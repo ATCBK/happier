@@ -1944,7 +1944,7 @@ describe('ConnectedServiceRefreshCoordinator', () => {
       materializationKey: 'session-claude',
     });
 
-    await expect(coordinator.tickOnce()).resolves.toBeUndefined();
+    await expect(coordinator.tickOnce()).resolves.toEqual({ nextAutomaticRunAfterMs: 30_000 });
 
     expect(onAuthUpdated).toHaveBeenCalledWith(expect.objectContaining({
       binding: { serviceId: 'claude-subscription', profileId: 'work' },
@@ -3058,7 +3058,8 @@ describe('ConnectedServiceRefreshCoordinator', () => {
     expect(updateConnectedServiceCredentialHealth).toHaveBeenCalledWith(expect.objectContaining({
       expectedCredentialRevision: leasedRevision,
       health: expect.objectContaining({
-        status: 'needs_reauth',
+        status: 'refresh_failed_retryable',
+        reconnectRequired: false,
         providerErrorCode: 'openai_codex_access_token_expired',
       }),
     }));

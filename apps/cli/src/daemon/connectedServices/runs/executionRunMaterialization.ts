@@ -677,10 +677,9 @@ export function createExecutionRunConnectedServicesBridge(
                 return false;
             }
 
-            // Retain only the exact existing materialized-root custody before
-            // checking whether fresh authority can be reconstructed. A live
-            // runner proves the root still needs cleanup, but does not prove a
-            // current registry declaration may become its authority.
+            // Retain any disposable-root cleanup separately from runtime authority.
+            // Durable provider homes deliberately have no root cleanup; exact runner
+            // and contribution custody below still decide whether adoption is valid.
             let cleanupOnExit: (() => void | Promise<void>) | null = null;
             let cleanupOnlyEntry: RunReleaseEntry | null = null;
             if (registration.materializedRoot) {
@@ -692,13 +691,6 @@ export function createExecutionRunConnectedServicesBridge(
                         materializedRoot: registration.materializedRoot,
                         parentSessionId: runner.parentSessionId,
                     });
-                if (!cleanupOnExit) {
-                    logger.debug(
-                        '[DAEMON RUN] Execution-run adoption refused without exact adopted-root cleanup custody',
-                        { runId: input.runId, runnerPid: input.runnerPid },
-                    );
-                    return false;
-                }
                 if (!current) {
                     cleanupOnlyEntry = {
                         modelId: null,
@@ -1028,9 +1020,7 @@ export function createExecutionRunConnectedServicesBridge(
                 let entry: RunReleaseEntry | null = null;
                 try {
                     const env: Record<string, string> = { ...resolved.env };
-                    const materializedRoot = resolved.targetMaterializedRoot
-                        ? await deps.resolveRunMaterializedRoot({ runKey, agentId, parentSessionId: runner.parentSessionId })
-                        : null;
+                    const materializedRoot = resolved.targetMaterializedRoot ?? null;
                     const cleanupOnExit = resolved.cleanupOnExit
                         ?? (materializedRoot
                             ? await deps.createAdoptedRootCleanup({ runKey, agentId, materializedRoot, parentSessionId: runner.parentSessionId })
@@ -1090,6 +1080,7 @@ export function createExecutionRunConnectedServicesBridge(
                         ok: true,
                         activationId,
                         env,
+                        ...(resolved.unsetEnvKeys?.length ? { unsetEnvKeys: resolved.unsetEnvKeys } : {}),
                         connectedServicesBindings,
                         registration,
                     };
@@ -1248,7 +1239,9 @@ export function createExecutionRunConnectedServicesBridge(
                 materializedRoot,
                 parentSessionId: input.sessionId,
             });
-            if (!cleanup) return false;
+            // A durable home has no disposable allocation to reclaim. The exact
+            // terminal receipt is already validated, so its cleanup is complete.
+            if (!cleanup) return true;
             const runner = input.sessionId
                 ? deps.captureRunnerIdentity({
                     runnerPid: input.runnerPid,

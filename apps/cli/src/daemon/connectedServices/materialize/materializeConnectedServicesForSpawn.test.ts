@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -19,8 +19,13 @@ import {
 } from '@/plugins/projection/registry/connectedAccountPurposeCompatibility';
 import {
   materializeConnectedServicesForSpawn as materializeConnectedServicesForSpawnProduction,
+  runSerializedMaterialization,
 } from './materializeConnectedServicesForSpawn';
 import { resolveConnectedServiceMaterializedRootDir } from './resolveConnectedServiceMaterializedRootDir';
+import { resolveConnectedServiceHomeDir } from '../homes/resolveConnectedServiceHomeDir';
+import { readConnectedServiceStateSharingManifest } from '../stateSharing/connectedServiceStateSharingManifest';
+import { createConnectedAccountPurposeBindingOwner } from '../purposeBindings/ConnectedAccountPurposeBindingOwner';
+import { materializeExactV021ConnectedServiceCredential } from '../compatibility/exactV021ConnectedServiceMaterialization';
 import {
   HAPPIER_CONNECTED_SERVICE_TARGET_MATERIALIZED_ROOT_ENV_KEY,
 } from '../connectedServiceChildEnvironment';
@@ -118,6 +123,447 @@ const LEGACY_UNFENCED_ONE_SHOT_MATERIALIZATION_AUTHORITY = {
 } as const satisfies MaterializeParams['connectedAccountMaterializationAuthority'];
 
 describe('materializeConnectedServicesForSpawn', () => {
+  it('keeps qualified account native state separate from each Session request-auth capability root', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-qualified-native-home-'));
+    const declaration = resolveQualifiedPurposeDeclarationSnapshotForAgentSpawn({
+      agentId: 'codex', contributions: runtimeFixture!.registry.contributes,
+    })!;
+    const scope = declaration.fileMaterializationPurposes[0]!;
+    const account = { service: scope.serviceRefs[0]!, accountId: 'work' };
+    const binding = { purpose: scope.purpose, target: { kind: 'account' as const, account } };
+    let record = buildConnectedServiceCredentialRecord({
+      now: 10, serviceId: 'openai-codex', profileId: account.accountId, kind: 'oauth', expiresAt: 100000,
+      oauth: { accessToken: 'fixture-access', refreshToken: 'fixture-refresh', idToken: 'fixture-id',
+        scope: null, tokenType: null, providerAccountId: 'fixture-account', providerEmail: null },
+    });
+    const unusedAccountBoundary = async (): Promise<never> => { throw new Error('Unexpected account inventory I/O'); };
+    let capturedAccount: (() => void) | null = null;
+    // The real binding owner resolves synthetic account metadata and invokes the admitted
+    // plugin credential serializer; no internal account/materialization logic is mocked.
+    const owner = createConnectedAccountPurposeBindingOwner({
+      store: { read: unusedAccountBoundary, update: unusedAccountBoundary, subscribe: () => ({ dispose() {} }) },
+      selectTarget: unusedAccountBoundary,
+      resolveTarget: async target => {
+        capturedAccount?.();
+        capturedAccount = null;
+        return target.kind === 'account'
+          ? { displayName: target.account.accountId, account: target.account } : null;
+      },
+      projectTargetAccounts: unusedAccountBoundary,
+      assertTargetAccountMaterializable: async input => {
+        if (input.account.accountId !== account.accountId) throw new Error('Fixture account admission refused');
+      },
+      materializeAccount: async input => await materializeExactV021ConnectedServiceCredential({
+        registry: runtimeFixture!.registry, serviceId: 'openai-codex', account: input.account,
+        record, request: input.request, signal: input.signal,
+      }),
+    });
+    const leases = ['qualified-first', 'qualified-second', 'qualified-after-rotation'].map(sessionId => owner.activateSessionPurposeBindings({
+      sessionId, purposes: declaration.purposes, bindings: [binding],
+    }));
+    try {
+      const params: MaterializeParams = {
+        agentId: 'codex', materializationKey: 'qualified-first', purposeBindingSessionId: 'qualified-first',
+        activeServerDir: join(root, 'server'), baseDir: join(root, 'materialized'), recordsByServiceId: new Map(),
+        connectedAccountsOwner: owner, processEnv: {},
+        connectedAccountMaterializationAuthority: {
+          kind: 'qualified', purposeBindings: [binding], requestAuthPurposeBindings: [binding],
+        },
+        qualifiedPurposeBindingSnapshot: { ...declaration, bindings: [binding] },
+      };
+      const first = await materializeConnectedServicesForSpawnProduction(params);
+      const second = await materializeConnectedServicesForSpawnProduction({
+        ...params, materializationKey: 'qualified-second', purposeBindingSessionId: 'qualified-second',
+      });
+      expect(first!.env.CODEX_HOME).toBe(second!.env.CODEX_HOME);
+      expect(first!.requestAuthMaterializedRoot).not.toBe(first!.targetMaterializedRoot);
+      expect(first!.requestAuthMaterializedRoot).not.toBe(second!.requestAuthMaterializedRoot);
+      await first!.cleanupOnExit!();
+      expect(existsSync(first!.requestAuthMaterializedRoot!)).toBe(false);
+      expect(await readFile(join(second!.env.CODEX_HOME!, 'auth.json'), 'utf8')).toContain('fixture-access');
+      // Credential reads are owned by the qualified purpose materializer, not
+      // the refresh caller's captured record. Queue behind the actual home
+      // lock, replace that external credential, then prove current bytes win.
+      let releaseHome!: () => void;
+      let enteredHome!: () => void;
+      const homeEntered = new Promise<void>(resolve => { enteredHome = resolve; });
+      const homeReleased = new Promise<void>(resolve => { releaseHome = resolve; });
+      const heldHome = runSerializedMaterialization(second!.env.CODEX_HOME!, async () => {
+        enteredHome();
+        await homeReleased;
+      });
+      await homeEntered;
+      const accountCaptured = new Promise<void>(resolve => { capturedAccount = resolve; });
+      const capturedRecord = record;
+      const queued = materializeConnectedServicesForSpawnProduction({
+        ...params, materializationKey: 'qualified-after-rotation', purposeBindingSessionId: 'qualified-after-rotation',
+        recordsByServiceId: new Map([['openai-codex', capturedRecord]]),
+      });
+      try {
+        await accountCaptured;
+        record = buildConnectedServiceCredentialRecord({
+          now: 20, serviceId: 'openai-codex', profileId: account.accountId, kind: 'oauth', expiresAt: 100000,
+          oauth: { accessToken: 'newest-access', refreshToken: 'newest-refresh', idToken: 'newest-id',
+            scope: null, tokenType: null, providerAccountId: 'fixture-account', providerEmail: null },
+        });
+      } finally {
+        releaseHome();
+      }
+      await heldHome;
+      const rotated = await queued;
+      expect(rotated!.env.CODEX_HOME).toBe(second!.env.CODEX_HOME);
+      expect(await readFile(join(rotated!.env.CODEX_HOME!, 'auth.json'), 'utf8')).toContain('newest-access');
+      expect(await readFile(join(rotated!.env.CODEX_HOME!, 'auth.json'), 'utf8')).not.toContain('fixture-access');
+      await rotated!.cleanupOnExit!();
+      await second!.cleanupOnExit!();
+    } finally {
+      for (const lease of leases) lease.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { agentId: 'codex', serviceId: 'openai-codex', environmentKey: 'CODEX_HOME', stateEntry: 'sessions' },
+    { agentId: 'claude', serviceId: 'claude-subscription', environmentKey: 'CLAUDE_CONFIG_DIR', stateEntry: 'projects' },
+  ] as const)('reuses the $agentId account home across Session identities without retiring native state', async ({
+    agentId, serviceId, environmentKey, stateEntry,
+  }) => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-stable-account-home-'));
+    try {
+      const record = buildConnectedServiceCredentialRecord({
+        now: 10, serviceId, profileId: 'work', kind: 'oauth', expiresAt: 100000,
+        oauth: { accessToken: 'fixture-access', refreshToken: 'fixture-refresh', idToken: 'fixture-id',
+          scope: null, tokenType: null, providerAccountId: 'fixture-account', providerEmail: null },
+      });
+      const params: MaterializeParams = {
+        agentId, materializationKey: 'first-session', activeServerDir: join(root, 'server'),
+        baseDir: join(root, 'materialized'), recordsByServiceId: new Map([[serviceId, record]]),
+        processEnv: {}, accountSettings: { connectedServicesProviderStateSharingSettingsV1: {
+          v: 1, defaults: { configMode: 'isolated', stateMode: 'isolated' }, byAgentId: {}, acknowledgedRisksByAgentId: {},
+        } },
+      };
+      const oldHome = resolveConnectedServiceMaterializedRootDir({
+        baseDir: params.baseDir, agentId, materializationKey: params.materializationKey,
+      });
+      const oldTranscript = join(oldHome, stateEntry, 'legacy-session.jsonl');
+      await mkdir(join(oldHome, stateEntry), { recursive: true });
+      await writeFile(oldTranscript, '{"sessionId":"legacy-session"}\n');
+      const first = await materializeConnectedServicesForSpawn(params);
+      const home = first!.env[environmentKey]!;
+      expect(home).toBe(join(resolveConnectedServiceHomeDir({
+        activeServerDir: params.activeServerDir, serviceId, profileId: record.profileId, agentId,
+      }), agentId === 'codex' ? 'codex-home' : 'claude-config'));
+      expect(home).not.toBe(oldHome);
+      expect(await readFile(join(home, stateEntry, 'legacy-session.jsonl'), 'utf8')).toContain('legacy-session');
+      expect(await readFile(oldTranscript, 'utf8')).toContain('legacy-session');
+      const transcript = join(home, stateEntry, 'fixture-session.jsonl');
+      await mkdir(join(home, stateEntry), { recursive: true });
+      await writeFile(transcript, '{"sessionId":"fixture-session"}\n');
+      await first!.cleanupOnExit!();
+      expect(await readFile(oldTranscript, 'utf8')).toContain('legacy-session');
+      const second = await materializeConnectedServicesForSpawn({ ...params, materializationKey: 'second-session' });
+      expect(second!.env[environmentKey]).toBe(home);
+      expect(await readFile(transcript, 'utf8')).toContain('fixture-session');
+      await second!.cleanupOnExit!();
+      expect(await readFile(transcript, 'utf8')).toContain('fixture-session');
+      if (agentId === 'claude' && record.kind === 'oauth') {
+        const approvalConfig = join(home, '.claude.json');
+        const privateMemory = join(home, stateEntry, 'memory', 'private.md');
+        await writeFile(approvalConfig, '{"approvalMarker":"retain-native-approval"}');
+        await mkdir(join(home, stateEntry, 'memory'), { recursive: true });
+        await writeFile(privateMemory, 'retain-native-memory');
+        const refreshed = await materializeConnectedServicesForSpawn({
+          ...params, materializationKey: 'refreshed-session',
+          recordsByServiceId: new Map([[serviceId, {
+            ...record, oauth: { ...record.oauth, accessToken: 'fixture-refreshed-access' },
+          }]]),
+        });
+        expect(refreshed!.env[environmentKey]).toBe(home);
+        expect(await readFile(join(home, '.credentials.json'), 'utf8')).toContain('fixture-refreshed-access');
+        expect(await readFile(approvalConfig, 'utf8')).toContain('retain-native-approval');
+        expect(await readFile(privateMemory, 'utf8')).toBe('retain-native-memory');
+        expect(await readFile(transcript, 'utf8')).toContain('fixture-session');
+        await refreshed!.cleanupOnExit!();
+      }
+      const sharedSource = join(root, 'native');
+      await mkdir(join(sharedSource, stateEntry), { recursive: true });
+      await writeFile(join(sharedSource, stateEntry, 'native-session.jsonl'), '{"sessionId":"native-session"}\n');
+      if (agentId === 'codex') {
+        await writeFile(join(sharedSource, 'history.jsonl'), '{"session_id":"native-session","text":"native"}\n');
+        await writeFile(join(home, 'history.jsonl'), '{"session_id":"fixture-session","text":"private"}\n');
+        await writeFile(join(sharedSource, 'session_index.jsonl'), '{"id":"native-session","updated_at":"2026-09-01T00:00:00.000Z"}\n');
+        await writeFile(join(home, 'session_index.jsonl'), '{"id":"fixture-session","updated_at":"2026-09-02T00:00:00.000Z"}\n');
+      }
+      const shared = await materializeConnectedServicesForSpawn({
+        ...params, materializationKey: 'shared-session', processEnv: { [environmentKey]: sharedSource },
+        accountSettings: { connectedServicesProviderStateSharingSettingsV1: {
+          v: 1, defaults: { configMode: 'isolated', stateMode: 'shared' }, byAgentId: {}, acknowledgedRisksByAgentId: {},
+        } },
+      });
+      expect(shared!.env[environmentKey]).toBe(home);
+      expect(await readFile(join(sharedSource, stateEntry, 'fixture-session.jsonl'), 'utf8')).toContain('fixture-session');
+      expect(await readFile(transcript, 'utf8')).toContain('fixture-session');
+      if (agentId === 'codex') {
+        expect(await readFile(join(home, 'history.jsonl'), 'utf8')).toContain('fixture-session');
+        expect(await readFile(join(home, 'history.jsonl'), 'utf8')).toContain('native-session');
+        expect(await readFile(join(home, 'session_index.jsonl'), 'utf8')).toContain('fixture-session');
+        expect(await readFile(join(home, 'session_index.jsonl'), 'utf8')).toContain('native-session');
+      }
+      await shared!.cleanupOnExit!();
+      const probeParams = { ...params, materializationKey: 'probe-fixture', probePurpose: 'probe' as const };
+      const probe = await materializeConnectedServicesForSpawn(probeParams);
+      const probeHome = probe!.env[environmentKey]!;
+      expect(probeHome).not.toBe(home);
+      await expect(lstat(join(probeHome, stateEntry))).rejects.toMatchObject({ code: 'ENOENT' });
+      await mkdir(join(probeHome, stateEntry), { recursive: true });
+      await writeFile(join(probeHome, stateEntry, 'probe-session.jsonl'), '{"sessionId":"probe-session"}\n');
+      await probe!.cleanupOnExit!();
+      expect(existsSync(probeHome)).toBe(false);
+      expect(await readFile(transcript, 'utf8')).toContain('fixture-session');
+      const groupParams = { ...params, selectionsByServiceId: new Map([[serviceId, {
+        kind: 'group' as const, serviceId, groupId: 'pool', activeProfileId: record.profileId,
+        fallbackProfileId: record.profileId, generation: 1, policy: {},
+      }]]) };
+      const groupFirst = await materializeConnectedServicesForSpawn({ ...groupParams, materializationKey: 'group-first' });
+      const groupSecond = await materializeConnectedServicesForSpawn({ ...groupParams, materializationKey: 'group-second' });
+      expect(groupFirst!.env[environmentKey]).not.toBe(home);
+      expect(groupSecond!.env[environmentKey]).toBe(groupFirst!.env[environmentKey]);
+      await groupFirst!.cleanupOnExit!();
+      await groupSecond!.cleanupOnExit!();
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it.each(['physical', 'aliased'] as const)('adopts only the resumed conversation across account selection with a %s base without trusting user or foreign homes', async base => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-prior-connected-home-'));
+    try {
+      const physicalServerDir = join(root, 'server');
+      const activeServerDir = base === 'aliased' ? join(root, 'server-alias') : physicalServerDir;
+      if (base === 'aliased') {
+        await mkdir(physicalServerDir);
+        await symlink(physicalServerDir, activeServerDir, process.platform === 'win32' ? 'junction' : 'dir');
+      }
+      const priorHome = join(resolveConnectedServiceHomeDir({
+        activeServerDir, serviceId: 'openai-codex', profileId: 'account-a', agentId: 'codex',
+      }), 'codex-home');
+      await mkdir(join(priorHome, 'sessions'), { recursive: true });
+      const vendorResumeId = '11111111-2222-4333-8444-555555555555';
+      const rolloutName = `rollout-2026-10-12T10-00-00-${vendorResumeId}.jsonl`;
+      await writeFile(join(priorHome, 'sessions', rolloutName), '{"sessionId":"retained-session"}\n');
+      await writeFile(join(priorHome, 'sessions', 'unrelated-session.jsonl'), 'unrelated-private-session');
+      await mkdir(join(priorHome, 'archived_sessions'), { recursive: true });
+      await writeFile(join(priorHome, 'archived_sessions', 'private.jsonl'), 'unrelated-private-archive');
+      await mkdir(join(priorHome, 'memories'), { recursive: true });
+      await writeFile(join(priorHome, 'memories', 'private.md'), 'unrelated-private-memory');
+      await writeFile(join(priorHome, 'history.jsonl'), '{"session_id":"unrelated-account-history"}\n');
+      const record = buildConnectedServiceCredentialRecord({
+        now: 10, serviceId: 'openai-codex', profileId: 'account-b', kind: 'oauth', expiresAt: 100000,
+        oauth: { accessToken: 'account-b-access', refreshToken: 'fixture-refresh', idToken: 'fixture-id',
+          scope: null, tokenType: null, providerAccountId: 'account-b', providerEmail: null },
+      });
+      const params: MaterializeParams = {
+        agentId: 'codex', materializationKey: 'resumed-session', activeServerDir,
+        baseDir: join(root, 'materialized'), recordsByServiceId: new Map([['openai-codex', record]]),
+        processEnv: {}, allowNativeAccountState: false,
+        accountSettings: { connectedServicesProviderStateSharingSettingsV1: {
+          v: 1, defaults: { configMode: 'isolated', stateMode: 'isolated' }, byAgentId: {}, acknowledgedRisksByAgentId: {},
+        } },
+      };
+      // Persisted binding IDs may already identify B while the last process still used A.
+      const descriptor = {
+        v: 1 as const, agentId: 'codex', agent: {
+          backendMode: 'appServer', home: 'connectedService', homePath: priorHome,
+          connectedServiceId: 'openai-codex', connectedServiceProfileId: record.profileId,
+        },
+      };
+      const resumedParams = { ...params, runtimeDescriptorV1: descriptor, vendorResumeId };
+      const resumed = await materializeConnectedServicesForSpawn(resumedParams);
+      const nextHome = resumed!.env.CODEX_HOME!;
+      expect(nextHome).not.toBe(priorHome);
+      expect(await readFile(join(nextHome, 'sessions', rolloutName), 'utf8')).toContain('retained-session');
+      expect(await readFile(join(priorHome, 'sessions', rolloutName), 'utf8')).toContain('retained-session');
+      const unrelatedPaths = ['sessions/unrelated-session.jsonl', 'archived_sessions/private.jsonl', 'memories/private.md', 'history.jsonl'];
+      for (const path of unrelatedPaths) {
+        await expect(lstat(join(nextHome, path))).rejects.toMatchObject({ code: 'ENOENT' });
+        expect(await readFile(join(priorHome, path), 'utf8')).toContain('unrelated');
+      }
+      expect(await readFile(join(nextHome, 'auth.json'), 'utf8')).toContain('account-b-access');
+      await resumed!.cleanupOnExit!();
+      const freshRecord = { ...record, profileId: 'fresh-account' };
+      const fresh = await materializeConnectedServicesForSpawn({
+        ...params, materializationKey: 'fresh-session', runtimeDescriptorV1: descriptor,
+        recordsByServiceId: new Map([['openai-codex', freshRecord]]),
+      });
+      for (const path of [`sessions/${rolloutName}`, ...unrelatedPaths]) {
+        await expect(lstat(join(fresh!.env.CODEX_HOME!, path))).rejects.toMatchObject({ code: 'ENOENT' });
+      }
+      await fresh!.cleanupOnExit!();
+      const foreignHome = join(root, 'foreign-home');
+      await mkdir(foreignHome);
+      const redirectedHome = join(activeServerDir, 'daemon', 'connected-services', 'homes', 'redirected-home');
+      await symlink(foreignHome, redirectedHome, process.platform === 'win32' ? 'junction' : 'dir');
+      for (const [home, source] of [
+        ['user', priorHome], ['connectedService', foreignHome], ['connectedService', redirectedHome],
+      ] as const) {
+        await mkdir(join(source, 'sessions'), { recursive: true });
+        await writeFile(join(source, 'sessions', 'untrusted-session.jsonl'), 'untrusted-history');
+        const candidateParams = {
+          ...params, materializationKey: `untrusted-${home}`,
+          runtimeDescriptorV1: { ...descriptor, agent: { ...descriptor.agent, home, homePath: source } },
+        };
+        const candidate = await materializeConnectedServicesForSpawn(candidateParams);
+        expect(existsSync(join(candidate!.env.CODEX_HOME!, 'sessions', 'untrusted-session.jsonl'))).toBe(false);
+        await candidate!.cleanupOnExit!();
+      }
+      const redirectedServer = join(root, 'redirected-server');
+      await mkdir(join(redirectedServer, 'daemon', 'connected-services'), { recursive: true });
+      await symlink(foreignHome, join(redirectedServer, 'daemon', 'connected-services', 'homes'),
+        process.platform === 'win32' ? 'junction' : 'dir');
+      await expect(materializeConnectedServicesForSpawn({
+        ...params, activeServerDir: redirectedServer, materializationKey: 'redirected-server-session',
+      })).rejects.toThrow('connected_service_materialization_root_unsafe');
+      expect(existsSync(join(foreignHome, 'openai-codex', record.profileId, 'codex', 'codex-home', 'auth.json'))).toBe(false);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it.each([
+    { agentId: 'claude', environmentKey: 'CLAUDE_CONFIG_DIR', stateEntry: 'projects', sourcePresent: false },
+    { agentId: 'claude', environmentKey: 'CLAUDE_CONFIG_DIR', stateEntry: 'projects', sourcePresent: true },
+    { agentId: 'codex', environmentKey: 'CODEX_HOME', stateEntry: 'sessions', sourcePresent: false },
+    { agentId: 'codex', environmentKey: 'CODEX_HOME', stateEntry: 'sessions', sourcePresent: true },
+    { agentId: 'pi', environmentKey: 'PI_CODING_AGENT_DIR', stateEntry: 'sessions', sourcePresent: false },
+    { agentId: 'pi', environmentKey: 'PI_CODING_AGENT_DIR', stateEntry: 'sessions', sourcePresent: true },
+  ] as const)('preserves $agentId state through live rematerialization with native source present=$sourcePresent', async ({
+    agentId, environmentKey, stateEntry, sourcePresent,
+  }) => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-linked-native-state-'));
+    try {
+      const nativeHome = join(root, 'native');
+      await mkdir(nativeHome);
+      if (sourcePresent) await mkdir(join(nativeHome, stateEntry));
+      const declaration = resolveQualifiedPurposeDeclarationSnapshotForAgentSpawn({
+        agentId, contributions: runtimeFixture!.registry.contributes,
+      });
+      expect(declaration).not.toBeNull();
+      // Keep the real account owner; this state-only fixture admits no account I/O.
+      const unavailableAccountBoundary = async (): Promise<never> => {
+        throw new Error('Credential-free state fixture must not access accounts');
+      };
+      const connectedAccountsOwner = createConnectedAccountPurposeBindingOwner({
+        store: {
+          read: unavailableAccountBoundary, update: unavailableAccountBoundary,
+          subscribe: () => ({ dispose() {} }),
+        },
+        selectTarget: unavailableAccountBoundary,
+        resolveTarget: unavailableAccountBoundary,
+        materializeAccount: unavailableAccountBoundary,
+        projectTargetAccounts: unavailableAccountBoundary,
+        assertTargetAccountMaterializable: unavailableAccountBoundary,
+      });
+      const params: MaterializeParams = {
+        agentId, materializationKey: 'csm_linked-native-state', activeServerDir: root,
+        baseDir: join(root, 'materialized'), recordsByServiceId: new Map(),
+        connectedAccountMaterializationAuthority: {
+          kind: 'qualified', purposeBindings: [], requestAuthPurposeBindings: [],
+        },
+        qualifiedPurposeBindingSnapshot: { ...declaration!, bindings: [] },
+        exactPurposeBindingSubjectId: 'linked-native-state-fixture',
+        connectedAccountsOwner,
+        processEnv: { [environmentKey]: nativeHome },
+        accountSettings: { connectedServicesProviderStateSharingSettingsV1: {
+          v: 1, defaults: { configMode: 'isolated', stateMode: 'shared' }, byAgentId: {}, acknowledgedRisksByAgentId: {},
+        } },
+      };
+      const first = await materializeConnectedServicesForSpawnProduction(params);
+      expect(first).not.toBeNull();
+      const home = first!.env[environmentKey]!;
+      const transcript = join(home, stateEntry, '-tmp', 's.jsonl');
+      await mkdir(join(home, stateEntry, '-tmp'), { recursive: true });
+      await writeFile(transcript, '{"sessionId":"s"}\n');
+      if (!sourcePresent) {
+        await expect(lstat(join(nativeHome, stateEntry))).rejects.toMatchObject({ code: 'ENOENT' });
+        const foreignState = join(root, 'foreign-state');
+        await mkdir(foreignState);
+        await writeFile(join(foreignState, 'other.jsonl'), 'another account');
+        await symlink(foreignState, join(home, stateEntry, 'foreign'), 'dir');
+      }
+
+      // The first launch remains live: refresh uses this same staged replacement owner.
+      const refreshed = await materializeConnectedServicesForSpawnProduction(params);
+      expect(refreshed!.env[environmentKey]).toBe(home);
+      expect(await readFile(transcript, 'utf8')).toBe('{"sessionId":"s"}\n');
+      expect((await lstat(join(home, stateEntry))).isSymbolicLink()).toBe(sourcePresent);
+      const manifest = await readConnectedServiceStateSharingManifest(home);
+      expect(manifest.stateEntries.includes(stateEntry)).toBe(sourcePresent);
+      if (sourcePresent) {
+        expect(await realpath(join(home, stateEntry))).toBe(await realpath(join(nativeHome, stateEntry)));
+        await writeFile(join(nativeHome, stateEntry, '-tmp', 's.jsonl'), '{"sessionId":"s","turn":2}\n');
+      } else {
+        await expect(lstat(join(nativeHome, stateEntry))).rejects.toMatchObject({ code: 'ENOENT' });
+        await expect(lstat(join(home, stateEntry, 'foreign'))).rejects.toMatchObject({ code: 'ENOENT' });
+        await writeFile(transcript, '{"sessionId":"s","turn":2}\n');
+      }
+      const nextRefresh = await materializeConnectedServicesForSpawnProduction(params);
+      expect(await readFile(transcript, 'utf8')).toBe('{"sessionId":"s","turn":2}\n');
+      await nextRefresh!.cleanupOnExit!();
+      await refreshed!.cleanupOnExit!();
+      await first!.cleanupOnExit!();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses to import local state through an aliased previous materialized home', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-aliased-run-native-state-'));
+    const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR']);
+    try {
+      envScope.patch({ HAPPIER_HOME_DIR: join(root, 'cli') });
+      reloadConfiguration();
+      const params: MaterializeParams = {
+        agentId: 'codex', materializationKey: 'aliased-run-native-state', activeServerDir: root,
+        baseDir: join(root, 'materialized'), recordsByServiceId: new Map(), allowNativeAccountState: false,
+        isAccountRuntimeCurrent: async () => true,
+      };
+      const first = await materializeConnectedServicesForSpawnProduction(params);
+      const home = first!.env.CODEX_HOME!;
+      await rm(home, { recursive: true, force: true });
+      const outside = join(root, 'outside');
+      await mkdir(join(outside, 'sessions'), { recursive: true });
+      await writeFile(join(outside, 'sessions', 'rollout.jsonl'), 'another native home');
+      await symlink(outside, home, 'dir');
+      await expect(materializeConnectedServicesForSpawnProduction(params)).rejects.toThrow('connected_service_materialization_root_unsafe');
+      expect((await lstat(home)).isSymbolicLink()).toBe(true);
+      expect(await readFile(join(outside, 'sessions', 'rollout.jsonl'), 'utf8')).toBe('another native home');
+    } finally {
+      envScope.restore(); reloadConfiguration(); await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves isolated declared native state after Run custody ends and through rematerialization', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-ended-run-native-state-'));
+    const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR']);
+    try {
+      envScope.patch({ HAPPIER_HOME_DIR: join(root, 'cli') });
+      reloadConfiguration();
+      const params: MaterializeParams = {
+        agentId: 'codex', materializationKey: 'ended-run-native-state', activeServerDir: root,
+        baseDir: join(root, 'materialized'), recordsByServiceId: new Map(), allowNativeAccountState: false,
+        isAccountRuntimeCurrent: async () => true,
+      };
+      const first = await materializeConnectedServicesForSpawnProduction(params);
+      const home = first!.env.CODEX_HOME!;
+      const archive = join(home, 'archived_sessions', 'rollout.jsonl');
+      await mkdir(join(home, 'archived_sessions'), { recursive: true });
+      await writeFile(archive, '{"nativeSession":"archived-thread"}\n');
+      await first!.cleanupOnExit!();
+      expect(await readFile(archive, 'utf8')).toContain('archived-thread');
+      const second = await materializeConnectedServicesForSpawnProduction(params);
+      await second!.cleanupOnExit!();
+      expect(await readFile(archive, 'utf8')).toContain('archived-thread');
+    } finally {
+      envScope.restore(); reloadConfiguration(); await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('preserves a Session home and its local rollout through exit and credential rematerialization', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-session-native-home-'));
     const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR']);
@@ -316,7 +762,7 @@ describe('materializeConnectedServicesForSpawn', () => {
     await expect(result!.cleanupOnExit!()).resolves.toBeUndefined();
   });
 
-  it('retains Codex profile hook preferences across atomic rematerialization without linking hook definitions', async () => {
+  it('retains destination Codex hook preferences when prior account context differs without linking hook definitions', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-codex-hooks-rematerialize-'));
     try {
       const sourceCodexHome = join(root, 'native');
@@ -345,14 +791,31 @@ describe('materializeConnectedServicesForSpawn', () => {
       expect((await lstat(join(home, 'hooks.json'))).isSymbolicLink()).toBe(false);
       await writeFile(join(home, 'config.toml'),
         (await readFile(join(home, 'config.toml'), 'utf8')) + `\n[hooks.state.'${hookId}']\nenabled = false\ntrusted_hash = 'sha256:reviewed'\n`);
+      const priorHome = join(resolveConnectedServiceHomeDir({
+        activeServerDir: params.activeServerDir, serviceId: 'openai-codex', profileId: 'another-account', agentId: 'codex',
+      }), 'codex-home');
+      await mkdir(priorHome, { recursive: true });
+      const priorHookId = `${join(priorHome, 'hooks.json')}:stop:0:0`;
+      await writeFile(join(priorHome, 'config.toml'), `[hooks.state.'${priorHookId}']\nenabled = true\ntrusted_hash = 'sha256:other-account'\n`);
+      const nativeHookId = `${join(sourceCodexHome, 'hooks.json')}:stop:0:0`;
+      await writeFile(join(sourceCodexHome, 'config.toml'),
+        `model_context_window = 9223372036854775807\n[hooks.state.'${nativeHookId}']\nenabled = true\ntrusted_hash = 'sha256:native'\n`);
       await writeFile(join(sourceCodexHome, 'hooks.json'), '{"hooks":{"Stop":[]}}\n');
       await expect(readFile(join(home, 'hooks.json'), 'utf8')).resolves.toBe(hooks);
-      const second = await materializeConnectedServicesForSpawn(params);
+      const second = await materializeConnectedServicesForSpawn({ ...params, runtimeDescriptorV1: {
+        v: 1, agentId: 'codex', agent: {
+          backendMode: 'appServer', home: 'connectedService', homePath: priorHome,
+          connectedServiceId: 'openai-codex', connectedServiceProfileId: 'another-account',
+        },
+      } });
       expect(second!.env.CODEX_HOME).toBe(home);
       const retained = await readFile(join(home, 'config.toml'), 'utf8');
       expect(retained).toContain(hookId);
       expect(retained).toContain('enabled = false');
       expect(retained).toContain('sha256:reviewed');
+      expect(retained).not.toContain(priorHookId);
+      expect(retained).not.toContain('sha256:other-account');
+      expect(retained).not.toContain(nativeHookId);
       expect(retained).toContain('9223372036854775807');
       expect(retained).not.toContain('.stage-');
       await expect(readFile(join(home, 'hooks.json'), 'utf8')).resolves.toBe('{"hooks":{"Stop":[]}}\n');
@@ -490,7 +953,12 @@ describe('materializeConnectedServicesForSpawn', () => {
       refresh_token: '',
       tokens: { access_token: 'isolated-access', refresh_token: '' },
     });
-    await expect(lstat(join(second!.env.CODEX_HOME!, 'accounts'))).rejects.toMatchObject({ code: 'ENOENT' });
+    // The rust-v0.162.1 file-auth backend owns auth.json, not this account-local
+    // directory. The descriptor excludes it from sharing; a partial credential
+    // projection must not turn that exclusion into ownership of private state.
+    expect((await lstat(join(second!.env.CODEX_HOME!, 'accounts'))).isSymbolicLink()).toBe(false);
+    expect(await readFile(join(second!.env.CODEX_HOME!, 'accounts', 'old.json'), 'utf8'))
+      .toBe('{"refresh_token":"historical-refresh"}');
     await expect(lstat(join(second!.env.CODEX_HOME!, 'config.toml'))).rejects.toThrow();
     await expect(lstat(join(second!.env.CODEX_HOME!, 'prompts'))).rejects.toThrow();
     await expect(lstat(join(second!.env.CODEX_HOME!, 'sessions'))).rejects.toThrow();
@@ -869,8 +1337,12 @@ describe('materializeConnectedServicesForSpawn', () => {
     } satisfies MaterializeParams;
     await materializeConnectedServicesForSpawn(copiedParams);
     expect((await lstat(join(target, 'settings.json'))).isSymbolicLink()).toBe(false);
+    const copiedSettingsIdentity = await lstat(join(target, 'settings.json'));
     await writeFile(join(sourceClaudeConfigDir, 'settings.json'), '{"theme":"refreshed"}\n');
     await materializeConnectedServicesForSpawn(copiedParams);
+    if (process.platform !== 'win32') {
+      expect((await lstat(join(target, 'settings.json'))).ino).toBe(copiedSettingsIdentity.ino);
+    }
     expect(JSON.parse(await readFile(join(target, 'settings.json'), 'utf8'))).toEqual({ theme: 'refreshed' });
 
     await materializeConnectedServicesForSpawn({

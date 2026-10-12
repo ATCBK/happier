@@ -230,6 +230,7 @@ export async function verifyResumeReachableThroughCatalog(
     }
     return await verifyDeclaredResumeFileReachability({
       targetMaterializedRoot: input.targetMaterializedRoot,
+      candidatePersistedSessionFile: input.candidatePersistedSessionFile,
       stateSharingDescriptor,
       vendorResumeId: input.vendorResumeId,
       ...(input.runtimeDescriptorV1 ? { runtimeDescriptorV1: input.runtimeDescriptorV1 } : {}),

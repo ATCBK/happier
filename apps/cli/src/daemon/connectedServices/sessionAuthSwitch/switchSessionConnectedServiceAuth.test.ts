@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
+import axios from 'axios';
+import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES,
   buildConnectedServiceCredentialRecord,
@@ -7,6 +11,7 @@ import {
   BUNDLED_LEGACY_CONNECTED_ACCOUNT_COMPATIBILITY_BY_SERVICE_ID,
   QualifiedConnectedAccountGroupV4Schema,
   QualifiedConnectedAccountListResponseV4Schema,
+  QualifiedConnectedAccountCredentialSnapshotV4Schema,
   ingestPluginManifestV2,
   type ConnectedServiceAuthGroupV1,
   type ConnectedServiceBindingsV2,
@@ -29,6 +34,14 @@ import {
 import type { ConnectedServiceQualifiedAuthGroupApi } from '../resolveConnectedServiceAuthForSpawn';
 import { resolveFirstPartyQualifiedConnectedAccountServiceForLegacyServiceId } from '@/plugins/projection/registry/connectedAccountPurposeCompatibility';
 import type { ConnectedServiceProviderRuntimeAuthAdapter } from '../runtimeAuth/types';
+import type { ApiClient } from '@/api/api';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
+import { resolveConnectedServiceHomeDir } from '../homes/resolveConnectedServiceHomeDir';
+import { createConnectedAccountPurposeBindingOwner } from '../purposeBindings/ConnectedAccountPurposeBindingOwner';
+import { canResumeFromMaterializedState } from '../stateSharing/canResumeFromMaterializedState';
+import { materializeSessionConnectedServiceRuntimeAuthSelection } from './materializeSessionConnectedServiceRuntimeAuthSelection';
+import { resolveTrackedConnectedServiceSwitchContinuityContext } from './resolveTrackedConnectedServiceSwitchContinuityContext';
 
 async function readCodexRuntimeAuthAdapterRegistration() {
   let captured: unknown;
@@ -350,6 +363,75 @@ function expectMaterializationIdentity(value: unknown): ConnectedServiceMaterial
 }
 
 describe('switchSessionConnectedServiceAuth', () => {
+  it('preflights an inactive account change against its actual target without writing credentials or metadata', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-inactive-target-preflight-'));
+    const unexpectedAccountBoundary = async (): Promise<never> => { throw new Error('Inactive preflight must not write account state or credentials'); };
+    const purposeOwner = createConnectedAccountPurposeBindingOwner({
+      store: { read: unexpectedAccountBoundary, update: unexpectedAccountBoundary, subscribe: () => ({ dispose() {} }) },
+      selectTarget: unexpectedAccountBoundary,
+      resolveTarget: async target => target.kind === 'account'
+        ? { displayName: target.account.accountId, account: target.account }
+        : { displayName: target.groupId, account: { service: target.service, accountId: 'backup' } },
+      materializeAccount: unexpectedAccountBoundary,
+    });
+    const runtime = await createAdmittedPluginRuntimeFixture({ controller: pluginReloadController,
+      runtimeOptions: { pluginIds: ['happier.agent.codex'], connectedAccounts: purposeOwner } });
+    const vendorResumeId = '019c1234-1234-7123-8123-123456789abc';
+    const serviceId = 'happier.agent.codex/openai-codex';
+    const credentialRevision = 'csr_0123456789ABCDEFGHJKMNPQRS';
+    const nextBindings = codexBindings('next');
+    const accountApi = { getAccountEncryptionMode: async () => 'plain' as const,
+      getConnectedServiceAuthGroup: async () => null,
+      listConnectedServiceProfiles: async () => ({ serviceId: 'openai-codex' as const,
+        profiles: [{ profileId: 'next', status: 'connected' as const }] }) };
+    const transport = vi.spyOn(axios, 'get').mockResolvedValue({ status: 200, data: QualifiedConnectedAccountCredentialSnapshotV4Schema.parse({
+      ref: { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'next' },
+      authenticationModeId: 'oauth', revisionSemantics: 'revisioned', credentialRevision, configurationRevision: null,
+      content: { t: 'plain', v: { v: 1, values: { accessToken: 'synthetic-access', refreshToken: 'synthetic-refresh' } } },
+      metadata: { scopes: [] },
+    }) });
+    try {
+      const target = join(resolveConnectedServiceHomeDir({
+        activeServerDir: root, serviceId, profileId: 'next', agentId: 'codex',
+      }), 'codex-home');
+      await mkdir(join(target, 'sessions'), { recursive: true });
+      await writeFile(join(target, 'sessions', `rollout-2026-10-11T12-00-00-${vendorResumeId}.jsonl`), '{}\n');
+      const persistSessionBindings = vi.fn();
+      const result = await switchSessionConnectedServiceAuth({
+        core: createConnectedServiceSessionAuthSwitchCore({ locks: new ConnectedServiceSessionAuthSwitchLockRegistry() }),
+        dryRun: true, getChildren: () => [], api: accountApi,
+        resolveInactiveSession: async () => ({ agentId: 'codex', connectedServices: codexBindings('old'),
+          connectedServiceMaterializationIdentityV1: { v: 1, id: 'csm_inactive_target', createdAtMs: 0 }, vendorResumeId, cwd: root,
+          metadata: { path: root, runtimeDescriptorV1: { v: 1, agentId: 'codex', agent: { providerSessionId: vendorResumeId } } } }),
+        materializeRuntimeAuthSelection: async (input) => await materializeSessionConnectedServiceRuntimeAuthSelection({
+          credentials: { token: 'synthetic-account-token', encryption: null }, api: accountApi as unknown as ApiClient,
+          activeServerDir: root, baseDir: join(root, 'materialized'), input,
+          connectedAccountsOwner: purposeOwner, activatePurposeBindings: purposeOwner.activatePurposeBindings,
+          processEnv: { HOME: join(root, 'empty-native-home') },
+        }),
+        resolveContinuity: async (input) => {
+          const context = resolveTrackedConnectedServiceSwitchContinuityContext({
+            agentId: input.agentId, baseDir: root, tracked: input.tracked,
+            connectedServiceMaterializationIdentityV1: input.connectedServiceMaterializationIdentityV1,
+            vendorResumeId: input.vendorResumeId, cwd: root, runtimeAuthSelection: input.runtimeAuthSelection,
+          });
+          const reachable = await canResumeFromMaterializedState({
+            agentId: 'codex', serviceId, targetMaterializedRoot: context.targetMaterializedRoot ?? '',
+            requestedStateMode: 'isolated', effectiveStateMode: 'isolated',
+            materializationIdentity: { v: 1, id: 'csm_inactive_target' }, vendorResumeId, cwd: root,
+          });
+          return reachable.ok ? { mode: 'restart_rematerialize' } : { mode: 'unsupported', reason: 'provider_session_state_unavailable_for_resume', errorCode: 'provider_session_state_unavailable_for_resume' };
+        },
+        persistSessionBindings, emitSessionEvent: async () => {},
+        restartSession: async () => { throw new Error('inactive preflight cannot restart'); },
+        hotApply: async () => { throw new Error('inactive preflight cannot hot-apply'); },
+        request: { sessionId: 'inactive', agentId: 'codex', bindings: nextBindings },
+      });
+      expect(result).toMatchObject({ ok: true, action: 'metadata_updated' });
+      expect(persistSessionBindings).not.toHaveBeenCalled();
+      expect(await stat(join(target, 'auth.json')).catch(() => null)).toBeNull();
+    } finally { transport.mockRestore(); await runtime.dispose(); await rm(root, { recursive: true, force: true }); }
+  });
   it('persists an exact team-resource V2 selection for an inactive Session', async () => {
     const serviceKey = 'happier.agent.claude/anthropic';
     const requested = {

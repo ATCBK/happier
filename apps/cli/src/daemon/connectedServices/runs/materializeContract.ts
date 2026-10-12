@@ -126,6 +126,7 @@ export type ConnectedServiceRunMaterializationHandlerResult =
         ok: true;
         activationId: string;
         env: Readonly<Record<string, string>>;
+        unsetEnvKeys?: readonly string[];
         connectedServicesBindings: unknown;
         registration: ExecutionRunConnectedServicesRegistrationV1;
     }>

@@ -577,7 +577,10 @@ describe('composed finite Run model recovery', () => {
         gate.resume();
         const result = await settlement;
         const updatedRevision = 'csr_bbbbbbbbbbbbbbbbbbbbbb';
-        expect(result).toEqual({ status: 'refreshed', result: { credentialRevision: updatedRevision } });
+        expect(result).toEqual({ status: 'refreshed', result: {
+            credentialRevision: updatedRevision,
+            accessToken: 'refreshed-access-1', providerAccountId: 'test-account-first',
+        } });
         expect(scenario.runtimeTargetRegistry.getRunTargetByRunKey(runId)).not.toBe(originalTarget);
         const auth = JSON.parse(await readFile(join(materialized.env.CODEX_HOME!, 'auth.json'), 'utf8'));
         expect(auth.tokens.access_token).toBe('refreshed-access-1');
@@ -587,8 +590,13 @@ describe('composed finite Run model recovery', () => {
         expect(await requestExecutionRunConnectedServiceRuntimeAuthRefresh(request, { target, timeoutMs: 120_000 })).toEqual(result);
         expect(scenario.providerExchanges()).toBe(1);
         expect(await scenario.bridge.refreshRuntimeAuth({ ...request, refreshAttemptId: 'unadmitted-old-basis' })).toMatchObject({ status: 'unavailable' });
+        const { expectedCredentialRevision: _expectedRevision, ...missingRevision } = request;
+        expect(await scenario.bridge.refreshRuntimeAuth(missingRevision)).toMatchObject({ status: 'unavailable' });
         expect(await scenario.bridge.refreshRuntimeAuth({ ...request, refreshAttemptId: 'native-proof-2', expectedCredentialRevision: updatedRevision }))
-            .toEqual({ status: 'refreshed', result: { credentialRevision: 'csr_cccccccccccccccccccccc' } });
+            .toEqual({ status: 'refreshed', result: {
+                credentialRevision: 'csr_cccccccccccccccccccccc',
+                accessToken: 'refreshed-access-2', providerAccountId: 'test-account-first',
+            } });
         expect(JSON.parse(await readFile(join(materialized.env.CODEX_HOME!, 'auth.json'), 'utf8')).tokens.access_token).toBe('refreshed-access-2');
         expect(scenario.providerExchanges()).toBe(2);
         await scenario.bridge.release(request);
@@ -638,7 +646,8 @@ describe('composed finite Run model recovery', () => {
     it('refuses a refreshed proof when writing the exact retained native home fails', async () => {
         const materialized = await scenario.materialize();
         createRefreshCoordinator();
-        const targetParent = dirname(resolveConnectedServiceMaterializedRootDir({ baseDir: scenario.baseDir, agentId: 'codex', materializationKey: runId }));
+        if (!materialized.env.CODEX_HOME) throw new Error('Expected retained native home');
+        const targetParent = dirname(materialized.env.CODEX_HOME);
         await rename(targetParent, `${targetParent}.previous`);
         await writeFile(targetParent, 'synthetic non-directory target parent');
         try {
@@ -667,8 +676,8 @@ describe('composed finite Run model recovery', () => {
     it.each(['same_runner', 'runner_replaced', 'member_changed'] as const)('fences genuine Session %s adoption across a cached acknowledgment and a second exchange', async (transition) => {
         const sessionId = 'genuine-refresh-session';
         const sessionPid = 4343;
-        const materialized = await resolveConnectedServiceAuthForSpawn({ agentId: 'codex', sessionId, materializationKey: sessionId,
-            connectedServicesBindingsRaw: { v: 2, bindingsByServiceId: { [serviceId]: { source: 'connected', selection: 'profile', profileId: 'first' } } },
+        const materializeProfile = async (profileId: string) => await resolveConnectedServiceAuthForSpawn({ agentId: 'codex', sessionId, materializationKey: sessionId,
+            connectedServicesBindingsRaw: { v: 2, bindingsByServiceId: { [serviceId]: { source: 'connected', selection: 'profile', profileId } } },
             activeServerDir: join(scenario.root, 'server'), baseDir: scenario.baseDir, credentials: scenario.credentials,
             api: scenario.api, nowMs: () => 1_000,
             qualifiedConnectedAccountApi: scenario.qualifiedConnectedAccountApi,
@@ -680,7 +689,15 @@ describe('composed finite Run model recovery', () => {
                 sessionId, purposes: snapshot.purposes, bindings: snapshot.bindings,
             }),
         });
+        const launchMaterialized = await materializeProfile('second');
+        if (!launchMaterialized?.env.CODEX_HOME) throw new Error('Expected account A launch home');
+        const launchAuthPath = join(launchMaterialized.env.CODEX_HOME, 'auth.json');
+        const launchAuth = await readFile(launchAuthPath, 'utf8');
+        expect(JSON.parse(launchAuth).tokens.account_id).toBe('test-account-second');
+        await launchMaterialized.materializationPurposeLease?.dispose();
+        const materialized = await materializeProfile('first');
         if (!materialized) throw new Error('Expected genuine Session materialization');
+        expect(materialized.env.CODEX_HOME).not.toBe(launchMaterialized.env.CODEX_HOME);
         scenario.runtimeTargetRegistry.registerTarget({ pid: sessionPid, agentId: 'codex', sessionId, materializationKey: sessionId,
             connectedServicesBindingsRaw: materialized.connectedServicesBindings, connectedServiceSelectionsEnv: materialized.env });
         const coordinator = createRefreshCoordinator(async () => {
@@ -714,20 +731,29 @@ describe('composed finite Run model recovery', () => {
                 expect(await duplicateRefresh).toMatchObject({ ok: false, errorCode: 'connected_service_session_refresh_forbidden' });
                 return;
             }
-            expect(first).toEqual({ ok: true, result: { status: 'refreshed', result: { credentialRevision: 'csr_bbbbbbbbbbbbbbbbbbbbbb' } } });
+            expect(first).toEqual({ ok: true, result: { status: 'refreshed', result: {
+                credentialRevision: 'csr_bbbbbbbbbbbbbbbbbbbbbb',
+                accessToken: 'refreshed-access-1', providerAccountId: 'test-account-first',
+            } } });
             expect(await duplicateRefresh).toEqual(first);
             expect(await handler(request)).toEqual(first);
             expect(scenario.providerExchanges()).toBe(1);
             expect(await handler({ ...request, refreshAttemptId: 'session-refresh-2', expectedCredentialRevision: 'csr_bbbbbbbbbbbbbbbbbbbbbb' }))
-                .toEqual({ ok: true, result: { status: 'refreshed', result: { credentialRevision: 'csr_cccccccccccccccccccccc' } } });
+                .toEqual({ ok: true, result: { status: 'refreshed', result: {
+                    credentialRevision: 'csr_cccccccccccccccccccccc',
+                    accessToken: 'refreshed-access-2', providerAccountId: 'test-account-first',
+                } } });
             expect(scenario.providerExchanges()).toBe(2);
             expect(JSON.parse(await readFile(join(materialized.env.CODEX_HOME!, 'auth.json'), 'utf8')).tokens.access_token).toBe('refreshed-access-2');
             expect(scenario.runtimeTargetRegistry.getBySessionId(sessionId)?.connectedServiceSelections[0]?.credentialRevision).toBe('csr_cccccccccccccccccccccc');
+            expect(await readFile(launchAuthPath, 'utf8')).toBe(launchAuth);
         } finally {
             gate.resume();
             scenario.runtimeTargetRegistry.unregisterPid(sessionPid);
             await materialized.materializationPurposeLease?.dispose();
             await materialized.cleanupOnExit?.();
+            await launchMaterialized.materializationPurposeLease?.dispose();
+            await launchMaterialized.cleanupOnExit?.();
         }
     });
 });

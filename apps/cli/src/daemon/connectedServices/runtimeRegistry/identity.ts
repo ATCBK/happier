@@ -1,4 +1,5 @@
 import { ConnectedAccountServiceKeySchema, ConnectedServiceBindingsV2IngressSchema } from '@happier-dev/protocol/connect/connected-service-bindings';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import type { ConnectedAccountServiceKey } from '@happier-dev/protocol';
 
 import { parseConnectedServicesBindings } from '../parseConnectedServicesBindings';
@@ -67,7 +68,7 @@ export function normalizeConnectedServicesBindingsRaw(raw: unknown): Readonly<{
   v?: unknown;
   bindingsByServiceId?: Record<string, unknown>;
 }> {
-  const compatible = ConnectedServiceBindingsV2IngressSchema.safeParse(raw);
+  const compatible = createStoredReadSchema(ConnectedServiceBindingsV2IngressSchema).safeParse(raw);
   if (compatible.success) return compatible.data;
   if (!isRecord(raw)) return {};
   const bindings = isRecord(raw.bindingsByServiceId)

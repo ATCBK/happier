@@ -29,6 +29,7 @@ type AgentConnectedAccountPurposeProjection = Readonly<{
     requestAuthUses: unknown;
     fileEnvironmentUses: unknown;
     environmentUses: unknown;
+    environmentUnsetUses: unknown;
 }>;
 
 type AgentConnectedAccountFileEnvironmentUse = Readonly<{
@@ -59,6 +60,7 @@ type AgentSpawnPurposeCatalogEntry = Readonly<{
     connectedAccountRequestAuthUses?: unknown;
     connectedAccountFileEnvironmentUses?: unknown;
     connectedAccountEnvironmentUses?: unknown;
+    connectedAccountEnvironmentUnsetUses?: unknown;
 }>;
 
 export type AgentSpawnPurposeContributions = Readonly<{
@@ -80,6 +82,7 @@ export type AgentSpawnQualifiedPurposeBindingSnapshot = Readonly<{
     requestAuthUses?: readonly QualifiedConnectedAccountRequestAuthUseV1[];
     fileEnvironmentUses?: readonly AgentSpawnQualifiedFileEnvironmentUse[];
     environmentUses?: readonly AgentSpawnQualifiedEnvironmentUse[];
+    environmentUnsetUses?: readonly AgentSpawnQualifiedEnvironmentUse[];
 }>;
 
 /**
@@ -95,6 +98,7 @@ export type AgentSpawnQualifiedPurposeDeclarationSnapshot = Readonly<{
     requestAuthUses?: readonly QualifiedConnectedAccountRequestAuthUseV1[];
     fileEnvironmentUses?: readonly AgentSpawnQualifiedFileEnvironmentUse[];
     environmentUses?: readonly AgentSpawnQualifiedEnvironmentUse[];
+    environmentUnsetUses?: readonly AgentSpawnQualifiedEnvironmentUse[];
 }>;
 
 type ResolvedAgentSpawnPurposeDeclarations = Readonly<{
@@ -121,6 +125,8 @@ function resolveAgentContribution(
             catalogEntry?.connectedAccountFileEnvironmentUses,
         environmentUses:
             catalogEntry?.connectedAccountEnvironmentUses,
+        environmentUnsetUses:
+            catalogEntry?.connectedAccountEnvironmentUnsetUses,
     };
 }
 
@@ -201,6 +207,10 @@ function resolveAgentSpawnPurposeDeclarations(input: Readonly<{
         projection?.environmentUses,
     );
     if (environmentUses === null) return null;
+    const environmentUnsetUses = snapshotAgentConnectedAccountEnvironmentUses(
+        projection?.environmentUnsetUses,
+    );
+    if (environmentUnsetUses === null) return null;
     const declarationsByPurpose = new Map(
         declarations.data.map((declaration) => [
             declaration.purpose,
@@ -225,6 +235,7 @@ function resolveAgentSpawnPurposeDeclarations(input: Readonly<{
     if (environmentUses?.some((use) => (
         declarationsByPurpose.get(use.purpose)?.materializationKinds?.includes('environment') !== true
     ))) return null;
+    if (environmentUnsetUses?.some((use) => !declarationsByPurpose.has(use.purpose))) return null;
     const consumer = Object.freeze({ ...identity.data });
     const authorizedPurposes = Object.freeze(
         declarations.data.map((declaration) => {
@@ -282,9 +293,9 @@ function resolveAgentSpawnPurposeDeclarations(input: Readonly<{
                 environmentKey: use.environmentKey,
             });
         }));
-    const qualifiedEnvironmentUses = environmentUses === undefined
+    const qualifyEnvironmentUses = (uses: readonly AgentConnectedAccountEnvironmentUse[] | undefined) => uses === undefined
         ? null
-        : Object.freeze(environmentUses.map((use): AgentSpawnQualifiedEnvironmentUse => {
+        : Object.freeze(uses.map((use): AgentSpawnQualifiedEnvironmentUse => {
             const scope = authorizedPurposesByLocalId.get(use.purpose);
             if (!scope) throw new Error('connected_account_launch_environment_purpose_unavailable');
             return Object.freeze({
@@ -293,6 +304,8 @@ function resolveAgentSpawnPurposeDeclarations(input: Readonly<{
                 environmentKey: use.environmentKey,
             });
         }));
+    const qualifiedEnvironmentUses = qualifyEnvironmentUses(environmentUses);
+    const qualifiedEnvironmentUnsetUses = qualifyEnvironmentUses(environmentUnsetUses);
     return Object.freeze({
         consumer,
         declarations: Object.freeze([...declarations.data]),
@@ -308,6 +321,9 @@ function resolveAgentSpawnPurposeDeclarations(input: Readonly<{
                 : {}),
             ...(qualifiedEnvironmentUses
                 ? { environmentUses: qualifiedEnvironmentUses }
+                : {}),
+            ...(qualifiedEnvironmentUnsetUses
+                ? { environmentUnsetUses: qualifiedEnvironmentUnsetUses }
                 : {}),
         }),
     });
@@ -386,6 +402,9 @@ export function resolveQualifiedPurposeBindingSnapshotForAgentSpawn(input: Reado
             : {}),
         ...(declarations.snapshot.environmentUses
             ? { environmentUses: declarations.snapshot.environmentUses }
+            : {}),
+        ...(declarations.snapshot.environmentUnsetUses
+            ? { environmentUnsetUses: declarations.snapshot.environmentUnsetUses }
             : {}),
     };
 }

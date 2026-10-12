@@ -1,4 +1,5 @@
 import { ExecutionRunConnectedServicesCleanupReceiptV1Schema, ExecutionRunConnectedServicesLaunchV1Schema, isPersistedExecutionRunConnectedServicesLaunchIdentityExact, normalizePersistedExecutionRunConnectedServicesLaunchV1 } from '@happier-dev/protocol/daemon/executionRuns';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import { isCatalogAgentId } from '@/agent/catalog/resolution';
 
@@ -54,7 +55,7 @@ export async function reattestRunningExecutionRunConnectedServices(input: Readon
     return false;
   }
   const parsedReceipt =
-    ExecutionRunConnectedServicesCleanupReceiptV1Schema.safeParse(
+    createStoredReadSchema(ExecutionRunConnectedServicesCleanupReceiptV1Schema).safeParse(
       marker.executionRunConnectedServicesCleanupReceiptV1,
     );
   if (

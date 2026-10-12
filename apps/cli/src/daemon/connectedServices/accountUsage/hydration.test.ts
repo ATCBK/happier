@@ -157,6 +157,7 @@ describe('hydrateProviderAccountUsageStoreFromCurrentSources', () => {
   it('opens the V4 encrypted record envelope through the account-scoped cipher', async () => {
     const snapshot = {
       ...createSnapshot(),
+      recoveryCreditDetails: { grant: { remainingCount: 2, appliesToProviderLimitIds: ['weekly'], unavailableReason: 'cooldown' as const } },
       subscription: {
         status: 'subscribed' as const, renewal: 'off' as const,
         observedAtMs: 900, staleAfterMs: 60_000,
@@ -187,7 +188,7 @@ describe('hydrateProviderAccountUsageStoreFromCurrentSources', () => {
       api: {
         getAccountEncryptionMode: async () => 'e2ee' as const,
         readProviderAccountUsageRecord: async () => ({
-          content: { t: 'encrypted' as const, c: sealed.ciphertext, subscription: sealed.subscription },
+          content: { t: 'encrypted' as const, c: sealed.ciphertext, subscription: sealed.subscription, recoveryCreditDetails: sealed.recoveryCreditDetails },
           metadata: {
             fetchedAt: snapshot.fetchedAtMs,
             staleAfterMs: snapshot.staleAfterMs,
@@ -204,6 +205,7 @@ describe('hydrateProviderAccountUsageStoreFromCurrentSources', () => {
     expect(result.hydratedRecordIds).toEqual([snapshot.recordId]);
     expect(store.resolveBySource(localGroupSource)?.recordId).toBe(snapshot.recordId);
     expect(store.resolveBySource(localGroupSource)?.subscription).toEqual(snapshot.subscription);
+    expect(store.resolveBySource(localGroupSource)?.recoveryCreditDetails).toEqual(snapshot.recoveryCreditDetails);
   });
 
   it('hydrates future-dated evidence as stale and schedules a bounded refresh', async () => {

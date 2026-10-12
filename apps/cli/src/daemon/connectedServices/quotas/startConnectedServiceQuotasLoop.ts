@@ -1,66 +1,52 @@
+import { startSingleFlightIntervalLoop, type SingleFlightLoopSchedule } from '@/daemon/lifecycle/singleFlightIntervalLoop';
+
 export type ConnectedServiceQuotasLoopHandle = Readonly<{
   stop: () => Promise<void>;
   pause: () => void;
   resume: () => void;
+  wake: () => void;
   subscribeAfterTick: (listener: () => void | Promise<void>) => () => void;
 }>;
 
 export function startConnectedServiceQuotasLoop(params: Readonly<{
   enabled: boolean;
   tickMs: number;
-  coordinator: Readonly<{ tickOnce: () => Promise<void> }>;
+  coordinator: Readonly<{ tickOnce: () => Promise<void | SingleFlightLoopSchedule> }>;
+  subscribeWake?: (listener: () => void) => () => void;
+  runImmediately?: boolean;
   onTickError: (error: unknown) => void;
-  setIntervalFn?: (fn: () => void, ms: number) => unknown;
-  clearIntervalFn?: (handle: unknown) => void;
+  setTimeoutFn?: (fn: () => void, ms: number) => unknown;
+  clearTimeoutFn?: (handle: unknown) => void;
 }>): ConnectedServiceQuotasLoopHandle | null {
   if (!params.enabled) return null;
 
-  const tickMs = Math.max(1, Math.trunc(params.tickMs));
-  const setIntervalImpl = params.setIntervalFn ?? ((fn, ms) => setInterval(fn, ms));
-  const clearIntervalImpl =
-    params.clearIntervalFn ?? ((handle) => clearInterval(handle as unknown as ReturnType<typeof setInterval>));
-
   let stopped = false;
-  let inFlight: Promise<void> | null = null;
-  let paused = false;
-  let stopPromise: Promise<void> | null = null;
   const settledTickListeners = new Set<() => void | Promise<void>>();
-  const intervalHandle = setIntervalImpl(() => {
-    if (stopped || inFlight) return;
-    if (paused) return;
-    inFlight = (async () => {
-      try {
-        await params.coordinator.tickOnce();
-        if (!stopped) await Promise.all([...settledTickListeners].map(listener => listener()));
-      } catch (error) {
-        params.onTickError(error);
-      } finally {
-        inFlight = null;
-      }
-    })();
-  }, tickMs);
-  (intervalHandle as unknown as { unref?: () => void })?.unref?.();
+  const loop = startSingleFlightIntervalLoop({
+    intervalMs: params.tickMs,
+    task: async () => {
+      const schedule = await params.coordinator.tickOnce();
+      if (!stopped) await Promise.all([...settledTickListeners].map(listener => listener()));
+      return schedule;
+    },
+    onError: params.onTickError,
+    unref: true,
+    setTimeoutFn: params.setTimeoutFn,
+    clearTimeoutFn: params.clearTimeoutFn,
+  });
+  const unsubscribeWake = params.subscribeWake?.(loop.trigger);
+  if (params.runImmediately) loop.trigger();
 
   return {
     stop: async () => {
-      if (stopPromise) {
-        await stopPromise;
-        return;
-      }
       stopped = true;
+      unsubscribeWake?.();
       settledTickListeners.clear();
-      clearIntervalImpl(intervalHandle);
-      stopPromise = (async () => {
-        await inFlight;
-      })();
-      await stopPromise;
+      await loop.stop();
     },
-    pause: () => {
-      paused = true;
-    },
-    resume: () => {
-      paused = false;
-    },
+    pause: loop.pause,
+    resume: () => { loop.trigger(); loop.resume(); },
+    wake: loop.trigger,
     subscribeAfterTick: listener => {
       if (!stopped) settledTickListeners.add(listener);
       return () => { settledTickListeners.delete(listener); };

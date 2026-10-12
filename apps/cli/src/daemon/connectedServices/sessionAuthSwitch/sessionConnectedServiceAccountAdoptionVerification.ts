@@ -50,6 +50,7 @@ export function createSessionConnectedServiceAccountAdoptionVerifier(deps?: Read
       agentId: input.agentId,
       materializedSelection: input.runtimeAuthSelection,
       fallbackSelection: {
+        ...(binding?.source === 'connected' ? { kind: binding.selection } : {}),
         serviceId: input.serviceId,
         binding,
         profileId: input.target.profileId,

@@ -26,6 +26,7 @@ export type ConnectedServiceResolvedSelection =
 
 export type ConnectedServicesMaterialization = Readonly<{
   env: Record<string, string>;
+  unsetEnvKeys?: readonly string[];
   targetMaterializedRoot?: string | null;
   requestAuthMaterializedRoot?: string | null;
   cleanupOnFailure: (() => void | Promise<void>) | null;

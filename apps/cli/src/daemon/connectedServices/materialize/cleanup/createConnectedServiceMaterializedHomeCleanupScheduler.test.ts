@@ -1,4 +1,4 @@
-import { mkdir, stat, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
@@ -23,6 +23,28 @@ async function createIdentityRoot(baseDir: string, materializationKey: string): 
 }
 
 describe('createConnectedServiceMaterializedHomeCleanupScheduler', () => {
+  it('does not reclaim a retained home through an aliased attempts directory', async () => {
+    const root = await createTempDir('happier-materialized-attempt-alias-');
+    const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR']);
+    try {
+      envScope.patch({ HAPPIER_HOME_DIR: join(root, 'cli') });
+      reloadConfiguration();
+      const baseDir = join(root, 'materialized');
+      const retained = await createIdentityRoot(baseDir, 'retained-home');
+      const agentHome = join(retained, 'codex');
+      await utimes(agentHome, new Date(1_000), new Date(1_000));
+      await symlink(retained, join(baseDir, '.attempts'), 'dir');
+      const scheduler = createConnectedServiceMaterializedHomeCleanupScheduler({
+        baseDir, nowMs: () => 10_000, orphanTtlMs: 1_000, attemptTtlMs: 1_000,
+        pidToTrackedSession: new Map(), getRetainedMaterializationKeys: async () => ['retained-home'],
+      });
+      await scheduler.reconcile();
+      await expect(stat(agentHome)).resolves.toBeTruthy();
+    } finally {
+      envScope.restore(); reloadConfiguration(); await removeTempDir(root);
+    }
+  });
+
   it('retains live and recoverable Run homes but reclaims a settled Run without native resume identity', async () => {
     const root = await createTempDir('happier-run-home-retention-');
     const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR']);

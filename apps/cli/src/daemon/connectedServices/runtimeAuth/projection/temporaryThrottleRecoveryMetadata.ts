@@ -1,4 +1,5 @@
 import { SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY as key, SessionUsageLimitRecoveryV1Schema } from '@happier-dev/protocol/sessions/state/valueSchemas/usageLimitRecovery';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import type { SessionUsageLimitRecoveryV1 } from '@happier-dev/protocol';
 import {
   hasSameUsageLimitRecoveryIdentity,
@@ -21,7 +22,7 @@ export function projectTemporaryThrottleRecoveryMetadata(
   metadata: Record<string, unknown>, intent: ThrottleProjectionIntent | null,
   previous: ThrottleProjectionIntent | null,
 ): Record<string, unknown> {
-  const parsed = SessionUsageLimitRecoveryV1Schema.safeParse(metadata[key]);
+  const parsed = createStoredReadSchema(SessionUsageLimitRecoveryV1Schema).safeParse(metadata[key]);
   const current = parsed.success ? parsed.data : null;
   if (!intent) {
     if (!previous || !current || !hasSameUsageLimitRecoveryIdentity(current, {

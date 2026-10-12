@@ -83,6 +83,7 @@ export function buildProviderAccountUsageSnapshotFromConnectedServiceQuotaObserv
         planLabel: snapshot.planLabel,
         accountLabel: snapshot.accountLabel,
         ...(snapshot.recoveryCredits ? { recoveryCredits: snapshot.recoveryCredits } : {}),
+        ...(snapshot.recoveryCreditDetails ? { recoveryCreditDetails: snapshot.recoveryCreditDetails } : {}),
         ...(snapshot.subscription ? { subscription: snapshot.subscription } : {}),
         meters: snapshot.meters,
         ...(snapshot.diagnostics ? { diagnostics: snapshot.diagnostics } : {}),

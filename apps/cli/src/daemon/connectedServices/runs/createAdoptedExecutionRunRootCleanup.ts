@@ -1,9 +1,9 @@
-import { realpath } from 'node:fs/promises';
 import { isAbsolute, relative, resolve } from 'node:path';
 
 import type { CatalogAgentId } from '@/agent/catalog/ids';
 import { isConnectedServiceMaterializedHomeRetainedOnExit } from '../materialize/cleanup/createConnectedServiceMaterializedHomeCleanupScheduler';
 import { resolveConnectedServiceMaterializedRootDir } from '../materialize/resolveConnectedServiceMaterializedRootDir';
+import { isCanonicalConnectedServiceMaterializedRoot } from '../materialize/privateMaterializedRoot';
 
 export function createAdoptedExecutionRunRootCleanup(input: Readonly<{
     materializationBaseDir: string;
@@ -24,8 +24,7 @@ export function createAdoptedExecutionRunRootCleanup(input: Readonly<{
     if (root !== expectedRoot) return null;
     return async () => {
         try {
-            const [realBase, realRoot] = await Promise.all([realpath(base), realpath(root)]);
-            if (relative(realBase, realRoot) !== relative(base, expectedRoot)) return;
+            if (!await isCanonicalConnectedServiceMaterializedRoot({ baseDir: base, rootDir: root })) return;
         } catch {
             return;
         }

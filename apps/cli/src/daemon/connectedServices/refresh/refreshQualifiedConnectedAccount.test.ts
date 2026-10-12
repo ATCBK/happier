@@ -74,6 +74,7 @@ async function createHarness() {
     },
   };
   const credentialSnapshot = {
+    retiredSnapshotField: true,
     ref: account,
     authenticationModeId: 'oauth',
     revisionSemantics: 'revisioned' as const,
@@ -95,6 +96,7 @@ async function createHarness() {
       randomBytes: (length) => new Uint8Array(length),
     }),
     metadata: {
+      retiredMetadataField: true,
       providerIdentity: { accountId: 'account-1' },
       displayName: 'Account 1',
       scopes: ['openid'],

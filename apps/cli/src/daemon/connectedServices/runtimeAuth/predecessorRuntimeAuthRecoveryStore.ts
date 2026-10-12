@@ -1,5 +1,6 @@
 import { ConnectedServiceCredentialRevisionV1Schema } from '@happier-dev/protocol/connect/connected-service-schemas';
 import { TranscriptRawAgentEventV1Schema } from '@happier-dev/protocol/sessions/messages/transcriptRawRecordV1';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import type { DurableBackoffRecoveryStore } from '../recoveryScheduler/DurableBackoffRecoveryScheduler';
 import type { RecoveryIntentFileStore } from '../recoveryScheduler/recoveryIntentFileStore';
@@ -70,7 +71,7 @@ function readPredecessorPendingVisibleEvents(
     const transition = pending?.transition === 'working' || pending?.transition === 'scheduled'
       ? pending.transition
       : null;
-    const transcriptEvent = TranscriptRawAgentEventV1Schema.safeParse(pending?.transcriptEvent);
+    const transcriptEvent = createStoredReadSchema(TranscriptRawAgentEventV1Schema).safeParse(pending?.transcriptEvent);
     if (
       !attemptId
       || attemptId !== expected.attemptId

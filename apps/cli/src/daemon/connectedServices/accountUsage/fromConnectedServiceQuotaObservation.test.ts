@@ -47,6 +47,15 @@ function createSnapshot(
 }
 
 describe('buildProviderAccountUsageSnapshotFromConnectedServiceQuotaObservation', () => {
+  it('preserves recovery-credit presentation through scalar and qualified quota conversion', () => {
+    const recoveryCreditDetails = { grant: { remainingCount: 2, appliesToProviderLimitIds: ['weekly'], unavailableReason: 'cooldown' as const } };
+    const quota = createSnapshot({ recoveryCreditDetails });
+    expect(buildProviderAccountUsageSnapshotFromConnectedServiceQuotaObservation({ snapshot: quota }).recoveryCreditDetails).toEqual(recoveryCreditDetails);
+    const { serviceId: _serviceId, profileId: _profileId, ...quotaFields } = quota;
+    const ref = { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'work' };
+    expect(buildProviderAccountUsageSnapshotFromQualifiedQuotaRow({ ref, quota: { ...quotaFields, ref } }).recoveryCreditDetails).toEqual(recoveryCreditDetails);
+  });
+
   it('builds a canonical provider-account usage snapshot from exact runtime quota evidence', () => {
     const subscription = {
       status: 'subscribed' as const, renewal: 'off' as const,

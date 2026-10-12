@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { lstat } from 'node:fs/promises';
+import { lstat, realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { qualifiedPurposeKey } from '@happier-dev/protocol/connect/connected-account-purpose-bindings';
+import { sameQualifiedConnectedAccountRef } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
 import { resolveConnectedServicesProviderStateSharingPolicyV1 } from '@happier-dev/protocol/account/settings/connected-services';
-import type { AccountSettings, ConnectedAccountServiceKey, ConnectedServiceCredentialRecordV1, ConnectedServiceId, QualifiedConnectedAccountPurposeBindingV1 } from '@happier-dev/protocol';
+import type { AccountSettings, ConnectedAccountServiceKey, ConnectedServiceCredentialRecordV1, ConnectedServiceId, QualifiedConnectedAccountPurposeBindingV1, RuntimeDescriptorV1 } from '@happier-dev/protocol';
 import {
   resolveConnectedAccountRequestAuthCapabilityPath,
 } from '@happier-dev/agents/request-auth';
@@ -33,6 +34,9 @@ import type {
 import { createBestEffortCleanupDirectory } from '@/daemon/connectedServices/materialization/materializer';
 import { isConnectedServiceMaterializedHomeRetainedOnExit } from './cleanup/createConnectedServiceMaterializedHomeCleanupScheduler';
 import { copyConnectedServiceHomeEntry } from '../stateSharing/connectedServiceHomeEntrySync';
+import { readConnectedServiceStateSharingManifest, writeConnectedServiceStateSharingManifest } from '../stateSharing/connectedServiceStateSharingManifest';
+import { importConnectedServiceSessionFiles, type ConnectedServiceSessionFileImportRoot } from '../stateSharing/importConnectedServiceSessionFiles';
+import { verifyResumeReachableThroughCatalog } from '../catalogHooks';
 import { replaceDirectoryAtomically } from '@/utils/fs/replaceDirectoryAtomically';
 import {
   HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_ENV_KEY,
@@ -43,7 +47,8 @@ import {
 } from '../connectedServiceChildEnvironment';
 import { resolveConnectedServiceMaterializedRootDir } from './resolveConnectedServiceMaterializedRootDir';
 import { resolveConnectedServiceTargetMaterializedRoot } from './resolveConnectedServiceTargetMaterializedRoot';
-import { ensurePrivateConnectedServiceMaterializedRoot } from './privateMaterializedRoot';
+import { resolveConnectedServiceNativeHomeTarget } from './resolveConnectedServiceNativeHomeTarget';
+import { ensurePrivateConnectedServiceMaterializedRoot, isCanonicalConnectedServiceMaterializedRoot } from './privateMaterializedRoot';
 import { materializeQualifiedConnectedAccountLaunchUses } from './materializeQualifiedConnectedAccountLaunchUses';
 import {
   createExactV021ConnectedServiceMaterializationOwner,
@@ -205,7 +210,12 @@ async function materializeQualifiedConnectedAccountLaunchForSpawn(params: Readon
   retainCleanup?: (cleanup: () => Promise<void>) => Promise<() => void>;
   agentId: CatalogAgentId;
   materializationKey: string;
+  activeServerDir: string;
   rootDir: string;
+  probePurpose?: 'probe';
+  runtimeDescriptorV1?: RuntimeDescriptorV1;
+  vendorResumeId?: string | null;
+  candidatePersistedSessionFile?: string | null;
   previousMaterializedRoot?: string | null;
   sessionDirectory?: string | null;
   processEnv?: NodeJS.ProcessEnv;
@@ -299,6 +309,8 @@ async function materializeQualifiedConnectedAccountLaunchForSpawn(params: Readon
       : null;
     const credentialFileOwner =
       lease.registry.resolveManagedServiceCredentialFileOwner?.();
+    const stateSharingDescriptor =
+      await catalogEntry?.getConnectedServiceStateSharingDescriptor?.() ?? null;
     const expectedAccountsByPurposeKey = new Map(
       (snapshot?.bindings ?? []).flatMap((binding) => (
         binding.target.kind === 'account'
@@ -306,6 +318,34 @@ async function materializeQualifiedConnectedAccountLaunchForSpawn(params: Readon
           : []
       )),
     );
+    if (!projectionOnlyGeminiOauth && stateSharingDescriptor?.providerSupportStatus === 'supported'
+      && stateSharingDescriptor.nativeHome) {
+      const capturedPurposes = new Set<string>();
+      for (const scope of snapshot?.fileMaterializationPurposes ?? []) {
+        const purposeKey = qualifiedPurposeKey(scope.purpose);
+        if (capturedPurposes.has(purposeKey) || !snapshot?.bindings.some(binding =>
+          qualifiedPurposeKey(binding.purpose) === purposeKey)) continue;
+        if (!connectedAccountsOwner) throw new Error('Connected Account launch authority is unavailable');
+        const binding = await connectedAccountsOwner.getBinding({
+          purpose: scope.purpose,
+          serviceRefs: scope.serviceRefs,
+          ...(params.exactPurposeBindingSubjectId
+            ? { exactPurposeBindingSubjectId: params.exactPurposeBindingSubjectId } : {}),
+          ...(params.purposeBindingSessionId ? { sessionId: params.purposeBindingSessionId } : {}),
+          signal: signalController.signal,
+        });
+        signalController.signal.throwIfAborted();
+        if (!binding) throw new Error('Connected Account native-home binding is unavailable');
+        const expected = expectedAccountsByPurposeKey.get(purposeKey);
+        if (expected && !sameQualifiedConnectedAccountRef(expected, binding.account)) {
+          throw new Error('Connected Account native-home binding changed');
+        }
+        expectedAccountsByPurposeKey.set(purposeKey, Object.freeze({
+          service: Object.freeze({ ...binding.account.service }), accountId: binding.account.accountId,
+        }));
+        capturedPurposes.add(purposeKey);
+      }
+    }
     const launchEnvironment = snapshot && connectedAccountsOwner && !projectionOnlyGeminiOauth
       ? await materializeQualifiedConnectedAccountLaunchUses({
         connectedAccountsOwner,
@@ -339,17 +379,17 @@ async function materializeQualifiedConnectedAccountLaunchForSpawn(params: Readon
             }
           : {}),
       })
-      : Object.freeze({});
+      : Object.freeze({ env: Object.freeze({}), unsetEnvKeys: Object.freeze([]) });
 
     signalController.signal.throwIfAborted();
-    const env: Record<string, string> = { ...launchEnvironment };
+    const env: Record<string, string> = { ...launchEnvironment.env };
     if (params.requestAuthRequired) {
       env[CONNECTED_ACCOUNT_REQUEST_AUTH_CAPABILITY_PATH_ENV] =
         resolveConnectedAccountRequestAuthCapabilityPath(params.rootDir);
     }
     const diagnostics: ConnectedServicesMaterializationDiagnostic[] = [];
-    const stateSharingDescriptor =
-      await catalogEntry?.getConnectedServiceStateSharingDescriptor?.() ?? null;
+    const mergeSharedStateFile = await catalogEntry?.getConnectedServiceSharedStateFileMerge?.() ?? undefined;
+    let targetMaterializedRoot = params.rootDir;
     if (params.nativeHomeOnly && (!stateSharingDescriptor?.nativeHome
       || stateSharingDescriptor.providerSupportStatus !== 'supported')) {
       throw new Error('agent_native_home_unavailable');
@@ -358,133 +398,198 @@ async function materializeQualifiedConnectedAccountLaunchForSpawn(params: Readon
       stateSharingDescriptor?.providerSupportStatus === 'supported'
       && stateSharingDescriptor.nativeHome
     ) {
-      const allowNativeState = params.allowNativeAccountState !== false;
-      const sourceEnvironment = Object.freeze(Object.fromEntries(
-        Object.entries(allowNativeState ? params.processEnv ?? process.env : {}).filter(
-          (entry): entry is [string, string] => typeof entry[1] === 'string',
-        ),
-      ));
-      const policy = resolveConnectedServicesProviderStateSharingPolicyV1(
-        (params.accountSettings as Readonly<Record<string, unknown>> | null | undefined)
-          ?.connectedServicesProviderStateSharingSettingsV1,
-        params.agentId,
-      );
-      if (!allowNativeState && !params.previousMaterializedRoot) {
-        throw new Error('Requester materialized home identity unavailable');
-      }
-      const stateSharing = await writeArtifacts(() => applyConnectedServiceStateSharingDescriptor({
-        descriptor: stateSharingDescriptor,
-        nativeSourceContext: {
-          // Foreign requester materialization has no authority over the
-          // custodian's native home. Only its already-owned target is reachable.
-          sourceRoot: allowNativeState ? resolveConnectedServiceNativeHomeRoot({
-            nativeHome: stateSharingDescriptor.nativeHome!,
-            sourceEnvironment,
-            homeDir: homedir(),
-          }) : params.previousMaterializedRoot!,
-          sourceEnv: sourceEnvironment,
-        },
-        target: {
-          targetMaterializedRoot: params.rootDir,
-          targetMaterializedEnv: env,
-        },
-        previousMaterializedRoot: params.previousMaterializedRoot ?? null,
-        configMode: allowNativeState ? policy.configMode : 'isolated',
-        requestedStateMode: policy.stateMode,
-        effectiveStateMode: allowNativeState ? policy.stateMode : 'isolated',
-        cwd: params.sessionDirectory ?? process.cwd(),
-        providerLabel: params.agentId,
-      }));
-      Object.assign(env, stateSharing.envOverrides, {
-        [stateSharingDescriptor.nativeHome.environmentKey]: params.rootDir,
+      const nativeHome = stateSharingDescriptor.nativeHome;
+      const homesRoot = join(params.activeServerDir, 'daemon', 'connected-services', 'homes');
+      const homesRootIsOwned = await isCanonicalConnectedServiceMaterializedRoot({
+        baseDir: params.activeServerDir, rootDir: homesRoot, allowMissing: true,
       });
-      diagnostics.push(...stateSharing.diagnostics);
-
-      if (params.previousMaterializedRoot && stateSharing.manifest.effectiveStateMode === 'isolated') {
-        await writeArtifacts(async () => {
-          for (const entry of stateSharingDescriptor.state.entries) {
-            const source = join(params.previousMaterializedRoot!, entry.path);
-            const sourceStat = await lstat(source).catch((error: unknown) => {
-              if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return null;
-              throw error;
-            });
-            // Carry this Run's private state through credential replacement.
-            // Shared native-account links remain owned by their original home.
-            if (sourceStat && !sourceStat.isSymbolicLink()) {
-              await copyConnectedServiceHomeEntry(source, join(params.rootDir, entry.path), { localStateOnly: true });
+      const durableTarget = resolveConnectedServiceNativeHomeTarget({
+        agentId: params.agentId, activeServerDir: params.activeServerDir,
+        nativeHome, snapshot, expectedAccountsByPurposeKey, probePurpose: params.probePurpose,
+      });
+      if (durableTarget) {
+        targetMaterializedRoot = durableTarget;
+        if (!homesRootIsOwned || !await isCanonicalConnectedServiceMaterializedRoot({
+          baseDir: homesRoot, rootDir: targetMaterializedRoot, allowMissing: true,
+        })) throw new Error('connected_service_materialization_root_unsafe');
+      }
+      const nativeRoot = targetMaterializedRoot;
+      const durableNativeHome = nativeRoot !== params.rootDir;
+      const materializeNativeHome = async () => {
+        await writeArtifacts(() => ensurePrivateConnectedServiceMaterializedRoot(nativeRoot));
+        const allowNativeState = params.allowNativeAccountState !== false;
+        const sourceEnvironment = Object.freeze(Object.fromEntries(
+          Object.entries(allowNativeState ? params.processEnv ?? process.env : {}).filter(
+            (entry): entry is [string, string] => typeof entry[1] === 'string',
+          ),
+        ));
+        const policy = resolveConnectedServicesProviderStateSharingPolicyV1(
+          (params.accountSettings as Readonly<Record<string, unknown>> | null | undefined)
+            ?.connectedServicesProviderStateSharingSettingsV1,
+          params.agentId,
+        );
+        if (!allowNativeState && !params.previousMaterializedRoot) {
+          throw new Error('Requester materialized home identity unavailable');
+        }
+        const existingManifest = durableNativeHome
+          ? await readConnectedServiceStateSharingManifest(nativeRoot) : undefined;
+        const sourceRoots = new Set<string>();
+        if (params.probePurpose !== 'probe') {
+          if (params.previousMaterializedRoot) sourceRoots.add(params.previousMaterializedRoot);
+          if (durableNativeHome) sourceRoots.add(nativeRoot);
+          const priorHomeDeclaration = nativeHome.runtimeDescriptorHome;
+          const runtimeDescriptor = params.runtimeDescriptorV1;
+          if (priorHomeDeclaration && runtimeDescriptor?.agentId === params.agentId
+            && runtimeDescriptor.agent[priorHomeDeclaration.scopeField] === priorHomeDeclaration.scopeValue) {
+            const previousHome = runtimeDescriptor.agent[priorHomeDeclaration.pathField];
+            if (homesRootIsOwned && typeof previousHome === 'string' && isAbsolute(previousHome)
+              && await isCanonicalConnectedServiceMaterializedRoot({ baseDir: homesRoot, rootDir: previousHome })) {
+              sourceRoots.add(previousHome);
             }
           }
+        }
+        const nativeSourceRoot = allowNativeState ? resolveConnectedServiceNativeHomeRoot({
+          nativeHome, sourceEnvironment, homeDir: homedir(),
+        }) : params.previousMaterializedRoot!;
+        const effectiveStateMode = allowNativeState && params.probePurpose !== 'probe' ? policy.stateMode : 'isolated';
+        const includePrivateStateFile = (path: string) => stateSharingDescriptor.state.entries.some(entry =>
+          path === entry.path || path.startsWith(`${entry.path}/`));
+        const stateSharing = await writeArtifacts(() => applyConnectedServiceStateSharingDescriptor({
+          descriptor: stateSharingDescriptor,
+          nativeSourceContext: {
+            // Foreign requester materialization has no authority over the
+            // custodian's native home. Only its already-owned target is reachable.
+            sourceRoot: nativeSourceRoot,
+            sourceEnv: sourceEnvironment,
+          },
+          target: {
+            targetMaterializedRoot: nativeRoot,
+            targetMaterializedEnv: env,
+          },
+          previousMaterializedRoot: durableNativeHome ? nativeRoot : params.previousMaterializedRoot ?? null,
+          existingManifest,
+          configMode: allowNativeState ? policy.configMode : 'isolated',
+          requestedStateMode: params.probePurpose === 'probe' ? 'isolated' : policy.stateMode,
+          effectiveStateMode,
+          sessionImportRoots: durableNativeHome && effectiveStateMode === 'shared'
+            ? [...sourceRoots].map(sourceRoot => ({
+                sourceRoot, destinationRoot: nativeSourceRoot, includeFile: includePrivateStateFile,
+              })) : undefined,
+          mergeSharedStateFile,
+          cwd: params.sessionDirectory ?? process.cwd(),
+          providerLabel: params.agentId,
+        }));
+        Object.assign(env, stateSharing.envOverrides, {
+          [nativeHome.environmentKey]: nativeRoot,
         });
-      }
+        diagnostics.push(...stateSharing.diagnostics);
 
-      const nativeHomeFiles: Record<string, Uint8Array> = Object.create(null);
-      for (const scope of projectionOnlyGeminiOauth
-        ? []
-        : snapshot?.fileMaterializationPurposes ?? []) {
-        if (!snapshot?.bindings.some((binding) => (
-          qualifiedPurposeKey(binding.purpose) === qualifiedPurposeKey(scope.purpose)
-        ))) continue;
-        if (!connectedAccountsOwner) throw new Error('Connected Account launch authority is unavailable');
-        const binding = await connectedAccountsOwner.getBinding({
-          purpose: scope.purpose,
-          serviceRefs: scope.serviceRefs,
-          ...(params.exactPurposeBindingSubjectId
-            ? { exactPurposeBindingSubjectId: params.exactPurposeBindingSubjectId }
-            : {}),
-          ...(params.purposeBindingSessionId
-            ? { sessionId: params.purposeBindingSessionId }
-            : {}),
-          signal: signalController.signal,
-        });
-        signalController.signal.throwIfAborted();
-        if (!binding) {
-          throw new Error('Connected Account native-home binding is unavailable');
+        if (durableNativeHome && effectiveStateMode !== 'shared') {
+          const roots: ConnectedServiceSessionFileImportRoot[] = [];
+          for (const sourceRoot of sourceRoots) {
+            if (resolve(sourceRoot) === resolve(nativeRoot)) continue;
+            const accountHome = homesRootIsOwned && await isCanonicalConnectedServiceMaterializedRoot({
+              baseDir: homesRoot, rootDir: sourceRoot,
+            });
+            if (accountHome) {
+              // Another account owns its conversations and memories. Only the requested
+              // conversation, identified by the incumbent catalog verifier, may cross homes.
+              if (!params.vendorResumeId) continue;
+              const resumed = await verifyResumeReachableThroughCatalog(params.agentId, {
+                targetMaterializedRoot: sourceRoot,
+                vendorResumeId: params.vendorResumeId,
+                candidatePersistedSessionFile: params.candidatePersistedSessionFile,
+                ...(params.runtimeDescriptorV1 ? { runtimeDescriptorV1: params.runtimeDescriptorV1 } : {}),
+              });
+              if (!resumed?.ok) continue;
+              const resumedPath = relative(await realpath(sourceRoot), resumed.resolvedPath).split(sep).join('/');
+              roots.push({ sourceRoot, destinationRoot: nativeRoot, includeFile: path => path === resumedPath });
+            } else {
+              // A legacy Run home belongs to this session, so retain its declared private state.
+              roots.push({ sourceRoot, destinationRoot: nativeRoot, includeFile: includePrivateStateFile,
+                mergeSharedStateFile });
+            }
+          }
+          await writeArtifacts(() => importConnectedServiceSessionFiles({
+            roots,
+          }));
+        } else if (params.previousMaterializedRoot && params.probePurpose !== 'probe') {
+          await writeArtifacts(async () => {
+            for (const entry of stateSharingDescriptor.state.entries) {
+              // The descriptor result owns which entries are managed in the new home.
+              // A linked entry with no native source remains local, just like isolated state.
+              if (stateSharing.manifest.stateEntries.includes(entry.path)) continue;
+              const source = join(params.previousMaterializedRoot!, entry.path);
+              const sourceStat = await lstat(source).catch((error: unknown) => {
+                if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return null;
+                throw error;
+              });
+              // Carry this Run's private state through credential replacement.
+              // Shared native-account links remain owned by their original home.
+              if (sourceStat && !sourceStat.isSymbolicLink()) {
+                await copyConnectedServiceHomeEntry(source, join(nativeRoot, entry.path), { localStateOnly: true });
+              }
+            }
+          });
         }
-        const materialization = await connectedAccountsOwner.materialize({
-          purpose: scope.purpose,
-          serviceRefs: scope.serviceRefs,
-          ...(params.exactPurposeBindingSubjectId
-            ? { exactPurposeBindingSubjectId: params.exactPurposeBindingSubjectId }
-            : {}),
-          ...(params.purposeBindingSessionId
-            ? { sessionId: params.purposeBindingSessionId }
-            : {}),
-          expectedAccount:
-            expectedAccountsByPurposeKey.get(qualifiedPurposeKey(scope.purpose))
-            ?? binding.account,
-          request: Object.freeze({
-            kind: 'files' as const,
-            fileIds: Object.freeze([
-              ...stateSharingDescriptor.authIsolation.secretEntries,
-            ]),
-          }),
-          signal: signalController.signal,
-        });
-        signalController.signal.throwIfAborted();
-        if (materialization.kind !== 'files') {
-          throw new Error(
-            'Connected Account native-home credential returned the wrong materialization kind',
-          );
-        }
-        if (!Object.entries(materialization.files).some(([fileId, contents]) =>
-          stateSharingDescriptor.authIsolation.secretEntries.includes(fileId) && contents.byteLength > 0)) {
-          throw new Error('Connected Account native-home credential file is unavailable');
-        }
-        for (const [fileId, contents] of Object.entries(materialization.files)) {
-          if (Object.prototype.hasOwnProperty.call(nativeHomeFiles, fileId)) {
+        await writeArtifacts(() => writeConnectedServiceStateSharingManifest(nativeRoot, stateSharing.manifest));
+
+        const nativeHomeFiles: Record<string, Uint8Array> = Object.create(null);
+        for (const scope of projectionOnlyGeminiOauth
+          ? []
+          : snapshot?.fileMaterializationPurposes ?? []) {
+          if (!snapshot?.bindings.some((binding) => (
+            qualifiedPurposeKey(binding.purpose) === qualifiedPurposeKey(scope.purpose)
+          ))) continue;
+          if (!connectedAccountsOwner) throw new Error('Connected Account launch authority is unavailable');
+          const expectedAccount = expectedAccountsByPurposeKey.get(qualifiedPurposeKey(scope.purpose));
+          if (!expectedAccount) throw new Error('Connected Account native-home binding is unavailable');
+          const materialization = await connectedAccountsOwner.materialize({
+            purpose: scope.purpose,
+            serviceRefs: scope.serviceRefs,
+            ...(params.exactPurposeBindingSubjectId
+              ? { exactPurposeBindingSubjectId: params.exactPurposeBindingSubjectId }
+              : {}),
+            ...(params.purposeBindingSessionId
+              ? { sessionId: params.purposeBindingSessionId }
+              : {}),
+            expectedAccount,
+            request: Object.freeze({
+              kind: 'files' as const,
+              fileIds: Object.freeze([
+                ...stateSharingDescriptor.authIsolation.secretEntries,
+              ]),
+            }),
+            signal: signalController.signal,
+          });
+          signalController.signal.throwIfAborted();
+          if (materialization.kind !== 'files') {
             throw new Error(
-              `Connected Account native-home credential '${fileId}' has multiple owners`,
+              'Connected Account native-home credential returned the wrong materialization kind',
             );
           }
-          nativeHomeFiles[fileId] = contents;
+          if (!Object.entries(materialization.files).some(([fileId, contents]) =>
+            stateSharingDescriptor.authIsolation.secretEntries.includes(fileId) && contents.byteLength > 0)) {
+            throw new Error('Connected Account native-home credential file is unavailable');
+          }
+          for (const [fileId, contents] of Object.entries(materialization.files)) {
+            if (Object.prototype.hasOwnProperty.call(nativeHomeFiles, fileId)) {
+              throw new Error(
+                `Connected Account native-home credential '${fileId}' has multiple owners`,
+              );
+            }
+            nativeHomeFiles[fileId] = contents;
+          }
         }
-      }
-      await writeArtifacts(() => materializeConnectedServiceNativeHomeCredentials({
-        targetRoot: params.rootDir,
-        declaredSecretEntries:
-          stateSharingDescriptor.authIsolation.secretEntries,
-        files: Object.freeze(nativeHomeFiles),
-      }));
+        await writeArtifacts(() => materializeConnectedServiceNativeHomeCredentials({
+          targetRoot: nativeRoot,
+          declaredSecretEntries:
+            stateSharingDescriptor.authIsolation.secretEntries,
+          files: Object.freeze(nativeHomeFiles),
+        }));
+      };
+      if (durableNativeHome) await runSerializedMaterialization(nativeRoot, materializeNativeHome);
+      else await materializeNativeHome();
     }
 
     if (params.legacyV021) {
@@ -502,7 +607,8 @@ async function materializeQualifiedConnectedAccountLaunchForSpawn(params: Readon
 
     return {
       env,
-      targetMaterializedRoot: params.rootDir,
+      ...(launchEnvironment.unsetEnvKeys.length > 0 ? { unsetEnvKeys: launchEnvironment.unsetEnvKeys } : {}),
+      targetMaterializedRoot,
       requestAuthMaterializedRoot:
         params.requestAuthRequired ? params.rootDir : null,
       cleanupOnFailure: cleanup,
@@ -522,6 +628,10 @@ export async function materializeConnectedServicesForSpawn(params: Readonly<{
   retainCleanup?: (cleanup: () => Promise<void>) => Promise<() => void>;
   agentId: CatalogAgentId;
   materializationKey: string;
+  probePurpose?: 'probe';
+  runtimeDescriptorV1?: RuntimeDescriptorV1;
+  vendorResumeId?: string | null;
+  candidatePersistedSessionFile?: string | null;
   activeServerDir: string;
   baseDir: string;
   sessionDirectory?: string | null;
@@ -552,6 +662,10 @@ async function materializeConnectedServicesForSpawnUnlocked(params: Readonly<{
   retainCleanup?: (cleanup: () => Promise<void>) => Promise<() => void>;
   agentId: CatalogAgentId;
   materializationKey: string;
+  probePurpose?: 'probe';
+  runtimeDescriptorV1?: RuntimeDescriptorV1;
+  vendorResumeId?: string | null;
+  candidatePersistedSessionFile?: string | null;
   activeServerDir: string;
   baseDir: string;
   sessionDirectory?: string | null;
@@ -607,9 +721,10 @@ async function materializeConnectedServicesForSpawnUnlocked(params: Readonly<{
       try { await cleanupAttemptRoot(); } catch (error) { failures.push(error); }
       if (promoted) {
         try {
-          if (!await isConnectedServiceMaterializedHomeRetainedOnExit({
+          if (await isCanonicalConnectedServiceMaterializedRoot({ baseDir: params.baseDir, rootDir })
+            && (params.probePurpose === 'probe' || !await isConnectedServiceMaterializedHomeRetainedOnExit({
             materializationKey: params.materializationKey, homeRoot: rootDir,
-          })) {
+          }))) {
             await createBestEffortCleanupDirectory(rootDir, undefined, { failureMode: 'reject' })();
           }
         } catch (error) { failures.push(error); }
@@ -696,6 +811,10 @@ async function materializeConnectedServicesForSpawnUnlocked(params: Readonly<{
 
   let materialized: ConnectedServicesMaterialization | null;
   try {
+    if (!await isCanonicalConnectedServiceMaterializedRoot({ baseDir: params.baseDir, rootDir, allowMissing: true })
+      || !await isCanonicalConnectedServiceMaterializedRoot({ baseDir: params.baseDir, rootDir: attemptRoot, allowMissing: true })) {
+      throw new Error('connected_service_materialization_root_unsafe');
+    }
     await writeArtifacts(() => ensurePrivateConnectedServiceMaterializedRoot(attemptRoot));
     materialized = await materializer();
   } catch (error) {
@@ -761,14 +880,29 @@ async function materializeConnectedServicesForSpawnUnlocked(params: Readonly<{
     await writeArtifacts(() => runSerializedMaterializationPromotion(rootDir, async () => {
       assertOpen();
       assertActiveAttempt({ rootDir, attemptId, cleanupRoot: dropAttemptRoot });
-      await replaceDirectoryAtomically({
-        stagedDir: attemptRoot,
-        targetDir: rootDir,
-        afterPromote: () => {
+      if (!await isCanonicalConnectedServiceMaterializedRoot({ baseDir: params.baseDir, rootDir, allowMissing: true })) {
+        throw new Error('connected_service_materialization_root_unsafe');
+      }
+      const durableNativeHome = targetMaterializedRoot
+        && resolve(targetMaterializedRoot) !== resolve(rootDir);
+      if (durableNativeHome) {
+        // Native history belongs to the account/group, not this attempt. Keep
+        // predecessor private state until native resume continuity is established.
+        if (requestAuthMaterializedRoot) {
+          await ensurePrivateConnectedServiceMaterializedRoot(rootDir);
           promoted = true;
-          assertActiveAttempt({ rootDir, attemptId, cleanupRoot: dropAttemptRoot });
-        },
-      });
+        }
+        await cleanupAttemptRoot();
+      } else {
+        await replaceDirectoryAtomically({
+          stagedDir: attemptRoot,
+          targetDir: rootDir,
+          afterPromote: () => {
+            promoted = true;
+            assertActiveAttempt({ rootDir, attemptId, cleanupRoot: dropAttemptRoot });
+          },
+        });
+      }
       assertActiveAttempt({ rootDir, attemptId, cleanupRoot: dropAttemptRoot });
     }));
     assertActiveAttempt({ rootDir, attemptId, cleanupRoot: dropAttemptRoot });
@@ -784,9 +918,10 @@ async function materializeConnectedServicesForSpawnUnlocked(params: Readonly<{
     ): Promise<void> => {
       let rootRemovalError: unknown;
       const rootRemoval = (async () => {
+        if (!await isCanonicalConnectedServiceMaterializedRoot({ baseDir: params.baseDir, rootDir })) return;
         // Native rollouts may be the only resume state. Credential/runtime
         // retirement still runs; the existing orphan sweep owns later reclamation.
-        if (!await isConnectedServiceMaterializedHomeRetainedOnExit({
+        if (params.probePurpose === 'probe' || !await isConnectedServiceMaterializedHomeRetainedOnExit({
           materializationKey: params.materializationKey, homeRoot: rootDir,
         })) await cleanupFinalRoot();
       })().catch((error: unknown) => {

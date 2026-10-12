@@ -7,6 +7,7 @@ import {
     type ProviderAccountUsageSnapshotV1,
 } from '@happier-dev/protocol';
 import { describe, expect, it, vi } from 'vitest';
+import axios from 'axios';
 
 import type { StoredCredentials } from '@/persistence';
 
@@ -71,6 +72,37 @@ const plainCredentials = {
 } satisfies StoredCredentials;
 
 describe('provider account usage persistence scheduler', () => {
+    it.each(['plain', 'e2ee'] as const)('publishes recovery-detail updates through the real V4 writer for %s accounts', async (mode) => {
+        const post = vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: { success: true, source: { status: 'linked' } } });
+        const encryption = { type: 'legacy' as const, secret: new Uint8Array(32).fill(7) };
+        const scheduler = createProviderAccountUsagePersistenceScheduler({
+            api: { getAccountEncryptionMode: async () => mode },
+            credentials: mode === 'plain' ? plainCredentials : { token: 'token', encryption },
+            now: () => 1_500, fingerprintKey: new Uint8Array(32).fill(3),
+            randomBytes: (length) => new Uint8Array(length).fill(6), minFreshnessMs: 60_000,
+        });
+        const initial = createSnapshot({ recoveryCreditDetails: { grant: { remainingCount: 2, appliesToProviderLimitIds: ['weekly'] } } });
+        const changed = createSnapshot({ recoveryCreditDetails: { grant: { remainingCount: 1, appliesToProviderLimitIds: ['weekly'], unavailableReason: 'cooldown' } } });
+        try {
+            await scheduler.recordInBandSnapshot(initial, { targets: [createTarget()] });
+            await scheduler.flush(1_000);
+            expect(await scheduler.recordInBandSnapshot(changed, { targets: [createTarget()] })).toMatchObject({ status: 'enqueued' });
+            await scheduler.flush(1_000);
+            const write = post.mock.calls.at(-1)?.[1];
+            expect(post.mock.calls.at(-1)?.[0]).toContain('/v4/connect/qualified/provider-account-usage');
+            if (mode === 'plain') {
+                expect(write).toMatchObject({ snapshot: { recoveryCreditDetails: changed.recoveryCreditDetails } });
+            } else {
+                const sealed = SealedProviderAccountUsageSnapshotV1Schema.parse(write.sealedPayload);
+                expect(openSealedProviderAccountUsageSnapshot({ material: encryption, sealed })?.recoveryCreditDetails).toEqual(changed.recoveryCreditDetails);
+                expect(write).not.toHaveProperty('snapshot');
+            }
+        } finally {
+            scheduler.dispose();
+            post.mockRestore();
+        }
+    });
+
     it('publishes subscription freshness separately from unchanged quota history material', async () => {
         const writeQualifiedProviderAccountUsage = vi.fn<WriteQualifiedProviderAccountUsage>(async () => ({ success: true as const, source: { status: 'linked' as const } }));
         const scheduler = createProviderAccountUsagePersistenceScheduler({ api: { getAccountEncryptionMode: async () => 'plain' }, credentials: plainCredentials, writeQualifiedProviderAccountUsage, now: () => 1_500, fingerprintKey: new Uint8Array(32).fill(3), minFreshnessMs: 60_000 });

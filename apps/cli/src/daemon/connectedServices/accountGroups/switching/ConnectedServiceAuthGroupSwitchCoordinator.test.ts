@@ -477,7 +477,7 @@ describe('ConnectedServiceAuthGroupSwitchCoordinator', () => {
       sessionId: 'source-session', serviceId: 'openai-codex', groupId: 'main', reason: 'usage_limit', observedProfileId: 'primary',
     })).resolves.toMatchObject({ activeProfileId: resetProfile, status: resetProfile === 'primary' ? 'observed_generation' : 'switched' });
     expect(redeemed).toEqual([resetProfile]);
-    expect(resetContexts).toEqual([{ groupId: 'main', sessionId: 'source-session' }]);
+    expect(resetContexts).toEqual([{ groupId: 'main', sessionId: 'source-session', providerLimitIds: [] }]);
     expect(applied).toEqual([resetProfile]);
     expect(stored.generation).toBe(resetProfile === 'primary' ? 1 : 2);
   });
@@ -2453,6 +2453,66 @@ describe('ConnectedServiceAuthGroupSwitchCoordinator', () => {
         toProfileId: 'backup',
       }),
     ]);
+  });
+
+  it.each([
+    { ownerProviderLimitId: 'rate_limit', ownerSwitchesThisHour: 0, ownerStatus: 'switch_reason_disabled' },
+    { ownerProviderLimitId: null, ownerSwitchesThisHour: 3, ownerStatus: 'switch_limit_reached' },
+  ])('reconsiders a peer $ownerStatus using each waiting request ($ownerProviderLimitId)', async ({
+    ownerProviderLimitId, ownerSwitchesThisHour, ownerStatus,
+  }) => {
+    for (const trigger of ['classified_failure', 'pre_turn'] as const) {
+      let releaseOwnerLoad: () => void = () => {};
+      let ownerEntered: () => void = () => {};
+      const ownerLoadGate = new Promise<void>((resolve) => { releaseOwnerLoad = resolve; });
+      const ownerLoadStarted = new Promise<void>((resolve) => { ownerEntered = resolve; });
+      let loadCount = 0;
+      let current = state('primary', 1);
+      current = {
+        ...current,
+        policy: {
+          ...current.policy,
+          maxSwitchesPerSessionHour: 3,
+          quotaLimitSelection: { mode: 'selected', providerLimitIds: ['five_hour', 'seven_day'] },
+        },
+      };
+      const applied: string[] = [];
+      const committed: string[] = [];
+      const coordinator = new ConnectedServiceAuthGroupSwitchCoordinator({
+        accountScope: { serverId: 'home', accountId: 'alice' },
+        leases: new InMemoryConnectedServiceAuthGroupSwitchLeaseRegistry(),
+        nowMs: () => 1_000,
+        quotaFreshnessMs: 60_000,
+        loadState: async () => {
+          loadCount += 1;
+          if (loadCount === 1) { ownerEntered(); await ownerLoadGate; }
+          return current;
+        },
+        commitSwitch: async ({ toProfileId }) => {
+          committed.push(toProfileId);
+          current = { ...current, activeProfileId: toProfileId, generation: current.generation + 1 };
+          return current;
+        },
+        applyGeneration: async ({ sessionId, activeProfileId }) => {
+          applied.push(`${sessionId}:${activeProfileId}`);
+          return { ok: true, mode: 'hot_apply' };
+        },
+      });
+      const common = { serviceId: 'openai-codex', groupId: 'main', reason: 'usage_limit', observedProfileId: 'primary' };
+      const owner = coordinator.switchAfterClassifiedFailure({
+        ...common, sessionId: 'owner', providerLimitId: ownerProviderLimitId, sessionSwitchesThisHour: ownerSwitchesThisHour,
+      });
+      await ownerLoadStarted;
+      const waiter = trigger === 'classified_failure'
+        ? coordinator.switchAfterClassifiedFailure({ ...common, sessionId: 'waiter', providerLimitId: null })
+        : coordinator.switchBeforeTurn({ ...common, sessionId: 'waiter' });
+      if (trigger === 'pre_turn') await vi.waitFor(() => expect(loadCount).toBe(2));
+      releaseOwnerLoad();
+      await expect(owner).resolves.toMatchObject({ status: ownerStatus, generation: 1 });
+      await expect(waiter).resolves.toMatchObject({ status: 'switched', activeProfileId: 'backup', generation: 2, mode: 'hot_apply' });
+      expect(committed).toEqual(['backup']);
+      expect(applied).toEqual(['waiter:backup']);
+    }
   });
 
   it('re-enters runtime-auth recovery when a lease loser failed on the observed generation target', async () => {

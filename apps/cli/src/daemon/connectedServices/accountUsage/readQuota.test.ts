@@ -11,6 +11,19 @@ function fixture() {
 }
 
 describe('qualified quota read', () => {
+  it('reads reset admission facts without unrelated Account-wide Pending work', async () => {
+    const { source, snapshot } = fixture();
+    const http = vi.spyOn(axios, 'get').mockImplementation(async url => ({ status: 200,
+      data: String(url).includes('/sources/resolve') ? { source, recordId: snapshot.recordId, providerAccountId: 'subject', fetchedAt: 250, staleAfterMs: 1000 }
+        : { content: { t: 'plain', v: snapshot }, metadata: { fetchedAt: 250, staleAfterMs: 1000, status: 'ok' }, sources: [source] } }));
+    const pendingHttp = vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: { entries: [] } });
+    try {
+      const result = await readProviderAccountUsageQuotaV4({ source }, { credentials: { token: 'token' }, accountMode: 'plain', nowMs: 500,
+        ...{ includePendingWork: false } });
+      expect(result.current).toEqual(snapshot);
+      expect(pendingHttp).not.toHaveBeenCalled();
+    } finally { http.mockRestore(); pendingHttp.mockRestore(); }
+  });
   it.each(['pending', 'witness'] as const)('samples completion time after held %s HTTP without changing explicit as-of reads', async held => {
     const { source, snapshot: base } = fixture();
     const witness = { ...base, observedAtMs: 500, fetchedAtMs: 500 };
@@ -72,14 +85,18 @@ describe('qualified quota read', () => {
   it('opens the canonical keyless plain record, derives its observed pace and retains targets without refreshing a vendor', async () => {
     const { source, snapshot } = fixture();
     const http = vi.spyOn(axios, 'get').mockImplementation(async url => ({ status: 200, data: String(url).includes('/sources/resolve') ? { source, recordId: snapshot.recordId, providerAccountId: 'subject', fetchedAt: 250, staleAfterMs: 1000 } : { content: { t: 'plain', v: snapshot }, metadata: { fetchedAt: 250, staleAfterMs: 1000, status: 'ok' }, sources: [source] } }));
-    const pendingHttp = vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: { entries: [] } });
+    const unboundEntries = [
+      { sessionId: 'session', localId: 'queued', authorityCurrent: true },
+      { sessionId: 'offline-session', localId: 'queued', authorityCurrent: false },
+    ];
+    const pendingHttp = vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: { entries: [], unboundEntries } });
     try {
       const targets = [{ id: 'personal', scope: { kind: 'personal' as const }, utilizationFraction: 1.2 }];
       const result = await readProviderAccountUsageQuotaV4({ source }, { credentials: { token: 'token' }, accountMode: 'plain', nowMs: 500, targets });
       expect(result.current).toEqual(snapshot);
       expect(result.pace).toMatchObject([{ meterId: 'weekly', value: { status: 'available', pace: 2 } }]);
       expect(result.targets).toEqual(targets);
-      expect(result.waitingWork).toEqual({ status: 'available', entries: [] });
+      expect(result.waitingWork).toEqual({ status: 'available', entries: [], unboundEntries });
       expect(http.mock.calls.every(([url]) => !String(url).includes('/refresh'))).toBe(true);
     } finally { http.mockRestore(); pendingHttp.mockRestore(); }
   });

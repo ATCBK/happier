@@ -2,9 +2,8 @@ import { ConnectedAccountUiProjectionEntryV1Schema } from '@happier-dev/protocol
 import { ConnectedAccountHttpHeadersRequestSchema } from '@happier-dev/protocol/connect/connected-account-purposes';
 import { MAX_INTERACTION_TRANSIENT_CHOICES_V1 } from '@happier-dev/protocol/plugins/interactions/transientV1';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
-import { createPluginContributionIdentity } from '@happier-dev/protocol/plugins/contribution-identity';
 import { isQualifiedConnectedAccountProfileActiveV4, isQualifiedConnectedAccountProfileUsableV4, resolveQualifiedConnectedAccountGroupActiveAccountV4 } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
-import { sameQualifiedConnectedAccountRef } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
+import { ConnectedAccountServiceIdentityV1Schema, sameQualifiedConnectedAccountRef } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
 import type { ConnectedServiceCredentialRevisionV1, PluginConnectedAccountAuthenticationV2, QualifiedConnectedAccountGroupV4, QualifiedConnectedAccountProfileV4, QualifiedConnectedAccountPurposeV1, QualifiedConnectedAccountPurposeBindingTargetV1, QualifiedConnectedAccountRef } from '@happier-dev/protocol';
 import { PluginError } from '@happier-dev/plugin-sdk';
 import type {
@@ -31,6 +30,7 @@ import type {
 } from '@/plugins/runtime/invocation/services/connectedAccounts';
 import type { PluginReloadController } from '@/plugins/runtime/reload/controller';
 import type { PluginAccessSelection } from '@/plugins/store/install/accessScopeRegistry';
+import { waitForChangeOrDeadline } from '@/daemon/lifecycle/waitForChangeOrDeadline';
 
 import {
   createActiveAccountSettingsConnectedAccountPurposeBindingStore,
@@ -155,7 +155,7 @@ export type DaemonConnectedAccountPurposeSessionRestartOwner = (
 ) => void;
 
 function qualifiedContributionKey(ref: PluginContributionRef): string {
-  return buildQualifiedPluginContributionKey(createPluginContributionIdentity(ref));
+  return buildQualifiedPluginContributionKey(ConnectedAccountServiceIdentityV1Schema.parse(ref));
 }
 
 function createRuntimeRegistryAccess(
@@ -177,6 +177,12 @@ function createRuntimeRegistryAccess(
       return Object.freeze({
         isCurrent: () => reloadController.isRuntimeRegistryCurrent(lease.registry),
         resolveService(service: PluginContributionRef) {
+          const host = lease.registry.connectedAccountContributions?.describe(service);
+          if (host?.sourceCustody.kind === 'host') {
+            return Object.freeze({ service: host.ref,
+              availability: host.isCurrent() ? 'available' as const : 'unavailable' as const,
+              authentication: host.descriptor.authentication });
+          }
           const parsedEntry = ConnectedAccountUiProjectionEntryV1Schema.safeParse(
             projected.entriesById[qualifiedContributionKey(service)],
           );
@@ -199,7 +205,10 @@ function createRuntimeRegistryAccess(
           });
         },
         listServices() {
-          return Object.freeze(Object.values(projected.entriesById).flatMap((rawEntry) => {
+          const hosts = lease.registry.connectedAccountContributions?.list().flatMap(entry => entry.sourceCustody.kind === 'host'
+            ? [{ service: entry.ref, availability: entry.isCurrent() ? 'available' as const : 'unavailable' as const, authentication: entry.descriptor.authentication }]
+            : []) ?? [];
+          return Object.freeze([...hosts, ...Object.values(projected.entriesById).flatMap((rawEntry) => {
             const parsedEntry = ConnectedAccountUiProjectionEntryV1Schema.safeParse(rawEntry);
             if (!parsedEntry.success) return [];
             const entry = parsedEntry.data;
@@ -219,7 +228,7 @@ function createRuntimeRegistryAccess(
                 : 'unavailable' as const,
               authentication: entry.authentication,
             })];
-          }));
+          })]);
         },
         release: lease.release,
       });
@@ -396,6 +405,8 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
   openTeamDirect?: TeamCredentialDirectMaterialClient['open'];
   workerMachineId?: string;
   resolveQualifiedConnectedAccountV4Support(): QualifiedConnectedAccountV4Support;
+  /** Root Account changes/reconnect invalidate this projection; requester contexts without that observer retain only in-flight reads. */
+  coordinatorInventoryIsObserved?: () => boolean;
   reloadController?: Pick<
     PluginReloadController,
     'acquireRuntimeRegistry' | 'isRuntimeRegistryCurrent' | 'subscribe'
@@ -461,7 +472,59 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
   const runtimeRegistry = params.runtimeRegistry
     ?? createRuntimeRegistryAccess(params.reloadController!);
   const invalidationListeners = new Set<() => void>();
+  type CoordinatorInventoryRead = {
+    valid: boolean;
+    pending: boolean;
+    isCurrent: () => boolean;
+    promise: Promise<readonly QualifiedConnectedAccountProfileV4[]>;
+  };
+  let coordinatorInventory: CoordinatorInventoryRead | undefined;
   let sessionRestartOwner: DaemonConnectedAccountPurposeSessionRestartOwner | null = null;
+
+  const readCoordinatorInventory = async (
+    setCurrentness: (isCurrent: () => boolean) => void,
+  ): Promise<readonly QualifiedConnectedAccountProfileV4[]> => {
+    // A coordinator's cancellation must not cancel the other coordinator's read.
+    // The HTTP boundary retains its existing request timeout.
+    const signal = new AbortController().signal;
+    const lease = await runtimeRegistry.acquire();
+    try {
+      setCurrentness(lease.isCurrent);
+      assertCurrentRegistry(lease, signal);
+      const services = (lease.listServices?.() ?? [])
+        .filter((service) => service.availability === 'available');
+      const accounts = (await Promise.all(services.map(async (service) => {
+        const result = await params.qualifiedApi!.listAccounts(service.service, signal);
+        if (result.service.pluginId !== service.service.pluginId
+          || result.service.localId !== service.service.localId) {
+          throw new Error('Qualified Connected Account inventory returned a different service');
+        }
+        return result.accounts;
+      }))).flat();
+      assertCurrentRegistry(lease, signal);
+      return Object.freeze(accounts);
+    } finally {
+      await lease.release();
+    }
+  };
+
+  const startCoordinatorInventoryRead = (): CoordinatorInventoryRead => {
+    const read: CoordinatorInventoryRead = {
+      valid: true,
+      pending: true,
+      isCurrent: () => true,
+      promise: readCoordinatorInventory((isCurrent) => { read.isCurrent = isCurrent; }),
+    };
+    coordinatorInventory = read;
+    const discard = () => {
+      if (coordinatorInventory === read) coordinatorInventory = undefined;
+    };
+    void read.promise.then(() => {
+      read.pending = false;
+      if (params.coordinatorInventoryIsObserved?.() !== true) discard();
+    }, discard);
+    return read;
+  };
 
   const resolveService = async (
     service: PluginContributionRef,
@@ -1197,32 +1260,24 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
       ) {
         return Object.freeze([]);
       }
-      const lease = await runtimeRegistry.acquire();
-      try {
-        assertCurrentRegistry(lease, signal);
-        const services = (lease.listServices?.() ?? [])
-          .filter((service) => service.availability === 'available');
-        const accounts = (
-          await Promise.all(services.map(async (service) => {
-            const result = await params.qualifiedApi!.listAccounts(
-              service.service,
-              signal,
-            );
-            if (
-              result.service.pluginId !== service.service.pluginId
-              || result.service.localId !== service.service.localId
-            ) {
-              throw new Error(
-                'Qualified Connected Account inventory returned a different service',
-              );
-            }
-            return result.accounts;
-          }))
-        ).flat();
-        assertCurrentRegistry(lease, signal);
-        return Object.freeze(accounts);
-      } finally {
-        await lease.release();
+      for (;;) {
+        signal.throwIfAborted();
+        const read = coordinatorInventory?.valid && coordinatorInventory.isCurrent()
+          && (coordinatorInventory.pending || params.coordinatorInventoryIsObserved?.() === true)
+          ? coordinatorInventory : startCoordinatorInventoryRead();
+        try {
+          await waitForChangeOrDeadline({ signal, waitForChange: async () => {
+            await read.promise;
+          } });
+          signal.throwIfAborted();
+          const accounts = await read.promise;
+          if (!read.valid || !read.isCurrent()) continue;
+          return accounts;
+        } catch (error) {
+          signal.throwIfAborted();
+          if (!read.valid || !read.isCurrent()) continue;
+          throw error;
+        }
       }
     },
     async listGroupQuotaTargets(input) {
@@ -1285,6 +1340,8 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
       };
     },
     invalidate() {
+      if (coordinatorInventory) coordinatorInventory.valid = false;
+      coordinatorInventory = undefined;
       for (const listener of invalidationListeners) listener();
     },
   });

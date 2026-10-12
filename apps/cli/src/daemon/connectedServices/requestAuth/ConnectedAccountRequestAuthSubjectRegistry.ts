@@ -23,6 +23,7 @@ type SubjectRecord = {
     materializedRootDir: string;
     authorityCurrent: boolean;
     cleanupPromise: Promise<void> | null;
+    onRetire?: () => void;
 };
 
 export type ConnectedAccountRequestAuthSubjectRegistry = Readonly<{
@@ -31,6 +32,8 @@ export type ConnectedAccountRequestAuthSubjectRegistry = Readonly<{
         materializedRootDir: string;
         materializationId: string;
         httpPort: number;
+        /** The registry retires the exact purpose lease along with its capability. */
+        onRetire?: () => void;
         /**
          * A lifecycle owner may stage and verify the capability, then run its
          * final proof immediately before this registry's synchronous authority
@@ -46,6 +49,7 @@ export type ConnectedAccountRequestAuthSubjectRegistry = Readonly<{
         options?: Readonly<{ removeMaterializedRoot?: boolean }>,
     ) => Promise<void>;
     authenticate: (capability: unknown) => ConnectedAccountRequestAuthSubject | null;
+    retireSessionCapabilities(input: Readonly<{ parentSessionId: string; materializationId: string }>): Promise<void>;
 }>;
 
 export type ConnectedAccountRequestAuthSubjectRegistryDependencies = Readonly<{
@@ -104,6 +108,10 @@ export function createConnectedAccountRequestAuthSubjectRegistry(
         const record = recordsByCapabilityDigest.get(capabilityDigest) ?? null;
         if (!record) return null;
         recordsByCapabilityDigest.delete(capabilityDigest);
+        if (record.authorityCurrent) {
+            record.authorityCurrent = false;
+            record.onRetire?.();
+        }
         const key = materializationKey({
             materializedRootDir: record.materializedRootDir,
             materializationId: record.descriptor.materializationId,
@@ -149,6 +157,7 @@ export function createConnectedAccountRequestAuthSubjectRegistry(
                 materializedRootDir: input.materializedRootDir,
                 authorityCurrent: true,
                 cleanupPromise: null,
+                ...(input.onRetire ? { onRetire: input.onRetire } : {}),
             });
             capabilityDigestByMaterialization.set(key, descriptor.capabilityDigest);
             if (previousDigest && previousDigest !== descriptor.capabilityDigest) {
@@ -218,6 +227,7 @@ export function createConnectedAccountRequestAuthSubjectRegistry(
         if (record.authorityCurrent) {
             // Authority is removed synchronously before filesystem cleanup begins.
             record.authorityCurrent = false;
+            record.onRetire?.();
             const key = materializationKey({
                 materializedRootDir: record.materializedRootDir,
                 materializationId: record.descriptor.materializationId,
@@ -275,10 +285,14 @@ export function createConnectedAccountRequestAuthSubjectRegistry(
         );
         return Object.freeze({
             subjectId: record.subject.subjectId,
+            ...(record.subject.parentSessionId ? { parentSessionId: record.subject.parentSessionId } : {}),
             ...(record.subject.legacyServiceKeyedCompatibility === true
                 ? { legacyServiceKeyedCompatibility: true as const }
                 : {}),
             isCurrent: isPrincipalCurrent,
+            ...(record.subject.validateCurrent ? { validateCurrent: async (signal: AbortSignal) => (
+                isPrincipalCurrent() && await record.subject.validateCurrent!(signal) && isPrincipalCurrent()
+            ) } : {}),
             registerRedaction: (values) => {
                 if (!isPrincipalCurrent()) {
                     throw new ConnectedAccountRequestAuthError('request_auth_not_active');
@@ -298,5 +312,12 @@ export function createConnectedAccountRequestAuthSubjectRegistry(
         activate,
         retire,
         authenticate,
+        async retireSessionCapabilities(input) {
+            const records = [...recordsByCapabilityDigest.values()].filter(record => (
+                record.subject.parentSessionId === input.parentSessionId
+                && record.descriptor.materializationId === input.materializationId
+            ));
+            await Promise.all(records.map(record => retire(record.descriptor, { removeMaterializedRoot: true })));
+        },
     };
 }

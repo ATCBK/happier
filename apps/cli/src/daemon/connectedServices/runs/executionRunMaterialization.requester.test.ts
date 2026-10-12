@@ -165,12 +165,10 @@ describe('requester execution-run materialization', () => {
       const nativeHome = result.env.CODEX_HOME;
       if (!nativeHome) throw new Error('The Run did not materialize its native auth home');
       expect(await readFile(join(nativeHome, 'auth.json'), 'utf8')).toContain('bob-subscription');
-      expect(result.registration.materializedRoot).toBe(resolveConnectedServiceMaterializedRootDir({
-        baseDir: resolveBaseDir('bob-session'), materializationKey: 'bob-run', agentId: 'codex',
-      }));
+      expect(result.registration.materializedRoot).toBe(nativeHome);
       expect(registry.getRunTargetByRunKey('bob-run')?.sessionId).toBe('bob-session');
       await bridge.release({ runId: 'bob-run', runnerPid: process.pid, activationId: result.activationId });
-      await expect(access(nativeHome)).rejects.toThrow();
+      await expect(access(nativeHome)).resolves.toBeUndefined();
       await expect(readFile(join(aliceRoot, 'custodian-sentinel'), 'utf8')).resolves.toBe('alice-private');
       const grouped = await bridge.materialize({ runId: 'bob-group-run', runnerPid: process.pid, agentId: 'codex',
         cwd: runtime.happyHomeDir, modelId: 'requested-model', connectedServices: { v: 2, bindingsByServiceId: {
@@ -194,7 +192,7 @@ describe('requester execution-run materialization', () => {
         sessionId: 'bob-session', persistedLaunch: result.registration })).resolves.toBe(true);
       runnerCurrent = false;
       await bridge.releaseForRunnerExit({ runnerPid: process.pid, runnerIdentity });
-      await expect(access(nativeHome)).rejects.toThrow();
+      await expect(access(nativeHome)).resolves.toBeUndefined();
       await expect(readFile(join(aliceRoot, 'custodian-sentinel'), 'utf8')).resolves.toBe('alice-private');
       // Cold terminal cleanup uses the exact retained parent Session without
       // admitting work or borrowing the custodian root after requester loss.
@@ -206,8 +204,24 @@ describe('requester execution-run materialization', () => {
       await expect(readFile(join(nativeHome, 'auth.json'), 'utf8')).resolves.toBe('retired-bob-secret');
       await expect(bridge.cleanupTerminalMaterialization({ runId: 'bob-run', runnerPid: process.pid,
         sessionId: 'bob-session', receipt })).resolves.toBe(true);
-      await expect(access(nativeHome)).rejects.toThrow();
+      await expect(access(nativeHome)).resolves.toBeUndefined();
       await expect(readFile(join(aliceRoot, 'custodian-sentinel'), 'utf8')).resolves.toBe('alice-private');
+      // Durable account homes need runtime adoption/release, but never run-root deletion.
+      const durableHome = join(runtime.happyHomeDir, 'profiles', 'bob', 'codex-home');
+      await mkdir(durableHome, { recursive: true });
+      await writeFile(join(durableHome, 'history-sentinel'), 'bob-private-history');
+      runnerCurrent = true;
+      await expect(bridge.adoptLiveMaterialization({ runId: 'bob-run', runnerPid: process.pid,
+        sessionId: 'bob-session', persistedLaunch: { ...result.registration, materializedRoot: durableHome } }))
+        .resolves.toBe(true);
+      expect(registry.getRunTargetByRunKey('bob-run')?.sessionId).toBe('bob-session');
+      runnerCurrent = false;
+      await bridge.releaseForRunnerExit({ runnerPid: process.pid, runnerIdentity });
+      expect(registry.getRunTargetByRunKey('bob-run')).toBeNull();
+      await expect(readFile(join(durableHome, 'history-sentinel'), 'utf8')).resolves.toBe('bob-private-history');
+      await expect(bridge.cleanupTerminalMaterialization({ runId: 'bob-run', runnerPid: process.pid,
+        sessionId: 'bob-session', receipt, materializedRoot: durableHome })).resolves.toBe(true);
+      await expect(readFile(join(durableHome, 'history-sentinel'), 'utf8')).resolves.toBe('bob-private-history');
     } finally { await runtime.dispose(); }
   });
 });

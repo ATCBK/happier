@@ -29,6 +29,12 @@ import {
 } from './qualifiedConnectedAccountEstablishedRuntimeOwner';
 import { createQualifiedConnectedAccountDaemonPersistence } from './qualifiedConnectedAccountDaemonPersistence';
 import { createDaemonConnectedAccountPurposeBindingRuntime } from './purposeBindings/createDaemonConnectedAccountPurposeBindingRuntime';
+import { createConnectedAccountContributionRegistry } from '@/plugins/runtime/connectedAccounts/contributionRegistry';
+import { HOST_CONNECTED_ACCOUNT_SERVICE_REF_V1 } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
+import { createDaemonQualifiedRequestAuthCallbacks } from './requestAuth/createDaemonQualifiedRequestAuthCallbacks';
+import { scopeConnectedAccountPurposeBindingLease } from './purposeBindings/ConnectedAccountPurposeBindingOwner';
+import { requireConnectedAccountCryptoMaterial, resolveConnectedAccountCryptoMaterial } from './accountScopedCryptoMaterial';
+import type { StoredCredentials } from '@/persistence';
 
 const service = Object.freeze({
   pluginId: 'happier.agent.codex',
@@ -47,6 +53,7 @@ const descriptor = PluginConnectedAccountDescriptorContributionV2Schema.parse({
     modes: [{
       id: 'oauth',
       kind: 'oauthAuthorizationCode',
+      callbackUrl: 'https://provider.example/oauth/callback',
       pkce: 'required',
       outcomeReconciliation: 'none',
       configuration: {
@@ -77,6 +84,7 @@ const originDescriptor = PluginConnectedAccountDescriptorContributionV2Schema.pa
     modes: [{
       id: 'oauth',
       kind: 'oauthAuthorizationCode',
+      callbackUrl: 'https://provider.example/oauth/callback',
       pkce: 'required',
       outcomeReconciliation: 'none',
       configuration: {
@@ -114,6 +122,121 @@ function plainEnvelope(kind: 'credential' | 'configuration', payload: unknown) {
 }
 
 describe('createQualifiedConnectedAccountEstablishedRuntimeOwner', () => {
+  it.each(['plain', 'e2ee'] as const)('records the union of MCP scope challenges through configuration CAS without changing credentials or secrets (%s)', async accountMode => {
+    const accountCredentials: StoredCredentials = { token: 'account-token', encryption: accountMode === 'e2ee'
+      ? { type: 'dataKey', publicKey: new Uint8Array(32), machineKey: new Uint8Array(32).fill(7) } : null };
+    const envelope = (kind: 'credential' | 'configuration', payload: unknown) => accountMode === 'plain' ? plainEnvelope(kind, payload)
+      : sealQualifiedConnectedAccountContentEnvelope({ kind, accountMode,
+        material: requireConnectedAccountCryptoMaterial(accountCredentials, resolveConnectedAccountCryptoMaterial(accountCredentials)),
+        payload, randomBytes: length => new Uint8Array(length) });
+    const mcpAccount = { service: HOST_CONNECTED_ACCOUNT_SERVICE_REF_V1, accountId: 'server-1' };
+    const mcpDescriptor = PluginConnectedAccountDescriptorContributionV2Schema.parse({
+      id: 'mcp-sign-in', title: 'MCP server sign-in',
+      authentication: { defaultModeId: 'oauth', modes: [{ id: 'oauth', kind: 'oauthAuthorizationCode',
+        callbackUrl: 'https://app.happier.dev/oauth/mcp/callback', pkce: 'required', outcomeReconciliation: 'none',
+        configuration: { scope: 'account', changeBehavior: 'refresh', fields: [
+          { id: 'resource', title: 'Resource', schema: { type: 'string' }, required: true },
+          { id: 'stepUpScopes', title: 'Scopes', schema: { type: 'array', items: { type: 'string' } } },
+          { id: 'clientSecret', title: 'Client secret', schema: { type: 'string' }, secret: true },
+        ] } }] },
+    });
+    const contributions = createConnectedAccountContributionRegistry({ descriptors: [],
+      activateOnDemand: async () => {}, readRegistrations: () => [],
+      readPluginOccurrenceId: () => null, readPluginSourceCustody: () => null, isPluginOccurrenceCurrent: () => false });
+    contributions.registerHostConnectedAccountRuntime({ ref: mcpAccount.service, descriptor: mcpDescriptor,
+      // No provider work is involved in scope reporting; these callbacks are never invoked.
+      runtime: { authentication: { modes: {} }, refresh: async () => ({ status: 'connected' }),
+        revoke: async () => ({ status: 'remoteUnsupported' }), status: async () => ({ status: 'connected' }),
+        materialize: async () => ({ kind: 'environment', env: {} }) } });
+    let credentialRevision = requestAuthCredentialRevision;
+    let configurationRecord: ConnectedAccountConfigurationRecord = {
+      revision: 'config-1', values: { resource: 'https://mcp.example.test/api', stepUpScopes: ['read'] },
+      secretRefs: {}, secretValues: { clientSecret: 'retained-client-secret' },
+    };
+    const writes: Array<Readonly<{ expectedRevision: string | null; values: Readonly<Record<string, unknown>> }>> = [];
+    let conflict = false;
+    const configurationOwner = createConnectedAccountConfigurationOwner({
+      read: async () => configurationRecord,
+      replace: async input => {
+        writes.push({ expectedRevision: input.expectedRevision, values: input.replacement.values });
+        if (conflict || input.expectedRevision !== configurationRecord.revision) {
+          return { status: 'conflict', code: 'connected_account_configuration_changed' };
+        }
+        configurationRecord = { ...input.replacement, revision: `config-${writes.length + 1}` };
+        return { status: 'committed', record: configurationRecord };
+      },
+      destroyAttempt: async () => {}, secrets: { admit: async () => {}, has: async () => false, read: async () => null },
+      isRuntimeCurrent: async () => true,
+    });
+    const registry = { connectedAccountContributions: contributions };
+    // The reload boundary supplies the real contribution registry; no domain callback is substituted.
+    const reloadController = { acquireRuntimeRegistry: async () => ({ registry, source: 'active', release: async () => {} }),
+      isRuntimeRegistryCurrent: () => true } as unknown as Pick<PluginReloadController, 'acquireRuntimeRegistry' | 'isRuntimeRegistryCurrent'>;
+    const owner = createQualifiedConnectedAccountEstablishedRuntimeOwner({
+      reloadController,
+      credentials: accountCredentials, getAccountEncryptionMode: async () => accountMode,
+      readCredential: async () => QualifiedConnectedAccountCredentialSnapshotV4Schema.parse({
+        ref: mcpAccount, authenticationModeId: 'oauth', revisionSemantics: 'revisioned', credentialRevision,
+        configurationRevision: configurationRecord.revision, content: envelope('credential', { v: 1, values: { accessToken: 'unchanged' } }),
+        metadata: { scopes: ['read'] },
+      }),
+      readConfiguration: async () => ({ target: { kind: 'account', ref: mcpAccount }, authenticationModeId: 'oauth',
+        revisionSemantics: 'revisioned', credentialRevision, configurationRevision: configurationRecord.revision,
+        configurationContent: envelope('configuration', { values: configurationRecord.values,
+          secretRefs: configurationRecord.secretRefs, secretValues: configurationRecord.secretValues }) }),
+      configuration: { read: async () => configurationRecord, secrets: { admit: async () => {}, has: async () => false, read: async () => null } },
+      configurationOwner,
+    });
+    await expect(owner.recordScopeChallenge({ account: mcpAccount, expectedCredentialRevision: credentialRevision,
+      requiredScopes: ['write', 'read', 'admin'] })).resolves.toEqual({ status: 'current_changed' });
+    expect(configurationRecord.values).toEqual({ resource: 'https://mcp.example.test/api', stepUpScopes: ['read', 'write', 'admin'] });
+    expect(configurationRecord.secretValues).toEqual({ clientSecret: 'retained-client-secret' });
+    expect(writes[0]?.expectedRevision).toBe('config-1');
+    await expect(owner.recordScopeChallenge({ account: mcpAccount, expectedCredentialRevision: credentialRevision,
+      requiredScopes: ['write'] })).resolves.toEqual({ status: 'current_unchanged' });
+    expect(writes).toHaveLength(1);
+    credentialRevision = 'csr_aaaaaaaaaaaaaaaaaaaaaa';
+    await expect(owner.recordScopeChallenge({ account: mcpAccount, expectedCredentialRevision: requestAuthCredentialRevision,
+      requiredScopes: ['different'] })).resolves.toEqual({ status: 'stale_context' });
+    expect(writes).toHaveLength(1);
+    conflict = true;
+    await expect(owner.recordScopeChallenge({ account: mcpAccount, expectedCredentialRevision: credentialRevision,
+      requiredScopes: ['different'] })).resolves.toEqual({ status: 'denied' });
+    expect(configurationRecord.values.stepUpScopes).toEqual(['read', 'write', 'admin']);
+    conflict = false;
+    const purposes = createDaemonConnectedAccountPurposeBindingRuntime({ establishedRuntimeOwner: owner, reloadController,
+      resolveQualifiedConnectedAccountV4Support: () => 'advertised', allowNativeAccountCredentials: false,
+      store: { read: async () => ({ v: 1, bindings: [] }), update: async mutate => mutate({ v: 1, bindings: [] }),
+        subscribe: () => ({ dispose() {} }) },
+      qualifiedApi: { listAccounts: async () => ({ accounts: [] }), listGroups: async () => ({ groups: [] }), readGroup: async () => null },
+    });
+    const purpose = { consumer: { pluginId: 'happier.mcp', localId: 'remote-bridge' }, purpose: 'mcp-server' };
+    const binding = { purpose, target: { kind: 'account' as const, account: mcpAccount } };
+    const lease = purposes.activatePurposeBindings({ subject: { kind: 'operation', operationId: 'scope-challenge',
+      consumer: purpose.consumer, isCurrent: () => true }, purposes: [purpose], bindings: [binding] });
+    const subject = scopeConnectedAccountPurposeBindingLease({ lease, subjectId: lease.subjectId, parentSessionId: 'requester-session',
+      uses: [{ purpose, materialization: { kind: 'httpHeaders', origin: 'https://mcp.example.test', headerNames: ['authorization'] } }],
+      registerRedaction: () => {} });
+    let requesterCurrent = true;
+    const callbacks = createDaemonQualifiedRequestAuthCallbacks({
+      resolveSessionAccountContext: async () => requesterCurrent ? { bootstrap: { serverHttpBaseUrl: 'https://requester.home.test' },
+        isCurrent: async () => requesterCurrent, qualifiedConnectedAccountEstablishedRuntimeOwner: owner,
+        resolveCurrentRequestAuthBinding: purposes.resolveCurrentRequestAuthBinding,
+        materializeRequestAuthBearer: purposes.materializeRequestAuthBearer } : null,
+    });
+    const failure = { class: 'insufficient_scope' as const, requiredScopes: ['export'],
+      evidence: { httpStatus: 403, limitCategory: 'validation_failed' as const, quotaScope: 'unknown' as const,
+        evidenceSource: { kind: 'structured' as const } } };
+    await expect(callbacks.reportScopeFailure!({ subject, resolved: { account: mcpAccount, credentialRevision },
+      failure, signal: new AbortController().signal })).resolves.toEqual({ status: 'current_changed' });
+    expect(configurationRecord.values.stepUpScopes).toEqual(['read', 'write', 'admin', 'export']);
+    requesterCurrent = false;
+    await expect(callbacks.reportScopeFailure!({ subject, resolved: { account: mcpAccount, credentialRevision },
+      failure: { ...failure, requiredScopes: ['withdrawn'] }, signal: new AbortController().signal })).resolves.toEqual({ status: 'stale_context' });
+    expect(configurationRecord.values.stepUpScopes).not.toContain('withdrawn');
+    await lease.dispose();
+    contributions.dispose();
+  });
   it('establishes the current usage basis before provider quota work, including a failed first fetch', async () => {
     const failure = new Error('provider offline');
     let sourceReady = false;
@@ -902,6 +1025,7 @@ describe('createQualifiedConnectedAccountEstablishedRuntimeOwner', () => {
           modes: [{
             id: 'oauth',
             kind: 'oauthAuthorizationCode',
+            callbackUrl: 'https://provider.example/oauth/callback',
             pkce: 'required',
             outcomeReconciliation: 'none',
             configuration: {
@@ -1230,7 +1354,7 @@ describe('createQualifiedConnectedAccountEstablishedRuntimeOwner', () => {
     const bindingLease = runtime.activatePurposeBindings({
       subject: { kind: 'managed_provider_operation', operationId: 'retained-machine', pluginId: purpose.consumer.pluginId,
         providerLocalId: purpose.consumer.localId, isCurrent: () => true,
-        credentialConfiguration: { account, revision: first.basis.credentialConfigurationRevision } },
+        credentialConfigurations: [{ account, revision: first.basis.credentialConfigurationRevision }] },
       purposes: [purpose], bindings: [{ purpose, target: { kind: 'account', account } }],
     });
     try {

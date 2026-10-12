@@ -42,14 +42,14 @@ describe('UsageLimitRecoveryScheduler', () => {
     const scheduler = new UsageLimitRecoveryScheduler({
       nowMs: () => Date.now(),
       store: {
-        read: () => persisted,
-        readAll: () => [['session-1', persisted] as const],
+        read: () => ({ ...persisted, retiredRecoveryField: true }),
+        readAll: () => [['session-1', { ...persisted, retiredRecoveryField: true }] as const],
         write: vi.fn(),
       },
       recover,
     });
 
-    expect(scheduler.hydratePassive()).toEqual([persisted]);
+    expect(scheduler.hydratePassive()).toEqual([expect.objectContaining(persisted)]);
     await vi.advanceTimersByTimeAsync(10_000);
     expect(recover).not.toHaveBeenCalled();
     await scheduler.wake({ sessionId: 'session-1', reason: 'check_now' });
@@ -593,7 +593,7 @@ describe('UsageLimitRecoveryScheduler', () => {
       status: 'requested',
       sessionId: 'session-1',
       agentId: null,
-      serviceId: 'openai-codex',
+      serviceId: 'happier.agent.codex/openai-codex',
       profileId: 'primary',
       groupId: 'main',
       generation: null,
@@ -638,7 +638,7 @@ describe('UsageLimitRecoveryScheduler', () => {
       status: 'requested',
       sessionId: 'session-codex',
       agentId: 'codex',
-      serviceId: 'openai-codex',
+      serviceId: 'happier.agent.codex/openai-codex',
       profileId: 'primary',
       groupId: 'main',
       generation: null,

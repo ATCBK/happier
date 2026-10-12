@@ -25,6 +25,7 @@ import type { RuntimeAuthFailureReportOutboxItem } from './reportOutbox/runtimeA
 import { scheduleRuntimeAuthFailureReportOutboxDrainToDaemon } from './reportOutbox/runtimeAuthFailureReportOutboxDrainScheduler';
 import { resolveRuntimeAuthFailureReportOutboxDelivery } from './reportOutbox/resolveRuntimeAuthFailureReportOutboxDelivery';
 import { sanitizeConnectedServiceRuntimeFailureClassification } from './sanitizeConnectedServiceRuntimeFailureClassification';
+import { readRuntimeAuthFailureReportSourceIdentity } from './runtimeAuthFailureReportIdentity';
 
 type RuntimeAuthFailureNotifyBody = Readonly<{
   reportId: string;
@@ -142,14 +143,11 @@ function buildStableRuntimeAuthFailureReportDedupeKey(input: Readonly<{
     sessionId: input.sessionId,
     switchesThisTurn: input.switchesThisTurn,
     kind: classification.kind ?? null,
-    serviceId: classification.serviceId ?? null,
-    profileId: classification.profileId ?? null,
-    groupId: classification.groupId ?? null,
+    ...readRuntimeAuthFailureReportSourceIdentity(classification),
     limitCategory: classification.limitCategory ?? null,
     providerLimitId: classification.providerLimitId ?? null,
     sourceProviderAccountId: classification.sourceProviderAccountId ?? null,
     failingAccessTokenFingerprint: classification.failingAccessTokenFingerprint ?? null,
-    groupGeneration: classification.groupGeneration ?? null,
     recoveryActionKind: classification.recoveryAction?.kind ?? null,
     resumePromptMode: input.resumePromptMode ?? null,
     resetsAtMsBucket,

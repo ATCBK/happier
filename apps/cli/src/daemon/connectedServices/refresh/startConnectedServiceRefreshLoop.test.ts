@@ -71,8 +71,10 @@ describe('startConnectedServiceRefreshLoop', () => {
             expect(coordinator.tickOnce).not.toHaveBeenCalled();
 
             handle?.resume();
-            await vi.advanceTimersByTimeAsync(50);
+            await vi.advanceTimersByTimeAsync(0);
             expect(coordinator.tickOnce).toHaveBeenCalledTimes(1);
+            await vi.advanceTimersByTimeAsync(50);
+            expect(coordinator.tickOnce).toHaveBeenCalledTimes(2);
 
             handle?.stop();
         } finally {

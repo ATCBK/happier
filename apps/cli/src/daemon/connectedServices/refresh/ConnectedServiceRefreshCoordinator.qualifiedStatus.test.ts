@@ -1,10 +1,10 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import axios from 'axios';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  buildConnectedServiceCredentialRecord,
   sealQualifiedConnectedAccountContentEnvelope,
   type QualifiedConnectedAccountProfileV4,
 } from '@happier-dev/protocol';
@@ -29,6 +29,7 @@ const createdRegistries: Array<Readonly<{
 }>> = [];
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   await Promise.all(createdRegistries.splice(0).map(async (registry) => {
     await registry.dispose();
@@ -39,13 +40,13 @@ afterEach(async () => {
 });
 
 async function createHarness(input: Readonly<{
+  clock?: () => number;
+  noScheduledAccounts?: boolean;
   generationCurrent?: boolean;
   pluginEnabled?: boolean;
   credentialAvailable?: boolean;
   v4Support?: 'advertised' | 'absent' | 'indeterminate';
   omitQualifiedRuntime?: boolean;
-  legacyCredentialKind?: 'oauth' | 'token';
-  acquireLegacyRefreshLease?: boolean;
 }>) {
   const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-qualified-status-'));
   createdDirectories.push(happyHomeDir);
@@ -125,58 +126,11 @@ async function createHarness(input: Readonly<{
         },
       },
     });
-  const legacyRecord =
-    input.legacyCredentialKind === 'oauth'
-      ? buildConnectedServiceCredentialRecord({
-          now,
-          serviceId: 'openai-codex',
-          profileId: 'work',
-          kind: 'oauth',
-          expiresAt: now - 1,
-          oauth: {
-            accessToken: 'expired-access',
-            refreshToken: 'refresh-token',
-            idToken: null,
-            scope: null,
-            tokenType: null,
-            providerAccountId: null,
-            providerEmail: null,
-          },
-        })
-      : buildConnectedServiceCredentialRecord({
-          now,
-          serviceId: 'openai',
-          profileId: 'work',
-          kind: 'token',
-          token: {
-            token: 'sk-qualified-current',
-            providerAccountId: null,
-            providerEmail: null,
-          },
-        });
   const api = {
     getAccountEncryptionMode: vi.fn(async () => 'plain' as const),
-    getConnectedServiceCredentialPlain: vi.fn(async () => ({
-      content: { t: 'plain' as const, v: legacyRecord },
-      revisionSemantics: 'revisioned' as const,
-      credentialRevision,
-    })),
+    getConnectedServiceCredentialPlain: vi.fn(),
     getConnectedServiceCredentialSealed: vi.fn(async () => null),
-    acquireConnectedServiceRefreshLease: vi.fn(async () => (
-      input.acquireLegacyRefreshLease
-        ? {
-            acquired: true as const,
-            ownerId: 'machine-1',
-            leaseUntil: now + 30_000,
-            credentialRevision,
-          }
-        : {
-            acquired: false as const,
-            ownerId: 'machine-1',
-            leaseUntil: now + 30_000,
-            credentialRevision,
-          }
-    )),
+    acquireConnectedServiceRefreshLease: vi.fn(),
   } as unknown as ApiClient;
   const mutateCredentialHealth = vi.fn(async (params: Readonly<{
     token: string;
@@ -197,7 +151,7 @@ async function createHarness(input: Readonly<{
     baseDir: join(happyHomeDir, 'materialized'),
     refreshWindowMs: 60_000,
     refreshLeaseMs: 30_000,
-    now: () => now,
+    now: input.clock ?? (() => now),
     ...(input.omitQualifiedRuntime
       ? {}
       : {
@@ -212,7 +166,7 @@ async function createHarness(input: Readonly<{
             establishedRuntimeOwner,
             mutateCredentialHealth,
             readCredential: readQualifiedCredential,
-            listScheduledAccounts: async (): Promise<readonly QualifiedConnectedAccountProfileV4[]> => [{
+            listScheduledAccounts: async (): Promise<readonly QualifiedConnectedAccountProfileV4[]> => input.noScheduledAccounts ? [] : [{
               ref: { service: openAiService, accountId: 'work' },
               status: 'connected',
               authenticationModeId: 'api-key',
@@ -252,6 +206,25 @@ async function createHarness(input: Readonly<{
 }
 
 describe('ConnectedServiceRefreshCoordinator qualified status integration', () => {
+  it('parks with no scheduled work and preserves actual health-probe deadlines for null-expiry accounts', async () => {
+    const empty = await createHarness({ noScheduledAccounts: true });
+    expect(await empty.coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: null });
+    let clock = now;
+    const harness = await createHarness({ clock: () => clock });
+    expect(await harness.coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: 30_000 });
+    clock += 29_999;
+    expect(await harness.coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: 1 });
+    expect(harness.mutateCredentialHealth).toHaveBeenCalledOnce();
+    clock += 1;
+    expect(await harness.coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: 30_000 });
+    expect(harness.mutateCredentialHealth).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns the existing credential-health recovery deadline when a null-expiry account is unavailable', async () => {
+    const harness = await createHarness({ credentialAvailable: false });
+    await expect(harness.coordinator.tickOnce()).rejects.toBeInstanceOf(AggregateError);
+    expect(await harness.coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: 60_000 });
+  });
   it('runs a real current plugin status leaf from the existing scheduled trigger and settles exact-revision health', async () => {
     const harness = await createHarness({});
     harness.coordinator.registerSpawnTarget({
@@ -328,61 +301,35 @@ describe('ConnectedServiceRefreshCoordinator qualified status integration', () =
     expect(harness.api.acquireConnectedServiceRefreshLease).not.toHaveBeenCalled();
   });
 
-  it('retains the released built-in legacy path when atomic V4 capability is known absent', async () => {
-    const providerFetch = vi.fn(async () => new Response(
-      JSON.stringify({ error: 'invalid_grant' }),
-      {
-        status: 400,
-        headers: { 'content-type': 'application/json' },
-      },
-    ));
-    vi.stubGlobal('fetch', providerFetch);
-    const harness = await createHarness({
-      v4Support: 'absent',
-      legacyCredentialKind: 'oauth',
-      acquireLegacyRefreshLease: true,
-    });
-
-    await expect(harness.coordinator.refreshConnectedServiceCredentialForQuota({
-      serviceId: 'openai-codex',
-      profileId: 'work',
-      force: true,
-    })).resolves.toBeNull();
-
-    expect(harness.readQualifiedCredential).not.toHaveBeenCalled();
-    expect(harness.mutateCredentialHealth).not.toHaveBeenCalled();
-    expect(harness.api.getConnectedServiceCredentialPlain).toHaveBeenCalled();
-    expect(providerFetch).toHaveBeenCalledOnce();
-  });
-
-  it('fails closed instead of refreshing through the legacy route when negotiation authority is missing', async () => {
+  it.each(['absent', 'indeterminate'] as const)('refuses refresh without credential or provider effects when V4 capability is %s', async (v4Support) => {
     const providerFetch = vi.fn();
     vi.stubGlobal('fetch', providerFetch);
-    const harness = await createHarness({
-      omitQualifiedRuntime: true,
-      legacyCredentialKind: 'oauth',
-    });
+    const harness = await createHarness({ v4Support });
 
     await expect(harness.coordinator.refreshConnectedServiceCredentialForQuota({
       serviceId: 'openai-codex',
       profileId: 'work',
       force: true,
-    })).resolves.toBeNull();
+    })).rejects.toMatchObject({ code: 'connected_account_capability_indeterminate' });
 
     expect(harness.readQualifiedCredential).not.toHaveBeenCalled();
     expect(harness.mutateCredentialHealth).not.toHaveBeenCalled();
-    expect(harness.api.getConnectedServiceCredentialPlain).toHaveBeenCalledOnce();
+    expect(harness.api.getConnectedServiceCredentialPlain).not.toHaveBeenCalled();
     expect(harness.api.acquireConnectedServiceRefreshLease).not.toHaveBeenCalled();
     expect(providerFetch).not.toHaveBeenCalled();
   });
 
-  it('fails closed instead of refreshing through the legacy route when V4 capability is indeterminate', async () => {
+  it('uses the qualified HTTP reader when no runtime is injected and never reads the scalar route', async () => {
     const providerFetch = vi.fn();
     vi.stubGlobal('fetch', providerFetch);
-    const harness = await createHarness({
-      v4Support: 'indeterminate',
-      legacyCredentialKind: 'oauth',
+    // HTTP is the Home boundary; default credential resolution and mode parsing stay real.
+    const credentialRead = vi.spyOn(axios, 'get').mockImplementation(async (url) => {
+      const parsed = new URL(String(url));
+      expect(parsed.pathname).toBe('/v4/connect/qualified/credential');
+      expect(parsed.searchParams.has('ref')).toBe(true);
+      return { status: 404, data: { error: 'not_found' } };
     });
+    const harness = await createHarness({ omitQualifiedRuntime: true });
 
     await expect(harness.coordinator.refreshConnectedServiceCredentialForQuota({
       serviceId: 'openai-codex',
@@ -392,8 +339,10 @@ describe('ConnectedServiceRefreshCoordinator qualified status integration', () =
 
     expect(harness.readQualifiedCredential).not.toHaveBeenCalled();
     expect(harness.mutateCredentialHealth).not.toHaveBeenCalled();
-    expect(harness.api.getConnectedServiceCredentialPlain).toHaveBeenCalledOnce();
+    expect(credentialRead).toHaveBeenCalledOnce();
+    expect(harness.api.getConnectedServiceCredentialPlain).not.toHaveBeenCalled();
     expect(harness.api.acquireConnectedServiceRefreshLease).not.toHaveBeenCalled();
     expect(providerFetch).not.toHaveBeenCalled();
   });
+
 });

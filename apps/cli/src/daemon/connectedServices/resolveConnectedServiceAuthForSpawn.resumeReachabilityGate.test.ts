@@ -3,17 +3,20 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import {
   buildConnectedServiceCredentialRecord,
+  QualifiedConnectedAccountListResponseV4Schema,
   sealAccountScopedBlobCiphertext,
 } from '@happier-dev/protocol';
 import type { Credentials } from '@/persistence';
 import type { ApiClient } from '@/api/api';
 import { formatPiSessionDirectoryForCwd } from '@happier-dev/plugins-pi/agent/sessionFiles';
-import { getResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { resolveQualifiedPurposeBindingSnapshotForAgentSpawn } from './requestAuth/prepareConnectedAccountRequestAuthForSpawn';
+import { createForegroundPurposeOwnerFixture } from '@/daemon/agentRuntime/prepareForegroundAdmission.connectedServices.testkit';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 
 import {
   ConnectedServiceSpawnResumeUnreachableError,
@@ -30,8 +33,8 @@ import {
  * on disk (imported into the materialized target) is proven reachable (D8). Fresh / isolated spawns
  * are never gated.
  *
- * These exercise the real PI materializer + real filesystem (NO MOCKS): the only stub is the API
- * sealed-credential boundary, which returns a real sealed token credential.
+ * These exercise the real PI materializer + real filesystem. Only Account API boundaries are
+ * substituted: qualified profile metadata and the sealed token credential.
  */
 
 const PI_NATIVE_SESSION_ID = '019e461b-0000-7000-8000-000000000000';
@@ -39,8 +42,19 @@ const PI_NATIVE_SESSION_FILE = `2026-05-20T15-57-24-578Z_${PI_NATIVE_SESSION_ID}
 const PI_NATIVE_SESSION_CONTENT = `{"id":"${PI_NATIVE_SESSION_ID}"}\n`;
 
 const tempDirs: string[] = [];
+const materializationCleanups: Array<() => Promise<void>> = [];
+let runtime: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>>;
+
+beforeAll(async () => {
+  runtime = await createAdmittedPluginRuntimeFixture({
+    controller: pluginReloadController,
+    runtimeOptions: { pluginIds: ['happier.agent.pi', 'happier.voice.openai'] },
+  });
+});
+afterAll(async () => { await runtime?.dispose(); });
 
 afterEach(async () => {
+  await Promise.all(materializationCleanups.splice(0).map(cleanup => cleanup()));
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
@@ -50,7 +64,11 @@ async function makeTempDir(prefix: string): Promise<string> {
   return dir;
 }
 
-function buildPiTokenCredentialApiAndCredentials(): Readonly<{ api: ApiClient; credentials: Credentials }> {
+function buildPiTokenCredentialApiAndCredentials(): Readonly<{
+  api: ApiClient;
+  credentials: Credentials;
+  qualifiedConnectedAccountApi: NonNullable<Parameters<typeof resolveConnectedServiceAuthForSpawn>[0]['qualifiedConnectedAccountApi']>;
+}> {
   const record = buildConnectedServiceCredentialRecord({
     now: 10,
     serviceId: 'openai',
@@ -91,7 +109,23 @@ function buildPiTokenCredentialApiAndCredentials(): Readonly<{ api: ApiClient; c
     },
   } as unknown as ApiClient;
 
-  return { api, credentials };
+  const service = { pluginId: 'happier.voice.openai', localId: 'openai' };
+  const accounts = QualifiedConnectedAccountListResponseV4Schema.parse({
+    service,
+    accounts: [{
+      ref: { service, accountId: record.profileId },
+      status: 'connected', authenticationModeId: 'api-key',
+      revisionSemantics: 'revisioned', credentialRevision: 'csr_aaaaaaaaaaaaaaaaaaaaaa',
+      configurationReady: true, configurationRevision: null, kind: 'token', expiresAt: null, scopes: [],
+    }],
+  });
+  return { api, credentials, qualifiedConnectedAccountApi: {
+    listAccounts: async ({ service: requestedService }) => {
+      expect(requestedService).toEqual(service);
+      return accounts;
+    },
+    readGroup: async () => { throw new Error('Profile-bound PI resume must not read an Account group'); },
+  } };
 }
 
 const sharedPiAccountSettings = {
@@ -131,9 +165,16 @@ async function callSpawn(params: Readonly<{
 }>) {
   const baseDir = await makeTempDir('happier-pi-gate-base-');
   const activeServerDir = await makeTempDir('happier-pi-gate-server-');
-  const { api, credentials } = buildPiTokenCredentialApiAndCredentials();
+  const { api, credentials, qualifiedConnectedAccountApi } = buildPiTokenCredentialApiAndCredentials();
+  const { owner } = createForegroundPurposeOwnerFixture({
+    consumer: { pluginId: 'happier.agent.pi', localId: 'pi' },
+    service: { pluginId: 'happier.voice.openai', localId: 'openai' },
+    accountId: 'work',
+    // PI's API-key purpose has no launch-time file or request-header materialization.
+    materializeAccount: async () => { throw new Error('Unexpected PI Account credential materialization'); },
+  });
 
-  return await resolveConnectedServiceAuthForSpawn({
+  const result = await resolveConnectedServiceAuthForSpawn({
     agentId: 'pi',
     connectedServicesBindingsRaw: piBindings,
     materializationKey: 'pi-gate-session',
@@ -142,6 +183,11 @@ async function callSpawn(params: Readonly<{
     sessionDirectory: params.cwd,
     credentials,
     api,
+    qualifiedConnectedAccountApi,
+    connectedAccountsOwner: owner,
+    activateQualifiedPurposeBindings: snapshot => owner.activateSessionPurposeBindings({
+      sessionId: 'pi-gate-session', purposes: snapshot.purposes, bindings: snapshot.bindings,
+    }),
     accountSettings: sharedPiAccountSettings,
     processEnv: {
       ...process.env,
@@ -154,9 +200,14 @@ async function callSpawn(params: Readonly<{
       resolveQualifiedPurposeBindingSnapshotForAgentSpawn({
         agentId: 'pi',
         bindings,
-        contributions: getResolvedContributionRegistry(),
+        contributions: runtime.registry.contributes,
       }),
   });
+  if (result) materializationCleanups.push(async () => {
+    await result.materializationPurposeLease?.dispose();
+    await result.cleanupOnExit?.();
+  });
+  return result;
 }
 
 describe('resolveConnectedServiceAuthForSpawn §2 resume-reachability gate', () => {

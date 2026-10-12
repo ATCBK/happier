@@ -1,10 +1,11 @@
 import { ConnectedServiceBindingsV2IngressSchema, readBuiltInLegacyConnectedAccountServiceKeyIngress } from '@happier-dev/protocol/connect/connected-service-bindings';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import type { ConnectedAccountServiceKey, ConnectedServiceBindingsV2 } from '@happier-dev/protocol';
 
 import { readConnectedServiceChildSelectionsFromEnv, type ConnectedServiceChildSelection } from '../connectedServiceChildEnvironment';
 
 export function readConnectedServiceBindingsOrEmpty(raw: unknown): ConnectedServiceBindingsV2 {
-  const parsed = ConnectedServiceBindingsV2IngressSchema.safeParse(raw);
+  const parsed = createStoredReadSchema(ConnectedServiceBindingsV2IngressSchema).safeParse(raw);
   return parsed.success ? parsed.data : { v: 2, bindingsByServiceId: {} };
 }
 

@@ -1,7 +1,7 @@
 import type { AccountSettings } from '@happier-dev/protocol';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
 import { isUsageQuotaNotificationEnabled, type UsageQuotaNotificationsV1 } from '@happier-dev/protocol/account/settings/usagePacingPreferencesV1';
-import { deriveProviderAccountUsagePace, readProviderAccountUsageWindowComparabilityReason, resolveProviderAccountUsagePaceWindow } from '@happier-dev/protocol/connect/deriveProviderAccountUsagePace';
+import { deriveProviderAccountUsagePace, hasProviderAccountUsageWitnessedReset, resolveProviderAccountUsagePaceWindow } from '@happier-dev/protocol/connect/deriveProviderAccountUsagePace';
 import { isConnectedServiceQuotaObservationFresh } from '@happier-dev/protocol/connect/quotaObservationTime';
 import { ConnectedServiceUsageNotificationV1Schema, type ConnectedServiceUsageNotificationV1 } from '@happier-dev/protocol/activity/webhookPayload';
 
@@ -27,13 +27,7 @@ function deriveUsageNotifications(transition: ConnectedServiceUsageSnapshotTrans
     const priorWindow = resolveProviderAccountUsagePaceWindow(previous, meter.meterId);
     if (!nextWindow || !priorWindow) continue;
     const sameWindow = nextWindow.resetAtMs === priorWindow.resetAtMs && nextWindow.windowDurationMs === priorWindow.windowDurationMs;
-    const priorWindowWitness = prior.status === 'available' || prior.reason === 'zero_elapsed'
-      || (prior.reason === 'outside_window' && previous.observedAtMs === priorWindow.resetAtMs);
-    const witnessedReset = !sameWindow && priorWindowWitness
-      && (next.status === 'available' || next.reason === 'zero_elapsed')
-      && readProviderAccountUsageWindowComparabilityReason({ previous, current: snapshot, meterId: meter.meterId }) === null
-      && nextWindow.windowStartAtMs === priorWindow.resetAtMs
-      && nextWindow.windowDurationMs === priorWindow.windowDurationMs;
+    const witnessedReset = hasProviderAccountUsageWitnessedReset({ previous, current: snapshot, meterId: meter.meterId, nowMs });
     const fingerprint = (kind: ConnectedServiceUsageNotificationV1['kind']) => JSON.stringify([
       snapshot.recordId, meter.meterId, nextWindow.resetAtMs, nextWindow.windowDurationMs, kind]);
     if (witnessedReset) {

@@ -7,6 +7,7 @@ import { randomBytes } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 
 import type { ApiClient } from '@/api/api';
+import type { SingleFlightLoopSchedule } from '@/daemon/lifecycle/singleFlightIntervalLoop';
 import {
   resolveFirstPartyLegacyConnectedServiceIdForQualifiedServiceKey,
   resolveFirstPartyQualifiedConnectedAccountServiceForLegacyServiceInput,
@@ -642,6 +643,7 @@ export class ConnectedServiceRefreshCoordinator {
     group: CanonicalGroupStateForRefresh | null;
   }>>();
   private readonly credentialHealthReprobeState = new Map<string, CredentialHealthReprobeState>();
+  private readonly scheduledHealthProbeAtByKey = new Map<string, number>();
   private readonly bridgeRefreshAttemptByBinding = new Map<string, {
     kind: 'codex';
     refreshAttemptId: string;
@@ -667,6 +669,8 @@ export class ConnectedServiceRefreshCoordinator {
     baseDir: string;
     refreshWindowMs: number;
     refreshLeaseMs: number;
+    /** Existing external status-acquisition policy, independent of inventory invalidation. */
+    healthProbeIntervalMs?: number;
     now: () => number;
     accountSettingsProvider?: () => AccountSettings | Readonly<Record<string, unknown>> | null | undefined;
     processEnv?: NodeJS.ProcessEnv;
@@ -1040,8 +1044,14 @@ export class ConnectedServiceRefreshCoordinator {
     this.runtimeRegistry.transferPid(fromPid, toPid);
   }
 
-  async tickOnce(): Promise<void> {
+  async tickOnce(): Promise<SingleFlightLoopSchedule> {
     const now = this.params.now();
+    let nextRunAt: number | null = null;
+    const scheduleAt = (deadline: number | null | undefined): void => {
+      if (typeof deadline === 'number' && Number.isFinite(deadline)) {
+        nextRunAt = nextRunAt === null ? deadline : Math.min(nextRunAt, deadline);
+      }
+    };
     const unique = new Map<string, BoundProfile>();
     const qualified = new Map<string, QualifiedConnectedAccountProfileV4>();
     const errors: unknown[] = [];
@@ -1068,7 +1078,25 @@ export class ConnectedServiceRefreshCoordinator {
 
     for (const binding of unique.values()) {
       try {
-        await this.maybeRefreshBinding(binding, now);
+        const key = bindingKey(binding);
+        const retryAt = this.credentialHealthReprobeState.get(key)?.nextProbeAt;
+        const probeAt = retryAt ?? this.scheduledHealthProbeAtByKey.get(key);
+        if (probeAt !== undefined && probeAt > now) {
+          scheduleAt(probeAt);
+        } else {
+          const result = await this.maybeRefreshBinding(binding, now);
+          const retryAt = this.credentialHealthReprobeState.get(key)?.nextProbeAt;
+          let nextProbeAt = retryAt
+            ?? (this.params.qualifiedConnectedAccountRuntime && this.isOperationAvailable(binding, 'credential_health')
+              ? now + (this.params.healthProbeIntervalMs ?? 30_000) : undefined);
+          const expiryDeadline = result.diagnostic.expiresAt === null ? null
+            : result.diagnostic.expiresAt - this.params.refreshWindowMs;
+          if (retryAt === undefined && expiryDeadline !== null && expiryDeadline > now) {
+            nextProbeAt = nextProbeAt === undefined ? expiryDeadline : Math.min(nextProbeAt, expiryDeadline);
+          }
+          if (nextProbeAt !== undefined) this.scheduledHealthProbeAtByKey.set(key, nextProbeAt);
+          scheduleAt(nextProbeAt);
+        }
         const compatibility =
           BUNDLED_LEGACY_CONNECTED_ACCOUNT_COMPATIBILITY_BY_SERVICE_ID[
             binding.serviceId
@@ -1084,7 +1112,22 @@ export class ConnectedServiceRefreshCoordinator {
 
     for (const profile of qualified.values()) {
       try {
-        await this.maybeRefreshScheduledQualifiedAccount(profile, now);
+        const key = `qualified:${qualifiedAccountKey(profile.ref)}`;
+        const retryAt = this.credentialHealthReprobeState.get(key)?.nextProbeAt;
+        const probeAt = retryAt
+          ?? this.scheduledHealthProbeAtByKey.get(key);
+        const expiryDeadline = profile.kind === 'oauth' && typeof profile.expiresAt === 'number'
+          ? profile.expiresAt - this.params.refreshWindowMs : null;
+        const expiryDue = retryAt === undefined && expiryDeadline !== null && expiryDeadline <= now;
+        if (probeAt === undefined || probeAt <= now || expiryDue) {
+          await this.maybeRefreshScheduledQualifiedAccount(profile, now);
+          if (this.shouldRunQualifiedOperation(profile.ref, 'credential_health')) {
+            this.scheduledHealthProbeAtByKey.set(key, now + (this.params.healthProbeIntervalMs ?? 30_000));
+          }
+        }
+        scheduleAt(this.credentialHealthReprobeState.get(key)?.nextProbeAt
+          ?? this.scheduledHealthProbeAtByKey.get(key));
+        if (retryAt === undefined && expiryDeadline !== null && expiryDeadline > now) scheduleAt(expiryDeadline);
       } catch (error) {
         errors.push(error);
       }
@@ -1093,6 +1136,11 @@ export class ConnectedServiceRefreshCoordinator {
     if (errors.length > 0) {
       throw new AggregateError(errors, 'Connected services refresh tick failed');
     }
+    const liveKeys = new Set([...unique.keys(), ...[...qualified.values()].map(profile => `qualified:${qualifiedAccountKey(profile.ref)}`)]);
+    for (const key of this.scheduledHealthProbeAtByKey.keys()) {
+      if (!liveKeys.has(key)) this.scheduledHealthProbeAtByKey.delete(key);
+    }
+    return { nextAutomaticRunAfterMs: nextRunAt === null ? null : Math.max(1, nextRunAt - this.params.now()) };
   }
 
   private async maybeRefreshScheduledQualifiedAccount(
@@ -1454,7 +1502,7 @@ export class ConnectedServiceRefreshCoordinator {
     });
     if (!exactMaterialized) return unavailable;
     const persisted = await this.readCredentialForRefresh({ api: this.params.api, credentials: this.params.credentials, binding });
-    if (!persisted || persisted.revisionSemantics !== 'revisioned'
+    if (!persisted || persisted.record.kind !== 'oauth' || persisted.revisionSemantics !== 'revisioned'
       || persisted.credentialRevision !== result.credentialRevision) return unavailable;
     // A genuine Session hot-apply can replace its own registry projection while
     // distributing this exact CAS. Only the request's captured runner authority
@@ -1465,7 +1513,11 @@ export class ConnectedServiceRefreshCoordinator {
       target = accepted;
     }
     if (!targetIsCurrent()) return unavailable;
-    return { status: 'refreshed', result: { credentialRevision: persisted.credentialRevision } };
+    return { status: 'refreshed', result: {
+      credentialRevision: persisted.credentialRevision,
+      accessToken: persisted.record.oauth.accessToken,
+      providerAccountId: persisted.record.oauth.providerAccountId,
+    } };
   }
 
   async refreshQualifiedConnectedAccountCredentialForRequestAuth(input: Readonly<{
@@ -1920,19 +1972,20 @@ export class ConnectedServiceRefreshCoordinator {
     return expiresAt > this.params.now();
   }
 
-  private async maybeRefreshBinding(binding: BoundProfile, now: number): Promise<void> {
+  private async maybeRefreshBinding(binding: BoundProfile, now: number): Promise<ConnectedServiceCredentialRefreshResult> {
     const result = await this.refreshOauthBinding(binding, now, { reason: 'scheduled' });
     if (result.status === 'refresh_failed') {
       throw new Error(`Connected services refresh failed (${binding.serviceId}/${binding.profileId}): ${result.diagnostic.category ?? 'unknown'}`);
     }
     if (result.status !== 'refreshed') {
-      if (result.status !== 'not_needed') return;
+      if (result.status !== 'not_needed') return result;
       const rematerialization = await this.maybeRematerializeStaleMaterializedHomesForFreshStoreBinding(binding);
-      if (!rematerialization || rematerialization.rematerializedTargets.length === 0) return;
+      if (!rematerialization || rematerialization.rematerializedTargets.length === 0) return result;
       await this.notifyAuthUpdatedForRefreshedBinding(binding, rematerialization.rematerializedTargets);
-      return;
+      return result;
     }
     // A 'refreshed' result already rematerialized + notified BY CONSTRUCTION on the completion path (RR-1).
+    return result;
   }
 
   private async maybeRematerializeStaleMaterializedHomesForFreshStoreBinding(

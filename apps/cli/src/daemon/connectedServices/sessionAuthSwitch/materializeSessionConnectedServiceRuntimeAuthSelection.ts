@@ -1,22 +1,33 @@
+import { randomUUID } from 'node:crypto';
+
 import type { ApiClient } from '@/api/api';
 import { resolveConnectedServiceCredentialResolutions } from '@/cloud/connectedServices/resolveConnectedServiceCredentials';
 import type { StoredCredentials } from '@/persistence';
 import {
-  type ConnectedServiceChildSelection,
   readConnectedServiceChildSelectionsFromEnv,
 } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
-import { resolveConnectedServiceMaterializedHomeRoot } from '@/daemon/connectedServices/catalogHooks';
 import { createConnectedServiceRuntimeAuthNativeHome } from '@/daemon/connectedServices/runtimeAuth/createRuntimeAuthNativeHome';
 import { createSessionConnectedServiceAuthTransport } from '@/session/runtime/control/transport';
 import {
   type AccountSettings,
   type ConnectedServiceCredentialRecordV1,
   type ConnectedServiceCredentialRevisionV1,
+  type QualifiedConnectedAccountRef,
 } from '@happier-dev/protocol';
+import { qualifiedPurposeKey } from '@happier-dev/protocol/connect/connected-account-purpose-bindings';
+import { acquireAuthoritativePluginRuntimeRegistryLease } from '@/plugins/runtime/reload/runtimeLease';
+import type { StablePluginConnectedAccountsOwner } from '@/plugins/runtime/invocation/services/connectedAccounts';
+import type { ConnectedAccountPurposeBindingOwner } from '../purposeBindings/ConnectedAccountPurposeBindingOwner';
+import { resolveQualifiedPurposeBindingSnapshotForAgentSpawn } from '../requestAuth/prepareConnectedAccountRequestAuthForSpawn';
+import { materializeConnectedServicesForSpawn } from '../materialize/materializeConnectedServicesForSpawn';
+import { resolveConnectedServiceNativeHomeTarget } from '../materialize/resolveConnectedServiceNativeHomeTarget';
+import type { validateConnectedServiceGroupMutationCurrentness } from '../accountGroups/generation/validateGroupMutationCurrentness';
+import type { ConnectedServicesMaterializationDiagnostic } from '../materialization/materializer';
 import { readQualifiedConnectedAccountCredentialMaterial } from '@/daemon/connectedServices/qualifiedConnectedAccountEstablishedRuntimeOwner';
 import { resolveFirstPartyLegacyConnectedServiceIdForQualifiedServiceKey, resolveQualifiedConnectedAccountServiceForIngressServiceId } from '@/plugins/projection/registry/connectedAccountPurposeCompatibility';
 
 import type { SessionConnectedServiceRuntimeAuthSelectionMaterializerInput } from './switchSessionConnectedServiceAuth';
+import { resolveTrackedConnectedServiceSwitchContinuityContext } from './resolveTrackedConnectedServiceSwitchContinuityContext';
 
 function readNonEmptyString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -26,9 +37,15 @@ export async function materializeSessionConnectedServiceRuntimeAuthSelection(par
   credentials: StoredCredentials;
   api: ApiClient;
   activeServerDir?: string;
+  baseDir?: string;
+  connectedAccountsOwner?: StablePluginConnectedAccountsOwner;
+  activatePurposeBindings?: ConnectedAccountPurposeBindingOwner['activatePurposeBindings'];
+  validateGroupMutationCurrentness?: (input: Parameters<typeof validateConnectedServiceGroupMutationCurrentness>[0]['input'])
+    => ReturnType<typeof validateConnectedServiceGroupMutationCurrentness>;
   input: SessionConnectedServiceRuntimeAuthSelectionMaterializerInput;
   accountSettings?: AccountSettings | null;
   processEnv?: NodeJS.ProcessEnv;
+  allowNativeAccountState?: boolean;
   isCurrent?: () => Promise<boolean>;
 }>): Promise<unknown | null> {
   if (params.input.next.source !== 'connected') return null;
@@ -45,7 +62,7 @@ export async function materializeSessionConnectedServiceRuntimeAuthSelection(par
 
   if (typeof params.api.getAccountEncryptionMode !== 'function') return null;
   const previousSelections = readConnectedServiceChildSelectionsFromEnv(
-    params.input.tracked.spawnOptions?.environmentVariables ?? {},
+    params.input.tracked?.spawnOptions?.environmentVariables ?? {},
   );
   const previousSelection = previousSelections?.get(params.input.serviceId) ?? null;
   const previousGroupSelection =
@@ -105,6 +122,7 @@ export async function materializeSessionConnectedServiceRuntimeAuthSelection(par
     : null;
 
   const baseSelection = {
+    kind: binding.selection,
     serviceId: params.input.serviceId,
     binding,
     profileId,
@@ -122,31 +140,102 @@ export async function materializeSessionConnectedServiceRuntimeAuthSelection(par
     credentialRevision,
   };
 
-  const targetSelection = (binding.selection === 'group'
-    ? {
-        kind: 'group',
-        serviceId: params.input.serviceId,
-        groupId: binding.groupId,
-        activeProfileId: profileId,
-        fallbackProfileId: fallbackProfileId!,
-        generation: generation!,
-        policy: null,
-        credentialRevision,
+  const isMaterializationCurrent = async () => {
+    await assertCurrent();
+    if (binding.selection !== 'group') return true;
+    if (!params.validateGroupMutationCurrentness) throw new Error('connected_account_group_currentness_unavailable');
+    return (await params.validateGroupMutationCurrentness({ serviceId: params.input.serviceId,
+      groupId: binding.groupId, profileId, generation: generation!, credentialRevision })).current;
+  };
+  let targetMaterializedRoot: string | null = null;
+  let targetMaterializedEnv: Readonly<Record<string, string>> | null = null;
+  let diagnostics: readonly ConnectedServicesMaterializationDiagnostic[] = [];
+  if (params.activeServerDir) {
+    const registryLease = await acquireAuthoritativePluginRuntimeRegistryLease();
+    try {
+      const registry = registryLease.registry;
+      const contribution = registry.contributes.agentDefinitionsById.get(params.input.agentId);
+      const catalogEntry = await registry.acquireAgentCatalogEntry?.(params.input.agentId) ?? contribution?.catalogEntry;
+      const snapshot = resolveQualifiedPurposeBindingSnapshotForAgentSpawn({
+        agentId: params.input.agentId, bindings: params.input.normalizedBindings,
+        contributions: registry.contributes, catalogEntry,
+      });
+      const nativeHomeDeclaration = (await catalogEntry?.getConnectedServiceStateSharingDescriptor?.())?.nativeHome;
+      const owner = params.connectedAccountsOwner ?? registry.resolveConnectedAccountPurposeBindingOwner?.();
+      if (nativeHomeDeclaration) {
+        if (!snapshot || !contribution?.identity || !owner || !params.activatePurposeBindings) {
+          throw new Error('connected_account_runtime_selection_authority_unavailable');
+        }
+        const operationId = randomUUID();
+        const purposeLease = params.activatePurposeBindings({
+          subject: { kind: 'operation', operationId, consumer: contribution.identity,
+            sessionId: params.input.sessionId, isCurrent: () => true },
+          purposes: snapshot.purposes, bindings: snapshot.bindings,
+          directMaterialOrigins: snapshot.directMaterialOrigins,
+        });
+        try {
+          const expectedAccountsByPurposeKey = new Map<string, QualifiedConnectedAccountRef>();
+          for (const scope of snapshot.fileMaterializationPurposes ?? []) {
+            const resolved = await owner.getBinding({ ...scope,
+              exactPurposeBindingSubjectId: purposeLease.subjectId, signal: new AbortController().signal });
+            if (resolved) {
+              const selectedService = resolveQualifiedConnectedAccountServiceForIngressServiceId(params.input.serviceId);
+              if (selectedService && resolved.account.service.pluginId === selectedService.pluginId
+                && resolved.account.service.localId === selectedService.localId && resolved.account.accountId !== profileId) {
+                throw new Error('shared_generation_application_superseded');
+              }
+              expectedAccountsByPurposeKey.set(qualifiedPurposeKey(scope.purpose), resolved.account);
+            }
+          }
+          await assertCurrent();
+          if (nativeHomeDeclaration) {
+            targetMaterializedRoot = resolveConnectedServiceNativeHomeTarget({
+              agentId: params.input.agentId, activeServerDir: params.activeServerDir,
+              nativeHome: nativeHomeDeclaration, snapshot, expectedAccountsByPurposeKey,
+            });
+            targetMaterializedEnv = targetMaterializedRoot
+              ? { [nativeHomeDeclaration.environmentKey]: targetMaterializedRoot } : null;
+          }
+          if (params.input.mode === 'apply') {
+            if (!params.baseDir) throw new Error('connected_account_runtime_selection_base_dir_unavailable');
+            const continuity = resolveTrackedConnectedServiceSwitchContinuityContext({
+              agentId: params.input.agentId, baseDir: params.baseDir, tracked: params.input.tracked,
+              persistedSessionMetadata: params.input.persistedSessionMetadata,
+            });
+            const materialized = await materializeConnectedServicesForSpawn({
+              agentId: params.input.agentId, materializationKey: operationId,
+              activeServerDir: params.activeServerDir, baseDir: params.baseDir,
+              sessionDirectory: params.input.cwd ?? params.input.tracked?.spawnOptions?.directory,
+              recordsByServiceId: new Map(), connectedAccountsOwner: params.connectedAccountsOwner,
+              connectedAccountMaterializationAuthority: { kind: 'qualified',
+                purposeBindings: snapshot.bindings, requestAuthPurposeBindings: [] },
+              qualifiedPurposeBindingSnapshot: snapshot, exactPurposeBindingSubjectId: purposeLease.subjectId,
+              runtimeDescriptorV1: continuity.runtimeDescriptorV1,
+              vendorResumeId: continuity.vendorResumeId,
+              candidatePersistedSessionFile: continuity.candidatePersistedSessionFile,
+              accountSettings: params.accountSettings, processEnv: params.processEnv,
+              allowNativeAccountState: params.allowNativeAccountState === true,
+              isAccountRuntimeCurrent: async () => purposeLease.isCurrent() && await isMaterializationCurrent(),
+            });
+            try {
+              if (!materialized) throw new Error('connected_account_runtime_selection_materialization_unavailable');
+              diagnostics = materialized.diagnostics ?? [];
+              targetMaterializedRoot = materialized?.targetMaterializedRoot ?? targetMaterializedRoot;
+              if (nativeHomeDeclaration && targetMaterializedRoot) {
+                targetMaterializedEnv = { [nativeHomeDeclaration.environmentKey]: targetMaterializedRoot };
+              }
+            } finally {
+              await materialized?.cleanupOnExit?.();
+            }
+          }
+        } finally {
+          purposeLease.dispose();
+        }
       }
-    : {
-        kind: 'profile',
-        serviceId: params.input.serviceId,
-        profileId,
-        credentialRevision,
-      }) satisfies ConnectedServiceChildSelection;
-  const targetMaterializedRoot = params.activeServerDir && legacyServiceId
-    ? resolveConnectedServiceMaterializedHomeRoot(params.input.agentId, {
-        activeServerDir: params.activeServerDir,
-        serviceId: legacyServiceId,
-        profileId,
-        selection: targetSelection,
-    })
-    : null;
+    } finally {
+      await registryLease.release();
+    }
+  }
   const runtimeAuthTransport = createSessionConnectedServiceAuthTransport({
     credentials: params.credentials,
     sessionId: params.input.sessionId,
@@ -170,6 +259,8 @@ export async function materializeSessionConnectedServiceRuntimeAuthSelection(par
       return result;
     },
     ...(targetMaterializedRoot ? { targetMaterializedRoot } : {}),
+    ...(targetMaterializedEnv ? { targetMaterializedEnv } : {}),
+    ...(diagnostics.length ? { diagnostics } : {}),
     ...(nativeHome ? { nativeHome } : {}),
   };
 }

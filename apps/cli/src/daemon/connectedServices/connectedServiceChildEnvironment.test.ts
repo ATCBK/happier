@@ -91,7 +91,9 @@ describe('connectedServiceChildEnvironment', () => {
     });
 
     expect(resolveConnectedServiceRuntimeAuthContextFromSessionMetadata({
-      getMetadataSnapshot: () => ({ connectedServices }),
+      getMetadataSnapshot: () => ({ connectedServices: { ...connectedServices, retiredBindingsField: true,
+        bindingsByServiceId: Object.fromEntries(Object.entries(connectedServices.bindingsByServiceId)
+          .map(([key, binding]) => [key, { ...binding, retiredBindingField: true }])) } }),
     }, 'happier.agent.codex/openai-codex')).toEqual({
       serviceId: 'happier.agent.codex/openai-codex',
       profileId: null,

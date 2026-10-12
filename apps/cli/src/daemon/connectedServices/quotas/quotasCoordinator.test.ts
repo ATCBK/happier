@@ -79,7 +79,8 @@ import type {
 import type { AccountPluginDataStorageHostDependencies } from '@/plugins/runtime/context/accountPluginDataStorage';
 import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
-import { resolvePluginContributes } from '@/plugins/projection/registry/resolvePluginContributions';
+import { projectLoadedPluginContributes, resolvePluginContributes } from '@/plugins/projection/registry/resolvePluginContributions';
+import { loadInstalledPlugins } from '@/plugins/discovery/load/installed';
 import {
   createLocalPathPluginDistributionIdentity,
   createPluginTrustRecord,
@@ -2094,14 +2095,22 @@ describe('ConnectedServiceQuotasCoordinator', () => {
     expect(loadQuota).not.toHaveBeenCalled();
   });
 
-  it.each(['usage_notice_requester', 'settlement_init_plain', 'settlement_init_e2ee', 'settlement_init_existing', 'settlement_init_no_quota', 'settlement_init_stale', 'settlement_init_failed', 'quota_error', 'quota_error_cold', 'quota_family', 'unusable_spare', 'enumerated', 'aggregate', 'aggregate_timeout', 'aggregate_network', 'read_failure', 'not_available', 'nothing_to_reset', 'already_consumed', 'manual_selected', 'manual_next', 'manual_not_available', 'manual_missing'] as const)('schedules a novel qualified account through the plugin quota leaf and canonical V4 usage writer (%s recovery)', async (recoveryMode) => {
-    const now = 1_000_000;
+  it.each(['deadline_no_quota', 'deadline_fresh', 'deadline_reset', 'usage_notice_requester', 'settlement_init_plain', 'settlement_init_e2ee', 'settlement_init_existing', 'settlement_init_no_quota', 'settlement_init_stale', 'settlement_init_failed', 'quota_error', 'quota_error_cold', 'quota_family', 'unusable_spare', 'enumerated', 'aggregate', 'aggregate_timeout', 'aggregate_network', 'read_failure', 'not_available', 'nothing_to_reset', 'already_consumed', 'manual_selected', 'manual_next', 'manual_not_available', 'manual_missing', 'manual_codex_alias', 'manual_claude_alias', 'manual_stale_basis', 'manual_persistence_failed', 'discovery_inventory', 'discovery_inventory_e2ee', 'discovery_malformed', 'discovery_unavailable', 'discovery_no_facet', 'automatic_target_then_manual', 'automatic_without_context_then_manual', 'automatic_pending_then_manual', 'automatic_pending_then_target', 'manual_distinct', 'manual_same_selector', 'manual_aggregate_selected', 'manual_known_no_effect_error', 'manual_unknown_error', 'manual_predecessor_error', 'manual_reset_after_quota_error', 'manual_reset_after_provider_backoff'] as const)('schedules a qualified account through the plugin quota leaf and canonical V4 usage writer (%s recovery)', async (recoveryMode) => {
+    let now = 1_000_000;
+    const service = recoveryMode === 'manual_codex_alias'
+      ? { pluginId: 'happier.agent.codex', localId: 'openai-codex' }
+      : recoveryMode === 'manual_claude_alias'
+        ? { pluginId: 'happier.agent.claude', localId: 'claude-subscription' }
+        : { pluginId: 'acme.novel.accounts', localId: 'work-cloud' };
+    const serviceKey = `${service.pluginId}/${service.localId}` as ConnectedAccountServiceKey;
+    const ingressServiceId = recoveryMode === 'manual_codex_alias' ? 'openai-codex'
+      : recoveryMode === 'manual_claude_alias' ? 'claude-subscription' : serviceKey;
     const settlementInitialization = recoveryMode.startsWith('settlement_init_');
-    const accountMode = recoveryMode === 'enumerated' || recoveryMode === 'settlement_init_e2ee' ? 'e2ee' as const : 'plain' as const;
+    const accountMode = recoveryMode === 'enumerated' || recoveryMode === 'settlement_init_e2ee' || recoveryMode === 'discovery_inventory_e2ee' ? 'e2ee' as const : 'plain' as const;
     const manual = recoveryMode.startsWith('manual_');
     const expectedProviderCreditId = recoveryMode === 'enumerated' || recoveryMode === 'manual_next'
       ? 'earliest'
-      : recoveryMode === 'manual_selected' || recoveryMode === 'manual_not_available' ? 'later' : undefined;
+      : recoveryMode === 'manual_selected' || recoveryMode === 'manual_not_available' ? 'later' : manual ? 'earliest' : undefined;
     const subscription = {
       status: 'subscribed' as const, renewal: 'off' as const,
       observedAtMs: now - 1_000, staleAfterMs: 60_000,
@@ -2117,13 +2126,12 @@ describe('ConnectedServiceQuotasCoordinator', () => {
       : subscription;
     const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-quota-home-'));
     const pluginRoot = await mkdtemp(join(tmpdir(), 'happier-quota-plugin-'));
+    const recoveryInvocationMarker = join(pluginRoot, 'recovery-invoked');
     const quotaInvocationMarker = join(pluginRoot, 'quota-invoked');
+    const automaticRefusalRelease = join(pluginRoot, 'release-automatic-refusal');
     const profile: QualifiedConnectedAccountProfileV4 = {
       ref: {
-        service: {
-          pluginId: 'acme.novel.accounts',
-          localId: 'work-cloud',
-        },
+        service,
         accountId: 'account-a',
       },
       status: 'connected',
@@ -2150,7 +2158,7 @@ describe('ConnectedServiceQuotasCoordinator', () => {
         connectedAccountDescriptors: [{
           id: profile.ref.service.localId,
           title: 'Novel account',
-          recoveryCredits: { supported: true },
+          recoveryCredits: recoveryMode === 'discovery_no_facet' ? undefined : { supported: true },
           authentication: {
             defaultModeId: 'manual',
             modes: [{
@@ -2170,9 +2178,12 @@ describe('ConnectedServiceQuotasCoordinator', () => {
     }), 'utf8');
     await writeFile(join(pluginRoot, 'daemon.mjs'), `export function activate(api) {
       let consumed = false;
+      let consumeAttemptCount = 0;
+      const consumedCreditIds = new Set();
       let inventoryReadCount = 0;
       let quotaReadCount = 0;
-      api.connectedAccounts.register('work-cloud', {
+      let automaticRefusalPending = false;
+      api.connectedAccounts.register('${service.localId}', {
         authentication: { modes: { manual: { kind: 'manual', async complete() {
           return { status: 'connected', accountId: 'account-a', scopes: [] };
         } } } },
@@ -2181,6 +2192,13 @@ describe('ConnectedServiceQuotasCoordinator', () => {
         async status() { return { status: 'connected' }; },
         recoveryCredits: {
           async read() {
+            await (await import('node:fs/promises')).writeFile(${JSON.stringify(recoveryInvocationMarker)}, automaticRefusalPending ? 'read-while-refusal-pending' : 'invoked');
+            ${recoveryMode === 'discovery_unavailable' ? "throw new Error('Bearer private-provider-secret inventory unavailable');" : ''}
+            ${recoveryMode === 'discovery_malformed' ? `return { observedAtMs: ${now}, availableCount: 1, credits: [{ providerCreditId: 'grant-a', status: 'available' }], recoveryCreditDetails: { 'grant-a': { remainingCount: -1, appliesToProviderLimitIds: [] } } };` : ''}
+            ${recoveryMode.startsWith('discovery_inventory') ? `return { observedAtMs: ${now}, availableCount: 0, credits: [
+              { providerCreditId: 'grant-a', kind: 'usage_limit_reset', status: 'unknown', title: 'Saved reset', providerResetType: 'cedar_ember', expiresAtMs: ${now + 2000} },
+              { providerCreditId: 'spent', kind: 'usage_limit_reset', status: 'redeemed', redeemedAtMs: ${now - 100} }
+            ], recoveryCreditDetails: { 'grant-a': { remainingCount: 2, appliesToProviderLimitIds: ['five_hour', 'seven_day'], unavailableReason: 'cooldown' }, spent: { remainingCount: 0, appliesToProviderLimitIds: [], unavailableReason: 'consumed' } } };` : ''}
             ${recoveryMode === 'read_failure' ? "throw new Error('inventory unavailable');" : ''}
             return { observedAtMs: ${now} + ++inventoryReadCount, availableCount: 3, credits: ${recoveryMode === 'enumerated' || manual ? `[
               { providerCreditId: 'expired', status: 'available', expiresAtMs: ${now - 1} },
@@ -2189,22 +2207,41 @@ describe('ConnectedServiceQuotasCoordinator', () => {
             ]${recoveryMode === 'manual_selected' || recoveryMode === 'manual_next' ? `.filter((credit) => credit.providerCreditId !== '${expectedProviderCreditId}' || !consumed)` : ''}` : '[]'} };
           },
           async consume(request, context, options) {
-            if (request.providerCreditId !== ${JSON.stringify(expectedProviderCreditId) ?? 'undefined'}) throw new Error('wrong credit');
-            if (consumed) throw new Error('duplicate consumption');
+            ${recoveryMode === 'manual_distinct' ? "if (!['earliest', 'later'].includes(request.providerCreditId)) throw new Error('wrong credit');" : `if (request.providerCreditId !== ${JSON.stringify(expectedProviderCreditId) ?? 'undefined'}) throw new Error('wrong credit');`}
+            if (consumedCreditIds.has(request.providerCreditId)) throw new Error('duplicate consumption');
+            ${recoveryMode === 'manual_known_no_effect_error' ? "if (++consumeAttemptCount === 1) throw Object.assign(new Error('No debit attempted'), { recoveryCreditConsumeOutcomeUnknown: false });" : ''}
+            ${recoveryMode.startsWith('automatic_pending_') ? `if (request.providerLimitIds?.length === 0) {
+              automaticRefusalPending = true;
+              const fs = await import('node:fs/promises');
+              await fs.writeFile(${JSON.stringify(recoveryInvocationMarker)}, 'refusal-pending');
+              while (!options.signal.aborted) {
+                if (await fs.readFile(${JSON.stringify(automaticRefusalRelease)}, 'utf8').catch(() => '') === 'release') break;
+                await new Promise((resolve) => setTimeout(resolve, 10));
+              }
+              options.signal.throwIfAborted();
+              return { status: 'nothing_to_reset' };
+            }` : ''}
+            ${recoveryMode.startsWith('automatic_') ? "if (request.providerLimitIds !== undefined && request.providerLimitIds.length === 0) return { status: 'nothing_to_reset' };" : ''}
             consumed = true;
+            consumedCreditIds.add(request.providerCreditId);
+            ${recoveryMode === 'manual_unknown_error' ? "throw Object.assign(new Error('Response lost after debit'), { recoveryCreditConsumeOutcomeUnknown: true });" : recoveryMode === 'manual_predecessor_error' ? "throw new Error('Response lost after debit');" : ''}
+            ${['manual_distinct', 'manual_same_selector', 'manual_aggregate_selected'].includes(recoveryMode) ? "if (request.providerCreditId === 'earliest') await new Promise((resolve, reject) => { options.signal.addEventListener('abort', () => reject(new Error('Provider debit acknowledgement unknown')), { once: true }); });" : ''}
             ${recoveryMode === 'aggregate_network' ? "throw new Error('response lost after debit');" : ''}
             ${recoveryMode === 'aggregate_timeout' ? "await new Promise((resolve, reject) => { options.signal.addEventListener('abort', () => reject(new Error('provider result unknown')), { once: true }); });" : ''}
             ${recoveryMode === 'not_available' || recoveryMode === 'nothing_to_reset' || recoveryMode === 'already_consumed' || recoveryMode === 'manual_not_available' ? `return { status: '${recoveryMode === 'manual_not_available' ? 'not_available' : recoveryMode}' };` : ''}
             return { status: 'consumed' };
           }
         },
-        ${recoveryMode === 'settlement_init_no_quota' ? '' : `async quota(context) {
+        ${recoveryMode === 'settlement_init_no_quota' || recoveryMode === 'deadline_no_quota' ? '' : `async quota(context) {
           ${settlementInitialization ? `await (await import('node:fs/promises')).writeFile(${JSON.stringify(quotaInvocationMarker)}, 'invoked');
           throw new Error('Connection settlement must not invoke provider quota');` : ''}
           const token = await context.credentials.get('token');
           if (token !== 'novel-token') throw new Error('quota credential unavailable');
           ${recoveryMode.startsWith('quota_error') ? "throw Object.assign(new Error('Bearer private-token must not be published'), { status: 429, retryAfterMs: 120000, quotaFetchErrorCode: 'provider_backoff' });" : ''}
+          ${recoveryMode === 'manual_reset_after_quota_error' ? "if (!consumed) throw Object.assign(new Error('Provider temporarily unavailable'), { quotaFetchErrorCode: 'network' });" : ''}
+          ${recoveryMode === 'manual_reset_after_provider_backoff' ? "if (!consumed) throw Object.assign(new Error('Provider retry required'), { status: 429, retryAfterMs: 120000, quotaFetchErrorCode: 'provider_backoff' });" : ''}
           return {
+            ${recoveryMode === 'discovery_no_facet' || recoveryMode === 'discovery_unavailable' ? "recoveryCredits: { availableCount: 99, credits: [] }, recoveryCreditDetails: { injected: { remainingCount: 99, appliesToProviderLimitIds: [] } }," : ''}
             observedAtMs: ${recoveryMode === 'usage_notice_requester' ? '++quotaReadCount === 1 ? 500000 : 600000' : now},
             ${accountMode === 'e2ee' ? `subscription: ${JSON.stringify(failedSubscription)},` : ''}
             limits: [{
@@ -2253,7 +2290,11 @@ describe('ConnectedServiceQuotasCoordinator', () => {
       },
     });
     const fixtureContributes = createResolvedContributionRegistry(
-      await resolvePluginContributes({ happyHomeDir }),
+      recoveryMode === 'manual_codex_alias' || recoveryMode === 'manual_claude_alias'
+        // Project the isolated first-party fixture through the real normalizer;
+        // external authoring cannot redeclare a bundled plugin identity.
+        ? projectLoadedPluginContributes({ loadResult: await loadInstalledPlugins({ happyHomeDir }), provenance: 'first_party' })
+        : await resolvePluginContributes({ happyHomeDir }),
     );
     const fixtureGenerationAuthority = await readCurrentCommittedPluginGenerations(
       resolvePluginStorePaths({ happyHomeDir }),
@@ -2299,6 +2340,7 @@ describe('ConnectedServiceQuotasCoordinator', () => {
         ? { scopes: [], displayName: profile.displayName, providerIdentity: profile.providerIdentity }
         : { scopes: [] },
     }));
+    let runtimeCurrent = true;
     const establishedRuntimeOwner =
       createQualifiedConnectedAccountEstablishedRuntimeOwner({
         reloadController: {
@@ -2311,7 +2353,7 @@ describe('ConnectedServiceQuotasCoordinator', () => {
             };
           },
           isRuntimeRegistryCurrent(candidate) {
-            return candidate === runtimeRegistry;
+            return runtimeCurrent && candidate === runtimeRegistry;
           },
         },
         credentials,
@@ -2329,7 +2371,7 @@ describe('ConnectedServiceQuotasCoordinator', () => {
       });
     const listScheduledAccounts = vi.fn(async () => [profile]);
     const recordKey: ProviderAccountUsageRecordKeyV1 = {
-      providerId: 'acme.novel.accounts/work-cloud', accountSubjectId: 'provider-account-a',
+      providerId: serviceKey, accountSubjectId: 'provider-account-a',
       subjectKind: 'account', quotaScope: 'account',
     };
     const previous: ProviderAccountUsageSnapshotV1 = {
@@ -2339,6 +2381,16 @@ describe('ConnectedServiceQuotasCoordinator', () => {
       observedAtMs: now - 70_000, fetchedAtMs: now - 70_000, staleAfterMs: 60_000,
       source: 'providerHttp', confidence: 'confirmed', state: 'loaded_empty', meters: [], subscription,
     };
+    if (recoveryMode === 'deadline_fresh' || recoveryMode === 'deadline_reset') {
+      previous.observedAtMs = now;
+      previous.fetchedAtMs = now;
+      previous.staleAfterMs = 300_000;
+      if (recoveryMode === 'deadline_reset') {
+        previous.state = 'loaded_data';
+        previous.meters = [{ meterId: 'monthly', label: 'Monthly', used: 100, limit: 100, remaining: 0,
+          utilizationPct: 100, unit: 'requests', resetsAt: now + 2_000, status: 'ok', details: {} }];
+      }
+    }
     if (recoveryMode === 'quota_error') {
       previous.state = 'loaded_data';
       previous.meters = [{ meterId: 'monthly', label: 'Monthly', used: 25, limit: 100, remaining: 75,
@@ -2580,9 +2632,46 @@ describe('ConnectedServiceQuotasCoordinator', () => {
         }
         return;
       }
-      await coordinator.tickOnce();
+      const schedule = await coordinator.tickOnce();
+      if (recoveryMode === 'deadline_no_quota') {
+        expect(schedule).toEqual({ nextAutomaticRunAfterMs: null });
+        return;
+      }
+      if (recoveryMode.startsWith('deadline_')) {
+        const deadline = recoveryMode === 'deadline_reset' ? 2_000 : 300_000;
+        expect(schedule).toEqual({ nextAutomaticRunAfterMs: deadline });
+        expect(readCredential).not.toHaveBeenCalled();
+        expect(writeProviderAccountUsage).not.toHaveBeenCalled();
+        now += deadline - 1;
+        expect(await coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: 1 });
+        expect(readCredential).not.toHaveBeenCalled();
+        now += 1;
+        expect(await coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: recoveryMode === 'deadline_reset' ? 58_000 : 60_000 });
+        expect(readCredential).toHaveBeenCalled();
+        expect(writeProviderAccountUsage).toHaveBeenCalled();
+        return;
+      }
+
+      if (recoveryMode === 'manual_reset_after_provider_backoff') {
+        const writeCount = writeProviderAccountUsage.mock.calls.length;
+        await expect(coordinator.consumeRecoveryCreditForProfile({
+          serviceId: ingressServiceId, profileId: 'account-a', idempotencyKey: 'confirmed-reset', providerCreditId: 'earliest',
+        })).resolves.toMatchObject({ ok: false, errorCode: 'connected_service_quota_recovery_credit_refresh_unavailable', receipt: { status: 'consumed' } });
+        expect(writeProviderAccountUsage.mock.calls).toHaveLength(writeCount);
+        return;
+      }
+
+      if (recoveryMode === 'manual_reset_after_quota_error') {
+        expect(writeProviderAccountUsage.mock.calls.at(-1)?.[0].write).toMatchObject({ snapshot: { state: 'error_last_known_good', diagnostics: [{ code: 'network' }] } });
+        await expect(coordinator.consumeRecoveryCreditForProfile({
+          serviceId: ingressServiceId, profileId: 'account-a', idempotencyKey: 'confirmed-reset', providerCreditId: 'earliest',
+        })).resolves.toMatchObject({ ok: true, receipt: { status: 'consumed', providerCreditId: 'earliest' } });
+        expect(accountUsageStore.listSnapshots()[0]).toMatchObject({ meters: [{ used: 0, remaining: 100 }] });
+        return;
+      }
 
       if (recoveryMode.startsWith('quota_error')) {
+        expect(schedule).toEqual({ nextAutomaticRunAfterMs: 120_000 });
         const writes = writeProviderAccountUsage.mock.calls.map(([params]) => params.write);
         expect(writes.at(-1)).toMatchObject({ status: 'error', snapshot: {
           state: 'error_last_known_good',
@@ -2594,7 +2683,7 @@ describe('ConnectedServiceQuotasCoordinator', () => {
         if (recoveryMode === 'quota_error_cold') expect(writes[0]).toMatchObject({ status: 'unavailable',
           snapshot: { state: 'not_loaded', meters: [], fetchedAtMs: 0 } });
         const writeCount = writes.length;
-        await coordinator.tickOnce();
+        expect(await coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: 120_000 });
         expect(writeProviderAccountUsage.mock.calls).toHaveLength(writeCount);
         return;
       }
@@ -2629,7 +2718,7 @@ describe('ConnectedServiceQuotasCoordinator', () => {
         ? openSealedProviderAccountUsageSnapshot({ material: credentials.encryption, sealed: written.sealedPayload })
         : null);
       expect(writtenSnapshot).toEqual(expect.objectContaining({
-        providerId: 'acme.novel.accounts/work-cloud',
+        providerId: serviceKey,
         subscription: expectedSubscription,
         accountSubject: { kind: 'providerSubject', id: 'provider-account-a' },
         accountLabel: 'Novel Work',
@@ -2638,13 +2727,37 @@ describe('ConnectedServiceQuotasCoordinator', () => {
       expect(accountUsageStore.listSnapshots()).toEqual([
         expect.objectContaining({
           providerId:
-            'acme.novel.accounts/work-cloud',
+            serviceKey,
           accountLabel: 'Novel Work',
           subscription: expectedSubscription,
         }),
       ]);
+      if (recoveryMode.startsWith('discovery_inventory')) {
+        const expectedRecovery = {
+          recoveryCredits: { availableCount: 0, credits: [
+            { id: 'grant-a', kind: 'usage_limit_reset', status: 'unknown', title: 'Saved reset', providerResetType: 'cedar_ember', expiresAtMs: now + 2000 },
+            { id: 'spent', kind: 'usage_limit_reset', status: 'redeemed', redeemedAtMs: now - 100 },
+          ] },
+          recoveryCreditDetails: {
+            'grant-a': { remainingCount: 2, appliesToProviderLimitIds: ['five_hour', 'seven_day'], unavailableReason: 'cooldown' },
+            spent: { remainingCount: 0, appliesToProviderLimitIds: [], unavailableReason: 'consumed' },
+          },
+        };
+        expect(writtenSnapshot).toMatchObject(expectedRecovery);
+        expect(accountUsageStore.resolveBySource({ serviceId: serviceKey, profileId: 'account-a', bindingKind: 'profile' }))
+          .toMatchObject(expectedRecovery);
+        return;
+      }
+      if (recoveryMode === 'discovery_no_facet' || recoveryMode === 'discovery_unavailable' || recoveryMode === 'discovery_malformed') {
+        expect(writtenSnapshot).not.toHaveProperty('recoveryCredits');
+        expect(writtenSnapshot).not.toHaveProperty('recoveryCreditDetails');
+        expect(accountUsageStore.listSnapshots()[0]).not.toHaveProperty('recoveryCredits');
+        if (recoveryMode === 'discovery_no_facet') await expect(readFile(recoveryInvocationMarker)).rejects.toMatchObject({ code: 'ENOENT' });
+        else await expect(readFile(recoveryInvocationMarker, 'utf8')).resolves.toBe('invoked');
+        return;
+      }
       if (recoveryMode === 'quota_family' || recoveryMode === 'unusable_spare') {
-        const serviceId = 'acme.novel.accounts/work-cloud';
+        const serviceId = serviceKey;
         await expect(coordinator.probeGroupQuotaSnapshots({
           serviceId, groupId: 'team', profileIds: recoveryMode === 'unusable_spare' ? ['dead', 'account-a'] : ['account-a'],
         })).resolves.toMatchObject({ status: 'complete', completedProfileCount: recoveryMode === 'unusable_spare' ? 2 : 1 });
@@ -2687,14 +2800,86 @@ describe('ConnectedServiceQuotasCoordinator', () => {
         }
         return;
       }
-      const request = { serviceId: 'acme.novel.accounts/work-cloud', profileId: 'account-a', groupId: 'team',
-        automaticResetContext: { groupId: 'team', ...(recoveryMode === 'enumerated' ? { sessionId: 'session-a' } : {}) },
+      const request = { serviceId: serviceKey, profileId: 'account-a', groupId: 'team',
+        automaticResetContext: { groupId: 'team', providerLimitIds: recoveryMode === 'automatic_target_then_manual' || recoveryMode.startsWith('automatic_pending_') ? [] : ['monthly'], ...(recoveryMode === 'enumerated' ? { sessionId: 'session-a' } : {}) },
       } as const;
       const usageSource = { serviceId: request.serviceId, profileId: request.profileId, groupId: request.groupId };
       const consume = () => manual
-        ? coordinator.consumeRecoveryCreditForProfile({ serviceId: request.serviceId, profileId: request.profileId,
+        ? coordinator.consumeRecoveryCreditForProfile({ serviceId: ingressServiceId, profileId: request.profileId,
             idempotencyKey: 'manual-selected-reset', ...(recoveryMode === 'manual_selected' || recoveryMode === 'manual_not_available' ? { providerCreditId: 'later' } : recoveryMode === 'manual_missing' ? { providerCreditId: 'missing' } : {}) })
-        : coordinator.consumeAvailableRecoveryCreditForProfile(request);
+        : coordinator.consumeAvailableRecoveryCreditForProfile(recoveryMode === 'automatic_without_context_then_manual' ? { serviceId: request.serviceId, profileId: request.profileId, groupId: request.groupId } : request);
+      if (recoveryMode === 'manual_stale_basis') {
+        runtimeCurrent = false;
+        await expect(consume()).resolves.toMatchObject({ ok: false });
+        expect(accountUsageStore.resolveBySource({ serviceId: serviceKey, profileId: request.profileId, bindingKind: 'profile' }))
+          .toMatchObject({ meters: [expect.objectContaining({ used: 25, remaining: 75 })] });
+        return;
+      }
+      if (recoveryMode === 'manual_persistence_failed') {
+        writeProviderAccountUsage.mockRejectedValueOnce(new Error('Home unavailable after provider debit'));
+        const first = await consume();
+        expect(first).toMatchObject({ ok: false, receipt: { idempotencyKey: 'manual-selected-reset', status: 'consumed' } });
+        expect(await consume()).toEqual(first);
+        return;
+      }
+      if (recoveryMode.startsWith('automatic_pending_')) {
+        const automaticPromise = consume();
+        await vi.waitFor(async () => {
+          expect(await readFile(recoveryInvocationMarker, 'utf8')).toBe('refusal-pending');
+        });
+        const secondPromise = recoveryMode === 'automatic_pending_then_manual'
+          ? coordinator.consumeRecoveryCreditForProfile({ serviceId: serviceKey, profileId: request.profileId,
+              idempotencyKey: 'concurrent-manual-reset' })
+          : coordinator.consumeAvailableRecoveryCreditForProfile({ ...request,
+              automaticResetContext: { groupId: 'another-team', providerLimitIds: ['monthly'] } });
+        await vi.waitFor(async () => {
+          expect(await readFile(recoveryInvocationMarker, 'utf8')).toBe('read-while-refusal-pending');
+        });
+        await writeFile(automaticRefusalRelease, 'release');
+        await expect(automaticPromise).resolves.toMatchObject({ ok: false, receipt: { status: 'nothing_to_reset' } });
+        await expect(secondPromise).resolves.toMatchObject({ ok: true, receipt: { status: 'consumed' } });
+        return;
+      }
+      if (recoveryMode.startsWith('automatic_')) {
+        const automatic = await consume();
+        expect(automatic).toMatchObject({ ok: false, receipt: { status: 'nothing_to_reset' } });
+        if (!automatic.receipt) throw new Error('Expected the explicit no-effect receipt');
+        await expect(coordinator.consumeRecoveryCreditForProfile({ serviceId: serviceKey, profileId: request.profileId,
+          idempotencyKey: automatic.receipt.idempotencyKey }))
+          .resolves.toMatchObject({ ok: true, receipt: { status: 'consumed' } });
+        return;
+      }
+      if (recoveryMode === 'manual_distinct' || recoveryMode === 'manual_same_selector' || recoveryMode === 'manual_aggregate_selected') {
+        const firstPromise = coordinator.consumeRecoveryCreditForProfile({ serviceId: serviceKey, profileId: request.profileId,
+          idempotencyKey: 'first-observation', ...(recoveryMode === 'manual_aggregate_selected' ? {} : { providerCreditId: 'earliest' }) });
+        // The provider's quota confirms the first debit while its acknowledgement
+        // remains pending. The second request therefore genuinely overlaps it.
+        await vi.waitFor(async () => {
+          await coordinator.probeGroupQuotaSnapshots({ ...usageSource, profileIds: [request.profileId] });
+          expect(accountUsageStore.resolveBySource({ ...usageSource, bindingKind: 'group_member', groupGeneration: 4 }))
+            .toMatchObject({ meters: [expect.objectContaining({ used: 0 })] });
+        });
+        const secondPromise = coordinator.consumeRecoveryCreditForProfile({ serviceId: serviceKey, profileId: request.profileId,
+          idempotencyKey: 'second-observation', providerCreditId: recoveryMode === 'manual_distinct' ? 'later' : 'earliest' });
+        const [first, second] = await Promise.all([firstPromise, secondPromise]);
+        expect(first).toMatchObject({ ok: false, receipt: { providerCreditId: 'earliest', status: 'unknown_after_timeout' } });
+        if (recoveryMode === 'manual_distinct') expect(second).toMatchObject({ ok: true, receipt: { providerCreditId: 'later', status: 'consumed' } });
+        else expect(second).toEqual(first);
+        return;
+      }
+      if (recoveryMode === 'manual_known_no_effect_error' || recoveryMode === 'manual_unknown_error' || recoveryMode === 'manual_predecessor_error') {
+        const first = await consume();
+        expect(first.ok).toBe(false);
+        if (recoveryMode === 'manual_known_no_effect_error') {
+          expect(first).not.toHaveProperty('receipt');
+          await expect(consume()).resolves.toMatchObject({ ok: true, receipt: { status: 'consumed' } });
+        } else {
+          expect(first).toMatchObject({ receipt: { status: 'unknown_after_timeout' } });
+          await expect(coordinator.consumeRecoveryCreditForProfile({ serviceId: serviceKey, profileId: request.profileId,
+            idempotencyKey: 'new-observation', providerCreditId: 'later' })).resolves.toEqual(first);
+        }
+        return;
+      }
       const firstPromise = consume();
       if (recoveryMode === 'aggregate_timeout') {
         // Observe the real plugin's debit through its quota leaf while its consume
@@ -2996,31 +3181,13 @@ describe('ConnectedServiceQuotasCoordinator', () => {
 
   it.each([
     {
-      name: 'Codex',
-      serviceId: 'openai-codex' as const,
-      pluginId: 'happier.agent.codex',
-      localId: 'openai-codex',
-      authenticationModeId: 'oauth',
-      peerClass: 'advertised_v4' as const,
-      expectedExecutor: 'qualified' as const,
-    },
-    {
-      name: 'Claude setup-token',
-      serviceId: 'claude-subscription' as const,
-      pluginId: 'happier.agent.claude',
-      localId: 'claude-subscription',
-      authenticationModeId: 'setup-token',
-      peerClass: 'advertised_v4' as const,
-      expectedExecutor: 'qualified' as const,
-    },
-    {
       name: 'Codex legacy peer',
       serviceId: 'openai-codex' as const,
       pluginId: 'happier.agent.codex',
       localId: 'openai-codex',
       authenticationModeId: 'oauth',
       peerClass: 'revisioned_v2_v3' as const,
-      expectedExecutor: 'legacy' as const,
+      expectedExecutor: 'none' as const,
     },
     {
       name: 'Codex indeterminate peer',
@@ -3172,31 +3339,10 @@ describe('ConnectedServiceQuotasCoordinator', () => {
 
     await coordinator.tickOnce();
 
-    if (expectedExecutor === 'legacy') {
-      expect(legacyFetcher.loadQuota).toHaveBeenCalledOnce();
-      expect(
-        getConnectedServiceCredentialPlain,
-      ).toHaveBeenCalledTimes(2);
-      expect(invokeWithReceipt).not.toHaveBeenCalled();
-      expect(writeProviderAccountUsage).not.toHaveBeenCalled();
-    } else if (expectedExecutor === 'qualified') {
-      expect(legacyFetcher.loadQuota).not.toHaveBeenCalled();
-      expect(
-        getConnectedServiceCredentialPlain,
-      ).not.toHaveBeenCalled();
-      expect(invokeWithReceipt).toHaveBeenCalledWith({
-        account: profile.ref,
-        operation: { kind: 'quota' },
-      });
-      expect(writeProviderAccountUsage).toHaveBeenCalledOnce();
-    } else {
-      expect(legacyFetcher.loadQuota).not.toHaveBeenCalled();
-      expect(
-        getConnectedServiceCredentialPlain,
-      ).not.toHaveBeenCalled();
-      expect(invokeWithReceipt).not.toHaveBeenCalled();
-      expect(writeProviderAccountUsage).not.toHaveBeenCalled();
-    }
+    expect(legacyFetcher.loadQuota).not.toHaveBeenCalled();
+    expect(getConnectedServiceCredentialPlain).not.toHaveBeenCalled();
+    expect(invokeWithReceipt).not.toHaveBeenCalled();
+    expect(writeProviderAccountUsage).not.toHaveBeenCalled();
   });
 
   it('opens predecessor-rich V2 quota ciphertext through the legacy boundary codec', () => {
@@ -3932,501 +4078,6 @@ describe('ConnectedServiceQuotasCoordinator', () => {
     expect(acquireConnectedServiceRefreshLease).not.toHaveBeenCalled();
     },
   );
-
-  it('consumes recovery credits through the quota fetcher and persists a refreshed plaintext snapshot', async () => {
-    const now = 1_000_000;
-    const credentials: Credentials = {
-      token: 'happy-token',
-      encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
-    const record = buildConnectedServiceCredentialRecord({
-      now,
-      serviceId: 'openai-codex',
-      profileId: 'work',
-      kind: 'oauth',
-      expiresAt: now + 60_000,
-      oauth: {
-        accessToken: 'access',
-        refreshToken: 'refresh',
-        idToken: null,
-        scope: null,
-        tokenType: null,
-        providerAccountId: 'acct',
-        providerEmail: 'user@example.com',
-      },
-    });
-    const legacyV4 = createLegacyScalarV4PersistenceRuntime({
-      serviceId: 'openai-codex',
-      profileIds: ['work'],
-      providerAccountIdsByProfileId: { work: 'acct' },
-    });
-    const api = {
-      getAccountEncryptionMode: vi.fn(async () => 'plain' as const),
-      getConnectedServiceQuotaSnapshotPlain: vi.fn(async () => null),
-      getConnectedServiceCredentialPlain: vi.fn(async () => ({ content: { t: 'plain' as const, v: record }, revisionSemantics: 'revisioned' as const, credentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS' })),
-      getConnectedServiceQuotaSnapshotSealed: vi.fn(async () => null),
-      getConnectedServiceCredentialSealed: vi.fn(async () => null),
-    } as unknown as QuotaApi;
-
-    const refreshedSnapshot = buildAgentAccountUsageSnapshotFixture({
-      record,
-      now: now + 1,
-      planLabel: 'Pro',
-      accountLabel: 'user@example.com',
-      recoveryCredits: {
-        availableCount: 0,
-        credits: [],
-      },
-      meters: [],
-    });
-    const consumeRecoveryCredit = vi.fn(async () => 'consumed' as const);
-    const fetcher: ConnectedServiceQuotaFetcher = {
-      serviceId: 'openai-codex',
-      consumeRecoveryCredit,
-      loadQuota: vi.fn(async () => refreshedSnapshot),
-    };
-
-    const coordinator = new ConnectedServiceQuotasCoordinator({
-      api,
-      credentials,
-      quotaFetchers: [fetcher],
-      now: () => now,
-      randomBytes: (length: number) => randomBytes(length),
-      qualifiedConnectedAccountRuntime: legacyV4.qualifiedConnectedAccountRuntime,
-    });
-
-    const result = await coordinator.consumeRecoveryCreditForProfile({
-      serviceId: 'openai-codex',
-      profileId: 'work',
-      idempotencyKey: 'consume:work:credit-1',
-      providerCreditId: 'credit-1',
-    });
-    const replayed = await coordinator.consumeRecoveryCreditForProfile({
-      serviceId: 'openai-codex',
-      profileId: 'work',
-      idempotencyKey: 'consume:work:credit-1',
-      providerCreditId: 'credit-1',
-    });
-
-    expect(result).toEqual({
-      ok: true,
-      receipt: {
-        idempotencyKey: 'consume:work:credit-1',
-        providerCreditId: 'credit-1',
-        status: 'consumed',
-      },
-      snapshot: expect.objectContaining({
-        serviceId: 'openai-codex',
-        profileId: 'work',
-        fetchedAt: refreshedSnapshot.fetchedAtMs,
-        recoveryCredits: refreshedSnapshot.recoveryCredits,
-      }),
-    });
-    expect(replayed).toEqual(result);
-    expect(consumeRecoveryCredit).toHaveBeenCalledTimes(1);
-    expect(consumeRecoveryCredit).toHaveBeenCalledWith(expect.objectContaining({
-      record,
-      now,
-      idempotencyKey: 'consume:work:credit-1',
-      providerCreditId: 'credit-1',
-      signal: expect.any(AbortSignal),
-    }));
-    expect(fetcher.loadQuota).toHaveBeenCalledWith(expect.objectContaining({
-      record,
-      now,
-      signal: expect.any(AbortSignal),
-    }));
-    // The refreshed snapshot persists through the strict V4 PAU write DTO.
-    expect(legacyV4.writeProviderAccountUsage).toHaveBeenCalledWith(expect.objectContaining({
-      token: 'happy-token',
-      write: expect.objectContaining({
-        source: { ref: legacyV4.profile.ref, bindingKind: 'account' },
-        expectedCredentialRevision: legacyV4.profile.credentialRevision,
-        expectedConfigurationRevision: null,
-        payloadMode: 'plain_json_v1',
-        status: 'ok',
-        snapshot: expect.objectContaining({
-          providerId: 'openai-codex',
-          recoveryCredits: refreshedSnapshot.recoveryCredits,
-        }),
-        fetchedAt: refreshedSnapshot.fetchedAtMs,
-        staleAfterMs: refreshedSnapshot.staleAfterMs,
-        metadata: expect.objectContaining({
-          materialFingerprint: expect.any(String),
-        }),
-      }),
-    }));
-  });
-
-  it('does not consume a recovery credit after the peer changes while resolving its credential', async () => {
-    const now = 1_000_000;
-    let peerClass:
-      | 'revisioned_v2_v3'
-      | 'advertised_v4' = 'revisioned_v2_v3';
-    const record = buildConnectedServiceCredentialRecord({
-      now,
-      serviceId: 'openai-codex',
-      profileId: 'work',
-      kind: 'oauth',
-      expiresAt: now + 60_000,
-      oauth: {
-        accessToken: 'access',
-        refreshToken: 'refresh',
-        idToken: null,
-        scope: null,
-        tokenType: null,
-        providerAccountId: 'acct',
-        providerEmail: 'user@example.com',
-      },
-    });
-    const consumeRecoveryCredit = vi.fn(
-      async () => 'consumed' as const,
-    );
-    const coordinator = new ConnectedServiceQuotasCoordinator({
-      api: {
-        getAccountEncryptionMode:
-          vi.fn(async () => 'plain' as const),
-        getConnectedServiceCredentialPlain: vi.fn(async () => {
-          peerClass = 'advertised_v4';
-          return {
-            content: { t: 'plain' as const, v: record },
-            revisionSemantics: 'revisioned' as const,
-            credentialRevision:
-              'csr_0123456789ABCDEFGHJKMNPQRS',
-          };
-        }),
-        getConnectedServiceQuotaSnapshotPlain:
-          vi.fn(async () => null),
-        getConnectedServiceQuotaSnapshotSealed:
-          vi.fn(async () => null),
-        getConnectedServiceCredentialSealed:
-          vi.fn(async () => null),
-      } as unknown as QuotaApi,
-      credentials: {
-        token: 'happy-token',
-        encryption: {
-          type: 'legacy',
-          secret: new Uint8Array(32).fill(9),
-        },
-      },
-      quotaFetchers: [{
-        serviceId: 'openai-codex',
-        consumeRecoveryCredit,
-        loadQuota: vi.fn(async () => null),
-      }],
-      now: () => now,
-      randomBytes: (length) =>
-        new Uint8Array(length).fill(7),
-      discoveryEnabled: false,
-      qualifiedConnectedAccountRuntime: {
-        resolvePeerClass: () => peerClass,
-        resolveOperationTransport: () =>
-          peerClass === 'revisioned_v2_v3'
-            ? {
-                kind: 'legacy' as const,
-                peerClass,
-                serviceId: 'openai-codex' as const,
-              }
-            : { kind: 'v4' as const },
-        establishedRuntimeOwner: {
-          invokeWithReceipt: vi.fn(),
-        },
-        listScheduledAccounts: vi.fn(async () => []),
-      } as unknown as QualifiedConnectedAccountQuotaRuntime,
-    });
-
-    await expect(
-      coordinator.consumeRecoveryCreditForProfile({
-        serviceId: 'openai-codex',
-        profileId: 'work',
-        idempotencyKey: 'consume:work:credit-1',
-      }),
-    ).resolves.toMatchObject({
-      ok: false,
-      errorCode:
-        'connected_service_quota_recovery_credit_unavailable',
-    });
-    expect(consumeRecoveryCredit).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ['consumed', 'consumed'],
-    ['already_consumed', 'already_consumed'],
-    ['not_available', 'not_available'],
-    ['nothing_to_reset', 'nothing_to_reset'],
-  ] as const)('preserves the %s recovery-credit outcome in the receipt', async (outcome, expectedStatus) => {
-    const now = 1_000_000;
-    const record = buildConnectedServiceCredentialRecord({
-      now, serviceId: 'openai-codex', profileId: 'work', kind: 'oauth', expiresAt: now + 60_000,
-      oauth: { accessToken: 'access', refreshToken: 'refresh', idToken: null, scope: null, tokenType: null, providerAccountId: 'acct', providerEmail: null },
-    });
-    const api = {
-      getAccountEncryptionMode: vi.fn(async () => 'plain' as const),
-      getConnectedServiceCredentialPlain: vi.fn(async () => ({ content: { t: 'plain' as const, v: record }, revisionSemantics: 'revisioned' as const, credentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS' })),
-      getConnectedServiceQuotaSnapshotPlain: vi.fn(async () => null),
-      getConnectedServiceQuotaSnapshotSealed: vi.fn(async () => null),
-      getConnectedServiceCredentialSealed: vi.fn(async () => null),
-    } as unknown as QuotaApi;
-    const fetcher: ConnectedServiceQuotaFetcher = {
-      serviceId: 'openai-codex',
-      consumeRecoveryCredit: vi.fn(async () => outcome),
-      loadQuota: vi.fn(async () => null),
-    };
-    const coordinator = new ConnectedServiceQuotasCoordinator({
-      api,
-      credentials: { token: 'happy-token', encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) } },
-      quotaFetchers: [fetcher], now: () => now, randomBytes: (length: number) => randomBytes(length),
-    });
-
-    await expect(coordinator.consumeRecoveryCreditForProfile({
-      serviceId: 'openai-codex', profileId: 'work', idempotencyKey: `req-${outcome}`,
-    })).resolves.toEqual(expect.objectContaining({
-      receipt: { idempotencyKey: `req-${outcome}`, status: expectedStatus },
-    }));
-  });
-
-  it('fails closed when the provider returns no recovery-credit outcome', async () => {
-    const now = 1_000_000;
-    const record = buildConnectedServiceCredentialRecord({
-      now, serviceId: 'openai-codex', profileId: 'work', kind: 'oauth', expiresAt: now + 60_000,
-      oauth: { accessToken: 'access', refreshToken: 'refresh', idToken: null, scope: null, tokenType: null, providerAccountId: 'acct', providerEmail: null },
-    });
-    const api = {
-      getAccountEncryptionMode: vi.fn(async () => 'plain' as const),
-      getConnectedServiceCredentialPlain: vi.fn(async () => ({ content: { t: 'plain' as const, v: record }, revisionSemantics: 'revisioned' as const, credentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS' })),
-      getConnectedServiceQuotaSnapshotPlain: vi.fn(async () => null),
-      getConnectedServiceQuotaSnapshotSealed: vi.fn(async () => null),
-      getConnectedServiceCredentialSealed: vi.fn(async () => null),
-    } as unknown as QuotaApi;
-    const fetcher = {
-      serviceId: 'openai-codex', consumeRecoveryCredit: vi.fn(async () => undefined), loadQuota: vi.fn(async () => null),
-    } as unknown as ConnectedServiceQuotaFetcher;
-    const coordinator = new ConnectedServiceQuotasCoordinator({
-      api,
-      credentials: { token: 'happy-token', encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) } },
-      quotaFetchers: [fetcher], now: () => now, randomBytes: (length: number) => randomBytes(length),
-    });
-    await expect(coordinator.consumeRecoveryCreditForProfile({
-      serviceId: 'openai-codex', profileId: 'work', idempotencyKey: 'req-void',
-    })).resolves.toEqual(expect.objectContaining({ ok: false }));
-  });
-
-  it('keeps the consume receipt idempotent when refresh persistence fails after the provider spend', async () => {
-    const now = 1_000_000;
-    const credentials: Credentials = {
-      token: 'happy-token',
-      encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
-    const record = buildConnectedServiceCredentialRecord({
-      now,
-      serviceId: 'openai-codex',
-      profileId: 'work',
-      kind: 'oauth',
-      expiresAt: now + 60_000,
-      oauth: {
-        accessToken: 'access',
-        refreshToken: 'refresh',
-        idToken: null,
-        scope: null,
-        tokenType: null,
-        providerAccountId: 'acct',
-        providerEmail: 'user@example.com',
-      },
-    });
-    const api = {
-      getAccountEncryptionMode: vi.fn(async () => 'plain' as const),
-      getConnectedServiceQuotaSnapshotPlain: vi.fn(async () => null),
-      getConnectedServiceCredentialPlain: vi.fn(async () => ({ content: { t: 'plain' as const, v: record }, revisionSemantics: 'revisioned' as const, credentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS' })),
-      registerProviderAccountUsageSnapshotPlain: vi.fn(async () => {
-        throw new Error('persist failed');
-      }),
-      getConnectedServiceQuotaSnapshotSealed: vi.fn(async () => null),
-      getConnectedServiceCredentialSealed: vi.fn(async () => null),
-      registerProviderAccountUsageSnapshotSealed: vi.fn(async () => {}),
-    } as unknown as QuotaApi;
-
-    const refreshedSnapshot = buildAgentAccountUsageSnapshotFixture({
-      record,
-      now: now + 1,
-      planLabel: 'Pro',
-      accountLabel: 'user@example.com',
-      recoveryCredits: {
-        availableCount: 0,
-        credits: [],
-      },
-      meters: [],
-    });
-    const consumeRecoveryCredit = vi.fn(async () => 'consumed' as const);
-    const fetcher: ConnectedServiceQuotaFetcher = {
-      serviceId: 'openai-codex',
-      consumeRecoveryCredit,
-      loadQuota: vi.fn(async () => refreshedSnapshot),
-    };
-
-    const coordinator = new ConnectedServiceQuotasCoordinator({
-      api,
-      credentials,
-      quotaFetchers: [fetcher],
-      now: () => now,
-      randomBytes: (length: number) => randomBytes(length),
-    });
-
-    const result = await coordinator.consumeRecoveryCreditForProfile({
-      serviceId: 'openai-codex',
-      profileId: 'work',
-      idempotencyKey: 'consume:work:credit-1',
-      providerCreditId: 'credit-1',
-    });
-    const replayed = await coordinator.consumeRecoveryCreditForProfile({
-      serviceId: 'openai-codex',
-      profileId: 'work',
-      idempotencyKey: 'consume:work:credit-1',
-      providerCreditId: 'credit-1',
-    });
-
-    expect(result).toMatchObject({
-      ok: false,
-      errorCode: 'connected_service_quota_recovery_credit_failed',
-      receipt: {
-        idempotencyKey: 'consume:work:credit-1',
-        providerCreditId: 'credit-1',
-        status: 'consumed',
-      },
-    });
-    expect(replayed).toEqual(result);
-    expect(consumeRecoveryCredit).toHaveBeenCalledTimes(1);
-  });
-
-  it('does not issue a queued legacy persistence write after the peer changes', async () => {
-    // The scalar lane's queued persistence payload is a canonical V4 PAU write, but it was
-    // produced under legacy fetch authority. The queued run rechecks currentness against the
-    // LIVE peer class immediately before resolving the qualified writer, so once the peer
-    // flips to advertised V4 the write must not land: the run throws a plain protocol error
-    // (nonretryable), the consume resolves failed, and the canonical writer is never invoked.
-    const now = 1_000_000;
-    let peerClass:
-      | 'revisioned_v2_v3'
-      | 'advertised_v4' = 'revisioned_v2_v3';
-    const credentials: Credentials = {
-      token: 'happy-token',
-      encryption: {
-        type: 'legacy',
-        secret: new Uint8Array(32).fill(9),
-      },
-    };
-    const record = buildConnectedServiceCredentialRecord({
-      now,
-      serviceId: 'openai-codex',
-      profileId: 'work',
-      kind: 'oauth',
-      expiresAt: now + 60_000,
-      oauth: {
-        accessToken: 'access',
-        refreshToken: 'refresh',
-        idToken: null,
-        scope: null,
-        tokenType: null,
-        providerAccountId: 'acct',
-        providerEmail: 'user@example.com',
-      },
-    });
-    const refreshedSnapshot = buildAgentAccountUsageSnapshotFixture({
-      record,
-      now: now + 1,
-      planLabel: 'Pro',
-      accountLabel: 'user@example.com',
-      meters: [],
-    });
-    const legacyV4 = createLegacyScalarV4PersistenceRuntime({
-      serviceId: 'openai-codex',
-      profileIds: ['work'],
-      providerAccountIdsByProfileId: { work: 'acct' },
-    });
-    const budget = createDaemonServerWorkBudget({
-      maxConcurrentWrites: 1,
-    });
-    let releaseBlocker!: () => void;
-    const blocker = budget.run(
-      { purpose: 'connectedServiceQuotaPersistence' },
-      async () => await new Promise<void>((resolve) => {
-        releaseBlocker = resolve;
-      }),
-    );
-    await vi.waitFor(() => {
-      expect(budget.getSnapshot().activeCount).toBe(1);
-    });
-    const serverWorkScheduler = createDaemonServerWorkScheduler({
-      budget,
-      now: () => now,
-    });
-    const coordinator = new ConnectedServiceQuotasCoordinator({
-      api: {
-        getAccountEncryptionMode:
-          vi.fn(async () => 'plain' as const),
-        getConnectedServiceCredentialPlain: vi.fn(async () => ({
-          content: { t: 'plain' as const, v: record },
-          revisionSemantics: 'revisioned' as const,
-          credentialRevision:
-            'csr_0123456789ABCDEFGHJKMNPQRS',
-        })),
-        getConnectedServiceQuotaSnapshotPlain:
-          vi.fn(async () => null),
-        getConnectedServiceQuotaSnapshotSealed:
-          vi.fn(async () => null),
-        getConnectedServiceCredentialSealed:
-          vi.fn(async () => null),
-      } as unknown as QuotaApi,
-      credentials,
-      quotaFetchers: [{
-        serviceId: 'openai-codex',
-        consumeRecoveryCredit:
-          vi.fn(async () => 'consumed' as const),
-        loadQuota:
-          vi.fn(async () => refreshedSnapshot),
-      }],
-      now: () => now,
-      randomBytes: (length: number) =>
-        randomBytes(length),
-      discoveryEnabled: false,
-      serverWorkScheduler,
-      qualifiedConnectedAccountRuntime: {
-        ...legacyV4.qualifiedConnectedAccountRuntime,
-        resolvePeerClass: () => peerClass,
-        resolveOperationTransport: () =>
-          peerClass === 'revisioned_v2_v3'
-            ? {
-                kind: 'legacy' as const,
-                peerClass,
-                serviceId: 'openai-codex' as const,
-              }
-            : { kind: 'v4' as const },
-      } as unknown as QualifiedConnectedAccountQuotaRuntime,
-    });
-
-    const consume = coordinator.consumeRecoveryCreditForProfile({
-      serviceId: 'openai-codex',
-      profileId: 'work',
-      idempotencyKey: 'consume:work:credit-1',
-    });
-    await vi.waitFor(() => {
-      expect(budget.getSnapshot().queuedCount).toBe(1);
-    });
-    peerClass = 'advertised_v4';
-    releaseBlocker();
-    await blocker;
-
-    // The queued payload lost its legacy write authority at the flip: the run refused the
-    // write (plain protocol error) and the canonical writer was never invoked.
-    await expect(consume).resolves.toMatchObject({
-      ok: false,
-      errorCode: 'connected_service_quota_recovery_credit_failed',
-      receipt: {
-        idempotencyKey: 'consume:work:credit-1',
-        status: 'consumed',
-      },
-    });
-    expect(legacyV4.writeProviderAccountUsage).not.toHaveBeenCalled();
-  });
 
   it('defers in-band durable persistence while account mode is unknown', async () => {
     const now = 1_000_000;
@@ -11855,7 +11506,7 @@ describe('ConnectedServiceQuotasCoordinator', () => {
       qualifiedConnectedAccountRuntime: legacyV4.qualifiedConnectedAccountRuntime,
     });
 
-    await coordinator.tickOnce();
+    expect(await coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: 300_000 });
     expect(listConnectedServiceProfiles).toHaveBeenCalledTimes(1);
     expect(fetcher.loadQuota).not.toHaveBeenCalled();
 
@@ -12375,7 +12026,7 @@ describe('ConnectedServiceQuotasCoordinator', () => {
       },
     });
 
-    await expect(coordinator.tickOnce()).resolves.toBeUndefined();
+    await expect(coordinator.tickOnce()).resolves.toMatchObject({ nextAutomaticRunAfterMs: expect.any(Number) });
   });
 
   it('applies a failure backoff window per binding', async () => {
@@ -12454,13 +12105,13 @@ describe('ConnectedServiceQuotasCoordinator', () => {
       },
     });
 
-    await coordinator.tickOnce();
-    await coordinator.tickOnce();
+    expect(await coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: 10_000 });
+    expect(await coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: 10_000 });
 
     expect(fetcher.loadQuota).toHaveBeenCalledTimes(1);
 
     now += 10_000;
-    await coordinator.tickOnce();
+    expect(await coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: 20_000 });
     expect(fetcher.loadQuota).toHaveBeenCalledTimes(2);
   });
 

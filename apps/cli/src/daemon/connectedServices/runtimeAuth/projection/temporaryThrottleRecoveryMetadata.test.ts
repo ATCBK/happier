@@ -74,7 +74,8 @@ describe('temporary throttle recovery presentation', () => {
   });
   it('preserves Stop, newer quota recovery and unrelated fields, and clears only the exact completed occurrence', () => {
     const armed = projectTemporaryThrottleRecoveryMetadata({ unrelated: 42 }, intent, null);
-    const stopped = projectTemporaryThrottleRecoveryMetadata(armed, { ...intent, status: 'cancelled', nextRetryAtMs: null }, intent);
+    const stoppedCanonical = projectTemporaryThrottleRecoveryMetadata(armed, { ...intent, status: 'cancelled', nextRetryAtMs: null }, intent);
+    const stopped = { ...stoppedCanonical, [key]: { ...(stoppedCanonical[key] as Record<string, unknown>), retiredRecoveryField: true } };
     expect(projectTemporaryThrottleRecoveryMetadata(stopped, intent, intent)[key]).toMatchObject({ status: 'cancelled' });
     expect(projectTemporaryThrottleRecoveryMetadata(stopped, { ...intent, armedAtMs: 101 }, intent)[key])
       .toMatchObject({ status: 'waiting', armedAtMs: 101, nextCheckAtMs: 5100 });

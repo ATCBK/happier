@@ -2,6 +2,7 @@ import { readBuiltInLegacyConnectedAccountServiceKeyIngress, type ConnectedServi
 
 import { resolveTrackedSessionCatalogAgentId } from '../../sessions/resolveTrackedSessionCatalogAgentId';
 import type { TrackedSession } from '../../types';
+import type { ConnectedServiceRuntimeRegistry } from '../runtimeRegistry/registry';
 import { hasTrackedConnectedServiceGroupBinding } from '../trackedSessionConnectedServiceBindings';
 import {
   ConnectedServiceGroupHomeCleanupScheduler,
@@ -10,12 +11,14 @@ import {
 
 export function createConnectedServiceGroupHomeCleanupScheduler(params: Readonly<{
   activeServerDir: string;
+  runtimeRegistry?: ConnectedServiceRuntimeRegistry;
   pidToTrackedSession: ReadonlyMap<number, TrackedSession>;
   groupExists?: (target: Readonly<{ serviceId: ConnectedServiceId; groupId: string }>) => Promise<boolean>;
   resolveGroupDeletionAuthority?: (target: Readonly<{ serviceId: ConnectedServiceId; groupId: string }>) => Promise<ConnectedServiceGroupDeletionAuthority>;
 }>): ConnectedServiceGroupHomeCleanupScheduler {
   return new ConnectedServiceGroupHomeCleanupScheduler({
     activeServerDir: params.activeServerDir,
+    runtimeRegistry: params.runtimeRegistry,
     groupExists: params.groupExists,
     resolveGroupDeletionAuthority: params.resolveGroupDeletionAuthority,
     hasLiveTarget: ({ serviceId, groupId, agentId }) => {

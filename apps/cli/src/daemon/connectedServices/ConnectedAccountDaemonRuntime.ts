@@ -4,7 +4,7 @@ import type { PluginContributionRef } from '@happier-dev/plugin-sdk';
 import type { PendingConnectedAccountAttemptTransaction } from '@/api/client/connectedAccountAttemptTransactionApi';
 import { QualifiedConnectedAccountCredentialConflictError } from '@/api/client/qualifiedConnectedAccountApi';
 import { PluginJsonValueV2Schema } from '@happier-dev/protocol/plugins/contributions/jsonSchema';
-import { pluginSourceCustodyV1Equal } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
+import { connectedAccountSourceCustodyV1Equal } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
 import { sameQualifiedConnectedAccountRef } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
 import type {
     ConnectedAccountAttemptResponse,
@@ -22,7 +22,7 @@ import type {
 
 import type { PluginReloadController } from '@/plugins/runtime/reload/controller';
 import { logger } from '@/ui/logger';
-import type { PluginSourceCustody } from '@/plugins/runtime/sourceAuthority';
+import type { ConnectedAccountSourceCustodyV1 } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
 import {
     ConnectedAccountRuntimeInvocationNotStartedError,
     type ConnectedAccountRuntimeLease,
@@ -180,7 +180,7 @@ export function createConnectedAccountDaemonConfigurationOwner(params: Readonly<
     const isPluginRuntimeCurrent = async (input: Readonly<{
         pluginId: string;
         occurrenceId: string;
-        sourceCustody: PluginSourceCustody;
+        sourceCustody: ConnectedAccountSourceCustodyV1;
     }>): Promise<boolean> => {
         const lease = params.reloadController.tryAcquireRuntimeRegistry();
         if (!lease) return false;
@@ -191,7 +191,7 @@ export function createConnectedAccountDaemonConfigurationOwner(params: Readonly<
                 .find((candidate) => candidate.ref.pluginId === input.pluginId);
             if (!entry) return false;
             return entry.occurrenceId === input.occurrenceId
-                && pluginSourceCustodyV1Equal(entry.sourceCustody, input.sourceCustody)
+                && connectedAccountSourceCustodyV1Equal(entry.sourceCustody, input.sourceCustody)
                 && entry.isCurrent();
         } catch {
             return false;
@@ -337,7 +337,7 @@ export function createConnectedAccountDaemonRuntime(params: Readonly<{
                 return Boolean(
                     contribution
                     && contribution.occurrenceId === admission.occurrenceId
-                    && pluginSourceCustodyV1Equal(
+                    && connectedAccountSourceCustodyV1Equal(
                         contribution.sourceCustody,
                         admission.sourceCustody,
                     )
@@ -406,7 +406,7 @@ export function createConnectedAccountDaemonRuntime(params: Readonly<{
         target: ConnectedAccountConfigurationTarget;
         mode: PluginConnectedAccountAuthenticationModeV2;
         occurrenceId: string;
-        sourceCustody: PluginSourceCustody;
+        sourceCustody: ConnectedAccountSourceCustodyV1;
     }>;
 
     async function resolveControlBasis(
@@ -1016,6 +1016,8 @@ export function createConnectedAccountDaemonRuntime(params: Readonly<{
                     return await attempts.read({
                         attemptId: command.attemptId,
                         ...(command.restoreKind ? { restoreKind: command.restoreKind } : {}),
+                        ...(command.waitForProviderStart === undefined ? {} : { waitForProviderStart: command.waitForProviderStart }),
+                        ...(options?.signal ? { signal: options.signal } : {}),
                     });
             }
             })();

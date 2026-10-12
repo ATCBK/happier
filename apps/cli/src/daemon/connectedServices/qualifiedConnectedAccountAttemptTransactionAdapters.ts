@@ -2,8 +2,9 @@ import { randomBytes as nodeRandomBytes } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 
 import { CONNECTED_ACCOUNT_DIRECT_EXPORT_CONTRACT_V1 } from '@happier-dev/protocol/connect/plugin-connected-account-authentication-v2';
-import { PluginSourceCustodyV1Schema, pluginSourceCustodyV1Equal } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
+import { ConnectedAccountSourceCustodyV1Schema, connectedAccountSourceCustodyV1Equal } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
 import { StoredJsonContentEnvelopeSchema, isStoredJsonContentEnvelopeModeCompatible } from '@happier-dev/protocol/storage/storedJsonContentEnvelope';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { openQualifiedConnectedAccountContentEnvelope, sealQualifiedConnectedAccountContentEnvelope } from '@happier-dev/protocol/connect/qualifiedConnectedAccountContentEnvelope';
 import { sameQualifiedConnectedAccountRef } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
 import type { StoredJsonContentEnvelope } from '@happier-dev/protocol';
@@ -34,7 +35,6 @@ import type {
   QualifiedConnectedAccountAttemptTransactionAdapters,
 } from './qualifiedConnectedAccountDaemonPersistence';
 
-const DEFAULT_CALLBACK_URL = 'http://localhost:1455/auth/callback';
 const DEFAULT_TRANSACTION_TTL_MS = 15 * 60_000;
 const MAX_TRANSACTION_TTL_MS = 24 * 60 * 60_000;
 
@@ -75,7 +75,7 @@ const PreparedSettlementShape = {
 } as const;
 const PreparedSettlementSchema = z.object({
   ...PreparedSettlementShape,
-  sourceCustody: PluginSourceCustodyV1Schema,
+  sourceCustody: ConnectedAccountSourceCustodyV1Schema,
 }).strict();
 const SnapshotCommonShape = {
   attemptId: BoundedIdSchema,
@@ -93,13 +93,15 @@ const SnapshotCommonShape = {
 } as const;
 const SnapshotBaseShape = {
   ...SnapshotCommonShape,
-  sourceCustody: PluginSourceCustodyV1Schema,
+  sourceCustody: ConnectedAccountSourceCustodyV1Schema,
   preparedSettlement: PreparedSettlementSchema.optional(),
 } as const;
 const OAuthSnapshotSchema = z.object({
   ...SnapshotBaseShape,
   phase: z.enum(['starting', 'awaitingOAuth', 'outcomeUnknown']),
   authorizationUrl: z.string().min(1).max(8_192).optional(),
+  issuer: z.string().min(1).max(4_096).optional(),
+  issuerResponseParameterRequired: z.boolean().optional(),
   expiresAtMs: SafeTimestampSchema.optional(),
 }).strict();
 const DeviceSnapshotSchema = z.object({
@@ -115,7 +117,7 @@ const OAuthPayloadSchema = z.object({
   version: z.literal(2),
   kind: z.literal('oauth'),
   snapshot: OAuthSnapshotSchema,
-  state: z.string().min(32).max(256),
+  state: z.string().min(32).max(4_096),
   challenge: z.string().min(32).max(256),
   verifier: z.string().min(43).max(128),
   callbackUrl: z.string().min(1).max(8_192),
@@ -160,15 +162,15 @@ function sameSnapshotIdentity(
     && sameService(left.service, right.service)
     && sameAccount(left.account, right.account)
     && left.modeId === right.modeId
-    && pluginSourceCustodyV1Equal(left.sourceCustody, right.sourceCustody)
+    && connectedAccountSourceCustodyV1Equal(left.sourceCustody, right.sourceCustody)
     && left.expectedCredentialRevision === right.expectedCredentialRevision
     && left.expectedCredentialConfigurationRevision
       === right.expectedCredentialConfigurationRevision
     && left.expectedConfigurationRevision === right.expectedConfigurationRevision
-    && isDeepStrictEqual(
+    && (isDeepStrictEqual(
       left.stagedAccountConfigurationContent,
       right.stagedAccountConfigurationContent,
-    );
+    ) || (left.sourceCustody.kind === 'host' && 'phase' in left && left.phase === 'starting'));
 }
 
 function assertOAuthSnapshotAdvance(
@@ -189,6 +191,9 @@ function assertOAuthSnapshotAdvance(
       current.authorizationUrl !== undefined
       && current.authorizationUrl !== next.authorizationUrl
     )
+    || (current.issuer !== undefined && current.issuer !== next.issuer)
+    || (current.issuerResponseParameterRequired !== undefined
+      && current.issuerResponseParameterRequired !== next.issuerResponseParameterRequired)
     || (
       current.preparedSettlement !== undefined
       && !isDeepStrictEqual(current.preparedSettlement, next.preparedSettlement)
@@ -245,7 +250,6 @@ export function createQualifiedConnectedAccountAttemptTransactionAdapters(
     getMachineId: () => string;
     api?: ConnectedAccountAttemptTransactionStoreApi;
     randomBytes?: (length: number) => Uint8Array;
-    callbackUrl?: string;
     transactionTtlMs?: number;
     now?: () => number;
   }>,
@@ -256,7 +260,6 @@ export function createQualifiedConnectedAccountAttemptTransactionAdapters(
       token: params.credentials.token,
     });
   const randomBytes = params.randomBytes ?? defaultRandomBytes;
-  const defaultCallbackUrl = params.callbackUrl ?? DEFAULT_CALLBACK_URL;
   const transactionTtlMs =
     params.transactionTtlMs ?? DEFAULT_TRANSACTION_TTL_MS;
   const now = params.now ?? Date.now;
@@ -319,7 +322,7 @@ export function createQualifiedConnectedAccountAttemptTransactionAdapters(
     record: ConnectedAccountAttemptTransactionRecord,
   ): Promise<unknown> {
     const accountMode = await resolveAccountMode();
-    const envelope = StoredJsonContentEnvelopeSchema.parse(record.content);
+    const envelope = createStoredReadSchema(StoredJsonContentEnvelopeSchema).parse(record.content);
     // The persisted Account mode and the stored envelope kind must agree before any
     // content is disclosed. A mismatch is an inconsistent record, never a reason to
     // try the other branch.
@@ -356,7 +359,7 @@ export function createQualifiedConnectedAccountAttemptTransactionAdapters(
     record: ConnectedAccountAttemptTransactionRecord;
   }>): Promise<OAuthPayload> {
     const opened = await open(input.record);
-    const parsed = OAuthPayloadSchema.parse(opened);
+    const parsed = createStoredReadSchema(OAuthPayloadSchema).parse(opened);
     if (parsed.snapshot.attemptId !== input.attemptId) {
       throw new Error(
         'Connected-account OAuth transaction identity is invalid',
@@ -370,7 +373,7 @@ export function createQualifiedConnectedAccountAttemptTransactionAdapters(
     record: ConnectedAccountAttemptTransactionRecord;
   }>): Promise<DevicePayload> {
     const opened = await open(input.record);
-    const parsed = DevicePayloadSchema.parse(opened);
+    const parsed = createStoredReadSchema(DevicePayloadSchema).parse(opened);
     if (parsed.snapshot.attemptId !== input.attemptId) {
       throw new Error(
         'Connected-account device transaction identity is invalid',
@@ -389,6 +392,9 @@ export function createQualifiedConnectedAccountAttemptTransactionAdapters(
     let record = input.record;
     let closed = false;
     return Object.freeze({
+      get expiresAtMs() {
+        return record.expiresAtMs;
+      },
       get snapshot() {
         return payload.snapshot;
       },
@@ -481,12 +487,12 @@ export function createQualifiedConnectedAccountAttemptTransactionAdapters(
         );
       }
       const pkce = generatePkceCodes();
-      const callbackUrl = input.callbackUrl ?? defaultCallbackUrl;
+      const callbackUrl = input.callbackUrl;
       const payload = OAuthPayloadSchema.parse({
         version: 2,
         kind: 'oauth',
         snapshot: input.snapshot,
-        state: Buffer.from(randomBytes(32)).toString('base64url'),
+        state: `${input.attemptId}.${Buffer.from(randomBytes(32)).toString('base64url')}`,
         challenge: pkce.challenge,
         verifier: pkce.verifier,
         callbackUrl,

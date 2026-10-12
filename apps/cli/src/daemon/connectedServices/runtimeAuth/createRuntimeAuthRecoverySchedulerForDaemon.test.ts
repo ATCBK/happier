@@ -130,6 +130,49 @@ async function seedRuntimeAuthRecoveryFile(
 }
 
 describe('createRuntimeAuthRecoverySchedulerForDaemon', () => {
+  it('retains pending event custody with retired fields when the stored recovery identity is canonical', async () => {
+    const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-runtime-auth-retired-event-'));
+    const serviceId = 'happier.agent.codex/openai-codex';
+    const identity = { sessionId: 'session-retained-event', serviceId, profileId: 'primary', groupId: 'team' };
+    const key = buildPredecessorRecoveryKey(identity);
+    const invalidIdentity = { ...identity, sessionId: 'session-mismatched-event' };
+    const invalidKey = buildPredecessorRecoveryKey(invalidIdentity);
+    const stored = predecessorV2Intent({ ...identity, classification: { ...classification, serviceId },
+      pendingVisibleEvents: [{ attemptId: predecessorAttemptId, transition: 'scheduled', transcriptEvent: {
+        type: 'connected-service-runtime-auth-recovery', status: 'retry_scheduled',
+        serviceId, profileId: 'primary', groupId: 'team',
+        nextRetryAtMs: 2_000, terminal: false, retiredEventField: true,
+        diagnostic: { code: 'recovery_retry_scheduled', failurePhase: 'runtime_auth_recovery',
+          source: 'runtime_auth_recovery', serviceId, profileId: 'primary', groupId: 'team', retryable: true,
+          suggestedActions: ['retry'], retiredDiagnosticField: true },
+      } }],
+    });
+    let scheduler: ReturnType<typeof createRuntimeAuthRecoverySchedulerForDaemon> | undefined;
+    try {
+      await seedRuntimeAuthRecoveryFile(activeServerDir, { [key]: stored,
+        [invalidKey]: predecessorV2Intent({ ...invalidIdentity, classification: { ...classification, serviceId },
+          pendingVisibleEvents: [{ attemptId: predecessorAttemptId, transition: 'scheduled', transcriptEvent: {
+            type: 'connected-service-runtime-auth-recovery', status: 'retry_scheduled',
+            serviceId, profileId: 'another-account', groupId: 'team', nextRetryAtMs: 2_000,
+            terminal: false, retiredEventField: true,
+          } }],
+        }),
+      });
+      scheduler = createRuntimeAuthRecoverySchedulerForDaemon({ activeServerDir, nowMs: () => -60_000 });
+      expect(scheduler.readForSession(identity.sessionId)).toHaveLength(1);
+      expect(scheduler.readForSession(invalidIdentity.sessionId)).toEqual([]);
+      const delivered: unknown[] = [];
+      await expect(scheduler.drainPendingVisibleEvents(async delivery => { delivered.push(delivery.transcriptEvent); }))
+        .resolves.toBe(1);
+      expect(delivered[0]).toMatchObject({ type: 'connected-service-runtime-auth-recovery', serviceId });
+      expect(delivered[0]).not.toHaveProperty('retiredEventField');
+      expect(delivered[0]).not.toHaveProperty('diagnostic.retiredDiagnosticField');
+    } finally {
+      scheduler?.dispose();
+      await rm(activeServerDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 10 });
+    }
+  });
+
   it('passively upgrades the exact predecessor V2/key vector and preserves pending event custody', async () => {
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-runtime-auth-predecessor-'));
     const recover = vi.fn(async () => ({ status: 'credential_refreshed' as const }));

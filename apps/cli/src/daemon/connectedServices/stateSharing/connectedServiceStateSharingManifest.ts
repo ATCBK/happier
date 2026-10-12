@@ -20,6 +20,8 @@ export type ConnectedServiceStateSharingManifestV1 = Readonly<{
   lastSyncAtMs: number;
   configEntries: readonly string[];
   stateEntries: readonly string[];
+  /** Declared native state, including private entries not managed as shared links. */
+  resumeStateEntries?: readonly string[];
   sessionFileMappings: readonly ConnectedServiceStateSharingSessionFileMappingV1[];
   diagnostics: readonly string[];
 }>;
@@ -45,9 +47,17 @@ export function isSafeConnectedServiceStateSharingEntry(entry: unknown): entry i
 }
 
 function parseManifest(value: unknown): ConnectedServiceStateSharingManifestV1 {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return EMPTY_MANIFEST;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('connected_service_state_sharing_manifest_invalid');
+  }
   const record = value as Record<string, unknown>;
-  if (record.v !== 1) return EMPTY_MANIFEST;
+  if (record.v !== 1) throw new Error('connected_service_state_sharing_manifest_invalid');
+  for (const key of ['stateEntries', 'resumeStateEntries']) {
+    const entries = record[key];
+    if (entries !== undefined && (
+      !Array.isArray(entries) || !entries.every(isSafeConnectedServiceStateSharingEntry)
+    )) throw new Error('connected_service_state_sharing_manifest_invalid');
+  }
   return {
     v: 1,
     requestedStateMode: parseStateMode(record.requestedStateMode),
@@ -59,6 +69,9 @@ function parseManifest(value: unknown): ConnectedServiceStateSharingManifestV1 {
     stateEntries: Array.isArray(record.stateEntries)
       ? record.stateEntries.filter(isSafeConnectedServiceStateSharingEntry)
       : [],
+    ...(Array.isArray(record.resumeStateEntries)
+      ? { resumeStateEntries: record.resumeStateEntries.filter(isSafeConnectedServiceStateSharingEntry) }
+      : {}),
     sessionFileMappings: parseSessionFileMappings(record.sessionFileMappings),
     diagnostics: parseDiagnostics(record.diagnostics),
   };
@@ -115,8 +128,9 @@ function parseSessionFileMappings(value: unknown): readonly ConnectedServiceStat
 async function tryReadParsedManifest(path: string): Promise<ConnectedServiceStateSharingManifestV1 | null> {
   try {
     return parseManifest(JSON.parse(await readFile(path, 'utf8')));
-  } catch {
-    return null;
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return null;
+    throw error;
   }
 }
 
@@ -135,8 +149,13 @@ export async function readConnectedServiceStateSharingManifest(
 /** Local resume data outlives process/Run custody; shared native-home links do not. */
 export async function hasLocalConnectedServiceResumeState(homeRoot: string): Promise<boolean> {
   const manifest = await readConnectedServiceStateSharingManifest(homeRoot);
-  // Historical homes may predate the sharing manifest; isolation owns XDG state.
-  const entries = new Set(['sessions', 'projects', 'xdg/state', ...manifest.stateEntries]);
+  // Predecessor isolated homes did not inventory their declared Codex state.
+  // New homes derive that inventory from the Agent descriptor; isolation owns XDG state.
+  const historicalEntries = manifest.resumeStateEntries === undefined
+    ? ['sessions', 'archived_sessions', 'session_index.jsonl', 'history.jsonl', 'memories', 'projects']
+    : [];
+  const entries = new Set(['xdg/state', ...historicalEntries,
+    ...manifest.stateEntries, ...(manifest.resumeStateEntries ?? [])]);
   const hasLocalFile = async (path: string): Promise<boolean> => {
     const entry = await lstat(path).catch((error: unknown) => {
       if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return null;

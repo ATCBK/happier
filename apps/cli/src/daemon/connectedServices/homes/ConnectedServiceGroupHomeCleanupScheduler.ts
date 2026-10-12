@@ -2,10 +2,11 @@ import { mkdir, readdir, rename, rm } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 
 import { AGENT_IDS } from '@happier-dev/agents';
-import { ConnectedServiceIdSchema } from '@happier-dev/protocol/connect/connected-service-bindings';
+import { ConnectedServiceIdSchema, readBuiltInLegacyConnectedAccountServiceKeyIngress } from '@happier-dev/protocol/connect/connected-service-bindings';
 import type { ConnectedServiceId } from '@happier-dev/protocol';
 
 import type { CatalogAgentId } from '@/agent/catalog/ids';
+import type { ConnectedServiceRuntimeRegistry } from '../runtimeRegistry/registry';
 import { resolveConnectedServiceGroupHomeDir } from './resolveConnectedServiceHomeDir';
 
 type DeletedGroupCleanupTarget = Readonly<{
@@ -85,6 +86,7 @@ export class ConnectedServiceGroupHomeCleanupScheduler {
 
   constructor(private readonly deps: Readonly<{
     activeServerDir: string;
+    runtimeRegistry?: ConnectedServiceRuntimeRegistry;
     hasLiveTarget(input: Readonly<{
       serviceId: ConnectedServiceId;
       groupId: string;
@@ -138,6 +140,16 @@ export class ConnectedServiceGroupHomeCleanupScheduler {
     }
   }
 
+  private hasLiveTarget(target: GroupHomeTarget): boolean {
+    const serviceKey = readBuiltInLegacyConnectedAccountServiceKeyIngress(target.serviceId);
+    return this.deps.runtimeRegistry?.listTargets().some(runtimeTarget => (
+      runtimeTarget.agentId === target.agentId
+      && runtimeTarget.activeBindings.some(binding => (
+        binding.serviceId === serviceKey && binding.groupId === target.groupId
+      ))
+    )) === true || this.deps.hasLiveTarget(target);
+  }
+
   async scheduleDeletedGroupCleanup(input: Readonly<{
     serviceId: ConnectedServiceId;
     groupId: string;
@@ -149,7 +161,7 @@ export class ConnectedServiceGroupHomeCleanupScheduler {
       groupId: input.groupId,
       agentId: input.agentId,
     });
-    if (this.deps.hasLiveTarget(input)) {
+    if (this.hasLiveTarget(input)) {
       this.pendingDeletedTargetsByKey.set(targetKey(input), { ...input, path });
       return { cleaned: false, pending: true, path };
     }
@@ -197,7 +209,7 @@ export class ConnectedServiceGroupHomeCleanupScheduler {
   async cleanupPendingDeletedGroupHomes(): Promise<ReadonlyArray<Readonly<{ cleaned: true; path: string }>>> {
     const cleaned: Array<Readonly<{ cleaned: true; path: string }>> = [];
     for (const [key, target] of this.pendingDeletedTargetsByKey.entries()) {
-      if (this.deps.hasLiveTarget(target)) continue;
+      if (this.hasLiveTarget(target)) continue;
       if (target.cleanupAttempts !== undefined && target.cleanupAttempts >= this.maxCleanupRetries) {
         this.pendingDeletedTargetsByKey.delete(key);
         continue;

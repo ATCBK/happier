@@ -1,4 +1,5 @@
 import { ConnectedServiceBindingsV2IngressSchema, readBuiltInLegacyConnectedAccountServiceKeyIngress } from '@happier-dev/protocol/connect/connected-service-bindings';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import type { ConnectedAccountServiceKey, ConnectedServiceBindingSelectionV1, ConnectedServiceProfileId, ConnectedServiceCredentialRevisionV1 } from '@happier-dev/protocol';
 
 import type { ConnectedServiceResolvedSelection } from './materialization/materializer';
@@ -284,7 +285,7 @@ export function findConnectedServiceBindingSelectionFromSessionMetadata(
   const metadata = typeof session.getMetadataSnapshot === 'function' ? session.getMetadataSnapshot() : null;
   if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
 
-  const parsed = ConnectedServiceBindingsV2IngressSchema.safeParse((metadata as Record<string, unknown>).connectedServices);
+  const parsed = createStoredReadSchema(ConnectedServiceBindingsV2IngressSchema).safeParse((metadata as Record<string, unknown>).connectedServices);
   if (!parsed.success) return null;
 
   const binding = parsed.data.bindingsByServiceId[serviceId];

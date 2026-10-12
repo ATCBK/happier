@@ -1,6 +1,6 @@
 import { lstat, readdir, realpath, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { isAbsolute, relative } from 'node:path';
+import { isAbsolute, relative, resolve } from 'node:path';
 
 import { normalizeMaterializationKeyForPath } from '../normalizeMaterializationKeyForPath';
 import { hasLocalConnectedServiceResumeState } from '../../stateSharing/connectedServiceStateSharingManifest';
@@ -307,7 +307,8 @@ export class ConnectedServiceMaterializedHomeCleanupScheduler {
         }),
       ]);
       const rel = relative(baseRealPath, targetRealPath);
-      return rel.length > 0 && !rel.startsWith('..') && !isAbsolute(rel);
+      return rel.length > 0 && !rel.startsWith('..') && !isAbsolute(rel)
+        && rel === relative(resolve(baseDir), resolve(path));
     } catch (error) {
       if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') return false;
       throw error;

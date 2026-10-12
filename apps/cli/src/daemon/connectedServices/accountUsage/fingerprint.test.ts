@@ -63,6 +63,33 @@ function createSnapshot(overrides: Partial<ProviderAccountUsageSnapshotV1> = {})
 }
 
 describe('provider account usage material fingerprint', () => {
+    it('keeps timestamp-only reset phases while coalescing observations within a phase', async () => {
+        const module = await loadFingerprintModule();
+        expect(module).not.toBeNull();
+        const key = new Uint8Array(32).fill(7);
+        const at = (observedAtMs: number) => createSnapshot({ observedAtMs, fetchedAtMs: observedAtMs,
+            meters: createSnapshot().meters.map(meter => ({ ...meter, windowDurationMs: 8000 })) });
+        const fingerprint = (observedAtMs: number) => module!.computeProviderAccountUsageSnapshotFingerprint(at(observedAtMs), key);
+        expect(fingerprint(2000)).toBe(fingerprint(8000));
+        expect(fingerprint(1000)).not.toBe(fingerprint(2000));
+        expect(fingerprint(8000)).not.toBe(fingerprint(9000));
+        expect(fingerprint(9000)).not.toBe(fingerprint(10000));
+    });
+    it('detects recovery-credit count and reason changes independently of action state', async () => {
+        const module = await loadFingerprintModule();
+        expect(module).not.toBeNull();
+        const key = new Uint8Array(32).fill(7);
+        const first = createSnapshot({ recoveryCreditDetails: { grant: { remainingCount: 2, appliesToProviderLimitIds: ['weekly'] } } });
+        for (const grant of [
+            { remainingCount: 1, appliesToProviderLimitIds: ['weekly'] },
+            { remainingCount: 2, appliesToProviderLimitIds: ['weekly'], unavailableReason: 'cooldown' as const },
+        ]) {
+            expect(module!.computeProviderAccountUsageSnapshotFingerprint({ ...first, recoveryCreditDetails: { grant } }, key)).not.toBe(
+                module!.computeProviderAccountUsageSnapshotFingerprint(first, key),
+            );
+        }
+    });
+
     it('coalesces subscription observation-only refreshes but retains paid/list fact changes', async () => {
         const module = await loadFingerprintModule();
         expect(module).not.toBeNull();

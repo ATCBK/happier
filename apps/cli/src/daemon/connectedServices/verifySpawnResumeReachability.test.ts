@@ -2,11 +2,13 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { HAPPIER_CONNECTED_SERVICE_TARGET_MATERIALIZED_ROOT_ENV_KEY } from './connectedServiceChildEnvironment';
 import { verifySpawnResumeReachability } from './verifySpawnResumeReachability';
 import { formatPiSessionDirectoryForCwd } from '@happier-dev/plugins-pi/agent/sessionFiles';
+import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 
 /**
  * P3-2 — direct unit tests for `verifySpawnResumeReachability`.
@@ -26,6 +28,16 @@ import { formatPiSessionDirectoryForCwd } from '@happier-dev/plugins-pi/agent/se
  */
 
 const CWD = '/tmp/vssrr-test-project';
+let runtimeFixture: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>>;
+
+beforeAll(async () => {
+  runtimeFixture = await createAdmittedPluginRuntimeFixture({
+    controller: pluginReloadController,
+    runtimeOptions: { pluginIds: ['happier.agent.pi'] },
+  });
+});
+
+afterAll(async () => { await runtimeFixture?.dispose(); });
 
 function makeEnvWithExplicitRoot(root: string): Readonly<Record<string, string>> {
   return {
@@ -55,7 +67,7 @@ describe('verifySpawnResumeReachability — wrapper unit (P3-2)', () => {
         materializedEnv: makeEnvWithExplicitRoot(tmpRoot),
       });
 
-      expect(result.ok).toBe(true);
+      expect(result).toMatchObject({ ok: true });
     } finally {
       await rm(tmpRoot, { recursive: true, force: true });
     }
@@ -102,7 +114,7 @@ describe('verifySpawnResumeReachability — wrapper unit (P3-2)', () => {
         materializedEnv: makeEnvWithLegacyFallbackOnly(piAgentDir),
       });
 
-      expect(result.ok).toBe(true);
+      expect(result).toMatchObject({ ok: true });
     } finally {
       await rm(tmpRoot, { recursive: true, force: true });
     }

@@ -1,4 +1,6 @@
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import fileSystem from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 
@@ -21,6 +23,61 @@ const descriptor = {
 } as const;
 
 describe('verifyDeclaredResumeFileReachability', () => {
+  it.each([false, true])('uses a target-visible persisted hint without reading unrelated file heads (linked=%s)', async linked => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-resume-visible-hint-'));
+    const sessions = join(root, linked ? 'native-sessions' : 'target/sessions');
+    const target = join(root, 'target');
+    const id = 'native-session-id';
+    const candidate = join(sessions, `z-session-${id}.jsonl`);
+    try {
+      await mkdir(sessions, { recursive: true });
+      if (linked) {
+        await mkdir(target);
+        await symlink(sessions, join(target, 'sessions'), process.platform === 'win32' ? 'junction' : 'dir');
+      }
+      await writeFile(join(sessions, 'a-unrelated.jsonl'), '{"type":"session","id":"unrelated"}\n');
+      await writeFile(candidate, `{"type":"session","id":"${id}"}\n`);
+      // Observe genuine OS reads while leaving filesystem custody and native correlation real.
+      const opens = vi.spyOn(fileSystem, 'open');
+      syncBuiltinESMExports();
+      try {
+        await expect(verifyDeclaredResumeFileReachability({
+          targetMaterializedRoot: target, stateSharingDescriptor: descriptor,
+          vendorResumeId: id, candidatePersistedSessionFile: candidate,
+          verifyResumeReachable: async input => {
+            const found = await input.sessionFiles.findDeclaredCandidate({ matchesCandidate: candidate => candidate.nativeSessionId === id });
+            return found.found ? { ok: true } : { ok: false, reason: 'not_found' };
+          },
+        })).resolves.toEqual({ ok: true, resolvedPath: candidate });
+        expect(opens.mock.calls.map(([path]) => path)).toEqual([candidate]);
+      } finally { opens.mockRestore(); syncBuiltinESMExports(); }
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('does not read or accept a persisted hint outside the declared target store', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-resume-source-only-hint-'));
+    const candidate = join(root, 'old-sessions', 'session-native-session-id.jsonl');
+    const target = join(root, 'target');
+    try {
+      await mkdir(join(root, 'old-sessions'));
+      await mkdir(join(target, 'sessions'), { recursive: true });
+      await writeFile(candidate, '{"type":"session","id":"native-session-id"}\n');
+      const opens = vi.spyOn(fileSystem, 'open');
+      syncBuiltinESMExports();
+      try {
+        await expect(verifyDeclaredResumeFileReachability({
+          targetMaterializedRoot: target, stateSharingDescriptor: descriptor,
+          vendorResumeId: 'native-session-id', candidatePersistedSessionFile: candidate,
+          verifyResumeReachable: async input => {
+            const found = await input.sessionFiles.findDeclaredCandidate({ matchesCandidate: candidate => candidate.nativeSessionId === 'native-session-id' });
+            return found.found ? { ok: true } : { ok: false, reason: 'not_found' };
+          },
+        })).resolves.toEqual({ ok: false, reason: 'not_found' });
+        expect(opens.mock.calls).toEqual([]);
+      } finally { opens.mockRestore(); syncBuiltinESMExports(); }
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   it('requires trajectory, JSON metadata and brain state in declared roots without admitting private auth paths', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-resume-companions-'));
     const id = 'native-session-id';

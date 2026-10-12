@@ -1,4 +1,5 @@
-import { chmod, lstat, mkdir } from 'node:fs/promises';
+import { chmod, lstat, mkdir, realpath } from 'node:fs/promises';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import {
   ensureProtectedLocalStateDirectory,
@@ -13,6 +14,30 @@ type MaterializedRootStat = Readonly<{
   mode: number;
   uid: number;
 }>;
+
+/** The configured base may be aliased; no child home may be redirected within or outside it. */
+export async function isCanonicalConnectedServiceMaterializedRoot(input: Readonly<{
+  baseDir: string;
+  rootDir: string;
+  allowMissing?: boolean;
+}>): Promise<boolean> {
+  const base = resolve(input.baseDir);
+  const root = resolve(input.rootDir);
+  const child = relative(base, root);
+  if (!child || child.startsWith('..') || isAbsolute(child)) return false;
+  let path = base;
+  for (const segment of child.split(sep)) {
+    path = join(path, segment);
+    const entry = await lstat(path).catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return null;
+      throw error;
+    });
+    if (!entry) return input.allowMissing === true;
+    if (!entry.isDirectory() || entry.isSymbolicLink()) return false;
+  }
+  const [realBase, realRoot] = await Promise.all([realpath(base), realpath(root)]);
+  return relative(realBase, realRoot) === child;
+}
 
 export function isPrivateConnectedServiceMaterializedRootStat(
   stat: MaterializedRootStat,

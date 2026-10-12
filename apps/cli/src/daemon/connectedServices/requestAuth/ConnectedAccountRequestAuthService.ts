@@ -34,6 +34,8 @@ export type ConnectedAccountRequestAuthSubject = Readonly<{
      */
     legacyServiceKeyedCompatibility?: true;
     isCurrent: () => boolean;
+    /** Host currentness that requires an existing Account or Run transport read. */
+    validateCurrent?: (signal: AbortSignal) => Promise<boolean>;
     /** Registers material with this exact live subject's bounded diagnostic owner. */
     registerRedaction: (values: readonly string[]) => void;
     resolvePurposeUse: (
@@ -95,7 +97,13 @@ export type ConnectedAccountRequestAuthServiceDependencies = Readonly<{
     refreshAfterAuthFailure: (input: Readonly<{
         subject: ConnectedAccountRequestAuthSubject;
         resolved: ConnectedAccountRequestAuthResolvedBinding;
-        failure: ConnectedAccountAuthFailureRequestV1['normalizedFailure'];
+        failure: Extract<ConnectedAccountAuthFailureRequestV1['normalizedFailure'], { class: 'authentication' }>;
+        signal: AbortSignal;
+    }>) => Promise<RequestAuthFailureOutcomeV1>;
+    reportScopeFailure?: (input: Readonly<{
+        subject: ConnectedAccountRequestAuthSubject;
+        resolved: ConnectedAccountRequestAuthResolvedBinding;
+        failure: Extract<ConnectedAccountAuthFailureRequestV1['normalizedFailure'], { class: 'insufficient_scope' }>;
         signal: AbortSignal;
     }>) => Promise<RequestAuthFailureOutcomeV1>;
     reportQuotaFailure: (input: Readonly<{
@@ -454,6 +462,10 @@ export function createConnectedAccountRequestAuthService(
         if (!subject.isCurrent()) {
             throw new ConnectedAccountRequestAuthError('request_auth_not_active');
         }
+        if (subject.validateCurrent && !await startRequestAuthOperation(signal, () => subject.validateCurrent!(signal))) {
+            throw new ConnectedAccountRequestAuthError('request_auth_not_active');
+        }
+        if (!subject.isCurrent()) throw new ConnectedAccountRequestAuthError('request_auth_not_active');
         const purpose = QualifiedConnectedAccountPurposeV1Schema.parse(purposeLike);
         const purposeUse = subject.resolvePurposeUse(purpose);
         if (
@@ -643,6 +655,8 @@ export function createConnectedAccountRequestAuthService(
         failureKey: string;
     }> | null> => {
         if (!subject.isCurrent()) return null;
+        if (subject.validateCurrent && !await startRequestAuthOperation(signal, () => subject.validateCurrent!(signal))) return null;
+        if (!subject.isCurrent()) return null;
         for (const purposeUse of subject.listPurposeUses()) {
             const currentUse = subject.resolvePurposeUse(purposeUse.binding.purpose);
             if (
@@ -768,6 +782,17 @@ export function createConnectedAccountRequestAuthService(
                 lifetime.signal,
             );
             if (!context) return { status: 'stale_context' };
+            if (request.normalizedFailure.class === 'insufficient_scope') {
+                if (!validateFailureLease(context, request.credentialContext)) return { status: 'stale_context' };
+                if (!dependencies.reportScopeFailure) return { status: 'denied' };
+                const failure = request.normalizedFailure;
+                const outcome = await startRequestAuthOperation(lifetime.signal, () => dependencies.reportScopeFailure!({
+                    subject: input.subject, resolved: context.resolved, failure, signal: lifetime.signal,
+                }));
+                return await isFailureCallerCurrentAfterAwait(input.subject, request.credentialContext, context, false, lifetime.signal)
+                    ? RequestAuthFailureOutcomeV1Schema.parse(outcome) : { status: 'stale_context' };
+            }
+            const failure = request.normalizedFailure;
             const pending = authFailures.get(context.failureKey);
             if (pending && !pending.operation.signal.aborted) {
                 const outcome = await awaitSharedOperation(
@@ -809,7 +834,7 @@ export function createConnectedAccountRequestAuthService(
                     () => dependencies.refreshAfterAuthFailure({
                         subject: input.subject,
                         resolved: context.resolved,
-                        failure: request.normalizedFailure,
+                        failure,
                         signal: ownerSignal,
                     }),
                 );

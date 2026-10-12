@@ -7,8 +7,8 @@ describe('connected-service credential application admission', () => {
   it.each(['openai-codex', 'happier.agent.codex/openai-codex'])('retains the actual selected pool member and generation for %s ingress', (serviceId) => {
     const state = readConnectedServiceCredentialApplicationState({
       serviceId,
-      connectedServicesBindingsRaw: { v: 2, bindingsByServiceId: {
-        'happier.agent.codex/openai-codex': { source: 'connected', selection: 'group', groupId: 'pool', profileId: 'selected' },
+      connectedServicesBindingsRaw: { v: 2, retiredBindingsField: true, bindingsByServiceId: {
+        'happier.agent.codex/openai-codex': { source: 'connected', selection: 'group', groupId: 'pool', profileId: 'selected', retiredBindingField: true },
       } },
       connectedServiceSelectionsEnv: { [HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY]: JSON.stringify([{
         kind: 'group', serviceId: 'happier.agent.codex/openai-codex', groupId: 'pool', activeProfileId: 'selected',

@@ -1,12 +1,13 @@
 import { ConnectedServiceUsageSourceV1Schema } from '@happier-dev/protocol/connect/connected-service-schemas';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { isConnectedServiceQuotaObservationFresh } from '@happier-dev/protocol/connect/quotaObservationTime';
 import { ProviderAccountUsageRecordIdSchema } from '@happier-dev/protocol/connect/account-usage-primitives';
 import { QualifiedConnectedServiceUsageSourceV4Schema } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
-import { openSealedProviderAccountUsageSnapshot } from '@happier-dev/protocol/connect/accountUsage';
+import { openProviderAccountUsageEncryptedContentV4 } from '@happier-dev/protocol/connect/accountUsage';
 import { parseBuiltInLegacyProviderAccountUsageSnapshotV1 } from '@happier-dev/protocol/connect/legacyConnectedServiceCompatibility';
 import { parseQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { readBuiltInLegacyConnectedServiceIdForQualifiedService } from '@happier-dev/protocol/connect/connected-service-bindings';
-import type { ConnectedServiceUsageSourceV1, ProviderAccountUsageRecordId, ProviderAccountUsageSnapshotV1, QualifiedConnectedServiceUsageSourceV4, SealedProviderAccountUsageSnapshotV1 } from '@happier-dev/protocol';
+import type { ConnectedServiceUsageSourceV1, ProviderAccountUsageRecordId, ProviderAccountUsageSnapshotV1, QualifiedConnectedServiceUsageSourceV4 } from '@happier-dev/protocol';
 import { isConnectedServiceUsageProviderCompatible } from '@happier-dev/agents';
 
 import {
@@ -19,7 +20,7 @@ import type { ProviderAccountUsageStore } from './store';
 type ProviderAccountUsageV4Record = Readonly<{
   content:
     | Readonly<{ t: 'plain'; v: unknown }>
-    | Readonly<{ t: 'encrypted'; c: string; subscription?: SealedProviderAccountUsageSnapshotV1['subscription'] }>;
+    | Parameters<typeof openProviderAccountUsageEncryptedContentV4>[0]['content'];
   metadata: Readonly<{
     fetchedAt: number;
     staleAfterMs: number;
@@ -54,7 +55,7 @@ export type ProviderAccountUsageCurrentSourceResolution = Readonly<{
 
 function accountScopedMaterial(
   credentials: StoredCredentials,
-): Parameters<typeof openSealedProviderAccountUsageSnapshot>[0]['material'] | null {
+): Parameters<typeof openProviderAccountUsageEncryptedContentV4>[0]['material'] | null {
   if (!credentials.encryption) return null;
   return credentials.encryption.type === 'legacy'
     ? { type: 'legacy', secret: credentials.encryption.secret }
@@ -123,7 +124,7 @@ async function resolveAccountEncryptionModeForHydration(
 function parseQualifiedUsageSources(
   value: unknown,
 ): readonly QualifiedConnectedServiceUsageSourceV4[] {
-  const parsed = QualifiedConnectedServiceUsageSourceV4Schema.array().safeParse(
+  const parsed = createStoredReadSchema(QualifiedConnectedServiceUsageSourceV4Schema.array()).safeParse(
     value,
   );
   return parsed.success ? parsed.data : [];
@@ -179,15 +180,9 @@ async function openProviderAccountUsageSnapshotForHydration(input: Readonly<{
   }
   let openedSnapshot: ProviderAccountUsageSnapshotV1 | null = null;
   try {
-    openedSnapshot = openSealedProviderAccountUsageSnapshot({
+    openedSnapshot = openProviderAccountUsageEncryptedContentV4({
       material,
-      sealed: {
-        format: 'account_scoped_v1',
-        ciphertext: response.content.c,
-        ...(response.content.subscription
-          ? { subscription: response.content.subscription }
-          : {}),
-      },
+      content: response.content,
     });
   } catch {
     throw new ConnectedServiceStoredContentUnavailableError(
@@ -314,7 +309,7 @@ export async function hydrateProviderAccountUsageStoreFromCurrentSources(input: 
     const parsedRecordId = ProviderAccountUsageRecordIdSchema.safeParse(
       resolved?.recordId,
     );
-    const resolvedSource = QualifiedConnectedServiceUsageSourceV4Schema.safeParse(
+    const resolvedSource = createStoredReadSchema(QualifiedConnectedServiceUsageSourceV4Schema).safeParse(
       resolved?.source,
     );
     if (!parsedRecordId.success) {

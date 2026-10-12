@@ -100,12 +100,14 @@ describe('hydrateProviderAccountUsageStoreFromConnectedServiceInventory', () => 
       groupGeneration: 4,
     };
     const listAccounts = vi.fn(async () => ({
-      service: qualifiedService,
-      accounts: [createProfile()],
+      service: { ...qualifiedService, retiredServiceField: true },
+      accounts: [{ ...createProfile(), retiredProfileField: true,
+        ref: { ...createProfile().ref, retiredRefField: true } }],
     }));
-    const listGroups = vi.fn(async () => ({ groups: [createGroup()] }));
+    const listGroups = vi.fn(async () => ({ groups: [{ ...createGroup(), retiredGroupField: true,
+      members: createGroup().members.map(member => ({ ...member, retiredMemberField: true })) }] }));
     const resolveSource = vi.fn(async ({ source }: { source: typeof accountSource | typeof groupSource }) => ({
-      source,
+      source: { ...source, retiredSourceField: true, ref: { ...source.ref, retiredRefField: true } },
       recordId: snapshot.recordId,
       providerAccountId: 'acct-work',
       fetchedAt: snapshot.fetchedAtMs,
@@ -118,7 +120,8 @@ describe('hydrateProviderAccountUsageStoreFromConnectedServiceInventory', () => 
         staleAfterMs: snapshot.staleAfterMs,
         status: 'ok' as const,
       },
-      sources: [accountSource, groupSource],
+      sources: [accountSource, groupSource].map(source => ({ ...source, retiredSourceField: true,
+        ref: { ...source.ref, service: { ...source.ref.service, retiredServiceField: true } } })),
     }));
     const store = createProviderAccountUsageStore();
 

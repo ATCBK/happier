@@ -32,10 +32,11 @@ const recovery: SessionUsageLimitRecoveryV1 = {
 
 function fixture(overrides: Partial<RawSessionRecord> = {}) {
   const metadata = {
-    connectedServices: { v: 2, bindingsByServiceId: {
-      [serviceId]: { source: 'connected', selection: 'profile', profileId: 'account-1' },
+    connectedServices: { v: 2, retiredBindingsField: true, bindingsByServiceId: {
+      [serviceId]: { source: 'connected', selection: 'profile', profileId: 'account-1', retiredBindingField: true },
     } },
-    sessionUsageLimitRecoveryV1: recovery,
+    sessionUsageLimitRecoveryV1: { ...recovery, retiredRecoveryField: true,
+      selectedAuth: { ...recovery.selectedAuth, retiredSelectionField: true } },
   };
   const rawSession = createSessionRecordFixture({
     id: sessionId, active: true, encryptionMode: 'plain', metadata: JSON.stringify(metadata),

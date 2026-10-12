@@ -1,4 +1,5 @@
 import { ConnectedServiceBindingsV2IngressSchema } from '@happier-dev/protocol/connect/connected-service-bindings';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import {
   SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY,
   SessionUsageLimitRecoveryV1Schema,
@@ -68,7 +69,7 @@ function matchesAuth(left: SessionUsageLimitRecoveryV1['selectedAuth'], right: S
 
 function matchesCurrentBinding(metadata: Record<string, unknown>, auth: SessionUsageLimitRecoveryV1['selectedAuth']): boolean {
   if (metadata.connectedServices === undefined) return auth.kind === 'native';
-  const parsed = ConnectedServiceBindingsV2IngressSchema.safeParse(metadata.connectedServices);
+  const parsed = createStoredReadSchema(ConnectedServiceBindingsV2IngressSchema).safeParse(metadata.connectedServices);
   if (!parsed.success) return false;
   if (auth.kind === 'native') {
     const binding = auth.serviceId ? parsed.data.bindingsByServiceId[auth.serviceId] : undefined;
@@ -103,7 +104,7 @@ export async function continueSessionAfterUsageLimitReset(input: Readonly<{
   const recovery = input.recovery;
   if (isTerminal(recovery) || !(await input.isCurrent())) return { status: 'superseded' };
   const currentValue = input.metadata[SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY];
-  const currentParsed = SessionUsageLimitRecoveryV1Schema.safeParse(currentValue);
+  const currentParsed = createStoredReadSchema(SessionUsageLimitRecoveryV1Schema).safeParse(currentValue);
   if (currentValue !== undefined && !currentParsed.success) return { status: 'superseded' };
   if (currentParsed.success) {
     const current = currentParsed.data;
@@ -154,7 +155,7 @@ export async function continueSessionAfterUsageLimitReset(input: Readonly<{
       const freshSource = freshIssue.usageLimit?.connectedService;
       if (source?.serviceId !== freshSource?.serviceId || source?.profileId !== freshSource?.profileId
         || source?.groupId !== freshSource?.groupId) return false;
-      const current = SessionUsageLimitRecoveryV1Schema.safeParse(metadata[SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY]);
+      const current = createStoredReadSchema(SessionUsageLimitRecoveryV1Schema).safeParse(metadata[SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY]);
       return (!current.success && metadata[SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY] === undefined)
         || (current.success && !isTerminal(current.data) && (owned || current.data.resumePromptMode !== 'off')
         && current.data.armedAtMs <= recovery.armedAtMs

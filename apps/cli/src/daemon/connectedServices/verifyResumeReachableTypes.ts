@@ -4,6 +4,7 @@ import type { RuntimeDescriptorV1 } from '@happier-dev/protocol';
 export type VerifyResumeReachableInput = Readonly<{
   targetMaterializedRoot: string;
   vendorResumeId: string | null;
+  candidatePersistedSessionFile?: string | null;
   runtimeDescriptorV1?: RuntimeDescriptorV1;
 }>;
 

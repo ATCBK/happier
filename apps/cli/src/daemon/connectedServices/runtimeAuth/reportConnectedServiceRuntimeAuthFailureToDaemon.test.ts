@@ -18,7 +18,7 @@ import type { ConnectedServiceRuntimeFailureClassification } from './types';
 
 const classification = {
   kind: 'usage_limit',
-  serviceId: 'openai-codex',
+  serviceId: 'happier.agent.codex/openai-codex',
   profileId: 'primary',
   groupId: 'team-pool',
   resetsAtMs: null,
@@ -236,6 +236,35 @@ describe('reportConnectedServiceRuntimeAuthFailureToDaemon', () => {
   // triggers, each calling this shared report path. Dedupe lives HERE — inside the single
   // owner in front of the daemon — keyed on stable identity only (no Date.now-derived
   // retryAfterMs), so all triggers are covered without per-call-site dedupers.
+  it('reports successive credential revisions to the daemon within the existing dedupe window', async () => {
+    const outboxDir = await createTempDir('runtime-auth-revision-report-');
+    try {
+      const revisions = ['csr_aaaaaaaaaaaaaaaaaaaaaa', 'csr_bbbbbbbbbbbbbbbbbbbbbb'];
+      type NotifyBody = Parameters<NonNullable<Parameters<typeof reportConnectedServiceRuntimeAuthFailureToDaemon>[0]['notify']>>[0];
+      const notify = vi.fn(async (body: NotifyBody) => {
+        // This mock is the genuine daemon transport boundary; the reporter and outbox stay real.
+        const observed = body.classification as Readonly<{ expectedCredentialRevision?: string }>;
+        return { ok: true, result: observed.expectedCredentialRevision === revisions[0]
+          ? { status: 'recovery_superseded', reason: 'source_tuple_mismatch' }
+          : { status: 'session_not_found' } };
+      });
+      const reports = [];
+      for (const expectedCredentialRevision of revisions) {
+        reports.push(await reportConnectedServiceRuntimeAuthFailureToDaemon({
+          sessionId: 'revision-guarded-session',
+          classification: { ...classification, serviceId: 'happier.agent.antigravity/antigravity-account',
+            profileId: 'selected-personal', groupId: 'selected-pool', groupGeneration: 7, expectedCredentialRevision },
+          notify, reportOutboxDir: outboxDir, nowMs: () => 1_000,
+        }));
+      }
+      expect(notify.mock.calls.map(([body]) => body.classification)).toEqual(revisions.map(expectedCredentialRevision =>
+        expect.objectContaining({ expectedCredentialRevision, groupGeneration: 7 })));
+      expect(reports[0]!.report).toMatchObject({ result: { status: 'recovery_superseded' } });
+      expect(reports[1]!.report).toMatchObject({ result: { status: 'session_not_found' } });
+      expect(await readRuntimeAuthFailureReportOutboxItems({ outboxDir })).toEqual([]);
+    } finally { await removeTempDir(outboxDir); }
+  });
+
   describe('stable report dedupe', () => {
     const limitClassification = {
       kind: 'usage_limit',
@@ -826,7 +855,7 @@ describe('reportConnectedServiceRuntimeAuthFailureToDaemon', () => {
         resumePromptMode: 'custom',
         classification: {
           kind: 'usage_limit',
-          serviceId: 'openai-codex',
+          serviceId: 'happier.agent.codex/openai-codex',
           profileId: 'primary',
           groupId: 'team-pool',
           rateLimits: null,

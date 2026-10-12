@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { ExecutionRunConnectedServicesLaunchV1Schema } from '@happier-dev/protocol/daemon/executionRuns';
 
 import {
   reattestRunningExecutionRunConnectedServices,
@@ -29,13 +30,13 @@ const launch = {
 
 describe('reattestRunningExecutionRunConnectedServices', () => {
   it('reconstructs only the exact still-running receipt/registration pair', async () => {
-    const registration = {
+    const registration = ExecutionRunConnectedServicesLaunchV1Schema.parse({
       ...launch,
       activationId: '11111111-1111-4111-8111-111111111111',
       connectedServicesBindings: {
-        v: 1 as const,
+        v: 2 as const,
         bindingsByServiceId: {
-          'happier.agent.codex/connected-accounts/openai-codex': {
+          'happier.agent.codex/openai-codex': {
             source: 'connected' as const,
             selection: 'profile' as const,
             profileId: 'team',
@@ -46,11 +47,11 @@ describe('reattestRunningExecutionRunConnectedServices', () => {
         HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON: JSON.stringify([{
           kind: 'profile',
           serviceId:
-            'happier.agent.codex/connected-accounts/openai-codex',
+            'happier.agent.codex/openai-codex',
           profileId: 'team',
         }]),
       },
-    };
+    });
     const runningMarker = {
       runId: registration.runKey,
       happySessionId: 'session-1',
@@ -58,6 +59,7 @@ describe('reattestRunningExecutionRunConnectedServices', () => {
       status: 'running',
       executionRunConnectedServicesCleanupReceiptV1: {
         v: 1 as const,
+        retiredReceiptField: true,
         activationId: registration.activationId,
         runKey: registration.runKey,
         agentId: registration.agentId,

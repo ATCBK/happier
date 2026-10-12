@@ -201,9 +201,10 @@ describe('daemon Team credential direct-material reconciler', () => {
     const owned = summary({ id: 'owned-on-page-two' });
     const foreign = summary({ id: 'other-team-member-source', custodianAccountId: 'someone-else' });
     const homeDomainAction = vi.fn(async (request: Readonly<{ actionId: string; input?: unknown }>) => {
-      if (request.actionId === 'teams.list') return teamsPage;
+      if (request.actionId === 'teams.list') return { ...teamsPage, retiredPageField: true,
+        items: teamsPage.items.map(team => ({ ...team, retiredTeamField: true })) };
       const input = request.input as Readonly<{ cursor?: string | null }>;
-      return TeamCredentialResourcePageV1Schema.parse(input?.cursor === 'page-two'
+      const page = TeamCredentialResourcePageV1Schema.parse(input?.cursor === 'page-two'
         ? {
           resources: [owned],
           viewer: { manageCredentials: false, offerOwnCredential: true },
@@ -214,6 +215,8 @@ describe('daemon Team credential direct-material reconciler', () => {
           viewer: { manageCredentials: false, offerOwnCredential: true },
           nextCursor: 'page-two',
         });
+      return { ...page, retiredPageField: true,
+        resources: page.resources.map(resource => ({ ...resource, retiredResourceField: true })) };
     }) as unknown as NonNullable<ActionExecutorDeps['homeDomainAction']>;
     vi.mocked(fetchTeamCredentialDirectMaterialPreparation).mockResolvedValue({
       homeServerIdentityId: 'home',

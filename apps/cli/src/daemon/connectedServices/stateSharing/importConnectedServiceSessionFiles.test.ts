@@ -1,12 +1,52 @@
-import { mkdir, mkdtemp, readdir, readFile, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
 import { importConnectedServiceSessionFiles } from './importConnectedServiceSessionFiles';
+import { reconcileCodexSharedJsonlState } from '../../../../../../packages/plugins/codex/src/agent/auth/services/home/sync/fixedJsonlState';
 
 describe('importConnectedServiceSessionFiles', () => {
+  it('adopts fixed-name native state through the pure codec before linking without duplicating data or dropping generic conflicts', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-native-state-import-'));
+    const sourceRoot = join(root, 'private');
+    const destinationRoot = join(root, 'native');
+    try {
+      await mkdir(sourceRoot, { recursive: true });
+      await mkdir(destinationRoot, { recursive: true });
+      await writeFile(join(sourceRoot, 'history.jsonl'), '{"text":"native"}\n{"text":"private"}\n{"text":"private"}\n');
+      await writeFile(join(destinationRoot, 'history.jsonl'), '{"text":"native"}');
+      await writeFile(join(sourceRoot, 'session_index.jsonl'), '{"id":"session","updated_at":"2026-10-11"}\n');
+      await writeFile(join(destinationRoot, 'session_index.jsonl'), '{"id":"session","updated_at":"2026-10-10"}\n');
+      await writeFile(join(sourceRoot, 'rollout.jsonl'), '{"id":"private"}\n');
+      await writeFile(join(destinationRoot, 'rollout.jsonl'), '{"id":"native"}\n');
+      await writeFile(join(sourceRoot, 'auth.json'), '{"token":"fixture-only"}\n');
+      const importRoot = {
+        sourceRoot, destinationRoot,
+        includeFile: (entryPath: string) => entryPath.endsWith('.jsonl'),
+        mergeSharedStateFile: reconcileCodexSharedJsonlState,
+      };
+      const first = await importConnectedServiceSessionFiles({ roots: [importRoot] });
+      await expect(readFile(join(destinationRoot, 'history.jsonl'), 'utf8')).resolves.toBe('{"text":"native"}\n{"text":"private"}\n');
+      await expect(readFile(join(destinationRoot, 'session_index.jsonl'), 'utf8')).resolves.toBe('{"id":"session","updated_at":"2026-10-10"}\n{"id":"session","updated_at":"2026-10-11"}\n');
+      expect(first).toMatchObject({ imported: 2, conflicted: 1 });
+      const entries = await readdir(destinationRoot);
+      expect(entries.filter(entry => entry.startsWith('history.happier-import-') || entry.startsWith('session_index.happier-import-'))).toEqual([]);
+      const rolloutConflict = entries.find(entry => entry.startsWith('rollout.happier-import-'));
+      expect(rolloutConflict).toBeDefined();
+      await expect(readFile(join(destinationRoot, rolloutConflict!), 'utf8')).resolves.toBe('{"id":"private"}\n');
+      expect(entries).not.toContain('auth.json');
+      const second = await importConnectedServiceSessionFiles({ roots: [importRoot] });
+      expect(second).toMatchObject({ imported: 0, conflicted: 0, skippedIdentical: 3 });
+      expect(await readdir(destinationRoot)).toEqual(entries);
+      await expect(readFile(join(destinationRoot, 'history.jsonl'), 'utf8')).resolves.toBe('{"text":"native"}\n{"text":"private"}\n');
+      await expect(readFile(join(sourceRoot, 'history.jsonl'), 'utf8')).resolves.toBe('{"text":"native"}\n{"text":"private"}\n{"text":"private"}\n');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('imports matching nested session files without moving the source files', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-session-import-'));
     const sourceRoot = join(root, 'source');

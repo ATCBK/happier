@@ -1,4 +1,6 @@
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
+import { createProtocolStoredReadSchema } from '@happier-dev/protocol/plugins/actions/protocol-composable-schema';
 import { ConnectedServiceIdSchema } from '@happier-dev/protocol/connect/connected-service-bindings';
 import { ConnectedServiceUsageSourceV1Schema } from '@happier-dev/protocol/connect/connected-service-schemas';
 import { QualifiedConnectedAccountGroupV4Schema, QualifiedConnectedAccountProfileV4Schema, QualifiedConnectedAccountServiceRefSchema } from '@happier-dev/protocol/connect/qualified-connected-account-projections';
@@ -110,7 +112,7 @@ function buildCurrentSources(input: Readonly<{
   const qualifiedService = QualifiedConnectedAccountServiceRefSchema.parse(
     input.qualifiedService,
   );
-  const accountsService = QualifiedConnectedAccountServiceRefSchema.parse(
+  const accountsService = createProtocolStoredReadSchema(QualifiedConnectedAccountServiceRefSchema).parse(
     input.accounts.service,
   );
   if (!sameQualifiedService(accountsService, qualifiedService)) {
@@ -122,7 +124,7 @@ function buildCurrentSources(input: Readonly<{
 
   const sources: ProviderAccountUsageHydrationSource[] = [];
   for (const rawAccount of input.accounts.accounts) {
-    const account = QualifiedConnectedAccountProfileV4Schema.parse(rawAccount);
+    const account = createStoredReadSchema(QualifiedConnectedAccountProfileV4Schema).parse(rawAccount);
     if (!sameQualifiedService(account.ref.service, qualifiedService)) {
       throw new Error('Qualified connected-account profile inventory is inconsistent');
     }
@@ -140,7 +142,7 @@ function buildCurrentSources(input: Readonly<{
   }
 
   for (const rawGroup of input.groups.groups) {
-    const group = QualifiedConnectedAccountGroupV4Schema.parse(rawGroup);
+    const group = createStoredReadSchema(QualifiedConnectedAccountGroupV4Schema).parse(rawGroup);
     if (!sameQualifiedService(group.ref.service, qualifiedService)) {
       throw new Error('Qualified connected-account group inventory returned a mismatched service');
     }
@@ -257,8 +259,8 @@ function resolutionMatches(
   second: SourceResolution,
 ): boolean {
   return second !== null
-    && buildQualifiedUsageSourceKey(first.source)
-      === buildQualifiedUsageSourceKey(second.source)
+    && buildQualifiedUsageSourceKey(createStoredReadSchema(QualifiedConnectedServiceUsageSourceV4Schema).parse(first.source))
+      === buildQualifiedUsageSourceKey(createStoredReadSchema(QualifiedConnectedServiceUsageSourceV4Schema).parse(second.source))
     && first.recordId === second.recordId
     && first.providerAccountId.trim() === second.providerAccountId.trim();
 }

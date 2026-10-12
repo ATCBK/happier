@@ -21,6 +21,7 @@ export function resolveConnectedServiceQuotasDaemonOptions(env: NodeJS.ProcessEn
   fetchTimeoutMs?: number;
   quotaPersistenceMaxConsecutiveFailures?: number;
   discoveryEnabled: boolean;
+  probeIntervalMs: number;
   discoveryIntervalMs: number;
   failureBackoffMinMs: number;
   failureBackoffMaxMs: number;
@@ -33,6 +34,10 @@ export function resolveConnectedServiceQuotasDaemonOptions(env: NodeJS.ProcessEn
   );
 
   const discoveryEnabled = parseOptionalBooleanEnv(env.HAPPIER_CONNECTED_SERVICES_QUOTAS_DISCOVERY_ENABLED);
+  // Preserve the daemon's existing externally acquired quota tick policy at its option owner.
+  const probeIntervalRaw = Number.parseInt((env.HAPPIER_CONNECTED_SERVICES_QUOTAS_TICK_MS ?? '').trim(), 10);
+  const probeIntervalMs = Number.isFinite(probeIntervalRaw)
+    ? Math.min(30 * 60_000, Math.max(5_000, probeIntervalRaw)) : 60_000;
   const discoveryIntervalParsed = parsePositiveInt(env.HAPPIER_CONNECTED_SERVICES_QUOTAS_DISCOVERY_INTERVAL_MS);
   const discoveryIntervalMs =
     discoveryIntervalParsed ?? 15 * 60_000;
@@ -51,6 +56,7 @@ export function resolveConnectedServiceQuotasDaemonOptions(env: NodeJS.ProcessEn
     ...(timeoutMs === null ? {} : { fetchTimeoutMs: timeoutMs }),
     ...(quotaPersistenceMaxConsecutiveFailures === null ? {} : { quotaPersistenceMaxConsecutiveFailures }),
     discoveryEnabled: discoveryEnabled === null ? true : discoveryEnabled,
+    probeIntervalMs,
     discoveryIntervalMs,
     failureBackoffMinMs,
     failureBackoffMaxMs,

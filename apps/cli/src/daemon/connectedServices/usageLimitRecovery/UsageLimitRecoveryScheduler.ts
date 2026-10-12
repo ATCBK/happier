@@ -1,4 +1,5 @@
 import { SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY, SESSION_USAGE_LIMIT_RECOVERY_STATE_FIELD_ID, SessionUsageLimitRecoveryV1Schema } from '@happier-dev/protocol/sessions/state/valueSchemas/usageLimitRecovery';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import type { SessionUsageLimitRecoveryAuthSelectionV1, SessionUsageLimitRecoveryResumePromptModeV1, SessionUsageLimitRecoveryV1 } from '@happier-dev/protocol';
 import {
   UsageLimitCheckNowRateLimiter,
@@ -65,8 +66,9 @@ export type UsageLimitRecoveryCancelExactResult =
   | Readonly<{ status: 'superseded'; intent: UsageLimitRecoveryIntent }>
   | Readonly<{ status: 'missing' }>;
 
-function isUsageLimitRecoveryIntent(value: unknown): value is UsageLimitRecoveryIntent {
-  return SessionUsageLimitRecoveryV1Schema.safeParse(value).success;
+function readUsageLimitRecoveryIntent(value: unknown): UsageLimitRecoveryIntent | null {
+  const parsed = createStoredReadSchema(SessionUsageLimitRecoveryV1Schema).safeParse(value);
+  return parsed.success ? parsed.data : null;
 }
 
 function readUsageLimitRecoveryServiceId(
@@ -139,7 +141,7 @@ export class UsageLimitRecoveryScheduler {
     this.scheduler = new DurableBackoffRecoveryScheduler<UsageLimitRecoveryIntent>({
       nowMs: deps.nowMs,
       store: deps.store,
-      normalizeIntent: (value) => isUsageLimitRecoveryIntent(value) ? value : null,
+      normalizeIntent: readUsageLimitRecoveryIntent,
       isSameIntentVersion: (left, right) => (
         hasSameUsageLimitRecoveryIdentity(left, right)
         && deterministicStringify(left) === deterministicStringify(right)

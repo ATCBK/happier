@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
-import { copyFile, lstat, mkdir, readdir, readFile, realpath, rename, rm } from 'node:fs/promises';
+import { appendFile, copyFile, lstat, mkdir, readdir, readFile, realpath, rename, rm } from 'node:fs/promises';
 import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path';
+
+import type { AgentConnectedAccountSharedStateFileMergeV1 } from '@happier-dev/plugin-sdk/agents/runtime';
 
 export type ConnectedServiceSessionFileImportDetail = Readonly<{
   sourcePath: string;
@@ -13,6 +15,7 @@ export type ConnectedServiceSessionFileImportRoot = Readonly<{
   sourceRoot: string;
   destinationRoot: string;
   includeFile?: (relativePath: string) => boolean;
+  mergeSharedStateFile?: AgentConnectedAccountSharedStateFileMergeV1;
 }>;
 
 export type ConnectedServiceSessionFileImportResult = Readonly<{
@@ -48,6 +51,7 @@ export async function importConnectedServiceSessionFiles(params: Readonly<{
         sourcePath,
         destinationPath: join(destinationRoot, ...relativePath.split('/')),
         relativePath,
+        mergeSharedStateFile: root.mergeSharedStateFile,
       });
       if (detail) {
         details.push(detail);
@@ -133,17 +137,49 @@ async function importSessionFile(params: Readonly<{
   sourcePath: string;
   destinationPath: string;
   relativePath: string;
+  mergeSharedStateFile?: AgentConnectedAccountSharedStateFileMergeV1;
 }>): Promise<ConnectedServiceSessionFileImportDetail | null> {
-  let sourceHash: string;
+  let incomingContents: Buffer;
   try {
-    sourceHash = await hashFile(params.sourcePath);
+    incomingContents = await readFile(params.sourcePath);
   } catch (error) {
     if (isEnoentError(error)) {
       return null;
     }
     throw error;
   }
-  if (await filesHaveSameHash(params.destinationPath, sourceHash)) {
+  const sourceHash = createHash('sha256').update(incomingContents).digest('hex');
+  let currentContents: Buffer | null = null;
+  if (params.mergeSharedStateFile) {
+    try {
+      currentContents = await readFile(params.destinationPath);
+    } catch (error) {
+      if (!isEnoentError(error)) throw error;
+    }
+    // Provider policy is a pure text codec. Only this importer has filesystem authority, and
+    // unrecognized paths still use the incumbent binary-safe, conflict-preserving import below.
+    const merge = params.mergeSharedStateFile({
+      entryPath: params.relativePath,
+      currentContents: currentContents?.toString('utf8') ?? null,
+      incomingContents: incomingContents.toString('utf8'),
+    });
+    if (merge) {
+      if (merge.appendText.length > 0) {
+        await mkdir(dirname(params.destinationPath), { recursive: true });
+        await appendFile(params.destinationPath, merge.appendText, { encoding: 'utf8', mode: 0o600 });
+      }
+      return {
+        sourcePath: params.sourcePath,
+        destinationPath: params.destinationPath,
+        relativePath: params.relativePath,
+        action: merge.appendText.length > 0 ? 'imported' : 'skipped_identical',
+      };
+    }
+  }
+  const identical = params.mergeSharedStateFile
+    ? currentContents !== null && createHash('sha256').update(currentContents).digest('hex') === sourceHash
+    : await filesHaveSameHash(params.destinationPath, sourceHash);
+  if (identical) {
     return {
       sourcePath: params.sourcePath,
       destinationPath: params.destinationPath,

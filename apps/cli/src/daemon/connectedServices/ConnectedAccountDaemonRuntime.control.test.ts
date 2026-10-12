@@ -56,6 +56,7 @@ const descriptor = PluginConnectedAccountDescriptorContributionV2Schema.parse({
     modes: [{
       id: 'oauth',
       kind: 'oauthAuthorizationCode',
+      callbackUrl: 'https://provider.example/oauth/callback',
       pkce: 'required',
       outcomeReconciliation: 'none',
       configuration: {
@@ -111,7 +112,7 @@ describe('ConnectedAccountDaemonRuntime control facade', () => {
       let current = true;
       const authenticationMode = authentication === 'manual'
         ? { id: authentication, kind: 'manual', outcomeReconciliation: 'none', fields: [{ id: successor ? 'apiKey' : 'token', title: 'Secret', schema: { type: 'string' }, secret: true }] }
-        : { id: authentication, kind: authentication === 'oauth' ? 'oauthAuthorizationCode' : 'oauthDeviceCode', outcomeReconciliation: 'none', ...(authentication === 'oauth' ? { pkce: 'required' } : {}) };
+        : { id: authentication, kind: authentication === 'oauth' ? 'oauthAuthorizationCode' : 'oauthDeviceCode', outcomeReconciliation: 'none', ...(authentication === 'oauth' ? { pkce: 'required', callbackUrl: 'http://127.0.0.1/callback' } : {}) };
       const definition = PluginConnectedAccountDescriptorContributionV2Schema.parse({ id: service.localId, title: 'Work', authentication: { defaultModeId: authentication, modes: [{ ...authenticationMode,
         ...(['configurationFailure', 'disposedDuringAdmission'].includes(scenario) ? { configuration: { scope: 'service', changeBehavior: 'refresh', fields: [{ id: 'endpoint', title: 'Endpoint', schema: { type: 'string' }, required: true }] } } : {}),
       }] } });
@@ -129,6 +130,7 @@ describe('ConnectedAccountDaemonRuntime control facade', () => {
         : authentication === 'oauth'
           ? { oauth: { kind: 'oauthAuthorizationCode', begin: async (_input, context) => {
             await context.attemptCredentials.set('challenge', 'original-challenge');
+            if (scenario === 'oauth') await callbackGate;
             return { status: 'awaitingOAuthRedirect', authorizationUrl: 'https://provider.example/authorize', expiresAtMs: 61_000 };
           }, complete: async (_input, context) => complete({ fields: {} }, context), cancel: async () => {} } }
           : { device: { kind: 'oauthDeviceCode', begin: async (context) => {
@@ -221,7 +223,12 @@ describe('ConnectedAccountDaemonRuntime control facade', () => {
         await vi.waitFor(() => expect(oldDisposed).toBe(true));
         return;
       }
-      if (authentication !== 'manual') await vi.waitFor(async () => expect(await daemon.execute({ operation: 'read', attemptId: 'attempt-custody' })).toMatchObject({ status: authentication === 'oauth' ? 'awaitingOAuth' : 'awaitingDeviceAuthorization' }));
+      if (scenario === 'oauth') {
+        expect(await daemon.execute({ operation: 'read', attemptId: 'attempt-custody' })).toMatchObject({ status: 'starting' });
+        const ready = daemon.execute({ operation: 'read', attemptId: 'attempt-custody', waitForProviderStart: true });
+        releaseCallback();
+        expect(await ready).toMatchObject({ status: 'awaitingOAuth' });
+      } else if (authentication !== 'manual') await vi.waitFor(async () => expect(await daemon.execute({ operation: 'read', attemptId: 'attempt-custody' })).toMatchObject({ status: authentication === 'oauth' ? 'awaitingOAuth' : 'awaitingDeviceAuthorization' }));
       if (scenario === 'cancelledManual') {
         const completion = daemon.execute({ operation: 'submitManual', attemptId: 'attempt-custody', fields: { token: 'original-secret' } });
         await vi.waitFor(() => expect(callbackEntered).toBe(true));

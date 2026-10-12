@@ -1,4 +1,5 @@
 import { QualifiedConnectedAccountCredentialSnapshotV4Schema } from '@happier-dev/protocol/connect/qualified-connected-account-projections';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { sameQualifiedConnectedAccountRef } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
 import type { QualifiedConnectedAccountCredentialSnapshotV4, QualifiedConnectedAccountRef } from '@happier-dev/protocol';
 import type {
@@ -126,7 +127,7 @@ export async function refreshQualifiedConnectedAccount(input: Readonly<{
     );
   }
   const expectedCredential =
-    QualifiedConnectedAccountCredentialSnapshotV4Schema.parse(
+    createStoredReadSchema(QualifiedConnectedAccountCredentialSnapshotV4Schema).parse(
       input.expectedCredential,
     );
   if (!sameQualifiedConnectedAccountRef(input.account, expectedCredential.ref)) {

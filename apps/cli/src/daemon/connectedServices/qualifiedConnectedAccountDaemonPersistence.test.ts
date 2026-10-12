@@ -269,7 +269,6 @@ describe('createQualifiedConnectedAccountDaemonPersistence', () => {
         read: vi.fn(async () => null),
       },
       randomBytes: (length) => new Uint8Array(length).fill(7),
-      callbackUrl: 'http://127.0.0.1:4000/auth/callback',
       ...(attemptTransactions ? { attemptTransactions } : {}),
     });
     const persistence = createPersistence();
@@ -295,7 +294,10 @@ describe('createQualifiedConnectedAccountDaemonPersistence', () => {
       attemptId: 'attempt-1',
       service,
       snapshot: startingSnapshot,
+      callbackUrl: 'https://accounts.example/oauth/callback',
     });
+    expect(transaction.request.callbackUrl).toBe('https://accounts.example/oauth/callback');
+    expect(transaction.request.state).toMatch(/^attempt-1\.[A-Za-z0-9_-]{43}$/);
     expect(() => transaction.acknowledge?.({
         ...startingSnapshot,
         phase: 'awaitingOAuth',

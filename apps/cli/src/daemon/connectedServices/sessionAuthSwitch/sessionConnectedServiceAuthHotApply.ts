@@ -231,6 +231,7 @@ export function createSessionConnectedServiceAuthHotApply(deps: Readonly<{
         agentId,
         materializedSelection,
         fallbackSelection: {
+          kind: binding.selection,
           serviceId,
           binding,
           profileId: binding.profileId,

@@ -1,15 +1,17 @@
-import { startSingleFlightIntervalLoop, type SingleFlightIntervalLoopHandle } from '@/daemon/lifecycle/singleFlightIntervalLoop';
+import { startSingleFlightIntervalLoop, type SingleFlightIntervalLoopHandle, type SingleFlightLoopSchedule } from '@/daemon/lifecycle/singleFlightIntervalLoop';
 
-type ConnectedServiceRefreshLoopHandle = Readonly<{
-    stop: () => void;
+export type ConnectedServiceRefreshLoopHandle = Readonly<{
+    stop: () => Promise<void>;
     pause: () => void;
     resume: () => void;
+    wake: () => void;
 }>;
 
 export function startConnectedServiceRefreshLoop(params: Readonly<{
     enabled: boolean;
     tickMs: number;
-    coordinator: Readonly<{ tickOnce: () => Promise<void> }>;
+    coordinator: Readonly<{ tickOnce: () => Promise<void | SingleFlightLoopSchedule> }>;
+    subscribeWake?: (listener: () => void) => () => void;
     onTickError: (error: unknown) => void;
     runImmediately?: boolean;
 }>): ConnectedServiceRefreshLoopHandle | null {
@@ -21,26 +23,25 @@ export function startConnectedServiceRefreshLoop(params: Readonly<{
         intervalMs: params.tickMs,
         failureBackoffMs: Math.max(params.tickMs, 5_000),
         maxFailureBackoffMs: 60_000,
-        task: async () => {
-            await params.coordinator.tickOnce();
-        },
+        task: () => params.coordinator.tickOnce(),
         onError: params.onTickError,
         unref: true,
     });
+    const unsubscribeWake = params.subscribeWake?.(loop.trigger);
 
     if (params.runImmediately === true) {
-        void params.coordinator.tickOnce().catch(params.onTickError);
+        loop.trigger();
     }
 
     return {
-        stop: () => {
-            loop.stop();
-        },
+        stop: async () => { unsubscribeWake?.(); await loop.stop(); },
         pause: () => {
             loop.pause();
         },
         resume: () => {
+            loop.trigger();
             loop.resume();
         },
+        wake: loop.trigger,
     };
 }

@@ -1,4 +1,5 @@
 import { readNonBlankOpaqueIdentifier } from '@happier-dev/protocol/strings/opaqueIdentifier';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { isDeepStrictEqual } from 'node:util';
 
 import { CONNECTED_SERVICE_UX_DIAGNOSTIC_CODES, ConnectedServiceUxDiagnosticCodeV1Schema } from '@happier-dev/protocol/connect/connectedServiceUxDiagnostics';
@@ -534,7 +535,9 @@ type ConnectedServiceGroupRuntimeMetadata = Readonly<{
 export type SessionConnectedServiceRuntimeAuthSelectionMaterializerInput = Readonly<{
   mode: SessionConnectedServiceRuntimeAuthSelectionMaterializerMode;
   runtimeAuthApplyReason?: ConnectedServiceRuntimeAuthApplyReason;
-  tracked: TrackedSession;
+  tracked: TrackedSession | null;
+  cwd?: string | null;
+  persistedSessionMetadata?: Record<string, unknown> | null;
   sessionId: string;
   agentId: CatalogAgentId;
   serviceId: ConnectedServiceId;
@@ -574,6 +577,7 @@ export type SwitchSessionConnectedServiceAuthInput = Readonly<{
     cwd?: string | null;
     /** Persisted vendor session-file hint (provider-derived by the caller) — reachability fast path. */
     candidatePersistedSessionFile?: string | null;
+    metadata?: Record<string, unknown> | null;
   }> | null>;
   api: ConnectedServiceProfilesApi;
   qualifiedConnectedAccountApi: ConnectedServiceQualifiedAuthGroupApi;
@@ -592,11 +596,12 @@ export type SwitchSessionConnectedServiceAuthInput = Readonly<{
     /**
      * For an INACTIVE switch (tracked=null) the daemon adapter cannot read cwd/target root from a
      * tracked session, so the switch forwards the inactive session's working directory and persisted
-     * session-file hint here. The adapter uses them (plus the deterministic reconstructed materialized
-     * root) to prove shared-state resume reachability instead of fail-closing a resumable session.
+     * session-file hint here. The adapter uses the prepared target and authoritative source metadata
+     * to prove shared-state resume reachability instead of fail-closing a resumable session.
      */
     cwd?: string | null;
     candidatePersistedSessionFile?: string | null;
+    persistedSessionMetadata?: Record<string, unknown> | null;
   }>): Promise<SessionConnectedServiceSwitchContinuity>;
   materializeRuntimeAuthSelection?(
     input: SessionConnectedServiceRuntimeAuthSelectionMaterializerInput,
@@ -1457,7 +1462,7 @@ async function normalizeRequestedBindings(input: Readonly<{
 }
 
 function readConnectedServiceBindingsOrEmpty(raw: unknown): ConnectedServiceBindingsV2 {
-  const parsed = ConnectedServiceBindingsV2IngressSchema.safeParse(raw);
+  const parsed = createStoredReadSchema(ConnectedServiceBindingsV2IngressSchema).safeParse(raw);
   return parsed.success ? parsed.data : { v: 2, bindingsByServiceId: {} };
 }
 
@@ -1612,7 +1617,9 @@ async function emitFailedSwitchAttemptEvent(input: Readonly<{
 
 async function maybeMaterializeRuntimeAuthSelection(input: Readonly<{
   materializeRuntimeAuthSelection: SwitchSessionConnectedServiceAuthInput['materializeRuntimeAuthSelection'];
-  tracked: TrackedSession;
+  tracked: TrackedSession | null;
+  cwd?: string | null;
+  persistedSessionMetadata?: Record<string, unknown> | null;
   sessionId: string;
   agentId: CatalogAgentId;
   serviceId: ConnectedServiceId;
@@ -1629,6 +1636,8 @@ async function maybeMaterializeRuntimeAuthSelection(input: Readonly<{
     mode: input.mode,
     ...(input.runtimeAuthApplyReason ? { runtimeAuthApplyReason: input.runtimeAuthApplyReason } : {}),
     tracked: input.tracked,
+    cwd: input.cwd,
+    persistedSessionMetadata: input.persistedSessionMetadata,
     sessionId: input.sessionId,
     agentId: input.agentId,
     serviceId: input.serviceId,
@@ -2003,6 +2012,29 @@ async function applyConnectedServiceAuthGenerationToTrackedSessionWithGroupConve
     for (const serviceId of changedServiceIds) {
       const next = nextByServiceId.get(serviceId);
       if (!next) continue;
+      const runtimeAuthSelection = await maybeMaterializeRuntimeAuthSelection({
+        materializeRuntimeAuthSelection: input.materializeRuntimeAuthSelection,
+        tracked: null,
+        cwd: inactive.cwd,
+        persistedSessionMetadata: inactive.metadata,
+        sessionId: input.request.sessionId,
+        agentId: inactiveAgentId,
+        serviceId,
+        previous: previousByServiceId.get(serviceId) ?? null,
+        next,
+        previousBindings,
+        normalizedBindings: normalized.normalized,
+        groupMetadataByServiceId: normalized.groupMetadataByServiceId,
+        mode: input.dryRun ? 'preflight' : 'apply',
+        runtimeAuthApplyReason: input.runtimeAuthApplyReason,
+      });
+      const blockingMaterializationDiagnostics = readRuntimeAuthSelectionBlockingMaterializationDiagnostics(runtimeAuthSelection);
+      if (blockingMaterializationDiagnostics.length > 0) {
+        return buildRuntimeAuthMaterializationFailureResult({
+          agentId: inactiveAgentId, serviceId, next,
+          diagnostics: blockingMaterializationDiagnostics, diagnosticSource,
+        });
+      }
       const continuity = await input.resolveContinuity({
         tracked: null,
         sessionId: input.request.sessionId,
@@ -2012,14 +2044,16 @@ async function applyConnectedServiceAuthGenerationToTrackedSessionWithGroupConve
         next,
         previousBindings,
         normalizedBindings: normalized.normalized,
+        ...(runtimeAuthSelection === null || runtimeAuthSelection === undefined ? {} : { runtimeAuthSelection }),
+        ...(inactive.metadata ? { persistedSessionMetadata: inactive.metadata } : {}),
         ...(connectedServiceMaterializationIdentityV1
           ? { connectedServiceMaterializationIdentityV1 }
           : {}),
         ...(readNonBlankOpaqueIdentifier(inactive.vendorResumeId)
           ? { vendorResumeId: inactive.vendorResumeId as string }
           : {}),
-        // Inactive switch (tracked=null): forward the session cwd + persisted hint so the daemon
-        // adapter can reconstruct the target materialized root and prove resume reachability.
+        // Inactive switches use the same prepared target as tracked switches, with source context
+        // from the authoritative inactive-session metadata read.
         ...(typeof inactive.cwd === 'string' && inactive.cwd.trim()
           ? { cwd: inactive.cwd.trim() }
           : {}),
@@ -2039,6 +2073,10 @@ async function applyConnectedServiceAuthGenerationToTrackedSessionWithGroupConve
       }
     }
 
+    if (input.dryRun) {
+      return { ok: true, action: 'metadata_updated', normalizedBindings: normalized.normalized,
+        continuityByServiceId, warnings };
+    }
     try {
       await input.persistSessionBindings?.({
         sessionId: input.request.sessionId,

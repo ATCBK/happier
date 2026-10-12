@@ -19,6 +19,8 @@ export type ProviderAccountUsageReadOptions = Readonly<{
   nowMs?: number;
   targets?: UsagePacingTargetsV1;
   assertCurrent?: () => void | Promise<void>;
+  /** Reset admission needs B evidence, without an Account-wide Pending read. */
+  includePendingWork?: boolean;
   authorizeRequest?: (request: Readonly<{ method: 'GET'; path: string }>) => Readonly<Record<string, string>> | null;
   authorizePendingReadRequest?: (request: Readonly<{ method: 'POST'; path: string; body: PendingResetStartsReadInputV1 }>) => Readonly<Record<string, string>> | null;
 }>;
@@ -38,7 +40,9 @@ export async function readProviderAccountUsageQuotaV4(input: ConnectedServiceQuo
   const page = request.history && resolution ? await readQualifiedProviderAccountUsageHistoryV4({ ...transport, query: { recordId: resolution.recordId, history: request.history } }) : null;
   await options.assertCurrent?.();
   if (request.history && resolution && !page) throw new ProviderAccountUsageReadErrorV1('provider_account_usage_content_unavailable');
-  const { nowMs, waitingWork } = await readWaitingWork(request, current, options);
+  const { nowMs, waitingWork } = options.includePendingWork === false
+    ? { nowMs: options.nowMs ?? Date.now(), waitingWork: undefined }
+    : await readWaitingWork(request, current, options);
   return projectProviderAccountUsageQuotaReadV1({ input: request, current, ...(request.history ? { history: page && resolution ? openProviderAccountUsageHistoryPageV4({ recordId: resolution.recordId, accountMode: options.accountMode, material, page }) : { entries: [], nextCursor: null } } : {}), nowMs, targets: options.targets, waitingWork });
 }
 
@@ -69,7 +73,7 @@ async function readWaitingWork(input: ConnectedServiceQuotaGetInputV1, current: 
     recordId: entry.reset.recordId, meterId: entry.reset.meterId,
     readiness: evaluatePendingResetStartReadinessV1({ reset: entry.reset, witness, current, nowMs, authorityCurrent: entry.authorityCurrent }),
   }));
-  return finish({ status: 'available', entries }, nowMs);
+  return finish({ status: 'available', entries, ...(pending.unboundEntries ? { unboundEntries: pending.unboundEntries } : {}) }, nowMs);
 }
 
 export async function readProviderAccountUsageHistoryWitnessV4(input: Readonly<{ recordId: ProviderAccountUsageRecordId; witness: ProviderAccountUsageHistoryWitnessV1 }>, options: ProviderAccountUsageReadOptions) {

@@ -39,6 +39,12 @@ describe('materializeConnectedServiceNativeHomeCredentials', () => {
     });
 
     await expect(readFile(join(targetRoot, 'auth.json'))).resolves.toEqual(Buffer.from(selected));
+    const rotatedSelection = new Uint8Array([0, 255, 42, 1]);
+    await materializeConnectedServiceNativeHomeCredentials({
+      targetRoot, declaredSecretEntries: ['auth.json', 'accounts/current.json'],
+      files: { 'auth.json': rotatedSelection },
+    });
+    await expect(readFile(join(targetRoot, 'auth.json'))).resolves.toEqual(Buffer.from(rotatedSelection));
     await expect(readFile(join(sourceRoot, 'auth.json'))).resolves.toEqual(Buffer.from(original));
   });
 
@@ -80,5 +86,11 @@ describe('materializeConnectedServiceNativeHomeCredentials', () => {
       files: { 'accounts/current.json': new Uint8Array([2]) },
     })).rejects.toThrow();
     await expect(readFile(join(outside, 'current.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await writeFile(join(outside, 'auth.json'), 'outside-native-auth');
+    await symlink(join(outside, 'auth.json'), join(targetRoot, 'auth.json'));
+    await expect(materializeConnectedServiceNativeHomeCredentials({
+      targetRoot, declaredSecretEntries: ['auth.json'], files: { 'auth.json': new Uint8Array([3]) },
+    })).rejects.toThrow();
+    await expect(readFile(join(outside, 'auth.json'), 'utf8')).resolves.toBe('outside-native-auth');
   });
 });

@@ -2,8 +2,109 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { startConnectedServiceQuotasLoop } from './startConnectedServiceQuotasLoop';
 import { ConnectedServiceQuotasCoordinator } from './ConnectedServiceQuotasCoordinator';
+import { ConnectedServiceRuntimeRegistry } from '../runtimeRegistry/registry';
 
 describe('startConnectedServiceQuotasLoop', () => {
+  it('reconciles a parked owner on runtime registration and releases its subscription on stop', async () => {
+    vi.useFakeTimers();
+    const registry = new ConnectedServiceRuntimeRegistry();
+    let ticks = 0;
+    const coordinator = new ConnectedServiceQuotasCoordinator({
+      credentials: { token: 'quota-loop-registry-account', encryption: null },
+      quotaFetchers: [], discoveryEnabled: false, runtimeRegistry: registry,
+      now: () => { ticks += 1; return Date.now(); },
+      randomBytes: length => new Uint8Array(length),
+      api: { getAccountEncryptionMode: async () => 'plain',
+        getConnectedServiceQuotaSnapshotSealed: async () => null,
+        getConnectedServiceCredentialSealed: async () => null },
+    });
+    const handle = startConnectedServiceQuotasLoop({ enabled: true, tickMs: 50, coordinator,
+      subscribeWake: listener => registry.subscribeTargetRegistrations(listener), onTickError: () => {} });
+    try {
+      handle?.wake();
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(ticks).toBe(1);
+      registry.registerTarget({ pid: 123, agentId: null, materializationKey: 'runtime',
+        connectedServicesBindingsRaw: { v: 1, bindingsByServiceId: {} } });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(ticks).toBe(2);
+      await handle?.stop();
+      registry.updateTarget({ pid: 123, sessionId: 'later' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(ticks).toBe(2);
+    } finally { await handle?.stop(); vi.useRealTimers(); }
+  });
+  it('parks after initial reconciliation when no account has a probe or reset deadline', async () => {
+    vi.useFakeTimers();
+    let ticks = 0;
+    const coordinator = new ConnectedServiceQuotasCoordinator({
+      credentials: { token: 'quota-loop-account', encryption: null },
+      quotaFetchers: [], discoveryEnabled: false,
+      now: () => { ticks += 1; return Date.now(); },
+      randomBytes: length => new Uint8Array(length),
+      api: {
+        getAccountEncryptionMode: async () => 'plain',
+        getConnectedServiceQuotaSnapshotSealed: async () => null,
+        getConnectedServiceCredentialSealed: async () => null,
+      },
+    });
+    const handle = startConnectedServiceQuotasLoop({
+      enabled: true, tickMs: 50, coordinator, runImmediately: true, onTickError: () => {},
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(ticks).toBe(1);
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(ticks).toBe(1);
+      handle?.pause();
+      handle?.resume();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(ticks).toBe(2);
+    } finally {
+      await handle?.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it('wakes the existing loop after profile changes without overlapping ticks', async () => {
+    let ticks = 0;
+    let release: () => void = () => {};
+    // The real coordinator owns discovery; only its clock and account HTTP are controlled.
+    const coordinator = new ConnectedServiceQuotasCoordinator({
+      credentials: { token: 'quota-loop-account', encryption: null },
+      quotaFetchers: [], discoveryEnabled: false,
+      now: () => { ticks += 1; return 500; },
+      randomBytes: length => new Uint8Array(length),
+      api: {
+        getAccountEncryptionMode: async () => { await new Promise<void>(resolve => { release = resolve; }); return 'plain'; },
+        getConnectedServiceQuotaSnapshotSealed: async () => null,
+        getConnectedServiceCredentialSealed: async () => null,
+      },
+    });
+    const handle = startConnectedServiceQuotasLoop({
+      enabled: true, tickMs: 10000,
+      coordinator,
+      onTickError: () => {},
+      setTimeoutFn: () => 1, clearTimeoutFn: () => {},
+    });
+    handle?.wake();
+    expect(ticks).toBe(1);
+    handle?.wake();
+    handle?.wake();
+    expect(ticks).toBe(1);
+    release();
+    await vi.waitFor(() => expect(ticks).toBe(2));
+    handle?.pause();
+    handle?.wake();
+    expect(ticks).toBe(2);
+    handle?.resume();
+    await vi.waitFor(() => expect(ticks).toBe(3));
+    await handle?.stop();
+    handle?.wake();
+    expect(ticks).toBe(3);
+  });
+
   it('notifies subscribed demand readers only after a successful settled tick, and detaches on stop', async () => {
     let tick: () => void = () => {};
     let complete: () => void = () => {};
@@ -27,8 +128,8 @@ describe('startConnectedServiceQuotasLoop', () => {
       enabled: true, tickMs: 10,
       coordinator,
       onTickError: () => {},
-      setIntervalFn: fn => { tick = fn; return 123; },
-      clearIntervalFn: () => {},
+      setTimeoutFn: fn => { tick = fn; return 123; },
+      clearTimeoutFn: () => {},
     });
     const unsubscribe = handle!.subscribeAfterTick(() => { observations.push('read-demand'); });
     tick();
@@ -61,11 +162,11 @@ describe('startConnectedServiceQuotasLoop', () => {
 
 	    let captured: (() => void) = () => {};
 	    let cleared = 0;
-	    const setIntervalFn = ((fn: () => void) => {
+	    const setTimeoutFn = ((fn: () => void) => {
 	      captured = fn;
 	      return 123;
 	    });
-    const clearIntervalFn = (() => {
+    const clearTimeoutFn = (() => {
       cleared += 1;
     });
 
@@ -74,8 +175,8 @@ describe('startConnectedServiceQuotasLoop', () => {
       tickMs: 10,
       coordinator,
       onTickError: vi.fn(),
-      setIntervalFn,
-      clearIntervalFn,
+      setTimeoutFn,
+      clearTimeoutFn,
     });
 
     expect(handle).not.toBeNull();
@@ -86,22 +187,23 @@ describe('startConnectedServiceQuotasLoop', () => {
     await Promise.resolve();
 
     expect(coordinator.tickOnce).toHaveBeenCalledTimes(1);
-    handle?.stop();
-    expect(cleared).toBe(1);
+    await handle?.stop();
+    callback();
+    expect(coordinator.tickOnce).toHaveBeenCalledTimes(1);
   });
 
   it('unrefs the interval handle when supported', () => {
     const coordinator: { tickOnce: () => Promise<void> } = { tickOnce: vi.fn(async () => {}) };
     const unref = vi.fn();
-    const setIntervalFn = vi.fn(() => ({ unref }));
+    const setTimeoutFn = vi.fn(() => ({ unref }));
 
     startConnectedServiceQuotasLoop({
       enabled: true,
       tickMs: 10,
       coordinator,
       onTickError: vi.fn(),
-      setIntervalFn,
-      clearIntervalFn: vi.fn(),
+      setTimeoutFn,
+      clearTimeoutFn: vi.fn(),
     });
 
     expect(unref).toHaveBeenCalledTimes(1);
@@ -113,8 +215,8 @@ describe('startConnectedServiceQuotasLoop', () => {
       tickMs: 10,
       coordinator: { tickOnce: vi.fn() },
       onTickError: vi.fn(),
-      setIntervalFn: () => 123,
-      clearIntervalFn: () => {},
+      setTimeoutFn: () => 123,
+      clearTimeoutFn: () => {},
     });
     expect(handle).toBeNull();
   });
@@ -123,7 +225,7 @@ describe('startConnectedServiceQuotasLoop', () => {
     const coordinator: { tickOnce: () => Promise<void> } = { tickOnce: vi.fn(async () => {}) };
 
     let captured: (() => void) = () => {};
-    const setIntervalFn = ((fn: () => void) => {
+    const setTimeoutFn = ((fn: () => void) => {
       captured = fn;
       return 123;
     });
@@ -133,8 +235,8 @@ describe('startConnectedServiceQuotasLoop', () => {
       tickMs: 10,
       coordinator,
       onTickError: vi.fn(),
-      setIntervalFn,
-      clearIntervalFn: vi.fn(),
+      setTimeoutFn,
+      clearTimeoutFn: vi.fn(),
     });
 
     handle?.pause();
@@ -169,11 +271,11 @@ describe('startConnectedServiceQuotasLoop', () => {
       tickMs: 10,
       coordinator,
       onTickError: vi.fn(),
-      setIntervalFn: (fn: () => void) => {
+      setTimeoutFn: (fn: () => void) => {
         captured = fn;
         return 123;
       },
-      clearIntervalFn: vi.fn(),
+      clearTimeoutFn: vi.fn(),
     });
 
     captured();

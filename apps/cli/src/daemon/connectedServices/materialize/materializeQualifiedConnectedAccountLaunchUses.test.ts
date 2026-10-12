@@ -1,4 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
+import { buildQualifiedPluginContributionKey, PluginAgentContributionV2Schema } from '@happier-dev/protocol';
+import { projectAgentConnectedAccountLaunchCatalogEntry } from '@/plugins/projection/registry/agentCatalogEntryHooks';
+import { createConnectedAccountPurposeBindingOwner } from '../purposeBindings/ConnectedAccountPurposeBindingOwner';
+import { resolveQualifiedPurposeBindingSnapshotForAgentSpawn } from '../requestAuth/prepareConnectedAccountRequestAuthForSpawn';
+import { PLUGIN_MANIFEST } from '../../../../../../packages/plugins/antigravity/src/manifest';
+import { antigravityConnectedAccountLaunch } from '../../../../../../packages/plugins/antigravity/src/agent/connectedServices/continuity';
+import { antigravityConnectedAccountRuntime } from '../../../../../../packages/plugins/antigravity/src/connectedAccounts/antigravityConnectedAccountRuntime';
+import { stripUnsetEnvironmentVariables } from '@/utils/processEnv/buildScopedProcessEnv';
 
 import {
   materializeQualifiedConnectedAccountLaunchUses,
@@ -16,6 +24,114 @@ const purpose = Object.freeze({ consumer, purpose: 'launch' });
 const account = Object.freeze({ service, accountId: 'account-1' });
 
 describe('materializeQualifiedConnectedAccountLaunchUses', () => {
+
+  it('consumes the Antigravity producer declaration for connected overrides while preserving a subsequent native launch', async () => {
+    const agentId = 'antigravity';
+    const declaration = PluginAgentContributionV2Schema.parse(PLUGIN_MANIFEST.contributes.agents?.[0]);
+    const identity = { pluginId: PLUGIN_MANIFEST.id, localId: agentId };
+    const service = { pluginId: PLUGIN_MANIFEST.id, localId: 'antigravity-account' };
+    const account = { service, accountId: 'selected-account' };
+    const catalogEntry = projectAgentConnectedAccountLaunchCatalogEntry({
+      pluginId: identity.pluginId, agentId, isCurrent: () => true,
+      hostAccess: PLUGIN_MANIFEST.hostAccess,
+      connectedAccountLaunch: antigravityConnectedAccountLaunch,
+    });
+    const owner = createConnectedAccountPurposeBindingOwner({
+      store: { read: async () => ({ v: 1, bindings: [{
+          purpose: { consumer: identity, purpose: 'model_upstream' }, target: { kind: 'account', account },
+        }] }),
+        update: async () => { throw new Error('Launch must not edit Account settings'); },
+        subscribe: () => ({ dispose() {} }) },
+      selectTarget: async () => { throw new Error('Launch must not prompt'); },
+      resolveTarget: async target => target.kind === 'account'
+        ? { displayName: target.account.accountId, account: target.account } : null,
+      // The host account boundary invokes the genuine provider materializer.
+      materializeAccount: async ({ request, signal }) => antigravityConnectedAccountRuntime.materialize(request, {
+        account, signal, credentials: { async get() { return null; } },
+        configuration: { target: { kind: 'account', account, modeId: 'oauth-personal' }, revision: 'configuration-1', values: {}, async getSecret() { return null; } },
+      } as Parameters<typeof antigravityConnectedAccountRuntime.materialize>[1]),
+      projectTargetAccounts: async () => { throw new Error('No Account listing needed'); },
+      assertTargetAccountMaterializable: async () => { throw new Error('No Account listing needed'); },
+    });
+    const contributions = { agentDefinitionsById: new Map([[agentId, {
+      identity, richDefinition: { definition: declaration }, catalogEntry,
+    }]]) };
+    const inheritedEnvironment = {
+      AGY_ACP_CCPA_BASE_URL: 'https://custom.example', AGY_ACP_CCPA_PROJECT: 'native-project',
+      GOOGLE_APPLICATION_CREDENTIALS: '/native/application.json', SHELL: '/bin/zsh',
+    };
+    const launch = async (source: 'connected' | 'native') => {
+      const snapshot = resolveQualifiedPurposeBindingSnapshotForAgentSpawn({
+        agentId, contributions, bindings: { v: 2, bindingsByServiceId: {
+          [buildQualifiedPluginContributionKey(service)]: source === 'connected'
+            ? { source, selection: 'profile', profileId: account.accountId } : { source },
+        } },
+      });
+      if (!snapshot) throw new Error('AGY declared launch snapshot unavailable');
+      const materialized = await materializeQualifiedConnectedAccountLaunchUses({
+        connectedAccountsOwner: owner, snapshot, signal: new AbortController().signal,
+      });
+      return { ...stripUnsetEnvironmentVariables(inheritedEnvironment, materialized.unsetEnvKeys), ...materialized.env };
+    };
+    expect(await launch('connected')).toEqual({
+      AGY_ACP_FORCE_FILE_STORAGE: '1', GOOGLE_APPLICATION_CREDENTIALS: '/native/application.json', SHELL: '/bin/zsh',
+    });
+    expect(await launch('native')).toEqual(inheritedEnvironment);
+  });
+
+  it('suppresses only declared keys of a bound purpose and preserves explicit native launch environment', async () => {
+    const catalogEntry = projectAgentConnectedAccountLaunchCatalogEntry({
+      pluginId: consumer.pluginId,
+      agentId: 'acme.example' as never,
+      isCurrent: () => true,
+      connectedAccountLaunch: {
+        environmentUnsetUses: [
+          { purpose: 'launch', environmentKey: 'AGY_ACP_CCPA_BASE_URL' },
+          { purpose: 'launch', environmentKey: 'AGY_ACP_CCPA_PROJECT' },
+          { purpose: 'unbound', environmentKey: 'UNRELATED_NATIVE_VALUE' },
+        ],
+      },
+    });
+    const owner = createConnectedAccountPurposeBindingOwner({
+      store: {
+        read: async () => ({ v: 1, bindings: [] }),
+        update: async () => { throw new Error('Launch projection must not edit Account settings'); },
+        subscribe: () => ({ dispose() {} }),
+      },
+      selectTarget: async () => { throw new Error('Launch projection must not prompt'); },
+      resolveTarget: async target => target.kind === 'account'
+        ? { displayName: target.account.accountId, account: target.account } : null,
+      materializeAccount: async () => { throw new Error('Unsetting inherited values needs no credential disclosure'); },
+      projectTargetAccounts: async () => { throw new Error('No Account listing needed'); },
+      assertTargetAccountMaterializable: async () => { throw new Error('No Account listing needed'); },
+    });
+    const contributions = { agentDefinitionsById: new Map([['acme.example', {
+      identity: consumer,
+      richDefinition: { definition: { connectedAccounts: [
+        { purpose: 'launch', service }, { purpose: 'unbound', service: { ...service, localId: 'other' } },
+      ] } },
+      catalogEntry,
+    }]]) };
+    const materialize = async (source: 'connected' | 'native') => {
+      const snapshot = resolveQualifiedPurposeBindingSnapshotForAgentSpawn({
+        agentId: 'acme.example', contributions,
+        bindings: { v: 2, bindingsByServiceId: {
+          [buildQualifiedPluginContributionKey(service)]: source === 'connected'
+            ? { source, selection: 'profile', profileId: account.accountId } : { source },
+        } },
+      });
+      if (!snapshot) throw new Error('Declared Agent launch snapshot unavailable');
+      return await materializeQualifiedConnectedAccountLaunchUses({
+        connectedAccountsOwner: owner, snapshot, signal: new AbortController().signal,
+      });
+    };
+    expect(await materialize('connected')).toEqual({
+      env: {}, unsetEnvKeys: ['AGY_ACP_CCPA_BASE_URL', 'AGY_ACP_CCPA_PROJECT'],
+    });
+    // A fresh native projection after connected use must not retain purpose-owned removal.
+    expect(await materialize('native')).toEqual({ env: {}, unsetEnvKeys: [] });
+  });
+
   it('keeps account selection and credential-file paths in their canonical host owners', async () => {
     const getBinding = vi.fn(async () => ({ account }));
     const materialize = vi.fn(async (input: Readonly<{
@@ -67,8 +183,8 @@ describe('materializeQualifiedConnectedAccountLaunchUses', () => {
     });
 
     expect(environment).toEqual({
-      EXAMPLE_TOKEN: 'secret',
-      EXAMPLE_AUTH_FILE: '/host-owned/auth.json',
+      env: { EXAMPLE_TOKEN: 'secret', EXAMPLE_AUTH_FILE: '/host-owned/auth.json' },
+      unsetEnvKeys: [],
     });
     expect(getBinding).toHaveBeenCalledTimes(1);
     expect(materialize).toHaveBeenCalledTimes(2);

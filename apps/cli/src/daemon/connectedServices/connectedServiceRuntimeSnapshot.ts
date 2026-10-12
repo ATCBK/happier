@@ -1,4 +1,5 @@
 import { ConnectedServiceBindingsV2IngressSchema } from '@happier-dev/protocol/connect/connected-service-bindings';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { ConnectedServiceMaterializationIdentityV1Schema } from '@happier-dev/protocol/sessions/metadata/connectedServiceMaterializationIdentityV1';
 import type { ConnectedServiceBindingsV2, ConnectedServiceMaterializationIdentityV1 } from '@happier-dev/protocol';
 
@@ -13,7 +14,7 @@ function readRecord(value: unknown): Record<string, unknown> | null {
 }
 
 function readConnectedServices(value: unknown): ConnectedServiceBindingsV2 | undefined {
-  const parsed = ConnectedServiceBindingsV2IngressSchema.safeParse(value);
+  const parsed = createStoredReadSchema(ConnectedServiceBindingsV2IngressSchema).safeParse(value);
   return parsed.success ? parsed.data : undefined;
 }
 

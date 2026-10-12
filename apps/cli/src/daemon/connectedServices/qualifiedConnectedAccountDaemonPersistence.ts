@@ -3,6 +3,7 @@ import {
   randomUUID,
 } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
+import { z } from 'zod';
 
 import { ConnectedConfigurationCatalogV1Schema, openConnectedAccountCatalogContentV1,
   type ConnectedAccountCatalogRecordV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
@@ -12,7 +13,7 @@ import { QualifiedConnectedAccountCredentialPayloadV1Schema, openQualifiedConnec
 import { SavedSecretSchema } from '@happier-dev/protocol/profiles/backendProfileSchema';
 import { sameQualifiedConnectedAccountRef } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
 import { parseQualifiedConnectedAccountCredentialPlaintextV1, projectQualifiedConnectedAccountCredentialPlaintextV1 } from '@happier-dev/protocol/connect/legacyConnectedServiceCompatibility';
-import { pluginSourceCustodyV1Equal } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
+import { connectedAccountSourceCustodyV1Equal } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
 import { isStoredJsonContentEnvelopeModeCompatible } from '@happier-dev/protocol/storage/storedJsonContentEnvelope';
 import type { AccountScopedCryptoMaterial, ConnectedServiceCredentialRecordV1, QualifiedConnectedAccountRef } from '@happier-dev/protocol';
 
@@ -324,7 +325,6 @@ export function createQualifiedConnectedAccountDaemonPersistence(
       ) => SessionSyncPendingInputServerContractResult | null;
     secrets: ConnectedAccountDaemonPersistence['configuration']['secrets'];
     randomBytes?: (length: number) => Uint8Array;
-    callbackUrl?: string;
     operationContext?: SavedSecretOperationContextV1;
     createConfigurationRevision?: () => string;
     createSecretId?: () => string;
@@ -382,15 +382,15 @@ export function createQualifiedConnectedAccountDaemonPersistence(
           : right.account !== undefined && sameQualifiedConnectedAccountRef(left.account, right.account)
       )
       && left.modeId === right.modeId
-      && pluginSourceCustodyV1Equal(left.sourceCustody, right.sourceCustody)
+      && connectedAccountSourceCustodyV1Equal(left.sourceCustody, right.sourceCustody)
       && left.expectedCredentialRevision === right.expectedCredentialRevision
       && left.expectedCredentialConfigurationRevision
         === right.expectedCredentialConfigurationRevision
       && left.expectedConfigurationRevision === right.expectedConfigurationRevision
-      && isDeepStrictEqual(
+      && (isDeepStrictEqual(
         left.stagedAccountConfigurationContent,
         right.stagedAccountConfigurationContent,
-      );
+      ) || (left.sourceCustody.kind === 'host' && left.phase === 'starting'));
   }
 
   function createLocalOAuthTransactionHandle(
@@ -399,6 +399,9 @@ export function createQualifiedConnectedAccountDaemonPersistence(
     snapshot: ConnectedAccountOAuthTransactionSnapshot;
   }> {
     return Object.freeze({
+      get expiresAtMs() {
+        return record.snapshot.expiresAtMs;
+      },
       get snapshot() {
         return record.snapshot;
       },
@@ -414,6 +417,9 @@ export function createQualifiedConnectedAccountDaemonPersistence(
         if (
           record.closed
           || !sameOAuthSnapshotIdentity(record.snapshot, snapshot)
+          || (record.snapshot.issuer !== undefined && record.snapshot.issuer !== snapshot.issuer)
+          || (record.snapshot.issuerResponseParameterRequired !== undefined
+            && record.snapshot.issuerResponseParameterRequired !== snapshot.issuerResponseParameterRequired)
           || (
             record.snapshot.phase === 'outcomeUnknown'
             && snapshot.phase !== 'outcomeUnknown'
@@ -465,11 +471,10 @@ export function createQualifiedConnectedAccountDaemonPersistence(
         const pkce = generatePkceCodes();
         const record = {
           snapshot: input.snapshot,
-          state: Buffer.from(randomBytes(32)).toString('base64url'),
+          state: `${input.attemptId}.${Buffer.from(randomBytes(32)).toString('base64url')}`,
           challenge: pkce.challenge,
           verifier: pkce.verifier,
-          callbackUrl:
-            params.callbackUrl ?? 'http://localhost:1455/auth/callback',
+          callbackUrl: z.url().parse(input.callbackUrl),
           consumed: false,
           closed: false,
         };

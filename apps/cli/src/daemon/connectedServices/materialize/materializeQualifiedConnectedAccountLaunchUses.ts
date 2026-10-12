@@ -11,6 +11,7 @@ import type {
 import type {
   AgentSpawnQualifiedPurposeBindingSnapshot,
 } from '../requestAuth/prepareConnectedAccountRequestAuthForSpawn';
+import { normalizeUnsetEnvKeys } from '@/utils/processEnv/buildScopedProcessEnv';
 
 type CredentialFileScope = Parameters<ManagedServiceCredentialFileOwner['materialize']>[0]['scope'];
 
@@ -31,7 +32,10 @@ export async function materializeQualifiedConnectedAccountLaunchUses(input: Read
   expectedAccountsByPurposeKey?: ReadonlyMap<string, QualifiedConnectedAccountRef>;
   credentialFileScope?: CredentialFileScope;
   retainCredentialFileCleanup?(cleanup: ManagedServiceCredentialFileCleanup): void;
-}>): Promise<Readonly<Record<string, string>>> {
+}>): Promise<Readonly<{
+  env: Readonly<Record<string, string>>;
+  unsetEnvKeys: readonly string[];
+}>> {
   const materializedEnvironment: Record<string, string> = Object.create(null);
   const expectedAccountsByPurposeKey = new Map(
     input.expectedAccountsByPurposeKey ?? [],
@@ -165,5 +169,10 @@ export async function materializeQualifiedConnectedAccountLaunchUses(input: Read
     }
   }
 
-  return Object.freeze(materializedEnvironment);
+  return Object.freeze({
+    env: Object.freeze(materializedEnvironment),
+    unsetEnvKeys: normalizeUnsetEnvKeys((input.snapshot.environmentUnsetUses ?? [])
+      .filter(use => isPurposeBound(use.purpose))
+      .map(use => use.environmentKey)),
+  });
 }

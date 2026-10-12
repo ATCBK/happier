@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import axios from 'axios';
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   MAX_INTERACTION_TRANSIENT_CHOICES_V1,
@@ -34,6 +34,7 @@ import { listQualifiedConnectedAccountsV4 } from '@/api/client/qualifiedConnecte
 import { readCanonicalPluginManifest } from '@/plugins/manifest/normalize';
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
+import { createPluginReloadController } from '@/plugins/runtime/reload/controller';
 import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
 
 import {
@@ -511,6 +512,133 @@ function createActionFormRuntime(input: Readonly<{
 }
 
 describe('createDaemonConnectedAccountPurposeBindingRuntime', () => {
+  const coordinatorCleanups: Array<() => Promise<void>> = [];
+  afterEach(async () => {
+    for (const cleanup of coordinatorCleanups.splice(0)) await cleanup();
+  });
+
+  async function coordinatorFixture(observed = true) {
+    const qualifiedApi = testQualifiedApi();
+    const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-coordinator-inventory-'));
+    const resolveRegistry = () => resolveExecutablePluginRuntimeRegistry({
+      happyHomeDir,
+      pluginIds: [openAiService.pluginId],
+      resolveDevelopmentSourceAuthority,
+    });
+    const reloadController = createPluginReloadController({ happyHomeDir, resolveRuntimeRegistry: resolveRegistry });
+    const inventoryReads = vi.fn(async (service: QualifiedConnectedAccountProfileV4['ref']['service']) => {
+      // HTTP boundary: other real registry services have no saved profiles.
+      return service.pluginId === openAiService.pluginId && service.localId === openAiService.localId
+        ? await qualifiedApi.listAccounts()
+        : { service, accounts: [] };
+    });
+    coordinatorCleanups.push(async () => {
+      await reloadController.shutdown();
+      await rm(happyHomeDir, { recursive: true, force: true });
+    });
+    const runtime = createDaemonConnectedAccountPurposeBindingRuntime({
+      coordinatorInventoryIsObserved: () => observed,
+      resolveQualifiedConnectedAccountV4Support: () => 'advertised',
+      establishedRuntimeOwner: {
+        invokeWithReceipt: async () => { throw new Error('Inventory must not open credentials'); },
+        invokeDirectMaterial: unavailableDirectMaterial,
+      },
+      qualifiedApi: {
+        ...qualifiedApi,
+        listAccounts: inventoryReads,
+      },
+      store: emptyStore(),
+      reloadController,
+    });
+    return { runtime, qualifiedApi, inventoryReads, setObserved: (value: boolean) => { observed = value; }, replaceRegistry: async () => {
+      const result = await reloadController.adoptPreparedRuntimeRegistry({
+        registry: await resolveRegistry(),
+        changedPluginIds: [openAiService.pluginId],
+        runningSessionDisposition: 'retainRunningSessions',
+      });
+      expect(result.ok).toBe(true);
+    } };
+  }
+
+  it('shares the observed coordinator inventory until an owner invalidation, including empty inventories', async () => {
+    const { runtime, qualifiedApi, inventoryReads } = await coordinatorFixture();
+    qualifiedApi.listAccounts.mockResolvedValue({ service: openAiService, accounts: [] });
+    const [quotas, refresh] = await Promise.all([runtime.listCoordinatorAccounts(), runtime.listCoordinatorAccounts()]);
+    expect(quotas).toEqual([]);
+    expect(refresh).toBe(quotas);
+    const services = inventoryReads.mock.calls.map(([service]) => JSON.stringify(service));
+    expect(new Set(services).size).toBe(services.length);
+    await runtime.listCoordinatorAccounts();
+    expect(inventoryReads).toHaveBeenCalledTimes(services.length);
+    expect(qualifiedApi.listAccounts).toHaveBeenCalledTimes(1);
+    qualifiedApi.listAccounts.mockResolvedValue({ service: openAiService, accounts: [testQualifiedProfile()] });
+    runtime.invalidate();
+    expect(await runtime.listCoordinatorAccounts()).toEqual([testQualifiedProfile()]);
+    expect(qualifiedApi.listAccounts).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not publish inventory invalidated during the read and retries failed reads', async () => {
+    const { runtime, qualifiedApi } = await coordinatorFixture();
+    qualifiedApi.listAccounts.mockImplementationOnce(async () => {
+      runtime.invalidate();
+      return { service: openAiService, accounts: [] };
+    });
+    expect(await runtime.listCoordinatorAccounts()).toEqual([testQualifiedProfile()]);
+    runtime.invalidate();
+    qualifiedApi.listAccounts.mockRejectedValueOnce(new Error('transport unavailable'));
+    await expect(runtime.listCoordinatorAccounts()).rejects.toThrow('transport unavailable');
+    expect(await runtime.listCoordinatorAccounts()).toEqual([testQualifiedProfile()]);
+  });
+
+  it('rereads after registry replacement and keeps unobserved requester inventories fresh', async () => {
+    const { runtime, qualifiedApi, replaceRegistry } = await coordinatorFixture();
+    await runtime.listCoordinatorAccounts();
+    qualifiedApi.listAccounts.mockResolvedValue({ service: openAiService, accounts: [] });
+    await replaceRegistry();
+    expect(await runtime.listCoordinatorAccounts()).toEqual([]);
+    expect(qualifiedApi.listAccounts).toHaveBeenCalledTimes(2);
+    const requester = await coordinatorFixture(false);
+    await requester.runtime.listCoordinatorAccounts();
+    requester.qualifiedApi.listAccounts.mockResolvedValue({ service: openAiService, accounts: [] });
+    expect(await requester.runtime.listCoordinatorAccounts()).toEqual([]);
+  });
+
+  it('lets a coordinator abort without cancelling the inventory shared with another coordinator', async () => {
+    const { runtime, qualifiedApi } = await coordinatorFixture();
+    let finish!: () => void;
+    const read = new Promise<void>((resolve) => { finish = resolve; });
+    let started!: () => void;
+    const reading = new Promise<void>((resolve) => { started = resolve; });
+    qualifiedApi.listAccounts.mockImplementationOnce(async () => {
+      started();
+      await read;
+      return { service: openAiService, accounts: [testQualifiedProfile()] };
+    });
+    const controller = new AbortController();
+    const cancelled = runtime.listCoordinatorAccounts(controller.signal);
+    const active = runtime.listCoordinatorAccounts();
+    await reading;
+    try {
+      expect(qualifiedApi.listAccounts).toHaveBeenCalledTimes(1);
+      controller.abort(new Error('coordinator stopped'));
+      await expect(cancelled).rejects.toThrow('coordinator stopped');
+    } finally {
+      finish();
+      await Promise.allSettled([cancelled, active]);
+    }
+    expect(await active).toEqual([testQualifiedProfile()]);
+    expect(qualifiedApi.listAccounts).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads fresh when the Account changes observer becomes unavailable', async () => {
+    const { runtime, qualifiedApi, setObserved } = await coordinatorFixture();
+    await runtime.listCoordinatorAccounts();
+    qualifiedApi.listAccounts.mockResolvedValue({ service: openAiService, accounts: [] });
+    setObserved(false);
+    expect(await runtime.listCoordinatorAccounts()).toEqual([]);
+    expect(qualifiedApi.listAccounts).toHaveBeenCalledTimes(2);
+  });
+
   it('refuses custodian native login for an isolated requester before invoking the OS credential owner', async () => {
     const runGhCommand = vi.fn(async () => ({ ok: true as const, stdout: 'alice-token', stderr: '', exitCode: 0 }));
     const runtime = createDaemonConnectedAccountPurposeBindingRuntime({
@@ -835,7 +963,7 @@ describe('createDaemonConnectedAccountPurposeBindingRuntime', () => {
       },
       exactPurposeBindingSubjectId: launchLease.subjectId,
       signal: new AbortController().signal,
-    })).resolves.toEqual({ OPENAI_API_KEY: 'sk-team-direct' });
+    })).resolves.toEqual({ env: { OPENAI_API_KEY: 'sk-team-direct' }, unsetEnvKeys: [] });
     expect(opened[0]).toEqual({
       consumer: { kind: 'session', sessionId: 'session-committed-before-launch' },
       resourceId: 'resource-1',

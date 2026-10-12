@@ -117,6 +117,26 @@ const authorized = {
 } as const;
 
 describe('ConnectedAccountPurposeBindingOwner', () => {
+  it('reads and updates a stored purpose catalog with retired nested fields', async () => {
+    const store = memoryStore();
+    await store.update(() => ({ v: 1, retiredCatalogField: true, bindings: [{
+      retiredBindingField: true,
+      purpose: { ...purpose, retiredPurposeField: true,
+        consumer: { ...purpose.consumer, retiredConsumerField: true } },
+      target: { kind: 'account', retiredTargetField: true,
+        account: { service: { ...service, retiredServiceField: true }, accountId: 'saved' } },
+    }] }));
+    const { owner } = createOwner({ store });
+    const signal = new AbortController().signal;
+    await expect(owner.materialize({ ...authorized, signal,
+      request: { kind: 'environment', keys: ['TOKEN'] },
+    })).resolves.toEqual({ kind: 'environment', env: { TOKEN: 'token:saved' } });
+    await owner.requestSelection({ ...authorized, reason: 'explicit', signal });
+    expect(store.current()).toEqual({ v: 1, bindings: [{ purpose, target: {
+      kind: 'account', account: { service, accountId: 'fixed' },
+    } }] });
+  });
+
   it('materializes an unbound native service without persisting credentials and keeps explicit accounts authoritative', async () => {
     const materializeNative = vi.fn(async () => ({ kind: 'httpHeaders' as const, headers: { authorization: 'Bearer native-secret' } }));
     const { owner, store } = createOwner({

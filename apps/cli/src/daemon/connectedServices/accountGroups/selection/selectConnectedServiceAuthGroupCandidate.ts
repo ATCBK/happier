@@ -381,10 +381,10 @@ function isQuotaExhausted(snapshot: ConnectedServiceAuthGroupQuotaSnapshot): boo
 /** A reset is a quota remedy, not a fallback for every reason a pool cannot select. */
 export function resolveConnectedServiceAuthGroupQuotaResetCandidates(
   params: Parameters<typeof selectConnectedServiceAuthGroupCandidate>[0],
-): ReadonlyArray<ConnectedServiceAuthGroupMember> {
+): ReadonlyArray<ConnectedServiceAuthGroupMember & Readonly<{ providerLimitIds: ReadonlyArray<string> }>> {
   const selection = selectConnectedServiceAuthGroupCandidate({ ...params, allowCurrentProfileRetry: true });
   if (selection.selected || selection.reason === 'manual_strategy') return [];
-  const resettable = new Set<string>();
+  const resettable = new Map<string, ReadonlyArray<string>>();
   for (const excluded of selection.excluded) {
     if (excluded.reason === 'disabled' || excluded.reason === 'auth_invalid' || excluded.reason === 'plan_unavailable') continue;
     if (excluded.reason !== 'quota_exhausted') return [];
@@ -396,9 +396,14 @@ export function resolveConnectedServiceAuthGroupQuotaResetCandidates(
     // Banked usage resets cannot repair request-rate or capacity throttling.
     if (!(snapshot.meters ?? []).some((meter) => isQuotaMeter(meter) && meterIsExhausted(meter))) return [];
     if ((snapshot.meters ?? []).some((meter) => isRateLimitMeter(meter) && meterIsExhausted(meter))) return [];
-    resettable.add(excluded.profileId);
+    resettable.set(excluded.profileId, [...new Set((snapshot.meters ?? [])
+      .filter((meter) => isQuotaMeter(meter) && meterIsExhausted(meter))
+      .map((meter) => meter.providerLimitId?.trim())
+      .filter((id): id is string => Boolean(id)))]);
   }
-  return params.members.filter((member) => resettable.has(member.profileId)).sort(comparePriority);
+  return params.members.filter((member) => resettable.has(member.profileId)).sort(comparePriority).map((member) => ({
+    ...member, providerLimitIds: resettable.get(member.profileId) ?? [],
+  }));
 }
 
 function resolveQuotaSnapshotExhaustionRetryAtMs(

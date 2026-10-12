@@ -166,6 +166,18 @@ describe('createDaemonQualifiedConnectedAccountAuthGroupSwitchCoordinator', () =
         expect(result.selection.decisionTrace.sticky).toBe(true);
         expect(currentGroup.activeConnectedAccountId).toBe('primary');
         expect(currentGroup.generation).toBe(7);
+        const priority = await coordinator.readSelection({ serviceId: service, groupId: 'fallbacks',
+            hypothetical: { strategy: 'priority' } });
+        expect(priority.selection.decisionTrace.orderedEligibleCandidates.map(candidate => candidate.profileId)).toEqual(['primary', 'backup']);
+        expect(priority.hypothetical).toEqual({ strategy: 'priority', atMs: 1_000 });
+        const future = await coordinator.readSelection({ serviceId: service, groupId: 'fallbacks',
+            hypothetical: { atMs: 100_001 } });
+        expect(future.observedAtMs).toBe(1_000);
+        expect(future.hypothetical).toEqual({ strategy: currentGroup.policy.strategy, atMs: 100_001 });
+        expect(future.selection.decisionTrace.candidates.every(candidate => candidate.quotaEvidence.status === 'stale_or_missing')).toBe(true);
+        expect(future.selection.decisionTrace.orderedEligibleCandidates.every(candidate => candidate.leastLimitedScore === null)).toBe(true);
+        expect(await coordinator.readSelection({ serviceId: service, groupId: 'fallbacks' })).toEqual(result);
+        expect(currentGroup.generation).toBe(7);
     });
 
     it('refuses a selection read when captured requester authority retires during hydration', async () => {

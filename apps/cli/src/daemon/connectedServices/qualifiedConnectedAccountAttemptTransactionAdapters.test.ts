@@ -14,6 +14,8 @@ import type {
   ConnectedAccountOAuthTransactionSnapshot,
 } from '@/plugins/runtime/connectedAccounts/authenticationAttemptOwner';
 import type { PluginSourceCustody } from '@/plugins/runtime/sourceAuthority';
+import { loadBundledPluginLocators } from '@/plugins/projection/registry/builtIn/locators';
+import { BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS } from '@/plugins/projection/registry/sources/generatedBundledPluginManifests';
 
 import {
   createQualifiedConnectedAccountAttemptTransactionAdapters,
@@ -212,6 +214,93 @@ function preparedDeviceSettlement(
 }
 
 describe('qualified Connected Account attempt transaction adapters', () => {
+  it('seals host-discovered configuration before the redirect and refuses changes after publication', async () => {
+    const api = createTransactionApi();
+    const owner = createQualifiedConnectedAccountAttemptTransactionAdapters({ credentials: credentials(7), ...e2eeAccount, api });
+    const snapshot = { ...oauthSnapshot(), service: { pluginId: 'happier', localId: 'mcp-sign-in' }, sourceCustody: { kind: 'host' as const } };
+    const handle = await owner.oauth.create({ attemptId: snapshot.attemptId, service: snapshot.service, snapshot,
+      callbackUrl: 'https://app.happier.dev/oauth/mcp/callback' });
+    expect(handle.expiresAtMs).toBe(api.records.get('oauth:oauth-attempt')!.expiresAtMs);
+    const discovered = { ...snapshot, phase: 'awaitingOAuth' as const, stagedAccountConfigurationContent: {
+      values: { resource: 'https://mcp.example/mcp', issuer: 'https://issuer.example' }, secretValues: { clientSecret: 'secret-client' },
+    } };
+    await handle.acknowledge!(discovered);
+    expect(storedContentJson(api.records.get('oauth:oauth-attempt'))).not.toContain('secret-client');
+    expect((await owner.oauth.read!(snapshot.attemptId))?.snapshot).toEqual(discovered);
+    await expect(handle.acknowledge!({ ...discovered, stagedAccountConfigurationContent: { values: { resource: 'https://other.example' } } }))
+      .rejects.toThrow();
+    await handle.close();
+  });
+  it('routes by the attempt prefix but rejects a different whole state after restart', async () => {
+    const api = createTransactionApi();
+    const params = { credentials: tokenOnlyCredentials(), ...plainAccount, api };
+    const adapters = createQualifiedConnectedAccountAttemptTransactionAdapters(params);
+    const snapshot = oauthSnapshot();
+    const handle = await adapters.oauth.create({ attemptId: snapshot.attemptId, service, snapshot,
+      callbackUrl: 'https://app.happier.dev/oauth/mcp/callback' });
+    expect(handle.request.state).toMatch(/^oauth-attempt\.[A-Za-z0-9_-]{43}$/);
+    const restored = await createQualifiedConnectedAccountAttemptTransactionAdapters(params).oauth.read!(snapshot.attemptId);
+    expect(restored).not.toBeNull();
+    await expect(restored!.acceptCompletion({ code: 'code', callbackUrl: handle.request.callbackUrl,
+      state: `${snapshot.attemptId}.${'a'.repeat(43)}` })).rejects.toThrow();
+    await expect(restored!.acceptCompletion({ code: 'code', callbackUrl: handle.request.callbackUrl,
+      state: handle.request.state })).resolves.toMatchObject({ code: 'code', state: handle.request.state });
+    await restored!.close();
+  });
+  it('uses the callback declared by the admitted Codex descriptor for its OAuth attempt', async () => {
+    const locator = BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.find((candidate) => candidate.pluginId === 'happier.agent.codex');
+    if (!locator) throw new Error('Missing bundled Codex locator');
+    const [plugin] = loadBundledPluginLocators([locator]);
+    const descriptor = plugin?.manifest.contributes?.connectedAccountDescriptors?.find((candidate) => candidate.id === 'openai-codex');
+    const mode = descriptor?.authentication?.modes.find((candidate) => candidate.kind === 'oauthAuthorizationCode');
+    if (!descriptor || mode?.kind !== 'oauthAuthorizationCode' || !mode.callbackUrl) {
+      throw new Error('Missing admitted Codex callback declaration');
+    }
+    const api = createTransactionApi();
+    const owner = createQualifiedConnectedAccountAttemptTransactionAdapters({
+      credentials: tokenOnlyCredentials(), ...plainAccount, api, now: () => 5_000,
+    });
+    const snapshot = {
+      ...oauthSnapshot(),
+      service: { pluginId: locator.pluginId, localId: descriptor.id },
+      modeId: mode.id,
+    };
+    const transaction = await owner.oauth.create({
+      attemptId: snapshot.attemptId, service: snapshot.service, snapshot, callbackUrl: mode.callbackUrl,
+    });
+    expect(transaction.request.callbackUrl).toBe(mode.callbackUrl);
+    expect((await owner.oauth.read!(snapshot.attemptId))?.request.callbackUrl).toBe(mode.callbackUrl);
+  });
+
+  it.each(['oauth', 'device'] as const)('restores %s stored attempts with retired fields while keeping fresh snapshots strict', async kind => {
+    const api = createTransactionApi();
+    const owner = createQualifiedConnectedAccountAttemptTransactionAdapters({
+      credentials: tokenOnlyCredentials(), ...plainAccount, api, now: () => 5_000,
+    });
+    const initial = kind === 'oauth' ? oauthSnapshot() : deviceSnapshot();
+    if (kind === 'oauth') await owner.oauth!.create({
+      attemptId: initial.attemptId, service, snapshot: oauthSnapshot(),
+      callbackUrl: 'https://provider.example/oauth/callback',
+    });
+    else await owner.device!.acknowledge(deviceSnapshot());
+    const key = transactionKey(kind, initial.attemptId);
+    const record = api.records.get(key)!;
+    if (record.content.t !== 'plain') throw new Error('Expected a plain stored attempt');
+    const payload = record.content.v;
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('Expected stored payload');
+    api.records.set(key, { ...record, content: { ...record.content, v: {
+      ...payload, retiredPayloadField: true,
+      snapshot: { ...initial, retiredSnapshotField: true,
+        service: { ...initial.service, retiredServiceField: true },
+        sourceCustody: { ...initial.sourceCustody, retiredCustodyField: true } },
+    } } });
+    if (kind === 'oauth') await expect(owner.oauth!.read(initial.attemptId)).resolves.toMatchObject({ snapshot: initial });
+    else await expect(owner.device!.read(initial.attemptId)).resolves.toEqual(initial);
+    const freshWithUnknown = { ...deviceSnapshot(), retiredSnapshotField: true };
+    await expect(owner.device!.acknowledge(freshWithUnknown))
+      .rejects.toMatchObject({ name: 'ZodError' });
+  });
+
   it.each([
     ['device policy', { directExportContract: null }],
     ['direct-export policy', { directExportContract: CONNECTED_ACCOUNT_DIRECT_EXPORT_CONTRACT_V1 }],
@@ -272,6 +361,7 @@ describe('qualified Connected Account attempt transaction adapters', () => {
     const starting = oauthSnapshot();
     const handle = await owner.oauth.create({
       attemptId: starting.attemptId, service: starting.service, snapshot: starting,
+      callbackUrl: 'https://provider.example/oauth/callback',
     });
     expect(await owner.listPending(service)).toEqual([]);
     const authorizationUrl = 'https://provider.example/authorize?state=secret-state';
@@ -332,6 +422,13 @@ describe('qualified Connected Account attempt transaction adapters', () => {
     expect(restored?.snapshot).toEqual(initial);
     expect(restored?.request).toEqual(original.request);
 
+    const discovered = { ...initial, phase: 'awaitingOAuth' as const,
+      issuer: 'https://issuer.example', issuerResponseParameterRequired: true };
+    await restored!.acknowledge!(discovered);
+    const issuerRestored = await afterRestart.oauth!.read!(initial.attemptId);
+    expect(issuerRestored?.snapshot).toMatchObject({ issuer: discovered.issuer, issuerResponseParameterRequired: true });
+    await expect(restored!.acknowledge!({ ...discovered, issuer: 'https://other.example' })).rejects.toThrow();
+
     await expect(restored!.acknowledge!({
       ...initial,
       phase: 'awaitingOAuth',
@@ -355,7 +452,7 @@ describe('qualified Connected Account attempt transaction adapters', () => {
     });
 
     await restored!.acknowledge!({
-      ...initial,
+      ...discovered,
       phase: 'outcomeUnknown',
     });
     const consumed = api.records.get('oauth:oauth-attempt');
@@ -477,6 +574,7 @@ describe('qualified Connected Account attempt transaction adapters', () => {
       attemptId: oauthInitial.attemptId,
       service: oauthInitial.service,
       snapshot: oauthInitial,
+      callbackUrl: 'https://provider.example/oauth/callback',
     });
     expect(api.records.get('oauth:oauth-attempt')?.content.t).toBe('plain');
     await expect(afterRestart.oauth!.read!(oauthInitial.attemptId))
@@ -611,7 +709,7 @@ describe('qualified Connected Account attempt transaction adapters', () => {
     )).rejects.toThrow();
   });
 
-  it('strictly rejects occurrence and retired generation fields in V2 payloads', async () => {
+  it('drops stored occurrence and retired generation fields while preserving canonical source custody', async () => {
     const api = createTransactionApi();
     const snapshot = deviceSnapshot();
     api.records.set('device:device-attempt', Object.freeze({
@@ -637,7 +735,7 @@ describe('qualified Connected Account attempt transaction adapters', () => {
       now: () => 5_000,
     });
 
-    await expect(adapters.device!.read(snapshot.attemptId)).rejects.toThrow();
+    await expect(adapters.device!.read(snapshot.attemptId)).resolves.toEqual(snapshot);
   });
 
   it('rejects the obsolete V1 generation-shaped payload instead of fabricating source custody', async () => {

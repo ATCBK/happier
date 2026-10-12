@@ -9,11 +9,14 @@ import type {
 } from '@happier-dev/plugin-sdk';
 import { QualifiedConnectedAccountPurposeBindingV1Schema, QualifiedConnectedAccountPurposeBindingTargetV1Schema, qualifiedPurposeKey } from '@happier-dev/protocol/connect/connected-account-purpose-bindings';
 import { ConnectedPurposeCatalogV1Schema } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { QualifiedConnectedAccountPurposeV1Schema } from '@happier-dev/protocol/connect/connectedAccountPurposeIdentity';
 import { QualifiedConnectedAccountRequestAuthUseV1Schema } from '@happier-dev/protocol/connect/connected-account-request-auth';
 import { ConnectedServiceCredentialRevisionV1Schema } from '@happier-dev/protocol/connect/connected-service-schemas';
 import { PluginContributionIdentityV1Schema } from '@happier-dev/protocol/plugins/contribution-identity';
-import { sameQualifiedConnectedAccountRef } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
+import { ConnectedAccountServiceIdentityV1Schema, HOST_CONNECTED_ACCOUNT_SERVICE_REF_V1, sameQualifiedConnectedAccountRef } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
+import { canonicalMcpOAuthResourceUrlV1 } from '@happier-dev/protocol/mcp/oauth/mcpOAuthResourceV1';
+import { MCP_REQUEST_AUTH_PURPOSE } from '@/mcp/runtime/mcpRequestAuth';
 import type { PluginContributionIdentityV1, ConnectedServiceCredentialRevisionV1, QualifiedConnectedAccountPurposeBindingsV1, QualifiedConnectedAccountPurposeBindingV1, QualifiedConnectedAccountPurposeBindingTargetV1, QualifiedConnectedAccountPurposeTeamResourceSelectionV1, QualifiedConnectedAccountPurposeV1, QualifiedConnectedAccountRequestAuthUseV1, QualifiedConnectedAccountRef, TeamResourceConnectedServiceSelectionV2 } from '@happier-dev/protocol';
 
 import { readStoredCredentials, type StoredCredentials } from '@/persistence';
@@ -164,6 +167,14 @@ export type ConnectedAccountPurposeAuthorizationScope = Readonly<{
 }>;
 
 export type ConnectedAccountPurposeBindingSubject =
+  | Readonly<{
+      /** Host-private issuance only, after authenticated Session resource admission. */
+      kind: 'mcp_request_auth';
+      operationId: string;
+      serverId: string;
+      resource: string;
+      isCurrent(): boolean;
+    }>
   | Readonly<{
       kind: 'session';
       sessionId: string;
@@ -323,6 +334,7 @@ export function scopeConnectedAccountPurposeBindingLease(input: Readonly<{
   uses: readonly QualifiedConnectedAccountRequestAuthUseV1[];
   /** Exact Session captured by the host issuer, not an encoded diagnostic id. */
   parentSessionId?: string;
+  validateCurrent?: ConnectedAccountRequestAuthSubject['validateCurrent'];
   registerRedaction: ConnectedAccountRequestAuthSubject['registerRedaction'];
   /**
    * Host-issued certificate for the catalog-Agent-only legacy service-keyed adapter.
@@ -366,6 +378,7 @@ export function scopeConnectedAccountPurposeBindingLease(input: Readonly<{
   return Object.freeze({
     subjectId,
     ...(input.parentSessionId ? { parentSessionId: input.parentSessionId } : {}),
+    ...(input.validateCurrent ? { validateCurrent: input.validateCurrent } : {}),
     ...(input.legacyServiceKeyedCompatibility === true
       ? { legacyServiceKeyedCompatibility: true as const }
       : {}),
@@ -583,7 +596,9 @@ function isAccountSettingsBoundaryUnavailable(error: unknown): error is PluginEr
 function assertTargetAuthorized(
   target: QualifiedConnectedAccountPurposeBindingTargetV1,
   serviceRefs: readonly PluginContributionRef[],
+  hostMcpRequestAuth = false,
 ): void {
+  if (contributionKey(targetService(target)) === contributionKey(HOST_CONNECTED_ACCOUNT_SERVICE_REF_V1) && !hostMcpRequestAuth) throw bindingOutOfScope();
   const selectedServiceKey = contributionKey(targetService(target));
   if (!serviceRefs.some((service) => contributionKey(service) === selectedServiceKey)) {
     throw bindingOutOfScope();
@@ -595,7 +610,7 @@ function replacePurposeBinding(
   purpose: QualifiedConnectedAccountPurposeV1,
   target: QualifiedConnectedAccountPurposeBindingTargetV1 | null,
 ): QualifiedConnectedAccountPurposeBindingsV1 {
-  const collection = ConnectedPurposeCatalogV1Schema.parse(collectionLike);
+  const collection = createStoredReadSchema(ConnectedPurposeCatalogV1Schema).parse(collectionLike);
   const key = qualifiedPurposeKey(purpose);
   // Agent Team resource defaults share this document. They are kept, except
   // that an explicit personal choice for the same purpose replaces its Team
@@ -618,7 +633,7 @@ function readPurposeTeamResourceSelection(
   purpose: QualifiedConnectedAccountPurposeV1,
 ): QualifiedConnectedAccountPurposeTeamResourceSelectionV1 | null {
   const key = qualifiedPurposeKey(purpose);
-  return ConnectedPurposeCatalogV1Schema.parse(collectionLike)
+  return createStoredReadSchema(ConnectedPurposeCatalogV1Schema).parse(collectionLike)
     .teamResourceSelections
     ?.find((entry) => qualifiedPurposeKey(entry.purpose) === key) ?? null;
 }
@@ -628,7 +643,7 @@ function readPurposeBinding(
   purpose: QualifiedConnectedAccountPurposeV1,
 ): QualifiedConnectedAccountPurposeBindingTargetV1 | null {
   const key = qualifiedPurposeKey(purpose);
-  return ConnectedPurposeCatalogV1Schema.parse(collectionLike)
+  return createStoredReadSchema(ConnectedPurposeCatalogV1Schema).parse(collectionLike)
     .bindings
     .find((binding) => qualifiedPurposeKey(binding.purpose) === key)
     ?.target ?? null;
@@ -719,6 +734,7 @@ export function createConnectedAccountPurposeBindingOwner(
     coveredPurposeKeys: ReadonlySet<string>;
     bindingByPurposeKey: ReadonlyMap<string, QualifiedConnectedAccountPurposeBindingV1>;
     bindings: readonly QualifiedConnectedAccountPurposeBindingV1[];
+    hostMcpRequestAuth?: Readonly<{ serverId: string; resource: string }>;
     credentialConfigurations?: readonly Readonly<{ account: QualifiedConnectedAccountRef; revision: string | null }>[];
     directMaterialOriginByPurposeKey: ReadonlyMap<string, ActiveConnectedAccountTeamDirectMaterialOrigin>;
   }>;
@@ -828,6 +844,14 @@ export function createConnectedAccountPurposeBindingOwner(
   ] = (input) => {
     const subject = input.subject;
     const normalized = (() => {
+      if (subject.kind === 'mcp_request_auth') {
+        const operationId = subject.operationId.trim();
+        if (!operationId || !subject.serverId.trim()) throw bindingOutOfScope();
+        canonicalMcpOAuthResourceUrlV1(subject.resource);
+        return { subjectKey: JSON.stringify(['mcp_request_auth', operationId]), subjectId: `mcp-request-auth:${operationId}`,
+          isSubjectCurrent: subject.isCurrent, sessionId: null, errorPrefix: 'connected_account_mcp_request_auth_binding',
+          expectedConsumer: MCP_REQUEST_AUTH_PURPOSE.consumer, directMaterialConsumer: null };
+      }
       if (subject.kind === 'session') {
         const sessionId = subject.sessionId.trim();
         if (!sessionId) {
@@ -979,6 +1003,10 @@ export function createConnectedAccountPurposeBindingOwner(
     const bindingByPurposeKey =
       new Map<string, QualifiedConnectedAccountPurposeBindingV1>();
     for (const binding of parsedBindings) {
+      const hostTarget = contributionKey(targetService(binding.target)) === contributionKey(HOST_CONNECTED_ACCOUNT_SERVICE_REF_V1);
+      if (hostTarget && (subject.kind !== 'mcp_request_auth' || binding.target.kind !== 'account'
+        || binding.target.account.accountId !== subject.serverId || qualifiedPurposeKey(binding.purpose) !== qualifiedPurposeKey(MCP_REQUEST_AUTH_PURPOSE))) throw bindingOutOfScope();
+      if (subject.kind === 'mcp_request_auth' && !hostTarget) throw bindingOutOfScope();
       const key = qualifiedPurposeKey(binding.purpose);
       if (!coveredPurposeKeys.has(key)) {
         throw new Error(`${normalized.errorPrefix}_undeclared_purpose`);
@@ -1033,6 +1061,8 @@ export function createConnectedAccountPurposeBindingOwner(
       coveredPurposeKeys,
       bindingByPurposeKey,
       bindings: Object.freeze(parsedBindings),
+      ...(subject.kind === 'mcp_request_auth' ? { hostMcpRequestAuth: Object.freeze({ serverId: subject.serverId,
+        resource: canonicalMcpOAuthResourceUrlV1(subject.resource) }) } : {}),
       ...(subject.kind === 'managed_provider_operation' && subject.credentialConfigurations
         ? { credentialConfigurations: Object.freeze(subject.credentialConfigurations.map(configuration => Object.freeze({
             account: Object.freeze({ service: Object.freeze({ ...configuration.account.service }), accountId: configuration.account.accountId }),
@@ -1116,7 +1146,8 @@ export function createConnectedAccountPurposeBindingOwner(
       const target = sessionBinding.binding?.target ?? null;
       if (!target) return null;
       try {
-        assertTargetAuthorized(target, input.serviceRefs);
+        assertTargetAuthorized(target, input.serviceRefs, Boolean(input.exactPurposeBindingSubjectId
+          && purposeBindingsBySubjectId.get(input.exactPurposeBindingSubjectId)?.hostMcpRequestAuth));
       } catch {
         return null;
       }
@@ -1210,7 +1241,7 @@ export function createConnectedAccountPurposeBindingOwner(
         );
       }
       const serviceRefs = Object.freeze(scopeLike.serviceRefs.map((service) => (
-        Object.freeze(PluginContributionIdentityV1Schema.parse(service))
+        Object.freeze(ConnectedAccountServiceIdentityV1Schema.parse(service))
       )));
       scopeByPurposeKey.set(key, Object.freeze({ purpose, serviceRefs }));
     }
@@ -1275,9 +1306,13 @@ export function createConnectedAccountPurposeBindingOwner(
   const materialize = async (
     input: Parameters<StablePluginConnectedAccountsOwner['materialize']>[0],
   ): Promise<PluginConnectedAccountMaterialization> => {
+    if (input.serviceRefs.some(service => contributionKey(service) === contributionKey(HOST_CONNECTED_ACCOUNT_SERVICE_REF_V1))) {
+      const basis = input.exactPurposeBindingSubjectId ? purposeBindingsBySubjectId.get(input.exactPurposeBindingSubjectId)?.hostMcpRequestAuth : null;
+      if (!basis || input.request.kind !== 'httpHeaders' || input.request.origin !== new URL(basis.resource).origin) throw bindingOutOfScope();
+    }
     if (input.nativeService && (input.expectedAccount || input.credentialRevisionBasis)) throw bindingOutOfScope();
     const nativeService = input.nativeService
-      ? PluginContributionIdentityV1Schema.safeParse(input.nativeService)
+      ? ConnectedAccountServiceIdentityV1Schema.safeParse(input.nativeService)
       : null;
     if (nativeService && (!nativeService.success || !input.serviceRefs.some((ref) => (
       contributionKey(ref) === contributionKey(nativeService.data)
@@ -1748,7 +1783,7 @@ export function createConnectedAccountPurposeBindingOwner(
           input.signal.throwIfAborted();
           try {
             await dependencies.store.update((currentLike) => {
-              const current = ConnectedPurposeCatalogV1Schema.parse(currentLike);
+              const current = createStoredReadSchema(ConnectedPurposeCatalogV1Schema).parse(currentLike);
               return ConnectedPurposeCatalogV1Schema.parse({
                 ...current,
                 bindings: current.bindings.filter((binding) => {

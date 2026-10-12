@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -6,11 +6,44 @@ import { describe, expect, it } from 'vitest';
 
 import {
   readConnectedServiceStateSharingManifest,
+  hasLocalConnectedServiceResumeState,
   removeConnectedServiceStateSharingManifestEntries,
   writeConnectedServiceStateSharingManifest,
 } from './connectedServiceStateSharingManifest';
 
 describe('connectedServiceStateSharingManifest', () => {
+  it('refuses a retention decision when the state manifest cannot be read or parsed', async () => {
+    const destination = await mkdtemp(join(tmpdir(), 'happier-state-sharing-unreadable-'));
+    try {
+      const manifest = join(destination, '.happier-state-sharing.json');
+      await writeFile(manifest, '{');
+      await expect(hasLocalConnectedServiceResumeState(destination)).rejects.toThrow();
+      await writeFile(manifest, '{"v":2}');
+      await expect(hasLocalConnectedServiceResumeState(destination)).rejects.toThrow();
+      await writeFile(manifest, '{"v":1,"stateEntries":"invalid"}');
+      await expect(hasLocalConnectedServiceResumeState(destination)).rejects.toThrow();
+      await rm(manifest);
+      await mkdir(manifest);
+      await expect(hasLocalConnectedServiceResumeState(destination)).rejects.toThrow();
+    } finally {
+      await rm(destination, { recursive: true, force: true });
+    }
+  });
+
+  it('retains archived native state in predecessor homes without a resume inventory', async () => {
+    const destination = await mkdtemp(join(tmpdir(), 'happier-state-sharing-predecessor-'));
+    try {
+      await writeFile(join(destination, '.happier-state-sharing.json'), JSON.stringify({
+        v: 1, stateEntries: [],
+      }));
+      await mkdir(join(destination, 'archived_sessions'));
+      await writeFile(join(destination, 'archived_sessions', 'rollout.jsonl'), 'native resume state');
+      await expect(hasLocalConnectedServiceResumeState(destination)).resolves.toBe(true);
+    } finally {
+      await rm(destination, { recursive: true, force: true });
+    }
+  });
+
   it('backfills manifest defaults for backward-compatible shape reads', async () => {
     const destination = await mkdtemp(join(tmpdir(), 'happier-state-sharing-manifest-'));
     try {

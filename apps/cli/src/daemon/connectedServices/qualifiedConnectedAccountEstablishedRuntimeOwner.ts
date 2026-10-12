@@ -6,7 +6,8 @@ import { computeCanonicalDomainSeparatedDigest } from '@happier-dev/protocol/cry
 import { QualifiedConnectedAccountCredentialPayloadV1Schema, openQualifiedConnectedAccountContentEnvelope, sealQualifiedConnectedAccountContentEnvelope } from '@happier-dev/protocol/connect/qualifiedConnectedAccountContentEnvelope';
 import { QualifiedConnectedAccountCredentialSnapshotV4Schema } from '@happier-dev/protocol/connect/qualified-connected-account-projections';
 import { parseQualifiedConnectedAccountCredentialPlaintextV1, projectQualifiedConnectedAccountCredentialPlaintextV1 } from '@happier-dev/protocol/connect/legacyConnectedServiceCompatibility';
-import { sameQualifiedConnectedAccountRef } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
+import { HOST_CONNECTED_ACCOUNT_SERVICE_REF_V1, sameQualifiedConnectedAccountRef } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
+import type { RequestAuthFailureOutcomeV1 } from '@happier-dev/protocol/connect/connected-account-request-auth';
 import type { AccountScopedCryptoMaterial, ConnectedServiceCredentialRevisionV1, JsonValue, PluginConnectedAccountAuthenticationModeV2, QualifiedConnectedAccountCredentialPayloadV1, QualifiedConnectedAccountConfigurationSnapshotV4, QualifiedConnectedAccountRef } from '@happier-dev/protocol';
 import type {
   ConnectedAccountRuntimeConfiguration as PluginConnectedAccountRuntimeConfiguration,
@@ -41,7 +42,7 @@ import type {
   ConnectedAccountRuntimeEstablishedResult,
 } from '@/plugins/runtime/connectedAccounts/runtimeInvoker';
 import type { PluginReloadController } from '@/plugins/runtime/reload/controller';
-import type { PluginSourceCustody } from '@/plugins/runtime/sourceAuthority';
+import type { ConnectedAccountSourceCustodyV1 } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
 import type { TeamCredentialDirectMaterialPayloadV1 } from '@happier-dev/protocol/teams';
 
 import type { ConnectedAccountDaemonPersistence } from './ConnectedAccountDaemonRuntime';
@@ -81,6 +82,13 @@ export type QualifiedConnectedAccountMaterialSnapshot = Readonly<{
 }>;
 
 export type QualifiedConnectedAccountEstablishedRuntimeOwner = Readonly<{
+  /** MCP challenges update the grant's configuration through its incumbent CAS owner, never its tokens. */
+  recordScopeChallenge(input: Readonly<{
+    account: QualifiedConnectedAccountRef;
+    expectedCredentialRevision: ConnectedServiceCredentialRevisionV1;
+    requiredScopes: readonly string[];
+    signal?: AbortSignal;
+  }>): Promise<RequestAuthFailureOutcomeV1>;
   /** Account-scoped connection identity, independent of renewable bearer material. */
   readCredentialConfigurationRevision(input: Readonly<{
     account: QualifiedConnectedAccountRef;
@@ -168,7 +176,7 @@ export type QualifiedConnectedAccountEstablishedInvocationBasis = Readonly<{
   credentialConfigurationRevision: string | null;
   runtimeConfigurationRevision: string;
   occurrenceId: string;
-  sourceCustody: PluginSourceCustody;
+  sourceCustody: ConnectedAccountSourceCustodyV1;
   isCurrent(): boolean;
   prepareCredentialReplacement(
     mutation: QualifiedConnectedAccountCredentialMutationPreparationInput,
@@ -538,7 +546,7 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
     const registryLease = await params.reloadController.acquireRuntimeRegistry();
     let contributionContractVersion: string;
     let mode: PluginConnectedAccountAuthenticationModeV2;
-    let sourceCustody: PluginSourceCustody;
+    let sourceCustody: ConnectedAccountSourceCustodyV1;
     let isContributionCurrent: () => boolean;
     try {
       const contribution = registryLease.registry.connectedAccountContributions?.describe(input.account.service);
@@ -1236,7 +1244,49 @@ export function createQualifiedConnectedAccountEstablishedRuntimeOwner(
     }
   }
 
+  async function recordScopeChallenge(
+    input: Parameters<QualifiedConnectedAccountEstablishedRuntimeOwner['recordScopeChallenge']>[0],
+  ): Promise<RequestAuthFailureOutcomeV1> {
+    assertNotAborted(input.signal);
+    if (!sameService(input.account.service, HOST_CONNECTED_ACCOUNT_SERVICE_REF_V1)
+      || !params.configurationOwner) return { status: 'denied' };
+    const accountMode = await params.getAccountEncryptionMode(input.signal);
+    if (accountMode === 'unknown') return { status: 'denied' };
+    const snapshots = await readExactSnapshots(input.account, input.signal);
+    if (snapshots.credential.credentialRevision !== input.expectedCredentialRevision) return { status: 'stale_context' };
+    if (!snapshots.configuration) return { status: 'denied' };
+    const lease = await params.reloadController.acquireRuntimeRegistry();
+    try {
+      const contribution = lease.registry.connectedAccountContributions?.describe(input.account.service);
+      const mode = contribution?.descriptor.authentication.modes.find(candidate => candidate.id === snapshots.credential.authenticationModeId);
+      if (!contribution || contribution.sourceCustody.kind !== 'host' || !mode
+        || !contribution.isCurrent() || !params.reloadController.isRuntimeRegistryCurrent(lease.registry)) return { status: 'stale_context' };
+      const target = configurationTarget(input.account, mode);
+      if (target.kind !== 'account') return { status: 'denied' };
+      const record = parseConnectedAccountConfigurationRecordContent(openEnvelope({
+        kind: 'configuration', accountMode, credentials: params.credentials, material,
+        envelope: snapshots.configuration.configurationContent,
+      }), snapshots.configuration.configurationRevision);
+      const previous = record.values.stepUpScopes;
+      if (previous !== undefined && (!Array.isArray(previous) || previous.some(scope => typeof scope !== 'string'))) return { status: 'denied' };
+      const scopes = [...new Set([...(Array.isArray(previous) ? previous : []), ...input.requiredScopes])];
+      if (Array.isArray(previous) && scopes.length === previous.length) return { status: 'current_unchanged' };
+      assertNotAborted(input.signal);
+      // Recheck token custody immediately before the same configuration owner
+      // performs its revision comparison and persistence operation.
+      const current = await readExactSnapshots(input.account, input.signal);
+      if (current.credential.credentialRevision !== input.expectedCredentialRevision) return { status: 'stale_context' };
+      const result = await params.configurationOwner.replaceForControl({
+        target, mode, expectedRevision: record.revision,
+        values: { ...record.values, stepUpScopes: scopes }, secretValues: {},
+        occurrenceId: contribution.occurrenceId, sourceCustody: contribution.sourceCustody,
+      });
+      return { status: result.status === 'committed' ? 'current_changed' : 'denied' };
+    } finally { await lease.release(); }
+  }
+
   const owner: QualifiedConnectedAccountEstablishedRuntimeOwner = {
+    recordScopeChallenge: input => runCurrentAccountRead(() => recordScopeChallenge(input)),
     readCredentialConfigurationRevision: (input) => runCurrentAccountRead(() => readCredentialConfigurationRevision(input)),
     readCredentialRevision: (input) => runCurrentAccountRead(() => readCredentialRevision(input)),
     readMaterialSnapshot: (input) => runCurrentAccountRead(() => readMaterialSnapshot(input)),

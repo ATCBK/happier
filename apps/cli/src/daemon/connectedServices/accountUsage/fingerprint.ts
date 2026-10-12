@@ -2,6 +2,7 @@ import { createHash, createHmac, hkdfSync } from 'node:crypto';
 
 import type { ProviderAccountUsageSnapshotV1 } from '@happier-dev/protocol';
 import { serializeProviderAccountUsageSnapshotMaterialV1 } from '@happier-dev/protocol/connect/account-usage-primitives';
+import { serializeProviderAccountUsageHistoryMaterialV1 } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
 import type { StoredCredentials } from '@/persistence';
 
 export type ProviderAccountUsageFingerprintKey = Uint8Array;
@@ -56,7 +57,7 @@ export function computeProviderAccountUsageSnapshotFingerprint(
   key: ProviderAccountUsageFingerprintKey,
 ): string {
   return createHmac('sha256', toBuffer(key))
-    .update(serializeProviderAccountUsageSnapshotMaterial(snapshot), 'utf8')
+    .update(serializeProviderAccountUsageHistoryMaterialV1(snapshot), 'utf8')
     .digest('hex')
     .slice(0, 32);
 }

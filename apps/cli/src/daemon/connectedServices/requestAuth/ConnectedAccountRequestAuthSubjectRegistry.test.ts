@@ -79,6 +79,50 @@ function subject(
 }
 
 describe('ConnectedAccountRequestAuthSubjectRegistry', () => {
+    it('retires the captured purpose lease when its Session capability is closed', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happier-request-auth-lease-'));
+        roots.push(root);
+        let current = true;
+        const registry = createConnectedAccountRequestAuthSubjectRegistry();
+        const descriptor = await registry.activate({
+            subject: { ...subject(() => current), parentSessionId: 'session-one' },
+            materializedRootDir: root, materializationId: 'lease-one', httpPort: 43_123,
+            onRetire: () => { current = false; },
+        });
+        await registry.retire(descriptor);
+        expect(current).toBe(false);
+    });
+    it('routes an authenticated subject to its captured requester Session account', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happier-request-auth-requester-'));
+        roots.push(root);
+        const registry = createConnectedAccountRequestAuthSubjectRegistry();
+        let requesterCurrent = true;
+        const descriptor = await registry.activate({
+            subject: { ...subject(), parentSessionId: 'requester-session', validateCurrent: async () => requesterCurrent },
+            materializedRootDir: root,
+            materializationId: 'requester',
+            httpPort: 43_123,
+        });
+        const document = await readConnectedAccountRequestAuthCapabilityFile(descriptor.path);
+        const principal = registry.authenticate(document?.capability);
+        expect(principal).not.toBeNull();
+        const owner = createConnectedAccountRequestAuthService({
+            resolveCurrentBinding: ({ subject: current }) => ({
+                account: { service, accountId: current.parentSessionId === 'requester-session' ? 'requester' : 'machine-owner' },
+                credentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS',
+                group: { groupId: 'fallbacks', generation: 0 },
+            }),
+            materializeBearer: async ({ resolved }) => ({ accessToken: `${resolved.account.accountId}-token` }),
+            refreshAfterAuthFailure: async () => ({ status: 'current_unchanged' }),
+            reportQuotaFailure: async () => ({ status: 'current_unchanged' }),
+        });
+        const lease = await owner.lookupRequestAuth({ subject: principal!, purpose });
+        expect(lease.accessToken).toBe('requester-token');
+        expect(lease.credentialContext.account.accountId).toBe('requester');
+        requesterCurrent = false;
+        await expect(owner.lookupRequestAuth({ subject: principal!, purpose })).rejects.toMatchObject({ code: 'request_auth_not_active' });
+        await registry.retire(descriptor);
+    });
     it('preserves host-issued catalog compatibility provenance only on the authenticated private principal', async () => {
         const agentRoot = await mkdtemp(
             join(tmpdir(), 'happier-request-auth-agent-'),

@@ -8,6 +8,7 @@ import { configuration } from '@/configuration';
 import { writeJsonAtomic } from '@/utils/fs/writeJsonAtomic';
 
 import { sanitizeConnectedServiceRuntimeFailureClassification } from '../sanitizeConnectedServiceRuntimeFailureClassification';
+import { readRuntimeAuthFailureReportSourceIdentity } from '../runtimeAuthFailureReportIdentity';
 import type {
   DrainRuntimeAuthFailureReportOutboxItemResult,
   DrainRuntimeAuthFailureReportOutboxItemsResult,
@@ -72,9 +73,7 @@ function buildReportKey(input: Readonly<{
 }>): string {
   const fingerprint = {
     sessionId: input.sessionId,
-    serviceId: input.classification.serviceId,
-    profileId: input.classification.profileId,
-    groupId: input.classification.groupId,
+    ...readRuntimeAuthFailureReportSourceIdentity(input.classification),
     kind: input.classification.kind,
     limitCategory: input.classification.limitCategory ?? null,
     resetsAtMs: input.classification.resetsAtMs,
@@ -82,8 +81,6 @@ function buildReportKey(input: Readonly<{
     quotaScope: input.classification.quotaScope ?? null,
     providerLimitId: input.classification.providerLimitId ?? null,
     sourceProviderAccountId: input.classification.sourceProviderAccountId ?? null,
-    groupGeneration: input.classification.groupGeneration ?? null,
-    expectedCredentialRevision: input.classification.expectedCredentialRevision ?? null,
     action: input.classification.action ?? null,
     recoveryAction: input.classification.recoveryAction ?? null,
     connectedServiceRecovery: input.classification.connectedServiceRecovery ?? null,

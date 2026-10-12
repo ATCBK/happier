@@ -1,4 +1,6 @@
 import { isDeepStrictEqual } from 'node:util';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
+
 import { computeTeamCredentialSourceMemberKeyV1 } from '@happier-dev/protocol/teams/credentials/directMaterialV1';
 import { TeamCredentialResourcePageV1Schema } from '@happier-dev/protocol/teams/credentials/resourceV1';
 import type { TeamCredentialResourceSummaryV1, TeamCredentialSourceBindingV1, TeamCredentialSourceMemberV1, TeamCredentialDirectMaterialCensusInputV1, TeamCredentialDirectMaterialCensusOutputV1, TeamCredentialDirectMaterialReconcileInputV1, TeamCredentialDirectMaterialReconcileOutputV1 } from '@happier-dev/protocol/teams';
@@ -71,7 +73,7 @@ async function listOwnedResources(input: Readonly<{
       ...(input.signal ? { signal: input.signal } : {}),
     });
     if (isActionFailure(page)) return resources;
-    const parsedPage = TeamsPageV1Schema.safeParse(page);
+    const parsedPage = createStoredReadSchema(TeamsPageV1Schema).safeParse(page);
     if (!parsedPage.success) return resources;
     for (const team of parsedPage.data.items) {
       // The administration list is paginated and carries no custodian filter,
@@ -85,7 +87,7 @@ async function listOwnedResources(input: Readonly<{
           ...(input.signal ? { signal: input.signal } : {}),
         });
         if (isActionFailure(listed)) break;
-        const parsedListed = TeamCredentialResourcePageV1Schema.safeParse(listed);
+        const parsedListed = createStoredReadSchema(TeamCredentialResourcePageV1Schema).safeParse(listed);
         if (!parsedListed.success) break;
         resources.push(...parsedListed.data.resources.filter((resource) => (
           resource.custodianAccountId === input.accountId

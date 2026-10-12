@@ -45,7 +45,10 @@ describe('ConnectedServiceRuntimeRegistry', () => {
   it('reads only an exact applied parent pool identity, without its member or pending bootstrap selection', () => {
     const registry = new ConnectedServiceRuntimeRegistry();
     registry.registerTarget({ pid: 123, sessionId: 'parent', agentId: 'codex',
-      connectedServicesBindingsRaw: connectedBindings, connectedServiceSelectionsEnvRaw: connectedSelections });
+      connectedServicesBindingsRaw: { ...connectedBindings, retiredBindingsField: true,
+        bindingsByServiceId: Object.fromEntries(Object.entries(connectedBindings.bindingsByServiceId)
+          .map(([key, binding]) => [key, { ...binding, retiredBindingField: true }])) },
+      connectedServiceSelectionsEnvRaw: connectedSelections });
     registry.registerTarget({ pid: 123, sessionId: 'parent', agentId: 'codex',
       connectedServicesBindingsRaw: { v: 2, bindingsByServiceId: {
         'acme.accounts/session-auth': { source: 'connected', selection: 'profile', profileId: 'pending' },

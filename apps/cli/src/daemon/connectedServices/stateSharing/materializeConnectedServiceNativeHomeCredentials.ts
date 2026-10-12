@@ -1,6 +1,6 @@
 import { isAbsolute, join, relative, resolve } from 'node:path';
 
-import { writePrivateOwnerFile } from '@/daemon/privateBearerFile';
+import { writeProtectedLocalStateFileAtomic } from '@/utils/fs/protectedLocalState';
 
 function isCanonicalRelativeCredentialPath(path: string): boolean {
   return path.length > 0
@@ -44,6 +44,6 @@ export async function materializeConnectedServiceNativeHomeCredentials(input: Re
     ) {
       throw new Error('connected_service_native_home_credential_path_unsafe');
     }
-    await writePrivateOwnerFile({ path, contents });
+    await writeProtectedLocalStateFileAtomic(path, contents, { authority: 'owned' });
   }
 }

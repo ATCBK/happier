@@ -8,9 +8,16 @@ describe('resolveConnectedServiceQuotasDaemonOptions', () => {
     expect(opts.fetchTimeoutMs).toBeUndefined();
     expect(opts.discoveryEnabled).toBe(true);
     expect(opts.discoveryIntervalMs).toBe(15 * 60_000);
+    expect(opts.probeIntervalMs).toBe(60_000);
     expect(opts.failureBackoffMinMs).toBe(30_000);
     expect(opts.failureBackoffMaxMs).toBe(10 * 60_000);
     expect(opts.failureBackoffJitterPct).toBeCloseTo(0.2, 5);
+  });
+
+  it('retains the existing quota acquisition cadence independently of persistence freshness', () => {
+    expect(resolveConnectedServiceQuotasDaemonOptions({ HAPPIER_CONNECTED_SERVICES_QUOTAS_TICK_MS: '12345' }).probeIntervalMs).toBe(12_345);
+    expect(resolveConnectedServiceQuotasDaemonOptions({ HAPPIER_CONNECTED_SERVICES_QUOTAS_TICK_MS: '-1' }).probeIntervalMs).toBe(5_000);
+    expect(resolveConnectedServiceQuotasDaemonOptions({ HAPPIER_CONNECTED_SERVICES_QUOTAS_TICK_MS: '99999999' }).probeIntervalMs).toBe(30 * 60_000);
   });
 
   it('uses provided fetch timeout when valid', () => {

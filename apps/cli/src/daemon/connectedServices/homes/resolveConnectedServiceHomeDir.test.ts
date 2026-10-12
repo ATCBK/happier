@@ -8,6 +8,16 @@ import {
 } from './resolveConnectedServiceHomeDir';
 
 describe('resolveConnectedServiceHomeDir', () => {
+  it('keeps qualified service identity in native homes and reuses the released first-party namespace', () => {
+    const params = { activeServerDir: '/tmp/server', profileId: 'work', agentId: 'codex' };
+    const first = resolveConnectedServiceHomeDir({ ...params, serviceId: 'acme.first/login' });
+    const second = resolveConnectedServiceHomeDir({ ...params, serviceId: 'acme.second/login' });
+    expect(first).not.toBe(second);
+    expect(first).not.toContain(join('acme.first', 'login'));
+    expect(resolveConnectedServiceHomeDir({ ...params, serviceId: 'happier.agent.codex/openai-codex' }))
+      .toBe(resolveConnectedServiceHomeDir({ ...params, serviceId: 'openai-codex' }));
+  });
+
   it('scopes homes under the active server dir', () => {
     const dir = resolveConnectedServiceHomeDir({
       activeServerDir: join('/', 'tmp', 'happier-server'),

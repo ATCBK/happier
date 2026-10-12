@@ -1123,6 +1123,7 @@ async function materializeAndVerifyConnectedServiceAuthForSpawn(params: Readonly
   retainCleanup?: (cleanup: () => Promise<void>) => Promise<() => void>;
   agentId: CatalogAgentId;
   materializationKey: string;
+  probePurpose?: 'probe';
   activeServerDir: string;
   baseDir: string;
   sessionDirectory: string | null;
@@ -1146,6 +1147,7 @@ async function materializeAndVerifyConnectedServiceAuthForSpawn(params: Readonly
     retainCleanup: params.retainCleanup,
     agentId: params.agentId,
     materializationKey: params.materializationKey,
+    probePurpose: params.probePurpose,
     activeServerDir: params.activeServerDir,
     baseDir: params.baseDir,
     sessionDirectory: params.sessionDirectory,
@@ -1163,6 +1165,8 @@ async function materializeAndVerifyConnectedServiceAuthForSpawn(params: Readonly
     allowNativeAccountState: params.allowNativeAccountState,
     connectedAccountsOwner: params.connectedAccountsOwner,
     isAccountRuntimeCurrent: params.isAccountRuntimeCurrent,
+    runtimeDescriptorV1: params.runtimeDescriptorV1,
+    vendorResumeId: params.vendorResumeId,
   });
 
   if (!materialized) return null;
@@ -1199,6 +1203,7 @@ export async function resolveConnectedServiceAuthForSpawn(params: Readonly<{
   modelId?: string;
   connectedServicesBindingsRaw: unknown;
   materializationKey: string;
+  probePurpose?: 'probe';
   activeServerDir: string;
   baseDir: string;
   sessionDirectory?: string | null;
@@ -1247,6 +1252,7 @@ export async function resolveConnectedServiceAuthForSpawn(params: Readonly<{
   }> | Promise<Readonly<{ subjectId: string; dispose(): void | Promise<void> }>>;
 }>): Promise<Readonly<{
   env: Record<string, string>;
+  unsetEnvKeys?: readonly string[];
   cleanupOnFailure: (() => void | Promise<void>) | null;
   cleanupOnExit: (() => void | Promise<void>) | null;
   connectedServicesBindings: ConnectedServicesBindingsV2;
@@ -1385,6 +1391,7 @@ export async function resolveConnectedServiceAuthForSpawn(params: Readonly<{
         retainCleanup: params.retainCleanup,
         agentId: params.agentId,
         materializationKey: params.materializationKey,
+        probePurpose: params.probePurpose,
         activeServerDir: params.activeServerDir,
         baseDir: params.baseDir,
         sessionDirectory: params.sessionDirectory ?? null,
