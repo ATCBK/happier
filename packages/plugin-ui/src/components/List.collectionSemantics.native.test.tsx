@@ -18,6 +18,8 @@ const nativePlatform = vi.hoisted(() => ({
  */
 vi.mock('react-native', () => ({
   Platform: nativePlatform,
+  // Native rows use the static reveal slot; the web easing is only initialized.
+  Easing: { bezier: () => (t: number) => t },
   StyleSheet: { hairlineWidth: 0.5 },
   I18nManager: { isRTL: false },
   FlatList: function MountedFlatList(props: Readonly<{

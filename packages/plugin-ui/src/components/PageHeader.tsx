@@ -2,6 +2,7 @@ import type { ReactElement, ReactNode } from 'react';
 
 import { HappierPageHeader, HappierPageHeadingBindingContext } from '../presentation/layout/PageHeader.js';
 import { useHappierPageChromeInternal } from '../presentation/layout/pageChrome.js';
+import { normalizeHappierPageOperations } from '../presentation/layout/pageOperations.js';
 import { Icon, type IconName } from './Icon.js';
 import { usePluginTranslation } from './PluginUiProvider.js';
 import { resolveAuthorText } from './resolveAuthorText.js';
@@ -57,7 +58,10 @@ export function PageHeader(props: PageHeaderProps): ReactElement {
   const chrome = useHappierPageChromeInternal();
   const bridgeSurface = usePluginUiSurfaceBridge();
   // A Collection detail retains its own semantic heading and controls in the detail body.
-  const hostActions = headingRef === undefined && chrome?.showsTitle === true && chrome.renderNavigationActions !== undefined;
+  const hostActions = headingRef === undefined && chrome?.renderNavigationActions !== undefined;
+  const actions = hostActions ? chrome.renderNavigationActions?.(props.actions == null ? null : bridgeSurface(
+    chrome.showsTitle ? normalizeHappierPageOperations(props.actions, (value, key) => resolveAuthorText(translate, value, key)) : props.actions,
+  )) : props.actions;
   const title = resolveAuthorText(translate, props.title, props.titleKey) ?? props.title;
   const description = resolveAuthorText(translate, props.description, props.descriptionKey);
   const meta = props.meta?.map((fact) => ({
@@ -68,7 +72,7 @@ export function PageHeader(props: PageHeaderProps): ReactElement {
   }));
   return (
     <HappierPageHeadingBindingContext.Provider value={headingRef}>
-    {hostActions && props.actions ? chrome.renderNavigationActions?.(bridgeSurface(props.actions)) : null}
+    {hostActions && chrome.showsTitle ? actions : null}
     <HappierPageHeader
       title={title}
       titleProminence={props.titleProminence}
@@ -79,7 +83,7 @@ export function PageHeader(props: PageHeaderProps): ReactElement {
       detailsPlacement={props.detailsPlacement}
       compactPresentation={props.compactPresentation}
       meta={meta}
-      actions={hostActions ? null : props.actions}
+      actions={hostActions && chrome.showsTitle ? null : actions}
       renderBack={chrome?.renderBack ?? null}
       {...(chrome?.columnMaxWidthPx === undefined ? {} : { columnMaxWidthPx: chrome.columnMaxWidthPx })}
       {...(props.testID === undefined ? {} : { testID: props.testID })}

@@ -7,6 +7,9 @@ import { HappierUiEnvironmentProvider, HappierUiPlatformProvider } from '../../e
 import { projectHappierUiEnvironment } from '../../environment/projectEnvironment.js';
 import { View } from 'react-native';
 import { Path, Svg } from 'react-native-svg';
+import { BurnUpChart } from '@happier-dev/plugin-ui/presentation';
+import { HappierDataChart } from './Chart.js';
+import type { HappierLayoutChangeEvent } from '../portableTypes.js';
 
 // RNW selects its instant AnimatedMock in NODE_ENV=test. Exercise its actual JS animation driver.
 vi.hoisted(() => { process.env.NODE_ENV = 'development'; });
@@ -18,6 +21,238 @@ const series = [
 ];
 const find = (root: HTMLElement, id: string) => root.querySelector<HTMLElement>(`[data-testid="${id}"]`)!;
 describe('neutral series dataset', () => {
+  it('draws an observed upper edge on the area scale without stacking it onto the mean or filling it', () => {
+    const input = [
+      { id: 'mean', label: 'Mean', fillOpacity: 0.2, points: [10, 10, null, 10, 10].map((y, x) => ({ id: String(x), x, y })) },
+      { id: 'maximum', label: 'Maximum', overlay: true, lineStyle: 'dotted' as const,
+        points: [95, 95, null, 80, 80].map((y, x) => ({ id: String(x), x, y })) },
+    ];
+    const mount = mountThroughReactNativeWeb(<StackedSeriesChart theme={theme} label="CPU" series={input}
+      width={200} viewportHeight={100} plotInset={0} domain={{ min: 0, max: 100 }} variant="area" size="tile" testID="peaks" />);
+    try {
+      const edges = [...mount.container.querySelectorAll('path[stroke-dasharray]')];
+      expect(edges).toHaveLength(2);
+      expect(edges[0]!.getAttribute('d')).toMatch(/^M0 5(?:\.\d+)? L50 5/u);
+      expect(edges.every(edge => edge.getAttribute('fill') === 'none')).toBe(true);
+      expect(edges.every(edge => !edge.getAttribute('d')?.endsWith('Z'))).toBe(true);
+      expect(find(mount.container, 'peaks-bucket-0').getAttribute('aria-label')).toContain('Maximum 95');
+    } finally { mount.unmount(); }
+  });
+  it('draws declared bucket shading and a reference box without converting unknown buckets to zero', () => {
+    const input = [{ id: 'rain', label: 'Rainfall', points: [10, null, 0, 2].map((y, x) => ({ id: String(x), x, y })) }];
+    const appearance = { bucketShading: [{ bucketId: '1' }, { bucketId: '3' }],
+      barRanges: [{ bucketId: '3', lower: 2, upper: 6, label: 'Typical active day' }] };
+    const mount = mountThroughReactNativeWeb(<StackedSeriesChart theme={theme} label="Rainfall" series={input}
+      width={200} viewportHeight={100} variant="bar" size="full" testID="rain" reference={{ value: 6, label: 'Average' }} {...appearance} />);
+    try {
+      expect(find(mount.container, 'rain-shading-1')).toBeTruthy();
+      const range = find(mount.container, 'rain-range-3');
+      expect(range.style.top).toBe('40px');
+      expect(range.style.height).toBe('40px');
+      expect(find(mount.container, 'rain-gap-1')).toBeTruthy();
+      expect(mount.container.querySelector('[data-testid="rain-bar-1-0"]')).toBeNull();
+      expect(mount.container.querySelector('[data-testid="rain-gap-2"]')).toBeNull();
+      expect(find(mount.container, 'rain-bar-2-0')).toBeTruthy();
+      expect(find(mount.container, 'rain').getAttribute('aria-label')).toContain('Typical active day 2–6');
+      expect(find(mount.container, 'rain').getAttribute('aria-label')).toContain('Average 6');
+      act(() => find(mount.container, 'rain-values-toggle').click());
+      expect(find(mount.container, 'rain-values-row-1').getAttribute('aria-label')).toContain('Rainfall: —');
+      expect(find(mount.container, 'rain-values-row-2').getAttribute('aria-label')).toContain('Rainfall: 0');
+    } finally { mount.unmount(); }
+  });
+  it('lets a reference label replace a scale value it would sit on, and keeps scale values it is clear of', () => {
+    const input = [{ id: 'rain', label: 'Rainfall', points: [100, 1, 0, 2].map((y, x) => ({ id: String(x), x, y })) }];
+    const chart = (value: number) => <StackedSeriesChart theme={theme} label="Rainfall" series={input} width={240} viewportHeight={100}
+      variant="bar" size="full" testID="rain" showScaleValues scaleGutter={44} reference={{ value, label: 'avg' }} />;
+    const near = mountThroughReactNativeWeb(chart(1));
+    try {
+      // The average sits on the baseline: "avg" stands there alone instead of printing over "0".
+      expect(near.container.querySelector('[data-testid="rain-scale-0"]')).toBeNull();
+      expect(find(near.container, 'rain-scale-1')).toBeTruthy();
+    } finally { near.unmount(); }
+    const clear = mountThroughReactNativeWeb(chart(75));
+    try {
+      expect(find(clear.container, 'rain-scale-0')).toBeTruthy();
+      expect(find(clear.container, 'rain-scale-1')).toBeTruthy();
+    } finally { clear.unmount(); }
+  });
+  it('keeps the N=1 adapter on identical geometry and accessible values for bars and lines', () => {
+    const points = [{ x: 'Mon', y: 0.00004 }, { x: 'Tue', y: 7 }, { x: 'Wed', y: 0 }];
+    for (const variant of ['bar', 'line'] as const) {
+      const native = mountThroughReactNativeWeb(<StackedSeriesChart theme={theme} label="Rainfall" variant={variant} size="full" testID="native"
+        series={[{ id: 'value', label: 'Rainfall', points: points.map((point, index) => ({ ...point, id: String(index) })) }]} />);
+      const adapter = mountThroughReactNativeWeb(<HappierDataChart theme={theme} label="Rainfall" style={variant} points={points} testID="adapter" />);
+      try {
+        for (const [container, id] of [[native.container, 'native'], [adapter.container, 'adapter']] as const) {
+          const measured = find(container, id) as HTMLElement & { __reactLayoutHandler: (event: HappierLayoutChangeEvent) => void };
+          act(() => measured.__reactLayoutHandler({ nativeEvent: { layout: { x: 0, y: 0, width: 180, height: 150 } } }));
+        }
+        const ink = (container: HTMLElement) => variant === 'line'
+          ? [...container.querySelectorAll('svg path')].map(path => path.getAttribute('d'))
+          : [...container.querySelectorAll<HTMLElement>('[data-testid*="-bar-"]')].map(bar => bar.style.height);
+        expect(ink(adapter.container)).toEqual(ink(native.container));
+        expect(find(adapter.container, 'adapter').getAttribute('aria-label')).toBe(find(native.container, 'native').getAttribute('aria-label'));
+        act(() => find(adapter.container, 'adapter-values-toggle').click());
+        act(() => find(native.container, 'native-values-toggle').click());
+        expect(find(adapter.container, 'adapter-values-row-0').getAttribute('aria-label')).toBe(find(native.container, 'native-values-row-0').getAttribute('aria-label'));
+      } finally { native.unmount(); adapter.unmount(); }
+    }
+  });
+  it('marks a gap as a quiet dashed rule along the baseline and draws a lone sample as a dot, never a column', () => {
+    const draw = (values: (number | null)[]) => mountThroughReactNativeWeb(<StackedSeriesChart theme={theme} label="Memory, last hour"
+      series={[{ id: 'memory', label: 'Memory', points: values.map((y, x) => ({ id: String(x), x, y })) }]}
+      width={200} viewportHeight={100} plotInset={0} minimumMaximum={10} variant="area" size="tile" testID="gap" />);
+    const solid = draw([2, 8, 4, 9, 3]);
+    const gappy = draw([2, 8, null, null, 3]);
+    try {
+      expect(solid.container.querySelectorAll('[data-testid^="gap-gap-"]')).toHaveLength(0);
+      // One rule across the two missing buckets, from the last sample before to the first after.
+      const rules = [...gappy.container.querySelectorAll('[data-testid^="gap-gap-"]')];
+      expect(rules).toHaveLength(1);
+      expect(rules[0]!.getAttribute('stroke-dasharray')).toBeTruthy();
+      expect(rules[0]!.getAttribute('x1')).toBe('50');
+      expect(rules[0]!.getAttribute('x2')).toBe('200');
+      // The lone sample after the gap is a dot, not a filled column to the baseline.
+      expect(gappy.container.querySelectorAll('[data-testid^="gap-lone-"]')).toHaveLength(1);
+      expect([...gappy.container.querySelectorAll('path')].some((path) => /^M200 [\d.]+ L200 /.test(path.getAttribute('d') ?? ''))).toBe(false);
+    } finally { gappy.unmount(); solid.unmount(); }
+  });
+  it('draws a run too short to read as an area as a line only, keeping the gap marks between runs', () => {
+    const draw = (values: (number | null)[]) => mountThroughReactNativeWeb(<StackedSeriesChart theme={theme} label="Memory, last hour"
+      series={[{ id: 'memory', label: 'Memory', points: values.map((y, x) => ({ id: String(x), x, y })) }]}
+      width={200} viewportHeight={100} plotInset={0} minimumMaximum={10} variant="area" size="tile" testID="short" />);
+    const filled = (view: ReturnType<typeof draw>) => [...view.container.querySelectorAll('path')].filter((path) => /Z$/u.test(path.getAttribute('d') ?? '') && path.getAttribute('fill') !== 'none');
+    const long = draw([2, 8, 4, 9, 3, 5]);
+    const mixed = draw([2, 8, 4, 9, null, 5, 6, 7, null, 3, 4]);
+    try {
+      // A long run keeps its area.
+      expect(filled(long)).toHaveLength(1);
+      // The 4-sample run keeps its area; the 3-sample and 2-sample runs are lines with no fill under them.
+      expect(filled(mixed)).toHaveLength(1);
+      const lines = [...mixed.container.querySelectorAll('path')].filter((path) => path.getAttribute('fill') === 'none' && path.getAttribute('stroke') !== 'none');
+      expect(lines.length).toBeGreaterThanOrEqual(2);
+      // The dashed gap marks stay between runs.
+      expect(mixed.container.querySelectorAll('[data-testid^="short-gap-"]').length).toBe(2);
+    } finally { mixed.unmount(); long.unmount(); }
+  });
+  it('tones only geometry above the threshold and keeps missing samples as separate paths', () => {
+    const input = [{ id: 'memory', label: 'Memory', points: [2, 8, null, 9, 3].map((y, x) => ({ id: String(x), x, y })) }];
+    const options = { threshold: { value: 6, label: 'Critical', tone: 'error' as const } };
+    const mount = mountThroughReactNativeWeb(<StackedSeriesChart theme={theme} label="Memory, last hour" series={input}
+      width={200} viewportHeight={100} plotInset={0} minimumMaximum={10} variant="area" size="tile" testID="memory" {...options} />);
+    try {
+      const clip = find(mount.container, 'memory-threshold-clip');
+      expect(clip.getAttribute('height')).toBe('40');
+      const toned = [...mount.container.querySelectorAll('[data-testid^="memory-threshold-path-"]')];
+      expect(toned).toHaveLength(2);
+      expect(toned.every((path) => path.getAttribute('clip-path')?.includes('threshold'))).toBe(true);
+      // Runs of two samples are too short to read as areas: lines, toned by stroke with no fill.
+      expect(toned.every((path) => path.getAttribute('stroke') === theme.colors.danger && path.getAttribute('fill') === 'none')).toBe(true);
+      expect(toned.map((path) => path.getAttribute('d'))).toEqual(['M0 80 L50 20', 'M150 10 L200 70']);
+      expect(find(mount.container, 'memory').getAttribute('aria-label')).toContain('Critical 6');
+      expect(find(mount.container, 'memory-bucket-2').getAttribute('aria-label')).toContain('Memory —');
+    } finally { mount.unmount(); }
+  });
+  it('mirrors uploads below the baseline while every readout retains their absolute magnitude', () => {
+    const input = [{ id: 'down', label: 'Down', points: [8, 4].map((y, x) => ({ id: String(x), x, y })) },
+      { id: 'up', label: 'Up', points: [-2, -4].map((y, x) => ({ id: String(x), x, y })) }];
+    const options = { mirrored: true };
+    const mount = mountThroughReactNativeWeb(<StackedSeriesChart theme={theme} label="Network, last hour" series={input}
+      width={200} viewportHeight={100} plotInset={0} variant="area" size="full" showScaleValues valuesLabel="Show values" testID="network" {...options} />);
+    try {
+      expect([...mount.container.querySelectorAll('svg path')].map((path) => path.getAttribute('d'))).toEqual([
+        'M0 0 L200 33.33 L200 66.67 L0 66.67 Z', 'M0 83.33 L200 100 L200 66.67 L0 66.67 Z',
+      ]);
+      expect(find(mount.container, 'network').getAttribute('aria-label')).toContain('Up 2');
+      expect(find(mount.container, 'network').getAttribute('aria-label')).not.toContain('Up -');
+      act(() => find(mount.container, 'network-bucket-1').click());
+      expect(find(mount.container, 'network-readout').textContent).toContain('Up · 4');
+      act(() => find(mount.container, 'network-values-toggle').click());
+      expect(find(mount.container, 'network-values-row-0').getAttribute('aria-label')).toContain('Up: 2');
+      expect(mount.container.textContent).not.toContain('-8');
+    } finally { mount.unmount(); }
+  });
+  it('slides one incoming sample while the endpoint stays fixed, and redraws immediately when motion is reduced or inactive', async () => {
+    const render = (sampleKey: number, reducedMotion: boolean, active = true) => <StackedSeriesChart theme={theme} label="CPU, last hour"
+      series={[{ id: 'cpu', label: 'CPU', points: [20, 40].map((y, x) => ({ id: String(x), x, y })) }]}
+      variant="line" size="tile" width={200} viewportHeight={100} plotInset={0} minimumMaximum={100} testID="live"
+      reducedMotion={reducedMotion} {...{ liveMotion: { sampleKey, stepPx: 10, durationMs: 100, active } }} />;
+    const mount = mountThroughReactNativeWeb(render(1, false));
+    try {
+      expect(find(mount.container, 'live').getAttribute('role')).toBe('img');
+      expect(find(mount.container, 'live').getAttribute('aria-label')).toContain('CPU 40');
+      expect(find(mount.container, 'live').getAttribute('aria-label')).not.toContain('CPU 20');
+      await mount.render(render(2, false));
+      expect(find(mount.container, 'live-sliding-ink').style.transform).toContain('translateX(10px)');
+      expect(find(mount.container, 'live-endpoint-0').getAttribute('cx')).toBe('200');
+      expect(find(mount.container, 'live-endpoint-0').closest('[data-testid="live-sliding-ink"]')).toBeNull();
+      await mount.render(render(3, true));
+      expect(find(mount.container, 'live-sliding-ink').style.transform).toContain('translateX(0px)');
+      await mount.render(render(4, false, false));
+      expect(find(mount.container, 'live-sliding-ink').style.transform).toContain('translateX(0px)');
+      expect(mount.container.querySelector('[data-testid="live-endpoint-0"]')).toBeNull();
+    } finally { mount.unmount(); }
+  });
+  it('renders a source pattern on bars and area ribbons while retaining distinct exact series values', async () => {
+    const input = [
+      { id: 'onsite', label: 'Onsite orders', color: theme.colors.accent, points: [{ id: 'mon', x: 0, y: 12 }] },
+      { id: 'remote', label: 'Remote orders', color: theme.colors.accent, fillPattern: 'hatch' as const, points: [{ id: 'mon', x: 0, y: 7 }] },
+    ];
+    const mount = mountThroughReactNativeWeb(<StackedSeriesChart theme={theme} label="Orders" series={input} variant="bar" width={200} size="full" testID="source" />);
+    try {
+      expect(find(mount.container, 'source-bar-0-0').querySelector('pattern')).toBeNull();
+      expect(find(mount.container, 'source-bar-0-1').querySelector('pattern')).not.toBeNull();
+      expect(find(mount.container, 'source').getAttribute('aria-label')).toContain('Onsite orders 12, Remote orders 7');
+      await mount.render(<StackedSeriesChart theme={theme} label="Orders" series={input} variant="area" width={200} size="full" testID="source" />);
+      expect(mount.container.querySelector('svg path[fill^="url("]')).not.toBeNull();
+      expect(find(mount.container, 'source').getAttribute('aria-label')).toContain('Onsite orders 12, Remote orders 7');
+    } finally { mount.unmount(); }
+  });
+  it('fills only the area between two public line series in their shared scale, retaining exact values', () => {
+    const input = [
+      { id: 'low', label: 'Low temperature', points: [{ id: 'a', x: 0, y: 2.3456789 }, { id: 'b', x: 3, y: 4 }] },
+      { id: 'high', label: 'High temperature', points: [{ id: 'a', x: 0, y: 6 }, { id: 'b', x: 3, y: 8 }] },
+    ];
+    const appearance = { bands: [{ id: 'spread', lowerSeriesId: 'low', upperSeriesId: 'high', color: theme.colors.accent, opacity: 0.2 }] };
+    const mount = mountThroughReactNativeWeb(<BurnUpChart theme={theme} label="Temperature" series={input}
+      width={200} viewportHeight={100} plotInset={0} size="full" minimumMaximum={10}
+      valueFormatter={(value) => String(Math.round(value))} valuesLabel="Show values" testID="temperature" {...appearance} />);
+    try {
+      const band = find(mount.container, 'temperature-band-spread-0');
+      expect(band).toBeTruthy();
+      expect(band.getAttribute('d')).toBe('M0 40 L200 20 L200 60 L0 76.54 Z');
+      expect(band.getAttribute('fill')).toBe(theme.colors.accent);
+      expect(band.getAttribute('fill-opacity')).toBe('0.2');
+      expect([...mount.container.querySelectorAll('svg path')].filter((path) => path !== band)
+        .map((path) => path.getAttribute('d'))).toEqual(['M0 76.54 L200 60', 'M0 40 L200 20']);
+      // Appearance does not become another series, sum, or approximate accessible value.
+      expect(find(mount.container, 'temperature').getAttribute('aria-label')).toContain('Low temperature 2.3456789');
+      act(() => find(mount.container, 'temperature-values-toggle').click());
+      expect(find(mount.container, 'temperature-values-row-0').getAttribute('aria-label')).toContain('Low temperature: 2.3456789');
+      act(() => find(mount.container, 'temperature-bucket-a').click());
+      expect(find(mount.container, 'temperature-readout').textContent).toContain('High temperature');
+    } finally { mount.unmount(); }
+  });
+  it('breaks bands at missing, non-finite, or inverted bounds without filling across the gap', () => {
+    const lows = [1, 2, null, 1, 5, 2, 3, Number.NaN, 1, 2];
+    const highs = [3, 4, 5, 3, 4, 4, 5, 6, 3, 4];
+    const input = [lows, highs].map((values, index) => ({ id: index === 0 ? 'low' : 'high', label: index === 0 ? 'Low' : 'High',
+      points: values.map((y, x) => ({ id: String(x), x, y })) }));
+    const appearance = { bands: [{ id: 'spread', lowerSeriesId: 'low', upperSeriesId: 'high' },
+      { id: 'absent', lowerSeriesId: 'low', upperSeriesId: 'absent' }] };
+    const mount = mountThroughReactNativeWeb(<BurnUpChart theme={theme} label="Temperature" series={input}
+      width={90} viewportHeight={60} plotInset={0} minimumMaximum={6} size="tile" testID="temperature" {...appearance} />);
+    try {
+      const bands = [...mount.container.querySelectorAll('[data-testid^="temperature-band-"]')];
+      expect(bands.map((band) => band.getAttribute('d'))).toEqual([
+        'M0 30 L10 20 L10 40 L0 50 Z',
+        'M50 20 L60 10 L60 30 L50 40 Z',
+        'M80 30 L90 20 L90 40 L80 50 Z',
+      ]);
+      expect(find(mount.container, 'temperature-bucket-2').getAttribute('aria-label')).toContain('Low —');
+      expect(find(mount.container, 'temperature-bucket-4').getAttribute('aria-label')).toContain('Low 5');
+    } finally { mount.unmount(); }
+  });
   it('composes incumbent line ink around the owner path geometry', () => {
     const input = [{ id: 'water', label: 'Water', points: [{ id: 'a', x: 0, y: 1 }, { id: 'b', x: 2, y: 3 }] }];
     const lineAdapter = { renderLinePath: (path: string, ink: Readonly<{ width: number; height: number; color: string; strokeWidth: number; reducedMotion: boolean }>) =>
@@ -105,6 +340,10 @@ describe('neutral series dataset', () => {
     const render = (ids: readonly string[]) => <StackedSeriesChart theme={theme} label="Orders" series={at(ids)} width={200}
       variant="bar" size="full" barMotion={motion} reducedMotion={false} testID="orders" />;
     const mount = mountThroughReactNativeWeb(render(['b', 'c']));
+    // RNW's real spring driver reads Date.now. Hold its clock while async React
+    // admission settles, then let actual frames prove the entering animation.
+    const now = Date.now();
+    const animationClock = vi.spyOn(Date, 'now').mockReturnValue(now);
     try {
       const retained = find(mount.container, 'orders-bar-0-0');
       expect(Number.parseFloat(retained.style.height)).toBe(150);
@@ -112,10 +351,23 @@ describe('neutral series dataset', () => {
       // The day that stays is the same mark; the day that joins rises from the axis.
       expect(find(mount.container, 'orders-bar-1-0')).toBe(retained);
       expect(Number.parseFloat(find(mount.container, 'orders-bar-0-0').style.height)).toBe(0);
+      animationClock.mockRestore();
       await act(async () => { await new Promise((resolve) => setTimeout(resolve, 600)); });
       expect(Number.parseFloat(find(mount.container, 'orders-bar-0-0').style.height)).toBeGreaterThan(100);
+    } finally { animationClock.mockRestore(); mount.unmount(); }
+  });
+  it('keys series that look the same once, so many comparable lines read as one legend entry', () => {
+    const line = (id: string, label: string, color: string) => ({ id, label, color, points: [0, 1, 2].map((x) => ({ id: String(x), x, y: x + id.length })) });
+    const input = [line('now', 'This window', '#2a7'), line('e1', 'Earlier windows', '#999'), line('e22', 'Earlier windows', '#999'), line('e333', 'Earlier windows', '#999')];
+    const mount = mountThroughReactNativeWeb(<StackedSeriesChart theme={theme} label="Burn" series={input}
+      width={200} viewportHeight={100} variant="line" size="full" showLegend testID="burn" />);
+    try {
+      const leaves = (label: string) => [...mount.container.querySelectorAll('div')].filter((node) => node.childElementCount === 0 && node.textContent === label);
+      expect(leaves('This window')).toHaveLength(1);
+      expect(leaves('Earlier windows')).toHaveLength(1);
     } finally { mount.unmount(); }
   });
+
   it('hands a host overlay the plot’s own bucket positions and lets a legend entry be chosen', () => {
     const input = ['one', 'two'].map((id) => ({ id, label: id, points: ['a', 'b', 'c', 'd'].map((point) => ({ id: point, x: point, y: 1 })) }));
     const plots: Readonly<{ width: number; height: number; centers: readonly number[]; buckets: readonly unknown[] }>[] = [];
@@ -192,6 +444,47 @@ describe('neutral series dataset', () => {
       expect(Number.parseFloat(find(mount.container, 'cost-bar-0-0').style.top)).toBe(140);
       expect(Number.parseFloat(find(mount.container, 'cost-bar-1-0').style.height)).toBe(10);
       expect(find(mount.container, 'cost').getAttribute('aria-label')).toContain('Cost 0.00004');
+    } finally { mount.unmount(); }
+  });
+  it('washes an area under its own edge line when the series asks for a wash', () => {
+    const input = [{ id: 'cpu', label: 'CPU', color: theme.colors.accent, fillOpacity: 0.08, points: [2, 6].map((y, x) => ({ id: String(x), x, y })) }];
+    const mount = mountThroughReactNativeWeb(<StackedSeriesChart theme={theme} label="CPU, last hour" series={input}
+      width={200} viewportHeight={100} plotInset={0} minimumMaximum={10} variant="area" size="tile" testID="cpu" />);
+    try {
+      const paths = [...mount.container.querySelectorAll('svg path')];
+      expect(paths).toHaveLength(2);
+      const [wash, edge] = paths;
+      expect(wash!.getAttribute('fill')).toBe(theme.colors.accent);
+      expect(wash!.getAttribute('fill-opacity')).toBe('0.08');
+      expect(wash!.getAttribute('d')).toBe('M0 80 L200 40 L200 100 L0 100 Z');
+      expect(edge!.getAttribute('fill')).toBe('none');
+      expect(edge!.getAttribute('stroke')).toBe(theme.colors.accent);
+      expect(edge!.getAttribute('d')).toBe('M0 80 L200 40');
+    } finally { mount.unmount(); }
+  });
+  it('holds a supplied value domain so a zoomed line keeps its honest floor', () => {
+    const input = [{ id: 'memory', label: 'Memory', points: [55, 60].map((y, x) => ({ id: String(x), x, y })) }];
+    const mount = mountThroughReactNativeWeb(<StackedSeriesChart theme={theme} label="Memory in use" series={input}
+      width={200} viewportHeight={100} plotInset={0} variant="line" size="tile" fitLine domain={{ min: 50, max: 60 }} testID="memory" />);
+    try {
+      expect([...mount.container.querySelectorAll('svg path')].map((path) => path.getAttribute('d'))).toEqual(['M0 50 L200 0']);
+    } finally { mount.unmount(); }
+  });
+  it('inks each run of points in the colour its points carry, joined at the shared point', () => {
+    const tone = theme.colors.danger;
+    const input = [{ id: 'memory', label: 'Memory', color: theme.colors.accent,
+      points: [2, 4, 6, 8, 4].map((y, x) => ({ id: String(x), x, y, ...(x === 2 || x === 3 ? { color: tone } : {}) })) }];
+    const mount = mountThroughReactNativeWeb(<StackedSeriesChart theme={theme} label="Memory in use" series={input}
+      width={200} viewportHeight={100} plotInset={0} minimumMaximum={10} variant="line" size="tile" testID="memory" />);
+    try {
+      const paths = [...mount.container.querySelectorAll('svg path')];
+      expect(paths.map((path) => [path.getAttribute('d'), path.getAttribute('stroke')])).toEqual([
+        ['M0 80 L50 60', theme.colors.accent],
+        ['M50 60 L100 40 L150 20', tone],
+        ['M150 20 L200 60', theme.colors.accent],
+      ]);
+      // The exact values are unchanged by ink.
+      expect(find(mount.container, 'memory-bucket-2').getAttribute('aria-label')).toContain('Memory 6');
     } finally { mount.unmount(); }
   });
 });

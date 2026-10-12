@@ -12,7 +12,7 @@ export type SurfaceProps = Readonly<{
   children?: ReactNode;
   tone?: SurfaceTone;
   padding?: SurfacePadding;
-  /** The host's material group. Defaults to the working content surface. */
+  /** The host's material group. Surface uses content; Card uses the in-flow card group. */
   materialRole?: HappierMaterialRole;
   testID?: string;
   onPress?: () => unknown;
@@ -77,7 +77,7 @@ export function Surface(props: SurfaceProps): ReactElement {
   return <SurfaceChrome {...props} />;
 }
 
-/** A content surface with the standard card inset. */
+/** An in-flow card surface with the standard inset. */
 export function Card({ padding = 'medium', ...props }: CardProps): ReactElement {
-  return <SurfaceChrome {...props} padding={padding} />;
+  return <SurfaceChrome {...props} materialRole={props.materialRole ?? 'card'} padding={padding} />;
 }

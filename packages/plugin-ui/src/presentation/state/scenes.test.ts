@@ -74,6 +74,20 @@ describe('Daybreak scene registry', () => {
     expect(resolveHappierScene('manyHomes').planets).toHaveLength(3);
   });
 
+  it('keeps plugin planet look choices on the existing resolved scene planet', () => {
+    const scene = resolveHappierScene(defineHappierScene({
+      name: 'acme.atmosphere', base: 'pairingDone',
+      planetAt: { x: 58, y: 23, r: 16, style: 'rich', fullness: 0.35, digits: true },
+    }));
+    expect(scene.planets).toHaveLength(2);
+    expect(scene.planets.every(planet => planet.style === 'rich' && planet.fullness === 0.35 && planet.digits === true)).toBe(true);
+    expect(scene.planets.at(-1)).toMatchObject({ cx: 58, cy: 23, r: 16 });
+    expect(resolveHappierScene({ name: 'acme.still', planetAt: { style: 'airy', fullness: 0, digits: false } }).planets[0])
+      .toMatchObject({ style: 'airy', fullness: 0, digits: false });
+    expect(resolveHappierScene('firstRun').planets[0]).not.toHaveProperty('style');
+    expect(resolveHappierScene({ name: 'acme.none', planet: false, planetAt: { digits: true } }).planets).toEqual([]);
+  });
+
   it('stands a prop on its ground at x, scaled and mirrored, with a sky prop lifted by its own float', () => {
     const [boxes, satellite] = propLayers(resolveHappierScene({
       name: 'test.place',

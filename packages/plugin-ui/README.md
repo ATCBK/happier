@@ -21,7 +21,7 @@ Developer Preview support policy:
 
 - The root entry is the ergonomic, curated author tier. Advanced trusted React
   Native/RNW authors may also import the public `./advanced`,
-  `./presentation`, and `./environment` tiers; they compose the same canonical
+  `./components`, and `./environment` tiers; they compose the same canonical
   implementations and projected environment that Happier core uses, rather
   than a plugin-only primitive library.
 - All declared entry points are Developer Preview source contracts while this
@@ -195,9 +195,12 @@ sentence-case `title`, `description` and optional section `action` (one hairline
 sheet, rows divided by full-width hairlines), `Item` rows with one control in
 `accessory`, `Toggle`, `Select` with `presentation="segmented"` or `"field"`,
 `TextField presentation="field"` (typed in place, saved on leaving with `onCommit`),
-`SelectionTiles`, and `EmptyState` with `layout="page"` or `"line"`. Page
+`SelectionTiles`, `SettingRow` with `SettingValueSlot` and `SettingStatusLine`
+(the settings-row anatomy of Happier's own registries), `Form.Actions` with a
+`trailing` destructive action and a `footnote`, `LinkDelivery` for handing a link
+over, and `EmptyState` with `layout="page"` or `"line"`. Page
 geometry and type come from one owner (`HAPPIER_PAGE_METRICS`,
-`HAPPIER_PAGE_TEXT` in `./presentation`); a same-realm host also installs its
+`HAPPIER_PAGE_TEXT` in `./components`); a same-realm host also installs its
 exact page colours (`HappierUiPalette`) and page chrome, and without them the
 colours resolve from the public theme snapshot. See the published guide
 "Settings and detail pages" (`apps/docs/content/docs/plugins/ui/configuration-pages.mdx`).
@@ -206,7 +209,7 @@ colours resolve from the public theme snapshot. See the published guide
 
 Use the root tier for ordinary surfaces. When a curated component does not fit
 your composition, trusted React Native/RNW authors may import shared primitive
-behavior from `/presentation` and the mounted environment facts from
+behavior from `/components` and the mounted environment facts from
 `/environment`:
 
 ```tsx
@@ -214,7 +217,7 @@ import {
   useHappierUiAccessibility,
   useHappierUiLocalization,
 } from '@happier-dev/plugin-ui/environment';
-import { HappierStack, HappierText } from '@happier-dev/plugin-ui/presentation';
+import { HappierStack, HappierText } from '@happier-dev/plugin-ui/components';
 
 function AdvancedSummary() {
   const { locale } = useHappierUiLocalization();
@@ -243,7 +246,7 @@ digest references, and keeps `pending` until the read settles. Retirement or
 authority withdrawal rejects later progress. This is a Developer Preview
 package construction seam, not another `PluginUiHostApi` method or wire stream.
 
-`/presentation` exposes lower-level shared primitives and behavior; it does
+`/components` exposes lower-level shared primitives and behavior; it does
 not grant private app state, host transport, navigation, overlay, or
 presentation-host control. `/environment` exposes factual theme, localization,
 accessibility, platform, and safe-area capabilities. A mounted surface already
@@ -291,21 +294,22 @@ copy. Graduated so far:
 |---|---|
 | `ListDetailLayout`, `Columns`, `Column` | Shared measured composition used by Happier core and plugin surfaces; pane and column children retain their identity across responsive layout changes |
 | `Text` | Real React Native semantics: projected theme typography and tone, user text scale, selectability scope, accessibility identity |
-| `Spinner`, `Status`, `State`, `LoadingState`, `EmptyState`, `ErrorState` | Real components over one shared state/feedback implementation Happier's own empty, spinner and status surfaces render too |
+| `Spinner`, `Status`, `State`, `SurfaceState`, `LoadingState`, `EmptyState`, `ErrorState` | Real components over one shared state/feedback implementation Happier's own empty, spinner and status surfaces render too. `SurfaceState` is the full composition (`HappierSurfaceState`) Happier's `SurfaceStateCard` binds: copy, present, summary, one recovery and a quiet second way, note, collapsed diagnostic; `LoadingState` and `ErrorState` (`onRetry`) are it with fewer parts |
+| `SettingRow`, `SettingValueSlot`, `SettingStatusLine` | The settings-row anatomy (`HappierSettingValueSlot`, `HappierSettingStatusLine`) Happier's schema settings rows bind; drafts, validation and writes stay with the author's page |
+| `LinkDelivery` | The link handover (`HappierLinkDelivery`) Happier's Team links bind: QR beside copy and open, through the host clipboard, external-link and QR owners. It renders, never stores, the link; no share port exists for plugin surfaces |
 | `Button` | Real pressable semantics over the shared press→pending owner Happier's own buttons render: async pending, reentry guard, hover/focus, accessible busy/disabled state |
 | `ActionPanel`, `ActionPanel.Section`, `Action.Execute` / `.Copy` / `.OpenExternal` / `.OpenSurface` / `.Refresh` | Real toolbar and action semantics. Each member dispatches through the canonical host method for its concern and reports a typed outcome, including the `outcomeUnknown` settlement that must never be retried blindly |
 | `Surface`, `Card` | Real native surface hosts over shared surface/press behavior; Happier's `SurfaceCard` consumes that behavior while applying its app-private RN styles locally |
 | `List`, `List.Section`, `List.Item`, `Item`, `ItemGroup` | Real list and row semantics over the shared collection owner. Virtualized `List` owns its bounded search/filter/selected-option state before rows reach the native virtualizer; authors retain match semantics and controlled values. Authors mark independently interactive accessories with `accessoryOutsidePressable`; theme injection, touch-target policy, overflow placement and group indexing remain adapter-owned |
-| `Form`, `Form.Field`, `Form.TextField`, `Form.Toggle`, `Form.Select`, `Form.ValidationMessage`, `Form.Actions` | Real form semantics over the canonical action-form owner. Authors provide static already-resolved options; host option sources and account inventory remain host-owned |
+| `Form`, `Form.Field`, `Form.TextField`, `Form.Toggle`, `Form.Select`, `Form.ValidationMessage`, `Form.Actions` | Real form semantics over the canonical action-form owner. Authors provide static already-resolved options; host option sources and account inventory remain host-owned. `Form.Actions` is the section action cluster (`HappierFormActions`) Happier's `SectionButtonRow` binds, with a far-edge `trailing` slot and a consequence or refusal `footnote` |
 | `Popover`, `Menu`, `Dropdown`, `ContextMenu` | Controlled overlay semantics over the incumbent presentation host. It owns anchoring, focus return, Escape, outside dismissal and Android Back; authors supply only semantic state and items |
 | `SessionProvider`, `SessionTranscript`, `SessionComposer`, `SessionChat` | In progress. A host-mediated live Session (transcript, composer, approvals) rendered by Happier's own session view. One controller per provider and at most one of each part; parts fill a bounded region. RN/RNW only: isolated tests and hosted web render the author's `fallback` |
 
-`./presentation` and `./environment` are the advanced public tier over the
-shared implementation and its environment seam. They exist so Happier core and
-plugin surfaces reach the same presentation owners; a core adapter may render
-its own RN host only when a portable author contract intentionally excludes
-required private props/styles. They remain less ergonomic than the root tier,
-not host-only or plugin-private.
+`./components` is the author UI layer, also re-exported by the root. It contains
+the ergonomic adapters and domain-neutral shared primitives over the same
+implementation Happier core consumes. `./environment` supplies their environment
+facts. A core adapter may render its own RN host only when the portable author
+contract intentionally excludes required private props/styles.
 
 Spinner presentation belongs to `presentation/feedback/Spinner.tsx`:
 `resolveHappierSpinnerPresentation` decides the mark and motion, and

@@ -30,7 +30,8 @@ export type HappierWorkMapNodeDeclaration = Readonly<{
    */
   labelDetail?: string;
   parentNodeId: string | null;
-  open: HappierWorkMapOpenTarget;
+  /** Where opening the node leads; absent for a node a read-only map only describes. */
+  open?: HappierWorkMapOpenTarget;
 }>;
 
 /** Placement derived from declared edges only. */

@@ -3,9 +3,31 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { mountThroughReactNativeWeb } from '../rnwMount.testSupport.js';
 import { createHostApiStub, createSurfaceContext } from '../surfaceFixture.testSupport.js';
-import { SelectionTiles, Text, type SelectionTilesOption } from './index.js';
+import { ItemGroup, SelectionTiles, Text, type SelectionTilesOption } from './index.js';
 import { PluginUiProvider } from './PluginUiProvider.js';
 import { HappierSelectionTiles } from '../presentation/form/SelectionTiles.js';
+import { HappierPageSheet } from '../presentation/layout/PageSection.js';
+
+const ACTION_OPTIONS = [
+  { id: 'phone', title: 'Add your phone', subtitle: 'Show a QR code', testID: 'action:phone' },
+  { id: 'home', title: 'Add another Home', subtitle: 'Scan a QR code', testID: 'action:home' },
+  { id: 'scan', title: 'Scan QR', disabled: true, testID: 'action:scan' },
+] as const;
+const TILE_COLORS = {
+  tileBackground: 'white', tileBorder: 'gray', selection: 'black', glyph: 'black', ring: 'black',
+  previewBackground: 'white', actionBackground: 'white', actionBorderHovered: 'black',
+};
+const SHEET_COLORS = { sheet: 'white', sheetBorder: 'gray', rowDivider: 'gray', groupDivider: 'gray' };
+
+function measureTiles(container: HTMLElement, width: number) {
+  // RNW exposes the actual layout callback on the measured host. jsdom does not fire ResizeObserver.
+  const measured = [...container.querySelectorAll<HTMLElement>('div')]
+    .find((node) => typeof Reflect.get(node, '__reactLayoutHandler') === 'function');
+  const handler = measured && Reflect.get(measured, '__reactLayoutHandler');
+  if (typeof handler === 'function') {
+    act(() => handler({ nativeEvent: { layout: { x: 0, y: 0, width, height: 240 } } }));
+  }
+}
 
 function mountTiles(element: React.ReactElement, context = createSurfaceContext()) {
   return mountThroughReactNativeWeb(
@@ -56,6 +78,80 @@ async function pressKey(target: HTMLElement, key: string): Promise<void> {
 }
 
 describe('SelectionTiles', () => {
+  it('hides visual captions without losing accessible names or keyboard selection', async () => {
+    const onChange = vi.fn();
+    const mount = mountTiles(<SelectionTiles variant="visual" tileSizing="fill" labels="hidden"
+      previewAspectRatio={1} labelLines={1} accessibilityLabel="Theme" value="light" onChange={onChange}
+      options={[{ id: 'light', title: 'Light', preview: <Text>Day preview</Text>, previewEdge: 'dashed' },
+        { id: 'dark', title: 'Dark', preview: <Text>Night preview</Text> }]} />);
+    try {
+      expect(mount.container.textContent).toBe('Day previewNight preview');
+      expect(radios(mount.container).map((radio) => radio.getAttribute('aria-label'))).toEqual(['Light', 'Dark']);
+      await pressKey(radios(mount.container)[0]!, 'ArrowRight');
+      expect(onChange).toHaveBeenLastCalledWith('dark');
+    } finally { mount.unmount(); }
+  });
+  it('recomposes shared action tiles into one contained page sheet, preserving activation and disabled state through resize', async () => {
+    const onPress = vi.fn();
+    const mount = mountTiles(
+      <HappierPageSheet surface="none" colors={SHEET_COLORS}>
+        <HappierSelectionTiles variant="action" accessibilityLabel="Devices" options={ACTION_OPTIONS}
+          onPress={onPress} colors={TILE_COLORS} renderText={({ text }) => <span>{text}</span>} renderGlyph={() => null} />
+      </HappierPageSheet>,
+    );
+    const separators = () => mount.container.querySelectorAll('[role="separator"]');
+    try {
+      expect(separators()).toHaveLength(0);
+      measureTiles(mount.container, 358);
+      expect(separators()).toHaveLength(2);
+      expect(mount.container.querySelector('[role="group"][aria-label="Devices"]')).not.toBeNull();
+      const home = mount.container.querySelector<HTMLElement>('[data-testid="action:home"]')!;
+      const scan = mount.container.querySelector<HTMLElement>('[data-testid="action:scan"]')!;
+      expect(home.getAttribute('role')).toBe('button');
+      expect(home.getAttribute('aria-label')).toBe('Add another Home, Scan a QR code');
+      expect(scan.getAttribute('aria-disabled')).toBe('true');
+      await act(async () => { home.click(); scan.click(); });
+      expect(onPress.mock.calls).toEqual([['home']]);
+      measureTiles(mount.container, 704);
+      expect(separators()).toHaveLength(0);
+      measureTiles(mount.container, 358);
+      expect(separators()).toHaveLength(2);
+    } finally { mount.unmount(); }
+  });
+
+  it('lets plugin authors use action tiles and inherits page rows from their section', async () => {
+    const onPress = vi.fn();
+    const mount = mountTiles(
+      <ItemGroup title="Devices" surface="none">
+        <SelectionTiles variant="action" accessibilityLabel="Add a device" options={ACTION_OPTIONS} onPress={onPress} />
+      </ItemGroup>,
+    );
+    try {
+      measureTiles(mount.container, 358);
+      expect(mount.container.querySelectorAll('[role="separator"]')).toHaveLength(2);
+      await act(async () => { mount.container.querySelector<HTMLElement>('[data-testid="action:phone"]')!.click(); });
+      expect(onPress).toHaveBeenCalledWith('phone');
+      expect(mount.container.querySelector('[role="radio"]')).toBeNull();
+    } finally { mount.unmount(); }
+  });
+
+  it.each(['standalone', 'grouped', 'footer'] as const)('retains action cards in the %s context', (context) => {
+    const tiles = <HappierSelectionTiles variant="action" accessibilityLabel="Devices" options={ACTION_OPTIONS}
+      onPress={() => {}} colors={TILE_COLORS} renderText={({ text }) => <span>{text}</span>} renderGlyph={() => null}
+      listPresentation={context === 'grouped' ? 'grouped' : undefined}
+      renderOptionFooter={context === 'footer' ? ({ option }) => <Text>{`${option.id} status`}</Text> : undefined} />;
+    const mount = mountTiles(context !== 'standalone'
+      ? <HappierPageSheet surface="none" colors={SHEET_COLORS}>{tiles}</HappierPageSheet> : tiles);
+    try {
+      measureTiles(mount.container, 358);
+      expect(mount.container.querySelectorAll('[role="separator"]')).toHaveLength(0);
+      if (context === 'footer') {
+        expect(mount.container.textContent).toContain('home status');
+        expect(mount.container.querySelector('[data-testid="action:home"]')?.getAttribute('role')).toBe('group');
+      }
+    } finally { mount.unmount(); }
+  });
+
   it('shows compact card previews beside their labels while retaining radio keyboard selection', async () => {
     function ControlledPreviewRows() {
       const [value, setValue] = useState<'list' | 'grid'>('grid');

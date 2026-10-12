@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { act } from 'react';
 import { describe, expect, it } from 'vitest';
-import { Platform, View } from 'react-native';
+import { Platform, Text, View } from 'react-native';
 
 import { mountThroughReactNativeWeb } from '../../rnwMount.testSupport.js';
 import { createHostApiStub, createSurfaceContext } from '../../surfaceFixture.testSupport.js';
@@ -372,6 +372,60 @@ describe('HappierFindBar', () => {
     expect(buttonNamed(busy.mounted.container, 'Search older messages')).toBeUndefined();
     expect(buttonNamed(busy.mounted.container, 'Stop')).toBeTruthy();
     busy.mounted.unmount();
+  });
+
+  it('flows a long note and its action in one text run in both Find presentations', async () => {
+    const textHost: HappierFindBarHost = { ...host, Text: ({ children, style, numberOfLines, testID }) => (
+      <Text style={style as React.ComponentProps<typeof Text>['style']} numberOfLines={numberOfLines} testID={testID}>{children}</Text>
+    ) };
+    const noteText = 'Older messages on this machine have not been searched, including messages outside the loaded transcript.';
+    for (const presentation of ['inline', 'keyboardSeated'] as const) {
+      let searched = 0;
+      const { mounted } = mountBar({
+        host: textHost,
+        presentation,
+        status: { kind: 'results', current: 1, total: 2, coverage: 'loaded' },
+        note: { icon: 'history', text: noteText, action: { label: 'Search older messages', onPress: () => { searched += 1; } } },
+      });
+      try {
+        const action = buttonNamed(mounted.container, 'Search older messages')!;
+        const noteRun = Array.from(byTestId(mounted.container, 'find.note')!.querySelectorAll<HTMLElement>('[dir]'))
+          .find(element => element.firstChild?.textContent?.startsWith(noteText));
+        expect(noteRun?.contains(action)).toBe(true);
+        expect(getComputedStyle(action).display).toBe('inline-flex');
+        await press(action);
+        expect(searched).toBe(1);
+      } finally {
+        mounted.unmount();
+      }
+    }
+  });
+
+  it('gives a coarse-web note action a physical touch target without enlarging its text line', () => {
+    let boundLineHeight: number | undefined;
+    const textHost: HappierFindBarHost = { ...host, Text: ({ children, style, numberOfLines, testID }) => {
+      if (children === labels.stop) boundLineHeight = style.lineHeight;
+      return <Text style={style as React.ComponentProps<typeof Text>['style']} numberOfLines={numberOfLines} testID={testID}>{children}</Text>;
+    } };
+    const { mounted } = mountBar({
+      host: textHost,
+      minimumTargetSize: 44,
+      status: { kind: 'searching', total: 2 },
+      note: { icon: 'history', text: 'Searching older messages' },
+    });
+    try {
+      const action = buttonNamed(mounted.container, 'Stop')!;
+      // jsdom retains RNW's font shorthand but loses its atomic line-height rule. Use the real
+      // host binding's supplied text metric; target padding/margins still come from rendered RNW.
+      expect(boundLineHeight).toBe(16);
+      const lineHeight = boundLineHeight!;
+      const targetStyle = getComputedStyle(action);
+      const physicalHeight = lineHeight + (parseFloat(targetStyle.paddingTop) || 0) + (parseFloat(targetStyle.paddingBottom) || 0);
+      expect(physicalHeight).toBeGreaterThanOrEqual(44);
+      expect(physicalHeight + (parseFloat(targetStyle.marginTop) || 0) + (parseFloat(targetStyle.marginBottom) || 0)).toBe(lineHeight);
+    } finally {
+      mounted.unmount();
+    }
   });
 
   it('closes with Esc while focus rests on a bar control, not only in the field', async () => {

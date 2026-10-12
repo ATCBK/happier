@@ -250,12 +250,19 @@ describe('plugin-ui semantic layout', () => {
         Record<string, unknown> | null
     )?.[DOM_LAYOUT_HANDLER_NAME];
 
-    // Identity, not a wrapper: each box's own measurement reaches the author
-    // who asked that box to report, and no box is measured through another's.
-    expect(layoutHandler('screen')).toBe(onScreenLayout);
-    expect(layoutHandler('stack')).toBe(onStackLayout);
-    expect(layoutHandler('row')).toBe(onRowLayout);
-    expect(layoutHandler('scroll')).toBe(onScrollLayout);
-    mount.unmount();
+    try {
+      // RNW may wrap a layout handler (ScrollView does). Assert the observable
+      // measurement contract, not the platform adapter's callback identity.
+      for (const [index, [testID, callback]] of ([
+        ['screen', onScreenLayout], ['stack', onStackLayout],
+        ['row', onRowLayout], ['scroll', onScrollLayout],
+      ] as const).entries()) {
+        const handler = layoutHandler(testID);
+        expect(handler).toBeTypeOf('function');
+        const event = { nativeEvent: { layout: { x: 0, y: 0, width: (index + 1) * 100, height: 600 } } };
+        if (typeof handler === 'function') act(() => handler(event));
+        expect(callback).toHaveBeenCalledWith(event);
+      }
+    } finally { mount.unmount(); }
   });
 });

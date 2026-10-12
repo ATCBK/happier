@@ -1,5 +1,8 @@
 import type { ReactElement, ReactNode } from 'react';
-import { View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
+
+import { resolveHappierUiPalette, useHappierUiInsets, useOptionalHappierUiPalette } from '../environment/context.js';
+import { HAPPIER_PAGE_METRICS } from '../presentation/layout/pageMetrics.js';
 
 import {
   useOptionalPluginUiPresentationHost,
@@ -27,6 +30,13 @@ export type DetailsPaneProps = Readonly<{
   /** The pane asks to close: its close or back control, Escape, or a tap outside an overlay pane. */
   onClose: () => void;
   children?: ReactNode;
+  /**
+   * The detail's one primary, pinned in thumb reach when the detail is pushed (phones): under a flat
+   * hairline at the foot of the page, above the home indicator and the keyboard, while the detail
+   * scrolls above it. Beside the page (the details pane) it is not drawn: the primary lives in
+   * `actions` there.
+   */
+  footer?: ReactNode;
   testID?: string;
 }>;
 
@@ -142,6 +152,46 @@ function PushedDetail(props: DetailsPaneProps): ReactElement {
         /></View>}
       />
       <View style={{ flex: 1, minHeight: 0 }}>{props.children}</View>
+      {props.footer === undefined ? null : (
+        <DetailsPaneFooter testID={props.testID === undefined ? undefined : `${props.testID}:footer`}>{props.footer}</DetailsPaneFooter>
+      )}
     </View>
   );
+}
+
+/**
+ * The pinned footer of a detail that is the page (pushed): page ground under a flat ink hairline, the page's edge
+ * inset, the home-indicator inset below. It arrives with the page (no motion of its own), and the host's keyboard
+ * owner, where there is one, keeps it above the keyboard.
+ *
+ * `DetailsPane` draws it for its `footer`. A `Collection` detail places it itself as the last child of its own
+ * full-height column when `renderDetail` receives `pushed: true`; the story above it scrolls and the footer stays.
+ * Draw it only while pushed: beside the page the primary lives in the details pane's header actions.
+ */
+export function DetailsPaneFooter(props: Readonly<{ children: ReactNode; testID?: string | undefined }>): ReactElement {
+  const theme = usePluginTheme();
+  const palette = useOptionalHappierUiPalette(theme) ?? resolveHappierUiPalette(theme);
+  const { safeArea } = useHappierUiInsets();
+  const host = useOptionalPluginUiPresentationHost();
+  // The pause a group edge makes: the page's existing measure for a seam inside its column.
+  const gap = HAPPIER_PAGE_METRICS.groupSeparatorGapPx;
+  const paddingBottom = Math.max(safeArea.bottom, gap);
+  const footer = (
+    <View
+      testID={props.testID}
+      style={{
+        backgroundColor: theme.colors.canvas,
+        borderTopWidth: StyleSheet.hairlineWidth,
+        borderTopColor: palette.rowDivider,
+        paddingTop: gap,
+        paddingBottom,
+        paddingHorizontal: HAPPIER_PAGE_METRICS.sheetInsetPx,
+      }}
+    >
+      {props.children}
+    </View>
+  );
+  return host?.renderKeyboardStickyFooter === undefined
+    ? footer
+    : <>{host.renderKeyboardStickyFooter({ openedOffset: paddingBottom - gap, children: footer })}</>;
 }

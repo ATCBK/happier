@@ -25,11 +25,14 @@ export function Icon({ name, size = 'medium', tone = 'neutral', accessibilityLab
   return <PluginUiIconGlyph name={name} size={resolveHappierIconSize(size)} tone={tone} accessibilityLabel={accessibilityLabel} testID={testID} />;
 }
 
-/** Package-private adapter for geometry stepped by a shared presentation owner. */
-export function PluginUiIconGlyph({ name, size: pixels, tone = 'neutral', accessibilityLabel, testID }: Omit<IconProps, 'size'> & Readonly<{ size: number }>): ReactElement {
+/**
+ * Package-private adapter for geometry stepped by a shared presentation owner. `color` is for a glyph
+ * that stands in a control's own ink (a filled primary's on-accent foreground) rather than a tone.
+ */
+export function PluginUiIconGlyph({ name, size: pixels, tone = 'neutral', color: inkColor, accessibilityLabel, testID }: Omit<IconProps, 'size'> & Readonly<{ size: number; color?: string }>): ReactElement {
   const host = useOptionalPluginUiPresentationHost();
   const theme = usePluginTheme();
-  const color = theme.colors[HAPPIER_TONE_COLOR_TOKEN[tone]];
+  const color = inkColor ?? theme.colors[HAPPIER_TONE_COLOR_TOKEN[tone]];
   if (host) {
     return <>{host.renderIcon({ name, size: pixels, color, ...(accessibilityLabel ? { accessibilityLabel } : {}), ...(testID ? { testID } : {}) })}</>;
   }

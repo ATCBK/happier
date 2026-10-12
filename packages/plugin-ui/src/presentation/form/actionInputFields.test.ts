@@ -7,6 +7,11 @@ import {
 } from './actionInputFields.js';
 
 describe('shared Action form semantics', () => {
+  it('keeps an array-valued single choice as one admitted selection', () => {
+    const choice = ['source', 'machine'];
+    expect(resolveHappierActionFieldPresentation({ widget: 'select' }, choice, choice))
+      .toEqual({ kind: 'select', value: choice, multiple: false });
+  });
   it('reads and patches nested paths without mutating the source', () => {
     const input = { outer: { keep: true, value: 'old' } };
     expect(readHappierActionInputPath(input, 'outer.value')).toBe('old');

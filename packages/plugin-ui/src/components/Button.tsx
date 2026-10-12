@@ -24,6 +24,7 @@ import {
 } from './Focus.js';
 import { usePluginTheme, usePluginTranslation } from './PluginUiProvider.js';
 import { resolveAuthorText } from './resolveAuthorText.js';
+import type { HappierPageOperation, HappierPageOperationTextResolver } from '../presentation/layout/pageOperations.js';
 
 /**
  * Happier's button for plugin surfaces.
@@ -115,8 +116,6 @@ export function Button({
   onPress,
   children,
 }: ButtonProps): ReactElement {
-  const theme = usePluginTheme();
-  const material = useHappierButtonMaterial(theme);
   const translate = usePluginTranslation();
   const label = resolveAuthorText(translate, title, titleKey);
   const resolvedAccessibilityLabel = resolveAuthorText(
@@ -126,22 +125,7 @@ export function Button({
   );
   const accessibleName = requireAccessibleButtonName(resolvedAccessibilityLabel, label);
   const focusBinding = usePluginUiFocusTargetBindingInternal(focusTarget);
-
-  const reducedMotion = useOptionalHappierUiAccessibility()?.reducedMotion ?? false;
-  const palette = useOptionalHappierUiPalette(theme);
-  const nativeMinimumTarget = useHappierNativeMinimumInteractiveTargetSize();
-  const { foreground } = resolveHappierButtonChrome({ theme, variant, disabled: disabled === true, focused: false, ...material });
-  const resolveStyle = (state: HappierPressableStyleState): HappierPortableStyle => ({
-    ...resolveHappierButtonChrome({
-      theme, variant, size, nativeMinimumTarget, disabled: state.disabled, focused: state.focused,
-      pressed: state.pressed, gloss: palette?.accentGloss, ...material,
-    }).style,
-    opacity: state.disabled && !state.busy ? HAPPIER_BUTTON_DISABLED_OPACITY : 1,
-    // The shared press vocabulary: a discrete control scales under the finger
-    // (an opacity dip under reduced motion), eased on web.
-    ...happierDiscretePressStyle(state.pressed && !state.disabled, reducedMotion),
-    ...happierPressTransitionStyle(state.pressed, ['transform', 'opacity'], reducedMotion),
-  });
+  const face = useButtonFace(variant, size, disabled === true);
 
   return (
     <HappierPressable
@@ -152,35 +136,90 @@ export function Button({
       hitSlop={BUTTON_HIT_SLOP}
       onPress={onPress}
       controlRef={focusBinding}
-      style={resolveStyle}
+      style={face.style}
     >
-      {(state) => (
-        <>
-          <HappierSurfaceGradientLayer gradient={resolveHappierButtonChrome({ theme, variant, disabled: state.disabled, focused: state.focused, pressed: state.pressed }).gradient} borderRadius={theme.radii.control} />
-          {state.busy ? (
-            <HappierSpinner
-              size={iconMatchedSpinnerSize(theme.typography.label.fontSize)}
-              color={foreground}
-              testID={testID ? `${testID}-spinner` : undefined}
-            />
-          ) : icon}
-          {/*
-            The label keeps its box while busy instead of being replaced, so the
-            button does not change width the moment it is pressed — a control
-            that resizes under the pointer is the reason a second press lands
-            somewhere else.
-          */}
-          <View style={state.busy ? { opacity: 0 } : undefined}>
-            {children ?? (
-              <HappierText variant="label" style={{ color: foreground }}>
-                {label}
-              </HappierText>
-            )}
-          </View>
-        </>
-      )}
+      {(state) => face.renderContent(state, {
+        icon,
+        children: children ?? label,
+        ...(testID ? { spinnerTestID: `${testID}-spinner` } : {}),
+      })}
     </HappierPressable>
   );
+}
+
+// Page chrome consumes the same semantic operation from source and separately bundled plugins.
+// The public adapter owns its author vocabulary; the host owns phone placement and row ordering.
+Button.happierPageOperation = (
+  props: ButtonProps,
+  resolveText: HappierPageOperationTextResolver = value => value,
+): HappierPageOperation | null => {
+  const title = typeof props.children === 'string' ? props.children
+    : resolveText(props.title, props.titleKey) ?? resolveText(props.accessibilityLabel, props.accessibilityLabelKey);
+  if (!title?.trim()) return null;
+  return {
+    id: props.testID ?? title,
+    title,
+    ...(props.testID === undefined ? {} : { testID: props.testID }),
+    ...(props.variant === 'destructive' ? { destructive: true } : {}),
+    ...(props.disabled ? { disabled: true } : {}),
+    ...(props.busy ? { pending: true } : {}),
+    onPress: props.onPress,
+  };
+};
+
+/**
+ * @internal The face of a labelled button: its chrome in every press state, the fill's finish, the
+ * leading glyph and the label. `Button` draws it, and so does every built-in trigger drawn as a button
+ * (a `Popover` with `triggerAppearance="primary"`), so a primary that opens a choice is the same
+ * button as one that acts — one face, never a second button style.
+ */
+export function useButtonFace(variant: ButtonVariant, size: ButtonSize, disabled: boolean) {
+  const theme = usePluginTheme();
+  const material = useHappierButtonMaterial(theme);
+  const reducedMotion = useOptionalHappierUiAccessibility()?.reducedMotion ?? false;
+  const palette = useOptionalHappierUiPalette(theme);
+  const nativeMinimumTarget = useHappierNativeMinimumInteractiveTargetSize();
+  const { foreground } = resolveHappierButtonChrome({ theme, variant, disabled, focused: false, ...material });
+  const style = (state: HappierPressableStyleState): HappierPortableStyle => ({
+    ...resolveHappierButtonChrome({
+      theme, variant, size, nativeMinimumTarget, disabled: state.disabled, focused: state.focused,
+      pressed: state.pressed, gloss: palette?.accentGloss, ...material,
+    }).style,
+    opacity: state.disabled && !state.busy ? HAPPIER_BUTTON_DISABLED_OPACITY : 1,
+    // The shared press vocabulary: a discrete control scales under the finger
+    // (an opacity dip under reduced motion), eased on web.
+    ...happierDiscretePressStyle(state.pressed && !state.disabled, reducedMotion),
+    ...happierPressTransitionStyle(state.pressed, ['transform', 'opacity'], reducedMotion),
+  });
+  const renderContent = (
+    state: HappierPressableStyleState,
+    content: Readonly<{ icon?: ReactNode; children: ReactNode; spinnerTestID?: string }>,
+  ): ReactElement => (
+    <>
+      <HappierSurfaceGradientLayer gradient={resolveHappierButtonChrome({ theme, variant, disabled: state.disabled, focused: state.focused, pressed: state.pressed }).gradient} borderRadius={theme.radii.control} />
+      {state.busy ? (
+        <HappierSpinner
+          size={iconMatchedSpinnerSize(theme.typography.label.fontSize)}
+          color={foreground}
+          testID={content.spinnerTestID}
+        />
+      ) : content.icon}
+      {/*
+        The label keeps its box while busy instead of being replaced, so the
+        button does not change width the moment it is pressed — a control
+        that resizes under the pointer is the reason a second press lands
+        somewhere else.
+      */}
+      <View style={state.busy ? { opacity: 0 } : undefined}>
+        {typeof content.children === 'string' || content.children === undefined ? (
+          <HappierText variant="label" style={{ color: foreground }}>
+            {content.children}
+          </HappierText>
+        ) : content.children}
+      </View>
+    </>
+  );
+  return { foreground, style, renderContent };
 }
 
 export type IconButtonProps = Readonly<{
@@ -238,11 +277,10 @@ export function IconButton({
         ...chrome(state).frame,
         minWidth: minimumTarget,
         minHeight: minimumTarget,
-        borderRadius: size / 2,
       })}
     >
-      {/* Press state belongs to the outer frame; the visible focus surface reads only focus. */}
-      {(state) => <View style={chrome({ ...state, pressed: false }).surface}>
+      {/* The frame is the touch target; the drawn square carries every tint and the focus ring. */}
+      {(state) => <View style={chrome(state).surface}>
         {state.busy ? <HappierSpinner size="small" color={theme.colors.secondaryText} /> : icon}
       </View>}
     </HappierPressable>

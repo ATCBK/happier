@@ -159,22 +159,62 @@ export function HappierForm({ children, accessibilityLabel, busy, testID, style 
 
 export type HappierFormActionsProps = Readonly<{
   children?: ReactNode;
+  /**
+   * Actions pushed to the cluster's far edge, after the others: the irreversible one (Delete, Leave)
+   * at the end of a page section. They wrap with the rest on a narrow width.
+   */
+  trailing?: ReactNode;
+  /**
+   * One line under the actions: the consequence of the destructive action, or a form's refusal. A
+   * string is drawn in the meta role; a host passes its own typed text node.
+   */
+  footnote?: ReactNode;
+  /** `danger` is a refusal, announced as it appears; `secondary` (default) is a static consequence note. */
+  footnoteTone?: 'secondary' | 'danger';
+  footnoteTestID?: string;
   testID?: string;
   style?: HappierStyleProp;
 }>;
 
-/** A named action cluster that cannot acquire a second submit/pending lifecycle. */
-export function HappierFormActions({ children, testID, style }: HappierFormActionsProps) {
-  return (
+/**
+ * A named action cluster that cannot acquire a second submit/pending lifecycle: a form's Save and
+ * Cancel, or the quiet leave-and-destroy actions that close a page section. Buttons wrap on narrow
+ * widths; submission state stays with the caller.
+ */
+export function HappierFormActions({ children, trailing, footnote, footnoteTone, footnoteTestID, testID, style }: HappierFormActionsProps) {
+  const toolbar = (
     <View
       role="toolbar"
       testID={testID}
-      style={[{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, style]}
+      style={[{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: HAPPIER_FORM_ACTIONS_GAP_PX }, footnote ? null : style]}
     >
       {children}
+      {trailing ? <View style={{ flexGrow: 1 }} /> : null}
+      {trailing}
+    </View>
+  );
+  if (!footnote) return toolbar;
+  const refusal = footnoteTone === 'danger';
+  return (
+    <View style={[{ gap: HAPPIER_FORM_ACTIONS_GAP_PX }, style]}>
+      {toolbar}
+      <View
+        testID={footnoteTestID}
+        // A refusal is announced as soon as it appears; a consequence note is static.
+        role={refusal ? 'alert' : undefined}
+        accessibilityRole={refusal ? 'alert' : undefined}
+        accessibilityLiveRegion={refusal ? 'assertive' : undefined}
+        aria-live={refusal ? 'assertive' : undefined}
+      >
+        {typeof footnote === 'string' ? (
+          <HappierText variant="meta" tone={refusal ? 'danger' : 'secondary'}>{footnote}</HappierText>
+        ) : footnote}
+      </View>
     </View>
   );
 }
+
+const HAPPIER_FORM_ACTIONS_GAP_PX = 8;
 
 export type HappierValidationMessageProps = Readonly<{
   message: string;
@@ -193,7 +233,7 @@ export function HappierValidationMessage({
   nativeID,
   accessibilityLiveRegion,
 }: HappierValidationMessageProps) {
-  const captionStyle = useHappierTypeRoleStyle('caption', theme);
+  const captionStyle = useHappierTypeRoleStyle('micro', theme);
   return (
     <HappierText
       accessibilityRole="alert"
@@ -240,7 +280,8 @@ export function useHappierIsWithinField(): boolean {
   return useContext(HappierFieldScopeContext);
 }
 
-function useHappierFieldIssueSemantics(): HappierFieldIssueSemantics {
+/** The enclosing field's issue and description identities, for every control a field draws. */
+export function useHappierFieldIssueSemantics(): HappierFieldIssueSemantics {
   return useContext(HappierFieldIssueContext);
 }
 
@@ -254,7 +295,7 @@ function combineAccessibilityHints(...hints: readonly (string | undefined)[]): s
 }
 
 export function HappierField(props: HappierFieldProps) {
-  const captionStyle = useHappierTypeRoleStyle('caption', props.theme);
+  const captionStyle = useHappierTypeRoleStyle('micro', props.theme);
   const generatedIssueId = useId();
   const generatedDescriptionId = useId();
   const issue = props.issue || undefined;
@@ -383,7 +424,7 @@ export function HappierTextField(props: HappierTextFieldProps) {
   const scaleOwnership = resolveHappierTextScaleOwnership({
     ...(accessibility === null ? {} : { environmentTextScale: accessibility.textScale }),
   });
-  const bodyStyle = useHappierTypeRoleStyle('body', props.theme);
+  const bodyStyle = useHappierTypeRoleStyle('meta', props.theme);
   // A field is a well on the control surface, like the host's own inputs and
   // this package's control-appearance triggers. `border` is the outline of a
   // bounded *surface* and is transparent in the light theme, so a field that
@@ -684,7 +725,7 @@ type HappierSelectOptionControlProps<Value> = Readonly<{
 function HappierSelectOptionControl<Value>(props: HappierSelectOptionControlProps<Value>) {
   const paintColor = useHappierMaterialColorResolver();
   const labelStyle = useHappierTypeRoleStyle('label', props.theme);
-  const captionStyle = useHappierTypeRoleStyle('caption', props.theme);
+  const captionStyle = useHappierTypeRoleStyle('micro', props.theme);
   const groupItem = useHappierItemGroupItemBehavior({
     role: props.accessibilityRole === 'radio' ? 'radio' : undefined,
     itemGroupRadioIndex: props.itemGroupRadioIndex,

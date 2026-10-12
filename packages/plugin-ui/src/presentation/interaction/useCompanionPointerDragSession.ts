@@ -74,6 +74,8 @@ type ActiveCompanionPointerDrag = {
     numericPointerId: number | null;
     startedOnHandle: boolean;
     hasMoved: boolean;
+    /** The pointer is captured only once the press became a drag (see `startDrag`). */
+    captured: boolean;
     pointer: PointerPoint;
     previous: PointerPoint;
     samples: CompanionDragVelocitySample[];
@@ -230,7 +232,7 @@ export function useCompanionPointerDragSession<TDragState = never>(input: UseCom
     const cleanupActiveDrag = React.useCallback(() => {
         const active = activeDragRef.current;
         active?.cleanupListeners?.();
-        inputRef.current.pointerHost.releasePointer(active?.captureTarget ?? null, active?.numericPointerId ?? null);
+        if (active?.captured) inputRef.current.pointerHost.releasePointer(active.captureTarget, active.numericPointerId);
         activeDragRef.current = null;
         setDragState(null);
     }, []);
@@ -301,17 +303,14 @@ export function useCompanionPointerDragSession<TDragState = never>(input: UseCom
         const exceededThreshold =
             Math.abs(totalDeltaX) >= COMPANION_DRAG_THRESHOLD_PX
             || Math.abs(totalDeltaY) >= COMPANION_DRAG_THRESHOLD_PX;
-        if (exceededThreshold) {
+        if (exceededThreshold && !active.hasMoved) {
             active.hasMoved = true;
             suppressNextPressRef.current = true;
+            active.captured = true;
+            inputRef.current.pointerHost.capturePointer(active.captureTarget, active.numericPointerId);
         }
         active.samples = pushVelocitySample(active.samples, movePoint, readEventTimeMs(moveEvent));
-        if (!active.hasMoved) {
-            const moveRecord = readRecord(moveEvent);
-            const preventDefault = moveRecord.preventDefault;
-            if (typeof preventDefault === 'function') preventDefault.call(moveEvent);
-            return;
-        }
+        if (!active.hasMoved) return;
         active.previous = movePoint;
 
         inputRef.current.onDragMove({
@@ -348,10 +347,17 @@ export function useCompanionPointerDragSession<TDragState = never>(input: UseCom
         const pointerId = readPointerId(event);
         const numericPointerId = readNumericPointerId(pointerId);
         const captureTarget = readCurrentTarget(event) ?? attachedTargetRef.current;
-        inputRef.current.pointerHost.capturePointer(captureTarget, numericPointerId);
+        /*
+         * No pointer capture yet: a press is not a drag until it crosses the threshold. Capturing on
+         * pointer-down retargets the `pointerup` and the `click` the browser derives from it to the
+         * handle itself, so a control the press started on (the Voice island body, the orb mark)
+         * never received its click and a tap did nothing. Movement is tracked on the window, so
+         * the drag still follows the pointer; capture starts in `handleMove`.
+         */
 
         const eventRecord = readRecord(event);
-        if (typeof eventRecord.preventDefault === 'function') eventRecord.preventDefault.call(event);
+        // A press must retain the browser's focus default. Selection/click suppression belongs
+        // to an admitted drag in handleMove, after the threshold has actually been crossed.
         if (typeof eventRecord.stopPropagation === 'function') eventRecord.stopPropagation.call(event);
 
         const cleanupListeners = inputRef.current.pointerHost.listenForActive(captureTarget, {
@@ -365,6 +371,7 @@ export function useCompanionPointerDragSession<TDragState = never>(input: UseCom
             numericPointerId,
             startedOnHandle,
             hasMoved: false,
+            captured: false,
             pointer: point,
             previous: point,
             samples: [{ x: point.x, y: point.y, timeMs: readEventTimeMs(event) }],

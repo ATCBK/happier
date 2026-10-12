@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { resolveHappierTypeScale } from '../presentation/text/typeScale.js';
 import { create, type ReactTestRenderer } from 'react-test-renderer';
 import { act } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -15,6 +16,8 @@ const nativePlatform = vi.hoisted(() => ({
 // that receive the provider's platform fact.
 vi.mock('react-native', () => ({
   Platform: nativePlatform,
+  // The public barrel loads motion constants; these text/target tests never animate a preview.
+  Easing: { bezier: () => (progress: number) => progress },
   I18nManager: { isRTL: false },
   FlatList: 'FlatList',
   Pressable: 'Pressable',
@@ -24,6 +27,7 @@ vi.mock('react-native', () => ({
     hairlineWidth: 1,
     absoluteFillObject: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 },
     create: <T extends Record<string, unknown>>(styles: T) => styles,
+    flatten: flattenStyle,
   },
   // A Toggle is the platform switch on native (the shared HappierSwitchNative).
   Switch: 'Switch',
@@ -102,7 +106,7 @@ async function renderInteractiveFamilies(
           <Button testID="button" title="Run" onPress={() => undefined} />
           <IconButton testID="icon-button" accessibilityLabel="Refresh" icon={<Text value="R" />} onPress={() => undefined} />
           <Surface testID="surface" accessibilityLabel="Open details" onPress={() => undefined}>
-            <Text testID="scaled-text" value="Details" variant="body" />
+            <Text testID="scaled-text" value="Details" variant="meta" />
           </Surface>
           <List.Item testID="list-tight:first" title="First" density="tight" onPress={() => undefined} />
           <List.Item testID="list-tight:second" title="Second" density="tight" onPress={() => undefined} />
@@ -240,8 +244,8 @@ describe('public interactive families use the provider-owned native target polic
     expect(text).toHaveLength(1);
     expect(text[0]!.props.allowFontScaling).toBe(false);
     expect(flattenStyle(text[0]!.props.style)).toMatchObject({
-      fontSize: context.theme.typography.body.fontSize * 2,
-      lineHeight: context.theme.typography.body.lineHeight * 2,
+      fontSize: resolveHappierTypeScale('meta', 'ios').fontSize * 2,
+      lineHeight: resolveHappierTypeScale('meta', 'ios').lineHeight * 2,
     });
 
     const textInput = renderer!.root.findAll((node) => (
@@ -250,8 +254,8 @@ describe('public interactive families use the provider-owned native target polic
     expect(textInput).toHaveLength(1);
     expect(textInput[0]!.props.allowFontScaling).toBe(false);
     expect(flattenStyle(textInput[0]!.props.style)).toMatchObject({
-      fontSize: context.theme.typography.body.fontSize * 2,
-      lineHeight: context.theme.typography.body.lineHeight * 2,
+      fontSize: resolveHappierTypeScale('meta', 'ios').fontSize * 2,
+      lineHeight: resolveHappierTypeScale('meta', 'ios').lineHeight * 2,
     });
   });
 

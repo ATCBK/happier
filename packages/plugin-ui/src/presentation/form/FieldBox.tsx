@@ -1,16 +1,18 @@
-import type { ReactNode } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { useContext, type ReactNode } from 'react';
+import { Platform, Pressable, StyleSheet, View } from 'react-native';
 
 import { HAPPIER_RADIUS_V1 } from '../../environment/radius.js';
 import { HAPPIER_PAGE_METRICS } from '../layout/pageMetrics.js';
+import { HappierPageRowFieldLayoutContext } from '../layout/pageRowField.js';
 import { HappierChevron } from '../collection/DisclosureChevron.js';
 import { happierFocusRingStyle } from '../interaction/focusVisible.js';
 import { happierRaisedEdgeStyle, type HappierRaisedEdge } from '../layout/raisedEdge.js';
 import type { HappierPortableStyle, HappierStyleProp } from '../portableTypes.js';
 import { useHappierMaterialColorResolver } from '../layout/Surface.js';
+import { resolveHappierTypeScale } from '../text/typeScale.js';
 
 /** The compact rail/search well; phones take the platform target supplied by the adapter. */
-export const HAPPIER_SEARCH_FIELD_METRICS = Object.freeze({ heightPx: 32, iconInsetPx: 10, iconSizePx: 14, iconGapPx: 8, trailingInsetPx: 8 });
+export const HAPPIER_SEARCH_FIELD_METRICS = Object.freeze({ heightPx: HAPPIER_PAGE_METRICS.controlHeightPx, iconInsetPx: 10, iconSizePx: 14, iconGapPx: 8, trailingInsetPx: 8 });
 
 export function HappierSearchFieldBox(props: Readonly<{
   testID?: string;
@@ -44,15 +46,22 @@ export function HappierSearchFieldBox(props: Readonly<{
  * whatever the control. Happier core's `fieldBox.ts` (text fields, the page
  * `DropdownMenu` trigger) and the plugin page-row `Select` read it here.
  */
+/**
+ * A field's value is the `label` role at regular weight (plan §4.1: field text is label): the box
+ * already separates the value from its row title, so it needs no size step. The iOS-web 16px input
+ * floor is the core `TextInput` owner's, applied over this.
+ */
+const FIELD_TEXT_ROLE = resolveHappierTypeScale('label', Platform.OS);
+
 export const HAPPIER_FIELD_BOX_METRICS = Object.freeze({
-  minHeightPx: 32,
+  minHeightPx: HAPPIER_PAGE_METRICS.controlHeightPx,
   /** A control: the `md` step of the one radius base. */
   radiusPx: HAPPIER_RADIUS_V1.md,
   borderWidthPx: 1,
   paddingLeftPx: 12,
   paddingRightPx: 8,
-  fontSizePx: 13.5,
-  lineHeightPx: 18,
+  fontSizePx: FIELD_TEXT_ROLE.fontSize,
+  lineHeightPx: FIELD_TEXT_ROLE.lineHeight,
   /** Narrowest width beside a label; stacked under the label a field spans the row instead. */
   inlineMinWidthPx: HAPPIER_PAGE_METRICS.fieldInlineMinWidthPx,
   /** A select trigger's box: wide enough for a short choice, never wider than a long one needs. */
@@ -143,15 +152,20 @@ export type HappierFieldBoxTriggerProps = Readonly<{
  */
 export function HappierFieldBoxTrigger({ colors, leading, children, trailing, span }: HappierFieldBoxTriggerProps) {
   const paintColor = useHappierMaterialColorResolver();
+  const rowLayout = useContext(HappierPageRowFieldLayoutContext);
+  const resolvedSpan = span === 'column' && rowLayout
+    ? rowLayout.stacked ? 'row' : rowLayout.maxWidthPx === null ? 'column' : 'content'
+    : span;
+  const maxWidthPx = span === 'column' ? rowLayout?.maxWidthPx : null;
   return (
     <View
       style={[HAPPIER_FIELD_BOX_SHAPE, {
         flexDirection: 'row',
         alignItems: 'center',
         gap: HAPPIER_FIELD_BOX_METRICS.triggerGapPx,
-        minWidth: span === 'intrinsic' ? 0 : HAPPIER_FIELD_BOX_METRICS.triggerMinWidthPx,
-        ...(span === 'column' ? { width: HAPPIER_FIELD_BOX_METRICS.inlineMinWidthPx } : {}),
-        ...(span === 'row' ? { alignSelf: 'stretch' as const } : { maxWidth: HAPPIER_FIELD_BOX_METRICS.triggerMaxWidthPx }),
+        minWidth: resolvedSpan === 'intrinsic' ? 0 : HAPPIER_FIELD_BOX_METRICS.triggerMinWidthPx,
+        ...(resolvedSpan === 'column' ? { width: HAPPIER_FIELD_BOX_METRICS.inlineMinWidthPx } : {}),
+        ...(resolvedSpan === 'row' ? { alignSelf: 'stretch' as const } : { maxWidth: maxWidthPx ?? HAPPIER_FIELD_BOX_METRICS.triggerMaxWidthPx }),
         borderColor: colors.borderColor,
         backgroundColor: paintColor(colors.backgroundColor),
       }, happierRaisedEdgeStyle(colors.edge), colors.focusRing ? happierFocusRingStyle({ visible: true, color: colors.focusRing }) : null]}
@@ -194,8 +208,9 @@ export const HAPPIER_FIELD_TEXT_METRICS = Object.freeze({
   multilinePaddingVerticalPx: 7,
   defaultMultilineLines: 3,
   errorGapPx: 4,
-  errorFontSizePx: 12,
-  errorLineHeightPx: 16,
+  /** A field's refusal line beneath the box: the meta role. */
+  errorFontSizePx: resolveHappierTypeScale('meta', Platform.OS).fontSize,
+  errorLineHeightPx: resolveHappierTypeScale('meta', Platform.OS).lineHeight,
 });
 
 /**
@@ -204,10 +219,18 @@ export const HAPPIER_FIELD_TEXT_METRICS = Object.freeze({
  * `lines` tall and top-aligned, and — on a touch platform — the native target
  * floor, so a tap anywhere in the box lands in the field.
  */
+/**
+ * How a text field presents. `field`: the bordered box of a row's control. `document`: long prose a
+ * person reads and edits in place (a role's instructions, notes) as a soft filled card at reading
+ * size, so it reads like the text it is rather than a form control.
+ */
+export type HappierFieldTextPresentation = 'field' | 'document';
+
 export function resolveHappierFieldTextInputMetrics(input: Readonly<{
   multiline?: boolean;
   minLines?: number;
   nativeMinimumTargetSize?: number;
+  presentation?: HappierFieldTextPresentation;
 }>): Readonly<{
   fontSize: number;
   lineHeight: number;
@@ -216,6 +239,17 @@ export function resolveHappierFieldTextInputMetrics(input: Readonly<{
   minHeight: number;
   textAlignVertical?: 'top';
 }> {
+  if (input.multiline && input.presentation === 'document') {
+    const reading = resolveHappierTypeScale('reading', Platform.OS);
+    return {
+      fontSize: reading.fontSize,
+      lineHeight: reading.lineHeight,
+      padding: 0,
+      margin: 0,
+      minHeight: reading.lineHeight * (input.minLines ?? HAPPIER_FIELD_TEXT_METRICS.defaultMultilineLines),
+      textAlignVertical: 'top',
+    };
+  }
   const line = HAPPIER_FIELD_BOX_METRICS.lineHeightPx;
   if (input.multiline) {
     return {
@@ -244,7 +278,16 @@ export type HappierFieldTextBoxProps = Readonly<{
   /** The field's refusal, drawn by the adapter's text host (an alert), beneath the box. */
   error?: ReactNode;
   style?: HappierStyleProp;
+  /** `document`: a soft filled card (the adapter supplies the fill and no border), card radius and roomy insets. */
+  presentation?: HappierFieldTextPresentation;
 }>;
+
+/** The document card's shape: the card step of the radius base and the field's own inset on both sides. */
+const HAPPIER_FIELD_DOCUMENT_SHAPE: HappierPortableStyle = Object.freeze({
+  borderRadius: HAPPIER_RADIUS_V1.xl,
+  paddingRight: HAPPIER_FIELD_BOX_METRICS.paddingLeftPx,
+  paddingVertical: HAPPIER_PAGE_METRICS.sectionHeaderGapPx,
+});
 
 /**
  * A configuration page's text field: the bordered field box a page select also
@@ -280,6 +323,7 @@ export function HappierFieldTextBox(props: HappierFieldTextBoxProps) {
             { justifyContent: 'center', borderColor: props.colors.borderColor, backgroundColor: paintColor(props.colors.backgroundColor) },
             happierRaisedEdgeStyle(props.colors.edge),
             props.multiline ? { paddingVertical: HAPPIER_FIELD_TEXT_METRICS.multilinePaddingVerticalPx } : null,
+            props.presentation === 'document' ? HAPPIER_FIELD_DOCUMENT_SHAPE : null,
           ]}
         >
           {props.children}

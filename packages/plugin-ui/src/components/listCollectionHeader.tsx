@@ -8,6 +8,7 @@ import { HappierPressable } from '../presentation/interaction/Pressable.js';
 import { HAPPIER_PRESS_FEEDBACK_V1 } from '../presentation/interaction/pressFeedback.js';
 import { happierFocusRingStyle } from '../presentation/interaction/focusVisible.js';
 import { HappierText } from '../presentation/text/Text.js';
+import { hasHappierPrecisePointer } from '../presentation/interaction/precisePointer.js';
 import { Button } from './Button.js';
 import { Icon } from './Icon.js';
 import { Row, Stack } from './Layout.js';
@@ -139,8 +140,8 @@ function SearchTokens(props: Readonly<{ tokens: readonly ListCollectionSearchTok
               ...happierFocusRingStyle({ visible: state.focused, color: theme.colors.focus }),
             }]}
           >
-            {token.qualifier === undefined ? null : <HappierText variant="caption" tone="secondary">{token.qualifier}</HappierText>}
-            <HappierText variant="caption" tone="neutral">{token.label}</HappierText>
+            {token.qualifier === undefined ? null : <HappierText variant="meta" tone="secondary">{token.qualifier}</HappierText>}
+            <HappierText variant="meta" tone="neutral">{token.label}</HappierText>
           </HappierPressable>
         );
       })}
@@ -158,8 +159,15 @@ export function CollectionKeyCap(props: Readonly<{ label: string; testID?: strin
   const theme = usePluginTheme();
   const palette = useOptionalHappierUiPalette(theme) ?? resolveHappierUiPalette(theme);
   return (
-    <View testID={props.testID} style={[keyCapStyle, { borderColor: palette.controlBorder, backgroundColor: palette.fieldBackground }]}>
-      <HappierText variant="caption" tone="muted">{props.label}</HappierText>
+    <View testID={props.testID} style={[keyCapStyle, {
+      // A caption-line square, plus its two border edges, keeps a single key legible.
+      minWidth: theme.typography.caption.lineHeight + 2,
+      paddingHorizontal: theme.spacing.xsmall,
+      borderRadius: theme.radii.small,
+      borderColor: palette.controlBorder,
+      backgroundColor: palette.fieldBackground,
+    }]}>
+      <HappierText variant="meta" tone="muted">{props.label}</HappierText>
     </View>
   );
 }
@@ -173,22 +181,44 @@ const searchTokenStyle = {
   borderRadius: HAPPIER_RADIUS_V1.sm,
   borderWidth: 1,
 } as const;
-const keyCapStyle = { minWidth: 18, paddingHorizontal: 4, borderWidth: 1, borderRadius: 5, alignItems: 'center' } as const;
+const keyCapStyle = { borderWidth: 1, alignItems: 'center' } as const;
 
-export function ListCollectionHeader(props: Readonly<{
-  search: ReactNode;
-  store: ListMultiSelectionStore | null;
-  selectable: boolean;
-  children?: ReactNode;
-}>) {
-  const snapshot = useListMultiSelectionStoreSnapshot(props.store);
+/**
+ * The control that enters and leaves multi-selection: a touch-sized plain button ("Select" / "Done selecting").
+ * Every row's own menu and Space also enter selection; this is the visible way in on touch. On a hover-capable
+ * pointer, modifier-click, Space and the row menu already select, so the list draws no "Select" there, only
+ * "Done selecting" while a selection is open. `null` when the list cannot select.
+ */
+export function useListSelectionModeControl(store: ListMultiSelectionStore | null, selectable: boolean): ReactNode {
+  const snapshot = useListMultiSelectionStoreSnapshot(store);
   const translate = usePluginTranslation();
-  const mode = props.store === null || !props.selectable ? null : <Row gap="small" align="center">
+  if (store === null || !selectable) return null;
+  if (!snapshot.isSelectionMode && hasHappierPrecisePointer()) return null;
+  return (
     <Button title={snapshot.isSelectionMode
       ? translate('happier.plugin-ui.list.finishSelection', 'Done selecting')
       : translate('happier.plugin-ui.list.selectItems', 'Select')}
       variant="plain" testID="happier-list-selection-mode"
-      onPress={() => { if (snapshot.isSelectionMode) props.store?.exit(); else props.store?.enter(); }} />
-  </Row>;
-  return !props.search && !mode && !props.children ? null : <Stack gap="small">{props.search}{mode}{props.children}</Stack>;
+      onPress={() => { if (snapshot.isSelectionMode) store.exit(); else store.enter(); }} />
+  );
 }
+
+export function ListCollectionHeader(props: Readonly<{
+  search: ReactNode;
+  /** The selection-mode control (`useListSelectionModeControl`), or `null` when the page's own row places it. */
+  selectionMode: ReactNode;
+  children?: ReactNode;
+  /** Space above the controls when they open a page's content under its page header (a page-sized list). */
+  leadingGapPx?: number;
+}>) {
+  const mode = props.selectionMode;
+  if (!props.search && !mode && !props.children) return null;
+  // One row: the field takes the width, the selection control ends it. Never a row of its own for one button.
+  const lead = props.search && mode
+    ? <Row gap="small" align="center"><View style={searchFillStyle}>{props.search}</View>{mode}</Row>
+    : props.search ?? mode;
+  const controls = props.children ? <Stack gap="small">{lead}{props.children}</Stack> : lead;
+  return props.leadingGapPx === undefined ? controls : <View style={{ paddingTop: props.leadingGapPx }}>{controls}</View>;
+}
+
+const searchFillStyle = { flex: 1, minWidth: 0 } as const;

@@ -5,37 +5,43 @@ import type {
   HappierUiTypography,
 } from '../../environment/types.js';
 import type { HappierFontWeight, HappierPortableStyle } from '../portableTypes.js';
+import { Platform } from 'react-native';
+import { HAPPIER_TYPE_WEIGHT, resolveHappierTypeScale, type HappierTypeEmphasis } from './typeScale.js';
 
 /**
  * The one resolver from a type role to a text style for every shared text
  * owner (Text variants, Heading, Label, list rows, status lines, form fields).
  *
- * A same-realm host's real role styles win when installed; otherwise the
- * public theme snapshot's metrics apply, with `heading` stepping down to
- * `title` because the snapshot has no heading step. Components never read
- * `theme.typography.*` for these roles themselves, so family, tracking and the
- * heading step reach every surface through this one seam.
+ * A same-realm host supplies the active font faces. Hosted surfaces resolve
+ * the same table directly; the public snapshot retains its historical keys
+ * and is a projection, never a second metric owner.
  */
 export function resolveHappierTypeRoleStyle(
   role: HappierTypeRole,
-  theme: HappierUiTheme,
+  _theme: HappierUiTheme,
   typography: HappierUiTypography | null,
+  emphasis?: HappierTypeEmphasis,
 ): HappierPortableStyle {
   const host = typography?.[role];
+  const face = emphasis ? typography?.weights?.[emphasis] : undefined;
   if (host) {
+    const font = emphasis
+      ? { fontFamily: face?.fontFamily, fontWeight: face?.fontWeight as HappierFontWeight | undefined ?? (face?.fontFamily ? undefined : HAPPIER_TYPE_WEIGHT[emphasis]) }
+      : { fontFamily: host.fontFamily, fontWeight: host.fontWeight as HappierFontWeight | undefined };
     return {
       fontSize: host.fontSize,
       lineHeight: host.lineHeight,
-      ...(host.fontWeight === undefined ? {} : { fontWeight: host.fontWeight as HappierFontWeight }),
-      ...(host.fontFamily === undefined ? {} : { fontFamily: host.fontFamily }),
+      ...(font.fontWeight === undefined ? {} : { fontWeight: font.fontWeight }),
+      ...(font.fontFamily === undefined ? {} : { fontFamily: font.fontFamily }),
       ...(host.letterSpacing === undefined ? {} : { letterSpacing: host.letterSpacing }),
     };
   }
-  const metric = theme.typography[role === 'heading' ? 'title' : role];
+  const metric = resolveHappierTypeScale(role, Platform.OS, emphasis);
   return {
     fontSize: metric.fontSize,
     lineHeight: metric.lineHeight,
-    fontWeight: metric.fontWeight as HappierFontWeight,
+    fontWeight: HAPPIER_TYPE_WEIGHT[metric.weight],
+    letterSpacing: metric.letterSpacing,
   };
 }
 

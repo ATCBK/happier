@@ -44,11 +44,12 @@ export type HappierUiEnvironment = Readonly<{
  * one a hosted-web frame in its own realm can receive); it carries size, line
  * height and weight for five roles. A same-realm host can say more: the real
  * role style objects its own screens use — family, tracking, tabular figures —
- * and a `heading` step above `title`. When a host installs these facts every
- * shared text owner reads them; without them the snapshot's metrics apply, so
- * the two never disagree on size (the host projects both from one role table).
+ * across all eight roles (`title` above `heading`). Host facts and the public
+ * snapshot project one role table; an unhosted surface resolves that table
+ * directly and keeps the snapshot's colour and accessibility facts.
  */
-export type HappierTypeRole = 'heading' | 'title' | 'label' | 'body' | 'reading' | 'caption';
+import type { HappierTypeRole } from '../presentation/text/typeScale.js';
+export type { HappierTypeRole } from '../presentation/text/typeScale.js';
 
 export type HappierTypeRoleStyle = Readonly<{
   fontSize: number;
@@ -133,6 +134,14 @@ export type HappierUiPalette = Readonly<{
    * retained-content freshness line.
    */
   inset?: string;
+  /** The quiet ink loading rows are drawn in (an ink overlay on the surface). Absent, the snapshot's control fill. */
+  skeleton?: string;
+  /**
+   * The version-control inks a diff stat's counts are drawn in (lines added, lines removed). Absent, they
+   * fall back to the snapshot's success and danger inks.
+   */
+  versionControlAdded?: string;
+  versionControlRemoved?: string;
   /** Same-realm compact search radius; unhosted search uses its public theme's control radius. */
   searchFieldRadiusPx?: number;
   /** The raised edge of the compact search field (drawn on `sheetBorder`); absent, it draws flat. */

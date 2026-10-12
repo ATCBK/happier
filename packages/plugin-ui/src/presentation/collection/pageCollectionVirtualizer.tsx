@@ -49,7 +49,7 @@ export function PageCollectionVirtualizer<Item>({ request, geometry, tracker, ta
       });
     } else {
       request.sections.forEach((section, sectionIndex) => {
-        append(`header:${section.key}`, geometry.headerHeight, -1, sectionIndex, true);
+        append(`header:${section.key}`, section.title === '' ? 0 : geometry.headerHeight, -1, sectionIndex, true);
         section.data.forEach((item, index) => {
           const key = request.keyForItem(item, index);
           append(`${section.key}:${key}`, geometry.rowHeight(key), index, sectionIndex, false, item);

@@ -1,10 +1,11 @@
-import { createContext, isValidElement, useCallback, useContext, useState, type ReactNode } from 'react';
+import { createContext, isValidElement, useCallback, useContext, useRef, useState, type ReactNode } from 'react';
 import { View } from 'react-native';
 
 import { useOptionalHappierUiTheme, useOptionalHappierUiTypography } from '../../environment/context.js';
 import type { HappierFocusable, HappierLayoutChangeEvent, HappierStyleProp } from '../portableTypes.js';
 import { HappierText, useHappierTextPresentation } from '../text/Text.js';
-import { HAPPIER_PAGE_METRICS, resolveHappierPageBackPlacement } from './pageMetrics.js';
+import { useHappierCollectionLayout } from '../collection/collectionLayout.js';
+import { HAPPIER_PAGE_METRICS, resolveHappierPageBackMeasuringLine, resolveHappierPageBackPlacement } from './pageMetrics.js';
 import { HAPPIER_PAGE_TEXT, resolveHappierPageTextStyle, type HappierPageTextRole } from './pageText.js';
 
 /** One fact on a page header's meta line: "@handle", "Personal Home", "End-to-end encrypted". */
@@ -145,29 +146,113 @@ export function HappierPageHeader(props: HappierPageHeaderProps) {
   const showTitle = props.showTitle !== false;
   const renderBack = props.renderBack ?? null;
   const showsBack = showTitle && renderBack !== null;
+  const collectionMode = useHappierCollectionLayout()?.mode ?? null;
   // The pane's width decides whether back fits in the gutter left of the
-  // column; only a header that carries back measures it.
+  // column. Every header measures it: a back control often arrives after the
+  // pane's one mount layout (it follows the route), and a handler attached
+  // late never hears that layout, which left back hidden while "measuring".
   const [paneWidthPx, setPaneWidthPx] = useState<number | null>(null);
   const handleLayout = useCallback((event: HappierLayoutChangeEvent) => {
     const widthPx = event.nativeEvent.layout.width;
     setPaneWidthPx((current) => (current === widthPx ? current : widthPx));
   }, []);
 
+  // An entity header whose actions cannot share the title's line moves them, as one group, after the
+  // whole identity (mark, title and meta), never between the title and its facts (DESIGN-15 R1). The
+  // split column's width at which they wrapped is remembered; only a wider column tries the line again.
+  const [splitWidthPx, setSplitWidthPx] = useState<number | null>(null);
+  const [actionsWrapWidthPx, setActionsWrapWidthPx] = useState<number | null>(null);
+  const splitWidthRef = useRef<number | null>(null);
+  // Sizes, not positions: a web layout event reports a box that resized, never one that only moved, so
+  // the wrap is read from the shared line growing taller than its tallest item.
+  const lineHeightsRef = useRef<{ line?: number; title?: number; actions?: number }>({});
+  const naturalWidthsRef = useRef<{ key: unknown; title: number; actions: number }>({ key: undefined, title: 0, actions: 0 });
+  const checkActionsWrap = useCallback(() => {
+    // Once both widths are known the prediction below decides; the line's height is the fallback.
+    if (naturalWidthsRef.current.title > 0 && naturalWidthsRef.current.actions > 0) return;
+    const { line, title, actions } = lineHeightsRef.current;
+    const widthPx = splitWidthRef.current;
+    if (line === undefined || title === undefined || actions === undefined || widthPx === null) return;
+    if (line <= Math.max(title, actions) + 1) return;
+    // Every box is measured afresh when the actions return to the line.
+    lineHeightsRef.current = {};
+    setActionsWrapWidthPx(widthPx);
+  }, []);
+  // The title's and the actions' own widths, as wide as either has been seen, decide the line as soon as
+  // the column's width is known: a column that narrows (a details pane opening) moves the actions in the
+  // same layout pass as everything else on the page, not one settle later (DESIGN-16 D3). Until both are
+  // known, the line's measured height decides instead.
+  // A renamed title is measured afresh; an element title (a new object every render) keeps its width.
+  const titleKey = typeof props.title === 'string' ? props.title : null;
+  if (naturalWidthsRef.current.key !== titleKey) naturalWidthsRef.current = { key: titleKey, title: 0, actions: naturalWidthsRef.current.actions };
+  const predictActionsWrap = useCallback((widthPx: number) => {
+    const { title, actions } = naturalWidthsRef.current;
+    if (title <= 0 || actions <= 0) return;
+    // The widest column that cannot hold both on one line. A flex-wrap line wraps by each item's own
+    // width before shrinking it, so a title is only ever measured narrower than itself when it alone
+    // fills the column, which already says the actions cannot share it.
+    const wrapWidthPx = Math.ceil(title + HAPPIER_PAGE_METRICS.pageHeaderColumnGapPx + actions) - 1;
+    setActionsWrapWidthPx(wrapWidthPx);
+    if (widthPx <= wrapWidthPx) lineHeightsRef.current = {};
+  }, []);
+  const handleTitleNaturalLayout = useCallback((event: HappierLayoutChangeEvent) => {
+    naturalWidthsRef.current.title = Math.max(naturalWidthsRef.current.title, event.nativeEvent.layout.width);
+    if (splitWidthRef.current !== null) predictActionsWrap(splitWidthRef.current);
+  }, [predictActionsWrap]);
+  const handleActionsNaturalLayout = useCallback((event: HappierLayoutChangeEvent) => {
+    naturalWidthsRef.current.actions = Math.max(naturalWidthsRef.current.actions, event.nativeEvent.layout.width);
+    if (splitWidthRef.current !== null) predictActionsWrap(splitWidthRef.current);
+  }, [predictActionsWrap]);
+  // Layout events arrive in no fixed order: whichever of the column, title and actions lands last decides.
+  const handleSplitLayout = useCallback((event: HappierLayoutChangeEvent) => {
+    const widthPx = event.nativeEvent.layout.width;
+    splitWidthRef.current = widthPx;
+    setSplitWidthPx((current) => (current === widthPx ? current : widthPx));
+    predictActionsWrap(widthPx);
+    checkActionsWrap();
+  }, [checkActionsWrap, predictActionsWrap]);
+  const handleTitleLineLayout = useCallback((event: HappierLayoutChangeEvent) => {
+    lineHeightsRef.current.line = event.nativeEvent.layout.height;
+    checkActionsWrap();
+  }, [checkActionsWrap]);
+  const handleTitleBoxLayout = useCallback((event: HappierLayoutChangeEvent) => {
+    lineHeightsRef.current.title = event.nativeEvent.layout.height;
+    checkActionsWrap();
+  }, [checkActionsWrap]);
+  const handleLineActionsLayout = useCallback((event: HappierLayoutChangeEvent) => {
+    lineHeightsRef.current.actions = event.nativeEvent.layout.height;
+    checkActionsWrap();
+  }, [checkActionsWrap]);
+
   if (!showTitle && !props.description && !props.actions && !props.status && !props.details && !props.meta) return null;
 
   const columnMaxWidthPx = props.columnMaxWidthPx ?? Number.POSITIVE_INFINITY;
   const centered = props.compactPresentation === 'centered' && paneWidthPx !== null && paneWidthPx < HAPPIER_PAGE_METRICS.rowStackBelowWidthPx;
   const inlineActions = !centered && props.actionsLayout === 'inline';
-  const backPlacement = showsBack ? resolveHappierPageBackPlacement({ paneWidthPx, columnMaxWidthPx }) : null;
+  const backPlacement = resolveHappierPageBackPlacement({ paneWidthPx, columnMaxWidthPx, backShown: showsBack });
 
   // In the gutter the arrow is outside the flow, anchored to what sits on the
   // content's left edge (the mark, else the text), so that keeps its place and
-  // the arrow sits level with it. Until the pane is measured it is mounted
-  // there unseen, so nothing moves on arrival.
+  // the arrow sits level with it. Where the gutter cannot hold it, it takes its
+  // own line above the title. Until the pane is measured it is mounted unseen
+  // where it will most likely land (the line, beside a collection's list; the
+  // gutter elsewhere), so nothing moves on arrival.
   const measuring = showsBack && backPlacement === null;
+  const measuringOnLine = measuring && resolveHappierPageBackMeasuringLine({ backShown: showsBack, collectionMode });
   const titleRole = props.titleProminence === 'hero' ? 'heroTitle' : 'pageTitle';
   const titleLineHeight = HAPPIER_PAGE_TEXT[titleRole].lineHeight;
-  const gutterBack = renderBack && (backPlacement === 'gutter' || measuring) ? (
+  const backLine = renderBack && !centered && (backPlacement === 'above-title' || measuringOnLine) ? (
+    <View
+      testID={props.testID ? `${props.testID}-back-line` : undefined}
+      style={[
+        { flexDirection: 'row', alignItems: 'center', height: HAPPIER_PAGE_METRICS.backControlSizePx, marginBottom: HAPPIER_PAGE_METRICS.pageHeaderLineGapPx },
+        measuring ? { opacity: 0 } : null,
+      ]}
+    >
+      {renderBack({})}
+    </View>
+  ) : null;
+  const gutterBack = renderBack && (backPlacement === 'gutter' || (measuring && !measuringOnLine)) ? (
     <View
       testID={props.testID ? `${props.testID}-back-gutter` : undefined}
       style={[
@@ -186,88 +271,42 @@ export function HappierPageHeader(props: HappierPageHeaderProps) {
   ) : null;
 
   const title = showTitle ? renderPageText(props.title, titleRole, renderText, true) : null;
-
-  return (
-    <View
-      testID={props.testID}
-      onLayout={showsBack || props.compactPresentation ? handleLayout : undefined}
-      style={{ alignItems: 'center' }}
-    >
-      <View
-        style={{
-          width: '100%',
-          maxWidth: props.columnMaxWidthPx,
-          paddingHorizontal: HAPPIER_PAGE_METRICS.pageTextInsetPx,
-          // When navigation chrome already shows the title, the purpose line takes the title's place
-          // right under that chrome instead of leaving the title's room empty above it.
-          paddingTop: showTitle ? HAPPIER_PAGE_METRICS.pageHeaderPaddingTopPx : HAPPIER_PAGE_METRICS.pageHeaderUnderChromePaddingTopPx,
-          paddingBottom: HAPPIER_PAGE_METRICS.pageHeaderPaddingBottomPx,
-        }}
-      >
-        <View
-          testID={props.testID ? `${props.testID}-title-row` : undefined}
-          // Inline actions (and the status line under them) hang from the title's top edge, so a status
-          // that wraps to another line never re-centres, and so moves, the identity beside it.
-          style={{ position: 'relative', flexDirection: centered ? 'column' : 'row', flexWrap: centered ? 'nowrap' : 'wrap', alignItems: inlineActions ? 'flex-start' : 'center', columnGap: 14, rowGap: 12 }}
-        >
-          {renderBack && backPlacement === 'title-row'
-            // On the title-row fallback the back control is centred on the
-            // title's first line at the page's text edge; its trailing margin
-            // pulls the title closer than the row gap, so the pair reads as one.
-            ? centered ? <View style={{ position: 'absolute', left: 0, top: 0 }}>{renderBack({})}</View> : renderBack(props.leading
-              ? { alignSelf: 'center', marginRight: -6 }
-              : { alignSelf: 'flex-start', height: titleLineHeight, marginRight: -6 })
-            : null}
-          {props.leading ? (
-            <View style={{ flexShrink: 0, position: 'relative' }}>
-              {props.leading}
-              {gutterBack}
-            </View>
-          ) : null}
-          <View style={{ position: 'relative', flexGrow: centered ? 0 : 1, flexShrink: 1, flexBasis: centered ? 'auto' : HAPPIER_PAGE_METRICS.sectionTextMinWidthPx, minWidth: 0, ...(centered ? { width: '100%', alignItems: 'center' } : {}) }}>
-            {props.leading ? null : gutterBack}
-            {title && props.titleAccessory ? (
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                <View style={{ flexShrink: 1, minWidth: 0 }}>{title}</View>
-                {props.titleAccessory}
-              </View>
-            ) : title}
-            {props.description ? (
-              <View style={showTitle ? { marginTop: HAPPIER_PAGE_METRICS.pageHeaderLineGapPx } : undefined}>
-                {renderPageText(props.description, 'pageDescription', renderText)}
-              </View>
-            ) : null}
-            {props.details && props.detailsPlacement !== 'column' ? (
-              <View style={{ marginTop: HAPPIER_PAGE_METRICS.pageHeaderLineGapPx }}>{props.details}</View>
-            ) : null}
-            {props.meta ? (
-              <View
-                testID={props.testID ? `${props.testID}-meta` : undefined}
-                style={[
-                  { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: centered ? 'center' : 'flex-start', columnGap: 6, minHeight: 18 },
-                  // Directly under the details line (an identifier row is already padded by its button).
-                  !props.details && (showTitle || props.description)
-                    ? { marginTop: HAPPIER_PAGE_METRICS.pageHeaderLineGapPx }
-                    : null,
-                ]}
-              >
-                {props.meta.map((fact, index) => (
-                  // The separator closes the fact before it, so a wrapped line never starts with "·".
-                  <View key={fact.key} testID={fact.testID} style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                    {fact.icon ?? null}
-                    {renderText({ role: 'meta', text: fact.text, header: false, ...(fact.mono ? { mono: true } : {}) })}
-                    {index < (props.meta?.length ?? 0) - 1 ? (
-                      <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" aria-hidden>
-                        {renderText({ role: 'meta', text: '·', header: false })}
-                      </View>
-                    ) : null}
-                  </View>
-                ))}
-              </View>
-            ) : null}
-          </View>
-          {props.actions || props.status ? (
+  const titleLine = title && props.titleAccessory ? (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+      <View style={{ flexShrink: 1, minWidth: 0 }}>{title}</View>
+      {props.titleAccessory}
+    </View>
+  ) : title;
+  const textBelowTitle = (
+    <>
+      {props.description ? (
+        <View style={showTitle ? { marginTop: HAPPIER_PAGE_METRICS.pageHeaderLineGapPx } : undefined}>
+          {renderPageText(props.description, 'pageDescription', renderText)}
+        </View>
+      ) : null}
+      {props.details && props.detailsPlacement !== 'column' ? (
+        <View style={{ marginTop: HAPPIER_PAGE_METRICS.pageHeaderLineGapPx }}>{props.details}</View>
+      ) : null}
+      {props.meta ? (
+        <PageHeaderMetaLine
+          testID={props.testID ? `${props.testID}-meta` : undefined}
+          facts={props.meta}
+          renderText={renderText}
+          centered={centered}
+          spaced={!props.details && (showTitle || Boolean(props.description))}
+        />
+      ) : null}
+    </>
+  );
+  const splitTitleLine = showTitle && !centered && !inlineActions && Boolean(props.actions || props.status);
+  const actionsBelowIdentity = splitTitleLine
+    && actionsWrapWidthPx !== null && splitWidthPx !== null && splitWidthPx <= actionsWrapWidthPx;
+  const actionsBlock = props.actions || props.status ? (
             <View
+              onLayout={splitTitleLine ? (event: HappierLayoutChangeEvent) => {
+                handleActionsNaturalLayout(event);
+                if (!actionsBelowIdentity) handleLineActionsLayout(event);
+              } : undefined}
               style={{
                 flexShrink: inlineActions ? 0 : 1,
                 maxWidth: '100%',
@@ -296,10 +335,133 @@ export function HappierPageHeader(props: HappierPageHeaderProps) {
                 </View>
               ) : null}
             </View>
+          ) : null;
+
+  return (
+    <View
+      testID={props.testID}
+      onLayout={handleLayout}
+      style={{ alignItems: 'center' }}
+    >
+      <View
+        style={{
+          width: '100%',
+          maxWidth: props.columnMaxWidthPx,
+          paddingHorizontal: HAPPIER_PAGE_METRICS.pageTextInsetPx,
+          // When navigation chrome already shows the title, the purpose line takes the title's place
+          // right under that chrome instead of leaving the title's room empty above it.
+          paddingTop: showTitle ? HAPPIER_PAGE_METRICS.pageHeaderPaddingTopPx : HAPPIER_PAGE_METRICS.pageHeaderUnderChromePaddingTopPx,
+          paddingBottom: HAPPIER_PAGE_METRICS.pageHeaderPaddingBottomPx,
+        }}
+      >
+        {backLine}
+        <View
+          testID={props.testID ? `${props.testID}-title-row` : undefined}
+          // Inline actions (and the status line under them) hang from the title's top edge, so a status
+          // that wraps to another line never re-centres, and so moves, the identity beside it.
+          style={{ position: 'relative', flexDirection: centered ? 'column' : 'row', flexWrap: centered ? 'nowrap' : 'wrap', alignItems: inlineActions ? 'flex-start' : 'center', columnGap: HAPPIER_PAGE_METRICS.pageHeaderColumnGapPx, rowGap: 12 }}
+        >
+          {renderBack && centered && backPlacement === 'above-title'
+            // A compact centred identity keeps back at the pane's top-left corner.
+            ? <View style={{ position: 'absolute', left: 0, top: 0 }}>{renderBack({})}</View>
+            : null}
+          {props.leading ? (
+            <View style={{ flexShrink: 0, position: 'relative' }}>
+              {props.leading}
+              {gutterBack}
+            </View>
           ) : null}
+          {splitTitleLine ? (
+            // An entity header (lab cforms F2): the actions share the title's line only, and the purpose,
+            // details and meta run the whole text column beneath them instead of wrapping in the space
+            // left beside the actions. Too narrow for both, the actions wrap under the title.
+            <View onLayout={handleSplitLayout} style={{ flexGrow: 1, flexShrink: 1, flexBasis: HAPPIER_PAGE_METRICS.sectionTextMinWidthPx, minWidth: 0 }}>
+              <View
+                onLayout={actionsBelowIdentity ? undefined : handleTitleLineLayout}
+                style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', columnGap: HAPPIER_PAGE_METRICS.pageHeaderColumnGapPx, rowGap: 12 }}
+              >
+                {/* The title's own measured width decides the line: when it and the actions don't fit
+                    side by side, the actions wrap beneath it instead of squeezing a short name onto two
+                    lines (DESIGN-14 D5). A title wider than the row still wraps within it. */}
+                <View
+                  onLayout={actionsBelowIdentity ? undefined : handleTitleBoxLayout}
+                  style={{ position: 'relative', flexGrow: 1, flexShrink: 1, flexBasis: 'auto', minWidth: 0 }}
+                >
+                  {props.leading ? null : gutterBack}
+                  <View onLayout={handleTitleNaturalLayout} style={{ alignSelf: 'flex-start', maxWidth: '100%' }}>{titleLine}</View>
+                </View>
+                {actionsBelowIdentity ? null : actionsBlock}
+              </View>
+              {textBelowTitle}
+            </View>
+          ) : (
+            <>
+              <View style={{ position: 'relative', flexGrow: centered ? 0 : 1, flexShrink: 1, flexBasis: centered ? 'auto' : HAPPIER_PAGE_METRICS.sectionTextMinWidthPx, minWidth: 0, ...(centered ? { width: '100%', alignItems: 'center' } : {}) }}>
+                {props.leading ? null : gutterBack}
+                {titleLine}
+                {textBelowTitle}
+              </View>
+              {actionsBlock}
+            </>
+          )}
         </View>
+        {actionsBelowIdentity ? (
+          <View testID={props.testID ? `${props.testID}-actions-below` : undefined} style={{ marginTop: 12, flexDirection: 'row' }}>
+            {actionsBlock}
+          </View>
+        ) : null}
         {props.details && props.detailsPlacement === 'column' ? <View style={{ marginTop: HAPPIER_PAGE_METRICS.pageHeaderLineGapPx }}>{props.details}</View> : null}
       </View>
+    </View>
+  );
+}
+
+/**
+ * The meta line. Each separator closes the fact before it, so a wrapped line never starts with "·";
+ * a separator that ends up closing a line keeps its width (the wrap does not move) but is not drawn,
+ * so no line ends with a dangling "·" either.
+ */
+function PageHeaderMetaLine(props: Readonly<{
+  testID?: string;
+  facts: readonly HappierPageHeaderMetaFact[];
+  renderText: HappierPageHeaderTextRender;
+  centered: boolean;
+  /** Directly under the description or title; an identifier row above is already padded by its button. */
+  spaced: boolean;
+}>) {
+  // Each fact's vertical centre in the line; facts on one wrapped row share it.
+  const [centres, setCentres] = useState<Readonly<Record<string, number>>>({});
+  const measureFact = (key: string) => (event: HappierLayoutChangeEvent) => {
+    const { y, height } = event.nativeEvent.layout;
+    const centre = y + height / 2;
+    setCentres((current) => (current[key] === centre ? current : { ...current, [key]: centre }));
+  };
+  const endsLine = (index: number) => {
+    const here = centres[props.facts[index]!.key];
+    const next = centres[props.facts[index + 1]!.key];
+    return here !== undefined && next !== undefined && next - here > HAPPIER_PAGE_TEXT.meta.lineHeight / 2;
+  };
+  return (
+    <View
+      testID={props.testID}
+      style={[
+        { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: props.centered ? 'center' : 'flex-start', columnGap: 6, minHeight: 18 },
+        props.spaced ? { marginTop: HAPPIER_PAGE_METRICS.pageHeaderLineGapPx } : null,
+      ]}
+    >
+      {props.facts.map((fact, index) => (
+        // A fact and the separator that closes it wrap as one group: the fact's words never break
+        // across lines, so a line never ends on a lone "·" after half a fact.
+        <View key={fact.key} testID={fact.testID} onLayout={measureFact(fact.key)} style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 0, maxWidth: '100%' }}>
+          {fact.icon ?? null}
+          {props.renderText({ role: 'meta', text: fact.text, header: false, ...(fact.mono ? { mono: true } : {}) })}
+          {index < props.facts.length - 1 ? (
+            <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" aria-hidden style={endsLine(index) ? { opacity: 0 } : undefined}>
+              {props.renderText({ role: 'meta', text: '·', header: false })}
+            </View>
+          ) : null}
+        </View>
+      ))}
     </View>
   );
 }

@@ -378,7 +378,7 @@ export function HappierWidgetFrame(props: HappierWidgetFrameProps) {
     !props.disclosure;
 
   return (
-    <HappierMaterialSurface materialRole={plain ? undefined : 'content'} gradient={plain ? null : props.gradient} renderMaterialSurface={props.renderMaterialSurface}
+    <HappierMaterialSurface materialRole={plain ? undefined : 'card'} gradient={plain ? null : props.gradient} renderMaterialSurface={props.renderMaterialSurface}
       testID={testID}
       onLayout={onLayout}
       accessibilityLabel={props.accessibilityLabel}

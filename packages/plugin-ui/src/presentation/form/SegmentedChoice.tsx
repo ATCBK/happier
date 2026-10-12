@@ -1,7 +1,7 @@
 import { useRef, type ReactNode } from 'react';
-import { I18nManager, View } from 'react-native';
+import { I18nManager, Platform, View } from 'react-native';
 
-import { useOptionalHappierUiLocalization } from '../../environment/context.js';
+import { useOptionalHappierUiLocalization, useOptionalHappierUiTypography } from '../../environment/context.js';
 import { HappierPressable } from '../interaction/Pressable.js';
 import { happierFocusRingStyle } from '../interaction/focusVisible.js';
 import { HAPPIER_RADIUS_V1, happierInnerRadius } from '../../environment/radius.js';
@@ -10,6 +10,9 @@ import { resolveHappierTabKeySelection } from '../navigation/Tabs.js';
 import type { HappierFocusable, HappierPortableStyle } from '../portableTypes.js';
 import { HappierText } from '../text/Text.js';
 import { useHappierMaterialColorResolver } from '../layout/Surface.js';
+import { resolveHappierTextStepStyle } from '../layout/pageText.js';
+import { resolveHappierTypeScale } from '../text/typeScale.js';
+import { useHappierFieldIssueSemantics } from './Fields.js';
 
 /**
  * The segmented control's geometry and label type, shared by Happier core's
@@ -28,6 +31,16 @@ import { useHappierMaterialColorResolver } from '../layout/Surface.js';
  */
 const SEGMENTED_TRACK_PADDING_PX = 2;
 
+/**
+ * Control text is the `body` role (the lab's 13 to 13.5px segment, select and button text, rounded
+ * down by the scale's half-size rule); a compact segment takes `micro`. The slots below stay the
+ * geometry that keeps the track 32 (compact 24) tall, whatever the role's own line height.
+ */
+const SEGMENT_LABEL_ROLE = Object.freeze({
+  default: resolveHappierTypeScale('body', Platform.OS),
+  compact: resolveHappierTypeScale('micro', Platform.OS),
+});
+
 export const HAPPIER_SEGMENTED_METRICS = Object.freeze({
   /** The track's inset: the gap around the segments and the thumb's inset. */
   trackPaddingPx: SEGMENTED_TRACK_PADDING_PX,
@@ -37,22 +50,27 @@ export const HAPPIER_SEGMENTED_METRICS = Object.freeze({
     default: happierInnerRadius(HAPPIER_RADIUS_V1.md, SEGMENTED_TRACK_PADDING_PX),
     compact: happierInnerRadius(HAPPIER_RADIUS_V1.sm, SEGMENTED_TRACK_PADDING_PX),
   }),
-  segmentPaddingVerticalPx: Object.freeze({ default: 7, compact: 4 }),
+  segmentPaddingVerticalPx: Object.freeze({ default: 6, compact: 4 }),
   /** A content-sized segment's side padding (a segment hugging its label). */
   segmentPaddingHorizontalPx: 12,
-  labelSlotPx: Object.freeze({ default: 14, compact: 12 }),
-  labelFontSizePx: Object.freeze({ default: 12, compact: 10 }),
-  labelActiveFontWeight: '600' as const,
+  /**
+   * The default label is the control text role (selects, buttons and segment labels read as one
+   * family beside the row titles); the track stays 32px tall (2 + 6 + 16 + 6 + 2).
+   */
+  labelSlotPx: Object.freeze({ default: 16, compact: 12 }),
+  labelFontSizePx: Object.freeze({ default: SEGMENT_LABEL_ROLE.default.fontSize, compact: SEGMENT_LABEL_ROLE.compact.fontSize }),
+  /** The chosen label's emphasis: a face, never a numeric weight over the regular face. */
+  labelActiveEmphasis: 'semiBold' as const,
   segmentMinWidthPx: 24,
   /** One unavailable segment, or a whole unavailable control. */
   disabledOpacity: 0.5,
   /** Separate list-filter pills share the tab interaction owner, without a segmented track. */
-  pills: Object.freeze({ gapPx: 8, radiusPx: 999, paddingVerticalPx: 4, paddingHorizontalPx: 8, labelFontSizePx: 13, labelSlotPx: 18 }),
+  pills: Object.freeze({ gapPx: 8, radiusPx: 999, paddingVerticalPx: 4, paddingHorizontalPx: 8, labelFontSizePx: SEGMENT_LABEL_ROLE.default.fontSize, labelSlotPx: 18 }),
   /**
    * A destination's page tabs (lab `p-overview` header): no track, a glyph beside each label, the
    * chosen tab on the ink selection fill. Controls' radius step; the label on the pill type step.
    */
-  plain: Object.freeze({ gapPx: 2, radiusPx: HAPPIER_RADIUS_V1.md, paddingVerticalPx: 6, paddingHorizontalPx: 11, labelFontSizePx: 13, labelSlotPx: 18, iconGapPx: 7 }),
+  plain: Object.freeze({ gapPx: 2, radiusPx: HAPPIER_RADIUS_V1.md, paddingVerticalPx: 6, paddingHorizontalPx: 11, labelFontSizePx: SEGMENT_LABEL_ROLE.default.fontSize, labelSlotPx: 18, iconGapPx: 7 }),
 });
 
 export type HappierSegmentedSize = 'default' | 'compact';
@@ -90,6 +108,12 @@ export type HappierSegmentedChoiceProps = Readonly<{
   testID?: string;
   /** Footprint choices may reflow at narrow widths or enlarged text. */
   wrap?: boolean;
+  /**
+   * A narrow toolbar's form (List | Board on a phone): a segment with a leading mark shows the mark
+   * alone, at the same height, and its label stays its accessible name. A segment without a mark
+   * keeps its label, since nothing else could name it on screen.
+   */
+  iconOnly?: boolean;
 }>;
 
 /**
@@ -101,6 +125,10 @@ export type HappierSegmentedChoiceProps = Readonly<{
  */
 export function HappierSegmentedChoice(props: HappierSegmentedChoiceProps) {
   const paintColor = useHappierMaterialColorResolver();
+  const typography = useOptionalHappierUiTypography();
+  // Inside a typed field (a form's few-way choice) each segment carries the field's issue and
+  // description, as the field's other controls do; elsewhere this is empty.
+  const fieldIssue = useHappierFieldIssueSemantics();
   const localization = useOptionalHappierUiLocalization();
   const rtl = localization ? localization.direction === 'rtl' : I18nManager.isRTL;
   const size = props.size ?? 'default';
@@ -134,6 +162,7 @@ export function HappierSegmentedChoice(props: HappierSegmentedChoiceProps) {
     >
       {props.segments.map((segment, index) => {
         const disabled = groupDisabled || segment.disabled;
+        const showsLabel = props.iconOnly !== true || segment.leading === undefined || segment.leading === null;
         return (
           <HappierPressable
             key={segment.key}
@@ -141,6 +170,9 @@ export function HappierSegmentedChoice(props: HappierSegmentedChoiceProps) {
             accessibilityLabel={segment.accessibilityLabel ?? segment.label}
             checked={segment.selected}
             disabled={disabled}
+            describedById={fieldIssue.descriptionId}
+            invalid={fieldIssue.invalid}
+            errorMessageId={fieldIssue.issueId}
             tabIndex={index === tabStopIndex ? 0 : -1}
             testID={segment.testID}
             controlRef={(node) => {
@@ -167,7 +199,7 @@ export function HappierSegmentedChoice(props: HappierSegmentedChoiceProps) {
               minWidth: HAPPIER_SEGMENTED_METRICS.segmentMinWidthPx,
               alignItems: 'center',
               flexDirection: 'row',
-              gap: segment.leading ? HAPPIER_SEGMENTED_METRICS.trackPaddingPx * 2 : 0,
+              gap: segment.leading && showsLabel ? HAPPIER_SEGMENTED_METRICS.trackPaddingPx * 2 : 0,
               justifyContent: 'center',
               paddingVertical: verticalPadding,
               paddingHorizontal: horizontalPadding,
@@ -181,19 +213,21 @@ export function HappierSegmentedChoice(props: HappierSegmentedChoiceProps) {
             })}
           >
             {segment.leading}
-            <HappierText
+            {showsLabel ? <HappierText
               accessible={false}
               numberOfLines={1}
               style={{
-                fontSize: HAPPIER_SEGMENTED_METRICS.labelFontSizePx[size],
                 // The label's line box is its slot, so every segmented control is padding + slot tall.
-                lineHeight: HAPPIER_SEGMENTED_METRICS.labelSlotPx[size],
+                ...resolveHappierTextStepStyle({
+                  fontSize: HAPPIER_SEGMENTED_METRICS.labelFontSizePx[size],
+                  lineHeight: HAPPIER_SEGMENTED_METRICS.labelSlotPx[size],
+                  weight: segment.selected ? HAPPIER_SEGMENTED_METRICS.labelActiveEmphasis : 'regular',
+                }, typography),
                 color: segment.selected ? props.colors.activeLabel : props.colors.label,
-                ...(segment.selected ? { fontWeight: HAPPIER_SEGMENTED_METRICS.labelActiveFontWeight } : {}),
               }}
             >
               {segment.label}
-            </HappierText>
+            </HappierText> : null}
           </HappierPressable>
         );
       })}

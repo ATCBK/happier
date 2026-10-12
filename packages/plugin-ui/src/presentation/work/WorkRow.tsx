@@ -6,6 +6,8 @@ import { HappierFactLine } from './FactLine.js';
 import { happierFocusRingStyle } from '../interaction/focusVisible.js';
 import { HappierPressable, type HappierPressableProps } from '../interaction/Pressable.js';
 import { HAPPIER_PRESS_FEEDBACK_V1 } from '../interaction/pressFeedback.js';
+import { HAPPIER_PAGE_METRICS } from '../layout/pageMetrics.js';
+import { happierPageRowDividerWidth, useHappierPageSection } from '../layout/PageSection.js';
 import type { HappierPortableStyle, HappierStyleProp } from '../portableTypes.js';
 import { resolveHappierWorkStatusWordColor, type HappierWorkStatusTone } from './workStatus.js';
 import {
@@ -39,10 +41,13 @@ import {
 /** Each nesting level of work under its lead. */
 const LEVEL_INDENT_PX = 24;
 const MARK_SIZE_PX = 30;
+/** Between a row's mark and its text. */
+const MARK_TEXT_GAP_PX = 10;
 
 const styles = StyleSheet.create({
-  summary: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, minWidth: 0 },
-  mark: { width: MARK_SIZE_PX, height: MARK_SIZE_PX },
+  summary: { flexDirection: 'row', alignItems: 'flex-start', gap: MARK_TEXT_GAP_PX, minWidth: 0 },
+  // A glyph smaller than the identity slot sits at its centre, level with the title (DESIGN-15 R5).
+  mark: { width: MARK_SIZE_PX, height: MARK_SIZE_PX, alignItems: 'center', justifyContent: 'center' },
   // The corner badge sits on the pane's paper so it reads as cut out of the mark.
   badge: {
     position: 'absolute',
@@ -77,6 +82,51 @@ const TITLE_TAIL_STYLE: HappierPortableStyle = { flexShrink: 0, maxWidth: '100%'
 /** Keeps the word gap between the two runs of a split title; an ordinary space would collapse. */
 const NON_BREAKING_SPACE = '\u00A0';
 const TRAILING_STATE_STYLE: HappierPortableStyle = { flexShrink: 0, maxWidth: '45%' };
+/**
+ * A row with its own control (Review, Settle, ⋯): the control keeps the row's inset from the sheet's
+ * edge and a row padding's breath after the row's meta, so it never sits flush on the edge (lab
+ * `inbox-I1`, `inbox-I2`).
+ */
+const TRAILING_ACCESSORY_ROW_STYLE = {
+  flexDirection: 'row',
+  alignItems: 'center',
+  gap: HAPPIER_WORK_PANE_METRICS.rowPaddingPx,
+  paddingRight: HAPPIER_WORK_PANE_METRICS.rowInsetPx,
+} as const;
+
+/**
+ * How a Work row is sized: `pane` (the default) is the Work pane's compact live list; `page` is a page
+ * made of Work rows (the Inbox, lab `inbox-I1`): the page row's text inset, height and type steps, so
+ * the rows read at the scale of the page header and section titles around them.
+ */
+export type HappierWorkRowDensity = 'pane' | 'page';
+
+/** A page row's text starts on the page sheet's row inset; its ring is part of that inset. */
+const PAGE_ROW_PADDING_PX = HAPPIER_PAGE_METRICS.rowPaddingHorizontalPx - HAPPIER_WORK_PANE_METRICS.rowRingPx;
+/**
+ * Where a page row's text column starts, from the row's outer edge (its ring, padding, mark and gap).
+ * Content that belongs to a row and sits under it (an inline answer, a request preview) starts here,
+ * so it reads as part of the row rather than as a block inside the sheet (lab `phone-P4`).
+ */
+export const HAPPIER_WORK_PAGE_ROW_METRICS = Object.freeze({
+  textInsetPx: HAPPIER_PAGE_METRICS.rowPaddingHorizontalPx + MARK_SIZE_PX + MARK_TEXT_GAP_PX,
+  /** The row's trailing inset, matching its leading padding. */
+  trailingInsetPx: HAPPIER_PAGE_METRICS.rowPaddingHorizontalPx,
+});
+const PAGE_ROW_STYLE: HappierPortableStyle = {
+  paddingHorizontal: PAGE_ROW_PADDING_PX,
+  minHeight: HAPPIER_PAGE_METRICS.rowMinHeightPx,
+};
+const PAGE_TRAILING_ACCESSORY_ROW_STYLE = {
+  ...TRAILING_ACCESSORY_ROW_STYLE,
+  paddingRight: PAGE_ROW_PADDING_PX,
+} as const;
+/** A page row centres its mark on its two lines (lab `.uwr-ib-row`), keeping the 30pt identity slot. */
+const PAGE_SUMMARY_STYLE = { alignItems: 'center' } as const;
+const TEXT_ROLES = Object.freeze({
+  pane: Object.freeze({ title: 'rowTitle', line: 'rowLine', time: 'rowTime', state: 'rowState' }),
+  page: Object.freeze({ title: 'pageRowTitle', line: 'pageRowLine', time: 'pageRowTime', state: 'pageRowState' }),
+} as const satisfies Record<HappierWorkRowDensity, Readonly<Record<'title' | 'line' | 'time' | 'state', HappierWorkTextRole>>>);
 
 export type HappierWorkRowShellProps = Readonly<{
   testID: string;
@@ -90,6 +140,13 @@ export type HappierWorkRowShellProps = Readonly<{
   trailingAccessory?: ReactNode;
   /** How deep under its lead the work sits; each level indents the row. */
   level?: number;
+  /** `pane` (default) or `page`: see {@link HappierWorkRowDensity}. */
+  density?: HappierWorkRowDensity;
+  /**
+   * A `page` row on a page sheet draws the sheet's full-width row hairline under it, as every page
+   * row does; the sheet passes it (`withHappierPageSectionDividers`) and the last row draws none.
+   */
+  showDivider?: boolean;
   onPress: () => void;
   onLongPress?: HappierPressableProps['onLongPress'];
   onContextMenu?: HappierPressableProps['onContextMenu'];
@@ -102,9 +159,28 @@ export const HappierWorkRowShell = memo(function HappierWorkRowShell(props: Happ
   const theme = useHappierWorkTheme(props.theme);
   const level = props.level ?? 0;
   const selected = props.selected === true;
+  const page = props.density === 'page';
+  const pageSection = useHappierPageSection();
+  const divider = page && props.showDivider === true && pageSection !== null ? (
+    <View
+      pointerEvents="none"
+      style={{
+        position: 'absolute',
+        left: 0,
+        right: 0,
+        bottom: 0,
+        height: happierPageRowDividerWidth(),
+        backgroundColor: pageSection.rowDividerColor,
+      }}
+    />
+  ) : null;
+  // A page row is selected as a whole, its own control included (lab `inbox-I1`): the fill spans the
+  // row edge to edge under the sheet's hairlines, rather than stopping at the control.
+  const rowSelected = page && selected;
   return (
     <View style={[level > 0 ? { paddingLeft: level * LEVEL_INDENT_PX } : null,
-      props.trailingAccessory ? { flexDirection: 'row', alignItems: 'center' } : null]}>
+      props.trailingAccessory ? (page ? PAGE_TRAILING_ACCESSORY_ROW_STYLE : TRAILING_ACCESSORY_ROW_STYLE) : null,
+      rowSelected ? { backgroundColor: theme.colors.selected, borderRadius: ROW_STYLE.borderRadius } : null]}>
       <HappierPressable
         testID={props.testID}
         accessibilityRole="button"
@@ -119,9 +195,11 @@ export const HappierWorkRowShell = memo(function HappierWorkRowShell(props: Happ
         onContextMenu={props.onContextMenu}
         style={({ hovered, focused, pressed }) => [
           ROW_STYLE,
+          page ? PAGE_ROW_STYLE : null,
           props.trailingAccessory ? { flex: 1, minWidth: 0 } : null,
-          hovered ? { backgroundColor: theme.colors.hover } : null,
-          selected ? { backgroundColor: theme.colors.selected } : null,
+          // The open row already carries its fill; the hover paint would cover it.
+          hovered && !rowSelected ? { backgroundColor: theme.colors.hover } : null,
+          selected && !rowSelected ? { backgroundColor: theme.colors.selected } : null,
           happierFocusRingStyle({ visible: focused, color: theme.colors.focus }),
           { opacity: pressed ? HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle : 1 },
         ]}
@@ -129,6 +207,7 @@ export const HappierWorkRowShell = memo(function HappierWorkRowShell(props: Happ
         {props.children}
       </HappierPressable>
       {props.trailingAccessory}
+      {divider}
     </View>
   );
 });
@@ -165,6 +244,19 @@ export type HappierWorkSummaryProps = Readonly<{
   accessibilityLiveRegion?: 'none' | 'polite' | 'assertive';
   /** Prefix for this instance's test ids. */
   testID?: string;
+  /** `pane` (default) or `page`: see {@link HappierWorkRowDensity}. Match the row shell's density. */
+  density?: HappierWorkRowDensity;
+  /**
+   * Whether `attention` puts an amber dot in the mark's corner (default). A list whose every row needs
+   * the person (the Inbox) already says so by being that list; its rows keep the strong title and
+   * their state word, and leave the corner quiet.
+   */
+  attentionMark?: boolean;
+  /**
+   * How many lines the title may take (default 1). A phone's page row lets a long title wrap onto a
+   * second line rather than cut the words that tell it from its siblings (lab `phone-P4`).
+   */
+  titleLines?: 1 | 2;
   /** Omitted inside a mounted plugin surface: the environment's theme. */
   theme?: HappierWorkTheme;
   /** Omitted inside a mounted plugin surface: the environment's text. */
@@ -182,12 +274,17 @@ export const HappierWorkSummary = memo(function HappierWorkSummary(props: Happie
   const titleHead = titleTailStart > 0 ? props.title.slice(0, titleTailStart).trimEnd() : '';
   const titleTail = titleHead.length > 0 ? props.title.slice(titleTailStart) : '';
   const titleColor = { color: theme.colors.text };
+  const density = props.density ?? 'pane';
+  const roles = TEXT_ROLES[density];
+  const attentionMark = props.attentionMark !== false;
+  const titleLines = props.titleLines ?? 1;
 
   return (
-    <View testID={testID} accessible accessibilityLabel={props.accessibilityLabel} accessibilityLiveRegion={props.accessibilityLiveRegion} style={styles.summary}>
+    <View testID={testID} accessible accessibilityLabel={props.accessibilityLabel} accessibilityLiveRegion={props.accessibilityLiveRegion}
+      style={[styles.summary, density === 'page' ? PAGE_SUMMARY_STYLE : null]}>
       {props.mark !== null && props.mark !== undefined ? <View style={styles.mark}>
         {props.mark}
-        {phase === 'attention' ? (
+        {phase === 'attention' && attentionMark ? (
           <View
             testID={testID ? `${testID}:attention-dot` : undefined}
             style={[styles.badge, { backgroundColor: theme.colors.surface }]}
@@ -204,7 +301,7 @@ export const HappierWorkSummary = memo(function HappierWorkSummary(props: Happie
         {titleTail.length > 0 ? (
           <View style={styles.splitTitle}>
             <Text
-              role="rowTitle"
+              role={roles.title}
               strong={phase === 'attention'}
               numberOfLines={1}
               testID={testID ? `${testID}:title` : undefined}
@@ -213,7 +310,7 @@ export const HappierWorkSummary = memo(function HappierWorkSummary(props: Happie
               {titleHead}
             </Text>
             <Text
-              role="rowTitle"
+              role={roles.title}
               strong={phase === 'attention'}
               numberOfLines={1}
               testID={testID ? `${testID}:title-tail` : undefined}
@@ -224,13 +321,14 @@ export const HappierWorkSummary = memo(function HappierWorkSummary(props: Happie
             </Text>
           </View>
         ) : (
-          <Text role="rowTitle" strong={phase === 'attention'} numberOfLines={1} style={titleColor}>
+          <Text role={roles.title} strong={phase === 'attention'} numberOfLines={titleLines}
+            testID={testID ? `${testID}:title` : undefined} style={titleColor}>
             {props.title}
           </Text>
         )}
         {props.facts.length > 0 ? (
           <HappierFactLine
-            role="rowLine"
+            role={roles.line}
             testID={testID ? `${testID}:facts` : undefined}
             numberOfLines={1}
             style={[LINE_STYLE, { color: theme.colors.secondaryText }]}
@@ -241,11 +339,11 @@ export const HappierWorkSummary = memo(function HappierWorkSummary(props: Happie
         ) : null}
       </View>
       {trailingTime ? (
-        <Text role="rowTime" style={[TIME_STYLE, { color: theme.colors.mutedText }]}>{trailingTime}</Text>
+        <Text role={roles.time} style={[TIME_STYLE, { color: theme.colors.mutedText }]}>{trailingTime}</Text>
       ) : null}
       {trailingState ? (
         <HappierWorkStatusWord
-          role="rowState"
+          role={roles.state}
           tone={trailingState.tone}
           testID={testID ? `${testID}:state:label` : undefined}
           numberOfLines={1}

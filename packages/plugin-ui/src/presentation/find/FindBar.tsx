@@ -6,6 +6,7 @@ import { HappierSearchFieldBox } from '../form/FieldBox.js';
 import { HappierPressable } from '../interaction/Pressable.js';
 import { HAPPIER_MOTION_V1 } from '../interaction/motion.js';
 import { HAPPIER_PRESS_FEEDBACK_V1 } from '../interaction/pressFeedback.js';
+import { HappierTextLinkButton } from '../interaction/TextLinkButton.js';
 import { HappierMaterialSurface, type HappierMaterialSurfaceRender } from '../layout/Surface.js';
 import type { HappierSurfaceGradient } from '../layout/material.js';
 import type { HappierFocusable, HappierPortableStyle, HappierStyleProp } from '../portableTypes.js';
@@ -178,6 +179,11 @@ export type HappierFindBarProps = Readonly<{
   /** The runtime's touch-target floor where a finger is the pointer (44/48); pointer platforms omit it. */
   minimumTargetSize?: number;
   reducedMotion?: boolean;
+  /**
+   * Who plays the arrival (default `self`). A host whose placement already presents the bar (arrival
+   * and exit through its overlay motion owner) passes `host`, so the bar does not settle twice.
+   */
+  arrivalMotion?: 'self' | 'host';
   /** Focus the field on mount (default true). The surface refocuses it through `inputRef`. */
   autoFocus?: boolean;
   inputRef?: Ref<HappierFocusable>;
@@ -309,9 +315,10 @@ export function HappierFindBar(props: HappierFindBarProps) {
   }, []);
 
   // The bar arrives rather than appearing: a short settle on the motion scale, none under reduced motion.
-  const arrival = useRef(new Animated.Value(props.reducedMotion ? 1 : 0)).current;
+  const settled = props.reducedMotion || props.arrivalMotion === 'host';
+  const arrival = useRef(new Animated.Value(settled ? 1 : 0)).current;
   useEffect(() => {
-    if (props.reducedMotion) {
+    if (settled) {
       arrival.setValue(1);
       return;
     }
@@ -324,7 +331,7 @@ export function HappierFindBar(props: HappierFindBarProps) {
     animation.start();
     return () => animation.stop();
     // Arrival plays once per mount; a reduced-motion change mid-flight snaps it.
-  }, [arrival, props.reducedMotion]);
+  }, [arrival, settled]);
 
   // iOS has no polite live region; the count is announced when it changes. Android and the web use
   // the slot's live region below.
@@ -433,6 +440,7 @@ export function HappierFindBar(props: HappierFindBarProps) {
       colors={colors}
       host={host}
       seated={seated}
+      minimumTargetSize={targetFloor}
       gradient={props.gradient}
       renderMaterialSurface={props.renderMaterialSurface}
       elevation={props.elevation}
@@ -756,6 +764,7 @@ function FindBarNote(props: Readonly<{
   colors: HappierFindBarColors;
   host: HappierFindBarHost;
   seated: boolean;
+  minimumTargetSize: number;
   gradient?: HappierSurfaceGradient | null;
   renderMaterialSurface?: HappierMaterialSurfaceRender;
   elevation?: HappierPortableStyle;
@@ -787,25 +796,17 @@ function FindBarNote(props: Readonly<{
   const content = (
     <>
       <View style={{ marginTop: 1 }}>{host.renderGlyph(icon, colors.tertiaryText, 14)}</View>
-      {/* The link (Stop, Search older) closes the note's last line rather than wrapping onto a line of its own. */}
-      <View style={{ flexShrink: 1, flexDirection: 'row', alignItems: 'flex-end', columnGap: 4 }}>
-        {props.note ? <View style={{ flexShrink: 1 }}><host.Text style={{ fontSize: 12, lineHeight: 16, color: colors.secondaryText }}>{props.link ? `${props.note.text} ·` : props.note.text}</host.Text></View> : null}
-        {props.link ? (
-          <HappierPressable
-            accessibilityLabel={props.link.label}
-            onPress={props.link.onPress}
-            testID={props.link.testID}
-            style={({ pressed }) => ({ borderRadius: 4, opacity: pressed ? HAPPIER_PRESS_FEEDBACK_V1.opacity : 1 })}
-          >
-            {(state) => (
-              <>
-                <host.Text style={{ fontSize: 12, lineHeight: 16, color: colors.accent }}>{props.link!.label}</host.Text>
-                <FocusRing visible={state.focused} color={colors.focus} radius={4} />
-              </>
-            )}
-          </HappierPressable>
-        ) : null}
-      </View>
+      {props.link ? (
+        <HappierTextLinkButton
+          {...props.link}
+          Text={host.Text}
+          labelStyle={{ fontSize: 12, lineHeight: 16, color: colors.accent }}
+          hoverColor={colors.accent}
+          focusColor={colors.focus}
+          minimumTargetSize={props.minimumTargetSize}
+          note={props.note ? { text: props.note.text, style: { flexShrink: 1, fontSize: 12, lineHeight: 16, color: colors.secondaryText } } : undefined}
+        />
+      ) : props.note ? <host.Text style={{ flexShrink: 1, fontSize: 12, lineHeight: 16, color: colors.secondaryText }}>{props.note.text}</host.Text> : null}
     </>
   );
   const testID = props.testID ? `${props.testID}.note` : undefined;

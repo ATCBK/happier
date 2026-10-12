@@ -5,8 +5,20 @@ import {
 } from '@happier-dev/plugin-sdk/testing';
 import { createPluginUiRnwSemanticSurfaceAdapter } from '@happier-dev/plugin-ui/testing';
 import type { PluginUiActionResultFor, RenderSurface } from '@happier-dev/plugin-sdk/ui';
+import { defineProtocolObject, defineProtocolString } from '@happier-dev/plugin-sdk/protocol';
 import { act } from 'react';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol';
+import {
+  createWidgetAreaActionPortV1,
+  createWidgetSurfaceArtifactPortV1,
+  createWidgetActionInputResolverV1,
+  validateWidgetWorkspaceInputV1,
+  type WidgetInstanceV1,
+  type WidgetInstanceActionIdV1,
+  type WidgetSurfaceRefV1,
+} from '@happier-dev/protocol/widgets';
+import { createWorkBoardArtifactBoundary } from '../../protocol/src/boards/workBoardArtifactV1.testkit.js';
 
 import { externalAuthoringPlugin } from '@external-authoring/plugin';
 import { renderPhysicalCopyTargetSurface } from '@external-authoring/targeted-surface';
@@ -20,8 +32,9 @@ const EXTERNAL_SEMANTIC_VIEW_ID = 'external-authoring-semantic';
 
 function selectExternalAuthoringSemanticRendererArtifact(
   ui: typeof externalAuthoringPlugin.manifest.contributes.ui,
+  viewId = EXTERNAL_SEMANTIC_VIEW_ID,
 ): string {
-  const view = ui.views?.find(candidate => candidate.id === EXTERNAL_SEMANTIC_VIEW_ID);
+  const view = ui.views?.find(candidate => candidate.id === viewId);
   if (!view) throw new Error('Expected the loaded external authoring semantic view');
   const renderer = ui.renderers?.find(candidate => candidate.id === view.renderer);
   if (renderer?.kind !== 'reactNative') {
@@ -30,9 +43,10 @@ function selectExternalAuthoringSemanticRendererArtifact(
   return renderer.artifact;
 }
 
-async function loadExternalAuthoringSemanticSurface(): Promise<RenderSurface> {
+async function loadExternalAuthoringSemanticSurface(viewId = EXTERNAL_SEMANTIC_VIEW_ID): Promise<RenderSurface> {
   const artifact = selectExternalAuthoringSemanticRendererArtifact(
     externalAuthoringPlugin.manifest.contributes.ui,
+    viewId,
   );
   if (artifact !== 'semantic-surface') {
     throw new Error(`Unsupported external authoring semantic artifact: ${artifact}`);
@@ -54,6 +68,116 @@ describe('external author semantic proof', () => {
       ...ui,
       views: ui.views?.filter(view => view.id !== EXTERNAL_SEMANTIC_VIEW_ID),
     })).toThrow('Expected the loaded external authoring semantic view');
+  });
+
+  it('renders a Source-free Project widget and companion from the actual Project area input admission', async () => {
+    const ui = externalAuthoringPlugin.manifest.contributes.ui;
+    const widget = ui.views?.find(view => view.id === 'external-project-checkout');
+    const sourceWidget = ui.views?.find(view => view.id === 'external-project-source');
+    const companion = ui.views?.find(view => view.id === 'external-project-companion');
+    expect(widget?.container).toBe('widget');
+    expect(sourceWidget?.container).toBe('widget');
+    expect(companion?.container).toBe('rightSidebarTab');
+    if (!widget || !sourceWidget || !companion) throw new Error('Missing public Project contributions');
+
+    const checkout = { id: 'checkout-review', serverId: 'home-review', machineId: 'machine-review',
+      rootPath: '/work/review-assistant', createdAtMs: 0, projectKey: 'private-project-review' };
+    const surface: WidgetSurfaceRefV1 = { serverId: checkout.serverId, accountId: 'reviewer',
+      owner: { kind: 'project', projectId: checkout.projectKey } };
+    const boundary = createWorkBoardArtifactBoundary();
+    const transport = boundary.forAccount(surface.accountId);
+    const area = createWidgetAreaActionPortV1(captured => createWidgetSurfaceArtifactPortV1(transport, {
+      surface: captured, isCurrent: () => true,
+    }));
+    let source: Readonly<{ sourceId: string; revision: number }> | null = null;
+    const deps = {
+      widgetAccountScope: () => ({ accountId: surface.accountId, serverId: surface.serverId }),
+      widgetSurfaceActions: { project: area },
+      widgetInputs: createWidgetActionInputResolverV1({
+        readDescriptor: async request => {
+          const definition = request.instance.definition;
+          return definition.kind === 'installed'
+            ? ui.views?.find(view => view.id === definition.surface.localId) ?? null : null;
+        },
+        // This is the host's admitted context boundary, not a substitute binder or Source policy.
+        readContext: async () => ({ checkout: [checkout], ...(source ? { project: [source] } : {}) }),
+        readViewerValues: async () => ({ values: {} }),
+        validateValue: async (field, value) => field.inputType && 'hostType' in field.inputType
+          && field.inputType.hostType === 'workspace'
+          ? validateWidgetWorkspaceInputV1({ value, serverId: surface.serverId, contextValues: [checkout] })
+          : { status: 'valid' },
+        resolveOptions: async () => [],
+      }),
+    } satisfies Pick<ActionExecutorDeps, 'widgetAccountScope' | 'widgetSurfaceActions' | 'widgetInputs'>;
+    const executor = createActionExecutor(deps as ActionExecutorDeps);
+    const execute = (actionId: WidgetInstanceActionIdV1, input: unknown) => executor.execute(actionId, input, {
+      serverId: surface.serverId, surface: 'ui', bypassApprovals: true,
+    });
+    const instance = (localId: string): WidgetInstanceV1 => ({ v: 1, id: localId,
+      definition: { kind: 'installed', surface: { pluginId: externalAuthoringPlugin.manifest.id, localId } },
+      bindings: { checkout: { kind: 'context', slot: 'checkout' },
+        ...(localId === sourceWidget.id ? { source: { kind: 'context' as const, slot: 'project' } } : {}) },
+    });
+    const checkoutInstance = instance(widget.id);
+    expect(await execute('widgets.item.add', { surface, area: 'main', instance: checkoutInstance })).toMatchObject({ ok: true });
+    const admitted = await execute('widgets.item.inputs.validate', {
+      ref: { surface, instanceId: checkoutInstance.id }, bindings: checkoutInstance.bindings,
+    });
+    expect(admitted).toEqual({ ok: true, result: { status: 'ready', input: { checkout } } });
+    if (!admitted.ok || !('input' in admitted.result)) throw new Error('Checkout input was not admitted');
+    for (const mount of [
+      { kind: 'embedded', role: 'widget', presentation: 'content' },
+      { kind: 'destination', container: 'rightSidebarTab',
+        destination: { pluginId: externalAuthoringPlugin.manifest.id, localId: companion.id } },
+    ] as const) {
+      const fixture = await createPluginUiTestkit({
+        identity: { instanceId: `project-${mount.kind}`, mountNonce: `project-${mount.kind}-mount` },
+        authorPlugin: { id: externalAuthoringPlugin.manifest.id, version: externalAuthoringPlugin.manifest.version },
+        surface: await loadExternalAuthoringSemanticSurface(mount.kind === 'embedded' ? widget.id : companion.id),
+        surfaceContext: createSurfaceContextFixture({ mount, target: { kind: 'project', projectId: checkout.projectKey } }),
+        launchInput: admitted.result.input,
+        adapter: createPluginUiRnwSemanticSurfaceAdapter(),
+      });
+      try {
+        await expect(fixture.getByText(`Project ${checkout.projectKey}`)).resolves.toBeDefined();
+        await expect(fixture.getByText(`${checkout.serverId} · ${checkout.machineId} · ${checkout.rootPath}`)).resolves.toBeDefined();
+      } finally { await fixture.dispose(); }
+    }
+    const sourceInstance = instance(sourceWidget.id);
+    const refuse = () => execute('widgets.item.inputs.validate', {
+      ref: { surface, instanceId: sourceInstance.id }, bindings: sourceInstance.bindings,
+    });
+    const beforeRefusal = [...boundary.rows.values()];
+    expect(await execute('widgets.item.add', { surface, area: 'aside', instance: sourceInstance })).toMatchObject({
+      ok: false, errorCode: 'widget_inputs_invalid', details: { status: 'selection_required', fields: [
+        { path: 'source', status: 'selection_required', reasonCode: 'widget_context_missing' },
+      ] },
+    });
+    expect([...boundary.rows.values()]).toEqual(beforeRefusal);
+    source = { sourceId: 'saved-review-source', revision: 1 };
+    expect(await execute('widgets.item.add', { surface, area: 'aside', instance: sourceInstance })).toMatchObject({ ok: true });
+    const sourceInput = await refuse();
+    expect(sourceInput).toEqual({ ok: true, result: { status: 'ready', input: { checkout, source } } });
+    if (!sourceInput.ok || !('input' in sourceInput.result)) throw new Error('Source input was not admitted');
+    const sourceMount = await createPluginUiTestkit({
+      identity: { instanceId: 'project-source', mountNonce: 'project-source-mount' },
+      authorPlugin: { id: externalAuthoringPlugin.manifest.id, version: externalAuthoringPlugin.manifest.version },
+      surface: await loadExternalAuthoringSemanticSurface(sourceWidget.id),
+      surfaceContext: createSurfaceContextFixture({ target: { kind: 'project', projectId: checkout.projectKey },
+        mount: { kind: 'embedded', role: 'widget', presentation: 'content' } }),
+      launchInput: sourceInput.result.input,
+      adapter: createPluginUiRnwSemanticSurfaceAdapter(),
+    });
+    try { await expect(sourceMount.getByText(`Source ${source.sourceId}`)).resolves.toBeDefined(); }
+    finally { await sourceMount.dispose(); }
+    source = null;
+    expect(await refuse()).toMatchObject({ ok: true, result: { status: 'selection_required' } });
+    expect(await execute('widgets.item.inputs.validate', {
+      ref: { surface, instanceId: checkoutInstance.id }, bindings: checkoutInstance.bindings,
+    })).toEqual(admitted);
+    const reloaded = createWidgetSurfaceArtifactPortV1(transport, { surface, isCurrent: () => true });
+    expect(await reloaded.readState()).toMatchObject({ kind: 'present', layout: { surface } });
+    expect(boundary.rows.size).toBe(1);
   });
 
   it('opens authoring through the public host Action boundary with a typed draft acknowledgement', async () => {
@@ -93,20 +217,27 @@ describe('external author semantic proof', () => {
       protocol: { id: 'physical-copy-sources', version: 1 },
     } as const;
     const mounts = { current: [] as unknown[] };
+    const occurrence = (pluginId: string, generation: string) => ({
+      pluginId,
+      occurrenceId: `${pluginId}:${generation}`,
+      sourceCustody: { kind: 'managed', immutableGenerationId: generation, installSource: 'npm' },
+    } as const);
+    const contributorFor = (generation: string) => ({
+      ...occurrence(contributorPluginId, generation), contributionId,
+    });
+    const detailInputSchema = defineProtocolObject({
+      entryId: defineProtocolString({ minLength: 1 }),
+    }, { policy: 'closed' });
     const contextFor = (targetGeneration: string, contributorGeneration?: string) => {
       const surface = contributorGeneration === undefined ? undefined : {
         point,
-        contributor: {
-          pluginId: contributorPluginId,
-          contributionId,
-          immutableGenerationId: contributorGeneration,
-        },
+        contributor: contributorFor(contributorGeneration),
         role: 'detail',
         presentation: 'content',
       } as const;
       return createSurfaceContextFixture({
         targetedContributions: {
-          target: { pluginId: targetPluginId, immutableGenerationId: targetGeneration },
+          target: occurrence(targetPluginId, targetGeneration),
           points: surface === undefined ? [] : [{
             pointId: point.pointId,
             protocols: [{
@@ -114,7 +245,7 @@ describe('external author semantic proof', () => {
               contributions: [{
                 contributor: surface.contributor,
                 protocol: point.protocol,
-                descriptor: { kind: 'physical-copy', label: 'External source' },
+                descriptor: { kind: 'issue', label: 'Physical package source' },
                 operations: [],
                 surfaces: [surface],
               }],
@@ -125,28 +256,30 @@ describe('external author semantic proof', () => {
     };
     const admittedMount = (targetGeneration: string, contributorGeneration: string) => ({
       kind: 'targetedSurface',
-      target: { pluginId: targetPluginId, immutableGenerationId: targetGeneration },
+      target: occurrence(targetPluginId, targetGeneration),
       point,
-      contributor: {
-        pluginId: contributorPluginId,
-        contributionId,
-        immutableGenerationId: contributorGeneration,
-      },
+      contributor: contributorFor(contributorGeneration),
       role: 'detail',
       presentation: 'content',
-      inputSchema: {
-        type: 'object',
-        properties: { entryId: { type: 'string', minLength: 1 } },
-        required: ['entryId'],
-        additionalProperties: false,
-      },
+      inputSchema: detailInputSchema.jsonSchema,
       rendererChain: [{ pluginId: contributorPluginId, localId: 'physical-copy-detail-renderer' }],
       selectedRenderer: {
         identity: { pluginId: contributorPluginId, localId: 'physical-copy-detail-renderer' },
         renderer: {
           kind: 'declarative',
           contributionId: 'physical-copy-detail-renderer',
-          model: { kind: 'text', text: 'External source detail' },
+          model: {
+            identity: {
+              pluginId: contributorPluginId,
+              localId: 'physical-copy-detail-renderer',
+              qualifiedId: `${contributorPluginId}/physical-copy-detail-renderer`,
+              occurrenceId: occurrence(contributorPluginId, contributorGeneration).occurrenceId,
+            },
+            visible: true,
+            requiredHostMethods: [],
+            declarativeInventory: { actions: [], destinations: [], settings: [], uiQueries: [] },
+            root: { kind: 'text', path: 'root', order: 0, text: 'External source detail' },
+          },
         },
         availability: { state: 'available', reason: 'available', diagnostics: [] },
       },
@@ -160,7 +293,7 @@ describe('external author semantic proof', () => {
       },
       resourceCapability: { readable: true, dynamic: true },
       contributorTargetedContributions: {
-        target: { pluginId: contributorPluginId, immutableGenerationId: contributorGeneration },
+        target: occurrence(contributorPluginId, contributorGeneration),
         points: [],
       },
     });
@@ -412,16 +545,22 @@ describe('external author semantic proof', () => {
       },
       surface: externalAuthoringSemanticSurface,
       surfaceContext: createSurfaceContextFixture({ locale: 'en-GB' }),
-      adapter: createPluginUiRnwSemanticSurfaceAdapter(),
+      adapter: createPluginUiRnwSemanticSurfaceAdapter({ overlays: true }),
       handlers: { executeAction: async () => null },
     });
 
     try {
       await expect(fixture.getByRole('form')).resolves.toMatchObject({ role: 'form' });
-      await expect(fixture.getByRole('radiogroup', { name: 'External review filter' })).resolves.toEqual({
-        role: 'radiogroup',
-        name: 'External review filter',
+      await expect(fixture.getByRole('button', { name: 'External review filter: Current review' })).resolves.toEqual({
+        role: 'button',
+        name: 'External review filter: Current review',
+        state: { expanded: false },
       });
+      await fixture.press(await fixture.getByRole('button', { name: 'External review filter: Current review' }));
+      await expect(fixture.getByRole('menuitemradio', { name: 'Current review', state: { checked: true } }))
+        .resolves.toBeDefined();
+      await fixture.press(await fixture.getByRole('menuitemradio', { name: 'All reviews' }));
+      await expect(fixture.getByRole('button', { name: 'External review filter: All reviews' })).resolves.toBeDefined();
       await expect(fixture.getByRole('tabpanel', { name: 'Summary' })).resolves.toEqual({
         role: 'tabpanel',
         name: 'Summary',

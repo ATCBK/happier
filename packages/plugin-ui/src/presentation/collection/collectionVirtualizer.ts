@@ -15,7 +15,7 @@ type CollectionVirtualizerBase<Item> = Readonly<{
   renderItem(item: Item, index: number, sectionIndex: number | null): ReactNode;
   /** Publish after mount, withdraw on unmount; no DOM or native ref crosses the seam. */
   onHandle(handle: CollectionVirtualizerHandle | null): void;
-  role: 'list' | 'listbox' | 'grid' | 'radiogroup' | 'group';
+  role: 'list' | 'listbox' | 'grid' | 'treegrid' | 'radiogroup' | 'group';
   accessibilityRole?: 'list' | 'radiogroup';
   accessibilityLabel?: string;
   rowCount?: number;
@@ -38,7 +38,7 @@ export type CollectionVirtualizerRequest<Item> = CollectionVirtualizerBase<Item>
   | Readonly<{ kind: 'flat'; items: readonly Item[] }>
   | Readonly<{
       kind: 'sections';
-      sections: readonly Readonly<{ key: string; data: readonly Item[] }>[];
+      sections: readonly Readonly<{ key: string; title?: string; data: readonly Item[] }>[];
       /** Section headers share the rows' scroller and remain sticky. */
       renderSectionHeader(sectionIndex: number): ReactNode;
     }>

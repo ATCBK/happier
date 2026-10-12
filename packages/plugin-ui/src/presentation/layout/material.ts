@@ -40,8 +40,8 @@ export function happierSurfaceFinishLift(gradient: HappierSurfaceGradient | null
     : { shadowColor: '#000000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: dark ? 0.06 : 0.07, shadowRadius: 2, elevation: 2 };
 }
 
-/** The app's four material groups. Policy and user preferences remain host-owned. */
-export type HappierMaterialRole = 'chrome' | 'sidebar' | 'content' | 'floating';
+/** The app's material groups. Policy and user preferences remain host-owned. */
+export type HappierMaterialRole = 'chrome' | 'sidebar' | 'content' | 'card' | 'floating';
 
 /** Base control gradients obey the same paint policy as their fill; finish overlays stay separate. */
 export function happierMaterialGradient(gradient: HappierSurfaceGradient | null | undefined, resolveColor: (color: string) => string): HappierSurfaceGradient | null | undefined {

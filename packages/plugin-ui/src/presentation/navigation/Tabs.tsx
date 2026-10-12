@@ -259,13 +259,25 @@ export function HappierTabs(props: Readonly<{
    * trailing edge above its hairline. The strip scrolls beside them; they never scroll away.
    */
   trailing?: ReactNode;
+  /**
+   * The strip's measured widths: its tabs at their natural width and the room the scroller has. A host
+   * that offers a compact form of the same choice (a current-name menu) switches to it when the tabs
+   * do not fit, by measurement rather than by device class.
+   */
+  onStripLayout?: (metrics: Readonly<{ contentWidth: number; viewportWidth: number }>) => void;
 }>) {
   const fill = props.layout === 'fill';
+  const stripWidths = useRef<{ content: number | null; viewport: number | null }>({ content: null, viewport: null });
+  const reportStrip = (part: 'content' | 'viewport', width: number): void => {
+    stripWidths.current[part] = width;
+    const { content, viewport } = stripWidths.current;
+    if (content !== null && viewport !== null) props.onStripLayout?.({ contentWidth: content, viewportWidth: viewport });
+  };
   const nativeMinimumTouchTarget = useHappierNativeMinimumInteractiveTargetSize();
   const localization = useOptionalHappierUiLocalization();
   const typography = useOptionalHappierUiTypography();
   const labelStyle = resolveHappierTypeRoleStyle('label', props.theme, typography);
-  const badgeStyle = resolveHappierTypeRoleStyle('caption', props.theme, typography);
+  const badgeStyle = resolveHappierTypeRoleStyle('micro', props.theme, typography);
   const rtl = localization ? localization.direction === 'rtl' : I18nManager.isRTL;
   const instanceId = useId().replace(/:/gu, '');
   const tabs = Children.toArray(props.children)
@@ -385,8 +397,11 @@ export function HappierTabs(props: Readonly<{
       {/* The strip's one hairline across the full width; the selected tab's underline lands on it (lab `.tabs`). */}
       <View pointerEvents="none" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 1, backgroundColor: props.theme.colors.divider }} />
       <View style={props.trailing === undefined ? undefined : { flex: 1, minWidth: 0 }}>
-      <HappierScrollArea horizontal>
+      <HappierScrollArea horizontal testID={`${props.testID ?? 'tabs'}:viewport`}
+        onLayout={(event) => { reportStrip('viewport', event.nativeEvent.layout.width); }}>
         <View
+          testID={`${props.testID ?? 'tabs'}:strip`}
+          onLayout={(event) => { reportStrip('content', event.nativeEvent.layout.width); }}
           role="tablist"
           aria-label={props.ariaLabel}
           accessibilityLabel={props.ariaLabel}

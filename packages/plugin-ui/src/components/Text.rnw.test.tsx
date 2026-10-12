@@ -5,6 +5,7 @@ import { mountThroughReactNativeWeb } from '../rnwMount.testSupport.js';
 import { createHostApiStub, createSurfaceContext } from '../surfaceFixture.testSupport.js';
 import { PluginUiProvider } from './PluginUiProvider.js';
 import { Text } from './Text.js';
+import { HAPPIER_TYPE_SCALE } from '../presentation/text/typeScale.js';
 
 /**
  * EU-7b, family `Text`.
@@ -57,11 +58,11 @@ describe('plugin-ui Text renders real React Native semantics', () => {
 
   it('paints the projected theme, not a package-local palette', () => {
     const context = createSurfaceContext();
-    const mount = mountSurface(<Text value="Broken" variant="title" tone="danger" />, context);
+    const mount = mountSurface(<Text value="Broken" variant="heading" tone="danger" />, context);
 
     const rendered = mount.container.firstElementChild as HTMLElement;
-    expect(rendered.style.fontSize).toBe(`${context.theme.typography.title.fontSize}px`);
-    expect(rendered.style.lineHeight).toBe(`${context.theme.typography.title.lineHeight}px`);
+    expect(rendered.style.fontSize).toBe(`${HAPPIER_TYPE_SCALE.heading.fontSize}px`);
+    expect(rendered.style.lineHeight).toBe(`${HAPPIER_TYPE_SCALE.heading.lineHeight}px`);
     // rgb(255, 59, 48) is the fixture's `colors.danger`; jsdom normalizes hex.
     expect(rendered.style.color.replace(/\s/gu, '')).toBe('rgb(255,59,48)');
 
@@ -84,16 +85,16 @@ describe('plugin-ui Text renders real React Native semantics', () => {
     const unscaled = createSurfaceContext();
     const scaled = createSurfaceContext({ textScale: 1.5 });
 
-    const plain = mountSurface(<Text value="Ready" variant="body" />, unscaled);
+    const plain = mountSurface(<Text value="Ready" variant="meta" />, unscaled);
     const plainSize = (plain.container.firstElementChild as HTMLElement).style.fontSize;
     plain.unmount();
 
-    const large = mountSurface(<Text value="Ready" variant="body" />, scaled);
+    const large = mountSurface(<Text value="Ready" variant="meta" />, scaled);
     const largeSize = (large.container.firstElementChild as HTMLElement).style.fontSize;
     large.unmount();
 
-    expect(plainSize).toBe(`${unscaled.theme.typography.body.fontSize}px`);
-    expect(largeSize).toBe(`${unscaled.theme.typography.body.fontSize * 1.5}px`);
+    expect(plainSize).toBe(`${HAPPIER_TYPE_SCALE.meta.fontSize}px`);
+    expect(largeSize).toBe(`${HAPPIER_TYPE_SCALE.meta.fontSize * 1.5}px`);
   });
 
   it('resolves a declared translation key and falls back to author text, never the raw key', () => {

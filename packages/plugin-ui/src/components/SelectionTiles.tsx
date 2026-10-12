@@ -54,6 +54,8 @@ type SelectionTilesBaseProps<T extends string> = Readonly<{
   maximumColumns?: number;
   minimumTileWidth?: number;
   subtitleLines?: number;
+  /** Only action tiles start operations; choice variants do not accept an action callback. */
+  onPress?: undefined;
   renderOptionFooter?: (input: Readonly<{ option: SelectionTilesOption<T>; selected: boolean; disabled: boolean }>) => ReactNode;
   /** The group's accessible name: the setting it chooses. */
   accessibilityLabel: string;
@@ -74,11 +76,20 @@ export type SelectionTilesProps<T extends string = string> =
     selectionMode: 'multiple';
     value: readonly T[];
     onChange: (next: T[]) => void;
+  }>)
+  | (Omit<SelectionTilesBaseProps<T>, 'variant' | 'onPress'> & Readonly<{
+    /** Buttons that start an operation; narrow page sections recompose them into rows. */
+    variant: 'action';
+    onPress: (id: T) => void;
+    selectionMode?: undefined;
+    value?: undefined;
+    onChange?: undefined;
   }>);
 
 /**
- * A group of tiles that choose a setting: text cards, or — for a setting that
- * changes what you see — visual tiles that each show the option's preview.
+ * A group of tiles that choose a setting or start an operation: text cards, or — for a setting that
+ * changes what you see — visual tiles that each show the option's preview. Action tiles recompose
+ * into rows on narrow page sections; tiles with footers retain their own card and controls.
  * The same tile owner Happier's own settings use: one radio group (or a set
  * of checkboxes) with a single tab stop and arrow-key selection.
  */
@@ -154,7 +165,6 @@ export function SelectionTiles<T extends string>(props: SelectionTilesProps<T>):
 
   const shared = {
     options,
-    variant: props.variant ?? 'card',
     tileSizing: props.tileSizing,
     density: props.density,
     minimumColumns: props.minimumColumns,
@@ -169,13 +179,17 @@ export function SelectionTiles<T extends string>(props: SelectionTilesProps<T>):
     renderGlyph,
   } as const;
 
+  if (props.variant === 'action') {
+    return <HappierSelectionTiles {...shared} variant="action" onPress={props.onPress} />;
+  }
   if (props.selectionMode === 'multiple') {
-    return <HappierSelectionTiles {...shared} selectionMode="multiple" value={props.value} onChange={props.onChange} />;
+    return <HappierSelectionTiles {...shared} variant={props.variant} selectionMode="multiple" value={props.value} onChange={props.onChange} />;
   }
   const onChange = props.onChange;
   return (
     <HappierSelectionTiles
       {...shared}
+      variant={props.variant}
       selectionMode="single"
       value={props.value}
       onChange={(next) => { if (next !== null) onChange(next); }}

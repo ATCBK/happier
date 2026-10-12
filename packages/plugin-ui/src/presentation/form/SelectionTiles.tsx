@@ -1,11 +1,17 @@
-import { useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
 import { I18nManager, Platform, Pressable, StyleSheet, View, useWindowDimensions, type ViewStyle } from 'react-native';
 
 import type { HappierPageTextStep } from '../layout/pageText.js';
 
-import { useOptionalHappierUiLocalization } from '../../environment/context.js';
+import { useOptionalHappierUiLocalization, useOptionalHappierUiPalette } from '../../environment/context.js';
+import type { HappierUiTheme } from '../../environment/types.js';
+import { HappierItemGroup } from '../collection/ItemGroup.js';
+import { HappierListItem } from '../collection/List.js';
+import { HappierChevron } from '../collection/DisclosureChevron.js';
+import { HappierPageSheet, useHappierPageSection, type HappierPageSheetProps } from '../layout/PageSection.js';
+import type { HappierPageRowMetrics } from '../layout/pageRowMetrics.js';
 import { HAPPIER_PRESS_FEEDBACK_V1 } from '../interaction/pressFeedback.js';
-import { HAPPIER_PAGE_METRICS } from '../layout/pageMetrics.js';
+import { HAPPIER_PAGE_METRICS, isHappierPageRowNarrow } from '../layout/pageMetrics.js';
 import { resolveHappierTabKeySelection } from '../navigation/Tabs.js';
 import { HAPPIER_FIELD_BOX_METRICS } from './FieldBox.js';
 import { resolveHappierRadioMarkStyle } from './RadioMark.js';
@@ -44,6 +50,8 @@ export type HappierSelectionTileOption<T extends string, I extends string = stri
    * static props — not a drawn replica — so the preview cannot drift from the product.
    */
   preview?: ReactNode;
+  /** Visual tiles: `dashed` draws the preview's edge dashed, for an empty slot that adds something (Your picture…). */
+  previewEdge?: 'solid' | 'dashed';
   /** Overrides the `testIdPrefix:id` test id of this tile. */
   testID?: string;
 }>;
@@ -150,6 +158,21 @@ type HappierChoiceTilesBaseProps<T extends string, I extends string> = HappierSe
    * decision (theme mode).
    */
   tileSizing?: 'natural' | 'fill';
+  /**
+   * Visual `fill` only: the preview's width ÷ height (default a small app window, 2.2). A picture or
+   * swatch picker sets its own proportions.
+   */
+  previewAspectRatio?: number;
+  /**
+   * Visual variant only. `hidden` drops the caption under each preview for pickers whose previews
+   * speak for themselves (picture thumbnails); every tile is still announced by its title.
+   */
+  labels?: 'shown' | 'hidden';
+  /**
+   * Visual variant only: how many lines a caption may take before it ellipsizes (default 2). A grid of
+   * short names keeps one line so its rows stay one height; the tile is announced by its whole title.
+   */
+  labelLines?: number;
   /** The group's accessible name (the setting it chooses). */
   accessibilityLabel?: string;
   testIdPrefix?: string;
@@ -211,6 +234,14 @@ export type HappierActionSelectionTilesProps<T extends string, I extends string 
     /** The group's accessible name. */
     accessibilityLabel?: string;
     testIdPrefix?: string;
+    /** A core adapter supplies its list scope; plugin sections inherit the shared page-sheet scope. */
+    listPresentation?: 'page' | 'grouped';
+    /** Core supplies these existing theme facts when no plugin environment is mounted. */
+    theme?: HappierUiTheme;
+    pageColors?: HappierPageSheetProps['colors'];
+    /** Core injects its in-app scale; plugin text keeps the environment's resolved scale. */
+    textScale?: number;
+    pageRowMetrics?: HappierPageRowMetrics;
     /**
      * A tile whose operation depends on its own state (a provisioner that is ready, needs setup or
      * needs an account) carries that state and its operation in a footer instead of being one
@@ -335,16 +366,23 @@ function VisualSelectionTiles<T extends string, I extends string>(props: Happier
   const columns = Math.min(props.options.length, Math.max(1, props.maximumColumns ?? props.options.length));
   // A row cannot fit columns + 1 percentage bases plus the positive shared gap. Flex growth then
   // distributes the remaining row width equally, keeping the same grid on web and native.
-  const columnBasis: ViewStyle | undefined = fill && columns < props.options.length
-    ? { flexBasis: `${100 / (columns + 1)}%`, flexShrink: 0 }
-    : undefined;
+  // Once measured, a filling grid that wraps gives every row the same tile width, so a short last
+  // row lines up under the full rows instead of stretching across them.
+  const wraps = fill && columns < props.options.length;
+  const [gridWidth, setGridWidth] = useState(0);
+  const columnBasis: ViewStyle | undefined = !wraps ? undefined
+    : gridWidth > 0
+      ? { width: (gridWidth - VISUAL_GRID_GAP_PX * (columns - 1)) / columns, flexBasis: 'auto', flexGrow: 0, flexShrink: 0 }
+      : { flexBasis: `${100 / (columns + 1)}%`, flexShrink: 0 };
+  const previewAspect: ViewStyle | null = fill && props.previewAspectRatio ? { aspectRatio: props.previewAspectRatio, minHeight: 0 } : null;
+  const showLabels = props.labels !== 'hidden';
   return (
-    <View style={styles.visualGrid} {...choiceGroupSemantics(props)}>
+    <View style={styles.visualGrid} onLayout={wraps ? (event) => setGridWidth(event.nativeEvent.layout.width) : undefined} {...choiceGroupSemantics(props)}>
       {props.options.map((option, index) => {
         const selected = isSelected(props, option.id);
         const disabled = option.disabled === true;
         const alignment = option.subtitle || option.badge ? 'left' : 'center';
-        const label = props.renderText({ role: 'visualLabel', text: option.title, selected, compact: false, numberOfLines: 2, alignment });
+        const label = props.renderText({ role: 'visualLabel', text: option.title, selected, compact: false, numberOfLines: props.labelLines ?? 2, alignment });
         return (
           <Pressable
             key={option.id}
@@ -372,11 +410,11 @@ function VisualSelectionTiles<T extends string, I extends string>(props: Happier
           >
             {/* The ring sits on an outer frame with a gap so it reads as a selection, not a border. */}
             <View style={[styles.visualRing, selected ? styles.visualRingSelected : null]}>
-              <View style={[styles.visualPreview, fill ? styles.visualPreviewFill : null]} pointerEvents="none">
+              <View style={[styles.visualPreview, fill ? styles.visualPreviewFill : null, previewAspect, option.previewEdge === 'dashed' ? styles.visualPreviewDashed : null]} pointerEvents="none">
                 {option.preview ?? null}
               </View>
             </View>
-            {option.badge ? (
+            {!showLabels ? null : option.badge ? (
               <View style={styles.visualLabelRow}>
                 {label}
                 <View style={styles.badge}>
@@ -384,7 +422,7 @@ function VisualSelectionTiles<T extends string, I extends string>(props: Happier
                 </View>
               </View>
             ) : label}
-            {option.subtitle
+            {showLabels && option.subtitle
               ? props.renderText({ role: 'visualSublabel', text: option.subtitle, selected, compact: false, numberOfLines: 2, alignment })
               : null}
           </Pressable>
@@ -405,9 +443,68 @@ export function HappierSelectionTiles<T extends string, I extends string = strin
 }
 
 function ActionSelectionTiles<T extends string, I extends string>(props: HappierActionSelectionTilesProps<T, I>) {
+  const section = useHappierPageSection();
+  const localization = useOptionalHappierUiLocalization();
+  const rtl = localization ? localization.direction === 'rtl' : I18nManager.isRTL;
+  const palette = useOptionalHappierUiPalette(props.theme);
+  const page = props.listPresentation === undefined ? section !== null : props.listPresentation === 'page';
+  const rowsWhenNarrow = page && !props.renderOptionFooter;
+  const [narrow, setNarrow] = useState(false);
+  const onLayout = useCallback((event: Readonly<{ nativeEvent: Readonly<{ layout: Readonly<{ width: number }> }> }>) => {
+    const next = isHappierPageRowNarrow(event.nativeEvent.layout.width);
+    setNarrow((current) => current === next ? current : next);
+  }, []);
+
+  const body = rowsWhenNarrow && narrow ? (
+    <HappierItemGroup accessibilityLabel={props.accessibilityLabel}>
+      {/* The containing section already owns the page inset; this sheet adds no second one. */}
+      <HappierPageSheet colors={props.pageColors ?? palette ?? {
+        sheet: props.colors.actionBackground,
+        sheetBorder: props.colors.tileBorder,
+        rowDivider: props.colors.divider ?? props.colors.tileBorder,
+        groupDivider: props.colors.divider ?? props.colors.tileBorder,
+      }}>
+        {props.options.map((option) => (
+          <HappierListItem
+            key={option.id}
+            testID={option.testID ?? (props.testIdPrefix ? `${props.testIdPrefix}:${option.id}` : undefined)}
+            theme={props.theme}
+            textScale={props.textScale}
+            pageRowMetrics={props.pageRowMetrics}
+            title={option.title}
+            subtitle={option.subtitle}
+            accessibilityLabel={option.subtitle ? `${option.title}, ${option.subtitle}` : option.title}
+            icon={option.mark ?? (option.icon ? props.renderGlyph({
+              glyph: { kind: 'icon', name: option.icon }, size: props.pageRowMetrics?.iconGlyphPx ?? HAPPIER_PAGE_METRICS.rowIconGlyphPx, color: props.colors.glyph,
+            }) : undefined)}
+            disabled={option.disabled}
+            accessory={<HappierChevron direction={rtl ? 'left' : 'right'} color={props.colors.glyph} />}
+            onPress={() => props.onPress(option.id)}
+          />
+        ))}
+      </HappierPageSheet>
+    </HappierItemGroup>
+  ) : <ActionSelectionCards {...props} />;
+  return rowsWhenNarrow ? <View onLayout={onLayout}>{body}</View> : body;
+}
+
+function ActionSelectionCards<T extends string, I extends string>(props: HappierActionSelectionTilesProps<T, I>) {
   const styles = useTileStyles(props.colors);
+  const [width, setWidth] = useState(0);
+  const onLayout = useCallback((event: Readonly<{ nativeEvent: Readonly<{ layout: Readonly<{ width: number }> }> }>) => {
+    const next = Math.floor(event.nativeEvent.layout.width);
+    setWidth((current) => current === next ? current : next);
+  }, []);
+  // Every tile takes the same track, so a wrapped last row keeps the width of the rows above it
+  // (a lone tile never stretches across the grid). Before the first measure the tiles share the row.
+  const trackStyle = useMemo((): ViewStyle | null => {
+    if (width <= 0) return null;
+    const columns = Math.max(1, Math.min(props.options.length, Math.floor((width + ACTION_GRID_GAP_PX) / (ACTION_TILE_MIN_WIDTH_PX + ACTION_GRID_GAP_PX))));
+    return { width: Math.floor((width - ACTION_GRID_GAP_PX * (columns - 1)) / columns), flexGrow: 0, flexShrink: 0, flexBasis: 'auto' };
+  }, [props.options.length, width]);
   return (
     <View
+      onLayout={onLayout}
       style={styles.actionGrid}
       accessibilityLabel={props.accessibilityLabel}
       aria-label={Platform.OS === 'web' ? props.accessibilityLabel : undefined}
@@ -423,7 +520,7 @@ function ActionSelectionTiles<T extends string, I extends string>(props: Happier
               role="group"
               accessibilityLabel={option.title}
               aria-label={Platform.OS === 'web' ? option.title : undefined}
-              style={[styles.actionTile, styles.actionTileWithFooter]}
+              style={[styles.actionTile, styles.actionTileWithFooter, trackStyle]}
             >
               <View style={styles.actionHead}>
                 {option.mark ?? (option.icon
@@ -457,6 +554,7 @@ function ActionSelectionTiles<T extends string, I extends string>(props: Happier
             }}
             style={({ pressed, hovered }: { pressed: boolean; hovered?: boolean }) => [
               styles.actionTile,
+              trackStyle,
               hovered && !disabled ? styles.actionTileHovered : null,
               { opacity: pressOpacity(disabled, pressed) },
             ]}
@@ -630,15 +728,21 @@ function CardSelectionTiles<T extends string, I extends string>(props: HappierCh
                     {option.mark ?? (glyph ? props.renderGlyph({ glyph, size: glyphSize, color: glyphColor }) : null)}
                   </View> : null}
                   <View style={[styles.textContainer, compact && !hasSubtitle ? styles.textContainerCentered : null]}>
-                    {props.renderText({ role: 'cardTitle', text: option.title, selected, compact, numberOfLines: 2 })}
+                    {/* The name wraps in full (a long service name is never cut) and its badge follows it,
+                        dropping to its own line only when the name leaves no room. */}
+                    <View style={styles.titleLine}>
+                      <View style={styles.titleText}>
+                        {props.renderText({ role: 'cardTitle', text: option.title, selected, compact, numberOfLines: 0 })}
+                      </View>
+                      {option.badge ? (
+                        <View style={styles.badgeInline}>
+                          {props.renderText({ role: 'badge', text: option.badge, selected, compact, numberOfLines: 1 })}
+                        </View>
+                      ) : null}
+                    </View>
                     {option.subtitle
                       ? props.renderText({ role: 'cardSubtitle', text: option.subtitle, selected, compact, numberOfLines: props.subtitleLines ?? 4 })
                       : null}
-                    {option.badge ? (
-                      <View style={styles.badge}>
-                        {props.renderText({ role: 'badge', text: option.badge, selected, compact, numberOfLines: 1 })}
-                      </View>
-                    ) : null}
                   </View>
                 </View>
                 <View style={styles.selectionAccessory} pointerEvents="none" aria-hidden>
@@ -666,10 +770,12 @@ const VISUAL_TILE_MIN_WIDTH_PX = 84;
 const VISUAL_PREVIEW_HEIGHT_PX = 70;
 const VISUAL_PREVIEW_RADIUS_PX = 10;
 const VISUAL_RING_GAP_PX = 2;
+const VISUAL_GRID_GAP_PX = 10;
 /** A filling tile keeps the proportions of a small app window rather than a fixed height. */
 const VISUAL_FILL_PREVIEW_ASPECT_RATIO = 2.2;
 
 const ACTION_TILE_MIN_WIDTH_PX = 180;
+const ACTION_GRID_GAP_PX = 10;
 
 /** Card icon slot: the list row's icon box, so a tile glyph lines up with a row glyph. */
 const CARD_ICON_BOX_PX = {
@@ -683,7 +789,7 @@ function createTileStyles(colors: HappierSelectionTilesColors) {
     actionGrid: {
       flexDirection: 'row',
       flexWrap: 'wrap',
-      gap: 10,
+      gap: ACTION_GRID_GAP_PX,
     },
     actionTile: {
       flexGrow: 1,
@@ -725,7 +831,7 @@ function createTileStyles(colors: HappierSelectionTilesColors) {
     visualGrid: {
       flexDirection: 'row',
       flexWrap: 'wrap',
-      gap: 10,
+      gap: VISUAL_GRID_GAP_PX,
     },
     // Tiles share the row up to their natural width, so three always fit a phone row and a desktop
     // row keeps them at their natural size instead of stretching them across the sheet.
@@ -765,6 +871,13 @@ function createTileStyles(colors: HappierSelectionTilesColors) {
       backgroundColor: colors.previewBackground,
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: colors.tileBorder,
+    },
+    // An empty slot: no ground of its own, an ink edge in dashes (the lab's "Your picture…").
+    visualPreviewDashed: {
+      backgroundColor: 'transparent',
+      borderStyle: 'dashed',
+      borderWidth: 1,
+      borderColor: colors.actionBorderHovered,
     },
     visualPreviewFill: {
       height: 'auto',
@@ -807,7 +920,10 @@ function createTileStyles(colors: HappierSelectionTilesColors) {
       borderRadius: HAPPIER_FIELD_BOX_METRICS.radiusPx,
       borderWidth: HAPPIER_FIELD_BOX_METRICS.borderWidthPx,
     },
+    // Tiles of one row share its height; the press target takes the slack so a footer (readiness) sits
+    // on the same line in every tile of the row however long the descriptions above it run.
     tilePressable: {
+      flexGrow: 1,
       paddingHorizontal: 12,
       paddingVertical: 14,
       minHeight: 92,
@@ -890,6 +1006,26 @@ function createTileStyles(colors: HappierSelectionTilesColors) {
       borderColor: colors.tileBorder,
       paddingHorizontal: 8,
       paddingVertical: 4,
+    },
+    // A card tile's name and badge share one wrapping line; the badge keeps its whole word.
+    titleLine: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      alignItems: 'center',
+      columnGap: 8,
+      rowGap: 2,
+    },
+    titleText: {
+      flexShrink: 1,
+      minWidth: 0,
+    },
+    badgeInline: {
+      flexShrink: 0,
+      borderRadius: 999,
+      borderWidth: 1,
+      borderColor: colors.tileBorder,
+      paddingHorizontal: 8,
+      paddingVertical: 0,
     },
   });
 }

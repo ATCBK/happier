@@ -2,8 +2,13 @@
 export type HappierWorkKind = 'session' | 'execution_run' | 'workflow_run';
 export type HappierRoleRunsAsKind = 'session' | 'background_run';
 
+/**
+ * One mark per kind of work. A workflow run carries the workflow mark the Workflows destination,
+ * editor, Run detail and run rows draw (`tree-structure`); `stack-simple` already means the session
+ * companion, so it never doubles as a workflow.
+ */
 export const HAPPIER_WORK_KIND_GLYPHS = {
-  session: 'sparkle', execution_run: 'play-circle', workflow_run: 'stack-simple',
+  session: 'sparkle', execution_run: 'play-circle', workflow_run: 'tree-structure',
 } as const;
 
 export function resolveHappierWorkKindPresentation(kind: HappierWorkKind, labels?: Readonly<Record<HappierWorkKind, string>>) {

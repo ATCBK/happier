@@ -105,7 +105,7 @@ export function DiffViewer({
 
   return (
     <HappierStack gap={8}>
-      <HappierText variant="caption">{label}</HappierText>
+      <HappierText variant="micro">{label}</HappierText>
       {content}
     </HappierStack>
   );

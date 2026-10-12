@@ -59,7 +59,7 @@ export function Text({
 
   return (
     <HappierText
-      variant={variant ?? 'body'}
+      variant={variant ?? 'meta'}
       tone={tone ?? 'neutral'}
       numberOfLines={numberOfLines}
       selectable={selectable}

@@ -60,6 +60,7 @@ import {
   HappierList,
   HappierListItem,
   HappierListSection,
+  HappierRowActionsReveal,
 } from '../presentation/collection/List.js';
 import {
   HappierItemGroup,
@@ -83,6 +84,7 @@ import { ListCollectionControlContext } from './listCollectionControl.js';
 import {
   ListCollectionHeader,
   useListCollectionSearch,
+  useListSelectionModeControl,
 } from './listCollectionHeader.js';
 import {
   HappierDisclosure,
@@ -514,6 +516,10 @@ export type ItemProps = Readonly<{
    * do.
    */
   accessoryWraps?: boolean;
+  /** The accessory always takes its own line under the row's content: a card's action beneath its body. */
+  accessoryBelow?: boolean;
+  /** A page select keeps its content width in a narrow desktop column and stacks beneath its label on phones. */
+  fieldAccessory?: boolean;
   tone?: HappierTone;
   /**
    * Colour for the trailing `detail` when it is the row's one loud fact — an
@@ -742,6 +748,14 @@ type RowFocusRequest = Readonly<{
  */
 /** A list whose rows scroll with the page sizes to its content instead of filling its container. */
 const pageScrollListBoxStyle: HappierPortableStyle = { minWidth: 0 };
+
+/** An empty scroller yields the rows' region to the empty slot, which fills it from the top. */
+const emptyScrollerStyle: HappierPortableStyle = { flexGrow: 0 };
+const emptyRegionStyle: HappierPortableStyle = {
+  flex: 1,
+  minHeight: 0,
+  overflow: 'hidden',
+};
 
 const virtualizedListBoxStyle: HappierPortableStyle = {
   flex: 1,
@@ -1417,13 +1431,13 @@ function VirtualizedList<Item>(
     return rowIndex === undefined ? null : (rows[rowIndex]?.item ?? null);
   }, [headerRenderer, rowIndexByKey, rows, selectedKey]);
   const authorHeader = resolveVirtualizedHeader(props.header, { selectedItem });
+  const selectionMode = useListSelectionModeControl(multiStore, eligibleSelectionKeys.length > 0);
   const headerContent = collectionControl?.hideChrome ? (
     authorHeader
   ) : (
     <ListCollectionHeader
       search={searchControl}
-      store={multiStore}
-      selectable={eligibleSelectionKeys.length > 0}
+      selectionMode={selectionMode}
     >
       {authorHeader}
     </ListCollectionHeader>
@@ -1456,6 +1470,7 @@ function VirtualizedList<Item>(
   const collectionRole =
     collectionControl?.collectionRole ??
     (selectionEnabled ? accessibilityPattern : 'list');
+  const gridRole = collectionRole === 'grid' || collectionRole === 'treegrid';
   // One row projection for both arms. `rowIndex` is the collection-wide
   // navigation position; `index` and `setSize` stay unit-local, which is what a
   // reader hears and what the author's callbacks already receive.
@@ -1655,6 +1670,8 @@ function VirtualizedList<Item>(
 
   const renderSectionHeader = useCallback(
     ({ section }: Readonly<{ section: VirtualizedListSectionData<Item> }>) => {
+      // An untitled section among titled ones (the rows a table's own header names) draws no band.
+      if (section.title === '') return null;
       const header = (
         <HappierListSection
           title={section.title}
@@ -1672,7 +1689,7 @@ function VirtualizedList<Item>(
             ? {}
             : { action: sectionHeaderAction(section.authorKey) })}
           virtualizedCollectionRole={collectionRole}
-          {...(collectionRole === 'grid'
+          {...(gridRole
             ? {
                 accessibilityRowIndex:
                   (sectionGridRowOffsets.get(section.key) ?? 0) + 1,
@@ -1691,6 +1708,7 @@ function VirtualizedList<Item>(
       collectionControl?.sectionHeaderTitleRole,
       collectionRole,
       collectionRowCount,
+      gridRole,
       sectionGridRowOffsets,
       sectionHeaderAction,
       sectionHeaderStyle,
@@ -1737,6 +1755,16 @@ function VirtualizedList<Item>(
     [renderSectionHeader, virtualizedSections],
   );
 
+  // A collection with no rows says so in the rows' own region, from its top: the platform scroller (which grows
+  // to fill the box) yields while there are no rows, and the empty slot takes the room it leaves. Every
+  // presentation's state (a table's, a list's, a board's) then stands in the same place.
+  const emptyFillsRegion =
+    !pageScroll &&
+    !scrollsEndContent &&
+    emptyContent !== null &&
+    emptyContent !== undefined &&
+    emptyContent !== false;
+
   const virtualizerRequest: CollectionVirtualizerRequest<Item> = {
     ...(visibleSections === undefined
       ? ({ kind: 'flat', items: visibleItems ?? [] } as const)
@@ -1759,12 +1787,12 @@ function VirtualizedList<Item>(
           ? undefined
           : 'list',
     role: collectionRole,
-    rowCount: collectionRole === 'grid' ? collectionRowCount : undefined,
+    rowCount: gridRole ? collectionRowCount : undefined,
     multiSelectable: collectionMultiSelectable,
     nativeCollection,
     accessibilityLabel: props.accessibilityLabel,
     testID: props.testID,
-    style: props.style,
+    style: emptyFillsRegion ? [props.style, emptyScrollerStyle] : props.style,
     contentContainerStyle: [densityStyle, props.contentContainerStyle],
     extraData,
     endContent: collectionEndContent,
@@ -1804,7 +1832,7 @@ function VirtualizedList<Item>(
         // @ts-expect-error React Native's role union omits RNW's standard listbox role.
         role={collectionRole}
         aria-rowcount={
-          collectionRole === 'grid' ? collectionRowCount : undefined
+          gridRole ? collectionRowCount : undefined
         }
         aria-multiselectable={collectionMultiSelectable}
         accessibilityCollection={nativeCollection}
@@ -1865,7 +1893,11 @@ function VirtualizedList<Item>(
       >
         {headerContent}
         {collection}
-        {scrollsEndContent ? null : emptyContent}
+        {emptyFillsRegion ? (
+          <View style={emptyRegionStyle}>{emptyContent}</View>
+        ) : scrollsEndContent ? null : (
+          emptyContent
+        )}
         {scrollsEndContent ? null : props.endContent}
         {props.footer}
       </View>
@@ -1948,6 +1980,7 @@ function renderListItem(
     hasSecondaryActions,
   }).secondaryActionsEnabled;
   const overflow = hasSecondaryActions ? (
+    <HappierRowActionsReveal>
     <HappierItemOverflow
       actions={secondaryActions}
       secondaryActionsEnabled={secondaryActionsEnabled}
@@ -1984,6 +2017,7 @@ function renderListItem(
         />
       )}
     />
+    </HappierRowActionsReveal>
   ) : null;
   const composedAccessory =
     accessory === undefined || accessory === null ? (
@@ -2001,6 +2035,8 @@ function renderListItem(
       {...item}
       onContextMenu={secondaryActionsControl?.onContextMenu}
       accessory={composedAccessory}
+      accessoryHeld={secondaryActionsControl?.open === true}
+      accessoryIsRowActions={hasSecondaryActions && (accessory === undefined || accessory === null)}
       hasSecondaryActions={hasSecondaryActions}
       accessoryOutsidePressable={
         hasSecondaryActions || accessoryOutsidePressable === true

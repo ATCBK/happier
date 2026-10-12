@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Pressable, View, type StyleProp, type ViewStyle } from 'react-native';
+import { Platform, Pressable, View, type StyleProp, type ViewStyle } from 'react-native';
 import { HappierText } from '../text/Text.js';
 import type { HappierFocusable, HappierStyleProp, HappierTextHostProps } from '../portableTypes.js';
 
@@ -75,7 +75,13 @@ export const HappierOptionRow = React.forwardRef<HappierFocusable, HappierOption
         </View>
         {includeRight && props.right ? <View style={[styles.right, aligned]}>{props.right}</View> : null}
     </>;
-    const control = { ...props.controlProps, ref: bindRef, disabled: props.disabled, onPress: props.disabled ? undefined : props.onSelect };
+    const { role, ...controlProps } = props.controlProps ?? {};
+    // RN host types omit RNW's ARIA roles (e.g. gridcell). Only web receives
+    // this prop; native uses the caller's typed accessibilityRole instead.
+    const platformRoleProps = Platform.OS === 'web'
+        ? { role: role as React.ComponentProps<typeof Pressable>['role'] }
+        : undefined;
+    const control = { ...controlProps, ...platformRoleProps, ref: bindRef, disabled: props.disabled, onPress: props.disabled ? undefined : props.onSelect };
     if (props.rightElementOutsidePressable && props.right) return <View style={props.rowStyle(false) as StyleProp<ViewStyle>}>
         <Pressable {...control} style={({ pressed }) => [styles.splitPressable, pressed && !props.disabled ? { opacity: props.splitPressOpacity } : null]}>{content(false)}</Pressable>
         <View style={styles.right}>{props.right}</View>

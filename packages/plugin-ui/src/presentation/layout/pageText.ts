@@ -2,6 +2,7 @@ import { Platform } from 'react-native';
 
 import type { HappierUiTypography } from '../../environment/types.js';
 import type { HappierFontWeight, HappierPortableStyle } from '../portableTypes.js';
+import { HAPPIER_TYPE_WEIGHT, resolveHappierTypeScale } from '../text/typeScale.js';
 
 /** The weights the configuration-page anatomy draws with. */
 export type HappierPageTextWeight = 'regular' | 'medium' | 'semiBold' | 'bold';
@@ -28,10 +29,8 @@ export type HappierPageTextStep = Readonly<{
   letterSpacing?: number;
 }>;
 
-const ios = Platform.OS === 'ios';
-
 /**
- * The one owner of the page anatomy's type scale, for Happier core pages
+ * The page anatomy's slot projection of the canonical type-role table, for Happier core pages
  * (which add their own font family per weight) and plugin pages (which take
  * the family from the host's typography facts, else a numeric weight).
  *
@@ -40,14 +39,14 @@ const ios = Platform.OS === 'ios';
  * density owner.
  */
 export const HAPPIER_PAGE_TEXT: Readonly<Record<HappierPageTextRole, HappierPageTextStep>> = Object.freeze({
-  pageTitle: { weight: 'bold', fontSize: 22, lineHeight: 28, letterSpacing: -0.4 },
-  heroTitle: { weight: 'bold', fontSize: 28, lineHeight: 34, letterSpacing: -0.4 },
-  pageDescription: { weight: 'regular', fontSize: 14, lineHeight: 20 },
-  meta: { weight: 'regular', fontSize: 13, lineHeight: 18 },
-  sectionTitle: { weight: 'bold', fontSize: ios ? 15 : 14, lineHeight: 20, letterSpacing: -0.1 },
-  sectionDescription: { weight: 'regular', fontSize: 13, lineHeight: 18 },
-  rowTitle: { weight: 'medium', fontSize: ios ? 15 : 14, lineHeight: 20, letterSpacing: ios ? -0.3 : 0.12 },
-  rowDescription: { weight: 'regular', fontSize: 13, lineHeight: 18, letterSpacing: 0 },
+  pageTitle: resolveHappierTypeScale('title', Platform.OS),
+  heroTitle: resolveHappierTypeScale('display', Platform.OS),
+  pageDescription: resolveHappierTypeScale('reading', Platform.OS),
+  meta: resolveHappierTypeScale('body', Platform.OS),
+  sectionTitle: resolveHappierTypeScale('label', Platform.OS, 'semiBold'),
+  sectionDescription: resolveHappierTypeScale('body', Platform.OS),
+  rowTitle: resolveHappierTypeScale('label', Platform.OS),
+  rowDescription: resolveHappierTypeScale('body', Platform.OS),
 });
 
 /** A step's size, line height and tracking, without a weight (core adds its own family). */
@@ -63,9 +62,7 @@ export function happierPageTextMetrics(role: HappierPageTextRole): Readonly<{
 }
 
 const NUMERIC_WEIGHT: Readonly<Record<HappierPageTextWeight, HappierFontWeight>> = Object.freeze({
-  regular: '400',
-  medium: '500',
-  semiBold: '600',
+  ...HAPPIER_TYPE_WEIGHT,
   bold: '700',
 });
 

@@ -9,6 +9,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
 
 import { resolveTypeScriptCliInvocation } from '../../../scripts/workspaces/resolveTypeScriptCliInvocation.mjs';
+import { createPublicSurfaceProgram, projectEntrypointExportRows } from '../../../scripts/api-governance/publicDeclarationReport.mjs';
 import * as fixtureHarness from './validateExternalAuthoringFixture.mjs';
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -16,14 +17,14 @@ const repositoryRoot = resolve(packageRoot, '../..');
 const requireFromPluginUi = createRequire(resolve(packageRoot, 'package.json'));
 const requireFromPluginSdk = createRequire(resolve(repositoryRoot, 'packages/plugin-sdk/package.json'));
 
-test('public presentation admission follows declaration reexports and rejects raw image exports', async () => {
+test('public components admission follows declaration reexports and rejects raw image exports', async () => {
   await fixtureHarness.withTemporaryExternalAuthoringRoot(async (root) => {
     const packageRoot = join(root, 'node_modules', '@happier-dev', 'plugin-ui');
-    const declarationsRoot = join(packageRoot, 'dist', 'presentation');
+    const declarationsRoot = join(packageRoot, 'dist', 'components');
     await mkdir(declarationsRoot, { recursive: true });
     await writeFile(join(packageRoot, 'package.json'), JSON.stringify({
       name: '@happier-dev/plugin-ui', type: 'module',
-      exports: { './presentation': { types: './dist/presentation/index.d.ts' } },
+      exports: { './components': { types: './dist/components/index.d.ts' } },
     }));
     await writeFile(join(declarationsRoot, 'index.d.ts'), "export * from './index.public.js';\n");
     await writeFile(join(declarationsRoot, 'index.public.d.ts'), 'export declare function HappierBrandMark(): unknown;\n');
@@ -31,6 +32,37 @@ test('public presentation admission follows declaration reexports and rejects ra
     await writeFile(join(declarationsRoot, 'index.public.d.ts'), 'export declare function HappierBrandMark(): unknown;\nexport declare function HappierImage(): unknown;\n');
     await assert.rejects(fixtureHarness.assertPublicPresentationContract(root), /Raw renderer export leaked/);
   });
+});
+
+test('the author components and root expose neutral owners while excluding mounted host controls', () => {
+  const entrypoints = [
+    { specifier: 'presentation', sourceModule: 'src/presentation/index.public.ts' },
+    { specifier: 'components', sourceModule: 'src/components/index.public.ts' },
+    { specifier: 'root', sourceModule: 'src/index.public.ts' },
+  ];
+  const program = createPublicSurfaceProgram(entrypoints.map(({ sourceModule }) => resolve(packageRoot, sourceModule)), packageRoot);
+  const rows = projectEntrypointExportRows({ program, packageRoot, entrypoints });
+  const exports = (specifier) => new Set(rows.filter((row) => row.specifier === specifier).map((row) => row.exportName));
+  const presentation = exports('presentation');
+  const components = exports('components');
+  const root = exports('root');
+  // Mounted host providers, registrars and native player controls are implementation-only.
+  const hostControls = new Set([
+    'HappierInputPickerPort', 'HappierInputPickerProvider', 'useHappierInputPickerPort',
+    'HappierItemGroupSelectionContext', 'HappierLiveStreamAvccInput', 'HappierLiveStreamPlayerDiagnostic',
+    'HappierLiveStreamPlayerDisplayState', 'HappierLiveStreamPlayerHost', 'HappierLiveStreamPlayerRendererEvent',
+    'HappierLiveStreamPlayerRenderEvent', 'HappierLiveStreamInputLayer', 'HappierLiveStreamPlayer',
+    'HappierPageChrome', 'HappierPageChromeProvider', 'HappierSpinnerHost', 'useHappierSpinnerKeyframes',
+  ]);
+  for (const name of hostControls) {
+    assert.ok(!components.has(name), `components exposes mounted host control ${name}`);
+    assert.ok(!root.has(name), `root exposes mounted host control ${name}`);
+  }
+  const authorName = (name) => name === 'FloatingFrame' ? 'HappierFloatingFrame'
+    : name === 'FloatingFrameProps' ? 'HappierFloatingFrameProps' : name;
+  const missing = [...presentation].filter((name) => !hostControls.has(name) && !components.has(authorName(name)));
+  assert.deepEqual(missing, [], 'neutral presentation exports must reach the components author layer');
+  assert.deepEqual([...components].filter((name) => !root.has(name)), [], 'root must re-export the complete author layer');
 });
 
 async function installPackedExternalAuthoringSemanticSurfaceStub(consumerRoot) {

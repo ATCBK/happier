@@ -41,8 +41,13 @@ export type HappierSetupStep = Readonly<{
   detail?: string;
   /** A short settled fact at the row's end (how long the step took). */
   meta?: string;
-  /** What the step asks the reader to do (numbered setup steps only). */
+  /** What the step asks the reader to do (numbered setup steps only): content beneath its words. */
   body?: ReactNode;
+  /**
+   * The one operation the step asks for, as a small button (numbered setup steps only). It sits at
+   * the end of the step beside its words and moves beneath them on a narrow row.
+   */
+  action?: ReactNode;
   testID?: string;
 }>;
 
@@ -152,8 +157,8 @@ export function HappierSetupSteps(props: HappierSetupStepsProps) {
   const plain = props.plain === true;
   const variant = props.variant ?? 'numbered';
   const paint = GLYPH_PAINT[variant];
-  const bodyStyle = useHappierTypeRoleStyle('body', theme);
-  const captionStyle = useHappierTypeRoleStyle('caption', theme);
+  const bodyStyle = useHappierTypeRoleStyle('meta', theme);
+  const captionStyle = useHappierTypeRoleStyle('micro', theme);
 
   const renderTitle = (
     step: HappierSetupStep,
@@ -247,7 +252,7 @@ export function HappierSetupSteps(props: HappierSetupStepsProps) {
                         alignItems: 'center',
                         gap: 10,
                         minHeight: 38,
-                        paddingVertical: 8,
+                        paddingVertical: theme.spacing.small,
                       },
                       index > 0
                         ? {
@@ -256,7 +261,7 @@ export function HappierSetupSteps(props: HappierSetupStepsProps) {
                           }
                         : null,
                     ]
-                  : { flexDirection: 'row', alignItems: 'center', gap: 8 }
+                  : { flexDirection: 'row', alignItems: 'center', gap: theme.spacing.small }
               }
             >
               <View
@@ -302,6 +307,7 @@ export function HappierSetupSteps(props: HappierSetupStepsProps) {
             stateGlyph={isGlyphState(state) ? renderGlyph(state) : undefined}
             trailing={step.meta ? renderMeta(step.meta) : undefined}
             titleContent={renderTitle(step, state)}
+            action={step.action}
           >
             {step.detail ? renderDetail(step.detail) : null}
             {step.body ? (
@@ -311,7 +317,7 @@ export function HappierSetupSteps(props: HappierSetupStepsProps) {
                   flexDirection: 'row',
                   flexWrap: 'wrap',
                   alignItems: 'center',
-                  gap: 8,
+                  gap: theme.spacing.small,
                 }}
               >
                 {step.body}

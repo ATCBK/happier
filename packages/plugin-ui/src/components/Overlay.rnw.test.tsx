@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { mountThroughReactNativeWeb, mountThroughReactNativeWebAsync } from '../rnwMount.testSupport.js';
 import { PluginUiPresentationHostProviderInternal, type PluginUiPresentationHost } from '../presentationHost/context.js';
 import { happierMaterialBackgroundColor } from '../presentation/layout/material.js';
+import { HAPPIER_SMALL_BUTTON_HEIGHT } from '../presentation/interaction/buttonChrome.js';
 import {
   createHostApiStub,
   createSurfaceContext,
@@ -166,6 +167,92 @@ describe('controlled overlay presentation', () => {
       const style = getComputedStyle(element);
       return style.outlineStyle === 'solid' && style.outlineColor === ring && style.outlineOffset === '2px';
     })).toBe(true);
+    mount.unmount();
+  });
+
+  it('draws a labelled primary trigger with its glyph leading the words, and a bare glyph only without a label', () => {
+    const context = createSurfaceContext();
+    const host: PluginUiPresentationHost = {
+      ...createPresentationHost(() => null),
+      renderIcon: (input) => <span data-icon={input.name} style={{ color: input.color }} />,
+    };
+    const mount = mountThroughReactNativeWeb(
+      <PluginUiProvider hostApi={createHostApiStub(context)} context={context}>
+        <PluginUiPresentationHostProviderInternal host={host}>
+          <Popover open={false} onOpenChange={() => undefined} trigger="Link a PR or issue"
+            triggerAppearance="primary" triggerIcon="add" triggerAccessibilityLabel="Link a PR or issue" testID="link">
+            <Text value="Search" />
+          </Popover>
+          <Popover open={false} onOpenChange={() => undefined} trigger="Add"
+            triggerIcon="add" triggerAccessibilityLabel="Add source" testID="add" />
+        </PluginUiPresentationHostProviderInternal>
+      </PluginUiProvider>,
+    );
+    const primary = mount.container.querySelector<HTMLElement>('[data-testid="link"]')!;
+    // One control, one name: the glyph is decoration, the words are the name.
+    expect(primary.getAttribute('aria-label')).toBe('Link a PR or issue');
+    expect(primary.querySelectorAll('[role="button"], [aria-label]:not([data-testid="link"])')).toHaveLength(0);
+    const glyph = primary.querySelector<HTMLElement>('[data-icon="add"]');
+    expect(glyph).not.toBeNull();
+    expect(primary.textContent).toBe('Link a PR or issue');
+    const label = Array.from(primary.querySelectorAll<HTMLElement>('*')).find((node) => node.textContent === 'Link a PR or issue' && node.children.length === 0)!;
+    expect(glyph!.compareDocumentPosition(label) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // The filled primary: the accent fill, the glyph in the same ink as the words.
+    expect(getComputedStyle(primary).backgroundColor).toBe(resolveRenderedColor('backgroundColor', context.theme.colors.accent));
+    expect(glyph!.style.color).toBe(getComputedStyle(label).color);
+    // Without a labelled appearance the glyph alone is the trigger.
+    const iconOnly = mount.container.querySelector<HTMLElement>('[data-testid="add"]')!;
+    expect(iconOnly.querySelector('[data-icon="add"]')).not.toBeNull();
+    expect(iconOnly.textContent).toBe('');
+    mount.unmount();
+  });
+
+  it('draws a control trigger as the small secondary button on the desktop control row', () => {
+    const context = createSurfaceContext();
+    const host: PluginUiPresentationHost = {
+      ...createPresentationHost(() => null),
+      renderIcon: (input) => <span data-icon={input.name} style={{ color: input.color }} />,
+    };
+    const mount = mountThroughReactNativeWeb(
+      <PluginUiProvider hostApi={createHostApiStub(context)} context={context}>
+        <PluginUiPresentationHostProviderInternal host={host}>
+          <Dropdown open={false} onOpenChange={() => undefined} trigger="Order · Newest"
+            triggerAppearance="control" triggerIcon="settings" triggerAccessibilityLabel="Order" testID="order"
+            items={[{ id: 'newest', label: 'Newest' }]} onSelect={() => undefined} />
+          <Button title="Peer" variant="secondary" size="small" onPress={() => undefined} testID="peer" />
+        </PluginUiPresentationHostProviderInternal>
+      </PluginUiProvider>,
+    );
+    const trigger = mount.container.querySelector<HTMLElement>('[data-testid="order"]')!;
+    const peer = mount.container.querySelector<HTMLElement>('[data-testid="peer"]')!;
+    expect(getComputedStyle(trigger).minHeight).toBe(`${HAPPIER_SMALL_BUTTON_HEIGHT}px`);
+    expect(getComputedStyle(trigger).backgroundColor).toBe(getComputedStyle(peer).backgroundColor);
+    // The glyph leads the words; the control keeps one name.
+    expect(trigger.querySelector('[data-icon="settings"]')).not.toBeNull();
+    expect(trigger.textContent).toBe('Order · Newest');
+    expect(trigger.getAttribute('aria-label')).toBe('Order');
+    mount.unmount();
+  });
+
+  it('draws a plain-text trigger with a disclosure caret and no control chrome when asked', () => {
+    const context = createSurfaceContext();
+    const mount = mountThroughReactNativeWeb(
+      <PluginUiProvider hostApi={createHostApiStub(context)} context={context}>
+        <Dropdown open={false} onOpenChange={() => undefined} trigger="Entry · Newest" triggerDisclosure
+          triggerAccessibilityLabel="Order" testID="plain" items={[{ id: 'newest', label: 'Newest' }]} onSelect={() => undefined} />
+        <Dropdown open={false} onOpenChange={() => undefined} trigger="Entry"
+          triggerAccessibilityLabel="Order" testID="bare" items={[{ id: 'newest', label: 'Newest' }]} onSelect={() => undefined} />
+      </PluginUiProvider>,
+    );
+    const plain = mount.container.querySelector<HTMLElement>('[data-testid="plain"]')!;
+    const bare = mount.container.querySelector<HTMLElement>('[data-testid="bare"]')!;
+    // The words stay the trigger's name; the caret is decoration beside them, not a second control.
+    expect(plain.textContent).toBe('Entry · Newest');
+    expect(plain.getAttribute('aria-label')).toBe('Order');
+    expect(plain.querySelectorAll('[aria-hidden="true"]').length).toBeGreaterThan(bare.querySelectorAll('[aria-hidden="true"]').length);
+    // No button face: the trigger sits in a header row at the row's own height.
+    expect(getComputedStyle(plain).backgroundColor).toBe(getComputedStyle(bare).backgroundColor);
+    expect(getComputedStyle(plain).minHeight).not.toBe(`${HAPPIER_SMALL_BUTTON_HEIGHT}px`);
     mount.unmount();
   });
 

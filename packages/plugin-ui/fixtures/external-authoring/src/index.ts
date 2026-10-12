@@ -13,6 +13,7 @@ import type {
   ComposerAttachmentRuntime,
   JsonValue,
 } from '@happier-dev/plugin-sdk';
+import type { PluginJsonSchema } from '@happier-dev/plugin-sdk/protocol';
 
 type ExternalIssueDraft = Readonly<Record<string, JsonValue>>;
 
@@ -23,6 +24,22 @@ const EXTERNAL_PREPARED_ISSUE_VALUE = defineProtocolString();
 const EXTERNAL_PREPARED_PREFIX = 'prepared:';
 const retryingLocalIds = new Set<string>();
 const acceptedMessageLocalIds = new Set<string>();
+
+// The host supplies this admitted checkout through the existing widget input binder.
+// The Source slot remains a separate input; it is never the personal Project identity.
+const projectCheckoutSchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'string', minLength: 1 }, serverId: { type: 'string', minLength: 1 },
+    machineId: { type: 'string', minLength: 1 }, rootPath: { type: 'string', minLength: 1 },
+    createdAtMs: { type: 'number', minimum: 0 }, projectKey: { type: 'string', minLength: 1 },
+  },
+  required: ['id', 'serverId', 'machineId', 'rootPath', 'createdAtMs', 'projectKey'],
+} satisfies PluginJsonSchema;
+const projectCheckoutInput = { path: 'checkout', title: 'This checkout', widget: 'json' as const,
+  required: true, inputType: { hostType: 'workspace' as const } };
+const projectTarget = { kind: 'project' as const, workspaceRefIdPath: 'checkout.id', serverIdPath: 'checkout.serverId',
+  machineIdPath: 'checkout.machineId', rootPathPath: 'checkout.rootPath', projectIdPath: 'checkout.projectKey' };
 
 function readExternalIssueId(value: ExternalIssueDraft): string {
   const reviewId = value.reviewId;
@@ -135,6 +152,29 @@ export const externalAuthoringPlugin = definePlugin({
       container: 'appPage',
       target: { kind: 'app' },
       renderer: 'external-authoring-semantic-renderer',
+    }, {
+      id: 'external-project-checkout', title: 'Checkout identity', container: 'widget',
+      target: projectTarget, renderer: 'external-project-renderer',
+      sizeDeclaration: { sizes: ['medium'], defaultSize: 'medium' },
+      inputs: { fields: [projectCheckoutInput] },
+      inputSchema: { type: 'object', properties: { checkout: projectCheckoutSchema },
+        required: ['checkout'], additionalProperties: false },
+    }, {
+      id: 'external-project-source', title: 'Repository source', container: 'widget',
+      target: projectTarget, renderer: 'external-project-renderer',
+      sizeDeclaration: { sizes: ['medium'], defaultSize: 'medium' },
+      inputs: { fields: [projectCheckoutInput,
+        { path: 'source', title: 'Saved repository source', widget: 'json', required: true }] },
+      inputSchema: { type: 'object', properties: { checkout: projectCheckoutSchema,
+        source: { type: 'object', properties: { sourceId: { type: 'string', minLength: 1 },
+          revision: { type: 'integer', minimum: 0 } }, required: ['sourceId', 'revision'] } },
+        required: ['checkout', 'source'], additionalProperties: false },
+    }, {
+      id: 'external-project-companion', title: 'Checkout identity', container: 'rightSidebarTab',
+      target: projectTarget, renderer: 'external-project-renderer',
+      inputs: { fields: [projectCheckoutInput] },
+      inputSchema: { type: 'object', properties: { checkout: projectCheckoutSchema },
+        required: ['checkout'], additionalProperties: false },
     }],
     renderers: [{
       id: 'external-authoring-composer-renderer',
@@ -146,6 +186,9 @@ export const externalAuthoringPlugin = definePlugin({
           fallback: 'External authoring Composer surface',
         },
       },
+    }, {
+      id: 'external-project-renderer',
+      kind: 'reactNative', artifact: 'semantic-surface', requiredHostMethods: ['context'],
     }, {
       id: 'external-authoring-semantic-renderer',
       kind: 'reactNative',

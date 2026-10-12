@@ -18,6 +18,8 @@ export type MetricProps = Readonly<{
   value: HappierDataValue;
   unit?: string;
   comparison?: HappierDataMetricComparison;
+  /** Visible contextual line under the number, rendered by the shared metric. */
+  caption?: string;
   testID?: string;
 }>;
 

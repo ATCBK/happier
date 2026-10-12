@@ -40,6 +40,8 @@ export const HAPPIER_STEP_STATE_TONE = {
 
 const MARKER_SIZE = 22;
 const MARKER_GLYPH_SIZE = 12;
+/** The narrowest a step's words get beside its action before the action moves beneath them. */
+const STEP_TEXT_MIN_WIDTH_BESIDE_ACTION = 240;
 
 /**
  * Where one ordered step stands. `current` is the step in front of the reader; `running` is a step
@@ -64,7 +66,7 @@ export function HappierStepMarkerView(props: Readonly<{
   testID?: string;
 }>) {
   const { marker, theme } = props;
-  const numberTextStyle = useHappierTypeRoleStyle('caption', theme);
+  const numberTextStyle = useHappierTypeRoleStyle('micro', theme);
   const progress = marker.kind === 'number' ? props.numberState ?? 'upcoming' : null;
   const ringed = progress === 'current' || progress === 'running';
   const settledTone = progress === 'failed' || progress === 'waiting' ? HAPPIER_STEP_PROGRESS_GLYPH_TONE[progress] : null;
@@ -110,28 +112,49 @@ export function HappierStep(props: Readonly<{
   numberState?: HappierStepProgress;
   /** A core text-host binding, preserving plain instruction versus heading semantics. */
   titleContent?: ReactNode;
+  /**
+   * The one operation the step asks for (a small button). It sits at the end of the step, level with
+   * its words, so every step's title and detail keep one left edge; on a narrow row it moves beneath.
+   */
+  action?: ReactNode;
   style?: HappierStyleProp;
 }>) {
   const theme = props.theme;
   const marker = props.marker;
   const markerId = props.testID === undefined ? undefined : `${props.testID}:marker`;
+  const hasAction = props.action !== undefined && props.action !== null;
+  const words = (
+    <>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.spacing.small, minHeight: MARKER_SIZE }}>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          {props.titleContent ?? <HappierHeading level={3} theme={theme}>{props.title}</HappierHeading>}
+        </View>
+        {props.trailing === undefined || props.trailing === null ? null : (
+          <View style={{ flexShrink: 1, alignItems: 'flex-end' }}>{props.trailing}</View>
+        )}
+      </View>
+      {props.children}
+    </>
+  );
 
   return (
     <View testID={props.testID} {...(props.numberState === 'running' ? { 'aria-busy': true } : {})}
       style={[{ flexDirection: 'row', gap: theme.spacing.medium, alignItems: 'flex-start' }, props.style]}>
       <HappierStepMarkerView marker={marker} markerLabel={props.markerLabel} stateGlyph={props.stateGlyph}
         numberState={props.numberState} theme={theme} testID={markerId} />
-      <View style={{ flex: 1, minWidth: 0, gap: theme.spacing.small }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.spacing.small, minHeight: MARKER_SIZE }}>
-          <View style={{ flex: 1, minWidth: 0 }}>
-            {props.titleContent ?? <HappierHeading level={3} theme={theme}>{props.title}</HappierHeading>}
+      {hasAction ? (
+        <View style={{ flex: 1, minWidth: 0, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center',
+          columnGap: theme.spacing.medium, rowGap: theme.spacing.small }}>
+          <View style={{ flexGrow: 1, flexShrink: 1, flexBasis: STEP_TEXT_MIN_WIDTH_BESIDE_ACTION, minWidth: 0, gap: theme.spacing.small }}>
+            {words}
           </View>
-          {props.trailing === undefined || props.trailing === null ? null : (
-            <View style={{ flexShrink: 1, alignItems: 'flex-end' }}>{props.trailing}</View>
-          )}
+          <View style={{ flexShrink: 0 }}>{props.action}</View>
         </View>
-        {props.children}
-      </View>
+      ) : (
+        <View style={{ flex: 1, minWidth: 0, gap: theme.spacing.small }}>
+          {words}
+        </View>
+      )}
     </View>
   );
 }

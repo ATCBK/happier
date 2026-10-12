@@ -24,10 +24,23 @@ export type StatusProps = Readonly<{
   /** A key from this plugin's declared translation bundle; `label` is its fallback. */
   labelKey?: string;
   /**
+   * A second, quieter line under the label: the reason or the time ("Loaded 10:42"), so one status can
+   * carry the whole answer beside its action instead of a status plus a banner. Notice presentation only.
+   */
+  value?: string;
+  /** A key from this plugin's declared translation bundle; `value` is its fallback. */
+  valueKey?: string;
+  /**
    * Whether the status is live/in-flight. The host's reduced-motion preference
    * still decides whether the indicator actually animates.
    */
   pulsing?: boolean;
+  /** Inline metadata truncates to one line and does not announce row refreshes. */
+  presentation?: 'notice' | 'inline';
+  /** Quiet states may omit the decorative indicator while retaining their words. */
+  indicator?: boolean;
+  /** Optional decorative source/agent mark before the status. */
+  leading?: ReactNode;
   /** Logical focus target transferred by the mounted host after author state changes. */
   focusTarget?: PluginUiFocusTarget;
   /**
@@ -44,18 +57,23 @@ export type StatusProps = Readonly<{
  * The shared status row owns its live-region semantics, tone mapping and
  * decorative dot. This adapter resolves only plugin-local copy and theme facts.
  */
-export function Status({ tone, label, labelKey, pulsing, focusTarget, action, testID }: StatusProps): ReactElement {
+export function Status({ tone, label, labelKey, value, valueKey, pulsing, presentation, indicator, leading, focusTarget, action, testID }: StatusProps): ReactElement {
   const theme = usePluginTheme();
   const translate = usePluginTranslation();
   const resolvedLabel = resolveAuthorText(translate, label, labelKey) ?? label;
+  const resolvedValue = value === undefined ? undefined : resolveAuthorText(translate, value, valueKey) ?? value;
   const focusBinding = usePluginUiFocusTargetBindingInternal(focusTarget);
 
   return (
     <HappierStatus
       label={resolvedLabel}
+      {...(resolvedValue === undefined || presentation === 'inline' ? {} : { value: resolvedValue })}
       tone={tone}
       theme={theme}
       isPulsing={pulsing}
+      presentation={presentation}
+      indicator={indicator}
+      leading={leading}
       controlRef={focusBinding}
       action={action}
       testID={testID}

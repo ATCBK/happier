@@ -3,7 +3,7 @@ import { usePluginUiFocusTarget } from '../index.js';
 import type {
   CollectionProps, CollectionAnatomy, CollectionSingleChoice, ListSingleChoiceCapabilityProps, DetailsPaneProps, StepProps, TabsProps, TabsItemProps,
   PluginTranslationValues, PluginUiFocusTarget,
-  CollectionVirtualizer, CollectionVirtualizerHandle, CollectionVirtualizerRequest,
+  CollectionVirtualizer, CollectionVirtualizerHandle, CollectionVirtualizerRequest, CollectionHeaderSlots, CollectionSort,
 } from '../index.js';
 import type { FormProps, SelectProps, TextFieldProps, TextSelection } from './Form.js';
 import type { ActionInputOptionValue } from '@happier-dev/plugin-sdk/actions';
@@ -20,7 +20,8 @@ import type {
 } from './List.js';
 import type { MenuGroup, MenuRadioGroup } from './Overlay.js';
 import type { PageHeaderProps } from './PageHeader.js';
-import type { EmptyStateProps } from './State.js';
+import type { EmptyStateProps, StateProps } from './State.js';
+import type { PluginUiResourceSnapshot } from '../hostApi/resourceStore.js';
 import type { SelectionTilesOption, SelectionTilesProps } from './SelectionTiles.js';
 import type { StatusProps } from './Status.js';
 import type { TextProps } from './Text.js';
@@ -51,9 +52,10 @@ type _AuthorCollectionKeysAreCurated = Assert<IsEqual<keyof CollectionProps<unkn
   | 'minListWidth' | 'minDetailWidth' | 'preferredListRatio' | 'minCardWidth' | 'groupAction'
   | 'scroll' | 'virtualizer' | 'loading' | 'useRowActions' | 'selection' | 'search' | 'empty' | 'header' | 'footer'
   | 'windowStatement' | 'testID' | 'listTestID' | 'detailTestID'
+  | 'sort' | 'summaryRows'
 >>;
 type _AuthorCollectionAnatomyKeysAreCurated = Assert<IsEqual<keyof CollectionAnatomy<unknown>,
-  | 'boardContent' | 'destination' | 'wrapItem' | 'glyph' | 'glyphBadge' | 'title' | 'titleSuffix' | 'where' | 'byline'
+  | 'boardContent' | 'cardContent' | 'destination' | 'wrapItem' | 'glyph' | 'glyphBadge' | 'title' | 'titleSuffix' | 'where' | 'byline'
   | 'reason' | 'signal'
   | 'agent' | 'age'
   | 'fields' | 'peek' | 'preview' | 'description' | 'action' | 'accessibilityLabel' | 'accessibilityHint'
@@ -64,10 +66,18 @@ type _VirtualizerHandleOnlyPositions = Assert<IsEqual<keyof CollectionVirtualize
 type _VirtualizerRequestHasNoNativeRefOrSelectionWriter = Assert<
   Extract<keyof CollectionVirtualizerRequest<unknown>, 'ref' | 'setSelection' | 'setFocus' | 'store'> extends never ? true : false
 >;
+// A header render receives exactly the Collection's own controls to place in its row (today: the search).
+type _CollectionHeaderRenderReceivesItsSlots = Assert<IsEqual<
+  Parameters<Extract<NonNullable<CollectionProps<unknown>['header']>, (slots: never) => unknown>>[0],
+  CollectionHeaderSlots
+>>;
+type _CollectionHeaderSlotsAreCurated = Assert<IsEqual<keyof CollectionHeaderSlots, 'search' | 'selection' | 'pageActions'>>;
+type _CollectionSortKeysAreCurated = Assert<IsEqual<keyof CollectionSort, 'key' | 'direction' | 'orders' | 'onChange'>>;
+type _CollectionNamedOrdersStayPortable = Assert<IsEqual<CollectionSort['orders'], readonly Readonly<{ key: string; label: string }>[] | undefined>>;
 type _CollectionVirtualizerIsPublic = Assert<IsEqual<CollectionProps<unknown>['virtualizer'], CollectionVirtualizer | undefined>>;
 type _VirtualizedListConsumesSameAdapter = Assert<IsEqual<Extract<ListProps<unknown>, { items: readonly unknown[] }>['virtualizer'], CollectionVirtualizer | undefined>>;
 type _AuthorDetailsPaneKeysAreCurated = Assert<IsEqual<keyof DetailsPaneProps,
-  'open' | 'title' | 'subtitle' | 'leading' | 'subtitleLeading' | 'actions' | 'onClose' | 'children' | 'testID'
+  'open' | 'title' | 'subtitle' | 'leading' | 'subtitleLeading' | 'actions' | 'onClose' | 'children' | 'footer' | 'testID'
 >>;
 type _AuthorStepKeysAreCurated = Assert<IsEqual<keyof StepProps,
   'marker' | 'title' | 'titleKey' | 'trailing' | 'children' | 'testID'
@@ -119,6 +129,8 @@ type _AuthorTextFieldFocusTarget = Assert<IsEqual<TextFieldProps['focusTarget'],
 type _AuthorTextFieldPresentation = Assert<IsEqual<TextFieldProps['presentation'], 'form' | 'field' | undefined>>;
 type _AuthorTextFieldKind = Assert<IsEqual<TextFieldProps['kind'], 'text' | 'integer' | 'decimal' | undefined>>;
 type _AuthorSelectFocusTarget = Assert<IsEqual<SelectProps['focusTarget'], PluginUiFocusTarget | undefined>>;
+// A narrow toolbar's segmented Select shows icons alone; one author switch, not a size or a label mode.
+type _AuthorSelectCompact = Assert<IsEqual<SelectProps['compact'], boolean | undefined>>;
 type _AuthorHeadingFocusTarget = Assert<IsEqual<HeadingProps['focusTarget'], PluginUiFocusTarget | undefined>>;
 type _AuthorStatusFocusTarget = Assert<IsEqual<StatusProps['focusTarget'], PluginUiFocusTarget | undefined>>;
 type _AuthorScreenFocusTarget = Assert<IsEqual<ScreenProps['focusTarget'], PluginUiFocusTarget | undefined>>;
@@ -145,6 +157,7 @@ type _AuthorFormHintKeysAreCurated = Assert<IsEqual<keyof FormProps['hints'],
 type _AuthorFormFieldKeysAreCurated = Assert<IsEqual<keyof FormProps['hints']['fields'][number],
   | 'path'
   | 'title'
+  | 'prompt'
   | 'description'
   | 'placeholder'
   | 'widget'
@@ -156,6 +169,7 @@ type _AuthorFormFieldKeysAreCurated = Assert<IsEqual<keyof FormProps['hints']['f
   | 'maxSelections'
   | 'options'
   | 'visibleWhen'
+  | 'visibleWhenContextSlot'
   | 'requiredWhen'
   | 'disabledWhen'
 >>;
@@ -176,6 +190,8 @@ type _AuthorItemPropKeysAreCurated = Assert<IsEqual<keyof ItemProps,
   | 'icon'
   | 'accessory'
   | 'accessoryWraps'
+  | 'accessoryBelow'
+  | 'fieldAccessory'
   | 'accessoryOutsidePressable'
   | 'tone'
   | 'detailTone'
@@ -295,6 +311,10 @@ type _AuthorSelectionTilesPropKeysAreCurated = Assert<IsEqual<keyof SelectionTil
   | 'options'
   | 'variant'
   | 'tileSizing'
+  | 'previewAspectRatio'
+  | 'labels'
+  | 'labelLines'
+  | 'surface'
   | 'density'
   | 'minimumColumns'
   | 'maximumColumns'
@@ -307,6 +327,7 @@ type _AuthorSelectionTilesPropKeysAreCurated = Assert<IsEqual<keyof SelectionTil
   | 'selectionMode'
   | 'value'
   | 'onChange'
+  | 'onPress'
 >>;
 
 type _AuthorSelectionTilesOptionKeysAreCurated = Assert<IsEqual<keyof SelectionTilesOption,
@@ -321,8 +342,11 @@ type _AuthorSelectionTilesOptionKeysAreCurated = Assert<IsEqual<keyof SelectionT
   | 'badgeKey'
   | 'testID'
   | 'preview'
+  | 'previewEdge'
   | 'disabled'
 >>;
+
+type _AuthorStateConsumesTheResourceOwnerSnapshot = Assert<IsEqual<StateProps['resource'], PluginUiResourceSnapshot | undefined>>;
 
 const staticAuthorForm: FormProps['hints'] = {
   title: 'Repository settings',

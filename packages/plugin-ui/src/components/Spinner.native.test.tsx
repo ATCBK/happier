@@ -28,7 +28,8 @@ vi.mock('react-native', () => {
       sequence: (steps: unknown[]) => steps,
       timing: (_value: unknown, config: unknown) => config,
     },
-    Easing: { linear: (t: number) => t, ease: (t: number) => t, inOut: (easing: unknown) => easing },
+    Easing: { linear: (t: number) => t, ease: (t: number) => t, inOut: (easing: unknown) => easing,
+      bezier: () => (t: number) => t },
     Platform: nativePlatform,
     Pressable: 'Pressable',
     Text: 'Text',
@@ -46,6 +47,7 @@ import { HappierListItem } from '../presentation/collection/List.js';
 import { Tabs } from './Tabs.js';
 import { HappierStatusDot } from '../presentation/status/StatusDot.js';
 import { HappierSpinner } from '../presentation/feedback/Spinner.js';
+import { DEFAULT_HAPPIER_SPINNER_STYLE_ID, DOT_SPINNER_STYLES } from '../presentation/feedback/spinnerStyles.js';
 import { createHostApiStub, createSurfaceContext } from '../surfaceFixture.testSupport.js';
 import { usePluginSurfaceActivity } from '../hostApi/context.js';
 import { HappierUiEnvironmentProvider } from '../environment/context.js';
@@ -62,6 +64,7 @@ afterEach(() => {
 });
 
 const running = () => loops.filter((loop) => loop.started > loop.stopped).length;
+const defaultDotCount = DOT_SPINNER_STYLES[DEFAULT_HAPPIER_SPINNER_STYLE_ID].dots.length;
 
 function dotOpacities(): unknown[] {
   return renderer!.root
@@ -80,7 +83,7 @@ describe('native HappierSpinner presentation', () => {
     await act(async () => { renderer = create(renderRow(true)); });
     expect(running()).toBe(1);
     await act(async () => { renderer!.update(renderRow(false)); });
-    expect(dotOpacities()).toEqual(Array(7).fill(0.85));
+    expect(dotOpacities()).toEqual(Array(defaultDotCount).fill(0.85));
     expect(running()).toBe(0);
     await act(async () => { renderer!.update(renderRow(true)); });
     expect(running()).toBe(1);
@@ -121,7 +124,7 @@ describe('native HappierSpinner presentation', () => {
     await act(async () => { renderer = create(renderBusy(true)); });
     expect(running()).toBe(1);
     await act(async () => { renderer!.update(renderBusy(false)); });
-    expect(dotOpacities()).toEqual(Array(7).fill(0.85));
+    expect(dotOpacities()).toEqual(Array(defaultDotCount).fill(0.85));
     expect(running()).toBe(0);
     expect(surfaceActive).toBe(true);
     await act(async () => { renderer!.update(renderBusy(true)); });
@@ -140,7 +143,7 @@ describe('native HappierSpinner presentation', () => {
       </PluginUiProviderInternal>
     );
     await act(async () => { renderer = create(renderBusy(false)); });
-    expect(dotOpacities()).toEqual(Array(28).fill(0.85));
+    expect(dotOpacities()).toEqual(Array(defaultDotCount * 4).fill(0.85));
     expect(running()).toBe(0);
     await act(async () => { renderer!.update(renderBusy(true)); });
     expect(running()).toBe(1);
@@ -165,7 +168,7 @@ describe('native HappierSpinner presentation', () => {
     await act(async () => { renderer = create(renderTabs('busy')); });
     expect(running()).toBe(1);
     await act(async () => { renderer!.update(renderTabs('other')); });
-    expect(dotOpacities()).toEqual(Array(7).fill(0.85));
+    expect(dotOpacities()).toEqual(Array(defaultDotCount).fill(0.85));
     expect(running()).toBe(0);
     await act(async () => { renderer!.update(renderTabs('busy')); });
     expect(running()).toBe(1);
@@ -182,7 +185,7 @@ describe('native HappierSpinner presentation', () => {
     });
 
     expect(renderer!.root.findAllByType('ActivityIndicator' as never)).toHaveLength(0);
-    expect(dotOpacities()).toEqual(Array(7).fill(0.85));
+    expect(dotOpacities()).toEqual(Array(defaultDotCount).fill(0.85));
   });
 
   it('holds public Spinner still, with no running clock, while its retained surface is inactive', async () => {
@@ -200,7 +203,7 @@ describe('native HappierSpinner presentation', () => {
     await act(async () => {
       renderer = create(renderSpinner(false));
     });
-    expect(dotOpacities()).toEqual(Array(7).fill(0.85));
+    expect(dotOpacities()).toEqual(Array(defaultDotCount).fill(0.85));
     expect(running()).toBe(0);
 
     await act(async () => {

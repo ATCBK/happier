@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { HAPPIER_RADIUS_V1 } from '../../environment/radius.js';
+import { Platform } from 'react-native';
+import type { HappierPageTextStep } from '../layout/pageText.js';
 
 /** One transient-menu scale, independent of a collection's density preference. */
 export const HAPPIER_MENU_ROW_METRICS = {
@@ -14,6 +16,15 @@ export const HAPPIER_MENU_ROW_METRICS = {
   sectionPaddingVerticalPx: 4,
   subtitleGapPx: 2,
 } as const;
+
+/**
+ * The text of one transient-menu row — its label and the quiet line beneath — for every menu, Happier
+ * core's `SelectableRow` and a plugin's `Menu` alike, so a row ⋯ menu reads in the app's own type.
+ */
+export const HAPPIER_MENU_ROW_TEXT = {
+  label: { weight: 'regular', fontSize: Platform.OS === 'ios' ? 16 : 15, lineHeight: 20, letterSpacing: Platform.OS === 'ios' ? -0.2 : 0 },
+  subtitle: { weight: 'regular', fontSize: 13, lineHeight: 18 },
+} as const satisfies Readonly<Record<'label' | 'subtitle', HappierPageTextStep>>;
 
 export type HappierMenuItemDescriptor = Readonly<{
   id: string;

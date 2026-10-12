@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createHappierCollectionVisitMemory,
   deriveHappierCollectionSections,
+  deriveHappierCollectionTree,
   resolveHappierCollectionInitialKey,
   resolveHappierCollectionKeyCommand,
 } from './collectionModel.js';
@@ -98,5 +99,56 @@ describe('Collection list keyboard', () => {
       .toEqual({ kind: 'toggleExpanded', key: 'b' });
     expect(resolveHappierCollectionKeyCommand({ ...base, key: 'Escape' })).toEqual({ kind: 'close' });
     expect(resolveHappierCollectionKeyCommand({ ...base, openKey: null, key: 'Escape' })).toBeNull();
+  });
+});
+
+describe('Collection tree', () => {
+  type Node = Readonly<{ id: string; group: 'a' | 'b'; parent: string | null; rank: number }>;
+  const nodeKey = (node: Node) => node.id;
+  const grouping = { axis: [{ key: 'a', title: 'A' }, { key: 'b', title: 'B' }], groupOf: (node: Node) => node.group };
+
+  it('flattens each group depth-first with the caller\'s order among siblings, rooting foreign and cyclic parents', () => {
+    const nodes: readonly Node[] = [
+      { id: 'late-child', group: 'a', parent: 'owner', rank: 2 },
+      { id: 'owner', group: 'a', parent: null, rank: 9 },
+      { id: 'early-child', group: 'a', parent: 'owner', rank: 1 },
+      { id: 'grandchild', group: 'a', parent: 'early-child', rank: 0 },
+      // The parent lives in another group, so this row is that group's owner.
+      { id: 'stray', group: 'b', parent: 'owner', rank: 0 },
+      // A loop the caller reported: its first member becomes a root instead of vanishing.
+      { id: 'loop-1', group: 'b', parent: 'loop-2', rank: 1 },
+      { id: 'loop-2', group: 'b', parent: 'loop-1', rank: 2 },
+    ];
+    const { sections, tree } = deriveHappierCollectionTree({
+      items: nodes, keyOf: nodeKey, groups: grouping, parentKey: (node) => node.parent,
+      order: (left, right) => left.rank - right.rank,
+    });
+    expect(sections.map((section) => section.items.map(nodeKey))).toEqual([
+      ['owner', 'early-child', 'grandchild', 'late-child'],
+      ['stray', 'loop-1', 'loop-2'],
+    ]);
+    expect(tree?.get('grandchild')).toMatchObject({ depth: 2, parentKey: 'early-child', posInSet: 1, setSize: 1 });
+    expect(tree?.get('late-child')).toMatchObject({ depth: 1, posInSet: 2, setSize: 2 });
+    expect(tree?.get('owner')).toMatchObject({ childCount: 2, held: false, context: false });
+    expect(tree?.get('stray')).toMatchObject({ depth: 0, parentKey: null });
+    expect(tree?.get('loop-2')).toMatchObject({ depth: 1, parentKey: 'loop-1' });
+  });
+
+  it('holds open only owners the filter narrows inside, and keeps non-matching owners as context', () => {
+    const nodes: readonly Node[] = [
+      { id: 'owner', group: 'a', parent: null, rank: 0 },
+      { id: 'match', group: 'a', parent: 'owner', rank: 0 },
+      { id: 'miss', group: 'a', parent: 'owner', rank: 0 },
+      { id: 'whole', group: 'a', parent: null, rank: 0 },
+      { id: 'whole-child', group: 'a', parent: 'whole', rank: 0 },
+    ];
+    const { sections, tree } = deriveHappierCollectionTree({
+      items: nodes, keyOf: nodeKey, parentKey: (node) => node.parent,
+      filter: (node) => node.id !== 'miss' && node.id !== 'owner',
+    });
+    expect(sections[0]!.items.map(nodeKey)).toEqual(['owner', 'match', 'whole', 'whole-child']);
+    expect(tree?.get('owner')).toMatchObject({ context: true, held: true, childCount: 1 });
+    // Everything under it matches: the reader's own open state decides.
+    expect(tree?.get('whole')).toMatchObject({ context: false, held: false });
   });
 });

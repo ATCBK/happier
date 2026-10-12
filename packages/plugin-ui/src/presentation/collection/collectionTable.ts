@@ -60,8 +60,11 @@ export function resolveHappierCollectionComposition(input: Readonly<{
     if (input.open) return input.pane === true ? 'list' : 'detail';
     return input.tableFits === true && input.presentation === 'table' ? 'table' : 'list';
   }
+  // With no detail, nothing is reserved beside the table: it stands wherever its own list minimum fits.
+  // A caller that measured only the split (no `tableFits`) keeps its split answer: a split that fits clears the list minimum.
+  if (input.detail === 'none') return (input.tableFits ?? input.splitFits) === true && input.presentation === 'table' ? 'table' : 'list';
   const resting: HappierCollectionComposition = input.splitFits === true && input.presentation === 'table' ? 'table' : 'list';
-  if (input.detail === 'none' || !input.open) return resting;
+  if (!input.open) return resting;
   if (input.splitFits !== true) return 'detail';
   return 'split';
 }
@@ -88,6 +91,11 @@ export type HappierCollectionTableColumn = Readonly<{
   priority: number;
   /** The one column that takes the remaining width (the title). It is never dropped. */
   flex?: boolean;
+  /**
+   * A column whose content reads better with room (a repository name) may grow beyond `minWidth` up to this
+   * width, from the room left beyond the minimum layout.
+   */
+  maxWidth?: number;
 }>;
 
 /**
@@ -110,6 +118,17 @@ export function resolveHappierCollectionTableColumns<Column extends HappierColle
     });
     if (drop < 0) break;
     visible.splice(drop, 1);
+  }
+  // Half of the room left beyond the minimum layout goes to the columns that asked to grow, each up to its cap;
+  // the title (and the figures beside it) keep the other half.
+  const growable = visible.filter((column) => column.flex !== true && column.maxWidth !== undefined && column.maxWidth > column.minWidth);
+  const spare = (input.availableWidth - width()) / 2;
+  if (growable.length > 0 && spare > 0) {
+    const headroom = growable.reduce((sum, column) => sum + (column.maxWidth! - column.minWidth), 0);
+    const grant = Math.min(spare, headroom);
+    return visible.map((column) => (growable.includes(column)
+      ? { ...column, minWidth: column.minWidth + Math.floor(grant * ((column.maxWidth! - column.minWidth) / headroom)) }
+      : column));
   }
   return visible.length === input.columns.length ? input.columns : visible;
 }

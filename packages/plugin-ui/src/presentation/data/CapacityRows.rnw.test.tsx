@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import { CapacityBar } from './CapacityBar.js';
 import { RankedRows } from './RankedRows.js';
@@ -12,6 +12,7 @@ const createSurfaceContext = () => ({ theme: SURFACE_CONTEXT_THEME_FIXTURE });
 
 describe('neutral capacity and ranked data through public presentation', () => {
   it('projects a remaining-axis meter without extending the solid remainder beyond current capacity', () => {
+    const errors = vi.spyOn(console, 'error');
     const mount = mountThroughReactNativeWeb(<CapacityBar theme={createSurfaceContext().theme} label="Inventory left"
       value={40} capacity={100} evenPace={120} projected={60} projection="remaining" showCaption={false} testID="left" />);
     try {
@@ -20,7 +21,10 @@ describe('neutral capacity and ranked data through public presentation', () => {
       expect(mount.container.querySelector('[data-testid="left-even-pace"]')?.getAttribute('style')).toContain('left: 100%');
       expect(mount.container.querySelector('[data-testid="left"]')?.getAttribute('aria-label')).toContain('Projected: 60');
       expect(mount.container.textContent).toBe('');
-    } finally { mount.unmount(); }
+      expect(mount.container.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true');
+      expect(errors.mock.calls.filter((args) => String(args[0]).includes('non-boolean attribute')
+        && args.some((arg) => String(arg).includes('accessible')))).toEqual([]);
+    } finally { mount.unmount(); errors.mockRestore(); }
   });
   it('keeps a declared composition denominator instead of summing overlapping categories', () => {
     expect(presentation).toHaveProperty('CompositionStrip', expect.any(Function));
@@ -85,6 +89,33 @@ describe('neutral capacity and ranked data through public presentation', () => {
     try {
       expect(mount.container.querySelector('[data-testid="samples-row-0"]')?.textContent).not.toContain('0%');
       expect(mount.container.querySelector('[data-testid="samples-row-1"]')?.textContent).toContain('0%');
+    } finally { mount.unmount(); }
+  });
+
+  it('draws a set-aside part as its colour\'s hatch and can name each part by its amount in a compact legend', () => {
+    const mount = mountThroughReactNativeWeb(<CompositionStrip theme={createSurfaceContext().theme}
+      label="Disk" total={100} testID="disk" valueFormatter={value => `${value} GB`}
+      appearance={{ legend: 'compact', figure: 'value' }}
+      segments={[{ id: 'other', label: 'Everything else', value: 50 }, { id: 'kept', label: 'Kept', value: 20 },
+        { id: 'set-aside', label: 'Set aside', value: 10, pattern: 'hatched' }]} />);
+    try {
+      // One hatch in the bar's segment and one in its legend swatch; solid parts draw none.
+      expect(mount.container.querySelectorAll('pattern')).toHaveLength(2);
+      expect(mount.container.textContent).toContain('Everything else50 GB');
+      expect(mount.container.textContent).toContain('Set aside10 GB');
+      expect(mount.container.textContent).not.toContain('%');
+      expect(mount.container.querySelectorAll('[role="listitem"]')[2]?.getAttribute('aria-label')).toContain('10%');
+    } finally { mount.unmount(); }
+  });
+
+  it('draws the bar alone when the host owns the legend', () => {
+    const mount = mountThroughReactNativeWeb(<CompositionStrip theme={createSurfaceContext().theme}
+      label="Disk" total={100} variant="bar" testID="bar"
+      segments={[{ id: 'used', label: 'Used', value: 60 }, { id: 'set-aside', label: 'Set aside', value: 10, pattern: 'hatched' }]} />);
+    try {
+      expect(mount.container.querySelectorAll('[role="listitem"]')).toHaveLength(0);
+      expect(mount.container.querySelectorAll('pattern')).toHaveLength(1);
+      expect(mount.container.querySelector('[data-testid="bar"]')?.getAttribute('aria-label')).toBe('Disk: 100');
     } finally { mount.unmount(); }
   });
 

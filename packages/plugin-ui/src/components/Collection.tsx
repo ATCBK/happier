@@ -10,7 +10,7 @@ import {
   type ReactElement,
   type ReactNode,
 } from 'react';
-import { Platform, ScrollView, View } from 'react-native';
+import { Platform, Pressable, ScrollView, View } from 'react-native';
 
 import {
   resolveHappierUiPalette,
@@ -21,7 +21,9 @@ import {
   useOptionalHappierUiTypography,
 } from '../environment/context.js';
 import { HAPPIER_PAGE_METRICS } from '../presentation/layout/pageMetrics.js';
+import { resolveHappierPageTextStyle } from '../presentation/layout/pageText.js';
 import { useHappierPageSection } from '../presentation/layout/PageSection.js';
+import { useHappierPageChromeInternal } from '../presentation/layout/pageChrome.js';
 import { HAPPIER_RADIUS_V1 } from '../environment/radius.js';
 import { HappierStatusDot } from '../presentation/status/StatusDot.js';
 import { PluginUiIconGlyph, type IconName } from './Icon.js';
@@ -29,13 +31,20 @@ import { HAPPIER_TONE_COLOR_TOKEN, type HappierTone } from '../presentation/sema
 import type { HappierTypeRole } from '../environment/types.js';
 import { useOptionalPluginUiPresentationHost } from '../presentationHost/context.js';
 import { HappierCollectionLayoutContext, resolveHappierCollectionLayoutState } from '../presentation/collection/collectionLayout.js';
-import { HappierCollectionTableRowContext } from '../presentation/collection/CollectionList.js';
+import { HappierCollectionTableRowContext, HappierCollectionTreeRowContext, type HappierCollectionTreeRowFacts } from '../presentation/collection/CollectionList.js';
 import {
   HAPPIER_COLLECTION_INSTANT_MOTION,
   HAPPIER_INSTANT_DISCLOSURE_MOTION,
   type HappierCollectionMotionValue,
 } from '../presentation/collection/collectionMotion.js';
-import type { HappierCollectionKey } from '../presentation/collection/collectionModel.js';
+import {
+  isHappierCollectionTreeBranchOpen,
+  resolveHappierCollectionTreeShown,
+  type HappierCollectionKey,
+  type HappierCollectionSection,
+  type HappierCollectionTree,
+} from '../presentation/collection/collectionModel.js';
+import { resolveHappierTreeKeyIntent, type HappierTreeNode } from '../presentation/navigation/treeInteraction.js';
 import {
   HAPPIER_COLLECTION_REDUCED_MOTION_TRACKS,
   HAPPIER_COLLECTION_TRANSITION_TRACKS,
@@ -58,13 +67,14 @@ import { HappierPressable } from '../presentation/interaction/Pressable.js';
 import type { HappierLayoutChangeEvent, HappierPortableStyle } from '../presentation/portableTypes.js';
 import { HappierText } from '../presentation/text/Text.js';
 import { CollectionCards, CollectionGroupActionButton, readCollectionLineHeight } from './CollectionCards.js';
-import { HappierSkeletonBlock } from '../presentation/feedback/Skeleton.js';
+import { Dropdown } from './Overlay.js';
+import { HappierSkeletonRows } from '../presentation/feedback/Skeleton.js';
 import { List, ListItemSelectionContext, type ItemProps, type ListMultiSelectionCapabilityProps, type ListSingleChoiceCapabilityProps, type ListSectionData, type ListSelectionProps } from './List.js';
 import { encodeHappierSectionRowCellKey, resolveHappierRovingTabStop } from '../presentation/collection/semantics.js';
 import { HappierRadioMark } from '../presentation/form/RadioMark.js';
-import { HappierChevron } from '../presentation/collection/DisclosureChevron.js';
+import { HAPPIER_DISCLOSURE_CHEVRON_METRICS, HappierChevron, HappierDisclosureChevron } from '../presentation/collection/DisclosureChevron.js';
 import { ListCollectionControlContext, type ListCollectionControl } from './listCollectionControl.js';
-import { CollectionKeyCap, ListCollectionHeader, useListCollectionSearch, type ListCollectionSearchToken } from './listCollectionHeader.js';
+import { CollectionKeyCap, ListCollectionHeader, useListCollectionSearch, useListSelectionModeControl, type ListCollectionSearchToken } from './listCollectionHeader.js';
 import { ListMultiSelectionProvider } from './ListMultiSelection.js';
 import { renderCollectionItemDestination } from './collectionItemDestination.js';
 import { DetailsPane, useDetailsPaneAvailable, useDetailsPaneHostInstalled } from './DetailsPane.js';
@@ -97,15 +107,36 @@ export type CollectionField<Item> = Readonly<{
   /** Lower drops first when the table is narrow. */
   priority: number;
   align?: 'start' | 'end';
+  /** The column title is a sort button (`CollectionProps.sort`); the caller orders the items. */
+  sortable?: boolean;
 }>;
 
 /** The one item anatomy every presentation draws from. Renderers are pure. */
 export type CollectionAnatomy<Item> = Readonly<{
   /** A domain card body inside the shared Board activation/focus/scroll owner. */
   boardContent?: (item: Item) => ReactNode;
+  /**
+   * A live domain card body for `grid`, drawn inside the card's shared activation/focus owner in place of the
+   * generic head and description (the footer's `reason` and `action` keep their slots). Unlike `preview`, it may
+   * subscribe to live data. Every card in the grid is one height: `height` is the body's exact height at normal
+   * text size (it scales with the reader's text size), and the body fits it rather than growing the card.
+   */
+  cardContent?: Readonly<{
+    height: number;
+    render: (item: Item) => ReactNode;
+    /**
+     * The body draws the footer's place itself (its status, its chevron), inside the card's one target. The grid then
+     * reserves no band below it, and the anatomy's `action` stands over that place as its own target, outside the
+     * card's, so an action is never a button inside the card's button.
+     */
+    ownsFooter?: boolean;
+  }>;
   /** Shareable qualified page/location for this item, without transferring selection or navigation ownership. */
   destination?: (item: Item) => NavigationListDestination | null;
-  /** A core destination owner may decorate the shared row/card without replacing its anatomy or activation. */
+  /**
+   * A core destination owner may decorate the shared row/card without replacing its anatomy or activation. A
+   * board's domain card draws its frame here, around both its open target and its `action`.
+   */
   wrapItem?: (item: Item, content: ReactNode) => ReactNode;
   glyph: (item: Item) => ReactNode;
   /**
@@ -115,10 +146,11 @@ export type CollectionAnatomy<Item> = Readonly<{
   glyphBadge?: (item: Item) => CollectionGlyphBadge | null;
   title: (item: Item) => string;
   /**
-   * The item's short designation ("#2481", "!88"), quiet after the title in the table's Entry cell. The list
-   * says it in its `byline` instead.
+   * The rest of the title line in the table's Entry cell: the item's short designation ("#2481", "!88") as quiet
+   * text, or the caller's own inline line (a status word, a command, chips) that gives way before the title does.
+   * The list says it in its `byline` instead.
    */
-  titleSuffix?: (item: Item) => string | null;
+  titleSuffix?: (item: Item) => ReactNode;
   /** Where the item lives ("payments-api"): the table's Where column. */
   where?: (item: Item) => ReactNode;
   /**
@@ -144,8 +176,9 @@ export type CollectionAnatomy<Item> = Readonly<{
   /** What the item is for, in a sentence; a grid card reserves exactly two lines for it. */
   description?: (item: Item) => string | null;
   /**
-   * A grid card's one footer action (Install, Manage, a switch), right of its status (`reason`). It is its own
-   * press and focus target beside the card's and never opens the item.
+   * A grid card's one footer action (Install, Manage, a switch), right of its status (`reason`); in a board, a
+   * domain card's (`boardContent`) action, on its own line under the body. It is its own press and focus target
+   * beside the card's, never inside it, and never opens the item.
    */
   action?: (item: Item) => ReactNode;
   /** The composed row name ("Pull request #2481, Review requested"). */
@@ -165,7 +198,31 @@ export type CollectionGlyphBadge = Readonly<
 >;
 
 /** A group header's one action. */
-export type CollectionGroupAction = Readonly<{ label: string; onPress: () => void }>;
+/**
+ * A group header's one action: a quiet link by default ("See all"); `operation` when it changes something
+ * ("Clean up 3 · 1.4 GB"), drawn as a small bordered button.
+ */
+export type CollectionGroupAction = Readonly<{ label: string; onPress: () => void; kind?: 'link' | 'operation' }>;
+
+/** The table's sort: the active field or named order; the caller orders the items. */
+export type CollectionSort = Readonly<{
+  key: string;
+  direction: 'ascending' | 'descending';
+  /** Named orders offered by the title column's menu, only in table geometry. */
+  orders?: readonly Readonly<{ key: string; label: string }>[];
+  onChange: (key: string) => void;
+}>;
+
+/**
+ * A totals row after the last group ("Happier in total"): its title in the title column and `cells[field.key]`
+ * under each field column. Not a row of the collection: never focused, selected or opened.
+ */
+export type CollectionSummaryRow = Readonly<{
+  key: string;
+  title: ReactNode;
+  cells?: Readonly<Record<string, ReactNode>>;
+  testID?: string;
+}>;
 
 /** A row's own controls, beside the row's press target (the grid's sibling cell). */
 type CollectionRowActionItems = readonly Omit<NonNullable<ItemProps['secondaryActions']>[number], 'icon'>[];
@@ -204,9 +261,35 @@ export type CollectionDetailHeader = Readonly<{
   actions?: ReactNode;
 }>;
 
+/**
+ * What the Collection hands a `header` render to place in the caller's own row (lab `cbar`: the title, the
+ * search with its tokens, then the page's trailing controls).
+ */
+export type CollectionHeaderSlots = Readonly<{
+  /** The search field and its tokens at the toolbar's bounded width; `null` without `search`. */
+  search: ReactNode;
+  /**
+   * The touch-sized control that enters and leaves multi-selection ("Select" / "Done selecting"); `null` when the
+   * Collection cannot select. A header render that receives it places it in its row: the Collection then draws no
+   * row of its own for it.
+   */
+  selection: ReactNode;
+  /**
+   * What the host keeps beside a page's title (the machine the page runs on). Placed in the row, it joins that row
+   * and the host draws no separate band for it; left out, the host keeps its band. `null` outside a host page.
+   */
+  pageActions: ReactNode;
+}>;
+
 export type CollectionDetailRenderContext = Readonly<{
   /** The host already draws the identity band; the detail keeps only its body facts. */
   headerHosted: boolean;
+  /**
+   * The detail is the page (a phone, or side panes turned off): it fills the Collection's region instead of sitting
+   * beside the list or in the host's details pane. Pin the detail's one primary then, by ending its own full-height
+   * column with `DetailsPaneFooter`; beside the page keep that primary in the details header's `actions`.
+   */
+  pushed: boolean;
 }>;
 
 /** Controlled local choice; changing it never opens the model's detail. */
@@ -246,6 +329,10 @@ export type CollectionProps<Item> = Readonly<{
    * it focused), by group key; `null` where the group has none. Drawn on grid shelves and on list and table groups.
    */
   groupAction?: (groupKey: string) => CollectionGroupAction | null;
+  /** Sortable field titles in the table (`CollectionField.sortable`); the Collection never reorders. */
+  sort?: CollectionSort;
+  /** Totals rows after the last group, aligned under the field columns (two columns in the list). */
+  summaryRows?: readonly CollectionSummaryRow[];
   /**
    * `page`: a page-sized collection scrolls as the page — its `header`, every row and its `footer` in one scroller
    * and one reading and focus order, with no virtualization (for a few dozen items, not an open-ended feed).
@@ -293,8 +380,10 @@ export type CollectionProps<Item> = Readonly<{
    * The page's own chrome above the Collection (a toolbar, notices), across both panes. It sits inside the
    * Collection's layout, so it reads the measured mode (`useHappierCollectionLayout`) like everything else inside.
    * A `grid` scrolls it with the cards (a page of cards reads as one page); the other views keep it fixed.
+   * As a render it receives the Collection's own controls (`CollectionHeaderSlots`) to place in its row: the
+   * search then leaves the list pane and stands where the render puts it, at a bounded width.
    */
-  header?: ReactNode;
+  header?: ReactNode | ((slots: CollectionHeaderSlots) => ReactNode);
   /** Content below the rows (a bulk bar): fixed, except in a `grid`, where it scrolls with the cards. */
   footer?: ReactNode;
   /**
@@ -318,6 +407,8 @@ const TABLE = Object.freeze({
   glyphWidth: 34,
   gap: 12,
   chevronWidth: 28,
+  /** One nesting level, and the disclosure's own slot before the glyph: the shared disclosure box. */
+  treeIndent: HAPPIER_DISCLOSURE_CHEVRON_METRICS.boxPx,
   titleMinWidth: 240,
   paddingY: 10,
   headerHeight: 32,
@@ -330,7 +421,7 @@ const TABLE = Object.freeze({
 });
 
 const SLOT_COLUMNS = Object.freeze({
-  where: { minWidth: 150, priority: 4 },
+  where: { minWidth: 150, priority: 4, maxWidth: 280 },
   reason: { minWidth: 172, priority: 5 },
   signal: { minWidth: 124, priority: 2 },
   agent: { minWidth: 150, priority: 3 },
@@ -343,6 +434,19 @@ type ResolvedColumn<Item> = HappierCollectionTableColumn & Readonly<{
   title: string;
   align: 'start' | 'end';
   render: ((item: Item) => ReactNode) | null;
+  /** The field key a sortable column sorts by, and the key its summary cell is read under. */
+  fieldKey: string | null;
+  sortable: boolean;
+}>;
+
+/** A nested table row's leading slot: its indent and disclosure. */
+type TreeLeading = Readonly<{ width: number; content: ReactNode }>;
+
+/** What a row reads of the tree: the model's nodes and open parents, while the table nests. */
+type CollectionTreeStage = Readonly<{
+  nodes: HappierCollectionTree;
+  openBranches: ReadonlySet<HappierCollectionKey>;
+  setBranchOpen: (key: HappierCollectionKey, open: boolean) => void;
 }>;
 
 type CollectionTransition =
@@ -372,6 +476,8 @@ type CollectionStage<Item> = Readonly<{
    */
   expanded: ReadonlySet<HappierCollectionKey>;
   toggleExpanded: (key: HappierCollectionKey) => void;
+  /** The tree, while the table presentation nests (`model.tree`); rows lead with its slot in every geometry. */
+  tree: CollectionTreeStage | null;
   /**
    * The list is the resting view (a phone, a narrow page) and no row travels to or from a table: titles may
    * take two lines and rows size to them. Beside a detail rows keep the exact height the travel plans with.
@@ -406,7 +512,7 @@ function useRowMetrics(): RowMetrics {
   return useMemo(() => {
     // The host's row anatomy: the row title role over the row meta role (`label` / `body`).
     const title = readCollectionLineHeight('label', theme, typography, textScale);
-    const meta = readCollectionLineHeight('body', theme, typography, textScale);
+    const meta = readCollectionLineHeight('meta', theme, typography, textScale);
     const label = readCollectionLineHeight('label', theme, typography, textScale);
     return {
       // One exact height per geometry and text-size bucket, never measured per row (COLLECTION.md §7).
@@ -423,6 +529,7 @@ function resolveColumns<Item>(
   width: number,
   textScale: number,
   rowAccessoryWidth: number,
+  leadingWidth: number,
 ): readonly ResolvedColumn<Item>[] {
   const declared: ResolvedColumn<Item>[] = [{
     key: 'title',
@@ -432,6 +539,8 @@ function resolveColumns<Item>(
     flex: true,
     align: 'start',
     render: null,
+    fieldKey: null,
+    sortable: false,
   }];
   for (const slot of SLOT_KEYS) {
     const render = anatomy[slot];
@@ -441,9 +550,12 @@ function resolveColumns<Item>(
       key: slot,
       title: anatomy.columnTitles[slot] ?? '',
       minWidth: column.minWidth * textScale,
+      ...('maxWidth' in column ? { maxWidth: column.maxWidth * textScale } : {}),
       priority: column.priority,
       align: 'align' in column ? column.align : 'start',
       render: slot === 'age' ? (item) => (anatomy.age?.(item) ?? null) : render as (item: Item) => ReactNode,
+      fieldKey: null,
+      sortable: false,
     });
   }
   for (const field of anatomy.fields ?? []) {
@@ -454,9 +566,11 @@ function resolveColumns<Item>(
       priority: field.priority,
       align: field.align ?? 'start',
       render: field.render,
+      fieldKey: field.key,
+      sortable: field.sortable === true,
     });
   }
-  const available = width - TABLE.insetStart - TABLE.insetEnd - TABLE.glyphWidth - TABLE.gap - rowAccessoryWidth;
+  const available = width - TABLE.insetStart - TABLE.insetEnd - TABLE.glyphWidth - TABLE.gap - rowAccessoryWidth - leadingWidth;
   return resolveHappierCollectionTableColumns({ columns: declared, availableWidth: available, gap: TABLE.gap });
 }
 
@@ -466,9 +580,10 @@ function tableShowsBesideTitle<Item>(
   width: number,
   textScale: number,
   rowAccessoryWidth: number,
+  leadingWidth: number,
 ): boolean {
   const declared = SLOT_KEYS.some((slot) => anatomy[slot] !== undefined) || (anatomy.fields?.length ?? 0) > 0;
-  return !declared || resolveColumns(anatomy, width, textScale, rowAccessoryWidth).length > 1;
+  return !declared || resolveColumns(anatomy, width, textScale, rowAccessoryWidth, leadingWidth).length > 1;
 }
 
 /** The first fact never shrinks, the last only once the middle is gone, the middle first. */
@@ -478,12 +593,19 @@ function windowPartShrink(index: number, count: number): number {
 }
 
 /** Placeholder title widths, deterministic so a refresh never shimmers into a different shape. */
-const SKELETON_TITLE_WIDTHS = ['62%', '48%', '71%', '55%', '66%', '44%'] as const;
+/** The collection rows' geometry for the shared loading rows: their insets, glyph column and gap. */
+const COLLECTION_SKELETON_GEOMETRY = Object.freeze({
+  insetStart: TABLE.insetStart,
+  insetEnd: TABLE.insetEnd,
+  glyphColumn: TABLE.glyphWidth - TABLE.gap,
+  gap: TABLE.gap,
+});
 
 /**
- * The rows that are coming, standing in their own geometry while the first window loads: the row height of
- * the current geometry, the glyph, the title (and the meta line in the list), the row hairline — as many as
- * fill what is on screen, so nothing moves when the real rows land and "empty" is never said early.
+ * The rows that are coming, standing in their own geometry while the first window loads: the shared
+ * loading rows (`HappierSkeletonRows`) at the row height of the current geometry, with the meta line in the
+ * list and the row hairline — as many as fill what is on screen, so nothing moves when the real rows land
+ * and "empty" is never said early.
  */
 function CollectionSkeletonRows(props: Readonly<{
   rowHeight: number;
@@ -495,23 +617,15 @@ function CollectionSkeletonRows(props: Readonly<{
   const palette = useOptionalHappierUiPalette() ?? resolveHappierUiPalette(theme);
   const count = props.viewportHeight === null ? 1 : Math.max(1, Math.ceil(props.viewportHeight / props.rowHeight));
   return (
-    <View aria-hidden accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
-      {Array.from({ length: count }, (_, index) => (
-        <View
-          key={index}
-          {...(props.testID === undefined ? {} : { testID: `${props.testID}:skeleton-row` })}
-          style={[skeletonRowStyle, { height: props.rowHeight, borderBottomColor: palette.rowDivider }]}
-        >
-          <View style={glyphStyle}>
-            <HappierSkeletonBlock color={theme.colors.control} width={16} height={16} radius={4} />
-          </View>
-          <View style={[flexCellStyle, { gap: 8 }]}>
-            <HappierSkeletonBlock color={theme.colors.control} width={SKELETON_TITLE_WIDTHS[index % SKELETON_TITLE_WIDTHS.length]!} height={10} />
-            {props.twoLines ? <HappierSkeletonBlock color={theme.colors.control} width="34%" height={8} /> : null}
-          </View>
-        </View>
-      ))}
-    </View>
+    <HappierSkeletonRows
+      rows={count}
+      theme={theme}
+      rowHeight={props.rowHeight}
+      lines={props.twoLines ? 2 : 1}
+      dividerColor={palette.rowDivider}
+      geometry={COLLECTION_SKELETON_GEOMETRY}
+      {...(props.testID === undefined ? {} : { rowTestID: `${props.testID}:skeleton-row` })}
+    />
   );
 }
 
@@ -530,15 +644,8 @@ const tableRowContentStyle: HappierPortableStyle = {
   minWidth: 0,
 };
 const glyphStyle: HappierPortableStyle = { width: TABLE.glyphWidth - TABLE.gap, alignItems: 'flex-start', justifyContent: 'center' };
-const skeletonRowStyle: HappierPortableStyle = {
-  flexDirection: 'row',
-  alignItems: 'center',
-  gap: TABLE.gap,
-  paddingLeft: TABLE.insetStart,
-  paddingRight: TABLE.insetEnd,
-  borderBottomWidth: 1,
-};
 const flexCellStyle: HappierPortableStyle = { flex: 1, minWidth: 0 };
+const orderHeaderCellStyle: HappierPortableStyle = { alignItems: 'flex-start' };
 const glyphWithBadgeStyle: HappierPortableStyle = { position: 'relative' };
 const glyphBadgeRingStyle: HappierPortableStyle = {
   position: 'absolute',
@@ -565,6 +672,17 @@ const listRowContentStyle: HappierPortableStyle = {
   minWidth: 0,
 };
 const lineStyle: HappierPortableStyle = { flexDirection: 'row', alignItems: 'center', gap: 8, minWidth: 0 };
+/**
+ * A page section's row: the page row's inset, rhythm and leading column (`HAPPIER_PAGE_METRICS`). The row's
+ * press target already draws a 1 pt edge inside the sheet, so the inset gives that point back.
+ */
+const pageRowContentStyle: HappierPortableStyle = {
+  paddingLeft: HAPPIER_PAGE_METRICS.rowPaddingHorizontalPx - 1,
+  paddingVertical: HAPPIER_PAGE_METRICS.rowPaddingVerticalPx,
+  gap: HAPPIER_PAGE_METRICS.rowLeadingGapPx,
+  minHeight: HAPPIER_PAGE_METRICS.rowMinHeightPx,
+};
+const pageRowGlyphStyle: HappierPortableStyle = { width: HAPPIER_PAGE_METRICS.rowLeadingColumnPx, alignItems: 'center' };
 /** A title that may wrap keeps its age on its first line, like the lab's phone list. */
 const wrappedTitleLineStyle: HappierPortableStyle = { flexDirection: 'row', alignItems: 'flex-start', gap: 8, minWidth: 0 };
 const overlayStyle: HappierPortableStyle = { position: 'absolute', left: 0, right: 0, top: 0 };
@@ -582,7 +700,7 @@ function cellStyle(column: ResolvedColumn<unknown>): HappierPortableStyle {
 }
 
 /** Plain text a slot returned is drawn as quiet secondary text; an element is the caller's own. */
-function SlotContent(props: Readonly<{ value: ReactNode; tone?: 'secondary' | 'muted'; tabular?: boolean }>): ReactElement | null {
+function SlotContent(props: Readonly<{ value: ReactNode; tone?: 'secondary' | 'muted'; tabular?: boolean; textStyle?: HappierPortableStyle }>): ReactElement | null {
   const value = props.value;
   if (value === null || value === undefined || value === false) return null;
   if (typeof value === 'string' || typeof value === 'number') {
@@ -590,7 +708,7 @@ function SlotContent(props: Readonly<{ value: ReactNode; tone?: 'secondary' | 'm
     // widen the hyphen and the digits of a designation.
     const tabular = props.tabular === true || typeof value === 'number';
     return (
-      <HappierText variant="body" tone={props.tone ?? 'secondary'} numberOfLines={1} tabularNumbers={tabular} style={cellTextStyle}>
+      <HappierText variant="meta" tone={props.tone ?? 'secondary'} numberOfLines={1} tabularNumbers={tabular} style={props.textStyle ?? cellTextStyle}>
         {String(value)}
       </HappierText>
     );
@@ -605,37 +723,66 @@ function TableCells<Item>(props: Readonly<{
   /** Draw the title (the resting table) or leave its place empty (the fading overlay above a list row). */
   withTitle: boolean;
   anatomy: CollectionAnatomy<Item>;
+  /** A nested table's indent and disclosure, before the glyph. */
+  leading?: TreeLeading | null;
 }>): ReactElement {
   const { item, anatomy } = props;
   return (
     <View style={[tableRowContentStyle, { height: props.height }]}>
+      {props.leading === undefined || props.leading === null ? null : (
+        <View style={[treeLeadingStyle, { width: props.leading.width }]}>{props.leading.content}</View>
+      )}
       <View style={glyphStyle}>{item === null || !props.withTitle ? null : anatomy.glyph(item)}</View>
       {props.columns.map((column) => (
         <View key={column.key} style={cellStyle(column as ResolvedColumn<unknown>)}>
           {item === null ? null : column.render === null ? (
             props.withTitle ? <TableTitle item={item} anatomy={anatomy} /> : null
-          ) : <SlotContent value={column.render(item)} tabular={column.key === 'age'} />}
+          ) : <TableCellValue value={column.render(item)} tabular={column.key === 'age'} />}
         </View>
       ))}
     </View>
   );
 }
 
+/**
+ * A data cell with nothing to say draws a quiet dash (lab `.td` "—"), so an empty column reads as "none" rather
+ * than as a column that failed to load, and every column keeps its place as values arrive. The dash is visual only:
+ * the row's announcement already omits what is not there.
+ */
+function TableCellValue(props: Readonly<{ value: ReactNode; tabular: boolean }>): ReactElement {
+  const value = props.value;
+  if (value === null || value === undefined || value === false || value === '') {
+    return <HappierText accessible={false} variant="meta" tone="muted" numberOfLines={1} style={cellTextStyle}>{EMPTY_CELL_MARK}</HappierText>;
+  }
+  return <SlotContent value={value} tabular={props.tabular} />;
+}
+
+const EMPTY_CELL_MARK = '—';
+
 /** The table's Entry cell: the title, then its designation quietly after it (lab `.tt` + `.nb`). */
 function TableTitle<Item>(props: Readonly<{ item: Item; anatomy: CollectionAnatomy<Item> }>): ReactElement {
   const { item, anatomy } = props;
   const suffix = anatomy.titleSuffix?.(item) ?? null;
+  const inline = suffix !== null && suffix !== false && typeof suffix !== 'string' && typeof suffix !== 'number';
   const title = (
-    <HappierText variant="label" tone="neutral" numberOfLines={1} style={titleTextStyle}>
+    <HappierText variant="label" tone="neutral" numberOfLines={1} style={inline ? titleBeforeLineStyle : titleTextStyle}>
       {anatomy.title(item)}
     </HappierText>
   );
-  if (suffix === null) return title;
+  if (suffix === null || suffix === false || suffix === '') return title;
+  if (inline) {
+    return (
+      <View style={titleWithLineStyle}>
+        {title}
+        <View style={titleLineStyle}>{suffix}</View>
+      </View>
+    );
+  }
   return (
     <View style={titleWithSuffixStyle}>
       {title}
       <HappierText
-        variant="body"
+        variant="meta"
         tone="muted"
         numberOfLines={1}
         tabularNumbers
@@ -649,8 +796,21 @@ function TableTitle<Item>(props: Readonly<{ item: Item; anatomy: CollectionAnato
 }
 
 const titleTextStyle: HappierPortableStyle = { flexShrink: 1 };
+const treeLeadingStyle: HappierPortableStyle = { alignItems: 'flex-end', justifyContent: 'center' };
+const branchStyle: HappierPortableStyle = {
+  width: TABLE.treeIndent,
+  height: TABLE.treeIndent,
+  borderRadius: HAPPIER_RADIUS_V1.sm,
+  alignItems: 'center',
+  justifyContent: 'center',
+};
 const titleWithSuffixStyle: HappierPortableStyle = { flexDirection: 'row', alignItems: 'baseline', gap: 6, minWidth: 0 };
-const titleSuffixStyle: HappierPortableStyle = { flexShrink: 0 };
+// A short designation keeps its width; a longer quiet phrase gives way before it can squeeze out the title.
+const titleSuffixStyle: HappierPortableStyle = { flexShrink: 0, maxWidth: '60%' };
+// The title keeps its name whole up to most of the cell; the line after it truncates first (lab `rp` H).
+const titleWithLineStyle: HappierPortableStyle = { flexDirection: 'row', alignItems: 'center', gap: 8, minWidth: 0 };
+const titleBeforeLineStyle: HappierPortableStyle = { flexShrink: 0, maxWidth: '70%' };
+const titleLineStyle: HappierPortableStyle = { flexDirection: 'row', alignItems: 'center', gap: 8, minWidth: 0, flexShrink: 1, overflow: 'hidden' };
 
 function ListCells<Item>(props: Readonly<{
   item: Item;
@@ -663,16 +823,20 @@ function ListCells<Item>(props: Readonly<{
   pageSection: boolean;
 }>): ReactElement {
   const { item, anatomy, AnimatedView } = props;
+  const typography = useOptionalHappierUiTypography();
   const age = anatomy.age?.(item) ?? null;
   const where = anatomy.byline === undefined ? anatomy.where?.(item) : anatomy.byline(item);
   const reason = anatomy.reason?.(item);
   const badge = anatomy.glyphBadge?.(item) ?? null;
+  // In a page section the rows are page rows: the same inset, leading column, rhythm and type steps as every
+  // other sheet on the page, so a collection's sheet and an `ItemGroup` below it read as one anatomy. The list
+  // never travels there (no table), so its rows size to their text.
+  const page = props.pageSection;
+  const secondLine = page ? { ...resolveHappierPageTextStyle('rowDescription', typography), flexShrink: 1 } : undefined;
   return (
     <View style={[listRowContentStyle,
-      // The sheet and row each consume one hairline of the page's optical inset.
-      props.pageSection ? { paddingLeft: HAPPIER_PAGE_METRICS.headingOpticalInsetPx - 2 } : null,
-      props.wrapTitle ? { minHeight: props.height } : { height: props.height }]}>
-      <View style={[glyphStyle, { justifyContent: 'flex-start' }]}>
+      page ? pageRowContentStyle : props.wrapTitle ? { minHeight: props.height } : { height: props.height }]}>
+      <View style={[glyphStyle, { justifyContent: 'flex-start' }, page ? pageRowGlyphStyle : null]}>
         {badge === null ? anatomy.glyph(item) : (
           <View style={glyphWithBadgeStyle}>
             {anatomy.glyph(item)}
@@ -680,18 +844,19 @@ function ListCells<Item>(props: Readonly<{
           </View>
         )}
       </View>
-      <View style={[flexCellStyle, { gap: 4 }]}>
+      <View style={[flexCellStyle, { gap: page ? 2 : 4 }]}>
         <View style={props.wrapTitle ? wrappedTitleLineStyle : lineStyle}>
-          <HappierText variant="label" tone="neutral" numberOfLines={props.wrapTitle ? 2 : 1} style={[titleTextStyle, flexCellStyle]}>
+          <HappierText variant="label" tone="neutral" numberOfLines={props.wrapTitle ? 2 : 1}
+            style={[titleTextStyle, flexCellStyle, page ? resolveHappierPageTextStyle('rowTitle', typography) : null]}>
             {anatomy.title(item)}
           </HappierText>
           {age === null ? null : (
-            <HappierText variant="caption" tone="muted" numberOfLines={1} tabularNumbers>{age}</HappierText>
+            <HappierText variant="meta" tone="muted" numberOfLines={1} tabularNumbers>{age}</HappierText>
           )}
         </View>
         <AnimatedView value={props.secondLine.value} tracks={props.secondLine.tracks} style={lineStyle}>
-          <View style={[flexCellStyle, lineStyle]}><SlotContent value={where} /></View>
-          <SlotContent value={reason} />
+          <View style={[flexCellStyle, lineStyle]}><SlotContent value={where} textStyle={secondLine} /></View>
+          <SlotContent value={reason} textStyle={secondLine} />
         </AnimatedView>
       </View>
     </View>
@@ -737,9 +902,11 @@ function CollectionRow<Item>(props: Readonly<{ item: Item; itemKey: string }>): 
   const title = anatomy.title(item);
   const expanded = stage.expanded.has(itemKey);
   const toggle = stage.toggleExpanded;
-  const peekable = stage.expandable && anatomy.peek !== undefined;
+  // A row with nothing to peek (its `peek` returns null) keeps the chevron's place, so its figures stay in their columns.
+  const peekSlot = stage.expandable && anatomy.peek !== undefined;
+  const peekable = peekSlot && anatomy.peek?.(item) !== null;
   const reducedMotionPeek = useHappierUiAccessibility().reducedMotion;
-  const chevron = peekable ? (
+  const chevron = !peekSlot ? null : peekable ? (
     <HappierPressable
       accessibilityRole="button"
       accessibilityLabel={translate('happier.plugin-ui.collection.peek', 'Peek {title}').replace('{title}', title)}
@@ -750,17 +917,54 @@ function CollectionRow<Item>(props: Readonly<{ item: Item; itemKey: string }>): 
     >
       <HappierChevron direction={expanded ? 'up' : 'down'} color={theme.colors.mutedText} size={PEEK_CHEVRON_SIZE} reducedMotion={reducedMotionPeek} />
     </HappierPressable>
-  ) : null;
+  ) : <View aria-hidden style={chevronStyle} />;
+  // A collection whose rows carry their own controls reserves that place on every row (the header already does):
+  // a row without them keeps its figures under the columns' titles.
+  const rowAccessory = actions.accessory === undefined && stage.useRowActions !== undefined && actions.secondaryActions === undefined
+    ? <View aria-hidden style={rowActionPlaceholderStyle} />
+    : actions.accessory;
   // One accessory cell in every geometry, even when it is empty beside a detail: a row whose cells come and go
   // would remount its press target, and table and split must keep the same row.
-  const accessory = actions.accessory === undefined && anatomy.peek === undefined ? null : (
-    <View style={lineStyle}>{actions.accessory}{chevron}</View>
+  const accessory = rowAccessory === undefined && anatomy.peek === undefined ? null : (
+    <View style={lineStyle}>{rowAccessory}{chevron}</View>
   );
   const travel = transition?.kind === 'travel' ? transition : null;
   const offset = travel === null ? 0 : travel.plan.offsets.get(itemKey) ?? 0;
   const height = geometry === 'table' ? metrics.tableRow - 2 : metrics.listRow - 2;
+  // A nested table row: indented by its depth, its disclosure (pointer only; the row's Right/Left and its
+  // treegrid `aria-expanded` are the keyboard and assistive paths) toggling the parent without opening it.
+  const treeStage = stage.tree;
+  const node = treeStage === null || geometry !== 'table' ? undefined : treeStage.nodes.get(itemKey);
+  const branchOpen = node !== undefined && treeStage !== null
+    && isHappierCollectionTreeBranchOpen(treeStage.nodes, treeStage.openBranches, itemKey);
+  const leading: TreeLeading | null = treeStage === null ? null : {
+    width: ((node?.depth ?? 0) + 1) * TABLE.treeIndent,
+    content: node === undefined || node.childCount === 0 ? null : (
+      <View aria-hidden accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+        {/* A pointer target, not a control: it sits inside the row's own press target, which must not nest one. */}
+        <Pressable
+          focusable={false}
+          disabled={node.held}
+          {...(anatomy.testID === undefined ? {} : { testID: `${anatomy.testID(item)}:branch` })}
+          onPress={(event) => {
+            event.stopPropagation();
+            treeStage.setBranchOpen(itemKey, !branchOpen);
+          }}
+          style={branchStyle}
+        >
+          <HappierDisclosureChevron expanded={branchOpen} color={theme.colors.mutedText} reducedMotion={reducedMotionPeek} />
+        </Pressable>
+      </View>
+    ),
+  };
+  const treeFacts = useMemo<HappierCollectionTreeRowFacts | null>(() => (node === undefined ? null : {
+    level: node.depth + 1,
+    ...(node.childCount === 0 ? {} : { expanded: branchOpen }),
+    posInSet: node.posInSet,
+    setSize: node.setSize,
+  }), [branchOpen, node]);
   const rowContents = geometry === 'table' ? (
-    <TableCells item={item} columns={stage.columns} height={height} withTitle anatomy={anatomy} />
+    <TableCells item={item} columns={stage.columns} height={height} withTitle anatomy={anatomy} leading={leading} />
   ) : (
     <View>
       <ListCells
@@ -775,7 +979,7 @@ function CollectionRow<Item>(props: Readonly<{ item: Item; itemKey: string }>): 
       {travel === null ? null : (
         // The table's other columns, fading where they stood while the rows travel.
         <AnimatedView value={progress} tracks={HAPPIER_COLLECTION_TRANSITION_TRACKS.columns} style={overlayStyle} pointerEvents="none">
-          <TableCells item={item} columns={stage.columns} height={metrics.tableRow - 2} withTitle={false} anatomy={anatomy} />
+          <TableCells item={item} columns={stage.columns} height={metrics.tableRow - 2} withTitle={false} anatomy={anatomy} leading={leading} />
         </AnimatedView>
       )}
     </View>
@@ -814,7 +1018,9 @@ function CollectionRow<Item>(props: Readonly<{ item: Item; itemKey: string }>): 
   );
   const destinationRow = (
     <HappierCollectionTableRowContext.Provider value>
-      {renderCollectionItemDestination(host, anatomy, item, rowItem)}
+      <HappierCollectionTreeRowContext.Provider value={treeFacts}>
+        {renderCollectionItemDestination(host, anatomy, item, rowItem)}
+      </HappierCollectionTreeRowContext.Provider>
     </HappierCollectionTableRowContext.Provider>
   );
   return (
@@ -831,6 +1037,8 @@ function CollectionRow<Item>(props: Readonly<{ item: Item; itemKey: string }>): 
 /** The peek chevron (the shared drawn chevron) turns with the peek at the base step, pointing down closed and up open. */
 const PEEK_CHEVRON_SIZE = 14;
 
+/** The place a row's own control (its ⋯ menu) takes; the header reserves it with the gap before it. */
+const rowActionPlaceholderStyle: HappierPortableStyle = { width: TABLE.chevronWidth, height: TABLE.chevronWidth };
 const chevronStyle: HappierPortableStyle = {
   width: TABLE.chevronWidth,
   height: TABLE.chevronWidth,
@@ -987,7 +1195,6 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
     preferredListRatio: props.preferredListRatio,
     gap: 0,
   }), [props.minDetailWidth, props.minListWidth, props.preferredListRatio, size]);
-  const layoutState = useMemo(() => resolveHappierCollectionLayoutState(geometry), [geometry]);
   const openKey = model.openKey;
   // The page's app details pane, when the host placed this page in a pane host and it sits beside the page now.
   // In a pane host whose pane is not beside the page (a phone, side panes off) the detail pushes: never a split.
@@ -996,8 +1203,11 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
   // The table fits where it clears the list minimum AND can still show a column beside the title: a table that
   // is a title column alone is the list with less in it, so there the rows recompose (COLLECTION.md "Phones").
   const rowAccessoryWidth = (anatomy.peek === undefined ? 0 : TABLE.chevronWidth) + (props.useRowActions !== undefined ? 36 : 0);
+  // A nested table leads every row with the disclosure slot (an owner's depth); the list draws owners only.
+  const tree = presentation === 'table' || presentation === 'list' ? model.tree : null;
+  const treeLeadingWidth = tree !== null && presentation === 'table' ? TABLE.treeIndent + TABLE.gap : 0;
   const tableFits = size === null ? null : size.width >= props.minListWidth
-    && tableShowsBesideTitle(anatomy, size.width, accessibility.textScale, rowAccessoryWidth);
+    && tableShowsBesideTitle(anatomy, size.width, accessibility.textScale, rowAccessoryWidth, treeLeadingWidth);
   const target = resolveHappierCollectionComposition({
     presentation,
     detail,
@@ -1113,6 +1323,9 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
   const transition = view.transition;
   const cards = presentation === 'board' || presentation === 'grid';
   const rowGeometry: 'table' | 'list' = transition?.kind === 'travel' || composition !== 'table' ? 'list' : 'table';
+  const layoutMode = resolveHappierCollectionLayoutState(geometry).mode;
+  const publishedComposition: HappierCollectionComposition = rowGeometry === 'table' ? 'table' : composition === 'table' ? 'list' : composition;
+  const layoutState = useMemo(() => ({ mode: layoutMode, composition: publishedComposition }), [layoutMode, publishedComposition]);
   const wrapTitles = composition === 'list' && transition === null && !besideDetail;
   // Peeks exist in the resting table; while the table fades out (reduced motion) they stay and fade with it.
   const expandable = rowGeometry === 'table'
@@ -1122,9 +1335,20 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
   // row, so it never vanishes at the start of an open (or pops back at the end of a close).
   const ghostPeeks = transition?.kind === 'travel' && anatomy.peek !== undefined;
 
+  // ---- the rows each geometry draws: a nested table its open branches, the list its owners ----
+  const openBranches = model.openBranches;
+  const nestedTable = tree !== null && rowGeometry === 'table';
+  const drawnSections = useMemo<readonly HappierCollectionSection<Item>[]>(() => (tree === null ? model.sections
+    : model.sections.map((section) => ({
+        ...section,
+        items: section.items.filter((item) => (nestedTable
+          ? resolveHappierCollectionTreeShown(tree, openBranches, model.keyOf(item))
+          : (tree.get(model.keyOf(item))?.depth ?? 0) === 0)),
+      }))), [model.keyOf, model.sections, nestedTable, openBranches, tree]);
+
   // ---- the List's cells: rows, and each open peek right below its row (table only) ----
   const expanded = model.expanded;
-  const sections = useMemo(() => model.sections.map((section, index): ListSectionData<CollectionCell<Item>> => {
+  const sections = useMemo(() => drawnSections.map((section, index): ListSectionData<CollectionCell<Item>> => {
     const data: CollectionCell<Item>[] = [];
     for (const item of section.items) {
       const key = model.keyOf(item);
@@ -1137,30 +1361,35 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
     return {
       key: group?.key ?? `collection-${index}`,
       title: group?.title ?? '',
-      // A page section names its rows; a dense list's caption band counts them.
-      ...(pageSections ? {} : { count: section.items.length }),
+      // A page section names its rows; a dense list's caption band counts them (a nested group every item
+      // it holds, open or not, but not the owners shown only to place a match).
+      ...(pageSections ? {} : { count: tree === null ? section.items.length
+        : (model.sections[index]?.items ?? []).filter((member) => tree.get(model.keyOf(member))?.context !== true).length }),
       ...(group?.description === undefined ? {} : { description: group.description }),
       data,
     };
-  }), [closingPeeks, expandable, expanded, ghostPeeks, model.keyOf, model.sections, pageSections]);
+  }), [closingPeeks, drawnSections, expandable, expanded, ghostPeeks, model.keyOf, model.sections, pageSections, tree]);
   const dividedKeys = useMemo(() => (pageSections
-    ? new Set(model.sections.flatMap((section) => section.items.slice(0, -1).map(model.keyOf)))
-    : null), [model.keyOf, model.sections, pageSections]);
+    ? new Set(drawnSections.flatMap((section) => section.items.slice(0, -1).map(model.keyOf)))
+    : null), [drawnSections, model.keyOf, pageSections]);
   const grouped = model.sections.some((section) => section.group !== null && section.group.title !== '');
   cellsRef.current = useMemo(() => {
     const cells: HappierCollectionTransitionCell[] = [];
     for (const section of sections) {
       if (grouped) {
-        cells.push({ key: sectionCellKey(section.key), table: metrics.groupHeader, list: metrics.groupHeader, header: true });
+        // An untitled group (the rows the table's header already names) draws no band of its own.
+        const band = section.title === '' ? 0 : metrics.groupHeader;
+        cells.push({ key: sectionCellKey(section.key), table: band, list: band, header: true });
       }
       for (const cell of section.data) {
         cells.push(cell.kind === 'item'
-          ? { key: cell.key, table: metrics.tableRow, list: metrics.listRow }
+          // A nested row stands only in the table: the list beside a detail draws owners only.
+          ? { key: cell.key, table: metrics.tableRow, list: (tree?.get(cell.key)?.depth ?? 0) > 0 ? 0 : metrics.listRow }
           : { key: cell.key, table: peekHeights.current.get(cell.itemKey) ?? 0, list: 0 });
       }
     }
     return cells;
-  }, [grouped, metrics, sections]);
+  }, [grouped, metrics, sections, tree]);
 
   const onPeekHeight = useCallback((key: string, height: number) => { peekHeights.current.set(key, height); }, []);
   const onPeekSettled = useCallback((key: string, isExpanded: boolean) => {
@@ -1185,9 +1414,12 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
   // ---- columns, by measured width ----
   const tableWidth = size?.width ?? 0;
   const columns = useMemo(
-    () => resolveColumns(anatomy, tableWidth, accessibility.textScale, rowAccessoryWidth),
-    [accessibility.textScale, anatomy, rowAccessoryWidth, tableWidth],
+    () => resolveColumns(anatomy, tableWidth, accessibility.textScale, rowAccessoryWidth, treeLeadingWidth),
+    [accessibility.textScale, anatomy, rowAccessoryWidth, tableWidth, treeLeadingWidth],
   );
+  const setBranchOpen = model.actions.setBranchOpen;
+  const treeStage = useMemo<CollectionTreeStage | null>(() => (tree === null || presentation !== 'table' ? null
+    : { nodes: tree, openBranches, setBranchOpen }), [openBranches, presentation, setBranchOpen, tree]);
 
   const stage = useMemo<CollectionStage<Item>>(() => ({
     composition,
@@ -1199,6 +1431,7 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
     anatomy,
     expanded,
     toggleExpanded: model.actions.toggleExpanded,
+    tree: treeStage,
     wrapTitles,
     pageSections,
     useRowActions: props.useRowActions,
@@ -1206,7 +1439,7 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
     dividedKeys,
     onPeekHeight,
     onPeekSettled,
-  }), [anatomy, columns, composition, dividedKeys, expandable, expanded, metrics, model.actions.toggleExpanded, wrapTitles, pageSections, onPeekHeight, onPeekSettled, progress, props.useRowActions, rowGeometry, transition]);
+  }), [anatomy, columns, composition, dividedKeys, expandable, expanded, metrics, model.actions.toggleExpanded, treeStage, wrapTitles, pageSections, onPeekHeight, onPeekSettled, progress, props.useRowActions, rowGeometry, transition]);
 
   // ---- the List engine's Collection facts ----
   const authorMultiple: NonNullable<CollectionProps<Item>['selection']>['multiple'] = props.selection?.multiple
@@ -1215,10 +1448,25 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
     throw new Error('Collection single choice and multiple selection are mutually exclusive');
   }
   const multipleStore = authorMultiple?.store ?? null;
-  const navigationKeys = useMemo(() => model.sections.flatMap(section => section.items)
-    .filter(item => props.selection?.isItemActivatable?.(item) !== false && singleChoice?.isItemSelectable?.(item) !== false).map(model.keyOf), [model.keyOf, model.sections, props.selection?.isItemActivatable, singleChoice?.isItemSelectable]);
-  const selectableKeys = useMemo(() => model.sections.flatMap(section => section.items)
-    .filter(item => authorMultiple?.isItemSelectable?.(item) !== false).map(model.keyOf), [authorMultiple?.isItemSelectable, model.keyOf, model.sections]);
+  const navigationKeys = useMemo(() => drawnSections.flatMap(section => section.items)
+    .filter(item => props.selection?.isItemActivatable?.(item) !== false && singleChoice?.isItemSelectable?.(item) !== false).map(model.keyOf), [drawnSections, model.keyOf, props.selection?.isItemActivatable, singleChoice?.isItemSelectable]);
+  const selectableKeys = useMemo(() => drawnSections.flatMap(section => section.items)
+    .filter(item => authorMultiple?.isItemSelectable?.(item) !== false).map(model.keyOf), [authorMultiple?.isItemSelectable, drawnSections, model.keyOf]);
+  // Right opens a closed parent or enters an open one; Left closes an open parent or returns to its parent.
+  const treeNodes = useMemo<readonly HappierTreeNode[] | null>(() => (!nestedTable || tree === null ? null
+    : drawnSections.flatMap(section => section.items).map((item): HappierTreeNode => {
+        const key = model.keyOf(item);
+        const node = tree.get(key);
+        return {
+          key,
+          parentKey: node?.parentKey ?? null,
+          depth: node?.depth ?? 0,
+          kind: (node?.childCount ?? 0) > 0 ? 'branch' : 'leaf',
+          expanded: isHappierCollectionTreeBranchOpen(tree, openBranches, key),
+          // A parent the search holds open cannot close while the narrowing lasts.
+          disabled: node?.held === true,
+        };
+      })), [drawnSections, model.keyOf, nestedTable, openBranches, tree]);
   const eligibleKeys = useMemo(() => {
     const present = new Set(model.sections.flatMap(section => section.items.map(model.keyOf)));
     return [...selectableKeys, ...(authorMultiple?.retainedSelectionKeys ?? []).filter(key => !present.has(key))];
@@ -1252,8 +1500,15 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
     hideChrome: true,
     focus: { key: model.focusKey, tabStopKey, request: model.focusRequest,
       onRequestHandled: model.actions.consumeFocusRequest,
-      ...(singleChoice === undefined ? { onKey: (key: string, from: string, event: unknown) => model.actions.navigate({ key, from, event, presentation,
-        store: multipleStore, eligibleKeys: navigationKeys }) } : {}) },
+      ...(singleChoice === undefined ? { onKey: (key: string, from: string, event: unknown) => {
+        if (treeNodes !== null && (key === 'ArrowRight' || key === 'ArrowLeft') && !hasKeyModifier(event)) {
+          const intent = resolveHappierTreeKeyIntent(treeNodes, from, key);
+          if (intent?.kind === 'focus') model.actions.requestFocus(intent.key);
+          else if (intent?.kind === 'disclose') setBranchOpen(intent.key, intent.expanded);
+          if (intent !== null) return true;
+        }
+        return model.actions.navigate({ key, from, event, presentation, store: multipleStore, eligibleKeys: navigationKeys });
+      } } : {}) },
     onRowKey: (key, itemKey) => {
       if (singleChoice === undefined && (key === ' ' || key === 'Spacebar') && expandable) {
         toggleExpanded(itemKey);
@@ -1275,7 +1530,7 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
       },
       pageSheet: { colors: palette },
     } : {
-      sectionHeaderTitleRole: 'caption' as const,
+      sectionHeaderTitleRole: 'micro' as const,
       sectionHeaderStyle: {
         height: metrics.groupHeader,
         justifyContent: 'center' as const,
@@ -1298,6 +1553,7 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
     }),
     ...(pageScroll ? { pageScroll: true } : {}),
     ...(pageVirtualized ? { pageVirtualization: pageGeometry } : {}),
+    ...(nestedTable ? { collectionRole: 'treegrid' as const } : {}),
     wrapSectionHeader: (sectionKey, header) => (
       <driver.AnimatedView
         value={progress}
@@ -1308,11 +1564,22 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
         {header}
       </driver.AnimatedView>
     ),
-  }), [driver, expandable, metrics, model, multipleStore, navigationKeys, pageScroll, pageVirtualized, pageGeometry, pageSections, palette, presentation, progress, props.groupAction, props.testID, scrollOffsetRef, singleChoice === undefined, tabStopKey, theme.colors.divider, theme.colors.elevatedSurface, theme.colors.surface, toggleExpanded, transition, view.scrollRequest, viewportScrollRequest]);
+  }), [driver, expandable, metrics, model, multipleStore, navigationKeys, nestedTable, setBranchOpen, treeNodes, pageScroll, pageVirtualized, pageGeometry, pageSections, palette, presentation, progress, props.groupAction, props.testID, scrollOffsetRef, singleChoice === undefined, tabStopKey, theme.colors.divider, theme.colors.elevatedSurface, theme.colors.surface, toggleExpanded, transition, view.scrollRequest, viewportScrollRequest]);
 
   // ---- Escape returns to the table from anywhere inside the Collection (web keyboard) ----
   const rootRef = useRef<View | null>(null);
   const search = useListCollectionSearch(props.search, rootRef);
+  // A header render places the search in the caller's row, at the toolbar's bounded width; else it stays in the pane.
+  const headerPlacesSearch = typeof props.header === 'function';
+  const selectionMode = useListSelectionModeControl(multipleStore, selectableKeys.length > 0);
+  const pageChrome = useHappierPageChromeInternal();
+  const header = typeof props.header === 'function' ? props.header({
+    search: search.control === null ? null : (
+      <View style={[headerSearchStyle, { width: HEADER_SEARCH_WIDTH * accessibility.textScale }]}>{search.control}</View>
+    ),
+    selection: selectionMode,
+    pageActions: pageChrome?.renderNavigationActions?.(null) ?? null,
+  }) : props.header;
   const close = model.actions.close;
   const hasOpen = openKey !== null;
   useEffect(() => {
@@ -1376,37 +1643,60 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
   // Beside the open pane the list keeps the split list's chrome (its bar and keys), like the lab's Desk list.
   const wide = composition === 'table' || composition === 'split' || (composition === 'list' && pane && openKey !== null);
   const desktop = platform === null || platform.platform === 'web' || platform.platform === 'desktop';
-  // A Collection with nothing in it is its empty state alone: no column header, no keys for rows that are not there.
+  // An empty Collection has no row chrome, except the table's named-order control remains reachable.
   const hasRows = model.keys.length > 0;
+  // The first window is still arriving: the table already stands (its column titles, its enclosure) so the rows
+  // land exactly where their skeleton rows stood.
+  const loadingFirstWindow = props.loading === true && !hasRows;
   const cardsWide = composition === 'cards';
   const showHints = (wide || (cardsWide && detail !== 'none' && geometry?.mode === 'split')) && desktop && hasRows;
   const transitionTracks = transition?.kind === 'travel' ? HAPPIER_COLLECTION_TRANSITION_TRACKS.columns : NO_TRACKS;
   // The bar above the rows keeps its height in the table and beside a detail, so opening or closing never moves
   // the rows under it: the table's column titles, or the window's first fact beside a detail (the lab's list bar).
-  const headerBar = hasRows && wide;
+  const namedOrderHeader = rowGeometry === 'table' && props.sort?.orders !== undefined;
+  const headerBar = (hasRows || loadingFirstWindow || namedOrderHeader) && wide;
   const statementLead = typeof props.windowStatement === 'string' ? props.windowStatement : props.windowStatement?.[0];
+  const sortableHeader = props.sort !== undefined && (namedOrderHeader || columns.some((column) => column.sortable));
   const columnHeader = !headerBar ? null : rowGeometry === 'list' && transition === null ? (
     <View style={[tableRowContentStyle, { height: TABLE.headerHeight, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }]}>
       <View style={glyphStyle} />
       {statementLead === undefined ? null : (
-        <HappierText variant="caption" tone="muted" numberOfLines={1} tabularNumbers>{statementLead}</HappierText>
+        <HappierText variant="meta" tone="muted" numberOfLines={1} tabularNumbers>{statementLead}</HappierText>
       )}
     </View>
   ) : (
     <driver.AnimatedView value={progress} tracks={transitionTracks} style={{ height: TABLE.headerHeight, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }}>
       <View
-        aria-hidden
-        accessibilityElementsHidden
-        importantForAccessibility="no-hide-descendants"
+        // Titles are read from the rows' own names; only sort buttons are controls a reader reaches here.
+        {...(sortableHeader ? {} : { 'aria-hidden': true, accessibilityElementsHidden: true, importantForAccessibility: 'no-hide-descendants' as const })}
         style={[tableRowContentStyle, { height: TABLE.headerHeight - 1, paddingRight: TABLE.insetEnd + rowAccessoryWidth + 1 }]}
       >
+        {treeStage === null ? null : <View style={{ width: TABLE.treeIndent }} />}
         <View style={glyphStyle} />
         {columns.map((column) => (
-          <View key={column.key} style={cellStyle(column as ResolvedColumn<unknown>)}>
-            <HappierText variant="caption" tone={column.key === 'title' ? 'neutral' : 'muted'} numberOfLines={1}>
-              {column.title}
-            </HappierText>
-          </View>
+          column.key === 'title' && namedOrderHeader && props.sort !== undefined ? (
+            <CollectionOrderHeader
+              key={column.key}
+              column={column as ResolvedColumn<unknown>}
+              sort={props.sort}
+              {...(props.testID === undefined ? {} : { testID: `${props.testID}:sort:title` })}
+            />
+          ) : column.sortable && props.sort !== undefined && column.fieldKey !== null ? (
+            <CollectionSortHeader
+              key={column.key}
+              column={column as ResolvedColumn<unknown>}
+              fieldKey={column.fieldKey}
+              sort={props.sort}
+              {...(props.testID === undefined ? {} : { testID: `${props.testID}:sort:${column.fieldKey}` })}
+            />
+          ) : (
+            <View key={column.key} style={cellStyle(column as ResolvedColumn<unknown>)}
+              {...(sortableHeader ? { 'aria-hidden': true, accessibilityElementsHidden: true, importantForAccessibility: 'no-hide-descendants' as const } : {})}>
+              <HappierText variant="meta" tone={column.key === 'title' ? 'neutral' : 'muted'} numberOfLines={1}>
+                {column.title}
+              </HappierText>
+            </View>
+          )
         ))}
       </View>
     </driver.AnimatedView>
@@ -1429,9 +1719,10 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
     ? [['J', 'K', hint.move], ['esc', translate('happier.plugin-ui.collection.hint.table', 'table')]]
     : [
         ['J', 'K', hint.move],
-        ['space', multipleStore === null
-          ? translate('happier.plugin-ui.collection.hint.peek', 'peek')
-          : translate('happier.plugin-ui.collection.hint.select', 'select')],
+        // Space is named only for what it does here: select, or the peek this anatomy really has.
+        ...(multipleStore !== null
+          ? [['space', translate('happier.plugin-ui.collection.hint.select', 'select')]]
+          : anatomy.peek !== undefined ? [['space', translate('happier.plugin-ui.collection.hint.peek', 'peek')]] : []),
         ['↵', hint.open],
         ['esc', translate('happier.plugin-ui.collection.hint.back', 'back')],
         ['⌘K', translate('happier.plugin-ui.collection.hint.anything', 'anything')],
@@ -1452,7 +1743,7 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
           {hints.map((hint) => (
             <View key={hint.join(' ')} style={hintStyle}>
               {hint.slice(0, -1).map((key) => <CollectionKeyCap key={key} label={key} />)}
-              <HappierText variant="caption" tone="muted">{hint[hint.length - 1]}</HappierText>
+              <HappierText variant="meta" tone="muted">{hint[hint.length - 1]}</HappierText>
             </View>
           ))}
         </View>
@@ -1464,8 +1755,8 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
             // Each fact stays its own text. A narrow footer keeps the count (first) and the honesty fact (last,
             // "… has more") and gives the middle detail away first (lab: "12 loaded · Azure DevOps has more").
             <View key={`${index}:${part}`} style={[lineStyle, { flexShrink: windowPartShrink(index, windowLine.length), minWidth: 0 }]}>
-              {index === 0 ? null : <HappierText variant="caption" tone="muted" aria-hidden>·</HappierText>}
-              <HappierText variant="caption" tone="muted" numberOfLines={1} tabularNumbers style={cellTextStyle}>{part}</HappierText>
+              {index === 0 ? null : <HappierText variant="meta" tone="muted" aria-hidden>·</HappierText>}
+              <HappierText variant="meta" tone="muted" numberOfLines={1} tabularNumbers style={cellTextStyle}>{part}</HappierText>
             </View>
           ))}
         </View>
@@ -1480,10 +1771,22 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
           {...(props.testID === undefined ? {} : { testID: `${props.testID}:continuation:${continuation.key}` })}
           style={(state) => ({ opacity: state.pressed || state.busy ? 0.6 : 1 })}
         >
-          <HappierText variant="caption" tone="secondary" numberOfLines={1}>{continuation.label}</HappierText>
+          <HappierText variant="meta" tone="secondary" numberOfLines={1}>{continuation.label}</HappierText>
         </HappierPressable>
       ))}
     </View>
+  );
+
+  const summaryRows = props.summaryRows === undefined || props.summaryRows.length === 0 || !hasRows ? null : (
+    <CollectionSummaryRows
+      rows={props.summaryRows}
+      geometry={rowGeometry}
+      columns={columns as readonly ResolvedColumn<unknown>[]}
+      leadingWidth={treeStage === null ? 0 : TABLE.treeIndent}
+      paddingEnd={TABLE.insetEnd + rowAccessoryWidth + 1}
+      height={metrics.tableRow}
+      fields={anatomy.fields ?? NO_FIELDS}
+    />
   );
 
   // ---- the panes ----
@@ -1493,7 +1796,7 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
   const lastDetailRef = useRef<ReactNode>(null);
   const detailNode = openKey !== null && props.renderDetail !== undefined && detail !== 'none'
     ? <CollectionDetailHeadingFocusContext.Provider value={pane && props.detailHeader !== undefined ? null : headingFocus}>
-        {props.renderDetail(openKey, { headerHosted: pane && props.detailHeader !== undefined })}
+        {props.renderDetail(openKey, { headerHosted: pane && props.detailHeader !== undefined, pushed: composition === 'detail' })}
       </CollectionDetailHeadingFocusContext.Provider>
     : transition !== null ? lastDetailRef.current : null;
   lastDetailRef.current = openKey !== null ? detailNode : transition !== null ? lastDetailRef.current : null;
@@ -1549,16 +1852,18 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
     <HappierCollectionLayoutContext.Provider value={layoutState}>
       <View ref={rootRef} testID={props.testID} style={rootStyle} onLayout={pageScroll ? onPageViewportLayout : undefined}>
         {/* A page-sized collection scrolls the page's own header and footer with its items. */}
-        {pageScroll ? null : props.header}
+        {pageScroll ? null : header}
         <PageScroller enabled={pageScroll && !pageVirtualized} viewport={viewport} request={viewportScrollRequest}>
-        {pageScroll ? props.header : null}
+        {pageScroll ? header : null}
         <View testID={props.testID === undefined ? undefined : `${props.testID}:stage`} onLayout={onLayout}
           style={[pageScroll ? pageStageStyle : rootStyle,
             // A standalone page table has the page sheet edge even when it recomposes as a list.
             // A nested sheet already owns that edge (for example the configurator's size table).
             pageSections || (pageScroll && presentation === 'table' && palette !== null && enclosingPageSheet === null)
               ? { marginHorizontal: HAPPIER_PAGE_METRICS.sheetInsetPx } : null,
-            composition === 'table' && hasRows ? {
+            // A table among a page's sections is a sheet with an edge; a Collection that IS the page's body (it
+            // fills its region under the page header, lab `merged-list`) lies flat and full-bleed.
+            pageScroll && composition === 'table' && (hasRows || loadingFirstWindow) ? {
               borderWidth: 1,
               borderColor: theme.colors.divider,
               borderRadius: HAPPIER_RADIUS_V1.xl,
@@ -1571,8 +1876,9 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
               importantForAccessibility={listVisible ? 'auto' : 'no-hide-descendants'}
               style={[paneStyle, { flex: listFlex }, listVisible ? null : hiddenStyle]}
             >
-              <ListCollectionHeader search={search.control} store={multipleStore} selectable={selectableKeys.length > 0} />
-              {cards && presentation === 'board' && props.loading === true && !hasRows ? (
+              <ListCollectionHeader search={headerPlacesSearch ? null : search.control} selectionMode={headerPlacesSearch ? null : selectionMode}
+                {...(pageSections ? { leadingGapPx: HAPPIER_PAGE_METRICS.sectionHeaderGapPx } : {})} />
+              {cards && presentation === 'board' && loadingFirstWindow ? (
                 // A board that is still reading stands in the same skeleton rows as the table: nothing is
                 // known yet about its columns, and "empty" would be a lie.
                 <CollectionSkeletonRows
@@ -1622,7 +1928,7 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
                     renderItem={renderCollectionCell as (cell: CollectionCell<Item>) => ReactElement}
                     selection={listSelection}
                     header={columnHeader}
-                    empty={props.loading === true && !hasRows ? (
+                    empty={loadingFirstWindow ? (
                       <CollectionSkeletonRows
                         rowHeight={rowGeometry === 'table' ? metrics.tableRow : metrics.listRow}
                         twoLines={rowGeometry === 'list'}
@@ -1630,8 +1936,9 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
                         {...(props.testID === undefined ? {} : { testID: props.testID })}
                       />
                     ) : props.empty}
-                    footer={(pageSections || props.footer === undefined) && footerLine === null ? undefined : (
+                    footer={(pageSections || props.footer === undefined) && footerLine === null && summaryRows === null ? undefined : (
                       <>
+                        {summaryRows}
                         {pageSections ? null : props.footer}
                         {footerLine}
                       </>
@@ -1682,7 +1989,150 @@ export function Collection<Item>(props: CollectionProps<Item>): ReactElement {
   );
 }
 
+function hasKeyModifier(event: unknown): boolean {
+  const modifiers = event !== null && typeof event === 'object'
+    ? event as Readonly<{ shiftKey?: boolean; ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean }> : null;
+  return modifiers?.shiftKey === true || modifiers?.ctrlKey === true || modifiers?.metaKey === true || modifiers?.altKey === true;
+}
+
+/**
+ * The title column's named-order menu: the column's own title, quiet like its neighbours, naming the active
+ * order and opening the shared menu's radio group (checks, focus and dismissal stay the menu owner's).
+ */
+function CollectionOrderHeader(props: Readonly<{
+  column: ResolvedColumn<unknown>;
+  sort: CollectionSort;
+  testID?: string;
+}>): ReactElement {
+  const [open, setOpen] = useState(false);
+  const orders = props.sort.orders ?? [];
+  const current = orders.find((order) => order.key === props.sort.key);
+  const title = props.column.title;
+  const radioGroup = 'order';
+  return (
+    // The title starts where the column's values start (lab "Entry ⌄" over the titles), never centred in a wide cell.
+    <View style={[cellStyle(props.column), orderHeaderCellStyle]} aria-sort={current === undefined ? 'none' : props.sort.direction}>
+      <Dropdown
+        open={open}
+        onOpenChange={setOpen}
+        trigger={current === undefined ? title : `${title} · ${current.label}`}
+        triggerDisclosure
+        triggerAccessibilityLabel={current === undefined ? title : `${title}: ${current.label}`}
+        {...(props.testID === undefined ? {} : { testID: props.testID })}
+        items={orders.map((order) => ({ id: order.key, label: order.label, kind: 'radio' as const, radioGroupId: radioGroup }))}
+        radioGroups={[{ id: radioGroup, accessibilityLabel: title, selectedId: current?.key ?? null }]}
+        onSelect={props.sort.onChange}
+      />
+    </View>
+  );
+}
+
+/** A sortable column title: a button naming the field, its arrow beside the title while it is the active order. */
+function CollectionSortHeader(props: Readonly<{
+  column: ResolvedColumn<unknown>;
+  fieldKey: string;
+  sort: CollectionSort;
+  testID?: string;
+}>): ReactElement {
+  const active = props.sort.key === props.fieldKey;
+  const onChange = props.sort.onChange;
+  const fieldKey = props.fieldKey;
+  return (
+    <View style={cellStyle(props.column)} aria-sort={active ? props.sort.direction : 'none'}>
+      <HappierPressable
+        accessibilityRole="button"
+        accessibilityLabel={props.column.title}
+        onPress={() => { onChange(fieldKey); }}
+        {...(props.testID === undefined ? {} : { testID: props.testID })}
+        style={() => sortHeaderStyle}
+      >
+        <HappierText variant="meta" tone={active ? 'neutral' : 'muted'} numberOfLines={1}>{props.column.title}</HappierText>
+        {active ? (
+          <HappierText variant="meta" tone="neutral" aria-hidden {...(props.testID === undefined ? {} : { testID: `${props.testID}:arrow` })}>
+            {props.sort.direction === 'descending' ? '↓' : '↑'}
+          </HappierText>
+        ) : null}
+      </HappierPressable>
+    </View>
+  );
+}
+
+const sortHeaderStyle: HappierPortableStyle = { flexDirection: 'row', alignItems: 'center', gap: 3, minWidth: 0 };
+
+/**
+ * The totals after the last group: in the table, the title under the title column and each cell under its
+ * field column (the same widths); in the list, the title left and the highest-priority value right. Plain rows,
+ * never focused, selected or opened, a quiet hairline between them.
+ */
+function CollectionSummaryRows(props: Readonly<{
+  rows: readonly CollectionSummaryRow[];
+  geometry: 'table' | 'list';
+  columns: readonly ResolvedColumn<unknown>[];
+  leadingWidth: number;
+  paddingEnd: number;
+  height: number;
+  /** Which field's value the list keeps: the highest priority. */
+  fields: readonly Readonly<{ key: string; priority: number }>[];
+}>): ReactElement {
+  const theme = useHappierUiTheme();
+  const palette = useOptionalHappierUiPalette() ?? resolveHappierUiPalette(theme);
+  const lead = props.fields.reduce<Readonly<{ key: string; priority: number }> | null>(
+    (best, field) => (best === null || field.priority > best.priority ? field : best), null);
+  return (
+    <View>
+      {props.rows.map((row) => (
+        <View
+          key={row.key}
+          {...(row.testID === undefined ? {} : { testID: row.testID })}
+          style={[tableRowContentStyle, { minHeight: props.height - 2, borderTopWidth: 1, borderTopColor: palette.rowDivider },
+            props.geometry === 'table' ? { paddingRight: props.paddingEnd } : { paddingRight: TABLE.insetStart }]}
+        >
+          {props.geometry === 'table' ? (
+            <>
+              {props.leadingWidth === 0 ? null : <View style={{ width: props.leadingWidth }} />}
+              <View style={glyphStyle} />
+              {props.columns.map((column) => (
+                <View
+                  key={column.key}
+                  style={cellStyle(column)}
+                  {...(row.testID === undefined || column.fieldKey === null ? {} : { testID: `${row.testID}:${column.fieldKey}` })}
+                >
+                  {column.render === null ? <SummaryTitle title={row.title} />
+                    : column.fieldKey === null ? null : <SlotContent value={row.cells?.[column.fieldKey]} tabular />}
+                </View>
+              ))}
+            </>
+          ) : (
+            <>
+              <View style={flexCellStyle}><SummaryTitle title={row.title} /></View>
+              {lead === null ? null : (
+                <View {...(row.testID === undefined ? {} : { testID: `${row.testID}:${lead.key}` })}>
+                  <SlotContent value={row.cells?.[lead.key]} tabular />
+                </View>
+              )}
+            </>
+          )}
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function SummaryTitle(props: Readonly<{ title: ReactNode }>): ReactElement | null {
+  return typeof props.title === 'string' || typeof props.title === 'number'
+    ? <HappierText variant="meta" tone="secondary" numberOfLines={1} style={cellTextStyle}>{String(props.title)}</HappierText>
+    : <>{props.title}</>;
+}
+
+const NO_FIELDS: readonly never[] = Object.freeze([]);
+
 const rootStyle: HappierPortableStyle = { flex: 1, minWidth: 0, minHeight: 0, overflow: 'hidden' };
+/**
+ * The search in a header row (lab `.cmd`): one readable measure at normal text size that scales with the reader's
+ * text, narrowing with a tight row and never wider than it, so the page's trailing controls keep their place.
+ */
+const HEADER_SEARCH_WIDTH = 380;
+const headerSearchStyle: HappierPortableStyle = { maxWidth: '100%', minWidth: 0, flexShrink: 1 };
 /** Inside the page's scroller the stage sizes to its rows instead of filling a fixed height. */
 const pageStageStyle: HappierPortableStyle = { minWidth: 0 };
 // No `overflow` here: an inline `hidden` would override the scroller's own overflow and stop it scrolling on the web.

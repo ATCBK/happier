@@ -12,6 +12,22 @@ import { HAPPIER_RADIUS_V1 } from '../../environment/radius.js';
  * horizontal padding to line something up.
  */
 export const HAPPIER_PAGE_METRICS = Object.freeze({
+  columnMaxWidthPx: Object.freeze({ reading: 704, wide: 944 }),
+  /** Inside a card or a free-standing group: the row inset, so a card's text lines up with a sheet's rows. */
+  cardPaddingPx: 16,
+  /** Between cards or tiles in a grid. */
+  cardGapPx: 12,
+  /** Settings lab .page/.detail: 80px; work-document lab: 60px. Pages use the settings measure. */
+  pagePaddingBottomPx: 80,
+  /**
+   * The band a column opens with on a desktop: the session header and a side pane's header, read
+   * through `calculateHeaderHeight`. Unified-work lab `.uw-phd` and app-surfaces `.am-pin` (56); the
+   * app-surfaces main header `.am-head` (52) is a page title strip, not this band.
+   */
+  paneHeaderHeightPx: 56,
+  /** An iPhone's band (app-surfaces `.phone .am-phn`), the native navigation bar's height. */
+  paneHeaderUnderNativeChromeHeightPx: 44,
+  controlHeightPx: 32,
   /**
    * From the column's edge to a sheet's edge. On every platform Happier's
    * grouped list container padding plus its card margin sum to this.
@@ -27,6 +43,11 @@ export const HAPPIER_PAGE_METRICS = Object.freeze({
   pageHeaderPaddingBottomPx: 4,
   /** Title → purpose line, and purpose → identity details / meta. */
   pageHeaderLineGapPx: 4,
+  /**
+   * Across a page header's title row: its leading mark → the title block → the actions. A page that
+   * lines content up under the title (a document's chips and steps) reads the title's edge from it.
+   */
+  pageHeaderColumnGapPx: 14,
   sectionGapPx: 28,
   sectionHeaderGapPx: 10,
   /** Sheets are cards: the `xl` step of the one radius base. */
@@ -82,24 +103,43 @@ export const HAPPIER_PAGE_METRICS = Object.freeze({
    * content, and a margin from the pane's edge.
    */
   backGutterWidthPx: 28 + 12 + 8,
+  /** The back control's own box (a 20px glyph with its 4px sides): the height of its line above a title. */
+  backControlSizePx: 28,
 } as const);
 
-export type HappierPageBackPlacement = 'gutter' | 'title-row';
+export type HappierPageBackPlacement = 'gutter' | 'above-title';
 
 /**
  * Where a page header's back arrow goes: in the gutter left of the content
- * column when the pane leaves room for it there, otherwise on the title row.
- * `null` until the pane has been measured, so the arrow is never drawn in one
- * place and then moved.
+ * column when the pane leaves room for it there, otherwise on its own line
+ * above the title, so the title, purpose and sections keep one left edge
+ * (DESIGN.md "Back stays out of the title"). `null` until the pane has been
+ * measured, so the arrow is never drawn in one place and then moved.
  */
 export function resolveHappierPageBackPlacement(input: Readonly<{
   paneWidthPx: number | null;
   columnMaxWidthPx: number;
+  /** Whether a back control will render at all; a hidden one takes no place (default: it will). */
+  backShown?: boolean;
 }>): HappierPageBackPlacement | null {
+  if (input.backShown === false) return null;
   if (input.paneWidthPx === null || !Number.isFinite(input.paneWidthPx) || input.paneWidthPx <= 0) return null;
   const columnWidthPx = Math.min(input.paneWidthPx, input.columnMaxWidthPx);
   const leadingSpacePx = (input.paneWidthPx - columnWidthPx) / 2 + HAPPIER_PAGE_METRICS.pageTextInsetPx;
-  return leadingSpacePx >= HAPPIER_PAGE_METRICS.backGutterWidthPx ? 'gutter' : 'title-row';
+  return leadingSpacePx >= HAPPIER_PAGE_METRICS.backGutterWidthPx ? 'gutter' : 'above-title';
+}
+
+/**
+ * Whether a header still measuring its pane reserves the line above its title. A detail beside a
+ * collection's list is narrow by construction and almost always lands there, so it reserves the line
+ * and never grows when the measurement arrives; any other page assumes the gutter, where wide panes land.
+ */
+export function resolveHappierPageBackMeasuringLine(input: Readonly<{
+  /** Whether a back control will render; a page whose back is hidden reserves nothing. */
+  backShown: boolean;
+  collectionMode: 'measuring' | 'split' | 'stacked' | null;
+}>): boolean {
+  return input.backShown && input.collectionMode === 'split';
 }
 
 /**
@@ -107,19 +147,22 @@ export function resolveHappierPageBackPlacement(input: Readonly<{
  * and adaptive actions preserve `sectionTextMinWidthPx`; adaptive actions also
  * follow the existing narrow page-control rule. Until the action is measured it
  * follows that rule too, so the first measured paint is never squeezed. A
- * `trailing` action (a quiet icon cluster) never drops.
+ * `trailing` action (a quiet icon cluster) never drops. On a narrow (phone)
+ * header a labelled action beside a description drops too: next to wrapped
+ * explanation lines it reads as part of the text, not the section's action.
  */
 export function isHappierSectionActionStacked(input: Readonly<{
   headerWidthPx: number | null;
   actionWidthPx: number | null;
   actionLayout?: 'inline' | 'adaptive' | 'trailing';
   gapPx: number;
+  hasDescription?: boolean;
 }>): boolean {
   const { headerWidthPx, actionWidthPx } = input;
   // A trailing icon cluster needs no text column of its own: the title beside it shrinks instead.
   if (input.actionLayout === 'trailing') return false;
   if (typeof headerWidthPx !== 'number' || !Number.isFinite(headerWidthPx) || headerWidthPx <= 0) return false;
-  if (input.actionLayout === 'adaptive' && isHappierPageRowNarrow(headerWidthPx)) return true;
+  if ((input.actionLayout === 'adaptive' || input.hasDescription === true) && isHappierPageRowNarrow(headerWidthPx)) return true;
   if (typeof actionWidthPx !== 'number' || !Number.isFinite(actionWidthPx) || actionWidthPx <= 0) {
     return isHappierPageRowNarrow(headerWidthPx);
   }
@@ -140,4 +183,36 @@ export function isHappierPageRowNarrow(widthPx: number | null | undefined): bool
   return typeof widthPx === 'number' && Number.isFinite(widthPx) && widthPx > 0
     && widthPx < HAPPIER_PAGE_METRICS.sectionTextMinWidthPx + HAPPIER_PAGE_METRICS.rowLeadingGapPx
       + HAPPIER_PAGE_METRICS.fieldInlineMinWidthPx + 2 * HAPPIER_PAGE_METRICS.rowPaddingHorizontalPx;
+}
+
+/** The most of a wide row an adaptive control (a segmented bar, a field select) may take beside its label. */
+export const HAPPIER_PAGE_ADAPTIVE_ACCESSORY_MAX_ROW_SHARE = 0.5;
+
+/**
+ * The one rule for whether a page row's control moves beneath its label, for Happier core's `Item` and
+ * the public `Item` alike.
+ *
+ * - `operation` (a button, a short value): it is the phone rule's "short value". It stays on its label's
+ *   line in a narrow row while the label keeps its column (`sectionTextMinWidthPx`), and moves beneath
+ *   only when its measured width would squeeze the label below that column.
+ * - `adaptive` (a segmented choice, a field select): it moves beneath on a narrow row
+ *   ({@link isHappierPageRowNarrow}), except in a menu, which is narrow by design.
+ *
+ * Either moves beneath when it is wider than its share of a wide row. Unmeasured, a control stays inline,
+ * because only the inline position reports its natural width.
+ */
+export function isHappierPageRowAccessoryStacked(input: Readonly<{
+  kind: 'operation' | 'adaptive';
+  rowWidthPx: number | null;
+  accessoryWidthPx: number | null;
+  menuRow?: boolean;
+}>): boolean {
+  const { rowWidthPx, accessoryWidthPx } = input;
+  const measured = rowWidthPx !== null && accessoryWidthPx !== null;
+  const overflows = measured && accessoryWidthPx > rowWidthPx * HAPPIER_PAGE_ADAPTIVE_ACCESSORY_MAX_ROW_SHARE;
+  if (input.kind === 'operation') {
+    return overflows || (measured
+      && rowWidthPx - accessoryWidthPx - HAPPIER_PAGE_METRICS.rowLeadingGapPx < HAPPIER_PAGE_METRICS.sectionTextMinWidthPx);
+  }
+  return overflows || (isHappierPageRowNarrow(rowWidthPx) && input.menuRow !== true);
 }

@@ -6,14 +6,16 @@ import { HappierText } from '../text/Text.js';
 import { formatHappierDataShare, formatHappierDataValue } from './dataModel.js';
 import { useHappierDataTextStyles } from './dataText.js';
 import { Heatmap } from './Heatmap.js';
+import { HappierDataHatch } from '../content/Hatch.js';
 import type { HappierPortableStyle } from '../portableTypes.js';
 
-export type CompositionSegment = Readonly<{ id: string; label: string; value: number | null; color?: string }>;
+/** `pattern: 'hatched'` marks a part that is set aside (e.g. collected to clear) in its own colour's hatch. */
+export type CompositionSegment = Readonly<{ id: string; label: string; value: number | null; color?: string; pattern?: 'solid' | 'hatched' }>;
 export type CompositionStripProps = Readonly<{
   theme: HappierUiTheme; label: string; total: number | null; segments: readonly CompositionSegment[];
   basis?: string; unknownLabel?: string; size?: 'inline' | 'tile' | 'full'; testID?: string;
-  /** Reuse the exact legend when another public chart owns the picture. */
-  variant?: 'strip' | 'waffle' | 'legend';
+  /** Reuse the exact legend when another public chart owns the picture; `bar` when the host owns the legend. */
+  variant?: 'strip' | 'waffle' | 'legend' | 'bar';
   minimumVisibleFraction?: number; minimumFillWidth?: number; segmentGap?: number;
   /** Visible ink only; accessibility retains the unabridged source amount. */
   valueFormatter?: (value: number) => string;
@@ -21,7 +23,9 @@ export type CompositionStripProps = Readonly<{
   renderSegment?: (segment: CompositionSegment, visual: ReactNode, share: number | null) => ReactNode;
   renderBarSegment?: (segment: CompositionSegment, visual: ReactNode, share: number | null) => ReactNode;
   /** Compact static/export legend; amounts remain exact in accessibility even when hidden in ink. */
-  appearance?: Readonly<{ legend: 'compact'; height?: number; textStyle?: HappierPortableStyle; allowFontScaling?: boolean }>;
+  appearance?: Readonly<{ legend: 'compact'; height?: number; textStyle?: HappierPortableStyle; allowFontScaling?: boolean;
+    /** What each compact legend entry shows beside its name: its share (default) or its amount (`valueFormatter`). */
+    figure?: 'share' | 'value' }>;
 }>;
 /** A supplied whole, never an inferred sum: overlapping categories remain exact rows. */
 export function CompositionStrip(props: CompositionStripProps) {
@@ -48,18 +52,34 @@ export function CompositionStrip(props: CompositionStripProps) {
       cells={cells} decorative size={props.size} testID={props.testID ? `${props.testID}-grid` : undefined} />
     : disjoint ? <HappierProgress theme={props.theme} label={props.label} semantics="none" height={props.appearance?.height ?? 12}
       minimumVisibleFraction={props.minimumVisibleFraction} minimumFillWidth={props.minimumFillWidth} segmentGap={props.segmentGap}
-      renderSegment={props.renderBarSegment ? (_segment, visual, index) => props.renderBarSegment!(props.segments[index]!, visual, shares[index] ?? null) : undefined}
-      segments={props.segments.map((segment, index) => ({ value: shares[index] ?? 0, color: segment.color ?? props.theme.colors.accent }))} /> : null}
-    <View role="list" style={{ flexDirection: 'row', flexWrap: 'wrap', rowGap: props.theme.spacing.small,
+      renderSegment={(_segment, solid, index) => {
+        const segment = props.segments[index]!;
+        // A hatched part is the hatch inside a hairline of its colour (the same mark as a hatched meter fill
+        // and the legend swatch), so the part keeps its edge against the track and reads as "set aside".
+        const visual = segment.pattern === 'hatched' ? <View style={{ height: '100%', overflow: 'hidden', borderWidth: 1,
+          borderColor: segment.color ?? props.theme.colors.accent, borderRadius: props.theme.radii.small }}>
+          <HappierDataHatch theme={props.theme} color={segment.color ?? props.theme.colors.accent} />
+        </View> : solid;
+        return props.renderBarSegment ? props.renderBarSegment(segment, visual, shares[index] ?? null) : visual;
+      }}
+      segments={props.segments.map((segment, index) => ({ value: shares[index] ?? 0,
+        color: segment.pattern === 'hatched' ? 'transparent' : segment.color ?? props.theme.colors.accent }))} /> : null}
+    {props.variant === 'bar' ? null : <View role="list" style={{ flexDirection: 'row', flexWrap: 'wrap', rowGap: props.theme.spacing.small,
       columnGap: props.appearance ? props.theme.spacing.small : undefined }}>
       {props.segments.map((segment, index) => {
         const share = shares[index] ?? null;
         const exact = segment.value === null || !Number.isFinite(segment.value) ? props.unknownLabel ?? 'Unknown' : formatHappierDataValue(segment.value, text.locale);
         const visual = <View role="listitem" accessible accessibilityLabel={[segment.label, exact, props.basis, share === null ? undefined : formatHappierDataShare(share, text.locale)].filter(Boolean).join(', ')}
           style={{ flexDirection: 'row', alignItems: 'center', gap: props.theme.spacing.xsmall }}>
-          <View style={{ width: 8, height: 8, borderRadius: props.theme.radii.small, backgroundColor: segment.color ?? props.theme.colors.accent }} />
+          {segment.pattern === 'hatched' ? <View style={{ width: 8, height: 8, borderRadius: props.theme.radii.small, overflow: 'hidden', borderWidth: 1,
+            borderColor: segment.color ?? props.theme.colors.accent }}><HappierDataHatch theme={props.theme} color={segment.color ?? props.theme.colors.accent} /></View>
+            : <View style={{ width: 8, height: 8, borderRadius: props.theme.radii.small, backgroundColor: segment.color ?? props.theme.colors.accent }} />}
           {segment.label ? <HappierText allowFontScaling={props.appearance?.allowFontScaling} style={{ ...text.caption, ...props.appearance?.textStyle, flexShrink: 1 }}>{segment.label}</HappierText> : null}
-          {share === null ? null : props.appearance ? <HappierText allowFontScaling={props.appearance.allowFontScaling}
+          {props.appearance?.figure === 'value' ? segment.value === null || !Number.isFinite(segment.value) ? null
+            : <HappierText allowFontScaling={props.appearance.allowFontScaling} style={{ ...text.captionStrong, ...props.appearance.textStyle }} tabularNumbers>
+              {props.valueFormatter?.(segment.value) ?? exact}
+            </HappierText>
+          : share === null ? null : props.appearance ? <HappierText allowFontScaling={props.appearance.allowFontScaling}
             style={{ ...text.captionStrong, ...props.appearance.textStyle }} tabularNumbers>
             {props.shareFormatter?.(share) ?? formatHappierDataShare(share, text.locale)}
           </HappierText> : <View style={{ borderRadius: props.theme.radii.small, paddingHorizontal: props.theme.spacing.xsmall,
@@ -72,6 +92,6 @@ export function CompositionStrip(props: CompositionStripProps) {
           {props.renderSegment?.(segment, visual, share) ?? visual}
         </View>;
       })}
-    </View>
+    </View>}
   </View>;
 }

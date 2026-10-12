@@ -116,7 +116,31 @@ export type HappierCollectionSectionsInput<Item> = Readonly<{
   order?: (left: Item, right: Item) => number;
   /** Window-local: coverage is reported by `window`, never implied. */
   filter?: (item: Item) => boolean;
+  /**
+   * The item's parent row (same group), for a nested table: each group flattens depth-first, a parent's
+   * descendants after it, siblings in order. A parent outside the items or in another group makes a root.
+   */
+  parentKey?: (item: Item) => HappierCollectionKey | null;
 }>;
+
+/** A row's place in its group's tree; present only when the Collection nests (`parentKey`). */
+export type HappierCollectionTreeNode = Readonly<{
+  key: HappierCollectionKey;
+  parentKey: HappierCollectionKey | null;
+  /** Ancestor count: 0 for an owner. */
+  depth: number;
+  /** Children listed in this (narrowed) window. */
+  childCount: number;
+  /** Position among its listed siblings, 1-based, and their count. */
+  posInSet: number;
+  setSize: number;
+  /** Listed only to place a match below it: the item itself does not match the filter. */
+  context: boolean;
+  /** The filter narrows inside it, so it reads as open while the narrowing lasts. */
+  held: boolean;
+}>;
+
+export type HappierCollectionTree = ReadonlyMap<HappierCollectionKey, HappierCollectionTreeNode>;
 
 /**
  * The one identity rule for every Collection surface: keys are unique, so a presentation can key its
@@ -160,10 +184,126 @@ export function narrowHappierCollectionGroups<Group, Item>(
 export function deriveHappierCollectionSections<Item>(
   input: HappierCollectionSectionsInput<Item>,
 ): readonly HappierCollectionSection<Item>[] {
+  return deriveHappierCollectionTree(input).sections;
+}
+
+/**
+ * Items → sections, and with `parentKey` each section's tree: a filter keeps a match's ancestors as context
+ * (held open, so the match stays inside its owner) and never adds a matching parent's other children.
+ */
+export function deriveHappierCollectionTree<Item>(input: HappierCollectionSectionsInput<Item>): Readonly<{
+  sections: readonly HappierCollectionSection<Item>[];
+  tree: HappierCollectionTree | null;
+}> {
+  if (input.parentKey === undefined) return { sections: deriveFlatSections(input), tree: null };
   admitHappierCollectionKeys(input.items.map(input.keyOf), 'Collection items');
+  const { keyOf, parentKey } = input;
+  const byKey = new Map(input.items.map((item) => [keyOf(item), item]));
+  const groupOf = (item: Item) => input.groups?.groupOf(item) ?? '';
+  const parentOf = new Map<HappierCollectionKey, HappierCollectionKey | null>();
+  for (const item of input.items) {
+    const key = keyOf(item);
+    const parent = parentKey(item);
+    const parentItem = parent === null ? undefined : byKey.get(parent);
+    parentOf.set(key, parentItem !== undefined && parent !== key && groupOf(parentItem) === groupOf(item) ? parent : null);
+  }
+  // A cycle (a stale parent reported by the caller) roots its first member rather than hiding the loop.
+  for (const key of parentOf.keys()) {
+    const seen = new Set<HappierCollectionKey>([key]);
+    for (let parent = parentOf.get(key) ?? null; parent !== null; parent = parentOf.get(parent) ?? null) {
+      if (seen.has(parent)) { parentOf.set(key, null); break; }
+      seen.add(parent);
+    }
+  }
+  const allChildren = new Map<HappierCollectionKey, HappierCollectionKey[]>();
+  for (const [key, parent] of parentOf) {
+    if (parent !== null) (allChildren.get(parent) ?? allChildren.set(parent, []).get(parent)!).push(key);
+  }
+  const filter = input.filter;
+  const listed = new Set(filter === undefined ? parentOf.keys() : input.items.filter(filter).map(keyOf));
+  const context = new Set<HappierCollectionKey>();
+  if (filter !== undefined) {
+    for (const key of [...listed]) {
+      for (let parent = parentOf.get(key) ?? null; parent !== null && !listed.has(parent); parent = parentOf.get(parent) ?? null) {
+        listed.add(parent);
+        context.add(parent);
+      }
+    }
+  }
+  const narrowed = new Map<HappierCollectionKey, boolean>();
+  const isNarrowed = (key: HappierCollectionKey): boolean => {
+    const known = narrowed.get(key);
+    if (known !== undefined) return known;
+    const result = (allChildren.get(key) ?? []).some((child) => !listed.has(child) || isNarrowed(child));
+    narrowed.set(key, result);
+    return result;
+  };
+  const items = input.items.filter((item) => listed.has(keyOf(item)));
+  const ordered = input.order ? [...items].sort(input.order) : items;
+  const tree = new Map<HappierCollectionKey, HappierCollectionTreeNode>();
+  const flatten = (rows: readonly Item[]): Item[] => {
+    const childrenOf = new Map<HappierCollectionKey | null, Item[]>();
+    for (const item of rows) {
+      const parent = parentOf.get(keyOf(item)) ?? null;
+      (childrenOf.get(parent) ?? childrenOf.set(parent, []).get(parent)!).push(item);
+    }
+    const out: Item[] = [];
+    const visit = (siblings: readonly Item[], parent: HappierCollectionKey | null, depth: number) => {
+      siblings.forEach((item, index) => {
+        const key = keyOf(item);
+        const children = childrenOf.get(key) ?? [];
+        tree.set(key, {
+          key,
+          parentKey: parent,
+          depth,
+          childCount: children.length,
+          posInSet: index + 1,
+          setSize: siblings.length,
+          context: context.has(key),
+          held: filter !== undefined && children.length > 0 && (context.has(key) || isNarrowed(key)),
+        });
+        out.push(item);
+        visit(children, key, depth + 1);
+      });
+    };
+    visit(childrenOf.get(null) ?? [], null, 0);
+    return out;
+  };
+  return { sections: deriveFlatSections({ ...input, items: ordered, filter: undefined, order: undefined }, flatten), tree };
+}
+
+/**
+ * The rows a nested table shows: every row whose ancestors are all open (opened by the reader, or held open by
+ * the narrowing), in the sections' order.
+ */
+export function resolveHappierCollectionTreeShown(
+  tree: HappierCollectionTree,
+  openBranches: ReadonlySet<HappierCollectionKey>,
+  key: HappierCollectionKey,
+): boolean {
+  for (let parent = tree.get(key)?.parentKey ?? null; parent !== null; parent = tree.get(parent)?.parentKey ?? null) {
+    if (!isHappierCollectionTreeBranchOpen(tree, openBranches, parent)) return false;
+  }
+  return true;
+}
+
+export function isHappierCollectionTreeBranchOpen(
+  tree: HappierCollectionTree,
+  openBranches: ReadonlySet<HappierCollectionKey>,
+  key: HappierCollectionKey,
+): boolean {
+  const node = tree.get(key);
+  return node !== undefined && node.childCount > 0 && (node.held || openBranches.has(key));
+}
+
+function deriveFlatSections<Item>(
+  input: HappierCollectionSectionsInput<Item>,
+  arrange: (rows: readonly Item[]) => readonly Item[] = (rows) => rows,
+): readonly HappierCollectionSection<Item>[] {
+  if (input.parentKey === undefined) admitHappierCollectionKeys(input.items.map(input.keyOf), 'Collection items');
   const filtered = input.filter ? input.items.filter(input.filter) : input.items;
   const ordered = input.order ? [...filtered].sort(input.order) : filtered;
-  if (!input.groups) return [{ group: null, items: ordered }];
+  if (!input.groups) return [{ group: null, items: arrange(ordered) }];
 
   const byGroup = new Map<string, Item[]>();
   for (const group of input.groups.axis) byGroup.set(group.key, []);
@@ -173,7 +313,7 @@ export function deriveHappierCollectionSections<Item>(
     if (!bucket) throw new Error(`Collection item "${input.keyOf(item)}" names undeclared group "${groupKey}".`);
     bucket.push(item);
   }
-  const sections = input.groups.axis.map((group): HappierCollectionSection<Item> => ({ group, items: byGroup.get(group.key) ?? [] }));
+  const sections = input.groups.axis.map((group): HappierCollectionSection<Item> => ({ group, items: arrange(byGroup.get(group.key) ?? []) }));
   if (input.groups.retainEmpty) return sections;
   return narrowHappierCollectionGroups(
     sections,

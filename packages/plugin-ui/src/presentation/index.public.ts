@@ -25,6 +25,8 @@ export {
   type HappierDecisionBarProps,
 } from './interaction/DecisionBar.js';
 export * from './interaction/companionReleaseMotion.js';
+export { HappierMotionFeedback, type MotionFeedbackProps } from './interaction/MotionFeedback.js';
+export { HappierComposerChip, type HappierComposerChipProps } from './interaction/ComposerChip.js';
 export {
   HappierApprovalPromptChrome,
   type HappierApprovalPromptChromeProps,
@@ -189,7 +191,16 @@ export type {
 export {
   HAPPIER_ICON_BUTTON_SIZE,
   resolveHappierIconButtonChrome,
+  resolveHappierIconButtonRadius,
 } from './interaction/iconButtonChrome.js';
+export {
+  HAPPIER_PAGE_ROW_TOUCH_MIN_HEIGHT_PX,
+  resolveHappierPageRowMetrics,
+  resolveHappierPageRowDensityInput,
+  type HappierPageRowDensity,
+  type HappierPageRowShape,
+  type HappierPageRowMetrics,
+} from './layout/pageRowMetrics.js';
 export {
   HappierListDetailLayout,
   type HappierListDetailLayoutProps,
@@ -212,6 +223,8 @@ export {
   type HappierCollectionGrouping,
   type HappierCollectionKey,
   type HappierCollectionSection,
+  type HappierCollectionTree,
+  type HappierCollectionTreeNode,
   type HappierCollectionVisitMemory,
   type HappierCollectionWindow,
 } from './collection/collectionModel.js';
@@ -282,6 +295,13 @@ export {
   type HappierDisclosureProps,
 } from './collection/Disclosure.js';
 export {
+  HappierCountedDisclosure,
+  type HappierCountedDisclosureContentProps,
+  type HappierCountedDisclosureFrameProps,
+  type HappierCountedDisclosureHeaderState,
+  type HappierCountedDisclosureProps,
+} from './collection/CountedDisclosure.js';
+export {
   HAPPIER_DISCLOSURE_CHEVRON_METRICS,
   HappierChevron,
   HappierDisclosureChevron,
@@ -296,9 +316,22 @@ export {
 export {
   HAPPIER_PAGE_METRICS,
   isHappierPageRowNarrow,
+  isHappierPageRowAccessoryStacked,
+  HAPPIER_PAGE_ADAPTIVE_ACCESSORY_MAX_ROW_SHARE,
   resolveHappierPageBackPlacement,
   type HappierPageBackPlacement,
 } from './layout/pageMetrics.js';
+export {
+  HAPPIER_VIEWPORT_CLASS_MIN_EDGE_BREAKPOINTS_PX,
+  resolveHappierViewportClass,
+  resolveHappierViewportMinEdgePx,
+  type HappierViewportClass,
+} from './layout/viewportClass.js';
+export {
+  HappierPageRowFieldLayoutContext,
+  type HappierPageRowFieldLayout,
+} from './layout/pageRowField.js';
+export { resolveHappierPageRowFieldMaxWidth } from './collection/List.js';
 export {
   HAPPIER_PAGE_TEXT,
   happierPageTextMetrics,
@@ -315,6 +348,12 @@ export {
   type HappierPageHeaderProps,
   type HappierPageHeaderTextRender,
 } from './layout/PageHeader.js';
+export {
+  normalizeHappierPageOperations,
+  readHappierPageOperation,
+  type HappierPageOperation,
+  type HappierPageOperationTextResolver,
+} from './layout/pageOperations.js';
 export {
   HappierPageSectionContext,
   HappierPageSectionHeader,
@@ -371,6 +410,7 @@ export {
   HAPPIER_META_COLUMN_STYLE,
   HAPPIER_META_COLUMN_V1,
 } from './text/metaColumn.js';
+export { HAPPIER_TYPE_SCALE, HAPPIER_TYPE_WEIGHT, resolveHappierTypeScale, type HappierTypeRole, type HappierTypeEmphasis, type HappierTypeScaleStep } from './text/typeScale.js';
 export {
   resolveHappierDiffViewerRequest,
   type HappierDiffViewerRequest,
@@ -429,12 +469,31 @@ export {
   HappierSkeletonRows,
   type HappierSkeletonBlockProps,
   type HappierSkeletonRowsProps,
+  type HappierSkeletonRowGeometry,
 } from './feedback/Skeleton.js';
 export {
   HappierStatusDot,
   type HappierStatusDotProps,
 } from './status/StatusDot.js';
 export { HappierStatus, type HappierStatusProps } from './status/Status.js';
+export {
+  HappierRowActionRevealSlot,
+  type HappierRowActionRevealSlotProps,
+} from './collection/RowActionRevealSlot.js';
+export {
+  HappierDiffStat,
+  formatHappierDiffStat,
+  type HappierDiffStatKind,
+  type HappierDiffStatProps,
+  type HappierDiffStatTextProps,
+} from './content/DiffStat.js';
+export {
+  HappierWidgetGlanceRow,
+  type HappierWidgetGlanceRowColors,
+  type HappierWidgetGlanceRowProps,
+  type HappierWidgetGlanceRowSpace,
+  type HappierWidgetGlanceRowTextProps,
+} from './layout/WidgetGlanceRow.js';
 export {
   describeHappierDataChart,
   formatHappierDataShare,
@@ -446,6 +505,8 @@ export {
   type HappierDataPoint,
   type HappierDataValue,
 } from './data/dataModel.js';
+export { formatHappierDataBytes, formatHappierDataBytesParts, type HappierDataBytesKind } from './data/dataModel.js';
+export { HAPPIER_SERIES_RAMP_ALPHAS, mixHappierColorOverPaper, resolveHappierSeriesRampColor } from './data/dataModel.js';
 export { HAPPIER_DATA_METRICS } from './data/dataText.js';
 export {
   HappierDataMetric,
@@ -462,6 +523,14 @@ export { CapacityBar, type CapacityBarProps } from './data/CapacityBar.js';
 export { RankedRows, type RankedRowsProps } from './data/RankedRows.js';
 export { CompositionStrip, type CompositionStripProps, type CompositionSegment } from './data/CompositionStrip.js';
 export { StackedSeriesChart, type StackedSeriesChartProps, type StackedSeriesBand } from './data/StackedSeriesChart.js';
+export { CoreLoadBars, type CoreLoadBarsProps, type CoreLoadBar } from './data/CoreLoadBars.js';
+// Whole-disk Storage chart forms (plan 40 §4.11): Map (squarified treemap) and Rings (sunburst) with their pure layouts.
+export { Treemap, type HappierChartPart, type HappierTreemapProps } from './data/Treemap.js';
+export { Sunburst, type HappierSunburstProps } from './data/Sunburst.js';
+export { layoutHappierTreemap, squarifyHappierTreemap, createHappierTreemapHitGrid, HAPPIER_TREEMAP_SMALLER_SUFFIX,
+  type HappierTreemapNode, type HappierTreemapTile, type HappierTreemapRect, type HappierTreemapLayoutOptions } from './data/treemapLayout.js';
+export { layoutHappierSunburst, hitHappierSunburst, HAPPIER_SUNBURST_SMALLER_SUFFIX,
+  type HappierSunburstNode, type HappierSunburstArc, type HappierSunburstRing, type HappierSunburstLayoutOptions } from './data/sunburstLayout.js';
 export { BurnUpChart, type BurnUpChartProps } from './data/BurnUpChart.js';
 export { Heatmap, resolveFirstFullyVisibleColumn, type HeatmapProps, type HappierGridAxis, type HappierGridCell, type HappierGridFrame } from './data/Heatmap.js';
 export { DotGrid, type DotGridProps } from './data/DotGrid.js';
@@ -599,6 +668,7 @@ export {
   type HappierPressableState,
   type HappierPressableStyleState,
 } from './interaction/Pressable.js';
+export { HappierTextLinkButton, type HappierTextLinkButtonProps } from './interaction/TextLinkButton.js';
 export {
   HAPPIER_FOCUS_RING_DELEGATED_STYLE,
   HAPPIER_FOCUS_RING_V1,
@@ -610,6 +680,7 @@ export {
 export {
   resolveHappierMenuKeyAction,
   HAPPIER_MENU_ROW_METRICS,
+  HAPPIER_MENU_ROW_TEXT,
   resolveHappierMenuContent,
   resolveHappierMenuRadioGroups,
   resolveHappierMenuSelection,
@@ -653,6 +724,18 @@ export {
   type HappierInfoTileProps,
   type HappierStateSize,
 } from './state/InfoState.js';
+export {
+  HappierSurfaceState,
+  HappierSurfaceStateLiveLine,
+  resolveHappierSurfaceStateQuiet,
+  type HappierSurfaceStateAction,
+  type HappierSurfaceStateBindings,
+  type HappierSurfaceStateLive,
+  type HappierSurfaceStateProps,
+  type HappierSurfaceStateQuietMetrics,
+  type HappierSurfaceStateSize,
+  type HappierSurfaceStateTextRole,
+} from './state/SurfaceState.js';
 export {
   formatHappierAsOfTime,
   resolveHappierFreshnessText,
@@ -826,6 +909,7 @@ export {
   HappierTextField,
   HappierToggle,
   HappierValidationMessage,
+  planHappierSelectOptions,
   resolveHappierFormPending,
   useHappierFormSubmission,
   type HappierFieldProps,
@@ -839,7 +923,10 @@ export {
 export {
   patchHappierActionInputPath,
   readHappierActionInputPath,
+  HAPPIER_SEGMENTED_CHOICES_MAX,
+  HAPPIER_SEGMENTED_LABEL_MAX_CHARS,
   resolveHappierActionFieldPresentation,
+  resolveHappierChoiceControl,
   writeHappierActionInputPath,
   type HappierActionFieldPresentation,
 } from './form/actionInputFields.js';
@@ -927,6 +1014,7 @@ export {
   type HappierFieldBoxLabel,
   type HappierFieldBoxTriggerProps,
   type HappierFieldTextBoxProps,
+  type HappierFieldTextPresentation,
 } from './form/FieldBox.js';
 export {
   filterHappierFieldDraft,
@@ -1022,12 +1110,14 @@ export {
 export { HappierFactLine, joinHappierFacts, type HappierFactLineProps } from './work/FactLine.js';
 export { HappierBreadcrumb, type HappierBreadcrumbItem, type HappierBreadcrumbProps } from './navigation/Breadcrumb.js';
 export {
+  HAPPIER_WORK_PAGE_ROW_METRICS,
   HappierWorkRowShell,
   HappierWorkStatusWord,
   HappierWorkSummary,
   type HappierWorkRowShellProps,
   type HappierWorkSummaryPhase,
   type HappierWorkSummaryProps,
+  type HappierWorkRowDensity,
 } from './work/WorkRow.js';
 export {
   HAPPIER_WORK_UPDATE_CARD_FACT_ICON_SIZE_PX,
@@ -1037,3 +1127,30 @@ export {
   type HappierWorkUpdateCardProps,
   type HappierWorkUpdateCardSurface,
 } from './work/WorkUpdateCard.js';
+export { HappierTriggerRow, type HappierTriggerRowProps, type HappierTriggerRowHost, type HappierTriggerRowBodyProps, type HappierTriggerRowToggleProps } from './work/TriggerRow.js';
+export { HappierProvenanceChip, type HappierProvenanceChipProps } from './work/ProvenanceChip.js';
+export {
+  HappierShareRowAction, HappierShareLevelControl, HappierShareGrantRow,
+  type HappierShareAction, type HappierShareChoiceProps, type HappierShareHost, type HappierShareTextProps,
+  type HappierShareRowActionProps, type HappierShareLevelControlProps,
+  type HappierShareGrantRemoval, type HappierShareGrantRowProps,
+} from './sharing/ShareGrantRow.js';
+export {
+  HappierShareSheet, HappierShareHelp,
+  type HappierShareSheetProps, type HappierShareSheetButtonProps, type HappierShareHelpProps,
+} from './sharing/ShareSheet.js';
+export {
+  HAPPIER_SETTING_INPUT_STYLE,
+  HAPPIER_SETTING_VALUE_SLOT_METRICS,
+  HappierSettingStatusLine,
+  HappierSettingValueSlot,
+  type HappierSettingRowLayout,
+  type HappierSettingStatusLineProps,
+  type HappierSettingValueSlotProps,
+} from './form/SettingField.js';
+export {
+  HappierLinkDelivery,
+  type HappierLinkDeliveryBindings,
+  type HappierLinkDeliveryButtonProps,
+  type HappierLinkDeliveryProps,
+} from './sharing/LinkDelivery.js';

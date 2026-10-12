@@ -8,11 +8,13 @@ import type {
   PluginUiDetailsPanePresentation,
   PluginUiPresentationHost,
 } from '../presentationHost/context.js';
+import { HAPPIER_PAGE_METRICS } from '../presentation/layout/pageMetrics.js';
 import { mountThroughReactNativeWeb } from '../rnwMount.testSupport.js';
 import { createHostApiStub, createSurfaceContext } from '../surfaceFixture.testSupport.js';
-import { DetailsPane } from './DetailsPane.js';
+import { DetailsPane, DetailsPaneFooter } from './DetailsPane.js';
 import { PluginUiProviderInternal, usePluginTheme, usePluginTranslation, useSurfaceContext } from './PluginUiProvider.js';
 import { Text } from './Text.js';
+import { ScrollArea } from './Layout.js';
 
 /**
  * Shell extensibility O6: `DetailsPane` renders its children in the page's app details pane, which the host draws
@@ -64,13 +66,18 @@ function Probe() {
   );
 }
 
-function mountWithPane(children: ReactNode, pane: ReturnType<typeof createPaneHost> | null) {
-  const context = createSurfaceContext();
+function mountWithPane(
+  children: ReactNode,
+  pane: ReturnType<typeof createPaneHost> | null,
+  options: Readonly<{ context?: ReturnType<typeof createSurfaceContext>; host?: Partial<PluginUiPresentationHost> }> = {},
+) {
+  const context = options.context ?? createSurfaceContext();
   const presentationHost = {
     renderMarkdown: () => null,
     renderPopover: () => null,
     renderIcon: () => null,
     ...(pane ? { detailsPane: pane.binding } : {}),
+    ...options.host,
   } as unknown as PluginUiPresentationHost;
   const Slot = pane?.Slot ?? (() => null);
   return mountThroughReactNativeWeb(
@@ -88,6 +95,26 @@ async function flush() {
 }
 
 describe('DetailsPane (host details pane binding)', () => {
+  it('lays a pane body out on the pane, not on the page column the surface was mounted in', async () => {
+    const pane = createPaneHost(true);
+    const view = mountWithPane(
+      <DetailsPane open title="Entry #2481" onClose={() => undefined}>
+        <ScrollArea><Text testID="pane-body" value="Detail body" /></ScrollArea>
+      </DetailsPane>,
+      pane,
+      { host: { pageChrome: { showsTitle: false, columnMaxWidthPx: 850 } } },
+    );
+    await flush();
+
+    const body = view.container.querySelector<HTMLElement>('[data-testid="pane-body"]')!;
+    expect(body).not.toBeNull();
+    // No ancestor inside the pane is clamped to the page's 850 px column.
+    for (let node: HTMLElement | null = body; node !== null && node.getAttribute('data-testid') !== 'host-pane'; node = node.parentElement) {
+      expect(node.style.maxWidth).not.toBe('850px');
+    }
+    view.unmount();
+  });
+
   it('renders the open detail in the host pane, outside the plugin tree, with the plugin context intact', async () => {
     const pane = createPaneHost(true);
     const onClose = vi.fn();
@@ -159,6 +186,70 @@ describe('DetailsPane (host details pane binding)', () => {
     const sourceMark = inPage.querySelector('[data-testid="source-mark"]');
     expect(sourceMark).not.toBeNull();
     expect(inPage.textContent).toContain('tidewater/checkout-web #2476 · You opened 42m ago');
+    view.unmount();
+  });
+
+  it('pins a pushed detail footer below the story, above the home indicator, and leaves the wide pane without one', async () => {
+    const context = createSurfaceContext({ safeAreaInsets: { top: 47, right: 0, bottom: 34, left: 0 } });
+    const detail = (
+      <DetailsPane open title="Entry #2476" onClose={() => undefined} testID="entry-pane"
+        footer={<RNText testID="footer-primary">Fix with Claude</RNText>}>
+        <RNText testID="story">The ask</RNText>
+      </DetailsPane>
+    );
+    const pushed = mountWithPane(detail, null, { context });
+    await flush();
+    const dialog = pushed.container.querySelector<HTMLElement>('[data-testid="entry-pane"]')!;
+    const story = dialog.querySelector<HTMLElement>('[data-testid="story"]')!;
+    const primary = dialog.querySelector<HTMLElement>('[data-testid="footer-primary"]');
+    expect(primary).not.toBeNull();
+    // Outside the region the story scrolls in, and after it: the story never runs under the primary.
+    const region = story.parentElement!;
+    expect(region.contains(primary)).toBe(false);
+    expect(story.compareDocumentPosition(primary!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const footer = dialog.querySelector<HTMLElement>('[data-testid="entry-pane:footer"]')!;
+    expect(footer.contains(primary)).toBe(true);
+    expect(getComputedStyle(footer).paddingBottom).toBe('34px');
+    pushed.unmount();
+
+    // On a phone the host keeps it above the keyboard; its home-indicator inset tucks under the keyboard.
+    const sticky: Array<number> = [];
+    const keyboardAware = mountWithPane(detail, null, {
+      context,
+      host: {
+        renderKeyboardStickyFooter: (input) => {
+          sticky.push(input.openedOffset);
+          return <div data-testid="keyboard-sticky">{input.children}</div>;
+        },
+      },
+    });
+    await flush();
+    expect(keyboardAware.container.querySelector('[data-testid="keyboard-sticky"] [data-testid="footer-primary"]')).not.toBeNull();
+    expect(sticky.at(-1)).toBe(34 - HAPPIER_PAGE_METRICS.groupSeparatorGapPx);
+    keyboardAware.unmount();
+
+    // Beside the page the primary lives in the pane's header; the footer is not drawn.
+    const pane = createPaneHost(true);
+    const wide = mountWithPane(detail, pane, { context });
+    await flush();
+    expect(wide.container.querySelector('[data-testid="host-pane"] [data-testid="story"]')).not.toBeNull();
+    expect(wide.container.querySelector('[data-testid="footer-primary"]')).toBeNull();
+    expect(pane.read()).not.toHaveProperty('footer');
+    wide.unmount();
+  });
+
+  it('draws the footer slot a detail places itself: page ground, ink hairline, home-indicator inset', async () => {
+    const context = createSurfaceContext({ safeAreaInsets: { top: 47, right: 0, bottom: 34, left: 0 } });
+    const view = mountWithPane(
+      <DetailsPaneFooter testID="slot"><RNText testID="slot-primary">Fix with Claude</RNText></DetailsPaneFooter>,
+      null,
+      { context },
+    );
+    await flush();
+    const footer = view.container.querySelector<HTMLElement>('[data-testid="slot"]')!;
+    expect(footer.contains(view.container.querySelector('[data-testid="slot-primary"]'))).toBe(true);
+    expect(getComputedStyle(footer).paddingBottom).toBe('34px');
+    expect(getComputedStyle(footer).borderTopWidth).not.toBe('0px');
     view.unmount();
   });
 

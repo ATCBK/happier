@@ -47,7 +47,7 @@ function NativeCollectionVirtualizer<Item>({ request }: Readonly<{ request: Coll
   ), [renderHeader, sectionIndices]);
   const props = {
     accessibilityRole: request.accessibilityRole,
-    'aria-rowcount': request.role === 'grid' ? request.rowCount : undefined,
+    'aria-rowcount': request.role === 'grid' || request.role === 'treegrid' ? request.rowCount : undefined,
     'aria-multiselectable': request.multiSelectable,
     accessibilityCollection: request.nativeCollection,
     accessibilityLabel: request.accessibilityLabel,

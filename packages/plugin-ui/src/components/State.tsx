@@ -14,12 +14,17 @@ import {
   HappierFreshnessLine,
   HappierSurfaceStateFrame,
   HappierStateLine,
-  HappierStateDetails,
   resolveHappierStateAnnouncement,
   resolveHappierStateFailureGlyph,
   HAPPIER_STATE_LINE_METRICS,
   type HappierStateSize,
+  type HappierSurfaceStateKind,
 } from '../presentation/state/InfoState.js';
+import {
+  HappierSurfaceState,
+  type HappierSurfaceStateAction,
+  type HappierSurfaceStateBindings,
+} from '../presentation/state/SurfaceState.js';
 import { useHappierPageChrome } from '../presentation/layout/pageChrome.js';
 import { useHappierUiAnimationActivityInternal, useOptionalHappierUiPalette } from '../environment/context.js';
 import {
@@ -35,6 +40,7 @@ import { PluginUiIconGlyph, type IconName } from './Icon.js';
 import { usePluginTheme, usePluginTranslation } from './PluginUiProvider.js';
 import { resolveAuthorText } from './resolveAuthorText.js';
 import { Spinner } from './Spinner.js';
+import { Button } from './Button.js';
 import { HappierSpinner } from '../presentation/feedback/Spinner.js';
 
 const STATE_LOADING_TRANSLATION_KEY = 'happier.plugin-ui.state.loading';
@@ -42,6 +48,7 @@ const STATE_EMPTY_TRANSLATION_KEY = 'happier.plugin-ui.state.empty';
 const STATE_ERROR_TRANSLATION_KEY = 'happier.plugin-ui.state.error';
 const STATE_DETAILS_TRANSLATION_KEY = 'happier.plugin-ui.state.details';
 const STATE_AS_OF_TRANSLATION_KEY = 'happier.plugin-ui.state.asOf';
+const STATE_RETRY_TRANSLATION_KEY = 'happier.plugin-ui.state.retry';
 
 /**
  * The size a state is drawn at: the author's, else the container the host mounted the surface in
@@ -143,6 +150,13 @@ export type ErrorStateProps = StateCopyProps & Readonly<{
    * never the sentence: `title` and `description` say what failed in words.
    */
   details?: string;
+  /**
+   * The one recovery: draws a Retry button (a host-localized "Retry", or `retryLabel`) under the copy,
+   * or an inline link in a `line`. A returned promise keeps it pending until the retry settles.
+   * Ignored when a custom `action` is given.
+   */
+  onRetry?: () => unknown;
+  retryLabel?: string;
 }>;
 
 function useResolvedCopy({ title, titleKey, description, descriptionKey }: StateCopyProps) {
@@ -181,22 +195,18 @@ function SkeletonRowsLoadingState(props: LoadingStateProps & Readonly<{ rows: nu
 }
 
 function SpinnerLoadingState(props: LoadingStateProps): ReactElement {
-  const { translate, title, description } = useResolvedCopy(props);
-  const size = useStateSize(props.size);
-  if (props.layout === 'line') return <HappierStateLine testID={props.testID} accessibilitySemantics={props.accessibilitySemantics} icon={<Spinner size={HAPPIER_STATE_LINE_METRICS.glyphPx - 2} accessibilityLabel={title ?? translate(STATE_LOADING_TRANSLATION_KEY, 'Loading')} />} action={props.action}>
-    <HappierText tone="secondary" style={HAPPIER_STATE_LINE_METRICS.text}>{title}{title && description ? ' · ' : null}{description}</HappierText>
-  </HappierStateLine>;
   return (
-    <HappierSurfaceStateFrame testID={props.testID} size={size} accessibilitySemantics={props.accessibilitySemantics}>
-    <HappierInfoState action={props.action} size={size}>
-      <HappierInfoTile
-        icon={<View style={{ marginBottom: size ? HAPPIER_STATE_SIZE_METRICS[size].glyphGapPx : 0 }}><Spinner size={size ? HAPPIER_STATE_SIZE_METRICS[size].glyphPx - 4 : 28} accessibilityLabel={title ?? translate(STATE_LOADING_TRANSLATION_KEY, 'Loading')} /></View>}
-        title={title}
-        description={description}
-        size={size}
-      />
-    </HappierInfoState>
-    </HappierSurfaceStateFrame>
+    <SurfaceStateAdapter
+      kind="loading"
+      testID={props.testID}
+      title={props.title}
+      titleKey={props.titleKey}
+      description={props.description}
+      descriptionKey={props.descriptionKey}
+      size={props.layout === 'line' ? 'line' : props.size}
+      accessibilitySemantics={props.accessibilitySemantics}
+      actionSlot={props.action}
+    />
   );
 }
 
@@ -225,7 +235,7 @@ export function EmptyState(props: EmptyStateProps): ReactElement {
         testID={props.testID}
         accessibilitySemantics={props.accessibilitySemantics}
         action={props.action ?? (unavailableReason ? (
-          <HappierText variant="caption" tone="secondary">{unavailableReason}</HappierText>
+          <HappierText variant="micro" tone="secondary">{unavailableReason}</HappierText>
         ) : undefined)}
       ><HappierText tone="secondary" style={HAPPIER_STATE_LINE_METRICS.text}>{title}{title && description ? ' · ' : null}{description}</HappierText></HappierStateLine>
     );
@@ -324,7 +334,7 @@ export function EmptySlot(props: EmptySlotProps): ReactElement {
       testID={props.testID}
       colors={{ border: palette?.sheetBorder ?? theme.colors.secondaryText, activeFill: theme.colors.control, focusRing: theme.colors.focus }}
       glyph={props.icon ? <PluginUiIconGlyph name={props.icon} size={14} tone="secondary" /> : undefined}
-      label={<HappierText variant="caption" tone="secondary">{text}</HappierText>}
+      label={<HappierText variant="micro" tone="secondary">{text}</HappierText>}
       action={props.action}
       onPress={props.onPress}
       accessibilityLabel={props.accessibilityLabel ?? text}
@@ -365,40 +375,182 @@ function useStateScene(
  * nothing new.
  */
 export function ErrorState(props: ErrorStateProps): ReactElement {
-  const { translate, title, description } = useResolvedCopy(props);
-  const size = useStateSize(props.size);
-  const glyph = resolveHappierStateFailureGlyph(props.kind ?? 'error', props.layout === 'line')!;
-  if (props.layout === 'line') return <HappierStateLine testID={props.testID} accessibilitySemantics={props.accessibilitySemantics} icon={<PluginUiIconGlyph name={glyph} size={HAPPIER_STATE_LINE_METRICS.glyphPx} tone={glyph === 'warning' ? 'warning' : 'muted'} />} action={props.action}>
-    <HappierText tone="secondary" style={HAPPIER_STATE_LINE_METRICS.text}>{title}{title && description ? ' · ' : null}{description}</HappierText>
-  </HappierStateLine>;
-  const state = (
-    <HappierInfoState
-      action={props.action}
-      size={size}
-    >
-      <HappierInfoTile
-        size={size}
-        icon={(
-          <View style={{ marginBottom: size ? HAPPIER_STATE_SIZE_METRICS[size].glyphGapPx : ERROR_STATE_GLYPH_GAP }}>
-            <PluginUiIconGlyph name={glyph} size={size ? HAPPIER_STATE_SIZE_METRICS[size].glyphPx : 32} tone="secondary" />
-          </View>
-        )}
-        title={title}
-        description={description}
-      />
-    </HappierInfoState>
-  );
+  const translate = usePluginTranslation();
+  const retry = props.onRetry && props.action === undefined ? {
+    label: props.retryLabel ?? translate(STATE_RETRY_TRANSLATION_KEY, 'Retry'),
+    onPress: props.onRetry,
+  } : undefined;
   return (
-    <HappierSurfaceStateFrame testID={props.testID} size={size}>
-      <View {...resolveHappierStateAnnouncement(props.accessibilitySemantics)} style={{ width: '100%' }}>
-      {state}
-      </View>
-      {props.details ? <HappierStateDetails testID={props.testID} label={translate(STATE_DETAILS_TRANSLATION_KEY, 'Details')} details={props.details} /> : null}
-    </HappierSurfaceStateFrame>
+    <SurfaceStateAdapter
+      kind={props.kind ?? 'error'}
+      testID={props.testID}
+      title={props.title}
+      titleKey={props.titleKey}
+      description={props.description}
+      descriptionKey={props.descriptionKey}
+      size={props.layout === 'line' ? 'line' : props.size}
+      accessibilitySemantics={props.accessibilitySemantics}
+      details={props.details}
+      action={retry}
+      actionSlot={props.action}
+    />
   );
 }
 
-const ERROR_STATE_GLYPH_GAP = 8;
+/** One way forward from a {@link SurfaceState}. */
+export type SurfaceStateAction = Readonly<{
+  /** Literal label; it is also the control's accessible name. */
+  label?: string;
+  /** A key from this plugin's declared translation bundle; `label` is its fallback. */
+  labelKey?: string;
+  /** A returned promise keeps the control pending until it settles. */
+  onPress: () => unknown;
+  disabled?: boolean;
+  /** Pending work this control did not start. */
+  busy?: boolean;
+  testID?: string;
+}>;
+
+export type SurfaceStateProps = Readonly<{
+  /** What the state is: drives the glyph and whether the one action is filled (empty, success) or quiet. */
+  kind: HappierSurfaceStateKind;
+  title?: string;
+  titleKey?: string;
+  /** The promise, or the cause, in the reader's words. Never a machine code. */
+  description?: string;
+  descriptionKey?: string;
+  /**
+   * The container: `pane`, `details`, `page` or `phone` (Happier's own pane state steps), or `line` for
+   * one quiet sentence among a list's rows. Omit it to use the container the host mounted the surface in.
+   */
+  size?: HappierStateSize | 'line';
+  /** Overrides the kind's glyph. */
+  icon?: IconName;
+  /** The present, under the copy ("Reconnecting · next try in 8 s"); `busy` draws a working ring. */
+  live?: Readonly<{ text: string; busy?: boolean }>;
+  /** A domain summary between the copy and the actions. Never drawn in a `line`. */
+  body?: ReactNode;
+  /** Quiet context for the next action, after the body. */
+  actionCaption?: string;
+  /** The one next step: Retry, Connect, Create the first item. */
+  action?: SurfaceStateAction;
+  /** A quiet second way forward beside it. Never a second primary. */
+  secondaryAction?: SurfaceStateAction;
+  /** A quiet line under the actions: a prerequisite or a reassurance ("Nothing is lost."). */
+  note?: string;
+  noteKey?: string;
+  /** A quiet "How it works" link after the note. */
+  learnMore?: SurfaceStateAction;
+  /** Diagnostic detail behind a collapsed "Details" disclosure on a failure. Never the sentence. */
+  details?: string;
+  /** Static states stay quiet; opt in when a lifecycle transition needs announcing. */
+  accessibilitySemantics?: 'status' | 'alert';
+  testID?: string;
+}>;
+
+/**
+ * The full state composition Happier's own panes use: a calm glyph, the title, the promise or cause, the
+ * present, a domain summary, the one recovery and a quiet second way, a note and the collapsed diagnostic,
+ * in that order — or, as a `line`, one sentence with an inline recovery. `LoadingState` and `ErrorState`
+ * are this component with fewer parts.
+ */
+export function SurfaceState(props: SurfaceStateProps): ReactElement {
+  return <SurfaceStateAdapter {...props} />;
+}
+
+const STATE_DEFAULT_GLYPH: Partial<Record<HappierSurfaceStateKind, IconName>> = {
+  success: 'check',
+  warning: 'warning',
+};
+const UNSIZED_STATE_GLYPH_PX = 32;
+const UNSIZED_STATE_GLYPH_GAP_PX = 8;
+
+function SurfaceStateAdapter(props: SurfaceStateProps & Readonly<{ actionSlot?: ReactNode }>): ReactElement {
+  const translate = usePluginTranslation();
+  const theme = usePluginTheme();
+  const surfaceActivity = usePluginSurfaceActivity();
+  const hostSize = useStateSize(undefined);
+  const size = props.size ?? hostSize;
+  const title = resolveAuthorText(translate, props.title, props.titleKey);
+  const description = resolveAuthorText(translate, props.description, props.descriptionKey);
+  const note = resolveAuthorText(translate, props.note, props.noteKey);
+  const resolveAction = (action: SurfaceStateAction | undefined): HappierSurfaceStateAction | undefined => {
+    if (!action) return undefined;
+    const label = resolveAuthorText(translate, action.label, action.labelKey) ?? '';
+    return { label, onPress: () => action.onPress() as void | Promise<unknown>, disabled: action.disabled, busy: action.busy, testID: action.testID };
+  };
+  const line = size === 'line';
+  const metrics = size && size !== 'line' ? HAPPIER_STATE_SIZE_METRICS[size] : null;
+  const loadingLabel = title ?? translate(STATE_LOADING_TRANSLATION_KEY, 'Loading');
+  const iconName = props.icon ?? resolveHappierStateFailureGlyph(props.kind, line) ?? STATE_DEFAULT_GLYPH[props.kind];
+  const glyph = props.kind === 'loading'
+    ? <Spinner size={line ? HAPPIER_STATE_LINE_METRICS.glyphPx - 2 : metrics ? metrics.glyphPx - 4 : 28} accessibilityLabel={loadingLabel} />
+    : iconName
+      ? <PluginUiIconGlyph
+          name={iconName}
+          size={line ? HAPPIER_STATE_LINE_METRICS.glyphPx : metrics?.glyphPx ?? UNSIZED_STATE_GLYPH_PX}
+          tone={line ? (props.kind === 'error' || props.kind === 'warning' ? 'warning' : 'muted') : 'secondary'}
+        />
+      : undefined;
+  const bindings: HappierSurfaceStateBindings = {
+    renderText: ({ role, metrics: textMetrics, testID, onPress, children }) => {
+      if (role === 'quietLink') {
+        return <HappierText testID={testID} accessibilityRole="link" onPress={onPress} tone="secondary" style={{ textDecorationLine: 'underline' }}>{children}</HappierText>;
+      }
+      if (role === 'lineAction') return <HappierText tone="neutral" style={{ ...textMetrics, fontWeight: '600' }}>{children}</HappierText>;
+      if (role === 'quiet') return <HappierText testID={testID} tone="muted" style={{ ...textMetrics, textAlign: 'center' }}>{children}</HappierText>;
+      return <HappierText testID={testID} tone="secondary" tabularNumbers={role === 'live'} style={textMetrics}>{children}</HappierText>;
+    },
+    renderButton: ({ action, emphasis, tone, testID }) => (
+      <Button
+        testID={testID}
+        title={action.label}
+        variant={emphasis === 'secondary' ? 'plain' : tone === 'filled' ? 'primary' : 'secondary'}
+        size="small"
+        disabled={action.disabled}
+        busy={action.busy}
+        onPress={action.onPress}
+      />
+    ),
+    renderSpinner: (sizePx) => (
+      <HappierSpinner size={sizePx} color={theme.colors.mutedText} animationEnabled={surfaceActivity.active} />
+    ),
+    renderTile: (tile) => (
+      <HappierInfoState action={tile.action} size={tile.size}>
+        <HappierInfoTile
+          size={tile.size}
+          icon={tile.glyph ? (
+            <View style={{ marginBottom: tile.size ? HAPPIER_STATE_SIZE_METRICS[tile.size].glyphGapPx : UNSIZED_STATE_GLYPH_GAP_PX }}>{tile.glyph}</View>
+          ) : undefined}
+          title={title}
+          description={description}
+        />
+      </HappierInfoState>
+    ),
+    detailsLabel: translate(STATE_DETAILS_TRANSLATION_KEY, 'Details'),
+    pressedFill: theme.colors.control,
+  };
+  return (
+    <HappierSurfaceState
+      testID={props.testID}
+      kind={props.kind}
+      size={size}
+      glyph={glyph}
+      lineText={<>{title}{title && description ? ' · ' : null}{description}</>}
+      live={props.live}
+      body={line ? undefined : props.body}
+      actionCaption={props.actionCaption}
+      action={resolveAction(props.action)}
+      secondaryAction={resolveAction(props.secondaryAction)}
+      actionSlot={props.actionSlot}
+      note={note}
+      learnMore={resolveAction(props.learnMore)}
+      diagnosticCode={props.details}
+      accessibilitySemantics={props.accessibilitySemantics}
+      bindings={bindings}
+    />
+  );
+}
 
 export type FreshnessLineProps = Readonly<{
   /** When the content still shown was last read. Omit when the reason alone says it ("Reconnecting…"). */

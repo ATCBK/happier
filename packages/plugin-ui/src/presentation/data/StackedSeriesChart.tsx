@@ -1,16 +1,25 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Animated, View } from 'react-native';
-import { Path, Svg } from 'react-native-svg';
+import { Fragment, useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { Animated, Easing, View } from 'react-native';
+import { Circle, ClipPath, Defs, Line, Path, Pattern, Rect, Svg } from 'react-native-svg';
 
 import type { HappierUiTheme } from '../../environment/types.js';
-import { useOptionalHappierUiAccessibility } from '../../environment/context.js';
+import { useOptionalHappierUiAccessibility, useOptionalHappierUiLocalization } from '../../environment/context.js';
 import { useHappierNativeMinimumInteractiveTargetSize } from '../../environment/interactiveTarget.js';
 import { HappierPressable } from '../interaction/Pressable.js';
 import type { HappierFocusable, HappierLayoutChangeEvent, HappierPortableStyle } from '../portableTypes.js';
 import { HappierText } from '../text/Text.js';
 import { HAPPIER_DATA_METRICS, useHappierDataTextStyles } from './dataText.js';
 import { HappierDataTable } from './DataRows.js';
-import { buildHappierSeriesPath, describeHappierSeriesBucket, describeHappierSeriesCoordinate, formatHappierDataValue, resolveHappierSeriesGeometry, type HappierSeries, type HappierSeriesBucket } from './dataModel.js';
+import { buildHappierSeriesPath, describeHappierSeriesBucket, describeHappierSeriesCoordinate, formatHappierDataValue, resolveHappierSeriesGeometry, resolveHappierSeriesRampColor, type HappierSeries, type HappierSeriesBucket } from './dataModel.js';
+
+/** A line-chart fill between caller-produced bounds; it adds no values or forecast semantics. */
+export type StackedSeriesBand = Readonly<{
+  id: string;
+  lowerSeriesId: string;
+  upperSeriesId: string;
+  color?: string;
+  opacity?: number;
+}>;
 
 export type StackedSeriesChartProps = Readonly<{
   theme: HappierUiTheme;
@@ -29,6 +38,10 @@ export type StackedSeriesChartProps = Readonly<{
   scaleGutter?: number;
   scaleTicks?: readonly Readonly<{ value: number; label: string }>[];
   minimumMaximum?: number;
+  /** A fixed value scale for line and area forms; it must hold every value drawn (a labelled zoom, a mirrored rate scale). */
+  domain?: Readonly<{ min: number; max: number }>;
+  /** Line appearance only. Missing, non-finite or inverted bounds break the fill; isolated points have no area. */
+  bands?: readonly StackedSeriesBand[];
   /** Incumbent host ink consumes the already-built path, not another scale or renderer. */
   renderLinePath?: (path: string, ink: Readonly<{ width: number; height: number; color: string; strokeWidth: number; reducedMotion: boolean }>) => ReactNode;
   renderInk?: (visual: ReactNode, reducedMotion: boolean) => ReactNode;
@@ -41,6 +54,8 @@ export type StackedSeriesChartProps = Readonly<{
   valuesLabel?: string;
   valuesCollapseLabel?: string;
   reducedMotion?: boolean;
+  /** One linear step on a received sample; the host supplies cadence and visibility, never a chart timer. */
+  liveMotion?: Readonly<{ sampleKey: string | number; stepPx: number; durationMs: number; active?: boolean }>;
   /** The host's existing entrance-once and spring grammar; absent means static. */
   barMotion?: Readonly<{
     /** Existing host slot morphs may opt in; semantic bucket identity is the default. */
@@ -62,6 +77,15 @@ export type StackedSeriesChartProps = Readonly<{
   axisTicks?: readonly string[];
   /** One labelled reference level (a typical day): a quiet dotted rule, never a series of its own. */
   reference?: Readonly<{ value: number; label: string }>;
+  /** Quiet background for caller-selected semantic bar slots (for example, weekends). */
+  bucketShading?: readonly Readonly<{ bucketId: string; color?: string; opacity?: number }>[];
+  /** Caller-produced comparison outlines on the observed bar scale, not observations or forecasts.
+   * Missing buckets and non-finite, inverted or out-of-scale bounds have no outline. */
+  barRanges?: readonly Readonly<{ bucketId: string; lower: number; upper: number; label: string }>[];
+  /** Tones only the ink above this level, in the same observed scale as the series. */
+  threshold?: Readonly<{ value: number; label: string; tone: 'warning' | 'error' }>;
+  /** The caller supplies negative values below zero; labels retain their absolute magnitudes. */
+  mirrored?: boolean;
   showAnnotations?: boolean;
   /** A series' own identity mark for the legend, keyed by series id; it follows the colour swatch. */
   leads?: Readonly<Record<string, ReactNode>>;
@@ -95,7 +119,19 @@ export type StackedSeriesPlot = Readonly<{
   centers: readonly number[];
 }>;
 
-function SeriesBar(props: Readonly<{ top: number; height: number; color: string; opacity: number; index: number;
+function HatchPattern(props: Readonly<{ id: string; color: string }>) {
+  return <Pattern id={props.id} width={6} height={6} patternUnits="userSpaceOnUse">
+    <Path d="M-1 1 L1 -1 M0 6 L6 0 M5 7 L7 5" stroke={props.color} strokeWidth={1} strokeOpacity={0.65} />
+  </Pattern>;
+}
+
+function HatchSwatch(props: Readonly<{ ink: string }>) {
+  const id = `hatch-${useId().replace(/:/gu, '')}`;
+  return <Svg width="100%" height="100%"><Defs><HatchPattern id={id} color={props.ink} /></Defs>
+    <Rect width="100%" height="100%" fill={`url(#${id})`} /></Svg>;
+}
+
+function SeriesBar(props: Readonly<{ top: number; height: number; color: string; opacity: number; index: number; fillPattern?: 'hatch'; patternInk: string;
   /** A mark that joins an already drawn chart (a period change) rises from the axis; it never pops in. */
   joining: boolean;
   motion: StackedSeriesChartProps['barMotion']; reducedMotion: boolean; testID?: string }>) {
@@ -117,43 +153,95 @@ function SeriesBar(props: Readonly<{ top: number; height: number; color: string;
     return () => animation?.stop();
   }, [animatedHeight, props.height, props.index, props.motion, props.reducedMotion]);
   const base = { position: 'absolute' as const, width: '100%' as const, backgroundColor: props.color, opacity: props.opacity };
-  if (props.reducedMotion || !props.motion) return <View testID={props.testID} style={{ ...base, top: props.top, height: props.height }} />;
-  return <Animated.View testID={props.testID} style={{ ...base, top: Animated.subtract(props.top + props.height, animatedHeight), height: animatedHeight }} />;
+  const pattern = props.fillPattern === 'hatch' ? <HatchSwatch ink={props.patternInk} /> : null;
+  if (props.reducedMotion || !props.motion) return <View testID={props.testID} style={{ ...base, top: props.top, height: props.height }}>{pattern}</View>;
+  return <Animated.View testID={props.testID} style={{ ...base, top: Animated.subtract(props.top + props.height, animatedHeight), height: animatedHeight }}>{pattern}</Animated.View>;
 }
 
 /** Finite series renderer. All variants share bucket identity, scale, interaction and exact facts. */
+/** A fragment of fewer consecutive samples than this (cut off by gaps) is drawn as a line only: an area under 2 or 3 points is a hard-edged sliver. A chart that is itself that short keeps its area. */
+const MIN_AREA_RUN_SAMPLES = 4;
+
 export function StackedSeriesChart(props: StackedSeriesChartProps) {
+  const patternId = `chart-hatch-${useId().replace(/:/gu, '')}`;
+  const thresholdId = `chart-threshold-${useId().replace(/:/gu, '')}`;
   const text = useHappierDataTextStyles(props.theme);
   const [measuredWidth, setWidth] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [valuesExpanded, setValuesExpanded] = useState(false);
   const accessibility = useOptionalHappierUiAccessibility();
+  const localization = useOptionalHappierUiLocalization();
   const nativeTarget = useHappierNativeMinimumInteractiveTargetSize();
   const reducedMotion = accessibility?.reducedMotion === true || (props.reducedMotion ?? accessibility?.reducedMotion ?? true);
+  const liveOffset = useRef(new Animated.Value(0)).current;
+  const priorLive = useRef({ sampleKey: props.liveMotion?.sampleKey, active: props.liveMotion?.active !== false });
+  useEffect(() => {
+    const motion = props.liveMotion;
+    const previous = priorLive.current;
+    const active = motion?.active !== false;
+    priorLive.current = { sampleKey: motion?.sampleKey, active };
+    liveOffset.stopAnimation();
+    liveOffset.setValue(0);
+    if (!motion || !active || !previous.active || reducedMotion || props.variant === 'bar'
+      || previous.sampleKey === undefined || previous.sampleKey === motion.sampleKey) return;
+    liveOffset.setValue(motion.stepPx);
+    const animation = Animated.timing(liveOffset, { toValue: 0, duration: motion.durationMs, easing: Easing.linear, useNativeDriver: false });
+    animation.start();
+    return () => animation.stop();
+  }, [liveOffset, props.liveMotion?.sampleKey, props.liveMotion?.active, props.liveMotion?.stepPx, props.liveMotion?.durationMs, props.variant, reducedMotion]);
   const controls = useRef(new Map<string, HappierFocusable>());
   // Marks created after the first commit are joining a chart the viewer is already reading.
   const drawn = useRef(false);
   useEffect(() => { drawn.current = true; }, []);
   const width = props.width ?? measuredWidth;
   const inline = props.size === 'inline';
+  // Full charts always offer their exact table, including declarative and N=1 adapters.
+  // Reuse the host-reserved Details label; callers can supply their own localized wording.
+  const valuesLabel = props.valuesLabel ?? (props.size === 'full'
+    ? localization?.translate('happier.plugin-ui.state.details', 'Details') ?? 'Details' : undefined);
   const showAxis = props.showAxis ?? !inline;
   const showLegend = props.showLegend ?? (!inline && props.series.length > 1);
+  // The values toggle is quiet meta: at the legend's trailing end when there is one, else on its own line.
+  const toggleInLegend = showLegend && !props.summary;
+  const valuesToggle = valuesLabel ? <HappierPressable testID={props.testID ? `${props.testID}-values-toggle` : undefined}
+    accessibilityLabel={valuesExpanded ? props.valuesCollapseLabel ?? valuesLabel : valuesLabel}
+    expanded={valuesExpanded} onPress={() => setValuesExpanded((value) => !value)}
+    style={toggleInLegend ? { marginLeft: 'auto' } : { alignSelf: 'flex-start', marginTop: HAPPIER_DATA_METRICS.blockGapPx }}>
+    <HappierText style={text.captionStrong}>{valuesExpanded ? props.valuesCollapseLabel ?? valuesLabel : valuesLabel}</HappierText>
+  </HappierPressable> : null;
   const height = Math.max(1, (props.viewportHeight ?? (inline ? 16 : props.size === 'tile' ? 64 : 150)));
   const peakInset = props.showPeakValue ? 32 : 0;
   // Stacked areas part on a thin paper seam (lab kitcharts "1.6px paper gap"), never a darker outline.
   const stroke = props.strokeWidth ?? (props.variant === 'area' ? (props.series.length > 1 ? HAPPIER_DATA_METRICS.areaSeamPx : 0) : HAPPIER_DATA_METRICS.lineStrokePx);
   const inset = props.variant === 'bar' ? 0 : props.plotInset ?? stroke / 2;
   const plotWidth = Math.max(0, width - (props.scaleGutter ?? 0));
-  const geometry = resolveHappierSeriesGeometry(props.series, { width: plotWidth, height: Math.max(1, height - inset * 2), variant: props.variant, normalized: props.normalized, fitLine: props.fitLine, minimumMaximum: props.minimumMaximum });
+  const geometry = resolveHappierSeriesGeometry(props.series, { width: plotWidth, height: Math.max(1, height - inset * 2), variant: props.variant, normalized: props.normalized, fitLine: props.fitLine, minimumMaximum: props.minimumMaximum, domain: props.domain });
   const unknown = props.unknownLabel ?? '—';
-  const format = props.valueFormatter ?? ((value: number) => formatHappierDataValue(value, text.locale));
+  const magnitude = (value: number) => props.mirrored ? Math.abs(value) : value;
+  const format = (value: number) => props.valueFormatter ? props.valueFormatter(magnitude(value)) : formatHappierDataValue(magnitude(value), text.locale);
+  const describe = (bucket: HappierSeriesBucket) => describeHappierSeriesBucket(props.mirrored
+    ? { ...bucket, values: bucket.values.map((entry) => ({ ...entry, value: entry.value === null ? null : magnitude(entry.value) })) } : bucket, unknown);
   const selected = geometry.buckets.find((bucket) => bucket.id === selectedId) ?? null;
   const select = (id: string) => { setSelectedId(id); props.onSelect?.(id); };
-  const color = (index: number) => props.series[index]?.color ?? props.theme.colors.accent;
-  const exact = geometry.buckets.map((bucket) => describeHappierSeriesBucket(bucket, unknown)).join('; ');
+  // A series without its own colour takes the accent's ordered ramp, so several read apart.
+  const color = (index: number) => props.series[index]?.color
+    ?? resolveHappierSeriesRampColor(props.theme.colors.accent, props.theme.colors.surface, index);
+  // A live chart's image announces its latest sample, not its entire retained history.
+  // Bucket controls and the exact-values table still expose every point.
+  const exact = (props.liveMotion ? geometry.buckets.slice(-1) : geometry.buckets).map(describe).join('; ');
+  const reference = props.reference && Number.isFinite(props.reference.value) ? props.reference : null;
+  const shading = new Map((props.bucketShading ?? []).map(entry => [entry.bucketId, entry]));
+  const barRanges = props.variant === 'bar' ? (props.barRanges ?? []).filter(range => Number.isFinite(range.lower)
+    && Number.isFinite(range.upper) && range.lower < range.upper && range.lower >= geometry.min && range.upper <= geometry.max
+    && geometry.buckets.some(bucket => bucket.id === range.bucketId && bucket.values.every(entry => entry.value !== null))) : [];
+  const ranges = new Map(barRanges.map(range => [range.bucketId, range]));
+  const threshold = props.threshold && Number.isFinite(props.threshold.value) ? props.threshold : null;
+  const thresholdY = threshold ? Math.max(0, Math.min(height, inset + geometry.yAt(threshold.value))) : 0;
+  const thresholdColor = threshold?.tone === 'error' ? props.theme.colors.danger : props.theme.colors.warning;
   // A stacked bucket's peak is its whole column, not its first series.
-  const bucketTotal = (bucket: HappierSeriesBucket): number | null => bucket.values.some((entry) => entry.value !== null)
-    ? bucket.values.reduce((sum, entry) => sum + (entry.value ?? 0), 0) : null;
+  const overlays = new Set(props.series.filter(entry => entry.overlay).map(entry => entry.id));
+  const bucketTotal = (bucket: HappierSeriesBucket): number | null => bucket.values.some((entry) => !overlays.has(entry.seriesId) && entry.value !== null)
+    ? bucket.values.reduce((sum, entry) => sum + (overlays.has(entry.seriesId) ? 0 : entry.value ?? 0), 0) : null;
   const peakIndex = geometry.buckets.reduce((peak, bucket, index) => (bucketTotal(bucket) ?? -Infinity) > (bucketTotal(geometry.buckets[peak]!) ?? -Infinity) ? index : peak, 0);
   const barGap = props.barGap ?? HAPPIER_DATA_METRICS.barGapPx;
   const nativeInline = !props.renderBucket && inline && nativeTarget !== undefined;
@@ -163,7 +251,7 @@ export function StackedSeriesChart(props: StackedSeriesChartProps) {
   const bucketControl = (bucket: HappierSeriesBucket, index: number, visual: ReactNode, style?: HappierPortableStyle, key: string | number = bucket.id) => <HappierPressable key={key}
     testID={props.testID ? `${props.testID}-bucket-${bucket.id}` : undefined}
     controlRef={(control) => { if (control) controls.current.set(bucket.id, control); else controls.current.delete(bucket.id); }}
-    accessibilityLabel={describeHappierSeriesBucket(bucket, unknown)} selected={selectedId === bucket.id}
+    accessibilityLabel={describe(bucket)} selected={selectedId === bucket.id}
     onPress={() => select(bucket.id)} onFocusChange={(focused) => { if (focused) setSelectedId(bucket.id); }}
     onKeyDown={(key) => {
       const next = key === 'ArrowRight' ? Math.min(index + 1, geometry.buckets.length - 1) : key === 'ArrowLeft' ? Math.max(0, index - 1) : key === 'Home' ? 0 : key === 'End' ? geometry.buckets.length - 1 : null;
@@ -172,7 +260,33 @@ export function StackedSeriesChart(props: StackedSeriesChartProps) {
       select(id); controls.current.get(id)?.focus(); return true;
     }} style={style}>{visual}</HappierPressable>;
 
+  const bandPaths = props.variant !== 'line' || plotWidth <= 0 ? [] : (props.bands ?? []).flatMap((band) => {
+    const lowerIndex = props.series.findIndex((entry) => entry.id === band.lowerSeriesId);
+    const upperIndex = props.series.findIndex((entry) => entry.id === band.upperSeriesId);
+    if (lowerIndex < 0 || upperIndex < 0) return [];
+    const runs: number[][] = [];
+    let run: number[] = [];
+    geometry.buckets.forEach((bucket, index) => {
+      const lower = bucket.values[lowerIndex]!.value;
+      const upper = bucket.values[upperIndex]!.value;
+      if (lower === null || upper === null || lower > upper) {
+        if (run.length > 1) runs.push(run);
+        run = [];
+      } else run.push(index);
+    });
+    if (run.length > 1) runs.push(run);
+    return runs.map((indexes, index) => {
+      const upper = indexes.map((bucketIndex) => ({ x: geometry.xAt(bucketIndex), y: inset + geometry.yAt(geometry.buckets[bucketIndex]!.values[upperIndex]!.upper) }));
+      const lower = [...indexes].reverse().map((bucketIndex) => ({ x: geometry.xAt(bucketIndex), y: inset + geometry.yAt(geometry.buckets[bucketIndex]!.values[lowerIndex]!.upper) }));
+      const path = `${buildHappierSeriesPath(upper, 0)} ${buildHappierSeriesPath(lower, 0).replace(/^M/u, 'L')} Z`;
+      return <Path key={`${band.id}:${index}`} testID={props.testID ? `${props.testID}-band-${band.id}-${index}` : undefined}
+        d={path} fill={band.color ?? color(upperIndex)} fillOpacity={band.opacity ?? HAPPIER_DATA_METRICS.barRestOpacity} stroke="none" />;
+    });
+  });
+
+  const thresholdPaths: ReactNode[] = [];
   const paths = props.variant === 'bar' || plotWidth <= 0 ? null : props.series.flatMap((entry, seriesIndex) => {
+    const variant = entry.overlay ? 'line' : props.variant;
     // Missing points break the ribbon/stroke rather than silently becoming zero or bridging a gap.
     const runs: number[][] = [];
     let run: number[] = [];
@@ -181,33 +295,115 @@ export function StackedSeriesChart(props: StackedSeriesChartProps) {
       else run.push(index);
     });
     if (run.length) runs.push(run);
-    return runs.map((indexes, index) => {
+    // A gap is marked, not bridged and not left blank: a quiet dashed rule along the baseline from the last sample before
+    // it to the first after it (or to the plot's edge), so a hole in the history reads as "no data here".
+    const gapRules = runs.flatMap((indexes, position) => {
+      const from = position === 0 ? (indexes[0]! > 0 ? 0 : null) : geometry.xAt(runs[position - 1]!.at(-1)!);
+      const to = position === 0 ? geometry.xAt(indexes[0]!) : indexes[0]! - runs[position - 1]!.at(-1)! > 1 ? geometry.xAt(indexes[0]!) : null;
+      const lead = position === 0 ? [from, to] : [from, to];
+      return lead[0] !== null && lead[1] !== null && lead[1] > lead[0] ? [{ x1: lead[0], x2: lead[1], key: `${position}` }] : [];
+    });
+    const tail = runs.length > 0 && runs.at(-1)!.at(-1)! < geometry.buckets.length - 1
+      ? [{ x1: geometry.xAt(runs.at(-1)!.at(-1)!), x2: plotWidth, key: 'tail' }] : [];
+    const gapMarks = [...gapRules, ...tail].map(({ x1, x2, key }) => <Line key={`${entry.id}:gap:${key}`}
+      testID={props.testID ? `${props.testID}-gap-${seriesIndex}-${key}` : undefined}
+      x1={x1} x2={x2} y1={height - 0.5} y2={height - 0.5} stroke={props.theme.colors.divider} strokeWidth={1}
+      strokeDasharray={[2, 3]} strokeLinecap="round" />);
+    // A point that carries its own colour inks its stretch of the line (a pressure episode in a memory
+    // history); stretches share their joining point, so the line stays continuous across the change.
+    const inkAt = (bucketIndex: number) => geometry.buckets[bucketIndex]!.values[seriesIndex]!.color ?? color(seriesIndex);
+    const pieces = runs.flatMap((indexes) => indexes.reduce<{ indexes: number[]; ink: string; runLength: number }[]>((out, bucketIndex, position) => {
+      const ink = inkAt(bucketIndex);
+      const current = out[out.length - 1];
+      if (current && current.ink === ink) current.indexes.push(bucketIndex);
+      else out.push({ indexes: current ? [indexes[position - 1]!, bucketIndex] : [bucketIndex], ink, runLength: indexes.length });
+      return out;
+    }, []));
+    const washed = variant === 'area' && entry.fillOpacity !== undefined;
+    return [...gapMarks, ...pieces.map(({ indexes, ink, runLength }, index) => {
+      // A run of a few samples is not an area to read: filled, it is a hard-edged sliver. It is the line alone, at the
+      // chart's line stroke, with no fill beneath it.
+      if (indexes.length > 1 && variant === 'area' && entry.fillPattern !== 'hatch' && runLength < MIN_AREA_RUN_SAMPLES && runLength < geometry.buckets.length) {
+        const points = indexes.map((bucketIndex) => ({ x: geometry.xAt(bucketIndex), y: inset + geometry.yAt(geometry.buckets[bucketIndex]!.values[seriesIndex]!.upper) }));
+        const linePath = buildHappierSeriesPath(points, 0);
+        const lineKey = `${entry.id}:${index}`;
+        if (threshold && points.some((point) => point.y < thresholdY)) thresholdPaths.push(<Path key={lineKey}
+          testID={props.testID ? `${props.testID}-threshold-path-${seriesIndex}-${index}` : undefined}
+          d={linePath} clipPath={`url(#${thresholdId})`} fill="none" stroke={thresholdColor} strokeWidth={HAPPIER_DATA_METRICS.lineStrokePx}
+          strokeLinecap="round" strokeLinejoin="round" />);
+        return <Path key={lineKey} testID={props.testID ? `${props.testID}-short-run-${seriesIndex}-${index}` : undefined}
+          d={linePath} fill="none" stroke={ink} strokeWidth={HAPPIER_DATA_METRICS.lineStrokePx} strokeLinecap="round" strokeLinejoin="round" />;
+      }
+      // One lone sample is a dot: as an area it would be a thin column dropping to the baseline.
+      if (indexes.length === 1 && variant === 'area' && entry.fillPattern !== 'hatch') {
+        const only = geometry.buckets[indexes[0]!]!.values[seriesIndex]!;
+        return <Circle key={`${entry.id}:${index}`} testID={props.testID ? `${props.testID}-lone-${seriesIndex}-${index}` : undefined}
+          cx={geometry.xAt(indexes[0]!)} cy={inset + geometry.yAt(only.upper)} r={Math.max(stroke, HAPPIER_DATA_METRICS.lineStrokePx)} fill={ink} />;
+      }
       const upper = indexes.map((bucketIndex) => ({ x: geometry.xAt(bucketIndex), y: inset + geometry.yAt(geometry.buckets[bucketIndex]!.values[seriesIndex]!.upper) }));
       if (indexes.length === 1) {
         const center = upper[0]!;
         upper.splice(0, 1, { x: geometry.buckets.length === 1 ? 0 : Math.max(0, center.x - stroke), y: center.y }, { x: geometry.buckets.length === 1 ? plotWidth : Math.min(plotWidth, center.x + stroke), y: center.y });
       }
-      let path = buildHappierSeriesPath(upper, props.variant === 'area' ? 0.85 : 0);
-      if (props.variant === 'area') {
+      let path = buildHappierSeriesPath(upper, variant === 'area' ? 0.85 : 0);
+      const edge = washed ? path : null;
+      if (variant === 'area') {
         const lower = [...indexes].reverse().map((bucketIndex) => ({ x: geometry.xAt(bucketIndex), y: inset + geometry.yAt(geometry.buckets[bucketIndex]!.values[seriesIndex]!.lower) }));
         if (indexes.length === 1) { lower[0] = { x: upper[1]!.x, y: lower[0]!.y }; lower.push({ x: upper[0]!.x, y: lower[0]!.y }); }
         path += ` ${buildHappierSeriesPath(lower, 0.85).replace(/^M/u, 'L')} Z`;
       }
       const key = `${entry.id}:${index}`;
-      if (props.variant === 'line' && props.renderLinePath) return <View key={key} style={{ position: 'absolute', left: 0, top: 0 }}>{props.renderLinePath(path, { width: plotWidth, height, color: color(seriesIndex), strokeWidth: stroke, reducedMotion })}</View>;
-      return <Path key={key} d={path} fill={props.variant === 'area' ? color(seriesIndex) : 'none'} stroke={props.variant === 'line' ? color(seriesIndex) : props.theme.colors.surface} strokeWidth={stroke} strokeDasharray={entry.lineStyle === 'dotted' ? [1.5, 3.5] : entry.lineStyle === 'dashed' ? [4, 4] : undefined} strokeLinecap="round" strokeLinejoin="round" />;
-    });
+      if (threshold && upper.some((point) => point.y < thresholdY)) thresholdPaths.push(<Path key={key}
+        testID={props.testID ? `${props.testID}-threshold-path-${seriesIndex}-${index}` : undefined}
+        d={path} clipPath={`url(#${thresholdId})`} fill={variant === 'area' ? thresholdColor : 'none'}
+        stroke={variant === 'line' ? thresholdColor : props.theme.colors.surface} strokeWidth={entry.overlay ? HAPPIER_DATA_METRICS.lineStrokePx : stroke}
+        strokeDasharray={entry.lineStyle === 'dotted' ? [1.5, 3.5] : entry.lineStyle === 'dashed' ? [4, 4] : undefined}
+        strokeLinecap="round" strokeLinejoin="round" />);
+      if (variant === 'line' && props.renderLinePath) return <View key={key} style={{ position: 'absolute', left: 0, top: 0 }}>{props.renderLinePath(path, { width: plotWidth, height, color: ink, strokeWidth: stroke, reducedMotion })}</View>;
+      const dash = entry.lineStyle === 'dotted' ? [1.5, 3.5] : entry.lineStyle === 'dashed' ? [4, 4] : undefined;
+      if (edge) return <Fragment key={key}><Path d={path} fill={ink} fillOpacity={entry.fillOpacity} stroke="none" />
+        <Path d={edge} fill="none" stroke={ink} strokeWidth={props.strokeWidth ?? HAPPIER_DATA_METRICS.lineStrokePx} strokeDasharray={dash} strokeLinecap="round" strokeLinejoin="round" /></Fragment>;
+      return <Fragment key={key}><Path d={path} fill={variant === 'area' ? ink : 'none'} stroke={variant === 'line' ? ink : props.theme.colors.surface} strokeWidth={entry.overlay ? HAPPIER_DATA_METRICS.lineStrokePx : stroke} strokeDasharray={dash} strokeLinecap="round" strokeLinejoin="round" />
+        {variant === 'area' && entry.fillPattern === 'hatch' ? <Path d={path} fill={`url(#${patternId})`} /> : null}</Fragment>;
+    })];
   });
 
   const showGrid = props.showGrid ?? !inline;
-  const pathInk = props.variant === 'line' && props.renderLinePath ? paths : <Svg width={plotWidth} height={height}>{paths}</Svg>;
+  const hasAreaHatch = props.variant === 'area' && props.series.some(entry => entry.fillPattern === 'hatch');
+  const pathInk = props.variant === 'line' && props.renderLinePath
+    ? <>{bandPaths.length ? <Svg width={plotWidth} height={height}>{bandPaths}</Svg> : null}{paths}</>
+    : <Svg width={plotWidth} height={height}>{hasAreaHatch ? <Defs><HatchPattern id={patternId} color={props.theme.colors.surface} /></Defs> : null}{bandPaths}{paths}</Svg>;
+  const thresholdInk = thresholdPaths.length ? <Svg width={plotWidth} height={height} style={{ position: 'absolute', left: 0, top: 0 }}>
+    <Defs><ClipPath id={thresholdId}><Rect testID={props.testID ? `${props.testID}-threshold-clip` : undefined}
+      x={0} y={0} width={plotWidth} height={thresholdY} /></ClipPath></Defs>{thresholdPaths}
+  </Svg> : null;
+  const liveEndpoints = props.liveMotion && props.liveMotion.active !== false && geometry.buckets.length ? <Svg width={plotWidth} height={height}
+    style={{ position: 'absolute', left: 0, top: 0 }}>
+    {geometry.buckets.at(-1)!.values.map((entry, index) => entry.value === null ? null : <Circle key={entry.seriesId}
+      testID={props.testID ? `${props.testID}-endpoint-${index}` : undefined}
+      cx={geometry.xAt(geometry.buckets.length - 1)} cy={inset + geometry.yAt(entry.upper)} r={HAPPIER_DATA_METRICS.lineStrokePx}
+      fill={threshold && inset + geometry.yAt(entry.upper) < thresholdY ? thresholdColor : entry.color ?? color(index)}
+      stroke={props.theme.colors.surface} strokeWidth={HAPPIER_DATA_METRICS.barSeamPx} />)}
+  </Svg> : null;
+  const ink = props.liveMotion ? <View style={{ width: plotWidth, height, overflow: 'hidden' }}>
+    <Animated.View testID={props.testID ? `${props.testID}-sliding-ink` : undefined} style={{ transform: [{ translateX: liveOffset }] }}>
+      {pathInk}{thresholdInk}
+    </Animated.View>{liveEndpoints}
+  </View> : <>{pathInk}{thresholdInk}</>;
   const plot = <View style={{ width: props.renderFrame ? undefined : plotWidth, height, marginTop: peakInset, position: 'relative', borderBottomWidth: inline || showGrid ? 0 : 1, borderBottomColor: props.theme.colors.divider }}>
     {props.variant === 'bar' ? null : <View pointerEvents="none" aria-hidden importantForAccessibility="no-hide-descendants" style={{ position: 'absolute', width: '100%', height }}>
-      {props.renderInk ? props.renderInk(pathInk, reducedMotion) : pathInk}
+      {props.renderInk ? props.renderInk(ink, reducedMotion) : ink}
     </View>}
     <View style={{ height, flexDirection: 'row', gap: props.variant === 'bar' ? barGap : 0, paddingHorizontal: props.variant === 'bar' ? props.barLeadingInset : undefined }}>
       {geometry.buckets.map((bucket, index) => {
-        const visual = props.variant !== 'bar' ? <View style={{ flex: 1 }} /> : <View style={{ height, width: props.barWidth ?? '100%', maxWidth: props.barMaxWidth, alignSelf: 'center', position: 'relative', overflow: 'hidden', backgroundColor: props.barTrackColor, borderTopLeftRadius: HAPPIER_DATA_METRICS.barRadiusPx, borderTopRightRadius: HAPPIER_DATA_METRICS.barRadiusPx }}>
+        const shade = shading.get(bucket.id);
+        const range = ranges.get(bucket.id);
+        const visual = props.variant !== 'bar' ? <View style={{ flex: 1 }} /> : <View style={{ height, width: '100%', position: 'relative' }}>
+          {shade ? <View pointerEvents="none" aria-hidden importantForAccessibility="no-hide-descendants"
+            testID={props.testID ? `${props.testID}-shading-${bucket.id}` : undefined}
+            style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0,
+              backgroundColor: shade.color ?? props.theme.colors.secondaryText, opacity: shade.opacity ?? HAPPIER_DATA_METRICS.bucketShadeOpacity }} /> : null}
+          <View style={{ height, width: props.barWidth ?? '100%', maxWidth: props.barMaxWidth, alignSelf: 'center', position: 'relative', overflow: 'hidden', backgroundColor: props.barTrackColor, borderTopLeftRadius: HAPPIER_DATA_METRICS.barRadiusPx, borderTopRightRadius: HAPPIER_DATA_METRICS.barRadiusPx }}>
           {bucket.values.map((entry, seriesIndex) => {
             if (entry.value === null) return null;
             const extent = Math.max(props.barMinHeight ?? (entry.value === 0 ? HAPPIER_DATA_METRICS.barStubPx : 0), Math.abs(geometry.yAt(entry.lower) - geometry.yAt(entry.upper)));
@@ -218,15 +414,28 @@ export function StackedSeriesChart(props: StackedSeriesChartProps) {
             return <SeriesBar key={entry.seriesId} testID={props.testID ? `${props.testID}-bar-${index}-${seriesIndex}` : undefined}
               top={entry.value >= 0 ? Math.max(0, geometry.yAt(entry.lower) - extent) : geometry.yAt(entry.lower) + seam} height={barHeight}
               color={entry.color ?? color(seriesIndex)} opacity={entry.opacity ?? (selectedId === bucket.id || props.series.length > 1 || emphasized ? 1 : props.barEmphasis === 'maximum' ? Math.max(0.55, 0.9 * barHeight / height) : 0.65)}
+              fillPattern={props.series[seriesIndex]?.fillPattern} patternInk={props.theme.colors.surface}
               index={index} joining={drawn.current} motion={props.barMotion} reducedMotion={reducedMotion} />;
           })}
+          {bucket.values.every(entry => entry.value === null) ? <View pointerEvents="none" aria-hidden importantForAccessibility="no-hide-descendants"
+            testID={props.testID ? `${props.testID}-gap-${bucket.id}` : undefined}
+            style={{ position: 'absolute', left: 0, right: 0, top: Math.max(0, geometry.yAt(0) - HAPPIER_DATA_METRICS.blockGapPx),
+              height: Math.min(height, HAPPIER_DATA_METRICS.blockGapPx), opacity: HAPPIER_DATA_METRICS.barRestOpacity }}>
+            <HatchSwatch ink={props.theme.colors.secondaryText} />
+          </View> : null}
+          {range ? <View pointerEvents="none" aria-hidden importantForAccessibility="no-hide-descendants"
+            testID={props.testID ? `${props.testID}-range-${bucket.id}` : undefined}
+            style={{ position: 'absolute', left: 0, right: 0, top: geometry.yAt(range.upper), height: geometry.yAt(range.lower) - geometry.yAt(range.upper),
+              borderWidth: HAPPIER_DATA_METRICS.barSeamPx, borderStyle: 'dashed', borderColor: props.theme.colors.secondaryText, opacity: 0.6 }} /> : null}
+          </View>
         </View>;
         const columnKey = props.variant === 'bar' && props.barMotion?.identity === 'slot' ? index : bucket.id;
         const columnStyle = props.variant === 'bar'
           ? { ...(props.barSlotWidth ? { width: props.barSlotWidth } : { flex: 1 }), height }
           : { position: 'absolute' as const, ...geometry.hitRangeAt(index), height };
         const peakTotal = props.showPeakValue && index === peakIndex ? bucketTotal(bucket) : null;
-        const peakLabel = peakTotal !== null
+        // A peak of nothing names nothing ("$0.00" over an empty plot).
+        const peakLabel = peakTotal !== null && peakTotal > 0
           ? <HappierText style={{ ...text.captionStrong, position: 'absolute', top: -peakInset, alignSelf: 'center' }} tabularNumbers>{format(peakTotal)}</HappierText> : null;
         if (props.renderBucket) return <View key={columnKey} style={columnStyle}>{peakLabel}{props.renderBucket(bucket, visual, () => select(bucket.id))}</View>;
         if (nativeInline || nativeDense) return <View key={columnKey} style={columnStyle} aria-hidden importantForAccessibility="no-hide-descendants">{peakLabel}{visual}</View>;
@@ -244,7 +453,9 @@ export function StackedSeriesChart(props: StackedSeriesChartProps) {
       {(props.axisTicks ?? (props.showPointLabels ? geometry.buckets.map((bucket) => bucket.label) : [geometry.buckets[0]!.label, ...(geometry.buckets.length > 1 ? [geometry.buckets[geometry.buckets.length - 1]!.label] : [])])).map((label, index) => <HappierText key={index} style={{ ...text.caption, ...(props.showPointLabels ? { ...(props.barSlotWidth ? { width: props.barSlotWidth } : { flex: 1 }), textAlign: 'center' } : {}) }}>{label}</HappierText>)}
     </View> : null}
   </View>;
-  return <View testID={props.testID} accessible={nativeInline ? true : undefined} accessibilityLabel={`${props.label}${exact ? `: ${exact}` : ''}`}
+  return <View testID={props.testID} accessible={nativeInline ? true : undefined}
+    accessibilityRole={threshold || props.mirrored || props.liveMotion ? 'image' : undefined}
+    accessibilityLabel={`${props.label}${exact ? `: ${exact}` : ''}${threshold ? `; ${threshold.label} ${format(threshold.value)}` : ''}${reference ? `; ${reference.label} ${reference.value}` : ''}${barRanges.map(range => `; ${range.label} ${range.lower}–${range.upper}`).join('')}`}
     onLayout={(event: HappierLayoutChangeEvent) => setWidth(event.nativeEvent.layout.width)} style={props.width ? { width: props.width } : undefined}>
     {props.showAnnotations ? geometry.buckets.filter((bucket) => bucket.annotation).map((bucket) => <HappierText key={bucket.id} style={{ ...text.caption, marginBottom: 6 }}>{bucket.label}{` · ${bucket.annotation}`}</HappierText>) : null}
     <View style={{ position: 'relative' }}>
@@ -252,24 +463,38 @@ export function StackedSeriesChart(props: StackedSeriesChartProps) {
         {(props.scaleTicks ? props.scaleTicks.map((tick) => inset + geometry.yAt(tick.value)) : [0, 0.5, 1].map((fraction) => fraction * (height - 1)))
           .map((top, index) => <View key={index} style={{ position: 'absolute', left: 0, right: 0, top, borderTopWidth: 1, borderTopColor: props.theme.colors.divider, opacity: 0.55 }} />)}
       </View> : null}
-      {props.reference && Number.isFinite(props.reference.value) && geometry.buckets.length ? <View pointerEvents="none" aria-hidden importantForAccessibility="no-hide-descendants"
-        style={{ position: 'absolute', left: 0, right: 0, top: peakInset + inset + geometry.yAt(props.reference.value), flexDirection: 'row', alignItems: 'center' }}>
-        <View style={{ flex: 1, marginRight: props.scaleGutter ?? 0, borderTopWidth: 1, borderStyle: 'dashed', borderTopColor: props.theme.colors.secondaryText, opacity: 0.6 }} />
-        {props.scaleGutter ? <HappierText style={{ ...text.caption, position: 'absolute', right: 0, top: -7 }}>{props.reference.label}</HappierText> : null}
-      </View> : null}
       {props.renderFrame ? props.renderFrame(chartBody) : chartBody}
-      {props.showScaleValues ? [geometry.min, geometry.min / 2 + geometry.max / 2].map((value, index) => <HappierText key={index} style={{ ...text.caption, position: 'absolute', right: 4, top: Math.max(0, peakInset + geometry.yAt(value) - 16) }} tabularNumbers>{format(value)}</HappierText>) : null}
+      {reference && geometry.buckets.length ? <View pointerEvents="none" aria-hidden importantForAccessibility="no-hide-descendants"
+        style={{ position: 'absolute', left: 0, right: 0, top: peakInset + inset + geometry.yAt(reference.value), flexDirection: 'row', alignItems: 'center' }}>
+        <View style={{ flex: 1, marginRight: props.scaleGutter ?? 0, borderTopWidth: 1, borderStyle: 'dashed', borderTopColor: props.theme.colors.secondaryText, opacity: 0.6 }} />
+        {props.scaleGutter ? <HappierText style={{ ...text.caption, position: 'absolute', right: 0, top: -7 }}>{reference.label}</HappierText> : null}
+      </View> : null}
+      {threshold && threshold.value >= geometry.min && threshold.value <= geometry.max && geometry.buckets.length ? <View pointerEvents="none" aria-hidden importantForAccessibility="no-hide-descendants"
+        style={{ position: 'absolute', left: 0, right: props.scaleGutter ?? 0, top: peakInset + thresholdY, borderTopWidth: 1, borderStyle: 'dashed', borderTopColor: thresholdColor }}>
+        <HappierText style={{ ...text.caption, color: thresholdColor, position: 'absolute', left: 0, bottom: HAPPIER_DATA_METRICS.axisGapPx }}>{threshold.label}</HappierText>
+      </View> : null}
+      {/* The reference label shares the scale gutter: a scale value it would print over steps aside for it. */}
+      {props.showScaleValues ? (props.mirrored ? [geometry.max, 0, geometry.min] : [geometry.min, geometry.min / 2 + geometry.max / 2]).map((value, index) =>
+        reference && props.scaleGutter && geometry.buckets.length
+          && Math.abs(geometry.yAt(value) - geometry.yAt(reference.value)) < (text.caption.lineHeight ?? props.theme.typography.caption.lineHeight) * 1.5 ? null
+          : <HappierText key={index} testID={props.testID ? `${props.testID}-scale-${index}` : undefined}
+            style={{ ...text.caption, position: 'absolute', right: 4, top: Math.max(0, peakInset + geometry.yAt(value) - 16) }} tabularNumbers>{format(value)}</HappierText>) : null}
       {props.scaleTicks?.map((tick) => <HappierText key={tick.value} style={{ ...text.caption, position: 'absolute', right: 0, top: Math.max(0, Math.min(height - 14, inset + geometry.yAt(tick.value) - 7)) }} tabularNumbers>{tick.label}</HappierText>)}
     </View>
     {selected && (props.showReadout ?? !inline) ? <View testID={props.testID ? `${props.testID}-readout` : undefined} accessibilityLiveRegion="polite">
       <HappierText style={text.captionStrong}>{selected.label}{selected.annotation ? ` · ${selected.annotation}` : ''}</HappierText>
       {selected.values.map((entry) => <HappierText key={entry.seriesId} style={text.caption} tabularNumbers>{`${entry.label} · ${entry.value === null ? unknown : format(entry.value)}`}</HappierText>)}
     </View> : null}
-    {showLegend ? <View style={{ flexDirection: 'row', flexWrap: 'wrap', columnGap: HAPPIER_DATA_METRICS.blockGapPx, rowGap: HAPPIER_DATA_METRICS.axisGapPx, marginTop: HAPPIER_DATA_METRICS.blockGapPx }}>
+    {showLegend ? <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', columnGap: HAPPIER_DATA_METRICS.blockGapPx, rowGap: HAPPIER_DATA_METRICS.axisGapPx, marginTop: HAPPIER_DATA_METRICS.blockGapPx }}>
       {props.series.map((entry, index) => {
+        // A legend keys looks: series drawn the same way under one name (many comparable lines) share one key.
+        const look = (candidate: typeof entry, at: number) => [candidate.label, color(at), candidate.lineStyle ?? '', candidate.fillPattern ?? ''].join('\u0000');
+        if (props.series.slice(0, index).some((earlier, at) => look(earlier, at) === look(entry, index))) return null;
         const chosen = props.selectedSeriesIds?.includes(entry.id) === true;
         const key = <>
-          <View style={{ width: 8, height: 8, borderRadius: 2, backgroundColor: color(index) }} />
+          <View style={{ width: 8, height: 8, borderRadius: 2, overflow: 'hidden', backgroundColor: color(index) }}>
+            {entry.fillPattern === 'hatch' ? <HatchSwatch ink={props.theme.colors.surface} /> : null}
+          </View>
           {props.leads?.[entry.id] ?? null}
           <HappierText style={chosen ? text.captionStrong : text.caption}>{entry.label}{entry.detail ? ` · ${entry.detail}` : ''}</HappierText>
         </>;
@@ -280,18 +505,15 @@ export function StackedSeriesChart(props: StackedSeriesChartProps) {
           accessibilityLabel={pressLabel ?? entry.label} selected={chosen}
           onPress={() => press(entry.id)} style={row}>{key}</HappierPressable> : <View key={entry.id} style={row}>{key}</View>;
       })}
+      {toggleInLegend ? valuesToggle : null}
     </View> : null}
     {props.summary ? <HappierText style={text.caption} tabularNumbers>{props.summary}</HappierText> : null}
-    {props.valuesLabel ? <HappierPressable testID={props.testID ? `${props.testID}-values-toggle` : undefined}
-      accessibilityLabel={valuesExpanded ? props.valuesCollapseLabel ?? props.valuesLabel : props.valuesLabel}
-      expanded={valuesExpanded} onPress={() => setValuesExpanded((value) => !value)}>
-      <HappierText style={text.captionStrong}>{valuesExpanded ? props.valuesCollapseLabel ?? props.valuesLabel : props.valuesLabel}</HappierText>
-    </HappierPressable> : null}
-    {nativeDense && (valuesExpanded || !props.valuesLabel) ? <View testID={props.testID ? `${props.testID}-values` : undefined}>
-      {geometry.buckets.map((bucket, index) => bucketControl(bucket, index, <HappierText style={text.caption} tabularNumbers>{describeHappierSeriesBucket(bucket, unknown)}</HappierText>, { justifyContent: 'center' }))}
+    {valuesLabel && !toggleInLegend ? valuesToggle : null}
+    {nativeDense && (valuesExpanded || !valuesLabel) ? <View testID={props.testID ? `${props.testID}-values` : undefined}>
+      {geometry.buckets.map((bucket, index) => bucketControl(bucket, index, <HappierText style={text.caption} tabularNumbers>{describe(bucket)}</HappierText>, { justifyContent: 'center' }))}
     </View> : valuesExpanded ? <HappierDataTable theme={props.theme} label={props.label}
       columns={[{ label: props.label }, ...props.series.map((entry) => ({ label: entry.label }))]}
-      rows={geometry.buckets.map((bucket) => [describeHappierSeriesCoordinate(bucket), ...bucket.values.map((entry) => entry.value ?? unknown)])}
+      rows={geometry.buckets.map((bucket) => [describeHappierSeriesCoordinate(bucket), ...bucket.values.map((entry) => entry.value === null ? unknown : magnitude(entry.value))])}
       testID={props.testID ? `${props.testID}-values` : undefined} /> : null}
   </View>;
 }

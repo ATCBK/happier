@@ -11,11 +11,13 @@ import {
 } from '../environment/context.js';
 import type { HappierTypeRole } from '../environment/types.js';
 import type { HappierCollectionKey, HappierCollectionSection } from '../presentation/collection/collectionModel.js';
+import { HappierCardActionsCornerContext, HappierCardSelectionRingContext } from '../presentation/collection/CollectionList.js';
 import { resolveHappierCollectionGridGeometry } from '../presentation/collection/collectionTable.js';
 import { useHappierCollectionViewport, type HappierCollectionModel, type HappierCollectionViewport } from '../presentation/collection/useCollection.js';
 import { HappierSkeletonBlock } from '../presentation/feedback/Skeleton.js';
 import { HappierSegmentedChoice } from '../presentation/form/SegmentedChoice.js';
 import { HappierPressable } from '../presentation/interaction/Pressable.js';
+import { Button } from './Button.js';
 import { HAPPIER_PAGE_METRICS } from '../presentation/layout/pageMetrics.js';
 import type { HappierFocusable, HappierPortableStyle, HappierStyleProp } from '../presentation/portableTypes.js';
 import { HappierText } from '../presentation/text/Text.js';
@@ -46,23 +48,49 @@ export function readCollectionLineHeight(role: HappierTypeRole, theme: Theme, ty
   return typeof value === 'number' ? Math.ceil(value) : 20;
 }
 
-/** Card geometry at normal text size. Gutters and the card's radius come from the page metrics owner. */
+/** Deliberate card/track dimensions, not spacing steps. Insets and gaps follow the reader's theme below. */
 const CARD = Object.freeze({
-  padding: 14,
+  /** The identity mark's box, independent of the spacing rhythm. */
   markSize: 32,
-  gap: 10,
+  /** The reserved action/status band, independent of the card's insets. */
   footerHeight: 28,
   /** The preview band's height: about seven preview lines, enough to recognise the item at a glance. */
   previewHeight: 128,
   // Compact tracks still leave room for the mark, a readable title and the card insets.
   boardColumnMinWidth: 160,
-  boardCardInsetX: 10,
-  boardCardInsetY: 4,
   /** The default narrowest grid card; one column at a 390 pt phone. */
   gridMinCardWidth: 280,
 });
 const GUTTER = HAPPIER_PAGE_METRICS.sheetInsetPx;
 const RADIUS = HAPPIER_PAGE_METRICS.sheetRadiusPx;
+
+/** One spacing owner for both measured card heights and the insets that draw them. */
+function useCardLayout() {
+  const { spacing } = useHappierUiTheme();
+  return useMemo(() => {
+    // The card sits between the page's regular steps: roomy inside, compact between cards.
+    const padding = (spacing.medium + spacing.large) / 2;
+    const gap = (spacing.small + spacing.medium) / 2;
+    const boardCardInsetX = gap;
+    const boardCardInsetY = spacing.xsmall;
+    return {
+      padding, gap, boardCardInsetX, boardCardInsetY,
+      lineStyle: { ...lineStyle, gap: spacing.small },
+      boardRowStyle: { ...boardRowStyle, paddingHorizontal: GUTTER - boardCardInsetX },
+      boardRowScrollStyle: { ...boardRowScrollStyle, paddingHorizontal: GUTTER - boardCardInsetX },
+      boardListContentStyle: { gap: 0, paddingBottom: padding },
+      boardItemStyle: { paddingHorizontal: boardCardInsetX, paddingVertical: boardCardInsetY },
+      boardCardBodyStyle: { gap: (spacing.xsmall + spacing.small) / 2, paddingHorizontal: spacing.medium,
+        // The top inset sits inside the card's one-point border.
+        paddingTop: spacing.medium - 1, paddingBottom: spacing.medium },
+      agentStripStyle: { ...agentStripStyle, paddingHorizontal: spacing.medium, paddingVertical: spacing.small + 1 },
+      columnHeaderStyle: { gap: spacing.xsmall / 2, paddingHorizontal: boardCardInsetX, paddingTop: padding, paddingBottom: gap },
+      pagerStyle: { paddingHorizontal: GUTTER, paddingVertical: gap },
+      shelfHeaderStyle: { ...shelfHeaderStyle, gap: spacing.medium },
+      gridFooterStyle: { ...gridFooterStyle, gap: spacing.small, left: padding + 1, right: padding + 1, bottom: padding + 1 },
+    };
+  }, [spacing]);
+}
 
 export type CollectionCardsProps<Item> = Readonly<{
   presentation: 'board' | 'grid';
@@ -106,7 +134,7 @@ function useCardText(): CardText {
   return useMemo(() => ({
     // The host's row anatomy on a card: the row title role over the row meta role.
     title: readCollectionLineHeight('label', theme, typography, textScale),
-    meta: readCollectionLineHeight('body', theme, typography, textScale),
+    meta: readCollectionLineHeight('meta', theme, typography, textScale),
     label: readCollectionLineHeight('label', theme, typography, textScale),
   }), [textScale, theme, typography]);
 }
@@ -122,7 +150,7 @@ function Slot(props: Readonly<{ value: ReactNode; tone?: 'secondary' | 'muted' }
   if (value === null || value === undefined || value === false) return null;
   if (typeof value === 'string' || typeof value === 'number') {
     return (
-      <HappierText variant="body" tone={props.tone ?? 'secondary'} numberOfLines={1} tabularNumbers style={shrinkStyle}>
+      <HappierText variant="meta" tone={props.tone ?? 'secondary'} numberOfLines={1} tabularNumbers style={shrinkStyle}>
         {String(value)}
       </HappierText>
     );
@@ -139,8 +167,9 @@ function SelectedRing(props: Readonly<{ color: string; testID?: string }>): Reac
 // Board
 // ---------------------------------------------------------------------------------------------------------------
 
-function BoardCard<Item>(props: Readonly<{ item: Item; anatomy: CollectionAnatomy<Item>; selected: boolean }>): ReactElement {
+function BoardCard<Item>(props: Readonly<{ item: Item; anatomy: CollectionAnatomy<Item>; selected: boolean; reserveActions: boolean }>): ReactElement {
   const { item, anatomy } = props;
+  const card = useCardLayout();
   const { theme, palette } = useCardColors();
   const where = anatomy.where?.(item);
   const age = anatomy.age?.(item) ?? null;
@@ -152,26 +181,27 @@ function BoardCard<Item>(props: Readonly<{ item: Item; anatomy: CollectionAnatom
   if (anatomy.boardContent) return <View>{anatomy.boardContent(item)}{props.selected ? <SelectedRing color={palette.selection} /> : null}</View>;
   return (
     <View style={[boardCardStyle, { backgroundColor: palette.sheet, borderColor: palette.sheetBorder }]}>
-      <View style={boardCardBodyStyle}>
-        <View style={lineStyle}>
+      <View style={card.boardCardBodyStyle}>
+        {/* The row's actions sit at this line's end, inside the card: the line keeps their place. */}
+        <View style={[card.lineStyle, props.reserveActions ? { paddingRight: CARD.markSize } : null]}>
           <View style={markStyle}>{anatomy.glyph(item)}</View>
           <HappierText variant="label" tone="neutral" numberOfLines={2} style={[titleStyle, shrinkStyle]}>{anatomy.title(item)}</HappierText>
         </View>
         {where === undefined && age === null ? null : (
-          <View style={lineStyle}>
-            <View style={[lineStyle, shrinkStyle]}><Slot value={where} /></View>
-            {age === null ? null : <HappierText variant="caption" tone="muted" numberOfLines={1} tabularNumbers>{age}</HappierText>}
+          <View style={card.lineStyle}>
+            <View style={[card.lineStyle, shrinkStyle]}><Slot value={where} /></View>
+            {age === null ? null : <HappierText variant="meta" tone="muted" numberOfLines={1} tabularNumbers>{age}</HappierText>}
           </View>
         )}
         {!hasFacts ? null : (
-          <View style={[lineStyle, { flexWrap: 'wrap' }]}>
+          <View style={[card.lineStyle, { flexWrap: 'wrap' }]}>
             <Slot value={reason} />
             <Slot value={signal} />
           </View>
         )}
       </View>
       {!hasAgent ? null : (
-        <View style={[agentStripStyle, { borderTopColor: theme.colors.divider }]}>
+        <View style={[card.agentStripStyle, { borderTopColor: theme.colors.divider }]}>
           <Slot value={agent} />
         </View>
       )}
@@ -187,15 +217,31 @@ function BoardCardRow<Item>(props: Readonly<{
   useRowActions?: CollectionProps<Item>['useRowActions'];
 }>): ReactElement {
   const host = useOptionalPluginUiPresentationHost();
+  const card = useCardLayout();
   const { item, anatomy } = props;
   const actions = props.useRowActions?.(item) ?? {};
+  // A domain card's action is its own gridcell under the open target, never inside it; the domain's
+  // frame (`wrapItem`) draws one card around both, so the card's insets sit outside that frame.
+  const action = anatomy.boardContent ? anatomy.action?.(item) : undefined;
+  const hasAction = action !== null && action !== undefined && action !== false;
+  // Row actions are the card's own corner control, not a sibling beside the card: they sit at the title line's
+  // end inside the card's body (its top and side insets), revealed like a grid card's.
+  const hasRowActions = anatomy.boardContent === undefined && ((actions.secondaryActions !== undefined && actions.secondaryActions.length > 0)
+    || (host?.renderDestinationRow !== undefined && anatomy.destination?.(item) != null));
+  const actionsCorner = useMemo(() => hasRowActions ? {
+    top: card.boardCardBodyStyle.paddingTop + 1 + card.boardItemStyle.paddingVertical - 1,
+    end: card.boardCardBodyStyle.paddingHorizontal + 1 + card.boardItemStyle.paddingHorizontal - 1,
+    height: CARD.markSize,
+  } : null, [card.boardCardBodyStyle.paddingHorizontal, card.boardCardBodyStyle.paddingTop, card.boardItemStyle.paddingHorizontal, card.boardItemStyle.paddingVertical, hasRowActions]);
   const row: ReactElement<ItemProps> = <List.Item
     {...actions} density="compact" showDivider={false} accessoryOutsidePressable
+    {...(hasAction ? { accessory: action, accessoryBelow: true } : {})}
     accessibilityLabel={anatomy.accessibilityLabel(item)}
     accessibilityHint={anatomy.accessibilityHint?.(item)}
-    testID={anatomy.testID?.(item)} style={boardItemStyle}
-  ><BoardCard item={item} anatomy={anatomy} selected={props.selected} /></List.Item>;
-  return <>{renderCollectionItemDestination(host, anatomy, item, row)}</>;
+    testID={anatomy.testID?.(item)} style={anatomy.boardContent ? undefined : card.boardItemStyle}
+  ><BoardCard item={item} anatomy={anatomy} selected={props.selected} reserveActions={actionsCorner !== null} /></List.Item>;
+  const composed = <HappierCardActionsCornerContext.Provider value={actionsCorner}>{renderCollectionItemDestination(host, anatomy, item, row)}</HappierCardActionsCornerContext.Provider>;
+  return anatomy.boardContent ? <View style={card.boardItemStyle}>{composed}</View> : <>{composed}</>;
 }
 
 function BoardColumn<Item>(props: Readonly<{
@@ -217,6 +263,7 @@ function BoardColumn<Item>(props: Readonly<{
   testID?: string;
 }>): ReactElement {
   const { section, model, anatomy, selectedKey } = props;
+  const card = useCardLayout();
   const translate = usePluginTranslation();
   const keyOf = model.keyOf;
   const open = model.actions.open;
@@ -245,18 +292,18 @@ function BoardColumn<Item>(props: Readonly<{
   return (
     <View style={props.style} testID={props.testID}>
       {!props.showHeader || group === null || group.title === '' ? null : (
-        <View style={columnHeaderStyle}>
-          <View style={lineStyle}>
+        <View style={card.columnHeaderStyle}>
+          <View style={card.lineStyle}>
             <HappierText variant="label" tone={HAPPIER_WORK_STATUS_SEMANTIC_TONE[section.items.length > 0 ? group.tone ?? 'neutral' : 'neutral']} style={[titleStyle, { flexShrink: 1 }]}>{group.title}</HappierText>
-            <HappierText variant="caption" tone="muted" tabularNumbers>{String(section.items.length)}</HappierText>
+            <HappierText variant="meta" tone="muted" tabularNumbers>{String(section.items.length)}</HappierText>
           </View>
           {group.description === undefined ? null : (
-            <HappierText variant="caption" tone="muted" numberOfLines={2}>{group.description}</HappierText>
+            <HappierText variant="meta" tone="muted" numberOfLines={2}>{group.description}</HappierText>
           )}
         </View>
       )}
       {section.items.length === 0 ? (
-        <HappierText variant="caption" tone="muted" style={{ paddingHorizontal: CARD.boardCardInsetX }}>
+        <HappierText variant="meta" tone="muted" style={{ paddingHorizontal: card.boardCardInsetX }}>
           {translate('happier.plugin-ui.collection.board.empty', 'None')}
         </HappierText>
       ) : null}
@@ -266,7 +313,7 @@ function BoardColumn<Item>(props: Readonly<{
             accessibilityLabel={props.label}
             accessibilityPattern="grid"
             density="compact"
-            contentContainerStyle={boardListContentStyle}
+            contentContainerStyle={card.boardListContentStyle}
             items={section.items}
             keyForItem={keyOf}
             renderItem={renderItem}
@@ -287,6 +334,7 @@ function BoardColumn<Item>(props: Readonly<{
 
 function CollectionBoard<Item>(props: CollectionCardsProps<Item>): ReactElement {
   const { model } = props;
+  const card = useCardLayout();
   const { theme, palette } = useCardColors();
   const translate = usePluginTranslation();
   const { textScale } = useHappierUiAccessibility();
@@ -298,7 +346,7 @@ function CollectionBoard<Item>(props: CollectionCardsProps<Item>): ReactElement 
   const horizontalScroll = useRef<ScrollView | null>(null);
   const minColumn = CARD.boardColumnMinWidth * textScale;
   // Empty and populated buckets keep the same track; arrivals never resize their neighbours.
-  const availableWidth = props.width === null ? null : Math.max(0, props.width - 2 * (GUTTER - CARD.boardCardInsetX));
+  const availableWidth = props.width === null ? null : Math.max(0, props.width - 2 * (GUTTER - card.boardCardInsetX));
   const fits = availableWidth === null || sections.length * minColumn <= availableWidth;
   const columnWidth = availableWidth === null ? null : Math.max(minColumn, availableWidth / Math.max(1, sections.length));
   useLayoutEffect(() => {
@@ -347,8 +395,8 @@ function CollectionBoard<Item>(props: CollectionCardsProps<Item>): ReactElement 
     );
   };
 
-  if (stacked) return <ScrollView ref={stackedScroll} style={fillStyle} contentContainerStyle={{ gap: CARD.gap,
-    paddingVertical: CARD.padding, paddingHorizontal: GUTTER - CARD.boardCardInsetX }}
+  if (stacked) return <ScrollView ref={stackedScroll} style={fillStyle} contentContainerStyle={{ gap: card.gap,
+    paddingVertical: card.padding, paddingHorizontal: GUTTER - card.boardCardInsetX }}
     scrollEventThrottle={16} onScroll={event => { boardViewport.offsetRef.current = event.nativeEvent.contentOffset.y; }}>
     {sections.map((section, index) => columnFor(section, index, {}, true))}
   </ScrollView>;
@@ -360,7 +408,7 @@ function CollectionBoard<Item>(props: CollectionCardsProps<Item>): ReactElement 
     return (
       <View style={fillStyle}>
         {sections.length < 2 ? null : (
-          <View style={pagerStyle}>
+          <View style={card.pagerStyle}>
             <HappierSegmentedChoice
               accessibilityLabel={translate('happier.plugin-ui.collection.board.columns', 'Columns')}
               segments={sections.map((candidate, candidateIndex) => ({
@@ -391,9 +439,9 @@ function CollectionBoard<Item>(props: CollectionCardsProps<Item>): ReactElement 
     columnWidth === null ? { flex: 1, minWidth: 0 } : { width: columnWidth, flexShrink: 0 },
   ], true));
   return fits ? (
-    <View style={boardRowStyle}>{columns}</View>
+    <View style={card.boardRowStyle}>{columns}</View>
   ) : (
-    <ScrollView ref={horizontalScroll} horizontal style={fillStyle} contentContainerStyle={boardRowScrollStyle} scrollEventThrottle={16}
+    <ScrollView ref={horizontalScroll} horizontal style={fillStyle} contentContainerStyle={card.boardRowScrollStyle} scrollEventThrottle={16}
       onScroll={event => { boardViewport.horizontalOffsetRef.current = event.nativeEvent.contentOffset.x; }}>{columns}</ScrollView>
   );
 }
@@ -403,9 +451,18 @@ function CollectionBoard<Item>(props: CollectionCardsProps<Item>): ReactElement 
 // ---------------------------------------------------------------------------------------------------------------
 
 type GridGeometry = Readonly<{
+  /**
+   * A card with no description and no footer content is a compact tile (R-APP-14): mark and title on one
+   * row, its `where` quiet on that row's end, one row's height plus the card padding.
+   */
+  compact: boolean;
   columns: number;
   cardWidth: number;
   cardHeight: number;
+  /** One card per row: no row peers to align with, so the card follows its content (no reserved bands). */
+  fitContent?: boolean;
+  /** The domain body's height when the anatomy draws its own card body (`cardContent`); else zero. */
+  contentHeight: number;
   /** Zero when no card in the grid has a description: the grid keeps no empty lines. */
   descriptionHeight: number;
   /** False when no card in the grid has a status or an action: the grid keeps no empty footer. */
@@ -428,36 +485,58 @@ function useGridSlots<Item>(model: HappierCollectionModel<Item>, anatomy: Collec
       // Nothing to read yet (loading): hold the anatomy's declared shape, so the skeleton matches what arrives.
       return {
         description: anatomy.description !== undefined,
-        footer: anatomy.reason !== undefined || anatomy.action !== undefined,
+        footer: anatomy.reason !== undefined || anatomy.action !== undefined || anatomy.age !== undefined,
         preview: anatomy.preview !== undefined,
       };
     }
-    let description = false;
-    let footer = false;
-    for (const item of items) {
-      if (!description && (anatomy.description?.(item) ?? null) !== null) description = true;
-      if (!footer && (present(anatomy.reason?.(item)) || present(anatomy.action?.(item)))) footer = true;
-      if (description && footer) break;
-    }
-    return { description, footer, preview: anatomy.preview !== undefined };
+    return readGridSlots(items, anatomy);
   }, [anatomy, model.sections]);
 }
 
-function useGridGeometry(width: number | null, minCardWidth: number, slots: GridSlots): GridGeometry {
+/** The bands these cards need: a description band when any has one, a footer band when any has footer content. */
+function readGridSlots<Item>(items: readonly Item[], anatomy: CollectionAnatomy<Item>): GridSlots {
+  let description = false;
+  let footer = false;
+  for (const item of items) {
+    if (!description && (anatomy.description?.(item) ?? null) !== null) description = true;
+    if (!footer && (present(anatomy.reason?.(item)) || present(anatomy.action?.(item)) || present(anatomy.age?.(item)))) footer = true;
+    if (description && footer) break;
+  }
+  return { description, footer, preview: anatomy.preview !== undefined };
+}
+
+/**
+ * The grid's card geometry for a set of bands. Exact per text size, never measured per card. The grid's
+ * columns come from its whole-grid bands; each shelf sizes its cards from its own (a shelf where no card
+ * has a description or a footer drops that band), so heights stay equal within a shelf.
+ */
+function useGridGeometryResolver(width: number | null, minCardWidth: number, contentHeightAtNormalText: number | null, bodyOwnsFooter = false): (slots: GridSlots) => GridGeometry {
+  const card = useCardLayout();
   const text = useCardText();
   const { textScale } = useHappierUiAccessibility();
-  return useMemo(() => {
+  return useCallback((slots: GridSlots): GridGeometry => {
     const inner = Math.max(0, (width ?? 0) - 2 * GUTTER);
     const { columns, cardWidth } = resolveHappierCollectionGridGeometry({ width: inner, minCardWidth: minCardWidth * textScale, gap: GUTTER });
     const descriptionHeight = slots.description ? 2 * text.meta : 0;
     // Exact per text size, never measured per card: every card is the same height, so rows are equal and footers align.
     const head = Math.max(CARD.markSize, text.title + text.meta);
     const previewHeight = slots.preview ? CARD.previewHeight : 0;
-    const cardHeight = 2 + 2 * CARD.padding + head + previewHeight
-      + (slots.description ? CARD.gap + descriptionHeight : 0)
-      + (slots.footer ? CARD.gap + CARD.footerHeight : 0);
-    return { columns, cardWidth, cardHeight, descriptionHeight, footer: slots.footer, previewHeight };
-  }, [minCardWidth, slots, text, textScale, width]);
+    if (contentHeightAtNormalText !== null) {
+      // A domain body is edge to edge and declares its own height; the footer keeps its padded place below it.
+      const contentHeight = Math.ceil(contentHeightAtNormalText * textScale);
+      const cardHeight = 2 + previewHeight + contentHeight + (slots.footer && !bodyOwnsFooter ? CARD.footerHeight + 2 * card.padding : 0);
+      return { compact: false, columns, cardWidth, cardHeight, contentHeight, descriptionHeight: 0, footer: slots.footer, previewHeight };
+    }
+    if (!slots.description && !slots.footer && previewHeight === 0) {
+      return { compact: true, columns, cardWidth, cardHeight: 2 + 2 * card.gap + Math.max(CARD.markSize, text.title),
+        contentHeight: 0, descriptionHeight: 0, footer: false, previewHeight };
+    }
+    const cardHeight = 2 + 2 * card.padding + head + previewHeight
+      + (slots.description ? card.gap + descriptionHeight : 0)
+      + (slots.footer ? card.gap + CARD.footerHeight : 0);
+    return { compact: false, columns, cardWidth, cardHeight, contentHeight: 0, descriptionHeight, footer: slots.footer, previewHeight,
+      fitContent: columns === 1 };
+  }, [bodyOwnsFooter, card, contentHeightAtNormalText, minCardWidth, text, textScale, width]);
 }
 
 function GridCardView<Item>(props: Readonly<{
@@ -486,6 +565,7 @@ function GridCardView<Item>(props: Readonly<{
   register: (key: string, target: HappierFocusable | null) => void;
 }>): ReactElement {
   const host = useOptionalPluginUiPresentationHost();
+  const cardLayout = useCardLayout();
   const { item, itemKey, anatomy, geometry } = props;
   const { theme, palette } = useCardColors();
   const testID = anatomy.testID?.(item);
@@ -494,12 +574,24 @@ function GridCardView<Item>(props: Readonly<{
   const status = anatomy.reason?.(item);
   const action = anatomy.action?.(item);
   const hasAction = action !== null && action !== undefined && action !== false;
+  // The footer's right column: the card's action, otherwise its age in the shared tabular meta column.
+  const age = hasAction ? null : anatomy.age?.(item) ?? null;
   const register = props.register;
   const onKey = props.onKey;
   const onFocus = props.onFocus;
   const multi = useListMultiSelectionRow(itemKey);
+  const cardSelected = props.multipleStore !== null ? multi.isSelected : props.selected;
   const actions = props.useRowActions?.(item) ?? {};
   const { activatable, selectable } = props;
+  // Row actions sit at the title line's end (the line reserves their width), not beside the card's body.
+  // A host destination can add its own row actions (open in a new tab), so a destination card reserves the place too.
+  const hasRowActions = anatomy.cardContent === undefined && ((actions.secondaryActions !== undefined && actions.secondaryActions.length > 0)
+    || (host?.renderDestinationRow !== undefined && anatomy.destination?.(item) != null));
+  const actionsCorner = useMemo(() => hasRowActions ? {
+    top: geometry.compact ? cardLayout.gap : geometry.previewHeight + cardLayout.padding,
+    end: cardLayout.padding, height: CARD.markSize,
+  } : null, [cardLayout.gap, cardLayout.padding, geometry.compact, geometry.previewHeight, hasRowActions]);
+  const titleLineEnd = hasRowActions ? { paddingRight: CARD.markSize } : null;
   const select = (event?: import('../presentation/portableTypes.js').HappierGestureResponderEvent): 'handled' | 'open' => {
     if (props.singleChoice) {
       onFocus(itemKey);
@@ -509,26 +601,55 @@ function GridCardView<Item>(props: Readonly<{
     return activateListItem({ key: itemKey, event, store: props.multipleStore,
       focus: onFocus, open: props.onOpen });
   };
-  const row: ReactElement<ItemProps> = (
+  const cardContent = anatomy.cardContent;
+  // Without a preview band the mark leads the card, and the title, description and status share
+  // the title's left edge; a card with a preview band reads top-down, so its text keeps the inset.
+  const textColumnInset = geometry.previewHeight === 0 ? CARD.markSize + Number(cardLayout.lineStyle.gap ?? 0) : 0;
+  const row: ReactElement<ItemProps> = cardContent !== undefined ? (
+    // The domain body fills the card's one target edge to edge; the footer's place stays reserved below it.
     <List.Item {...actions} showDivider={false} density="compact" accessoryOutsidePressable
       accessibilityLabel={anatomy.accessibilityLabel(item)} accessibilityHint={anatomy.accessibilityHint?.(item)}
-      testID={testID} style={{ flex: 1, padding: CARD.padding,
-        ...(geometry.previewHeight === 0 ? {} : { paddingTop: geometry.previewHeight + CARD.padding }), borderRadius: RADIUS - 1 }}
+      testID={testID} style={{ flex: 1, padding: 0, paddingTop: geometry.previewHeight, borderRadius: RADIUS - 1 }}
     >
-      <View style={{ flex: 1, gap: CARD.gap }}>
+      <View style={{ flex: 1 }}>
+        <View style={{ height: geometry.contentHeight, overflow: 'hidden' }}>{cardContent.render(item)}</View>
+        {!geometry.footer || cardContent.ownsFooter ? null : <View style={{ height: CARD.footerHeight + 2 * cardLayout.padding }} />}
+      </View>
+    </List.Item>
+  ) : (
+    <List.Item {...actions} showDivider={false} density="compact" accessoryOutsidePressable
+      accessibilityLabel={anatomy.accessibilityLabel(item)} accessibilityHint={anatomy.accessibilityHint?.(item)}
+      testID={testID} style={{ flex: 1, padding: cardLayout.padding,
+        // A compact tile is one row: the card's gap above and below it, as between a card's own lines.
+        ...(geometry.compact ? { paddingVertical: cardLayout.gap } : {}),
+        ...(geometry.previewHeight === 0 ? {} : { paddingTop: geometry.previewHeight + cardLayout.padding }), borderRadius: RADIUS - 1 }}
+    >
+      <View style={{ flex: 1, gap: cardLayout.gap }}>
 
-        <View style={[lineStyle, { alignItems: 'flex-start' }]}>
+        {geometry.compact ? (
+        // A compact tile: one row, the quiet `where` at its end (a version, a reach).
+        <View style={[cardLayout.lineStyle, { alignItems: 'center' }, titleLineEnd]}>
+          <View style={[markStyle, { width: CARD.markSize, height: CARD.markSize }]}>{anatomy.glyph(item)}</View>
+          <View style={shrinkStyle}>
+            <HappierText variant="label" tone="neutral" numberOfLines={1} style={titleStyle}>{anatomy.title(item)}</HappierText>
+          </View>
+          {where === undefined || where === null ? null : <View style={{ flexShrink: 0, marginLeft: 'auto' }}><Slot value={where} /></View>}
+        </View>
+        ) : (
+        <View style={[cardLayout.lineStyle, { alignItems: 'flex-start' }, titleLineEnd]}>
           <View style={[markStyle, { width: CARD.markSize, height: CARD.markSize }]}>{anatomy.glyph(item)}</View>
           <View style={shrinkStyle}>
             <HappierText variant="label" tone="neutral" numberOfLines={1} style={titleStyle}>{anatomy.title(item)}</HappierText>
             <Slot value={where} />
           </View>
         </View>
+        )}
         {geometry.descriptionHeight === 0 ? null : (
-        <View style={{ height: geometry.descriptionHeight }}>
+        // One text column: the description hangs under the title, not under the mark.
+        <View style={{ ...(geometry.fitContent ? {} : { height: geometry.descriptionHeight }), marginLeft: textColumnInset }}>
           {description === null ? null : (
             <HappierText
-              variant="body"
+              variant="meta"
               tone="secondary"
               numberOfLines={2}
               {...(testID === undefined ? {} : { testID: `${testID}:description` })}
@@ -547,11 +668,11 @@ function GridCardView<Item>(props: Readonly<{
   );
   const card = (
     <View
-      style={[gridCardStyle, { width: geometry.cardWidth, height: geometry.cardHeight, backgroundColor: palette.sheet, borderColor: palette.sheetBorder }]}
+      style={[gridCardStyle, { width: geometry.cardWidth, ...(geometry.fitContent ? {} : { height: geometry.cardHeight }), backgroundColor: palette.sheet, borderColor: palette.sheetBorder }]}
       testID={testID === undefined ? undefined : `${testID}:card`}
     >
       <ListItemSelectionContext.Provider value={{
-        itemKey, multiSelectable: selectable, selected: props.multipleStore !== null ? multi.isSelected : props.selected,
+        itemKey, multiSelectable: selectable, selected: cardSelected,
         activatable, select, positionInSet: props.rowIndex + 1, setSize: props.count,
         roving: { isTabStop: props.tabStop, register: target => register(itemKey, target),
           onFocus: () => onFocus(itemKey),
@@ -559,7 +680,11 @@ function GridCardView<Item>(props: Readonly<{
         accessibilityPattern: props.singleChoice ? 'radiogroup' : 'grid', unavailableReason: props.unavailableReason,
         rowIndex: props.rowIndex, rowCount: props.count,
       }}>
-        {renderCollectionItemDestination(host, anatomy, item, row)}
+        <HappierCardSelectionRingContext.Provider value>
+          <HappierCardActionsCornerContext.Provider value={actionsCorner}>
+            {renderCollectionItemDestination(host, anatomy, item, row)}
+          </HappierCardActionsCornerContext.Provider>
+        </HappierCardSelectionRingContext.Provider>
       </ListItemSelectionContext.Provider>
       {geometry.previewHeight === 0 ? null : (
         // Anchor the edge-to-edge band to the card, not the padded metadata inside List.Item.
@@ -580,12 +705,18 @@ function GridCardView<Item>(props: Readonly<{
       {!geometry.footer ? null : (
         // The action has its own target beside the body's, never inside it. Both columns share the available
         // width: a long status shrinks before the action, rather than running underneath an overlaid control.
-        <View pointerEvents="box-none" style={gridFooterStyle}>
-          <View pointerEvents="none" style={[shrinkStyle, { justifyContent: 'center' }]}><Slot value={status} /></View>
+        <View pointerEvents="box-none" style={cardLayout.gridFooterStyle}>
+          <View pointerEvents="none" style={[shrinkStyle, { justifyContent: 'center', marginLeft: textColumnInset }]}><Slot value={status} /></View>
           {!hasAction ? null : <View style={gridActionStyle}>{action}</View>}
+          {age === null ? null : (
+            <View pointerEvents="none" style={{ justifyContent: 'center', flexShrink: 0 }}>
+              <HappierText variant="meta" tone="muted" numberOfLines={1} tabularNumbers>{age}</HappierText>
+            </View>
+          )}
         </View>
       )}
-      {props.selected ? <SelectedRing color={palette.selection} {...(testID === undefined ? {} : { testID: `${testID}:selected` })} /> : null}
+      {/* The ring is the card's one selection mark, for the open card and for each card in a bulk set. */}
+      {props.selected || cardSelected ? <SelectedRing color={palette.selection} {...(testID === undefined ? {} : { testID: `${testID}:selected` })} /> : null}
     </View>
   );
   return card;
@@ -599,9 +730,23 @@ const GridCard = memo(GridCardView) as typeof GridCardView;
 
 function CollectionGrid<Item>(props: CollectionCardsProps<Item>): ReactElement {
   const { model, anatomy } = props;
+  const card = useCardLayout();
   const { theme } = useCardColors();
   const { viewport, scrollRequest } = useHappierCollectionViewport(model, 'grid');
-  const geometry = useGridGeometry(props.width, props.minCardWidth ?? CARD.gridMinCardWidth, useGridSlots(model, anatomy));
+  const resolveGeometry = useGridGeometryResolver(props.width, props.minCardWidth ?? CARD.gridMinCardWidth,
+    anatomy.cardContent?.height ?? null, anatomy.cardContent?.ownsFooter === true);
+  const gridSlots = useGridSlots(model, anatomy);
+  const geometry = useMemo(() => resolveGeometry(gridSlots), [gridSlots, resolveGeometry]);
+  // Each grid row's own bands (R-APP-10, R-APP-14): cards in a row share its tallest card's height, and a
+  // row where no card has a description or footer content drops that band (all compact tiles).
+  const rowGeometries = useMemo(() => model.sections.map((section) => {
+    const rows: GridGeometry[] = [];
+    for (let start = 0; start < section.items.length; start += geometry.columns) {
+      const slots = readGridSlots(section.items.slice(start, start + geometry.columns), anatomy);
+      rows.push(slots.description === gridSlots.description && slots.footer === gridSlots.footer ? geometry : resolveGeometry(slots));
+    }
+    return rows;
+  }), [anatomy, geometry, gridSlots, model.sections, resolveGeometry]);
   const keyOf = model.keyOf;
   const keys = useMemo(() => model.sections.flatMap((section) => section.items.map(keyOf)), [keyOf, model.sections]);
   const rowIndices = useMemo(() => new Map(keys.map((key, index) => [key, index])), [keys]);
@@ -700,11 +845,11 @@ function CollectionGrid<Item>(props: CollectionCardsProps<Item>): ReactElement {
             {...(props.testID === undefined || !shelf ? {} : { testID: `${props.testID}:shelf:${group.key}` })}
           >
             {!shelf ? null : (
-              <View style={shelfHeaderStyle}>
+              <View style={card.shelfHeaderStyle}>
                 <View style={shrinkStyle}>
                   <HappierText variant="label" tone="neutral" numberOfLines={1} style={titleStyle}>{group.title}</HappierText>
                   {group.description === undefined ? null : (
-                    <HappierText variant="caption" tone="muted" numberOfLines={1}>{group.description}</HappierText>
+                    <HappierText variant="meta" tone="muted" numberOfLines={1}>{group.description}</HappierText>
                   )}
                 </View>
                 <CollectionGroupActionButton
@@ -729,7 +874,7 @@ function CollectionGrid<Item>(props: CollectionCardsProps<Item>): ReactElement {
                       item={item}
                       itemKey={key}
                       anatomy={anatomy}
-                      geometry={geometry}
+                      geometry={rowGeometries[sectionIndex]?.[rowIndex] ?? geometry}
                       count={keys.length}
                       activatable={props.selection?.isItemActivatable?.(item) !== false && single?.isItemSelectable?.(item) !== false}
                       selectable={props.selection?.multiple !== undefined && props.selection.multiple.isItemSelectable?.(item) !== false}
@@ -777,6 +922,18 @@ export function CollectionGroupActionButton(props: Readonly<{
 }>): ReactElement | null {
   const action = props.action;
   if (action === null) return null;
+  if (action.kind === 'operation') {
+    return (
+      <Button
+        variant="secondary"
+        size="small"
+        title={action.label}
+        accessibilityLabel={`${action.label}, ${props.groupTitle}`}
+        onPress={action.onPress}
+        {...(props.testID === undefined ? {} : { testID: `${props.testID}:group:${props.groupKey}:action` })}
+      />
+    );
+  }
   return (
     <HappierPressable
       accessibilityRole="button"
@@ -785,7 +942,7 @@ export function CollectionGroupActionButton(props: Readonly<{
       {...(props.testID === undefined ? {} : { testID: `${props.testID}:group:${props.groupKey}:action` })}
       style={(state) => ({ opacity: state.pressed ? 0.6 : 1 })}
     >
-      <HappierText variant="caption" tone="secondary">{action.label}</HappierText>
+      <HappierText variant="meta" tone="secondary">{action.label}</HappierText>
     </HappierPressable>
   );
 }
@@ -800,7 +957,7 @@ export function CollectionCards<Item>(props: CollectionCardsProps<Item>): ReactE
 
 const fillStyle: HappierPortableStyle = { flex: 1, minWidth: 0, minHeight: 0 };
 const shrinkStyle: HappierPortableStyle = { flex: 1, minWidth: 0, flexShrink: 1 };
-const lineStyle: HappierPortableStyle = { flexDirection: 'row', alignItems: 'center', gap: 8, minWidth: 0 };
+const lineStyle: HappierPortableStyle = { flexDirection: 'row', alignItems: 'center', minWidth: 0 };
 const titleStyle: HappierPortableStyle = { fontWeight: '600' };
 const markStyle: HappierPortableStyle = { alignItems: 'center', justifyContent: 'center' };
 const ringStyle: HappierPortableStyle = {
@@ -812,18 +969,13 @@ const ringStyle: HappierPortableStyle = {
   borderWidth: 2,
   borderRadius: RADIUS + 1,
 };
-const boardRowStyle: HappierPortableStyle = { flex: 1, flexDirection: 'row', minWidth: 0, minHeight: 0, paddingHorizontal: GUTTER - CARD.boardCardInsetX };
-const boardRowScrollStyle: HappierPortableStyle = { flexGrow: 1, flexDirection: 'row', paddingHorizontal: GUTTER - CARD.boardCardInsetX };
-const boardListContentStyle: HappierPortableStyle = { gap: 0, paddingBottom: CARD.padding };
-const boardItemStyle: HappierPortableStyle = { paddingHorizontal: CARD.boardCardInsetX, paddingVertical: CARD.boardCardInsetY };
+const boardRowStyle: HappierPortableStyle = { flex: 1, flexDirection: 'row', minWidth: 0, minHeight: 0 };
+const boardRowScrollStyle: HappierPortableStyle = { flexGrow: 1, flexDirection: 'row' };
 const boardCardStyle: HappierPortableStyle = { borderWidth: 1, borderRadius: RADIUS, overflow: 'visible' };
-const boardCardBodyStyle: HappierPortableStyle = { gap: 6, paddingHorizontal: 12, paddingTop: 11, paddingBottom: 12 };
-const agentStripStyle: HappierPortableStyle = { borderTopWidth: 1, paddingHorizontal: 12, paddingVertical: 9, flexDirection: 'row', alignItems: 'center' };
-const columnHeaderStyle: HappierPortableStyle = { gap: 2, paddingHorizontal: CARD.boardCardInsetX, paddingTop: 14, paddingBottom: 10 };
-const pagerStyle: HappierPortableStyle = { paddingHorizontal: GUTTER, paddingVertical: 10 };
+const agentStripStyle: HappierPortableStyle = { borderTopWidth: 1, flexDirection: 'row', alignItems: 'center' };
 const gridContentStyle: HappierPortableStyle = { padding: GUTTER, gap: HAPPIER_PAGE_METRICS.sectionGapPx };
 const shelfStyle: HappierPortableStyle = { gap: GUTTER };
-const shelfHeaderStyle: HappierPortableStyle = { flexDirection: 'row', alignItems: 'flex-end', gap: 12, paddingHorizontal: HAPPIER_PAGE_METRICS.headingOpticalInsetPx };
+const shelfHeaderStyle: HappierPortableStyle = { flexDirection: 'row', alignItems: 'flex-end', paddingHorizontal: HAPPIER_PAGE_METRICS.headingOpticalInsetPx };
 const gridRowStyle: HappierPortableStyle = { flexDirection: 'row', gap: GUTTER };
 const gridCardStyle: HappierPortableStyle = { borderWidth: 1, borderRadius: RADIUS };
 const gridPreviewStyle: HappierPortableStyle = {
@@ -837,9 +989,6 @@ const gridPreviewStyle: HappierPortableStyle = {
 const gridFooterStyle: HappierPortableStyle = {
   ...lineStyle,
   position: 'absolute',
-  left: CARD.padding + 1,
-  right: CARD.padding + 1,
-  bottom: CARD.padding + 1,
   height: CARD.footerHeight,
 };
 const gridActionStyle: HappierPortableStyle = {

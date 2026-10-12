@@ -15,6 +15,7 @@ import { HappierScrollArea, HappierStack } from '../presentation/layout/Layout.j
 import { HappierText } from '../presentation/text/Text.js';
 import {
   HAPPIER_MENU_ROW_METRICS,
+  HAPPIER_MENU_ROW_TEXT,
   resolveHappierMenuContent,
   resolveHappierMenuRadioGroups,
   useHappierMenuInteraction,
@@ -23,8 +24,6 @@ import {
 import type { HappierTextVariant, HappierTone } from '../presentation/semantics.js';
 import { HAPPIER_PRESS_FEEDBACK_V1, happierPressTransitionStyle } from '../presentation/interaction/pressFeedback.js';
 import { HAPPIER_FOCUS_RING_DELEGATED_STYLE, happierFocusRingStyle } from '../presentation/interaction/focusVisible.js';
-import { resolveHappierButtonChrome, useHappierButtonMaterial } from '../presentation/interaction/buttonChrome.js';
-import { HappierSurfaceGradientLayer } from '../presentation/layout/SurfaceGradientLayer.js';
 import { settleHappierRaisedEdge } from '../presentation/layout/raisedEdge.js';
 import { HAPPIER_ICON_BUTTON_SIZE, resolveHappierIconButtonChrome } from '../presentation/interaction/iconButtonChrome.js';
 import {
@@ -32,8 +31,11 @@ import {
   HappierFieldBoxTrigger,
   resolveHappierFieldBoxLabel,
 } from '../presentation/form/FieldBox.js';
-import { resolveHappierUiPalette, useOptionalHappierUiPalette } from '../environment/context.js';
-import { Icon, type IconName } from './Icon.js';
+import { resolveHappierUiPalette, useOptionalHappierUiPalette, useOptionalHappierUiTypography } from '../environment/context.js';
+import { resolveHappierTextStepStyle } from '../presentation/layout/pageText.js';
+import { resolveHappierIconSize } from '../presentation/content/Icon.js';
+import { useButtonFace } from './Button.js';
+import { Icon, PluginUiIconGlyph, type IconName } from './Icon.js';
 import { OverlayFieldTriggerContext } from './overlayFieldTrigger.js';
 import { Surface } from './Surface.js';
 import { usePluginTheme } from './PluginUiProvider.js';
@@ -62,8 +64,15 @@ export type PopoverProps = Readonly<{
    */
   triggerAppearance?: 'text' | 'control' | 'primary';
   /**
-   * Draw the trigger as this glyph alone, an icon button, instead of its text: a pane header's "+" or
-   * a row's ⋯. `trigger` stays the words the control stands for; `triggerAccessibilityLabel` names it.
+   * Draws a caret after a plain `text` trigger, so a title that opens a menu reads as one ("Entry ⌄" in
+   * a table's column header). Labelled appearances (`control`, `primary`) are buttons and never take it.
+   */
+  triggerDisclosure?: boolean;
+  /**
+   * The trigger's glyph. With the default `text` appearance the trigger is this glyph alone, an icon
+   * button (a pane header's "+", a row's ⋯), and `trigger` stays the words it stands for. With a
+   * labelled appearance (`control`, `primary`) the glyph leads the visible words, as a `Button`'s
+   * leading icon does ("+ Link a PR or issue"). `triggerAccessibilityLabel` names the control either way.
    */
   triggerIcon?: IconName;
   triggerAccessibilityLabel: string;
@@ -92,6 +101,15 @@ type PopoverPresentationProps = PopoverProps & Readonly<{
   renderContent?: (controls: PluginUiPopoverContentControls) => ReactNode;
 }>;
 
+/** A group heading starts on the rows' own text edge, with the menu's row rhythm above it. */
+const groupLabelStyle = {
+  paddingHorizontal: HAPPIER_MENU_ROW_METRICS.paddingHorizontalPx,
+  paddingTop: HAPPIER_MENU_ROW_METRICS.paddingVerticalPx,
+} as const;
+
+/** A text trigger's words and caret on one line, the caret kept close like a sorted title's arrow. */
+const disclosureTriggerStyle = { flexDirection: 'row', alignItems: 'center', gap: 3, minWidth: 0 } as const;
+
 function requestContextOpen(event: unknown, onOpenChange: (open: boolean) => void) {
   const candidate = event as { preventDefault?: () => void; stopPropagation?: () => void } | null;
   candidate?.preventDefault?.();
@@ -108,9 +126,10 @@ function PopoverPresentation({
   open,
   onOpenChange,
   trigger,
-  triggerTextVariant = 'body',
+  triggerTextVariant = 'meta',
   triggerTextTone = 'neutral',
   triggerAppearance = 'text',
+  triggerDisclosure = false,
   triggerIcon,
   triggerAccessibilityLabel,
   contentAccessibilityLabel: requestedContentAccessibilityLabel,
@@ -134,7 +153,6 @@ function PopoverPresentation({
   }
   const nativeMinimumTouchTarget = useHappierNativeMinimumInteractiveTargetSize();
   const theme = usePluginTheme();
-  const material = useHappierButtonMaterial(theme);
   const host = useOptionalPluginUiPresentationHost();
   const followScrollRef = useOptionalPluginUiPopoverScrollSource();
   const fieldTrigger = useContext(OverlayFieldTriggerContext);
@@ -147,6 +165,15 @@ function PopoverPresentation({
     requestContextOpen(event, onOpenChange);
   }, [onOpenChange]);
   const contentAccessibilityLabel = requestedContentAccessibilityLabel ?? triggerAccessibilityLabel;
+  // Only the plain-text appearance turns a glyph into an icon button; a labelled one keeps its words.
+  const iconOnly = triggerIcon !== undefined && triggerAppearance === 'text';
+  // A labelled trigger is a Button's face, glyph and all: the view's primary, or the small secondary
+  // of a toolbar's control row. Both hooks run on every render, whichever appearance draws.
+  const primaryFace = useButtonFace('primary', 'normal', disabled === true);
+  const controlFace = useButtonFace('secondary', 'small', disabled === true);
+  const buttonFace = fieldTrigger ? null
+    : triggerAppearance === 'primary' ? primaryFace
+      : triggerAppearance === 'control' ? controlFace : null;
   const iconChrome = (state: HappierPressableStyleState) => resolveHappierIconButtonChrome({
     size: HAPPIER_ICON_BUTTON_SIZE, variant: 'plain', selected: state.selected,
     hovered: state.hovered, pressed: state.pressed, focused: state.focused, disabled: state.disabled,
@@ -199,7 +226,10 @@ function PopoverPresentation({
         accessibilityRole="button"
         tabIndex={triggerTabIndex}
         testID={testID}
-        style={(state) => ({
+        style={(state) => buttonFace ? {
+          ...(nativeMinimumTouchTarget === undefined ? {} : { minWidth: nativeMinimumTouchTarget }),
+          ...buttonFace.style(state),
+        } : ({
           ...(nativeMinimumTouchTarget === undefined ? {} : {
             minHeight: nativeMinimumTouchTarget,
             minWidth: nativeMinimumTouchTarget,
@@ -210,31 +240,7 @@ function PopoverPresentation({
           // on a narrow row it takes the row's width up to the field box's own maximum.
           // The field box inside draws the ring.
           ...(fieldTrigger ? { alignSelf: 'stretch', alignItems: 'stretch', ...HAPPIER_FOCUS_RING_DELEGATED_STYLE } : {}),
-          ...(!fieldTrigger && triggerIcon !== undefined ? iconChrome(state).frame : {}),
-          ...(!fieldTrigger && triggerIcon !== undefined ? { borderRadius: HAPPIER_ICON_BUTTON_SIZE / 2 } : {}),
-          ...(!fieldTrigger && triggerIcon === undefined && triggerAppearance === 'primary'
-            ? resolveHappierButtonChrome({
-                theme,
-                variant: 'primary',
-                disabled: state.disabled,
-                focused: state.focused,
-                pressed: state.pressed,
-                gloss: palette.accentGloss,
-                ...material,
-              }).style
-            : {}),
-          ...(!fieldTrigger && triggerIcon === undefined && triggerAppearance === 'control'
-            ? {
-                flexDirection: 'row',
-                gap: theme.spacing.xsmall,
-                paddingHorizontal: theme.spacing.medium,
-                borderRadius: theme.radii.control,
-                borderWidth: 1,
-                borderColor: 'transparent',
-                backgroundColor: theme.colors.control,
-                ...happierFocusRingStyle({ visible: state.focused, color: theme.colors.focus }),
-              }
-            : {}),
+          ...(!fieldTrigger && iconOnly ? iconChrome(state).frame : {}),
           opacity: state.disabled ? 0.45 : state.pressed ? HAPPIER_PRESS_FEEDBACK_V1.opacity : 1,
           ...happierPressTransitionStyle(state.pressed, ['opacity']),
         })}
@@ -260,22 +266,23 @@ function PopoverPresentation({
               <HappierText accessible={false} numberOfLines={1} style={label.style}>{label.text}</HappierText>
             </HappierFieldBoxTrigger>
           );
-        } : triggerIcon !== undefined ? (state) => (
-          <View style={iconChrome({ ...state, pressed: false }).surface}>
+        } : iconOnly ? (state) => (
+          <View style={iconChrome(state).surface}>
             <Icon name={triggerIcon} size="medium" tone="neutral" />
           </View>
-        ) : triggerAppearance === 'primary' ? (state) => (
-          <>
-          <HappierSurfaceGradientLayer gradient={resolveHappierButtonChrome({ theme, variant: 'primary', disabled: state.disabled, focused: state.focused, pressed: state.pressed }).gradient} borderRadius={theme.radii.control} />
-          <HappierText
-            accessible={false}
-            variant="label"
-            numberOfLines={1}
-            style={{ color: resolveHappierButtonChrome({ theme, variant: 'primary', disabled: false, focused: false, ...material }).foreground }}
-          >
-            {trigger}
-          </HappierText>
-          </>
+        ) : buttonFace ? (state) => buttonFace.renderContent(state, {
+          // The glyph in the button's own ink, at a Button's leading-icon size.
+          ...(triggerIcon === undefined ? {} : {
+            icon: <PluginUiIconGlyph name={triggerIcon} size={resolveHappierIconSize('small')} color={buttonFace.foreground} />,
+          }),
+          children: trigger,
+        }) : triggerDisclosure && !iconOnly ? (
+          <View style={disclosureTriggerStyle}>
+            <HappierText accessible={false} variant={triggerTextVariant} tone={triggerTextTone} numberOfLines={1}>
+              {trigger}
+            </HappierText>
+            <HappierFieldBoxChevron open={open} color={theme.colors.secondaryText} />
+          </View>
         ) : (
           <HappierText accessible={false} variant={triggerTextVariant} tone={triggerTextTone} numberOfLines={1}>
             {trigger}
@@ -291,6 +298,7 @@ function PopoverPresentation({
             initialFocusRef,
             placement: placement ?? 'auto',
             presentation,
+            width: fieldTrigger ? 'anchor' : 'content',
             autoFocusOnOpen: shouldAutoFocusOnOpen,
             onRequestClose: () => onOpenChange(false),
             content,
@@ -395,6 +403,8 @@ type MenuContentProps =
 export type MenuProps = Omit<PopoverProps, 'children'> & MenuContentProps & Readonly<{
   /** One controlled selected id per named radio group; radio rows never own checks locally. */
   radioGroups?: readonly MenuRadioGroup[];
+  /** Draws each named group's heading above its rows (a Filters menu of labelled checkbox groups). */
+  showGroupLabels?: boolean;
   onSelect(id: string): void;
 }>;
 
@@ -481,6 +491,13 @@ function MenuRows({
     else itemRefs.current.delete(id);
     if (id === activeItemId) initialFocusRef.current = node;
   }, [activeItemId, initialFocusRef]);
+  // The one menu row type (`HAPPIER_MENU_ROW_TEXT`), in the host's face, as core's own menus draw it.
+  const typography = useOptionalHappierUiTypography();
+  const labelTextStyle = useMemo(() => resolveHappierTextStepStyle(HAPPIER_MENU_ROW_TEXT.label, typography), [typography]);
+  const subtitleTextStyle = useMemo(() => ({
+    ...resolveHappierTextStepStyle(HAPPIER_MENU_ROW_TEXT.subtitle, typography),
+    marginTop: HAPPIER_MENU_ROW_METRICS.subtitleGapPx,
+  }), [typography]);
   const renderItem = (entry: MenuEntry) => {
     const { item, index } = entry;
     const checked = item.kind === 'radio'
@@ -534,8 +551,8 @@ function MenuRows({
       >
         {item.icon ? <Icon name={item.icon} size="small" tone={item.destructive ? 'danger' : 'secondary'} /> : null}
         <View style={{ flex: 1, flexShrink: 1 }}>
-          <HappierText tone={item.destructive ? 'danger' : 'neutral'}>{item.label}</HappierText>
-          {item.subtitle ? <HappierText variant="caption" tone="secondary">{item.subtitle}</HappierText> : null}
+          <HappierText tone={item.destructive ? 'danger' : 'neutral'} style={labelTextStyle}>{item.label}</HappierText>
+          {item.subtitle ? <HappierText tone="secondary" style={subtitleTextStyle}>{item.subtitle}</HappierText> : null}
         </View>
         {/* The checked state is drawn, not only announced. */}
         {checked === true ? <Icon name="check" size="small" tone="accent" /> : null}
@@ -569,7 +586,9 @@ function MenuRows({
           accessibilityLabel={group.accessibilityLabel}
           aria-label={group.accessibilityLabel}
         >
-          {showGroupLabels ? <HappierText variant="caption" tone="secondary">{group.accessibilityLabel}</HappierText> : null}
+          {showGroupLabels ? (
+            <HappierText variant="micro" tone="secondary" style={groupLabelStyle}>{group.accessibilityLabel}</HappierText>
+          ) : null}
           {renderEntries(createMenuRenderEntries(group.entries, resolvedRadioGroups))}
         </View>
       ))}
@@ -581,6 +600,7 @@ function MenuPresentation({
   items: ungroupedItems = [],
   groups = [],
   radioGroups = [],
+  showGroupLabels = false,
   onSelect,
   onOpenChange,
   kind,
@@ -611,6 +631,7 @@ function MenuPresentation({
           triggerAccessibilityLabel={popover.triggerAccessibilityLabel}
           controls={controls}
           initialFocusRef={initialFocusRef}
+          showGroupLabels={showGroupLabels}
         />
       )}
     />

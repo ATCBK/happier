@@ -33,6 +33,20 @@ describe('table columns', () => {
     expect(narrower.map((column) => column.key)).toEqual(['title', 'where', 'reason', 'age']);
   });
 
+  it('lets a growable column take half of the room beyond the minimum layout, up to its cap, and leaves the title the rest', () => {
+    const growable = columns.map((column) => (column.key === 'where' ? { ...column, maxWidth: 280 } : column));
+    const width = (available: number, key: string) => resolveHappierCollectionTableColumns({ columns: growable, availableWidth: available, gap: 12 })
+      .find((column) => column.key === key)!.minWidth;
+    // The minimum layout is 936: no spare room, no growth.
+    expect(width(936, 'where')).toBe(150);
+    // 200 spare: half (100) goes to the growable column.
+    expect(width(1136, 'where')).toBe(250);
+    // A very wide table stops at the column's cap.
+    expect(width(3000, 'where')).toBe(280);
+    // Columns that did not ask to grow never do.
+    expect(width(3000, 'reason')).toBe(170);
+  });
+
   it('never drops the title, even when nothing else fits', () => {
     const visible = resolveHappierCollectionTableColumns({ columns, availableWidth: 100, gap: 12 });
     expect(visible.map((column) => column.key)).toEqual(['title']);
@@ -60,6 +74,13 @@ describe('detail auto composition', () => {
 
   it('opens nothing with detail none', () => {
     expect(resolveHappierCollectionComposition({ ...wide, detail: 'none', open: true })).toBe('table');
+  });
+
+  it('with detail none, stands as a table wherever its own list minimum fits: no detail minimum is reserved', () => {
+    // A detail-less table (a whole-disk level, a process table) has nothing to put beside it.
+    expect(resolveHappierCollectionComposition({ presentation: 'table', detail: 'none', splitFits: false, tableFits: true, open: false })).toBe('table');
+    expect(resolveHappierCollectionComposition({ presentation: 'table', detail: 'none', splitFits: false, tableFits: false, open: false })).toBe('list');
+    expect(resolveHappierCollectionComposition({ presentation: 'list', detail: 'none', splitFits: true, tableFits: true, open: false })).toBe('list');
   });
 
   it('keeps a board or a grid on screen, and pushes its detail where the host has no pane beside the page', () => {

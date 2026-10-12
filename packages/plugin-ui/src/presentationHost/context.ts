@@ -193,6 +193,12 @@ export type PluginUiPresentationHost = Readonly<{
   resolveMaterialColor?(input: Readonly<{ color: string; role?: HappierMaterialRole; nested: boolean; translucentColor?: string }>): string;
   /** Incumbent platform image decoder; Session-media acquisition remains in the mounted host API. */
   storedImageHost?: HappierStoredImageHost;
+  /**
+   * Keep a pushed detail's pinned footer above the on-screen keyboard through the host's keyboard
+   * owner. `openedOffset` is how much of the footer's bottom padding (its home-indicator inset) may
+   * tuck under the open keyboard. Absent (web, a hosted frame), the footer stays at the page's foot.
+   */
+  renderKeyboardStickyFooter?(input: Readonly<{ openedOffset: number; children: ReactNode }>): ReactNode;
   /** The host's own date and time picker for `LocalDateTimeField`; absent, the field is typed alone. */
   localDateTimePicker?: import('../presentation/form/LocalDateTimeField.js').HappierLocalDateTimePickerHost;
   /** Qualified row destinations use the incumbent workspace owner; absent hosts keep ordinary activation. */
@@ -344,6 +350,12 @@ export type PluginUiPresentationHost = Readonly<{
     placement?: 'auto' | 'top' | 'bottom' | 'left' | 'right';
     /** Semantic disposition selects the host's established portal sizing contract. */
     presentation?: PluginUiPopoverPresentation;
+    /**
+     * `anchor` (a field box's choice list) matches the trigger's width. `content` (every other trigger)
+     * sizes to the content, with the trigger's width only as a minimum. Hosts that do not size by content
+     * ignore it.
+     */
+    width?: 'anchor' | 'content';
     /** Menu-like content asks the incumbent host Popover to move focus on open. */
     autoFocusOnOpen?: boolean;
     onRequestClose(): void;

@@ -37,6 +37,7 @@ export type {
 export {
   HAPPIER_ANDROID_MINIMUM_INTERACTIVE_TARGET_SIZE,
   HAPPIER_DEFAULT_MINIMUM_INTERACTIVE_TARGET_SIZE,
+  HAPPIER_POINTER_MINIMUM_INTERACTIVE_TARGET_SIZE,
   resolveHappierMinimumInteractiveTargetSize,
   useHappierNativeMinimumInteractiveTargetSize,
 } from './interactiveTarget.js';

@@ -102,6 +102,8 @@ export type HappierPressableProps = Readonly<{
    * it is emitted from the one this owner already keeps.
    */
   onFocusChange?: (focused: boolean) => void;
+  /** The pointer's hover entering and leaving, from the same hover fact the chrome uses (never touch). */
+  onHoverChange?: (hovered: boolean) => void;
   disabled?: boolean;
   /**
    * Declare the busy state instead of deriving it from the press promise, for a
@@ -214,6 +216,11 @@ function isKeyboardGeneratedClick(event: unknown): boolean {
 
 const anchorStyle: ViewStyle = { position: 'relative' };
 
+function isTouchPointer(event: unknown): boolean {
+  const native = (event as { nativeEvent?: { pointerType?: unknown } } | null)?.nativeEvent;
+  return native?.pointerType === 'touch';
+}
+
 /** Whether this focus shows its ring: {@link isHappierFocusVisible} for the focused element. */
 function isFocusVisible(event: unknown): boolean {
   return isHappierFocusVisible((event as { target?: unknown } | null)?.target);
@@ -227,6 +234,7 @@ export function HappierPressable({
   onContextMenu,
   onKeyDown,
   onFocusChange,
+  onHoverChange,
   disabled,
   busy,
   invalid,
@@ -263,6 +271,15 @@ export function HappierPressable({
   const [pressed, setPressed] = useState(false);
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
+  // Web: losing focus commits after the focus move has settled. A focus-dependent overlay (a
+  // tooltip, its anchor) that unmounted inside the blur event removed nodes while the document's
+  // active element was briefly <body>; a trapped focus scope (the web modal's) reads that as "the
+  // focused element was removed" and pulls focus to its container, so Tab never reached the next
+  // control (composer chips after "Open prompts").
+  const blurCommitRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (blurCommitRef.current !== null) clearTimeout(blurCommitRef.current);
+  }, []);
   const pendingRef = useRef(false);
   const controlNodeRef = useRef<HappierFocusable | null>(null);
   const pendingKeyboardFocusRestoreRef = useRef(false);
@@ -486,10 +503,28 @@ export function HappierPressable({
       onLongPress={isDisabled ? undefined : onLongPress}
       {...webContextMenuProps}
       onKeyDown={Platform.OS === 'web' ? handleKeyDown : undefined}
-      onHoverIn={() => setHovered(true)}
-      onHoverOut={() => setHovered(false)}
-      onFocus={(event: unknown) => { setFocused(isFocusVisible(event)); onFocusChange?.(true); }}
-      onBlur={() => { setFocused(false); onFocusChange?.(false); }}
+      // A finger has no hover: a touch that RNW reports as a pointer entering never paints hover
+      // chrome or opens a hover tooltip.
+      onHoverIn={(event: unknown) => { if (isTouchPointer(event)) return; setHovered(true); onHoverChange?.(true); }}
+      onHoverOut={() => { setHovered(false); onHoverChange?.(false); }}
+      onFocus={(event: unknown) => {
+        if (blurCommitRef.current !== null) clearTimeout(blurCommitRef.current);
+        blurCommitRef.current = null;
+        setFocused(isFocusVisible(event));
+        onFocusChange?.(true);
+      }}
+      onBlur={() => {
+        if (Platform.OS === 'web') {
+          if (blurCommitRef.current !== null) clearTimeout(blurCommitRef.current);
+          blurCommitRef.current = setTimeout(() => {
+            blurCommitRef.current = null;
+            setFocused(false);
+          }, 0);
+        } else {
+          setFocused(false);
+        }
+        onFocusChange?.(false);
+      }}
       style={pressableStyle}
     >
       {content}

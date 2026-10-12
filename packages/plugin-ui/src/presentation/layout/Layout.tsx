@@ -16,6 +16,7 @@ import type {
 } from '../portableTypes.js';
 import { PluginUiPopoverScrollSourceProvider, useOptionalPluginUiPresentationHost } from '../../presentationHost/context.js';
 import { PluginUiScrollActivityProvider } from '../../presentationHost/scrollActivity.js';
+import { useHappierPageChrome } from './pageChrome.js';
 
 // The semantic gap vocabulary is owned by the RN-free shared module so the
 // public adapter and the host declarative renderer cannot disagree about it.
@@ -27,6 +28,8 @@ export {
 
 export type HappierStackProps = Readonly<{
   children?: ReactNode;
+  /** Fill available space without imposing a minimum content width. */
+  grow?: boolean;
   /** Private semantic focus binding supplied by the public layout adapter. */
   controlRef?: (instance: HappierFocusable | null) => void;
   direction?: 'vertical' | 'horizontal';
@@ -69,6 +72,7 @@ export type HappierScrollAreaProps = Readonly<{
 
 const screenBaseStyle: ViewStyle = { flex: 1, minWidth: 0 };
 const stackBaseStyle: ViewStyle = { minWidth: 0 };
+const stackGrowStyle: ViewStyle = { flex: 1, minWidth: 0 };
 
 export function HappierScreen({ children, controlRef, onLayout, testID, style, safeAreaInsets }: HappierScreenProps) {
   const insetStyle: ViewStyle | undefined = safeAreaInsets
@@ -94,6 +98,7 @@ export function HappierScreen({ children, controlRef, onLayout, testID, style, s
 
 export function HappierStack({
   children,
+  grow = false,
   direction = 'vertical',
   gap = 0,
   wrap = false,
@@ -112,6 +117,7 @@ export function HappierStack({
       testID={testID}
       style={[
         stackBaseStyle,
+        grow ? stackGrowStyle : undefined,
         {
           flexDirection: direction === 'horizontal' ? 'row' : 'column',
           gap,
@@ -139,6 +145,8 @@ export function HappierScrollArea({
 }: HappierScrollAreaProps) {
   const scrollSourceRef = useRef<ScrollView | null>(null);
   const host = useOptionalPluginUiPresentationHost();
+  const pageChrome = useHappierPageChrome();
+  const columnMaxWidthPx = scrollProps.horizontal === true ? undefined : pageChrome?.columnMaxWidthPx;
   const createTracker = host?.createScrollActivityTracker;
   const tracker = useMemo(() => createTracker?.(scrollSourceRef, scrollProps.horizontal === true) ?? null,
     [createTracker, scrollProps.horizontal]);
@@ -165,7 +173,11 @@ export function HappierScrollArea({
         contentContainerStyle={[insetStyle, contentContainerStyle]}
         keyboardShouldPersistTaps={keyboardShouldPersistTaps}
       >
-        {children}
+        {/* A page's scroll owns its column: every block (a banner, a card, a state), not only the
+            sections that centre themselves, sits on the column the page header uses (R-APP-4). */}
+        {columnMaxWidthPx === undefined ? children : (
+          <View style={{ alignSelf: 'center', width: '100%', maxWidth: columnMaxWidthPx }}>{children}</View>
+        )}
       </ScrollView>
       </PluginUiScrollActivityProvider>
     </PluginUiPopoverScrollSourceProvider>

@@ -128,7 +128,7 @@ function WorkListSection(props: HappierWorkSectionProps) {
           theme={theme}
           reducedMotion={props.reducedMotion}
         />
-      ) : <WorkSectionBody {...props} />}
+      ) : renderWorkSectionBody(props)}
     </View>
   );
 }
@@ -211,13 +211,14 @@ function WorkPageSection(props: HappierWorkSectionProps) {
           reducedMotion={props.reducedMotion}
         />
       ) : (
-        <HappierWorkFlatSheet theme={theme}><WorkSectionBody {...props} /></HappierWorkFlatSheet>
+        <HappierWorkFlatSheet theme={theme}>{renderWorkSectionBody(props)}</HappierWorkFlatSheet>
       )}
     </View>
   );
 }
 
-function WorkSectionBody(props: HappierWorkSectionProps) {
+// Keep the groups visible to the sheet's canonical child/divider owner.
+function renderWorkSectionBody(props: HappierWorkSectionProps) {
   return (
     <>
       {props.empty ? <HappierWorkSectionEmptyLine theme={props.theme} host={props.host} {...props.empty} /> : props.children}

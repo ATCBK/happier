@@ -7,6 +7,12 @@ export const HAPPIER_DEFAULT_MINIMUM_INTERACTIVE_TARGET_SIZE = 44;
 export const HAPPIER_ANDROID_MINIMUM_INTERACTIVE_TARGET_SIZE = 48;
 
 /**
+ * A precise pointer's floor: WCAG 2.2 AA target size (2.5.8). Dense pointer layouts keep their
+ * drawn sizes above it; the touch floors above apply only where the primary pointer is a finger.
+ */
+export const HAPPIER_POINTER_MINIMUM_INTERACTIVE_TARGET_SIZE = 24;
+
+/**
  * The one 44/48 platform policy shared by Happier core adapters and portable
  * presentation. Callers that render dense desktop/web layouts can retain their
  * density by using {@link useHappierNativeMinimumInteractiveTargetSize}, which

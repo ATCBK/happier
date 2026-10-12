@@ -31,13 +31,15 @@ describe('public data nodes through React Native Web', () => {
     const mount = mountThroughReactNativeWeb(render(96, 1));
     try {
       const chart = query(mount.container, 'sized-chart')!;
-      const bar = query(mount.container, 'sized-chart-bar-1')!.firstElementChild as HTMLElement;
+      const bar = query(mount.container, 'sized-chart-bar-1-0')!;
       const compactHeight = Number.parseFloat(bar.style.height);
       await mount.render(render(384, 4));
       expect(Number.parseFloat(bar.style.height)).toBeGreaterThan(compactHeight);
       expect(query(mount.container, 'sized-chart')).toBe(chart);
       expect(mount.container.querySelectorAll('[data-testid^="sized-chart-bar-"]')).toHaveLength(3);
-      expect(chart.getAttribute('aria-label')).toBe('Signups: Mon 214, Tue 236, Wed 183');
+      expect(chart.getAttribute('aria-label')).toContain('Mon: Signups 214');
+      act(() => query(mount.container, 'sized-chart-values-toggle')!.click());
+      expect(query(mount.container, 'sized-chart-values-row-2')!.getAttribute('aria-label')).toContain('Signups: 183');
     } finally { mount.unmount(); }
   });
   it('draws a row\'s trailing identity marks after its title and before the amount, outside the spoken label', () => {
@@ -51,6 +53,16 @@ describe('public data nodes through React Native Web', () => {
       expect(row.textContent).toBe('glassCX38');
       expect(row.getAttribute('aria-label')).toBe('glass, Cost: 38, 100%');
       expect(query(mount.container, 'ledger-row-1')!.textContent).toBe('relay12');
+    } finally { mount.unmount(); }
+  });
+  it('draws the mark by what it means, so a true value that is bad never reads as a tick', () => {
+    const context = createSurfaceContext();
+    const mount = mountThroughReactNativeWeb(<HappierDataRows testID="tests" theme={context.theme}
+      columns={[{ label: 'Test' }]} rows={[[ 'pager' ], [ 'widget' ]]}
+      marks={[{ passed: true, label: 'Flaky', meaning: 'bad' }, { passed: false, label: 'Stable', meaning: 'good' }]} />);
+    try {
+      expect(query(mount.container, 'tests-mark-0')!.textContent).toContain('✗');
+      expect(query(mount.container, 'tests-mark-1')!.textContent).toContain('✓');
     } finally { mount.unmount(); }
   });
   it('shows the status mark and announces its label for every CI row', () => {
@@ -67,7 +79,8 @@ describe('public data nodes through React Native Web', () => {
   });
   it('keeps every table row, drops the secondary column on a phone width and still reads it in each row', () => {
     const context = createSurfaceContext();
-    const rows = Array.from({ length: 30 }, (_, index) => [`Person ${index}`, 'Team', 'Paired 2 machines', '10:38']);
+    // This table actually overflows a phone with the current shared text scale.
+    const rows = Array.from({ length: 30 }, (_, index) => [`Person ${index}`, 'Professional', 'Paired 2 machines', '10:38']);
     const mount = mountThroughReactNativeWeb(
       <PluginUiProvider hostApi={createHostApiStub(context)} context={context}>
         <DataTable testID="people" label="Newest people" incomplete="More in the full view"
@@ -82,7 +95,7 @@ describe('public data nodes through React Native Web', () => {
       expect(query(mount.container, 'people-header-1')).toBeNull();
       expect(query(mount.container, 'people-header-0')).not.toBeNull();
       expect(mount.container.querySelectorAll('[role="row"]')).toHaveLength(31);
-      expect(query(mount.container, 'people-row-29')!.getAttribute('aria-label')).toBe('Person: Person 29, Plan: Team, Got to: Paired 2 machines, Joined: 10:38');
+      expect(query(mount.container, 'people-row-29')!.getAttribute('aria-label')).toBe('Person: Person 29, Plan: Professional, Got to: Paired 2 machines, Joined: 10:38');
       expect(query(mount.container, 'people-incomplete')!.textContent).toBe('More in the full view');
       layout(table, 900);
       expect(query(mount.container, 'people-header-1')).not.toBeNull();
@@ -106,7 +119,7 @@ describe('public data nodes through React Native Web', () => {
     }
   });
 
-  it('is one labelled image naming every point, with the current period as the one strong bar', () => {
+  it('keeps exact values and bucket selection on the N=1 public chart', () => {
     const context = createSurfaceContext();
     const points = [{ x: 'Mon', y: 214 }, { x: 'Tue', y: 236 }, { x: 'Wed', y: 183 }];
     const mount = mountThroughReactNativeWeb(
@@ -114,14 +127,12 @@ describe('public data nodes through React Native Web', () => {
     );
     try {
       const chart = query(mount.container, 'signups')!;
-      expect(chart.getAttribute('role')).toBe('img');
-      expect(chart.getAttribute('aria-label')).toMatch(/^Signups per day: Mon 214, Tue 236, Wed 183$/u);
-      const last = query(mount.container, 'signups-bar-2')!.firstElementChild as HTMLElement;
-      const rest = query(mount.container, 'signups-bar-1')!.firstElementChild as HTMLElement;
-      expect(last.style.opacity).toBe('1');
-      expect(Number(rest.style.opacity)).toBeLessThan(1);
-      // The tallest point fills the plot; a shorter one is proportionally lower.
-      expect(rest.style.height).toBe('64px');
+      expect(query(mount.container, 'signups-bucket-1')!.getAttribute('role')).toBe('button');
+      expect(chart.getAttribute('aria-label')).toContain('Tue: Signups per day 236');
+      act(() => query(mount.container, 'signups-bucket-1')!.click());
+      expect(query(mount.container, 'signups-readout')!.textContent).toContain('236');
+      act(() => query(mount.container, 'signups-values-toggle')!.click());
+      expect(query(mount.container, 'signups-values-row-2')!.getAttribute('aria-label')).toContain('Signups per day: 183');
     } finally {
       mount.unmount();
     }

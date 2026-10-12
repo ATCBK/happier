@@ -43,7 +43,9 @@ function useVisibleStructure(rows: readonly unknown[] | undefined, hasSummary: b
   let count = 0;
   let top = STRUCTURE_TOP;
   if (hasSummary) top = measured.summaryHeight === undefined ? bandHeight : top + measured.summaryHeight + STRUCTURE_GAP;
-  while (rows && count < rows.length && top < bandHeight) {
+  // Until the band is measured its first row shows: an unmeasured card is never a white box (a virtualized
+  // grid mounts cards late, and the first paint used to land before the band's layout).
+  while (rows && count < rows.length && (top < bandHeight || (bandHeight === 0 && count === 0))) {
     const height = measured.heights[count];
     count += 1;
     if (height === undefined) break;
@@ -70,6 +72,11 @@ function useVisibleStructure(rows: readonly unknown[] | undefined, hasSummary: b
 function stripInline(text: string): string {
   return text.replace(/`([^`]*)`/g, '$1').replace(/\*\*([^*]*)\*\*/g, '$1').replace(/[*_]([^*_]+)[*_]/g, '$1').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1');
 }
+/** A one-line text run collapses leading spaces; non-breaking ones keep a code excerpt's indentation on every host. */
+function keepIndentation(line: string): string {
+  const indent = /^[ \t]*/.exec(line)![0];
+  return indent.length === 0 ? line : indent.replace(/\t/g, '  ').replace(/ /g, '\u00a0') + line.slice(indent.length);
+}
 function readMarkdownPreviewLines(markdown: string): readonly PreviewLine[] {
   const lines: PreviewLine[] = [];
   for (const raw of markdown.split('\n')) {
@@ -94,17 +101,17 @@ export const HappierArtifactPreviewCard = React.memo(function HappierArtifactPre
   const text = (value: string, style: HappierPortableStyle, numberOfLines?: number, typography?: 'semiBold' | 'mono') => host.renderText({ text: value, style, numberOfLines, typography });
   if (preview.kind === 'markdown') return <View style={band} testID={props.testID} aria-hidden accessible={false} importantForAccessibility="no-hide-descendants">
     {readMarkdownPreviewLines(preview.text).map((line, index) => line.kind === 'heading'
-      ? <React.Fragment key={index}>{text(line.text, { fontSize: 12, lineHeight: 16, color: colors.primary, marginBottom: 2 }, 1, 'semiBold')}</React.Fragment>
-      : <View key={index} style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+      ? <React.Fragment key={index}>{text(line.text, { flexShrink: 0, fontSize: 12, lineHeight: 16, color: colors.primary, marginTop: index === 0 ? 0 : 4, marginBottom: 2 }, 1, 'semiBold')}</React.Fragment>
+      : <View key={index} style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 0 }}>
         {line.kind === 'bullet' ? text('•', { fontSize: 11, lineHeight: 15, color: colors.tertiary }) : null}
         {line.kind === 'check' ? host.renderIcon({ name: line.done ? 'check-square' : 'square', size: 11, color: colors.tertiary }) : null}
         {text(line.text, { flexShrink: 1, fontSize: 11, lineHeight: 15, color: line.done ? colors.tertiary : colors.secondary,
-          ...(line.done ? { textDecorationLine: 'line-through' as const } : {}) }, 2)}
+          ...(line.done ? { textDecorationLine: 'line-through' as const } : {}) }, line.kind === 'text' ? 4 : 2)}
       </View>)}
   </View>;
   if (preview.kind === 'code') return <View style={band} testID={props.testID} aria-hidden accessible={false} importantForAccessibility="no-hide-descendants">
     {preview.text.split('\n').slice(0, PREVIEW_LINES + 1).map((line, index) => <React.Fragment key={index}>
-      {text(line.length > 0 ? line : ' ', { fontSize: 10.5, lineHeight: 16, color: colors.primary }, 1, 'mono')}
+      {text(line.length > 0 ? keepIndentation(line) : ' ', { flexShrink: 0, fontSize: 10.5, lineHeight: 16, color: colors.primary }, 1, 'mono')}
     </React.Fragment>)}
   </View>;
   if (preview.kind === 'workflow') return <View style={[band, { gap: STRUCTURE_GAP }]} testID={props.testID} onLayout={structure.onBandLayout}

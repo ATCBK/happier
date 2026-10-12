@@ -77,6 +77,12 @@ const reactNativeWebAliases = [
   { find: /^react-native$/u, replacement: resolve('../../apps/ui/node_modules/react-native-web/dist/index.js') },
   // Native/Metro chooses this web implementation by platform extension; Vite does not.
   { find: /^react-native-svg$/u, replacement: resolve('../../apps/ui/node_modules/react-native-svg/lib/module/elements.web.js') },
+  // The same external author proof also has a source-only inner loop; package preparation
+  // and loaded-platform certification remain owned by their integrated lanes.
+  { find: '@external-authoring/plugin', replacement: resolve('fixtures/external-authoring/src/index.ts') },
+  { find: '@external-authoring/semantic-surface', replacement: resolve('fixtures/external-authoring/src/semanticSurface.tsx') },
+  { find: '@external-authoring/targeted-surface', replacement: resolve('../plugin-sdk/fixtures/external-targeted-packages/target/src/surface.tsx') },
+  { find: '@external-authoring/targeted-contributor', replacement: resolve('../plugin-sdk/fixtures/external-targeted-packages/contributor/src/index.ts') },
 ];
 
 export default defineConfig({
@@ -110,7 +116,7 @@ export default defineConfig({
           // contributor shell cannot fail every mount test at once.
           env: { HAPPIER_FEATURE_POLICY_ENV: '', NODE_ENV: 'test' },
           setupFiles: ['./src/rnwTestSetup.ts'],
-          include: ['src/**/*.rnw.test.tsx'],
+          include: ['src/**/*.rnw.test.tsx', 'scripts/externalAuthoringSemanticProof.rnw.test.tsx'],
           exclude: sharedExclude,
         },
       },

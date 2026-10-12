@@ -28,7 +28,7 @@ const sdkTestingEntry = resolve(installedSdkRoot, 'dist/testing/index.js');
 const sdkUiEntry = resolve(installedSdkRoot, 'dist/ui/index.js');
 const pluginUiEntry = resolve(installedPluginUiRoot, 'dist/index.js');
 const pluginUiAdvancedEntry = resolve(installedPluginUiRoot, 'dist/advanced/index.js');
-const pluginUiPresentationEntry = resolve(installedPluginUiRoot, 'dist/presentation/index.js');
+const pluginUiComponentsEntry = resolve(installedPluginUiRoot, 'dist/components/index.js');
 const pluginUiEnvironmentEntry = resolve(installedPluginUiRoot, 'dist/environment/index.js');
 const pluginUiTestingEntry = resolve(installedPluginUiRoot, 'dist/testing/index.js');
 const consumerReactEntry = resolve(consumerNodeModulesRoot, 'react/index.js');
@@ -62,7 +62,7 @@ export default defineConfig({
       { find: /^@happier-dev\/plugin-sdk\/ui$/u, replacement: sdkUiEntry },
       { find: /^@happier-dev\/plugin-ui$/u, replacement: pluginUiEntry },
       { find: /^@happier-dev\/plugin-ui\/advanced$/u, replacement: pluginUiAdvancedEntry },
-      { find: /^@happier-dev\/plugin-ui\/presentation$/u, replacement: pluginUiPresentationEntry },
+      { find: /^@happier-dev\/plugin-ui\/components$/u, replacement: pluginUiComponentsEntry },
       { find: /^@happier-dev\/plugin-ui\/environment$/u, replacement: pluginUiEnvironmentEntry },
       { find: /^@happier-dev\/plugin-ui\/testing$/u, replacement: pluginUiTestingEntry },
       {

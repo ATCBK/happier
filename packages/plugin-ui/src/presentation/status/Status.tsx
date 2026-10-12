@@ -25,6 +25,9 @@ export type HappierStatusProps = Readonly<{
   contrast?: HappierUiAccessibility['contrast'];
   /** Whether the status is currently active/in flight. */
   isPulsing?: boolean;
+  presentation?: 'notice' | 'inline';
+  indicator?: boolean;
+  leading?: ReactNode;
   /** Host-owned retained-surface activity; false pauses native pulse work. */
   animationEnabled?: boolean;
   /** Private semantic focus binding supplied by the public Status adapter. */
@@ -61,17 +64,21 @@ function textStyle(role: HappierPortableStyle, color: string): HappierPortableSt
  */
 export function HappierStatus(props: HappierStatusProps) {
   const environmentAccessibility = useOptionalHappierUiAccessibility();
+  const inline = props.presentation === 'inline';
   const accessibilityLiveRegion = props.accessibilityLiveRegion ?? 'polite';
   const ariaLive = accessibilityLiveRegion === 'none' ? 'off' : accessibilityLiveRegion;
   const highContrast = (props.contrast ?? environmentAccessibility?.contrast) === 'high';
   const toneColor = props.theme.colors[HAPPIER_TONE_COLOR_TOKEN[props.tone]];
   // A status line is quiet metadata beside the content it describes: body for
   // its name, caption for its value — never the row-title weight of a label.
-  const bodyStyle = useHappierTypeRoleStyle('body', props.theme);
-  const captionStyle = useHappierTypeRoleStyle('caption', props.theme);
+  const bodyStyle = useHappierTypeRoleStyle('meta', props.theme);
+  const captionStyle = useHappierTypeRoleStyle('micro', props.theme);
   const label = renderStatusText(
     props.label,
-    textStyle(bodyStyle, props.theme.colors.text),
+    textStyle(bodyStyle, inline ? props.theme.colors.secondaryText : props.theme.colors.text),
+    false,
+    undefined,
+    inline ? 1 : undefined,
   );
   const value = props.value === undefined
     ? null
@@ -85,19 +92,22 @@ export function HappierStatus(props: HappierStatusProps) {
   const region = (
     <View
       ref={props.controlRef}
-      role="status"
+      role={inline ? undefined : 'status'}
       tabIndex={props.controlRef ? -1 : undefined}
       testID={props.testID}
       {...(props.accessibilityLabel === undefined
         ? {}
         : { accessibilityLabel: props.accessibilityLabel, 'aria-label': props.accessibilityLabel })}
-      accessibilityLiveRegion={accessibilityLiveRegion}
-      aria-live={ariaLive}
-      style={props.action === undefined || props.action === null
+      accessibilityLiveRegion={inline ? undefined : accessibilityLiveRegion}
+      aria-live={inline ? undefined : ariaLive}
+      style={inline
+        ? { minWidth: 0, maxWidth: '100%', flexDirection: 'row', alignItems: 'center', gap: props.theme.spacing.xsmall }
+        : props.action === undefined || props.action === null
         ? { flexDirection: 'row', alignItems: 'center', gap: props.theme.spacing.small }
         : { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: props.theme.spacing.small }}
     >
-      <HappierStatusDot
+      {props.leading}
+      {props.indicator === false ? null : <HappierStatusDot
         color={toneColor}
         isPulsing={props.isPulsing}
         animationEnabled={props.animationEnabled}
@@ -105,8 +115,10 @@ export function HappierStatus(props: HappierStatusProps) {
           size: 8,
           style: { borderWidth: 1, borderColor: props.theme.colors.text },
         } : {})}
-      />
-      <View style={{ flex: 1, minWidth: 0, gap: props.theme.spacing.xsmall }}>
+      />}
+      <View style={inline
+        ? { flexShrink: 1, minWidth: 0 }
+        : { flex: 1, minWidth: 0, gap: props.theme.spacing.xsmall }}>
         {label}
         {value}
       </View>
@@ -126,11 +138,12 @@ function renderStatusText(
   style: HappierPortableStyle,
   selectable = false,
   elementStyleOverride?: HappierPortableStyle,
+  numberOfLines?: number,
 ): ReactNode {
   if (isValidElement<{ style?: unknown }>(value)) {
     return elementStyleOverride === undefined
       ? value
       : cloneElement(value, { style: [value.props.style, elementStyleOverride] });
   }
-  return <HappierText selectable={selectable} style={style}>{value}</HappierText>;
+  return <HappierText selectable={selectable} numberOfLines={numberOfLines} style={style}>{value}</HappierText>;
 }

@@ -29,6 +29,41 @@ export function formatHappierDataValue(value: HappierDataValue, locale?: string)
   }
 }
 
+/** What a byte figure measures; it sets the base, never the call site (program ruling D8). */
+export type HappierDataBytesKind = 'storage' | 'memory';
+
+const HAPPIER_BYTE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'] as const;
+
+/**
+ * A byte figure split into its number and unit, in the reader's locale. Storage (disks, files, scans,
+ * transfers) is decimal, as drives and the OS show it ("994 GB", a 1 TB drive is "1 TB"); memory (RAM,
+ * processes, swap) is binary labelled GB, as Activity Monitor and Task Manager do ("128 GB"). Values at
+ * or above one unit keep three significant figures ("3.84 GB", "58.4 GB", "412 GB"); whole values drop
+ * trailing zeroes. Sub-byte values keep the whole-byte presentation.
+ */
+export function formatHappierDataBytesParts(bytes: number, options: Readonly<{ kind: HappierDataBytesKind; locale?: string }>): Readonly<{ value: string; unit: string }> {
+  const base = options.kind === 'memory' ? 1024 : 1000;
+  let value = Number.isFinite(bytes) ? Math.max(0, bytes) : 0;
+  let index = 0;
+  while (index < HAPPIER_BYTE_UNITS.length - 1 && value >= base) { value /= base; index += 1; }
+  let rounded = value >= 1 ? Number(value.toPrecision(3)) : Math.round(value);
+  // Rounding can reach the next unit's threshold ("1000 KB"): carry it.
+  if (index < HAPPIER_BYTE_UNITS.length - 1 && rounded >= base) { rounded = 1; index += 1; }
+  let text: string;
+  try {
+    text = new Intl.NumberFormat(options.locale === undefined ? undefined : [options.locale], { maximumSignificantDigits: 3 }).format(rounded);
+  } catch {
+    text = String(rounded);
+  }
+  return { value: text, unit: HAPPIER_BYTE_UNITS[index]! };
+}
+
+/** "412 GB", "128 GB", "180 MB": a byte figure in the base its kind sets. */
+export function formatHappierDataBytes(bytes: number, options: Readonly<{ kind: HappierDataBytesKind; locale?: string }>): string {
+  const parts = formatHappierDataBytesParts(bytes, options);
+  return `${parts.value} ${parts.unit}`;
+}
+
 /** A whole-number percentage in the reader's locale ("63%"). */
 export function formatHappierDataShare(share: number, locale?: string): string {
   try {
@@ -122,61 +157,17 @@ export function describeHappierDataChart(label: string, points: readonly Happier
   return `${label}: ${values.join(', ')}`;
 }
 
-/**
- * Bar heights as fractions of the plot, measured from a zero baseline. Every bar keeps a visible
- * stub so a zero still reads as a point in the series.
- */
-export function resolveHappierDataBarHeights(points: readonly HappierDataPoint[], plotHeight: number, stub: number): readonly number[] {
-  const shares = resolveHappierDataShares(points.map((point) => point.y));
-  return shares.map((share) => Math.round(stub + share * Math.max(0, plotHeight - stub)));
-}
-
-/** A line's vertices inside a measured plot, scaled between the series' own lowest and highest values. */
-export function resolveHappierDataLinePoints(
-  points: readonly HappierDataPoint[],
-  width: number,
-  height: number,
-  strokeWidth: number,
-): readonly Readonly<{ x: number; y: number }>[] {
-  if (points.length === 0 || width <= 0 || height <= 0) return [];
-  const values = points.map((point) => point.y);
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const span = max - min;
-  const inset = strokeWidth / 2;
-  const usable = Math.max(0, height - strokeWidth);
-  return points.map((point, index) => ({
-    x: points.length === 1 ? width / 2 : (index / (points.length - 1)) * width,
-    y: inset + (span > 0 ? (1 - (point.y - min) / span) * usable : usable / 2),
-  }));
-}
-
-/** The straight pieces between consecutive vertices, as centre, length and angle in degrees. */
-export function resolveHappierDataLineSegments(vertices: readonly Readonly<{ x: number; y: number }>[]): readonly Readonly<{
-  centerX: number;
-  centerY: number;
-  length: number;
-  angle: number;
-}>[] {
-  const segments = [];
-  for (let index = 1; index < vertices.length; index += 1) {
-    const from = vertices[index - 1]!;
-    const to = vertices[index]!;
-    const dx = to.x - from.x;
-    const dy = to.y - from.y;
-    segments.push({
-      centerX: (from.x + to.x) / 2,
-      centerY: (from.y + to.y) / 2,
-      length: Math.hypot(dx, dy),
-      angle: (Math.atan2(dy, dx) * 180) / Math.PI,
-    });
-  }
-  return segments;
-}
 
 /** `id` is a semantic bucket identity shared across series, not a series-local point index. */
 export type HappierSeriesPoint = Readonly<{ id: string; x: string | number; y: number | null; label?: string; annotation?: string; color?: string; opacity?: number }>;
-export type HappierSeries = Readonly<{ id: string; label: string; color?: string; detail?: string; lineStyle?: 'solid' | 'dashed' | 'dotted'; points: readonly HappierSeriesPoint[] }>;
+/**
+ * `fillOpacity` washes an area ribbon in its colour at that opacity and draws the ribbon's upper edge as a
+ * line, so a single history reads as a line over its own light fill rather than a solid block.
+ */
+export type HappierSeries = Readonly<{ id: string; label: string; color?: string; detail?: string; lineStyle?: 'solid' | 'dashed' | 'dotted'; fillPattern?: 'hatch'; fillOpacity?: number;
+  /** An observed comparison line in line/area charts, excluded from stacked totals/fills. */
+  overlay?: boolean;
+  points: readonly HappierSeriesPoint[] }>;
 export type HappierSeriesBucket = Readonly<{
   id: string; x: string | number; label: string; annotation?: string;
   values: readonly Readonly<{ seriesId: string; label: string; value: number | null; lower: number; upper: number; color?: string; opacity?: number }>[];
@@ -185,6 +176,8 @@ export type HappierSeriesBucket = Readonly<{
 /** One semantic bucket alignment and scale for bars, ribbons, lines and their exact-value alternatives. */
 export function resolveHappierSeriesGeometry(series: readonly HappierSeries[], options: Readonly<{
   width: number; height: number; variant: 'bar' | 'line' | 'area'; normalized?: boolean; fitLine?: boolean; minimumMaximum?: number;
+  /** A fixed value scale (a zoomed line with a labelled floor, a mirrored rate scale); it must hold every value. */
+  domain?: Readonly<{ min: number; max: number }>;
 }>) {
   const points = new Map<string, HappierSeriesPoint>();
   for (const entry of series) for (const point of entry.points) if (!points.has(point.id)) points.set(point.id, point);
@@ -194,11 +187,11 @@ export function resolveHappierSeriesGeometry(series: readonly HappierSeries[], o
   for (const point of points.values()) {
     let positive = 0;
     let negative = 0;
-    for (const entry of lookup) {
+    for (const [index, entry] of lookup.entries()) {
       const value = entry.get(point.id)?.y;
       if (typeof value !== 'number' || !Number.isFinite(value)) continue;
       largest = Math.max(largest, Math.abs(value));
-      if (value < 0) negative += value; else positive += value;
+      if (!series[index]!.overlay) { if (value < 0) negative += value; else positive += value; }
     }
     if (!Number.isFinite(positive) || !Number.isFinite(negative)) overflowingStack = true;
   }
@@ -208,16 +201,18 @@ export function resolveHappierSeriesGeometry(series: readonly HappierSeries[], o
   let max = options.normalized ? 1 : 0;
   const buckets: HappierSeriesBucket[] = [...points.values()].map((point) => {
     const raw = lookup.map((entry) => { const y = entry.get(point.id)?.y; return typeof y === 'number' && Number.isFinite(y) ? y : null; });
-    const normalizationUnit = options.normalized ? raw.reduce<number>((maxValue, value) => Math.max(maxValue, value ?? 0), 0) : 1;
-    const total = normalizationUnit > 0 ? raw.reduce<number>((sum, value) => sum + (value !== null && value > 0 ? value / normalizationUnit : 0), 0) : 0;
+    const normalizationUnit = options.normalized ? raw.reduce<number>((maxValue, value, index) =>
+      series[index]!.overlay ? maxValue : Math.max(maxValue, value ?? 0), 0) : 1;
+    const total = normalizationUnit > 0 ? raw.reduce<number>((sum, value, index) =>
+      sum + (!series[index]!.overlay && value !== null && value > 0 ? value / normalizationUnit : 0), 0) : 0;
     let positive = 0;
     let negative = 0;
     const values = series.map((entry, index) => {
       const value = raw[index] ?? null;
       const scaled = value === null ? 0 : options.normalized ? (total > 0 ? (value / normalizationUnit) / total : 0) : value / coordinateUnit;
-      const lower = options.variant === 'line' ? 0 : scaled < 0 ? negative : positive;
+      const lower = options.variant === 'line' || entry.overlay ? 0 : scaled < 0 ? negative : positive;
       const upper = lower + scaled;
-      if (scaled < 0) negative = upper; else positive = upper;
+      if (!entry.overlay) { if (scaled < 0) negative = upper; else positive = upper; }
       min = Math.min(min, upper); max = Math.max(max, upper);
       const ink = lookup[index]!.get(point.id);
       return { seriesId: entry.id, label: entry.label, value, lower, upper,
@@ -231,6 +226,10 @@ export function resolveHappierSeriesGeometry(series: readonly HappierSeries[], o
   }
   if (!options.normalized && options.minimumMaximum !== undefined && Number.isFinite(options.minimumMaximum)) {
     max = Math.max(max, options.minimumMaximum / coordinateUnit);
+  }
+  if (!options.normalized && options.domain && Number.isFinite(options.domain.min) && Number.isFinite(options.domain.max)
+    && options.domain.min < options.domain.max) {
+    min = options.domain.min / coordinateUnit; max = options.domain.max / coordinateUnit;
   }
   // An empty/zero bar rests at the baseline; flat lines still retain their centered fallback.
   if (options.variant === 'bar' && min === 0 && max === 0) max = 1 / coordinateUnit;
@@ -285,4 +284,38 @@ export function resolveHappierDataDomainFraction(value: number | null, min: numb
   // Halving avoids overflow across both finite number extrema. Ordinary domains retain direct
   // subtraction so subnormal differences are not rounded away by halving.
   return Number.isFinite(span) ? (value - min) / span : (value / 2 - min / 2) / (max / 2 - min / 2);
+}
+
+/**
+ * Ordered tonal ramp for telling series apart: index 0 is the full accent, later steps fade in
+ * strictly decreasing, still-legible amounts. Eight steps, so eight categories never wrap.
+ */
+export const HAPPIER_SERIES_RAMP_ALPHAS = [1, 0.82, 0.68, 0.56, 0.46, 0.37, 0.29, 0.22] as const;
+
+const HAPPIER_HEX6 = /^#([0-9a-fA-F]{6})$/;
+
+/** `color` at `amount` over `paper`, as one solid colour; `null` when either is not `#RRGGBB`. */
+export function mixHappierColorOverPaper(color: string, paper: string, amount: number): string | null {
+  const top = HAPPIER_HEX6.exec(color.trim());
+  const under = HAPPIER_HEX6.exec(paper.trim());
+  if (!top || !under) return null;
+  const a = parseInt(top[1]!, 16);
+  const b = parseInt(under[1]!, 16);
+  const channel = (shift: number) => Math.round(((a >> shift) & 0xff) * amount + ((b >> shift) & 0xff) * (1 - amount));
+  return `#${[16, 8, 0].map((shift) => channel(shift).toString(16).padStart(2, '0')).join('')}`;
+}
+
+/**
+ * Step `index` of the accent's ramp. On a known paper the step is solid (pre-mixed with the paper), so
+ * stacked steps keep their order on glass; otherwise it is the accent at that alpha.
+ */
+export function resolveHappierSeriesRampColor(accent: string, paper: string | null | undefined, index: number): string {
+  const alpha = HAPPIER_SERIES_RAMP_ALPHAS[Math.max(0, Math.min(index, HAPPIER_SERIES_RAMP_ALPHAS.length - 1))]!;
+  if (alpha >= 1) return accent;
+  const mixed = paper ? mixHappierColorOverPaper(accent, paper, alpha) : null;
+  if (mixed) return mixed;
+  const hex = HAPPIER_HEX6.exec(accent.trim());
+  if (!hex) return accent;
+  const value = parseInt(hex[1]!, 16);
+  return `rgba(${(value >> 16) & 0xff}, ${(value >> 8) & 0xff}, ${value & 0xff}, ${alpha})`;
 }

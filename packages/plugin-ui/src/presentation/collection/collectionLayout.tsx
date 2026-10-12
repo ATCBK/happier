@@ -1,6 +1,7 @@
 import { createContext, useContext } from 'react';
 
 import type { HappierListDetailLayoutState } from './listDetailGeometry.js';
+import type { HappierCollectionComposition } from './collectionTable.js';
 
 /**
  * How a Collection is currently composed: `split` puts the list beside the detail, `stacked` shows one
@@ -13,10 +14,14 @@ import type { HappierListDetailLayoutState } from './listDetailGeometry.js';
 export type HappierCollectionLayoutMode = 'measuring' | HappierListDetailLayoutState['mode'];
 
 /**
- * Only the mode is published, one frozen value per mode, so a resize that keeps the mode re-renders
- * no reader; the pane widths stay inside the split geometry.
+ * The mode and, for Collection, its actual list/table/board composition are published. Pane widths
+ * stay inside the geometry; Collection keeps the value stable until either published fact changes.
  */
-export type HappierCollectionLayoutState = Readonly<{ mode: HappierCollectionLayoutMode }>;
+export type HappierCollectionLayoutState = Readonly<{
+  mode: HappierCollectionLayoutMode;
+  /** The current Collection composition, when provided by Collection rather than a standalone split layout. */
+  composition?: HappierCollectionComposition;
+}>;
 
 const HAPPIER_COLLECTION_LAYOUT_STATES: Readonly<Record<HappierCollectionLayoutMode, HappierCollectionLayoutState>> = Object.freeze({
   measuring: Object.freeze({ mode: 'measuring' }),

@@ -70,6 +70,11 @@ export type HappierWorkStateColors = Readonly<{ foreground: string; background: 
 
 /** The colours the status treatment reads (a {@link HappierWorkTheme}'s `colors` satisfies it). */
 export type HappierWorkStatusColors = Readonly<{
+  /**
+   * The card's own fill. Given, a tone's tint is laid over it as one opaque colour, so a tinted card never
+   * shows what lies beneath it (a Board Canvas's dots, a card it overlaps).
+   */
+  surface?: string;
   secondaryText: string;
   attention: HappierWorkStateColors;
   danger: HappierWorkStateColors;
@@ -81,6 +86,34 @@ export function softenHappierWorkColor(color: string, alpha: number): string | n
   if (!hex) return null;
   const value = parseInt(hex[1]!, 16);
   return `rgba(${(value >> 16) & 0xff}, ${(value >> 8) & 0xff}, ${value & 0xff}, ${alpha})`;
+}
+
+function parseRgba(color: string): readonly [number, number, number, number] | null {
+  const value = color.trim();
+  const hex = /^#([0-9a-fA-F]{6})$/u.exec(value);
+  if (hex) {
+    const n = parseInt(hex[1]!, 16);
+    return [(n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff, 1];
+  }
+  const rgb = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+)\s*)?\)$/u.exec(value);
+  return rgb ? [Number(rgb[1]), Number(rgb[2]), Number(rgb[3]), rgb[4] === undefined ? 1 : Number(rgb[4])] : null;
+}
+
+/** A translucent tint laid over an opaque fill, as the one opaque colour it shows; unparseable input keeps the tint. */
+function layOver(tint: string, surface: string | undefined): string {
+  const over = parseRgba(tint);
+  const under = surface === undefined ? null : parseRgba(surface);
+  if (!over || !under || under[3] !== 1) return tint;
+  const channel = (index: number) => Math.round(over[index]! * over[3] + under[index]! * (1 - over[3]));
+  return `rgb(${channel(0)}, ${channel(1)}, ${channel(2)})`;
+}
+
+/** The needs-you wash for a fill: lighter on light paper, stronger on dark; 5% when the fill is unknown. */
+function attentionWashAlpha(surface: string | undefined): number {
+  const rgba = surface === undefined ? null : parseRgba(surface);
+  if (!rgba) return 0.05;
+  const luminance = (0.2126 * rgba[0] + 0.7152 * rgba[1] + 0.0722 * rgba[2]) / 255;
+  return luminance < 0.5 ? 0.07 : 0.04;
 }
 
 function stateColors(colors: HappierWorkStatusColors, tone: HappierWorkStatusTone): HappierWorkStateColors | null {
@@ -120,8 +153,11 @@ export function resolveHappierWorkStatusSurfaceStyle(
   return {
     borderWidth: 1,
     borderColor: softenHappierWorkColor(state.border, 0.55) ?? state.border,
-    // Work cards stack; the lab's six-percent wash leaves each card distinct while its ring speaks.
-    backgroundColor: tone === 'attention' ? softenHappierWorkColor(state.border, 0.06) ?? state.background : state.background,
+    // The ring speaks; the wash only warms the paper (lab `.uwr-hold.st-need`: 4% on light paper, 7% on
+    // dark, where the same hue needs more presence). A heavier wash turns a reading card into an amber slab.
+    backgroundColor: layOver(tone === 'attention'
+      ? softenHappierWorkColor(state.border, attentionWashAlpha(colors.surface)) ?? state.background : state.background,
+      colors.surface),
     ...(halo ? { boxShadow: `0 0 0 3px ${halo}` } : null),
   };
 }

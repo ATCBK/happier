@@ -28,6 +28,10 @@ export const HAPPIER_DATA_METRICS = Object.freeze({
   /** A chart's plot: bars sit on a hairline baseline with a 2 pt gap between them. */
   plotHeightPx: 64,
   barGapPx: 6,
+  /** Per-core bars wrap at this readable width rather than squeezing an entire CPU into one row. */
+  coreWidthPx: 16,
+  coreGapPx: 3,
+  coreHeightPx: 32,
   barRadiusPx: 3,
   /** A zero still reads as a point in the series. */
   barStubPx: 4,
@@ -39,7 +43,18 @@ export const HAPPIER_DATA_METRICS = Object.freeze({
   /** Opacity of the text colour for resting bars, a proportion's track and its fill. */
   barRestOpacity: 0.16,
   trackOpacity: 0.08,
+  /** A context band behind a whole bucket (weekends): half a track, so it groups days without reading as data. */
+  bucketShadeOpacity: 0.04,
   proportionOpacity: 0.45,
+});
+
+/**
+ * How a live meter moves (lab `rv`): a new value eases from where the fill is drawn (strong ease-out, so a sample
+ * reads as arriving, never as lagging), and a tone change cross-fades on the shared slow step. Reduced motion jumps.
+ */
+export const HAPPIER_DATA_MOTION = Object.freeze({
+  valueMs: 600,
+  valueBezier: Object.freeze([0.23, 1, 0.32, 1] as const),
 });
 
 export type HappierDataTextStyles = Readonly<{
@@ -58,8 +73,8 @@ export function useHappierDataTextStyles(theme: HappierUiTheme): HappierDataText
   const typography = useOptionalHappierUiTypography();
   const localization = useOptionalHappierUiLocalization();
   return useMemo(() => {
-    const body = resolveHappierTypeRoleStyle('body', theme, typography);
-    const caption = resolveHappierTypeRoleStyle('caption', theme, typography);
+    const body = resolveHappierTypeRoleStyle('meta', theme, typography);
+    const caption = resolveHappierTypeRoleStyle('micro', theme, typography);
     const label = resolveHappierTypeRoleStyle('label', theme, typography);
     const semiBold = (role: HappierPortableStyle) => ({ ...role, ...resolveHappierTextStepStyle({ weight: 'semiBold',
       fontSize: role.fontSize ?? theme.typography.body.fontSize, lineHeight: role.lineHeight ?? theme.typography.body.lineHeight }, typography) });

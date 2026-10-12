@@ -1,5 +1,5 @@
-import type { ReactNode } from 'react';
-import { Text, View } from 'react-native';
+import { act, Fragment, useState, type ReactNode } from 'react';
+import { Pressable, Text, View } from 'react-native';
 import { describe, expect, it } from 'vitest';
 
 import { mountThroughReactNativeWeb } from '../../rnwMount.testSupport.js';
@@ -8,7 +8,7 @@ import {
   type HappierCollectionListHost,
   type HappierCollectionListTextRole,
 } from '../collection/CollectionList.js';
-import { HappierPageSheet, HappierPageSheetGroup, useHappierPageSection } from './PageSection.js';
+import { HappierPageSectionHeader, HappierPageSheet, HappierPageSheetGroup, useHappierPageSection } from './PageSection.js';
 import { HAPPIER_PAGE_METRICS } from './pageMetrics.js';
 
 /**
@@ -34,6 +34,11 @@ function Row(props: Readonly<{ id: string; showDivider?: boolean }>) {
   );
 }
 
+function DraftRow(props: Readonly<{ id: string }>) {
+  const [edits, setEdits] = useState(0);
+  return <Pressable testID={props.id} onPress={() => setEdits((current) => current + 1)}><Text>{edits}</Text></Pressable>;
+}
+
 function separatorsIn(root: Element): HTMLElement[] {
   return Array.from(root.querySelectorAll<HTMLElement>('[role="separator"]'));
 }
@@ -47,6 +52,45 @@ function mount(children: ReactNode) {
 }
 
 describe('HappierPageSheet groups, row inset and row dividers', () => {
+  it.each([false, true])('retains a mounted row draft when a conditional status line appears (rowDividers=%s)', async (rowDividers) => {
+    const sheet = (pending: boolean) => (
+      <HappierPageSheet surface="none" colors={COLORS} rowDividers={rowDividers}>
+        {pending ? <Text testID="pending">Saving</Text> : null}
+        <><DraftRow id="draft" /></>
+      </HappierPageSheet>
+    );
+    const view = mount(sheet(false));
+    const draft = () => view.container.querySelector<HTMLElement>('[data-testid="draft"]')!;
+    act(() => draft().click());
+    expect(draft().textContent).toBe('1');
+    await view.render(<View testID="root">{sheet(true)}</View>);
+    expect(draft().textContent).toBe('1');
+    await view.render(<View testID="root">{sheet(false)}</View>);
+    expect(draft().textContent).toBe('1');
+    view.unmount();
+  });
+
+  it('keeps nested fragment keys scoped while grouped rows reorder', async () => {
+    const sheet = (ids: readonly string[]) => (
+      <HappierPageSheet colors={COLORS}>
+        <HappierPageSheetGroup>
+          {ids.map((id) => <Fragment key={id}><><DraftRow key="draft" id={id} /></></Fragment>)}
+        </HappierPageSheetGroup>
+        <HappierPageSheetGroup><Row id="neighbor" /></HappierPageSheetGroup>
+      </HappierPageSheet>
+    );
+    const view = mount(sheet(['draft-a', 'draft-b']));
+    const draft = (id: string) => view.container.querySelector<HTMLElement>(`[data-testid="${id}"]`)!;
+    act(() => draft('draft-a').click());
+    act(() => { draft('draft-b').click(); draft('draft-b').click(); });
+    await view.render(<View testID="root">{sheet(['draft-b', 'draft-a'])}</View>);
+    expect(draft('draft-a').textContent).toBe('1');
+    expect(draft('draft-b').textContent).toBe('2');
+    expect(dividerFlags(view.container, ['neighbor'])).toEqual(['no']);
+    expect(separatorsIn(view.container)).toHaveLength(1);
+    view.unmount();
+  });
+
   it('lays a flat sheet out with its own row inset, no row hairlines, and one inset separator between groups', () => {
     const view = mount(
       <HappierPageSheet surface="none" colors={COLORS} rowInsetPx={9} rowDividers={false}>
@@ -157,5 +201,43 @@ describe('HappierPageSheet groups, row inset and row dividers', () => {
     expect(labels[1]!.style.paddingLeft).toBe('9px');
     expect(labels[1]!.style.paddingRight).toBe('9px');
     view.unmount();
+  });
+});
+
+describe('HappierPageSectionHeader action placement', () => {
+  const header = (action: ReactNode) => (
+    <HappierPageSectionHeader
+      testID="section-header"
+      title="Directory"
+      description="Directory sources keep Team membership and Groups aligned with an external organization."
+      action={action}
+      actionLayout="inline"
+      insetPx={0}
+    />
+  );
+
+  it('observes the header even when its action arrives after the first paint', async () => {
+    // A directory's "+ Add source" is offered once the sources have loaded, so the header mounts
+    // without it. React Native Web decides whether to observe a view's size only at mount, so a
+    // header that attached its layout handler with the action would never learn its width and
+    // would keep the action beside a wrapped description on a phone.
+    const observed = new Set<Element>();
+    class RecordingResizeObserver {
+      observe(node: Element) { observed.add(node); }
+      unobserve(node: Element) { observed.delete(node); }
+      disconnect() { observed.clear(); }
+    }
+    const windowWithObserver = window as unknown as { ResizeObserver?: unknown };
+    const previous = windowWithObserver.ResizeObserver;
+    windowWithObserver.ResizeObserver = RecordingResizeObserver;
+    try {
+      const view = mountThroughReactNativeWeb(header(null));
+      await view.render(header(<Text testID="late-action">Add source</Text>));
+      const root = view.container.querySelector<HTMLElement>('[data-testid="section-header"]')!;
+      expect(observed.has(root)).toBe(true);
+      view.unmount();
+    } finally {
+      windowWithObserver.ResizeObserver = previous;
+    }
   });
 });

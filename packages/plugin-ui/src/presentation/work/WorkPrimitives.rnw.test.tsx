@@ -46,41 +46,104 @@ function byTestId(root: Element, testID: string): HTMLElement | null {
 const ATTENTION = SURFACE_THEME_FIXTURE.colors.attention;
 
 describe('Work primitives for plugin authors', () => {
+  it('separates page-section event groups without adding row dividers', () => {
+    const mounted = mountThroughReactNativeWeb(
+      inSurface(
+        <HappierWorkSection testID="triggers" title="Triggers" anatomy="page">
+          <authorBarrel.HappierPageSheetGroup
+            header={<span>When a turn ends</span>}
+          >
+            <authorBarrel.HappierTriggerRow
+              title="Review"
+              enabled
+              toggleLabel="Turn off Review"
+              onToggle={() => {}}
+            />
+            <authorBarrel.HappierTriggerRow
+              title="Notify"
+              enabled
+              toggleLabel="Turn off Notify"
+              onToggle={() => {}}
+            />
+          </authorBarrel.HappierPageSheetGroup>
+          <authorBarrel.HappierPageSheetGroup
+            header={<span>Every morning</span>}
+          >
+            <authorBarrel.HappierTriggerRow
+              title="Summarize"
+              enabled
+              toggleLabel="Turn off Summarize"
+              onToggle={() => {}}
+            />
+          </authorBarrel.HappierPageSheetGroup>
+        </HappierWorkSection>,
+      ),
+    );
+    try {
+      expect(
+        byTestId(mounted.container, 'triggers')!.querySelectorAll(
+          '[role="separator"]',
+        ),
+      ).toHaveLength(1);
+    } finally {
+      mounted.unmount();
+    }
+  });
+
   it('keeps an independent accessory outside the selected disclosure button', () => {
     const open = vi.fn();
     const dismiss = vi.fn();
-    const mounted = mountThroughReactNativeWeb(inSurface(
-      <authorBarrel.HappierWorkRowShell testID="work-row" accessibilityLabel="Review work"
-        selected expanded onPress={open}
-        trailingAccessory={<button data-testid="dismiss" onClick={dismiss}>Dismiss</button>}>
-        <span>Review work</span>
-      </authorBarrel.HappierWorkRowShell>,
-    ));
+    const mounted = mountThroughReactNativeWeb(
+      inSurface(
+        <authorBarrel.HappierWorkRowShell
+          testID="work-row"
+          accessibilityLabel="Review work"
+          selected
+          expanded
+          onPress={open}
+          trailingAccessory={
+            <button data-testid="dismiss" onClick={dismiss}>
+              Dismiss
+            </button>
+          }
+        >
+          <span>Review work</span>
+        </authorBarrel.HappierWorkRowShell>,
+      ),
+    );
     try {
       const row = byTestId(mounted.container, 'work-row')!;
       const accessory = byTestId(mounted.container, 'dismiss')!;
       expect(row.getAttribute('role')).toBe('button');
       expect(row.getAttribute('aria-expanded')).toBe('true');
-      expect(row.getAttribute('aria-selected')).toBe('true');
+      // Selection is visual here; aria-selected is not valid on a disclosure button.
+      expect(row.getAttribute('aria-selected')).toBeNull();
       expect(row.contains(accessory)).toBe(false);
       act(() => accessory.click());
       expect(dismiss).toHaveBeenCalledOnce();
       expect(open).not.toHaveBeenCalled();
       act(() => row.click());
       expect(open).toHaveBeenCalledOnce();
-    } finally { mounted.unmount(); }
+    } finally {
+      mounted.unmount();
+    }
   });
 
   it('keeps empty invitations and expansion caller-controlled', () => {
     const invite = vi.fn();
     const expand = vi.fn();
-    const mounted = mountThroughReactNativeWeb(inSurface(
-      <HappierWorkSection testID="notes" title="Notes"
-        empty={{ text: 'Add a note', onPress: invite, testID: 'invite' }}
-        more={{ label: 'Show more', onPress: expand, testID: 'more' }}>
-        <span data-testid="hidden-row" />
-      </HappierWorkSection>,
-    ));
+    const mounted = mountThroughReactNativeWeb(
+      inSurface(
+        <HappierWorkSection
+          testID="notes"
+          title="Notes"
+          empty={{ text: 'Add a note', onPress: invite, testID: 'invite' }}
+          more={{ label: 'Show more', onPress: expand, testID: 'more' }}
+        >
+          <span data-testid="hidden-row" />
+        </HappierWorkSection>,
+      ),
+    );
     try {
       expect(byTestId(mounted.container, 'hidden-row')).toBeNull();
       act(() => byTestId(mounted.container, 'invite')!.click());
@@ -88,36 +151,65 @@ describe('Work primitives for plugin authors', () => {
       expect(invite).toHaveBeenCalledOnce();
       expect(expand).toHaveBeenCalledOnce();
       expect(byTestId(mounted.container, 'hidden-row')).toBeNull();
-    } finally { mounted.unmount(); }
+    } finally {
+      mounted.unmount();
+    }
   });
 
   it('omits absent facts without leaving separators or an empty line', () => {
-    const mounted = mountThroughReactNativeWeb(inSurface(
-      <>
-        <authorBarrel.HappierFactLine testID="facts" facts={['Linux', null, 'Codex']} />
-        <authorBarrel.HappierFactLine testID="empty-facts" facts={[null, '']} />
-      </>,
-    ));
+    const mounted = mountThroughReactNativeWeb(
+      inSurface(
+        <>
+          <authorBarrel.HappierFactLine
+            testID="facts"
+            facts={['Linux', null, 'Codex']}
+          />
+          <authorBarrel.HappierFactLine
+            testID="empty-facts"
+            facts={[null, '']}
+          />
+        </>,
+      ),
+    );
     try {
-      expect(byTestId(mounted.container, 'facts')!.textContent).toBe('Linux · Codex');
+      expect(byTestId(mounted.container, 'facts')!.textContent).toBe(
+        'Linux · Codex',
+      );
       expect(byTestId(mounted.container, 'empty-facts')).toBeNull();
-      expect(authorBarrel.joinHappierFacts('Linux', null, '', 'Codex')).toBe('Linux · Codex');
-    } finally { mounted.unmount(); }
+      expect(authorBarrel.joinHappierFacts('Linux', null, '', 'Codex')).toBe(
+        'Linux · Codex',
+      );
+    } finally {
+      mounted.unmount();
+    }
   });
 
   it('opens ancestors while keeping the current breadcrumb non-interactive', () => {
     const open = vi.fn();
-    const mounted = mountThroughReactNativeWeb(inSurface(
-      <authorBarrel.HappierBreadcrumb items={[
-        { key: 'root', label: 'Project', testID: 'ancestor', onPress: open },
-        { key: 'current', label: 'File', testID: 'current' },
-      ]} />,
-    ));
+    const mounted = mountThroughReactNativeWeb(
+      inSurface(
+        <authorBarrel.HappierBreadcrumb
+          items={[
+            {
+              key: 'root',
+              label: 'Project',
+              testID: 'ancestor',
+              onPress: open,
+            },
+            { key: 'current', label: 'File', testID: 'current' },
+          ]}
+        />,
+      ),
+    );
     try {
       act(() => byTestId(mounted.container, 'ancestor')!.click());
       expect(open).toHaveBeenCalledOnce();
-      expect(byTestId(mounted.container, 'current')!.getAttribute('role')).not.toBe('link');
-    } finally { mounted.unmount(); }
+      expect(
+        byTestId(mounted.container, 'current')!.getAttribute('role'),
+      ).not.toBe('link');
+    } finally {
+      mounted.unmount();
+    }
   });
 
   it('publishes the status language: bucket order and localized labels', () => {
@@ -181,6 +273,14 @@ describe('Work primitives for plugin authors', () => {
     );
     expect(needsYou.borderColor).toBeTruthy();
     expect(needsYou.borderColor).not.toBe(trouble.borderColor);
+    // Over the card's own fill the tint is one opaque colour: a tinted card hides what lies beneath it.
+    const opaque = (style: { backgroundColor: string }) => !/rgba\([^)]*,\s*0?\.\d+\s*\)/u.test(style.backgroundColor);
+    const onSurface = { ...colors, surface: '#ffffff' };
+    const needsYouOnSurface = authorBarrel.resolveHappierWorkStatusSurfaceStyle('attention', onSurface);
+    const troubleOnSurface = authorBarrel.resolveHappierWorkStatusSurfaceStyle('danger', onSurface);
+    expect(opaque(needsYouOnSurface) && opaque(troubleOnSurface)).toBe(true);
+    expect(needsYouOnSurface.backgroundColor).not.toBe(troubleOnSurface.backgroundColor);
+    expect(needsYouOnSurface.backgroundColor).not.toBe('rgb(255, 255, 255)');
     expect(
       authorBarrel.resolveHappierWorkStatusSurfaceStyle('neutral', colors),
     ).toBeNull();
@@ -281,6 +381,151 @@ describe('Work primitives for plugin authors', () => {
     }
   });
 
+  it('draws a map without an open handler read-only: its cards are not buttons, and a muted card is quieter', () => {
+    const map = buildHappierWorkMap({
+      relationships: 'authored',
+      nodes: [
+        { nodeId: 'one', label: 'Level 1', parentNodeId: null },
+        { nodeId: 'refused', label: 'One more', parentNodeId: null },
+      ],
+    });
+    const mounted = mountThroughReactNativeWeb(
+      inSurface(
+        <HappierWorkMapView
+          map={map}
+          selectedNodeId={null}
+          testIDPrefix="map"
+          rootLayout="sequence"
+          accessibilityLabelForNode={(node) => node.label}
+          presentNode={(node) => ({ muted: node.nodeId === 'refused' })}
+        />,
+      ),
+    );
+    try {
+      const one = byTestId(mounted.container, 'map-node-one')!;
+      const refused = byTestId(mounted.container, 'map-node-refused')!;
+      expect(one.getAttribute('role')).not.toBe('button');
+      expect(refused.getAttribute('role')).not.toBe('button');
+      expect(getComputedStyle(one).opacity).not.toBe('0.6');
+      expect(getComputedStyle(refused).opacity).toBe('0.6');
+    } finally {
+      mounted.unmount();
+    }
+  });
+
+  it("trails a full-width card's status on its row and moves it under the title only inside a lane", () => {
+    const map = buildHappierWorkMap({
+      relationships: 'authored',
+      nodes: [
+        {
+          nodeId: 'lead',
+          label: 'Release train',
+          parentNodeId: null,
+          open: { kind: 'session', sessionId: 'lead' },
+        },
+        {
+          nodeId: 'api',
+          label: 'API lane',
+          parentNodeId: 'lead',
+          open: { kind: 'session', sessionId: 'api' },
+        },
+        {
+          nodeId: 'docs',
+          label: 'Docs lane',
+          parentNodeId: 'lead',
+          open: { kind: 'session', sessionId: 'docs' },
+        },
+        {
+          nodeId: 'solo',
+          label: 'Unrelated',
+          parentNodeId: null,
+          open: { kind: 'session', sessionId: 'solo' },
+        },
+      ],
+    });
+    const mounted = mountThroughReactNativeWeb(
+      inSurface(
+        <HappierWorkMapView
+          map={map}
+          selectedNodeId={null}
+          testIDPrefix="map"
+          accessibilityLabelForNode={(node) => node.label}
+          presentNode={(node) => ({
+            childLayout: node.nodeId === 'lead' ? 'lanes' : 'sequence',
+          })}
+          renderStatus={(node) => (
+            <span data-testid={`status-${node.nodeId}`}>Waiting</span>
+          )}
+        />,
+      ),
+    );
+    // The row's direct child that holds the status: its own trailing cell, or the title's column.
+    const statusCell = (nodeId: string) => {
+      const row = byTestId(mounted.container, `map-node-${nodeId}`)!;
+      let cell: HTMLElement = byTestId(row, `status-${nodeId}`)!;
+      while (cell.parentElement !== row) cell = cell.parentElement!;
+      return cell;
+    };
+    try {
+      expect(statusCell('solo').textContent).not.toContain('Unrelated');
+      expect(statusCell('api').textContent).toContain('API lane');
+    } finally {
+      mounted.unmount();
+    }
+  });
+
+  it('keeps lane cards to their title and state, and gives the fact line only to full-width nodes (lab map-M2)', () => {
+    const map = buildHappierWorkMap({
+      relationships: 'authored',
+      nodes: [
+        {
+          nodeId: 'lead',
+          label: 'Payments v2 rollout',
+          parentNodeId: null,
+          open: { kind: 'session', sessionId: 'lead' },
+        },
+        {
+          nodeId: 'api',
+          label: 'Idempotent retries',
+          parentNodeId: 'lead',
+          open: { kind: 'session', sessionId: 'api' },
+        },
+        {
+          nodeId: 'ui',
+          label: 'Checkout UI retry states',
+          parentNodeId: 'lead',
+          open: { kind: 'session', sessionId: 'ui' },
+        },
+      ],
+    });
+    const mounted = mountThroughReactNativeWeb(
+      inSurface(
+        <HappierWorkMapView
+          map={map}
+          selectedNodeId={null}
+          testIDPrefix="map"
+          accessibilityLabelForNode={(node) => node.label}
+          presentNode={(node) => ({
+            childLayout: node.nodeId === 'lead' ? 'lanes' : 'sequence',
+          })}
+          renderSubtitle={(node) => (
+            <span data-testid={`subtitle-${node.nodeId}`}>
+              Claude · MacBook Pro
+            </span>
+          )}
+        />,
+      ),
+    );
+    try {
+      expect(byTestId(mounted.container, 'map-group-lead')).not.toBeNull();
+      expect(byTestId(mounted.container, 'subtitle-lead')).not.toBeNull();
+      expect(byTestId(mounted.container, 'subtitle-api')).toBeNull();
+      expect(byTestId(mounted.container, 'subtitle-ui')).toBeNull();
+    } finally {
+      mounted.unmount();
+    }
+  });
+
   it('draws a Work summary: mark, title, one fact line, and the owner word in the attention treatment', () => {
     const mounted = mountThroughReactNativeWeb(
       inSurface(
@@ -307,6 +552,35 @@ describe('Work primitives for plugin authors', () => {
       expect(word.textContent).toBe('Waiting for you');
       expect(word.style.color).toBe('rgb(148, 82, 0)');
       expect(ATTENTION).toBe('#945200');
+    } finally {
+      mounted.unmount();
+    }
+  });
+
+  it('draws a page-density summary for a page of things that all need you: page type steps, a strong title and no corner dot', () => {
+    const mounted = mountThroughReactNativeWeb(
+      inSurface(
+        <HappierWorkSummary
+          testID="summary"
+          title="Write changelog is waiting for your review"
+          phase="attention"
+          density="page"
+          attentionMark={false}
+          mark={<span data-testid="mark" />}
+          facts={['Changelog lane']}
+          trailingTime="4m"
+          accessibilityLabel="Write changelog is waiting for your review"
+        />,
+      ),
+    );
+    try {
+      expect(byTestId(mounted.container, 'summary:attention-dot')).toBeNull();
+      const title = byTestId(mounted.container, 'summary:title')!;
+      expect(title.style.fontSize).toBe('14px');
+      expect(title.style.lineHeight).toBe('20px');
+      expect(title.style.fontWeight).toBe('600');
+      const facts = byTestId(mounted.container, 'summary:facts')!;
+      expect(facts.style.fontSize).toBe('13px');
     } finally {
       mounted.unmount();
     }

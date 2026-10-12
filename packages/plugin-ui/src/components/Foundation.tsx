@@ -97,7 +97,7 @@ export function Badge({ tone = 'neutral', variant = 'outlined', icon, testID, ch
   const color = theme.colors[HAPPIER_TONE_COLOR_TOKEN[tone]];
   const label = useAuthorText(text);
   // The icon sits at the words' own line height, so a badge with an icon is exactly as tall as one without.
-  const iconSize = useHappierTypeRoleStyle('caption', theme).lineHeight;
+  const iconSize = useHappierTypeRoleStyle('micro', theme).lineHeight;
   const tinted = variant === 'tinted';
   const textColor = tinted && tone !== 'accent' && tone !== 'secondary' && tone !== 'muted'
     ? theme.statusText?.[tone] ?? color

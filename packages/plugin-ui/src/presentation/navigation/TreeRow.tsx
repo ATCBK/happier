@@ -325,7 +325,7 @@ export function HappierTreeRow(props: HappierTreeRowProps) {
                 </View>
                 {typeof props.meta === 'string' || typeof props.meta === 'number' ? (
                   <HappierText
-                    variant="caption"
+                    variant="micro"
                     numberOfLines={1}
                     tabularNumbers
                     style={{ flexShrink: 0, color: theme.colors.mutedText }}

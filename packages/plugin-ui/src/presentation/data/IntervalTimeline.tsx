@@ -8,6 +8,7 @@ import { HappierPressable } from '../interaction/Pressable.js';
 import type { HappierLayoutChangeEvent } from '../portableTypes.js';
 import { HappierText } from '../text/Text.js';
 import { HappierDataRows } from './DataRows.js';
+import { useOptionalHappierUiLocalization } from '../../environment/context.js';
 import { formatHappierDataValue, resolveHappierDataDomainFraction } from './dataModel.js';
 import { HAPPIER_DATA_METRICS, useHappierDataTextStyles } from './dataText.js';
 
@@ -44,6 +45,9 @@ export type IntervalTimelineProps = Readonly<{
    * number on the axis, rows and readout; without it the finite coordinate is stated as a number.
    */
   formatValue?: (value: number) => string;
+  /** Names the toggle that reveals the exact rows while the plot shows; defaults to the host's Details. */
+  valuesLabel?: string;
+  valuesCollapseLabel?: string;
   /** Domain-owned marker ink, placed by the shared timeline geometry. */
   renderMarker?: (interval: IntervalTimelineInterval) => ReactNode;
   testID?: string;
@@ -54,6 +58,8 @@ export function IntervalTimeline(props: IntervalTimelineProps) {
   const nativeTarget = useHappierNativeMinimumInteractiveTargetSize();
   const [measuredWidth, setMeasuredWidth] = useState<number | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [valuesExpanded, setValuesExpanded] = useState(false);
+  const localization = useOptionalHappierUiLocalization();
   const unknown = props.unknownLabel ?? 'Unknown';
   const startLabel = props.startLabel ?? 'Start';
   const endLabel = props.endLabel ?? 'End';
@@ -80,6 +86,7 @@ export function IntervalTimeline(props: IntervalTimelineProps) {
   const heightFits = props.geometry === undefined || Number.isFinite(props.geometry.height) && props.geometry.height >= requiredHeight;
   const validDomain = Number.isFinite(props.domain.start) && Number.isFinite(props.domain.end) && props.domain.start < props.domain.end;
   const showPlot = (props.size ?? 'full') === 'full' && validDomain && axisFits && heightFits && props.intervals.length > 0;
+  const valuesLabel = props.valuesLabel ?? localization?.translate('happier.plugin-ui.state.details', 'Details') ?? 'Details';
 
   return <View testID={props.testID} onLayout={(event: HappierLayoutChangeEvent) => setMeasuredWidth(event.nativeEvent.layout.width)}
     style={{ gap: HAPPIER_DATA_METRICS.blockGapPx }}>
@@ -126,10 +133,17 @@ export function IntervalTimeline(props: IntervalTimelineProps) {
     </View> : null}
     {selected ? <HappierText testID={props.testID ? `${props.testID}-readout` : undefined} style={text.captionStrong}
       accessibilityLiveRegion="polite" tabularNumbers>{describe(selected)}</HappierText> : null}
-    <HappierDataRows theme={props.theme} label={props.label} testID={props.testID ? `${props.testID}-values` : undefined}
+    {/* The plot already lists every interval as a selectable row; its exact table waits behind Details
+        (as in StackedSeriesChart) instead of repeating the same runs as text. Without a plot the rows are the body. */}
+    {showPlot ? <HappierPressable testID={props.testID ? `${props.testID}-values-toggle` : undefined}
+      accessibilityLabel={valuesExpanded ? props.valuesCollapseLabel ?? valuesLabel : valuesLabel}
+      expanded={valuesExpanded} onPress={() => setValuesExpanded((value) => !value)}>
+      <HappierText style={text.captionStrong}>{valuesExpanded ? props.valuesCollapseLabel ?? valuesLabel : valuesLabel}</HappierText>
+    </HappierPressable> : null}
+    {showPlot && !valuesExpanded ? null : <HappierDataRows theme={props.theme} label={props.label} testID={props.testID ? `${props.testID}-values` : undefined}
       density={props.size === 'inline' || props.size === 'tile' ? 'compact' : 'comfortable'}
       rowIds={props.intervals.map((interval) => interval.id)}
       columns={[{ label: props.label }, { label: startLabel }, ...(hasIntervals ? [{ label: endLabel }] : []), { label: 'Annotation' }]}
-      rows={props.intervals.map(rowValues)} />
+      rows={props.intervals.map(rowValues)} />}
   </View>;
 }

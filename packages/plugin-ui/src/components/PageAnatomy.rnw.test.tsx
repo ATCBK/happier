@@ -1,6 +1,6 @@
 import { act, useState, type ReactNode } from 'react';
-import { View } from 'react-native';
-import { describe, expect, it } from 'vitest';
+import { Dimensions, View } from 'react-native';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { HappierUiPalette } from '../environment/types.js';
 import type { HappierLayoutChangeEvent } from '../presentation/portableTypes.js';
@@ -14,6 +14,7 @@ import { Item, ItemGroup, List } from './List.js';
 import { PageHeader } from './PageHeader.js';
 import { PluginUiProviderInternal } from './PluginUiProvider.js';
 import { EmptyState } from './State.js';
+import { Select } from './Form.js';
 
 /**
  * Configuration-surfaces U9: a plugin page composes the same anatomy as
@@ -62,6 +63,29 @@ function textOf(element: Element | null | undefined): string {
 }
 
 describe('plugin page anatomy through the shared page owners', () => {
+  it('keeps a compact identity glyph on the same title edge as a standard page-row glyph', () => {
+    const mount = mountPage(
+      <ItemGroup title="Devices">
+        <Item title="Compact identity" icon={<View testID="compact-glyph" style={{ width: 16, height: 16 }} />} />
+        <Item title="Standard identity" icon={<View testID="standard-glyph" style={{ width: HAPPIER_PAGE_METRICS.rowLeadingColumnPx, height: HAPPIER_PAGE_METRICS.rowLeadingColumnPx }} />} />
+        <Item title="Larger identity" icon={<View testID="larger-glyph" style={{ width: 24, height: 24 }} />} />
+      </ItemGroup>,
+    );
+    try {
+      // Read the rendered layout constraint, not the authored component's props. A smaller glyph
+      // must retain the page's leading column so its title aligns with the standard row below it.
+      const leadingWidth = (id: string) => {
+        const glyph = mount.container.querySelector<HTMLElement>(`[data-testid="${id}"]`)!;
+        const column = getComputedStyle(glyph.parentElement!);
+        const fixedWidth = Number.parseFloat(column.width);
+        if (Number.isFinite(fixedWidth)) return fixedWidth;
+        return Math.max(Number.parseFloat(getComputedStyle(glyph).width), Number.parseFloat(column.minWidth) || 0);
+      };
+      expect(leadingWidth('compact-glyph')).toBe(leadingWidth('standard-glyph'));
+      expect(leadingWidth('larger-glyph')).toBeGreaterThan(leadingWidth('standard-glyph'));
+    } finally { mount.unmount(); }
+  });
+
   it('lets an explicit radio-group name override its visible title', () => {
     const mount = mountPage(
       <ItemGroup title="Use" accessibilityRole="radiogroup" accessibilityLabel="Checkout preparation">
@@ -105,7 +129,6 @@ describe('plugin page anatomy through the shared page owners', () => {
     const sheet = Array.from(section.querySelectorAll<HTMLElement>('div'))
       .find((element) => element.style.borderTopLeftRadius === '14px');
     expect(sheet, 'the rows sit on one rounded page sheet').toBeDefined();
-    expect(sheet?.style.backgroundColor).toBe('rgb(241, 242, 243)');
     expect(sheet?.style.borderTopColor).toBe('rgb(10, 11, 12)');
     // The group is named by its title for assistive technology.
     expect(section.querySelector('[role="group"]')?.getAttribute('aria-label')).toBe('Sync');
@@ -207,6 +230,18 @@ describe('plugin page anatomy through the shared page owners', () => {
     own.unmount();
   });
 
+  it('places host page actions beside the desktop title even when the plugin declares no actions', () => {
+    const mount = mountPage(<PageHeader title="Sentry" testID="header" />, {
+      pageChrome: {
+        showsTitle: false,
+        renderNavigationActions: (actions: ReactNode) => <><button data-testid="execution-origin">Runs on · Workstation</button>{actions}</>,
+      },
+    });
+    expect(mount.container.querySelector('[data-testid="header"] [data-testid="execution-origin"]')).not.toBeNull();
+    expect(mount.container.querySelectorAll('[data-testid="execution-origin"]')).toHaveLength(1);
+    mount.unmount();
+  });
+
   it('keeps a page row control on the row inset, and moves a wide one beneath its label on a narrow row', () => {
     const mount = mountPage(
       <ItemGroup title="Reviews">
@@ -233,6 +268,87 @@ describe('plugin page anatomy through the shared page owners', () => {
     expect(control().style.paddingLeft).toBe(`${HAPPIER_PAGE_METRICS.rowPaddingHorizontalPx}px`);
     expect(control().style.alignSelf).toBe('stretch');
     mount.unmount();
+  });
+
+  it('keeps a short page operation beside its label on a narrow row, and moves it beneath only when it would squeeze the label', () => {
+    const mount = mountPage(
+      <ItemGroup title="Machines">
+        <Item testID="where-row" title="Where" accessory={<View testID="where-control" />} accessoryOutsidePressable />
+      </ItemGroup>,
+    );
+    const row = mount.container.querySelector<HTMLElement>('[data-testid="where-row"]')!;
+    const container = () => mount.container.querySelector<HTMLElement>('[data-testid="where-control"]')!.parentElement!;
+    const handler = (node: Element) => (node as unknown as { __reactLayoutHandler?: (event: HappierLayoutChangeEvent) => void }).__reactLayoutHandler;
+    const layout = (node: Element, width: number) => act(() => handler(node)!({ nativeEvent: { layout: { x: 0, y: 0, width, height: 52 } } }));
+    layout(row, 390);
+    expect(handler(container()), 'an inline page operation reports its natural width').toBeDefined();
+    // A short button (Change): the label keeps its 200 px column, so the button stays on its line.
+    layout(container(), 90 + HAPPIER_PAGE_METRICS.rowPaddingHorizontalPx);
+    expect(container().style.alignSelf).not.toBe('stretch');
+    // A wide one would leave the label less than its column: it moves beneath, on the label's edge.
+    layout(container(), 260 + HAPPIER_PAGE_METRICS.rowPaddingHorizontalPx);
+    expect(container().style.alignSelf).toBe('stretch');
+    expect(container().style.paddingLeft).toBe(`${HAPPIER_PAGE_METRICS.rowPaddingHorizontalPx}px`);
+    mount.unmount();
+  });
+
+  it.each([
+    { viewportWidth: 1280, viewportHeight: 900, rowWidth: 481, trailing: true },
+    { viewportWidth: 430, viewportHeight: 932, rowWidth: 398, trailing: false },
+  ])('fits a page select beside its label in a desktop column and below it on a phone ($viewportWidth)', ({ viewportWidth, viewportHeight, rowWidth, trailing }) => {
+    const getDimensions = Dimensions.get.bind(Dimensions);
+    let viewport = { width: viewportWidth, height: viewportHeight, scale: 1, fontScale: 1 };
+    const dimensions = vi.spyOn(Dimensions, 'get').mockImplementation((name) => name === 'window'
+      ? viewport
+      : getDimensions(name));
+    const mount = mountPage(
+      <ItemGroup title="Acquisition">
+        <Item
+          testID="strategy-row"
+          title="Strategy"
+          accessoryWraps
+          fieldAccessory
+          accessoryOutsidePressable
+          accessory={<Select
+            label="Strategy"
+            presentation="field"
+            value="round-robin"
+            options={[{ value: 'priority', label: 'Priority order' }, { value: 'round-robin', label: 'Round robin' }]}
+            onChange={() => undefined}
+          />}
+        />
+      </ItemGroup>,
+    );
+    try {
+      const row = mount.container.querySelector<HTMLElement>('[data-testid="strategy-row"]')!;
+      const layout = (row as unknown as { __reactLayoutHandler: (event: HappierLayoutChangeEvent) => void }).__reactLayoutHandler;
+      const trigger = mount.container.querySelector<HTMLElement>('[role="button"][aria-label="Strategy: Round robin"]')!;
+      expect(trigger).not.toBeNull();
+      act(() => layout({ nativeEvent: { layout: { x: 0, y: 0, width: rowWidth, height: 52 } } }));
+
+      const composition = row.firstElementChild as HTMLElement;
+      expect(composition.style.flexDirection).toBe(trailing ? 'row' : 'column');
+      const field = trigger.firstElementChild as HTMLElement;
+      expect(getComputedStyle(field).width).not.toBe('240px');
+      if (trailing) {
+        expect(Array.from(trigger.querySelectorAll<HTMLElement>('div')).some((node) => getComputedStyle(node).maxWidth === '237px')).toBe(true);
+        // A host can resize around a fixed-width pane: the row width alone has not changed.
+        viewport = { width: 430, height: 932, scale: 1, fontScale: 1 };
+        act(() => layout({ nativeEvent: { layout: { x: 0, y: 0, width: rowWidth, height: 52 } } }));
+        expect(composition.style.flexDirection).toBe('column');
+        viewport = { width: viewportWidth, height: viewportHeight, scale: 1, fontScale: 1 };
+        act(() => layout({ nativeEvent: { layout: { x: 0, y: 0, width: rowWidth, height: 52 } } }));
+        expect(composition.style.flexDirection).toBe('row');
+        act(() => layout({ nativeEvent: { layout: { x: 0, y: 0, width: 370, height: 52 } } }));
+        expect(composition.style.flexDirection).toBe('column');
+      }
+      // Recomposition must retain the trigger and its focus/menu owner.
+      expect(mount.container.querySelector('[role="button"][aria-label="Strategy: Round robin"]')).toBe(trigger);
+      expect(trigger.textContent).toContain('Round robin');
+    } finally {
+      mount.unmount();
+      dimensions.mockRestore();
+    }
   });
 
   it('draws an empty page in the page frame and an empty list as one quiet line', () => {

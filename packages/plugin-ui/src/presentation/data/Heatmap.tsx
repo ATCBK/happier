@@ -59,6 +59,9 @@ export function HappierDataGrid(props: HeatmapProps & { variant: 'heatmap' | 'do
   const dots = props.variant === 'dots';
   const circles = dots && props.dotAppearance === 'dots';
   const rowMajor = dots || strip || props.order === 'rows';
+  // The row-label gutter fits its labels: one letter keeps the dense column, a short day name ("Mon")
+  // gets room rather than wrapping under itself.
+  const rowLabelWidth = props.rows.some((row) => row.label.length > 1) ? 28 : 16;
   // Incumbent contribution grid, recap tiles and dense dot matrix metrics.
   const cellSize = props.size === 'inline' ? 7.5 : props.size === 'tile' ? 16 : 11;
   const gap = strip ? 4 : props.size === 'tile' && !dots ? 7 : 3;
@@ -67,7 +70,7 @@ export function HappierDataGrid(props: HeatmapProps & { variant: 'heatmap' | 'do
   const slotSize = nativeTargets ? Math.max(cellSize, nativeTargetSize) : cellSize;
   const stride = slotSize + gap;
   const contentWidth = nativeTargets
-    ? (props.columns.length ? props.columns.length * slotSize + (props.columns.length - 1) * gap : 0) + (dots ? 24 : 0)
+    ? (props.columns.length ? props.columns.length * slotSize + (props.columns.length - 1) * gap : 0) + (dots ? rowLabelWidth + 8 : 0)
     : props.columns.length * stride;
   const positions = new Map(props.cells.map((cell) => [`${cell.row}\u0000${cell.column}`, cell]));
   const maximum = Math.max(1, ...props.cells.map((cell) => cell.value !== null && Number.isFinite(cell.value) ? cell.value : 0));
@@ -111,11 +114,11 @@ export function HappierDataGrid(props: HeatmapProps & { variant: 'heatmap' | 'do
       </View>)}
     </View> : null}
     {rowMajor ? props.rows.map((row) => <View key={row.id} style={{ flexDirection: 'row', gap: dots ? 8 : 0, alignItems: 'center' }}>
-      {dots ? <HappierText style={{ ...text.caption, width: 16, fontSize: 11, lineHeight: 14 }}>{row.label}</HappierText> : null}
+      {dots ? <HappierText style={{ ...text.caption, width: rowLabelWidth, fontSize: 11, lineHeight: 14 }} numberOfLines={1}>{row.label}</HappierText> : null}
       <View style={{ flex: (dots || strip) && !nativeTargets ? 1 : undefined, flexDirection: 'row', gap }}>{props.columns.map((column) => renderCell(row, column))}</View>
     </View>) : <View style={{ flexDirection: 'row', gap }}>{props.columns.map((column) => <View key={column.id} style={{ gap }}>{props.rows.map((row) => renderCell(row, column))}</View>)}</View>}
     {(dots || strip) && props.columns.some((column) => column.label) ? <View style={{ flexDirection: 'row', gap: dots ? 8 : 0 }}>
-      {dots ? <View style={{ width: 16 }} /> : null}
+      {dots ? <View style={{ width: rowLabelWidth }} /> : null}
       <View style={{ flex: 1, flexDirection: 'row', gap, justifyContent: dots ? 'space-between' : undefined }}>{(dots ? props.columns.filter(column => column.label) : props.columns).map((column) => <View key={column.id} style={dots ? undefined : { flex: 1, minWidth: 0 }}><HappierText style={{ ...text.caption, fontSize: 11, lineHeight: 14, textAlign: 'center' }}>{column.label}</HappierText></View>)}</View>
     </View> : null}
   </View>;

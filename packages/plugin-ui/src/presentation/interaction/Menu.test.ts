@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+// Native Platform is the SDK boundary; all menu semantics below remain real.
+vi.mock('react-native', () => ({ Platform: { OS: 'web' } }));
 
 import {
   resolveHappierMenuContent,

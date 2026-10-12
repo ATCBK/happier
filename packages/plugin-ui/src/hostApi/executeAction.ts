@@ -7,6 +7,7 @@ import type {
   PluginUiActionResultFor,
 } from '@happier-dev/plugin-sdk/ui';
 
+import { useHappierUiLocalization } from '../environment/context.js';
 import { usePluginHostApi } from './context.js';
 
 /**
@@ -71,16 +72,38 @@ function readErrorCode(error: unknown): string {
   return typeof code === 'string' && code.trim() !== '' ? code : UNKNOWN_ERROR_CODE;
 }
 
-function readErrorMessage(error: unknown): string {
+/**
+ * The sentence a refusal stands for when nobody wrote one.
+ *
+ * Host API refusals cross the mount as a bare `{ code }`, so the client error's
+ * `message` is the code itself (`stale_surface`). A page that shows
+ * `execution.message` must read as words in the reader's language, so a missing
+ * message, or one that only repeats its code, becomes the host-translated
+ * sentence for that code. An author's or a host's real sentence is kept as is.
+ */
+const REFUSAL_SENTENCES: Readonly<Record<string, readonly [key: string, fallback: string]>> = {
+  unavailable: ['happier.plugin-ui.action.error.unavailable', 'This isn\u2019t available right now. Try again in a moment.'],
+  denied: ['happier.plugin-ui.action.error.denied', 'This isn\u2019t allowed here.'],
+  stale_surface: ['happier.plugin-ui.action.error.stale', 'This page is out of date. Reopen it and try again.'],
+  expired_resource: ['happier.plugin-ui.action.error.stale', 'This page is out of date. Reopen it and try again.'],
+  timeout: ['happier.plugin-ui.action.error.noAnswer', 'No answer came back in time, so it may still finish.'],
+  aborted: ['happier.plugin-ui.action.error.noAnswer', 'No answer came back in time, so it may still finish.'],
+};
+const FAILED_SENTENCE = ['happier.plugin-ui.action.error.failed', 'That didn\u2019t go through. Nothing changed.'] as const;
+
+type Translate = (key: string, fallback?: string) => string;
+
+function readErrorMessage(error: unknown, code: string, translate: Translate): string {
   const message = (error as { message?: unknown } | null)?.message;
-  return typeof message === 'string' && message.trim() !== ''
-    ? message
-    : 'The action did not complete.';
+  const written = typeof message === 'string' ? message.trim() : '';
+  if (written !== '' && written !== code) return written;
+  const [key, fallback] = REFUSAL_SENTENCES[code] ?? FAILED_SENTENCE;
+  return translate(key, fallback);
 }
 
-function settledFromRejection<Result>(error: unknown): PluginActionExecution<Result> {
+function settledFromRejection<Result>(error: unknown, translate: Translate): PluginActionExecution<Result> {
   const code = readErrorCode(error);
-  const message = readErrorMessage(error);
+  const message = readErrorMessage(error, code, translate);
   if (OUTCOME_UNKNOWN_ERROR_CODES.has(code)) {
     return { status: 'outcomeUnknown', code, message };
   }
@@ -143,6 +166,9 @@ export function useExecutePluginAction(
   input?: JsonValue,
 ): PluginActionExecutionController<JsonValue, JsonValue> {
   const hostApi = usePluginHostApi();
+  const { translate } = useHappierUiLocalization();
+  const translateRef = useRef(translate);
+  translateRef.current = translate;
   const actionKey = actionIdentityKey(action);
   const bindingToken = useMemo(() => ({}), [actionKey, hostApi]);
   const [executionRecord, setExecutionRecord] = useState<Readonly<{
@@ -193,7 +219,7 @@ export function useExecutePluginAction(
         : await executeAction(action, actionInput, options);
       settled = settledFromResult(result);
     } catch (error) {
-      settled = settledFromRejection<JsonValue>(error);
+      settled = settledFromRejection<JsonValue>(error, translateRef.current);
     }
 
     if (pendingRef.current === bindingToken) pendingRef.current = null;

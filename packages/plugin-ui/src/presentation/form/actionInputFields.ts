@@ -42,6 +42,34 @@ export type HappierActionFieldPresentation<OptionValue = unknown> =
       parseText(text: string): unknown;
     }>;
 
+/** The most choices a fixed single choice shows as one segmented control. */
+export const HAPPIER_SEGMENTED_CHOICES_MAX = 4;
+/**
+ * The longest label a segment carries ("API equivalent"): longer ones would squeeze four segments past
+ * a row's control column, so the choice stays a list ("long labels: bordered field select").
+ */
+export const HAPPIER_SEGMENTED_LABEL_MAX_CHARS = 14;
+
+/**
+ * How a fixed choice is drawn, decided once for every typed form (Action fields, Workflow inputs,
+ * widget setup, plugin Forms): two to four short choices that need no explanation are one segmented
+ * control; more, long or explained ones and several values are the one compact choice field
+ * (`'list'`: a field box naming the reading that opens its rows; DESIGN.md control table, lab
+ * `dashboards` IN "Plain inputs").
+ */
+export function resolveHappierChoiceControl(
+  presentation: HappierActionFieldPresentation,
+  options: readonly Readonly<{ label: string; description?: string }>[],
+): 'segmented' | 'list' | null {
+  if (presentation.kind !== 'select') return null;
+  return !presentation.multiple
+    && options.length >= 2
+    && options.length <= HAPPIER_SEGMENTED_CHOICES_MAX
+    && options.every((option) => option.description === undefined && option.label.length <= HAPPIER_SEGMENTED_LABEL_MAX_CHARS)
+    ? 'segmented'
+    : 'list';
+}
+
 function readTextList(field: HappierActionInputField, value: unknown): readonly string[] {
   if (!Array.isArray(value)) return [];
   return value.map((item) => String(item ?? '').trim()).filter(Boolean);
@@ -73,7 +101,7 @@ export function resolveHappierActionFieldPresentation<OptionValue = unknown>(
   if (field.widget === 'select') {
     return {
       kind: 'select',
-      value: Array.isArray(selection) ? undefined : selection,
+      value: selection,
       multiple: false,
     };
   }

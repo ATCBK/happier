@@ -47,6 +47,10 @@ export type HappierDropOutcomeVocabulary = Readonly<{
   unknownDetail: string;
   /** Reason codes meaning releasing here changes nothing ("Already here"): quiet, never a refusal. */
   unchangedCodes?: ReadonlySet<string>;
+  /** The quiet title for an unchanged place that names no verb of its own ("Already here"). */
+  unchangedTitle?: string;
+  /** What releasing there does ("Release to leave it where it is"); the owner's reason when omitted. */
+  unchangedDetail?: string;
   /** Reason codes meaning nothing under the pointer answers: the card shows only what it carries. */
   silentCodes?: ReadonlySet<string>;
 }>;
@@ -108,7 +112,10 @@ export function describeHappierDropOutcome(
     const code = admission.reason.code;
     if (vocabulary.silentCodes?.has(code)) return null;
     if (vocabulary.unchangedCodes?.has(code)) {
-      return { tone: 'quiet', glyph: 'here', title: admission.preview?.verb ?? vocabulary.refusedTitle, detail: admission.reason.message };
+      // An unchanged place is never worded as a refusal: its own verb, else "Already here".
+      if (admission.preview) return { tone: 'quiet', glyph: 'here', title: admission.preview.verb, detail: admission.reason.message };
+      return { tone: 'quiet', glyph: 'here', title: vocabulary.unchangedTitle ?? vocabulary.refusedTitle,
+        detail: vocabulary.unchangedDetail ?? admission.reason.message };
     }
     const title = admission.preview?.glyph === 'refused'
       ? admission.preview.verb

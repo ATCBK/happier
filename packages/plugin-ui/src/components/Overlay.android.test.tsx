@@ -16,6 +16,7 @@ vi.mock('react-native', () => ({
   Platform: nativePlatform,
   Pressable: 'Pressable',
   ScrollView: 'ScrollView',
+  StyleSheet: { flatten: (style: unknown) => flattenStyle(style), hairlineWidth: 1 },
   Text: 'Text',
   View: 'View',
 }));

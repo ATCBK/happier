@@ -68,7 +68,10 @@ type FormOption = Readonly<{
   value: FormOptionValue;
   label: string;
   description?: string;
-  /** A segmented option's leading icon ("List" with its rows); decorative, the label names the option. */
+  /**
+   * A segmented option's leading icon ("List" with its rows); decorative, the label names the option.
+   * A `compact` segmented Select shows it alone.
+   */
   icon?: IconName;
   disabled?: boolean;
   accessibilityLabel?: string;
@@ -303,6 +306,12 @@ export type SelectProps = Readonly<{
    * rejects `multiple`. Every presentation applies the same selection rules.
    */
   presentation?: 'inline' | 'menu' | 'field' | 'segmented';
+  /**
+   * Segmented only: fit a narrow toolbar (List | Board on a phone). Each option with an `icon`
+   * shows the icon alone and its label becomes its accessible name; an option without an icon
+   * keeps its label. The control keeps its height, its radio-group semantics and its keys.
+   */
+  compact?: boolean;
   /** Logical focus target transferred to the first enabled option in this field. */
   focusTarget?: PluginUiFocusTarget;
   testID?: string;
@@ -450,6 +459,7 @@ function SelectSegmented(props: SelectProps): ReactElement {
         props.onChange(entry.nextValue());
       }}
       disabled={props.disabled}
+      iconOnly={props.compact === true}
       colors={{
         track: palette.segmentTrack,
         thumb: palette.segmentThumb,
@@ -465,7 +475,7 @@ function SelectSegmented(props: SelectProps): ReactElement {
 
 /**
  * A local wall-clock reading: `YYYY-MM-DD` and `HH:mm` where the reader is. Read the instant it names
- * with `resolveHappierFutureLocalDateTime` from `@happier-dev/plugin-ui/presentation`.
+ * with `resolveHappierFutureLocalDateTime` from `@happier-dev/plugin-ui/components`.
  */
 export type LocalDateTimeValue = HappierLocalDateTimeDraft;
 
@@ -493,10 +503,38 @@ export function ValidationMessage({ message, testID }: ValidationMessageProps): 
   return <HappierValidationMessage message={message} theme={usePluginTheme()} testID={testID} />;
 }
 
-export type FormActionsProps = Readonly<{ children?: ReactNode }>;
+export type FormActionsProps = Readonly<{
+  children?: ReactNode;
+  /** Actions at the cluster's far edge, after the others: the irreversible one (Delete, Leave). */
+  trailing?: ReactNode;
+  /** One line under the actions: the consequence of the destructive action, or why it was refused. */
+  footnote?: string | null;
+  /** A key from this plugin's declared translation bundle; `footnote` is its fallback. */
+  footnoteKey?: string;
+  /** `danger` is a refusal, announced as it appears; `secondary` (default) a static consequence. */
+  footnoteTone?: 'secondary' | 'danger';
+  footnoteTestID?: string;
+  testID?: string;
+}>;
 
-function FormActions({ children }: FormActionsProps): ReactElement {
-  return <HappierFormActions>{children}</HappierFormActions>;
+/**
+ * A row of buttons at the end of a form or page section: Save and Cancel, or the quiet
+ * leave-and-destroy actions that close a page, with an optional consequence or refusal line beneath.
+ * Pending and submit state stay with the buttons and their caller.
+ */
+function FormActions({ children, trailing, footnote, footnoteKey, footnoteTone, footnoteTestID, testID }: FormActionsProps): ReactElement {
+  const translate = usePluginTranslation();
+  return (
+    <HappierFormActions
+      trailing={trailing}
+      footnote={resolveAuthorText(translate, footnote ?? undefined, footnoteKey)}
+      footnoteTone={footnoteTone}
+      footnoteTestID={footnoteTestID}
+      testID={testID}
+    >
+      {children}
+    </HappierFormActions>
+  );
 }
 
 export type FormProps = Readonly<{

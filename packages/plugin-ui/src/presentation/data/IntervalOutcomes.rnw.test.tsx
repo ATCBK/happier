@@ -32,6 +32,7 @@ describe('neutral intervals and outcomes', () => {
       intervals={[{ id: 'arrives', label: 'Shipment', kind: 'point', start: 12, end: 12, annotation: 'Dock 2' }]} />;
     const mount = mountThroughReactNativeWeb(render('full'));
     try {
+      act(() => query(mount.container, 'events-values-toggle')!.click());
       expect(query(mount.container, 'events-values-row-0')!.getAttribute('aria-label')).not.toContain('End');
       expect(query(mount.container, 'events-end-arrives')).toBeNull();
       act(() => query(mount.container, 'events-select-arrives')!.click());
@@ -47,6 +48,7 @@ describe('neutral intervals and outcomes', () => {
       intervals={[{ id: 'known', label: 'Observation', start: 12.3456789, end: 13.000000001, startLabel: 'Morning', endLabel: 'Noon' },
         { id: 'unknown', label: 'Incomplete', start: 1, end: null, endLabel: 'Not observed' }]} />);
     try {
+      act(() => query(mount.container, 'labels-values-toggle')!.click());
       const known = query(mount.container, 'labels-values-row-0')!;
       expect(known.textContent).toContain('Morning');
       expect(known.textContent).toContain('12.3456789');
@@ -66,6 +68,9 @@ describe('neutral intervals and outcomes', () => {
       label="Runs today" domain={{ start: 0, end: 1440 }} geometry={{ width: 500, height: 200 }} formatValue={clock}
       intervals={[{ id: 'run', label: 'Nightly audit', start: 120, end: 160 }]} />);
     try {
+      // The plot already lists every run; its exact rows wait behind Details instead of repeating it.
+      expect(query(mount.container, 'clock-values-row-0')).toBeNull();
+      act(() => query(mount.container, 'clock-values-toggle')!.click());
       const row = query(mount.container, 'clock-values-row-0')!;
       expect(row.getAttribute('aria-label')).toContain('Start: 02:00, End: 02:40');
       expect(row.textContent).not.toContain('120');
@@ -88,6 +93,7 @@ describe('neutral intervals and outcomes', () => {
       size={size} geometry={{ width, height: 200 }} />;
     const mount = mountThroughReactNativeWeb(render(500));
     try {
+      act(() => query(mount.container, 'batches-values-toggle')!.click());
       expect(query(mount.container, 'batches-values-row-0')).not.toBeNull();
       expect(query(mount.container, 'batches-values-row-0')!.getAttribute('aria-label')).toContain('Start: -10, End: 0');
       expect(query(mount.container, 'batches-values-row-1')!.getAttribute('aria-label')).toContain('End: Unknown');

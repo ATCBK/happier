@@ -131,11 +131,14 @@ export function HappierPageSectionHeader(props: HappierPageSectionHeaderProps) {
     actionWidthPx,
     actionLayout: props.actionLayout,
     gapPx: SECTION_ACTION_GAP_PX,
+    hasDescription: props.description !== null && props.description !== undefined && props.description !== false && props.description !== '',
   });
   return (
     <View
       testID={props.testID}
-      onLayout={hasAction ? handleLayout : undefined}
+      // Always attached: React Native Web decides whether to observe a view only when it mounts, and a
+      // section's action can arrive after that (a directory's "+ Add source" once its sources load).
+      onLayout={handleLayout}
       style={[
         {
           flexDirection: 'row',
@@ -188,19 +191,15 @@ export function useHappierPageSection(): HappierPageSection | null {
 type DividerChildProps = Readonly<{ showDivider?: boolean }>;
 
 function flattenSectionRows(children: ReactNode): ReactElement<DividerChildProps>[] {
-  const rows: ReactElement<DividerChildProps>[] = [];
-  const visit = (node: ReactNode) => {
-    Children.forEach(node, (child) => {
-      if (!isValidElement(child)) return;
-      if (child.type === Fragment) {
-        visit((child as ReactElement<{ children?: ReactNode }>).props.children);
-        return;
-      }
-      rows.push(child as ReactElement<DividerChildProps>);
-    });
-  };
-  visit(children);
-  return rows;
+  // React's map scopes returned row keys through fragments and retains the original
+  // child slots. Packing rows before assigning keys remounts later authors when a
+  // conditional status line appears, retiring their drafts and pending Actions.
+  return Children.toArray(Children.map(children, (child) => {
+    if (!isValidElement(child)) return null;
+    return child.type === Fragment
+      ? flattenSectionRows((child as ReactElement<{ children?: ReactNode }>).props.children)
+      : child;
+  })) as ReactElement<DividerChildProps>[];
 }
 
 /**
@@ -292,7 +291,7 @@ export function HappierPageSheet(props: HappierPageSheetProps) {
   const grouped = children.some(isSheetGroup);
   return (
     <HappierPageSectionContext.Provider value={section}>
-      <HappierMaterialSurface testID={props.testID} materialRole={props.surface === 'none' ? undefined : 'content'} gradient={props.surface === 'none' ? null : props.gradient} renderMaterialSurface={props.renderMaterialSurface} style={[sheetStyle, props.style]}>
+      <HappierMaterialSurface testID={props.testID} materialRole={props.surface === 'none' ? undefined : 'card'} gradient={props.surface === 'none' ? null : props.gradient} renderMaterialSurface={props.renderMaterialSurface} style={[sheetStyle, props.style]}>
         {grouped
           ? children.map((child, index) => (isSheetGroup(child) ? (
               <Fragment key={child.key ?? `page-sheet-group-${index}`}>

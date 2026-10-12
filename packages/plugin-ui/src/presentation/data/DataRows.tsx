@@ -53,8 +53,10 @@ function RowMark(props: Readonly<{ mark: NonNullable<HappierDataRowsProps['marks
   styles: HappierDataTextStyles; testID?: string }>) {
   const color = props.mark.meaning === 'good' ? props.theme.colors.success
     : props.mark.meaning === 'bad' ? props.theme.colors.danger : props.theme.colors.secondaryText;
+  // Glyph and colour say the same thing: a value that means good is a tick whatever its boolean.
+  const tick = props.mark.meaning === 'good' || (props.mark.meaning === 'neutral' && props.mark.passed);
   return <View accessibilityElementsHidden importantForAccessibility="no">
-    <HappierText testID={props.testID} style={{ ...props.styles.strong, color }}>{props.mark.passed ? '✓' : '✗'}</HappierText>
+    <HappierText testID={props.testID} style={{ ...props.styles.strong, color }}>{tick ? '✓' : '✗'}</HappierText>
   </View>;
 }
 

@@ -50,6 +50,25 @@ export type HappierSegmentedChoiceRowModel<T extends string = string> =
   }>;
 
 /**
+ * Each distinct reason, in option order. One reason speaks for itself; two or more are told apart by
+ * the options they belong to ("From the directory: Add a directory first."), so a row with several
+ * unavailable choices never runs their reasons into one unattached paragraph.
+ */
+function nameUnavailableOptions<T extends string>(
+  options: readonly HappierSegmentedChoiceRowOption<T>[],
+): string[] {
+  const labelsByReason = new Map<string, string[]>();
+  for (const option of options) {
+    if (!option.unavailableReason) continue;
+    const labels = labelsByReason.get(option.unavailableReason);
+    if (labels) labels.push(option.label);
+    else labelsByReason.set(option.unavailableReason, [option.label]);
+  }
+  if (labelsByReason.size < 2) return [...labelsByReason.keys()];
+  return [...labelsByReason].map(([reason, labels]) => `${labels.join(', ')}: ${reason}`);
+}
+
+/**
  * The ONE rule of a "label + inline segmented choice" row (a group's Width, Frame and Dividers; a
  * setting choosing between two to four short options): an unavailable option is shown, never hidden,
  * and says why — in its accessible name and in the line under the row's label. Happier core's
@@ -67,13 +86,7 @@ export function resolveHappierSegmentedChoiceRow<T extends string>(
   const description =
     input.options.find((option) => option.id === input.value)?.description ??
     input.description;
-  const unavailableReasons = [
-    ...new Set(
-      input.options.flatMap((option) =>
-        option.unavailableReason ? [option.unavailableReason] : [],
-      ),
-    ),
-  ];
+  const unavailableReasons = nameUnavailableOptions(input.options);
   const detail = [description, ...unavailableReasons].filter(Boolean).join(' ');
   return {
     segments: input.options.map((option) => ({

@@ -24,8 +24,9 @@ import type { HappierStateSize } from './InfoState.js';
  * page/pane/thumb; detail drops at thumb). The built-in scenes are compositions of these parts, and
  * plugins compose theirs through the same API ({@link defineHappierScene}, {@link defineHappierSceneProp}).
  * Drawing is the host's (`renderScene` on the presentation host; the app's scene renderer in core): ink,
- * line widths, the planet itself, motion and theme stay host-owned, so a composition places parts but
- * never restyles them. Coordinates are in one 160 × 64 scene box.
+ * line widths, the planet itself, motion and theme stay host-owned. A composition can choose the
+ * planet's published style, fullness and digit field; it never supplies a painter. Coordinates are
+ * in one 160 × 64 scene box.
  */
 
 export const HAPPIER_SCENE_VIEWBOX = Object.freeze({ width: 160, height: 64 });
@@ -124,8 +125,14 @@ export type HappierScenePropPlacement = Readonly<{
   flip?: boolean;
 }>;
 
-/** Where the moment's planet sits, when a scene moves it: `rise` is the share of its radius above the ground. */
-export type HappierScenePlanetPlacement = Readonly<{ x?: number; y?: number; r?: number; rise?: number }>;
+/** Where the moment's planet sits: `rise` is the share of its radius above the ground. */
+export type HappierScenePlanetPlacement = Readonly<{
+  x?: number; y?: number; r?: number; rise?: number;
+  /** Omitted look choices retain the scene's existing mark calibration. */
+  style?: 'airy' | 'balanced' | 'rich';
+  fullness?: number;
+  digits?: boolean;
+}>;
 
 /** A scene as data. Built-in scenes and plugin scenes are both this composition. */
 export type HappierSceneComposition = Readonly<{
@@ -243,6 +250,9 @@ export type HappierResolvedScenePlanet = Readonly<{
   ink: boolean;
   clipY?: number;
   rises: boolean;
+  style?: HappierScenePlanetPlacement['style'];
+  fullness?: number;
+  digits?: boolean;
 }>;
 
 export type HappierResolvedScene = Readonly<{
@@ -338,7 +348,7 @@ const SKY: Readonly<Record<HappierSceneSky, (c: SceneContext) => HappierResolved
 
 // ─── moments and planet states ────────────────────────────────────────────────────────────────────
 
-type MomentPlanet = Readonly<{ x: number; r: number; rise?: number; y?: number; pose?: 'ready' | 'shadow' | 'eclipse'; progress?: number; warm?: boolean; outline?: boolean }>;
+type MomentPlanet = HappierScenePlanetPlacement & Readonly<{ x: number; r: number; pose?: 'ready' | 'shadow' | 'eclipse'; progress?: number; warm?: boolean; outline?: boolean }>;
 const MOMENTS: Readonly<Record<HappierSceneMoment, Readonly<{ planet: MomentPlanet | null; sky?: readonly HappierSceneSky[] }>>> = Object.freeze({
   // only the halo shows
   predawn: { planet: { x: 80, rise: -0.62, r: 14, pose: 'shadow' }, sky: ['stars'] },
@@ -374,6 +384,9 @@ function resolvePlanets(spec: MomentPlanet | null, state: HappierScenePlanetStat
     warm: spec.warm === true,
     ink: false,
     ...(clipY !== undefined ? { clipY } : {}),
+    ...(spec.style !== undefined ? { style: spec.style } : {}),
+    ...(spec.fullness !== undefined ? { fullness: spec.fullness } : {}),
+    ...(spec.digits !== undefined ? { digits: spec.digits } : {}),
   };
   if (state === 'homes') {
     return { planets: HOMES.map(([x, r, pose]) => ({ ...base, pose, cx: x, cy: f2(ground - r * 0.55), r, rows: planetRows(r), rises: false })), marks: [] };

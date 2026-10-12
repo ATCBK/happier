@@ -13,7 +13,8 @@
  * families each owning a tone→token table would disagree the first time either
  * changed.
  */
-export type HappierTextVariant = 'body' | 'reading' | 'label' | 'title' | 'caption' | 'code';
+import type { HappierTypeRole } from './text/typeScale.js';
+export type HappierTextVariant = HappierTypeRole | 'code';
 
 export type HappierTone =
   | 'neutral'

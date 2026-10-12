@@ -293,13 +293,24 @@ describe('author package boundary', () => {
     expect(packageJson.scripts?.['test:local']).toContain('test:external-authoring');
   });
 
-  it('keeps every declared package entrypoint as a thin wrapper over one author-owned source spec', () => {
+  it('keeps declared barrels thin and the framework-free type-scale export at its canonical leaf', () => {
     const packageRoot = resolve(new URL('.', import.meta.url).pathname, '..');
     const packageJson = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')) as {
-      exports: Record<string, unknown>;
+      exports: Record<string, Readonly<{ 'happier-source': string; types: string; default: string }>>;
     };
 
     for (const specifier of Object.keys(packageJson.exports)) {
+      if (specifier === './presentation/typeScale') {
+        // UI and design-lab consumers share these metrics without importing React/Native.
+        expect(packageJson.exports[specifier]).toEqual({
+          'happier-source': './src/presentation/text/typeScale.ts',
+          types: './dist/presentation/text/typeScale.d.ts',
+          default: './dist/presentation/text/typeScale.js',
+        });
+        const source = readFileSync(join(packageRoot, packageJson.exports[specifier]['happier-source']), 'utf8');
+        expect(importedSpecifiers(source)).toEqual([]);
+        continue;
+      }
       const directory = specifier === '.' ? '' : specifier.slice(2);
       const entrypoint = join(packageRoot, 'src', directory, 'index.ts');
       const sourceSpec = join(packageRoot, 'src', directory, 'index.public.ts');
@@ -392,13 +403,12 @@ describe('author package boundary', () => {
       '@happier-dev/plugin-ui/components',
       '@happier-dev/plugin-ui/hostApi',
       '@happier-dev/plugin-ui/data',
-      '@happier-dev/plugin-ui/presentation',
       '@happier-dev/plugin-ui/environment',
       '@happier-dev/plugin-ui/advanced',
     ]) {
       expect(webClosure).toContain(`'${specifier}'`);
     }
-    for (const forbidden of ['zod', '@happier-dev/protocol', 'ajv', 'semver', '@happier-dev/plugin-sdk']) {
+    for (const forbidden of ['@happier-dev/plugin-ui/presentation', '@happier-dev/plugin-ui/presentation/typeScale', 'zod', '@happier-dev/protocol', 'ajv', 'semver', '@happier-dev/plugin-sdk']) {
       expect(webClosure).not.toContain(`'${forbidden}'`);
     }
     expect(babelConfig).toContain("autoProcessPaths: ['packages/plugin-ui/src']");

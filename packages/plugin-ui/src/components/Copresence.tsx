@@ -74,7 +74,7 @@ const PLAIN_CAPSULE_HOST: HappierCapsuleHost = {
   Surface: PlainCapsuleSurface,
   Text: (props) => (
     <HappierText
-      variant={props.role === 'title' ? 'label' : props.role === 'meta' ? 'caption' : undefined}
+      variant={props.role === 'title' ? 'label' : props.role === 'meta' ? 'micro' : undefined}
       numberOfLines={props.numberOfLines}
       style={[props.style, props.color ? { color: props.color } : null]}
     >

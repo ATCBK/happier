@@ -3,7 +3,6 @@ import { Switch as ReactNativeSwitch, View, type ViewStyle } from 'react-native'
 import { HappierPressable } from '../interaction/Pressable.js';
 import { HAPPIER_FOCUS_RING_DELEGATED_STYLE, happierFocusRingStyle } from '../interaction/focusVisible.js';
 import { HAPPIER_MOTION_V1 } from '../interaction/motion.js';
-import { HAPPIER_PRESS_FEEDBACK_V1 } from '../interaction/pressFeedback.js';
 import type { HappierFocusable, HappierStyleProp } from '../portableTypes.js';
 
 /**
@@ -23,9 +22,14 @@ import type { HappierFocusable, HappierStyleProp } from '../portableTypes.js';
  * the plugin `Toggle` through the platform it runs on.
  */
 export const HAPPIER_SWITCH_METRICS = Object.freeze({
-  default: Object.freeze({ trackWidth: 40, trackHeight: 22, thumbSize: 18, padding: 2 }),
+  default: Object.freeze({ trackWidth: 40, trackHeight: 24, thumbSize: 20, padding: 2 }),
   compact: Object.freeze({ trackWidth: 32, trackHeight: 18, thumbSize: 14, padding: 2 }),
-  /** The web control's own hit box around the drawn track. */
+  /**
+   * While pressed, the thumb widens toward the track's centre (the physical
+   * squash of a switch about to move), by this much, and settles back on release.
+   */
+  pressStretchPx: 4,
+  /** The web control's hit region around the drawn track; it overhangs and takes no layout. */
   webTargetPx: 44,
   disabledOpacity: 0.6,
 });
@@ -63,6 +67,11 @@ export type HappierSwitchProps = Readonly<{
   controlRef?: (instance: HappierFocusable | null) => void;
   /** Caller layout for the control box; the switch's own target floor always applies over it. */
   style?: HappierStyleProp;
+  /**
+   * The row this switch sits in owns its press (tap anywhere on the row toggles it): the switch draws
+   * its state only — no press, focus or accessibility node of its own — so a tap is counted once.
+   */
+  presentational?: boolean;
 }>;
 
 type WebTransitionStyle = ViewStyle & {
@@ -77,10 +86,12 @@ const TRACK_TRANSITION: WebTransitionStyle = {
   transitionTimingFunction: HAPPIER_MOTION_V1.standardEasingCss,
 };
 const THUMB_TRANSITION: WebTransitionStyle = {
-  transitionProperty: 'transform',
+  transitionProperty: 'transform, width',
   transitionDuration: `${HAPPIER_MOTION_V1.baseMs}ms`,
   transitionTimingFunction: HAPPIER_MOTION_V1.standardEasingCss,
 };
+
+const THUMB_SHADOW = '0 1px 2px rgba(0, 0, 0, 0.18), 0 1px 1px rgba(0, 0, 0, 0.06)';
 
 function isToggleKey(key: string): boolean {
   return key === ' ' || key === 'Spacebar' || key === 'Enter';
@@ -90,7 +101,7 @@ function isToggleKey(key: string): boolean {
 export function HappierSwitchNative(props: HappierSwitchProps) {
   const { colors } = props;
   const target = props.minimumTouchTarget;
-  return (
+  const control = (
     <ReactNativeSwitch
       ref={props.controlRef as ((instance: ReactNativeSwitch | null) => void) | undefined}
       value={props.value}
@@ -110,14 +121,71 @@ export function HappierSwitchNative(props: HappierSwitchProps) {
       thumbColor={colors.thumb}
     />
   );
+  if (!props.presentational) return control;
+  return (
+    <View pointerEvents="none" importantForAccessibility="no-hide-descendants" accessibilityElementsHidden>
+      {control}
+    </View>
+  );
 }
 
 /** The drawn switch: the web control (see the module note). */
 export function HappierSwitch(props: HappierSwitchProps) {
   const { value, onValueChange, disabled, colors } = props;
   const metrics = HAPPIER_SWITCH_METRICS[props.size ?? 'default'];
-  const translateX = value ? metrics.trackWidth - metrics.thumbSize - metrics.padding * 2 : 0;
+  const thumbTravel = (thumbWidth: number) => (value ? metrics.trackWidth - thumbWidth - metrics.padding * 2 : 0);
   const toggle = () => { onValueChange?.(!value); };
+  const hitWidth = Math.max(HAPPIER_SWITCH_METRICS.webTargetPx, metrics.trackWidth);
+  const hitHeight = Math.max(HAPPIER_SWITCH_METRICS.webTargetPx, metrics.trackHeight);
+  const renderTrack = (pressed: boolean, focused: boolean) => {
+    const thumbWidth = metrics.thumbSize + (pressed && disabled !== true ? HAPPIER_SWITCH_METRICS.pressStretchPx : 0);
+    return <View
+      style={[
+        {
+          width: metrics.trackWidth,
+          height: metrics.trackHeight,
+          borderRadius: metrics.trackHeight / 2,
+          padding: metrics.padding,
+          justifyContent: 'center',
+          backgroundColor: value ? colors.trackOn : colors.trackOff,
+        },
+        // The ring follows the drawn track, not the larger hit box around it.
+        happierFocusRingStyle({ visible: focused, color: colors.focusRing }),
+        props.reducedMotion ? null : TRACK_TRANSITION,
+      ]}
+    >
+      <View
+        style={[
+          {
+            width: thumbWidth,
+            height: metrics.thumbSize,
+            borderRadius: metrics.thumbSize / 2,
+            backgroundColor: colors.thumb,
+            // A soft, close shadow lifts the thumb off either track colour (white on a light-grey
+            // off track otherwise reads as a hole, not a knob).
+            boxShadow: THUMB_SHADOW,
+            transform: [{ translateX: thumbTravel(thumbWidth) }],
+          },
+          props.reducedMotion ? null : THUMB_TRANSITION,
+        ]}
+      />
+    </View>;
+  };
+  if (props.presentational) {
+    // The enclosing row is the control; this is only its picture (no role, focus or press).
+    return (
+      <View
+        pointerEvents="none"
+        aria-hidden
+        importantForAccessibility="no-hide-descendants"
+        accessibilityElementsHidden
+        testID={props.testID}
+        style={[props.style as ViewStyle | undefined, { opacity: disabled ? HAPPIER_SWITCH_METRICS.disabledOpacity : 1, alignSelf: 'flex-start' }]}
+      >
+        {renderTrack(false, false)}
+      </View>
+    );
+  }
   return (
     <HappierPressable
       accessibilityRole="switch"
@@ -142,46 +210,22 @@ export function HappierSwitch(props: HappierSwitchProps) {
       style={(state) => [
         props.style,
         {
-          minWidth: HAPPIER_SWITCH_METRICS.webTargetPx,
-          minHeight: HAPPIER_SWITCH_METRICS.webTargetPx,
+          // The hit region is the full target, but it overhangs the drawn track instead of taking
+          // layout: in flow the switch is exactly its track, so it never makes a row taller.
+          width: hitWidth,
+          height: hitHeight,
+          marginHorizontal: -(hitWidth - metrics.trackWidth) / 2,
+          marginVertical: -(hitHeight - metrics.trackHeight) / 2,
           alignItems: 'center',
           justifyContent: 'center',
           alignSelf: 'flex-start',
           ...HAPPIER_FOCUS_RING_DELEGATED_STYLE,
-          opacity: disabled
-            ? HAPPIER_SWITCH_METRICS.disabledOpacity
-            : state.pressed ? HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle : 1,
+          // The thumb's squash is the press feedback; the control never dims on press.
+          opacity: disabled ? HAPPIER_SWITCH_METRICS.disabledOpacity : 1,
         },
       ]}
     >
-      {(state) => <View
-        style={[
-          {
-            width: metrics.trackWidth,
-            height: metrics.trackHeight,
-            borderRadius: metrics.trackHeight / 2,
-            padding: metrics.padding,
-            justifyContent: 'center',
-            backgroundColor: value ? colors.trackOn : colors.trackOff,
-          },
-          // The ring follows the drawn track, not the larger hit box around it.
-          happierFocusRingStyle({ visible: state.focused, color: colors.focusRing }),
-          props.reducedMotion ? null : TRACK_TRANSITION,
-        ]}
-      >
-        <View
-          style={[
-            {
-              width: metrics.thumbSize,
-              height: metrics.thumbSize,
-              borderRadius: metrics.thumbSize / 2,
-              backgroundColor: colors.thumb,
-              transform: [{ translateX }],
-            },
-            props.reducedMotion ? null : THUMB_TRANSITION,
-          ]}
-        />
-      </View>}
+      {(state) => renderTrack(state.pressed, state.focused)}
     </HappierPressable>
   );
 }

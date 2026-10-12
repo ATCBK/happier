@@ -32,6 +32,11 @@ export type WidgetSizePickerProps = Readonly<{
    * segments. Without one, the track keeps its one line and scrolls sideways.
    */
   renderCompact?: (input: WidgetSizePickerCompactInput) => ReactNode;
+  /**
+   * The visible name above the segments. The compact form names itself ("Size · Medium"), so the
+   * label shows only with the segments and the choice is never named twice.
+   */
+  label?: ReactNode;
   testID?: string;
 }>;
 
@@ -74,7 +79,8 @@ export function WidgetSizePicker(props: WidgetSizePickerProps) {
   }
   const maxRows = Math.max(...props.choices.map(choice => choice.footprint.rowSpan));
   return (
-    <View testID={testID ? `${testID}.room` : undefined} onLayout={onRoomLayout} style={{ alignSelf: 'stretch', alignItems: 'center' }}>
+    <View testID={testID ? `${testID}.room` : undefined} onLayout={onRoomLayout} style={{ alignSelf: 'stretch', alignItems: 'center', gap: 6 }}>
+      {props.label === undefined ? null : <View style={{ alignSelf: 'stretch' }}>{props.label}</View>}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ maxWidth: '100%', flexGrow: 0 }}>
         <View testID={testID ? `${testID}.track` : undefined} onLayout={onTrackLayout} style={{ flexDirection: 'row' }}>
           <HappierSegmentedChoice

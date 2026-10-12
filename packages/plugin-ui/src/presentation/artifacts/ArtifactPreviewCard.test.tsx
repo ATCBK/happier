@@ -121,4 +121,10 @@ describe('HappierArtifactPreviewCard visible structure', () => {
     expect(JSON.stringify(tree.toJSON())).toContain('After');
     expect(JSON.stringify(tree.toJSON())).not.toContain('Before');
   });
+
+  it('keeps a code excerpt\'s indentation, which a one-line text run would otherwise collapse', async () => {
+    await act(async () => { tree = create(card({ kind: 'code', language: 'TypeScript', text: 'function retry() {\n  for (;;) {\n    return 1;\n  }\n}' })); });
+    const lines = previewBand().findAll(node => node.type === 'span').map(node => node.props.children as string);
+    expect(lines.slice(0, 3)).toEqual(['function retry() {', '\u00a0\u00a0for (;;) {', '\u00a0\u00a0\u00a0\u00a0return 1;']);
+  });
 });

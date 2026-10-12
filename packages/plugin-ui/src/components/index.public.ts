@@ -14,7 +14,8 @@ export {
   type StatusCapsuleProps,
 } from './Copresence.js';
 export { Avatar, type AvatarProps } from './Avatar.js';
-export { DetailsPane, type DetailsPaneProps } from './DetailsPane.js';
+export { DetailsPane, DetailsPaneFooter, type DetailsPaneProps } from './DetailsPane.js';
+export { DiffStat, type DiffStatProps } from './DiffStat.js';
 export { PaneHeaderContent, type PaneHeaderContentProps, type PaneHeaderContentLineSegment } from './PaneHeaderContent.js';
 export {
   type PluginUiFocusTarget,
@@ -27,12 +28,18 @@ export * from './Image.js';
 export { MotionFeedback, type MotionFeedbackProps } from './MotionFeedback.js';
 export * from './StoredImage.js';
 export * from './Layout.js';
+export { LinkDelivery, type LinkDeliveryProps } from './LinkDelivery.js';
+export {
+  SettingRow, SettingStatusLine, SettingValueSlot,
+  type SettingRowLayout, type SettingRowProps, type SettingStatusLineProps, type SettingValueSlotProps,
+} from './Setting.js';
 export {
   List, Item, ItemGroup,
   type ListSearchProps, type ListMultiSelectionCapabilityProps, type ListSingleChoiceCapabilityProps, type ListSelectionProps,
   type ListHeaderContext, type ListSectionData, type ListProps, type ListSectionProps,
   type ItemProps, type ListItemProps, type ListAccessibilityPattern, type ItemGroupProps,
 } from './List.js';
+export { CountedDisclosureItem, type CountedDisclosureItemProps } from './CountedDisclosureItem.js';
 export * from './NavigationList.js';
 export * from './PageHeader.js';
 export {
@@ -70,6 +77,7 @@ export * from './Text.js';
 export * from './TargetedSurface.js';
 export { WidgetSurface, type WidgetSurfaceProps } from './WidgetSurface.js';
 export { WidgetFrame, type WidgetFrameProps } from './WidgetFrame.js';
+export { WidgetGlanceRow, type WidgetGlanceRowProps } from './WidgetGlanceRow.js';
 export { FloatingFrame, type FloatingFrameProps } from './FloatingFrame.js';
 export { Tree, type TreeItem, type TreeProps } from './Tree.js';
 export { DragSource, DropTarget, type DragSourceProps, type DropTargetProps } from './EntityDragDrop.js';

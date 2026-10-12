@@ -5,6 +5,7 @@ import { useHappierPageSection } from '../layout/PageSection.js';
 import { HAPPIER_PAGE_METRICS } from '../layout/pageMetrics.js';
 import { HAPPIER_RADIUS_V1 } from '../../environment/radius.js';
 import type { HappierPageTextStep } from '../layout/pageText.js';
+import { resolveHappierTypeScale, type HappierTypeEmphasis, type HappierTypeRole } from '../text/typeScale.js';
 import type { HappierPortableStyle, HappierStyleProp } from '../portableTypes.js';
 import {
   resolveHappierCollectionDraftTitle,
@@ -131,22 +132,33 @@ export const HAPPIER_COLLECTION_LIST_METRICS = Object.freeze({
   dimmedOpacity: 0.55,
 });
 
+/** A list text step from the type scale: the role's metrics on this platform, at its emphasis. */
+function collectionTextStep(role: HappierTypeRole, emphasis?: HappierTypeEmphasis): HappierPageTextStep {
+  const step = resolveHappierTypeScale(role, Platform.OS, emphasis);
+  return {
+    weight: step.weight,
+    fontSize: step.fontSize,
+    lineHeight: step.lineHeight,
+    ...(step.letterSpacing === 0 ? {} : { letterSpacing: step.letterSpacing }),
+  };
+}
+
 /**
  * The list anatomy's type steps (sizes, line heights, weights). Core binds them to its own families
  * and plugin columns take the host's faces for the same weights, so the two draw one type rhythm.
  */
 export const HAPPIER_COLLECTION_LIST_TEXT: Readonly<Record<HappierCollectionListTextRole | 'rowTitle' | 'rowTitleSelected', HappierPageTextStep>> = Object.freeze({
-  title: { weight: 'semiBold', fontSize: 15, lineHeight: 20 },
-  count: { weight: 'regular', fontSize: 13, lineHeight: 18 },
-  groupTitle: { weight: 'semiBold', fontSize: 12, lineHeight: 16 },
+  title: collectionTextStep('heading'),
+  count: collectionTextStep('body'),
+  groupTitle: collectionTextStep('meta', 'semiBold'),
   // A group label inside a page section's sheet is a sub-heading between the section title and its
   // rows (the event a set of triggers answers): a step above the rows' description, in the text tone,
   // so it reads as a heading rather than a quiet column label.
-  groupHeading: { weight: 'semiBold', fontSize: 13, lineHeight: 18 },
-  groupCount: { weight: 'regular', fontSize: 12, lineHeight: 16 },
+  groupHeading: collectionTextStep('body', 'semiBold'),
+  groupCount: collectionTextStep('meta'),
   // A navigation row's title: the compact list step, heavier while it is the open row.
-  rowTitle: { weight: 'regular', fontSize: Platform.OS === 'ios' ? 14 : 13, lineHeight: 18 },
-  rowTitleSelected: { weight: 'semiBold', fontSize: Platform.OS === 'ios' ? 14 : 13, lineHeight: 18 },
+  rowTitle: collectionTextStep('body'),
+  rowTitleSelected: collectionTextStep('body', 'semiBold'),
 });
 
 /** A row's content inset (its own horizontal padding inside the gutter), plus a disclosure indent. */
@@ -179,12 +191,37 @@ export function useHappierCollectionTableRow(): boolean {
   return useContext(HappierCollectionTableRowContext);
 }
 
+/** A nested Collection table row's treegrid facts (`aria-level`, its open state, its place among siblings). */
+export type HappierCollectionTreeRowFacts = Readonly<{
+  level: number;
+  /** Omitted for a row without children. */
+  expanded?: boolean;
+  posInSet: number;
+  setSize: number;
+}>;
+
+export const HappierCollectionTreeRowContext = createContext<HappierCollectionTreeRowFacts | null>(null);
+
 /**
  * Whether this List row is the one whose detail is open, provided by the List row owner. With a
  * multi-selection store mounted a row's `selected` means "in the bulk set", so the open row needs its own
  * fact to keep its mark (`HappierCollectionTableRowContext`'s edge).
  */
 export const HappierListRowOpenContext = createContext(false);
+
+/**
+ * Set by a card that draws its own selection ring around the row (a Collection grid card). The row then
+ * keeps its selection semantics but paints no inset fill: the same fact drawn twice reads as a box in a box.
+ */
+export const HappierCardSelectionRingContext = createContext(false);
+
+/**
+ * Where a Collection grid card's row actions sit: the end of its title line (`top` from the card's edge,
+ * `end` from its trailing edge, `height` the title line's). Without it the actions take a cell beside the
+ * card's body and centre on it, which puts them between the body's lines. Under a precise pointer the
+ * actions show while the card is hovered, focused or its menu is open; on touch they always show.
+ */
+export const HappierCardActionsCornerContext = createContext<Readonly<{ top: number; end: number; height: number }> | null>(null);
 
 /** The open row's leading edge in a Collection's table or list (lab `.br.on::before`). */
 export const HAPPIER_COLLECTION_SELECTED_EDGE_WIDTH = 2.5;

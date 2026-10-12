@@ -707,7 +707,7 @@ async function assertPackedExternalAuthoringFixtureInstallation({ packedHostRoot
 export async function assertPublicPresentationContract(consumerRoot) {
   const packageRoot = join(consumerRoot, 'node_modules', '@happier-dev', 'plugin-ui');
   const packageJson = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8'));
-  const presentationExport = packageJson.exports?.['./presentation'];
+  const presentationExport = packageJson.exports?.['./components'];
   const declarationPath = (
     presentationExport
     && typeof presentationExport === 'object'
@@ -716,11 +716,11 @@ export async function assertPublicPresentationContract(consumerRoot) {
     ? presentationExport.types
     : undefined;
   if (!declarationPath?.startsWith('./')) {
-    throw new Error('Packed plugin-ui presentation export has no public declaration entrypoint');
+    throw new Error('Packed plugin-ui components export has no public declaration entrypoint');
   }
   const declarationFile = resolve(packageRoot, declarationPath);
   if (!pathIsInside(packageRoot, declarationFile)) {
-    throw new Error('Packed plugin-ui presentation declaration escapes its package root');
+    throw new Error('Packed plugin-ui components declaration escapes its package root');
   }
   // The public barrel may reexport another declaration. Ask the compiler's
   // module-symbol owner rather than mistaking a barrel's text for its exports.
@@ -731,10 +731,10 @@ export async function assertPublicPresentationContract(consumerRoot) {
   const module = source ? checker.getSymbolAtLocation(source) : undefined;
   const exports = new Set(module ? checker.getExportsOfModule(module).map((symbol) => symbol.name) : []);
   if (exports.has('HappierImage')) {
-    throw new Error('Raw renderer export leaked through plugin-ui/presentation: HappierImage');
+    throw new Error('Raw renderer export leaked through plugin-ui/components: HappierImage');
   }
   if (!exports.has('HappierBrandMark')) {
-    throw new Error('Semantic BrandMark renderer is missing from plugin-ui/presentation');
+    throw new Error('Semantic BrandMark renderer is missing from plugin-ui/components');
   }
 }
 

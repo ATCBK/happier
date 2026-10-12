@@ -133,6 +133,10 @@ export type HappierWorkTextRole =
   | 'rowLine'
   | 'rowState'
   | 'rowTime'
+  | 'pageRowTitle'
+  | 'pageRowLine'
+  | 'pageRowState'
+  | 'pageRowTime'
   | 'cardTitle'
   | 'cardWord'
   | 'cardMeta'
@@ -160,6 +164,13 @@ export const HAPPIER_WORK_TEXT: Readonly<Record<HappierWorkTextRole, HappierWork
   rowLine: { weight: 'regular', fontSize: 12, lineHeight: 16 },
   rowState: { weight: 'regular', fontSize: 12, lineHeight: 18 },
   rowTime: { weight: 'regular', fontSize: 11.5, lineHeight: 18, tabular: true },
+  // A Work row on a page of its own (the Inbox; lab `inbox-I1` `.uwr-ib-row`): the page row's steps, so
+  // its rows read at the same scale as the page header and section titles around them.
+  // Existing steps only (no new sizes): the page row's title and description, and the card's tabular meta.
+  pageRowTitle: { weight: 'regular', fontSize: HAPPIER_PAGE_TEXT.rowTitle.fontSize, lineHeight: HAPPIER_PAGE_TEXT.rowTitle.lineHeight },
+  pageRowLine: { weight: 'regular', fontSize: HAPPIER_PAGE_TEXT.rowDescription.fontSize, lineHeight: HAPPIER_PAGE_TEXT.rowDescription.lineHeight },
+  pageRowState: { weight: 'regular', fontSize: HAPPIER_PAGE_TEXT.rowDescription.fontSize, lineHeight: HAPPIER_PAGE_TEXT.rowDescription.lineHeight },
+  pageRowTime: { weight: 'regular', fontSize: 12, lineHeight: 18, tabular: true },
   // A Work update card (lab `.uws-card`): its head reads as one line — title, state word, kind and age.
   cardTitle: { weight: 'semiBold', fontSize: 13.5, lineHeight: 18 },
   cardWord: { weight: 'regular', fontSize: 12.5, lineHeight: 18 },

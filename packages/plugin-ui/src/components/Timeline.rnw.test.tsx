@@ -25,7 +25,7 @@ describe('Timeline', () => {
           renderItem={(item) => ({
             glyph: <Icon name="check" />,
             heading: <Text variant="label">{item}</Text>,
-            time: item === 'second' ? <Text variant="caption">Earlier today</Text> : null,
+            time: item === 'second' ? <Text variant="micro">Earlier today</Text> : null,
             body: item === 'second' ? <Button title="Retry build" onPress={() => actions.push('retry')} /> : null,
             trailing: item === 'first' ? <Button title="Open build" onPress={() => actions.push('open')} /> : null,
           })}

@@ -37,6 +37,10 @@ export type HappierPublicLinkCardProps = Readonly<{
   expiryControl: ReactNode;
   usesControl: ReactNode;
   consentControl: ReactNode;
+  /** A second switch in the options, drawn like consent (a visual's network access, when the link carries one). */
+  networkTitle?: string;
+  networkDescription?: string;
+  networkControl?: ReactNode;
   cancelControl: ReactNode;
   submitControl: ReactNode;
 }>;
@@ -80,6 +84,13 @@ export function HappierPublicLinkCard(props: HappierPublicLinkCardProps) {
           </View>
           {props.consentControl}
         </View>
+        {props.networkControl ? <View style={styles.consent}>
+          <View style={styles.consentText}>
+            <Text style={[typography.consentTitle, { color: colors.text }]}>{props.networkTitle}</Text>
+            {props.networkDescription ? <Text style={meta}>{props.networkDescription}</Text> : null}
+          </View>
+          {props.networkControl}
+        </View> : null}
         {props.published ? <Text style={meta}>{props.replacementNote}</Text> : null}
         <View style={styles.actions}><View style={styles.grow} />{props.cancelControl}{props.submitControl}</View>
       </View> : null}

@@ -170,6 +170,35 @@ describe('setup steps as ordered progress', () => {
     expect(query(view, 'step:cleanup')?.querySelector('[data-testid^="glyph:"]')).toBeNull();
   });
 
+  it('places a step\'s one operation at the end of the step, beside its words, apart from the content beneath', () => {
+    const theme = createSurfaceContext().theme;
+    const view = mountThroughReactNativeWeb(
+      <HappierSetupSteps
+        theme={theme}
+        steps={[
+          {
+            key: 'invite',
+            title: 'Invite people',
+            detail: 'Everyone you invite joins the Home.',
+            state: 'current',
+            action: <Text testID="invite-action">Invite people</Text>,
+            body: <Text testID="invite-body">Pending: 2</Text>,
+            testID: 'step:invite',
+          },
+        ]}
+      />,
+    );
+    const step = query(view, 'step:invite')!;
+    const action = query(view, 'invite-action')!;
+    const body = query(view, 'invite-body')!;
+    // The operation stands in its own slot of the step: its wrapper holds it alone, while the
+    // step's words and the content beneath stay together in the step.
+    expect(step.contains(action)).toBe(true);
+    expect(action.parentElement?.textContent).toBe('Invite people');
+    expect(action.parentElement?.contains(body)).toBe(false);
+    expect(step.textContent).toContain('Everyone you invite joins the Home.');
+  });
+
   it('hands the adapter the colour and weight each title takes, so it binds only its text host', () => {
     const theme = createSurfaceContext().theme;
     const seen: Record<string, string> = {};

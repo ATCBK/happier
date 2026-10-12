@@ -3,6 +3,7 @@ import { useCallback, type ReactElement } from 'react';
 import type { PluginUiResourceReference } from '../hostApi/resourceStore.js';
 import { usePluginResource } from '../hostApi/index.js';
 import { HappierBrandMark, HappierImage, type HappierImageSize } from '../presentation/content/Image.js';
+import { resolveHappierIconSize } from '../presentation/content/Icon.js';
 import { usePluginTheme } from './PluginUiProvider.js';
 import { useOptionalPluginUiPresentationHost } from '../presentationHost/context.js';
 import { usePluginHostApi } from '../hostApi/context.js';
@@ -87,7 +88,10 @@ export function usePluginBrandDisplayName(pluginId?: string): string | undefined
  * intentionally not an author prop: `manifest.brand.iconResourceId` remains
  * the one declaration and projection owner.
  */
-export function BrandMark({ pluginId, size, pixelSize, showName = false, externallyLabelled = false, testID }: BrandMarkProps): ReactElement {
+export function BrandMark({ pluginId, size, pixelSize: requestedPixelSize, showName = false, externallyLabelled = false, testID }: BrandMarkProps): ReactElement {
+  // A small mark sits beside text (a byline, a cell): at a small glyph's step, not the 32 px image step,
+  // where a filled brand reads as a heavy disk. Larger marks keep their image steps.
+  const pixelSize = requestedPixelSize ?? (size === 'small' ? resolveHappierIconSize('small') : undefined);
   const presentationHost = useOptionalPluginUiPresentationHost();
   const displayName = usePluginBrandDisplayName(pluginId) ?? 'Plugin';
   const targetPluginId = pluginId === undefined ? undefined : pluginId.trim();

@@ -3,15 +3,18 @@ import { View } from 'react-native';
 
 import type { HappierUiTheme } from '../../environment/types.js';
 import type { HappierStyleProp } from '../portableTypes.js';
-import { resolveHappierActionFieldPresentation, type HappierActionInputField } from './actionInputFields.js';
+import { resolveHappierUiPalette, useOptionalHappierUiPalette } from '../../environment/context.js';
+import { resolveHappierActionFieldPresentation, resolveHappierChoiceControl, type HappierActionInputField } from './actionInputFields.js';
 import {
   HappierField,
-  HappierSelect,
   HappierTextField,
   HappierToggle,
   HappierValidationMessage,
+  planHappierSelectOptions,
   type HappierSelectOption,
 } from './Fields.js';
+import { HappierChoiceField } from './ChoiceField.js';
+import { HappierSegmentedChoice } from './SegmentedChoice.js';
 import { HappierInputPickerButton, useHappierInputPicker } from './inputPicker.js';
 
 /**
@@ -21,6 +24,7 @@ import { HappierInputPickerButton, useHappierInputPicker } from './inputPicker.j
 export type HappierInputFieldDescriptor = HappierActionInputField & Readonly<{
   path: string;
   title: string;
+  prompt?: string;
   description?: string;
   placeholder?: string;
   required?: boolean;
@@ -40,6 +44,8 @@ export type HappierInputFieldProps<Value> = Readonly<{
   optionsStatus?: 'loading' | 'ready' | 'failed';
   /** The host's own state line for a failed options read, with its retry. */
   optionsNotice?: ReactNode;
+  /** Host-owned binding affordance; typed value controls and picker behavior remain field-owned. */
+  leading?: ReactNode;
   /** Receives the next value for `field.path`: parsed text, a boolean, a selection or a picked value. */
   onChange: (value: unknown) => void;
   disabled?: boolean;
@@ -54,6 +60,10 @@ export type HappierInputFieldProps<Value> = Readonly<{
   /** The control's test id (text input or toggle). */
   controlTestID?: string;
   testID?: string;
+  /** The host's reading of a value the options cannot name; a picker-only field shows it in its trigger. */
+  valueLabel?: string;
+  /** A host's request to show the choices now (a repair, a keyboard hand-off); each new positive value opens them. */
+  openRequest?: number;
   style?: HappierStyleProp;
   theme: HappierUiTheme;
 }>;
@@ -67,6 +77,7 @@ export type HappierInputFieldProps<Value> = Readonly<{
  */
 export function HappierInputField<Value>(props: HappierInputFieldProps<Value>): ReactElement {
   const { field, theme } = props;
+  const label = field.prompt ?? field.title;
   const presentation = resolveHappierActionFieldPresentation<Value>(field, props.value, props.selection);
   const optionsSettled = props.optionsStatus === undefined || props.optionsStatus === 'ready';
   const picker = useHappierInputPicker({
@@ -77,11 +88,14 @@ export function HappierInputField<Value>(props: HappierInputFieldProps<Value>): 
     onSelect: props.onChange,
   });
   const disabled = props.disabled === true || field.disabled === true;
+  const palette = useOptionalHappierUiPalette(theme) ?? resolveHappierUiPalette(theme);
+  // A picker-only type has no list to show: its field box is the picker's trigger.
+  const pickerOnly = presentation.kind === 'select' && (props.options ?? []).length === 0 && picker.affordance !== null;
   let control: ReactNode;
   if (presentation.kind === 'toggle') {
     control = (
       <HappierToggle
-        label={props.toggleLabel ?? field.title}
+        label={props.toggleLabel ?? label}
         value={presentation.value}
         disabled={disabled}
         theme={theme}
@@ -89,18 +103,71 @@ export function HappierInputField<Value>(props: HappierInputFieldProps<Value>): 
         onChange={props.onChange}
       />
     );
+  } else if (presentation.kind === 'select' && resolveHappierChoiceControl(presentation, props.options ?? []) === 'segmented') {
+    // Two to four short choices: one segmented control, the same shape as every other few-way choice.
+    const plan = planHappierSelectOptions<Value>({
+      options: props.options ?? [],
+      value: presentation.value,
+      disabled: disabled || !optionsSettled,
+      ...(props.isEqual === undefined ? {} : { isEqual: props.isEqual }),
+      ...(props.keyForOption === undefined ? {} : { keyForOption: props.keyForOption }),
+    });
+    control = (
+      <HappierSegmentedChoice
+        accessibilityLabel={label}
+        segments={plan.options.map((entry) => ({
+          key: entry.key,
+          label: entry.option.label,
+          selected: entry.selected,
+          disabled: entry.disabled,
+          ...(entry.option.accessibilityLabel === undefined ? {} : { accessibilityLabel: entry.option.accessibilityLabel }),
+          ...(entry.option.testID === undefined ? {} : { testID: entry.option.testID }),
+        }))}
+        onSelect={(index) => {
+          const entry = plan.options[index];
+          if (entry === undefined || entry.disabled || entry.selected) return;
+          props.onChange(entry.nextValue());
+        }}
+        disabled={disabled || !optionsSettled}
+        colors={{
+          track: palette.segmentTrack,
+          thumb: palette.segmentThumb,
+          ...(palette.segmentThumbLift === undefined ? {} : { thumbLift: palette.segmentThumbLift }),
+          label: theme.colors.secondaryText,
+          activeLabel: theme.colors.text,
+          focusRing: theme.colors.focus,
+        }}
+        {...(props.testID === undefined ? {} : { testID: `${props.testID}.segmented` })}
+      />
+    );
   } else if (presentation.kind === 'select') {
     const options = props.options ?? [];
-    // A picker-only type has no list to show; its control is the picker itself.
-    control = options.length === 0 && picker.affordance !== null ? null : (
-      <HappierSelect<Value>
-        label={field.title}
+    control = pickerOnly ? (
+      // A picker-only type has no list to show: its field box reads the value and opens the picker.
+      <HappierChoiceField<Value>
+        label={label}
+        options={options}
+        value={presentation.value}
+        placeholder={picker.affordance?.label}
+        {...(props.valueLabel === undefined ? {} : { reading: props.valueLabel })}
+        disabled={disabled || props.optionsStatus === 'loading'}
+        theme={theme}
+        onOpen={() => { void picker.open(); }}
+        onChange={props.onChange}
+        {...(props.testID === undefined ? {} : { testID: `${props.testID}-picker` })}
+      />
+    ) : (
+      <HappierChoiceField<Value>
+        label={label}
         options={options}
         value={presentation.value}
         multiple={presentation.multiple}
         maxSelections={field.maxSelections}
         minimumSelections={presentation.multiple && field.required ? 1 : undefined}
         required={field.required}
+        placeholder={field.placeholder}
+        {...(props.testID === undefined ? {} : { testID: props.testID })}
+        {...(props.openRequest === undefined ? {} : { openRequest: props.openRequest })}
         disabled={disabled || !optionsSettled}
         theme={theme}
         {...(props.isEqual === undefined ? {} : { isEqual: props.isEqual })}
@@ -111,7 +178,7 @@ export function HappierInputField<Value>(props: HappierInputFieldProps<Value>): 
   } else {
     control = (
       <HappierTextField
-        label={field.title}
+        label={label}
         testID={props.controlTestID}
         placeholder={field.placeholder}
         required={field.required}
@@ -125,7 +192,7 @@ export function HappierInputField<Value>(props: HappierInputFieldProps<Value>): 
       />
     );
   }
-  const pickerButton = (
+  const pickerButton = pickerOnly ? null : (
     <HappierInputPickerButton
       picker={picker}
       theme={theme}
@@ -137,6 +204,7 @@ export function HappierInputField<Value>(props: HappierInputFieldProps<Value>): 
   if (props.frame === 'none') {
     return (
       <View testID={props.testID} style={[{ gap: theme.spacing.small }, props.style]}>
+        {props.leading}
         {control}
         {props.optionsStatus === 'failed' ? props.optionsNotice : null}
         {pickerButton}
@@ -148,7 +216,7 @@ export function HappierInputField<Value>(props: HappierInputFieldProps<Value>): 
   }
   return (
     <HappierField
-      label={field.title}
+      label={label}
       description={field.description}
       required={field.required}
       disabled={disabled}
@@ -157,6 +225,7 @@ export function HappierInputField<Value>(props: HappierInputFieldProps<Value>): 
       testID={props.testID}
       style={props.style}
     >
+      {props.leading}
       {control}
       {props.optionsStatus === 'failed' ? props.optionsNotice : null}
       {pickerButton}

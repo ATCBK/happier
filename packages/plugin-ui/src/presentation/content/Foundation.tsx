@@ -46,14 +46,14 @@ export function HappierHeading(
   }>,
 ) {
   // Three steps of the ramp, never one size for every level: the page heading
-  // (1) takes the heading role, a pane or section heading (2) the title role,
+  // (1) takes the title role, a pane or section heading (2) the heading role,
   // and a subsection heading (3+) the label role, so a group heading never
   // reads as loudly as the heading of the pane it sits in.
   const role =
     props.level === 1
-      ? ('heading' as const)
+      ? ('title' as const)
       : props.level === 2
-        ? ('title' as const)
+        ? ('heading' as const)
         : ('label' as const);
   const hostTypography = useOptionalHappierUiTypography();
   const environmentTheme = useOptionalHappierUiTheme();
@@ -71,7 +71,7 @@ export function HappierHeading(
               color: theme.colors.text,
             },
           }
-        : { variant: role === 'heading' ? ('title' as const) : role })}
+        : { variant: role })}
       testID={props.testID}
     >
       {props.children}
@@ -147,6 +147,9 @@ export const HAPPIER_BADGE_METRICS = Object.freeze({
   gap: 5,
 });
 
+/** The fully rounded badge shape (`shape="capsule"`); a press target wrapping one follows the same radius. */
+export const HAPPIER_BADGE_CAPSULE_RADIUS_PX = 999;
+
 export function HappierBadge(
   props: Readonly<{
     /**
@@ -179,7 +182,7 @@ export function HappierBadge(
   const words = isValidElement(props.children) ? (
     props.children
   ) : (
-    <HappierText variant="caption" style={{ color: props.color }}>
+    <HappierText variant="micro" style={{ color: props.color }}>
       {props.children}
     </HappierText>
   );
@@ -197,7 +200,7 @@ export function HappierBadge(
           backgroundColor: paintColor(props.backgroundColor),
           borderRadius:
             props.shape === 'capsule'
-              ? 999
+              ? HAPPIER_BADGE_CAPSULE_RADIUS_PX
               : (props.radius ?? HAPPIER_BADGE_METRICS.radius),
           paddingHorizontal:
             props.horizontalPadding ?? HAPPIER_BADGE_METRICS.horizontalPadding,
@@ -355,11 +358,16 @@ export function HappierProgress(
   const fillPercentage = resolveHappierProgressPercentage(props.value, {
     minimumVisible: props.minimumVisibleFraction,
   });
+  const fillColor = props.fillColor ?? props.theme.colors.accent;
+  // A hatched fill is the hatch itself in the fill's ink, inside a hairline of it (the same mark as a
+  // composition strip's hatched part): the track shows between the lines, so it reads as "not yet".
+  const hatched = props.fillPattern === 'hatched';
   const fillStyle: ViewStyle = {
     height: '100%',
     minWidth: props.minimumFillWidth,
     width: `${fillPercentage}%`,
-    backgroundColor: props.fillColor ?? props.theme.colors.accent,
+    backgroundColor: hatched ? 'transparent' : fillColor,
+    ...(hatched ? { borderWidth: 1, borderColor: fillColor, overflow: 'hidden' as const } : {}),
     opacity: props.fillOpacity,
     borderRadius: props.theme.radii.pill,
   };
@@ -430,7 +438,7 @@ export function HappierProgress(
         props.renderFill(percentage)
       ) : (
         <View testID={props.fillTestID} style={fillStyle}>
-          {props.fillPattern === 'hatched' ? <HappierDataHatch theme={props.theme} /> : null}
+          {hatched ? <HappierDataHatch theme={props.theme} color={fillColor} density={(props.height ?? 8) <= props.theme.spacing.small ? 'fine' : 'regular'} /> : null}
         </View>
       )}
     </View>

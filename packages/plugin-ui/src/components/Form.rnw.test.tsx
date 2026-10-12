@@ -4,6 +4,8 @@ import { describe, expect, expectTypeOf, it, vi } from 'vitest';
 import type { ActionInputHints } from '@happier-dev/plugin-sdk/actions';
 
 import { HAPPIER_FIELD_BOX_METRICS } from '../presentation/form/FieldBox.js';
+import { HAPPIER_SWITCH_METRICS } from '../presentation/form/Switch.js';
+import { resolveHappierTypeScale } from '../presentation/text/typeScale.js';
 import { HappierSelect, HappierValidationMessage } from '../presentation/form/Fields.js';
 import { mountThroughReactNativeWeb } from '../rnwMount.testSupport.js';
 import { createHostApiStub, createSurfaceContext, SURFACE_THEME_FIXTURE } from '../surfaceFixture.testSupport.js';
@@ -55,6 +57,16 @@ function mountForm(element: React.ReactElement, context = createSurfaceContext()
 }
 
 describe('canonical Action Form presentation', () => {
+  it('uses the optional prompt for visible and accessible field labels, falling back to the noun title', () => {
+    const mount = mountForm(<Form hints={{ fields: [
+      { path: 'repository', title: 'Repository', prompt: 'Which repository?', widget: 'text' },
+      { path: 'branch', title: 'Branch', widget: 'text' },
+    ] }} value={{}} onChange={() => undefined} onSubmit={() => undefined} />);
+    expect(mount.container.textContent).toContain('Which repository?');
+    expect(mount.container.querySelectorAll('input')[0]?.getAttribute('aria-label')).toBe('Which repository?');
+    expect(mount.container.querySelectorAll('input')[1]?.getAttribute('aria-label')).toBe('Branch');
+    mount.unmount();
+  });
   it('resolves direct field chrome through the plugin catalog', () => {
     const context = createSurfaceContext({
       translations: {
@@ -462,7 +474,7 @@ describe('canonical Action Form presentation', () => {
     )).toThrow(/duplicate values/u);
   });
 
-  it('keeps exact Connected Account option values semantically selected and captions accessible on RNW', () => {
+  it('keeps exact Connected Account option values semantically selected and captions accessible on RNW', async () => {
     const account = {
       service: { pluginId: 'com.acme.accounts', localId: 'service' },
       accountId: 'account-1',
@@ -486,6 +498,10 @@ describe('canonical Action Form presentation', () => {
       onSubmit={() => undefined}
     />);
 
+    // The compact choice field names the reading and opens its rows in place.
+    const trigger = mount.container.querySelector<HTMLElement>('[aria-label^="Connected account:"]');
+    expect(trigger?.textContent).toContain('Work account');
+    await act(async () => { trigger?.click(); });
     const option = [...mount.container.querySelectorAll<HTMLElement>('[role="radio"]')]
       .find((node) => node.textContent?.includes('Work account'));
     expect(option?.getAttribute('aria-checked')).toBe('true');
@@ -519,6 +535,7 @@ describe('canonical Action Form presentation', () => {
     }
 
     const mount = mountForm(<RequiredEngineSelection />);
+    await act(async () => { mount.container.querySelector<HTMLElement>('[aria-label^="Review engines:"]')?.click(); });
     const claude = [...mount.container.querySelectorAll<HTMLElement>('[role="checkbox"]')]
       .find((option) => option.textContent?.includes('Claude'));
     const codex = [...mount.container.querySelectorAll<HTMLElement>('[role="checkbox"]')]
@@ -696,8 +713,9 @@ describe('canonical Action Form presentation', () => {
     );
 
     const input = mount.container.querySelector<HTMLInputElement>('[data-testid="scaled-field"]');
-    expect(input?.style.fontSize).toBe(`${context.theme.typography.body.fontSize * 2}px`);
-    expect(input?.style.lineHeight).toBe(`${context.theme.typography.body.lineHeight * 2}px`);
+    const metrics = resolveHappierTypeScale('meta', 'web');
+    expect(input?.style.fontSize).toBe(`${metrics.fontSize * 2}px`);
+    expect(input?.style.lineHeight).toBe(`${metrics.lineHeight * 2}px`);
     mount.unmount();
   });
 });
@@ -923,6 +941,33 @@ describe('standalone Select presentation', () => {
 });
 
 describe('shared control visuals (D6)', () => {
+  it('keeps selected descriptions and unavailable reasons in compact segmented choices', async () => {
+    const onChange = vi.fn();
+    function Harness() {
+      const [value, setValue] = useState('list');
+      return <Form.Select label="View" presentation="segmented" compact value={value}
+        options={[
+          { value: 'list', label: 'List', icon: 'list', description: 'One item per row' },
+          { value: 'board', label: 'Board', icon: 'board', description: 'Grouped by stage' },
+          { value: 'table', label: 'Table', unavailableReason: 'Needs a wider view', accessibilityLabel: 'Detailed table' },
+          { value: 'map', label: 'Map', unavailableReason: 'Choose a project first' },
+        ]}
+        onChange={(next) => { onChange(next); setValue(String(next)); }} />;
+    }
+    const mount = mountForm(<Harness />);
+    try {
+      expect(mount.container.textContent).toContain('One item per row');
+      expect(mount.container.textContent).toContain('Table: Needs a wider view');
+      expect(mount.container.textContent).toContain('Map: Choose a project first');
+      const radios = [...mount.container.querySelectorAll<HTMLElement>('[role="radio"]')];
+      expect(radios[2]?.getAttribute('aria-disabled')).toBe('true');
+      expect(radios[2]?.getAttribute('aria-label')).toBe('Detailed table, Needs a wider view');
+      await act(async () => { radios[2]?.click(); radios[1]?.click(); });
+      expect(onChange.mock.calls).toEqual([['board']]);
+      expect(mount.container.textContent).toContain('Grouped by stage');
+      expect(mount.container.textContent).not.toContain('One item per row');
+    } finally { mount.unmount(); }
+  });
   const HOST_PALETTE: HappierUiPalette = {
     page: '#fafafa',
     sheet: '#ffffff',
@@ -976,9 +1021,10 @@ describe('shared control visuals (D6)', () => {
     const toggle = mount.container.querySelector<HTMLElement>('[role="switch"]');
     const track = toggle?.firstElementChild as HTMLElement | null;
     const thumb = track?.firstElementChild as HTMLElement | null;
-    // Core's switch geometry (40×22 track, 18 thumb) and the host's own switch roles.
-    expect(getComputedStyle(track!).width).toBe('40px');
-    expect(getComputedStyle(track!).height).toBe('22px');
+    // Plugin and core controls consume the same switch geometry and host colours.
+    expect(getComputedStyle(track!).width).toBe(`${HAPPIER_SWITCH_METRICS.default.trackWidth}px`);
+    expect(getComputedStyle(track!).height).toBe(`${HAPPIER_SWITCH_METRICS.default.trackHeight}px`);
+    expect(getComputedStyle(thumb!).height).toBe(`${HAPPIER_SWITCH_METRICS.default.thumbSize}px`);
     expect(getComputedStyle(track!).backgroundColor).toBe('rgb(18, 52, 86)');
     expect(getComputedStyle(thumb!).backgroundColor).toBe('rgb(254, 220, 186)');
 
@@ -1096,6 +1142,41 @@ describe('shared control visuals (D6)', () => {
     mount.unmount();
   });
 
+  it('shows a compact segmented option as its icon alone, still named and chosen by its label', async () => {
+    const onChange = vi.fn();
+    function Harness() {
+      const [value, setValue] = useState<string>('list');
+      return (
+        <Form.Select
+          label="View"
+          presentation="segmented"
+          compact
+          value={value}
+          options={[
+            { value: 'list', label: 'List', icon: 'list' },
+            { value: 'board', label: 'Board', icon: 'board' },
+            // No icon: nothing could stand in for the words, so this option keeps them.
+            { value: 'table', label: 'Table' },
+          ]}
+          onChange={(next) => { onChange(next); setValue(next as string); }}
+        />
+      );
+    }
+    const mount = mountForm(<Harness />);
+    expect(mount.container.querySelector('[role="radiogroup"]')?.getAttribute('aria-label')).toBe('View');
+    let radios = [...mount.container.querySelectorAll<HTMLElement>('[role="radio"]')];
+    // The label leaves the screen but stays the option's accessible name.
+    expect(radios.map((radio) => radio.textContent)).toEqual(['', '', 'Table']);
+    expect(radios.map((radio) => radio.getAttribute('aria-label'))).toEqual(['List', 'Board', 'Table']);
+    expect(radios.map((radio) => radio.querySelector('[aria-hidden="true"]') !== null)).toEqual([true, true, false]);
+
+    await act(async () => { radios[1]?.click(); });
+    radios = [...mount.container.querySelectorAll<HTMLElement>('[role="radio"]')];
+    expect(onChange).toHaveBeenLastCalledWith('board');
+    expect(radios.map((radio) => radio.getAttribute('aria-checked'))).toEqual(['false', 'true', 'false']);
+    mount.unmount();
+  });
+
   it('rejects a multiple-choice segmented Select', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     expect(() => mountForm(
@@ -1129,6 +1210,10 @@ describe('shared control visuals (D6)', () => {
     expect(getComputedStyle(box).borderTopColor).toBe('rgb(171, 205, 239)');
     expect(getComputedStyle(box).backgroundColor).toBe('rgb(253, 253, 253)');
     expect(box.style.borderTopLeftRadius).toBe(`${HAPPIER_FIELD_BOX_METRICS.radiusPx}px`);
+    // A field's text is the label role (plan §4.1), at the row title's size.
+    const label = resolveHappierTypeScale('label', 'web');
+    expect(input.style.fontSize).toBe(`${label.fontSize}px`);
+    expect(input.style.lineHeight).toBe(`${label.lineHeight}px`);
     mount.unmount();
   });
 

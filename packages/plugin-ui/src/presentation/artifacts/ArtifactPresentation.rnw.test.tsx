@@ -56,6 +56,17 @@ describe('shared artifact presentation', () => {
     }
   });
 
+  it('shows a structured preview\'s first row before its band is measured, never an empty band', async () => {
+    const view = mountThroughReactNativeWeb(<HappierArtifactPreviewCard preview={{ kind: 'workflow', steps: [{ title: 'Read new issues' }, { title: 'Label and dedupe' }] }}
+      testID="preview" htmlLabel="HTML" colors={{ primary: 'black', secondary: 'gray', tertiary: 'gray', paper: 'white', paperBorder: 'gray' }}
+      host={{ renderText: ({ text }) => <Text>{text}</Text>, renderIcon: () => <Text>File</Text> }} />);
+    try {
+      expect(byId(view.container, 'preview')?.textContent).toContain('Read new issues');
+    } finally {
+      view.unmount();
+    }
+  });
+
   it('keeps an issued publication visible without inventing a bearer URL, and withdraws unknown off state', async () => {
     const view = mountThroughReactNativeWeb(publicLink());
     expect(byId(view.container, 'session-public-link-hidden')?.textContent).toBe('Created elsewhere');

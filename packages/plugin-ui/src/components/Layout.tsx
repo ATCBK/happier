@@ -65,6 +65,8 @@ export type LayoutChangeEvent = HappierLayoutChangeEvent;
 
 export type StackProps = Readonly<{
   children?: ReactNode;
+  /** Fill the remaining space while allowing content to shrink inside a row or pane. */
+  grow?: boolean;
   gap?: LayoutGap;
   wrap?: boolean;
   align?: HappierAlignment;

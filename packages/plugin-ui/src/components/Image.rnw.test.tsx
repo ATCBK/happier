@@ -5,6 +5,7 @@ import { mountThroughReactNativeWeb, mountThroughReactNativeWebAsync } from '../
 import { createAdmittedBrandPngFixture, createHostApiStub, createSurfaceContext } from '../surfaceFixture.testSupport.js';
 import { BrandMark, Image as ResourceImage } from './Image.js';
 import { PluginUiProvider } from './PluginUiProvider.js';
+import { resolveHappierIconSize } from '../presentation/content/Icon.js';
 import { PluginUiPresentationHostProviderInternal } from '../presentationHost/context.js';
 
 const TRANSPARENT_BRAND_BYTES = createAdmittedBrandPngFixture();
@@ -63,6 +64,47 @@ describe('bounded package image and brand fallback', () => {
     const mark = mount.container.querySelector<HTMLElement>('[data-testid="compact-brand"]');
     expect(mark?.style.width).toBe('10px');
     expect(mark?.style.height).toBe('10px');
+    mount.unmount();
+  });
+
+  it('sits a small brand mark at text size, so a byline never carries a heavy disk', () => {
+    const context = createSurfaceContext();
+    const mount = mountThroughReactNativeWeb(
+      <PluginUiProvider hostApi={createHostApiStub(context)} context={context}>
+        <BrandMark size="small" testID="small-brand" externallyLabelled />
+        <BrandMark size="medium" testID="medium-brand" externallyLabelled />
+      </PluginUiProvider>,
+    );
+    const small = mount.container.querySelector<HTMLElement>('[data-testid="small-brand"]')!;
+    const medium = mount.container.querySelector<HTMLElement>('[data-testid="medium-brand"]')!;
+    // The same step as a small glyph beside text, never the 32 px image step.
+    expect(Number.parseFloat(small.style.width)).toBe(resolveHappierIconSize('small'));
+    expect(Number.parseFloat(small.style.height)).toBe(resolveHappierIconSize('small'));
+    // Larger marks keep their image steps.
+    expect(medium.style.width).not.toBe(small.style.width);
+    mount.unmount();
+  });
+
+  it('draws a monochrome brand in the theme\'s ink, so it follows light and dark', async () => {
+    const context = createSurfaceContext();
+    const mount = await mountThroughReactNativeWebAsync(
+      <PluginUiProvider
+        hostApi={createHostApiStub(context, {
+          readResource: async () => ({ contentType: 'image/png', digest: `sha256:${'b'.repeat(64)}`, bytes: TRANSPARENT_BRAND_BYTES }),
+        })}
+        context={context}
+      >
+        <PluginUiPresentationHostProviderInternal host={{
+          brand: { displayName: 'GitHub', monochrome: true, resource: { pluginId: 'happier.scm.forge.github', localId: 'brand-icon' } },
+          renderMarkdown: () => null, renderCodeBlock: () => null, renderPopover: () => null, renderIcon: () => null,
+        }}>
+          <BrandMark testID="mono-brand" />
+        </PluginUiPresentationHostProviderInternal>
+      </PluginUiProvider>,
+    );
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    // RNW draws a tinted image through an SVG flood filter in the theme's text colour.
+    expect(mount.container.querySelector('feFlood')).not.toBeNull();
     mount.unmount();
   });
 
@@ -232,6 +274,8 @@ describe('bounded package image and brand fallback', () => {
     expect(renderBrandMark).toHaveBeenCalledWith({
       pluginId: 'example.provider',
       size: 'small',
+      // A small mark is text size: the owner passes that exact slot to the host's renderer.
+      pixelSize: resolveHappierIconSize('small'),
       showName: false,
       externallyLabelled: false,
       testID: 'target-provider-mark',

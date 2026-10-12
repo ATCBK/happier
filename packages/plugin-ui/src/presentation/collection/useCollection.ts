@@ -4,7 +4,7 @@ import { I18nManager, Platform } from 'react-native';
 import { useOptionalHappierUiLocalization } from '../../environment/context.js';
 import {
   HAPPIER_COLLECTION_WINDOW_COMPLETE,
-  deriveHappierCollectionSections,
+  deriveHappierCollectionTree,
   resolveHappierCollectionInitialKey,
   resolveHappierCollectionKeyCommand,
   resolveHappierCollectionSpatialFocus,
@@ -12,6 +12,7 @@ import {
   type HappierCollectionGrouping,
   type HappierCollectionKey,
   type HappierCollectionSection,
+  type HappierCollectionTree,
   type HappierCollectionVisitMemory,
   type HappierCollectionWindow,
 } from './collectionModel.js';
@@ -54,6 +55,13 @@ export type HappierCollectionModelInput<Item> = Readonly<{
   /** Rows may peek (expand in place) where the presentation allows it. */
   expandable?: boolean;
   /**
+   * Nesting: the item's parent row in the same group. The table draws a parent's children under it while it
+   * is open; the list draws owners only. Siblings keep the order the caller gives (`items`, then `order`).
+   */
+  parentKey?: (item: Item) => HappierCollectionKey | null;
+  /** The parents open when the Collection mounts (a remembered tree); later changes are the reader's. */
+  initialOpenBranches?: readonly HappierCollectionKey[];
+  /**
    * Wide screens always have a selection: the last visited item, else the first. The model records
    * each opened item here. `ready: false` holds the landing until the items are known, so "first" is
    * never a guess.
@@ -74,6 +82,8 @@ export type HappierCollectionActions = Readonly<{
   requestFocus: (key: HappierCollectionKey) => void;
   consumeFocusRequest: (request: Readonly<{ key: string }>) => void;
   toggleExpanded: (key: HappierCollectionKey) => void;
+  /** Opens or closes a nested parent row (never its peek). */
+  setBranchOpen: (key: HappierCollectionKey, open: boolean) => void;
   open: (key: HappierCollectionKey) => void;
   close: () => void;
   /** Dispatches one of the list presentation's keys; `true` when the key was the Collection's. */
@@ -107,7 +117,12 @@ export type HappierCollectionModel<Item> = Readonly<{
   viewport: (view: HappierCollectionPresentation, columnKey?: string) => HappierCollectionViewport;
   selection: HappierListMultiSelectionSnapshot | null;
   selectionStore: HappierListMultiSelectionStore | null;
+  /** Rows peeking in place. */
   expanded: ReadonlySet<HappierCollectionKey>;
+  /** Each row's place in its group's tree; `null` unless the input nests (`parentKey`). */
+  tree: HappierCollectionTree | null;
+  /** The nested parents the reader opened (a narrowing filter also holds some open: `tree` node `held`). */
+  openBranches: ReadonlySet<HappierCollectionKey>;
   openKey: HappierCollectionKey | null;
   draft: HappierCollectionDraft | null;
   /** Measured once by the split geometry, read by everyone; `null` outside one. */
@@ -147,12 +162,13 @@ const readInertSnapshot = () => HAPPIER_LIST_MULTI_SELECTION_INERT_SNAPSHOT;
  * presentation draws them. The open item is the caller's route; a drop or an action is the caller's.
  */
 export function useHappierCollection<Item>(input: HappierCollectionModelInput<Item>): HappierCollectionModel<Item> {
-  const { items, keyOf, groups, order, filter } = input;
-  const sections = useMemo(
-    () => deriveHappierCollectionSections({
+  const { items, keyOf, groups, order, filter, parentKey } = input;
+  const { sections, tree } = useMemo(
+    () => deriveHappierCollectionTree({
       items, keyOf, ...(groups ? { groups } : {}), ...(order ? { order } : {}), ...(filter ? { filter } : {}),
+      ...(parentKey ? { parentKey } : {}),
     }),
-    [filter, groups, items, keyOf, order],
+    [filter, groups, items, keyOf, order, parentKey],
   );
   const draftInput = input.draft ?? null;
   const itemKeys = useMemo(
@@ -192,6 +208,18 @@ export function useHappierCollection<Item>(input: HappierCollectionModelInput<It
     return current;
   }, []);
   const [expanded, setExpanded] = useState<ReadonlySet<HappierCollectionKey>>(EMPTY_EXPANDED);
+  const [openBranches, setOpenBranches] = useState<ReadonlySet<HappierCollectionKey>>(
+    () => (input.initialOpenBranches === undefined ? EMPTY_EXPANDED : new Set(input.initialOpenBranches)),
+  );
+  const setBranchOpen = useCallback((key: HappierCollectionKey, isOpen: boolean) => {
+    setOpenBranches((current) => {
+      if (current.has(key) === isOpen) return current;
+      const next = new Set(current);
+      if (isOpen) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+  }, []);
   const expandable = input.expandable === true;
 
   // ---- the open item is the route's ----
@@ -289,8 +317,8 @@ export function useHappierCollection<Item>(input: HappierCollectionModelInput<It
     return true;
   }, [focus, keyOf, rtl, sections, selectionStore]);
   const actions = useMemo<HappierCollectionActions>(
-    () => ({ focus, requestFocus, consumeFocusRequest, toggleExpanded, open, close, handleKey, navigate, showColumn }),
-    [close, consumeFocusRequest, focus, handleKey, navigate, open, requestFocus, toggleExpanded],
+    () => ({ focus, requestFocus, consumeFocusRequest, toggleExpanded, setBranchOpen, open, close, handleKey, navigate, showColumn }),
+    [close, consumeFocusRequest, focus, handleKey, navigate, open, requestFocus, setBranchOpen, toggleExpanded],
   );
 
   const draft = useMemo<HappierCollectionDraft | null>(
@@ -310,6 +338,8 @@ export function useHappierCollection<Item>(input: HappierCollectionModelInput<It
     selection: selectionStore === null ? null : selectionSnapshot,
     selectionStore,
     expanded,
+    tree,
+    openBranches,
     openKey,
     draft,
     layout,

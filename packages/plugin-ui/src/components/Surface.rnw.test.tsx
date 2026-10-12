@@ -38,6 +38,20 @@ function resolveRenderedColor(
 }
 
 describe('Surface and Card', () => {
+  it('projects a card independently of content and inherits one finish inside another card', () => {
+    const context = createSurfaceContext();
+    const gradient = { colors: ['rgba(0,0,0,0.025)', 'rgba(0,0,0,0)'] as [string, string] };
+    const mount = mountSurface(<Surface testID="content-plane"><Card testID="outer-card"><Card testID="inner-card"><Text value="Nested content" /></Card></Card></Surface>,
+      { ...context, theme: { ...context.theme, surfaceFinish: { card: gradient } } });
+    const outer = mount.container.querySelector<HTMLElement>('[data-testid="outer-card"]')!.firstElementChild!;
+    const inner = mount.container.querySelector<HTMLElement>('[data-testid="inner-card"]')!.firstElementChild!;
+    expect(getComputedStyle(outer).backgroundColor).toContain('--happier-glass-card-opacity');
+    expect(getComputedStyle(outer).backgroundImage).toContain('linear-gradient');
+    expect(getComputedStyle(inner).backgroundColor).toContain('--happier-glass-card-nested-opacity');
+    expect(['', 'none']).toContain(getComputedStyle(inner).backgroundImage);
+    expect(inner.textContent).toBe('Nested content');
+    mount.unmount();
+  });
   it('materializes fields and surfaces while preserving solid controls with equal colour values', () => {
     const host: PluginUiPresentationHost = {
       renderMarkdown: () => null, renderCodeBlock: () => null, renderPopover: () => null, renderIcon: () => null,
@@ -171,7 +185,7 @@ describe('Surface and Card', () => {
     mount.unmount();
   });
 
-  it('uses a separate nested coat without changing the child foreground or another material group', () => {
+  it('gives a card its own coat inside content without changing the foreground or floating material', () => {
     const mount = mountSurface(
       <Surface testID="content-plane">
         <Card testID="nested-card"><Text value="Working content" /></Card>
@@ -180,7 +194,7 @@ describe('Surface and Card', () => {
     );
     const body = (id: string) => mount.container.querySelector<HTMLElement>(`[data-testid="${id}"]`)!.firstElementChild!;
     expect(getComputedStyle(body('content-plane')).backgroundColor).toContain('var(--happier-glass-content-opacity, 100%)');
-    expect(getComputedStyle(body('nested-card')).backgroundColor).toContain('var(--happier-glass-content-nested-opacity, 100%)');
+    expect(getComputedStyle(body('nested-card')).backgroundColor).toContain('var(--happier-glass-card-opacity, 100%)');
     expect(getComputedStyle(body('floating-plane')).backgroundColor).toContain('var(--happier-glass-floating-opacity, 100%)');
     expect(['', '1']).toContain(getComputedStyle(body('nested-card')).opacity);
     mount.unmount();

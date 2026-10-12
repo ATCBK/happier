@@ -2,14 +2,25 @@ import { describe, expect, it } from 'vitest';
 
 import {
   describeHappierDataChart,
+  formatHappierDataBytes,
+  formatHappierDataBytesParts,
   formatHappierDataShare,
   formatHappierDataValue,
-  resolveHappierDataLinePoints,
   resolveHappierDataShares,
   resolveHappierDataTableColumns,
+  resolveHappierSeriesGeometry,
 } from './dataModel.js';
 
 describe('shared data presentation rules', () => {
+  it('normalizes stacked observations without treating a comparison overlay as another part', () => {
+    const geometry = resolveHappierSeriesGeometry([
+      { id: 'observed', label: 'Mean', points: [{ id: 'a', x: 0, y: 20 }] },
+      { id: 'maximum', label: 'Maximum', overlay: true, points: [{ id: 'a', x: 0, y: 80 }] },
+    ], { width: 100, height: 100, variant: 'area', normalized: true });
+    expect(geometry.buckets[0]!.values).toMatchObject([
+      { value: 20, lower: 0, upper: 1 }, { value: 80, lower: 0, upper: 4 },
+    ]);
+  });
   it('reads numbers in the reader locale and shares against the largest value shown', () => {
     expect(formatHappierDataValue(1284, 'en-US')).toBe('1,284');
     expect(formatHappierDataValue(1284, 'de-DE')).toBe('1.284');
@@ -29,12 +40,34 @@ describe('shared data presentation rules', () => {
     expect(resolveHappierDataTableColumns({ ...input, availableWidth: 40 })).toEqual([0]);
   });
 
-  it('names every point of a chart for assistive technology and keeps a flat line inside its plot', () => {
+  it('names every point through the retained public chart-description helper', () => {
     expect(describeHappierDataChart('Signups per day', [{ x: 'Tue', y: 236 }, { x: 'Wed', y: 1183 }], 'en-US'))
       .toBe('Signups per day: Tue 236, Wed 1,183');
-    expect(resolveHappierDataLinePoints([{ x: 1, y: 5 }, { x: 2, y: 5 }], 100, 40, 2)).toEqual([{ x: 0, y: 20 }, { x: 100, y: 20 }]);
-    const rising = resolveHappierDataLinePoints([{ x: 1, y: 0 }, { x: 2, y: 10 }], 100, 40, 2);
-    expect(rising[0]).toEqual({ x: 0, y: 39 });
-    expect(rising[1]).toEqual({ x: 100, y: 1 });
+  });
+
+  it('reads bytes in the base the quantity kind sets: storage decimal, memory binary', () => {
+    // A 1 TB drive is "1 TB" and a 128 GiB machine is "128 GB", as the OS and drive vendor show them.
+    expect(formatHappierDataBytes(1_000_000_000_000, { kind: 'storage', locale: 'en-US' })).toBe('1 TB');
+    expect(formatHappierDataBytes(128 * 1024 ** 3, { kind: 'memory', locale: 'en-US' })).toBe('128 GB');
+    expect(formatHappierDataBytes(128 * 1024 ** 3, { kind: 'storage', locale: 'en-US' })).toBe('137 GB');
+    // Three significant figures at and above one unit; a whole value drops trailing zeroes.
+    expect(formatHappierDataBytes(58_400_000_000, { kind: 'storage', locale: 'en-US' })).toBe('58.4 GB');
+    expect(formatHappierDataBytes(17_640_000_000, { kind: 'storage', locale: 'en-US' })).toBe('17.6 GB');
+    expect(formatHappierDataBytes(71.26 * 1024 ** 3, { kind: 'memory', locale: 'en-US' })).toBe('71.3 GB');
+    expect(formatHappierDataBytes(99.97 * 1024 ** 2, { kind: 'memory', locale: 'en-US' })).toBe('100 MB');
+    expect(formatHappierDataBytes(3.84 * 1024 ** 3, { kind: 'memory', locale: 'en-US' })).toBe('3.84 GB');
+    expect(formatHappierDataBytes(2 * 1024 ** 3, { kind: 'memory', locale: 'en-US' })).toBe('2 GB');
+    expect(formatHappierDataBytes(412_400_000_000, { kind: 'storage', locale: 'en-US' })).toBe('412 GB');
+    expect(formatHappierDataBytes(1_240_000_000_000, { kind: 'storage', locale: 'de-DE' })).toBe('1,24 TB');
+    expect(formatHappierDataBytes(9_960, { kind: 'storage', locale: 'en-US' })).toBe('9.96 KB');
+    expect(formatHappierDataBytes(999_600, { kind: 'storage', locale: 'en-US' })).toBe('1 MB');
+    expect(formatHappierDataBytes(1023.6 * 1024, { kind: 'memory', locale: 'en-US' })).toBe('1,020 KB');
+    expect(formatHappierDataBytesParts(1_236, { kind: 'storage', locale: 'en-US' })).toEqual({ value: '1.24', unit: 'KB' });
+    expect(formatHappierDataBytesParts(1_236, { kind: 'storage', locale: 'invalid_locale' })).toEqual({ value: '1.24', unit: 'KB' });
+    expect(formatHappierDataBytes(-1, { kind: 'storage', locale: 'en-US' })).toBe('0 B');
+    expect(formatHappierDataBytes(Number.POSITIVE_INFINITY, { kind: 'memory', locale: 'en-US' })).toBe('0 B');
+    expect(formatHappierDataBytes(0, { kind: 'memory', locale: 'en-US' })).toBe('0 B');
+    expect(formatHappierDataBytes(812, { kind: 'storage', locale: 'en-US' })).toBe('812 B');
+    expect(formatHappierDataBytesParts(180 * 1024 ** 2, { kind: 'memory', locale: 'en-US' })).toEqual({ value: '180', unit: 'MB' });
   });
 });

@@ -15,6 +15,7 @@ import {
 } from './index.js';
 import { PluginUiProvider, PluginUiProviderInternal } from './PluginUiProvider.js';
 import type { PluginUiPresentationHost } from '../presentationHost/context.js';
+import { resolveHappierTypeScale } from '../presentation/text/typeScale.js';
 import {
   HappierProgress,
   HappierLink,
@@ -151,11 +152,11 @@ describe('foundation presentation families', () => {
 
   it('steps heading levels down the ramp and renders the same-realm host type roles', () => {
     const typography = {
-      heading: { fontSize: 22, lineHeight: 28, fontWeight: '700', fontFamily: 'HostDisplay', letterSpacing: -0.4 },
-      title: { fontSize: 17, lineHeight: 22, fontWeight: '600', fontFamily: 'HostText' },
+      title: { fontSize: 22, lineHeight: 28, fontWeight: '700', fontFamily: 'HostDisplay', letterSpacing: -0.4 },
+      heading: { fontSize: 17, lineHeight: 22, fontWeight: '600', fontFamily: 'HostText' },
       label: { fontSize: 15, lineHeight: 20, fontWeight: '600', fontFamily: 'HostText' },
       body: { fontSize: 13, lineHeight: 17, fontWeight: '400', fontFamily: 'HostText' },
-      caption: { fontSize: 12, lineHeight: 16, fontWeight: '400', fontFamily: 'HostText', fontVariant: ['tabular-nums'] as const },
+      meta: { fontSize: 12, lineHeight: 16, fontWeight: '400', fontFamily: 'HostText', fontVariant: ['tabular-nums'] as const },
     } as const;
     const host = {
       typography,
@@ -186,16 +187,15 @@ describe('foundation presentation families', () => {
     expect(read(hosted.container, 'label').fontFamily).toBe('HostText');
     hosted.unmount();
 
-    // Without same-realm host facts (a hosted-web realm or a bare provider) the
-    // public snapshot's metrics apply, still as a descending ramp.
+    // Without same-realm font facts the shared type scale owns metrics.
     const snapshot = mountFoundation(
       <>
         <Heading value="Pane" level={2} testID="h2" />
         <Heading value="Group" level={3} testID="h3" />
       </>,
     );
-    expect(read(snapshot.container, 'h2').fontSize).toBe(`${context.theme.typography.title.fontSize}px`);
-    expect(read(snapshot.container, 'h3').fontSize).toBe(`${context.theme.typography.label.fontSize}px`);
+    expect(read(snapshot.container, 'h2').fontSize).toBe(`${resolveHappierTypeScale('heading', 'web').fontSize}px`);
+    expect(read(snapshot.container, 'h3').fontSize).toBe(`${resolveHappierTypeScale('label', 'web').fontSize}px`);
     snapshot.unmount();
   });
 
@@ -322,7 +322,7 @@ describe('foundation presentation families', () => {
     expect(bar?.getAttribute('aria-label')).toBe('src/a.ts: 96 added, 71 removed');
     expect(bar?.getAttribute('aria-valuenow')).toBeNull();
     const fills = [0, 1].map((index) => mount.container.querySelector<HTMLElement>(`[data-testid="lines-segment-${index}"]`));
-    expect(fills.map((fill) => fill?.style.width)).toEqual(['60%', '30%']);
+    expect(fills.map((fill) => fill?.parentElement?.style.width)).toEqual(['60%', '30%']);
     expect(getComputedStyle(fills[0]!).backgroundColor).toBe(getComputedStyle(withColor(context.theme.colors.success)).backgroundColor);
     expect(getComputedStyle(fills[1]!).backgroundColor).toBe(getComputedStyle(withColor(context.theme.colors.danger)).backgroundColor);
 

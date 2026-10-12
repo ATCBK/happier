@@ -2,7 +2,10 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 import * as ts from 'typescript';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+// The ownership audit invokes portable menu semantics, not the native SDK.
+vi.mock('react-native', () => ({ Platform: { OS: 'web' } }));
 
 import { resolveHappierPopoverPlacement } from './presentation/interaction/Menu.js';
 
@@ -48,6 +51,7 @@ const APPROVED_CATALOG_VOCABULARY = [
   'Action.Execute', 'Action.Copy', 'Action.OpenExternal', 'Action.OpenSurface', 'Action.Refresh',
   'ActionPanel', 'ActionPanel.Section',
   'List', 'List.Section', 'List.Item', 'Item', 'ItemGroup',
+  'CountedDisclosureItem',
   'List.SelectionActionBar', 'ListSelectionActionBar',
   'ListMultiSelectionProvider', 'createListMultiSelectionStore',
   'Form', 'Field', 'TextField', 'Toggle', 'Select', 'ValidationMessage',
@@ -62,6 +66,8 @@ const APPROVED_CATALOG_VOCABULARY = [
   'WidgetFrame',
   'WidgetPresentationProvider',
   'EmptySlot',
+  // Teams/Home design-sdk-unify: one owner each for the full state, link handover and settings-row anatomy.
+  'SurfaceState', 'LinkDelivery', 'SettingRow', 'SettingValueSlot', 'SettingStatusLine',
   'FloatingFrame',
   // r0.42 (Triage plan): the numbered story-rail step, one presentation owner.
   'Step',
@@ -77,7 +83,7 @@ const APPROVED_CATALOG_VOCABULARY = [
   'SessionProvider', 'SessionTranscript', 'SessionComposer', 'SessionChat',
   // Pane states and shell columns: existing public adapters over shared presentation owners.
   'FreshnessLine', 'NavigationList', 'NavigationList.Group', 'NavigationList.Row',
-  'DetailsPane', 'PaneHeaderContent', 'Avatar', 'AgentCursor', 'PresenceCapsule', 'StatusCapsule',
+  'DetailsPane', 'DetailsPaneFooter', 'PaneHeaderContent', 'Avatar', 'AgentCursor', 'PresenceCapsule', 'StatusCapsule',
   // Entity drag-and-drop r1: declared sources/targets join the mounted host lifecycle.
   'DragSource', 'DropTarget', 'HostedAnchoredMenu',
   // Widgets platform r1 (WGT-11): the native metric, rows/table and one-series chart nodes.
@@ -88,6 +94,8 @@ const APPROVED_CATALOG_VOCABULARY = [
   'SetupSteps', 'SetupBlockTile', 'SetupBlockGrid', 'VoiceMarkArt', 'StatusCell', 'DictationButton',
   // Lane 12 Machines: the typed-or-picked local date and time (a provisioner's lease or expiry input).
   'LocalDateTimeField',
+  // Lane 12 Projects: the widget-body glance row and the lines-added/removed readout, one owner each.
+  'WidgetGlanceRow', 'DiffStat',
 ] as const;
 
 type DeclarativeDisposition = Readonly<{
@@ -668,6 +676,25 @@ const GRADUATED_FAMILIES: readonly GraduatedFamily[] = [
     declarative: { kind: 'node', node: 'item', rendererSymbol: 'HappierListItem' },
   },
   {
+    publicName: 'CountedDisclosureItem',
+    propTypeName: 'CountedDisclosureItemProps',
+    family: 'Counted disclosure',
+    disposition: 'required',
+    proofTier: 'behavior-owning',
+    phase: 'graduated',
+    publiclyExported: true,
+    sharedModule: 'presentation/collection/CountedDisclosure.tsx',
+    sharedSymbol: 'HappierCountedDisclosure',
+    pluginOwner: { module: 'components/CountedDisclosureItem.tsx', symbol: 'CountedDisclosureItem' },
+    coreConsumers: ['components/ui/lists/CountedDisclosureItem.tsx'],
+    positiveConsumer: {
+      kind: 'external-author-reference',
+      pathFromRepoRoot: 'packages/plugin-ui/fixtures/external-authoring/src/semanticSurface.tsx',
+    },
+    devMountSymbols: ['CountedDisclosureItem as PluginCountedDisclosureItem'],
+    declarative: { kind: 'not-applicable', reason: 'The fold carries executable React details; declarative documents retain their list/item composition.' },
+  },
+  {
     publicName: 'ItemGroup',
     propTypeName: 'ItemGroupProps',
     family: 'Item group',
@@ -1188,8 +1215,10 @@ const GRADUATED_FAMILIES: readonly GraduatedFamily[] = [
         ? 'HappierFormActions'
         : symbol === 'Toggle' ? 'HappierSwitch' : `Happier${symbol}`,
     pluginOwner: { module: 'components/Form.tsx', symbol },
-    coreConsumers: symbol === 'ValidationMessage' || symbol === 'FormActions'
+    coreConsumers: symbol === 'ValidationMessage'
       ? ['components/plugins/surfaces/DeclarativePluginSurface.tsx']
+      : symbol === 'FormActions'
+      ? ['components/plugins/surfaces/DeclarativePluginSurface.tsx', 'components/ui/lists/SectionButtonRow.tsx']
       : symbol === 'Toggle'
         ? ['components/ui/forms/Switch.web.tsx', 'components/ui/forms/Switch.tsx']
         : ['components/sessions/actions/ActionInputFields.tsx'],
@@ -1462,6 +1491,51 @@ const GRADUATED_FAMILIES: readonly GraduatedFamily[] = [
     declarative: { kind: 'not-applicable', reason: 'Declarative widgets render inside the host frame; there is no free frame node.' },
   },
   {
+    publicName: 'SurfaceState',
+    propTypeName: 'SurfaceStateProps',
+    family: 'Surface state',
+    disposition: 'required',
+    proofTier: 'simple',
+    phase: 'in-progress',
+    publiclyExported: true,
+    sharedModule: 'presentation/state/SurfaceState.tsx',
+    sharedSymbol: 'HappierSurfaceState',
+    pluginOwner: { module: 'components/State.tsx', symbol: 'SurfaceState' },
+    coreConsumers: ['components/ui/surfaces/SurfaceStateCard.tsx'],
+    devMountSymbols: [],
+    declarative: { kind: 'not-applicable', reason: 'Declarative surfaces keep the V2 state node; the full composition is an RN author adapter.' },
+  },
+  {
+    publicName: 'LinkDelivery',
+    propTypeName: 'LinkDeliveryProps',
+    family: 'Link delivery',
+    disposition: 'required',
+    proofTier: 'simple',
+    phase: 'in-progress',
+    publiclyExported: true,
+    sharedModule: 'presentation/sharing/LinkDelivery.tsx',
+    sharedSymbol: 'HappierLinkDelivery',
+    pluginOwner: { module: 'components/LinkDelivery.tsx', symbol: 'LinkDelivery' },
+    coreConsumers: ['components/settings/teams/TeamLinkDelivery.tsx'],
+    devMountSymbols: [],
+    declarative: { kind: 'not-applicable', reason: 'A link handover needs host clipboard and QR ports; V2 has no link-delivery node.' },
+  },
+  ...(['SettingRow', 'SettingValueSlot', 'SettingStatusLine'] as const).map((publicName) => ({
+    publicName,
+    propTypeName: `${publicName}Props`,
+    family: 'Setting row',
+    disposition: 'required' as const,
+    proofTier: 'simple' as const,
+    phase: 'in-progress' as const,
+    publiclyExported: true,
+    sharedModule: 'presentation/form/SettingField.tsx',
+    sharedSymbol: 'HappierSettingValueSlot',
+    pluginOwner: { module: 'components/Setting.tsx', symbol: publicName },
+    coreConsumers: ['components/settings/schemaFields/SchemaFieldRow.tsx'],
+    devMountSymbols: [],
+    declarative: { kind: 'not-applicable' as const, reason: 'Declared plugin settings render through the host settings renderer; these are custom-page anatomy.' },
+  })),
+  {
     publicName: 'EmptySlot',
     propTypeName: 'EmptySlotProps',
     family: 'Empty slot',
@@ -1618,7 +1692,7 @@ const GRADUATED_FAMILIES: readonly GraduatedFamily[] = [
     coreConsumers: ['components/ui/lists/collection/CollectionList.tsx'],
     positiveConsumer: {
       kind: 'plugin-surface',
-      pathFromRepoRoot: 'packages/plugins/triage/src/ui/column/viewsColumn.tsx',
+      pathFromRepoRoot: 'packages/plugins/channels/src/ui/glance/channelsGlance.tsx',
     },
     devMountSymbols: [],
     declarative: { kind: 'not-applicable', reason: 'Navigation columns are mounted plugin surfaces; V2 has no navigation-list node.' },
@@ -1637,7 +1711,7 @@ const GRADUATED_FAMILIES: readonly GraduatedFamily[] = [
     coreConsumers: ['components/ui/lists/collection/CollectionList.tsx'],
     positiveConsumer: {
       kind: 'plugin-surface',
-      pathFromRepoRoot: 'packages/plugins/triage/src/ui/column/viewsColumn.tsx',
+      pathFromRepoRoot: 'packages/plugins/channels/src/ui/glance/channelsGlance.tsx',
     },
     devMountSymbols: [],
     declarative: { kind: 'not-applicable', reason: 'V2 has no navigation-list group node.' },
@@ -1656,7 +1730,7 @@ const GRADUATED_FAMILIES: readonly GraduatedFamily[] = [
     coreConsumers: [],
     positiveConsumer: {
       kind: 'plugin-surface',
-      pathFromRepoRoot: 'packages/plugins/triage/src/ui/column/viewsColumn.tsx',
+      pathFromRepoRoot: 'packages/plugins/channels/src/ui/glance/channelsGlance.tsx',
     },
     devMountSymbols: [],
     declarative: { kind: 'not-applicable', reason: 'V2 has no navigation-list row node.' },
@@ -1688,6 +1762,7 @@ const GRADUATED_FAMILIES: readonly GraduatedFamily[] = [
   // Named exports are catalogued too. These record source ownership, not loaded-platform graduation.
   ...[
     { publicName: 'DetailsPane', module: 'components/DetailsPane.tsx', sharedModule: 'components/DetailsPane.tsx', sharedSymbol: 'DetailsPane' },
+    { publicName: 'DetailsPaneFooter', module: 'components/DetailsPane.tsx', sharedModule: 'components/DetailsPane.tsx', sharedSymbol: 'DetailsPaneFooter' },
     { publicName: 'PaneHeaderContent', module: 'components/PaneHeaderContent.tsx', sharedModule: 'components/PaneHeaderContent.tsx', sharedSymbol: 'PaneHeaderContent' },
     { publicName: 'Avatar', module: 'components/Avatar.tsx', sharedModule: 'components/Avatar.tsx', sharedSymbol: 'Avatar' },
     { publicName: 'AgentCursor', module: 'components/Copresence.tsx', sharedModule: 'presentation/copresence/AgentCursor.tsx', sharedSymbol: 'HappierAgentCursor' },
@@ -1695,7 +1770,8 @@ const GRADUATED_FAMILIES: readonly GraduatedFamily[] = [
     { publicName: 'StatusCapsule', module: 'components/Copresence.tsx', sharedModule: 'presentation/status/StatusCapsule.tsx', sharedSymbol: 'HappierStatusCapsule' },
   ].map((entry): GraduatedFamily => ({
     publicName: entry.publicName,
-    propTypeName: `${entry.publicName}Props`,
+    propTypeName: entry.publicName === 'DetailsPaneFooter'
+      ? 'ComponentProps<typeof DetailsPaneFooter>' : `${entry.publicName}Props`,
     family: entry.publicName,
     disposition: 'required',
     proofTier: 'behavior-owning',
@@ -1737,6 +1813,36 @@ const GRADUATED_FAMILIES: readonly GraduatedFamily[] = [
     coreConsumers: ['components/ui/dateTime/LocalDateTimeEditor.tsx'],
     devMountSymbols: [],
     declarative: { kind: 'not-applicable', reason: 'V2 has no local date-time node.' },
+  },
+  {
+    publicName: 'WidgetGlanceRow',
+    propTypeName: 'WidgetGlanceRowProps',
+    family: 'Widget glance row',
+    disposition: 'required',
+    proofTier: 'simple',
+    phase: 'in-progress',
+    publiclyExported: true,
+    sharedModule: 'presentation/layout/WidgetGlanceRow.tsx',
+    sharedSymbol: 'HappierWidgetGlanceRow',
+    pluginOwner: { module: 'components/WidgetGlanceRow.tsx', symbol: 'WidgetGlanceRow' },
+    coreConsumers: ['components/widgets/glance/WidgetGlanceRow.tsx'],
+    devMountSymbols: [],
+    declarative: { kind: 'not-applicable', reason: 'V2 has no widget glance-row node.' },
+  },
+  {
+    publicName: 'DiffStat',
+    propTypeName: 'DiffStatProps',
+    family: 'Diff stat',
+    disposition: 'required',
+    proofTier: 'simple',
+    phase: 'in-progress',
+    publiclyExported: true,
+    sharedModule: 'presentation/content/DiffStat.tsx',
+    sharedSymbol: 'HappierDiffStat',
+    pluginOwner: { module: 'components/DiffStat.tsx', symbol: 'DiffStat' },
+    coreConsumers: ['components/workspaces/scm/DiffStat.tsx'],
+    devMountSymbols: [],
+    declarative: { kind: 'not-applicable', reason: 'V2 has no diff-stat node.' },
   },
   // These five public adapters request the existing physical host. They do not duplicate its
   // presentation or lifecycle and are source-present, not loaded-platform graduated.
@@ -1903,6 +2009,14 @@ function sourceDeclaresSymbol(source: string, symbol: string): boolean {
 }
 
 function sourceDeclaresExportedType(source: string, typeName: string): boolean {
+  const component = /^ComponentProps<typeof (\w+)>$/u.exec(typeName)?.[1];
+  if (component) {
+    const file = ts.createSourceFile('public-owner.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    return file.statements.some(statement => ts.isFunctionDeclaration(statement)
+      && statement.name?.text === component
+      && statement.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.ExportKeyword)
+      && statement.parameters.length === 1 && statement.parameters[0]?.type !== undefined);
+  }
   return new RegExp(`export\\s+(?:type|interface)\\s+${typeName}\\b`, 'u').test(source);
 }
 
@@ -1998,7 +2112,9 @@ function sourceRendersPublicPluginUiComponent(source: string, publicName: string
 
 function isMaintainedPublicConsumerSource(consumer: PositiveConsumer): boolean {
   if (consumer.kind === 'plugin-surface') {
-    return /^packages\/plugins\/[^/]+\/src\/ui\/.+\.(?:ts|tsx)$/u.test(consumer.pathFromRepoRoot);
+    // Public UI consumers may live beside their domain (for example Session cockpit rows).
+    // The catalog separately verifies the runtime public import and rendered component.
+    return /^packages\/plugins\/[^/]+\/src\/.+\.(?:ts|tsx)$/u.test(consumer.pathFromRepoRoot);
   }
   return /^packages\/plugin-ui\/fixtures\/external-authoring\/src\/.+\.(?:ts|tsx)$/u
     .test(consumer.pathFromRepoRoot);
@@ -2475,6 +2591,11 @@ describe('graduated shared presentation families (§8.2)', () => {
       'SelectionTiles',
       'Tree',
       'WidgetFrame',
+      'SurfaceState',
+      'LinkDelivery',
+      'SettingRow',
+      'SettingValueSlot',
+      'SettingStatusLine',
       'EmptySlot',
       'FloatingFrame',
       'PageHeader',
@@ -2486,8 +2607,8 @@ describe('graduated shared presentation families (§8.2)', () => {
       'NavigationList.Group',
       'NavigationList.Row',
       'DragSource', 'DropTarget',
-      'DetailsPane', 'PaneHeaderContent', 'Avatar', 'AgentCursor', 'PresenceCapsule', 'StatusCapsule',
-      'SetupSteps', 'LocalDateTimeField', 'SetupBlockTile', 'SetupBlockGrid', 'VoiceMarkArt', 'StatusCell', 'DictationButton',
+      'DetailsPane', 'DetailsPaneFooter', 'PaneHeaderContent', 'Avatar', 'AgentCursor', 'PresenceCapsule', 'StatusCapsule',
+      'SetupSteps', 'LocalDateTimeField', 'WidgetGlanceRow', 'DiffStat', 'SetupBlockTile', 'SetupBlockGrid', 'VoiceMarkArt', 'StatusCell', 'DictationButton',
     ]);
   });
 

@@ -2,6 +2,7 @@ import { isValidElement, useState, type ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { HAPPIER_PAGE_METRICS } from '../layout/pageMetrics.js';
+import { useHappierPageSection } from '../layout/PageSection.js';
 import { HAPPIER_COLLECTION_LIST_METRICS } from '../collection/CollectionList.js';
 import { HappierText } from '../text/Text.js';
 import type { HappierTone } from '../semantics.js';
@@ -50,6 +51,9 @@ export function HappierSurfaceStateFrame(props: Readonly<{
   );
 }
 
+/** The room a line's sentence asks for before its recovery moves under it. */
+const LINE_TEXT_BASIS_PX = 220;
+
 /** One compact sentence, glyph and inline recovery; diagnostic detail never enters a list line. */
 export function HappierStateLine(props: Readonly<{
   testID?: string;
@@ -59,19 +63,25 @@ export function HappierStateLine(props: Readonly<{
   accessibilitySemantics?: 'status' | 'alert';
 }>) {
   const metrics = HAPPIER_STATE_LINE_METRICS;
+  // In a page section's sheet the line stands on the rows' edge (the sheet's row inset), not the
+  // collection column's text inset.
+  const pageSection = useHappierPageSection();
   return (
     <View testID={props.testID} {...resolveHappierStateAnnouncement(props.accessibilitySemantics)} style={{
       minHeight: metrics.minHeightPx,
-      paddingHorizontal: metrics.paddingHorizontalPx,
+      paddingHorizontal: pageSection?.rowInsetPx ?? metrics.paddingHorizontalPx,
       paddingVertical: metrics.paddingVerticalPx,
       // One line that wraps its sentence, never its parts: the glyph and the recovery stay beside the
       // text in a narrow column instead of stacking above and below it.
       flexDirection: 'row',
+      // A sentence that needs more than the room beside its glyph puts the recovery under it, instead of
+      // wrapping the sentence to four lines in a column left by the recovery.
+      flexWrap: 'wrap',
       alignItems: 'center',
       gap: metrics.gapPx,
     }}>
       {props.icon ? <View style={{ flexShrink: 0 }} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">{props.icon}</View> : null}
-      <View style={{ flexShrink: 1, minWidth: 0 }}>{props.children}</View>
+      <View style={props.action ? { flexShrink: 1, flexGrow: 1, flexBasis: LINE_TEXT_BASIS_PX, minWidth: 0 } : { flexShrink: 1, minWidth: 0 }}>{props.children}</View>
       {props.action ? <View style={{ flexShrink: 0, marginLeft: 'auto' }}>{props.action}</View> : null}
     </View>
   );
@@ -95,7 +105,7 @@ export function HappierStateDetails(props: Readonly<{
       happierDiscretePressStyle(state.pressed, reducedMotion),
       happierPressTransitionStyle(state.pressed, ['transform', 'opacity'], reducedMotion),
     ]}>
-      {props.renderToggle?.(open) ?? <HappierText accessible={false} variant="caption" tone="secondary">{props.label}</HappierText>}
+      {props.renderToggle?.(open) ?? <HappierText accessible={false} variant="micro" tone="secondary">{props.label}</HappierText>}
     </HappierPressable>
     {open ? props.renderDetails?.(props.details) ?? <HappierText testID={props.testID ? `${props.testID}-details-code` : undefined} variant="code" tone="secondary" selectable style={{ textAlign: 'center' }}>{props.details}</HappierText> : null}
   </View>
@@ -110,23 +120,40 @@ export function HappierFreshnessLine(props: Readonly<{
   icon: ReactNode;
   children: ReactNode;
   action?: ReactNode;
+  /**
+   * The line sits on a sheet or card that already draws the surface (a widget body): it is one plain
+   * line on that sheet, aligned with its content, never a filled strip boxed inside it.
+   */
+  onSheet?: boolean;
+  /**
+   * `line` (default): the strip under a surface's header. `chip`: the same facts as one inline status at a
+   * header's or tab bar's end ("● Live", "As of 10:42 · Retry"), sized to its words, with no strip.
+   */
+  presentation?: 'line' | 'chip';
+  /** Chip only: a quiet clause before the glyph ("Sampled only while you're looking"). */
+  lead?: ReactNode;
 }>) {
   const metrics = HAPPIER_FRESHNESS_LINE_METRICS;
+  const chip = props.presentation === 'chip';
+  const plain = chip || props.onSheet === true;
   return (
     <View testID={props.testID} accessibilityRole="text" accessibilityLiveRegion="polite" role="status" aria-live="polite" aria-busy={props.busy || undefined} style={{
       flexDirection: 'row',
       alignItems: 'center',
-      gap: metrics.gapPx,
-      minHeight: metrics.minHeightPx,
-      paddingLeft: metrics.paddingStartPx,
-      paddingRight: metrics.paddingEndPx,
-      backgroundColor: props.colors.background,
-      borderTopWidth: StyleSheet.hairlineWidth,
-      borderBottomWidth: StyleSheet.hairlineWidth,
+      gap: chip ? metrics.chip.gapPx : metrics.gapPx,
+      minHeight: chip ? metrics.chip.minHeightPx : metrics.minHeightPx,
+      flexShrink: chip ? 1 : undefined,
+      minWidth: chip ? 0 : undefined,
+      paddingLeft: plain ? 0 : metrics.paddingStartPx,
+      paddingRight: plain ? 0 : metrics.paddingEndPx,
+      backgroundColor: plain ? 'transparent' : props.colors.background,
+      borderTopWidth: plain ? 0 : StyleSheet.hairlineWidth,
+      borderBottomWidth: plain ? 0 : StyleSheet.hairlineWidth,
       borderColor: props.colors.border,
     }}>
+      {chip ? props.lead ?? null : null}
       {props.icon}
-      <View style={{ flex: 1, minWidth: 0 }}>{props.children}</View>
+      <View style={chip ? { flexShrink: 1, minWidth: 0 } : { flex: 1, minWidth: 0 }}>{props.children}</View>
       {props.action ?? null}
     </View>
   );
@@ -256,6 +283,8 @@ export const HAPPIER_FRESHNESS_LINE_METRICS = Object.freeze({
   gapPx: 8,
   glyphPx: 13,
   text: Object.freeze({ fontSize: 12, lineHeight: 16 }),
+  /** The inline chip (resources lab `.rs-live`): a 6 pt dot or the 13 pt glyph, then the words, 6 pt apart. */
+  chip: Object.freeze({ minHeightPx: 24, gapPx: 6, dotPx: 6 }),
 });
 
 /**
@@ -302,7 +331,7 @@ export type HappierInfoStateProps = Readonly<{
 function renderSlot(
   slot: ReactNode,
   semantic: Readonly<{
-    variant: 'title' | 'body';
+    variant: 'heading' | 'meta';
     tone: HappierTone;
     gap: number;
     /** A sized state's type step (`HAPPIER_STATE_SIZE_METRICS`); unsized keeps the variant's own. */
@@ -352,13 +381,13 @@ export function HappierInfoTile({
       {icon}
       <View style={{ width: '100%', maxWidth: measure }}>
         {renderSlot(title, {
-          variant: 'title',
+          variant: 'heading',
           tone: tone ?? 'neutral',
           gap: size ? HAPPIER_STATE_SIZE_METRICS[size].bodyGapPx : INFO_STATE_TITLE_GAP,
           type: size ? HAPPIER_STATE_SIZE_METRICS[size].title : undefined,
         })}
         {renderSlot(description, {
-          variant: 'body',
+          variant: 'meta',
           tone: 'secondary',
           gap: 0,
           type: size ? HAPPIER_STATE_SIZE_METRICS[size].body : undefined,

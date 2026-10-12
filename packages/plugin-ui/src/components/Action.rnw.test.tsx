@@ -319,6 +319,33 @@ describe('plugin-ui Action family dispatches through the canonical host API', ()
     mount.unmount();
   });
 
+  it('says what a host refusal means in words and keeps an author sentence as written', async () => {
+    // Host API refusals cross the mount as `{ code }` alone, so the client error's
+    // message IS the code (`stale_surface`). A page that prints `execution.message`
+    // must still read as a sentence; an author's own sentence is never replaced.
+    const refusals: unknown[] = [
+      Object.assign(new Error('stale_surface'), { code: 'stale_surface' }),
+      Object.assign(new Error('The review service refused.'), { code: 'denied' }),
+    ];
+    const executeAction = vi.fn(async () => { throw refusals.shift(); });
+    const onSettled = vi.fn();
+    const mount = mountSurface(
+      <Action.Execute action="review.refresh" title="Run review" onSettled={onSettled} />,
+      createHostApiStub(createSurfaceContext(), { executeAction } as unknown as Partial<PluginUiHostApi>),
+    );
+
+    await press(pressableByLabel(mount.container, 'Run review'));
+    await press(pressableByLabel(mount.container, 'Run review'));
+
+    const [hostRefusal, authorRefusal] = onSettled.mock.calls.map((call) => call[0] as { code: string; message: string });
+    expect(hostRefusal).toMatchObject({ status: 'error', code: 'stale_surface' });
+    expect(hostRefusal?.message).not.toContain('stale_surface');
+    expect(hostRefusal?.message).toMatch(/\s/u);
+    expect(authorRefusal).toMatchObject({ status: 'error', code: 'denied', message: 'The review service refused.' });
+
+    mount.unmount();
+  });
+
   it('settles success and failure after Strict Mode replays the action hook effect', async () => {
     let resolveFirst: ((value: unknown) => void) | undefined;
     let rejectSecond: ((error: Error) => void) | undefined;

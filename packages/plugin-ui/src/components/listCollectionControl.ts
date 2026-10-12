@@ -24,8 +24,8 @@ export type ListCollectionControl = Readonly<{
   /** A column must not narrow the shared selection inventory to its own mounted rows. */
   ownsSelectionRows?: boolean;
   hideChrome?: boolean;
-  /** Board columns are groups inside the Collection's one radio group. */
-  collectionRole?: 'group';
+  /** Board columns are groups inside the Collection's one radio group; a nested table is a treegrid. */
+  collectionRole?: 'group' | 'treegrid';
   /** The scroll offset as the scroller reports it, and one scroll request (a new object is a new request). */
   scroll?: Readonly<{
     offsetRef: MutableRefObject<number>;
@@ -33,7 +33,7 @@ export type ListCollectionControl = Readonly<{
   }>;
   /** Group headers at the presentation's exact height, and the type role their words take. */
   sectionHeaderStyle?: HappierStyleProp;
-  sectionHeaderTitleRole?: 'label' | 'caption' | 'section';
+  sectionHeaderTitleRole?: 'label' | 'micro' | 'section';
   /** Wraps a group header cell (the shared-element travel moves headers with their rows). */
   wrapSectionHeader?: (sectionKey: string, header: ReactNode) => ReactNode;
   /** One control at the end of a group header ("See all"), by the group's author key; `null` for none. */

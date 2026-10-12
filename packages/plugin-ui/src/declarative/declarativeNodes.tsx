@@ -1,6 +1,8 @@
 import * as React from 'react';
 import { HappierActionPanel, HappierActionPanelSection } from '../presentation/interaction/ActionPanel.js';
 import { HappierDataChart } from '../presentation/data/Chart.js';
+import { StackedSeriesChart } from '../presentation/data/StackedSeriesChart.js';
+import type { HappierSeriesPoint } from '../presentation/data/dataModel.js';
 import { HappierDataMetric } from '../presentation/data/Metric.js';
 import { HappierDataRows, HappierDataTable } from '../presentation/data/DataRows.js';
 import { HappierHeading, HappierMetadata } from '../presentation/content/Foundation.js';
@@ -349,6 +351,19 @@ const renderDeclarativeData: DeclarativeNodeRenderer = (value, context) => {
         }
         const rows = readPluginDeclarativeDataRowsV1(data, node.rows);
         if (node.kind === 'chart') {
+            if ('series' in node) {
+                const series = new Map<string, { id: string; label: string; points: HappierSeriesPoint[] }>();
+                for (const row of rows) {
+                    const name = String(readPluginDeclarativeDataFieldV1(row, node.series));
+                    const rawX = readPluginDeclarativeDataFieldV1(row, node.x);
+                    const x = typeof rawX === 'boolean' ? String(rawX) : rawX;
+                    let entry = series.get(name);
+                    if (!entry) { entry = { id: name, label: name, points: [] }; series.set(name, entry); }
+                    entry.points.push({ id: JSON.stringify(x), x, y: Number(readPluginDeclarativeDataFieldV1(row, node.value)) });
+                }
+                return <StackedSeriesChart key={key} testID={testID} theme={theme} label={context.localize(node.label)} variant={node.style}
+                    size="full" viewportHeight={context.widgetPresentation?.geometry?.height} series={[...series.values()]} />;
+            }
             return <HappierDataChart key={key} testID={testID} theme={theme} label={context.localize(node.label)} style={node.style}
                 viewportHeight={context.widgetPresentation?.geometry?.height}
                 points={rows.map((row) => {
