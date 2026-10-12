@@ -20,6 +20,7 @@ import { shadowLevelStyle } from '@/shadowElevation';
 import { t } from '@/text';
 import { useFindSurfaceRuntime } from '@/keyboard/KeyboardShortcutProvider';
 import { resolveThemeSurfaceFinish } from '@/components/ui/surfaces/themeRaisedEdge';
+import { FindBarExitingContext } from './FindBarPlacement';
 
 const GLYPHS = {
     search: 'magnifying-glass',
@@ -101,6 +102,8 @@ export function FindBar({ surfaceLabel, ...props }: FindBarProps): React.ReactEl
     const { theme } = useUnistyles();
     const reducedMotion = useReducedMotionPreference();
     const { keyboardHandlers } = useFindSurfaceRuntime();
+    // A leaving bar is inert: no focus, no field ref, no test ids.
+    const exiting = React.useContext(FindBarExitingContext);
     const labels = React.useMemo(() => buildFindBarLabels(surfaceLabel), [surfaceLabel]);
     const { surface, border, text, state, shadowLevels } = theme.colors;
     const dark = theme.dark;
@@ -124,6 +127,7 @@ export function FindBar({ surfaceLabel, ...props }: FindBarProps): React.ReactEl
     return (
         <HappierFindBar
             {...props}
+            {...(exiting ? { autoFocus: false, inputRef: undefined, testID: undefined, onInputFocus: undefined, onInputBlur: undefined } : null)}
             keyboardHandlers={keyboardHandlers}
             labels={labels}
             colors={colors}
@@ -132,6 +136,8 @@ export function FindBar({ surfaceLabel, ...props }: FindBarProps): React.ReactEl
             renderMaterialSurface={renderThemeMaterialSurface}
             host={CORE_FIND_BAR_HOST}
             reducedMotion={reducedMotion}
+            // The host placement presents the bar (overlay motion owner), so the bar does not settle twice.
+            arrivalMotion="host"
             minimumTargetSize={minimumTargetSize}
         />
     );

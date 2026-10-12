@@ -1,30 +1,78 @@
 import * as React from 'react';
-import { View } from 'react-native';
+import { Animated, View, type LayoutChangeEvent } from 'react-native';
 
 import { ComposerKeyboardFloatingInset } from '@/components/sessions/keyboardAvoidance';
+import { resolveOverlayMotionPreset, useOverlayMotionAnimation, useOverlayPresence } from '@/components/ui/overlays/motion/overlayMotion';
+import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { useDeviceType } from '@/utils/platform/responsive';
+import { useFindComposerSlotSeat } from './FindComposerSlot';
 
 export function useFindBarPresentation(): 'inline' | 'keyboardSeated' {
     return useDeviceType() === 'phone' ? 'keyboardSeated' : 'inline';
 }
 
+/**
+ * The Find bar arrives and leaves like the app's other floating capsules (the overlay motion owner's
+ * popover preset): from above at the top of a surface, from below where it is seated on a phone.
+ */
+const FIND_BAR_MOTION = {
+    inline: resolveOverlayMotionPreset({ kind: 'popover', direction: 'bottom' }),
+    seated: resolveOverlayMotionPreset({ kind: 'popover', direction: 'top' }),
+} as const;
+
+/** True while the bar is leaving: it renders its last frame inert (no focus, no ids, not announced). */
+export const FindBarExitingContext = React.createContext(false);
+
+/**
+ * Whether a surface keeps its Find bar mounted: while open, and through the bar's exit after it closes.
+ * The surface closes its Find model and returns focus at once; only the bar's last frame lingers.
+ */
+export function useFindBarPresence(open: boolean): Readonly<{ present: boolean; exiting: boolean }> {
+    const reducedMotion = useReducedMotionPreference();
+    const preset = FIND_BAR_MOTION.inline;
+    return useOverlayPresence(open, reducedMotion ? preset.reducedMotionFadeMs : preset.exitMs);
+}
+
 /** One host placement for every Find bar; the terminal footer already follows the keyboard. */
 export function FindBarPlacement(props: Readonly<{
     children(presentation: 'inline' | 'keyboardSeated'): React.ReactNode;
+    /** False while the bar leaves (`useFindBarPresence`): the last open frame stays, inert, as it exits. */
+    visible?: boolean;
     seatedInFlow?: boolean;
     testID?: string;
+    /** The inline capsule's frame (bar plus its note), so its surface can keep content clear of it. */
+    onLayout?: (event: LayoutChangeEvent) => void;
 }>) {
+    const visible = props.visible ?? true;
     const presentation = useFindBarPresentation();
     const seated = presentation === 'keyboardSeated';
-    const bar = <View style={seated ? undefined : { maxWidth: 560, width: '100%' }}>
-        {props.children(presentation)}
-    </View>;
+    // While open the bar renders live; while leaving it keeps its last open frame.
+    const lastFrame = React.useRef<React.ReactNode>(null);
+    if (visible) lastFrame.current = props.children(presentation);
+    const motionRef = React.useRef<React.ComponentRef<typeof View>>(null);
+    const motion = useOverlayMotionAnimation({
+        visible, preset: seated ? FIND_BAR_MOTION.seated : FIND_BAR_MOTION.inline, elementRef: motionRef,
+    });
+    const bar = <Animated.View ref={motionRef} pointerEvents={visible ? undefined : 'none'}
+        aria-hidden={visible ? undefined : true} accessibilityElementsHidden={!visible}
+        importantForAccessibility={visible ? undefined : 'no-hide-descendants'}
+        style={[seated ? undefined : { maxWidth: 560, width: '100%' }, motion.style]}>
+        <FindBarExitingContext.Provider value={!visible}>{lastFrame.current}</FindBarExitingContext.Provider>
+    </Animated.View>;
+    // On a phone screen with a composer slot, the seated bar takes the composer's place (F1p); while it
+    // leaves, the composer is already back beneath it. The terminal footer seats it in its own flow.
+    const inComposerSlot = useFindComposerSlotSeat(
+        <View testID={visible ? props.testID : undefined}>{bar}</View>,
+        seated && !props.seatedInFlow,
+        !visible,
+    );
+    if (inComposerSlot) return null;
     if (seated && props.seatedInFlow) {
-        return <View testID={props.testID} pointerEvents="box-none">{bar}</View>;
+        return <View testID={visible ? props.testID : undefined} pointerEvents="box-none">{bar}</View>;
     }
     return seated
-        ? <ComposerKeyboardFloatingInset testID={props.testID}
+        ? <ComposerKeyboardFloatingInset testID={visible ? props.testID : undefined}
             style={{ position: 'absolute', left: 0, right: 0, zIndex: 20 }}>{bar}</ComposerKeyboardFloatingInset>
-        : <View testID={props.testID} pointerEvents="box-none"
+        : <View testID={visible ? props.testID : undefined} pointerEvents="box-none" onLayout={visible ? props.onLayout : undefined}
             style={{ position: 'absolute', top: 10, left: 14, right: 14, alignItems: 'flex-end', zIndex: 20 }}>{bar}</View>;
 }

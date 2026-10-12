@@ -3,6 +3,7 @@ import { Platform } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { Text } from '@/components/ui/text/Text';
 import { HappierFindHighlightedText, type FindMarkStyle, type FindTextRange } from '@happier-dev/plugin-ui/presentation';
+import { FIND_MATCH_CURRENT_TEST_ID } from './findMarkTestIds';
 export { sliceFindRanges } from '@happier-dev/plugin-ui/presentation';
 
 /**
@@ -32,5 +33,5 @@ export function FindHighlightedText(props: Readonly<{ text: string; ranges?: rea
     const { theme } = useUnistyles();
     const marks = React.useMemo(() => resolveFindMarkStyles(theme), [theme]);
     return <HappierFindHighlightedText {...props} marks={marks} renderMatch={({ key, text, current, style, selectable }) =>
-        <Text key={key} useDefaultTypography={false} selectable={selectable} testID={current ? 'find-match-current' : 'find-match-all'} style={style}>{text}</Text>} />;
+        <Text key={key} useDefaultTypography={false} selectable={selectable} testID={current ? FIND_MATCH_CURRENT_TEST_ID : 'find-match-all'} style={style}>{text}</Text>} />;
 }

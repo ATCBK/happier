@@ -64,7 +64,7 @@ vi.mock('@/hooks/server/useFeatureEnabled', () => ({
     useFeatureEnabled: (id: string) => featureSpy(id),
 }));
 
-const settingSpy = vi.fn((key: string): 'advanced' | 'off' | number | null => {
+const settingSpy = vi.fn((key: string): 'advanced' | 'simple' | 'off' | number | null => {
     if (key === 'filesDiffSyntaxHighlightingMode') return 'advanced';
     if (key === 'filesDiffTokenizationMaxBytes') return 1_000_000;
     if (key === 'filesDiffTokenizationMaxLines') return 10_000;
@@ -84,11 +84,11 @@ vi.mock('@/sync/store/hooks', () => ({
 
 const createHighlighterSpy = vi.fn(async (..._args: any[]) => ({
     loadLanguage: async () => {},
-    codeToTokens: () => ({
+    codeToTokens: (code: string) => ({
         fg: '#000',
-        tokens: [
-            [{ content: 'const', color: '#f00' }, { content: ' x = 1;', color: '#000' }],
-        ],
+        tokens: code.split('\n').map(line => line.startsWith('const')
+            ? [{ content: 'const', color: '#f00' }, { content: line.slice(5), color: '#000' }]
+            : [{ content: line.slice(0, 12), color: '#666' }, { content: line.slice(12), color: '#666' }]),
     }),
 }));
 
@@ -102,6 +102,28 @@ async function flushReactAsyncWork(): Promise<void> {
 }
 
 describe('CodeBlockView (web)', () => {
+    it.each(['off', 'simple', 'advanced'] as const)('keeps Read and diff code marks through the web %s renderer', async (mode) => {
+        settingSpy.mockImplementation((key: string) => key === 'filesDiffSyntaxHighlightingMode' ? mode : 1_000_000);
+        // Shiki is the external syntax engine; retain every source line and split the matched
+        // phrase across token boundaries, as its real output does.
+        const code = Array.from({ length: 15 }, (_, index) => index === 14
+            ? '// must not remount the modal' : `const line${index + 1} = ${index + 1};`).join('\r\n');
+        const text = 'must not remount the modal';
+        const start = code.indexOf(text);
+        const { CodeBlockView } = await import('./CodeBlockView.web');
+        const screen = await renderScreen(<CodeBlockView code={code} language="typescript"
+            findRanges={[{ start, end: start + text.length, current: true }]} />);
+        await flushReactAsyncWork();
+        const marked = () => screen.findAllHostsByTestId('find-match-current').map(node => node.children.join('')).join('');
+        expect(marked()).toBe(text);
+        await screen.update(<CodeBlockView code={code} language="typescript"
+            findRanges={[{ start, end: start + text.length, current: false }]} />);
+        expect(marked()).toBe('');
+        expect(screen.findAllHostsByTestId('find-match-all').map(node => node.children.join('')).join('')).toBe(text);
+        await screen.update(<CodeBlockView code={code} language="typescript" />);
+        expect(screen.findAllHostsByTestId('find-match-all')).toHaveLength(0);
+        await screen.unmount();
+    });
     it('applies an owner-scoped container surface', async () => {
         const { CodeBlockView } = await import('./CodeBlockView.web');
 
@@ -118,7 +140,7 @@ describe('CodeBlockView (web)', () => {
     it('uses Shiki tokens when advanced highlighting is enabled', async () => {
         featureSpy.mockClear();
         settingSpy.mockClear();
-        createHighlighterSpy.mockClear();
+        // The web mark case may already have populated the real Shiki engine cache.
 
         const { CodeBlockView } = await import('./CodeBlockView.web');
 

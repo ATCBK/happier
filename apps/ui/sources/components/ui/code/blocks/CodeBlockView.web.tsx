@@ -11,6 +11,7 @@ import type { ShikiInlineToken } from '@/components/ui/code/highlighting/shiki/s
 import { shikiTokenizeLines } from '@/components/ui/code/highlighting/shiki/shikiTokenize.web';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { resolveCodeMonoFontFamily } from '../codeTypography';
+import { FindHighlightedText, sliceFindRanges } from '@/components/ui/text/FindHighlightedText';
 
 import type { CodeBlockViewProps } from './codeBlockViewTypes';
 import { CodeBlockViewFrame } from './CodeBlockViewFrame';
@@ -26,6 +27,7 @@ export const CodeBlockView = React.memo<CodeBlockViewProps>(({
     headerRight,
     scrollTestID,
     containerStyle,
+    findRanges,
 }) => {
     const { theme } = useUnistyles();
     const isDark = theme.dark === true;
@@ -53,6 +55,17 @@ export const CodeBlockView = React.memo<CodeBlockViewProps>(({
     const [tokensRevision, setTokensRevision] = React.useState(0);
 
     const lines = budget.lines;
+    const hasFindRanges = Boolean(findRanges?.length);
+    // Shiki consumes normalized lines; Find's ranges retain the original UTF-16 source offsets.
+    const sourceLineOffsets = React.useMemo(() => {
+        if (!shikiEnabled || !hasFindRanges) return null;
+        let offset = 0;
+        return code.split('\n').map(line => {
+            const start = offset;
+            offset += line.length + 1;
+            return start;
+        });
+    }, [code, shikiEnabled, hasFindRanges]);
 
     React.useEffect(() => {
         if (!shikiEnabled) {
@@ -110,16 +123,23 @@ export const CodeBlockView = React.memo<CodeBlockViewProps>(({
                     webWhitespaceStyle,
                 ]}
             >
-                {tokensByLine.map((row, rowIndex) => (
-                    <React.Fragment key={rowIndex}>
-                        {row.map((token, tokenIndex) => (
-                            <Text key={tokenIndex} selectable={selectable} style={{ color: token.color }}>
-                                {token.text}
-                            </Text>
-                        ))}
-                        {rowIndex < tokensByLine.length - 1 ? '\n' : null}
-                    </React.Fragment>
-                ))}
+                {tokensByLine.map((row, rowIndex) => {
+                    let offset = sourceLineOffsets?.[rowIndex] ?? 0;
+                    return (
+                        <React.Fragment key={rowIndex}>
+                            {row.map((token, tokenIndex) => {
+                                const ranges = sliceFindRanges(findRanges, offset, token.text.length);
+                                offset += token.text.length;
+                                return (
+                                    <Text key={tokenIndex} useDefaultTypography={false} selectable={selectable} style={{ color: token.color }}>
+                                        {ranges?.length ? <FindHighlightedText text={token.text} ranges={ranges} selectable={selectable} /> : token.text}
+                                    </Text>
+                                );
+                            })}
+                            {rowIndex < tokensByLine.length - 1 ? '\n' : null}
+                        </React.Fragment>
+                    );
+                })}
             </Text>
         </View>
     ) : simpleEnabled ? (
@@ -128,6 +148,7 @@ export const CodeBlockView = React.memo<CodeBlockViewProps>(({
             language={syntax.language}
             selectable={selectable}
             wrap={wrap}
+            findRanges={findRanges}
         />
     ) : (
         <Text
@@ -142,7 +163,7 @@ export const CodeBlockView = React.memo<CodeBlockViewProps>(({
                 webWhitespaceStyle,
             ]}
         >
-            {code}
+            {findRanges?.length ? <FindHighlightedText text={code} ranges={findRanges} selectable={selectable} /> : code}
         </Text>
     );
 

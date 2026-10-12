@@ -61,7 +61,9 @@ describe('core Find field keyboard ownership', () => {
             return null;
         }
         const submit = () => {
+            const before = current;
             keyboardHandlers!.onKeyPress({ nativeEvent: { key: 'Enter' } });
+            expect(current).toBe(before);
             keyboardHandlers!.onSubmitEditing();
         };
         try {
@@ -74,7 +76,8 @@ describe('core Find field keyboard ownership', () => {
             submit(); expect(current).toBe(2);
             await act(async () => { storage.setState({ settings: { ...storage.getState().settings,
                 keyboardShortcutOverridesV1: {}, keyboardShortcutsV2Enabled: false } }); });
-            submit(); expect(current).toBe(2);
+            // Find remains a surface interaction when general optional shortcuts are off.
+            submit(); expect(current).toBe(3);
         } finally {
             await act(async () => { root.unmount(); }); container.remove(); storage.setState({ settings: originalSettings });
         }
