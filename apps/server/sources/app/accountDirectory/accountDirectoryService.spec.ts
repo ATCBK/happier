@@ -203,6 +203,27 @@ describe("Account Directory service", () => {
         mocks.txPairingSessionDeleteMany.mockResolvedValue({ count: 0 });
     });
 
+    it("labels the directory account from its explicit name and then username", async () => {
+        const { readAccountDirectoryMe } = await import("./accountDirectoryService");
+        const account = {
+            id: "account-1",
+            name: "  Ana María de la Cruz  ",
+            firstName: "Old",
+            lastName: "Identity",
+            username: "ana",
+            avatar: null,
+            encryptionMode: "plain",
+            AccountPasswordCredential: null,
+            AccountIdentity: [],
+        };
+        let currentAccount: Row = account;
+        mocks.txAccountFindUnique.mockImplementation(async (args: { select: Record<string, unknown> }) =>
+            Object.fromEntries(Object.entries(currentAccount).filter(([field]) => args.select[field])));
+        expect((await readAccountDirectoryMe(account.id)).displayName).toBe("Ana María de la Cruz");
+        currentAccount = { ...account, name: null };
+        expect((await readAccountDirectoryMe(account.id)).displayName).toBe("ana");
+    });
+
     describe("directory entry upsert", () => {
         it("creates the first entry transactionally and prefers it when the account has no preferred Home", async () => {
             const { upsertAccountHomeDirectoryEntry } = await import("./accountDirectoryService");

@@ -5,6 +5,7 @@ import { db } from "@/storage/db";
 import { inTx, type Tx } from "@/storage/inTx";
 import { getOrCreateServerIdentityId, initializeServerIdentityCache, readCachedServerIdentityIdForHotPath } from "@/app/serverIdentity/serverIdentity";
 import { getPublicUrl } from "@/storage/blob/files";
+import { resolveAccountDisplayLabelV1 } from "@/app/account/profile/accountDisplayProfile";
 import {
     readRequiredAuthenticatedHomeConnectionDescriptor,
 } from "@/app/features/homeConnectionDescriptorPublication";
@@ -140,8 +141,8 @@ export async function readAccountDirectoryMe(accountId: string): Promise<Account
         where: { id: accountId },
         select: {
             id: true,
-            firstName: true,
-            lastName: true,
+            name: true,
+            username: true,
             avatar: true,
             encryptionMode: true,
             AccountPasswordCredential: { select: { accountId: true } },
@@ -149,7 +150,7 @@ export async function readAccountDirectoryMe(accountId: string): Promise<Account
         },
     }), { readOnly: true });
     if (!user) throw new AccountDirectoryError("not_found", "Account not found");
-    const displayName = [user.firstName, user.lastName].filter((part): part is string => Boolean(part?.trim())).join(" ") || null;
+    const displayName = resolveAccountDisplayLabelV1(user);
     return AccountDirectoryMeResponseSchema.parse({
         v: 1,
         accountId: user.id,
@@ -190,7 +191,7 @@ export async function listAccountHomeDirectory(accountId: string) {
             preferredHomeServerIdentityId: account.preferredHomeServerIdentityId ?? null,
             homes: rows.map((row) => mapHomeRow(row, account.preferredHomeServerIdentityId ?? null)),
         });
-    }, { readOnly: true });
+    }, { isolationLevel: "Serializable", /* Directory entries and their preferred Home must come from one snapshot. */ readOnly: true });
 }
 
 async function upsertAccountHomeDirectoryEntryInTx(
@@ -290,7 +291,7 @@ export async function upsertAccountHomeDirectoryEntry(params: Readonly<{
         homeServerIdentityId: params.homeServerIdentityId,
         label: body.label,
         connectionDescriptor: body.connectionDescriptor,
-    }));
+    }), { isolationLevel: "Serializable" /* Descriptor revision comparison and preference admission span directory and Account rows. */ });
 }
 
 export async function deleteAccountHomeDirectoryEntry(params: Readonly<{ accountId: string; homeServerIdentityId: string }>): Promise<void> {
@@ -300,7 +301,7 @@ export async function deleteAccountHomeDirectoryEntry(params: Readonly<{ account
             where: { id: params.accountId, preferredHomeServerIdentityId: params.homeServerIdentityId },
             data: { preferredHomeServerIdentityId: null },
         });
-    });
+    }, { isolationLevel: "Serializable" /* Pair directory deletion with preference admission without leaving a dangling preferred Home. */ });
 }
 
 export async function setPreferredAccountHome(params: Readonly<{ accountId: string; homeServerIdentityId: string | null }>): ReturnType<typeof listAccountHomeDirectory> {
@@ -313,7 +314,7 @@ export async function setPreferredAccountHome(params: Readonly<{ accountId: stri
             if (!exists) throw new AccountDirectoryError("preferred_home_not_found", "Home is not present in the directory");
         }
         await tx.account.updateMany({ where: { id: params.accountId }, data: { preferredHomeServerIdentityId: params.homeServerIdentityId } });
-    });
+    }, { isolationLevel: "Serializable" /* The directory-entry existence check and Account preference write are one admission. */ });
     return listAccountHomeDirectory(params.accountId);
 }
 
@@ -423,7 +424,7 @@ export async function upsertAccountDirectoryLink(params: Readonly<{
         issuerSigningKeyId: body.issuerSigningKeyId,
         issuerSigningPublicKey: storedPublicKey,
         relink: body.relink,
-    }));
+    }), { isolationLevel: "Serializable" /* Issuer slot replacement and approval invalidation depend on the previously observed binding. */ });
 }
 
 export async function deleteAccountDirectoryLink(params: Readonly<{ accountId: string; issuerServerIdentityId: string }>): Promise<void> {
@@ -438,7 +439,7 @@ export async function deleteAccountDirectoryLink(params: Readonly<{ accountId: s
         if (existing && deleted.count > 0) {
             await invalidateAccountAssertionApprovalsForLink(tx, existing);
         }
-    });
+    }, { isolationLevel: "Serializable" /* Link deletion and approval invalidation must observe the same issuer binding. */ });
 }
 
 export type SameServiceHomeEntryOutcome = Readonly<
@@ -855,7 +856,7 @@ export async function redeemHomeLoginAssertion(params: Readonly<{
             if (error instanceof InactiveAccountError) throw new AccountDirectoryError("account_disabled");
             throw error;
         }
-    });
+    }, { isolationLevel: "Serializable" /* Issuer binding, approval and Account credential epoch must form one authentication snapshot. */ });
     const credentialPayload = HomeLoginCredentialPayloadV1Schema.safeParse({ token });
     if (!credentialPayload.success) {
         throw new AccountDirectoryError("home_redemption_unavailable", "Home token issuer returned invalid credentials");
