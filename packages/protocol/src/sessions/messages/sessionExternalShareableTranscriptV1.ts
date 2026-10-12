@@ -1,4 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
+import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 import { z } from 'zod';
 
 import { PluginIdSchema } from '../../plugins/pluginId.js';
@@ -60,8 +61,10 @@ export type ExternalShareableActorV1 = z.infer<typeof ExternalShareableActorV1Sc
  */
 export function deriveExternalShareableActorFromAdmissionReceiptV1(
   inputAdmissionReceipt: unknown,
+  mode: 'input' | 'stored' = 'input',
 ): ExternalShareableActorV1 | null {
-  const receipt = SessionInputAdmissionReceiptV1Schema.safeParse(inputAdmissionReceipt);
+  const receipt = (mode === 'stored' ? createStoredReadSchema(SessionInputAdmissionReceiptV1Schema)
+    : SessionInputAdmissionReceiptV1Schema).safeParse(inputAdmissionReceipt);
   if (!receipt.success) return null;
   if (receipt.data.issuer === 'authenticatedMachine') return 'machine';
   return receipt.data.sessionRelationship === 'owner' ? 'owner' : 'collaborator';

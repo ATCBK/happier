@@ -16,6 +16,7 @@ import {
   readSessionAgentTransitionDividerV1,
 } from '../agentTransitionDivider.js';
 import { createSessionMessageMetaSchema } from './sessionMessageMeta.js';
+import { SESSION_CAPABILITY_NOTICE_SIDECAR_KEY } from './sessionCapabilityNoticeV1.js';
 import type { SessionMessageMeta } from './sessionMessageMeta.js';
 import { AgentIdV1Schema } from '../../agents/agentIdV1.js';
 import { WorkerUpdateV1Schema, SessionWorkerPublishInputV1Schema, refineWorkerDeliverableResultV1 } from '../relations/workerUpdateV1.js';
@@ -437,6 +438,11 @@ export const ConnectedServiceRuntimeAuthRecoveryTranscriptStatusV1Schema = lazyZ
 export type ConnectedServiceRuntimeAuthRecoveryTranscriptStatusV1 =
   z.infer<typeof ConnectedServiceRuntimeAuthRecoveryTranscriptStatusV1Schema>;
 
+/** The existing V1 `cancelled` carrier also represents non-retrying policy outcomes. */
+export function isConnectedServiceRuntimeAuthRecoveryCancellation(reason: string | null | undefined): boolean {
+  return !reason || reason === 'usage_limit_recovery_cancelled' || reason === 'runtime_auth_recovery_cancelled';
+}
+
 const CONNECTED_SERVICE_SWITCH_ATTEMPT_V2_FIELDS = [
   'attemptedContinuityMode',
   'outcomeAction',
@@ -702,6 +708,9 @@ const AgentEventSchema = lazyZodSchema(() => z.discriminatedUnion('type', [
        * divider, never silenced, and never a departure boundary.
        */
       [SESSION_AGENT_TRANSITION_DIVIDER_SIDECAR_KEY]: z.unknown().optional(),
+      // Retain the presentation sidecar even when malformed or from a future writer.
+      // Its canonical reader validates it without erasing the fallback message.
+      [SESSION_CAPABILITY_NOTICE_SIDECAR_KEY]: z.unknown().optional(),
     })
     .passthrough(),
   z
@@ -845,7 +854,7 @@ const RawAgentRecordSchema = lazyZodSchema(() => z
       type: z.literal('output'),
       data: RawAgentOutputDataSchema,
     }),
-    z.object({ type: z.literal('event'), id: z.string(), data: AgentEventSchema }).passthrough(),
+    z.object({ type: z.literal('event'), id: z.string(), data: createStoredReadSchema(AgentEventSchema) }).passthrough(),
     z
       .object({
         type: z.literal('codex'),

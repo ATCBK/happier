@@ -19,6 +19,7 @@ import { VendorPluginMentionV1Schema } from '../../runtime/input/vendorPluginMen
 import { SkillMentionV1Schema } from '../../runtime/input/skillMentionV1.js';
 import { ExecutionRunInputTurnV1Schema } from '../../execution/runs/responseSchemas.js';
 import { SessionForkVisualOriginV1Schema } from '../board/forkVisualCopies.js';
+import { SESSION_MESSAGE_MODEL_SELECTION_V1_META_KEY } from '../../providers/selection/v1.js';
 import {
   SESSION_INPUT_AUTHORITY_META_KEY,
   SESSION_INPUT_REQUEST_META_KEY,
@@ -113,6 +114,9 @@ export function createSessionMessageMetaSchema(zod: typeof z) {
       source: zod.union([zod.enum(['ui', 'cli']), zod.string()]).optional(),
       permissionMode: createSessionPermissionModeSchema(zod).optional(),
       model: zod.string().nullable().optional(),
+      // Preserve invalid presence as well as valid intent: the model-selection
+      // owner must refuse it instead of seeing absence and using legacy model.
+      [SESSION_MESSAGE_MODEL_SELECTION_V1_META_KEY]: zod.unknown().optional(),
       fallbackModel: zod.string().nullable().optional(),
       customSystemPrompt: zod.string().nullable().optional(),
       appendSystemPrompt: zod.string().nullable().optional(),

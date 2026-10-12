@@ -34,7 +34,7 @@ export type SessionInputPromptProvenanceV1 = z.infer<typeof SessionInputPromptPr
 
 /** Prompt-only classification; it grants no persisted provenance or input authority. */
 export function resolveSessionInputPromptProvenanceV1(meta: unknown): SessionInputPromptProvenanceV1 {
-  return readSessionMessageProvenance(meta) ?? Object.freeze({ v: 1, kind: 'legacyUnknown' as const });
+  return readSessionMessageProvenance(meta, 'stored') ?? Object.freeze({ v: 1, kind: 'legacyUnknown' as const });
 }
 
 /** The bounded read capabilities that a retained Session Run may describe in its first prompt. */

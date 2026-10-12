@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { projectSessionMetadataForWire } from './terminalMetadata.js';
 import { readSessionRoleIdV1, readSessionRolesV1, writeSessionRoleIdV1ToMetadata } from '../../prompts/roles/sessionRolesSnapshot.js';
 import { z } from 'zod';
+import { SessionPublisherGenerationV1Schema } from '../control/machineSessionTerminalV1.js';
 import { zodSchemaToJsonSchemaObject } from '../../actions/actionInputJsonSchema.js';
 
 import {
@@ -40,6 +41,7 @@ import {
   SessionOwnerMetadataEnvelopeV1Schema,
   SessionOwnerMetadataV1Schema,
   SessionOwnerModeCatalogV1Schema,
+  SessionOwnerModeCatalogV2Schema,
   readSessionModesMetadata,
   projectSessionModesV1Compatibility,
   SessionSharedMetadataV1Schema,
@@ -60,6 +62,96 @@ import {
 } from './sessionMetadataEnvelopesV1.js';
 
 describe('metadata schema consumer contracts', () => {
+  it('round-trips both selections and pending apply markers without a local item cap', () => {
+    const selection = { v: 1 as const, managedServersEnabled: true,
+      forceIncludeServerIds: Array.from({ length: 2_049 }, (_, i) => `server-${i}`), forceExcludeServerIds: [] };
+    const metadata = { mcpSelectionV1: selection,
+      mcpSelectionRestartRequiredV1: { v: 1, appliedSelection: selection },
+      skillSelectionV1: { v: 1, forceIncludeSkillIds: ['lint'], forceExcludeSkillIds: [], excludeNativeSkillNames: ['native'] },
+      skillSelectionRestartRequiredV1: { v: 1, appliedSelection: { v: 1, forceIncludeSkillIds: [], forceExcludeSkillIds: [], excludeNativeSkillNames: [] } },
+    };
+    const created = createSessionOwnerMetadataV1({ metadata });
+    expect(created).toMatchObject({ ok: true, ownerMetadata: { runtime: metadata } });
+    if (!created.ok) throw new Error('capability metadata rejected');
+    const sharedMetadata = projectSessionSharedMetadataV1({ metadata });
+    expect(projectSessionOwnerCompatibilityViewV1({ sharedMetadata, ownerMetadata: created.ownerMetadata }))
+      .toMatchObject(metadata);
+    expect(sharedMetadata).not.toHaveProperty('skillSelectionV1');
+  });
+  it('round-trips the unattended policy only through private runtime metadata', () => {
+    const metadata = { allowedTools: ['mcp__wilson-intake__*'], unlistedTools: 'deny' };
+    const created = createSessionOwnerMetadataV1({ metadata });
+    expect(created).toMatchObject({ ok: true, ownerMetadata: { runtime: metadata } });
+    if (!created.ok) throw new Error('tool policy rejected');
+    const sharedMetadata = projectSessionSharedMetadataV1({ metadata });
+    expect(sharedMetadata).toEqual({ v: 1 });
+    expect(projectSessionOwnerCompatibilityViewV1({ sharedMetadata, ownerMetadata: created.ownerMetadata }))
+      .toMatchObject(metadata);
+  });
+  it.each(['plain', 'e2ee'] as const)('keeps attested spawn facts in private %s owner metadata only', (accountMode) => {
+    const attestedContext = { externalPrincipalId: 'sales@batiplus.ch', sourceMessageId: '<lead@example.test>' };
+    const created = createSessionOwnerMetadataV1({ metadata: { attestedContext } });
+    expect(created).toMatchObject({ ok: true, ownerMetadata: { system: { attestedContext } } });
+    if (!created.ok) throw new Error('attested metadata rejected');
+    const envelope = accountMode === 'plain' ? createPlainSessionOwnerMetadataEnvelopeV1(created.ownerMetadata)
+      : sealSessionOwnerMetadataEnvelopeV1({ ownerMetadata: created.ownerMetadata, material: material(7), randomBytes: deterministicRandomBytes(3) });
+    const opened = openSessionOwnerMetadataEnvelopeV1({ accountMode, envelope, material: material(7) });
+    expect(opened).toMatchObject({ ok: true, ownerMetadata: { system: { attestedContext } } });
+    const sharedMetadata = projectSessionSharedMetadataV1({ metadata: { attestedContext } });
+    expect(sharedMetadata).toEqual({ v: 1 });
+    if (!opened.ok) throw new Error('attested metadata unavailable');
+    expect(projectSessionOwnerCompatibilityViewV1({ sharedMetadata, ownerMetadata: opened.ownerMetadata })).toMatchObject({ attestedContext });
+  });
+
+  it.each(['plain', 'e2ee'] as const)('round-trips private %s Voice provider conversation state without disclosure', (accountMode) => {
+    const voiceProviderConversationsV1 = { v: 1, providers: {
+      'happier.xai/realtime': { conversationId: 'xai-conversation', updatedAt: 0 },
+    } };
+    const metadata = { voiceProviderConversationsV1 };
+    const created = createSessionOwnerMetadataV1({ metadata });
+    expect(created).toMatchObject({ ok: true, ownerMetadata: { system: metadata } });
+    if (!created.ok) throw new Error('Voice provider conversation state rejected');
+    const envelope = accountMode === 'plain'
+      ? createPlainSessionOwnerMetadataEnvelopeV1(created.ownerMetadata)
+      : { t: 'encrypted', c: sealAccountScopedBlobCiphertext({ kind: 'session_owner_metadata',
+        material: material(7), payload: created.ownerMetadata, randomBytes: deterministicRandomBytes(3) }) };
+    const opened = openSessionOwnerMetadataEnvelopeV1({ accountMode, envelope, material: material(7) });
+    expect(opened).toMatchObject({ ok: true, ownerMetadata: { system: metadata } });
+    if (!opened.ok) throw new Error('Voice provider conversation state unavailable');
+    const sharedMetadata = projectSessionSharedMetadataV1({ metadata });
+    expect(sharedMetadata).toEqual({ v: 1 });
+    expect(projectSessionOwnerCompatibilityViewV1({ sharedMetadata, ownerMetadata: opened.ownerMetadata }))
+      .toMatchObject(metadata);
+    const additive = { v: 1, system: { voiceProviderConversationsV1: { ...voiceProviderConversationsV1,
+      future: true, providers: { 'happier.xai/realtime': { ...voiceProviderConversationsV1.providers['happier.xai/realtime'], future: true } } } } };
+    expect(SessionOwnerMetadataV1Schema.safeParse(additive).success).toBe(false);
+    expect(parseSessionOwnerMetadataEnvelopeV1(JSON.stringify({ t: 'plain', v: additive })))
+      .toEqual({ t: 'plain', v: created.ownerMetadata });
+  });
+
+  it.each([
+    { providerId: 'unqualified', conversationId: 'conversation', updatedAt: 0 },
+    { providerId: 'happier.xai/realtime', conversationId: '', updatedAt: 0 },
+    { providerId: 'happier.xai/realtime', conversationId: 'x'.repeat(513), updatedAt: 0 },
+    { providerId: 'happier.xai/realtime', conversationId: 'conversation', updatedAt: -1 },
+    { providerId: 'happier.xai/realtime', conversationId: 'conversation', updatedAt: Infinity },
+  ])('rejects malformed private Voice provider conversation state: $providerId / $updatedAt', ({ providerId, ...state }) => {
+    expect(createSessionOwnerMetadataV1({ metadata: { voiceProviderConversationsV1: {
+      v: 1, providers: { [providerId]: state },
+    } } }).ok).toBe(false);
+  });
+
+  it('projects only validated share-safe guard state and retains it for the owner', () => {
+    const state = { v: 1, kind: 'stopping', stopAt: 300_000, rule: 'memory_guard' };
+    const sharedMetadata = projectSessionSharedMetadataV1({ metadata: { sessionGuardStateV1: state } });
+    expect(sharedMetadata).toMatchObject({ sessionGuardStateV1: state });
+    expect(projectSessionOwnerCompatibilityViewV1({ sharedMetadata, ownerMetadata: { v: 1 } }))
+      .toMatchObject({ sessionGuardStateV1: state });
+    expect(projectSessionSharedMetadataV1({ metadata: { sessionGuardStateV1: { ...state, sessionId: 'private' } } }))
+      .toMatchObject({ sessionGuardStateV1: state });
+    expect(projectSessionSharedMetadataV1({ metadata: { sessionGuardStateV1: { ...state, stopAt: -1 } } }))
+      .not.toHaveProperty('sessionGuardStateV1');
+  });
   it('retains runner generation facts through private owner metadata and the attach compatibility view', () => {
     const metadata = { hostPid: 321, hostProcessStartTimeMs: 123456, hostProcessInstanceFingerprint: 'linux:123456' };
     const owner = createSessionOwnerMetadataV1({ metadata });
@@ -72,7 +164,7 @@ describe('metadata schema consumer contracts', () => {
   });
 
   it.each(['plain', 'e2ee'] as const)('round-trips a private %s Session voice preference without disclosing it', (accountMode) => {
-    const voicePreference = { providerContributionId: 'happier.xai/realtime', settingFieldPath: 'voice', value: { kind: 'custom', id: 'my-voice' } };
+    const voicePreference = { providerContributionId: 'happier.xai/realtime', settingFieldPath: 'voice', value: { kind: 'custom', id: 'my-voice' }, displayName: 'My voice' };
     const metadata = { work: { voicePreference, sessionRolesV1: { overrides: {}, sessionRoles: {}, notes: 'Keep notes' } } };
     const created = createSessionOwnerMetadataV1({ metadata });
     expect(created).toMatchObject({ ok: true, ownerMetadata: { work: { voicePreference } } });
@@ -107,6 +199,7 @@ describe('metadata schema consumer contracts', () => {
     const reference = z.object({
       machineId: z.string().trim().min(1).max(256),
       committedFenceMs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+      publisherGeneration: SessionPublisherGenerationV1Schema,
     }).strict();
     for (const target of ['draft-2020-12', 'draft-7'] as const) {
       expect(zodSchemaToJsonSchemaObject(SessionMetadataPublisherPreconditionV1Schema, { target }))
@@ -114,12 +207,19 @@ describe('metadata schema consumer contracts', () => {
       expect(zodSchemaToJsonSchemaObject(SessionMetadataPublisherPreconditionV1Schema.pick({ machineId: true }), { target }))
         .toEqual(zodSchemaToJsonSchemaObject(reference.pick({ machineId: true }), { target }));
     }
-    expect(SessionMetadataPublisherPreconditionV1Schema.parse({ machineId: ' machine-1 ', committedFenceMs: 0 }))
-      .toEqual({ machineId: 'machine-1', committedFenceMs: 0 });
+    expect(SessionMetadataPublisherPreconditionV1Schema.parse({ machineId: ' machine-1 ', committedFenceMs: 0, publisherGeneration: '1' }))
+      .toEqual({ machineId: 'machine-1', committedFenceMs: 0, publisherGeneration: '1' });
+  });
+
+  it('rejects publisher-qualified metadata authority without a publisher generation', () => {
+    expect(SessionMetadataPublisherPreconditionV1Schema.safeParse({
+      machineId: 'machine-1',
+      committedFenceMs: 1,
+    }).success).toBe(false);
   });
 
   it('retains classic errors and issue paths for invalid metadata', () => {
-    const result = SessionMetadataPublisherPreconditionV1Schema.safeParse({ machineId: 42, committedFenceMs: -1 });
+    const result = SessionMetadataPublisherPreconditionV1Schema.safeParse({ machineId: 42, committedFenceMs: -1, publisherGeneration: '1' });
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(result.error).toBeInstanceOf(z.ZodError);
@@ -211,7 +311,8 @@ describe('native mode catalog compatibility', () => {
     expect(SessionOwnerModeCatalogV1Schema.parse(compatible)).toEqual({ ...state, v: 1, currentModeId: 'custom' });
     expect(readSessionModesMetadata({ acpSessionModesV1: compatible })).toEqual({ ...state, currentModeId: 'custom' });
     expect(readSessionModesMetadata({ sessionModesV2: state, sessionModesV1: compatible })).toEqual(state);
-    expect(readSessionModesMetadata({ sessionModesV2: { ...state, unrecognizedAuthority: true }, sessionModesV1: compatible })).toBeNull();
+    expect(readSessionModesMetadata({ sessionModesV2: { ...state, unrecognizedAuthority: true }, sessionModesV1: compatible })).toEqual(state);
+    expect(SessionOwnerModeCatalogV2Schema.safeParse({ ...state, unrecognizedAuthority: true }).success).toBe(false);
   });
 });
 
@@ -1146,6 +1247,7 @@ describe('session metadata privacy envelopes v1', () => {
       publisherPrecondition: {
         machineId: 'machine-1',
         committedFenceMs: 1_000,
+        publisherGeneration: '1',
       },
       expectedOwnerMetadata: {
         t: 'encrypted',
@@ -1270,6 +1372,7 @@ describe('session metadata privacy envelopes v1', () => {
         publisherPrecondition: {
           machineId: 'machine-1',
           committedFenceMs: 1_000,
+          publisherGeneration: '1',
         },
       }).success,
     ).toBe(false);

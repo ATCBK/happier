@@ -7,7 +7,7 @@ import { SessionMessageAttentionImpactSchema } from './transcriptRawRecordV1.js'
 import { SessionMessageDeliveryResolutionV1Schema } from './sessionMessageDeliveryResolutionV1.js';
 import { SessionMessageRoleSchema, type SessionMessageRole } from './sessionMessageRole.js';
 import { SessionStoredMessageContentSchema } from './sessionStoredMessageContent.js';
-import { SessionTranscriptObservationProvenanceV1Schema } from './transcriptObservationV1.js';
+import { SessionTranscriptObservationProvenanceV1Schema, SessionTranscriptSurfaceItemReferenceInputV1Schema } from './transcriptObservationV1.js';
 import {
   ExternalShareableActorV1Schema,
   ExternalShareableTranscriptSnapshotV1Schema,
@@ -24,6 +24,7 @@ export const SessionMessageV1Schema = lazyZodSchema(() => z.object({
   sourceCreatedAt: z.number().int().min(0).optional(),
   sourceUpdatedAt: z.number().int().min(0).optional(),
   transcriptObservationProvenance: SessionTranscriptObservationProvenanceV1Schema.optional(),
+  surfaceItemReference: SessionTranscriptSurfaceItemReferenceInputV1Schema.nullable().optional(),
   deliveryResolution: SessionMessageDeliveryResolutionV1Schema.optional(),
   messageActionReference: MessageActionReferenceV1Schema.optional(),
   accountActor: SessionMessageAccountActorV1Schema.nullable().optional(),

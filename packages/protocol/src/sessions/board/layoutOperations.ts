@@ -67,6 +67,8 @@ export const SessionBoardLayoutOperationV1Schema = lazyZodSchema(() => z.discrim
     op: z.literal('item.place'),
     itemId: SessionSurfaceItemIdSchema,
     tabId: SessionBoardTabIdSchema,
+    /** Only a missing view consumes this explicit title; existing views are never renamed. */
+    tabTitle: z.string().trim().optional(),
     width: SessionBoardItemWidthSchema,
     anchor: SessionBoardItemAnchorV1Schema.optional(),
   }).strict(),
@@ -219,7 +221,13 @@ export function applySessionBoardLayoutOperationV1(
     }
     case 'item.place': {
       const index = tabIndex(operation.tabId);
-      if (index < 0) return INVALID;
+      if (index < 0) {
+        if (operation.tabTitle === undefined) return INVALID;
+        return applySessionBoardItemPlacementV1(layout, { itemId: operation.itemId, placement: {
+          tabId: operation.tabId, tabTitle: operation.tabTitle, width: operation.width,
+          ...(operation.anchor ? { anchor: operation.anchor } : {}),
+        } });
+      }
       const tab = tabs[index] as MutableTab;
       if (tab.items.some((item) => item.itemId === operation.itemId)) return INVALID;
       if (insertAt(tab.items, { itemId: operation.itemId, width: operation.width }, operation.anchor) !== 'inserted') {

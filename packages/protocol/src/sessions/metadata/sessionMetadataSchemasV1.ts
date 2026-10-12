@@ -1,9 +1,11 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { createStoredReadSchema } from '../../json/storedReadSchema.js';
+import { AgentSessionToolPolicyShapeV1 } from '../../runtime/permissionIntentV1.js';
+import { createStoredReadSchema, defineStoredReadProjection } from '../../json/storedReadSchema.js';
 import { NonBlankOpaqueIdentifierSchema, readNonBlankOpaqueIdentifier } from '../../strings/opaqueIdentifier.js';
 import { z } from 'zod';
 import { SessionPermissionApprovalReviewerClaimV1Schema } from '../permissions/v1.js';
 import { SessionForkFilesNotCopiedV1Schema } from '../creation/sessionSpawnNewResultV1.js';
+import { SessionPublisherGenerationV1Schema } from '../control/machineSessionTerminalV1.js';
 import { SessionForkVisualCopyV1Schema, SessionForkVisualsV1Schema } from '../board/forkVisualCopies.js';
 
 import type { AccountEncryptionMode } from '../../features/payload/capabilities/encryptionCapabilities.js';
@@ -58,16 +60,22 @@ import { projectRuntimeDescriptorV1ForPredecessor } from './compat/runtimeDescri
 import { SessionUsageLimitRecoveryV1Schema } from '../state/valueSchemas/usageLimitRecovery.js';
 import { SessionRollbackTargetSchema } from '../rollback.js';
 import { parseVoiceAgentRunMetadataV1 } from '../../voice/voiceAgentRunMetadataV1.js';
+import { VoiceProviderIdSchema } from '../../voice/realtime/providerSettings.js';
 import { AgentSessionStartupInstructionsMarkerV1Schema } from '../../runtime/agentSessionStartupInstructionsV1.js';
 import { ContentPublicKeyFingerprintSchema } from '../../machines/identity/contentPublicKeyFingerprint.js';
 import { SessionWorkspaceLocationV1Schema } from './sessionWorkspaceLocationV1.js';
 import { SessionCreationCorrespondenceV1Schema } from '../creation/sessionCreationCorrespondenceV1.js';
+import { SessionAttestedContextV1Schema } from '../creation/sessionAttestedContextV1.js';
 import { MachinePoolSelectionOriginV1Schema } from '../../machines/pools/v1.js';
 import { SessionDiscussionSelectionSourceV1Schema } from '../discussions/content.js';
 import { SessionActionConfirmationsV1Schema } from './sessionActionConfirmationsV1.js';
 import { SessionRolesV1Schema } from '../../prompts/roles/sessionRolesSnapshot.js';
 import { PluginUiNewSessionSeedOriginV1Schema } from '../../plugins/ui/newSessionSeedOrigin.js';
 import { createSessionTerminalMetadataSchema } from './terminalMetadata.js';
+import { SessionGuardStateV1Schema } from '../../machines/guard/sessionGuardStateV1.js';
+import { SessionMcpSelectionAuthoringV1Schema, SessionMcpSelectionRestartRequiredAuthoringV1Schema } from '../../mcp/servers/sessionSelectionV1.js';
+import { SessionSkillSelectionAuthoringV1Schema } from '../../reach/sessionCapabilitySelectionV1.js';
+import { SessionSkillSelectionRestartRequiredAuthoringV1Schema } from '../../reach/sessionCapabilityMetadataV1.js';
 
 export const SESSION_METADATA_LAYOUT_VERSION_V1 = 1 as const;
 export const SESSION_SHARED_METADATA_VERSION_V1 = 1 as const;
@@ -221,6 +229,7 @@ export type SessionMetadataInactiveModelIntentPatchV1 = z.infer<
 export const SessionMetadataPublisherPreconditionV1Schema = lazyZodSchema(() => z.object({
   machineId: BoundedIdentifierSchema,
   committedFenceMs: TimestampSchema,
+  publisherGeneration: SessionPublisherGenerationV1Schema,
 }).strict());
 export type SessionMetadataPublisherPreconditionV1 = z.infer<
   typeof SessionMetadataPublisherPreconditionV1Schema
@@ -417,6 +426,7 @@ export const SessionSharedMetadataV1Schema = lazyZodSchema(() => z.object({
   publicAgentState: SessionPublicAgentStateV1Schema.optional(),
   actionConfirmationsV1: SessionActionConfirmationsV1Schema.optional(),
   forkVisualsV1: SessionForkVisualsV1Schema.optional(),
+  sessionGuardStateV1: SessionGuardStateV1Schema.optional(),
 }).strict());
 export type SessionSharedMetadataV1 = z.infer<
   typeof SessionSharedMetadataV1Schema
@@ -500,11 +510,12 @@ function expandOwnerLinkedSessionVariant(
 
 function createSessionOwnerLinkedSessionVariantSchema(
   variant: 'externalSessionV1' | 'directSessionV1',
+  purpose: 'input' | 'stored' = 'input',
 ) {
   return z.unknown().transform((value, ctx) => {
     const resolved = resolveLinkedExternalSessionMetadataV1({
       [variant]: expandOwnerLinkedSessionVariant(value, variant),
-    });
+    }, purpose);
     if (!resolved.ok) {
       ctx.addIssue({
         code: 'custom',
@@ -519,7 +530,9 @@ function createSessionOwnerLinkedSessionVariantSchema(
     );
     const projected = variant === 'externalSessionV1'
       ? readRecord(normalized.externalSessionV1)
-      : readRecord(value);
+      : purpose === 'stored'
+        ? projectStoredOwnerDirectSessionLink(resolved.linkedSession)
+        : readRecord(value);
     if (!projected) {
       ctx.addIssue({
         code: 'custom',
@@ -535,6 +548,7 @@ function createSessionOwnerLinkedSessionVariantSchema(
 
     const runtimeDescriptor = normalizeOwnerRuntimeDescriptorV1(
       projected[runtimeKey],
+      purpose,
     );
     if (!runtimeDescriptor) {
       ctx.addIssue({
@@ -557,13 +571,35 @@ const SessionOwnerExternalSessionLinkV1Schema =
 const SessionOwnerDirectSessionLinkV1Schema =
   lazyZodSchema(() => createSessionOwnerLinkedSessionVariantSchema('directSessionV1'));
 
+// Released direct links keep their vocabulary, but only the reconciled known
+// link facts acquire authority. Native descriptor/source data stays owner-owned.
+function projectStoredOwnerDirectSessionLink(
+  link: Parameters<typeof buildLinkedExternalSessionMetadataV1>[1],
+): Record<string, unknown> {
+  const { agentId, runtimeDescriptorV1, qualifiedIdentity: _qualifiedIdentity,
+    linkData: _linkData, ...known } = link;
+  return {
+    ...known,
+    providerId: agentId,
+    ...(runtimeDescriptorV1 === undefined ? {} : {
+      agentRuntimeDescriptorV1: projectRuntimeDescriptorV1ForPredecessor(runtimeDescriptorV1),
+    }),
+  };
+}
+
+defineStoredReadProjection(SessionOwnerExternalSessionLinkV1Schema, () =>
+  createSessionOwnerLinkedSessionVariantSchema('externalSessionV1', 'stored'));
+defineStoredReadProjection(SessionOwnerDirectSessionLinkV1Schema, () =>
+  createSessionOwnerLinkedSessionVariantSchema('directSessionV1', 'stored'));
+
 function createSessionOwnerCompatibilityLinkedSessionVariantSchema(
   variant: 'externalSessionV1' | 'directSessionV1',
+  purpose: 'input' | 'stored' = 'input',
 ) {
   return z.unknown().transform((value, context) => {
     const resolved = resolveLinkedExternalSessionMetadataV1({
       [variant]: expandOwnerLinkedSessionVariant(value, variant),
-    });
+    }, purpose);
     if (!resolved.ok) {
       context.addIssue({
         code: 'custom',
@@ -577,7 +613,9 @@ function createSessionOwnerCompatibilityLinkedSessionVariantSchema(
     );
     const projected = variant === 'externalSessionV1'
       ? normalized.externalSessionV1
-      : value;
+      : purpose === 'stored'
+        ? projectStoredOwnerDirectSessionLink(resolved.linkedSession)
+        : value;
     if (projected === undefined) {
       context.addIssue({
         code: 'custom',
@@ -597,6 +635,11 @@ const SessionOwnerCompatibilityDirectSessionLinkV1Schema =
   lazyZodSchema(() => createSessionOwnerCompatibilityLinkedSessionVariantSchema(
     'directSessionV1',
   ));
+
+defineStoredReadProjection(SessionOwnerCompatibilityExternalSessionLinkV1Schema, () =>
+  createSessionOwnerCompatibilityLinkedSessionVariantSchema('externalSessionV1', 'stored'));
+defineStoredReadProjection(SessionOwnerCompatibilityDirectSessionLinkV1Schema, () =>
+  createSessionOwnerCompatibilityLinkedSessionVariantSchema('directSessionV1', 'stored'));
 
 const SessionOwnerNativeSessionV1Schema = lazyZodSchema(() => z.object({
   runtimeDescriptorV1: SessionOwnerRuntimeDescriptorV1Schema.optional(),
@@ -704,10 +747,10 @@ export type SessionOwnerModeCatalogV2 = z.infer<typeof SessionOwnerModeCatalogV2
 export function readSessionModesMetadata(metadata: Readonly<Record<string, unknown>> | null | undefined): SessionOwnerModeCatalogV2 | null {
   if (!metadata) return null;
   if ('sessionModesV2' in metadata) {
-    const parsed = SessionOwnerModeCatalogV2Schema.safeParse(metadata.sessionModesV2);
+    const parsed = createStoredReadSchema(SessionOwnerModeCatalogV2Schema).safeParse(metadata.sessionModesV2);
     return parsed.success ? parsed.data : null;
   }
-  const parsed = SessionOwnerModeCatalogV1Schema.safeParse(normalizeAgentVocabularyRecord(metadata.sessionModesV1 ?? metadata.acpSessionModesV1, 'provider'));
+  const parsed = createStoredReadSchema(SessionOwnerModeCatalogV1Schema).safeParse(normalizeAgentVocabularyRecord(metadata.sessionModesV1 ?? metadata.acpSessionModesV1, 'provider'));
   return parsed.success ? { ...parsed.data, v: 2 } : null;
 }
 
@@ -930,14 +973,8 @@ const SessionOwnerRollbackRangesV1Schema = lazyZodSchema(() => z.object({
   )).max(20_000),
 }).strict());
 
-const SessionOwnerMcpSelectionV1Schema = lazyZodSchema(() => z.object({
-  v: z.literal(1),
-  managedServersEnabled: z.boolean(),
-  forceIncludeServerIds: z.array(BoundedIdentifierSchema).max(2_048),
-  forceExcludeServerIds: z.array(BoundedIdentifierSchema).max(2_048),
-}).strict());
-
 const SessionOwnerRuntimeV1Schema = lazyZodSchema(() => z.object({
+  ...AgentSessionToolPolicyShapeV1,
   externalSessionOperationV1: ExternalSessionOperationStateV1Schema.optional(),
   terminal: SessionOwnerTerminalV1Schema.optional(),
   tools: z.array(z.string().max(2_000)).max(4_096).optional(),
@@ -988,7 +1025,10 @@ const SessionOwnerRuntimeV1Schema = lazyZodSchema(() => z.object({
   }).strict().optional(),
   agentRuntimeCapabilitiesV1: SessionOwnerAgentRuntimeCapabilitiesV1Schema.optional(),
   agentRuntimeFacetsV1: SessionOwnerAgentRuntimeFacetsV1Schema.optional(),
-  mcpSelectionV1: SessionOwnerMcpSelectionV1Schema.optional(),
+  mcpSelectionV1: SessionMcpSelectionAuthoringV1Schema.optional(),
+  mcpSelectionRestartRequiredV1: SessionMcpSelectionRestartRequiredAuthoringV1Schema.optional(),
+  skillSelectionV1: SessionSkillSelectionAuthoringV1Schema.optional(),
+  skillSelectionRestartRequiredV1: SessionSkillSelectionRestartRequiredAuthoringV1Schema.optional(),
   runtimeActivity: z.union([
     SessionRuntimeActivitySnapshotSchema,
     SessionRuntimeActivityProjectionSchema,
@@ -1283,6 +1323,7 @@ const SessionOwnerResumeHandleV1Schema = lazyZodSchema(() => z.discriminatedUnio
 ]));
 
 const SessionOwnerSystemV1Schema = lazyZodSchema(() => z.object({
+  attestedContext: SessionAttestedContextV1Schema.optional(),
   sessionCreationCorrespondenceV1: SessionCreationCorrespondenceV1Schema.optional(),
   placementOrigin: MachinePoolSelectionOriginV1Schema.optional(),
   systemSessionV1: z.object({
@@ -1319,6 +1360,13 @@ const SessionOwnerSystemV1Schema = lazyZodSchema(() => z.object({
   }).strict().optional(),
   voiceAgentStartupInstructionsV1:
     AgentSessionStartupInstructionsMarkerV1Schema.optional(),
+  voiceProviderConversationsV1: z.object({
+    v: z.literal(1),
+    providers: z.record(VoiceProviderIdSchema, z.object({
+      conversationId: z.string().trim().min(1).max(512),
+      updatedAt: z.number().finite().nonnegative(),
+    }).strict()),
+  }).strict().optional(),
 }).strict());
 
 const SessionOwnerHandoffV1Schema = lazyZodSchema(() => z.object({
@@ -1394,6 +1442,7 @@ const SessionOwnerCompatibilityRuntimeDescriptorV1Schema =
  * incumbent work-state and headline fields remain flat.
  */
 export const SessionOwnerCompatibilityViewV1Schema = lazyZodSchema(() => z.object({
+  sessionGuardStateV1: SessionGuardStateV1Schema.optional(),
   summary: SessionSharedSummaryV1Schema.optional(),
   agentPresentation: SessionSharedAgentPresentationV1Schema.optional(),
   externalSessionOperationPresentationV1:
@@ -1576,14 +1625,14 @@ export function projectSessionMetadataAgentVocabularyWriteCompatibilityV1<T>(
 }
 
 function projectSummary(metadata: UnknownRecord): SessionSharedSummaryV1 | null {
-  const parsed = SessionSharedSummaryV1Schema.safeParse(metadata.summary);
+  const parsed = createStoredReadSchema(SessionSharedSummaryV1Schema).safeParse(metadata.summary);
   return parsed.success ? parsed.data : null;
 }
 
 function projectAgentPresentation(
   metadata: UnknownRecord,
 ): SessionSharedAgentPresentationV1 | null {
-  const explicit = SessionSharedAgentPresentationV1Schema.safeParse(
+  const explicit = createStoredReadSchema(SessionSharedAgentPresentationV1Schema).safeParse(
     metadata.agentPresentation,
   );
   if (explicit.success) return explicit.data;
@@ -1605,7 +1654,7 @@ function projectAgentPresentation(
 }
 
 function projectOperationPresentation(metadata: UnknownRecord) {
-  const ownerState = ExternalSessionOperationStateV1Schema.safeParse(
+  const ownerState = createStoredReadSchema(ExternalSessionOperationStateV1Schema).safeParse(
     metadata[EXTERNAL_SESSION_OPERATION_METADATA_KEY],
   );
   if (ownerState.success) {
@@ -1614,7 +1663,7 @@ function projectOperationPresentation(metadata: UnknownRecord) {
     );
   }
   const presentation =
-    ExternalSessionOperationSharedPresentationV1Schema.safeParse(
+    createStoredReadSchema(ExternalSessionOperationSharedPresentationV1Schema).safeParse(
       metadata[EXTERNAL_SESSION_OPERATION_PRESENTATION_METADATA_KEY],
     );
   return presentation.success ? presentation.data : null;
@@ -1633,7 +1682,7 @@ function projectPublicAgentState(
     const request = readRecord(requestInput);
     if (!request) continue;
     const reviewerClaim = request.status === 'approved'
-      ? SessionPermissionApprovalReviewerClaimV1Schema.safeParse(request.permissionDecisionClaimV1)
+      ? createStoredReadSchema(SessionPermissionApprovalReviewerClaimV1Schema).safeParse(request.permissionDecisionClaimV1)
       : null;
     const parsed = SessionPublicCompletedRequestV1Schema.safeParse({
       tool: request.tool,
@@ -1669,11 +1718,12 @@ export function projectSessionSharedMetadataV1(params: Readonly<{
   const externalSessionOperationPresentationV1 =
     projectOperationPresentation(metadata);
   const publicAgentState = projectPublicAgentState(params.agentState);
-  const actionConfirmationsV1 = SessionActionConfirmationsV1Schema.safeParse(
+  const sessionGuardStateV1 = createStoredReadSchema(SessionGuardStateV1Schema).safeParse(metadata.sessionGuardStateV1);
+  const actionConfirmationsV1 = createStoredReadSchema(SessionActionConfirmationsV1Schema).safeParse(
     metadata.actionConfirmationsV1,
   );
   const fork = readRecord(metadata.forkV1);
-  const forkVisualsV1 = SessionForkVisualsV1Schema.safeParse(
+  const forkVisualsV1 = createStoredReadSchema(SessionForkVisualsV1Schema).safeParse(
     fork?.visualCopies === undefined ? metadata.forkVisualsV1 : { v: 1, copies: fork.visualCopies },
   );
 
@@ -1690,6 +1740,7 @@ export function projectSessionSharedMetadataV1(params: Readonly<{
       ? { actionConfirmationsV1: actionConfirmationsV1.data }
       : {}),
     ...(forkVisualsV1.success ? { forkVisualsV1: forkVisualsV1.data } : {}),
+    ...(sessionGuardStateV1.success ? { sessionGuardStateV1: sessionGuardStateV1.data } : {}),
   });
 }
 
@@ -1737,7 +1788,7 @@ export function projectSessionOwnerCompatibilityViewV1(
               _ownerDirectSessionV1,
               'directSessionV1',
             ) }),
-      });
+      }, 'stored');
   if (linkedSessionResolution && !linkedSessionResolution.ok) {
     throw new Error(
       `Invalid linked-session owner metadata: ${linkedSessionResolution.reason}`,
@@ -1757,6 +1808,7 @@ export function projectSessionOwnerCompatibilityViewV1(
     sessionAgentActivityHeadlineV1, ...privateWork } = ownerMetadata.work ?? {};
 
   const canonical = SessionOwnerCompatibilityViewV1Schema.parse({
+    ...(sharedMetadata.sessionGuardStateV1 ? { sessionGuardStateV1: sharedMetadata.sessionGuardStateV1 } : {}),
     ...(sharedMetadata.summary
       ? { summary: sharedMetadata.summary }
       : {}),
@@ -1813,6 +1865,7 @@ export function projectSessionOwnerCompatibilityViewV1(
 const SHARED_ONLY_METADATA_KEYS = new Set([
   'summary',
   'agentPresentation',
+  'sessionGuardStateV1',
   EXTERNAL_SESSION_OPERATION_PRESENTATION_METADATA_KEY,
   'actionConfirmationsV1',
 ]);
@@ -1871,6 +1924,8 @@ const RELEASED_NATIVE_SESSION_COMPATIBILITY_KEYS = [
 ] as const;
 
 const RUNTIME_OWNER_KEYS = [
+  'allowedTools',
+  'unlistedTools',
   EXTERNAL_SESSION_OPERATION_METADATA_KEY,
   'terminal',
   'tools',
@@ -1917,6 +1972,9 @@ const RUNTIME_OWNER_KEYS = [
   'agentRuntimeCapabilitiesV1',
   'agentRuntimeFacetsV1',
   'mcpSelectionV1',
+  'mcpSelectionRestartRequiredV1',
+  'skillSelectionV1',
+  'skillSelectionRestartRequiredV1',
 ] as const;
 const CONNECTED_SERVICE_OWNER_KEYS = [
   'connectedServices',
@@ -1947,6 +2005,7 @@ const WORK_OWNER_KEYS = [
   'codexGoalV1',
 ] as const;
 const SYSTEM_OWNER_KEYS = [
+  'attestedContext',
   'sessionCreationCorrespondenceV1',
   'placementOrigin',
   'systemSessionV1',
@@ -1955,6 +2014,7 @@ const SYSTEM_OWNER_KEYS = [
   'voiceConversationScopeV1',
   'voiceConversationBindingV1',
   'voiceAgentStartupInstructionsV1',
+  'voiceProviderConversationsV1',
 ] as const;
 const HANDOFF_OWNER_KEYS = ['handoffV1', 'acpTransportV1'] as const;
 const CURSOR_OWNER_KEYS = [
@@ -1985,15 +2045,19 @@ function hasOnlyKeys(record: UnknownRecord, allowed: ReadonlySet<string>): boole
 
 function normalizeOwnerRuntimeDescriptorV1(
   input: unknown,
+  purpose: 'input' | 'stored' = 'input',
 ): SessionOwnerRuntimeDescriptorV1 | null {
   const descriptor = readRuntimeDescriptorV1(input);
   if (!descriptor) return null;
-  const parsed = SessionOwnerRuntimeDescriptorV1Schema.safeParse(descriptor);
+  const parsed = (purpose === 'stored'
+    ? createStoredReadSchema(SessionOwnerRuntimeDescriptorV1Schema)
+    : SessionOwnerRuntimeDescriptorV1Schema).safeParse(descriptor);
   return parsed.success ? parsed.data : null;
 }
 
 function normalizeLinkedSessionVariants(
   metadata: UnknownRecord,
+  purpose: 'input' | 'stored' = 'input',
 ): Readonly<{
   externalSessionV1?: z.infer<typeof SessionOwnerExternalSessionLinkV1Schema>;
 }> | null {
@@ -2006,13 +2070,15 @@ function normalizeLinkedSessionVariants(
   // cannot be projected into an owner envelope. Current owner writes always
   // project through externalSessionV1; directSessionV1 is ingress only for
   // released persisted rows.
-  const resolved = resolveLinkedExternalSessionMetadataV1(metadata);
+  const resolved = resolveLinkedExternalSessionMetadataV1(metadata, purpose);
   if (!resolved.ok) return null;
   const normalized = buildLinkedExternalSessionMetadataV1(
     {},
     resolved.linkedSession,
   );
-  const externalSessionV1 = SessionOwnerExternalSessionLinkV1Schema.safeParse(
+  const externalSessionV1 = (purpose === 'stored'
+    ? createStoredReadSchema(SessionOwnerExternalSessionLinkV1Schema)
+    : SessionOwnerExternalSessionLinkV1Schema).safeParse(
     normalized.externalSessionV1,
   );
   if (!externalSessionV1.success) return null;
@@ -2146,7 +2212,8 @@ function buildReleasedCodexRuntimeDescriptorV1(
 
 export function createSessionOwnerMetadataV1(params: Readonly<{
   metadata: unknown;
-}>): CreateSessionOwnerMetadataV1Result {
+}>, purpose: 'input' | 'stored' = 'input'): CreateSessionOwnerMetadataV1Result {
+  const storedRead = purpose === 'stored';
   const metadata = readRecord(params.metadata);
   if (!metadata) {
     return {
@@ -2176,7 +2243,7 @@ export function createSessionOwnerMetadataV1(params: Readonly<{
     'directSessionAttentionV1',
     'work',
   ]);
-  const unsupportedFields = Object.keys(metadata)
+  const unsupportedFields = storedRead ? [] : Object.keys(metadata)
     .filter((key) => !supportedKeys.has(key));
 
   const hasReleasedCodexBackendMode = Object.hasOwn(metadata, 'codexBackendMode');
@@ -2191,7 +2258,7 @@ export function createSessionOwnerMetadataV1(params: Readonly<{
     ?? undefined;
   const runtimeDescriptorV1 = runtimeDescriptorInput === undefined
     ? undefined
-    : normalizeOwnerRuntimeDescriptorV1(runtimeDescriptorInput);
+    : normalizeOwnerRuntimeDescriptorV1(runtimeDescriptorInput, purpose);
   if (runtimeDescriptorInput !== undefined && !runtimeDescriptorV1) {
     unsupportedFields.push(
       metadata.runtimeDescriptorV1 !== undefined
@@ -2212,7 +2279,7 @@ export function createSessionOwnerMetadataV1(params: Readonly<{
   ) {
     unsupportedFields.push('codexBackendMode');
   }
-  const linkedSessionVariants = normalizeLinkedSessionVariants(metadata);
+  const linkedSessionVariants = normalizeLinkedSessionVariants(metadata, purpose);
   if (!linkedSessionVariants) {
     if (metadata.externalSessionV1 !== undefined) {
       unsupportedFields.push('externalSessionV1');
@@ -2292,7 +2359,7 @@ export function createSessionOwnerMetadataV1(params: Readonly<{
   if (metadata.externalHistoryImportV1 !== undefined) {
     const resolution = resolveExternalHistoryImportV1FromMetadata({
       externalHistoryImportV1: metadata.externalHistoryImportV1,
-    });
+    }, purpose);
     if (resolution.state === 'valid') {
       historyInput.externalHistoryImportV1 = resolution.historyImport;
     } else {
@@ -2347,7 +2414,8 @@ export function createSessionOwnerMetadataV1(params: Readonly<{
   ]);
   if (Object.hasOwn(metadata, 'work')) {
     try {
-      const roleWork = SessionOwnerPrivateWorkV1Schema.safeParse(migrateRetainedSessionWorkContextV1(metadata.work));
+      const roleWork = (storedRead ? createStoredReadSchema(SessionOwnerPrivateWorkV1Schema) : SessionOwnerPrivateWorkV1Schema)
+        .safeParse(migrateRetainedSessionWorkContextV1(metadata.work));
       if (roleWork.success) {
         Object.assign(workInput, roleWork.data);
       } else {
@@ -2363,7 +2431,7 @@ export function createSessionOwnerMetadataV1(params: Readonly<{
     if (metadata.sessionWorkStateV1 !== undefined) {
       // The canonical state already owns the same facts; remove the legacy alias.
     } else {
-      const legacyGoal = z.object({
+      const legacyGoalSchema = z.object({
         objective: z.string().trim().min(1).max(4_000).optional(),
         title: z.string().trim().min(1).max(4_000).optional(),
         status: z.enum([
@@ -2388,7 +2456,8 @@ export function createSessionOwnerMetadataV1(params: Readonly<{
         tokenBudget: z.number().finite().positive().nullable().optional(),
         tokensUsed: z.number().int().nonnegative().optional(),
         timeUsedSeconds: z.number().finite().nonnegative().optional(),
-      }).strict().safeParse(legacyGoalInput);
+      }).strict();
+      const legacyGoal = (storedRead ? createStoredReadSchema(legacyGoalSchema) : legacyGoalSchema).safeParse(legacyGoalInput);
       const title = legacyGoal.success
         ? legacyGoal.data.objective ?? legacyGoal.data.title
         : undefined;
@@ -2525,7 +2594,7 @@ export function createSessionOwnerMetadataV1(params: Readonly<{
   };
   for (const [category, schema, input] of categoryInputs) {
     if (Object.keys(input).length === 0) continue;
-    const parsed = schema.safeParse(input);
+    const parsed = (storedRead ? createStoredReadSchema(schema) : schema).safeParse(input);
     if (!parsed.success) {
       unsupportedFields.push(
         ...parsed.error.issues.map((issue) =>

@@ -1,5 +1,6 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
 import { z } from 'zod';
+import { SessionMetadataPublisherPreconditionV1Schema } from '../../metadata/sessionMetadataSchemasV1.js';
 
 import {
   SessionRuntimeActivityProjectionSchema,
@@ -73,11 +74,7 @@ export const SessionPublisherAuthorityCheckAckSchema = lazyZodSchema(() => z.uni
   z.object({
     status: z.literal('current'),
     sessionId: z.string().trim().min(1),
-    publisherPrecondition: z.object({
-      machineId: z.string().trim().min(1).max(256),
-      committedFenceMs: z.number().int().nonnegative()
-        .max(Number.MAX_SAFE_INTEGER),
-    }).strict(),
+    publisherPrecondition: SessionMetadataPublisherPreconditionV1Schema,
   }).strict(),
   z.object({
     status: z.literal('superseded'),

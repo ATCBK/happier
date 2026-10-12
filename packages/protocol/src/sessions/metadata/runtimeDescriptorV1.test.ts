@@ -8,8 +8,31 @@ import {
   readRuntimeDescriptorV1ForAgent,
   writeRuntimeDescriptorV1ForPersistence,
 } from './runtimeDescriptorV1.js';
+import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 describe('runtimeDescriptorV1 aliases', () => {
+  it('preserves the explicitly open native recovery bags inside derived stored parents', () => {
+    const descriptor = { v: 1, agentId: 'codex', nativeEnvelope: { keep: true },
+      agent: { backendMode: 'appServer', providerSessionId: 'thread', opaqueNativeState: { keep: true },
+        agentExtra: { owner: 'codex', schemaId: 'native', v: 1, arbitraryNativeState: { keep: true } } } };
+    const stored = createStoredReadSchema(RuntimeDescriptorV1Schema);
+    expect(stored.parse(descriptor)).toEqual(descriptor);
+    expect(stored.safeParse({ ...descriptor, v: 2 }).success).toBe(false);
+    expect(stored.safeParse({ ...descriptor, agent: { ...descriptor.agent,
+      agentExtra: { ...descriptor.agent.agentExtra, v: 0 } } }).success).toBe(false);
+    expect(runtimeDescriptorV1.PortableRuntimeDescriptorV1Schema.safeParse(descriptor).success).toBe(false);
+  });
+
+  it('normalizes retained contribution identity annotations without losing opaque Agent recovery data', () => {
+    const identity = { pluginId: 'happier.agent.ohmypi', localId: 'ohmypi' };
+    const retained = { v: 1, agentIdentity: { ...identity, retired: true },
+      agent: { providerSessionId: 'thread', opaqueNativeState: { retired: true } } };
+    const expected = { v: 1, agentId: 'ohMyPi', agent: retained.agent };
+    expect(readRuntimeDescriptorV1ForAgent({ ...retained, agentIdentity: identity }, 'ohMyPi')).toEqual(expected);
+    expect(readRuntimeDescriptorV1ForAgent(retained, 'ohMyPi')).toEqual(expected);
+    expect(readRuntimeDescriptorV1ForAgent({ ...retained,
+      agentIdentity: { ...retained.agentIdentity, localId: 7 } }, 'ohMyPi')).toBeNull();
+  });
   it('keeps canonical descriptor custody generic instead of dispatching bundled readers', () => {
     const source = readFileSync(new URL('./runtimeDescriptorV1.ts', import.meta.url), 'utf8');
     const indexSource = readFileSync(new URL('../../index.ts', import.meta.url), 'utf8');

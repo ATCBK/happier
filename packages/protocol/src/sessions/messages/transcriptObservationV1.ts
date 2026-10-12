@@ -1,5 +1,6 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod';
+import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 import { PendingLocalIdSchema } from '../pending/pendingLocalId.js';
 import { SessionMessageRoleSchema } from './sessionMessageRole.js';
@@ -26,14 +27,54 @@ export const SessionTranscriptSurfaceItemReferenceV1Schema = lazyZodSchema(() =>
 }).strict());
 export type SessionTranscriptSurfaceItemReferenceV1 = z.infer<typeof SessionTranscriptSurfaceItemReferenceV1Schema>;
 
+/** Current publishers retain the exact immutable acknowledgement separately from the owned grant. */
+export const SessionTranscriptSurfaceItemReferenceMemberV1Schema = lazyZodSchema(() =>
+  SessionTranscriptSurfaceItemReferenceV1Schema.extend({
+    sourceItemId: SessionSurfaceItemIdSchema,
+    sourceItemRevision: SessionSystemRecordRevisionSchema.nullable(),
+  }));
+export type SessionTranscriptSurfaceItemReferenceMemberV1 = z.infer<typeof SessionTranscriptSurfaceItemReferenceMemberV1Schema>;
+
+/** Originless singleton members are a development-seam read adapter, not invented origin proof. */
+export const SessionTranscriptSurfaceItemReferenceReadV1Schema = lazyZodSchema(() => z.union([
+  SessionTranscriptSurfaceItemReferenceMemberV1Schema, SessionTranscriptSurfaceItemReferenceV1Schema,
+]));
+export type SessionTranscriptSurfaceItemReferenceReadV1 = z.infer<typeof SessionTranscriptSurfaceItemReferenceReadV1Schema>;
+
+export const SessionTranscriptSurfaceItemReferencesV1Schema = lazyZodSchema(() => z.object({
+  v: z.literal(1), references: z.array(SessionTranscriptSurfaceItemReferenceReadV1Schema).min(1),
+}).strict());
+export type SessionTranscriptSurfaceItemReferencesV1 = z.infer<typeof SessionTranscriptSurfaceItemReferencesV1Schema>;
+
+/** The sole accepted-shape adapter: all new stored/wire writes carry one collection per native row. */
+export const SessionTranscriptSurfaceItemReferenceInputV1Schema = lazyZodSchema(() => z.union([
+  SessionTranscriptSurfaceItemReferencesV1Schema, SessionTranscriptSurfaceItemReferenceV1Schema,
+]).transform(value => 'references' in value ? value : { v: 1 as const, references: [value] }));
+export type SessionTranscriptSurfaceItemReferenceInputV1 = z.input<typeof SessionTranscriptSurfaceItemReferenceInputV1Schema>;
+
+export function readSessionTranscriptSurfaceItemReferencesV1(value: unknown): readonly SessionTranscriptSurfaceItemReferenceReadV1[] | null {
+  const parsed = createStoredReadSchema(SessionTranscriptSurfaceItemReferenceInputV1Schema).safeParse(value);
+  return parsed.success ? parsed.data.references : null;
+}
+
+/** Producer aggregation identity includes revision: two acknowledgements may share one copied child. */
+export function getSessionTranscriptSurfaceItemReferenceSourceKeyV1(reference: Pick<SessionTranscriptSurfaceItemReferenceMemberV1,
+  'sourceAddress' | 'sourceItemId' | 'sourceItemRevision'>): string {
+  return JSON.stringify([reference.sourceAddress.serverId, reference.sourceAddress.sessionId,
+    reference.sourceItemId, reference.sourceItemRevision]);
+}
+
+/** Existing per-request boundary shared by the v2 and v3 historical import epochs. */
+export const SESSION_HISTORICAL_TRANSCRIPT_IMPORT_MAX_ITEMS = 500;
+
 /** The v3 operation epoch preserves acknowledged child identities in historical imports. */
 export const SessionHistoricalTranscriptImportV3Schema = lazyZodSchema(() => z.object({
   items: z.array(z.object({
     localId: z.string().trim().min(1),
     content: SessionStoredMessageContentSchema,
     messageRole: SessionMessageRoleSchema.optional(),
-    surfaceItemReference: SessionTranscriptSurfaceItemReferenceV1Schema.optional(),
-  }).strict()).min(1).max(500),
+    surfaceItemReference: SessionTranscriptSurfaceItemReferenceInputV1Schema.optional(),
+  }).strict()).min(1).max(SESSION_HISTORICAL_TRANSCRIPT_IMPORT_MAX_ITEMS),
 }).strict());
 
 export const SessionTranscriptObservationProvenanceV1Schema = lazyZodSchema(() => z.object({
@@ -45,8 +86,11 @@ export type SessionTranscriptObservationProvenanceV1 = z.infer<typeof SessionTra
 
 export function isRecoveredHistoryTranscriptObservationProvenance(
   value: unknown,
+  purpose: 'input' | 'stored' = 'input',
 ): value is SessionTranscriptObservationProvenanceV1 & { source: 'history' } {
-  const provenance = SessionTranscriptObservationProvenanceV1Schema.safeParse(value);
+  const provenance = (purpose === 'stored'
+    ? createStoredReadSchema(SessionTranscriptObservationProvenanceV1Schema)
+    : SessionTranscriptObservationProvenanceV1Schema).safeParse(value);
   return provenance.success && provenance.data.source === 'history';
 }
 
@@ -78,7 +122,7 @@ export const SessionTranscriptObservationV1Schema = lazyZodSchema(() =>
 
 export const SessionTranscriptObservationV2Schema = lazyZodSchema(() =>
   SessionTranscriptObservationBodyV1Schema.extend({ v: z.literal(2),
-    surfaceItemReference: SessionTranscriptSurfaceItemReferenceV1Schema.optional(),
+    surfaceItemReference: SessionTranscriptSurfaceItemReferenceInputV1Schema.optional(),
   }).superRefine(refineObservationTimestamps));
 
 export const SessionTranscriptObservationInputSchema = lazyZodSchema(() =>

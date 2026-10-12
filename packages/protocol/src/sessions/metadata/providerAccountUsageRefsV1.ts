@@ -1,5 +1,6 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod';
+import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 import {
   ProviderAccountUsageRecordIdSchema,
@@ -72,7 +73,7 @@ export function writeProviderAccountUsageRecordIdToMetadata(
     parsedRecordId.data,
   ]);
 
-  const previous = ProviderAccountUsageRefsV1Schema.safeParse(
+  const previous = createStoredReadSchema(ProviderAccountUsageRefsV1Schema).safeParse(
     base[PROVIDER_ACCOUNT_USAGE_REFS_METADATA_KEY],
   );
   const unchangedIds = previous.success

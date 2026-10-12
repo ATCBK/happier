@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   agentEventAttentionImpact,
+  isConnectedServiceRuntimeAuthRecoveryCancellation,
   agentEventLocalIdAttentionImpact,
   buildAgentEventLocalId,
   TranscriptRawAgentEventV1Schema,
@@ -9,6 +10,28 @@ import {
 } from './transcriptRawRecordV1.js';
 
 describe('TranscriptRawRecordV1Schema', () => {
+  it('projects retired typed event fields while preserving opaque native-provider records', () => {
+    const update = { v: 1, workerKind: 'session', workerId: 'worker', ownerState: 'settled', wake: 'finished',
+      headline: 'Worker finished', canInspect: true };
+    const raw = { role: 'agent', content: { type: 'event', id: 'event-1',
+      data: { type: 'worker-update', update: { ...update, retired: true }, retired: true } } };
+    expect(TranscriptRawRecordV1Schema.parse(raw)).toEqual({ role: 'agent', content: { type: 'event', id: 'event-1',
+      data: { type: 'worker-update', update } } });
+    expect(TranscriptRawAgentEventV1Schema.safeParse(raw.content.data).success).toBe(false);
+    const native = { role: 'agent', retained: true, content: { type: 'output', retained: true,
+      data: { type: 'opaque_future_type', providerPayload: { retired: true } } } };
+    expect(TranscriptRawRecordV1Schema.parse(native)).toEqual({ ...native,
+      content: { type: native.content.type, data: native.content.data } });
+    expect(TranscriptRawRecordV1Schema.safeParse({ ...raw, content: { ...raw.content,
+      data: { type: 'worker-update', update: { ...update, canInspect: 'true' } } } }).success).toBe(false);
+  });
+  it('preserves explicit cancellation separately from non-retrying recovery decisions in the released carrier', () => {
+    expect(isConnectedServiceRuntimeAuthRecoveryCancellation(null)).toBe(true);
+    expect(isConnectedServiceRuntimeAuthRecoveryCancellation('usage_limit_recovery_cancelled')).toBe(true);
+    expect(isConnectedServiceRuntimeAuthRecoveryCancellation('runtime_auth_recovery_cancelled')).toBe(true);
+    expect(isConnectedServiceRuntimeAuthRecoveryCancellation('switch_reason_disabled')).toBe(false);
+    expect(isConnectedServiceRuntimeAuthRecoveryCancellation('degraded_recovery_attempts_exhausted')).toBe(false);
+  });
   it('accepts strict host WorkerUpdate and worker-report events without user input', () => {
     expect(TranscriptRawAgentEventV1Schema.safeParse({ type: 'worker-update', update: {
       v: 1, workerKind: 'session', workerId: 'worker', ownerState: 'settled', wake: 'finished',

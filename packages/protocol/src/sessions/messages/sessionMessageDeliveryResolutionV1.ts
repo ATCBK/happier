@@ -1,5 +1,6 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod';
+import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 /** Witnessed host admission; requested delivery intent is not accepted delivery evidence. */
 export const SessionMessageAcceptedDeliveryFactsV1Schema = lazyZodSchema(() => z.object({
@@ -10,6 +11,7 @@ export const SessionMessageAcceptedDeliveryFactsV1Schema = lazyZodSchema(() => z
     turnId: z.string().refine((value) => value.trim().length > 0),
   }).strict(),
 }).strict());
+export const SessionMessageAcceptedDeliveryFactsV1StoredSchema = createStoredReadSchema(SessionMessageAcceptedDeliveryFactsV1Schema);
 
 export const SessionMessageAcceptedDeliveryContentV1Schema = lazyZodSchema(() => z.discriminatedUnion('t', [
   z.object({ t: z.literal('plain'), v: SessionMessageAcceptedDeliveryFactsV1Schema }).strict(),
@@ -29,5 +31,12 @@ export type SessionMessageDeliveryResolutionV1 = z.infer<typeof SessionMessageDe
 
 export function parseSessionMessageDeliveryResolutionV1(value: unknown): SessionMessageDeliveryResolutionV1 | null {
   const parsed = SessionMessageDeliveryResolutionV1Schema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
+
+const storedSessionMessageDeliveryResolutionV1Schema = createStoredReadSchema(SessionMessageDeliveryResolutionV1Schema);
+
+export function readStoredSessionMessageDeliveryResolutionV1(value: unknown): SessionMessageDeliveryResolutionV1 | null {
+  const parsed = storedSessionMessageDeliveryResolutionV1Schema.safeParse(value);
   return parsed.success ? parsed.data : null;
 }

@@ -53,6 +53,7 @@ describe('Session Runtime Activity', () => {
       publisherPrecondition: {
         machineId: 'machine-1',
         committedFenceMs: 1_000,
+        publisherGeneration: '1',
       },
     })).toEqual({
       status: 'current',
@@ -60,6 +61,7 @@ describe('Session Runtime Activity', () => {
       publisherPrecondition: {
         machineId: 'machine-1',
         committedFenceMs: 1_000,
+        publisherGeneration: '1',
       },
     });
     expect(SessionPublisherAuthorityCheckAckSchema.parse({
@@ -72,6 +74,7 @@ describe('Session Runtime Activity', () => {
       publisherPrecondition: {
         machineId: 'machine-1',
         committedFenceMs: 1_000,
+        publisherGeneration: '1',
       },
       permit: 'reusable',
     }).success).toBe(false);

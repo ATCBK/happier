@@ -22,12 +22,13 @@ export const SessionModelMutationReversalV1Schema = lazyZodSchema(() => z.discri
 ]));
 export type SessionModelMutationReversalV1 = z.infer<typeof SessionModelMutationReversalV1Schema>;
 
-export const SessionModelTransitionRequestV1Schema = lazyZodSchema(() => z.object({
+export const SessionModelTransitionRequestV1Schema = lazyZodSchema(() => z.union([z.object({
   v: z.literal(1),
   selection: ProviderBoundModelRefSchema,
+  applyTiming: z.enum(['immediate', 'next_prompt']).optional(),
   captureBefore: z.boolean().optional(),
   expected: SessionModelMutationExpectedV1Schema.optional(),
-}).strict());
+}).strict(), z.object({ v: z.literal(1), unarm: z.literal(true) }).strict()]));
 export type SessionModelTransitionRequestV1 = z.infer<
   typeof SessionModelTransitionRequestV1Schema
 >;
@@ -37,6 +38,10 @@ const SessionModelTransitionSuccessV1Schema = lazyZodSchema(() => z.object({
   status: z.enum(['applied', 'already_active']),
   activeSelection: ProviderBoundModelRefSchema,
   reversal: SessionModelMutationReversalV1Schema.optional(),
+}).strict());
+const SessionModelTransitionArmedV1Schema = lazyZodSchema(() => z.object({
+  ok: z.literal(true), status: z.literal('armed'), activeSelection: ProviderBoundModelRefSchema,
+  requestedSelection: ProviderBoundModelRefSchema,
 }).strict());
 
 const SessionModelTransitionKnownActiveFailureV1Schema = lazyZodSchema(() => z.object({
@@ -71,6 +76,7 @@ const SessionModelTransitionOwnerUnavailableV1Schema = lazyZodSchema(() => z.obj
 
 export const SessionModelTransitionResultV1Schema = lazyZodSchema(() => z.union([
   SessionModelTransitionSuccessV1Schema,
+  SessionModelTransitionArmedV1Schema,
   SessionModelTransitionKnownActiveFailureV1Schema,
   SessionModelTransitionReconciliationRequiredV1Schema,
   SessionModelTransitionOwnerUnavailableV1Schema,

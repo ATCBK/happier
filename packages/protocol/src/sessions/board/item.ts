@@ -60,9 +60,9 @@ export const SessionSurfaceItemV1Schema = lazyZodSchema(() => z.object({
 }));
 export type SessionSurfaceItemV1 = Readonly<z.infer<typeof SessionSurfaceItemV1Schema>>;
 /** Persisted content drops additive fields before the strict Action/result owners consume it. */
-defineStoredReadProjection(SessionSurfaceItemV1Schema, () => createStoredReadSchema(SessionSurfaceItemV1Schema.clone())
+export const SessionSurfaceItemV1StoredSchema = lazyZodSchema(() => createStoredReadSchema(SessionSurfaceItemV1Schema.clone())
   .transform(item => ({ ...item, destination: item.destination ?? 'board' as const })));
-export const SessionSurfaceItemV1StoredSchema = createStoredReadSchema(SessionSurfaceItemV1Schema);
+defineStoredReadProjection(SessionSurfaceItemV1Schema, () => SessionSurfaceItemV1StoredSchema);
 
 /** A Board widget's instance identity is its existing canonical record identity. */
 export function isSessionSurfaceItemIdentityCorrespondingV1(itemId: string, item: SessionSurfaceItemV1): boolean {

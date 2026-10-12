@@ -1,4 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
+import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 import { z } from 'zod';
 
 import { AccountDisplayProfileV1Schema } from '../../account/accountDisplayProfileV1.js';
@@ -46,10 +47,11 @@ export function parseSessionMessageAccountActorV1(
 export function deriveSessionMessageAuthorAccountIdV1(params: Readonly<{
   messageRole: unknown;
   inputAdmissionReceipt: unknown;
-}>): string | null {
+}>, mode: 'input' | 'stored' = 'input'): string | null {
   const role = SessionMessageRoleSchema.safeParse(params.messageRole);
   if (!role.success || role.data !== 'user') return null;
-  const receipt = SessionInputAdmissionReceiptV1Schema.safeParse(params.inputAdmissionReceipt);
+  const receipt = (mode === 'stored' ? createStoredReadSchema(SessionInputAdmissionReceiptV1Schema)
+    : SessionInputAdmissionReceiptV1Schema).safeParse(params.inputAdmissionReceipt);
   if (!receipt.success || receipt.data.issuer !== 'authenticatedAccount') return null;
   return receipt.data.actorAccountId;
 }

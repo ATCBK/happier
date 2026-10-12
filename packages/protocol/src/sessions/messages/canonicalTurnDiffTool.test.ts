@@ -63,8 +63,9 @@ describe('canonical turn diff transcript helpers', () => {
         source: 'scm_checkpoint',
         confidence: 'exact',
         turnStatus: 'completed',
-        seqRange: { startSeqInclusive: 5, endSeqInclusive: 5 },
+        seqRange: { startSeqInclusive: 5, endSeqInclusive: 5, retired: true },
         repositoryCheckpoint: {
+          retired: true,
           version: 1,
           scopeId: 'session-checkpoint-1:/repo',
           startRef: 'refs/happier/checkpoints/scope/turn-start/turn-checkpoint-1',
@@ -75,6 +76,7 @@ describe('canonical turn diff transcript helpers', () => {
           receipts: [
             {
               id: 'checkpoint.diff_computed',
+              retired: true,
               ref: 'refs/happier/checkpoints/scope/turn-final/turn-checkpoint-1',
             },
           ],
@@ -302,7 +304,7 @@ describe('canonical turn diff transcript helpers', () => {
         confidence: 'best_effort',
         provider: 'scm:git',
         truncated: true,
-        stats: { unifiedDiffBytes: 900_000, addedLines: 4000, removedLines: 3000 },
+        stats: { unifiedDiffBytes: 900_000, addedLines: 4000, removedLines: 3000, retired: true },
       }],
     };
     const metadata = readTurnChangeToolMetadata(input);

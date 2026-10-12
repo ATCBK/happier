@@ -1,5 +1,7 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod';
+import { defineStoredReadProjection } from '../../json/storedReadSchema.js';
+import { createProtocolStoredReadSchema } from '../../plugins/actions/protocolComposableSchema.js';
 import {
   PluginContributionIdentityV1Schema,
   resolveAgentIdFromPersistedContributionIdentityV1,
@@ -63,7 +65,7 @@ function normalizeDeployedRuntimeDescriptorV1(value: unknown): unknown {
     ? record.agentId.trim()
     : null;
   const agentIdentity = hasAgentIdentity
-    ? PluginContributionIdentityV1Schema.safeParse(record.agentIdentity)
+    ? createProtocolStoredReadSchema(PluginContributionIdentityV1Schema).safeParse(record.agentIdentity)
     : null;
   if (hasAgentIdentity && !agentIdentity?.success) return undefined;
   const identityAgentId = agentIdentity?.success
@@ -113,7 +115,7 @@ function createRuntimeDescriptorAgentExtraV1Schema(zod: typeof z) {
 }
 
 export function createRuntimeDescriptorV1Schema(zod: typeof z) {
-  return zod.preprocess(
+  const schema = zod.preprocess(
     normalizeDeployedRuntimeDescriptorV1,
     zod.object({
       v: zod.literal(1),
@@ -121,6 +123,9 @@ export function createRuntimeDescriptorV1Schema(zod: typeof z) {
       agent: createRuntimeDescriptorAgentSchema(zod),
     }).passthrough(),
   );
+  // Agent recovery state is explicitly native JSON, not unknown typed fields.
+  // The same owner validates identity/aliases while preserving these bags.
+  return defineStoredReadProjection(schema, () => schema);
 }
 
 export const RuntimeDescriptorV1Schema = createRuntimeDescriptorV1Schema(z);

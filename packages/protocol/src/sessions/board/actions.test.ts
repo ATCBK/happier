@@ -28,6 +28,7 @@ import {
   parseSessionBoardActionPortResultV1,
   projectSessionBoardAdapterFailureV1,
   projectSessionBoardGetResultV1,
+  SessionSystemRecordCreatorV1Schema,
 } from './actions.js';
 import { SessionBoardMutationV1Schema } from './mutations.js';
 import {
@@ -45,9 +46,42 @@ const item = {
 } as const;
 
 describe('Session Board Action contracts', () => {
+  it('accepts only exact cross-Session create sources as an alternative to authored content', () => {
+    const copy = { sessionId: 'destination-session', itemId: 'copy', expectedItemRevision: null,
+      copySource: { serverId: 'home', sessionId: 'source-session', itemId: 'source', expectedItemRevision: revision } };
+    expect(SessionBoardItemUpsertInputV1Schema.safeParse(copy).success).toBe(true);
+    const cli = getActionSpec('session.board.item.upsert').cli!;
+    const friendly = cli.inputSchema!.safeParse({ ...copy, expectedItemRevision: undefined });
+    expect(friendly.success).toBe(true);
+    if (friendly.success) {
+      const bound = cli.bindInput!(friendly.data, { actionId: 'session.board.item.upsert', invocationId: 'copy-cli' });
+      expect(bound).toMatchObject({ copySource: copy.copySource });
+      expect(bound).not.toHaveProperty('item');
+    }
+    expect(SessionBoardItemUpsertInputV1Schema.safeParse({ ...copy, item }).success).toBe(false);
+    expect(SessionBoardItemUpsertInputV1Schema.safeParse({ ...copy, expectedItemRevision: revision }).success).toBe(false);
+    expect(SessionBoardItemUpsertInputV1Schema.safeParse({ ...copy, copySource: { ...copy.copySource, sessionId: 'destination-session' } }).success).toBe(false);
+    expect(SessionBoardItemUpsertInputV1Schema.safeParse({ ...copy, copySource: { ...copy.copySource, url: 'https://example.com/visual' } }).success).toBe(false);
+  });
+  it('projects server-proved creator identity separately from item content and treats historical records as unknown', () => {
+    const projection = projectSessionBoardGetResultV1({ serverId: 'home', sessionId: 'session',
+      capabilities: { readTranscript: true, editSessionRecords: true }, layout: null, requestedItemIds: ['known', 'old'],
+      entries: [
+        { status: 'ready', itemId: 'known', revision, item, creator: { kind: 'session', sessionId: 'session' } },
+        { status: 'ready', itemId: 'old', revision, item },
+      ], incomplete: false, page: { cursor: null, hasNext: false },
+    });
+    expect(projection.items).toMatchObject([
+      { itemId: 'known', creator: { kind: 'session', sessionId: 'session' } },
+      { itemId: 'old', creator: { kind: 'unknown' } },
+    ]);
+    expect(SessionSystemRecordCreatorV1Schema.safeParse({ kind: 'session', sessionId: ' padded ' }).success).toBe(false);
+  });
   it('defaults visual creation to transcript and requires placement only for explicit Board destinations', () => {
     const create = { itemId: 'note', expectedItemRevision: null, item };
     expect(SessionBoardItemUpsertInputV1Schema.parse(create)).toMatchObject({ destination: 'transcript' });
+    const update = { itemId: 'note', expectedItemRevision: revision, item };
+    expect(SessionBoardItemUpsertInputV1Schema.parse(update)).toEqual(update);
     expect(SessionBoardItemUpsertInputV1Schema.safeParse({ ...create, destination: 'transcript', placement: { width: 'wide' } }).success).toBe(false);
     for (const destination of ['board', 'both']) {
       expect(SessionBoardItemUpsertInputV1Schema.safeParse({ ...create, destination }).success).toBe(false);
@@ -738,6 +772,53 @@ describe('Session Board Action contracts', () => {
     expect(parseSessionBoardActionPortResultV1('session.board.item.upsert', intent, failure, {
       expectedServerId: 'other-home', expectedSessionId: 'session-1',
     }).success).toBe(false);
+
+    const reviewedVisual = {
+      networkSetting: null, recordRevision: null, creator: { kind: 'unknown' },
+      previousCapabilitiesDigest: null, previousExecutableFingerprint: null,
+    } as const;
+    const reviewedFailure = createSessionBoardOutcomeUnknownFailureV1({
+      ...failure.details.recovery, intent: { ...intent, reviewedVisual },
+    });
+    const binding = { expectedServerId: 'home-1', expectedSessionId: 'session-1' };
+    const parsedReviewed = parseSessionBoardActionExecuteOutcomeV1('session.board.item.upsert', intent, reviewedFailure, binding);
+    expect(parsedReviewed).toEqual({ success: true, kind: 'failure', data: reviewedFailure });
+    for (const changedInput of [
+      { ...intent, item: { ...item, title: 'Different body' } },
+      { ...intent, item: { ...item, source: { kind: 'declarative', document: {
+        version: 1, root: { kind: 'markdown', text: 'Changed content' },
+      } } } },
+      { ...intent, itemId: 'other' },
+      { ...intent, sessionId: 'other-session' },
+      { ...intent, expectedItemRevision: revision },
+      { ...intent, expectedLayoutRevision: revision },
+      { ...intent, reviewedVisual: { ...reviewedVisual, recordRevision: revision } },
+    ]) {
+      expect(parseSessionBoardActionExecuteOutcomeV1('session.board.item.upsert', changedInput, reviewedFailure, binding).success).toBe(false);
+    }
+    const copySource = { serverId: 'home-1', sessionId: 'source-session', itemId: 'source', expectedItemRevision: revision };
+    const copiedIntent = { ...intent, reviewedVisual: { ...reviewedVisual, copySource } };
+    const copiedFailure = createSessionBoardOutcomeUnknownFailureV1({ ...failure.details.recovery, intent: copiedIntent });
+    expect(parseSessionBoardActionExecuteOutcomeV1('session.board.item.upsert', copiedIntent, copiedFailure, binding))
+      .toEqual({ success: true, kind: 'failure', data: copiedFailure });
+    expect(parseSessionBoardActionExecuteOutcomeV1('session.board.item.upsert', intent, copiedFailure, binding).success).toBe(false);
+    for (const changedSource of [
+      { ...copySource, serverId: 'other-home' }, { ...copySource, sessionId: 'other-source-session' },
+      { ...copySource, itemId: 'other-source' }, { ...copySource, expectedItemRevision: 'ssr1.AAAACHN5c3JlY18yAAAAAg' },
+    ]) {
+      expect(parseSessionBoardActionExecuteOutcomeV1('session.board.item.upsert', {
+        ...copiedIntent, reviewedVisual: { ...reviewedVisual, copySource: changedSource },
+      }, copiedFailure, binding).success).toBe(false);
+    }
+    for (const changedRecovery of [
+      { ...reviewedFailure.details.recovery, serverId: 'other-home' },
+      { ...reviewedFailure.details.recovery, sessionId: 'other-session' },
+      { ...reviewedFailure.details.recovery, mutationRequest: { ...mutationRequest, itemId: 'other' } },
+    ]) {
+      expect(parseSessionBoardActionExecuteOutcomeV1('session.board.item.upsert', intent, {
+        ...reviewedFailure, details: { recovery: changedRecovery },
+      }, binding).success).toBe(false);
+    }
   });
 
   it('classifies canonical executor outcomes without confusing approval with failure or application', () => {
@@ -813,7 +894,10 @@ describe('Session Board Action contracts', () => {
       kind: 'failure',
       result: { ok: false, errorCode: 'session_board_forbidden', error: 'session_board_forbidden' },
     });
-    expect(classifySessionBoardMutationTransportResultV1({ ...common, status: 500, body: undefined }))
-      .toEqual({ kind: 'failure', result: { ok: false, errorCode: 'invalid_response', error: 'invalid_response' } });
+    for (const status of [500, 503]) {
+      expect(classifySessionBoardMutationTransportResultV1({ ...common, status,
+        body: { error: 'Internal Server Error', message: 'private database details' },
+      })).toEqual({ kind: 'failure', result: { ok: false, errorCode: 'server_error', error: 'server_error' } });
+    }
   });
 });

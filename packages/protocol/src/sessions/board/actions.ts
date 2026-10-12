@@ -1,6 +1,7 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
+import { areServerProfileIdentifiersEquivalent, type ServerProfileScopeResolver } from '../../features/payload/capabilities/serverIdentityCapabilities.js';
 
 import {
   ActionApprovalRequestCreatedResultSchema,
@@ -17,8 +18,12 @@ import {
 } from './actionIds.js';
 import { SessionBoardTabIdSchema, SessionSurfaceItemIdSchema } from './ids.js';
 import { SessionSurfaceItemV1Schema, SessionSurfaceItemDestinationV1Schema, isSessionSurfaceItemIdentityCorrespondingV1, type SessionSurfaceItemV1 } from './item.js';
+import { readSessionVisualCapabilitiesV1, persistSessionVisualEffectivePolicyV1 } from './visualPolicy.js';
+import { getWidgetSizeFootprintV1, resolveSessionBoardWidgetSizeV1, resolveWidgetSizeChoicesV1, type WidgetSizeV1 } from '../../widgets/widgetPresentationV1.js';
 import { ArtifactWorkspacePublicationSourceV1Schema } from '../../artifacts/artifactWorkspaceFileV1.js';
-import { UiSurfaceCapabilityRequestV1Schema } from '../../plugins/contributions/ui/hostedHtmlCapabilitiesV1.js';
+import { UiSurfaceCapabilityRequestV1Schema, UiSurfaceNetworkPolicyV1Schema } from '../../plugins/contributions/ui/hostedHtmlCapabilitiesV1.js';
+import { SessionSystemRecordCreatorV1Schema } from '../system/records/sessionSystemRecord.js';
+export { SessionSystemRecordCreatorV1Schema } from '../system/records/sessionSystemRecord.js';
 import { SessionBoardItemWidthSchema, SessionBoardItemFrameStyleSchema, SessionBoardLayoutV1Schema } from './layout.js';
 import {
   SessionBoardMutationResultV1Schema,
@@ -90,6 +95,7 @@ export const SessionBoardGetResultV1Schema = lazyZodSchema(() => z.object({
     revision: SessionSystemRecordRevisionSchema,
     title: z.string(),
     sourceKind: SessionSurfaceItemSourceKindV1Schema,
+    creator: SessionSystemRecordCreatorV1Schema.default({ kind: 'unknown' }),
     // Item capability requests reuse canonical Action ids, whose family list
     // includes these Board Actions. Defer the reverse schema edge until parse.
     item: z.lazy(() => SessionSurfaceItemV1Schema).optional(),
@@ -104,7 +110,7 @@ export const SessionBoardGetResultV1Schema = lazyZodSchema(() => z.object({
 export type SessionBoardGetResultV1 = z.infer<typeof SessionBoardGetResultV1Schema>;
 
 export type SessionBoardReadProjectionEntryV1 =
-  | Readonly<{ status: 'ready'; itemId: unknown; revision: unknown; item: unknown }>
+  | Readonly<{ status: 'ready'; itemId: unknown; revision: unknown; item: unknown; creator?: unknown }>
   | Readonly<{ status: 'unavailable' }>;
 
 /**
@@ -134,6 +140,7 @@ export function projectSessionBoardGetResultV1(input: Readonly<{
     const itemId = SessionSurfaceItemIdSchema.safeParse(entry.itemId);
     const revision = SessionSystemRecordRevisionSchema.safeParse(entry.revision);
     const item = SessionSurfaceItemV1Schema.safeParse(entry.item);
+    const creator = SessionSystemRecordCreatorV1Schema.safeParse(entry.creator);
     if (!itemId.success || !revision.success || !item.success) {
       incomplete = true;
       continue;
@@ -145,6 +152,7 @@ export function projectSessionBoardGetResultV1(input: Readonly<{
       revision: revision.data,
       title: item.data.title,
       sourceKind: item.data.source.kind,
+      creator: creator.success ? creator.data : { kind: 'unknown' },
       ...(requested?.has(itemId.data) ? { item: item.data } : {}),
     });
   }
@@ -170,7 +178,26 @@ const SessionSurfaceWorkspacePublicationItemV1Schema = lazyZodSchema(() => z.obj
   }).strict(),
 }).omit({ snapshot: true }).strict());
 
-export const SessionBoardItemUpsertInputV1Schema = lazyZodSchema(() => z.object({
+/** Facts bound by the Action owner before approval; never an authored grant. */
+export const SessionVisualCopySourceV1Schema = lazyZodSchema(() => z.object({
+  serverId: z.string().trim().min(1),
+  sessionId: z.string().trim().min(1),
+  itemId: SessionSurfaceItemIdSchema,
+  expectedItemRevision: SessionSystemRecordRevisionSchema,
+}).strict());
+
+export const SessionVisualReviewedAdmissionV1Schema = lazyZodSchema(() => z.object({
+  networkSetting: z.enum(['allowed', 'ask', 'off']).nullable(),
+  recordRevision: SessionSystemRecordRevisionSchema.nullable(),
+  creator: SessionSystemRecordCreatorV1Schema,
+  previousCapabilitiesDigest: z.string().min(1).nullable(),
+  previousExecutableFingerprint: z.string().min(1).nullable(),
+  /** Host-proved source of a frozen, independently owned cross-Session copy. */
+  copySource: SessionVisualCopySourceV1Schema.optional(),
+}).strict());
+export type SessionVisualReviewedAdmissionV1 = z.infer<typeof SessionVisualReviewedAdmissionV1Schema>;
+
+const SessionBoardItemUpsertOperandsV1Schema = lazyZodSchema(() => z.object({
   sessionId: SessionBoardActionSessionIdSchema,
   itemId: SessionSurfaceItemIdSchema,
   /** `null` requests creation; every other value is an exact optimistic-concurrency operand. */
@@ -178,15 +205,37 @@ export const SessionBoardItemUpsertInputV1Schema = lazyZodSchema(() => z.object(
   destination: SessionSurfaceItemDestinationV1Schema.optional(),
   /** Optional captured layout operand for an atomic content+placement edit. */
   expectedLayoutRevision: SessionSystemRecordRevisionSchema.nullable().optional(),
-  item: z.union([z.lazy(() => SessionSurfaceItemV1Schema), SessionSurfaceWorkspacePublicationItemV1Schema]),
   placement: SessionBoardItemPlacementV1Schema.optional(),
-}).strict().superRefine((input, context) => {
+  reviewedVisual: SessionVisualReviewedAdmissionV1Schema.optional(),
+}).strict());
+
+/** Normalized content consumed by keyholding adapters; acquisition intents never reach storage. */
+export const SessionBoardAuthoredItemUpsertInputV1Schema = lazyZodSchema(() => SessionBoardItemUpsertOperandsV1Schema.extend({
+  item: z.union([z.lazy(() => SessionSurfaceItemV1Schema), SessionSurfaceWorkspacePublicationItemV1Schema]),
+}).strict());
+
+const SessionBoardCopyItemUpsertInputV1Schema = lazyZodSchema(() => SessionBoardItemUpsertOperandsV1Schema.extend({
+    expectedItemRevision: z.null(),
+    copySource: SessionVisualCopySourceV1Schema,
+  }).strict());
+type SessionBoardItemUpsertSchemaInputV1 = z.input<typeof SessionBoardAuthoredItemUpsertInputV1Schema>
+  | z.input<typeof SessionBoardCopyItemUpsertInputV1Schema>;
+type SessionBoardItemUpsertSchemaOutputV1 = z.output<typeof SessionBoardAuthoredItemUpsertInputV1Schema>
+  | z.output<typeof SessionBoardCopyItemUpsertInputV1Schema>;
+
+export const SessionBoardItemUpsertInputV1Schema: z.ZodType<SessionBoardItemUpsertSchemaOutputV1, SessionBoardItemUpsertSchemaInputV1> = lazyZodSchema(() => z.union([
+  SessionBoardAuthoredItemUpsertInputV1Schema,
+  SessionBoardCopyItemUpsertInputV1Schema,
+]).superRefine((input, context) => {
   if (input.expectedLayoutRevision !== undefined && !input.placement) {
     context.addIssue({ code: 'custom', path: ['expectedLayoutRevision'], message: 'A captured layout revision requires a placement edit' });
   }
-  if (input.item.source.kind === 'widget'
+  if ('item' in input && input.item.source.kind === 'widget'
     && !isSessionSurfaceItemIdentityCorrespondingV1(input.itemId, { ...input.item, source: input.item.source })) {
     context.addIssue({ code: 'custom', path: ['item', 'source', 'instance', 'id'], message: 'Widget instance identity must match its Board item identity' });
+  }
+  if ('copySource' in input && input.sessionId === input.copySource.sessionId) {
+    context.addIssue({ code: 'custom', path: ['copySource', 'sessionId'], message: 'Same-Session visuals use layout Pin instead of a copy' });
   }
   if (input.destination === 'transcript' && input.placement) {
     context.addIssue({ code: 'custom', path: ['placement'], message: 'Transcript destination does not modify Board layout' });
@@ -198,8 +247,23 @@ export const SessionBoardItemUpsertInputV1Schema = lazyZodSchema(() => z.object(
       message: 'Item creation requires an atomic first placement',
     });
   }
-}).transform(input => ({ ...input, destination: input.destination ?? (input.placement ? 'board' as const : 'transcript' as const) })));
+}).transform(input => input.expectedItemRevision === null
+  ? { ...input, destination: input.destination ?? (input.placement ? 'board' as const : 'transcript' as const) }
+  : input));
 export type SessionBoardItemUpsertInputV1 = z.input<typeof SessionBoardItemUpsertInputV1Schema>;
+
+type SessionBoardAuthoredItemUpsertV1 = z.output<typeof SessionBoardAuthoredItemUpsertInputV1Schema>;
+
+/** Materialize an already admitted creation size; permission and size choice remain host-owned. */
+export function materializeSessionBoardWidgetCreationFootprintV1(
+  input: SessionBoardAuthoredItemUpsertV1, size: WidgetSizeV1,
+): SessionBoardAuthoredItemUpsertV1 | null {
+  const placement = input.placement;
+  const footprint = getWidgetSizeFootprintV1('sessionBoard', size);
+  if (!placement || !footprint || input.expectedItemRevision !== null || input.item.source.kind !== 'widget') return null;
+  return { ...input, placement: { ...placement, width: SessionBoardItemWidthSchema.parse(footprint.width) },
+    item: { ...input.item, height: placement.width === undefined ? { mode: 'fixed', size: footprint.height } : input.item.height } };
+}
 
 export const SessionBoardItemRemoveInputV1Schema = lazyZodSchema(() => z.object({
   sessionId: SessionBoardActionSessionIdSchema,
@@ -238,6 +302,8 @@ export const SessionBoardMutationActionResultV1Schema = lazyZodSchema(() => z.ob
     title: z.string(),
     sourceKind: SessionSurfaceItemSourceKindV1Schema,
   }).strict().optional(),
+  effectiveNetwork: UiSurfaceNetworkPolicyV1Schema.optional(),
+  notices: z.array(z.object({ code: z.literal('agent_html_network_off') }).strict()).optional(),
 }).strict().superRefine((value, context) => {
   if (value.result.operation === 'remove_item' && value.destination !== null) {
     context.addIssue({ code: 'custom', path: ['destination'], message: 'A removed item has no Board destination' });
@@ -306,7 +372,21 @@ export type SessionBoardApprovalRequestCreatedResultV1 = Readonly<
   z.infer<typeof SessionBoardApprovalRequestCreatedResultV1Schema>
 >;
 
-const SessionBoardMutationActionRecoveryEvidenceV1Schema = lazyZodSchema(() => z.discriminatedUnion('actionId', [
+type SessionBoardMutationRecoverySchemaV1<TId extends SessionBoardActionIdV1, TIntent extends z.ZodType> = z.ZodObject<{
+  v: z.ZodLiteral<1>;
+  actionId: z.ZodLiteral<TId>;
+  serverId: z.ZodString;
+  sessionId: z.ZodString;
+  requestBody: z.ZodString;
+  mutationRequest: typeof SessionBoardMutationV1Schema;
+  intent: TIntent;
+}, z.core.$strict>;
+
+const SessionBoardMutationActionRecoveryEvidenceV1Schema: z.ZodDiscriminatedUnion<[
+  SessionBoardMutationRecoverySchemaV1<'session.board.item.upsert', typeof SessionBoardItemUpsertInputV1Schema>,
+  SessionBoardMutationRecoverySchemaV1<'session.board.item.remove', typeof SessionBoardItemRemoveInputV1Schema>,
+  SessionBoardMutationRecoverySchemaV1<'session.board.layout.update', typeof SessionBoardLayoutUpdateInputV1Schema>,
+], 'actionId'> = lazyZodSchema(() => z.discriminatedUnion('actionId', [
   z.object({
     v: z.literal(1),
     actionId: z.literal('session.board.item.upsert'),
@@ -337,7 +417,7 @@ const SessionBoardMutationActionRecoveryEvidenceV1Schema = lazyZodSchema(() => z
 ]));
 
 /** Exact issued mutation evidence retained only for an ambiguous post-dispatch result. */
-export const SessionBoardActionRecoveryEvidenceV1Schema = lazyZodSchema(() => SessionBoardMutationActionRecoveryEvidenceV1Schema.superRefine(
+export const SessionBoardActionRecoveryEvidenceV1Schema: typeof SessionBoardMutationActionRecoveryEvidenceV1Schema = lazyZodSchema(() => SessionBoardMutationActionRecoveryEvidenceV1Schema.superRefine(
   (evidence, context) => {
     let mutation: z.infer<typeof SessionBoardMutationV1Schema> | null = null;
     try {
@@ -585,7 +665,7 @@ function readSessionBoardAdapterErrorCode(error: unknown, depth = 0): string | n
  */
 export function projectSessionBoardAdapterFailureV1(
   error: unknown,
-  fallback: SessionBoardDefiniteFailureCodeV1 = 'invalid_response',
+  fallback: SessionBoardSimpleFailureCodeV1 = 'invalid_response',
   actionId?: SessionBoardActionIdV1,
 ): SessionBoardActionFailureV1 {
   const rawCode = readSessionBoardAdapterErrorCode(error);
@@ -695,6 +775,14 @@ export function classifySessionBoardMutationTransportResultV1(input: Readonly<{
   }
   if (input.status === 404 && SessionBoardFeatureGateErrorV1Schema.safeParse(input.body).success) {
     return { kind: 'failure', result: projectSessionBoardFeatureGateFailureV1(input.actionId) };
+  }
+  if (input.status >= 500 && input.status < 600) {
+    // A server failure is not a malformed Action/MCP response.
+    // Keep private server diagnostics out of the published tool result.
+    return {
+      kind: 'failure',
+      result: { ok: false, errorCode: 'server_error', error: 'server_error' },
+    };
   }
   return {
     kind: 'failure',
@@ -811,8 +899,46 @@ function parseBoardFailure(
       || parsed.data.recovery.serverId !== options.expectedServerId
       || options.expectedSessionId === undefined
       || parsed.data.recovery.sessionId !== options.expectedSessionId
-      || !recordsEqualAfterSchemaParse(SESSION_BOARD_ACTION_INPUT_SCHEMAS_V1[actionId], parsed.data.recovery.intent, input)
     ) return { success: false };
+    let expectedInput = input;
+    if (parsed.data.recovery.actionId === 'session.board.item.upsert') {
+      const invoked = SessionBoardItemUpsertInputV1Schema.safeParse(input);
+      const reviewedVisual = parsed.data.recovery.intent.reviewedVisual;
+      // Admission adds review facts, not caller operands. A caller who did not
+      // supply them is compared on the same host-reviewed basis; copied-source
+      // custody and any caller-supplied review facts still require exact equality.
+      if (invoked.success && 'item' in invoked.data && invoked.data.reviewedVisual === undefined
+        && reviewedVisual !== undefined && reviewedVisual.copySource === undefined) {
+        const authored = SessionSurfaceItemV1Schema.safeParse(invoked.data.item);
+        const capabilities = authored.success ? readSessionVisualCapabilitiesV1(authored.data) : null;
+        if (authored.success && capabilities) {
+          const effective = invoked.data.expectedItemRevision === null && reviewedVisual.networkSetting === 'off'
+            ? { ...capabilities, network: 'none' as const, networkOrigins: [] } : capabilities;
+          let materialized: SessionBoardAuthoredItemUpsertV1 = {
+            ...invoked.data, item: persistSessionVisualEffectivePolicyV1(authored.data, effective), reviewedVisual,
+          };
+          const recovered = parsed.data.recovery.intent;
+          if (materialized.expectedItemRevision === null && materialized.item.source.kind === 'widget'
+            && materialized.placement && materialized.placement.width === undefined && 'item' in recovered
+            && recovered.placement?.width !== undefined) {
+            // Absent width requests the definition's complete default footprint,
+            // not an independent height. Explicit width+height remains exact.
+            const size = resolveSessionBoardWidgetSizeV1(recovered.placement.width, recovered.item.height);
+            const definition = materialized.item.source.instance.definition;
+            const inlineDefault = definition.kind === 'inline'
+              ? resolveWidgetSizeChoicesV1('sessionBoard', definition.definition.sizeDeclaration).defaultSize : undefined;
+            if (!size || definition.kind === 'inline' && size !== inlineDefault) return { success: false };
+            const rectangle = materializeSessionBoardWidgetCreationFootprintV1(materialized, size);
+            if (!rectangle) return { success: false };
+            materialized = rectangle;
+          }
+          expectedInput = materialized;
+        }
+      }
+    }
+    if (!recordsEqualAfterSchemaParse(SESSION_BOARD_ACTION_INPUT_SCHEMAS_V1[actionId], parsed.data.recovery.intent, expectedInput)) {
+      return { success: false };
+    }
     return { success: true, kind: 'failure', data: { ok: false, errorCode, error: errorCode, details: parsed.data } };
   }
   const parsedDefiniteFailureCode = BoardDefiniteFailureCodeV1Schema.safeParse(result.errorCode);
@@ -840,7 +966,7 @@ export function parseSessionBoardActionPortResultV1(
   actionId: SessionBoardActionIdV1,
   input: unknown,
   result: unknown,
-  options: Readonly<{ expectedSessionId?: string; expectedServerId?: string }> = {},
+  options: Readonly<{ expectedSessionId?: string; expectedServerId?: string; resolveServerScopeId?: ServerProfileScopeResolver }> = {},
 ): SessionBoardActionPortResultParseV1 {
   const parsedInput = SESSION_BOARD_ACTION_INPUT_SCHEMAS_V1[actionId].safeParse(input);
   if (!parsedInput.success || !result || typeof result !== 'object' || Array.isArray(result)) {
@@ -861,7 +987,7 @@ export function parseSessionBoardActionPortResultV1(
   const expectedSessionId = options.expectedSessionId
     ?? ('sessionId' in parsedInput.data ? parsedInput.data.sessionId : undefined);
   if (expectedSessionId !== undefined && output.sessionId !== expectedSessionId) return { success: false };
-  if (options.expectedServerId !== undefined && output.serverId !== options.expectedServerId) return { success: false };
+  if (!areServerProfileIdentifiersEquivalent(output.serverId, options.expectedServerId, options.resolveServerScopeId)) return { success: false };
 
   if (actionId === 'session.board.get') {
     const requested = new Set((parsedInput.data as SessionBoardGetInputV1).itemIds ?? []);
@@ -936,7 +1062,7 @@ export function parseSessionBoardActionExecuteOutcomeV1(
   actionId: SessionBoardActionIdV1,
   input: unknown,
   result: ActionExecuteResult,
-  options: Readonly<{ expectedSessionId?: string; expectedServerId?: string }> = {},
+  options: Readonly<{ expectedSessionId?: string; expectedServerId?: string; resolveServerScopeId?: ServerProfileScopeResolver }> = {},
 ): SessionBoardActionExecuteOutcomeParseV1 {
   if (!result || typeof result !== 'object' || Array.isArray(result)) return { success: false };
   const envelope = result as Readonly<Record<string, unknown>>;

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { SessionSurfaceItemIdSchema } from './ids.js';
+import { areServerProfileIdentifiersEquivalent, type ServerProfileScopeResolver } from '../../features/payload/capabilities/serverIdentityCapabilities.js';
 
 const origin = {
     originServerId: z.string().trim().min(1),
@@ -42,9 +43,13 @@ export function resolveSessionForkVisualReferenceTargetV1(input: Readonly<{
     reference: Readonly<{ address: Readonly<{ serverId: string; sessionId: string }>; itemId: string }>;
     childAddress: Readonly<{ serverId: string; sessionId: string }>;
     copies: readonly SessionForkVisualCopyV1[];
+    resolveServerScopeId?: ServerProfileScopeResolver;
 }>): Readonly<{ status: 'copied'; address: Readonly<{ serverId: string; sessionId: string }>; itemId: string }>
     | Readonly<{ status: 'not_copied' }> {
-    const copy = input.copies.find(candidate => candidate.originServerId === input.reference.address.serverId
+    if (!areServerProfileIdentifiersEquivalent(input.reference.address.serverId, input.childAddress.serverId,
+        input.resolveServerScopeId)) return { status: 'not_copied' };
+    const copy = input.copies.find(candidate => areServerProfileIdentifiersEquivalent(candidate.originServerId,
+        input.reference.address.serverId, input.resolveServerScopeId)
         && candidate.originSessionId === input.reference.address.sessionId && candidate.originItemId === input.reference.itemId);
     return copy?.status === 'copied'
         ? { status: 'copied', address: input.childAddress, itemId: copy.itemId }

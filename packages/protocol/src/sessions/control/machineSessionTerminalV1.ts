@@ -8,7 +8,7 @@ export const MACHINE_SESSION_TERMINAL_FINALIZE_EVENT_V1 =
 
 const MachineSessionTerminalSessionIdV1Schema = lazyZodSchema(() => z.string().trim().min(1));
 const MachineSessionTerminalFenceMsV1Schema = lazyZodSchema(() => z.number().int().nonnegative());
-const MachineSessionTerminalPublisherGenerationV1Schema = lazyZodSchema(() => z
+export const SessionPublisherGenerationV1Schema = lazyZodSchema(() => z
   .string()
   .refine((value) => (
     /^[1-9]\d{0,18}$/.test(value)
@@ -18,7 +18,7 @@ const MachineSessionTerminalPublisherGenerationV1Schema = lazyZodSchema(() => z
 export const MachineSessionTerminalAuthorityV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('generation'),
-    publisherGeneration: MachineSessionTerminalPublisherGenerationV1Schema,
+    publisherGeneration: SessionPublisherGenerationV1Schema,
   }).strict(),
   z.object({
     kind: z.literal('legacy-heartbeat'),

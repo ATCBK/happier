@@ -1,9 +1,10 @@
 import { z } from 'zod';
+import { createStoredReadSchema, defineStoredReadProjection } from '../../json/storedReadSchema.js';
 
 import { SessionRollbackTargetSchema } from '../rollback.js';
 
 export function createSessionRollbackRangeV1Schema(zod: typeof z) {
-  return zod
+  const schema = zod
     .object({
       target: SessionRollbackTargetSchema,
       startSeqInclusive: zod.number().int().nonnegative(),
@@ -15,17 +16,24 @@ export function createSessionRollbackRangeV1Schema(zod: typeof z) {
       path: ['endSeqInclusive'],
     })
     .passthrough();
+  return defineStoredReadProjection(schema, () => schema.safeExtend({
+    target: createStoredReadSchema(SessionRollbackTargetSchema),
+  }));
 }
 
 export const SessionRollbackRangeV1Schema = createSessionRollbackRangeV1Schema(z);
 export type SessionRollbackRangeV1 = z.infer<typeof SessionRollbackRangeV1Schema>;
 
 export function createSessionRollbackRangesV1Schema(zod: typeof z) {
-  return zod.object({
+  const rangeSchema = createSessionRollbackRangeV1Schema(zod);
+  const schema = zod.object({
     v: zod.literal(1),
     updatedAt: zod.number().finite(),
-    ranges: zod.array(createSessionRollbackRangeV1Schema(zod)),
+    ranges: zod.array(rangeSchema),
   }).passthrough();
+  return defineStoredReadProjection(schema, () => schema.extend({
+    ranges: zod.array(createStoredReadSchema(rangeSchema)),
+  }));
 }
 
 export const SessionRollbackRangesV1Schema = createSessionRollbackRangesV1Schema(z);
@@ -45,6 +53,6 @@ export function buildSessionRollbackRangesV1(params: Readonly<{
 export function readSessionRollbackRangesV1FromMetadata(metadata: unknown): SessionRollbackRangesV1 | null {
   if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
   const raw = (metadata as Record<string, unknown>).sessionRollbackRangesV1;
-  const parsed = SessionRollbackRangesV1Schema.safeParse(raw);
+  const parsed = createStoredReadSchema(SessionRollbackRangesV1Schema).safeParse(raw);
   return parsed.success ? parsed.data : null;
 }

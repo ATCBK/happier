@@ -1,4 +1,5 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
+import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 import { z } from 'zod';
 import { CallerInputConstraintsV1Schema } from '../../auth/callerInputConstraintsV1.js';
 import { sha256 } from '@noble/hashes/sha2';
@@ -11,6 +12,7 @@ import type { ActionSurfaces } from '../../actions/metadata.js';
 import { encodeBase64 } from '../../crypto/base64.js';
 import { readConversationTurnOriginV1FromMessageMeta } from '../../messages/structured/conversationTurnOriginV1.js';
 import { SubagentLaunchV1Schema } from '../../messages/structured/subagentLaunchV1.js';
+import { SubagentCommandV1Schema } from '../../messages/structured/subagentCommandV1.js';
 import { ParticipantRecipientRoutingIdentityV1Schema } from '../../messages/structured/participantMessageV1.js';
 import { PluginContributionLocalIdSchema } from '../../plugins/contributionIdentity.js';
 import { PluginIdSchema } from '../../plugins/pluginId.js';
@@ -171,9 +173,16 @@ const PluginSessionSubagentLaunchInputRequestV1Schema = lazyZodSchema(() => z.ob
   idempotencyKey: PluginSessionInputIdempotencyKeyV1Schema,
 }).strict());
 
+const PluginSessionSubagentCommandInputRequestV1Schema = lazyZodSchema(() => z.object({
+  kind: z.literal('sessionSubagentCommand'),
+  command: SubagentCommandV1Schema,
+  idempotencyKey: PluginSessionInputIdempotencyKeyV1Schema,
+}).strict());
+
 export const PluginSessionInputRequestV1Schema = lazyZodSchema(() => z.union([
   PluginSessionUserTextInputRequestV1Schema,
   PluginSessionSubagentLaunchInputRequestV1Schema,
+  PluginSessionSubagentCommandInputRequestV1Schema,
 ]));
 export type PluginSessionInputRequestV1 = z.infer<typeof PluginSessionInputRequestV1Schema>;
 
@@ -967,44 +976,44 @@ function readMetaRecord(meta: unknown): Record<string, unknown> | null {
   return isRecord(meta) ? meta : null;
 }
 
-export function readSessionInputRequestV1(meta: unknown): SessionInputRequestV1 | null {
+export function readSessionInputRequestV1(meta: unknown, mode: 'input' | 'stored' = 'input'): SessionInputRequestV1 | null {
   const record = readMetaRecord(meta);
   if (!record || Object.hasOwn(record, SESSION_INPUT_AUTHORITY_META_KEY)) return null;
-  const parsed = SessionInputRequestV1Schema.safeParse(record[SESSION_INPUT_REQUEST_META_KEY]);
+  const parsed = (mode === 'stored' ? createStoredReadSchema(SessionInputRequestV1Schema) : SessionInputRequestV1Schema).safeParse(record[SESSION_INPUT_REQUEST_META_KEY]);
   return parsed.success ? parsed.data : null;
 }
 
-export function readSessionInputRequest(meta: unknown): SessionInputRequest | null {
+export function readSessionInputRequest(meta: unknown, mode: 'input' | 'stored' = 'input'): SessionInputRequest | null {
   const record = readMetaRecord(meta);
   if (!record || Object.hasOwn(record, SESSION_INPUT_AUTHORITY_META_KEY)) return null;
-  const parsed = SessionInputRequestSchema.safeParse(record[SESSION_INPUT_REQUEST_META_KEY]);
+  const parsed = (mode === 'stored' ? createStoredReadSchema(SessionInputRequestSchema) : SessionInputRequestSchema).safeParse(record[SESSION_INPUT_REQUEST_META_KEY]);
   return parsed.success ? parsed.data : null;
 }
 
-export function readSessionInputAuthorityV1(meta: unknown): SessionInputAuthorityV1 | null {
+export function readSessionInputAuthorityV1(meta: unknown, mode: 'input' | 'stored' = 'input'): SessionInputAuthorityV1 | null {
   const record = readMetaRecord(meta);
   if (!record || Object.hasOwn(record, SESSION_INPUT_REQUEST_META_KEY)) return null;
-  const parsed = SessionInputAuthorityV1Schema.safeParse(record[SESSION_INPUT_AUTHORITY_META_KEY]);
+  const parsed = (mode === 'stored' ? createStoredReadSchema(SessionInputAuthorityV1Schema) : SessionInputAuthorityV1Schema).safeParse(record[SESSION_INPUT_AUTHORITY_META_KEY]);
   return parsed.success ? parsed.data : null;
 }
 
-export function readSessionInputAuthority(meta: unknown): SessionInputAuthority | null {
+export function readSessionInputAuthority(meta: unknown, mode: 'input' | 'stored' = 'input'): SessionInputAuthority | null {
   const record = readMetaRecord(meta);
   if (!record || Object.hasOwn(record, SESSION_INPUT_REQUEST_META_KEY)) return null;
-  const parsed = SessionInputAuthoritySchema.safeParse(record[SESSION_INPUT_AUTHORITY_META_KEY]);
+  const parsed = (mode === 'stored' ? createStoredReadSchema(SessionInputAuthoritySchema) : SessionInputAuthoritySchema).safeParse(record[SESSION_INPUT_AUTHORITY_META_KEY]);
   return parsed.success ? parsed.data : null;
 }
 
-export function readSessionMessageProvenanceV1(meta: unknown): SessionMessageProvenanceV1 | null {
+export function readSessionMessageProvenanceV1(meta: unknown, mode: 'input' | 'stored' = 'input'): SessionMessageProvenanceV1 | null {
   const record = readMetaRecord(meta);
   if (!record) return null;
 
   if (Object.hasOwn(record, SESSION_MESSAGE_PROVENANCE_META_KEY)) {
-    const parsed = SessionMessageProvenanceV1Schema.safeParse(record[SESSION_MESSAGE_PROVENANCE_META_KEY]);
+    const parsed = (mode === 'stored' ? createStoredReadSchema(SessionMessageProvenanceV1Schema) : SessionMessageProvenanceV1Schema).safeParse(record[SESSION_MESSAGE_PROVENANCE_META_KEY]);
     return parsed.success ? parsed.data : null;
   }
 
-  const predecessorOrigin = readConversationTurnOriginV1FromMessageMeta(record);
+  const predecessorOrigin = readConversationTurnOriginV1FromMessageMeta(record, mode);
   if (!predecessorOrigin?.source) return null;
   const projected = SessionMessageProvenanceV1Schema.safeParse({
     v: 1,
@@ -1016,18 +1025,19 @@ export function readSessionMessageProvenanceV1(meta: unknown): SessionMessagePro
   return projected.success ? projected.data : null;
 }
 
-export function readSessionMessageProvenance(meta: unknown): SessionMessageProvenance | null {
+export function readSessionMessageProvenance(meta: unknown, mode: 'input' | 'stored' = 'input'): SessionMessageProvenance | null {
   const record = readMetaRecord(meta);
   if (!record) return null;
-  if (!Object.hasOwn(record, SESSION_MESSAGE_PROVENANCE_META_KEY)) return readSessionMessageProvenanceV1(meta);
-  const parsed = SessionMessageProvenanceSchema.safeParse(record[SESSION_MESSAGE_PROVENANCE_META_KEY]);
+  if (!Object.hasOwn(record, SESSION_MESSAGE_PROVENANCE_META_KEY)) return readSessionMessageProvenanceV1(meta, mode);
+  const parsed = (mode === 'stored' ? createStoredReadSchema(SessionMessageProvenanceSchema) : SessionMessageProvenanceSchema).safeParse(record[SESSION_MESSAGE_PROVENANCE_META_KEY]);
   return parsed.success ? parsed.data : null;
 }
 
 export function readSessionPermissionSourceAuthorityV1(
   meta: unknown,
+  mode: 'input' | 'stored' = 'input',
 ): SessionPermissionSourceAuthorityV1 | null {
-  const authority = readSessionInputAuthority(meta);
+  const authority = readSessionInputAuthority(meta, mode);
   if (!authority?.sourceAuthority) return null;
   return {
     kind: 'mediatedExternal',
@@ -1041,10 +1051,11 @@ export function readSessionPermissionSourceAuthorityV1(
 
 export function readSessionInputCausalPermissionAuthorityV1(
   meta: unknown,
+  mode: 'input' | 'stored' = 'input',
 ): SessionInputCausalPermissionAuthorityV1 | null {
-  const authority = readSessionInputAuthority(meta);
+  const authority = readSessionInputAuthority(meta, mode);
   if (!authority) return null;
-  const sourceAuthority = readSessionPermissionSourceAuthorityV1(meta);
+  const sourceAuthority = readSessionPermissionSourceAuthorityV1(meta, mode);
   const parsed = SessionInputCausalPermissionAuthorityV1Schema.safeParse({
     kind: 'admittedSessionInputV1',
     admittedPermissionCeiling: authority.permission.admittedPermissionCeiling,

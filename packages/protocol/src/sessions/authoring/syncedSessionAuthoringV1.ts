@@ -2,6 +2,7 @@ import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod';
 
 import { NonBlankOpaqueIdentifierSchema } from '../../strings/opaqueIdentifier.js';
+import { SessionMcpSelectionV1Schema } from '../../mcp/servers/sessionSelectionV1.js';
 
 /**
  * Immutable `server-v0.2.11` synchronized authoring projection.
@@ -58,19 +59,6 @@ const ReleasedSessionAuthoringCheckoutCreationDraftV1Schema = lazyZodSchema(() =
   baseRef: z.string().trim().min(1).nullable(),
   branchMode: z.enum(['new', 'existing']).optional(),
 }).strict());
-const ReleasedSessionMcpSelectionV1Schema = lazyZodSchema(() => z.preprocess(
-  (raw) => (!raw || typeof raw !== 'object' || Array.isArray(raw) ? {} : raw),
-  z.object({
-    v: z.literal(1).default(1),
-    managedServersEnabled: z.boolean().default(true),
-    forceIncludeServerIds: z.array(z.string().min(1)).default([]),
-    forceExcludeServerIds: z.array(z.string().min(1)).default([]),
-  }),
-).transform((value) => ({
-  ...value,
-  forceIncludeServerIds: [...new Set(value.forceIncludeServerIds)],
-  forceExcludeServerIds: [...new Set(value.forceExcludeServerIds)],
-})));
 const ReleasedSyncedSessionAuthoringTerminalV1Schema = lazyZodSchema(() => z.object({
   mode: z.enum(['integrated', 'plain', 'tmux', 'windows_terminal', 'windows_console']).optional(),
   tmux: z.object({
@@ -103,7 +91,7 @@ export const SyncedSessionAuthoringValueV1Schema = lazyZodSchema(() => z.object(
   resumeSessionId: NonBlankOpaqueIdentifierSchema.nullable(),
   permissionMode: z.string().trim().min(1).nullable(),
   modelId: z.string().trim().min(1).nullable(),
-  mcpSelection: ReleasedSessionMcpSelectionV1Schema.nullable(),
+  mcpSelection: SessionMcpSelectionV1Schema.nullable(),
   connectedServices: ReleasedConnectedServiceBindingsV1Schema.nullable(),
   terminal: ReleasedSyncedSessionAuthoringTerminalV1Schema.nullable(),
   windowsRemoteSessionLaunchMode: z.enum(['hidden', 'windows_terminal', 'console']).nullable(),

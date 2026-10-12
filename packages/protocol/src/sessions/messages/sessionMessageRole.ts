@@ -90,6 +90,10 @@ function resolveTranscriptBodyCarrier(
 export function resolveTranscriptBodySessionMessageRole(
   input: ResolveTranscriptBodySessionMessageRoleInput,
 ): SessionMessageRole {
+  const envelope = asRecord(input.body);
+  // An explicit event envelope owns its transcript role, including host
+  // informational messages and WorkerUpdates. Its payload is not assistant text.
+  if (envelope?.type === 'event') return asRecord(envelope.data) ? 'event' : 'unknown';
   const carrier = resolveTranscriptBodyCarrier(input);
   if (!carrier) return 'unknown';
   const { body: record, protocol } = carrier;

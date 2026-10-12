@@ -3,7 +3,8 @@ import { createHappierActionToolNameIndex, isRecord, readHappierActionExecuteAct
 import { SESSION_BOARD_ACTION_IDS_V1, SESSION_BOARD_ACTION_MCP_TOOL_NAMES_V1 } from './actionIds.js';
 import { parseSessionBoardActionExecuteOutcomeV1, parseSessionBoardActionPortResultV1 } from './actions.js';
 import type { SessionBoardItemWidth } from './layout.js';
-import type { SessionTranscriptSurfaceItemReferenceV1 } from '../messages/transcriptObservationV1.js';
+import type { SessionTranscriptSurfaceItemReferenceReadV1 } from '../messages/transcriptObservationV1.js';
+import type { ServerProfileScopeResolver } from '../../features/payload/capabilities/serverIdentityCapabilities.js';
 
 export type TranscriptSessionBoardItemReferenceV1 = Readonly<{
     address: Readonly<{ serverId: string; sessionId: string }>;
@@ -21,6 +22,7 @@ export function resolveTranscriptSessionBoardItemReferenceV1(input: Readonly<{
     input: unknown;
     result: unknown;
     address: TranscriptSessionBoardItemReferenceV1['address'] | null;
+    resolveServerScopeId?: ServerProfileScopeResolver;
 }>): TranscriptSessionBoardItemReferenceV1 | null {
     if (!input.address || input.state !== 'completed') return null;
     const directActionId = readHappierActionId(readHappierActionToolName(input.toolName, input.input), createHappierActionToolNameIndex(
@@ -30,7 +32,8 @@ export function resolveTranscriptSessionBoardItemReferenceV1(input: Readonly<{
         (id): id is 'session.board.item.upsert' => id === 'session.board.item.upsert');
     const actionId = directActionId ?? executeActionId;
     if (actionId !== 'session.board.item.upsert') return null;
-    const options = { expectedServerId: input.address.serverId, expectedSessionId: input.address.sessionId };
+    const options = { expectedServerId: input.address.serverId, expectedSessionId: input.address.sessionId,
+        resolveServerScopeId: input.resolveServerScopeId };
     const parsedInput = readHappierActionToolPayload(input.input);
     const toolInput = executeActionId && isRecord(parsedInput) ? maybeParseJson(parsedInput.input) : parsedInput;
     for (const candidate of readHappierActionToolResultCandidates(input.result, input.input)) {
@@ -57,17 +60,26 @@ export function resolveTranscriptSessionBoardItemReferenceV1(input: Readonly<{
 /** The published association is authenticated by its current Session writer, never by origin metadata. */
 export function isPublishedTranscriptSessionBoardItemReferenceCorrespondingV1(input: Readonly<{
     acknowledgedReference: TranscriptSessionBoardItemReferenceV1;
-    publishedReference: SessionTranscriptSurfaceItemReferenceV1;
+    publishedReference: SessionTranscriptSurfaceItemReferenceReadV1;
     publishedSessionId: string;
 }>): boolean {
     const acknowledged = input.acknowledgedReference;
     const published = input.publishedReference;
-    if (!input.publishedSessionId || !acknowledged.itemRevision
+    if (!input.publishedSessionId
         || acknowledged.address.serverId !== published.sourceAddress.serverId
         || acknowledged.address.sessionId !== published.sourceAddress.sessionId) return false;
-    // A historical import stamps the independently owned child copy. Its original
-    // immutable acknowledgement may still have Board intent and parent identity.
-    if (published.sourceAddress.sessionId !== input.publishedSessionId) return true;
-    return acknowledged.itemDestination !== 'board' && acknowledged.itemId === published.itemId
-        && acknowledged.itemRevision === published.itemRevision;
+    if ('sourceItemId' in published) {
+        if (published.sourceItemId !== acknowledged.itemId
+            || published.sourceItemRevision !== acknowledged.itemRevision) return false;
+        // The exact original identity selects a member, not a grant. Only the
+        // published Session's admitted child Item/revision can supply content.
+        // A copied Board-origin acknowledgement can therefore remain inline.
+        if (published.itemId !== published.sourceItemId
+            || published.sourceAddress.sessionId !== input.publishedSessionId) return true;
+    }
+    // Direct singleton reads remain exact. An old child association
+    // without original identity cannot identify a sibling by source address alone.
+    return published.sourceAddress.sessionId === input.publishedSessionId
+        && acknowledged.itemRevision !== null && acknowledged.itemDestination !== 'board'
+        && acknowledged.itemId === published.itemId && acknowledged.itemRevision === published.itemRevision;
 }

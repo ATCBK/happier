@@ -19,7 +19,7 @@ import { TurnIdSchema } from '../idsV1.js';
 import { PendingLocalIdSchema } from '../pending/pendingLocalId.js';
 import { SessionOrganizationPlacementV1Schema } from '../creation/sessionSpawnNewResultV1.js';
 import { ExternalSessionStorageStateV1Schema } from '../external/operationV1.js';
-import { PendingActivationAuthorizationV1Schema } from '../pending/pendingActivationAuthorizationV1.js';
+import { PendingActivationAuthorizationV1Schema, PendingActivationFailureDetailsV1Schema } from '../pending/pendingActivationAuthorizationV1.js';
 import { SubAgentRunResultV2Schema } from '../../tools/v2/schemas.js';
 import { StopSessionIncompleteReasonSchema } from '../../sessionStop.js';
 import { AccountEncryptionModeSchema } from '../../features/payload/capabilities/encryptionCapabilities.js';
@@ -168,6 +168,7 @@ export const SessionControlErrorCodeSchema = lazyZodSchema(() => z.enum([
   'not_authenticated',
   'server_unreachable',
   'session_not_found',
+  'not_found',
   'session_id_ambiguous',
   'session_active',
   'execution_run_not_found',
@@ -439,6 +440,7 @@ export const V2SessionRecordSchema = lazyZodSchema(() => z
     pendingBlockedCount: z.number().int().min(0).optional(),
     pendingVersion: z.number().int().min(0).optional(),
     pendingActivationAuthorization: PendingActivationAuthorizationV1Schema.optional(),
+    pendingActivationFailureDetails: PendingActivationFailureDetailsV1Schema.optional(),
     dataEncryptionKey: z.string().nullable(),
     /**
      * The one human Account currently responsible for this Session.

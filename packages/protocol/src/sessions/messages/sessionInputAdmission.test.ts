@@ -51,6 +51,29 @@ describe('session input admission metadata', () => {
     }).success).toBe(false);
   });
 
+  it('admits subagent-command author intent without admitting caller authority or arbitrary recipients', () => {
+    const commandInput = {
+      kind: 'sessionSubagentCommand',
+      command: { kind: 'agent_team_member_delete', teamId: 'reviewers', memberId: 'worker-1' },
+      idempotencyKey: 'shutdown-worker-1',
+    } as const;
+    expect(protocol.PluginSessionInputRequestV1Schema.parse(commandInput)).toEqual(commandInput);
+    for (const extra of [
+      { actionCaller: { kind: 'host' } },
+      { localId: 'caller-controlled' },
+      { recipient: { kind: 'execution_run', runId: 'run-1' } },
+    ]) {
+      expect(protocol.PluginSessionInputRequestV1Schema.safeParse({ ...commandInput, ...extra }).success).toBe(false);
+    }
+    expect(protocol.PluginSessionInputRequestV1Schema.safeParse({
+      kind: commandInput.kind, command: commandInput.command,
+    }).success).toBe(false);
+    const spec = getActionSpec('session.message.send');
+    expect(spec.surfaceBindings?.api?.inputSchema?.parse({
+      sessionId: 's1', kind: commandInput.kind, command: commandInput.command,
+    })).toEqual({ sessionId: 's1', kind: commandInput.kind, command: commandInput.command });
+  });
+
   it('derives label-free routing into authored content while preserving omitted main metadata', () => {
     const meta = { sentFrom: 'cli' };
     expect(withParticipantRecipientV1(meta, undefined)).toBe(meta);

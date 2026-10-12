@@ -21,7 +21,7 @@ describe('SessionMessageAccountActorV1Schema', () => {
     })).toEqual({
       v: 1,
       accountId: 'acc_alice',
-      profile: { firstName: 'Alice', lastName: null, username: null, avatarUrl: null },
+      profile: { name: 'Alice', firstName: 'Alice', lastName: null, username: null, avatarUrl: null },
     });
   });
 

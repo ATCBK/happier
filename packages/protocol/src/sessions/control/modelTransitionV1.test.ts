@@ -7,6 +7,11 @@ import {
 } from './modelTransitionV1.js';
 
 describe('session model transition host-private control contract', () => {
+  it('accepts explicit un-arm at the transition owner without a caller-authored model', () => {
+    expect(SessionModelTransitionRequestV1Schema.safeParse({ v: 1, unarm: true }).success).toBe(true);
+    expect(SessionModelTransitionRequestV1Schema.safeParse({ v: 1, unarm: true,
+      selection: { agentTargetKey: 'backend:claude', providerConnectionId: null, modelId: 'guess' } }).success).toBe(false);
+  });
   it('uses one structured private session route', () => {
     expect(SESSION_RPC_METHODS.SESSION_MODEL_TRANSITION).toBe('session.model.transition');
     expect(SessionModelTransitionRequestV1Schema.parse({

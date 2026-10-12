@@ -23,6 +23,20 @@ function expectOk(result: ReturnType<typeof applySessionBoardLayoutOperationV1>)
 }
 
 describe('Session Board semantic layout operations', () => {
+  it('places an existing item onto an empty Board only with an explicit new-view title', () => {
+    const empty: SessionBoardLayoutV1 = { v: 1, tabs: [] };
+    const parsed = SessionBoardLayoutOperationV1Schema.safeParse({
+      op: 'item.place', itemId: 'visual', tabId: 'overview', tabTitle: 'Overview', width: 'medium',
+    });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    const placed = expectOk(applySessionBoardLayoutOperationV1(empty, parsed.data));
+    expect(placed).toEqual({ v: 1, tabs: [{ id: 'overview', title: 'Overview', items: [{ itemId: 'visual', width: 'medium' }] }] });
+    expect(applySessionBoardLayoutOperationV1(empty, { op: 'item.place', itemId: 'visual', tabId: 'overview', width: 'medium' }))
+      .toEqual({ ok: false, error: 'session_board_invalid' });
+    expect(applySessionBoardLayoutOperationV1(placed, parsed.data)).toEqual({ ok: false, error: 'session_board_invalid' });
+  });
+
   it('applies the portable frame atomically with a first placement and retains it on omitted-frame upserts', () => {
     const placement = { tabId: 'metrics', width: 'compact' as const, frameStyle: 'plain' as const, anchor: { side: 'before' as const, itemId: 'chart' } };
     const added = expectOk(applySessionBoardItemPlacementV1(layout, { itemId: 'copy', placement }));
@@ -108,6 +122,7 @@ describe('Session Board semantic layout operations', () => {
       { op: 'tab.move', tabId: 'metrics', index: 0 },
       { op: 'tab.remove', tabId: 'metrics' },
       { op: 'item.reorder', itemId: 'chart', tabId: 'overview' },
+      { op: 'item.copy', itemId: 'chart', tabId: 'overview', targetItemId: 'copy' },
     ]) {
       expect(SessionBoardLayoutOperationV1Schema.safeParse(operation).success, JSON.stringify(operation)).toBe(false);
     }

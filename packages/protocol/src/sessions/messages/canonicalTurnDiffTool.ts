@@ -10,6 +10,7 @@ import {
   FileChangeEvidenceSchema,
   TurnChangeSetSchema,
 } from '../changes/schemas.js';
+import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 type RecordLike = Record<string, unknown>;
 
@@ -77,7 +78,7 @@ export function readTurnChangeToolMetadata(input: unknown): TurnChangeToolMetada
     const source = ChangeEvidenceSourceSchema.safeParse(meta.source);
     const confidence = ChangeConfidenceSchema.safeParse(meta.confidence);
     if (!source.success || !confidence.success) return null;
-    const parsed = TurnChangeSetSchema.safeParse({
+    const parsed = createStoredReadSchema(TurnChangeSetSchema).safeParse({
       sessionId,
       turnId,
       seqRange: meta.seqRange,
@@ -158,7 +159,7 @@ export function extractCanonicalDiffFiles(input: unknown, metadata: TurnChangeTo
         ...(file.truncated === undefined ? {} : { truncated: file.truncated }),
         ...(file.stats === undefined ? {} : { stats: file.stats }),
       };
-      const parsed = FileChangeEvidenceSchema.safeParse(candidate);
+      const parsed = createStoredReadSchema(FileChangeEvidenceSchema).safeParse(candidate);
       return parsed.success ? [parsed.data] : [];
     });
 }

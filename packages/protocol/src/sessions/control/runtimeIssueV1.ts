@@ -38,6 +38,23 @@ export const SessionRuntimeIssueSourceV1Schema = lazyZodSchema(() => z.enum([
 ]));
 export type SessionRuntimeIssueSourceV1 = z.infer<typeof SessionRuntimeIssueSourceV1Schema>;
 
+/** Closed startup diagnostics shared by Agent adapters and the host issue projector. */
+export const AGENT_STARTUP_FAILURE_PREVIEWS = {
+  agent_startup_rpc_rejected: 'Agent startup was rejected by its native API',
+  agent_startup_transport_failed: 'Agent startup transport failed',
+  agent_startup_invalid_state: 'Agent startup encountered invalid local runtime state',
+  agent_startup_failed: 'Agent startup failed',
+  AGENT_RESUME_PROVIDER_STATE_MISSING: 'The native Agent state needed to resume is missing',
+  codex_refresh_free_auth_unsupported: 'Agent startup authentication is unavailable',
+} as const;
+export type AgentStartupFailureCode = keyof typeof AGENT_STARTUP_FAILURE_PREVIEWS;
+
+export function readAgentStartupFailureCode(value: unknown): AgentStartupFailureCode | null {
+  return typeof value === 'string' && Object.hasOwn(AGENT_STARTUP_FAILURE_PREVIEWS, value)
+    ? value as AgentStartupFailureCode
+    : null;
+}
+
 const SessionRuntimeAgentProcessExitAfterSwitchDetailsV1Schema = lazyZodSchema(() => z
   .object({
     exitCode: z.number().int().nullable(),

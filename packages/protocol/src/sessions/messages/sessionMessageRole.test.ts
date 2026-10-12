@@ -66,5 +66,12 @@ describe('session message role schema', () => {
       role: 'agent',
       body: { type: 'message', message: 'assistant text' },
     });
+    expect(protocol.resolveTranscriptBodySemanticEvent({
+      protocol: 'acp',
+      body: { type: 'event', data: { type: 'message', message: 'native assistant text' } },
+    })).toEqual({ role: 'agent', body: { type: 'message', message: 'native assistant text' } });
+    expect(protocol.resolveTranscriptBodySessionMessageRole({
+      protocol: 'acp', body: { type: 'event', data: null },
+    })).toBe('unknown');
   });
 });

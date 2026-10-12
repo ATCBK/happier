@@ -1,5 +1,6 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod';
+import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 import { PendingLocalIdSchema, readPendingLocalId } from '../pending/pendingLocalId.js';
 
 export const SESSION_PENDING_QUEUE_HOLD_METADATA_KEY = 'sessionPendingQueueHoldV1' as const;
@@ -67,7 +68,7 @@ export function readSessionPendingQueueHoldV1FromMetadata(metadata: unknown): Se
     return null;
   }
   const raw = (metadata as Record<string, unknown>)[SESSION_PENDING_QUEUE_HOLD_METADATA_KEY];
-  const parsed = SessionPendingQueueHoldV1Schema.safeParse(raw);
+  const parsed = createStoredReadSchema(SessionPendingQueueHoldV1Schema).safeParse(raw);
   return parsed.success ? parsed.data : null;
 }
 
