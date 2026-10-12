@@ -1,8 +1,84 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import * as planet from './planet.mjs';
+import { assertStructuralParity, captureRuntimeSkip } from './scripts/parityAssertions.mjs';
 const { createPlanetFrame, planetFrameIntervalMs, planetRowsForColumns } = planet;
+
+const sceneParity = JSON.parse(readFileSync(new URL('./fixtures/planet-scene-parity.json', import.meta.url), 'utf8'));
+const sha256 = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+
+test('Home scenes retain captured lab dot and digit structure and counts', async (t) => {
+  const hashes = [];
+  for (const reference of sceneParity.scenes) {
+    const actual = planet.createPlanetScene(reference.options);
+    assert.deepEqual([actual.body.length, actual.haze.length, actual.cells.length], reference.counts, `${reference.id}: counts`);
+    if (reference.output) assertStructuralParity(actual, reference.output, reference.id);
+    hashes.push([sha256(actual), reference.sha256, reference.id]);
+  }
+  await t.test('scene exact hashes match the capture', { skip: captureRuntimeSkip }, () => {
+    for (const [actual, expected, label] of hashes) assert.equal(actual, expected, label);
+  });
+});
+
+test('scene extraction leaves every existing brand size and pose byte-identical', () => {
+  for (const { options, sha256: expected } of sceneParity.brand) {
+    assert.equal(sha256(planet.createPlanetDots(options)), expected, JSON.stringify(options));
+  }
+});
+
+test('Welcome and Loading retain captured choreography structure and identities', async (t) => {
+  const hashes = [];
+  assert.deepEqual(planet.PLANET_MOMENT_TIMINGS, sceneParity.timings);
+  for (const { px, py, k } of sceneParity.light) {
+    assert.ok(Number.isFinite(planet.planetLightAt(px, py, k)));
+    assert.ok(Number.isFinite(planet.planetMaskAt(px, py, k)));
+  }
+  for (const { options, sha256: expected, output } of sceneParity.assemblies) {
+    const { body, patches, field, R, g } = planet.planetAssembly(options);
+    const actual = { body, patches, field, R, g };
+    const label = `assembly/${options.theme}`;
+    if (output) assertStructuralParity(actual, output, label);
+    hashes.push([sha256(actual), expected, label]);
+  }
+  for (const ref of sceneParity.frames) {
+    const frame = planet.planetMomentFrame(ref.moment, ref.time, ref.moment === 'loading' ? ref.ready : null);
+    assert.equal(frame.assembly, ref.assembly, JSON.stringify(ref));
+    if (!ref.assembly) continue;
+    const src = ref.moment === 'welcome'
+      ? { R: 112, cx: 180, cy: 165, theme: ref.theme, field: { reach: { bottom: 1.22 } } }
+      : { R: Math.min(360, 330) * 0.17, cx: 180, cy: Math.round(330 * 0.45), theme: ref.theme, rotate: -1.5, mirror: false };
+    const A = planet.planetAssembly({ ...src, view: { w: 360, h: 330 } });
+    const f = frame.frame;
+    const values = { t: f.t, prog: f.prog, alpha: f.alpha ?? 1, halo: f.halo, fieldU: f.fieldU, t0: f.t0 ?? 0, retype: f.retype ?? 0,
+      patches: A.patches.map((p) => ({ landT: f.landT(p), appear: f.appear(p), loose: f.loose ? f.loose(p) : 0 })) };
+    const label = `${ref.moment}-${ref.theme}-${ref.time}`;
+    if (ref.output) assertStructuralParity(values, ref.output, label);
+    hashes.push([sha256(values), ref.sha256, label]);
+  }
+  await t.test('choreography exact hashes and curves match the capture', { skip: captureRuntimeSkip }, () => {
+    for (const [actual, expected, label] of hashes) assert.equal(actual, expected, label);
+    for (const { px, py, k, light, mask } of sceneParity.light) {
+      assert.equal(planet.planetLightAt(px, py, k), light);
+      assert.equal(planet.planetMaskAt(px, py, k), mask);
+    }
+  });
+});
+
+test('while readiness is unknown, the Loading cloud holds its patch digits drifting toward the limb', () => {
+  const A = planet.planetAssembly({ R: 120, cx: 300, cy: 260, theme: 'dark', rotate: -1.5, mirror: false, view: { w: 600, h: 560 } });
+  const waiting = planet.planetMomentFrame('loading', 2, null);
+  assert.equal(waiting.assembly, true);
+  const cells = planet.planetAssemblyFrame(A, waiting.frame).cells;
+  const patchCells = cells.filter((cell) => cell.weight === 500);
+  assert.ok(patchCells.length > A.patches.length / 2, `patch digits drawn: ${patchCells.length} of ${A.patches.length}`);
+  assert.ok(cells.every((cell) => Number.isFinite(cell.x) && Number.isFinite(cell.y) && Number.isFinite(cell.a)));
+  // The same patches, once ready is known far ahead, are the lab's waiting frame exactly.
+  const known = planet.planetAssemblyFrame(A, planet.planetMomentFrame('loading', 2, 1e6).frame).cells;
+  assert.deepEqual(cells.filter((cell) => cell.weight === 500).map(({ x, y, a, ch }) => ({ x, y, a, ch })),
+    known.filter((cell) => cell.weight === 500).map(({ x, y, a, ch }) => ({ x, y, a, ch })));
+});
 
 // Independently measured from PR #463, head a83d311b63f8ba5e1bba7f637fee5a90a61ed1b3.
 // These cover eclipse, settled shading, the light theme and dimming, including RGB + 2x4 projection.
@@ -365,4 +441,13 @@ test('the rest glyph hands over to the dots early in the tap and returns as a le
   assert.equal(shown(1, 0.4), 0);
   assert.ok(shown(1, 0.8) > 0.5);
   assert.equal(shown(1, 1), 1);
+});
+
+test('a gained Home scene equals the scene re-derived at that gain (the ripple re-gains, never re-samples)', () => {
+  const options = { theme: 'dark', R: 306, cx: 1060 - 76.5, cy: 153, view: { w: 1060, h: 900 }, time: 0, rate: 0, rotate: -1.5, mirror: false,
+    fullness: 1, halo: { top: 1, right: 1, left: 1, bottom: 0.8 }, tail: 1.6, style: 'balanced', dpr: 1,
+    field: { around: 1, reach: { top: 3.2, right: 3.2, left: 2.7, bottom: 2.7 }, fall: 0.8, ink: 0.8, start: 0.3, ramp: 0.6, over: 0.62, overStyle: 'ink' } };
+  const base = planet.createPlanetScene(options);
+  assert.equal(planet.gainPlanetScene(base, 1), base);
+  for (const gain of [1.07, 1.22]) assert.deepEqual(planet.gainPlanetScene(base, gain), planet.createPlanetScene({ ...options, gain }), `gain ${gain}`);
 });

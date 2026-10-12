@@ -15,6 +15,18 @@
       "types": "./planet.d.mts",
       "default": "./planet.mjs"
     },
+    "./planet-moments": {
+      "types": "./planet-moments.d.mts",
+      "default": "./planet-moments.mjs"
+    },
+    "./planet-placement": {
+      "types": "./planet-placement.d.mts",
+      "default": "./planet-placement.mjs"
+    },
+    "./atmosphere": {
+      "types": "./atmosphere.d.mts",
+      "default": "./atmosphere.mjs"
+    },
     "./product-story": {
       "happier-source": "./src/product-story.ts",
       "types": "./dist/product-story.d.ts",
@@ -25,11 +37,17 @@
     "dist",
     "planet.mjs",
     "planet.d.mts",
+    "planet-moments.mjs",
+    "planet-moments.d.mts",
+    "planet-placement.mjs",
+    "planet-placement.d.mts",
+    "atmosphere.mjs",
+    "atmosphere.d.mts",
     "package.json"
   ],
   "scripts": {
     "test": "../../apps/stack/bin/hstack-exec --script=test:local",
-    "test:local": "node --test planet.test.mjs",
+    "test:local": "node --test planet.test.mjs atmosphere.test.mjs planet-moments.test.mjs planet-placement.test.mjs scripts/parityAssertions.test.mjs",
     "build": "node ../../scripts/workspaces/buildTypeScriptPackageDist.mjs -p tsconfig.json",
     "prepack": "node ../../scripts/workspaces/buildTypeScriptPackageDist.mjs -p tsconfig.json",
     "typecheck": "../../apps/stack/bin/hstack-exec --script=typecheck:local",

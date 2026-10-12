@@ -142,7 +142,7 @@ function samplePlanetDot(px, py, dx, dy, sample) {
 }
 
 /** The sampler's colour for a cell, lit or not (a mark slot keeps its colour while a level lights it). */
-function shadePlanetDot(px, py, dx, dy, { palette, light, reveal, breath, spin, glow, reach, gamma = 1 }) {
+export function shadePlanetDot(px, py, dx, dy, { palette, light, reveal, breath, spin, glow, reach, gamma = 1, fleck: fleckShare = 0.06 /* lab: */, detail: detailK = 1 /* lab: */, full = 0 /* lab: */, fleckDot = false /* lab: */ }) {
   const distanceSquared = px * px + py * py;
   const threshold = BAYER[(dy & 3) * 4 + (dx & 3)];
   if (distanceSquared >= 1) {
@@ -155,7 +155,8 @@ function shadePlanetDot(px, py, dx, dy, { palette, light, reveal, breath, spin, 
   }
   const pz = Math.sqrt(1 - distanceSquared);
   const lambert = px * light[0] + py * light[1] + pz * light[2];
-  const day = smooth((lambert + 0.42) / 1.05);
+  const day0 = smooth((lambert + 0.42) / 1.05);
+  const day = full ? mix(day0, 0.6 + 0.4 * day0, full) : day0; // lab: fullness lifts the night side to a soft terminator shade
   const rimFacing = clamp(((px * light[0] + py * light[1]) / Math.max(0.2, Math.sqrt(distanceSquared))) * 1.2 + 0.1);
   const rim = (1 - pz) ** 2.6 * rimFacing * (0.6 + 0.4 * reveal);
   const qy = py * COS_TILT - px * SIN_TILT;
@@ -164,13 +165,15 @@ function shadePlanetDot(px, py, dx, dy, { palette, light, reveal, breath, spin, 
   const latitude = Math.asin(clamp(qy, -1, 1));
   const bands = Math.sin(latitude * 7 + Math.sin(longitude * 2 + latitude * 3) * 0.9) * 0.5 + 0.5;
   const grain = hash(Math.floor((longitude / (Math.PI * 2)) * 180 + 1000), Math.floor(latitude * 40 + 100));
-  const detail = 1 + (bands - 0.5) * 0.07 + (grain - 0.5) * 0.12;
+  const detail = 1 + ((bands - 0.5) * 0.07 + (grain - 0.5) * 0.12) * detailK;
   let colour = gradient(palette.body, clamp(0.44 + py * 0.6 - px * 0.12));
   colour = mixRgb(colour, palette.rose, clamp(-px * 0.35) * (1 - Math.abs(py)));
   colour = mixRgb(palette.background, colour, clamp(day * detail * (1 + 0.08 * breath)) ** gamma);
   colour = mixRgb(colour, palette.rim, clamp(rim * 1.1));
-  const fleck = grain < 0.06 ? 0.5 : 0;
-  return { rgb: colour, lit: !(clamp(day * 1.25 + rim * 2) - fleck < threshold) };
+  // lab: beyond the product's sizes a surface cell spans several dots, so flecks would cluster; there each fleck is ONE
+  // lattice dot, scattered, at the share the product shows at 160 px (a fleck cell drops about half of its dots)
+  const fleck = fleckDot ? (hash(dx * 7 + 3, dy * 13 + 5) < fleckShare * 0.5 ? 1 : 0) : (grain < fleckShare ? 0.5 : 0);
+  return { rgb: colour, lit: !(clamp(day * 1.25 + rim * 2 + full * 0.3) - fleck < threshold) };
 }
 
 export function createPlanetFrame(options = {}) {
@@ -319,7 +322,7 @@ function atmosphereForEnergy(energy) {
  * `bleed` (a fraction of the box per side, e.g. 0.3) is the live mark's geometry (see
  * `createLiveMarkDots`). Without it the planet sits inside the box (hero/readiness art).
  */
-export function createPlanetDots({ size = 24, theme = 'dark', pose = 'ready', energy = 0, light, bleed = 0, rows: latticeRows, halo = 1, warmth = 0 } = {}) {
+function createPlanetDotSlots({ size = 24, theme = 'dark', pose = 'ready', energy = 0, light, bleed = 0, rows: latticeRows, halo = 1, warmth = 0 } = {}) {
   const amplitude = Number.isFinite(energy) ? clamp(energy) : 0;
   if (Number.isFinite(bleed) && bleed > 0) return createLiveMarkDots({ size, theme, pose, amplitude, light, bleed });
   // Scene art keeps a finer lattice than a mark of the same box (`rows`), a quieter halo and, at golden
@@ -351,6 +354,11 @@ export function createPlanetDots({ size = 24, theme = 'dark', pose = 'ready', en
     if (rgb && warm > 0) rgb = mixRgb(rgb, palette.rim, warm);
     return { id, x, y, radius: pitch * 0.33, rgb: (rgb ? inkDot(rgb, theme) : palette.background).map(Math.round), opacity };
   });
+}
+
+/** Existing mark projection delegates to the scene owner, retaining every invisible lattice slot. */
+export function createPlanetDots(options = {}) {
+  return planetScene(options, 'mark');
 }
 
 /**
@@ -693,4 +701,233 @@ export function drawPlanetMarkFrame(to, from, morph, pose, energy, flow, draw, g
     const micA = leaving > 0 ? to.micA[i] * micResolve : 0;
     if (micA > 0.004) draw(to.micX[i], to.micY[i], to.micR[i], to.micRgb[c], to.micRgb[c + 1], to.micRgb[c + 2], micA);
   }
+}
+
+// The Home scene maths below are extracted unchanged from the approved atmosphere lab.
+const STYLES = { airy: 0.12, balanced: 0.55, rich: 1 };
+const DOT_RADIUS = 0.33, REST_SPIN = spinAt(SPIN_REST_SECONDS);
+const sstep = (a, b, v) => { const t = clamp((v - a) / (b - a)); return t * t * (3 - 2 * t); };
+const easeOut = (v) => 1 - (1 - clamp(v)) ** 3;
+const easeInOut = (v) => { const t = clamp(v); return t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2; };
+const crit = (v, w = 7) => { const t = clamp(v); return (1 - (1 + w * t) * Math.exp(-w * t)) / (1 - (1 + w) * Math.exp(-w)); };
+// The field/choreography hash uses addition. The existing body sampler uses XOR above.
+function sceneHash(x, y) { let h = Math.imul(x | 0, 374761393) + Math.imul(y | 0, 668265263) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; }
+function digitOf(i, j, t = 0, rate = 0) { const step = rate ? Math.floor(t * rate + sceneHash(i, j) * 9) : 0; const h = sceneHash(i + step * 7, j - step * 13); return h < 0.62 ? 1 + Math.floor(h / 0.62 * 3) : Math.floor(sceneHash(i * 3 + step, j + 11) * 10); }
+const bitOf = (i, j, t = 0, rate = 0) => (sceneHash(i + Math.floor(t * rate) * 5, j * 7 + 1) < 0.5 ? 0 : 1);
+const lightForReveal = (reveal) => normalize([mix(0.35, 0.78, reveal), mix(-0.2, -0.42, reveal), mix(-0.95, 0.5, smooth(reveal))]);
+const lightK = (k) => normalize([mix(0.3, 0.42, k), mix(-0.25, -0.5, k), mix(-0.92, 0.76, easeOut(k))]);
+const PRESETS = [[0.12, 1.375, 0.27, 0.13, 1.35, 4.6, 0.4], [0.55, 1, DOT_RADIUS, 0.06, 1, 7, 1], [1, 0.75, 0.41, 0.025, 0.85, 9, 1.7]];
+function styleOf(fill) {
+  const [a, b] = fill <= PRESETS[1][0] ? [PRESETS[0], PRESETS[1]] : [PRESETS[1], PRESETS[2]]; const t = clamp((fill - a[0]) / (b[0] - a[0]));
+  return { pitchK: mix(a[1], b[1], t), dotR: mix(a[2], b[2], t), fleck: mix(a[3], b[3], t), glowK: mix(a[4], b[4], t), reach: mix(a[5], b[5], t), detail: mix(a[6], b[6], t) };
+}
+// reach: a number of planet radii, or { top, right, bottom, left } (missing sides take the default), blended by direction
+function reachOf(f, o, R) {
+  const d = clamp(1 + 320 / R, 1.3, 1.9); const r = f.reach != null ? f.reach : o.fieldReach; // at most ~320 px from the limb
+  if (r && typeof r === 'object') { const t = r.top || d, ri = r.right || d, bo = r.bottom || d, l = r.left || d; return { max: Math.max(t, ri, bo, l), key: [t, ri, bo, l].join('/'),
+    at: (px, py) => { const q = Math.hypot(px, py) || 1, x = px / q, y = py / q; return (x > 0 ? ri : l) * x * x + (y > 0 ? bo : t) * y * y; } }; }
+  const v = r || d; return { max: v, key: String(v), at: () => v };
+}
+function fieldOf(o, R) {
+  let f = o.field; if (f == null) f = {}; if (typeof f === 'number') f = { around: f, over: o.over != null ? o.over : (f > 0 ? 0.16 : 0) };
+  const reach = reachOf(f, o, R);
+  return { around: R < 24 ? 0 : (f.around != null ? f.around : 1), over: R < 90 ? 0 : (f.over != null ? f.over : 0.3), fall: f.fall || 2.1, ink: f.ink || 1, start: f.start != null ? f.start : 1, ramp: f.ramp || 0.5, overStyle: f.overStyle || 'emboss',
+    reach: reach.max, reachAt: reach.at, reachKey: reach.key, seed: f.seed || 0, cell: f.cell || (o.fieldDp ? o.fieldDp * 1.3 : clamp(R / 10.5, 11, 22)) };
+}
+function resolve(o, dpr, view) {
+  const th = o.theme === 'light' ? 'light' : 'dark'; const R = o.R != null ? o.R : o.r; const mode = o.mode || 'dots';
+  const fill = o.fill != null ? clamp(o.fill) : (STYLES[o.style] != null ? STYLES[o.style] : STYLES.balanced); const ST = styleOf(fill);
+  // the brand's hero pitch is 3.2 px; a big planet keeps about 80 dots across until the pitch reaches 9 px, then it gains
+  // dots instead of growing them, so at R 700–1100 it is still a field of round dots. Small marks follow the product's tiers.
+  // the planet is always a FINE field of small round dots: the pitch is about constant in css px (balanced 4, airy 5.5,
+  // rich 3), so a larger planet has more dots, never bigger ones. Up to 400 px across it is the product's hero lattice (3.2 px).
+  const pitch = o.pitch || Math.max(1.6, Math.min(clamp(R / 50, HERO_DOT_PITCH, 4) * ST.pitchK, (2.5 * R) / 14)); const pD = Math.max(2, Math.round(pitch * dpr));
+  const rise = o.rise != null ? o.rise : 1; const rot = o.rotate || 0, mir = o.mirror ? -1 : 1;
+  const F = fieldOf(o, R); const CX = Math.round(o.cx * dpr), CY = Math.round(o.cy * dpr); // the lattice is anchored to the centre: it never swims
+  // halo: a number, or { top, right, bottom, left } (missing sides = 1), blended by direction on the canvas like `reach`
+  const hs = o.halo != null && typeof o.halo === 'object' ? o.halo : null; const hv = (v) => (v != null ? v : 1);
+  const haloAt = hs ? (fx, fy) => { const q = Math.hypot(fx, fy) || 1, x = fx / q, y = fy / q; return hv(x > 0 ? hs.right : hs.left) * x * x + hv(y > 0 ? hs.bottom : hs.top) * y * y; } : null;
+  const haloMax = hs ? Math.max(hv(hs.top), hv(hs.right), hv(hs.bottom), hv(hs.left)) : (o.halo != null ? o.halo : 1);
+  const full = o.fullness != null ? clamp(o.fullness) : 0;
+  const atm = atmosphereForEnergy(0); const glow = atm.glow * ST.glowK * haloMax;
+  const tail = o.tail || 0;
+  const haloEnd = Math.max(1 + Math.log(Math.max(1.01, glow * 0.9 / 0.05)) / ST.reach, tail ? 1 + tail * haloMax : 0); // beyond this altitude no halo dot can light
+  const B = Math.max(haloEnd, F.around ? F.reach : 0) * R + pitch;
+  const x0 = Math.max(0, Math.floor(CX - B * dpr)), y0 = Math.max(0, Math.floor(CY - B * dpr));
+  const x1 = Math.min(Math.round(view.w * dpr), Math.ceil(CX + B * dpr)), y1 = Math.min(Math.round(view.h * dpr), Math.ceil(CY + B * dpr));
+  const sample = { palette: PLANET_PALETTES[th], light: o.light || lightForReveal(rise), reveal: rise, breath: 0, spin: REST_SPIN, glow, reach: ST.reach, fleck: ST.fleck, detail: ST.detail, full, fleckDot: R > 200 }; // above 400 px across: single-dot flecks
+  return { tail, haloAt, haloMax, haloKey: hs ? [hs.top, hs.right, hs.bottom, hs.left].join('/') : '', full, fill, ST, sample, haloEnd, rc: Math.cos(-rot), rs: Math.sin(-rot), mir, rot, th, R, mode, pD, pitch: pD / dpr, rise, L: lightK(rise), gain: o.gain || 1, F, dpr, CX, CY, cx: CX / dpr, cy: CY / dpr,
+    x0, y0, W: Math.max(0, x1 - x0), H: Math.max(0, y1 - y0), time: o.time || 0, rate: o.rate || 0, dp: o.dp, binary: o.binary, lightKey: o.light ? o.light.map((v) => v.toFixed(3)).join() : '' };
+}
+function toArt(P, fx, fy, o) { const x = fx * P.mir; o[0] = x * P.rc - fy * P.rs; o[1] = x * P.rs + fy * P.rc; return o; }
+const AP = [0, 0];
+function brandAt(P, fx, fy) { toArt(P, fx, fy, AP); const sh = shadePlanetDot(AP[0], AP[1], 0, 0, P.sample); return { lit: sh.lit, rgb: inkDot(sh.rgb, P.th) }; }
+// every lit dot of the visible region: { x, y (css px in the canvas), r, rgb, op, halo, i, j, px, py (art space) }
+function brandDots(P) {
+  const { pD, dpr, R, th, sample } = P; const out = []; const p = pD / dpr; const rB = p * P.ST.dotR, rH = p * P.ST.dotR * (0.28 / 0.33);
+  const i0 = Math.floor((P.x0 - P.CX) / pD) - 1, i1 = Math.ceil((P.x0 + P.W - P.CX) / pD) + 1, j0 = Math.floor((P.y0 - P.CY) / pD) - 1, j1 = Math.ceil((P.y0 + P.H - P.CY) / pD) + 1; const lim = P.haloEnd * P.haloEnd;
+  for (let j = j0; j < j1; j++) for (let i = i0; i < i1; i++) {
+    const fx = (i + 0.5) * p / R, fy = (j + 0.5) * p / R; const d2 = fx * fx + fy * fy; if (d2 > lim) continue;
+    toArt(P, fx, fy, AP); const px = AP[0], py = AP[1]; const g0 = sample.glow; if (P.haloAt && d2 >= 1) sample.glow = g0 * P.haloAt(fx, fy) / P.haloMax;
+    const sh = shadePlanetDot(px, py, i + 4096, j + 4096, sample); sample.glow = g0; const d = Math.sqrt(d2); let fade = 1;
+    if (!sh.lit) { // the tail: past the brand's glow the haze keeps thinning on the same ordered lattice, all round the planet
+      if (!P.tail || d2 < 1) continue; const L = P.tail * (P.haloAt ? P.haloAt(fx, fy) : 1); if (L <= 0) continue; const k = (d - 1) / L;
+      const facing = clamp(((px * sample.light[0] + py * sample.light[1]) / d) * 0.5 + 0.6);
+      // dense enough: the brand's ordered lattice; fainter: a random scatter, so the haze thins to nothing with no contour
+      const dn = (0.45 * Math.exp(-9 * k) + 0.05 * (1 - sstep(0.4, 1, k))) * facing; /* dissolves fast, then a few stray dots */ const bt = BAYER[((j + 4096) & 3) * 4 + ((i + 4096) & 3)] + 0.02;
+      if (dn >= 0.12 ? dn <= bt : sceneHash(i + 7331, j + 1709) >= dn * 0.75) continue; fade = 1 - 0.55 * clamp(k); }
+    let rgb = sh.rgb, op = 1; const halo = d >= 1;
+    if (halo) { rgb = gradient(sample.palette.halo, clamp((py + 1) / 2 - px * 0.2)); op = haloOpacity(th, d) * fade; } // as createPlanetDots: a halo dot carries its colour and fades by opacity
+    rgb = inkDot(rgb, th); if (P.gain !== 1) rgb = gainRgb(rgb, P.gain);
+    out.push({ x: P.cx + (i + 0.5) * p, y: P.cy + (j + 0.5) * p, r: halo ? rH : rB, rgb, op, halo, i, j, px, py });
+  }
+  return out;
+}
+// gain is a dot's final colour step (moment brightening); the digit cells never carry it
+const gainRgb = (rgb, gain) => rgb.map((c) => clamp(c * gain, 0, 255));
+function fieldCells(P, all) {
+  const { th, R, F, cx, cy } = P; const out = []; if (!F.around && !F.over) return out;
+  const vx0 = P.x0 / P.dpr, vy0 = P.y0 / P.dpr, vx1 = (P.x0 + P.W) / P.dpr, vy1 = (P.y0 + P.H) / P.dpr;
+  const dark = th === 'dark'; const grey = dark ? [190, 186, 204] : [128, 124, 142]; const sd = F.seed * 131; const base = dark ? 0.2 : 0.13;
+  const c = F.cell, fs = c * 0.62, n = Math.ceil(F.reach * R / c); const doOver = F.over && P.mode === 'dots'; const pal = P.sample.palette;
+  for (let j = -n; j < n; j++) for (let i = -n; i < n; i++) {
+    const X = cx + (i + 0.5) * c, Y = cy + (j + 0.5) * c; if (!all && (X < vx0 - c || X > vx1 + c || Y < vy0 - c || Y > vy1 + c)) continue;
+    const fx = (X - cx) / R, fy = (Y - cy) / R; const r = Math.hypot(fx, fy); const over = r < 1;
+    if (over ? !doOver : (!F.around || r > F.reach)) continue;
+    const hi = i + 4096 + sd, hj = j + 4096; if (sceneHash(hi + 911, hj + 77) < 0.07) continue;   // a few cells are never struck
+    let a, col; const m = sstep(0, 0.5, P.rise);
+    if (over) { const b = brandAt(P, fx, fy); if (!b.lit) continue; a = F.over * m * sstep(1, 0.9, r);
+      // printed ('ink'): the number is cut out of the planet in the page colour (white on light, near-black on dark);
+      // embossed: the dots under the glyph go paler
+      col = F.overStyle === 'ink' ? pal.background.slice() : [mix(b.rgb[0], 255, 0.4), mix(b.rgb[1], 255, 0.4), mix(b.rgb[2], 255, 0.4)]; }
+    else { const reach = F.reachAt(fx, fy); if (r > reach) continue; toArt(P, fx, fy, AP);
+      const near = Math.exp(-(r - 1) * 3) * clamp(((AP[0] * P.sample.light[0] + AP[1] * P.sample.light[1]) / r) * 0.8 + 0.5); // the halo's own light
+      const fall = Math.pow(1 - sstep(1, reach, r), F.fall) * sstep(1.0, 1.05, r); const rampIn = F.start < 1 ? mix(F.start, 1, sstep(1, 1 + F.ramp, r)) : 1; // softer at the limb, building outward
+      a = F.around * F.ink * (base + (dark ? 0.3 : 0.2) * near * F.start) * fall * m * rampIn;
+      const hc = inkDot(gradient(pal.halo, clamp((AP[1] + 1) / 2 - AP[0] * 0.2)), th); const k = near * 0.75; col = [mix(grey[0], hc[0], k), mix(grey[1], hc[1], k), mix(grey[2], hc[2], k)]; }
+    if (sceneHash(hi + 401, hj + 7) > 0.8) a *= 0.45;                                              // a typewriter's uneven strike
+    if (a < 0.012) continue;
+    const step = P.rate && !over && sceneHash(hi + 5, hj + 9) < 0.15 ? Math.floor(P.time * P.rate + sceneHash(hi, hj + 3) * 4) : 0;
+    out.push({ x: X, y: Y, a: clamp(a), col, cut: over && F.overStyle === 'ink', ch: String(P.binary ? bitOf(hi + step * 7, hj) : digitOf(hi + step * 7, hj)), over, fs, i, j });
+  }
+  return out;
+}
+
+/** Visible Home body, haze and typewriter field. Coordinates are CSS pixels, RGB is unrounded. */
+export function createPlanetScene(options) {
+  return planetScene(options, 'scene');
+}
+
+function planetScene(options, projection) {
+  // Existing hero/voice grids are edge-anchored and retain unlit slots for morph correspondence.
+  // Home's visible scene is centre-anchored. Both projections use the one canonical sampler.
+  if (projection === 'mark') return createPlanetDotSlots(options);
+  const P = resolve(options, options.dpr || 1, options.view);
+  const list = brandDots(P);
+  const dot = ({ x, y, r, rgb, op, i, j }) => ({ x, y, r, rgb, opacity: op, i, j });
+  return { body: list.filter((d) => !d.halo).map(dot), haze: list.filter((d) => d.halo).map(dot),
+    cells: fieldCells(P).map(({ col, ...c }) => ({ ...c, rgb: col })) };
+}
+
+/** The same scene at another gain without sampling it again: gain only scales the dots' colours (brandDots).
+ * `scene` must be the gain-1 scene for the same options. */
+export function gainPlanetScene(scene, gain) {
+  if (gain === 1) return scene;
+  const dot = (d) => ({ ...d, rgb: gainRgb(d.rgb, gain) });
+  return { body: scene.body.map(dot), haze: scene.haze.map(dot), cells: scene.cells };
+}
+
+// The lab's canvas shell consumes these pure functions rather than keeping private copies.
+export const PLANET_SAMPLER = { PLANET_PALETTES, BAYER, shadePlanetDot, inkDot, atmosphereForEnergy, lightForReveal, haloOpacity, gradient, mixRgb, hash, DOT_RADIUS, HERO_DOT_PITCH, REST_SPIN };
+export const PLANET_SCENE_RENDERER = { resolve, brandDots, fieldCells, toArt, brandAt, sceneHash, digitOf, bitOf, sstep, easeOut, easeInOut, crit };
+
+const ASM = { FLY: 0.45, PATCH: 2 };
+// the light of the assembly: it starts behind the planet, so only the limb on the lit side catches it (a crescent out
+// of the eclipse), then swings round to the front; the terminator crosses the sphere and the far limb is lit last.
+const UX = 0.643, UY = -0.766; // the PNG's own key-light side (up and to the right)
+export function planetLightAt(px, py, k) {
+  const r = Math.hypot(px, py); const nz = Math.sqrt(Math.max(0, 1 - Math.min(1, r * r))); const q = r > 1 ? 1 / r : 1;
+  const th = (1 - k) * 2.75; return (px * UX + py * UY) * q * Math.sin(th) + nz * Math.cos(th) + 0.3 * k * k;
+}
+export const planetMaskAt = (px, py, k) => (k >= 1 ? 1 : sstep(-0.07, 0.1, planetLightAt(px, py, k)));
+export function planetAssembly(o) {
+  const dpr = o.dpr || 1, view = o.view;
+  const P0 = resolve({ ...o, rise: 1 }, dpr, view);
+  const parts = { P: P0, list: brandDots(P0), field: fieldCells(P0) }; const P = parts.P; const R = P.R; const spread = R * 0.72;
+  // every body dot knows when the light reaches it; one digit per patch of PATCH × PATCH dots flies in and settles into them
+  const body = parts.list.filter((d) => !d.halo); const N = 48; const G = new Map();
+  for (const d of body) { d.ks = 1; for (let n = 0; n <= N; n++) { if (planetMaskAt(d.px, d.py, n / N) >= 0.5) { d.ks = n / N; break; } }
+    const gk = `${Math.floor(d.i / ASM.PATCH)}|${Math.floor(d.j / ASM.PATCH)}`; let g = G.get(gk); if (!g) { g = { n: 0, x: 0, y: 0, ks: 0, col: [0, 0, 0], i: Math.floor(d.i / ASM.PATCH) + 600, j: Math.floor(d.j / ASM.PATCH) + 600 }; G.set(gk, g); }
+    g.n++; g.x += d.x; g.y += d.y; g.ks += d.ks; g.col[0] += d.rgb[0]; g.col[1] += d.rgb[1]; g.col[2] += d.rgb[2]; }
+  const patches = [...G.values()].map((g) => { const hi = g.i, hj = g.j; const x = g.x / g.n, y = g.y / g.n;
+    const g1 = (sceneHash(hi * 3 + 1, hj * 5 + 2) + sceneHash(hi + 9, hj + 4) + sceneHash(hj, hi + 33) - 1.5), g2 = (sceneHash(hi * 7 + 3, hj + 21) + sceneHash(hi + 2, hj * 3 + 8) + sceneHash(hj + 5, hi * 2) - 1.5);
+    return { x, y, ks: g.ks / g.n, d: sceneHash(hi + 13, hj + 17), sx: x + g1 * spread * 1.5, sy: y + g2 * spread * 1.1, col: [g.col[0] / g.n, g.col[1] / g.n, g.col[2] / g.n], a: 1, i: hi, j: hj }; });
+  const field = parts.field.filter((c) => !c.over).map((c) => { const hi = c.i + 900, hj = c.j + 900;
+    const g1 = (sceneHash(hi * 3 + 1, hj * 5 + 2) + sceneHash(hi + 9, hj + 4) - 1), g2 = (sceneHash(hi * 7 + 3, hj + 21) + sceneHash(hi + 2, hj * 3 + 8) - 1);
+    return { ...c, sx: c.x + g1 * R * 0.5, sy: c.y + g2 * R * 0.5, d: sceneHash(hi + 3, hj + 5) }; });
+  return { P, R, g: P.pitch * ASM.PATCH, body, patches, field };
+}
+
+const W4 = { T: 1.9, LIGHT0: 0.2, LIGHT1: 1.72, COPY0: 0.95, COPY1: 1.4, CROSS: 0.22 };
+const L4 = { GRACE: 0.25, RESOLVE: 0.5, TRAVEL: 0.5, FADE: 0.14 };
+export const PLANET_MOMENT_TIMINGS = { ASM, W4, L4 };
+
+/** Renderer-independent assembly drawing, extracted from the lab's drawAssembly. */
+export function planetAssemblyFrame(A, f) {
+  const { P, patches, field } = A; const prog = clamp(f.prog); const al = f.alpha != null ? f.alpha : 1;
+  const body = [], cells = [];
+  if (prog > 0 && al > 0) {
+    for (const d of A.body) {
+      const k = prog >= 1 ? 1 : sstep(d.ks, d.ks + 0.07, prog); if (k <= 0) continue;
+      body.push({ x: d.x, y: d.y, r: d.r * k, rgb: d.rgb, opacity: al });
+    }
+  }
+  const halo = prog > 0 && al > 0 ? al * clamp(f.halo || 0) : 0;
+  const ca = (f.cloud != null ? f.cloud : 1) * al;
+  if (ca <= 0) return { body, halo, cells };
+  for (const q of field) {
+    const u = f.fieldU != null ? clamp((f.fieldU - q.d * 0.45) / 0.55) : 0; const k = crit(u, 6);
+    const x = mix(q.sx, q.x, k), y = mix(q.sy, q.y, k);
+    cells.push({ ...q, x, y, a: ca * mix(Math.min(0.16, q.a * 1.6) * (f.appear ? f.appear(q) : 1), q.a, k), weight: q.over ? (q.cut ? 700 : 600) : 400, fs: Number(q.fs.toFixed(2)) });
+  }
+  const g = A.g; const dark = P.th === 'dark';
+  for (const p of patches) {
+    const tl = f.landT(p); const start = Math.max(f.t0 != null ? f.t0 : 0, tl - ASM.FLY);
+    // readiness not known yet: the patch has not left the cloud (only `loose` moves it)
+    const u = tl === Infinity ? -Infinity : (f.t - start) / Math.max(0.12, tl - start);
+    if (u >= 1.12) continue; const k = crit(u, 6.5); const loose = f.loose ? f.loose(p) : 0; const kk = Math.max(k, loose);
+    const x = mix(p.sx, p.x, kk), y = mix(p.sy, p.y, kk); const out = sstep(0.82, 1.1, u);
+    const size = g * mix(1.35, 1.05, kk);
+    const a = ca * (1 - out) * mix((dark ? 0.36 : 0.3) * (f.appear ? f.appear(p) : 1), 0.92, Math.max(sstep(0, 0.5, u), loose * 0.9));
+    if (a > 0.01) cells.push({ x, y, a: a * (0.45 + 0.55 * p.a), col: p.col, ch: String(digitOf(p.i, p.j, f.t, u > 0 ? 0 : (f.retype || 0))), over: false, cut: false, fs: Number(size.toFixed(1)), weight: 500 });
+  }
+  return { body, halo, cells };
+}
+
+/** Pure lab curves. Readiness is a caller-observed time; null never finishes Loading. */
+export function planetMomentFrame(moment, t, T = null) {
+  if (moment === 'welcome') {
+    const copy = easeOut(sstep(W4.COPY0, W4.COPY1, t));
+    if (t >= W4.T) return { assembly: false, rest: true, restAlpha: 1, copy, time: t - W4.T };
+    const lin = clamp((t - W4.LIGHT0) / (W4.LIGHT1 - W4.LIGHT0)); const prog = easeInOut(lin);
+    const inv = (k) => (k < 0.5 ? Math.cbrt(k / 4) : 1 - Math.cbrt((1 - k) / 4));
+    const x = sstep(W4.T - W4.CROSS, W4.T, t);
+    return { assembly: true, rest: false, restAlpha: x, copy, frame: {
+      t, prog, alpha: 1 - x, halo: sstep(1.42, 1.78, t), landT: (p) => W4.LIGHT0 + inv(p.ks) * (W4.LIGHT1 - W4.LIGHT0) + 0.05 + p.d * 0.06, fieldU: clamp((t - 0.25) / 1.35),
+      appear: (p) => sstep(-0.35 + p.d * 0.2, -0.05 + p.d * 0.2, t),
+    } };
+  }
+  const fast = T != null && T <= L4.GRACE; const after = T != null ? t - T : -1;
+  const cover = T == null || after < 0 ? 1 : 1 - sstep(0, L4.FADE, after);
+  if (fast) return { assembly: false, fast, cover, rest: after >= 0, travel: 1 };
+  if (t < L4.GRACE) return { assembly: false, fast, cover, rest: false, travel: 0 };
+  if (after >= L4.RESOLVE + L4.TRAVEL) return { assembly: false, fast, cover, rest: true, travel: 1 };
+  if (after >= L4.RESOLVE) return { assembly: false, fast, cover, rest: false, travel: crit((after - L4.RESOLVE) / L4.TRAVEL, 6) };
+  const wait = t - L4.GRACE; const hold = easeOut(clamp(wait / 1.1));
+  const prog = after < 0 ? 0 : easeInOut(clamp(after / (L4.RESOLVE - 0.06)));
+  return { assembly: true, fast, cover, rest: false, travel: 0, frame: {
+    t, t0: T != null ? T - 0.05 : 0, prog, retype: 6, halo: after < 0 ? 0 : sstep(0.32, 0.5, after), landT: (p) => (T == null ? Infinity : T + 0.2 + p.ks * 0.22 + p.d * 0.04),
+    appear: (p) => sstep(p.d * 0.3, 0.15 + p.d * 0.3, wait), fieldU: after < 0 ? 0 : clamp(after / L4.RESOLVE),
+    loose: (p) => hold * 0.86 * sstep(0.34, 0.04, p.ks),
+  } };
 }
