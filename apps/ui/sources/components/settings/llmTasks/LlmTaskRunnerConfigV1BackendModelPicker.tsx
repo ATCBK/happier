@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import { useAuthoringMemoryField } from '@/sync/domains/state/storage';
 import * as React from 'react';
 
@@ -24,7 +25,8 @@ import { FieldItem } from '@/components/ui/forms/FieldItem';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
-import { useSetting } from '@/sync/domains/state/storage';
+import { useActiveServerAccountScope, useSetting } from '@/sync/domains/state/storage';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 import { useAllMachines } from '@/sync/store/hooks';
 import { useAcpCatalogForServer } from '@/sync/store/useAcpCatalog';
 import { t } from '@/text';
@@ -61,6 +63,8 @@ export function LlmTaskRunnerConfigV1BackendModelPicker(props: Readonly<{
   const catalogReady = acpCatalog?.catalog.status === 'ready' && !acpCatalog.stale;
   const backendEnabledByTargetKey = useSetting('backendEnabledByTargetKey') as Record<string, boolean> | undefined;
   const machines = useAllMachines();
+  const scope = useActiveServerAccountScope();
+  const reachabilityRevision = useMachineReachabilityRevision();
   const recentMachinePaths = useAuthoringMemoryField('recentMachinePaths');
   const [openMenu, setOpenMenu] = React.useState<null | 'backend' | 'model'>(null);
   const [customModelDraft, setCustomModelDraft] = React.useState<string | null>(null);
@@ -69,9 +73,10 @@ export function LlmTaskRunnerConfigV1BackendModelPicker(props: Readonly<{
   const preflightMachineId = React.useMemo(() => {
     return resolvePreferredMachineId({
       machines,
+      scope,
       recentMachinePaths: Array.isArray(recentMachinePaths) ? recentMachinePaths : [],
     });
-  }, [machines, recentMachinePaths]);
+  }, [machines, recentMachinePaths, scope, reachabilityRevision]);
   const daemonMergedProjection = useDaemonMergedProjectionInputs({
     machineId: preflightMachineId,
     serverId: String(getActiveServerSnapshot().serverId ?? '').trim() || null,
@@ -185,7 +190,7 @@ export function LlmTaskRunnerConfigV1BackendModelPicker(props: Readonly<{
     <>
       <Wrapper>
         {showLabels ? (
-          <Text style={{ fontSize: 12, fontWeight: '500', color: theme.colors.text.secondary }}>
+          <Text style={{ ...Typography.variant('meta', 'medium'),  color: theme.colors.text.secondary }}>
             {t('settingsSession.replayResume.summaryRunner.backendTitle')}
           </Text>
         ) : null}
@@ -232,7 +237,7 @@ export function LlmTaskRunnerConfigV1BackendModelPicker(props: Readonly<{
       />
 
       {showLabels ? (
-        <Text style={{ fontSize: 12, fontWeight: '500', color: theme.colors.text.secondary }}>
+        <Text style={{ ...Typography.variant('meta', 'medium'),  color: theme.colors.text.secondary }}>
           {t('settingsSession.replayResume.summaryRunner.modelTitle')}
         </Text>
       ) : null}
@@ -297,7 +302,7 @@ export function LlmTaskRunnerConfigV1BackendModelPicker(props: Readonly<{
             />
           </FieldItem>
           <SectionContentRow>
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 8 }}>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', gap: theme.space.s8 }}>
               <RoundButton testID={`${customModelTestID}.cancel`} size="small" display="secondary" title={t('common.cancel')} onPress={() => setCustomModelDraft(null)} />
               <RoundButton testID={`${customModelTestID}.save`} size="small" title={t('common.save')} onPress={saveCustomModel} />
             </View>
