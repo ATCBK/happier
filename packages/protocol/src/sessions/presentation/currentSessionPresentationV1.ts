@@ -10,6 +10,7 @@ const WidgetInputBindingsV1Schema = z.lazy(() => BindingsSchema);
 import { WidgetExpectedPresentationV1Schema } from '../../widgets/widgetPresentationV1.js';
 import { SESSION_COMPANION_BUILTIN_ITEM_IDS } from '../../widgets/builtinWidgetDescriptorV1.js';
 import { PluginIdSchema } from '../../plugins/pluginId.js';
+import { UiSurfaceNetworkRequestV1Schema } from '../../plugins/contributions/ui/hostedHtmlCapabilitiesV1.js';
 import { SessionSurfaceItemIdSchema } from '../board/ids.js';
 import {
   ComposerTransactionResultV1Schema,
@@ -86,6 +87,8 @@ export const CurrentSessionPresentationIntentV1Schema = lazyZodSchema(() => z.di
   z.object({ kind: z.literal('viewer.source.select'), source: z.enum(['computer', 'browser']) }).strict(),
   z.object({ kind: z.literal('viewer.expand') }).strict(),
   z.object({ kind: z.literal('viewer.restore') }).strict(),
+  // Instance transport is host-only; the public author subset below excludes it.
+  z.object({ kind: z.literal('companion.instance.network.set'), instanceId: z.string().trim().min(1), network: UiSurfaceNetworkRequestV1Schema }).strict(),
 ]));
 export type CurrentSessionPresentationIntentV1 = z.infer<
   typeof CurrentSessionPresentationIntentV1Schema
