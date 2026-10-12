@@ -15,6 +15,7 @@ import type { Machine } from '@/sync/domains/state/storageTypes';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { useMachineListForServer, useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { t } from '@/text';
+import { readMachineRequestReachabilityObservation } from '@/sync/domains/machines/reachability/machineReachability';
 
 export type ManagedControllerScope = Readonly<{
   /** The machine whose installation runs provider calls: the person's choice, else the preselected default. */
@@ -64,8 +65,8 @@ export function useManagedControllerScope(
     ? chosen : undefined;
   const preferredMachineId = input.preferred?.machineId;
   const preferredInstallationId = input.preferred?.installationId;
-  const retained = scopedChoice?.explicit ? scopedChoice.controller
-    : preferredMachineId && preferredInstallationId ? input.preferred : scopedChoice?.controller;
+  const namedRetained = scopedChoice?.explicit ? scopedChoice.controller
+    : preferredMachineId && preferredInstallationId ? input.preferred : undefined;
   const { onSelect } = input;
 
   const eligible = React.useMemo(
@@ -78,12 +79,23 @@ export function useManagedControllerScope(
       rows.filter(
         (row) =>
           areServerProfileIdentifiersEquivalent(row.serverId, input.serverId) &&
-          (row.candidate.target.machineId === retained?.machineId || eligible.some(
+          (row.candidate.target.machineId === namedRetained?.machineId || eligible.some(
             (machine) => machine.id === row.candidate.target.machineId,
           )),
       ),
-    [eligible, input.serverId, rows, retained?.machineId],
+    [eligible, input.serverId, namedRetained?.machineId, rows],
   );
+  const automaticRetainedRow = !namedRetained && scopedChoice && !scopedChoice.explicit
+    ? scopedRows.find((row) => row.candidate.target.machineId === scopedChoice.controller.machineId)
+    : undefined;
+  const automaticRetained = automaticRetainedRow && scopedChoice
+    && readMachineRequestReachabilityObservation(
+      automaticRetainedRow.serverId,
+      automaticRetainedRow.candidate.target.machineId,
+    )?.outcome !== 'failed'
+    ? scopedChoice.controller
+    : undefined;
+  const retained = namedRetained ?? automaticRetained;
   // Kept identity-stable by its ids: presence updates must not restart the reads it scopes.
   const preferred = React.useMemo(() => {
     // A draft keeps its exact installation even when asleep, missing or replaced; fresh execution

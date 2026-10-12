@@ -67,7 +67,7 @@ export function buildMachineAdministrationCandidateInventoryRowsFromSnapshots(pa
                 machineId: machine.id,
             });
             if (!parsedTarget.success) continue;
-            const presence = resolveMachinePickerPresence(machine, params.nowMs);
+            const presence = resolveMachinePickerPresence(machine, params.nowMs, snapshot.profileId);
             const availability = machine.availability?.kind === 'locked'
                 ? 'locked' as const
                 : presence.status;
@@ -145,7 +145,7 @@ export function buildMachineAdministrationCandidateInventoryRows(params: Readonl
                 serverIdentityId,
                 machineId: machine.id,
             });
-            const presence = resolveMachinePickerPresence(machine, params.nowMs);
+            const presence = resolveMachinePickerPresence(machine, params.nowMs, profile.id);
             const availability = machine.availability?.kind === 'locked'
                 ? 'locked' as const
                 : presence.status;

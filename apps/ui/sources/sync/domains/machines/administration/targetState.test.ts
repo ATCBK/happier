@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { adoptHomeProfile, type ServerProfile } from '@/sync/domains/server/serverProfiles';
+import {
+    clearMachineRequestReachabilityForTest,
+    recordMachineRequestFailed,
+} from '@/sync/domains/machines/reachability/machineReachability';
 
 import {
     buildMachineAdministrationCandidateInventoryRows,
@@ -35,6 +39,7 @@ function machine(input: Readonly<{
 
 let profile: ServerProfile;
 beforeEach(async () => {
+    clearMachineRequestReachabilityForTest();
     const url = 'https://b.example.test';
     profile = await adoptHomeProfile({ descriptor: {
         v: 1, homeServerIdentityId: 'srv_server_b', canonicalServerUrl: url,
@@ -43,6 +48,23 @@ beforeEach(async () => {
 });
 
 describe('buildMachineAdministrationCandidates', () => {
+    it('projects a failed server-scoped request as unreachable despite fresh pushed presence', () => {
+        recordMachineRequestFailed({ serverId: 'local-profile-b', machineId: 'machine-b', observedAtMs: 100 });
+
+        const rows = buildMachineAdministrationCandidateInventoryRowsFromSnapshots({
+            snapshots: [{
+                kind: 'resolved',
+                profileId: 'local-profile-b',
+                serverIdentityId: 'srv_server_b',
+                serverName: 'Server B',
+                observation: 'live',
+                machines: [machine({ id: 'machine-b', active: true })],
+            }],
+            nowMs: 100,
+        });
+
+        expect(rows[0]?.candidate.availability).toBe('offline');
+    });
     it('keeps the device-local routing row attached to its portable candidate without exposing it as preference data', () => {
         const rawMachine = machine({ id: 'machine-b', active: true });
 

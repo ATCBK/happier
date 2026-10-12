@@ -82,6 +82,22 @@ describe('provisioner picker demand', () => {
     expect(scope.getCurrent().selection?.resolveExecutionTarget()).toBeNull();
     await scope.unmount();
   });
+  it('moves an automatic controller choice after a failed request proves it unreachable', async () => {
+    const serverId = await harness.addHome({ name: 'Build', serverUrl: 'https://build.example', serverIdentityId: 'srv_build', accountId: 'owner', currentAccount: true });
+    const { storage } = await import('@/sync/domains/state/storage');
+    const { useManagedControllerScope } = await import('./useManagedControllerScope');
+    const { clearMachineRequestReachabilityForTest, recordMachineRequestFailed } = await import('@/sync/domains/machines/reachability/machineReachability');
+    onTestFinished(clearMachineRequestReachabilityForTest);
+    const online = (id: string) => createMachineFixture({ id, installationId: `${id}-installation`, activeAt: Date.now(), metadata: null });
+    await act(async () => storage.setState({ machineListByServerId: { srv_build: [online('a'), online('z')] }, machineListStatusByServerId: { srv_build: 'idle' } }));
+    const scope = await renderHook(() => useManagedControllerScope({ serverId, testIDPrefix: 'scope-probe' }));
+    expect(scope.getCurrent().controller?.machineId).toBe('a');
+
+    await act(async () => recordMachineRequestFailed({ serverId, machineId: 'a' }));
+
+    expect(scope.getCurrent().controller?.machineId).toBe('z');
+    await scope.unmount();
+  });
   it('leaves automatic scope unselected when only offline or retired controllers exist', async () => {
     const serverId = await harness.addHome({ name: 'Build', serverUrl: 'https://build.example', serverIdentityId: 'srv_build', accountId: 'owner', currentAccount: true });
     const { storage } = await import('@/sync/domains/state/storage');
