@@ -180,10 +180,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
     const { session, accountBinding, accountLifetime, exactSettings, settings, profileCatalogReady, acpCatalogSnapshot, enabledAgentIds, defaultBackend,
         backendTarget, inheritedModelSelection, inheritedRoutePresentation, inheritedConnectedServicesSelection, machineId, startAction } = useExecutionRunLaunchContext(props.sessionId, serverId);
     const [mountedComposerRef, setMountedComposerRef] = React.useState<Extract<ComposerRefV1, { kind: 'participantMessage' }> | null>(null);
-    React.useEffect(() => {
-        if (!props.autoFocusComposer || !mountedComposerRef) return;
-        requestRegisteredComposerFocus(mountedComposerRef);
-    }, [mountedComposerRef, props.autoFocusComposer]);
+    const initialComposerFocusApplied = React.useRef(false);
     const sharedSavedSecretsEnabled = useFeatureEnabled('teams', {
         scopeKind: 'spawn',
         serverId,
@@ -552,6 +549,10 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
         || (options.selectedProfileId !== '' && (
             options.selectedProfileChoice?.disabled !== false || !options.selectedProfileMatchesSelectedBackend
         ));
+    React.useEffect(() => {
+        if (!props.autoFocusComposer || !mountedComposerRef || unavailable || !editable || initialComposerFocusApplied.current) return;
+        initialComposerFocusApplied.current = requestRegisteredComposerFocus(mountedComposerRef);
+    }, [editable, mountedComposerRef, props.autoFocusComposer, unavailable]);
 
     // The role this start runs (lab `convo-S1/S2`): the one chosen here, else the role the run-start
     // owner gives its intent (a review is the Reviewer's). Only a chosen role travels as `roleId`; the

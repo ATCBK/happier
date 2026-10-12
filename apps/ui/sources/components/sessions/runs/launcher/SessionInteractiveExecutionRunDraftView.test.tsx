@@ -35,6 +35,7 @@ import { refreshSavedSecretCatalog, resetSavedSecretCatalogEngineForTests } from
 import { resetSavedSecretCatalogSnapshotsForTests } from '@/sync/store/settings/savedSecretCatalogSnapshot';
 import { refreshPromptLibraryCatalog, resetPromptLibraryCatalogEngineForTests } from '@/sync/engine/settings/promptLibraryCatalogEngine';
 import { resetPromptLibraryCatalogSnapshotsForTests } from '@/sync/store/settings/promptLibraryCatalogSnapshot';
+import { resolveBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
 
 // Platform, credentials, local persistence, HTTP and RPC are the boundaries. The composer,
 // capture/coordinator, draft repository, launcher options, role catalog, capability/feature
@@ -128,7 +129,10 @@ function run(runId: string, launchOrigin?: unknown): Run {
         retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'streaming', ...(launchOrigin ? { launchOrigin } : {}) });
 }
 function startedTargetKey(value: Record<string, unknown>) { return buildBackendTargetKeyV2(PersistedBackendTargetRefV2Schema.parse(value.backendTarget)); }
-function canonicalTargetKey(optionId: string) { return buildBackendTargetKeyV2(resolveReviewEngineTarget(optionId)); }
+function canonicalTargetKey(optionId: string) {
+    return optionId.includes(':') ? resolveBackendTargetKeyV2(optionId)
+        : buildBackendTargetKeyV2(resolveReviewEngineTarget(optionId));
+}
 function setSettings(patch: Partial<Settings>) {
     getStorage().setState((state) => ({ settings: { ...state.settings, ...patch } }));
 }
@@ -270,7 +274,7 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
             homes: [{ key: 'home', serverUrl: `https://launcher-${++sequence}.example.test`, accountId: 'account_1' }],
             route: async (request) => {
                 if (request.path === '/v1/features') return Response.json(FeaturesResponseSchema.parse({
-                    features: { execution: { runs: { enabled: true } }, encryption: { plaintextStorage: { enabled: true }, accountOptOut: { enabled: true } } },
+                    features: { execution: { runs: { enabled: true } }, teams: { enabled: true }, encryption: { plaintextStorage: { enabled: true }, accountOptOut: { enabled: true } } },
                     capabilities: { session: { pendingInput: { protocolVersion: 3 } }, accountStoredContentCompatibility: { v: 1, currentProtocolVersion: 3, minimumProtocolVersion: 3, declarationTransport: 'http-header-and-socket-auth-v1' } },
                 }));
                 if (request.path === '/v1/machines/machine_1') return Response.json({ machine: { id: 'machine_1', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } });
@@ -310,7 +314,7 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
             metadata: { path: '/repo', host: 'tester.local', homeDir: '/Users/tester', machineId: 'machine_1', flavor: 'claude' } });
         const machine = createMachineFixture({ id: 'machine_1', activeAt: Date.now(), storageMode: 'plain' });
         getStorage().setState({ sessions: { session_1: session }, machines: { machine_1: machine }, machineListByServerId: { [serverId]: [machine] },
-            settings: { ...settingsDefaults, experiments: true, featureToggles: { 'execution.runs': true }, backendEnabledByTargetKey: {}, sessionMessageSendMode: 'server_pending', currentSecretBindingsByProfileId: {} },
+            settings: { ...settingsDefaults, experiments: true, featureToggles: { 'execution.runs': true, teams: true }, backendEnabledByTargetKey: {}, sessionMessageSendMode: 'server_pending', currentSecretBindingsByProfileId: {} },
             settingsScope: { serverId, accountId: 'account_1' }, profileScope: { serverId, accountId: 'account_1' } });
         await ensureSessionDraftRepositoryHydrated({ serverId, accountId: 'account_1' });
     });
@@ -342,6 +346,19 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
         expect(composer().initialLocalId).toBe(inputId);
         expect(composer().canSendMessages).toBe(true);
         expect(screen.findByTestId('execution-run-conversation-start-another')).toBeNull();
+    });
+    it('does not start under a replacement Account after mounted admission', async () => {
+        await mount();
+        await type('Keep my Account-bound draft');
+        await waitFor(() => expect(composer().canSendMessages).toBe(true));
+        // The secure credential boundary now answers for another Account, before
+        // its asynchronous UI projection can replace the mounted binding.
+        home.switchAccount('home', 'replacement_account');
+        await act(async () => { await sendButton().props.onPress(); });
+        await settle();
+        expect(emittedStarts).toEqual([]);
+        expect(outbound).toEqual([]);
+        expect(input().props.value).toBe('Keep my Account-bound draft');
     });
     it('clears the accepted Run draft before navigation retires the Account binding', async () => {
         let atNavigation: unknown;
@@ -521,6 +538,14 @@ describe('SessionInteractiveExecutionRunDraftView — real composer and Action p
     it('registers the actual composer focus target only when autofocus is requested', async () => {
         await mount({ autoFocusComposer: true });
         await waitFor(() => expect(platform.focus).toHaveBeenCalled());
+        platform.focus.mockClear();
+        startResults.push({ ok: false, error: 'backend_unavailable' });
+        await send('Inspect this', false);
+        await waitFor(() => expect(screen.findByTestId('execution-run-conversation-start-another')).not.toBeNull());
+        expect(composer().canSendMessages).toBe(false);
+        await screen.pressByTestIdAsync('execution-run-conversation-start-another');
+        await waitFor(() => expect(composer().canSendMessages).toBe(true));
+        expect(platform.focus).not.toHaveBeenCalled();
         await screen.unmount();
         platform.focus.mockClear();
         await mount({ autoFocusComposer: false });
