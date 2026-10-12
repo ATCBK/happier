@@ -6,6 +6,8 @@ import { useSessionCollaborationDestinationAdmitted } from '@/hooks/session/useS
 import { normalizeSessionAddress, sessionAddressKey } from '@/sync/domains/session/sessionAddress';
 import * as React from 'react';
 import { Platform, View } from 'react-native';
+
+import { PopoverScope } from '@/components/ui/popover';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import type { PluginUiDestinationReferenceV1 } from '@happier-dev/protocol/plugins/ui';
 
@@ -434,6 +436,8 @@ export const SessionRightPanel = React.memo((props: SessionRightPanelProps) => (
 const SessionRightPanelContent = React.memo((props: SessionRightPanelProps) => {
     const styles = stylesheet;
     const { theme } = useUnistyles();
+    // The pane (header and body) is the boundary its menus and Add surfaces float inside.
+    const paneBoundaryRef = React.useRef<View>(null);
     const insets = useChromeSafeAreaInsets();
     const headerPaddingTop = 10;
     const sessionScreenTestIdsEnabled = useSessionScreenTestIdsEnabled();
@@ -464,7 +468,8 @@ const SessionRightPanelContent = React.memo((props: SessionRightPanelProps) => {
             onPress={props.onRequestClose ?? pane.closeRight}
             accessibilityLabel={closeButtonAtStart ? t('common.back') : t('common.close')}
             variant="plain"
-            size={resolveTouchTargetFloorPx() ?? 36}
+            size={36}
+                        minimumInteractiveTargetSize={resolveTouchTargetFloorPx() ?? undefined}
             iconName={closeButtonAtStart ? (Platform.OS === 'ios' ? 'caret-left' : 'arrow-left') : 'x'}
             iconSize={closeButtonAtStart ? 24 : 16}
         />
@@ -472,7 +477,8 @@ const SessionRightPanelContent = React.memo((props: SessionRightPanelProps) => {
 
     return (
         <PaneHeaderSlotProvider>
-        <View testID="session-right-panel-root" style={styles.container}>
+        <View ref={paneBoundaryRef} testID="session-right-panel-root" style={styles.container}>
+        <PopoverScope boundaryRef={paneBoundaryRef}>
             {!externalRail ? <View style={[styles.header, { paddingTop: headerPaddingTop + headerSafeAreaTop }]}>
                 {closeButtonAtStart ? closeButton : null}
                 <View style={styles.tabBarContainer}>
@@ -667,6 +673,8 @@ const SessionRightPanelContent = React.memo((props: SessionRightPanelProps) => {
                                         {tab.placement.binding.targetKind === 'app' ? (
                                             <AppRightSidebarTabSurface
                                                 placement={tab.placement}
+                                                executionTarget={pluginRuntime.serverId && pluginRuntime.machineId
+                                                    ? { serverId: pluginRuntime.serverId, machineId: pluginRuntime.machineId } : null}
                                                 binding={activeTab === tab.id ? pluginBinding : undefined}
                                                 mountInstanceKey={activeTab === tab.id ? activeInstanceKey : undefined}
                                             />
@@ -690,6 +698,7 @@ const SessionRightPanelContent = React.memo((props: SessionRightPanelProps) => {
                 )}
                 </SurfaceStateSizeProvider>
             </View>
+        </PopoverScope>
         </View>
         </PaneHeaderSlotProvider>
     );
