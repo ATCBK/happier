@@ -1,12 +1,16 @@
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { createWorkspacePackageSourcesPlugin } from '../../scripts/testing/vitestWorkspacePackageResolution.ts';
+import {
+    createWorkspacePackageSourcesPlugin,
+    readBundledPluginWorkspacePackageSpecs,
+} from '../../scripts/testing/vitestWorkspacePackageResolution.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..', '..');
 
 export const serverWorkspacePackageSourcesPlugin = createWorkspacePackageSourcesPlugin([
+    ...readBundledPluginWorkspacePackageSpecs(repoRoot),
     {
         packageName: '@happier-dev/transfers',
         packageSourceRoot: resolve(repoRoot, 'packages', 'transfers', 'src'),
@@ -38,5 +42,9 @@ export const serverWorkspacePackageSourcesPlugin = createWorkspacePackageSources
     {
         packageName: '@happier-dev/protocol',
         packageSourceRoot: resolve(repoRoot, 'packages', 'protocol', 'src'),
+    },
+    {
+        packageName: '@happier-dev/session-core',
+        packageSourceRoot: resolve(repoRoot, 'packages', 'session-core', 'src'),
     },
 ], 'happier-server-workspace-package-sources');

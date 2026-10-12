@@ -68,6 +68,7 @@
     "session-message-author:backfill": "node ./scripts/runTsx.mjs --tsconfig ./tsconfig.json ./scripts/sessionMessageAuthorProjectionBackfill.ts"
   },
   "devDependencies": {
+    "@happier-dev/plugins-machine-crabbox": "0.0.0",
     "@happier-dev/tests": "0.0.0",
     "@types/chalk": "^2.2.0",
     "@types/express": "^4.17.21",
