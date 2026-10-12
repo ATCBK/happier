@@ -100,6 +100,7 @@ export const KIMI_PLUGIN = definePlugin({
           },
         },
         capabilities: projectAgentCapabilitiesV2FromDefinition(AGENT_DEFINITION.core, {
+          skills: { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported' },
           surfaces: ['externalSessions'],
           sessions: {
             open: ['create', 'resume'],
