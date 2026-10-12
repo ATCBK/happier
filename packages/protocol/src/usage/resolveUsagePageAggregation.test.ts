@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeUsageQuery } from '../inputs/usageQuery.js';
-import { UsageAnalyticsQueryResponseSchema } from './usageAnalyticsContracts.js';
-import { resolveUsagePageAggregation, UsageQueryBatchResultSchema } from './resolveUsagePageAggregation.js';
+import { normalizeUsageQuery, resolveUsageQueryPeriod } from '../inputs/usageQuery.js';
+import { UsageAnalyticsQueryResponseSchema, type UsageAnalyticsQueryResponse } from './usageAnalyticsContracts.js';
+import { resolveUsagePageAggregation, resolveUsagePageAccountingRequests, UsageQueryBatchResultSchema } from './resolveUsagePageAggregation.js';
 import type { UsageWorkEvidence } from './usageOutcomeAllocation.js';
+import { buildProviderAccountUsageRecordId } from '../connect/providerAccountUsagePrimitives.js';
+import { ConnectedServiceQuotaGetResultV1Schema } from '../connect/providerAccountUsageHistorySchemasV1.js';
+import { projectUsagePlanInsights } from './usagePlanInsights.js';
+import { USAGE_COACH_DETECTOR_IDS } from './coach/coachDetectorIds.js';
 
 const tokens = { input: 12, output: 4, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 16 };
 const accounting = UsageAnalyticsQueryResponseSchema.parse({
@@ -10,6 +14,243 @@ const accounting = UsageAnalyticsQueryResponseSchema.parse({
 });
 
 describe('resolveUsagePageAggregation', () => {
+  it('uses the witnessed relative range for comparison and private detail even when accounting fails', () => {
+    const nowMs = Date.UTC(2026, 9, 12, 12);
+    const query = normalizeUsageQuery({ period: { relative: '7days' } });
+    const period = resolveUsageQueryPeriod(query, nowMs);
+    const absolute = normalizeUsageQuery({ period });
+    const requests = resolveUsagePageAccountingRequests([query], nowMs);
+    expect(requests).toHaveLength(2);
+    expect(requests[0]).toEqual(query);
+    expect(requests[1]).toEqual(resolveUsagePageAccountingRequests([absolute], nowMs)[1]);
+    const input = { accounting: [{ query, status: 'error' as const }], nowMs,
+      howYouWork: [{ query, asOfMs: nowMs, detail: { status: 'partial' as const, facts: [
+        { workId: 'old', evidenceId: 'old', agentId: null, machineId: null, kind: 'busy' as const,
+          startMs: Date.UTC(2026, 8, 1), endMs: Date.UTC(2026, 8, 1, 1) },
+        { workId: 'current', evidenceId: 'current', agentId: null, machineId: null, kind: 'busy' as const,
+          startMs: nowMs - 3_600_000, endMs: nowMs },
+      ] } }] };
+    const batch = resolveUsagePageAggregation({ ...input, queries: [query] });
+    const slice = batch.results[0]!;
+    expect(slice.requestedQuery).toEqual(query);
+    expect(slice.shownQuery).toEqual(query);
+    expect(slice.howYouWork?.intervals).toMatchObject({ period, agentTimeMs: 3_600_000 });
+    expect(slice.coach?.period).toEqual(period);
+    expect(slice.comparison?.query).toEqual(requests[1]);
+    expect(UsageQueryBatchResultSchema.safeParse(batch).success).toBe(true);
+    const absoluteSlice = resolveUsagePageAggregation({ ...input, queries: [absolute],
+      accounting: [{ query: absolute, status: 'error' }],
+      howYouWork: input.howYouWork.map(snapshot => ({ ...snapshot, query: absolute })),
+    }).results[0]!;
+    expect(slice.howYouWork).toEqual(absoluteSlice.howYouWork);
+    expect(slice.comparison?.query).toEqual(absoluteSlice.comparison?.query);
+    expect(UsageQueryBatchResultSchema.safeParse({ ...batch, results: [{ ...slice,
+      howYouWork: { ...slice.howYouWork, intervals: { ...slice.howYouWork!.intervals, period: { startMs: 0, endMs: nowMs } } },
+    }] }).success).toBe(false);
+    const otherPeriod = { startMs: 2000, endMs: 3000 };
+    expect(UsageQueryBatchResultSchema.safeParse({ v: 1, results: [{ ...absoluteSlice, coach: undefined, howYouWork: undefined,
+      accounting: { ...accounting, coverage: { status: 'complete', reasons: [], sources: [], missingDimensions: [], ranked: [],
+        range: { ...otherPeriod, complete: true } } },
+      comparison: { query: normalizeUsageQuery({ ...absolute, period: { startMs: 1000, endMs: 2000 } }),
+        source: { source: 'comparison', status: 'unknown' } },
+    }] }).success).toBe(false);
+    const all = normalizeUsageQuery({ period: { relative: 'all' } });
+    expect(resolveUsagePageAccountingRequests([all], nowMs)).toEqual([all]);
+    expect(resolveUsagePageAccountingRequests([normalizeUsageQuery({})], nowMs)).toHaveLength(1);
+  });
+  it('shares already-admitted quota history across query slices instead of reparsing each copy', () => {
+    const source = { ref: { service: { pluginId: 'test.provider', localId: 'subscription' }, accountId: 'one' }, bindingKind: 'account' as const };
+    const recordKey = { providerId: 'provider', accountSubjectId: 'one', subjectKind: 'account', quotaScope: 'account' } as const;
+    const snapshot = { v: 1, recordId: buildProviderAccountUsageRecordId(recordKey), recordKey, providerId: 'provider',
+      accountSubject: { kind: 'providerSubject', id: 'one' }, observedAtMs: 150, fetchedAtMs: 150, staleAfterMs: 100,
+      source: 'providerHttp', confidence: 'confirmed', state: 'loaded_data', meters: [] };
+    // Genuine input boundary validation happens once before projection.
+    const quota = ConnectedServiceQuotaGetResultV1Schema.parse({ source, current: snapshot,
+      history: { entries: Array.from({ length: 1000 }, (_, index) => ({ id: `history-${index}`, observedAtMs: index, snapshot })), nextCursor: null },
+      pace: [], targets: [], waitingWork: { status: 'unavailable', reason: 'unsupported' } });
+    const queries = Array.from({ length: 8 }, (_, index) => normalizeUsageQuery({ period: { startMs: 100, endMs: 200 }, agents: [`agent-${index}`] }));
+    const start = performance.now();
+    const batch = resolveUsagePageAggregation({ queries, quota: { status: 'available', value: [quota] }, nowMs: 150 });
+    const ms = performance.now() - start;
+    console.info('[PERF-RENDER aggregation]', JSON.stringify({ slices: queries.length, historyEntries: 1000,
+      retainedQuotaReferences: batch.results.filter(slice => slice.quota?.[0] === quota).length, ms }));
+    expect(batch.results.every(slice => slice.quota?.[0] === quota)).toBe(true);
+    expect(UsageQueryBatchResultSchema.safeParse(batch).success).toBe(true);
+    const denied = resolveUsagePageAggregation({ queries, previous: batch, quota: { status: 'error', errorCode: 'denied' } });
+    expect(denied.results.every(slice => slice.quota === undefined)).toBe(true);
+  });
+  it('adds only authorized machine display locations and retires them when unavailable while accepting older source rows', () => {
+    const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 } });
+    const coverage: NonNullable<UsageAnalyticsQueryResponse['coverage']> = { status: 'partial', reasons: [], missingDimensions: [], range: { complete: false }, ranked: [], sources: [
+      { source: 'runtime', path: 'runtime', status: 'available', eventCount: 1, machineId: 'work', captureKind: 'measured' },
+      { source: 'history', path: 'native', status: 'partial', eventCount: 1, machineId: 'missing', captureKind: 'from_logs' },
+      { source: 'legacy', path: 'legacy', status: 'unknown', eventCount: 1 },
+    ] };
+    const first = resolveUsagePageAggregation({ queries: [query], accounting: [{ query,
+      value: { ...accounting, coverage }, status: 'available' }], sourceLocations: [{ machineId: 'work', displayLocation: 'Workstation' }] });
+    expect(first.results[0]?.accounting?.coverage?.sources).toEqual([
+      { ...coverage.sources[0], displayLocation: 'Workstation' }, coverage.sources[1], coverage.sources[2],
+    ]);
+    expect(UsageQueryBatchResultSchema.safeParse(first).success).toBe(true);
+    const retired = resolveUsagePageAggregation({ queries: [query], previous: first,
+      accounting: [{ query, status: 'error', errorCode: 'network_error' }], sourceLocations: [] });
+    expect(retired.results[0]?.accounting?.coverage?.sources.every(source => !('displayLocation' in source))).toBe(true);
+    expect(UsageAnalyticsQueryResponseSchema.safeParse({ ...accounting, coverage: { ...coverage,
+      sources: [{ ...coverage.sources[0], displayLocation: '/private/project' }] } }).success).toBe(false);
+  });
+  it('reprojects chosen night hours while retaining the exact query private interval evidence during a reread', () => {
+    const hour = 3_600_000;
+    const query = normalizeUsageQuery({ period: { startMs: 0, endMs: 24 * hour } });
+    const value = { ...accounting, activity: { weekdayHourBuckets: [
+      { weekday: 4, hour: 0, eventCount: 7 }, { weekday: 4, hour: 12, eventCount: 3 },
+    ] } };
+    const source = { query, value, status: 'available' as const };
+    const first = resolveUsagePageAggregation({ queries: [query], accounting: [source],
+      nightHours: { startHour: 22, endHour: 6 }, howYouWork: [{ query, detail: { status: 'partial',
+        facts: [{ workId: 'w', evidenceId: 'e', agentId: null, machineId: null, kind: 'busy', startMs: 0, endMs: hour }],
+        acceptedInputs: [], permissions: [] } }] });
+    const revised = resolveUsagePageAggregation({ queries: [query], accounting: [source], previous: first,
+      nightHours: { startHour: 9, endHour: 17 }, sources: [{ source: 'how_you_work', status: 'pending' }] });
+    expect(revised.results[0]?.howYouWork).toMatchObject({ detailStatus: 'partial',
+      intervals: { agentTimeMs: hour, night: { startHour: 9, endHour: 17, busyMs: 0, activityCount: 3 } },
+      nightShift: { startHour: 9, endHour: 17, recordedActivityCount: 3, observedBusyMs: 0 } });
+    const cleared = resolveUsagePageAggregation({ queries: [query], accounting: [source], previous: revised,
+      nightHours: null, sources: [{ source: 'how_you_work', status: 'pending' }] });
+    expect(cleared.results[0]?.howYouWork?.nightShift).toBeNull();
+    expect(cleared.results[0]?.howYouWork?.intervals?.night).toBeNull();
+    const refused = resolveUsagePageAggregation({ queries: [query], accounting: [source], previous: revised,
+      nightHours: { startHour: 9, endHour: 17 }, howYouWork: [{ query, detail: { status: 'unknown' } }] });
+    expect(refused.results[0]?.howYouWork).toMatchObject({ detailStatus: 'unknown', intervals: null,
+      nightShift: { recordedActivityCount: 3, observedBusyMs: null } });
+  });
+
+  it('attributes observed API-equivalent value to the exact connected account and qualifies price multiples by period and currency', () => {
+    const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 } });
+    const service = { pluginId: 'test.provider', localId: 'subscription' };
+    const source = { ref: { service, accountId: 'one' }, bindingKind: 'account' as const };
+    const recordKey = { providerId: 'provider', accountSubjectId: 'one', subjectKind: 'account', quotaScope: 'account' } as const;
+    const read = ConnectedServiceQuotaGetResultV1Schema.parse({ source, current: {
+      v: 1, recordId: buildProviderAccountUsageRecordId(recordKey), recordKey, providerId: 'provider',
+      accountSubject: { kind: 'providerSubject', id: 'one' }, observedAtMs: 150, fetchedAtMs: 150, staleAfterMs: 100,
+      source: 'providerHttp', confidence: 'confirmed', state: 'loaded_data', meters: [], subscription: {
+        status: 'subscribed', renewal: 'on', observedAtMs: 150, staleAfterMs: 100,
+        currentPeriodStartAtMs: 100, currentPeriodEndAtMs: 200,
+        enteredMonthlyPrice: { amount: 2, currency: 'USD', enteredAtMs: 100 },
+      },
+    }, pace: [], targets: [], waitingWork: { status: 'unavailable', reason: 'unsupported' } });
+    const contribution = { id: 'one', eventCount: 1, observedAtMs: 140, sessionId: 's', turnId: 't', agentId: 'agent',
+      modelId: 'model', machineId: null, projectKey: null, workspaceId: null, source: 'runtime', tokens,
+      cost: { reportedUsd: 20, estimatedUsd: 8, apiEquivalentUsd: 4, pricingSource: 'user:override:model', currency: 'USD' },
+      providerAttribution: 'known' as const, connectedAccount: source.ref };
+    const value: UsageAnalyticsQueryResponse = { ...accounting, contributions: [contribution,
+      { ...contribution, id: 'switched', connectedAccount: { ...source.ref, accountId: 'two' }, cost: { ...contribution.cost, apiEquivalentUsd: 60 } },
+      { ...contribution, id: 'different-service', connectedAccount: { ...source.ref, service: { ...service, localId: 'another' } } },
+      { ...contribution, id: 'unknown', providerAttribution: 'unknown' as const },
+    ] };
+    const project = (quota = read, supplied = value, selectedQuery = query) => projectUsagePlanInsights({ query: selectedQuery,
+      nowMs: 150, accounting: supplied, quota: [quota] }).accounts[0]!.value;
+    expect(project()).toMatchObject({ status: 'available', kind: 'api_equivalent', amountUsd: 4, currency: 'USD',
+      period: { startMs: 100, endMs: 200 }, coverage: 'partial', pricedContributionCount: 1, unknownAccountContributionCount: 1,
+      pricingSources: ['user:override:model'], priceMultiple: { status: 'available', multiple: 2, priceKind: 'entered',
+        priceAmount: 2, currency: 'USD', period: { startAtMs: 100, endAtMs: 200 } } });
+    const relative = normalizeUsageQuery({ period: { relative: '7days' } });
+    const endMs = Date.parse('2026-10-11T20:30:00Z');
+    const period = { startMs: endMs - 7 * 86_400_000, endMs };
+    const relativeResult = resolveUsagePageAggregation({ queries: [relative], quota: { status: 'available', value: [read] }, accounting: [{ query: relative,
+      status: 'available', value: { ...value, coverage: { status: 'partial', reasons: [], missingDimensions: [],
+        range: { ...period, complete: false }, ranked: [], sources: [] } } }] });
+    expect(relativeResult.results[0]).toMatchObject({ shownQuery: relative,
+      planInsights: { accounts: [{ value: { status: 'available', amountUsd: 4, period } }] }, coach: { period } });
+    expect(project({ ...read, current: { ...read.current!, subscription: { ...read.current!.subscription!,
+      enteredMonthlyPrice: { amount: 2, currency: 'EUR', enteredAtMs: 100 } } } })).toMatchObject({ amountUsd: 4,
+        priceMultiple: { status: 'insufficient_basis', reason: 'currency_mismatch' } });
+    expect(project(read, value, normalizeUsageQuery({ period: { startMs: 90, endMs: 200 } }))).toMatchObject({
+      priceMultiple: { status: 'insufficient_basis', reason: 'period_mismatch' } });
+    expect(project(read, { ...value, contributions: [{ ...contribution, cost: { reportedUsd: 20, estimatedUsd: 8, currency: 'USD' } }] }))
+      .toMatchObject({ status: 'insufficient_basis', reason: 'account_usage_unpriced' });
+    expect(project(read, { ...value, contributions: [{ ...contribution, providerAttribution: 'unknown' as const }] }))
+      .toMatchObject({ status: 'insufficient_basis', reason: 'account_attribution_unavailable' });
+    const unpriced = { ...contribution, id: 'unpriced', cost: { reportedUsd: 20, estimatedUsd: 8, currency: 'USD' } };
+    expect(project(read, { ...value, contributions: [contribution, unpriced] })).toMatchObject({ status: 'available',
+      amountUsd: 4, coverage: 'partial', pricedContributionCount: 1, unpricedContributionCount: 1 });
+    expect(project({ ...read, current: { ...read.current!, subscription: { ...read.current!.subscription!,
+      enteredMonthlyPrice: { amount: 0, currency: 'USD', enteredAtMs: 100 } } } })).toMatchObject({
+      priceMultiple: { status: 'insufficient_basis', reason: 'zero_price' } });
+    const complete = UsageAnalyticsQueryResponseSchema.parse({ ...value, contributions: [contribution,
+      { ...contribution, id: 'native-without-account', providerSource: 'native', connectedAccount: null },
+      { ...contribution, id: 'api', providerSource: 'provider', providerConnectionId: 'api-connection', connectedAccount: null }],
+      coverage: { status: 'complete', reasons: [], sources: [], missingDimensions: [], range: { complete: true }, ranked: [] } });
+    expect(project(read, complete)).toMatchObject({ amountUsd: 4, coverage: 'complete', unknownAccountContributionCount: 0 });
+    const missingAccount = UsageAnalyticsQueryResponseSchema.parse({ ...complete, contributions: [contribution,
+      { ...contribution, id: 'missing-native-account', providerSource: 'native', connectedAccount: undefined }] });
+    expect(project(read, missingAccount)).toMatchObject({ amountUsd: 4, coverage: 'partial', unknownAccountContributionCount: 1 });
+  });
+  it('projects window weather and model-specific headroom without ranking unrelated models or inventing account value', () => {
+    const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 } });
+    const recordKey = { providerId: 'provider', accountSubjectId: 'one', subjectKind: 'account', quotaScope: 'account' } as const;
+    const recordId = buildProviderAccountUsageRecordId(recordKey);
+    const quota = ConnectedServiceQuotaGetResultV1Schema.parse({
+      source: { ref: { service: { pluginId: 'test.provider', localId: 'subscription' }, accountId: 'one' }, bindingKind: 'account' },
+      current: { v: 1, recordId, recordKey, providerId: 'provider', accountSubject: { kind: 'providerSubject', id: 'one' },
+        observedAtMs: 150, fetchedAtMs: 150, staleAfterMs: 100, source: 'providerHttp', confidence: 'confirmed', state: 'loaded_data',
+        meters: [{ meterId: 'model', label: 'Model allowance', modelId: 'witnessed-model', used: 25, limit: 100, utilizationPct: 25, unit: 'requests', status: 'ok', resetsAt: 200, resetAtMs: 200, windowDurationMs: 100 }] },
+      pace: [{ meterId: 'model', value: { status: 'available', window: { recordId, meterId: 'model', resetAtMs: 200, windowStartAtMs: 100, windowDurationMs: 100 },
+        usedFraction: 0.25, elapsedFraction: 0.5, evenPaceFraction: 0.5, pace: 0.5, projectedResetUtilizationFraction: 0.5, qualification: 'confirmed', sampleCount: 1 } }],
+      targets: [], waitingWork: { status: 'unavailable', reason: 'unsupported' },
+    });
+    const slice = resolveUsagePageAggregation({ queries: [query], nowMs: 150, quota: { status: 'available', value: [quota] } }).results[0]!;
+    expect(slice).toMatchObject({ planInsights: { accounts: [{
+      value: { status: 'insufficient_basis', reason: 'account_attribution_unavailable' },
+      weather: [{ meterId: 'model', status: 'available', outlook: 'within_even_pace', projectedUsedFraction: 0.5, sampleCount: 1, method: 'witnessed_linear_pace' }],
+      modelHeadroom: [{ meterId: 'model', modelId: 'witnessed-model', status: 'available', remainingFraction: 0.75, method: 'model_specific_quota_meter' }],
+    }] } });
+    const stale = resolveUsagePageAggregation({ queries: [query], nowMs: 250, quota: { status: 'available', value: [quota] } }).results[0]!;
+    expect(stale).toMatchObject({ planInsights: { accounts: [{ weather: [{ status: 'insufficient_basis', reason: 'stale' }],
+      modelHeadroom: [{ status: 'insufficient_basis', reason: 'stale' }] }] } });
+    const justStarted = ConnectedServiceQuotaGetResultV1Schema.parse({ ...quota,
+      current: { ...quota.current!, meters: [{ ...quota.current!.meters[0]!, resetAtMs: 250, resetsAt: 250 }] },
+      pace: [{ meterId: 'model', value: { status: 'unavailable', reason: 'zero_elapsed' } }],
+    });
+    expect.soft(resolveUsagePageAggregation({ queries: [query], nowMs: 150, quota: { status: 'available', value: [justStarted] } }).results[0])
+      .toMatchObject({ planInsights: { accounts: [{ modelHeadroom: [{ status: 'available', modelId: 'witnessed-model', remainingFraction: 0.75 }] }] } });
+    const meter = { ...quota.current!.meters[0]!, resetAtMs: 180, resetsAt: 180, windowDurationMs: 40 };
+    const subscription = { status: 'subscribed', renewal: 'on', observedAtMs: 150, staleAfterMs: 100,
+      currentPeriodStartAtMs: 100, currentPeriodEndAtMs: 200, enteredMonthlyPrice: { amount: 20, currency: 'EUR', enteredAtMs: 100 } };
+    const ended = { ...quota.current!, observedAtMs: 138, fetchedAtMs: 138, subscription, meters: [{ ...meter, resetAtMs: 140, resetsAt: 140 }] };
+    const resetRead = ConnectedServiceQuotaGetResultV1Schema.parse({ ...quota, current: { ...quota.current!, meters: [meter],
+      subscription },
+      history: { entries: [{ id: 'one', observedAtMs: 138, snapshot: ended }, { id: 'duplicate', observedAtMs: 138, snapshot: ended }], nextCursor: null },
+    });
+    expect.soft(resolveUsagePageAggregation({ queries: [query], nowMs: 150, quota: { status: 'available', value: [resetRead] } }).results[0])
+      .toMatchObject({ planInsights: { accounts: [{ pricePerReset: [{ status: 'available', amount: 20, currency: 'EUR', priceKind: 'entered',
+        recordedResetCount: 1, coverage: 'recorded_subset', method: 'period_price_divided_by_recorded_resets' }] }] } });
+    const invalidRead = { ...resetRead, history: { entries: [{ id: 'not-recorded', observedAtMs: 150,
+      snapshot: { ...ended, observedAtMs: 150, state: 'not_loaded' as const, meters: [{ ...meter, resetAtMs: 150, resetsAt: 150 }] } }], nextCursor: null } };
+    expect.soft(resolveUsagePageAggregation({ queries: [query], nowMs: 150, quota: { status: 'available', value: [invalidRead] } }).results[0])
+      .toMatchObject({ planInsights: { accounts: [{ pricePerReset: [{ status: 'insufficient_basis', reason: 'recorded_resets_unavailable' }] }] } });
+    expect.soft(UsageQueryBatchResultSchema.safeParse({ v: 1, results: [{ ...slice, quota: undefined }] }).success).toBe(false);
+  });
+  it('reports an ended recorded week with explicit partial coverage, never a perfection score or assumed human presence', () => {
+    const startMs = Date.UTC(2026, 9, 5);
+    const endMs = Date.UTC(2026, 9, 12);
+    const query = normalizeUsageQuery({ period: { startMs, endMs } });
+    const value = UsageAnalyticsQueryResponseSchema.parse({ ...accounting, activity: {
+      calendarDays: [{ date: '2026-10-05', eventCount: 1 }, { date: '2026-10-07', eventCount: 2 }],
+      weekdayHourBuckets: [],
+    } });
+    const slice = resolveUsagePageAggregation({ queries: [query], nowMs: endMs, accounting: [{ query, value, status: 'available' }] }).results[0]!;
+    expect(slice).toMatchObject({ planInsights: { recordedWeek: { status: 'available', startMs, endMs,
+      recordedActiveDays: 2, recordedEvents: 3, coverage: 'partial', method: 'recorded_calendar_week', humanPresence: 'unknown' } } });
+    expect(slice).not.toHaveProperty('planInsights.recordedWeek.score');
+    expect.soft(UsageQueryBatchResultSchema.safeParse({ v: 1, results: [{ ...slice,
+      planInsights: { ...slice.planInsights, recordedWeek: { ...slice.planInsights!.recordedWeek, endMs: endMs + 1 } } }] }).success).toBe(false);
+    const completeAccounting = UsageAnalyticsQueryResponseSchema.parse({ ...value,
+      coverage: { status: 'complete', reasons: [], sources: [], missingDimensions: [], range: { complete: true }, ranked: [] } });
+    expect(resolveUsagePageAggregation({ queries: [query], nowMs: endMs, accounting: [{ query, value: completeAccounting, status: 'available' }] }).results[0])
+      .toMatchObject({ planInsights: { recordedWeek: { coverage: 'partial', accountingCoverage: 'complete', intervalCoverage: 'unknown' } } });
+    expect(resolveUsagePageAggregation({ queries: [query], nowMs: endMs - 1, accounting: [{ query, value, status: 'available' }] }).results[0])
+      .toMatchObject({ planInsights: { recordedWeek: { status: 'insufficient_basis', reason: 'week_not_ended' } } });
+  });
   it('re-prices historical API-equivalent facts through Account overrides without changing vendor reports', () => {
     const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 } });
     const historicalTokens = { input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, total: 1_000_000 };
@@ -123,7 +364,7 @@ describe('resolveUsagePageAggregation', () => {
     } }] });
     const unavailable = resolveUsagePageAggregation({ queries: [query] });
     expect(unavailable.results[0]?.coach).toMatchObject({ asOfMs: null, currentness: 'unknown', findings: [] });
-    expect(unavailable.results[0]?.coach?.evaluations).toHaveLength(11);
+    expect(unavailable.results[0]?.coach?.evaluations).toHaveLength(USAGE_COACH_DETECTOR_IDS.length);
   });
   it('uses witnessed private approval pairs only on their admitted Coach query', () => {
     const query = normalizeUsageQuery({ session: 'session', period: { startMs: 100, endMs: 200 } });
@@ -236,6 +477,34 @@ describe('resolveUsagePageAggregation', () => {
     const unavailable = resolveUsagePageAggregation({ queries: [query], previous: result,
       howYouWork: [{ query, detail: { status: 'unknown' } }] });
     expect(unavailable.results[0]?.howYouWork?.intervals).toBeNull();
+  });
+  it('honors Account check choices before evaluation and while prior detail is retained', () => {
+    const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 } });
+    const detail = { status: 'partial' as const, permissions: [{ workId: 'turn', requestId: 'permission',
+      requestedAtMs: 120, decidedAtMs: 160, toolId: 'Bash', answeringClientCategory: null }], facts: [], acceptedInputs: [] };
+    const previous = resolveUsagePageAggregation({ queries: [query], howYouWork: [{ query, detail, asOfMs: 200 }] });
+    expect(previous.results[0]!.coach!.findings.some(finding => finding.detectorId === 'approval_friction')).toBe(true);
+    const coachPreferences = { v: 1 as const, suppressions: [], disabledChecks: ['approval_friction' as const], modelSuggestion: 'off' as const };
+    for (const source of [{ howYouWork: [{ query, detail, asOfMs: 200 }] },
+      { previous, sources: [{ source: 'how_you_work', status: 'pending' as const }] }]) {
+      const coach = resolveUsagePageAggregation({ queries: [query], ...source, coachPreferences }).results[0]!.coach!;
+      expect(coach.evaluations.find(row => row.detectorId === 'approval_friction')?.status).toBe('disabled');
+      expect(coach.evaluations.find(row => row.detectorId === 'model_misfit')?.status).toBe('disabled');
+      expect(coach.findings).toEqual([]);
+    }
+    const disabled = resolveUsagePageAggregation({ queries: [query], howYouWork: [{ query, detail, asOfMs: 200 }], coachPreferences });
+    const enabledAgain = resolveUsagePageAggregation({ queries: [query], previous: disabled,
+      sources: [{ source: 'how_you_work', status: 'pending' }] }).results[0]!.coach!;
+    expect(enabledAgain.evaluations.find(row => row.detectorId === 'approval_friction')?.status).toBe('insufficient_evidence');
+    const openQuery = normalizeUsageQuery({ period: { startMs: 100 } });
+    const openPrevious = resolveUsagePageAggregation({ queries: [openQuery], howYouWork: [{ query: openQuery, detail, asOfMs: 200 }] });
+    const openPending = resolveUsagePageAggregation({ queries: [openQuery], previous: openPrevious, coachPreferences,
+      sources: [{ source: 'how_you_work', status: 'pending' }] }).results[0]!.coach!;
+    expect(openPending.evaluations.find(row => row.detectorId === 'approval_friction')?.status).toBe('disabled');
+    const unavailable = resolveUsagePageAggregation({ queries: [query], previous,
+      sources: [{ source: 'how_you_work', status: 'pending' }], coachPreferences: null }).results[0]!.coach!;
+    expect(unavailable.findings).toEqual([]);
+    expect(unavailable.evaluations.every(row => row.status === 'insufficient_evidence')).toBe(true);
   });
   it('composes Work only from the exact admitted accounting query and witnessed turns', () => {
     const query = normalizeUsageQuery({ session: 'session', period: { startMs: 100, endMs: 200 } });

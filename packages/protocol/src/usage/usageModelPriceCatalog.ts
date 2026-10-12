@@ -1,58 +1,10 @@
 import { z } from 'zod';
-import { lazyZodSchema } from '../lazyZodSchema.js';
 import { LITELLM_BUNDLED_SNAPSHOT } from './usageModelPriceSnapshot.js';
+import { canonicalUsageModelPriceId, UsageModelPriceCatalogSchema, type UsageModelPriceCatalog, type UsageModelPriceProvenance, type UsageModelPriceRates, type UsageModelPriceOverridesV1 } from './usageModelPriceSchemas.js';
+export * from './usageModelPriceSchemas.js';
 
 export const LITELLM_MODEL_PRICE_URL = 'https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json';
-const rate = lazyZodSchema(() => z.number().finite().nonnegative());
-export const UsageModelPriceRatesSchema = lazyZodSchema(() => z.object({
-  inputUsdPerMillion: rate, outputUsdPerMillion: rate,
-  cacheReadUsdPerMillion: rate.optional(), cacheWriteUsdPerMillion: rate.optional(), reasoningUsdPerMillion: rate.optional(),
-}).strict());
-export type UsageModelPriceRates = z.infer<typeof UsageModelPriceRatesSchema>;
-export const UsageModelPriceEntrySchema = lazyZodSchema(() => UsageModelPriceRatesSchema.extend({
-  provider: z.string().min(1).optional(), sourceUrl: z.string().url().optional(),
-}).strict());
-export const UsageModelPriceProvenanceSchema = lazyZodSchema(() => z.object({
-  source: z.literal('litellm'), origin: z.enum(['bundled', 'fetched', 'cached']),
-  asOfMs: z.number().int().nonnegative(), revision: z.string().min(1),
-  fetchStatus: z.enum(['ready', 'disabled', 'error']), errorCode: z.string().min(1).optional(),
-}).strict());
-export type UsageModelPriceProvenance = z.infer<typeof UsageModelPriceProvenanceSchema>;
-export const UsageModelPriceCatalogSchema = lazyZodSchema(() => z.object({
-  v: z.literal(1), models: z.record(z.string().trim().min(1), UsageModelPriceEntrySchema),
-  provenance: UsageModelPriceProvenanceSchema,
-}).strict());
-export type UsageModelPriceCatalog = z.infer<typeof UsageModelPriceCatalogSchema>;
 export const bundledUsageModelPriceCatalog: UsageModelPriceCatalog = UsageModelPriceCatalogSchema.parse(LITELLM_BUNDLED_SNAPSHOT);
-
-export const UsageModelPriceOverrideSchema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  UsageModelPriceRatesSchema.omit({ reasoningUsdPerMillion: true }).extend({ kind: z.literal('rates') }).strict(),
-  z.object({ kind: z.literal('map'), modelId: z.string().trim().min(1) }).strict(),
-]));
-// Zod records intentionally omit __proto__; reject it instead of acknowledging a lost setting.
-export const UsageModelPriceOverridesV1Schema = lazyZodSchema(() => z.preprocess((value, context) => {
-  if (value !== null && typeof value === 'object' && Object.hasOwn(value, '__proto__')) {
-    context.addIssue({ code: 'custom', path: ['__proto__'], message: 'Reserved record key' });
-  }
-  return value;
-}, z.record(z.string().trim().min(1), UsageModelPriceOverrideSchema)
-  .superRefine((overrides, context) => {
-    for (const id of Object.keys(overrides)) {
-      const seen = new Set<string>();
-      let current = id;
-      while (Object.hasOwn(overrides, current)) {
-        if (seen.has(current)) {
-          context.addIssue({ code: 'custom', path: [id], message: 'Model price mappings must not contain a cycle' });
-          break;
-        }
-        seen.add(current);
-        const override = overrides[current]!;
-        if (override.kind !== 'map') break;
-        current = override.modelId;
-      }
-    }
-  })));
-export type UsageModelPriceOverridesV1 = z.infer<typeof UsageModelPriceOverridesV1Schema>;
 
 /** LiteLLM is an external, heterogeneous file. Only standard text-token tariffs enter this catalog. */
 export function parseLiteLlmModelPriceCatalog(value: unknown, provenance: UsageModelPriceProvenance): UsageModelPriceCatalog {
@@ -96,30 +48,44 @@ export interface ResolvedUsageModelPrice {
   mappedFrom?: string;
 }
 
-/** Explicit user mappings win; catalog ids and the two documented vendor prefixes are exact aliases. */
+/** Read pre-fix alias keys without maintaining a second override authority.
+ * If both spellings were edited, the canonical key wins consistently for every reader.
+ */
+export function readUsageModelPriceOverride(modelId: string | null | undefined, overrides: UsageModelPriceOverridesV1): UsageModelPriceOverridesV1[string] | null {
+  const canonical = canonicalUsageModelPriceId(modelId);
+  if (canonical === null) return null;
+  if (Object.hasOwn(overrides, canonical)) return overrides[canonical]!;
+  const alias = Object.keys(overrides).sort().find(id => canonicalUsageModelPriceId(id) === canonical);
+  return alias === undefined ? null : overrides[alias]!;
+}
+
+/** Explicit user mappings win; all readers consume the same exact model identity. */
 export function resolveUsageModelPrice(modelId: string | null | undefined, catalog: UsageModelPriceCatalog = bundledUsageModelPriceCatalog,
   overrides: UsageModelPriceOverridesV1 = {}): ResolvedUsageModelPrice | null {
   if (!modelId?.trim()) return null;
   const original = modelId.trim();
-  let current = original;
+  let current = canonicalUsageModelPriceId(original)!;
   const seen = new Set<string>();
   let mapped = false;
   while (true) {
     if (seen.has(current)) return null;
     seen.add(current);
-    const override = Object.hasOwn(overrides, current) ? overrides[current] : undefined;
+    const override = readUsageModelPriceOverride(current, overrides);
     if (override?.kind === 'rates') return { modelId: current, rates: override, source: mapped ? 'mapping' : 'override',
       ...(mapped ? { mappedFrom: original } : {}) };
-    if (override?.kind === 'map') { current = override.modelId; mapped = true; continue; }
-    const rates = Object.hasOwn(catalog.models, current) ? catalog.models[current] : undefined;
+    if (override?.kind === 'map') { current = canonicalUsageModelPriceId(override.modelId)!; mapped = true; continue; }
+    // A fetched catalog can retain only the vendor snapshot spelling.
+    const catalogId = !Object.hasOwn(catalog.models, current) && current === 'claude-haiku-4-5'
+      ? 'claude-haiku-4-5-20251001' : current;
+    const rates = Object.hasOwn(catalog.models, catalogId) ? catalog.models[catalogId] : undefined;
     if (rates) return { modelId: current, rates, source: mapped ? 'mapping' : 'catalog', ...(mapped ? { mappedFrom: original } : {}) };
+    // Retain the existing fallback only after exact overrides and catalog tariffs.
     const alias = /^(openai|anthropic)\/(.+)$/.exec(current);
     const entry = alias && Object.hasOwn(catalog.models, alias[2]!) ? catalog.models[alias[2]!] : undefined;
-    if (entry && entry.provider === alias![1]) { current = alias![2]!; continue; }
-    // The owned Claude [1m] variant selects the same base model; this is not fuzzy matching.
+    if (entry && entry.provider === alias![1]) { current = canonicalUsageModelPriceId(alias![2]!)!; continue; }
     const baseId = current.endsWith('[1m]') ? current.slice(0, -4).trim() : null;
     const base = baseId && Object.hasOwn(catalog.models, baseId) ? catalog.models[baseId] : undefined;
-    if (base?.provider === 'anthropic') { current = baseId!; continue; }
+    if (base?.provider === 'anthropic') { current = canonicalUsageModelPriceId(baseId)!; continue; }
     return null;
   }
 }

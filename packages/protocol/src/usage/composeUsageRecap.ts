@@ -16,7 +16,8 @@ export function composeUsageRecap(args: Readonly<{
   }
   const accounting = snapshot.accounting;
   if (!accounting) return { kind: 'unavailable', reason: 'accounting_unavailable' };
-  const { startMs, endMs } = input.query.period;
+  const { startMs, endMs } = 'relative' in input.query.period
+    ? accounting.coverage?.range ?? {} : input.query.period;
   if (startMs === undefined || endMs === undefined || endMs < startMs) return { kind: 'unavailable', reason: 'period_unavailable' };
   const selectedFields = USAGE_RECAP_FIELDS.filter(field => input.selectedFields.includes(field));
   const selected = new Set(selectedFields);

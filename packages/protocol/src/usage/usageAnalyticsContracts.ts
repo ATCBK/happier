@@ -4,7 +4,8 @@ import { PluginContributionIdentityV1Schema } from '../plugins/contributionIdent
 import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js';
 import { NonBlankOpaqueIdentifierSchema } from '../strings/opaqueIdentifier.js';
 import { ProviderConnectionIdSchema, ProviderContributionKeySchema } from '../providers/ids.js';
-import { UsageModelPriceCatalogSchema } from './usageModelPriceCatalog.js';
+import { UsageModelPriceCatalogSchema } from './usageModelPriceSchemas.js';
+import { QualifiedConnectedAccountRefSchema } from '../connect/qualifiedConnectedAccountPersistence.js';
 
 const NonNegativeNumberSchema = lazyZodSchema(() => z.number().finite().min(0));
 const OptionalNonEmptyStringSchema = lazyZodSchema(() => z.string().trim().min(1).optional().nullable());
@@ -88,10 +89,27 @@ export const UsageNativeHistoryDeleteRequestSchema = lazyZodSchema(() => z.objec
 }).strict());
 export type UsageNativeHistoryDeleteRequest = z.infer<typeof UsageNativeHistoryDeleteRequestSchema>;
 
+/** Host-captured request source; never reconstructed from current Session metadata. */
+export const UsageRequestAttributionSchema = lazyZodSchema(() => z.object({
+  v: z.literal(1),
+  turnId: z.string().trim().min(1),
+  source: z.discriminatedUnion('kind', [
+    z.object({ kind: z.literal('native'), connectedAccount: asProtocolZod(QualifiedConnectedAccountRefSchema).nullable() }).strict(),
+    z.object({ kind: z.literal('provider'), providerId: ProviderContributionKeySchema.nullable(), providerConnectionId: ProviderConnectionIdSchema }).strict(),
+  ]),
+}).strict());
+export type UsageRequestAttribution = z.infer<typeof UsageRequestAttributionSchema>;
+
+export function readUsageRequestAttribution(metadata: unknown): UsageRequestAttribution | null {
+  const parsed = UsageRequestAttributionSchema.safeParse(metadata && typeof metadata === 'object' ? Reflect.get(metadata, 'usageAttribution') : undefined);
+  return parsed.success ? parsed.data : null;
+}
+
 export const UsageEventIngestRequestSchema = lazyZodSchema(() => z.object({
   sessionId: z.string().trim().min(1).optional(),
   subject: UsageNativeAccountingSubjectSchema.optional(),
   accounting: UsageNativeAccountingEvidenceSchema.optional(),
+  attribution: UsageRequestAttributionSchema.optional(),
   observedAt: z.number().int().min(0),
   agentId: z.string().trim().min(1),
   backendMode: OptionalNonEmptyStringSchema,
@@ -109,6 +127,9 @@ export const UsageEventIngestRequestSchema = lazyZodSchema(() => z.object({
   context: UsageObservationContextSchema.optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
 }).strict().superRefine((request, ctx) => {
+  if (request.attribution && (request.subject || request.scope !== 'turn_delta' || request.isCumulative || request.turnId !== request.attribution.turnId)) {
+    ctx.addIssue({ code: 'custom', path: ['attribution'], message: 'Request attribution requires a matching runtime turn delta.' });
+  }
   if (Boolean(request.sessionId) === Boolean(request.subject)) {
     ctx.addIssue({ code: 'custom', path: ['subject'], message: 'Exactly one accounting subject is required.' });
   }
@@ -256,12 +277,29 @@ const UsageAnalyticsInsightsSchema = lazyZodSchema(() => z.object({
   cacheSavingsUsd: NonNegativeNumberSchema.optional(),
 }).strict());
 
+/** Capture path and execution attribution are independent; native replay can be linked to Happier. */
+export const UsageAnalyticsSourceContextSchema = lazyZodSchema(() => z.object({
+  path: z.enum(['runtime', 'native', 'legacy', 'unknown']),
+  execution: z.enum(['happier', 'outside', 'unknown']),
+}).strict());
+export type UsageAnalyticsSourceContext = z.infer<typeof UsageAnalyticsSourceContextSchema>;
+
+export const UsageAnalyticsTimelineSourceSchema = lazyZodSchema(() => UsageAnalyticsSourceContextSchema.extend({
+  source: z.string().trim().min(1),
+  eventCount: z.number().int().min(0),
+  tokens: UsageObservationTokensSchema,
+  cost: UsageObservationCostSchema,
+}).strict());
+export type UsageAnalyticsTimelineSource = z.infer<typeof UsageAnalyticsTimelineSourceSchema>;
+
 const UsageAnalyticsLeaderSchema = lazyZodSchema(() => z.object({
   key: z.string().trim().min(1),
   label: z.string().trim().min(1).optional(),
   eventCount: z.number().int().min(0),
   tokens: UsageObservationTokensSchema.optional(),
   cost: UsageObservationCostSchema.optional(),
+  /** Only timeline leaders carry source partitions; older responses may omit them. */
+  sources: z.array(UsageAnalyticsTimelineSourceSchema).optional(),
 }).strict());
 
 const UsageAnalyticsLeadersSchema = lazyZodSchema(() => z.object({
@@ -345,17 +383,22 @@ export const UsageAnalyticsCostFactSchema = lazyZodSchema(() => UsageAnalyticsCo
 }));
 export type UsageAnalyticsCostFact = z.infer<typeof UsageAnalyticsCostFactSchema>;
 
-export const UsageAnalyticsCoverageSchema = lazyZodSchema(() => z.object({
-  status: z.enum(['complete', 'partial', 'unknown']),
-  reasons: z.array(UsageAccountingCoverageReasonSchema),
-  sources: z.array(z.object({
+/** Server-queryable provenance contains witnessed identities, never machine names or filesystem locations. */
+export const UsageAnalyticsSourceCoverageSchema = lazyZodSchema(() => z.object({
     source: z.string().trim().min(1),
     path: z.enum(['runtime', 'native', 'legacy', 'unknown']),
     status: z.enum(['available', 'partial', 'unknown', 'unsupported', 'pending', 'error']),
+    machineId: z.string().trim().min(1).optional(),
+    captureKind: z.enum(['measured', 'from_logs', 'not_added']).optional(),
     asOfMs: z.number().int().min(0).optional(),
     eventCount: z.number().int().min(0),
     historyComplete: z.boolean().optional(),
-  }).strict()),
+}).strict());
+
+export const UsageAnalyticsCoverageSchema = lazyZodSchema(() => z.object({
+  status: z.enum(['complete', 'partial', 'unknown']),
+  reasons: z.array(UsageAccountingCoverageReasonSchema),
+  sources: z.array(UsageAnalyticsSourceCoverageSchema),
   missingDimensions: z.array(UsageAnalyticsBreakdownDimensionSchema),
   range: z.object({
     startMs: z.number().int().min(0).optional(),
@@ -374,6 +417,7 @@ export type UsageAnalyticsCoverage = z.infer<typeof UsageAnalyticsCoverageSchema
 export const UsageAnalyticsContributionSchema = lazyZodSchema(() => z.object({
   id: z.string().trim().min(1),
   eventCount: z.number().int().min(0).optional(),
+  context: UsageObservationContextSchema.optional(),
   observedAtMs: z.number().int().min(0),
   sessionId: z.string().trim().min(1).nullable(),
   turnId: z.string().trim().min(1).nullable(),
@@ -386,10 +430,13 @@ export const UsageAnalyticsContributionSchema = lazyZodSchema(() => z.object({
   /** Missing older responses remain unknown, including a null connection dimension. */
   /** Response-bound source certainty; absent and current-metadata-only dimensions are unknown. */
   providerAttribution: z.enum(['known', 'unknown']).optional(),
+  providerSource: z.enum(['native', 'provider', 'unknown']).optional(),
+  connectedAccount: asProtocolZod(QualifiedConnectedAccountRefSchema).nullable().optional(),
   machineId: z.string().trim().min(1).nullable(),
   projectKey: z.string().trim().min(1).nullable(),
   workspaceId: z.string().trim().min(1).nullable(),
   source: z.string().trim().min(1).nullable(),
+  sourceContext: UsageAnalyticsSourceContextSchema.optional(),
   tokens: UsageObservationTokensSchema,
   tokenCategories: UsageObservationTokensSchema.optional(),
   cost: UsageObservationCostSchema,

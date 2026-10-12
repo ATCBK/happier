@@ -24,6 +24,16 @@ export const UsageFileResultSchema = lazyZodSchema(() => z.object({
 }).strict());
 export type UsageFileResult = z.infer<typeof UsageFileResultSchema>;
 
+export function formatUsageExportFileTimestamp(date: Date): string {
+  return date.toISOString().replace(/[:.]/g, '-');
+}
+
+/** Shared file-result encoding for already-authorized usage document serializers. */
+export function buildUsageTextFileResult(input: Readonly<Omit<UsageFileResult, 'v' | 'base64'> & { content: string }>): UsageFileResult {
+  const { content, ...metadata } = input;
+  return UsageFileResultSchema.parse({ v: 1, ...metadata, base64: encodeBase64(new TextEncoder().encode(content)) });
+}
+
 /** RFC 4180 quoting, shared by personal and Team usage export delivery. */
 export function escapeUsageCsvField(value: string): string {
   return /[",\n\r]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
@@ -54,8 +64,8 @@ export function buildUsageFileResult(input: UsageExportInput, value: UsageAnalyt
     content = `costBasis: ${request.query.costBasis}\n` + fields.map(field => `${field}: ${accounting[field] === undefined ? 'unavailable' : JSON.stringify(accounting[field])}`).join('\n') + '\n';
   }
   const { extension, mediaType } = USAGE_EXPORT_FORMATS[request.format];
-  return UsageFileResultSchema.parse({ v: 1,
+  return buildUsageTextFileResult({
     mediaType,
     fileName: asOfMs === null ? `usage.${extension}` : `usage-${asOfMs}.${extension}`,
-    base64: encodeBase64(new TextEncoder().encode(content)), fields, asOfMs });
+    content, fields, asOfMs });
 }

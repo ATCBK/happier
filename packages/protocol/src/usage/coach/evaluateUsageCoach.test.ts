@@ -19,6 +19,17 @@ const composition: UsagePromptComposition = { v: 1, evidenceId: 'prompt', sessio
     components: [component], nativePrefix: null, contextWindowTokens: null };
 
 describe('evidence-bound usage coach', () => {
+    it('does not inspect disabled check evidence, including model Off', () => {
+        const detail = { coverage: 'partial' as const, get modelRequests(): never { throw new Error('Disabled model was evaluated'); } };
+        expect(result({ detail, preferences: { v: 1, suppressions: [], disabledChecks: [], modelSuggestion: 'off' } }, 'model_misfit').status).toBe('disabled');
+        expect(result({ detail, preferences: { v: 1, suppressions: [], disabledChecks: ['model_misfit'], modelSuggestion: 'suggest_with_estimates' } }, 'model_misfit').status).toBe('disabled');
+        expect(result({ detail, preferences: null }, 'model_misfit').status).toBe('insufficient_evidence');
+        const disabled = evaluateUsageCoach({ ...base, composition: [{ ...composition, components: [{ ...component, byteLength: -1 }] }],
+            preferences: { v: 1, suppressions: [], disabledChecks: [...USAGE_COACH_DETECTOR_IDS], modelSuggestion: 'suggest_with_estimates' } });
+        expect(disabled.evaluations.every(row => row.status === 'disabled')).toBe(true);
+        expect(disabled.findings).toEqual([]);
+        expect(UsageCoachEvaluationSchema.safeParse(disabled).success).toBe(true);
+    });
     it('compares completed identical host requests through exact turn/model/source cost facts, without claiming task quality', () => {
         const requestIdentity = { scopeKey: 'a'.repeat(64), digest: 'b'.repeat(64),
             selection: { agentTargetKey: 'agent:happier.agent.codex:codex', providerConnectionId: null, modelId: 'heavy' } };
@@ -55,10 +66,24 @@ describe('evidence-bound usage coach', () => {
             { ...accounting.contributions![1]!, modelId: 'unknown' }] }).status).toBe('insufficient_evidence');
         expect(read(requests, { ...accounting, contributions: [accounting.contributions![0]!,
             { ...accounting.contributions![1]!, cost: { reportedUsd: 0, estimatedUsd: 1, currency: 'USD', costSource: 'pricing_estimate' } }] }).status).toBe('insufficient_evidence');
-        expect(read(requests, { ...accounting, contributions: [accounting.contributions![0]!,
-            { ...accounting.contributions![1]!, providerConnectionId: undefined }] }).status).toBe('insufficient_evidence');
-        expect(read(requests, { ...accounting, coverage: { ...accounting.coverage!, status: 'partial' } }).status).toBe('insufficient_evidence');
-        expect(read(requests, { ...accounting, contributions: accounting.contributions!.map(row => ({ ...row, providerAttribution: undefined })) }).status).toBe('insufficient_evidence');
+        const partial = { ...accounting, coverage: { ...accounting.coverage!, status: 'partial' as const },
+            contributions: accounting.contributions!.map(row => ({ ...row, providerConnectionId: undefined, providerAttribution: undefined })) };
+        expect(read(requests, partial)).toMatchObject({ status: 'finding', finding: { coverage: 'partial',
+            modelComparison: { costCoverage: 'partial', providerAttribution: 'unknown', modelCost: 4, candidateCost: 1 } } });
+        expect(result({ accounting: partial, detail: { coverage: 'partial', modelRequests: requests },
+            preferences: { v: 1, suppressions: [], disabledChecks: [], modelSuggestion: 'complete_only' } }, 'model_misfit').status).toBe('insufficient_evidence');
+        const account = { service: { pluginId: 'example.auth', localId: 'native' }, accountId: 'request-account' };
+        const attributed = { ...accounting, contributions: accounting.contributions!.map(row => ({ ...row,
+            providerSource: 'native' as const, connectedAccount: account })) };
+        const observed = read(requests, attributed);
+        expect(observed).toMatchObject({ status: 'finding', finding: { modelComparison: {
+            modelResponseSource: { kind: 'native', connectedAccount: account },
+            candidateResponseSource: { kind: 'native', connectedAccount: account }, providerConnectionId: null,
+        } } });
+        const switched = read(requests, { ...attributed, contributions: attributed.contributions.map(row => ({ ...row,
+            connectedAccount: { ...account, accountId: 'switched-request-account' } })) });
+        expect(observed.status === 'finding' && switched.status === 'finding'
+            && observed.finding.evidenceKey !== switched.finding.evidenceKey).toBe(true);
         const changedTarget = read(requests.map(row => ({ ...row, requestIdentity: { ...row.requestIdentity,
             selection: { ...row.requestIdentity.selection, modelId: row.turnId === 'light-turn' ? 'other-light' : 'heavy' } } })),
         { ...accounting, contributions: accounting.contributions!.map(row => row.turnId === 'light-turn' ? { ...row, modelId: 'other-light' } : row) });
@@ -117,11 +142,12 @@ describe('evidence-bound usage coach', () => {
         expect(found).toMatchObject({ status: 'finding', finding: { summaryCode: 'redundant_unchanged_read_observed',
             measurements: [{ metric: 'unchanged_reads', value: 1, unit: 'count' }] } });
     });
-    it('reports observed repeated compactions without fabricating token or dollar savings and deduplicates facts', () => {
-        const c = { evidenceId: 'c1', observedAtMs: 10, sessionId: 's', turnId: 't' };
-        const found = result({ detail: { coverage: 'partial', compactions: [c, c, { ...c, evidenceId: 'c2', observedAtMs: 20 }] } }, 'compaction_storms');
-        expect(found).toMatchObject({ status: 'finding', finding: { coverage: 'partial', summaryCode: 'repeated_compaction_observed',
-            measurements: [{ metric: 'compactions', value: 2, unit: 'count' }] } });
+    it('reports witnessed compaction thrash without fabricating savings and deduplicates facts', () => {
+        const c = { evidenceId: 'c1', observedAtMs: 10, sessionId: 's', turnId: 't', immediateRefillToLimit: true };
+        const found = result({ detail: { coverage: 'partial', compactions: [c, c, { ...c, evidenceId: 'c2', observedAtMs: 20 },
+            { ...c, evidenceId: 'c3', observedAtMs: 30 }] } }, 'compaction_storms');
+        expect(found).toMatchObject({ status: 'finding', finding: { coverage: 'partial', summaryCode: 'compaction_thrash_observed',
+            measurements: [{ metric: 'compactions', value: 3, unit: 'count' }] } });
         expect(found.status === 'finding' && Object.keys(found.finding)).not.toContain('estimatedSavings');
         expect(result({ detail: { coverage: 'complete', compactions: [c, c] } }, 'compaction_storms').status).toBe('no_finding');
     });
@@ -136,7 +162,7 @@ describe('evidence-bound usage coach', () => {
     it('does not call idle gaps or prefix hash changes causal misses without authoritative native cause', () => {
         const cache = { evidenceId: 'cache', observedAtMs: 30, inputId: 'i', boundary: 'agent_native_request' as const,
             cacheOutcome: 'miss' as const, missCause: 'unknown' as const, cacheWriteTokens: 100,
-            idleMs: 20, prefixDigest: 'b', previousPrefixDigest: 'a' };
+            idleMs: 20, ttlMs: 20, prefixDigest: 'b', previousPrefixDigest: 'a' };
         expect(result({ detail: { coverage: 'complete', nativeCache: [cache] } }, 'idle_recaching').status).toBe('insufficient_evidence');
         expect(result({ detail: { coverage: 'complete', nativeCache: [cache] } }, 'cache_busting_prompt_changes').status).toBe('insufficient_evidence');
         expect(result({ detail: { coverage: 'complete', nativeCache: [{ ...cache, missCause: 'ttl_expired' }] } }, 'idle_recaching'))
@@ -148,19 +174,21 @@ describe('evidence-bound usage coach', () => {
         expect(result({ detail: { coverage: 'complete', nativeCache: [{ ...cache, missCause: 'prefix_change', previousPrefixDigest: null }] } },
             'cache_busting_prompt_changes').status).toBe('insufficient_evidence');
     });
-    it('requires matched workload and witnessed outcome before proposing model fit', () => {
+    it('does not replace completed matched host requests with synthetic outcome assertions', () => {
         const comparison = { evidenceId: 'm', observedAtMs: 20, workloadKey: 'exact', modelId: 'a', candidateModelId: 'b',
             requiredOutcomeKey: 'checks_passed', modelOutcome: 'met' as const, candidateOutcome: 'unknown' as const,
             costKind: 'reported' as const, currency: 'USD', modelCost: 2, candidateCost: 1 };
-        expect(result({ detail: { coverage: 'complete', modelComparisons: [comparison] } }, 'model_misfit').status).toBe('insufficient_evidence');
-        expect(result({ detail: { coverage: 'complete', modelComparisons: [{ ...comparison, candidateOutcome: 'met' }] } }, 'model_misfit'))
-            .toMatchObject({ status: 'finding', finding: { summaryCode: 'compatible_model_cost_difference',
-                measurements: [{ metric: 'observed_cost_difference', currency: 'USD', costKind: 'reported' }] } });
+        const unknownOutcome = { coverage: 'complete' as const, modelComparisons: [comparison] };
+        const assertedOutcome = { ...unknownOutcome, modelComparisons: [{ ...comparison, candidateOutcome: 'met' }] };
+        expect(result({ detail: unknownOutcome }, 'model_misfit').status).toBe('insufficient_evidence');
+        expect(result({ detail: assertedOutcome }, 'model_misfit'))
+            .toMatchObject({ status: 'insufficient_evidence' });
     });
     it('requires repeated failed operations and witnessed absence of progress rather than large token totals', () => {
-        const l = { evidenceId: 'l1', observedAtMs: 10, turnId: 't', operationKey: 'op', outcome: 'failed' as const, progress: 'none' as const };
+        const l = { evidenceId: 'l1', observedAtMs: 10, turnId: 't', operationKey: 'op', errorDigest: 'error', outcome: 'failed' as const, progress: 'none' as const };
         expect(result({ detail: { coverage: 'complete', loops: [l, { ...l, evidenceId: 'l2', observedAtMs: 20, progress: 'observed' }] } }, 'anomalous_looping_usage').status).toBe('no_finding');
-        expect(result({ detail: { coverage: 'complete', loops: [l, { ...l, evidenceId: 'l2', observedAtMs: 20 }] } }, 'anomalous_looping_usage'))
+        expect(result({ detail: { coverage: 'complete', loops: [l, { ...l, evidenceId: 'l2', observedAtMs: 20 },
+            { ...l, evidenceId: 'l3', observedAtMs: 30 }] } }, 'anomalous_looping_usage'))
             .toMatchObject({ status: 'finding', finding: { summaryCode: 'failed_loop_observed' } });
     });
     it('names actual outside-Happier native accounting without calling it unwanted or cron', () => {
@@ -201,14 +229,13 @@ describe('evidence-bound usage coach', () => {
         expect(result({ composition: [schema], detail: { coverage: 'complete', toolUses: [{ evidenceId: 'u', observedAtMs: 20,
             serverKey: component.sourceId, toolId: 'tool' }] } }, 'mcp_overhead').status).toBe('insufficient_evidence');
     });
-    it('requires a witnessed native context denominator and prefix size rather than processed tokens or host-only sizes', () => {
+    it('does not retain the full-window trigger without per-request context accounting', () => {
         expect(result({ composition: [{ ...composition, contextWindowTokens: 10 }] }, 'context_bloat').status).toBe('insufficient_evidence');
         const native: UsagePromptComposition = { ...composition, boundary: 'agent_native_request', coverage: 'complete_native',
             contextWindowTokens: 100, nativePrefix: { digest: 'b'.repeat(64), tokenCount: 100, tokenizerId: 'native',
                 cacheOutcome: 'unknown', missCause: 'unknown', cacheReadTokens: null, cacheWriteTokens: null, ttlMs: null } };
-        expect(result({ composition: [native] }, 'context_bloat')).toMatchObject({ status: 'finding', finding: {
-            measurements: [{ metric: 'composed_tokens', value: 100, unit: 'tokens' }, { metric: 'context_window_tokens', value: 100, unit: 'tokens' }] } });
-        expect(result({ compositionCoverage: 'complete', composition: [{ ...native, nativePrefix: { ...native.nativePrefix!, tokenCount: 10 } }] }, 'context_bloat').status).toBe('no_finding');
+        expect(result({ composition: [native] }, 'context_bloat').status).toBe('insufficient_evidence');
+        expect(result({ compositionCoverage: 'complete', composition: [{ ...native, nativePrefix: { ...native.nativePrefix!, tokenCount: 10 } }] }, 'context_bloat').status).toBe('insufficient_evidence');
     });
     it('consumes a native context cache cause while leaving host-only prefix changes insufficient', () => {
         const previous: UsagePromptComposition = { ...composition, evidenceId: 'p1', boundary: 'agent_native_request', coverage: 'complete_native',
@@ -224,8 +251,9 @@ describe('evidence-bound usage coach', () => {
             components: [{ ...component, digest: 'b'.repeat(64) }] }] }, 'cache_busting_prompt_changes').status).toBe('insufficient_evidence');
     });
     it('preserves stale currentness and binds evidence identity to actual observations', () => {
-        const c = { evidenceId: 'c1', observedAtMs: 10, sessionId: 's', turnId: 't' };
-        const input = { detail: { coverage: 'complete' as const, compactions: [c, { ...c, evidenceId: 'c2', observedAtMs: 20 }] } };
+        const c = { evidenceId: 'c1', observedAtMs: 10, sessionId: 's', turnId: 't', immediateRefillToLimit: true };
+        const input = { detail: { coverage: 'complete' as const, compactions: [c, { ...c, evidenceId: 'c2', observedAtMs: 20 },
+            { ...c, evidenceId: 'c3', observedAtMs: 30 }] } };
         const first = result(input, 'compaction_storms');
         const second = result({ ...input, currentness: 'stale' }, 'compaction_storms');
         expect(first.status).toBe('finding');
@@ -254,8 +282,7 @@ describe('evidence-bound usage coach', () => {
     });
     it('refuses a serialized public result that swaps evidence, remedy identity or evaluated concepts', () => {
         // These are transport tamper cases: a typed finding must not advertise another finding's Apply.
-        const c = { evidenceId: 'c1', observedAtMs: 10, sessionId: 's', turnId: 't' };
-        const value = evaluateUsageCoach({ ...base, detail: { coverage: 'complete', compactions: [c, { ...c, evidenceId: 'c2', observedAtMs: 20 }] } });
+        const value = evaluateUsageCoach({ ...base, composition: [{ ...composition, components: [component, component] }] });
         const transport: typeof value = JSON.parse(JSON.stringify(value));
         expect(UsageCoachEvaluationSchema.safeParse({ ...evaluateUsageCoach(base), asOfMs: null, currentness: 'unknown' }).success).toBe(true);
         expect(UsageCoachEvaluationSchema.safeParse({ ...evaluateUsageCoach(base), asOfMs: null, currentness: 'current' }).success).toBe(false);
@@ -279,10 +306,9 @@ describe('evidence-bound usage coach', () => {
         expect(UsageCoachEvaluationSchema.safeParse(replaceFinding({ ...finding, evidenceKey: 'plugin-owned-opaque-key' })).success).toBe(true);
     });
     it('applies Account preferences only to exact finding evidence and expires snooze at the explicit clock', () => {
-        const c = { evidenceId: 'c1', observedAtMs: 10, sessionId: 's', turnId: 't' };
-        const evaluation = evaluateUsageCoach({ ...base, detail: { coverage: 'complete', compactions: [c, { ...c, evidenceId: 'c2', observedAtMs: 20 }] } });
+        const evaluation = evaluateUsageCoach({ ...base, composition: [{ ...composition, components: [component, component] }] });
         const key = evaluation.findings[0]!.evidenceKey;
-        const preferences = { v: 1 as const,
+        const preferences = { v: 1 as const, disabledChecks: [], modelSuggestion: 'suggest_with_estimates' as const,
             suppressions: [{ kind: 'dismissed' as const, evidenceKey: key }] };
         expect(applyUsageCoachPreferences(evaluation, preferences, 30).findings[0]!.state.dismissed).toBe(true);
         expect(applyUsageCoachPreferences(evaluation, { ...preferences, suppressions: [{ kind: 'dismissed', evidenceKey: 'different' }] }, 30)
@@ -290,7 +316,7 @@ describe('evidence-bound usage coach', () => {
         const snoozed = { ...preferences, suppressions: [{ kind: 'snoozed' as const, evidenceKey: key, untilMs: 40 }] };
         expect(applyUsageCoachPreferences(evaluation, snoozed, 30).findings[0]!.state.snoozedUntilMs).toBe(40);
         expect(applyUsageCoachPreferences(evaluation, snoozed, 40).findings[0]!.state.snoozedUntilMs).toBeNull();
-        const changed = evaluateUsageCoach({ ...base, detail: { coverage: 'complete', compactions: [c, { ...c, evidenceId: 'c3', observedAtMs: 20 }] } });
+        const changed = evaluateUsageCoach({ ...base, composition: [{ ...composition, evidenceId: 'changed', components: [component, component] }] });
         expect(applyUsageCoachPreferences(changed, preferences, 30).findings[0]!.state.dismissed).toBe(false);
     });
 });

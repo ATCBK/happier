@@ -1,5 +1,5 @@
 import type { UsageObservationCost, UsageObservationTokens } from './usageAnalyticsContracts.js';
-import { resolveUsageCostBasis, type UsageCostMode } from './usageCost.js';
+import { resolveUsageCostBasis, type UsageCostMode, type UsageSelectedCostBasis } from './usageCostFacts.js';
 
 export function createEmptyUsageTokens(): UsageObservationTokens {
     return { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
@@ -26,14 +26,16 @@ export function addUsageCost(left: UsageObservationCost, right: UsageObservation
 
 // Distinguish the initial zero accumulator from an already unpriced population.
 // This aggregation-only evidence never enters the serialized contract.
-const aggregateBasisAvailable = Symbol('aggregateBasisAvailable');
-type AggregatedUsageCost = UsageObservationCost & { [aggregateBasisAvailable]?: boolean };
+export const usageCostAggregationBasis = Symbol('usageCostAggregationBasis');
+export type AggregatedUsageCost = UsageObservationCost & { [usageCostAggregationBasis]?: {
+    mode: UsageCostMode; available: boolean; selected?: UsageSelectedCostBasis;
+} };
 
 export function addUsageCostForMode(left: UsageObservationCost, right: UsageObservationCost, mode: UsageCostMode): AggregatedUsageCost {
     const leftBasis = resolveUsageCostBasis(left, mode);
     const rightBasis = resolveUsageCostBasis(right, mode);
     const leftAggregate: AggregatedUsageCost = left;
-    const leftEmpty = leftAggregate[aggregateBasisAvailable] !== false && left.apiEquivalentUsd === undefined && left.costSource === 'none'
+    const leftEmpty = leftAggregate[usageCostAggregationBasis]?.available !== false && left.apiEquivalentUsd === undefined && left.costSource === 'none'
         && left.reportedUsd === 0 && left.estimatedUsd === 0 && (left.invoiceUsd ?? 0) === 0;
     const apiEquivalentUsd = leftEmpty ? right.apiEquivalentUsd
         : left.apiEquivalentUsd !== undefined && right.apiEquivalentUsd !== undefined ? left.apiEquivalentUsd + right.apiEquivalentUsd : undefined;
@@ -42,11 +44,15 @@ export function addUsageCostForMode(left: UsageObservationCost, right: UsageObse
             : left.pricingSource === right.pricingSource ? left.pricingSource : 'effective_model_prices',
     } : {}) };
     if (leftEmpty && rightBasis) return { ...combined, currency: right.currency, costSource: right.costSource,
-        effectiveUsd: rightBasis.amountUsd, [aggregateBasisAvailable]: true };
-    if (leftBasis && rightBasis && leftBasis.kind === rightBasis.kind && leftBasis.currency === rightBasis.currency) {
-        return { ...combined, costSource: left.costSource, effectiveUsd: leftBasis.amountUsd + rightBasis.amountUsd, [aggregateBasisAvailable]: true };
+        effectiveUsd: rightBasis.amountUsd, [usageCostAggregationBasis]: { mode, available: true, selected: rightBasis } };
+    if (leftBasis && rightBasis && (mode === 'auto' || leftBasis.kind === rightBasis.kind) && leftBasis.currency === rightBasis.currency) {
+        const selected: UsageSelectedCostBasis = { kind: leftBasis.kind === rightBasis.kind ? leftBasis.kind : 'mixed',
+            currency: leftBasis.currency, amountUsd: leftBasis.amountUsd + rightBasis.amountUsd,
+            source: leftBasis.kind === rightBasis.kind && leftBasis.source === rightBasis.source ? leftBasis.source : 'best_available' };
+        return { ...combined, effectiveUsd: selected.amountUsd,
+            [usageCostAggregationBasis]: { mode, available: true, selected } };
     }
-    return { ...combined, costSource: 'none', [aggregateBasisAvailable]: false };
+    return { ...combined, costSource: 'none', [usageCostAggregationBasis]: { mode, available: false } };
 }
 
 export function withEffectiveUsageCost(cost: UsageObservationCost, mode: UsageCostMode): UsageObservationCost {

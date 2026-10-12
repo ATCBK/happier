@@ -20,6 +20,20 @@ const response: UsageAnalyticsQueryResponse = {
 const snapshot = resolveUsagePageAggregation({ queries: [query], accounting: [{ query, value: response, status: 'available', asOfMs: 9500 }] }).results[0]!;
 
 describe('private recap composition', () => {
+  it('composes a relative selection using witnessed accounting bounds, never a new viewer clock', () => {
+    const relative = normalizeUsageQuery({ ...query, period: { relative: '7days' } });
+    const endMs = Date.parse('2026-10-11T20:30:00Z');
+    const period = { startMs: endMs - 7 * 86_400_000, endMs };
+    const value = { ...response, coverage: { status: 'partial' as const, reasons: [], missingDimensions: [],
+      range: { ...period, complete: false }, ranked: [], sources: [] } };
+    const shown = resolveUsagePageAggregation({ queries: [relative], accounting: [{ query: relative, value,
+      status: 'available', asOfMs: endMs }] }).results[0]!;
+    const input = UsageRecapComposeInputSchema.parse({ query: relative, selectedFields: ['tokens'] });
+    expect(composeUsageRecap({ input, snapshot: shown })).toMatchObject({ kind: 'composed',
+      period: { ...period, timeZoneOffsetMinutes: 120 }, facts: { tokens: response.totals.tokens } });
+    expect(composeUsageRecap({ input, snapshot: { ...shown, accounting: response } }))
+      .toEqual({ kind: 'unavailable', reason: 'period_unavailable' });
+  });
   it('shares one selected-fact result across all seven styles and three formats without leaking names or dollars by default', () => {
     for (const style of USAGE_RECAP_STYLES) {
       for (const format of USAGE_RECAP_FORMATS) {

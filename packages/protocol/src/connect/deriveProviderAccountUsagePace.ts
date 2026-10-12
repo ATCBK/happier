@@ -95,6 +95,46 @@ export function deriveProviderAccountUsagePace(input: Readonly<{ snapshot: Provi
   return deriveWitnessedPace(input, false);
 }
 
+export type ProviderAccountUsageHeadroomV1 =
+  | Readonly<{ status: 'available'; window: ProviderAccountUsagePaceWindowV1; remainingFraction: number; qualification: 'confirmed' | 'estimated' }>
+  | Extract<ProviderAccountUsagePaceV1, { status: 'unavailable' }>;
+
+/** Present quota needs a witnessed meter and window, but not positive elapsed time for a forecast. */
+export function deriveProviderAccountUsageHeadroom(input: Readonly<{ snapshot: ProviderAccountUsageSnapshotV1; meterId: string; nowMs: number }>): ProviderAccountUsageHeadroomV1 {
+  const { snapshot, meterId, nowMs } = input;
+  if (snapshot.state === 'not_loaded' || snapshot.state === 'loaded_empty') return { status: 'unavailable', reason: 'not_loaded' };
+  if (snapshot.state !== 'loaded_data' || !isConnectedServiceQuotaObservationFresh({ observedAtMs: snapshot.observedAtMs, nowMs, maxAgeMs: snapshot.staleAfterMs })) return { status: 'unavailable', reason: 'stale' };
+  const window = resolveProviderAccountUsagePaceWindow(snapshot, meterId);
+  if (!window) return { status: 'unavailable', reason: 'unknown_window' };
+  if (exceedsNonRenewingEntitlement(snapshot, window)) return { status: 'unavailable', reason: 'non_renewing_end' };
+  if (snapshot.observedAtMs < window.windowStartAtMs || snapshot.observedAtMs > window.resetAtMs || nowMs >= window.resetAtMs) return { status: 'unavailable', reason: 'outside_window' };
+  const meter = snapshot.meters.find(value => value.meterId === meterId)!;
+  const used = fraction(meter);
+  if (used === null) return { status: 'unavailable', reason: 'unknown_utilization' };
+  if (hasInconsistentCounters(meter)) return { status: 'unavailable', reason: 'inconsistent_counters' };
+  return { status: 'available', window, remainingFraction: Math.max(0, Math.min(1, 1 - used)),
+    qualification: snapshot.confidence === 'confirmed' && meter.status === 'ok' ? 'confirmed' : 'estimated' };
+}
+
+/** The accepted B lifecycle reset witness, shared by notifications and recorded-history projections. */
+export function hasProviderAccountUsageWitnessedReset(input: Readonly<{ previous: ProviderAccountUsageSnapshotV1; current: ProviderAccountUsageSnapshotV1; meterId: string; nowMs: number }>): boolean {
+  const { previous, current, meterId, nowMs } = input;
+  if (previous.recordId !== current.recordId || previous.observedAtMs >= current.observedAtMs
+    || previous.state !== 'loaded_data' || current.state !== 'loaded_data'
+    || !isConnectedServiceQuotaObservationFresh({ observedAtMs: current.observedAtMs, nowMs, maxAgeMs: current.staleAfterMs })) return false;
+  const before = deriveProviderAccountUsagePace({ snapshot: previous, meterId, nowMs: previous.observedAtMs });
+  const after = deriveProviderAccountUsagePace({ snapshot: current, meterId, nowMs });
+  const beforeWindow = resolveProviderAccountUsagePaceWindow(previous, meterId);
+  const afterWindow = resolveProviderAccountUsagePaceWindow(current, meterId);
+  return !!beforeWindow && !!afterWindow
+    && (before.status === 'available' || before.reason === 'zero_elapsed'
+      || (before.reason === 'outside_window' && previous.observedAtMs === beforeWindow.resetAtMs))
+    && (after.status === 'available' || after.reason === 'zero_elapsed')
+    && readProviderAccountUsageWindowComparabilityReason({ previous, current, meterId }) === null
+    && afterWindow.windowStartAtMs === beforeWindow.resetAtMs
+    && afterWindow.windowDurationMs === beforeWindow.windowDurationMs;
+}
+
 function deriveWitnessedPace(input: Readonly<{ snapshot: ProviderAccountUsageSnapshotV1; meterId: string; nowMs: number; history?: readonly ProviderAccountUsageSnapshotV1[] }>, terminal: boolean): ProviderAccountUsagePaceV1 {
   const { snapshot, meterId, nowMs } = input;
   const unavailable = (reason: Extract<ProviderAccountUsagePaceV1, { status: 'unavailable' }>['reason']): ProviderAccountUsagePaceV1 => ({ status: 'unavailable', reason });

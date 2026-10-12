@@ -1,62 +1,12 @@
-import type { UsageAnalyticsContribution, UsageAnalyticsCostFact, UsageAnalyticsCostFactKind, UsageAnalyticsQueryRequest, UsageAnalyticsQueryResponse, UsageObservationCost, UsageObservationTokens } from './usageAnalyticsContracts.js';
+import type { UsageAnalyticsContribution, UsageAnalyticsCostFact, UsageAnalyticsQueryRequest, UsageAnalyticsQueryResponse, UsageObservationCost, UsageObservationTokens } from './usageAnalyticsContracts.js';
 import { bundledUsageModelPriceCatalog, resolveUsageModelPrice, type ResolvedUsageModelPrice, type UsageModelPriceCatalog, type UsageModelPriceOverridesV1 } from './usageModelPriceCatalog.js';
 import { resolveUsageTokenCategories } from './usageTokenCategories.js';
 import { projectUsageCostFactTotals } from './usageCostFactTotals.js';
 import { reprojectUsageLeaders } from './usageLeaderProjection.js';
+import { addUsageCostForMode, createEmptyUsageCost } from './usageAggregation.js';
 
-export type UsageCostMode = NonNullable<UsageAnalyticsQueryRequest['costMode']> | 'auto';
-export interface UsageCostBasis {
-  kind: Exclude<UsageAnalyticsCostFactKind, 'unpriced'>;
-  currency: string;
-  amountUsd: number;
-  source: string;
-}
-
-export function resolveUsageCostMode(mode: UsageAnalyticsQueryRequest['costMode']): UsageCostMode {
-  return mode ?? 'auto';
-}
-
-export function resolveUsageCostFactForMode<Fact extends { kind: UsageAnalyticsCostFactKind }>(facts: readonly Fact[], mode: UsageCostMode): Fact | undefined {
-  if (mode === 'api_equivalent') return facts.find((fact) => fact.kind === 'api_equivalent');
-  if (mode === 'reported') return facts.find((fact) => fact.kind === 'reported');
-  if (mode === 'estimated') return facts.find((fact) => fact.kind === 'estimated');
-  return facts.find((fact) => fact.kind === 'invoice')
-    ?? facts.find((fact) => fact.kind === 'reported')
-    ?? facts.find((fact) => fact.kind === 'api_equivalent')
-    ?? facts.find((fact) => fact.kind === 'estimated');
-}
-
-/** All observed monetary kinds remain separate, including simultaneous facts. */
-export function resolveUsageCostFacts(cost: UsageObservationCost): UsageCostBasis[] {
-  const reportedSource = cost.costSource === 'provider_reported_api_equivalent' ? 'provider_reported_api_equivalent' : 'provider_reported';
-  const hasReported = cost.reportedUsd > 0 || cost.costSource === 'provider_reported' || cost.costSource === 'provider_reported_api_equivalent';
-  const hasEstimated = cost.estimatedUsd > 0 || cost.costSource === 'pricing_estimate';
-  const hasInvoice = (cost.invoiceUsd ?? 0) > 0 || cost.costSource === 'invoice';
-  const basis = (kind: UsageCostBasis['kind'], amountUsd: number, source: string): UsageCostBasis => ({ kind, amountUsd, currency: cost.currency, source });
-  const facts: UsageCostBasis[] = [];
-  if (hasReported) facts.push(basis('reported', cost.reportedUsd, reportedSource));
-  if (hasEstimated) facts.push(basis('estimated', cost.estimatedUsd, 'pricing_estimate'));
-  if (hasInvoice) facts.push(basis('invoice', cost.invoiceUsd ?? 0, 'invoice'));
-  if (cost.apiEquivalentUsd !== undefined) facts.push({ kind: 'api_equivalent', currency: 'USD', amountUsd: cost.apiEquivalentUsd, source: cost.pricingSource ?? 'catalog' });
-  return facts;
-}
-
-/** A monetary value is available only when its selected basis is witnessed. */
-export function resolveUsageCostBasis(cost: UsageObservationCost, mode: UsageCostMode): UsageCostBasis | null {
-  if (mode === 'api_equivalent') return cost.apiEquivalentUsd === undefined ? null
-    : { kind: 'api_equivalent', currency: 'USD', amountUsd: cost.apiEquivalentUsd, source: cost.pricingSource ?? 'catalog' };
-  if (cost.currency === 'MIXED' || cost.costSource === 'none' && cost.apiEquivalentUsd === undefined) return null;
-  return resolveUsageCostFactForMode(resolveUsageCostFacts(cost), mode) ?? null;
-}
-
-/** Legacy numeric adapter; absence is represented by the result's omitted presentation. */
-export function resolveEffectiveUsageCostUsd(cost: UsageObservationCost, mode: UsageCostMode): number {
-  return resolveUsageCostBasis(cost, mode)?.amountUsd ?? 0;
-}
-
-export function resolveUsageCostPresentationSource(cost: UsageObservationCost, mode: UsageCostMode): string {
-  return resolveUsageCostBasis(cost, mode)?.source ?? 'none';
-}
+import { resolveUsageCostBasis, resolveUsageCostFacts, type UsageCostMode } from './usageCostFacts.js';
+export * from './usageCostFacts.js';
 
 /** Standard catalog USD tariff over nonoverlapping token categories, never an invoice. */
 export interface UsageModelCostEstimate {
@@ -98,16 +48,6 @@ export function repriceUsageObservationCost(rawCost: UsageObservationCost, model
   return selected ? { ...priced, effectiveUsd: selected.amountUsd } : priced;
 }
 
-/** One grouping key is used by both query aggregation and price reprojection. */
-export function resolveUsageContributionDimensionKey(row: Pick<UsageAnalyticsContribution,
-  'agentId' | 'modelId' | 'sessionId' | 'projectKey' | 'workspaceId' | 'backendMode' | 'source'> & { machineId?: string | null },
-  dimension: NonNullable<UsageAnalyticsQueryRequest['breakdowns']>[number] | 'engine'): string | null {
-  if (dimension === 'engine') return row.agentId ? row.backendMode ? `${row.agentId}:${row.backendMode}` : row.agentId : null;
-  const fields = { agent: 'agentId', model: 'modelId', session: 'sessionId', project: 'projectKey', workspace: 'workspaceId',
-    machine: 'machineId', backendMode: 'backendMode', source: 'source' } as const;
-  return row[fields[dimension]] ?? null;
-}
-
 /** Recompute history from the admitted contribution projection, retaining the original money facts. */
 export function repriceUsageAnalyticsResponse(value: UsageAnalyticsQueryResponse, catalog: UsageModelPriceCatalog = value.priceCatalog ?? bundledUsageModelPriceCatalog,
   overrides: UsageModelPriceOverridesV1 = {}, mode: UsageCostMode = 'auto'): UsageAnalyticsQueryResponse {
@@ -122,8 +62,8 @@ export function repriceUsageAnalyticsResponse(value: UsageAnalyticsQueryResponse
     cacheSavingsUsd += estimate?.breakdown?.cacheSavingsUsd ?? 0;
     const cost = repriceUsageObservationCost(row.cost, row.modelId, categories, catalog, overrides, mode);
     const existing = resolveUsageCostFacts(cost);
-    const base = { tokens: row.tokens, eventCount: 1, asOfMs: row.observedAtMs,
-      complete: value.coverage?.status === 'complete' };
+    const base = { tokens: row.tokens, eventCount: row.eventCount ?? 1, asOfMs: row.observedAtMs,
+      complete: row.eventCount !== undefined && value.coverage?.status === 'complete' };
     for (const fact of existing) facts.push({ ...base, ...fact, currency: fact.kind === 'api_equivalent' ? 'USD' : fact.currency });
     if (!estimate && row.tokens.total > 0) facts.push({ ...base, kind: 'unpriced', currency: 'USD', amountUsd: null,
       source: categories ? 'model_price_unknown' : 'token_categories_unknown', complete: false });
@@ -137,22 +77,13 @@ export function repriceUsageAnalyticsResponse(value: UsageAnalyticsQueryResponse
       pricingSource: rows.every(row => row.cost.pricingSource === rows[0]?.cost.pricingSource)
         ? rows[0]?.cost.pricingSource ?? `litellm:${catalog.provenance.revision}` : 'effective_model_prices',
     } : observed;
-    const selected = rows.map(row => resolveUsageCostBasis(row.cost, mode));
-    const first = selected[0];
-    if (!first || selected.some(fact => !fact || fact.kind !== first.kind || fact.currency !== first.currency)) return updated;
-    return { ...updated, effectiveUsd: selected.reduce((sum, fact) => sum + fact!.amountUsd, 0) };
+    const selected = resolveUsageCostBasis(rows.reduce((total, row) => addUsageCostForMode(total, row.cost, mode), createEmptyUsageCost()), mode);
+    return selected ? { ...updated, effectiveUsd: selected.amountUsd } : updated;
   };
-  const rowsFor = (dimension: Parameters<typeof resolveUsageContributionDimensionKey>[1], key: string,
-    rows: readonly UsageAnalyticsContribution[] = contributions) => rows.filter(row => (resolveUsageContributionDimensionKey(row, dimension) ?? 'unknown') === key);
-  const breakdowns = value.breakdowns && Object.fromEntries(Object.entries(value.breakdowns).map(([dimension, entries]) =>
-    [dimension, entries?.map(entry => ({ ...entry, cost: projectCost(entry.cost, rowsFor(dimension as Parameters<typeof rowsFor>[0], entry.key)) }))]));
   const ranking = reprojectUsageLeaders(value, contributions, mode, projectCost);
   const totals = { ...value.totals, cost: projectCost(value.totals.cost, contributions) };
-  const selected = contributions.map(row => resolveUsageCostBasis(row.cost, mode));
-  const first = selected[0];
-  const oneBasis = first && selected.every(fact => fact && fact.kind === first.kind && fact.currency === first.currency);
-  const costPresentation = oneBasis ? { mode, effectiveUsd: selected.reduce((sum, fact) => sum + fact!.amountUsd, 0), currency: first.currency,
-    source: selected.every(fact => fact!.source === first.source) ? first.source : 'effective_model_prices' } : undefined;
+  const selected = resolveUsageCostBasis(contributions.reduce((total, row) => addUsageCostForMode(total, row.cost, mode), createEmptyUsageCost()), mode);
+  const costPresentation = selected ? { mode, effectiveUsd: selected.amountUsd, currency: selected.currency, source: selected.source } : undefined;
   const factGroups = new Map<string, UsageAnalyticsCostFact[]>();
   for (const fact of facts) {
     const key = JSON.stringify([fact.kind, fact.currency, fact.source]);
@@ -174,5 +105,5 @@ export function repriceUsageAnalyticsResponse(value: UsageAnalyticsQueryResponse
   return { ...value, totals, contributions, costFacts: groupedFacts, priceCatalog: catalog, costPresentation, coverage, insights,
     series: value.series?.map(bucket => ({ ...bucket, cost: projectCost(bucket.cost,
       contributions.filter(row => row.observedAtMs >= bucket.bucketStartMs && row.observedAtMs < bucket.bucketEndMs)) })),
-    breakdowns, leaders: ranking.leaders, modelTimeline: ranking.modelTimeline, engineTimeline: ranking.engineTimeline };
+    breakdowns: ranking.breakdowns, leaders: ranking.leaders, modelTimeline: ranking.modelTimeline, engineTimeline: ranking.engineTimeline };
 }

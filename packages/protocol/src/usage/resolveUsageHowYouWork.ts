@@ -25,11 +25,20 @@ export interface UsageHowYouWorkDetailInput {
     activityAtMs?: readonly number[];
     /** Same admitted private detail read; never an accounting metadata carrier. */
     coach?: UsageCoachReadEvidence;
+    /** Content-free points observed in the already-opened transcript; no inferred turn or duration. */
+    phaseEvents?: readonly UsageAutopsyEvent[];
 }
+const UsageAutopsyEventSchema = lazyZodSchema(() => z.object({
+    evidenceId: z.string().min(1), sessionId: z.string().min(1), turnId: z.string().nullable(),
+    observedAtMs: z.number().int().nonnegative(), kind: z.enum(['read', 'change', 'execute', 'delegate', 'compaction', 'unknown']),
+    method: z.enum(['tool_classification', 'native_event']),
+}).strict());
+export type UsageAutopsyEvent = z.infer<typeof UsageAutopsyEventSchema>;
 const CountSchema = lazyZodSchema(() => z.number().int().nonnegative());
 const DurationSchema = lazyZodSchema(() => z.number().finite().nonnegative());
 export const UsageHowYouWorkSchema = lazyZodSchema(() => z.object({
     detailStatus: z.enum(['available', 'partial', 'unknown']),
+    autopsy: z.object({ coverage: z.enum(['complete', 'partial']), events: z.array(UsageAutopsyEventSchema) }).strict().optional(),
     intervals: UsageWorkIntervalsProjectionSchema.nullable(),
     todayInParallel: z.object({ date: z.string(), startMs: z.number().int(), endMs: z.number().int(),
         agentTimeMs: DurationSchema, elapsedBusyMs: DurationSchema, parallelBusyMs: DurationSchema, maxParallel: CountSchema,
@@ -53,6 +62,7 @@ export const UsageHowYouWorkSchema = lazyZodSchema(() => z.object({
         if (value.nightShift?.observedBusyMs !== undefined && value.nightShift.observedBusyMs !== null) {
             context.addIssue({ code: 'custom', path: ['nightShift', 'observedBusyMs'], message: 'Unknown private detail cannot disclose busy duration' });
         }
+        if (value.autopsy !== undefined) context.addIssue({ code: 'custom', path: ['autopsy'], message: 'Unknown private detail cannot disclose autopsy facts' });
         for (const field of ['intervals', 'todayInParallel', 'permissions', 'inputs'] as const) {
             if (value[field] !== null) context.addIssue({ code: 'custom', path: [field], message: 'Unknown private detail cannot disclose facts' });
         }
@@ -63,11 +73,19 @@ export type UsageHowYouWork = z.infer<typeof UsageHowYouWorkSchema>;
 export function resolveUsageHowYouWork(input: Readonly<{
     period: UsageWorkIntervalsInput['period']; timeZoneOffsetMinutes: number; nowMs?: number;
     accounting?: UsageAnalyticsQueryResponse; detail?: UsageHowYouWorkDetailInput; nightHours?: UsageWorkIntervalsInput['nightHours'];
+    /** Already admitted private projection for this exact query, only while its source is pending. */
+    retained?: UsageHowYouWork;
 }>): UsageHowYouWork {
     const detail = input.detail?.status === 'unknown' ? undefined : input.detail;
-    const intervals = detail?.facts !== undefined
-        ? projectUsageWorkIntervals({ ...input, facts: detail.facts, activityAtMs: detail.activityAtMs }) : null;
+    const retained = input.detail === undefined ? input.retained : undefined;
     const nightHours = input.nightHours ? UsageNightHoursV1Schema.parse(input.nightHours) : undefined;
+    const intervals = detail?.facts !== undefined
+        ? projectUsageWorkIntervals({ ...input, facts: detail.facts, activityAtMs: detail.activityAtMs })
+        : retained?.intervals ? { ...retained.intervals, night: nightHours ? { ...nightHours,
+            busyMs: retained.intervals.weekdayHourBuckets.reduce((sum, row) =>
+                sum + (isUsageNightHour(row.hour, nightHours) ? row.busyMs : 0), 0),
+            activityCount: null,
+        } : null } : null;
     const buckets = input.accounting?.activity?.weekdayHourBuckets;
     const nightShift = nightHours ? { ...nightHours, observedBusyMs: intervals?.night?.busyMs ?? null,
         recordedActivityCount: input.accounting ? buckets === undefined ? null : buckets.reduce((sum, row) =>
@@ -80,15 +98,23 @@ export function resolveUsageHowYouWork(input: Readonly<{
     const todayIntervals = detail?.facts !== undefined && todayPeriod && todayPeriod.startMs < todayPeriod.endMs
         ? projectUsageWorkIntervals({ period: todayPeriod, timeZoneOffsetMinutes: input.timeZoneOffsetMinutes, facts: detail.facts }) : null;
     const result: UsageHowYouWork = {
-        detailStatus: !detail ? 'unknown' : detail.status === 'partial' || intervals?.coverage === 'partial' ? 'partial' : 'available',
+        ...(retained?.autopsy === undefined ? {} : { autopsy: retained.autopsy }),
+        detailStatus: !detail ? retained?.detailStatus ?? 'unknown' : detail.status === 'partial' || intervals?.coverage === 'partial' ? 'partial' : 'available',
         intervals, todayInParallel: todayIntervals && today ? { date: today.date, ...todayIntervals.period,
             agentTimeMs: todayIntervals.agentTimeMs, elapsedBusyMs: todayIntervals.elapsedBusyMs,
-            parallelBusyMs: todayIntervals.parallelBusyMs, maxParallel: todayIntervals.maxParallel } : null,
+            parallelBusyMs: todayIntervals.parallelBusyMs, maxParallel: todayIntervals.maxParallel } : retained?.todayInParallel ?? null,
         nightShift, activity: input.accounting?.activity ?? null, footprint: input.accounting ? projectUsageFootprint(input.accounting) : null,
-        permissions: null, inputs: null,
+        permissions: retained?.permissions ?? null, inputs: retained?.inputs ?? null,
     };
     if (detail) {
         const inPeriod = (instant: number) => Number.isSafeInteger(instant) && instant >= input.period.startMs && instant < input.period.endMs;
+        if (detail.phaseEvents !== undefined || detail.coach?.detail?.compactions !== undefined) {
+            const events: UsageAutopsyEvent[] = [...(detail.phaseEvents ?? []),
+                ...(detail.coach?.detail?.compactions ?? []).map(record => ({ ...record, kind: 'compaction' as const, method: 'native_event' as const }))];
+            result.autopsy = { coverage: 'partial', events: [...new Map(events.filter(event => inPeriod(event.observedAtMs))
+                .map(event => [JSON.stringify([event.sessionId, event.evidenceId, event.kind]), event])).values()]
+                .sort((left, right) => left.observedAtMs - right.observedAtMs || left.evidenceId.localeCompare(right.evidenceId)) };
+        }
         const permissions: NonNullable<UsageHowYouWork['permissions']> = { requestCount: 0, pairedDecisionCount: 0,
             decisionLatencyMs: null, unknownRequestTimeCount: 0, unknownDecisionTimeCount: 0,
             byAnsweringClient: { ios: 0, android: 0, web: 0, desktop: 0, unknown: 0 }, byTool: [] };

@@ -16,7 +16,12 @@ export const UsageMcpBindingUsageSchema = lazyZodSchema(() => z.object({
     v: z.literal(1), evidenceId: Id, sessionId: Id, turnId: Id, observedAtMs: Count,
     window: z.object({ startMs: Count, endMs: Count }).strict(),
     coverage: z.enum(['complete', 'partial']),
-    bindings: z.array(UsageMcpBindingIdentitySchema.extend({ toolCallCount: Count, schemaBytes: Count.nullable() }).strict()),
+    bindings: z.array(UsageMcpBindingIdentitySchema.extend({ toolCallCount: Count, schemaBytes: Count.nullable(),
+        /** Absent means the producer did not observe native definition loading. */
+        definitionsLoading: z.enum(['upfront', 'deferred', 'unknown']).optional(),
+        /** Measured definition tokens actually occupying this native context, not deferred catalog size. */
+        schemaTokens: Count.nullable().optional(), contextWindowTokens: Count.nullable().optional(),
+    }).strict()),
 }).strict().superRefine((value, context) => {
     if (value.window.startMs > value.window.endMs || value.window.endMs !== value.observedAtMs) {
         context.addIssue({ code: 'custom', path: ['window'], message: 'Usage must identify its complete observed window' });

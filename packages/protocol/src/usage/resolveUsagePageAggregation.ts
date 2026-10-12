@@ -1,8 +1,9 @@
 import { z } from 'zod';
+import type { UsageCoachPreferencesV1 } from '../account/settings/usageCoachPreferencesV1.js';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { sameStrictJsonValue } from '../json/strictJsonValue.js';
-import { getUsageQueryKey, normalizeUsageQuery, UsageQuerySchema, type UsageQuery } from '../inputs/usageQuery.js';
-import { UsageAnalyticsQueryResponseSchema, type UsageAnalyticsQueryResponse } from './usageAnalyticsContracts.js';
+import { getUsageQueryKey, normalizeUsageQuery, resolveUsageQueryPeriod, UsageQuerySchema, type UsageQuery } from '../inputs/usageQuery.js';
+import { UsageAnalyticsCoverageSchema, UsageAnalyticsQueryResponseSchema, UsageAnalyticsSourceCoverageSchema, type UsageAnalyticsQueryResponse } from './usageAnalyticsContracts.js';
 import { UsageCostFactTotalSchema, projectUsageCostFactTotals } from './usageCostFactTotals.js';
 import { allocateUsageOutcomes, UsageWorkProjectionSchema, type UsageWorkEvidence } from './usageOutcomeAllocation.js';
 import type { ScmBranchWorkEvidence } from '../scm/branches.js';
@@ -16,6 +17,8 @@ import { QualifiedConnectedAccountGroupRefSchema } from '../connect/qualifiedCon
 import { ConnectedServicePoolSelectionGetResponseV1Schema } from '../connect/connectedServicePoolSelection.js';
 import { repriceUsageAnalyticsResponse } from './usageCost.js';
 import type { UsageModelPriceOverridesV1 } from './usageModelPriceCatalog.js';
+import { projectUsagePlanInsights, UsagePlanInsightsSchema } from './usagePlanInsights.js';
+export type { UsagePlanInsights } from './usagePlanInsights.js';
 
 /** Source transport currentness is separate from accounting completeness. */
 export const UsageQuerySourceStatusSchema = lazyZodSchema(() => z.enum([
@@ -50,15 +53,23 @@ export const UsageQueryPoolSnapshotSchema = lazyZodSchema(() => z.object({
 export type UsageQueryPoolSnapshot = z.infer<typeof UsageQueryPoolSnapshotSchema>;
 export type UsagePoolSourceSnapshot = Readonly<{ query: UsageQuery; value: readonly UsageQueryPoolSnapshot[] }>;
 
+// Opened machine labels belong to the authorized client projection, not accounting storage or its server response.
+const UsageQueryAccountingSchema = lazyZodSchema(() => UsageAnalyticsQueryResponseSchema.extend({
+  coverage: UsageAnalyticsCoverageSchema.extend({ sources: z.array(UsageAnalyticsSourceCoverageSchema.extend({
+    displayLocation: z.string().trim().min(1).optional(),
+  }).strict()) }).strict().optional(),
+}));
+
 export const UsageQueryResultSliceSchema = lazyZodSchema(() => z.object({
   key: z.string().min(1),
   requestedQuery: UsageQuerySchema,
   shownQuery: UsageQuerySchema,
-  accounting: UsageAnalyticsQueryResponseSchema.optional(),
+  accounting: UsageQueryAccountingSchema.optional(),
   costFactTotals: z.array(UsageCostFactTotalSchema).optional(),
   quota: z.array(ConnectedServiceQuotaGetResultV1Schema).optional(),
   pools: z.array(UsageQueryPoolSnapshotSchema).optional(),
-  comparison: z.object({ query: UsageQuerySchema, accounting: UsageAnalyticsQueryResponseSchema.optional(),
+  planInsights: UsagePlanInsightsSchema.optional(),
+  comparison: z.object({ query: UsageQuerySchema, accounting: UsageQueryAccountingSchema.optional(),
     costFactTotals: z.array(UsageCostFactTotalSchema).optional(),
     source: UsageQuerySourceStateSchema }).strict().optional(),
   work: UsageWorkProjectionSchema.optional(),
@@ -84,7 +95,8 @@ export const UsageQueryResultSliceSchema = lazyZodSchema(() => z.object({
     context.addIssue({ code: 'custom', path: ['comparison', 'costFactTotals'], message: 'Comparison money totals must preserve their admitted accounting and source provenance' });
   }
   if (slice.comparison) {
-    const expected = resolveUsageComparisonQuery(slice.requestedQuery);
+    const expected = resolveUsageComparisonQuery(slice.requestedQuery, 'relative' in slice.requestedQuery.period
+      ? slice.coach?.period ?? slice.accounting?.coverage?.range : slice.requestedQuery.period);
     if (!expected || getUsageQueryKey(slice.comparison.query) !== getUsageQueryKey(expected)) {
       context.addIssue({ code: 'custom', path: ['comparison', 'query'], message: 'Comparison must identify the exact preceding range' });
     }
@@ -96,14 +108,26 @@ export const UsageQueryResultSliceSchema = lazyZodSchema(() => z.object({
   if (slice.quota && !slice.sources.some(source => source.source === 'quota' && ['available', 'partial', 'stale'].includes(source.status))) {
     context.addIssue({ code: 'custom', path: ['quota'], message: 'Unavailable allowance cannot disclose protected facts' });
   }
+  if (slice.planInsights?.accounts.some(account => !slice.quota?.some(read => sameStrictJsonValue(read.source, account.source)))) {
+    context.addIssue({ code: 'custom', path: ['planInsights', 'accounts'], message: 'Plan facts must identify an admitted qualified allowance account' });
+  }
+  const week = slice.planInsights?.recordedWeek;
+  const witnessedPeriod = 'relative' in slice.shownQuery.period
+    ? slice.coach?.period ?? slice.accounting?.coverage?.range
+    : slice.shownQuery.period;
+  if (week?.status === 'available' && (!slice.accounting?.activity
+    || week.startMs !== witnessedPeriod?.startMs || week.endMs !== witnessedPeriod?.endMs
+    || week.timeZoneOffsetMinutes !== slice.shownQuery.timeZoneOffsetMinutes)) {
+    context.addIssue({ code: 'custom', path: ['planInsights', 'recordedWeek'], message: 'Recorded week must preserve admitted accounting period and calendar' });
+  }
   if ((slice.work?.allocations.some(row => row.evidence.length > 0) || slice.work?.branchAllocations.some(row => row.evidence.length > 0))
     && !slice.sources.some(source => source.source === 'work' && ['available', 'partial', 'stale', 'pending'].includes(source.status))) {
     context.addIssue({ code: 'custom', path: ['work'], message: 'Unavailable Work sources cannot disclose private evidence' });
   }
   const intervals = slice.howYouWork?.intervals;
   if (intervals && (intervals.timeZoneOffsetMinutes !== slice.shownQuery.timeZoneOffsetMinutes
-    || (slice.shownQuery.period.startMs !== undefined && intervals.period.startMs !== slice.shownQuery.period.startMs)
-    || (slice.shownQuery.period.endMs !== undefined && intervals.period.endMs !== slice.shownQuery.period.endMs))) {
+    || (witnessedPeriod?.startMs !== undefined && intervals.period.startMs !== witnessedPeriod.startMs)
+    || (witnessedPeriod?.endMs !== undefined && intervals.period.endMs !== witnessedPeriod.endMs))) {
     context.addIssue({ code: 'custom', path: ['howYouWork'], message: 'Intervals must identify the shown period and calendar' });
   }
   if (intervals && !slice.sources.some(source => source.source === 'how_you_work' && ['available', 'partial', 'pending'].includes(source.status))) {
@@ -149,6 +173,8 @@ export function retainUsageQueryResultReferences(current: UsageQueryBatchResult,
 
 export type UsageAccountingSourceSnapshot = Readonly<{
   query: UsageQuery;
+  /** Captured once by the read planner, including failed/pending reads. */
+  period?: ReturnType<typeof resolveUsageQueryPeriod>;
   value?: UsageAnalyticsQueryResponse;
   status: UsageQuerySourceState['status'];
   asOfMs?: number;
@@ -179,24 +205,29 @@ export type UsageHowYouWorkSourceSnapshot = Readonly<{
 }>;
 
 /** Unbounded ranges and ranges without a valid preceding interval have no comparison. */
-export function resolveUsageComparisonQuery(candidate: UsageQuery): UsageQuery | null {
+export function resolveUsageComparisonQuery(candidate: UsageQuery, period?: Readonly<{ startMs?: number; endMs?: number }>): UsageQuery | null {
   const query = normalizeUsageQuery(candidate);
-  const { startMs, endMs } = query.period;
+  const { startMs, endMs } = period ?? query.period;
   if (startMs === undefined || endMs === undefined || endMs <= startMs) return null;
   const previousStart = startMs - (endMs - startMs);
   if (previousStart < 0) return null;
   return normalizeUsageQuery({ ...query, period: { startMs: previousStart, endMs: startMs } });
 }
 
-export function resolveUsagePageAccountingRequests(queries: readonly UsageQuery[]): UsageQuery[] {
-  const requests = new Map<string, UsageQuery>();
+export function resolveUsagePageAccountingReads(queries: readonly UsageQuery[], nowMs: number): Readonly<{ query: UsageQuery; period: ReturnType<typeof resolveUsageQueryPeriod> }>[] {
+  const requests = new Map<string, Readonly<{ query: UsageQuery; period: ReturnType<typeof resolveUsageQueryPeriod> }>>();
   for (const candidate of queries) {
     const query = normalizeUsageQuery(candidate);
-    requests.set(getUsageQueryKey(query), query);
-    const comparison = resolveUsageComparisonQuery(query);
-    if (comparison) requests.set(getUsageQueryKey(comparison), comparison);
+    const period = resolveUsageQueryPeriod(query, nowMs);
+    requests.set(getUsageQueryKey(query), { query, period });
+    const comparison = resolveUsageComparisonQuery(query, period);
+    if (comparison) requests.set(getUsageQueryKey(comparison), { query: comparison, period: comparison.period });
   }
   return [...requests.values()];
+}
+
+export function resolveUsagePageAccountingRequests(queries: readonly UsageQuery[], nowMs = Date.now()): UsageQuery[] {
+  return resolveUsagePageAccountingReads(queries, nowMs).map(read => read.query);
 }
 
 function retainAccountingOnReadFailure(observed: UsageAccountingSourceSnapshot | undefined,
@@ -216,12 +247,17 @@ export function resolveUsagePageAggregation(input: Readonly<{
   accounting?: readonly UsageAccountingSourceSnapshot[];
   work?: readonly UsageWorkSourceSnapshot[];
   howYouWork?: readonly UsageHowYouWorkSourceSnapshot[];
+  /** Account preference is available independently of private Session detail; null explicitly clears it. */
+  nightHours?: UsageWorkIntervalsInput['nightHours'] | null;
   nowMs?: number;
   quota?: Readonly<Omit<UsageQuerySourceState, 'source'> & { value?: readonly ConnectedServiceQuotaGetResultV1[] }>;
   pools?: readonly UsagePoolSourceSnapshot[];
   sources?: readonly UsageQuerySourceState[];
+  /** Already-opened machine labels authorized for this Account; absence withdraws retained labels. */
+  sourceLocations?: readonly Readonly<{ machineId: string; displayLocation: string }>[];
   previous?: UsageQueryBatchResult;
   pricingOverrides?: UsageModelPriceOverridesV1;
+  coachPreferences?: UsageCoachPreferencesV1 | null;
 }>): UsageQueryBatchResult {
   const queries = new Map<string, UsageQuery>();
   for (const candidate of input.queries) {
@@ -233,6 +269,14 @@ export function resolveUsagePageAggregation(input: Readonly<{
     ...snapshot,
     asOfMs: snapshot.asOfMs ?? (snapshot.value ? resolveUsageAccountingAsOfMs(snapshot.value) : undefined),
   }]));
+  const sourceLocations = new Map(input.sourceLocations?.map(location => [location.machineId, location.displayLocation]));
+  const projectSourceLocations = (value: UsageAnalyticsQueryResponse) => !value.coverage ? value : { ...value,
+    coverage: { ...value.coverage, sources: value.coverage.sources.map(candidate => {
+      // Retained snapshots can carry old labels. Re-admit only accounting fields before applying current authorization.
+      const source = UsageAnalyticsSourceCoverageSchema.strip().parse(candidate);
+      const displayLocation = source.machineId ? sourceLocations.get(source.machineId) : undefined;
+      return { ...source, ...(displayLocation === undefined ? {} : { displayLocation }) };
+    }) } };
   const projectPrices = (snapshot: UsageAccountingSourceSnapshot | undefined) => snapshot?.value
     && (snapshot.value.priceCatalog || input.pricingOverrides !== undefined)
     ? { ...snapshot, value: repriceUsageAnalyticsResponse(snapshot.value, snapshot.value.priceCatalog, input.pricingOverrides, snapshot.query.costBasis) }
@@ -247,7 +291,9 @@ export function resolveUsagePageAggregation(input: Readonly<{
     const pools = poolsByQuery.get(key);
     const snapshot = projectPrices(retainAccountingOnReadFailure(observed, prior?.accounting,
       prior?.sources.find(source => source.source === 'accounting')?.asOfMs));
-    const comparisonQuery = resolveUsageComparisonQuery(query);
+    const period = observed?.period ?? (input.nowMs !== undefined ? resolveUsageQueryPeriod(query, input.nowMs)
+      : 'relative' in query.period ? snapshot?.value?.coverage?.range ?? query.period : query.period);
+    const comparisonQuery = resolveUsageComparisonQuery(query, period);
     const previousComparison = comparisonQuery && prior?.comparison
       && getUsageQueryKey(prior.comparison.query) === getUsageQueryKey(comparisonQuery) ? prior.comparison : undefined;
     const comparisonSnapshot = comparisonQuery ? projectPrices(retainAccountingOnReadFailure(accounting.get(getUsageQueryKey(comparisonQuery)),
@@ -259,6 +305,7 @@ export function resolveUsagePageAggregation(input: Readonly<{
     const detailSnapshot = howYouWork.get(key);
     const pendingDetail = !detailSnapshot && input.sources?.some(source => source.source === 'how_you_work' && source.status === 'pending');
     const retainedDetail = pendingDetail ? prior : undefined;
+    const retainedNightHours = retainedDetail?.howYouWork?.nightShift;
     // Retained evidence remains attached to this exact query while its owner
     // rereads it. Allocation always recomputes over the current contributions;
     // a terminal refusal below removes that previously admitted evidence.
@@ -268,16 +315,19 @@ export function resolveUsagePageAggregation(input: Readonly<{
       : workSnapshot && ['available', 'partial', 'stale'].includes(workSnapshot.status) ? workSnapshot.branchEvidence ?? [] : [];
     // An open query is projected only up to a witnessed source as-of. It is not
     // relabelled as a different bounded query or filled forward to this clock.
-    const startMs = query.period.startMs ?? snapshot?.value?.coverage?.range.startMs ?? 0;
-    const endMs = query.period.endMs ?? snapshot?.value?.coverage?.range.endMs ?? detailSnapshot?.asOfMs;
+    const startMs = period.startMs ?? 0;
+    const endMs = period.endMs ?? detailSnapshot?.asOfMs;
     const detailProjection = endMs === undefined || endMs < startMs ? undefined : resolveUsageHowYouWork({
       period: { startMs, endMs }, timeZoneOffsetMinutes: query.timeZoneOffsetMinutes,
       accounting: snapshot?.value, detail: detailSnapshot?.detail,
-      nowMs: input.nowMs ?? detailSnapshot?.asOfMs, nightHours: detailSnapshot?.nightHours,
+      retained: retainedDetail?.howYouWork,
+      nowMs: input.nowMs ?? detailSnapshot?.asOfMs,
+      nightHours: input.nightHours === undefined ? detailSnapshot?.nightHours ?? (retainedNightHours
+        ? { startHour: retainedNightHours.startHour, endHour: retainedNightHours.endHour } : undefined) : input.nightHours ?? undefined,
     });
     const admittedDetail = detailSnapshot?.detail.status === 'unknown' ? undefined : detailSnapshot?.detail;
     const coachEvidence = admittedDetail?.coach;
-    const coachAsOfMs = (admittedDetail ? detailSnapshot?.asOfMs : undefined) ?? snapshot?.asOfMs ?? null;
+    const coachAsOfMs = (admittedDetail ? detailSnapshot?.asOfMs : undefined) ?? snapshot?.asOfMs ?? retainedDetail?.coach?.asOfMs ?? null;
     const coachEndMs = endMs ?? coachAsOfMs;
     const coach = coachEndMs === null || coachEndMs === undefined || coachEndMs < startMs ? undefined : evaluateUsageCoach({
       ...coachEvidence,
@@ -289,10 +339,18 @@ export function resolveUsagePageAggregation(input: Readonly<{
       currentness: coachAsOfMs === null ? 'unknown' : snapshot?.status === 'error' || snapshot?.status === 'stale' ? 'stale'
         : snapshot?.status === 'available' || admittedDetail ? 'current' : 'unknown',
       accounting: snapshot?.value,
+      pricingOverrides: input.pricingOverrides,
+      preferences: input.coachPreferences,
     });
-    const retainedCoach = retainedDetail?.coach;
-    const retainedEvaluations = retainedCoach?.evaluations.map(evaluation => evaluation.status === 'finding'
-      ? { ...evaluation, finding: { ...evaluation.finding, currentness: 'stale' as const, remedy: null, action: null } } : evaluation);
+    const retainedCoach = input.coachPreferences === null ? undefined : retainedDetail?.coach;
+    const retainedEvaluations = retainedCoach?.evaluations.map(evaluation => {
+      const configured = coach?.evaluations.find(row => row.detectorId === evaluation.detectorId);
+      // Retention must not revive evidence that the current evaluator's configuration refuses.
+      if (configured?.status === 'disabled' || evaluation.status === 'disabled' || evaluation.detectorId === 'model_misfit'
+        && input.coachPreferences?.modelSuggestion === 'complete_only') return configured ?? evaluation;
+      return evaluation.status === 'finding'
+        ? { ...evaluation, finding: { ...evaluation.finding, currentness: 'stale' as const, remedy: null, action: null } } : evaluation;
+    });
     const coachProjection = retainedCoach && retainedEvaluations ? { ...retainedCoach, currentness: 'stale' as const,
       evaluations: retainedEvaluations, findings: retainedEvaluations.flatMap(evaluation => evaluation.status === 'finding' ? [evaluation.finding] : []) } : coach;
     const digestSuggestion = coachProjection && createUsageCoachDigestSuggestion(query, coachProjection.period);
@@ -308,33 +366,45 @@ export function resolveUsagePageAggregation(input: Readonly<{
       { source: 'work', status: workSnapshot?.status ?? 'not_loaded',
         ...(workSnapshot?.asOfMs === undefined ? {} : { asOfMs: workSnapshot.asOfMs }),
         ...(workSnapshot?.errorCode === undefined ? {} : { errorCode: workSnapshot.errorCode }) },
-      ...(input.sources ?? []),
+      ...(query.includeSessionEvidence ? input.sources ?? [] : [
+        ...(input.sources ?? []).filter(source => source.source !== 'how_you_work'),
+        { source: 'how_you_work', status: 'not_loaded' as const },
+      ]),
       ...(pools?.map(pool => ({ source: `selection:${pool.group.service.pluginId}/${pool.group.service.localId}:${pool.group.groupId}`,
         status: pool.selection.status, ...(pool.selection.asOfMs === undefined ? {} : { asOfMs: pool.selection.asOfMs }),
         ...(pool.selection.errorCode === undefined ? {} : { errorCode: pool.selection.errorCode }) })) ?? []),
       ...(detailSnapshot ? [{ source: 'how_you_work', status: detailProjection?.detailStatus ?? 'unknown',
         ...(detailSnapshot.asOfMs === undefined ? {} : { asOfMs: detailSnapshot.asOfMs }) }] : []),
     ];
-    const slice = UsageQueryResultSliceSchema.parse({
+    // Inputs are admitted owner snapshots; this projection is not a wire boundary.
+    // Parsing here clones the same full history for every widget on every source
+    // revision. Keep its identity and validate the batch at the Action/Resource boundary.
+    const slice: UsageQueryResultSlice = {
       key, requestedQuery: query, shownQuery: query,
-      ...(snapshot?.value === undefined ? {} : { accounting: snapshot.value, costFactTotals: projectUsageCostFactTotals(snapshot.value.costFacts ?? []) }),
-      ...(input.quota?.value && ['available', 'partial', 'stale'].includes(input.quota.status) ? { quota: input.quota.value } : {}),
+      ...(snapshot?.value === undefined ? {} : { accounting: projectSourceLocations(snapshot.value), costFactTotals: projectUsageCostFactTotals(snapshot.value.costFacts ?? []) }),
+      planInsights: projectUsagePlanInsights({ query: { ...query, period }, nowMs: input.nowMs, accounting: snapshot?.value, accountingAsOfMs: snapshot?.asOfMs,
+        howYouWork: detailProjection,
+        quota: input.quota?.value && ['available', 'partial', 'stale'].includes(input.quota.status) ? input.quota.value : undefined }),
+      ...(input.quota?.value && ['available', 'partial', 'stale'].includes(input.quota.status) ? { quota: [...input.quota.value] } : {}),
       ...(pools ? { pools: pools.map(pool => ({ ...pool, selection: ['available', 'stale'].includes(pool.selection.status)
         ? pool.selection : { ...pool.selection, value: undefined } })) } : {}),
-      ...(detailProjection === undefined ? {} : { howYouWork: retainedDetail?.howYouWork ?? detailProjection }),
+      ...(detailProjection === undefined ? {} : { howYouWork: detailProjection }),
       ...(coachProjection === undefined ? {} : { coach: { ...coachProjection,
         ...(digestSuggestion === undefined ? {} : { digestSuggestion }),
       } }),
       ...(comparisonQuery ? { comparison: { query: comparisonQuery, source: comparisonSource,
-        ...(comparisonSnapshot?.value === undefined ? {} : { accounting: comparisonSnapshot.value, costFactTotals: projectUsageCostFactTotals(comparisonSnapshot.value.costFacts ?? []) }) } } : {}),
-      ...(snapshot?.value?.contributions === undefined ? {} : { work: allocateUsageOutcomes({
+        ...(comparisonSnapshot?.value === undefined ? {} : { accounting: projectSourceLocations(comparisonSnapshot.value), costFactTotals: projectUsageCostFactTotals(comparisonSnapshot.value.costFacts ?? []) }) } } : {}),
+      ...(snapshot?.value?.contributions === undefined ? {} : { work: UsageWorkProjectionSchema.parse(allocateUsageOutcomes({
         contributions: snapshot.value.contributions,
         evidence: workEvidence,
         branchEvidence,
-      }) }),
+      })) }),
       sources,
-      pending: [...sources, ...(comparisonQuery ? [comparisonSource] : [])].some(source => source.status === 'pending' || source.status === 'not_loaded'),
-    });
+      pending: [...sources, ...(comparisonQuery ? [comparisonSource] : [])].some(source =>
+        (source.status === 'pending' || source.status === 'not_loaded')
+        && (source.source === 'work' ? query.includeWorkEvidence
+          : source.source === 'how_you_work' ? query.includeSessionEvidence : true)),
+    };
     return slice;
   });
   return retainUsageQueryResultReferences({ v: 1, results }, input.previous);

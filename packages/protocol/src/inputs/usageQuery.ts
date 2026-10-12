@@ -3,14 +3,19 @@ import { lazyZodSchema } from '../lazyZodSchema.js';
 import { createCanonicalJsonSigningInput } from '../crypto/canonicalJson.js';
 import { projectNativeJsonValueForTransport } from '../json/strictJsonValue.js';
 import { UsageAnalyticsQueryRequestSchema, UsageAnalyticsQueryFiltersSchema, UsageAnalyticsBreakdownDimensionSchema, type UsageAnalyticsQueryRequest } from '../usage/usageAnalyticsContracts.js';
-import type { InputFieldHint } from './inputFields.js';
+import type { InputFieldHint, InputOption } from './inputFields.js';
+import { resolveUsageBucketBounds } from '../usage/usageCalendar.js';
+
+export const UsageRelativePeriodSchema = z.enum(['today', '7days', '30days', '90days', 'year', 'all']);
+export type UsageRelativePeriod = z.infer<typeof UsageRelativePeriodSchema>;
 
 /** Personal usage input. Authority is captured by the host, never carried by the query. */
 export const UsageQuerySchema = lazyZodSchema(() => {
   const clauses = UsageAnalyticsQueryRequestSchema.shape;
   const filters = UsageAnalyticsQueryFiltersSchema.shape;
   return z.object({
-    period: clauses.dateRange.unwrap().default({}),
+    period: z.union([clauses.dateRange.unwrap(), z.object({ relative: UsageRelativePeriodSchema,
+      startMs: z.never().optional(), endMs: z.never().optional() }).strict()]).default({}),
     agents: filters.agentIds.unwrap().default([]),
     machines: filters.machineIds.unwrap().default([]),
     projects: filters.projectKeys.unwrap().default([]),
@@ -18,6 +23,9 @@ export const UsageQuerySchema = lazyZodSchema(() => {
     session: z.union([filters.sessionIds.unwrap().element, filters.sessionIds.unwrap()]).nullable().default(null),
     costBasis: clauses.costMode.unwrap().default('auto'),
     metric: z.enum(['tokens', 'cost']).default('tokens'),
+    // Host projection demand; accounting transport never receives this clause.
+    includeSessionEvidence: z.boolean().default(true),
+    includeWorkEvidence: z.boolean().default(true),
     breakdown: clauses.breakdowns.unwrap().default([]),
     modelIds: filters.modelIds.unwrap().default([]),
     workspaceIds: filters.workspaceIds.unwrap().default([]),
@@ -70,12 +78,24 @@ export function getUsageQueryBatchKey(value: unknown): string {
   return createCanonicalJsonSigningInput(projectNativeJsonValueForTransport(normalizeUsageQueryBatchInput(value)));
 }
 
-export function usageQueryToAnalyticsRequest(value: UsageQuery): UsageAnalyticsQueryRequest {
+/** Resolve rolling intent only at the read boundary; persisted inputs and semantic keys stay relative. */
+export function resolveUsageQueryPeriod(query: Pick<UsageQuery, 'period' | 'timeZoneOffsetMinutes'>, nowMs: number): NonNullable<UsageAnalyticsQueryRequest['dateRange']> {
+  if (!('relative' in query.period)) return query.period;
+  const relative = query.period.relative;
+  const today = resolveUsageBucketBounds('day', nowMs, query.timeZoneOffsetMinutes).bucketStartMs;
+  if (relative === 'today') return { startMs: today, endMs: nowMs };
+  if (relative === 'all') return { startMs: 0, endMs: nowMs };
+  const days = { '7days': 7, '30days': 30, '90days': 90, year: 365 }[relative];
+  return { startMs: today - (days - 1) * 86_400_000, endMs: nowMs };
+}
+
+export function usageQueryToAnalyticsRequest(value: UsageQuery, nowMs = Date.now()): UsageAnalyticsQueryRequest {
   const query = normalizeUsageQuery(value);
-  const { period, agents, machines, projects, sources, session, costBasis, metric: _metric, breakdown,
+  const { period: _period, agents, machines, projects, sources, session, costBasis, metric: _metric,
+    includeSessionEvidence: _sessionEvidence, includeWorkEvidence: _workEvidence, breakdown,
     modelIds, workspaceIds, backendModes, ...clauses } = query;
   const selected = (values: string[]) => values.length ? values : undefined;
-  return UsageAnalyticsQueryRequestSchema.parse({ ...clauses, dateRange: period, costMode: costBasis, breakdowns: breakdown,
+  return UsageAnalyticsQueryRequestSchema.parse({ ...clauses, dateRange: resolveUsageQueryPeriod(query, nowMs), costMode: costBasis, breakdowns: breakdown,
     filters: { agentIds: selected(agents), machineIds: selected(machines), projectKeys: selected(projects), sources: selected(sources),
       sessionIds: session === null ? undefined : typeof session === 'string' ? [session] : session,
       modelIds: selected(modelIds), workspaceIds: selected(workspaceIds), backendModes: selected(backendModes) },
@@ -94,21 +114,38 @@ const breakdownLabels = {
   agent: 'Agent', model: 'Model', session: 'Session', project: 'Project', workspace: 'Workspace',
   backendMode: 'Backend mode', source: 'Source', machine: 'Machine',
 } satisfies Record<z.infer<typeof UsageAnalyticsBreakdownDimensionSchema>, string>;
+const editableBreakdownDimensions = ['agent', 'model', 'project', 'source', 'machine'] as const satisfies readonly z.infer<typeof UsageAnalyticsBreakdownDimensionSchema>[];
+
+/** Array-valued choices keep the UsageQuery contract, including existing multi-dimension pins. */
+export function readUsageGroupByOptions(value: unknown): readonly InputOption[] {
+  const options: InputOption[] = [{ value: [], label: 'Default' },
+    ...editableBreakdownDimensions.map(dimension => ({ value: [dimension], label: breakdownLabels[dimension] }))];
+  const stored = UsageQuerySchema.shape.breakdown.safeParse(value);
+  if (stored.success && !options.some(option => JSON.stringify(option.value) === JSON.stringify(stored.data))) {
+    options.push({ value: stored.data, label: stored.data.map(dimension => breakdownLabels[dimension]).join(' · ') });
+  }
+  return options;
+}
+
+/** The breakdowns widget really draws several dimensions; ordinary widgets choose one grouping. */
+export const USAGE_MULTI_BREAKDOWN_INPUT_FIELD: InputFieldHint = {
+  path: 'breakdown', title: 'Breakdown', widget: 'multiselect', contextMode: 'own', required: false,
+  options: editableBreakdownDimensions.map(value => ({ value, label: breakdownLabels[value] })),
+};
 
 /** Same independently editable paths for widget, group and ordinary input editors. */
 export const USAGE_QUERY_INPUT_FIELDS: readonly InputFieldHint[] = [
   { path: 'period', title: 'Period', widget: 'select', inputType: { hostType: 'usageQuery', field: 'period' }, contextMode: 'follow' },
-  { path: 'agents', title: 'Agents', widget: 'text_list', listSeparator: 'newline', contextMode: 'follow' },
-  { path: 'machines', title: 'Machines', widget: 'text_list', listSeparator: 'newline', contextMode: 'follow' },
-  { path: 'projects', title: 'Projects', widget: 'text_list', listSeparator: 'newline', contextMode: 'follow' },
-  { path: 'sources', title: 'Sources', widget: 'text_list', listSeparator: 'newline', contextMode: 'follow' },
-  { path: 'session', title: 'Session', widget: 'select', inputType: { hostType: 'usageQuery', field: 'session' }, contextMode: 'follow' },
+  { path: 'agents', title: 'Agents', widget: 'multiselect', optionsSourceId: 'usage.filters.agents', placeholder: 'All agents', contextMode: 'follow', required: false },
+  { path: 'machines', title: 'Machines', widget: 'multiselect', optionsSourceId: 'usage.filters.machines', placeholder: 'All machines', contextMode: 'follow', required: false },
+  { path: 'projects', title: 'Projects', widget: 'multiselect', optionsSourceId: 'usage.filters.projects', placeholder: 'All projects', contextMode: 'follow', required: false },
+  { path: 'sources', title: 'Sources', widget: 'multiselect', optionsSourceId: 'usage.filters.sources', placeholder: 'All sources', contextMode: 'follow', required: false },
+  { path: 'session', title: 'Session', widget: 'select', inputType: { hostType: 'usageQuery', field: 'session' }, contextMode: 'follow', visibleWhenContextSlot: 'session' },
   { path: 'costBasis', title: 'Cost basis', widget: 'select', contextMode: 'follow',
     options: UsageAnalyticsQueryRequestSchema.shape.costMode.unwrap().options.map(value => ({ value,
       label: { auto: 'Automatic', reported: 'Reported', estimated: 'Estimated', api_equivalent: 'API equivalent' }[value] })) },
   { path: 'metric', title: 'Metric', widget: 'select', contextMode: 'own', options: [
     { value: 'tokens', label: 'Tokens' }, { value: 'cost', label: 'Cost' },
   ] },
-  { path: 'breakdown', title: 'Breakdown', widget: 'multiselect', contextMode: 'own',
-    options: UsageAnalyticsBreakdownDimensionSchema.options.map(value => ({ value, label: breakdownLabels[value] })) },
+  { path: 'breakdown', title: 'Group by', widget: 'select', contextMode: 'own', optionsSourceId: 'usage.query.breakdown' },
 ];

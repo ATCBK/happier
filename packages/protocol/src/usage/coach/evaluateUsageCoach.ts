@@ -2,11 +2,15 @@ import { computeCanonicalDomainSeparatedDigest } from '../../crypto/canonicalDig
 import { UsagePromptCompositionSchema } from './usagePromptComposition.js';
 import { UsageCoachModelRequestSchema } from './usagePromptComposition.js';
 import { UsageMcpBindingUsageSchema } from './usageMcpBindingUsage.js';
-import { resolveUsageCostBasis } from '../usageCost.js';
+import { resolveUsageCostBasis, estimateUsageModelCost } from '../usageCost.js';
+import { bundledUsageModelPriceCatalog, LITELLM_MODEL_PRICE_URL } from '../usageModelPriceCatalog.js';
+import { COACH_VENDOR_FACTS as facts, COACH_RESEARCH_SOURCES as research } from './coachVendorFacts.js';
+import { UsageRequestAttributionSchema } from '../usageAnalyticsContracts.js';
+import { sameStrictJsonValue } from '../../json/strictJsonValue.js';
 import { UsageCoachPreferencesV1Schema, type UsageCoachPreferencesV1 } from '../../account/settings/usageCoachPreferencesV1.js';
 import { USAGE_COACH_DETECTOR_IDS, USAGE_COACH_REQUIRED_EVIDENCE, UsageCoachEvaluationSchema, type UsageCoachCapability, type UsageCoachEvaluation,
     type UsageCoachEvaluationInput, type UsageCoachConceptEvaluation, type UsageCoachDetectorId, type UsageCoachFinding,
-    type UsageCoachAdmittedRemedy } from './coachFinding.js';
+    type UsageCoachAdmittedRemedy, type UsageCoachNativeCacheFact } from './coachFinding.js';
 
 export function applyUsageCoachPreferences(evaluation: UsageCoachEvaluation, preferences: UsageCoachPreferencesV1,
     nowMs: number): UsageCoachEvaluation {
@@ -43,9 +47,13 @@ export function admitUsageCoachRemedies(evaluation: UsageCoachEvaluation, admitt
 }
 
 export function evaluateUsageCoach(input: UsageCoachEvaluationInput): UsageCoachEvaluation {
+    // A failed Account read is not evidence that the user enabled every check.
+    const preferences = input.preferences === null ? null : UsageCoachPreferencesV1Schema.parse(input.preferences ?? {});
+    const enabled = (id: UsageCoachDetectorId) => preferences !== null && !preferences.disabledChecks.includes(id)
+        && (id !== 'model_misfit' || preferences.modelSuggestion !== 'off');
     const inPeriod = (instant: number) => Number.isSafeInteger(instant) && instant >= input.period.startMs
         && instant < input.period.endMs && (input.asOfMs === null || instant <= input.asOfMs);
-    const detail = input.detail?.coverage === 'unknown' ? undefined : input.detail;
+    const detail = preferences === null || input.detail?.coverage === 'unknown' ? undefined : input.detail;
     const complete = detail?.coverage === 'complete';
     const unique = <T extends { evidenceId: string; observedAtMs: number }>(values: readonly T[]) =>
         [...new Map(values.filter(row => inPeriod(row.observedAtMs)).map(row => [row.evidenceId, row])).values()];
@@ -53,59 +61,214 @@ export function evaluateUsageCoach(input: UsageCoachEvaluationInput): UsageCoach
         ({ detectorId, requiredEvidence: [capability], status: 'insufficient_evidence', missingEvidence: [capability] });
     const negative = (detectorId: UsageCoachDetectorId, capability: UsageCoachCapability, covered: boolean): UsageCoachConceptEvaluation =>
         covered ? { detectorId, requiredEvidence: [capability], status: 'no_finding' } : insufficient(detectorId, capability);
+    const basis = (id: UsageCoachDetectorId): UsageCoachFinding['basis'] => {
+        switch (id) {
+            case 'duplicated_instructions': return { method: 'exact_duplicate_injection_v1', kind: 'observation',
+                citations: [facts.costs.citation, research.agentDiet], limitations: ['Exact repeated bytes do not establish quality harm or dollar savings.'],
+                advice: ['Remove exact duplicate instructions. Claude Code recommends concise CLAUDE.md files; its auto-memory loading limit is not a universal instruction-size limit.'] };
+            case 'model_misfit': return { method: 'matched_completed_host_request_n1_v1', kind: 'observation',
+                citations: [research.modelEvaluation, facts.requestCache.citation],
+                limitations: ['n=1 observed pair, not a task-suitability verdict. Completion is not a quality label.',
+                    'Partial accounting and unknown response attribution may confound this comparison. Cache-rebuild adjustment is not available.'],
+                advice: ['Validate the outcome before choosing a model. A mid-session model switch rebuilds its cache; compare current-context tokens × candidate cache-write rate against future observed savings, rather than treating the raw difference as net savings.'] };
+            case 'idle_recaching':
+            case 'cache_busting_prompt_changes':
+            case 'cache_economics': return { method: 'request_ttl_cache_economics_v1', kind: 'derived',
+                citations: [facts.cache.citation, facts.costs.citation, facts.requestCache.citation],
+                limitations: ['No universal cache-hit target. The spend-share warning borrows the vendor behavior-flag convention, not a research cutoff.',
+                    'Expected compaction, tool clearing and deliberate model/effort rebuilds are excluded. Missing request causes or prices cannot establish waste.'],
+                advice: ['Use the request’s actual TTL, not a provider-wide default. Where supported, compare 1h versus 5m caching: avoided expiries per write must exceed (1h write rate − 5m write rate) / (5m write rate − read rate). Use the model’s catalog read rate, not a universal read multiplier.'] };
+            case 'approval_friction': return { method: 'permission_wait_request_ttl_v1', kind: 'derived',
+                citations: [facts.costs.citation], limitations: ['A wait is cost-linked only when it reaches the witnessed active TTL; this is not a proven cache miss or wasted approval.'],
+                advice: ['Review consistently allowed operations for an appropriate allowlist or sandbox. Preserve meaningful approvals.'] };
+            case 'mcp_overhead': return { method: 'witnessed_mcp_definition_loading_v1', kind: 'vendor_fact',
+                citations: [facts.mcp.citation], limitations: ['Unused bindings alone are informational. No assumed tokens-per-tool or dollar saving.',
+                    'The context-share threshold is Claude Code tool-search policy, not a research harm threshold.'],
+                advice: ['Prefer deferred definitions where supported; review measured upfront schemas and unused bindings.'] };
+            case 'repeated_file_reads': return { method: 'unchanged_selection_without_compaction_v1', kind: 'observation',
+                citations: [research.agentDiet, research.swePruner], limitations: ['No token-cost estimate without measured read content carried through later requests.'],
+                advice: ['Review exact unchanged redundant reads; changed files and reads following compaction are not counted.'] };
+            case 'compaction_storms': return { method: 'three_immediate_compaction_refills_v1', kind: 'vendor_fact',
+                citations: [facts.compaction.citation, facts.costs.citation], limitations: ['Requires native immediate-refill evidence, not two compaction events or an invented time/turn window.'],
+                advice: ['Investigate context that refills to its limit immediately after compaction. Normal compaction is expected.'] };
+            case 'anomalous_looping_usage': return { method: 'identical_failures_guidance_v1', kind: 'guidance_derived',
+                citations: [facts.corrections.citation], limitations: ['Three consecutive identical failed operations with identical errors and no progress adapt “corrected more than twice”; this is guidance-derived, not a measured optimum.'],
+                advice: ['Change the approach after repeated identical failures. No state change or successful intervening operation may be ignored.'] };
+            case 'context_bloat': return { method: 'observed_request_context_growth_cost_v1', kind: 'derived',
+                citations: [facts.costs.citation, facts.pricing.citation, facts.reasoning.citation],
+                limitations: ['No universal long-context or quality-degradation threshold. Request counts and normalized, nonoverlapping tokens are required.'],
+                advice: ['Show actual growing request context and cached-history cost. Clear between unrelated tasks or compact at natural breaks.',
+                    `Haiku 5.5 prompts above ${facts.pricing.haiku55LongPromptTokens} tokens (including cache) have a ${facts.pricing.haiku55LongPromptMultiplier}× price step.`,
+                    `For OpenAI reasoning models, the experimental guidance is to reserve at least ${facts.reasoning.experimentalHeadroomTokens} tokens for reasoning and output, then tune to observed workloads; it is not a universal trigger.`] };
+            case 'outside_usage': return { method: 'native_unlinked_accounting_v1', kind: 'observation',
+                citations: [facts.costs.citation], limitations: ['Informational, not waste or savings. Vendor local dashboards exclude other devices and web usage.'], advice: [] };
+            case 'effort_audit': return { method: 'recorded_request_effort_audit_v1', kind: 'observation',
+                citations: [facts.costs.citation, facts.reasoning.citation, facts.requestCache.citation],
+                limitations: ['Recorded effort is required. Thinking/output share has no research-backed waste cutoff.'],
+                advice: ['Compare outcomes before lowering effort. Set effort at session start where possible; changes can rebuild the cache on affected models.'] };
+            case 'subagent_fanout': return { method: 'observed_subagent_token_breakdown_v1', kind: 'observation',
+                citations: [facts.requestCache.citation, facts.costs.citation], limitations: ['Token fan-out is informational, not waste; parallelism may improve outcomes.'],
+                advice: ['Inspect parent and subagent token shares. Ordinary subagents have independent caches; forks may reuse their parent prefix.'] };
+        }
+    };
     const finding = (detectorId: UsageCoachDetectorId, capability: UsageCoachCapability,
         summaryCode: UsageCoachFinding['summaryCode'], evidence: UsageCoachFinding['evidence'], measurements: UsageCoachFinding['measurements'],
         coverage: UsageCoachFinding['coverage'] = detail?.coverage ?? 'partial',
-        modelComparison?: UsageCoachFinding['modelComparison']): UsageCoachConceptEvaluation => {
+        modelComparison?: UsageCoachFinding['modelComparison'],
+        classification: UsageCoachFinding['classification'] = 'informational',
+        details: Pick<UsageCoachFinding, 'cacheCauses' | 'evidenceSeries'> = {}): UsageCoachConceptEvaluation => {
         evidence.sort((a, b) => a.id.localeCompare(b.id) || a.observedAtMs - b.observedAtMs);
+        const evidenceBasis = basis(detectorId);
+        if (measurements.some(row => row.unit === 'currency' && row.costKind === 'api_equivalent')) {
+            const catalog = input.accounting?.priceCatalog ?? bundledUsageModelPriceCatalog;
+            const priceDate = new Date(catalog.provenance.asOfMs);
+            if (Number.isFinite(priceDate.getTime())) evidenceBasis.citations.push({ url: LITELLM_MODEL_PRICE_URL,
+                sourceKind: 'price_catalog', asOf: priceDate.toISOString().slice(0, 10) });
+            evidenceBasis.limitations.push(`API-equivalent pricing uses U10 catalog ${catalog.provenance.revision}; not an invoice or plan-quota conversion.`);
+        }
         // The requested query key already identifies its range/calendar. An open
         // query's witnessed display end advances without changing these facts.
+        // Presentation samples reuse this finding's evidence; adding a chart does not retire its dismissal or remedy identity.
+        const { evidenceSeries: _evidenceSeries, ...evidenceDetails } = details;
         const evidenceKey = computeCanonicalDomainSeparatedDigest('happier.usage.coach.finding.v1',
             [detectorId, input.queryKey, summaryCode, JSON.stringify(evidence), JSON.stringify(measurements),
+                evidenceBasis.method, classification, JSON.stringify(evidenceDetails),
                 ...(modelComparison ? [JSON.stringify(modelComparison)] : [])]);
         const state = input.findingStates?.find(row => row.detectorId === detectorId && row.evidenceKey === evidenceKey)?.state
             ?? { dismissed: false, snoozedUntilMs: null, applied: null };
         return { detectorId, requiredEvidence: [capability], status: 'finding', finding: {
             detectorId, evidenceKey, queryKey: input.queryKey, period: input.period, asOfMs: input.asOfMs,
-            currentness: input.currentness, coverage, severity: 'info', summaryCode, evidence, measurements, remedy: null,
-            action: null, state, ...(modelComparison ? { modelComparison } : {}),
+            currentness: input.currentness, coverage, severity: classification === 'cost_linked' ? 'warning' : 'info',
+            classification, basis: evidenceBasis, summaryCode, evidence, measurements, remedy: null,
+            action: null, state, ...details, ...(modelComparison ? { modelComparison } : {}),
         } };
     };
     const ref = (kind: UsageCoachFinding['evidence'][number]['kind'], row: { evidenceId: string; observedAtMs: number }) =>
         ({ kind, id: row.evidenceId, observedAtMs: row.observedAtMs });
-    const composition = input.composition === undefined ? undefined : unique(input.composition.map(row => UsagePromptCompositionSchema.parse(row)));
+    const series = (metric: UsageCoachFinding['measurements'][number]['metric'],
+        unit: UsageCoachFinding['measurements'][number]['unit'],
+        points: NonNullable<UsageCoachFinding['evidenceSeries']>[number]['points']) => ({ metric, unit,
+        points: points.sort((a, b) => a.observedAtMs - b.observedAtMs || a.evidenceId.localeCompare(b.evidenceId)) });
+    const usesComposition = enabled('duplicated_instructions') || enabled('cache_busting_prompt_changes') || enabled('idle_recaching') || enabled('cache_economics');
+    const composition = !usesComposition || input.composition === undefined ? undefined
+        : unique(input.composition.map(row => UsagePromptCompositionSchema.parse(row)));
     const fullComposition = input.compositionCoverage === 'complete' && composition !== undefined
         && composition.every(row => row.coverage === 'complete_native');
+    // The two retained preference ids are cause views of this ONE cache analysis.
+    // Unknown rebuilds can explain a miss, but cannot be priced as avoidable waste.
+    const cacheEnabled = enabled('idle_recaching') || enabled('cache_busting_prompt_changes') || enabled('cache_economics');
+    const cacheRows: UsageCoachNativeCacheFact[] = cacheEnabled && detail?.nativeCache ? unique(detail.nativeCache).map(row => ({ ...row })) : [];
+    const seenCacheInputs = new Set(cacheRows.map(row => JSON.stringify([row.sessionId ?? null, row.inputId])));
+    if (cacheEnabled && composition) {
+        const previous = new Map<string, typeof composition[number]>();
+        for (const row of [...composition].sort((a, b) => a.observedAtMs - b.observedAtMs || a.evidenceId.localeCompare(b.evidenceId))) {
+            if (row.boundary !== 'agent_native_request' || row.coverage !== 'complete_native' || !row.nativePrefix || !row.inputId) continue;
+            const before = previous.get(row.sessionId);
+            const prefix = row.nativePrefix;
+            const inputKey = JSON.stringify([row.sessionId, row.inputId]);
+            if (!seenCacheInputs.has(inputKey)) cacheRows.push({
+                evidenceId: row.evidenceId, observedAtMs: row.observedAtMs, inputId: row.inputId, boundary: 'agent_native_request',
+                sessionId: row.sessionId, ...(row.turnId ? { turnId: row.turnId } : {}),
+                ...(row.requestIdentity ? { modelId: row.requestIdentity.selection.modelId } : {}),
+                cacheOutcome: prefix.cacheOutcome, missCause: prefix.missCause, cacheWriteTokens: prefix.cacheWriteTokens,
+                idleMs: before ? row.observedAtMs - before.observedAtMs : null, ttlMs: prefix.ttlMs,
+                prefixDigest: prefix.digest, previousPrefixDigest: before?.nativePrefix?.digest ?? null,
+                rebuildCause: detail?.compactions?.some(compaction => compaction.sessionId === row.sessionId
+                    && before && compaction.observedAtMs >= before.observedAtMs && compaction.observedAtMs <= row.observedAtMs)
+                    ? 'compaction' : before?.requestIdentity && row.requestIdentity
+                        && before.requestIdentity.selection.modelId !== row.requestIdentity.selection.modelId ? 'model_switch' : 'unknown',
+            });
+            seenCacheInputs.add(inputKey);
+            previous.set(row.sessionId, row);
+        }
+    }
+    const previousCacheRequest = new Map<string, number>();
+    for (const row of [...cacheRows].sort((a, b) => a.observedAtMs - b.observedAtMs || a.evidenceId.localeCompare(b.evidenceId))) {
+        if (!row.sessionId && !row.turnId) continue;
+        const scope = JSON.stringify([row.sessionId ?? null, row.sessionId ? null : row.turnId]);
+        const before = previousCacheRequest.get(scope) ?? input.period.startMs;
+        if (detail?.compactions?.some(compaction => (row.sessionId ? compaction.sessionId === row.sessionId : compaction.turnId === row.turnId)
+            && compaction.observedAtMs >= before && compaction.observedAtMs <= row.observedAtMs)) row.rebuildCause = 'compaction';
+        previousCacheRequest.set(scope, row.observedAtMs);
+    }
+    const expectedRebuild = (row: UsageCoachNativeCacheFact) => row.rebuildCause !== undefined
+        && row.rebuildCause !== 'unknown' && row.rebuildCause !== 'unexpected';
+    const cacheCause = (row: UsageCoachNativeCacheFact) => {
+        if (expectedRebuild(row) || row.cacheOutcome !== 'miss' || !row.cacheWriteTokens) return null;
+        if (row.missCause === 'ttl_expired' && row.idleMs !== null && row.ttlMs !== undefined && row.ttlMs !== null
+            && row.ttlMs > 0 && row.idleMs >= row.ttlMs) return 'idle_recaching';
+        if (row.missCause === 'prefix_change' && row.prefixDigest && row.previousPrefixDigest
+            && row.prefixDigest !== row.previousPrefixDigest) return 'cache_busting_prompt_changes';
+        return null;
+    };
+    const usesPrices = cacheEnabled || enabled('context_bloat');
+    const catalog = usesPrices ? input.accounting?.priceCatalog ?? bundledUsageModelPriceCatalog : bundledUsageModelPriceCatalog;
+    const accountingRows = usesPrices && input.accounting?.contributions
+        ? [...new Map(input.accounting.contributions.filter(row => inPeriod(row.observedAtMs)).map(row => [row.id, row])).values()] : undefined;
+    const pricedRows = accountingRows?.map(row => ({ row, price: row.tokenCategories
+        ? estimateUsageModelCost(row.modelId, row.tokenCategories, catalog, input.pricingOverrides) : null }));
+    const cachePremium = (row: UsageCoachNativeCacheFact): number | null => {
+        if (!cacheCause(row) || row.rebuildCause !== 'unexpected' || !row.sessionId || !row.turnId || !row.modelId) return null;
+        const matches = pricedRows?.filter(entry => entry.row.sessionId === row.sessionId && entry.row.turnId === row.turnId
+            && entry.row.modelId === row.modelId && entry.row.eventCount === 1) ?? [];
+        if (matches.length !== 1 || !matches[0]!.price || !matches[0]!.row.tokenCategories
+            || matches[0]!.row.tokenCategories.cacheWrite !== row.cacheWriteTokens) return null;
+        const rates = matches[0]!.price!.price.rates;
+        let write = rates.cacheWriteUsdPerMillion;
+        if (row.ttlMs === facts.cache.longTtlMs
+            && catalog.models[matches[0]!.price!.price.modelId]?.provider === 'anthropic') {
+            // U10's generic write tariff may describe 5m caching. Do not divide a
+            // 1h premium by a 5m-priced total and invent a spend-share warning.
+            if (write !== rates.inputUsdPerMillion * facts.cache.longWriteMultiplier) return null;
+        } else if (row.ttlMs !== facts.cache.shortTtlMs) return null;
+        return write === undefined || rates.cacheReadUsdPerMillion === undefined ? null
+            : Math.max(0, row.cacheWriteTokens! * (write - rates.cacheReadUsdPerMillion) / 1_000_000);
+    };
+    const totalPricedCost = pricedRows?.length && pricedRows.every(entry => entry.price !== null)
+        ? pricedRows.reduce((sum, entry) => sum + entry.price!.total, 0) : null;
+    const causeShare = (rows: readonly UsageCoachNativeCacheFact[]) => {
+        const premiums = rows.map(cachePremium);
+        if (!premiums.length || premiums.some(value => value === null) || totalPricedCost === null || totalPricedCost <= 0) return null;
+        return premiums.reduce<number>((sum, value) => sum + value!, 0) / totalPricedCost;
+    };
 
     const evaluations = USAGE_COACH_DETECTOR_IDS.map((id): UsageCoachConceptEvaluation => {
         const capability = USAGE_COACH_REQUIRED_EVIDENCE[id][0];
+        if (preferences === null) return insufficient(id, capability);
+        if (!enabled(id)) return { detectorId: id, requiredEvidence: [capability], status: 'disabled' };
         switch (id) {
             case 'duplicated_instructions': {
                 if (!composition) return insufficient(id, capability);
                 let duplicateCount = 0;
                 let duplicateBytes = 0;
                 const evidence: UsageCoachFinding['evidence'] = [];
+                const points: NonNullable<UsageCoachFinding['evidenceSeries']>[number]['points'] = [];
                 for (const row of composition) {
                     const seen = new Set<string>();
                     let duplicate = false;
+                    let rowDuplicateBytes = 0;
                     for (const component of row.components) {
                         if (component.kind !== 'instructions' || component.overlap !== 'none' || component.byteLength === 0) continue;
                         const key = JSON.stringify([component.digest, component.location, component.byteLength]);
-                        if (seen.has(key)) { duplicateCount += 1; duplicateBytes += component.byteLength; duplicate = true; }
+                        if (seen.has(key)) { duplicateCount += 1; duplicateBytes += component.byteLength;
+                            rowDuplicateBytes += component.byteLength; duplicate = true; }
                         seen.add(key);
                     }
-                    if (duplicate) evidence.push(ref('composition', row));
+                    if (duplicate) { evidence.push(ref('composition', row));
+                        points.push({ evidenceId: row.evidenceId, observedAtMs: row.observedAtMs, value: rowDuplicateBytes }); }
                 }
                 if (duplicateCount) return finding(id, capability, 'duplicate_injection_observed', evidence,
                     [{ metric: 'duplicate_injections', value: duplicateCount, unit: 'count' },
-                        { metric: 'duplicate_bytes', value: duplicateBytes, unit: 'bytes' }], fullComposition ? 'complete' : 'partial');
+                        { metric: 'duplicate_bytes', value: duplicateBytes, unit: 'bytes' }], fullComposition ? 'complete' : 'partial',
+                    undefined, 'informational', { evidenceSeries: [series('duplicate_bytes', 'bytes', points)] });
                 return negative(id, capability, fullComposition && composition.every(row => row.components.every(component =>
                     component.kind !== 'instructions' || component.overlap === 'none')));
             }
             case 'model_misfit': {
-                if (detail?.modelRequests && input.accounting?.contributions && input.accounting.coverage?.status === 'complete'
-                    && input.accounting.coverage.range.complete && input.accounting.coverage.range.startMs === input.period.startMs
-                    && input.accounting.coverage.range.endMs === input.period.endMs) {
+                // Native accounting does not certify whole-request cost completeness. An exhausted
+                // history page is not that certificate; complete-only must remain insufficient.
+                if (preferences.modelSuggestion === 'complete_only') return insufficient(id, capability);
+                if (detail?.modelRequests && input.accounting?.contributions) {
                     const requests = unique(detail.modelRequests.flatMap(row => {
                         const parsed = UsageCoachModelRequestSchema.safeParse(row);
                         return parsed.success && inPeriod(parsed.data.startedAtMs) ? [parsed.data] : [];
@@ -117,12 +280,25 @@ export function evaluateUsageCoach(input: UsageCoachEvaluationInput): UsageCoach
                             row.sessionId === request.sessionId && row.turnId === request.turnId).map(row => [row.id, row])).values()];
                         if (!contributions.length || contributions.some(row => !inPeriod(row.observedAtMs)
                             || row.observedAtMs < request.startedAtMs || row.observedAtMs > request.observedAtMs
-                            || row.modelId !== selection.modelId || row.providerAttribution !== 'known'
-                            || row.providerConnectionId !== selection.providerConnectionId)) return [];
+                            || row.modelId !== selection.modelId
+                            || row.providerAttribution === 'known' && row.providerConnectionId !== selection.providerConnectionId)) return [];
                         const costs = contributions.map(row => resolveUsageCostBasis(row.cost, 'auto'));
                         const basis = costs[0];
-                        if (!basis || costs.some(cost => !cost || cost.kind !== basis.kind || cost.currency !== basis.currency)) return [];
-                        return [{ request, contributions, cost: { ...basis, amountUsd: costs.reduce((sum, cost) => sum + cost!.amountUsd, 0) } }];
+                        if (!basis || basis.kind === 'mixed' || costs.some(cost => !cost || cost.kind !== basis.kind || cost.currency !== basis.currency)) return [];
+                        // Consume the host-captured AMEND-2 identity, never current Session binding
+                        // dimensions. Mixed or missing source evidence remains explicitly unknown.
+                        const sources = contributions.map(row => {
+                            const source = row.providerAttribution !== 'known' ? undefined : row.providerSource === 'native'
+                                ? { kind: 'native', connectedAccount: row.connectedAccount ?? null }
+                                : row.providerSource === 'provider' ? { kind: 'provider', providerId: row.providerId ?? null,
+                                    providerConnectionId: row.providerConnectionId } : undefined;
+                            const parsed = UsageRequestAttributionSchema.shape.source.safeParse(source);
+                            return parsed.success ? parsed.data : undefined;
+                        });
+                        const responseSource = sources[0] && sources.every(source => source && sameStrictJsonValue(source, sources[0]))
+                            ? sources[0] : undefined;
+                        return [{ request, contributions, responseSource,
+                            cost: { ...basis, kind: basis.kind, amountUsd: costs.reduce((sum, cost) => sum + cost!.amountUsd, 0) } }];
                     });
                     // Each observed request participates once; the finding does not add speculative savings across pairs.
                     for (const model of priced) {
@@ -150,46 +326,29 @@ export function evaluateUsageCoach(input: UsageCoachEvaluationInput): UsageCoach
                             requestKey: model.request.requestIdentity.digest, requestScopeKey: model.request.requestIdentity.scopeKey,
                             modelCost: model.cost.amountUsd, candidateCost: candidate.cost.amountUsd,
                             currency: model.cost.currency, costKind: model.cost.kind,
+                            costCoverage: 'partial',
+                            providerAttribution: model.responseSource && candidate.responseSource ? 'known' : 'unknown',
+                            ...(model.responseSource ? { modelResponseSource: model.responseSource } : {}),
+                            ...(candidate.responseSource ? { candidateResponseSource: candidate.responseSource } : {}),
                         });
                     }
                 }
-                if (!detail?.modelComparisons) return insufficient(id, capability);
-                const rows = unique(detail.modelComparisons);
-                const match = rows.find(row => row.modelId !== row.candidateModelId && row.modelOutcome === 'met'
-                    && row.candidateOutcome === 'met' && row.modelCost > row.candidateCost);
-                if (match) return finding(id, capability, 'compatible_model_cost_difference', [ref('model_comparison', match)],
-                    [{ metric: 'observed_cost_difference', value: match.modelCost - match.candidateCost, unit: 'currency',
-                        currency: match.currency, costKind: match.costKind }]);
-                return negative(id, capability, complete && rows.every(row => row.modelOutcome !== 'unknown' && row.candidateOutcome !== 'unknown'));
+                // Completion of matched host requests is the sole model trigger. A synthetic
+                // outcome assertion is not research-backed evidence of model suitability.
+                return insufficient(id, capability);
             }
             case 'idle_recaching':
             case 'cache_busting_prompt_changes': {
-                const rows = detail?.nativeCache ? unique(detail.nativeCache) : [];
-                // Native request facts are evidence translators, not another cache policy.
-                if (id === 'cache_busting_prompt_changes' && composition) {
-                    const previous = new Map<string, typeof composition[number]>();
-                    for (const row of [...composition].sort((a, b) => a.observedAtMs - b.observedAtMs)) {
-                        if (row.boundary !== 'agent_native_request' || row.coverage !== 'complete_native' || !row.nativePrefix) continue;
-                        const before = previous.get(row.sessionId);
-                        if (before?.nativePrefix && row.nativePrefix.cacheOutcome === 'miss' && row.nativePrefix.missCause === 'prefix_change'
-                            && row.nativePrefix.cacheWriteTokens !== null && row.nativePrefix.cacheWriteTokens > 0
-                            && row.nativePrefix.digest !== before.nativePrefix.digest) {
-                            return finding(id, capability, 'prefix_change_cache_miss_observed', [ref('composition', before), ref('composition', row)],
-                                [{ metric: 'cache_write_tokens', value: row.nativePrefix.cacheWriteTokens, unit: 'tokens' }], fullComposition ? 'complete' : 'partial');
-                        }
-                        previous.set(row.sessionId, row);
-                    }
-                }
-                if (!detail?.nativeCache) return insufficient(id, capability);
-                const match = rows.find(row => row.cacheOutcome === 'miss' && row.cacheWriteTokens !== null && row.cacheWriteTokens > 0
-                    && (id === 'idle_recaching' ? row.missCause === 'ttl_expired' && row.idleMs !== null && row.idleMs > 0
-                        : row.missCause === 'prefix_change' && row.prefixDigest !== null && row.previousPrefixDigest !== null
-                            && row.prefixDigest !== row.previousPrefixDigest));
-                if (match) return finding(id, capability, id === 'idle_recaching' ? 'idle_cache_recreation_observed' : 'prefix_change_cache_miss_observed',
-                    [ref('native_cache', match)], [{ metric: 'cache_write_tokens', value: match.cacheWriteTokens!, unit: 'tokens' }]);
-                return negative(id, capability, complete && rows.every(row => row.cacheOutcome === 'hit'
+                if (!detail?.nativeCache && !composition) return insufficient(id, capability);
+                const matches = cacheRows.filter(row => cacheCause(row) === id);
+                if (matches.length) return finding(id, capability, id === 'idle_recaching' ? 'idle_cache_recreation_observed' : 'prefix_change_cache_miss_observed',
+                    matches.map(row => ref('native_cache', row)), [{ metric: 'cache_write_tokens', value: matches.reduce((sum, row) => sum + row.cacheWriteTokens!, 0), unit: 'tokens' }],
+                    detail?.coverage ?? 'partial', undefined, (causeShare(matches) ?? 0) >= facts.costs.behaviorFlagShare ? 'cost_linked' : 'informational',
+                    { evidenceSeries: [series('cache_write_tokens', 'tokens', matches.map(row => ({ evidenceId: row.evidenceId,
+                        observedAtMs: row.observedAtMs, value: row.cacheWriteTokens! })))] });
+                return negative(id, capability, (complete || fullComposition) && cacheRows.every(row => expectedRebuild(row) || row.cacheOutcome === 'hit'
                     || row.cacheOutcome === 'miss' && row.missCause !== 'unknown' && row.cacheWriteTokens !== null
-                        && (id !== 'idle_recaching' || row.missCause !== 'ttl_expired' || row.idleMs !== null)
+                        && (id !== 'idle_recaching' || row.missCause !== 'ttl_expired' || row.idleMs !== null && row.ttlMs !== undefined && row.ttlMs !== null && row.ttlMs > 0)
                         && (id !== 'cache_busting_prompt_changes' || row.missCause !== 'prefix_change'
                             || row.prefixDigest !== null && row.previousPrefixDigest !== null)));
             }
@@ -202,7 +361,12 @@ export function evaluateUsageCoach(input: UsageCoachEvaluationInput): UsageCoach
                 if (paired.length) return finding(id, capability, 'approval_wait_observed',
                     paired.map(row => ({ kind: 'permission', id: JSON.stringify([row.workId, row.requestId]), observedAtMs: row.decidedAtMs! })),
                     [{ metric: 'permission_wait', value: paired.reduce((sum, row) => sum + row.decidedAtMs! - row.requestedAtMs!, 0), unit: 'milliseconds' },
-                        { metric: 'permission_requests', value: paired.length, unit: 'count' }]);
+                        { metric: 'permission_requests', value: paired.length, unit: 'count' }], detail?.coverage ?? 'partial', undefined,
+                    paired.some(row => row.cacheTtlMs !== undefined && row.cacheTtlMs !== null && row.cacheTtlMs > 0
+                        && row.decidedAtMs! - row.requestedAtMs! >= row.cacheTtlMs) ? 'cost_linked' : 'informational',
+                    { evidenceSeries: [series('permission_wait', 'milliseconds', paired.map(row => ({
+                        evidenceId: JSON.stringify([row.workId, row.requestId]), observedAtMs: row.decidedAtMs!,
+                        value: row.decidedAtMs! - row.requestedAtMs! })))] });
                 return negative(id, capability, complete && rows.every(row => row.requestedAtMs !== null && row.decidedAtMs !== null
                     && row.decidedAtMs >= row.requestedAtMs));
             }
@@ -226,8 +390,22 @@ export function evaluateUsageCoach(input: UsageCoachEvaluationInput): UsageCoach
                 }
                 if (!bindings.size || [...bindings.values()].some(binding => !binding.consistent)) return insufficient(id, capability);
                 const unused = [...bindings.values()].filter(binding => binding.calls === 0).length;
-                if (unused) return finding(id, capability, 'unused_mcp_binding_observed', rows.map(row => ref('mcp_usage', row)),
-                    [{ metric: 'unused_mcp_bindings', value: unused, unit: 'count' }], 'partial');
+                const definitionWindows = rows.flatMap(row => {
+                    if (!row.bindings.length || row.bindings.some(binding => binding.schemaTokens === undefined || binding.schemaTokens === null
+                        || !binding.contextWindowTokens)) return [];
+                    const denominator = row.bindings[0]!.contextWindowTokens!;
+                    if (!row.bindings.every(binding => binding.contextWindowTokens === denominator)) return [];
+                    return [{ row, tokens: row.bindings.reduce((sum, binding) => sum + binding.schemaTokens!, 0), denominator }];
+                });
+                const loaded = rows.some(row => row.bindings.some(binding => binding.definitionsLoading === 'upfront'))
+                    || definitionWindows.some(window => window.tokens / window.denominator >= facts.mcp.deferredDefinitionContextShare);
+                const measurements: UsageCoachFinding['measurements'] = [{ metric: 'unused_mcp_bindings', value: unused, unit: 'count' }];
+                if (definitionWindows.length) measurements.push({ metric: 'loaded_schema_tokens',
+                    value: Math.max(...definitionWindows.map(window => window.tokens)), unit: 'tokens' });
+                if (unused || loaded) return finding(id, capability, loaded ? 'mcp_definition_overhead_observed' : 'unused_mcp_binding_observed', rows.map(row => ref('mcp_usage', row)),
+                    measurements, 'partial', undefined, loaded ? 'cost_linked' : 'informational',
+                    definitionWindows.length ? { evidenceSeries: [series('loaded_schema_tokens', 'tokens', definitionWindows.map(window => ({
+                        evidenceId: window.row.evidenceId, observedAtMs: window.row.observedAtMs, value: window.tokens })))] } : {});
                 return { detectorId: id, requiredEvidence: [capability], status: 'no_finding' };
             }
             case 'repeated_file_reads': {
@@ -241,7 +419,8 @@ export function evaluateUsageCoach(input: UsageCoachEvaluationInput): UsageCoach
                     const key = JSON.stringify([row.turnId, row.fileKey, row.selectionKey]);
                     const before = previous.get(key);
                     if (before && (row.versionDigest === null || before.versionDigest === null)) unknown = true;
-                    else if (before && row.versionDigest === before.versionDigest) {
+                    else if (before && row.versionDigest === before.versionDigest && !detail.compactions?.some(compaction => compaction.turnId === row.turnId
+                        && compaction.observedAtMs >= before.observedAtMs && compaction.observedAtMs <= row.observedAtMs)) {
                         if (row.reason === 'redundant') { redundant.push(row); evidence.set(before.evidenceId, before); evidence.set(row.evidenceId, row); }
                         else if (row.reason === 'unknown') unknown = true;
                     }
@@ -253,17 +432,26 @@ export function evaluateUsageCoach(input: UsageCoachEvaluationInput): UsageCoach
             }
             case 'compaction_storms': {
                 if (!detail?.compactions) return insufficient(id, capability);
-                const rows = unique(detail.compactions);
+                const rows = unique(detail.compactions).sort((a, b) => a.observedAtMs - b.observedAtMs || a.evidenceId.localeCompare(b.evidenceId));
                 const sessions = new Map<string, typeof rows>();
                 for (const row of rows) {
                     const group = sessions.get(row.sessionId) ?? [];
                     group.push(row);
                     sessions.set(row.sessionId, group);
                 }
-                const repeated = [...sessions.values()].filter(rows => rows.length > 1).flat();
-                if (repeated.length) return finding(id, capability, 'repeated_compaction_observed', repeated.map(row => ref('compaction', row)),
+                const repeated: typeof rows = [];
+                for (const group of sessions.values()) {
+                    let run: typeof rows = [];
+                    for (const row of group) {
+                        if (row.immediateRefillToLimit !== true) { run = []; continue; }
+                        run.push(row);
+                        if (run.length === facts.compaction.immediateRefillsInARow) repeated.push(...run);
+                        else if (run.length > facts.compaction.immediateRefillsInARow) repeated.push(row);
+                    }
+                }
+                if (repeated.length) return finding(id, capability, 'compaction_thrash_observed', repeated.map(row => ref('compaction', row)),
                     [{ metric: 'compactions', value: repeated.length, unit: 'count' }]);
-                return negative(id, capability, complete);
+                return negative(id, capability, complete && rows.every(row => typeof row.immediateRefillToLimit === 'boolean'));
             }
             case 'anomalous_looping_usage': {
                 if (!detail?.loops) return insufficient(id, capability);
@@ -271,27 +459,118 @@ export function evaluateUsageCoach(input: UsageCoachEvaluationInput): UsageCoach
                 const runs = new Map<string, typeof rows>();
                 const repeated = new Map<string, typeof rows[number]>();
                 for (const row of rows) {
-                    const key = JSON.stringify([row.turnId, row.operationKey]);
-                    const run = row.outcome === 'failed' && row.progress === 'none' ? runs.get(key) ?? [] : [];
-                    if (row.outcome === 'failed' && row.progress === 'none') run.push(row);
-                    runs.set(key, run);
-                    if (run.length === 2) repeated.set(run[0]!.evidenceId, run[0]!);
-                    if (run.length > 1) repeated.set(row.evidenceId, row);
+                    const before = runs.get(row.turnId) ?? [];
+                    const last = before.at(-1);
+                    const failed = row.outcome === 'failed' && row.progress === 'none' && Boolean(row.errorDigest);
+                    const run = failed && last?.operationKey === row.operationKey && last.errorDigest === row.errorDigest ? before : [];
+                    if (failed) run.push(row);
+                    runs.set(row.turnId, run);
+                    if (run.length > facts.corrections.moreThanTwice) for (const match of run) repeated.set(match.evidenceId, match);
                 }
                 if (repeated.size) return finding(id, capability, 'failed_loop_observed', [...repeated.values()].map(row => ref('loop', row)),
                     [{ metric: 'failed_repetitions', value: repeated.size, unit: 'count' }]);
-                return negative(id, capability, complete && rows.every(row => row.outcome !== 'unknown' && row.progress !== 'unknown'));
+                return negative(id, capability, complete && rows.every(row => row.outcome !== 'unknown' && row.progress !== 'unknown'
+                    && (row.outcome !== 'failed' || Boolean(row.errorDigest))));
             }
             case 'context_bloat': {
-                if (!composition) return insufficient(id, capability);
-                const known = composition.filter(row => row.coverage === 'complete_native' && row.nativePrefix?.tokenCount !== null
-                    && row.nativePrefix?.tokenCount !== undefined && row.nativePrefix.tokenizerId !== null
-                    && row.contextWindowTokens !== null && row.contextWindowTokens > 0);
-                const match = known.find(row => row.nativePrefix!.tokenCount! >= row.contextWindowTokens!);
-                if (match) return finding(id, capability, 'context_capacity_reached', [ref('composition', match)],
-                    [{ metric: 'composed_tokens', value: match.nativePrefix!.tokenCount!, unit: 'tokens' },
-                        { metric: 'context_window_tokens', value: match.contextWindowTokens!, unit: 'tokens' }], fullComposition ? 'complete' : 'partial');
-                return negative(id, capability, fullComposition && known.length === composition.length);
+                // Keep the preference id, replace its full-window rule. Never treat aggregate
+                // event buckets as individual requests or infer a universal "long" context.
+                if (!pricedRows) return insufficient(id, capability);
+                const sessions = new Map<string, typeof pricedRows>();
+                for (const entry of pricedRows) {
+                    if (!entry.row.sessionId || entry.row.eventCount !== 1 || !entry.row.tokenCategories) continue;
+                    const group = sessions.get(entry.row.sessionId) ?? [];
+                    group.push(entry); sessions.set(entry.row.sessionId, group);
+                }
+                for (const group of sessions.values()) {
+                    group.sort((a, b) => a.row.observedAtMs - b.row.observedAtMs || a.row.id.localeCompare(b.row.id));
+                    const size = (entry: typeof group[number]) => entry.row.tokenCategories!.input
+                        + entry.row.tokenCategories!.cacheRead + entry.row.tokenCategories!.cacheWrite;
+                    let growingRequest: typeof group[number] | undefined;
+                    for (let index = group.length - 1; index > 0; index -= 1) {
+                        if (size(group[index]!) > size(group[index - 1]!)) {
+                            growingRequest = group[index];
+                            break;
+                        }
+                    }
+                    if (!growingRequest) continue;
+                    // The measured request must witness the growth. A later compaction or
+                    // output-only observation does not erase that observation or supply its size.
+                    const measurements: UsageCoachFinding['measurements'] = [{ metric: 'composed_tokens', value: size(growingRequest), unit: 'tokens' }];
+                    if (group.every(entry => entry.price !== null && (entry.row.tokenCategories!.cacheRead === 0
+                        || entry.price!.price.rates.cacheReadUsdPerMillion !== undefined))) measurements.push({
+                        metric: 'cached_history_cost', value: group.reduce((sum, entry) => sum + entry.row.tokenCategories!.cacheRead
+                            * (entry.price!.price.rates.cacheReadUsdPerMillion ?? 0) / 1_000_000, 0),
+                        unit: 'currency', currency: 'USD', costKind: 'api_equivalent',
+                    });
+                    return finding(id, capability, 'context_growth_cost_observed', group.map(entry => ({ kind: 'accounting',
+                        id: entry.row.id, observedAtMs: entry.row.observedAtMs })), measurements, 'partial', undefined, 'informational',
+                    { evidenceSeries: [series('composed_tokens', 'tokens', group.map(entry => ({ evidenceId: entry.row.id,
+                        observedAtMs: entry.row.observedAtMs, value: size(entry) })))] });
+                }
+                return negative(id, capability, input.accounting?.coverage?.status === 'complete'
+                    && pricedRows.every(entry => entry.row.eventCount === 1 && entry.row.tokenCategories !== undefined && entry.row.tokenCategories !== null));
+            }
+            case 'cache_economics': {
+                if (!accountingRows?.length || accountingRows.some(row => !row.tokenCategories)) return insufficient(id, capability);
+                const totals = accountingRows.reduce((sum, row) => ({ input: sum.input + row.tokenCategories!.input,
+                    read: sum.read + row.tokenCategories!.cacheRead, write: sum.write + row.tokenCategories!.cacheWrite }), { input: 0, read: 0, write: 0 });
+                const denominator = totals.input + totals.read + totals.write;
+                if (denominator === 0) return negative(id, capability, input.accounting?.coverage?.status === 'complete');
+                const measurements: UsageCoachFinding['measurements'] = [
+                    { metric: 'input_tokens', value: totals.input, unit: 'tokens' },
+                    { metric: 'cache_read_tokens', value: totals.read, unit: 'tokens' },
+                    { metric: 'cache_write_tokens', value: totals.write, unit: 'tokens' },
+                    { metric: 'cache_hit_ratio', value: totals.read / denominator, unit: 'count' },
+                ];
+                const causes = cacheRows.filter(row => cacheCause(row) !== null);
+                const share = causeShare(causes);
+                if (share !== null) measurements.push({ metric: 'cache_replacement_premium', value: share * totalPricedCost!,
+                    unit: 'currency', currency: 'USD', costKind: 'api_equivalent' }, { metric: 'cache_cost_share', value: share, unit: 'count' });
+                const cacheCauses: NonNullable<UsageCoachFinding['cacheCauses']> = (['ttl_expired', 'prefix_change'] as const).flatMap(cause => {
+                    const matches = causes.filter(row => row.missCause === cause);
+                    if (!matches.length) return [];
+                    const premiums = matches.map(cachePremium);
+                    return [{ cause, cacheWriteTokens: matches.reduce((sum, row) => sum + row.cacheWriteTokens!, 0),
+                        premiumUsd: premiums.every(value => value !== null) ? premiums.reduce<number>((sum, value) => sum + value!, 0) : null }];
+                });
+                return finding(id, capability, 'cache_economics_observed', [
+                    ...accountingRows.map(row => ({ kind: 'accounting' as const, id: row.id, observedAtMs: row.observedAtMs })),
+                    ...causes.map(row => ref('native_cache', row)),
+                ], measurements, input.accounting?.coverage?.status ?? 'unknown', undefined,
+                share !== null && share >= facts.costs.behaviorFlagShare ? 'cost_linked' : 'informational', { cacheCauses,
+                    evidenceSeries: (['input_tokens', 'cache_read_tokens', 'cache_write_tokens'] as const).map(metric => series(metric, 'tokens',
+                        accountingRows.map(row => ({ evidenceId: row.id, observedAtMs: row.observedAtMs, value: metric === 'input_tokens'
+                            ? row.tokenCategories!.input : metric === 'cache_read_tokens' ? row.tokenCategories!.cacheRead : row.tokenCategories!.cacheWrite })))),
+                });
+            }
+            case 'effort_audit': {
+                const rows = unique(detail?.effortAudits ?? []).filter(row => row.effort.trim()
+                    && Number.isFinite(row.outputTokens) && row.outputTokens >= 0 && Number.isFinite(row.thinkingTokens) && row.thinkingTokens >= 0);
+                if (!rows.length) return insufficient(id, capability);
+                const result = finding(id, capability, 'effort_audit_observed', rows.map(row => ref('effort', row)), [
+                    { metric: 'output_tokens', value: rows.reduce((sum, row) => sum + row.outputTokens, 0), unit: 'tokens' },
+                    { metric: 'thinking_tokens', value: rows.reduce((sum, row) => sum + row.thinkingTokens, 0), unit: 'tokens' },
+                ], detail?.coverage ?? 'partial', undefined, 'informational', { evidenceSeries: [
+                    series('output_tokens', 'tokens', rows.map(row => ({ evidenceId: row.evidenceId, observedAtMs: row.observedAtMs, value: row.outputTokens }))),
+                    series('thinking_tokens', 'tokens', rows.map(row => ({ evidenceId: row.evidenceId, observedAtMs: row.observedAtMs, value: row.thinkingTokens }))),
+                ] });
+                if (result.status === 'finding') result.finding.basis.limitations.push(`Recorded efforts: ${[...new Set(rows.map(row => row.effort))].join(', ')}.`);
+                return result;
+            }
+            case 'subagent_fanout': {
+                const rows = unique(detail?.subagentUsage ?? []).filter(row => Number.isFinite(row.parentTokens) && row.parentTokens >= 0
+                    && Number.isFinite(row.subagentTokens) && row.subagentTokens >= 0);
+                if (!rows.length) return insufficient(id, capability);
+                const parent = rows.reduce((sum, row) => sum + row.parentTokens, 0);
+                const children = rows.reduce((sum, row) => sum + row.subagentTokens, 0);
+                return finding(id, capability, 'subagent_fanout_observed', rows.map(row => ref('subagent', row)), [
+                    { metric: 'parent_tokens', value: parent, unit: 'tokens' }, { metric: 'subagent_tokens', value: children, unit: 'tokens' },
+                    ...(parent > 0 ? [{ metric: 'fanout_multiplier' as const, value: (parent + children) / parent, unit: 'count' as const }] : []),
+                ], detail?.coverage ?? 'partial', undefined, 'informational', { evidenceSeries: [
+                    series('parent_tokens', 'tokens', rows.map(row => ({ evidenceId: row.evidenceId, observedAtMs: row.observedAtMs, value: row.parentTokens }))),
+                    series('subagent_tokens', 'tokens', rows.map(row => ({ evidenceId: row.evidenceId, observedAtMs: row.observedAtMs, value: row.subagentTokens }))),
+                ] });
             }
             case 'outside_usage': {
                 const accounting = input.accounting;
@@ -303,7 +582,9 @@ export function evaluateUsageCoach(input: UsageCoachEvaluationInput): UsageCoach
                     && row.source !== null && paths.get(row.source) === 'native');
                 if (outside.length) return finding(id, capability, 'outside_happier_usage_observed',
                     outside.map(row => ({ kind: 'accounting', id: row.id, observedAtMs: row.observedAtMs })),
-                    [{ metric: 'outside_tokens', value: outside.reduce((sum, row) => sum + row.tokens.total, 0), unit: 'tokens' }], accounting.coverage.status);
+                    [{ metric: 'outside_tokens', value: outside.reduce((sum, row) => sum + row.tokens.total, 0), unit: 'tokens' }], accounting.coverage.status,
+                    undefined, 'informational', { evidenceSeries: [series('outside_tokens', 'tokens', outside.map(row => ({ evidenceId: row.id,
+                        observedAtMs: row.observedAtMs, value: row.tokens.total })))] });
                 return negative(id, capability, accounting.coverage.status === 'complete' && accounting.coverage.range.complete
                     && accounting.coverage.range.startMs === input.period.startMs && accounting.coverage.range.endMs === input.period.endMs
                     && rows.every(row => row.sessionId !== null || row.source !== null && paths.has(row.source)
@@ -315,6 +596,7 @@ export function evaluateUsageCoach(input: UsageCoachEvaluationInput): UsageCoach
     const result = UsageCoachEvaluationSchema.parse({ v: 1, queryKey: input.queryKey, period: input.period, asOfMs: input.asOfMs,
         currentness: input.currentness, evaluations,
         findings: evaluations.flatMap(row => row.status === 'finding' ? [row.finding] : []),
+        unavailableChecks: [{ check: 'fast_mode', reason: 'not_available' }, { check: 'scheduled_interval_vs_ttl', reason: 'not_available' }],
     });
     return admitUsageCoachRemedies(result, input.admittedRemedies ?? []);
 }

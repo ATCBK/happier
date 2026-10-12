@@ -4,6 +4,53 @@ import { estimateUsageModelCost, repriceUsageAnalyticsResponse } from './usageCo
 import { UsageAnalyticsQueryResponseSchema } from './usageAnalyticsContracts.js';
 
 describe('canonical model price catalog', () => {
+  it('retains exact vendor and extended-context tariffs before legacy fallback aliases', () => {
+    const base = { inputUsdPerMillion: 3, outputUsdPerMillion: 15, provider: 'anthropic' };
+    const extended = { ...base, inputUsdPerMillion: 6 };
+    const vendor = { ...base, inputUsdPerMillion: 9 };
+    const catalog = { ...bundledUsageModelPriceCatalog, models: {
+      'claude-sonnet-4-6': base, 'claude-sonnet-4-6[1m]': extended, 'anthropic/claude-sonnet-4-6': vendor,
+    } };
+    expect(resolveUsageModelPrice('claude-sonnet-4-6[1m]', catalog)?.rates).toEqual(extended);
+    expect(resolveUsageModelPrice('anthropic/claude-sonnet-4-6', catalog)?.rates).toEqual(vendor);
+    const override = { kind: 'rates' as const, inputUsdPerMillion: 12, outputUsdPerMillion: 15 };
+    expect(resolveUsageModelPrice('claude-sonnet-4-6[1m]', catalog,
+      { 'claude-sonnet-4-6[1m]': override })?.rates).toEqual(override);
+    const fallback = { ...catalog, models: { 'claude-sonnet-4-6': base } };
+    expect(resolveUsageModelPrice('claude-sonnet-4-6[1m]', fallback)?.rates).toEqual(base);
+    expect(resolveUsageModelPrice('anthropic/claude-sonnet-4-6', fallback)?.rates).toEqual(base);
+  });
+
+  it('shares Haiku snapshot and alias overrides when repricing history without changing reported money', () => {
+    const alias = 'claude-haiku-4-5';
+    const dated = 'claude-haiku-4-5-20251001';
+    const rates = { kind: 'rates' as const, inputUsdPerMillion: 20, outputUsdPerMillion: 40 };
+    const tokens = { total: 1_000_000, input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 };
+    const cost = { reportedUsd: 4, estimatedUsd: 1, currency: 'USD' };
+    const raw = UsageAnalyticsQueryResponseSchema.parse({ v: 1, totals: { tokens: { ...tokens, total: 2_000_000, input: 2_000_000 }, cost, eventCount: 2 },
+      contributions: [alias, dated].map((modelId, i) => ({ id: String(i), observedAtMs: 10, machineId: null, sessionId: null,
+        turnId: null, agentId: 'claude', projectKey: null, workspaceId: null, source: 'native', modelId, tokens, tokenCategories: tokens, cost })) });
+    for (const overrideId of [alias, dated]) {
+      const overrides = { [overrideId]: rates };
+      expect(resolveUsageModelPrice(alias, bundledUsageModelPriceCatalog, overrides)).toMatchObject({ source: 'override', rates });
+      expect(resolveUsageModelPrice(dated, bundledUsageModelPriceCatalog, overrides)).toMatchObject({ source: 'override', rates });
+      const result = repriceUsageAnalyticsResponse(raw, bundledUsageModelPriceCatalog, overrides, 'api_equivalent');
+      expect(result.contributions?.map(row => row.cost.apiEquivalentUsd)).toEqual([20, 20]);
+      expect(result.totals.cost.apiEquivalentUsd).toBe(40);
+      expect(result.contributions?.map(row => row.cost.reportedUsd)).toEqual([4, 4]);
+    }
+    // A pre-fix Account can contain both spellings. The canonical entry wins for both.
+    const conflicts = { [alias]: rates, [dated]: { ...rates, inputUsdPerMillion: 99 } };
+    expect([alias, dated].map(id => estimateUsageModelCost(id, tokens, bundledUsageModelPriceCatalog, conflicts)?.total))
+      .toEqual([20, 20]);
+    const mapped = { [dated]: { kind: 'map' as const, modelId: 'gpt-5.4' },
+      'gpt-5.4': rates };
+    expect([alias, dated].map(id => estimateUsageModelCost(id, tokens, bundledUsageModelPriceCatalog, mapped)?.total))
+      .toEqual([20, 20]);
+    expect(resolveUsageModelPrice('claude-haiku-4-5-20990101')).toBeNull();
+    expect(resolveUsageModelPrice('vertex_ai/claude-haiku-4-5')?.modelId).toBe('vertex_ai/claude-haiku-4-5');
+  });
+
   it('projects standard text-token rates from the heterogeneous public file without inventing cache prices', () => {
     const catalog = parseLiteLlmModelPriceCatalog({ sample_spec: {}, model: { mode: 'chat', input_cost_per_token: 0.000002,
       output_cost_per_token: 0.00001, cache_read_input_token_cost: 0.0000002, input_cost_per_token_above_200k_tokens: 9 },

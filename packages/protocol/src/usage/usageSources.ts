@@ -24,6 +24,9 @@ export type UsageSourceDateRangeV1 = z.infer<typeof UsageSourceDateRangeV1Schema
 export const UsageSourceV1Schema = lazyZodSchema(() => z.object({
   serverId: id, machineId: id, sourceId: id,
   agent: asProtocolZod(PluginContributionIdentityV1Schema),
+  /** Accounting identity is independent of the opaque root and its client-only display path. */
+  accountingSources: z.array(id).optional(),
+  captureKind: z.literal('from_logs').optional(),
   externalSessionSource: ExternalSessionsSourceSchema.optional(),
   root: z.object({ kind: z.enum(['default', 'configured', 'materialized', 'override']), path: id.nullable() }).strict(),
   consent: z.enum(['enabled', 'disabled']),
@@ -33,6 +36,13 @@ export const UsageSourceV1Schema = lazyZodSchema(() => z.object({
   errorCode: id.optional(),
 }).strict());
 export type UsageSourceV1 = z.infer<typeof UsageSourceV1Schema>;
+
+/** Exact accounting selections never match an Agent, capture path, or source-root key. */
+export function matchesUsageSourceAccountingScope(source: Pick<UsageSourceV1, 'accountingSources' | 'captureKind'>,
+  selected: readonly string[]): boolean {
+  return selected.length === 0 || source.captureKind === 'from_logs'
+    && selected.some(id => source.accountingSources?.includes(id));
+}
 export const UsageSourcesListV1Schema = lazyZodSchema(() => z.object({ sources: z.array(UsageSourceV1Schema) }).strict());
 export const UsageSourceResultV1Schema = lazyZodSchema(() => z.object({ source: UsageSourceV1Schema }).strict());
 export const UsageSourceDeleteResultV1Schema = lazyZodSchema(() => z.object({
