@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import test from 'node:test';
+import { createTempFixture } from '../../../apps/stack/scripts/testkit/core/temp_fixture.mjs';
 
 import {
   IROH_RUST_TARGETS,
@@ -72,6 +76,48 @@ test('an unrecognised build platform is a no-op rather than a guess', () => {
   const plan = resolveRustToolchainPlan({ platform: '', channel: '1.94.1', hasRustup: true });
   assert.equal(plan.status, 'skipped');
   assert.deepEqual(plan.commands, []);
+});
+
+test('a native host prepares only its pinned compiler, without mobile or WASM targets', () => {
+  for (const hasRustup of [false, true]) {
+    const plan = resolveRustToolchainPlan({ platform: 'host', channel: '1.94.1', hasRustup });
+    assert.equal(plan.status, 'install');
+    assert.deepEqual(plan.targets, []);
+    assert.equal(plan.commands.length, 1);
+    assert.match(plan.commands[0].args.join(' '), /1\.94\.1/u);
+  }
+});
+
+test('native host setup finds user-local rustup off PATH, verifies the pin and reuses a ready compiler', async t => {
+  const { root } = await createTempFixture(t, { prefix: 'hstack-native-rust-' });
+  const cargoHome = join(root, 'cargo');
+  await mkdir(join(cargoHome, 'bin'), { recursive: true });
+  await mkdir(join(root, 'empty-path'));
+  const channel = readPinnedRustChannel(await read(packageRoot, 'rust-toolchain.toml'));
+  // rustup is the external executable boundary. No compiler, network installer,
+  // account or system package is changed by this fixture.
+  await writeFile(join(cargoHome, 'bin/rustup'), `#!/bin/sh
+case "$*" in
+  --version) echo fixture-rustup ;;
+  'run ${channel} rustc --version') [ -f "$CARGO_HOME/ready" ] ;;
+  'toolchain install ${channel} --profile minimal')
+    printf '%s\\n' "$*" >> "$CARGO_HOME/installs"
+    [ "\${TEST_FAIL_RUST:-0}" = 1 ] || printf ready > "$CARGO_HOME/ready" ;;
+  *) exit 79 ;;
+esac
+`, { mode: 0o755 });
+  const run = extraEnv => spawnSync(process.execPath, [fileURLToPath(new URL('./ensure-rust-toolchain.mjs', import.meta.url)), '--platform', 'host'], {
+    encoding: 'utf8', env: { ...process.env, CARGO_HOME: cargoHome, PATH: join(root, 'empty-path'), ...extraEnv },
+  });
+  const broken = run({ TEST_FAIL_RUST: '1' });
+  assert.notEqual(broken.status, 0, 'an installer success without the pinned compiler must fail');
+  const first = run();
+  assert.equal(first.status, 0, first.stderr);
+  const installs = await readFile(join(cargoHome, 'installs'), 'utf8');
+  assert.ok(installs.includes(channel));
+  const second = run();
+  assert.equal(second.status, 0, second.stderr);
+  assert.equal(await readFile(join(cargoHome, 'installs'), 'utf8'), installs, 'a ready compiler must not be reinstalled');
 });
 
 test('the declared targets are exactly the ones the Iroh build scripts compile', async () => {

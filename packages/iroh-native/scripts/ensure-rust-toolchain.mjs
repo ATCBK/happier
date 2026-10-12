@@ -18,6 +18,8 @@
 // the pinned compiler without anyone remembering to select it.
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 /**
@@ -27,6 +29,7 @@ import { fileURLToPath } from 'node:url';
  * one side only and fail the release build with a missing std.
  */
 export const IROH_RUST_TARGETS = Object.freeze({
+  host: Object.freeze([]),
   ios: Object.freeze(['aarch64-apple-ios', 'aarch64-apple-ios-sim', 'x86_64-apple-ios']),
   android: Object.freeze(['aarch64-linux-android', 'x86_64-linux-android']),
   browser: Object.freeze(['wasm32-unknown-unknown']),
@@ -53,7 +56,7 @@ export function resolveRustToolchainPlan({ platform, channel, hasRustup, install
   }
 
   const scope = String(installScope ?? '').trim();
-  if (scope && !scope.split(',').map((entry) => entry.trim()).includes('iroh-native')) {
+  if (platform !== 'host' && scope && !scope.split(',').map((entry) => entry.trim()).includes('iroh-native')) {
     return {
       status: 'skipped',
       reason: `HAPPIER_INSTALL_SCOPE excludes iroh-native, so no Rust build runs (${scope})`,
@@ -71,30 +74,30 @@ export function resolveRustToolchainPlan({ platform, channel, hasRustup, install
         + `| sh -s -- -y --no-modify-path --profile minimal --default-toolchain ${channel}`,
       ],
     }];
-  commands.push({ command: 'rustup', args: ['target', 'add', '--toolchain', channel, ...targets] });
+  if (targets.length > 0) commands.push({ command: 'rustup', args: ['target', 'add', '--toolchain', channel, ...targets] });
   return { status: 'install', targets: [...targets], commands };
 }
 
-function main() {
-  const argv = process.argv.slice(2);
-  const platformIndex = argv.indexOf('--platform');
-  const platform = platformIndex === -1
-    ? process.env.EAS_BUILD_PLATFORM
-    : argv[platformIndex + 1];
-
-  const channel = readPinnedRustChannel(
-    readFileSync(fileURLToPath(new URL('rust-toolchain.toml', PACKAGE_ROOT)), 'utf8'),
-  );
-  const hasRustup = spawnSync('rustup', ['--version'], { stdio: 'ignore' }).status === 0;
+export function prepareRustToolchain({ platform, channel, env = process.env }) {
+  const cargoBin = join(env.CARGO_HOME || join(env.HOME || homedir(), '.cargo'), 'bin');
+  const rustup = spawnSync('rustup', ['--version'], { env, stdio: 'ignore' }).status === 0
+    ? 'rustup' : join(cargoBin, 'rustup');
+  const hasRustup = spawnSync(rustup, ['--version'], { env, stdio: 'ignore' }).status === 0;
   const plan = resolveRustToolchainPlan({
     platform,
     channel,
     hasRustup,
-    installScope: process.env.HAPPIER_INSTALL_SCOPE,
+    installScope: env.HAPPIER_INSTALL_SCOPE,
   });
 
   if (plan.status === 'skipped') {
     process.stdout.write(`[iroh-native] Rust toolchain setup skipped: ${plan.reason}\n`);
+    return;
+  }
+
+  if (platform === 'host' && hasRustup
+    && spawnSync(rustup, ['run', channel, 'rustc', '--version'], { env, stdio: 'ignore' }).status === 0) {
+    process.stdout.write(`[iroh-native] Rust ${channel} ready for native host\n`);
     return;
   }
 
@@ -104,14 +107,28 @@ function main() {
   for (const { command, args } of plan.commands) {
     // `~/.cargo/bin` is only on PATH for later steps once rustup has installed
     // it, so the freshly installed rustup is invoked from its known location.
-    const executable = command === 'rustup' && !hasRustup
-      ? `${process.env.CARGO_HOME || `${process.env.HOME}/.cargo`}/bin/rustup`
+    const executable = command === 'rustup'
+      ? rustup
       : command;
-    const result = spawnSync(executable, args, { stdio: 'inherit' });
+    const result = spawnSync(executable, args, { env, stdio: 'inherit' });
     if (result.status !== 0) {
       throw new Error(`${command} ${args.join(' ')} failed with status ${result.status ?? result.error}`);
     }
   }
+  if (platform === 'host') {
+    const compiler = spawnSync(rustup, ['run', channel, 'rustc', '--version'], { env, stdio: 'inherit' });
+    if (compiler.status !== 0) throw new Error(`Rust ${channel} is unavailable after preparation`);
+  }
+}
+
+function main() {
+  const argv = process.argv.slice(2);
+  const platformIndex = argv.indexOf('--platform');
+  const platform = platformIndex === -1 ? process.env.EAS_BUILD_PLATFORM : argv[platformIndex + 1];
+  const channel = readPinnedRustChannel(
+    readFileSync(fileURLToPath(new URL('rust-toolchain.toml', PACKAGE_ROOT)), 'utf8'),
+  );
+  prepareRustToolchain({ platform, channel });
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
