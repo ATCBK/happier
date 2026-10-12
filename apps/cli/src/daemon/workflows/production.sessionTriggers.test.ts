@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1, admitAgentStartV1,
+  AutomationTriggerIdSchema, deriveAutomationOccurrenceKeyV1,
   openWorkflowAcceptedSnapshotStoredEnvelopeV1, parseWorkflowStoredContentEnvelopeV1,
   type WorkflowDefinitionV1,
 } from '@happier-dev/protocol';
@@ -80,13 +81,30 @@ function admissionHarness(prepareWorkspace: typeof prepareWorkflowAcceptedWorksp
 afterEach(() => vi.restoreAllMocks());
 
 describe('scoped workflow claim admission', () => {
-  it('refuses a literal self-target inherited through a nested definition before snapshot effects', async () => {
+  it('admits a manually invoked habit into its scoped destination Session', async () => {
+    const harness = admissionHarness();
+    await expect(harness.coordinate(claim({ ...definition, defaults: { ...definition.defaults,
+      conversation: { kind: 'existing_session', sessionId: 'origin-session', machineId } } }))).rejects.toBe(captured);
+    expect(harness.snapshots[0]).toMatchObject({ origin: { originSessionId: 'origin-session' },
+      materializedLeaves: [{ selection: { conversation: { kind: 'existing_session', sessionId: 'origin-session' } } }] });
+  });
+
+  it('refuses a lifecycle self-target inherited through a nested definition before snapshot effects', async () => {
     const harness = admissionHarness();
     const source: WorkflowDefinitionV1 = { ...definition, defaults: { ...definition.defaults,
       conversation: { kind: 'existing_session', sessionId: 'origin-session', machineId } },
       blocks: [{ kind: 'if', id: 'nested', when: { kind: 'compare', operator: 'eq',
         left: { kind: 'literal', value: true }, right: { kind: 'literal', value: true } }, then: definition.blocks, otherwise: [] }] };
-    await expect(harness.coordinate(claim(source))).resolves.toMatchObject({ state: 'failed', reason: 'self_target', admission: 'refused' });
+    const occurrence = claim(source);
+    const triggerId = AutomationTriggerIdSchema.parse('lifecycle-trigger');
+    const occurrenceKey = deriveAutomationOccurrenceKeyV1({ triggerId, evidence: {
+      v: 1, kind: 'sessionLifecycle', event: 'parentTurnCompleted',
+      sourceSessionId: 'origin-session', sourceTurnId: 'turn-1', occurredAt: 1,
+    } });
+    await expect(harness.coordinate({ ...occurrence, automationCause: { kind: 'trigger', triggerKind: 'sessionLifecycle',
+      triggerId, triggerRevision: 0, occurredAt: 1, occurrenceKey,
+      evidence: { event: 'parentTurnCompleted', sourceSessionId: 'origin-session', sourceTurnId: 'turn-1',
+        policy: { kind: 'currentTurn' } } } })).resolves.toMatchObject({ state: 'failed', reason: 'self_target', admission: 'refused' });
     expect(harness.effects).toEqual([]);
   });
 

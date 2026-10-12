@@ -79,7 +79,7 @@ describe('workflow Session step executor', () => {
     agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
     profileId: 'reviewer', acpSessionModeId: 'plan',
     sessionConfigOptionOverrides: { v: 1, updatedAt: 1, overrides: { reasoning: { value: 'PRIVATE_CONFIG', updatedAt: 1 } } },
-    mcpSelection: { v: 1, managedServersEnabled: false, forceIncludeServerIds: ['mcp-1'], forceExcludeServerIds: [] },
+    capabilitySelection: { mcp: { v: 1, managedServersEnabled: false, forceIncludeServerIds: ['mcp-1'], forceExcludeServerIds: [] } },
     connectedServices: { v: 2, bindingsByServiceId: {} }, transcriptStorage: 'direct',
     terminal: { mode: 'tmux', tmux: { sessionName: 'PRIVATE_TITLE', isolated: true } },
     windowsRemoteSessionLaunchMode: 'windows_terminal', windowsRemoteSessionConsole: 'hidden',

@@ -94,7 +94,7 @@ describe('Workflow Session step execution', () => {
         launchEnvironment: { values: { PREDECESSOR_RUN: 'literal value' }, unset: [] }, providerSessionResume: { kind: 'provider_session.v1', providerSessionId: 'incoming-native' },
         profileId: 'incoming-profile', acpSessionModeId: 'incoming-mode', transcriptStorage: 'persisted',
         terminal: { mode: 'plain' }, windowsRemoteSessionLaunchMode: 'windows_terminal', windowsTerminalWindowName: 'Incoming window',
-        mcpSelection: { v: 1, managedServersEnabled: false, forceIncludeServerIds: [], forceExcludeServerIds: [] },
+        capabilitySelection: { mcp: { v: 1, managedServersEnabled: false, forceIncludeServerIds: [], forceExcludeServerIds: [] } },
         connectedServices: { v: 2, bindingsByServiceId: {} },
       },
       executionTarget: { kind: 'session' }, workspace: { machineId: 'machine-1', directory: '/repo', checkoutRootPath: '/repo' },
@@ -106,7 +106,7 @@ describe('Workflow Session step execution', () => {
       resume: 'incoming-native', environmentVariables: { PREDECESSOR_RUN: 'literal value' }, profileId: 'incoming-profile',
       agentModeId: 'incoming-mode', transcriptStorage: 'persisted', terminal: { mode: 'plain' },
       windowsRemoteSessionLaunchMode: 'windows_terminal', windowsTerminalWindowName: 'Incoming window',
-      mcpSelection: { v: 1, managedServersEnabled: false, forceIncludeServerIds: [], forceExcludeServerIds: [] },
+      capabilitySelection: { mcp: { v: 1, managedServersEnabled: false, forceIncludeServerIds: [], forceExcludeServerIds: [] } },
       connectedServices: { v: 2, bindingsByServiceId: {} },
     });
     expect(http.post).not.toHaveBeenCalled();

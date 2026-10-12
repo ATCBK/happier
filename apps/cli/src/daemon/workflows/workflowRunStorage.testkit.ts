@@ -128,9 +128,8 @@ export function createWorkflowRunStorageTestkit(params: Readonly<{
   let waitAttempts = 0;
   let keyCensus = params.keyCensus ?? createPlainWorkflowRunKeyCensusFixture(params);
 
-  const requiresAttention = () => state === 'interrupted'
-    || (TERMINAL_RUN_STATES.some(value => value === state) && custodyState === 'pending')
-    || [...rows.values()].some(value => ATTENTION_LIFECYCLES.some(lifecycle => lifecycle === value.index.lifecycle));
+  const requiresAttention = () => state !== 'cancelled'
+    && [...rows.values()].some(value => ATTENTION_LIFECYCLES.some(lifecycle => lifecycle === value.index.lifecycle));
 
   const summary = (): WorkflowRunSummaryV1 => ({ sourceArtifactId: null, ownerAccountId: keyCensus.ownerAccountId, visibleTeamId: keyCensus.visibleTeamId,
     id: params.runId,
@@ -140,6 +139,7 @@ export function createWorkflowRunStorageTestkit(params: Readonly<{
     machineId: params.machineId,
     workflowCustodyState: custodyState,
     attentionRequired: requiresAttention(),
+    heldCount: state === 'cancelled' ? 0 : [...rows.values()].filter(row => row.index.lifecycle === 'waiting_for_review').length,
     originDeliveryAckRevision,
     availability: {
       pause: true, resumeBoundary: false,
@@ -220,13 +220,15 @@ export function createWorkflowRunStorageTestkit(params: Readonly<{
       }
       case 'get': {
         if (acceptedEnvelope === null) throw notFound();
-        return { run: summary(), acceptedEnvelope, checkpointEnvelope, resultEnvelope, keyCensus };
+        const rootProgress = ordered().find(row => row.index.parentRecordId === null
+          && row.index.sequence === '0' && row.index.memberOrdinal === '0' && row.index.attempt === '0') ?? null;
+        return { run: summary(), acceptedEnvelope, checkpointEnvelope, resultEnvelope, keyCensus, rootProgress };
       }
       case 'list': {
         const root = ordered().find(row => row.index.parentRecordId === null);
         return { runs: acceptedEnvelope === null ? [] : [summary()],
           acceptedEnvelopesByRunId: { [params.runId]: acceptedEnvelope }, keyCensusByRunId: { [params.runId]: keyCensus },
-          rootProgressByRunId: root ? { [params.runId]: root } : {}, nextCursor: null };
+          rootProgressByRunId: root ? { [params.runId]: root } : {} };
       }
       case 'initialize': {
         expectRevision();
@@ -391,18 +393,24 @@ export function createWorkflowRunStorageTestkit(params: Readonly<{
       case 'resume':
       case 'cancel': {
         expectRevision();
+        if (kind === 'cancel') {
+          const immediate = state === 'paused' || state === 'waiting_for_review'
+            || (rows.size === 0 && (state === 'queued' || state === 'claimed' || state === 'pause_requested'));
+          requestControl(immediate ? 'cancelled' : 'cancel_requested');
+          if (immediate) {
+            custodyState = 'settled';
+            for (const row of rows.values()) {
+              if (row.index.lifecycle !== 'cancel_requested') continue;
+              rows.set(row.index.id, { ...row, index: { ...row.index, lifecycle: 'cancelled',
+                contentRevision: (BigInt(row.index.contentRevision) + 1n).toString() } });
+            }
+          }
+          return { run: summary(), intent: immediate ? 'cancelled' : 'cancel_requested' };
+        }
         revision += 1;
         if (kind === 'pause') state = 'pause_requested';
         if (kind === 'resume') state = 'running';
-        if (kind === 'cancel') {
-          state = 'cancelled';
-          for (const row of [...rows.values()]) {
-            if (!CANCELLABLE_LIFECYCLES.some((candidate) => candidate === row.index.lifecycle)) continue;
-            rows.set(row.index.id, { ...row, index: { ...row.index, lifecycle: 'cancelled',
-              contentRevision: (BigInt(row.index.contentRevision) + 1n).toString() } });
-          }
-        }
-        return { run: summary(), intent: kind === 'cancel' ? 'cancelled' : kind };
+        return { run: summary(), intent: kind };
       }
       case 'wait': {
         // Faithful projection of the server's observation contract: terminal,
@@ -432,6 +440,19 @@ export function createWorkflowRunStorageTestkit(params: Readonly<{
     }
   };
 
+  const requestControl: WorkflowRunStorageTestkit['requestControl'] = (next) => {
+    revision += 1;
+    if (next !== 'cancel_requested') state = next;
+    if (next !== 'cancelled' && next !== 'cancel_requested') { publishChange(); return; }
+    for (const row of [...rows.values()]) {
+      if (!CANCELLABLE_LIFECYCLES.some((candidate) => candidate === row.index.lifecycle)) continue;
+      rows.set(row.index.id, { ...row, index: { ...row.index,
+        lifecycle: row.index.lifecycle === 'waiting_for_review' ? 'cancelled' : 'cancel_requested',
+        contentRevision: (BigInt(row.index.contentRevision) + 1n).toString() } });
+    }
+    publishChange();
+  };
+
   return {
     execute: async (operation) => {
       const result = await execute(operation);
@@ -451,17 +472,6 @@ export function createWorkflowRunStorageTestkit(params: Readonly<{
     acceptedEnvelope: () => acceptedEnvelope,
     checkpointEnvelope: () => checkpointEnvelope,
     resultEnvelope: () => resultEnvelope,
-    requestControl: (next) => {
-      revision += 1;
-      if (next !== 'cancel_requested') state = next;
-      if (next !== 'cancelled' && next !== 'cancel_requested') { publishChange(); return; }
-      for (const row of [...rows.values()]) {
-        if (!CANCELLABLE_LIFECYCLES.some((candidate) => candidate === row.index.lifecycle)) continue;
-        rows.set(row.index.id, { ...row, index: { ...row.index,
-          lifecycle: row.index.lifecycle === 'waiting_for_review' ? 'cancelled' : 'cancel_requested',
-          contentRevision: (BigInt(row.index.contentRevision) + 1n).toString() } });
-      }
-      publishChange();
-    },
+    requestControl,
   };
 }

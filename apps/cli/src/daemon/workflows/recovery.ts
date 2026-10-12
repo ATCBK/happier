@@ -286,7 +286,7 @@ export function createWorkflowInvocationRecoveryFactWriter(params: Readonly<{
         ...(observation.kind !== 'unresolved' && observation.usage ? { usage: observation.usage } : {}),
         ...(observation.kind !== 'completed' && observation.code ? { reason: observation.code,
           ...(observation.kind === 'failed' && observation.message !== undefined ? { reasonMessage: observation.message } : {}) } : {}),
-      }),
+      }, { previousLifecycle: currentLifecycle, lifecycle, observedAtMs: Date.now() }),
       ...(observation.kind === 'completed' && (reviewRequired || generation) && !progress.review?.resultSource
         ? { review: { ...progress.review, resultSource: { kind: 'execution_input' as const } } } : {}),
       ...(stoppedWithUncertainEffects ? { uncertainPriorEffects: { activity: 'stopped' as const } } : {}),
@@ -387,6 +387,12 @@ async function recoverInvocationCustody(params: Readonly<{
           continue;
         }
         const lifecycle = params.run.state === 'cancelled' ? 'cancelled' : 'skipped';
+        if (lifecycle === 'cancelled') {
+          const transition = await commitObservation(invocation, { kind: 'cancelled' });
+          if (transition) reconciled.push(transition);
+          else allResolved = false;
+          continue;
+        }
         if (!await commitFact(exactIndex, lifecycle, storedContentEnvelope)) {
           allResolved = false;
           continue;
@@ -400,11 +406,12 @@ async function recoverInvocationCustody(params: Readonly<{
       }
       if (progress.blockKind !== 'step' && progress.blockKind !== 'action') {
         if (currentLifecycle === 'cancel_requested') {
-          if (!await commitFact(exactIndex, 'cancelled', storedContentEnvelope)) {
+          const transition = await commitObservation(invocation, { kind: 'cancelled' });
+          if (!transition) {
             allResolved = false;
             continue;
           }
-          reconciled.push({ id: exactIndex.id, expectedLifecycle: 'cancelled', lifecycle: 'cancelled' });
+          reconciled.push(transition);
           continue;
         }
         if (currentLifecycle === 'outcome_uncertain') {

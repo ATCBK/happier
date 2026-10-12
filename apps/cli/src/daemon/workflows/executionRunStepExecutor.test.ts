@@ -119,12 +119,12 @@ function baseParams(overrides: Record<string, unknown> = {}) {
         updatedAt: 1,
         overrides: { effort: { value: 'high', updatedAt: 1 } },
       },
-      mcpSelection: {
+      capabilitySelection: { mcp: {
         v: 1,
         managedServersEnabled: true,
         forceIncludeServerIds: ['repo'],
         forceExcludeServerIds: [],
-      },
+      } },
       connectedServices: { v: 2, bindingsByServiceId: {} },
       acpSessionModeId: 'plan',
       runtimeDescriptorV1: {
@@ -462,7 +462,8 @@ describe('workflow detached Execution Run step executor', () => {
       resolveProducerConversation: async () => null,
     });
     const params = baseParams({
-      execution: { ...baseParams().execution, conversation: { kind: conversation } },
+      execution: { ...baseParams().execution, conversation: { kind: conversation },
+        allowedTools: ['mcp__wilson-brief__*'], unlistedTools: 'deny' },
       onInputAccepted: async (correspondence: NonNullable<Parameters<WorkflowStepExecutor>[0]['invocation']['execution']>) => {
         accepted = correspondence;
         events.push('commit');
@@ -485,6 +486,8 @@ describe('workflow detached Execution Run step executor', () => {
       instructions: 'Implement it',
       cwd: '/repo',
       permissionMode: 'safe-yolo',
+      allowedTools: ['mcp__wilson-brief__*'],
+      unlistedTools: 'deny',
       retentionPolicy: 'resumable',
       runClass: 'long_lived',
       ioMode: 'request_response',
@@ -497,7 +500,7 @@ describe('workflow detached Execution Run step executor', () => {
         updatedAt: 1,
         overrides: { effort: { value: 'high', updatedAt: 1 } },
       },
-      mcpSelection: expect.objectContaining({ forceIncludeServerIds: ['repo'] }),
+      capabilitySelection: { mcp: expect.objectContaining({ forceIncludeServerIds: ['repo'] }) },
       connectedServices: { v: 2, bindingsByServiceId: {} },
       acpSessionModeId: 'plan',
       runtimeDescriptorV1: {

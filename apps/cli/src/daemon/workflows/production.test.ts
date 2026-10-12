@@ -46,6 +46,8 @@ import { MAX_AUTOMATION_STORED_ENVELOPE_UTF8_BYTES } from '@happier-dev/protocol
 import { WorkflowMachineCommandOutputV1Schema } from '@happier-dev/protocol/workflows/stepActionsV1';
 import { WorkflowInputResolutionError } from './input';
 import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
+import { createWorkflowDefinitionActions } from '@happier-dev/protocol/actions/executor/workflowDefinitions';
+import { WorkflowActionOutputSchemasV1 } from '@happier-dev/protocol/workflows/actionsV1';
 import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
 import { createStablePluginNotificationsOwner } from '@/plugins/runtime/invocation/services/notifications';
 import { resetActiveAccountSettingsSnapshotForTests,
@@ -467,8 +469,13 @@ describe('production workflow coordinator', () => {
     });
     const unexpectedDefinitionRead = async () => { throw new Error('Notification observes the accepted Run, not mutable definitions'); };
     const executeWorkflowAction = createWorkflowActionExecutor({ isWorkflowFeatureEnabled: () => true, runs: runOwner,
-      definitions: { list: unexpectedDefinitionRead, get: unexpectedDefinitionRead, create: unexpectedDefinitionRead,
-        update: unexpectedDefinitionRead, edit: unexpectedDefinitionRead, delete: unexpectedDefinitionRead } });
+      // Only Artifact persistence is unavailable; run the real definition owner.
+      definitions: createWorkflowDefinitionActions({
+        artifactStore: { read: unexpectedDefinitionRead, list: unexpectedDefinitionRead, create: unexpectedDefinitionRead,
+          update: unexpectedDefinitionRead, delete: unexpectedDefinitionRead },
+        encodeListCursor: () => { throw new Error('unexpected_definition_cursor'); },
+        assertDefinitionWriteAllowed: unexpectedDefinitionRead,
+      }) });
     const actionDeps = createCliActionDeps({ token: credentials.token, sessionId: '',
       mode: 'plain', ctx: null,
       credentials, serverId: 'server-1', serverHttpBaseUrl: 'https://home.example.test',
@@ -633,7 +640,9 @@ describe('production workflow coordinator', () => {
       randomBytes: () => { throw new Error('plain_account_does_not_need_keys'); },
     });
     const beforeList = boundary.calls.length;
-    const listed = await owner.execute({ actionId: 'workflow.run.list', input: { targetSessionId: 'session-2' }, context: {} });
+    const listed = WorkflowActionOutputSchemasV1['workflow.run.list'].parse(
+      await owner.execute({ actionId: 'workflow.run.list', input: { targetSessionId: 'session-2' }, context: {} }),
+    );
     expect(listed.runs[0]?.stepProgress).toEqual(rootProgress());
     expect(boundary.calls.slice(beforeList).map(call => call.operation)).toEqual(['list']);
     const root = boundary.rows().find(row => row.index.parentRecordId === null)!;
@@ -672,7 +681,7 @@ describe('production workflow coordinator', () => {
       conversation: { kind: 'existing_session', sessionId: 'session-1', machineId },
     }, blocks: [onlyStep, { kind: 'if', id: 'conditional',
       when: { kind: 'exists', value: { kind: 'literal', value: true } }, otherwise: [],
-      then: [{ kind: 'loop', id: 'empty', repetition: { kind: 'count', count: { kind: 'literal', value: 0 } }, body: [{ ...onlyStep, id: 'unused' }] }] },
+      then: [{ kind: 'loop', id: 'empty', repetition: { kind: 'count', count: { kind: 'literal', value: 0 } }, body: [{ ...onlyStep, id: 'unused' }, { ...onlyStep, id: 'also-unused' }] }] },
       { kind: 'loop', id: 'batch', repetition: { kind: 'items', items: { kind: 'literal', value: ['slow', 'fast', 'third'] },
         execution: 'parallel', maxConcurrent: 2, failurePolicy: 'collect_outcomes' }, body: [{ ...onlyStep, id: 'item' }] }] };
     const accepted = await materializeWorkflowAcceptedSnapshotV1({ definition: authored,
@@ -716,9 +725,9 @@ describe('production workflow coordinator', () => {
     });
     await expect(coordinate({ runId, attempt: 0, expectedRevision: 0, acceptedEnvelope,
       accountCurrentness: { mode: 'plain', version: 1, contentKeyFingerprint: null } })).resolves.toMatchObject({ state: 'succeeded' });
-    expect(observed[0]).toMatchObject({ completed: 0, total: 3 });
-    expect(observed[3]).toMatchObject({ completed: 2, total: 3, currentLoop: { completed: 1, total: 3 } });
-    expect(openedRoot()).toMatchObject({ kind: 'available', content: { stepProgress: { completed: 3, total: 3 } } });
+    expect(observed[0]).toMatchObject({ completed: 0, total: 4 });
+    expect(observed[3]).toMatchObject({ completed: 3, total: 4, currentLoop: { completed: 1, total: 3 } });
+    expect(openedRoot()).toMatchObject({ kind: 'available', content: { stepProgress: { completed: 4, total: 4 } } });
   });
 
   it('counts only current loop-item attempts after reload and replacement', async () => {
@@ -751,7 +760,7 @@ describe('production workflow coordinator', () => {
           invocationPath: { blockId: 'batch', scope: [] }, attempt: '0', logicalInvocationRecordId: loopId,
           container: { kind: 'loop', mode: 'items', source: { kind: 'definition', reference: { kind: 'literal', value: [1, 2] } }, itemCount: '2', nextMemberIndex: '2', nextBodyBlockOrdinal: '0' } }) },
       { id: 'item-old', sequence: '2', parentRecordId: loopId, memberOrdinal: '0', lifecycle: 'completed', contentEnvelope: seal('item-old', '2', loopId, '0', frame('item-old', 0)) },
-      { id: 'item-other', sequence: '3', parentRecordId: loopId, memberOrdinal: '1', lifecycle: 'running', contentEnvelope: seal('item-other', '3', loopId, '1', frame('item-other', 1)) },
+      { id: 'item-other', sequence: '3', parentRecordId: loopId, memberOrdinal: '1', lifecycle: 'pending', contentEnvelope: seal('item-other', '3', loopId, '1', frame('item-other', 1)) },
     ] });
     const store = await DurableWorkflowCoordinatorStore.load({ accountId, runId, parentAttempt: 0, storage: boundary, checkpoint,
       revision: boundary.run().revision, rootRecordId: rootId, authoredDefinition: authored,
@@ -771,6 +780,38 @@ describe('production workflow coordinator', () => {
     expect(progress()).toMatchObject({ kind: 'available', content: { stepProgress: { completed: 0, total: 1, currentLoop: { completed: 0, total: 2 } } } });
     await store.commitFact({ key: replacement.key, lifecycle: 'completed' });
     expect(progress()).toMatchObject({ kind: 'available', content: { stepProgress: { completed: 0, total: 1, currentLoop: { completed: 1, total: 2 } } } });
+    const openRow = (id: string) => {
+      const row = boundary.rowById(id)!;
+      return openWorkflowProgressStoredEnvelopeV1({ mode: 'plain', envelope: parseWorkflowStoredContentEnvelopeV1(row.contentEnvelope),
+        binding: { v: 1, purpose: 'invocation_progress', accountId, runId, recordId: id, sequence: row.index.sequence,
+          parentRecordId: row.index.parentRecordId, memberOrdinal: row.index.memberOrdinal, attempt: row.index.attempt } });
+    };
+    const openedLoop = openRow(loopId);
+    expect(openedLoop).toMatchObject({ kind: 'available', content: { loopProgress: { completed: 1, total: 2 } } });
+    if (openedLoop.kind !== 'available') throw new Error('loop_progress_missing');
+    // Reloading an already-running older occurrence does not invent its original start.
+    expect(openedLoop.content.timing).toBeUndefined();
+    // Terminal bookkeeping must not make a completed occurrence's duration grow.
+    const running = await store.readByLogicalInvocation('item-other');
+    if (!running) throw new Error('item_missing');
+    const clock = vi.spyOn(Date, 'now');
+    try {
+      clock.mockReturnValue(Date.parse('2026-10-11T10:00:00.000Z'));
+      await store.commitFact({ key: running.key, lifecycle: 'running' });
+      clock.mockReturnValue(Date.parse('2026-10-11T10:01:00.000Z'));
+      await store.commitFact({ key: running.key, lifecycle: 'waiting_for_review' });
+      const held = openRow('item-other');
+      expect(held).toMatchObject({ kind: 'available', content: { timing: { startedAt: '2026-10-11T10:00:00.000Z' } } });
+      if (held.kind !== 'available') throw new Error('held_timing_missing');
+      expect(held.content.timing).not.toHaveProperty('finishedAt');
+      clock.mockReturnValue(Date.parse('2026-10-11T10:02:00.000Z'));
+      await store.commitFact({ key: running.key, lifecycle: 'completed' });
+      clock.mockReturnValue(Date.parse('2026-10-11T11:00:00.000Z'));
+      await store.commitFact({ key: running.key, lifecycle: 'completed', interaction: {} });
+      expect(openRow('item-other')).toMatchObject({ kind: 'available', content: { timing: {
+        startedAt: '2026-10-11T10:00:00.000Z', finishedAt: '2026-10-11T10:02:00.000Z',
+      } } });
+    } finally { clock.mockRestore(); }
     await boundary.execute({ operation: 'invocations.admit', runId, expectedRevision: boundary.run().revision, checkpointEnvelope,
       invocations: [{ id: 'loop-recovered', sequence: '5', parentRecordId: rootId, memberOrdinal: '0', lifecycle: 'running',
         contentEnvelope: seal('loop-recovered', '5', rootId, '0', { kind: 'happier.workflow-progress.v1', blockKind: 'loop',
@@ -1284,16 +1325,26 @@ describe('production workflow coordinator', () => {
     const store = await load({ kind: 'happier.workflow-checkpoint.v1', rootRecordId: rootId,
       nextSequence: '1', frontier: { nextBlockOrdinal: 0, paused: false } });
     await store.commitFact({ key: rootKey, lifecycle: 'running' });
-    const admit = async (blockId: string, ordinal: string, execution: WorkflowExecutionCorrespondenceV1) =>
+    const admit = async (blockId: string, ordinal: string, execution?: WorkflowExecutionCorrespondenceV1) =>
       store.ensureIntent({ blockKind: 'step', key: workflowInvocationKey({ runId, blockId, scope: [], attempt: 0 }),
         recordId: `inv-${blockId}`, runId, blockId, path: { blockId, scope: [] }, attempt: 0,
-        memberOrdinal: ordinal, parentKey: rootKey, acceptedAtMs: 1, lifecycle: 'running', execution });
+        memberOrdinal: ordinal, parentKey: rootKey, acceptedAtMs: 1, lifecycle: execution ? 'running' : 'pending', ...(execution ? { execution } : {}) });
     const originalExecution = { kind: 'session', sessionId: 'session-original', localInputId: 'input-original' } satisfies WorkflowExecutionCorrespondenceV1;
     const detachedExecution = { kind: 'detached_run', runId: 'native-detached', localInputId: 'input-detached', runtimeSelection: {} } satisfies WorkflowExecutionCorrespondenceV1;
     const replacementExecution = { kind: 'session', sessionId: 'session-replacement', localInputId: 'input-replacement' } satisfies WorkflowExecutionCorrespondenceV1;
     const original = await admit('session-first', '0', originalExecution);
     const detached = await admit('detached', '1', detachedExecution);
     const replacement = await admit('session-replacement', '2', replacementExecution);
+    const unexecuted = await admit('not-started', '3');
+    await expect(store.commitSharedConversation({ scopeOwnerKey: rootId, targetClass: 'session', invocationRecordId: detached.recordId }))
+      .rejects.toMatchObject({ message: 'workflow_conversation_unavailable', details: { reason: 'target_kind_mismatch',
+        expected: { kind: 'session' }, observed: { kind: 'detached_run' } } });
+    await store.commitFact({ key: rootKey, lifecycle: 'running', sharedConversationInvocationRecordId: { session: unexecuted.recordId } });
+    await expect(store.resolveSharedInvocation({ kind: 'shared', scopeOwnerKey: rootId, targetClass: 'session' }))
+      .rejects.toMatchObject({ message: 'workflow_conversation_unavailable', details: { reason: 'session_unavailable' } });
+    await expect(store.commitSharedConversation({ scopeOwnerKey: rootId, targetClass: 'session', invocationRecordId: original.recordId }))
+      .rejects.toMatchObject({ message: 'workflow_conversation_unavailable', details: { reason: 'recovery_execution_missing' } });
+    await store.commitFact({ key: rootKey, lifecycle: 'running', sharedConversationInvocationRecordId: { session: original.recordId } });
     await store.commitSharedConversation({ scopeOwnerKey: rootId, targetClass: 'session', invocationRecordId: original.recordId });
     await store.commitSharedConversation({ scopeOwnerKey: rootId, targetClass: 'detached_run', invocationRecordId: detached.recordId });
 
@@ -1333,7 +1384,7 @@ describe('production workflow coordinator', () => {
       operation.operation === 'invocations.fact' || operation.operation === 'invocations.admit' || operation.operation === 'transition'
     ))).toEqual([]);
     expect(boundary.rowById(rootId)?.contentEnvelope).toBe(sealedRoot);
-    expect(boundary.rows()).toHaveLength(4);
+    expect(boundary.rows()).toHaveLength(5);
   });
 
   it.each(['before_mutation', 'after_mutation'] as const)('acknowledges a pointer-only fact only when its sealed mutation applied after %s', async (failure) => {

@@ -1,4 +1,4 @@
-import { classifyWorkflowHoldV1, classifyWorkflowReviewEntryV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
+import { classifyWorkflowHoldV1, classifyWorkflowReviewEntryV1, projectWorkflowLoopItemDisplayLabelV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
 import { freezeWorkflowLoopLimitsV1, projectWorkflowFiniteActionInputV1 } from '@happier-dev/protocol/workflows/materializeWorkflowAcceptedSnapshotV1';
 import { deriveWorkflowReplacementId } from '@happier-dev/protocol/workflows/workflowInvocationIdentityV1';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
@@ -11,6 +11,7 @@ import { prepareActionCompletionV1, resumeActionCompletionV1 } from '@happier-de
 import type { createActionExecutor, ActionExecutorContext, ActionCompletionRun, ActionCompletionOperation, ActionCompletionStateV1, ExecutionRunTerminalObservation } from '@happier-dev/protocol/actions';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
+import { parseQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
 import { readWorkflowProjectSetupConsentHold } from './stepExecution';
 import { validateExecutionRunProfileResult } from '@happier-dev/protocol/execution/runs/resultContract';
 import { decodeExecutionRunResultObservation } from '@happier-dev/protocol/execution/runs/resultContract';
@@ -81,6 +82,7 @@ export type WorkflowCoordinatorInvocation = Readonly<{
   usage?: WorkflowUsageV1;
   reason?: string;
   reasonMessage?: string;
+  reasonDetails?: NonNullable<WorkflowProgressEnvelopeV1['reason']>['details'];
   validationIssues?: WorkflowProgressEnvelopeV1['validationIssues'];
   execution?: WorkflowProgressEnvelopeV1['execution'];
   sharedConversationInvocationRecordId?: WorkflowProgressEnvelopeV1['sharedConversationInvocationRecordId'];
@@ -132,6 +134,7 @@ export type WorkflowCoordinatorStore = Readonly<{
     interaction?: WorkflowJsonValue;
     reason?: string;
     reasonMessage?: string;
+    reasonDetails?: NonNullable<WorkflowProgressEnvelopeV1['reason']>['details'];
     validationIssues?: WorkflowProgressEnvelopeV1['validationIssues'];
     execution?: WorkflowProgressEnvelopeV1['execution'];
     sharedConversationInvocationRecordId?: WorkflowProgressEnvelopeV1['sharedConversationInvocationRecordId'];
@@ -165,7 +168,7 @@ export type WorkflowStepExecutionResult =
       /** Native Execution Run results are already decoded; Session results remain exact assistant text. */
       resultEncoding?: 'raw_text' | 'typed';
     }>
-  | Readonly<{ kind: 'failed'; code: string; message?: string; usage?: WorkflowUsageV1 }>
+  | Readonly<{ kind: 'failed'; code: string; message?: string; reasonDetails?: NonNullable<WorkflowProgressEnvelopeV1['reason']>['details']; usage?: WorkflowUsageV1 }>
   | Readonly<{ kind: 'needs_attention'; code: string; usage?: WorkflowUsageV1 }>
   | Readonly<{ kind: 'cancelled'; code?: string; usage?: WorkflowUsageV1 }>
   | Readonly<{ kind: 'outcome_uncertain'; code: string; usage?: WorkflowUsageV1 }>;
@@ -237,7 +240,7 @@ export type WorkflowStepPreparer = (params: Readonly<{
 }>) => Promise<Readonly<{
   conversationWorkspace?: WorkflowConversationWorkspace;
   preparedStep?: unknown;
-  failure?: Readonly<{ kind: 'failed' | 'needs_attention'; code: string }>;
+  failure?: Readonly<{ kind: 'failed' | 'needs_attention'; code: string; reasonDetails?: NonNullable<WorkflowProgressEnvelopeV1['reason']>['details'] }>;
 }>>;
 
 export type WorkflowWorkspaceResolver = (params: Readonly<{
@@ -758,6 +761,9 @@ class WorkflowReviewHolds {
     if (this.refreshing) return await this.refreshing;
     this.refreshing = (async () => {
       if (!this.confirm) throw new Error('workflow_review_confirmation_missing');
+      // Only these waiters belong to this confirmation. Independent lanes can
+      // enter a new hold while its exact storage reads are still in flight.
+      const confirmedWaiters = [...this.waiters];
       const snapshot = await this.confirm();
       if (this.parkRevision !== undefined || this.closed) return;
       if (snapshot.control !== 'running') {
@@ -766,12 +772,15 @@ class WorkflowReviewHolds {
         return;
       }
       let resolved = false;
-      for (const [recordId, waiter] of this.waiters) {
+      for (const [recordId, waiter] of confirmedWaiters) {
+        if (this.waiters.get(recordId) !== waiter) continue;
         const row = snapshot.rows.find((candidate) => candidate.recordId === recordId);
         if (!row) throw new Error('workflow_invocation_intent_missing');
         if (holdReadiness(row) !== 'awaiting_person') { resolved = true; waiter.resolve(row); }
       }
-      if (!resolved && this.inFlight === 0 && this.waiters.size > 0) {
+      const allWaitersConfirmed = this.waiters.size === confirmedWaiters.length
+        && confirmedWaiters.every(([id, waiter]) => this.waiters.get(id) === waiter);
+      if (!resolved && this.inFlight === 0 && this.waiters.size > 0 && allWaitersConfirmed) {
         this.parkRevision = snapshot.revision;
         const boundary = new WorkflowControlBoundary('waiting_for_review');
         this.controller.abort(boundary);
@@ -1210,16 +1219,19 @@ async function executeBodyFrame(params: Readonly<{
     }
     await params.afterBlocks?.(key);
   } catch (error) {
-    if (error instanceof WorkflowLeafFailure) {
+    if (error instanceof WorkflowLeafFailure || (error instanceof WorkflowControlBoundary && error.state === 'cancelled'
+      && classifyWorkflowAbort(params.context.signal) !== 'fail_stop')) {
       const failStopClosure = classifyWorkflowAbort(params.context.signal) === 'fail_stop';
-      const lifecycle = failStopClosure ? 'cancelled'
+      const cancellation = classifyWorkflowAbort(params.context.signal) === 'cancelled';
+      const lifecycle = failStopClosure || cancellation ? 'cancelled'
         : error.state === 'cancelled' ? 'cancelled'
         : error.state === 'outcome_uncertain' ? 'outcome_uncertain'
           : error.state === 'interrupted' ? 'needs_attention' : 'failed';
       await params.context.deps.store.commitFact({
         key,
         lifecycle,
-        reason: failStopClosure ? failStopCausalReason(params.context.signal) : error.code,
+        ...(failStopClosure ? { reason: failStopCausalReason(params.context.signal) }
+          : error instanceof WorkflowLeafFailure ? { reason: error.code } : {}),
       });
     }
     throw error;
@@ -1266,9 +1278,11 @@ async function ensureAndCommitContainer(
     await body(key);
     await context.deps.store.commitContainerResult({ key });
   } catch (error) {
-    if (error instanceof WorkflowLeafFailure) {
+    if (error instanceof WorkflowLeafFailure || (error instanceof WorkflowControlBoundary && error.state === 'cancelled'
+      && classifyWorkflowAbort(context.signal) !== 'fail_stop')) {
       const failStopClosure = classifyWorkflowAbort(context.signal) === 'fail_stop';
-      const lifecycle = failStopClosure ? 'cancelled' as const
+      const cancellation = classifyWorkflowAbort(context.signal) === 'cancelled';
+      const lifecycle = failStopClosure || cancellation ? 'cancelled' as const
         : error.state === 'cancelled'
         ? 'cancelled' as const
         : error.state === 'outcome_uncertain'
@@ -1279,7 +1293,8 @@ async function ensureAndCommitContainer(
       await context.deps.store.commitFact({
         key,
         lifecycle,
-        reason: failStopClosure ? failStopCausalReason(context.signal) : error.code,
+        ...(failStopClosure ? { reason: failStopCausalReason(context.signal) }
+          : error instanceof WorkflowLeafFailure ? { reason: error.code } : {}),
       });
     }
     throw error;
@@ -1680,8 +1695,11 @@ async function executeActionBlock(
   if (row && !setupConsentHold) { const failure = persistedFailure(row); if (failure) throw failure; }
   const frozen = context.materializedLeaves.find((candidate) => candidate.sourceKey === context.sourceKey
     && candidate.blockId === leaf.id && candidate.kind === 'action');
-  const actionId = ActionIdSchema.safeParse(frozen?.actionId);
-  if (!frozen?.actionContract || !actionId.success || actionId.data !== leaf.actionId || !context.deps.action) {
+  const actionId = frozen?.actionId;
+  const builtinActionId = ActionIdSchema.safeParse(actionId);
+  const contributedAction = parseQualifiedPluginActionId(actionId);
+  if (!frozen?.actionContract || actionId !== leaf.actionId
+    || (!builtinActionId.success && !contributedAction) || !context.deps.action) {
     throw new WorkflowLeafFailure('interrupted', 'target_unavailable');
   }
   if (!row) {
@@ -1726,19 +1744,23 @@ async function executeActionBlock(
     }
     const actionWorkspace = workspace ?? await resolveLeafWorkspace(leaf, row, scope, frame, context);
     workspace = actionWorkspace;
-    input = projectWorkflowFiniteActionInputV1({ machineId: actionWorkspace.machineId, actionId: actionId.data, input });
+    input = projectWorkflowFiniteActionInputV1({ machineId: actionWorkspace.machineId, actionId, input });
     const localInputId = `workflow:${createHash('sha256').update(row.recordId).digest('hex')}:action`;
     const actionRequestId = `${context.runId}/${row.logicalInvocationRecordId ?? row.recordId}/${row.attempt}`;
     const actionContext: ActionExecutorContext = { ...await context.holds.track(() => context.deps.action!.buildContext({ runId: context.runId, authorization: context.authorization,
       workDepth: context.workDepth, workspace: actionWorkspace, ...(context.originSessionId ? { originSessionId: context.originSessionId } : {}),
       ...(frozen.role ? { role: frozen.role } : {}),
       ...(context.signal ? { signal: context.signal } : {}) })), actionRequestId };
-    const prepared = await context.holds.track(() => context.deps.action!.executor.prepare(actionId.data, input, actionContext));
+    // Qualified plugin Actions consume the same host front door and approval
+    // contract as every other contributed Action; workflow custody stays here.
+    const prepared = await context.holds.track(() => builtinActionId.success
+      ? context.deps.action!.executor.prepare(builtinActionId.data, input, actionContext)
+      : context.deps.action!.executor.prepare('action.invoke', { action: contributedAction, input }, actionContext));
     if (prepared.kind === 'settled' && !prepared.result.ok) return await fail(prepared.result.errorCode, 'failed', true);
     await context.deps.waitForNewWorkAdmission?.(context.signal);
     await assertAdmissionOpen(context);
     await assertAcceptedAuthorizationCurrent(context);
-    const execution = { kind: 'action' as const, actionId: actionId.data, actionRequestId, localInputId, input };
+    const execution = { kind: 'action' as const, actionId, actionRequestId, localInputId, input };
     // This CAS is the last asynchronous boundary before the one-shot effect.
     // Failure/lost acknowledgement never authorizes dispatch or replay.
     try { row = await context.deps.store.commitFact({ key: row.key, lifecycle: 'admitting', execution }); }
@@ -1758,13 +1780,13 @@ async function executeActionBlock(
       catch { return undefined; }
     });
     if (!invoked || (!invoked.ok && invoked.errorCode === 'action_failed')) return await fail('outcome_uncertain', 'outcome_uncertain');
-    const consent = readWorkflowProjectSetupConsentHold(actionId.data, invoked.ok ? invoked.result : invoked);
+    const consent = readWorkflowProjectSetupConsentHold(actionId, invoked.ok ? invoked.result : invoked);
     if (consent) {
       row = await context.deps.store.commitFact({ key: row.key, lifecycle: 'needs_attention', reason: consent.code,
         execution: { ...execution, output: consent } });
       throw new WorkflowLeafFailure('interrupted', consent.code);
     }
-    const declaration = frozen.actionContract.completion ? getActionSpec(actionId.data).completion : undefined;
+    const declaration = frozen.actionContract.completion && builtinActionId.success ? getActionSpec(builtinActionId.data).completion : undefined;
     if (frozen.actionContract.completion && !declaration) return await fail('outcome_uncertain', 'outcome_uncertain');
     const phase = prepareActionCompletionV1(declaration, invoked, { serverId: actionContext.serverId });
     if (phase.kind === 'awaiting') {
@@ -1788,11 +1810,12 @@ async function executeActionBlock(
   }
   assertWorkflowAbortSignal(context);
   if (completionState) {
-    if (!workspace) return await fail('outcome_uncertain', 'outcome_uncertain');
+    if (!workspace || !builtinActionId.success) return await fail('outcome_uncertain', 'outcome_uncertain');
     const observationWorkspace = workspace;
-    completed = await context.holds.track(() => resumeActionCompletionV1({ actionId: actionId.data,
+    const completionActionId = builtinActionId.data;
+    completed = await context.holds.track(() => resumeActionCompletionV1({ actionId: completionActionId,
       completion: frozen.actionContract!.completion, state: completionState,
-      resolveDeclaration: () => getActionSpec(actionId.data).completion,
+      resolveDeclaration: () => getActionSpec(completionActionId).completion,
       ...(context.deps.action!.observeOperation ? { observeOperation: async (operation: ActionCompletionOperation) =>
         await context.deps.action!.observeOperation!(operation, context.signal ? { signal: context.signal } : {}) } : {}),
       observeRun: async (run) => await context.deps.action!.observeRun(run, { workspace: observationWorkspace, ...(context.signal ? { signal: context.signal } : {}) }) }));
@@ -1800,7 +1823,7 @@ async function executeActionBlock(
   if (!completed) return await fail('outcome_uncertain', 'outcome_uncertain');
   assertWorkflowAbortSignal(context);
   const completionConsent = completed.kind === 'failed'
-    ? readWorkflowProjectSetupConsentHold(actionId.data, completed.value) : null;
+    ? readWorkflowProjectSetupConsentHold(actionId, completed.value) : null;
   if (completionConsent && row.execution?.kind === 'action') {
     row = await context.deps.store.commitFact({ key: row.key, lifecycle: 'needs_attention', reason: completionConsent.code,
       execution: { ...row.execution, output: completed.kind === 'failed' ? completed.value : undefined } });
@@ -1814,7 +1837,7 @@ async function executeActionBlock(
   if (completed.kind !== 'completed') {
     // Only the native start owner's explicit non-creation evidence proves failure. Otherwise
     // declaring Actions need persisted correspondence and terminal observation.
-    const declaration = getActionSpec(actionId.data).completion;
+    const declaration = builtinActionId.success ? getActionSpec(builtinActionId.data).completion : undefined;
     const collectable = completed.kind === 'failed'
       && (!frozen.actionContract.completion || noRunsLaunched || (completionState !== undefined
         && (completionState.awaitedOperations !== undefined
@@ -2128,7 +2151,8 @@ async function executeStepBlock(
         if (classifyWorkflowReviewEntryV1({ mayEnterReview: !rejoining && !durableExecution,
           pauseForReview: step.pauseForReview === true, isGeneration: isReviewGeneration, inputCompleted: false,
           observation: preparedStep.failure, continuationRefusedBeforeAdmission: true }) === 'waiting_for_review') {
-          const row = await enterReview({ key, lifecycle: 'waiting_for_review', reason: preparedStep.failure.code }, context, () => {
+          const row = await enterReview({ key, lifecycle: 'waiting_for_review', reason: preparedStep.failure.code,
+            ...(preparedStep.failure.reasonDetails ? { reasonDetails: preparedStep.failure.reasonDetails } : {}) }, context, () => {
             nativeTerminalCommitted = true;
             releaseAdmission();
           });
@@ -2139,6 +2163,7 @@ async function executeStepBlock(
           key,
           lifecycle: preparedStep.failure.kind,
           reason: preparedStep.failure.code,
+          ...(preparedStep.failure.reasonDetails ? { reasonDetails: preparedStep.failure.reasonDetails } : {}),
         });
         nativeTerminalCommitted = preparedStep.failure.kind === 'failed';
         throw new WorkflowLeafFailure(
@@ -2365,6 +2390,7 @@ async function executeStepBlock(
       isGeneration: isReviewGeneration, inputCompleted: false, observation: execution,
       continuationRefusedBeforeAdmission: generationContinuationRefused }) === 'waiting_for_review') {
       const row = await enterReview({ key, lifecycle: 'waiting_for_review', reason: execution.code,
+        ...(execution.kind === 'failed' && execution.reasonDetails ? { reasonDetails: execution.reasonDetails } : {}),
         ...(execution.kind === 'failed' && execution.message !== undefined ? { reasonMessage: execution.message } : {}),
         ...(execution.usage ? { usage: execution.usage } : {}) }, context, () => {
         nativeTerminalCommitted = true;
@@ -2408,6 +2434,8 @@ async function executeStepBlock(
       key,
       lifecycle: failStopClosure ? 'cancelled' : execution.kind,
       reason,
+      ...(execution.kind === 'failed' && execution.reasonDetails && reason === execution.code
+        ? { reasonDetails: execution.reasonDetails } : {}),
       ...(execution.kind === 'failed' && execution.message !== undefined
         ? { reasonMessage: execution.message } : {}),
       ...(execution.usage ? { usage: execution.usage } : {}),
@@ -2579,15 +2607,15 @@ async function executeLoop(
         ? withAbortSignal(context, failStop.signal)
         : context;
       const parentKey = activeLoopKey;
-      const pipelines = selectedItems.map((value, index) => ({
-        value,
-        index,
-        memberOrdinal: String(index),
-        scope: [...scope, { kind: 'iteration' as const, blockId: block.id, index }],
-      }));
+      const pipelines = selectedItems.map((value, index) => {
+        const displayLabel = projectWorkflowLoopItemDisplayLabelV1(value);
+        return { value, index, memberOrdinal: String(index),
+          source: { kind: 'item' as const, index: String(index), ...(displayLabel === undefined ? {} : { displayLabel }) },
+          scope: [...scope, { kind: 'iteration' as const, blockId: block.id, index }] };
+      });
       const scheduledPipelines = await orderPipelinesForRecovery(pipelines, context, activeLoopKey, frame, repetition.failurePolicy === 'collect_outcomes');
       const advanceMemberFrontier = createMemberFrontier(Number(loopProgress.nextMemberIndex), async (next) => await commitLoopProgress(next, 0));
-      const runItem = async ({ value, index, scope: itemScope }: typeof pipelines[number]) => {
+      const runItem = async ({ value, index, source, scope: itemScope }: typeof pipelines[number]) => {
         if (failStop.signal.aborted) {
           await closeWaitingAfterFailStop({ owner: block, scope: itemScope, context: itemContext, parentKey, memberOrdinal: String(index), reason: failStopReason });
           throw failStop.signal.reason;
@@ -2604,7 +2632,7 @@ async function executeLoop(
         try {
           await executeBodyFrame({
             owner: block,
-            source: { kind: 'item', index: String(index) },
+            source,
             blocks: block.body,
             scope: itemScope,
             frame: itemFrame,
@@ -2646,7 +2674,7 @@ async function executeLoop(
           const persist = scheduling.then(async () => {
             if (pipeline && waiting && repetition.maxConcurrent !== undefined && index + 1 >= workerCount) {
               assertWorkflowAbortSignal(itemContext);
-              await persistWaitingForCapacity({ owner: block, source: { kind: 'item', index: String(waiting.index) },
+              await persistWaitingForCapacity({ owner: block, source: waiting.source,
                 scope: waiting.scope, context: itemContext, parentKey, memberOrdinal: waiting.memberOrdinal });
             }
           });

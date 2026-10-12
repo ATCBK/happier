@@ -114,7 +114,7 @@ describe('finite Project command Workflow completion', () => {
       stopProcessTree: async () => { stopRequests++; },
       // The OS boundary fixture has no surviving descendants after exit.
       probeProcessGroup: () => 'absent',
-      config: { maxSessions: 10, idleTimeoutMs: 60000, bufferMaxBytes: 100000, bufferMaxEvents: 1000,
+      config: { bufferMaxBytes: 100000, bufferMaxEvents: 1000,
         bufferRetentionMs: 600000, urlParseBufferLimit: 32768, maxWriteChunkBytes: 16384, defaultCols: 80, defaultRows: 24 } });
     managers.push(terminals);
     let operationSequence = 0;

@@ -537,28 +537,44 @@ describe('durable review coordinator', () => {
   });
 
   it('consumes a Generate intent through the existing durable replacement path and preserves the prior row', async () => {
-    const { store, storage } = await harness();
-    const intent = await store.ensureIntent({ blockKind: 'step', key: workflowInvocationKey({ runId, blockId: 'draft', scope: [], attempt: 0 }),
-      recordId: '33333333-3333-4333-8333-333333333333', runId, blockId: 'draft', memberOrdinal: '0',
-      path: { blockId: 'draft', scope: [] }, attempt: 0, acceptedAtMs: 1, lifecycle: 'running' });
-    await store.commitFact({ key: intent.key, lifecycle: 'waiting_for_review', result: 'Prior',
-      execution: { kind: 'session', sessionId: 'session', localInputId: 'prior-input' }, workspace: { descriptor: workspace },
-      review: { resultSource: { kind: 'execution_input' }, decision: { kind: 'generate', requestedFromContentRevision: '1' } } });
-    const coordinator = createWorkflowCoordinator({ store, rootInvocationRecordId: rootId,
-      isAcceptedAuthorizationCurrent: async () => true, resolveWorkspace: async () => ({ ok: true, workspace }),
-      executeStep: async (params) => {
-        expect(params.recoveryPreviousExecution).toMatchObject({ sessionId: 'session', localInputId: 'prior-input' });
-        await params.beforeInputAdmission();
-        await params.onInputAccepted({ kind: 'session', sessionId: 'session', localInputId: 'generated-input' });
-        return { kind: 'completed', result: 'Generated' };
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-10-11T10:00:00.000Z'));
+    try {
+      const { store, storage } = await harness();
+      const progressOf = (row: NonNullable<ReturnType<typeof storage.rowById>>) => {
+        const opened = openWorkflowProgressStoredEnvelopeV1({ mode: 'plain', envelope: parseWorkflowStoredContentEnvelopeV1(row.contentEnvelope),
+          binding: { v: 1, purpose: 'invocation_progress', accountId, runId, recordId: row.index.id, sequence: row.index.sequence,
+            parentRecordId: row.index.parentRecordId, memberOrdinal: row.index.memberOrdinal, attempt: row.index.attempt } });
+        if (opened.kind !== 'available') throw new Error('step_timing_unavailable');
+        return opened.content;
+      };
+      const intent = await store.ensureIntent({ blockKind: 'step', key: workflowInvocationKey({ runId, blockId: 'draft', scope: [], attempt: 0 }),
+        recordId: '33333333-3333-4333-8333-333333333333', runId, blockId: 'draft', memberOrdinal: '0',
+        path: { blockId: 'draft', scope: [] }, attempt: 0, acceptedAtMs: 1, lifecycle: 'running' });
+      expect(progressOf(storage.rowById(intent.recordId)!)).toMatchObject({ blockKind: 'step',
+        timing: { startedAt: '2026-10-11T10:00:00.000Z' } });
+      await store.commitFact({ key: intent.key, lifecycle: 'waiting_for_review', result: 'Prior',
+        execution: { kind: 'session', sessionId: 'session', localInputId: 'prior-input' }, workspace: { descriptor: workspace },
+        review: { resultSource: { kind: 'execution_input' }, decision: { kind: 'generate', requestedFromContentRevision: '1' } } });
+      clock.mockReturnValue(Date.parse('2026-10-11T10:05:00.000Z'));
+      const coordinator = createWorkflowCoordinator({ store, rootInvocationRecordId: rootId,
+        isAcceptedAuthorizationCurrent: async () => true, resolveWorkspace: async () => ({ ok: true, workspace }),
+        executeStep: async (params) => {
+          expect(params.recoveryPreviousExecution).toMatchObject({ sessionId: 'session', localInputId: 'prior-input' });
+          await params.beforeInputAdmission();
+          await params.onInputAccepted({ kind: 'session', sessionId: 'session', localInputId: 'generated-input' });
+          return { kind: 'completed', result: 'Generated' };
+        } });
+      expect(await coordinator.run({ runId, definition: { version: 1, inputs: [], defaults: { agentTarget: generationAgentTarget }, blocks: [step] },
+        inputs: {}, executionTarget: { kind: 'session' }, authorization: { admittedPermissionCeiling: 'default', principal: { kind: 'host' } } }))
+        .toMatchObject({ state: 'succeeded' });
+      expect(storage.rowById(intent.recordId)?.index.lifecycle).toBe('superseded');
+      const replacement = storage.rows().find((row) => row.index.attempt === '1')!;
+      expect(replacement.index.lifecycle).toBe('completed');
+      expect(progressOf(replacement)).toMatchObject({ timing: {
+        startedAt: '2026-10-11T10:05:00.000Z', finishedAt: '2026-10-11T10:05:00.000Z',
       } });
-    expect(await coordinator.run({ runId, definition: { version: 1, inputs: [], defaults: { agentTarget: generationAgentTarget }, blocks: [step] },
-      inputs: {}, executionTarget: { kind: 'session' }, authorization: { admittedPermissionCeiling: 'default', principal: { kind: 'host' } } }))
-      .toMatchObject({ state: 'succeeded' });
-    expect(storage.rowById(intent.recordId)?.index.lifecycle).toBe('superseded');
-    const replacement = storage.rows().find((row) => row.index.attempt === '1')!;
-    expect(replacement.index.lifecycle).toBe('completed');
-    expect(storage.calls.filter((call) => call.operation === 'invocations.admit' &&
-      (call.invocations as readonly { replaces?: unknown }[]).some((row) => row.replaces))).toHaveLength(1);
+      expect(storage.calls.filter((call) => call.operation === 'invocations.admit' &&
+        (call.invocations as readonly { replaces?: unknown }[]).some((row) => row.replaces))).toHaveLength(1);
+    } finally { clock.mockRestore(); }
   });
 });

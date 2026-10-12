@@ -194,7 +194,7 @@ export function createInMemoryWorkflowCoordinatorStore(): InMemoryWorkflowCoordi
         } });
       }
     },
-    commitFact: async ({ key, lifecycle, result, usage, reason, reasonMessage, validationIssues, review, execution, sharedConversationInvocationRecordId, observationDeadline, input, resultContract, workspace, container, containerResult, resultProvenance }) => {
+    commitFact: async ({ key, lifecycle, result, usage, reason, reasonMessage, reasonDetails, validationIssues, review, execution, sharedConversationInvocationRecordId, observationDeadline, input, resultContract, workspace, container, containerResult, resultProvenance }) => {
       const existing = records.get(key);
       if (!existing) throw new Error('workflow_invocation_intent_missing');
       if (existing.lifecycle === 'completed' || existing.lifecycle === 'failed'
@@ -212,6 +212,7 @@ export function createInMemoryWorkflowCoordinatorStore(): InMemoryWorkflowCoordi
         ...(review ? { review } : {}), ...(result === undefined ? {} : { result }), ...(usage === undefined ? {} : { usage }), ...(reason ? { reason } : {}), ...(execution ? { execution } : {}), ...(sharedConversationInvocationRecordId ? { sharedConversationInvocationRecordId: { ...existing.sharedConversationInvocationRecordId, ...sharedConversationInvocationRecordId } } : {}), ...(observationDeadline ? { observationDeadline } : {}), ...(input ? { input } : {}), ...(workspace ? { workspace: { ...existing.workspace, ...workspace } } : {}), ...(container ? { container } : {}), ...(containerResult ? { containerResult } : {}) };
       const withContract = resultContract === undefined ? committed : { ...committed, resultContract };
       const withMessage = { ...withContract, ...(reasonMessage === undefined ? {} : { reasonMessage }),
+        ...(reasonDetails === undefined ? {} : { reasonDetails }),
         ...(validationIssues === undefined ? {} : { validationIssues }) };
       records.set(key, withMessage);
       return withMessage;

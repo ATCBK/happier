@@ -1,4 +1,5 @@
 import type { StoredCredentials } from '@/persistence';
+import type { WorkflowConversationUnavailableDetailsV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
 import { DaemonContributionRegistryProjectionDescribeResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { ExecutionRunGetResponseSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import { SessionContinuationInspectionV1Schema } from '@happier-dev/protocol/sessions/agentTransition';
@@ -32,18 +33,32 @@ type RecoveryActionExecutor = Readonly<{
 
 export async function resolveWorkflowAuthorizedSession(params: Readonly<{
   credentials: StoredCredentials; sessionId: string; machineId: string; signal?: AbortSignal;
+  onUnavailable?: (details: WorkflowConversationUnavailableDetailsV1) => void;
 }>) {
   const target = await resolveSessionTransportContext({
     credentials: params.credentials, idOrPrefix: params.sessionId,
     ...(params.signal ? { signal: params.signal } : {}),
   });
-  if (!target.ok || target.sessionId !== params.sessionId) return null;
+  if (!target.ok || target.sessionId !== params.sessionId) {
+    params.onUnavailable?.({ code: 'workflow_conversation_unavailable',
+      reason: target.ok ? 'session_identity_mismatch' : target.code === 'encryption_material_unavailable' ? 'account_scope_unavailable' : 'session_unavailable',
+      expected: { kind: 'session', ids: [params.sessionId] },
+      observed: target.ok ? { kind: 'session', ids: [target.sessionId] } : { kind: 'unavailable', ids: [target.code] } });
+    return null;
+  }
   const metadata = tryDecryptSessionOwnerMetadataView({
     credentials: params.credentials,
     accountEncryptionMode: target.accountEncryptionCurrentness.mode,
     rawSession: target.rawSession,
   });
-  return metadata && metadata.machineId === params.machineId ? { target, metadata } : null;
+  if (!metadata || metadata.machineId !== params.machineId) {
+    params.onUnavailable?.({ code: 'workflow_conversation_unavailable', reason: metadata ? 'machine_mismatch' : 'owner_metadata_unavailable',
+      expected: { kind: 'string', ids: [params.machineId] },
+      observed: metadata && typeof metadata.machineId === 'string'
+        ? { kind: 'string', ids: [metadata.machineId] } : { kind: 'unavailable' } });
+    return null;
+  }
+  return { target, metadata };
 }
 
 /** Fresh exact native facts only; the Protocol owner decides which controls they permit. */
@@ -122,7 +137,7 @@ export async function observeWorkflowInvocationRecoveryEvidence(params: Readonly
       }));
       if (!inspected.success || inspected.data.type !== 'available') return evidence;
       const described = DaemonContributionRegistryProjectionDescribeResponseSchema.safeParse(await callMachineRpc({ ...request,
-        method: RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE, request: { machineId: params.machineId },
+        method: RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE, request: { machineId: params.machineId, selection: 'agents' },
       }));
       const capabilities = described.success ? described.data.projection.agentsById[agentId]?.capabilities?.sessions : undefined;
       if (!capabilities?.delivery.includes('newTurn')) return evidence;

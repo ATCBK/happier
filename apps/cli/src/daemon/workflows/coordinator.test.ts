@@ -27,6 +27,7 @@ import {
 } from './coordinator';
 import { createInMemoryWorkflowCoordinatorStore } from './workflowCoordinator.testkit';
 import { createDaemonAdmissionDrain, waitForDaemonAdmission } from '../lifecycle/admissionDrain';
+import type { WorkflowJsonValue } from './input';
 
 const agentTarget = { kind: 'agent', identity: { pluginId: 'happier.agent.test', localId: 'test' } } as const;
 const workspace = { machineId: 'machine-1', directory: '/repo', checkoutRootPath: '/repo' } as const;
@@ -78,6 +79,29 @@ async function admitPreparedInput(params: Parameters<WorkflowStepExecutor>[0]): 
 }
 
 describe('workflow coordinator', () => {
+  it('records scalar For-each display labels on exact private item frames, including waiting items', async () => {
+    const store = createInMemoryWorkflowCoordinatorStore();
+    const values: WorkflowJsonValue[] = ['#1482', { nested: { hidden: 'not a label' }, title: ' src/main.ts ' },
+      { number: 1483, secret: { token: 'not a label' } }, { nested: ['no raw JSON'] },
+      { id: 1484, title: '🚀'.repeat(300) }, false];
+    const coordinator = createWorkflowCoordinator({ store, resolveWorkspace, isAcceptedAuthorizationCurrent: async () => true,
+      executeStep: async () => ({ kind: 'completed', result: 'done' }) });
+    const outcome = await coordinator.run({ runId: 'item-labels', inputs: {}, executionTarget, authorization,
+      definition: definition([{ kind: 'loop', id: 'files', repetition: { kind: 'items',
+        items: { kind: 'literal', value: values }, execution: 'parallel', maxConcurrent: 1, failurePolicy: 'collect_outcomes' },
+        body: [step('inspect')] }]) });
+    expect(outcome.state).toBe('succeeded');
+    const frames = store.list().filter(row => row.frame?.source.kind === 'item')
+      .sort((left, right) => Number(left.memberOrdinal) - Number(right.memberOrdinal));
+    expect(frames.map(row => row.frame?.source)).toEqual([
+      { kind: 'item', index: '0', displayLabel: '#1482' },
+      { kind: 'item', index: '1', displayLabel: 'src/main.ts' },
+      { kind: 'item', index: '2', displayLabel: '1483' },
+      { kind: 'item', index: '3' },
+      { kind: 'item', index: '4', displayLabel: '🚀'.repeat(255) + '…' },
+      { kind: 'item', index: '5', displayLabel: 'false' },
+    ]);
+  });
   it.each([['', true], ['A report', true], ['A report', false]] as const)("binds Notify me's evaluated onlyWhen to the exact result (%j, enabled %j), rather than the final step", async (report, enabled) => {
     const store = createInMemoryWorkflowCoordinatorStore();
     const rootKey = workflowInvocationKey({ runId: 'quiet-provenance', blockId: '$root', scope: [], attempt: 0 });

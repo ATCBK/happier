@@ -93,7 +93,12 @@ it.each(['retained', 'observed'] as const)('retains Project consent custody (%s)
   expect((await writer.readInvocation(childId))?.progress.review).toBeUndefined();
 });
 
-it('refreshes the encrypted root counts after interrupted native reattach without completing the parent', async () => {
+it.each([
+  { kind: 'completed', startedAt: now },
+  { kind: 'completed', startedAt: undefined },
+  { kind: 'failed', startedAt: now },
+  { kind: 'cancelled', startedAt: now },
+] as const)('refreshes the encrypted root counts after interrupted native reattach without completing the parent ($kind, start=$startedAt)', async (scenario) => {
   const rootId = '2aaf1a39-4c48-4904-83a4-7eae318dfc2c';
   const childId = '33333333-3333-4333-8333-333333333333';
   const kit = createWorkflowRunStorageTestkit({ accountId, runId, machineId, now, origin: { kind: 'direct' },
@@ -104,7 +109,8 @@ it('refreshes the encrypted root counts after interrupted native reattach withou
     progress: { kind: 'happier.workflow-progress.v1', blockKind: root ? 'root' : 'step',
       invocationPath: { blockId: root ? '$root' : 'step', scope: [] }, attempt: '0', logicalInvocationRecordId: id,
       ...(root ? { stepProgress: { completed: 0, total: 1 } }
-        : { execution: { kind: 'session' as const, sessionId: 'session', localInputId: 'input' } }) },
+        : { ...(scenario.startedAt ? { timing: { startedAt: scenario.startedAt } } : {}),
+          execution: { kind: 'session' as const, sessionId: 'session', localInputId: 'input' } }) },
   }));
   await kit.execute({ operation: 'initialize', runId, expectedRevision: 0, checkpointEnvelope: checkpointEnvelope(),
     rootInvocation: { id: rootId, contentEnvelope: seal(rootId, true) } });
@@ -117,12 +123,32 @@ it('refreshes the encrypted root counts after interrupted native reattach withou
     encryption: { witness: { mode: 'plain', version: 1, contentKeyFingerprint: null }, runCrypto: { mode: 'plain' } } });
   const child = await writer.readInvocation(childId);
   if (!child) throw new Error('fixture_invocation_unavailable');
-  await writer.commitObservation(child, { kind: 'completed', result: 'done' });
-  expect((await writer.readInvocation(rootId))?.progress.stepProgress).toEqual({ completed: 1, total: 1 });
+  const finishedAt = '2026-09-08T12:03:00.000Z';
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.parse(finishedAt));
+  try {
+    const observation = scenario.kind === 'completed' ? { kind: 'completed' as const, result: 'done' }
+      : { kind: scenario.kind, code: 'provider_stopped' };
+    await writer.commitObservation(child, observation);
+    const settled = await writer.readInvocation(childId);
+    expect(settled?.index.lifecycle).toBe(scenario.kind);
+    expect(settled?.progress.timing).toEqual(scenario.startedAt ? { startedAt: scenario.startedAt, finishedAt } : undefined);
+    expect(settled?.index).toMatchObject({ id: childId, attempt: child.index.attempt });
+    clock.mockReturnValue(Date.parse('2026-09-08T12:04:00.000Z'));
+    if (!settled) throw new Error('fixture_invocation_unavailable');
+    expect(await writer.commitObservation(settled, observation)).toBeNull();
+    expect((await writer.readInvocation(childId))?.progress.timing).toEqual(settled.progress.timing);
+  } finally {
+    clock.mockRestore();
+  }
+  expect((await writer.readInvocation(rootId))?.progress.stepProgress).toEqual({ completed: scenario.kind === 'completed' ? 1 : 0, total: 1 });
   expect(kit.rowById(rootId)?.index.lifecycle).toBe('running');
   expect(kit.run()).toMatchObject({ state: 'interrupted', revision: 3, workflowCustodyState: 'pending' });
-  expect(kit.calls.find((operation) => operation.resolution === 'root_list_progress'))
-    .toMatchObject({ expectedRevision: 3, invocationId: rootId, expectedLifecycle: 'running', lifecycle: 'running' });
+  const rootPublication = kit.calls.find((operation) => operation.resolution === 'root_list_progress');
+  if (scenario.kind === 'completed') {
+    expect(rootPublication).toMatchObject({ expectedRevision: 3, invocationId: rootId, expectedLifecycle: 'running', lifecycle: 'running' });
+  } else {
+    expect(rootPublication).toBeUndefined();
+  }
 });
 
 it.each([
@@ -158,6 +184,7 @@ it.each([
       { id: recordId, sequence: '2', parentRecordId: rootId, memberOrdinal: '0', lifecycle: 'running',
         contentEnvelope: seal(recordId, '2', rootId, { kind: 'happier.workflow-progress.v1', blockKind: 'step',
           invocationPath: { blockId: 'step', scope: [] }, attempt: '1', logicalInvocationRecordId: priorId, previousAttemptRecordId: priorId,
+          timing: { startedAt: now },
           execution: { kind: 'session', sessionId: 'session', localInputId: 'generation-input' } }) },
     ] });
   // Seed the retained replacement row through the canonical storage boundary fixture.
@@ -174,6 +201,12 @@ it.each([
     : { kind: scenario.kind, code: scenario.code });
   expect(kit.rowById(recordId)?.index.lifecycle).toBe(scenario.lifecycle);
   expect(reviewEntries).toBe(scenario.lifecycle === 'waiting_for_review' ? 1 : 0);
+  expect((await writer.readInvocation(recordId))?.progress.timing).toMatchObject({ startedAt: now });
+  if (scenario.lifecycle === 'completed' || scenario.lifecycle === 'failed') {
+    expect((await writer.readInvocation(recordId))?.progress.timing?.finishedAt).toEqual(expect.any(String));
+  } else {
+    expect((await writer.readInvocation(recordId))?.progress.timing?.finishedAt).toBeUndefined();
+  }
   if (scenario.kind === 'unresolved') {
     expect((await writer.readInvocation(recordId))?.progress.uncertainPriorEffects).toBeUndefined();
   }
@@ -508,7 +541,7 @@ describe('workflow Run startup/reconnect recovery', () => {
     await kit.execute({ operation: 'invocations.admit', runId, expectedRevision: 1, checkpointEnvelope: checkpointEnvelope(rootId),
       invocations: [{ id: childId, sequence: '1', parentRecordId: rootId, memberOrdinal: '0', lifecycle: 'running', contentEnvelope: seal(childId, false) }] });
     kit.requestControl('cancelled');
-    expect(kit.run()).toMatchObject({ workflowCustodyState: 'pending', attentionRequired: true });
+    expect(kit.run()).toMatchObject({ workflowCustodyState: 'pending', attentionRequired: false });
     const requests: { method: string; path: string }[] = [];
     // Real HTTP readers consume the same tombstone shape as the retained Home.
     // Only the Home/storage and socket transports are substituted.
@@ -557,7 +590,7 @@ describe('workflow Run startup/reconnect recovery', () => {
       const cancelled = scenario === 'cancelled_input';
       if (scenario !== 'unknown_launch') expect(requests).toContainEqual({ method: 'GET', path: `/v2/sessions/${sessionId}/pending` });
       expect(kit.rowById(childId)?.index.lifecycle).toBe(cancelled ? 'cancelled' : 'cancel_requested');
-      expect(kit.run()).toMatchObject({ state: 'cancelled', workflowCustodyState: cancelled ? 'settled' : 'pending', attentionRequired: !cancelled });
+      expect(kit.run()).toMatchObject({ state: 'cancelled', workflowCustodyState: cancelled ? 'settled' : 'pending', attentionRequired: false });
       if (cancelled) expect(requests.every(request => request.method === 'GET')).toBe(true);
       if (scenario === 'unknown_launch') expect(requests).toEqual([]);
     } finally {
@@ -879,7 +912,7 @@ describe('workflow Run startup/reconnect recovery', () => {
     ];
     const progresses = [
       { kind: 'happier.workflow-progress.v1' as const, invocationPath: { blockId: '$root', scope: [] }, blockKind: 'root' as const,
-        attempt: '0', logicalInvocationRecordId: rootId },
+        attempt: '0', logicalInvocationRecordId: rootId, timing: { startedAt: now } },
       { kind: 'happier.workflow-progress.v1' as const, invocationPath: { blockId: 'step', scope: [] }, blockKind: 'step' as const,
         attempt: '0', logicalInvocationRecordId: childId,
         execution: { kind: 'session' as const, sessionId: 'session-1', localInputId: 'input-1' } },
@@ -915,6 +948,15 @@ describe('workflow Run startup/reconnect recovery', () => {
 
     await recover('control');
 
+    const rootFact = execute.mock.calls.find(([operation]) => operation.operation === 'invocations.fact'
+      && operation.invocationId === rootId)?.[0];
+    const openedRoot = openWorkflowProgressStoredEnvelopeV1({ mode: 'plain',
+      binding: { v: 1, purpose: 'invocation_progress', accountId, runId, recordId: rootId,
+        sequence: '0', parentRecordId: null, memberOrdinal: '0', attempt: '0' },
+      envelope: parseWorkflowStoredContentEnvelopeV1(rootFact?.contentEnvelope) });
+    expect(openedRoot.kind).toBe('available');
+    if (openedRoot.kind !== 'available') throw new Error('fixture_invocation_unavailable');
+    expect(openedRoot.content.timing).toEqual({ startedAt: now, finishedAt: expect.any(String) });
     expect(reconcileInvocation).toHaveBeenCalledTimes(1);
     expect(reconcileInvocation).toHaveBeenCalledWith(expect.objectContaining({
       trigger: 'control',

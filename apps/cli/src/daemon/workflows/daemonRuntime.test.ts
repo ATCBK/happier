@@ -11,6 +11,7 @@ import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { bindApiSessionSocketMock, createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
 import { publishServerHttpRuntimeOrigin } from '@/api/client/serverHttpBaseUrl';
 import { configuration } from '@/configuration';
+import { createSessionNotificationContextFixture } from '@/testkit/backends/sessionFixtures';
 import { createWorkflowRunStorageTestkit, type WorkflowRunStorageTestkitOperation } from './workflowRunStorage.testkit';
 import { tmpdir } from 'node:os';
 import nacl from 'tweetnacl';
@@ -308,7 +309,10 @@ describe('workflow actual Session reuse metadata', () => {
   it('uses the authorized owner cwd and rejects another Machine before preparation', async () => {
     await expect(resolveWorkflowSessionConversation({ credentials, sessionId, machineId: 'machine-1' }))
       .resolves.toMatchObject({ sessionId, machineId: 'machine-1', directory: '/owner/checkout' });
-    await expect(resolveWorkflowSessionConversation({ credentials, sessionId, machineId: 'machine-2' })).resolves.toBeNull();
+    const refused: unknown[] = [];
+    await expect(resolveWorkflowSessionConversation({ credentials, sessionId, machineId: 'machine-2',
+      onUnavailable: (details) => { refused.push(details); } })).resolves.toBeNull();
+    expect(refused).toMatchObject([{ reason: 'machine_mismatch', expected: { ids: ['machine-2'] }, observed: { ids: ['machine-1'] } }]);
   });
 
   it('projects timestamped controls from authenticated Session owner metadata', async () => {
@@ -317,12 +321,47 @@ describe('workflow actual Session reuse metadata', () => {
       workspace: { path: '/owner/checkout', machineId: 'machine-1' },
       nativeSession: { runtimeDescriptorV1: { v: 1, agentId: 'claude', agent: {} } },
       runtime: { permissionMode: 'read-only', permissionModeUpdatedAt: 200,
+        allowedTools: ['mcp__wilson-brief__*'], unlistedTools: 'deny',
         modelSelectionIntentV1: { v: 1, selection: ref, updatedAt: 200 } },
     } } });
     expect(await resolveWorkflowSessionConversation({ credentials, sessionId, machineId: 'machine-1' }))
-      .toMatchObject({ runtimeSnapshot: {
+      .toMatchObject({ runtimeSelection: { allowedTools: ['mcp__wilson-brief__*'], unlistedTools: 'deny' }, runtimeSnapshot: {
         permissionMode: { value: 'read-only', updatedAt: 200 }, modelSelection: { value: ref, updatedAt: 200 },
       } });
+  });
+
+  it('retains known Connected selection from predecessor metadata with additive fields', async () => {
+    const serviceKey = 'happier.test/service';
+    mocks.fetchSessionById.mockResolvedValue({ ...session, metadataLayoutVersion: 0,
+      metadata: JSON.stringify({ path: '/owner/checkout', machineId: 'machine-1',
+        connectedServices: { v: 2, retiredCarrier: true, bindingsByServiceId: {
+          [serviceKey]: { source: 'connected', selection: 'profile', profileId: 'saved-profile', retiredSelection: true },
+        } },
+      }), ownerMetadata: undefined });
+    const resolved = await resolveWorkflowSessionConversation({ credentials, sessionId, machineId: 'machine-1' });
+    expect(resolved?.runtimeSelection).toMatchObject({ connectedServices: { v: 2, bindingsByServiceId: {
+      [serviceKey]: { source: 'connected', selection: 'profile', profileId: 'saved-profile' },
+    } } });
+    expect(resolved?.runtimeSelection?.connectedServices).not.toHaveProperty('retiredCarrier');
+    expect(resolved?.runtimeSelection?.connectedServices?.bindingsByServiceId[serviceKey]).not.toHaveProperty('retiredSelection');
+  });
+
+  it.each(['claude', 'another-agent'])('reads retained config catalog fields only for the current Agent (%s)', async agentId => {
+    mocks.fetchSessionById.mockResolvedValue({ ...session, metadataLayoutVersion: 0,
+      metadata: JSON.stringify({ path: '/owner/checkout', machineId: 'machine-1',
+        runtimeDescriptorV1: { v: 1, agentId: 'claude', agent: {} },
+        sessionConfigOptionsV1: { v: 1, agentId, updatedAt: 200, retiredCatalogField: true,
+          configOptions: [{ id: 'quality', name: 'Quality', type: 'string', currentValue: 'high', retiredOptionField: true }] },
+      }), ownerMetadata: undefined });
+    const resolved = await resolveWorkflowSessionConversation({ credentials, sessionId, machineId: 'machine-1' });
+    expect(resolved).not.toBeNull();
+    if (agentId === 'claude') {
+      expect(resolved?.runtimeSelection).toMatchObject({ sessionConfigOptionOverrides: {
+        v: 1, updatedAt: 200, overrides: { quality: { updatedAt: 200, value: 'high' } },
+      } });
+    } else {
+      expect(resolved?.runtimeSelection).not.toHaveProperty('sessionConfigOptionOverrides');
+    }
   });
 
   it('projects authoritative workflow Session origin and depth from the Session record', async () => {
@@ -332,11 +371,38 @@ describe('workflow actual Session reuse metadata', () => {
   });
 
   it('refuses missing owner metadata rather than using presentation or plaintext as owner authority', async () => {
+    const refused: unknown[] = [];
     mocks.fetchSessionById.mockResolvedValue({ ...session, ownerMetadata: undefined,
       metadata: JSON.stringify({ v: 1, summary: { text: '/invented/path', updatedAt: 1 } }) });
-    await expect(resolveWorkflowSessionConversation({ credentials, sessionId, machineId: 'machine-1' })).resolves.toBeNull();
+    await expect(resolveWorkflowSessionConversation({ credentials, sessionId, machineId: 'machine-1',
+      onUnavailable: (details) => { refused.push(details); } })).resolves.toBeNull();
+    expect(refused).toMatchObject([{ reason: 'owner_metadata_unavailable' }]);
     mocks.fetchSessionById.mockResolvedValue({ ...session, ownerMetadata: { t: 'encrypted', c: 'invalid' } });
-    await expect(resolveWorkflowSessionConversation({ credentials, sessionId, machineId: 'machine-1' })).resolves.toBeNull();
+    await expect(resolveWorkflowSessionConversation({ credentials, sessionId, machineId: 'machine-1',
+      onUnavailable: (details) => { refused.push(details); } })).resolves.toBeNull();
+    expect(refused).toMatchObject([{ reason: 'owner_metadata_unavailable' }, { reason: 'owner_metadata_unavailable' }]);
+  });
+
+  it.each([
+    ['session_unavailable', null],
+    ['workspace_unavailable', { ...session, ownerMetadata: { t: 'plain', v: { v: 1, workspace: { machineId: 'machine-1' } } } }],
+    ['account_scope_unavailable', { ...session, encryptionMode: 'e2ee', dataEncryptionKey: null }],
+  ])('reports authenticated reuse reader check %s without changing its null refusal', async (reason, record) => {
+    mocks.fetchSessionById.mockResolvedValue(record);
+    const refused: unknown[] = [];
+    await expect(resolveWorkflowSessionConversation({ credentials, sessionId, machineId: 'machine-1',
+      onUnavailable: (details) => { refused.push(details); } })).resolves.toBeNull();
+    expect(refused).toMatchObject([{ reason }]);
+  });
+  it('reports authenticated reuse reader check session_identity_mismatch for a prefix that resolves to another exact id', async () => {
+    const page = { sessions: [createSessionNotificationContextFixture(sessionId)], nextCursor: null, hasNext: false,
+      attentionNextCursor: null, attentionHasNext: false };
+    mocks.fetchSessionsPage.mockResolvedValue(page);
+    mocks.fetchSessionsQueryPage.mockResolvedValue(page);
+    const refused: unknown[] = [];
+    await expect(resolveWorkflowSessionConversation({ credentials, sessionId: 'c123', machineId: 'machine-1',
+      onUnavailable: (details) => { refused.push(details); } })).resolves.toBeNull();
+    expect(refused).toMatchObject([{ reason: 'session_identity_mismatch', expected: { ids: ['c123'] }, observed: { ids: [sessionId] } }]);
   });
 
   it('accepts only the origin input owner withdrawal answer and never infers it from absence', async () => {
@@ -487,7 +553,8 @@ describe('production daemon Workflow bootstrap', () => {
     await expect(isCurrent({
       authorization: {
         admittedPermissionCeiling: 'default',
-        principal: { kind: 'plugin', pluginId: 'happier.example' } as never,
+        principal: { kind: 'plugin', pluginId: 'happier.example',
+          sourceCustody: { ...pluginSourceCustody, registeredRootId: 'retired-example-root' } },
       },
     })).resolves.toBe(false);
     await expect(isCurrent({

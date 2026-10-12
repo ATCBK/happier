@@ -27,25 +27,31 @@ export function createWorkflowRunStorageClient(params: Readonly<{
   machineId?: string;
   serverHttpBaseUrl?: string;
   createPublisherHeader?: CreatePluginInstallationPublisherHeader;
+  resolveAuthorizationHeaders?: (request: Readonly<{ method: 'POST'; path: string; body: unknown }>) => Readonly<Record<string, string>> | null;
 }>) {
   const baseUrl = params.serverHttpBaseUrl ?? resolveServerHttpBaseUrl();
   const createPublisherHeader = params.createPublisherHeader ?? createDefaultPluginInstallationPublisherHeader;
   return {
     observeChanges: (runId: string, onChange: () => void, onError: (error: unknown) => void) =>
       observeAccountChanges({ token: params.token, serverUrl: baseUrl, entityId: `workflow-run:${runId}` }, { onChange, onError }),
-    execute: async (operation: WorkflowRunStorageOperation, options: Readonly<{ signal?: AbortSignal }> = {}): Promise<unknown> => {
+    execute: async (operation: WorkflowRunStorageOperation, options: Readonly<{ signal?: AbortSignal; publisherMachineId?: string }> = {}): Promise<unknown> => {
       const executorOperation = isWorkflowRunExecutorStorageOperationV1(operation.operation);
-      if (executorOperation && !params.machineId) {
+      const publisherMachineId = options.publisherMachineId ?? (executorOperation ? params.machineId : undefined);
+      if (executorOperation && !publisherMachineId) {
         throw Object.assign(new Error('target_unavailable'), { code: 'target_unavailable' });
       }
-      const body = { ...operation, ...(executorOperation ? { publisherMachineId: params.machineId } : {}) };
-      const publisherHeader = executorOperation
+      const body = { ...operation, ...(publisherMachineId ? { publisherMachineId } : {}) };
+      const publisherHeader = publisherMachineId
         ? await createPublisherHeader({ method: 'POST', path: WORKFLOW_RUN_STORAGE_HTTP_PATH, body })
         : null;
+      const authorizationHeaders = params.resolveAuthorizationHeaders
+        ? params.resolveAuthorizationHeaders({ method: 'POST', path: WORKFLOW_RUN_STORAGE_HTTP_PATH, body })
+        : { Authorization: `Bearer ${params.token}` };
+      if (!authorizationHeaders) throw Object.assign(new Error('not_authenticated'), { code: 'not_authenticated' });
       const request = () => axios.post<unknown>(`${baseUrl}${WORKFLOW_RUN_STORAGE_HTTP_PATH}`, body, {
         headers: {
           ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(),
-          Authorization: `Bearer ${params.token}`,
+          ...authorizationHeaders,
           'Content-Type': 'application/json',
           ...(publisherHeader ? { [PLUGIN_INSTALLATION_MANIFEST_PUBLISHER_HEADER_V1]: publisherHeader } : {}),
         },

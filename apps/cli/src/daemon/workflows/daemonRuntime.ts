@@ -3,6 +3,7 @@ import type {
   AccountApiTokensListActionOutputV1,
   WorkflowAcceptedAuthorizationV1,
 } from '@happier-dev/protocol';
+import type { WorkflowConversationUnavailableDetailsV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
 import { resolveSessionRuntimeSnapshot } from '@/daemon/sessions/runtimeSnapshot/resolveSessionRuntimeSnapshot';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { pluginSourceCustodyV1Equal } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
@@ -12,15 +13,16 @@ import { SessionOwnerMetadataV1Schema, readSessionModesMetadata } from '@happier
 import { SessionInputCancelExactTurnResultV1Schema } from '@happier-dev/protocol/sessions/control/exactTurnCancellationV1';
 import { ActionDefinitionV1Schema } from '@happier-dev/protocol/actions/actionDefinitionV1';
 import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { admitAgentStartV1 } from '@happier-dev/protocol/account/settings/admitAgentStartV1';
 import { formatWorkflowDefinitionRefV1 } from '@happier-dev/protocol/workflows/workflowDefinitionRefV1';
-import { readSessionMcpSelectionV1FromMetadata, readSessionMcpSelectionRestartRequiredV1FromMetadata } from '@happier-dev/protocol/mcp/servers/sessionSelectionV1';
+import { readWorkflowRunLeafStartRequestV1 } from '@happier-dev/protocol/workflows/materializeWorkflowAcceptedSnapshotV1';
+import { readAppliedSessionCapabilitySelectionFromMetadataV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
 import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
 import { freezeActionCompletionContractV1, readActionCompletionRunObservationV1 } from '@happier-dev/protocol/actions/actionCompletion';
 import type { ActionCompletionOperation } from '@happier-dev/protocol/actions/actionCompletion';
 import { ACTION_OPERATION_RPC_METHODS_V1, ACTION_OPERATION_RPC_METHODS_V2, ActionOperationGetV1ResponseSchema } from '@happier-dev/protocol/actions/operations/v1';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
-import { zodSchemaToJsonSchemaObject } from '@happier-dev/protocol/actions/actionInputJsonSchema';
 import { ExecutionRunWaitResultSchema, ExecutionRunGetResponseSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import {
   CONVERSATION_CORE_PROVIDER_ACTION_IDS_V1,
@@ -34,9 +36,11 @@ import {
   readAuthoritativePluginSlotOccurrence,
 } from '@/plugins/runtime/reload/runtimeLease';
 import { executeContributedAction } from '@/plugins/runtime/invocation/actions/executeContributedAction';
+import { createCommittedContributedActionDefinitionLister, createCommittedContributedActionInvoker } from '@/plugins/runtime/invocation/actions/createCommittedContributedActionDeps';
 import { readAgentCatalogSnapshot } from '@/agent/catalog/snapshot';
 import { resolveBackendTargetFromSessionMetadata } from '@/session/backendTargets/resolveBackendTargetFromSessionMetadata';
 import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
+import { createCredentialedTargetActionCurrentIntent } from '@/session/actions/createCliActionExecutor';
 import { createCredentialedWorkflowMaterializationHostV1 } from '@/session/actions/workflowMaterializationHost';
 import type { sendSessionMessage } from '@/session/services/sendSessionMessage';
 import { callSessionRpc } from '@/session/transport/rpc/sessionRpc';
@@ -148,11 +152,16 @@ export async function resolveWorkflowSessionConversation(params: Readonly<{
   sessionId: string;
   machineId: string;
   signal?: AbortSignal;
+  onUnavailable?: (details: WorkflowConversationUnavailableDetailsV1) => void;
 }>): Promise<WorkflowSessionConversation | null> {
   const authorized = await resolveWorkflowAuthorizedSession(params);
   if (!authorized) return null;
   const { target, metadata } = authorized;
-  if (typeof metadata.path !== 'string' || !metadata.path.trim()) return null;
+  if (typeof metadata.path !== 'string' || !metadata.path.trim()) {
+    params.onUnavailable?.({ code: 'workflow_conversation_unavailable', reason: 'workspace_unavailable',
+      expected: { kind: 'object' }, observed: { kind: 'unset' } });
+    return null;
+  }
   const backend = resolveBackendTargetFromSessionMetadata(metadata);
   const contribution = backend ? readAgentCatalogSnapshot().agentDefinitionsById.get(backend.backendId) : null;
   const agentTarget = contribution?.identity ? { kind: 'agent' as const, identity: contribution.identity } : undefined;
@@ -161,7 +170,7 @@ export async function resolveWorkflowSessionConversation(params: Readonly<{
   // fields and secrets never become a Workflow witness.
   for (const field of WORKFLOW_SESSION_AUTHORING_SELECTION_FIELD_IDS) {
     if (metadata[field] === undefined) continue;
-    const parsed = WorkflowSessionAuthoringSelectionSchema.shape[field].safeParse(metadata[field]);
+    const parsed = createStoredReadSchema(WorkflowSessionAuthoringSelectionSchema.shape[field]).safeParse(metadata[field]);
     if (parsed.success) selection[field] = parsed.data;
   }
   if (agentTarget) selection.agentTarget = agentTarget;
@@ -183,11 +192,9 @@ export async function resolveWorkflowSessionConversation(params: Readonly<{
   } else {
     delete selection.sessionConfigOptionOverrides;
   }
-  // Pending MCP intent is not applied runtime state; its existing owner retains
+  // Pending capability intent is not applied runtime state; its existing owner retains
   // the exact applied selection when a restart is required.
-  const mcp = readSessionMcpSelectionRestartRequiredV1FromMetadata(metadata)?.appliedSelection
-    ?? readSessionMcpSelectionV1FromMetadata(metadata);
-  if (mcp) selection.mcpSelection = mcp;
+  selection.capabilitySelection = readAppliedSessionCapabilitySelectionFromMetadataV1(metadata);
   const { permissionMode, modelSelection } = resolveSessionRuntimeSnapshot({
     incomingOptions: { existingSessionId: target.sessionId, directory: metadata.path },
     persistedMetadata: metadata,
@@ -198,6 +205,7 @@ export async function resolveWorkflowSessionConversation(params: Readonly<{
     ...(target.rawSession.workDepth === undefined ? {} : { workDepth: target.rawSession.workDepth }),
     ...(agentTarget ? { agentTarget } : {}),
     runtimeSelection: WorkflowSessionAuthoringSelectionSchema.parse(selection),
+    ...(modes && modes.agentId === backend?.backendId ? { sessionModes: modes } : {}),
     runtimeSnapshot: { permissionMode, modelSelection },
   };
 }
@@ -373,6 +381,12 @@ export function createProductionDaemonWorkflowRuntime(params: Readonly<{
         machineActionDirectTargetTransport: input.machineActionDirectTargetTransport,
         ...(input.managedMachineAction ? { managedMachineAction: input.managedMachineAction } : {}),
         workflowAcceptedAuthorizationCurrentness: isAcceptedAuthorizationCurrent,
+        pluginActionExecutionOwner: 'current_process',
+        listContributedActionDefinitions: createCommittedContributedActionDefinitionLister(),
+        invokeContributedAction: createCommittedContributedActionInvoker({
+          isWorkflowRunAuthorizationCurrent: isAcceptedAuthorizationCurrent,
+          requestCurrentIntent: createCredentialedTargetActionCurrentIntent(params.credentials),
+        }),
       });
       const resolveMaterializer = createCredentialedWorkflowMaterializationHostV1({
         credentials: params.credentials, accountId: params.accountId,
@@ -398,16 +412,13 @@ export function createProductionDaemonWorkflowRuntime(params: Readonly<{
           const spec = ActionDefinitionV1Schema.safeParse(result.result.actionSpec);
           if (!spec.success || spec.data.id !== actionId || spec.data.outputSchema === undefined) return null;
           const id = ActionIdSchema.safeParse(actionId);
-          if (!id.success) return null;
           // This is the exact run machine's host catalog. Executable completion
           // functions stay host-private; only their frozen schema is sealed.
-          const hostSpec = getActionSpec(id.data);
-          const declaration = hostSpec.completion;
-          const outputSchema = declaration?.terminalOutputSchema ?? hostSpec.outputSchema;
-          if (outputSchema === undefined) return null;
-          return { inputSchema: StrictJsonValueSchema.parse(zodSchemaToJsonSchemaObject(hostSpec.inputSchema, { target: 'draft-7' })),
-            outputSchema: StrictJsonValueSchema.parse(zodSchemaToJsonSchemaObject(outputSchema, { target: 'draft-7' })),
-            ...(declaration ? { completion: freezeActionCompletionContractV1(declaration) } : {}) };
+          const declaration = id.success ? getActionSpec(id.data).completion : undefined;
+          const completion = declaration ? freezeActionCompletionContractV1(declaration) : undefined;
+          return { inputSchema: StrictJsonValueSchema.parse(spec.data.inputSchema),
+            outputSchema: StrictJsonValueSchema.parse(completion?.terminalOutputSchema ?? spec.data.outputSchema),
+            ...(completion ? { completion } : {}) };
         },
       });
       const resolveMaterializationHost: NonNullable<Parameters<typeof createProductionWorkflowRunCoordinator>[0]['resolveMaterializationHost']> = async (claim) => {
@@ -415,7 +426,7 @@ export function createProductionDaemonWorkflowRuntime(params: Readonly<{
           ...(claim.signal ? { signal: claim.signal } : {}) });
         const current = materialization.agentStartPolicySnapshot;
         return { ...materialization, admitLeaf: async (leaf, facts) => admitAgentStartV1(current.policy,
-          { kind: 'workflow_run_leaf', leaf }, {
+          readWorkflowRunLeafStartRequestV1(leaf), {
             caller: { kind: 'originless', runId: claim.runId, runDepth: claim.workDepth,
               ...(claim.originSessionId ? { runOriginSessionId: claim.originSessionId } : {}) },
             baseline: { machineId: input.machineId, directory: claim.directory }, ledSubtreeSessionIds: [],
@@ -447,16 +458,22 @@ export function createProductionDaemonWorkflowRuntime(params: Readonly<{
             callerPermissionCeiling: execution.authorization.admittedPermissionCeiling,
             workDepthLimit: current.workDepthLimit, allowLists: current.allowLists } };
       };
-      const resolveConversation = async ({ sessionId, machineId, signal }: Readonly<{
+      const resolveConversation = async ({ sessionId, machineId, signal, onUnavailable }: Readonly<{
         sessionId: string;
         machineId: string;
         signal?: AbortSignal;
+        onUnavailable?: (details: WorkflowConversationUnavailableDetailsV1) => void;
       }>) => {
-        if (machineId !== input.machineId) return null;
+        if (machineId !== input.machineId) {
+          onUnavailable?.({ code: 'workflow_conversation_unavailable', reason: 'machine_mismatch',
+            expected: { kind: 'string', ids: [machineId] }, observed: { kind: 'string', ids: [input.machineId] } });
+          return null;
+        }
         return await resolveWorkflowSessionConversation({
           credentials: params.credentials,
           sessionId, machineId,
           ...(signal ? { signal } : {}),
+          ...(onUnavailable ? { onUnavailable } : {}),
         });
       };
       return createProductionWorkflowRunCoordinator({

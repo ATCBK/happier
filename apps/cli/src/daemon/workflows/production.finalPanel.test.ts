@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   openWorkflowCheckpointStoredEnvelopeV1, parseWorkflowStoredContentEnvelopeV1,
+  openWorkflowProgressStoredEnvelopeV1,
   sealWorkflowAcceptedSnapshotStoredEnvelopeV1, sealWorkflowProgressStoredEnvelopeV1,
   sealWorkflowCheckpointStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1,
   type WorkflowProgressEnvelopeV1, type WorkflowDefinitionV1,
@@ -25,6 +26,8 @@ afterEach(() => vi.restoreAllMocks());
 describe('workflow final-panel certification', () => {
   it.each([
     { last: 'F-b', expected: 'F-b', failedPanel: false, cancelled: false },
+    { last: 'F-b', expected: 'F-b', failedPanel: false, cancelled: false, extraStoredFields: true },
+    { last: 'F-b', expected: undefined, failedPanel: false, cancelled: false, extraStoredFields: true, invalidEngineOutcome: true },
     { last: 'F-c', expected: undefined, failedPanel: false, cancelled: false },
     { last: null, expected: undefined, failedPanel: false, cancelled: false },
     { last: 'F-b', expected: undefined, failedPanel: true, cancelled: false },
@@ -32,7 +35,7 @@ describe('workflow final-panel certification', () => {
     { last: 'F-b', expected: undefined, failedPanel: false, cancelled: false, materialization: { kind: 'partial', errorCode: 'write_failed' } },
     { last: 'F-b', expected: undefined, failedPanel: false, cancelled: false, materialization: { kind: 'failed', errorCode: 'write_failed' } },
     { last: 'F-b', expected: undefined, failedPanel: false, cancelled: false, materialization: null },
-  ])('persists only the final reviewed tree after restart ($last; failed panel $failedPanel; cancelled $cancelled; materialization $materialization)', async ({ last, expected, failedPanel, cancelled, materialization }) => {
+  ])('persists only the final reviewed tree after restart ($last; failed panel $failedPanel; cancelled $cancelled; materialization $materialization; retained extras $extraStoredFields; invalid outcome $invalidEngineOutcome)', async ({ last, expected, failedPanel, cancelled, materialization, extraStoredFields, invalidEngineOutcome }) => {
     // The current tree moved to F-d after the panel started. Closing the run
     // must use the persisted typed review values and never inspect that tree.
     const read = vi.spyOn(scm, 'readWorktreeChangeFingerprint').mockResolvedValue({ kind: 'available', fingerprint: 'F-d' });
@@ -85,10 +88,12 @@ describe('workflow final-panel certification', () => {
       await admitCompleted(id, itemId, '0', { kind: 'happier.workflow-progress.v1', blockKind: 'action', attempt: '0',
             invocationPath: { blockId: 'review', scope }, ...(failsBeforeLaunch ? {} : { execution: { kind: 'action', actionId: 'review.start',
               localInputId: id, actionRequestId: id, input: {} }, result: { reviewedFingerprint: fingerprints[index]!,
-              commentIds: [], perEngineOutcome: [{ key: `engine-${index % 2}`, outcome: 'completed',
+              ...(extraStoredFields ? { retiredReviewField: true } : {}),
+              commentIds: [], perEngineOutcome: [{ key: `engine-${index % 2}`, outcome: invalidEngineOutcome ? 'retired_outcome' : 'completed',
+                ...(extraStoredFields ? { retiredEngineField: true } : {}),
                 ...(round === 1 && index % 2 === 1 && materialization !== undefined
                   ? materialization === null ? {} : { materialization }
-                  : { materialization: { kind: 'complete' } }) }] } }),
+                  : { materialization: { kind: 'complete', ...(extraStoredFields ? { retiredMaterializationField: true } : {}) } }) }] } }),
           });
       if (failsBeforeLaunch) boundary.rowById(id)!.index = { ...boundary.rowById(id)!.index, lifecycle: 'failed' };
     }
@@ -110,6 +115,16 @@ describe('workflow final-panel certification', () => {
     expect(opened.kind).toBe('available');
     if (opened.kind !== 'available') throw new Error('Closing checkpoint unavailable');
     expect('endFingerprint' in opened.content ? opened.content.endFingerprint : undefined).toBe(expected);
+    if (extraStoredFields) {
+      const retained = boundary.rowById('review-3')!;
+      const index = retained.index;
+      expect(openWorkflowProgressStoredEnvelopeV1({ mode: 'plain',
+        binding: { v: 1, purpose: 'invocation_progress', accountId, runId, recordId: index.id,
+          sequence: index.sequence, parentRecordId: index.parentRecordId, memberOrdinal: index.memberOrdinal, attempt: index.attempt },
+        envelope: parseWorkflowStoredContentEnvelopeV1(retained.contentEnvelope),
+      })).toMatchObject({ kind: 'available', content: { result: { retiredReviewField: true,
+        perEngineOutcome: [{ retiredEngineField: true, materialization: { retiredMaterializationField: true } }] } } });
+    }
     expect(read).not.toHaveBeenCalled();
   });
 });

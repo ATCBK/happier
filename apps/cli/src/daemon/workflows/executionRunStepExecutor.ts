@@ -367,6 +367,8 @@ function buildNativeAgentRunStartInput(params: Readonly<{
     localInputId,
     resultContract: executionParams.step.result,
     permissionMode: params.permissionMode,
+    ...(selection.allowedTools !== undefined ? { allowedTools: selection.allowedTools } : {}),
+    ...(selection.unlistedTools !== undefined ? { unlistedTools: selection.unlistedTools } : {}),
     retentionPolicy: 'resumable',
     runClass: 'long_lived',
     ioMode: 'request_response',
@@ -375,7 +377,7 @@ function buildNativeAgentRunStartInput(params: Readonly<{
     ...(selection.sessionConfigOptionOverrides
       ? { sessionConfigOptionOverrides: selection.sessionConfigOptionOverrides }
       : {}),
-    ...(selection.mcpSelection !== undefined ? { mcpSelection: selection.mcpSelection } : {}),
+    ...(selection.capabilitySelection !== undefined ? { capabilitySelection: selection.capabilitySelection } : {}),
     ...(selection.connectedServices !== undefined
       ? { connectedServices: selection.connectedServices }
       : {}),
