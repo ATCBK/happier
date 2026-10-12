@@ -556,6 +556,8 @@ export async function readJsonlFileForwardLines(params: Readonly<{
   chunkBytes?: number;
   maxOversizeLineBytes?: number;
   fileSystem?: JsonlScannerFileSystemV1;
+  /** Consume each parsed line immediately without retaining source bodies. */
+  onLine?: (line: JsonlForwardLineV1) => void;
 }>): Promise<Readonly<{
   items: readonly JsonlForwardLineV1[];
   diagnostics?: readonly JsonlSourceDiagnosticV1[];
@@ -586,6 +588,12 @@ export async function readJsonlFileForwardLines(params: Readonly<{
   }
 
   const items: JsonlForwardLineV1[] = [];
+  let itemCount = 0;
+  const acceptLine = (line: JsonlForwardLineV1) => {
+    itemCount += 1;
+    if (params.onLine) params.onLine(line);
+    else items.push(line);
+  };
   const malformedPositions: number[] = [];
   let malformedCount = 0;
   let bytesReadTotal = 0;
@@ -593,11 +601,11 @@ export async function readJsonlFileForwardLines(params: Readonly<{
   let carryStartOffset = offsetBytes;
   let nextReadOffset = offsetBytes;
 
-  while (nextReadOffset < fileSize && items.length < maxItems) {
+  while (nextReadOffset < fileSize && itemCount < maxItems) {
     const remainingBytes = maxBytes - bytesReadTotal;
     const canContinueOversizeFirstLine =
       remainingBytes <= 0 &&
-      items.length === 0 &&
+      itemCount === 0 &&
       carry.length > 0 &&
       carry.length < maxOversizeLineBytes;
     if (remainingBytes <= 0 && !canContinueOversizeFirstLine) break;
@@ -614,7 +622,7 @@ export async function readJsonlFileForwardLines(params: Readonly<{
     const combinedStartOffset = carryStartOffset;
     const combined = carry.length > 0 ? Buffer.concat([carry, chunk]) : chunk;
     let lineStartIndex = 0;
-    for (let index = 0; index < combined.length && items.length < maxItems; index += 1) {
+    for (let index = 0; index < combined.length && itemCount < maxItems; index += 1) {
       if (combined[index] !== 0x0a) continue;
 
       const line = combined.slice(lineStartIndex, index);
@@ -629,7 +637,7 @@ export async function readJsonlFileForwardLines(params: Readonly<{
       }
       const rawLine = decoded.value.trim();
       if (rawLine.length > 0) {
-        items.push({
+        acceptLine({
           rawLine,
           value: parseJsonLine(rawLine),
           startOffsetBytes: combinedStartOffset + lineStartIndex,
@@ -643,7 +651,7 @@ export async function readJsonlFileForwardLines(params: Readonly<{
     carryStartOffset = combinedStartOffset + lineStartIndex;
   }
 
-  if (items.length < maxItems && nextReadOffset >= fileSize && carry.length > 0) {
+  if (itemCount < maxItems && nextReadOffset >= fileSize && carry.length > 0) {
     const decoded = decodeSourceLine(carry);
     if (!decoded.ok) {
       malformedCount += 1;
@@ -655,7 +663,7 @@ export async function readJsonlFileForwardLines(params: Readonly<{
     } else {
       const rawLine = decoded.value.trim();
       if (rawLine.length > 0) {
-        items.push({
+        acceptLine({
           rawLine,
           value: parseJsonLine(rawLine),
           startOffsetBytes: carryStartOffset,
@@ -675,7 +683,7 @@ export async function readJsonlFileForwardLines(params: Readonly<{
     nextOffsetBytes: carryStartOffset,
     truncated: false,
     reachedEnd,
-    hitPageLimit: !reachedEnd && (items.length >= maxItems || nextReadOffset < fileSize),
+    hitPageLimit: !reachedEnd && (itemCount >= maxItems || nextReadOffset < fileSize),
   };
 }
 

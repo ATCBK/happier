@@ -79,7 +79,7 @@ export const ProjectKeyV1Schema: SessionSchema<ProjectKeyV1> = protocolProjectKe
 
 export type SessionSpawnNewInputV2 = PluginActionInputById['session.spawn_new'];
 /** Browser-safe Session-create input projected at the SDK author boundary. */
-export const SessionSpawnNewInputV2Schema: SessionSchema<SessionSpawnNewInputV2> = projectProtocolValue(protocolSessionSpawnNewInputV2Schema);
+export const SessionSpawnNewInputV2Schema: SessionSchema<SessionSpawnNewInputV2> = /* @__PURE__ */ projectProtocolValue(protocolSessionSpawnNewInputV2Schema);
 
 /**
  * SDK-local author declaration for the one Protocol-owned worktree draft.
@@ -100,7 +100,7 @@ export type SessionServerStartSpawnDraftV1 = Omit<
     'creationKey' | 'initialInput'
 >;
 /** Browser-safe server-start draft projected at the SDK author boundary. */
-export const SessionServerStartSpawnDraftV1Schema: SessionSchema<SessionServerStartSpawnDraftV1> = projectProtocolValue(protocolSessionServerStartSpawnDraftV1Schema);
+export const SessionServerStartSpawnDraftV1Schema: SessionSchema<SessionServerStartSpawnDraftV1> = /* @__PURE__ */ projectProtocolValue(protocolSessionServerStartSpawnDraftV1Schema);
 
 /**
  * Declaration-neutral projection of the Protocol provenance union. The
@@ -407,6 +407,8 @@ export type SessionSummary = Readonly<{
     machineId?: string;
     projectId?: string;
     agentId?: string;
+    /** Protected birth facts were opened; omission means their presence is unknown. */
+    hasAttestedContext?: boolean;
     state: 'active' | 'idle' | 'stopped' | 'archived';
     runtimeAvailability: PluginOperationAvailability;
     storagePolicy: 'required_e2ee' | 'optional' | 'plaintext_only';
@@ -425,7 +427,7 @@ export type SessionSummary = Readonly<{
 export type SessionSendAttachment = NonNullable<
     Exclude<
         PluginActionInputById['session.message.send'],
-        Readonly<{ kind: 'sessionSubagentLaunch' }>
+        Readonly<{ kind: 'sessionSubagentLaunch' | 'sessionSubagentCommand' }>
     >['attachments']
 >[number];
 /**
@@ -438,14 +440,18 @@ export type SessionSendRequest =
       PluginActionInputById['session.message.send'],
       Readonly<{ kind: 'sessionSubagentLaunch' }>
     >, 'sessionId'>>
+  | Readonly<Omit<Extract<
+      PluginActionInputById['session.message.send'],
+      Readonly<{ kind: 'sessionSubagentCommand' }>
+    >, 'sessionId'>>
   | Readonly<Omit<Exclude<
       PluginActionInputById['session.message.send'],
-      Readonly<{ kind: 'sessionSubagentLaunch' }>
+      Readonly<{ kind: 'sessionSubagentLaunch' | 'sessionSubagentCommand' }>
     >, 'sessionId' | 'message'> & {
     kind: 'userText';
     text: Exclude<
         PluginActionInputById['session.message.send'],
-        Readonly<{ kind: 'sessionSubagentLaunch' }>
+        Readonly<{ kind: 'sessionSubagentLaunch' | 'sessionSubagentCommand' }>
     >['message'];
     /**
      * Declared attachment drafts delivered with this input. Resending under the
@@ -454,16 +460,16 @@ export type SessionSendRequest =
      */
     attachments?: Exclude<
         PluginActionInputById['session.message.send'],
-        Readonly<{ kind: 'sessionSubagentLaunch' }>
+        Readonly<{ kind: 'sessionSubagentLaunch' | 'sessionSubagentCommand' }>
     >['attachments'];
     /** Exact participant target; omission sends to the main Session. */
     recipient?: Exclude<
         PluginActionInputById['session.message.send'],
-        Readonly<{ kind: 'sessionSubagentLaunch' }>
+        Readonly<{ kind: 'sessionSubagentLaunch' | 'sessionSubagentCommand' }>
     >['recipient'];
     source?: Exclude<
         PluginActionInputById['session.message.send'],
-        Readonly<{ kind: 'sessionSubagentLaunch' }>
+        Readonly<{ kind: 'sessionSubagentLaunch' | 'sessionSubagentCommand' }>
     >['source'];
   }>;
 /** Canonical result of the shared Session message Action. */
@@ -550,6 +556,16 @@ export interface SessionAuthService {
 export interface SessionHandle {
     summary(options?: PluginCancellationOptions): Promise<SessionSummary>;
     send(request: SessionSendRequest, options?: PluginCancellationOptions): Promise<SessionSendResult>;
+    /**
+     * Copies a trusted plugin-local file through the hosted Session's existing
+     * attachment transfer owner. The host derives the workspace destination;
+     * a source path on another machine is unavailable, never a local fallback.
+     */
+    materializeAttachment(request: Readonly<{
+        sourcePath: string;
+        name: string;
+        messageLocalId: string;
+    }>, options?: PluginCancellationOptions): Promise<Readonly<{ path: string; bytes: Uint8Array }>>;
     listSystemRecords(
         query: SessionSystemRecordListQuery,
         options?: PluginCancellationOptions,

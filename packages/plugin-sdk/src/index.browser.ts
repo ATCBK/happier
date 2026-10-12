@@ -103,12 +103,7 @@ export type {
 } from './targetedContributionAuthoring.js';
 export { ComposerReferenceCandidateIdV1Schema } from './composerReferenceProviders.js';
 export {
-    MAX_PLUGIN_SEARCH_ITEMS_V1,
     MAX_PLUGIN_SEARCH_ITEM_COMMAND_UTF8_BYTES_V1,
-    MAX_PLUGIN_SEARCH_ITEM_ID_UTF8_BYTES_V1,
-    MAX_PLUGIN_SEARCH_QUERY_UTF8_BYTES_V1,
-    MAX_PLUGIN_SEARCH_SUBTITLE_CODE_POINTS_V1,
-    MAX_PLUGIN_SEARCH_TITLE_CODE_POINTS_V1,
     PluginSearchItemV1Schema,
     PluginSearchQueryV1Schema,
     PluginSearchResultV1Schema,

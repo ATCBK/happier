@@ -2972,7 +2972,7 @@ describe('definePlugin', () => {
                 },
                 discoverySources: {
                     catalog: {
-                        declaration: { title: 'Catalog' },
+                        declaration: { title: 'Catalog', loadedInHappierSessions: true },
                         discover,
                     },
                 },
@@ -2984,7 +2984,7 @@ describe('definePlugin', () => {
                 { id: 'docs', kind: 'static', title: 'Docs' },
                 { id: 'dynamic', kind: 'dynamic', title: 'Dynamic' },
             ],
-            discoverySources: [{ id: 'catalog', title: 'Catalog' }],
+            discoverySources: [{ id: 'catalog', title: 'Catalog', loadedInHappierSessions: true }],
         });
         expect(plugin.manifest.hostAccess?.required).toContainEqual({
             id: 'mcp-capabilities',

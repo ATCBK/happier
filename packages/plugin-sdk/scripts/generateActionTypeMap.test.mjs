@@ -19,7 +19,29 @@ import {
   writeFileIfChanged,
 } from './generateActionTypeMap.mjs';
 import * as actionTypeMapGenerator from './generateActionTypeMap.mjs';
+import { readActionCatalog } from './deriveActionDtos.mjs';
 import { withWorkspaceBundleLock } from '../../../scripts/workspaces/workspaceBundleLock.mjs';
+
+test('filtered canonical Action families preserve their exact partition without executing source', t => {
+  const root = mkdtempSync(resolve(tmpdir(), 'happier-action-partition-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const actions = resolve(root, 'packages/protocol/src/actions');
+  mkdirSync(actions, { recursive: true });
+  writeFileSync(resolve(actions, 'partition.ts'), `
+    throw new Error('Catalog source must not execute');
+    export const IDS = ['credentials.read', 'credentials.export', 'credentials.write'] as const;
+    export const HOME = IDS.filter(id => id !== 'credentials.export');
+    export const REMOTE = IDS.filter(id => !(HOME as readonly string[]).includes(id));
+  `);
+  writeFileSync(resolve(actions, 'actionIds.ts'), `
+    import { HOME, REMOTE } from './partition.js';
+    export const ACTION_ID_FAMILIES_V1 = { home: HOME, remote: REMOTE } as const;
+  `);
+  writeFileSync(resolve(actions, 'pluginActionSurface.ts'), 'export const PLUGIN_SURFACE_EXCLUSION_REASONS = {} as const;');
+  assert.deepEqual(readActionCatalog(root).families, {
+    home: ['credentials.read', 'credentials.write'], remote: ['credentials.export'],
+  });
+});
 
 test('an explicit Action map producer invocation defaults to source writes and remote checks', () => {
   // The source checkout owns this generated input, whatever it is publishing: a local

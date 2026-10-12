@@ -1231,10 +1231,12 @@ describe('normal SDK declaration closure identities', () => {
             expect(emitted, privateName).not.toContain(privateName);
         }
 
-        expectTypeOf<AgentSessionRuntimeEvent>()
-            .toMatchTypeOf<CanonicalAgentSessionRuntimeEvent>();
-        expectTypeOf<CanonicalAgentSessionRuntimeEvent>()
-            .toMatchTypeOf<AgentSessionRuntimeEvent>();
+        // Compare both assignment directions without intersecting mutually
+        // exclusive event-union properties into an impossible synthetic shape.
+        const publicFitsCanonical = (event: AgentSessionRuntimeEvent): CanonicalAgentSessionRuntimeEvent => event;
+        const canonicalFitsPublic = (event: CanonicalAgentSessionRuntimeEvent): AgentSessionRuntimeEvent => event;
+        void publicFitsCanonical;
+        void canonicalFitsPublic;
         expectTypeOf<AgentSessionProviderCheckpoint>()
             .toEqualTypeOf<CanonicalAgentSessionProviderCheckpoint>();
         expectTypeOf<AgentSessionSendRequest>()

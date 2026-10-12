@@ -966,7 +966,17 @@ test('generation exposes canonical source entries before packaged realm conditio
     'happier-source': './src/protocol/index.browser.ts',
     default: './dist/protocol/index.browser.js',
   });
-  assert.equal(generated.packageExports['./host/registration'].browser, './dist/host/registration/index.js');
+  for (const specifier of ['./host/registration', './host/ui', './ui/client', './voice/client']) {
+    const entrypoint = inventory.entrypoints.find((entry) => entry.specifier === specifier);
+    for (const condition of ['browser', 'react-native']) {
+      const runtimeTarget = entrypoint.conditions[condition];
+      if (!runtimeTarget) continue;
+      assert.deepEqual(generated.packageExports[specifier][condition], {
+        'happier-source': `./${entrypoint.sourceModule}`,
+        default: runtimeTarget,
+      });
+    }
+  }
 
   for (const [specifier, conditions] of Object.entries(generated.packageExports)) {
     assert.equal(conditions['happier-source'], `./${inventory.entrypoints.find((entry) => entry.specifier === specifier).sourceModule}`);

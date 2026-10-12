@@ -146,7 +146,7 @@ export function ReviewOverview({ pinnedArea }: Readonly<{ pinnedArea: boolean }>
             <Card padding="large">
                 <Stack gap="small">
                     <Status tone="success" label="Review assistant ready" />
-                    <Text value="Review assistant" variant="title" />
+                    <Text value="Review assistant" variant="heading" />
                     <Text
                         value="Run the declared review action through the current host API."
                         tone="secondary"
@@ -264,7 +264,7 @@ function ReviewSessionStatusPanel({
                                 : 'Current review status'}
                         pulsing={refreshing}
                     />
-                    <Text value={title} variant="title" />
+                    <Text value={title} variant="heading" />
                     <Text value={summary} selectable />
                     {detailsAction}
                     {refreshAction}
@@ -384,11 +384,11 @@ function ReviewOpenableContentPanel({
             <Card padding="large">
                 <Stack gap="small">
                     <Status tone="success" label="Bounded review snapshot" />
-                    <Text value="Selected review file" variant="title" />
+                    <Text value="Selected review file" variant="heading" />
                     <Text
                         value={`${state.result.mimeType} · ${state.result.sizeBytes} bytes`}
                         tone="secondary"
-                        variant="caption"
+                        variant="micro"
                     />
                     <CodeBlock
                         code={state.result.content.text}
@@ -484,7 +484,7 @@ function ReviewStatusWidget({
                             : 'Current review status'}
                     pulsing={refreshing}
                 />
-                <Text value="Review status" variant="title" />
+                <Text value="Review status" variant="heading" />
                 <Text
                     value={summary}
                     selectable
@@ -512,7 +512,7 @@ function ReviewPanel(context: RenderContext) {
         const input = readInputTypePickerLaunchInput(context.launchInput);
         return (
             <ReviewFrame accessibilityLabel="Choose repository">
-                <Text value="Choose repository" variant="title" />
+                <Text value="Choose repository" variant="heading" />
                 {!input ? <ErrorState title="Repository choices are unavailable" /> : null}
                 {input?.options?.filter(option => !option.disabled).map((option) => (
                     <Button key={actionInputOptionValueKey(option.value)} title={option.label}

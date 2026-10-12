@@ -67,6 +67,11 @@
       "types": "./dist/connected-accounts/index.d.ts",
       "default": "./dist/connected-accounts/index.js"
     },
+    "./connected-accounts/request-auth": {
+      "happier-source": "./src/connected-accounts/request-auth/index.ts",
+      "types": "./dist/connected-accounts/request-auth/index.d.ts",
+      "default": "./dist/connected-accounts/request-auth/index.js"
+    },
     "./contributions": {
       "happier-source": "./src/contributions/index.ts",
       "types": "./dist/contributions/index.d.ts",
@@ -123,15 +128,27 @@
     "./host/registration": {
       "happier-source": "./src/host/registration/index.ts",
       "types": "./dist/host/registration/index.d.ts",
-      "browser": { "happier-source": "./src/host/registration/index.ts", "default": "./dist/host/registration/index.js" },
-      "react-native": { "happier-source": "./src/host/registration/index.ts", "default": "./dist/host/registration/index.js" },
+      "browser": {
+        "happier-source": "./src/host/registration/index.ts",
+        "default": "./dist/host/registration/index.js"
+      },
+      "react-native": {
+        "happier-source": "./src/host/registration/index.ts",
+        "default": "./dist/host/registration/index.js"
+      },
       "default": "./dist/host/registration/index.js"
     },
     "./host/ui": {
       "happier-source": "./src/host/ui/index.ts",
       "types": "./dist/host/ui/index.d.ts",
-      "browser": { "happier-source": "./src/host/ui/index.ts", "default": "./dist/host/ui/index.js" },
-      "react-native": { "happier-source": "./src/host/ui/index.ts", "default": "./dist/host/ui/index.js" },
+      "browser": {
+        "happier-source": "./src/host/ui/index.ts",
+        "default": "./dist/host/ui/index.js"
+      },
+      "react-native": {
+        "happier-source": "./src/host/ui/index.ts",
+        "default": "./dist/host/ui/index.js"
+      },
       "default": "./dist/host/ui/index.js"
     },
     "./http": {
@@ -276,7 +293,10 @@
     "./ui/client": {
       "happier-source": "./src/ui/client/index.ts",
       "types": "./dist/ui/client/index.d.ts",
-      "browser": { "happier-source": "./src/ui/client/index.ts", "default": "./dist/ui/client/index.js" },
+      "browser": {
+        "happier-source": "./src/ui/client/index.ts",
+        "default": "./dist/ui/client/index.js"
+      },
       "default": "./dist/ui/client/index.js"
     },
     "./voice": {
@@ -287,8 +307,14 @@
     "./voice/client": {
       "happier-source": "./src/voice/client/index.ts",
       "types": "./dist/voice/client/index.d.ts",
-      "browser": { "happier-source": "./src/voice/client/index.ts", "default": "./dist/voice/client/index.js" },
-      "react-native": { "happier-source": "./src/voice/client/index.ts", "default": "./dist/voice/client/index.js" },
+      "browser": {
+        "happier-source": "./src/voice/client/index.ts",
+        "default": "./dist/voice/client/index.js"
+      },
+      "react-native": {
+        "happier-source": "./src/voice/client/index.ts",
+        "default": "./dist/voice/client/index.js"
+      },
       "default": "./dist/voice/client/index.js"
     },
     "./voice/speech": {
@@ -473,6 +499,8 @@
     "check:api-surface": "yarn -s check:api-governance",
     "tsc": "node ../../scripts/workspaces/runTypeScriptCli.mjs",
     "generate:action-type-map": "node ./scripts/generateActionTypeMap.mjs --write",
+    "generate:hosted-html-guest": "node ./scripts/buildHostedHtmlGuestBootstrap.mjs",
+    "check:hosted-html-guest": "node ./scripts/buildHostedHtmlGuestBootstrap.mjs --check",
     "check:action-type-map": "node ./scripts/generateActionTypeMap.mjs --check",
     "prepare:declarations": "node ./scripts/bundleWorkspaceDeps.mjs --declarations --run-script=prepare:declarations:prepared",
     "prepare:declarations:prepared": "yarn -s check:action-type-map",
@@ -483,13 +511,13 @@
     "check:public-toolchain:generated": "node ./scripts/generatePublicToolchainCompatibility.mjs --check-generated",
     "prepack": "node ./scripts/bundleWorkspaceDeps.mjs --declarations --run-script=prepack:prepared",
     "prepack:prepared": "yarn -s prepare:declarations:prepared && node ./scripts/bundleWorkspaceDeps.mjs --artifact && node ./scripts/apiSurfaceCli.mjs --materialize-source --write && yarn -s build:compiled && node ../../scripts/api-governance/cli.mjs --profile plugin-sdk --write && yarn -s check:api-governance:prepared && yarn -s check:public-toolchain:generated",
-    "generated:finite": "yarn -s check:action-type-map",
+    "generated:finite": "yarn -s check:action-type-map && yarn -s check:hosted-html-guest",
     "prepare:finite": "node ./scripts/bundleWorkspaceDeps.mjs --declarations",
     "build:finite": "node ./scripts/bundleWorkspaceDeps.mjs --declarations --run-script=build:finite:prepared",
     "build:finite:prepared": "yarn -s build:compiled",
     "api:finite": "node ./scripts/bundleWorkspaceDeps.mjs --declarations --run-script=api:finite:prepared",
     "api:finite:prepared": "node ../../scripts/api-governance/cli.mjs --profile plugin-sdk --check",
-    "build:compiled": "node ../../scripts/workspaces/buildTypeScriptPackageDist.mjs -p tsconfig.json",
+    "build:compiled": "yarn -s generate:hosted-html-guest && node ../../scripts/workspaces/buildTypeScriptPackageDist.mjs -p tsconfig.json",
     "build": "node ./scripts/bundleWorkspaceDeps.mjs --declarations --run-script=build:prepared",
     "build:prepared": "yarn -s build:compiled",
     "postinstall:real": "yarn -s build",
@@ -504,8 +532,8 @@
     "test:source": "vitest run --config vitest.source.config.ts",
     "typecheck": "../../apps/stack/bin/hstack-exec --script=typecheck:local",
     "typecheck:local": "yarn -s typecheck:source && yarn -s typecheck:tests",
-    "typecheck:source": "node ../../scripts/workspaces/runTypeScriptCli.mjs --noEmit -p tsconfig.json",
-    "typecheck:tests": "node ../../scripts/workspaces/runTypeScriptCli.mjs --noEmit -p tsconfig.tests.json",
+    "typecheck:source": "yarn -s generate:hosted-html-guest && node ../../scripts/workspaces/runTypeScriptCli.mjs --noEmit -p tsconfig.json",
+    "typecheck:tests": "yarn -s generate:hosted-html-guest && node ../../scripts/workspaces/runTypeScriptCli.mjs --noEmit -p tsconfig.tests.json",
     "typecheck:tests:prepared": "node ../../scripts/workspaces/runTypeScriptCli.mjs --noEmit -p tsconfig.tests.json",
     "typecheck:finite": "yarn -s typecheck:tests:prepared"
   },

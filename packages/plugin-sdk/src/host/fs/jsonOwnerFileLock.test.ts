@@ -40,6 +40,7 @@ async function raceForLockHeldBy(pid: number): Promise<Readonly<{ ranEffect: boo
     processStartedAtMs: heldAtMs,
     createdAtMs: heldAtMs,
     updatedAtMs: heldAtMs,
+    retired: true,
   }), 'utf8');
 
   let ranEffect = false;

@@ -44,6 +44,7 @@ export const CAPABILITY_HOST_BINDING_OWNERS_V1 = Object.freeze({
   /** Projects declared workflows into the existing workflow library. */
   workflowFamilyProjection: 'apps/cli/src/plugins/projection/registry/workflows.ts',
   inputTypeFamilyProjection: 'apps/cli/src/plugins/projection/registry/inputTypes.ts',
+  atmospherePictureFamilyProjection: 'apps/cli/src/plugins/projection/registry/atmospherePictures.ts',
   /** Admits contribution points and the contributions targeting them. */
   targetedContributionAdmission: 'apps/cli/src/plugins/projection/registry/targetedContributions.ts',
   /** Binds declared plugin commands onto the CLI command surface. */
@@ -185,6 +186,7 @@ export const MANIFEST_FAMILY_REALM_OWNERS_V1 = Object.freeze({
   roles: declarativeFamilyOwners(CAPABILITY_HOST_BINDING_OWNERS_V1.roleFamilyProjection),
   workflows: declarativeFamilyOwners(CAPABILITY_HOST_BINDING_OWNERS_V1.workflowFamilyProjection),
   inputTypes: declarativeFamilyOwners(CAPABILITY_HOST_BINDING_OWNERS_V1.inputTypeFamilyProjection),
+  atmospherePictures: declarativeFamilyOwners(CAPABILITY_HOST_BINDING_OWNERS_V1.atmospherePictureFamilyProjection),
   notifications: declarativeFamilyOwners(CAPABILITY_HOST_BINDING_OWNERS_V1.pluginNotificationsHost),
   systemTools: declarativeFamilyOwners(CAPABILITY_HOST_BINDING_OWNERS_V1.systemToolProjection),
   pluginContributionPoints: declarativeFamilyOwners(

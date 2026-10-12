@@ -139,6 +139,8 @@ export type PluginConnectedAccountOAuthBeginResult =
         status: 'awaitingOAuthRedirect';
         authorizationUrl: string;
         expiresAtMs?: number;
+        issuer?: string;
+        issuerResponseParameterRequired?: boolean;
     }>
     | Exclude<PluginConnectedAccountAuthCompletionResult, Readonly<{ status: 'connected' }>>;
 export type PluginConnectedAccountDeviceBeginResult =

@@ -590,7 +590,7 @@ describe('createPluginUiTestkit', () => {
 
         expect(result.kind).toBe('mounted');
         if (result.kind !== 'mounted') throw new Error('The available host fact must admit the semantic surface.');
-        expect(result.fixture.context).toMatchObject({ surface: initialSurface });
+        expect(result.fixture.context).toMatchObject({ surface: initialSurface, activity: { active: true } });
         expect(semantic.mounts).toHaveLength(1);
         await result.fixture.dispose();
     });

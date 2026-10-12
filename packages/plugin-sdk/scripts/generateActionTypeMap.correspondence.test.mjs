@@ -20,6 +20,38 @@ function publicProjectionSource(protocol) {
       + printer.printNode(ts.EmitHint.Unspecified, node, file)).join('\n');
 }
 
+test('public manifest input references admit qualified machine fields and match Protocol host references', (t) => {
+  const repoRoot = process.cwd();
+  const cache = resolve(repoRoot, 'packages/protocol/node_modules/.cache');
+  mkdirSync(cache, { recursive: true });
+  const root = mkdtempSync(resolve(cache, 'happier-host-input-correspondence-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  // Compile the actual portable declaration without pulling unrelated, prepared SDK host imports into this type-only witness.
+  const manifestPath = resolve(repoRoot, 'packages/plugin-sdk/src/manifest.ts');
+  const manifest = ts.createSourceFile(manifestPath, readFileSync(manifestPath, 'utf8'), ts.ScriptTarget.ES2022, true);
+  const declaration = manifest.statements.find(node => ts.isTypeAliasDeclaration(node) && node.name.text === 'PluginInputTypeReferenceV1');
+  assert.ok(declaration, 'Expected the canonical public manifest input-reference declaration');
+  writeFileSync(resolve(root, 'publicReference.ts'), ts.createPrinter().printNode(ts.EmitHint.Unspecified, declaration, manifest));
+  const fixture = resolve(root, 'hostInputs.ts');
+  writeFileSync(fixture, `
+    import type { InputTypeReferenceV1 as Canonical } from '${repoRoot}/packages/protocol/src/inputs/inputTypes.js';
+    import type { PluginInputTypeReferenceV1 as Public } from './publicReference.js';
+    declare const canonical: Canonical;
+    declare const authored: Public;
+    const forward: Public = canonical;
+    const reverse: Canonical = authored;
+    const machine: Public = { hostType: 'machine' };
+  `);
+  const invocation = resolveTypeScriptCliInvocation({ repoRoot, workspaceDir: repoRoot });
+  const result = spawnSync(invocation.command, [...invocation.argsPrefix,
+    '--ignoreConfig', '--strict', '--skipLibCheck', '--target', 'ES2022',
+    '--module', 'ESNext', '--moduleResolution', 'Bundler', '--customConditions', 'happier-source',
+    '--types', 'node', '--noEmit', resolve(repoRoot, 'packages/protocol/src/auth/tr46.d.ts'), fixture,
+  ], { cwd: repoRoot, encoding: 'utf8' });
+  assert.equal(result.status, 0, JSON.stringify({ signal: result.signal, error: result.error?.message })
+    + '\n' + result.stdout + result.stderr);
+});
+
 test('public Action correspondence preserves empty objects, primitives, brands and recursive JSON leaves', (t) => {
   const repoRoot = process.cwd();
   const cache = resolve(repoRoot, 'packages/protocol/node_modules/.cache');

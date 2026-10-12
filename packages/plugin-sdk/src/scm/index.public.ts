@@ -1,4 +1,5 @@
 export type { PluginScmRegistrationApi } from './projections.js';
+export type { ScmWorktreeRetireRequest, ScmWorktreeReinstateRequest } from './projections.js';
 export type { ScmEntryHistoryV1, ScmHistoryEntriesInputV1, ScmHistoryEntriesOutputV1, ScmHistoryEntriesRequest, ScmHistoryEntriesResponse } from './projections.js';
 export { ScmHistoryEntriesInputV1Schema, ScmHistoryEntriesResponseSchema } from './projections.js';
 export { SCM_COMMIT_MESSAGE_MAX_LENGTH } from './projections.js';
@@ -70,6 +71,7 @@ export type { ScmPullRequestAuthState } from './projections.js';
 export type { ScmPullRequestCheckoutRequest } from './projections.js';
 export type { ScmPullRequestCheckoutResponse } from './projections.js';
 export type { ScmPullRequestChecksState } from './projections.js';
+export type { ScmPullRequestErrorResponse } from './projections.js';
 export type { ScmPullRequestGetRequest } from './projections.js';
 export type { ScmPullRequestGetResponse } from './projections.js';
 export type { ScmPullRequestWorkEvidence } from './projections.js';

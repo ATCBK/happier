@@ -17,6 +17,14 @@ export const finding = {
     currentness: 'current',
     coverage: 'complete',
     severity: 'info',
+    classification: 'informational',
+    basis: {
+        method: 'unchanged_selection_without_compaction_v1',
+        kind: 'observation',
+        citations: [{ url: 'https://arxiv.org/abs/2509.23586', sourceKind: 'research_paper', asOf: '2026-10-10' }],
+        limitations: ['Repeated unchanged selections are observed, not a measured dollar saving.'],
+        advice: ['Review redundant reads; changed files and reads after compaction are not counted.'],
+    },
     summaryCode: 'redundant_unchanged_read_observed',
     evidence: [
         { kind: 'file_read', id: 'read-one', observedAtMs: 1 },

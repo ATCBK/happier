@@ -257,6 +257,8 @@ const EXPECTED_EXPORTS = [
     'ConnectedServiceQuotaRecoveryCreditKindV1Schema',
     'ConnectedServiceQuotaRecoveryCreditStatusV1',
     'ConnectedServiceQuotaRecoveryCreditStatusV1Schema',
+    'ConnectedServiceQuotaRecoveryCreditDetailsV1',
+    'ConnectedServiceQuotaRecoveryCreditDetailsByIdV1',
     'ConnectedServiceQuotaRecoveryCreditV1',
     'ConnectedServiceQuotaRecoveryCreditV1Schema',
     'ConnectedServiceQuotaRecoveryCreditsV1',

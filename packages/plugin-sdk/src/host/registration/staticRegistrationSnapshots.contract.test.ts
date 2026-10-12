@@ -106,7 +106,7 @@ function captureAgentField(field: 'externalSessions' | 'externalSessionObservati
     const scope = createPluginRegistrationScope({
         pluginId: 'test.snapshot-contract',
         target: { realm: 'daemon' },
-        rights: [{ family: 'agents', localId: 'agent', target: { realm: 'daemon' }, requiredFields: field === 'externalSessions' ? [field] : ['externalSessions', field] }],
+        rights: [{ family: 'agents', localId: 'agent', target: { realm: 'daemon' }, requiredFields: ['externalSessions'] }],
     });
     if (field === 'externalSessions') {
         scope.api.agents.registerExternalSessions('agent', fixture as SnapshotContracts['externalSessions']);

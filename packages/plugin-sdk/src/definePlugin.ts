@@ -891,6 +891,10 @@ export type DefinePluginInput<
             PluginContributionLocalId,
             Omit<NonNullable<NonNullable<PluginManifest['contributes']>['inputTypes']>[number], 'id'>
         >>;
+        atmospherePictures?: Readonly<Record<
+            PluginContributionLocalId,
+            Omit<NonNullable<NonNullable<PluginManifest['contributes']>['atmospherePictures']>[number], 'id'>
+        >>;
         dragSources?: Readonly<Record<PluginContributionLocalId, Omit<NonNullable<NonNullable<PluginManifest['contributes']>['dragSources']>[number], 'id'>>>;
         dropTargets?: Readonly<Record<PluginContributionLocalId, Omit<NonNullable<NonNullable<PluginManifest['contributes']>['dropTargets']>[number], 'id'>>>;
         notifications?: Readonly<Record<
@@ -2446,6 +2450,7 @@ const EXECUTION_RUN_PROFILES_ADAPTER = descriptorFamilyAdapter('executionRunProf
 const ROLES_ADAPTER = descriptorFamilyAdapter('roles');
 const WORKFLOWS_ADAPTER = descriptorFamilyAdapter('workflows');
 const INPUT_TYPES_ADAPTER = descriptorFamilyAdapter('inputTypes');
+const ATMOSPHERE_PICTURES_ADAPTER = descriptorFamilyAdapter('atmospherePictures');
 const DRAG_SOURCES_ADAPTER = descriptorFamilyAdapter('dragSources');
 const DROP_TARGETS_ADAPTER = descriptorFamilyAdapter('dropTargets');
 const NOTIFICATIONS_ADAPTER = descriptorFamilyAdapter('notifications');
@@ -2643,6 +2648,7 @@ export const DEFINE_PLUGIN_FAMILY_POLICY_V2 = Object.freeze({
     roles: { classification: 'descriptor-only', authorKey: 'roles', inputShape: 'descriptor', adapter: ROLES_ADAPTER },
     workflows: { classification: 'descriptor-only', authorKey: 'workflows', inputShape: 'descriptor', adapter: WORKFLOWS_ADAPTER },
     inputTypes: { classification: 'descriptor-only', authorKey: 'inputTypes', inputShape: 'descriptor', adapter: INPUT_TYPES_ADAPTER },
+    atmospherePictures: { classification: 'descriptor-only', authorKey: 'atmospherePictures', inputShape: 'descriptor', adapter: ATMOSPHERE_PICTURES_ADAPTER },
     dragSources: { classification: 'adapter', authorKey: 'dragSources', inputShape: 'descriptor', adapter: DRAG_SOURCES_ADAPTER },
     dropTargets: { classification: 'adapter', authorKey: 'dropTargets', inputShape: 'descriptor', adapter: DROP_TARGETS_ADAPTER },
     notifications: { classification: 'descriptor-only', authorKey: 'notifications', inputShape: 'descriptor', adapter: NOTIFICATIONS_ADAPTER },

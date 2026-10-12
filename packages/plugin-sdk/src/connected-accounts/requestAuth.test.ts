@@ -15,6 +15,7 @@ import {
   CONNECTED_ACCOUNT_REQUEST_AUTH_CAPABILITY_PATH_ENV,
   buildConnectedAccountRequestAuthClientSource,
 } from './requestAuth.js';
+import { createConnectedAccountRequestAuthClient } from './request-auth/index.js';
 
 const roots: string[] = [];
 const originalFetch = globalThis.fetch;
@@ -178,6 +179,28 @@ function writeTestCapabilityFileSync(
 }
 
 describe('generated connected-account request-auth client source', () => {
+  it('keeps the callable host client on the same transport and rereads its explicit capability file', async () => {
+    const { capability } = await configureFiles();
+    delete process.env[CONNECTED_ACCOUNT_REQUEST_AUTH_CAPABILITY_PATH_ENV];
+    const receivedCapabilities: string[] = [];
+    globalThis.fetch = vi.fn(async (_url, init) => {
+      receivedCapabilities.push(new Headers(init?.headers).get(CONNECTED_ACCOUNT_REQUEST_AUTH_CAPABILITY_HEADER) ?? '');
+      return new Response(JSON.stringify({ ok: true, value: {
+        accessToken: 'host-access',
+        credentialContext: {
+          account: { service: { pluginId: 'happier.connected-account.test', localId: 'subscription' }, accountId: 'work' },
+          credentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS',
+        },
+      } }), { status: 200 });
+    });
+    const client = await createConnectedAccountRequestAuthClient({ capabilityFile: capability.path });
+    expect((await client.lookupConnectedAccountRequestAuth({ purpose })).accessToken).toBe('host-access');
+    const rotatedCapability = randomBytes(32).toString('base64url');
+    writeTestCapabilityFileSync(capability.path, 'run-2', rotatedCapability);
+    expect((await client.lookupConnectedAccountRequestAuth({ purpose })).accessToken).toBe('host-access');
+    expect(receivedCapabilities).toEqual([capability.document.capability, rotatedCapability]);
+  });
+
   it('gives authentication recovery a longer transport budget without extending ordinary lookups', async () => {
     await configureFiles();
     const timeoutSpy = vi.spyOn(AbortSignal, 'timeout');

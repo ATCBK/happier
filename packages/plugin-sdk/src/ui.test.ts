@@ -5,8 +5,6 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
 import * as protocol from '@happier-dev/protocol';
 import {
     CURRENT_UI_CONTEXT_BOUNDED_INCOMPLETENESS_V1 as canonicalCurrentUiContextBoundedIncompletenessV1,
-    CURRENT_UI_CONTEXT_MAX_COMMANDS_V1 as canonicalCurrentUiContextMaxCommandsV1,
-    CURRENT_UI_CONTEXT_MAX_UTF8_BYTES_V1 as canonicalCurrentUiContextMaxUtf8BytesV1,
     ComposerRefV1Schema as canonicalComposerRefV1Schema,
     MAX_COMPOSER_ATTACHMENT_DESCRIPTION_CODE_POINTS_V1 as canonicalComposerAttachmentDescriptionCodePointsV1,
     MAX_COMPOSER_ATTACHMENT_LABEL_CODE_POINTS_V1 as canonicalComposerAttachmentLabelCodePointsV1,
@@ -235,23 +233,19 @@ describe('plugin UI public surface', () => {
         );
     });
 
-    it('projects current-context bounds and incompleteness through the UI author spec', () => {
+    it('projects current-context incompleteness through the UI author spec without invented budgets', () => {
         const uiAuthorSource = readFileSync(new URL('./ui/index.public.ts', import.meta.url), 'utf8');
 
-        expect(pluginUiPackageSurface.CURRENT_UI_CONTEXT_MAX_COMMANDS_V1)
-            .toBe(canonicalCurrentUiContextMaxCommandsV1);
-        expect(pluginUiPackageSurface.CURRENT_UI_CONTEXT_MAX_UTF8_BYTES_V1)
-            .toBe(canonicalCurrentUiContextMaxUtf8BytesV1);
+        expect(pluginUiPackageSurface).not.toHaveProperty('CURRENT_UI_CONTEXT_MAX_COMMANDS_V1');
+        expect(pluginUiPackageSurface).not.toHaveProperty('CURRENT_UI_CONTEXT_MAX_UTF8_BYTES_V1');
         expect(pluginUiPackageSurface.CURRENT_UI_CONTEXT_BOUNDED_INCOMPLETENESS_V1)
             .toBe(canonicalCurrentUiContextBoundedIncompletenessV1);
-        expect(pluginUiAuthorSurface.CURRENT_UI_CONTEXT_MAX_COMMANDS_V1)
-            .toBe(canonicalCurrentUiContextMaxCommandsV1);
-        expect(pluginUiAuthorSurface.CURRENT_UI_CONTEXT_MAX_UTF8_BYTES_V1)
-            .toBe(canonicalCurrentUiContextMaxUtf8BytesV1);
+        expect(pluginUiAuthorSurface).not.toHaveProperty('CURRENT_UI_CONTEXT_MAX_COMMANDS_V1');
+        expect(pluginUiAuthorSurface).not.toHaveProperty('CURRENT_UI_CONTEXT_MAX_UTF8_BYTES_V1');
         expect(pluginUiAuthorSurface.CURRENT_UI_CONTEXT_BOUNDED_INCOMPLETENESS_V1)
             .toBe(canonicalCurrentUiContextBoundedIncompletenessV1);
         expect(uiAuthorSource).toMatch(
-            /export \{[\s\S]*?CURRENT_UI_CONTEXT_BOUNDED_INCOMPLETENESS_V1[\s\S]*?CURRENT_UI_CONTEXT_MAX_COMMANDS_V1[\s\S]*?CURRENT_UI_CONTEXT_MAX_UTF8_BYTES_V1[\s\S]*?\} from '\.\/hostApi\.js';/u,
+            /export \{[\s\S]*?CURRENT_UI_CONTEXT_BOUNDED_INCOMPLETENESS_V1[\s\S]*?\} from '\.\/hostApi\.js';/u,
         );
     });
 

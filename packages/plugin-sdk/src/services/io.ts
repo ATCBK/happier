@@ -107,6 +107,8 @@ export type PluginExecSpawnRequest = Readonly<{
     maxStderrBytes?: number;
 }>;
 export type PluginAgentCliReadinessRequest = Readonly<{
+    /** Read the installed CLI version through the host's canonical probe when requested. */
+    includeVersion?: boolean;
     candidates: readonly string[];
     requirement: 'any' | 'all';
     cwd?: string;
@@ -115,7 +117,7 @@ export type PluginAgentCliReadinessRequest = Readonly<{
     signal?: AbortSignal;
 }>;
 export type PluginAgentCliReadinessResult = Readonly<{
-    launchable: readonly Readonly<{ agentId: string }>[];
+    launchable: readonly Readonly<{ agentId: string; version?: string }>[];
 }>;
 export type PluginProcessOutput = Readonly<{ sequence: number; stream: 'stdout' | 'stderr'; data: Uint8Array }>;
 export type PluginProcessObservedTermination =

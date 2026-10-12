@@ -9,6 +9,28 @@ import ts from 'typescript';
 import * as generator from './generateActionTypeMap.mjs';
 import { resolveTypeScriptCliInvocation } from '../../../scripts/workspaces/resolveTypeScriptCliInvocation.mjs';
 
+function writeCanonicalSdkTypeFixtures(root) {
+  const put = (path, text) => {
+    const target = resolve(root, path);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, text);
+  };
+  put('packages/plugin-sdk/src/identity.ts', `
+    export type JsonValue = null | boolean | number | string | readonly JsonValue[] | { readonly [key: string]: JsonValue };
+    export type PluginJsonValueV2 = JsonValue;
+  `);
+  put('packages/plugin-sdk/src/scm/projections.ts', `
+    import type { JsonValue } from '../identity.js';
+    export type ScmComparisonSource =
+      | { kind: 'turnCheckpoint'; sessionId?: string; turnId?: string; checkpointReceiptId?: string; evidenceMode?: 'checkpoint' | 'agent_reported' | 'reconciled' }
+      | { kind: 'session'; sessionId: string }
+      | { kind: 'workingTree' }
+      | { kind: 'branch'; head: string; base: string }
+      | { kind: 'commit'; commit: string; parent?: string }
+      | { kind: 'pullRequest'; locator: { providerId: string; repository: string; number: number; baseOid?: string; headOid?: string; sourceAction?: { action: { pluginId: string; localId: string }; input?: JsonValue } } };
+  `);
+}
+
 test('Action DTO declaration consumers retain literal keys and result fields without a validator dependency', (t) => {
   const root = mkdtempSync(resolve(tmpdir(), 'happier-action-dto-consumer-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -131,14 +153,16 @@ test('current published Action DTO closure emits portable declarations and recur
   const root = mkdtempSync(resolve(tmpdir(), 'happier-current-action-dto-consumer-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const projection = generator.projectActionDtoDeclarations();
-  const actionsRoot = 'packages/plugin-sdk/src/actions/';
+  const sdkSourceRoot = resolve(root, 'packages/plugin-sdk/src');
+  const actionsRoot = resolve(sdkSourceRoot, 'actions');
   for (const [path, text] of projection.outputs) {
     assert.equal(readFileSync(resolve(path), 'utf8'), text, `published DTO module is current: ${path}`);
-    const target = resolve(root, path.slice(actionsRoot.length));
+    const target = resolve(root, path);
     mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, text);
     assert.doesNotMatch(text, /\bzod\b|@happier-dev\/protocol|\bz\./u);
   }
+  writeCanonicalSdkTypeFixtures(root);
   const comparison = `
     import type * as Dto from './actionTypeMap.generated.js';
     // @ts-expect-error the public map has no arbitrary string index
@@ -153,12 +177,12 @@ test('current published Action DTO closure emits portable declarations and recur
     export type LinkValue = Dto.PluginAgentExternalSessionLinkDataValue;
     export type SchemaJson = Dto.JSONType;
   `;
-  writeFileSync(resolve(root, 'compare.ts'), comparison);
+  writeFileSync(resolve(actionsRoot, 'compare.ts'), comparison);
   const invocation = resolveTypeScriptCliInvocation({ repoRoot: process.cwd(), workspaceDir: process.cwd() });
   const compile = (args) => spawnSync(invocation.command, [...invocation.argsPrefix,
     '--ignoreConfig', '--strict', '--skipLibCheck', '--target', 'ES2022',
     '--module', 'NodeNext', '--moduleResolution', 'NodeNext', ...args,
-  ], { cwd: root, encoding: 'utf8' });
+  ], { cwd: actionsRoot, encoding: 'utf8' });
   const emitted = compile(['--declaration', '--emitDeclarationOnly', '--outDir', 'declarations', 'compare.ts']);
   assert.equal(emitted.status, 0, emitted.stdout + emitted.stderr);
   const inspectDeclarations = (path) => {
@@ -169,11 +193,11 @@ test('current published Action DTO closure emits portable declarations and recur
         /\bzod\b|@happier-dev\/protocol|\bz\./u);
     }
   };
-  inspectDeclarations(resolve(root, 'declarations'));
-  writeFileSync(resolve(root, 'consumer.ts'), `
-    import type { Input, Result } from './declarations/compare.js';
-    import type { PluginActionWorkflowIngressBlockV1, PluginActionWorkflowBlockV1, PluginActionResultById } from './declarations/actionTypeMap.generated.js';
-    import type { PluginDeclarativeNodeV2 } from './declarations/dtos/actionDeclarativeNodeDto.generated.js';
+  inspectDeclarations(resolve(actionsRoot, 'declarations'));
+  writeFileSync(resolve(actionsRoot, 'consumer.ts'), `
+    import type { Input, Result } from './declarations/actions/compare.js';
+    import type { PluginActionWorkflowIngressBlockV1, PluginActionWorkflowBlockV1, PluginActionResultById } from './declarations/actions/actionTypeMap.generated.js';
+    import type { PluginDeclarativeNodeV2 } from './declarations/actions/dtos/actionDeclarativeNodeDto.generated.js';
     declare const input: Input;
     declare const result: Result;
     export const authored = input;
@@ -206,10 +230,12 @@ test('current published Action DTO closure emits portable declarations and recur
 test('SDK declarative aliases and neutral DTOs remain equivalent in a declaration consumer', (t) => {
   const root = mkdtempSync(resolve(tmpdir(), 'happier-action-ui-dto-consumer-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
+  const actionsRoot = resolve(root, 'packages/plugin-sdk/src/actions');
   for (const [path, text] of generator.projectActionDtoDeclarations().outputs) {
-    const target = resolve(root, path.replace('packages/plugin-sdk/src/actions/', ''));
+    const target = resolve(root, path);
     mkdirSync(dirname(target), { recursive: true }); writeFileSync(target, text);
   }
+  writeCanonicalSdkTypeFixtures(root);
   const file = ts.createSourceFile('manifest.ts', readFileSync(new URL('../src/manifest.ts', import.meta.url), 'utf8'), ts.ScriptTarget.ES2022, true);
   const aliases = new Map(file.statements.filter(ts.isTypeAliasDeclaration).map(node => [node.name.text, node]));
   const selected = new Set();
@@ -221,12 +247,15 @@ test('SDK declarative aliases and neutral DTOs remain equivalent in a declaratio
     const node = aliases.get(name);
     if (!node) {
       const owner = file.statements.find(node => ts.isImportDeclaration(node)
-        && node.moduleSpecifier.text === './actions/dtos/actionDeclarativeNodeDto.generated.js'
+        && /^\.\/actions\/dtos\/[A-Za-z0-9]+\.generated\.js$/u.test(node.moduleSpecifier.text)
         && node.importClause?.namedBindings && ts.isNamedImports(node.importClause.namedBindings)
         && node.importClause.namedBindings.elements.some(item => item.name.text === name));
       assert.ok(owner, `existing SDK grammar dependency: ${name}`);
       const binding = owner.importClause.namedBindings.elements.find(item=>item.name.text === name);
-      projectedImports.set(name, (binding.propertyName ?? binding.name).text);
+      projectedImports.set(name, {
+        imported: (binding.propertyName ?? binding.name).text,
+        module: owner.moduleSpecifier.text.replace('./actions/', './'),
+      });
       return;
     }
     selected.add(name);
@@ -239,18 +268,21 @@ test('SDK declarative aliases and neutral DTOs remain equivalent in a declaratio
       && node.type.typeName.text.startsWith('DtoPlugin')) select(name);
   }
   const printer = ts.createPrinter();
-  const original = `import type { JsonValue } from './dtos/strictJsonValue.generated.js';\nimport type { PluginJsonValueV2 } from './dtos/jsonSchema.generated.js';\nimport type { PluginInvocableActionId } from './actionTypeMap.generated.js';\nimport type { PluginUiIconTokenV1, PluginUiAttachmentToneV1, ComposerContentMediaKindV1, ComposerContentMimeTypeV1 } from './dtos/actionDeclarativeNodeDto.generated.js';\n`
-    + ([...projectedImports].length ? `import type { ${[...projectedImports].map(([local,name])=>`${name} as ${local}`).join(', ')} } from './dtos/actionDeclarativeNodeDto.generated.js';\n` : '')
+  const projectedImportText = [...new Set([...projectedImports.values()].map(({ module }) => module))]
+    .map(module => `import type { ${[...projectedImports].filter(([, value]) => value.module === module).map(([local, value]) => `${value.imported} as ${local}`).join(', ')} } from '${module}';`)
+    .join('\n');
+  const original = `type JsonValue = null | boolean | number | string | readonly JsonValue[] | { readonly [key: string]: JsonValue };\ntype PluginJsonValueV2 = JsonValue;\nimport type { PluginInvocableActionId } from './actionTypeMap.generated.js';\nimport type { PluginUiIconTokenV1, PluginUiAttachmentToneV1, ComposerContentMediaKindV1, ComposerContentMimeTypeV1 } from './dtos/actionDeclarativeNodeDto.generated.js';\n`
+    + (projectedImportText ? `${projectedImportText}\n` : '')
     + [...selected].map(name => printer.printNode(ts.EmitHint.Unspecified, aliases.get(name), file)).join('\n');
-  writeFileSync(resolve(root, 'originalUi.ts'), original.replaceAll("import('./actions/actionTypeMap.generated.js').PluginInvocableActionId", 'PluginInvocableActionId'));
-  writeFileSync(resolve(root, 'uiComparison.ts'), `
+  writeFileSync(resolve(actionsRoot, 'originalUi.ts'), original.replaceAll("import('./actions/actionTypeMap.generated.js').PluginInvocableActionId", 'PluginInvocableActionId'));
+  writeFileSync(resolve(actionsRoot, 'uiComparison.ts'), `
     import type * as Original from './originalUi.js';
-    import type * as Neutral from './dtos/actionDeclarativeNodeDto.generated.js';
+    import type * as Neutral from './dtos/pluginActionDtoSupport.generated.js';
     type Equal<A,B> = [A] extends [B] ? [B] extends [A] ? true : false : false;
     type Assert<T extends true> = T;
     ${[...selected].map(name=>`type Preserve${name} = Assert<Equal<Original.${name}, Neutral.${name}>>;`).join('\n')}
   `);
   const invocation = resolveTypeScriptCliInvocation({ repoRoot: process.cwd(), workspaceDir: process.cwd() });
-  const result = spawnSync(invocation.command, [...invocation.argsPrefix, '--ignoreConfig', '--strict', '--skipLibCheck', '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', '--noEmit', 'uiComparison.ts'], { cwd: root, encoding: 'utf8' });
+  const result = spawnSync(invocation.command, [...invocation.argsPrefix, '--ignoreConfig', '--strict', '--skipLibCheck', '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', '--noEmit', 'uiComparison.ts'], { cwd: actionsRoot, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stdout + result.stderr);
 });

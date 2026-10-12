@@ -12,12 +12,8 @@ export type { PluginDragSourceRuntime, PluginDropTargetRuntime, EntityDragItemV1
 export type { PluginDragSourceContributionV1, PluginDropTargetContributionV1 } from './manifest.js';
 export type { PluginProjectNativeAdapterContributionV1 } from './manifest.js';
 export type { PluginInputTypeReferenceV1 } from './manifest.js';
-export { MAX_PLUGIN_SEARCH_ITEMS_V1 } from './searchProviders.js';
-export { MAX_PLUGIN_SEARCH_ITEM_ID_UTF8_BYTES_V1 } from './searchProviders.js';
-export { MAX_PLUGIN_SEARCH_QUERY_UTF8_BYTES_V1 } from './searchProviders.js';
+export type { PluginAtmospherePictureContributionV1 } from './manifest.js';
 export { MAX_PLUGIN_SEARCH_ITEM_COMMAND_UTF8_BYTES_V1 } from './searchProviders.js';
-export { MAX_PLUGIN_SEARCH_SUBTITLE_CODE_POINTS_V1 } from './searchProviders.js';
-export { MAX_PLUGIN_SEARCH_TITLE_CODE_POINTS_V1 } from './searchProviders.js';
 export { PluginSearchItemV1Schema } from './searchProviders.js';
 export { PluginSearchQueryV1Schema } from './searchProviders.js';
 export { PluginSearchResultV1Schema } from './searchProviders.js';

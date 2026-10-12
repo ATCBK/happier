@@ -283,6 +283,10 @@ describe('Agent runner-factory registration transaction', () => {
         purpose: 'agent_token',
         environmentKey: 'EXAMPLE_AGENT_TOKEN',
       }],
+      environmentUnsetUses: [{
+        purpose: 'agent_config',
+        environmentKey: 'AGY_ACP_CCPA_BASE_URL',
+      }],
       switchContinuity: {
         continuityMode: 'restart_same_home' as const,
         supportedTransitions: ['native_to_connected'],
@@ -291,6 +295,8 @@ describe('Agent runner-factory registration transaction', () => {
         nativeHome: {
           environmentKey: 'EXAMPLE_AGENT_HOME',
           defaultRelativePath: '.example-agent',
+          materializedDirectoryName: 'account-home',
+          runtimeDescriptorHome: { pathField: 'nativeHomePath', scopeField: 'nativeHomeKind', scopeValue: 'connectedService' },
         },
         providerSupportStatus: 'supported',
         config: {
@@ -322,9 +328,11 @@ describe('Agent runner-factory registration transaction', () => {
     connectedAccountLaunch.requestAuthUses[0]!.purpose = 'mutated';
     connectedAccountLaunch.fileEnvironmentUses[0]!.fileId = 'mutated';
     connectedAccountLaunch.environmentUses[0]!.purpose = 'mutated';
+    connectedAccountLaunch.environmentUnsetUses[0]!.environmentKey = 'MUTATED';
     connectedAccountLaunch.switchContinuity.supportedTransitions[0] = 'connected_to_native';
     connectedAccountLaunch.stateSharingDescriptor.config.entries[0]!.path = 'mutated.toml';
     connectedAccountLaunch.stateSharingDescriptor.nativeHome.defaultRelativePath = '../escape';
+    connectedAccountLaunch.stateSharingDescriptor.nativeHome.runtimeDescriptorHome.pathField = 'mutated';
 
     expect(captured).toEqual({
       requestAuthUses: [{
@@ -344,6 +352,10 @@ describe('Agent runner-factory registration transaction', () => {
         purpose: 'agent_token',
         environmentKey: 'EXAMPLE_AGENT_TOKEN',
       }],
+      environmentUnsetUses: [{
+        purpose: 'agent_config',
+        environmentKey: 'AGY_ACP_CCPA_BASE_URL',
+      }],
       switchContinuity: {
         continuityMode: 'restart_same_home',
         supportedTransitions: ['native_to_connected'],
@@ -352,6 +364,8 @@ describe('Agent runner-factory registration transaction', () => {
         nativeHome: {
           environmentKey: 'EXAMPLE_AGENT_HOME',
           defaultRelativePath: '.example-agent',
+          materializedDirectoryName: 'account-home',
+          runtimeDescriptorHome: { pathField: 'nativeHomePath', scopeField: 'nativeHomeKind', scopeValue: 'connectedService' },
         },
         providerSupportStatus: 'supported',
         config: {
@@ -493,6 +507,10 @@ describe('Agent runner-factory registration transaction', () => {
     { environmentKey: 'AGENT_HOME', defaultRelativePath: '/tmp/agent' },
     { environmentKey: 'AGENT_HOME', defaultRelativePath: '../agent' },
     { environmentKey: 'AGENT_HOME', defaultRelativePath: 'agent\\home' },
+    { environmentKey: 'AGENT_HOME', defaultRelativePath: '.agent', materializedDirectoryName: '../foreign' },
+    { environmentKey: 'AGENT_HOME', defaultRelativePath: '.agent', materializedDirectoryName: 'foreign\\home' },
+    { environmentKey: 'AGENT_HOME', defaultRelativePath: '.agent', runtimeDescriptorHome: { pathField: '', scopeField: 'home', scopeValue: 'connectedService' } },
+    { environmentKey: 'AGENT_HOME', defaultRelativePath: '.agent', groupHome: 'ambient' },
   ])('rejects an unsafe connected-account native home %s', (nativeHome) => {
     const scope = scopeFor(['factory']);
     expect(() => {
@@ -520,6 +538,9 @@ describe('Agent runner-factory registration transaction', () => {
     { fileEnvironmentUses: [] },
     { fileEnvironmentUses: [{ purpose: 'config', fileId: '', environmentKey: 'AGENT_CONFIG' }] },
     { environmentUses: [{ purpose: 'token', environmentKey: 'NOT-AN-ENV' }] },
+    { environmentUnsetUses: [] },
+    { environmentUnsetUses: [{ purpose: '', environmentKey: 'AGY_ACP_CCPA_PROJECT' }] },
+    { environmentUnsetUses: [{ purpose: 'config', environmentKey: 'NOT-AN-ENV' }] },
   ])('rejects invalid connected-account environment launch uses %s', (connectedAccountLaunch) => {
     const scope = scopeFor(['factory']);
     expect(() => {

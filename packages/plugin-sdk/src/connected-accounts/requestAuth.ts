@@ -1,4 +1,6 @@
 import { CONNECTED_ACCOUNT_REQUEST_AUTH_CAPABILITY_HEADER, CONNECTED_ACCOUNT_REQUEST_AUTH_CAPABILITY_VERSION, CONNECTED_ACCOUNT_REQUEST_AUTH_ERROR_HTTP_STATUS_V1, CONNECTED_ACCOUNT_REQUEST_AUTH_FAILURE_PATH, CONNECTED_ACCOUNT_REQUEST_AUTH_LOOKUP_PATH, CONNECTED_ACCOUNT_REQUEST_AUTH_MATERIALIZATION_ID_MAX_LENGTH, CONNECTED_ACCOUNT_REQUEST_AUTH_QUOTA_FAILURE_PATH, PI_REQUEST_AUTH_PINNED_TERMINAL_PRODUCER_VERSIONS_V1, PI_REQUEST_AUTH_PINNED_TERMINAL_SIGNATURES_V1 } from '@happier-dev/protocol/connect/connected-account-request-auth';
+import type { ConnectedAccountAuthFailureRequestV1, ConnectedAccountQuotaFailureRequestV1, OAuthBearerLeaseV1, QualifiedConnectedAccountPurposeV1, RequestAuthFailureOutcomeV1 } from '@happier-dev/protocol';
+import { HOST_CONNECTED_ACCOUNT_SERVICE_REF_V1 } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
 
 export const CONNECTED_ACCOUNT_REQUEST_AUTH_CAPABILITY_PATH_ENV =
   'HAPPIER_CONNECTED_ACCOUNT_REQUEST_AUTH_CAPABILITY_PATH' as const;
@@ -6,6 +8,8 @@ export const CONNECTED_ACCOUNT_REQUEST_AUTH_CAPABILITY_PATH_ENV =
 export type ConnectedAccountRequestAuthClientSourceParams = Readonly<{
   /** Env var containing the private, atomically rotated request-auth endpoint/capability document. */
   capabilityPathEnv: string;
+  /** Host callers carry the private path directly without putting it into ambient environment. */
+  capabilityPath?: string;
   requestTimeoutMs?: number;
   /** Authentication recovery may rotate an OAuth credential and fetch provider evidence, so it has a larger bounded wait. */
   authFailureRequestTimeoutMs?: number;
@@ -120,7 +124,12 @@ function requestAuthParseAccount(value) {
   if (!requestAuthIsBoundedString(value.accountId, 1, 256) || value.accountId !== value.accountId.trim()) {
     throw new Error("happier_request_auth_schema_invalid");
   }
-  return { service: requestAuthParseContributionIdentity(value.service), accountId: value.accountId };
+  const service = requestAuthHasExactKeys(value.service, ["pluginId", "localId"])
+    && value.service.pluginId === ${js(HOST_CONNECTED_ACCOUNT_SERVICE_REF_V1.pluginId)}
+    && value.service.localId === ${js(HOST_CONNECTED_ACCOUNT_SERVICE_REF_V1.localId)}
+    ? { pluginId: value.service.pluginId, localId: value.service.localId }
+    : requestAuthParseContributionIdentity(value.service);
+  return { service, accountId: value.accountId };
 }
 
 function requestAuthParseCredentialContext(value) {
@@ -248,7 +257,8 @@ function requestAuthParseEvidence(value) {
 }
 
 function requestAuthParseFailure(value, expectedClass) {
-  if (!requestAuthHasExactKeys(value, ["class", "evidence"]) || value.class !== expectedClass) {
+  const scoped = expectedClass === "insufficient_scope";
+  if (!requestAuthHasExactKeys(value, scoped ? ["class", "evidence", "requiredScopes"] : ["class", "evidence"]) || value.class !== expectedClass) {
     throw new Error("happier_request_auth_schema_invalid");
   }
   const evidence = requestAuthParseEvidence(value.evidence);
@@ -257,6 +267,13 @@ function requestAuthParseFailure(value, expectedClass) {
     || (expectedClass === "quota" && evidence.limitCategory === "auth_invalid")
   ) {
     throw new Error("happier_request_auth_schema_invalid");
+  }
+  if (scoped) {
+    if (evidence.limitCategory !== "validation_failed" || !Array.isArray(value.requiredScopes)
+      || !value.requiredScopes.every((scope) => typeof scope === "string" && scope.length > 0)) {
+      throw new Error("happier_request_auth_schema_invalid");
+    }
+    return { class: expectedClass, evidence, requiredScopes: [...value.requiredScopes] };
   }
   return { class: expectedClass, evidence };
 }
@@ -308,7 +325,7 @@ function requestAuthParseOutcome(value) {
 
 // Deliberately reread one atomically replaced tuple for every independent operation.
 function requestAuthReadTransportTuple() {
-  const path = process.env[CONNECTED_ACCOUNT_REQUEST_AUTH_CAPABILITY_PATH_ENV];
+  const path = ${input.capabilityPath === undefined ? 'process.env[CONNECTED_ACCOUNT_REQUEST_AUTH_CAPABILITY_PATH_ENV]' : js(input.capabilityPath)};
   if (typeof path !== "string" || path.trim().length === 0) {
     throw new Error("happier_request_auth_capability_path_missing");
   }
@@ -462,9 +479,11 @@ async function reportConnectedAccountAuthFailure(input) {
   if (!requestAuthHasExactKeys(input, ["credentialContext", "normalizedFailure"], ["signal"])) {
     throw new Error("happier_request_auth_schema_invalid");
   }
+  const failureClass = input.normalizedFailure?.class;
+  if (failureClass !== "authentication" && failureClass !== "insufficient_scope") throw new Error("happier_request_auth_schema_invalid");
   const body = {
     credentialContext: requestAuthParseCredentialContext(input.credentialContext),
-    normalizedFailure: requestAuthParseFailure(input.normalizedFailure, "authentication"),
+    normalizedFailure: requestAuthParseFailure(input.normalizedFailure, failureClass),
   };
   return requestAuthParseOutcome(await requestAuthCall(
     CONNECTED_ACCOUNT_REQUEST_AUTH_FAILURE_PATH,
@@ -491,3 +510,10 @@ async function reportConnectedAccountQuotaFailure(input) {
 
 `;
 }
+
+export type ConnectedAccountRequestAuthClient = Readonly<{
+  lookupConnectedAccountRequestAuth(input: Readonly<{ purpose: QualifiedConnectedAccountPurposeV1; signal?: AbortSignal }>): Promise<OAuthBearerLeaseV1>;
+  reportConnectedAccountAuthFailure(input: ConnectedAccountAuthFailureRequestV1 & Readonly<{ signal?: AbortSignal }>): Promise<RequestAuthFailureOutcomeV1>;
+  reportConnectedAccountQuotaFailure(input: ConnectedAccountQuotaFailureRequestV1 & Readonly<{ signal?: AbortSignal }>): Promise<RequestAuthFailureOutcomeV1>;
+}>;
+

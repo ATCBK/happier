@@ -1,4 +1,5 @@
-import { dirname, resolve } from 'node:path';
+import { dirname, relative, resolve } from 'node:path';
+import { readFile } from 'node:fs/promises';
 import { spawnForegroundCommand } from '../../../apps/stack/scripts/utils/proc/proc.mjs';
 import { fileURLToPath } from 'node:url';
 
@@ -7,8 +8,13 @@ import { ensureWorkspacePackagesBuiltForComponent as ensureWorkspacePackagesBuil
 import { bundleWorkspacePackageDependencies } from '../../../scripts/workspaces/bundleWorkspacePackageDependencies.mjs';
 import { WORKSPACE_PACKAGE_PREREQUISITES_READY_ENV_VAR } from '../../../scripts/workspaces/workspaceChildBuildEnv.mjs';
 import { resolveWorkspaceBundlePublicationMode } from '../../../scripts/workspaces/workspaceBundlePublication.mjs';
+import { resolveWorkspacePackageBuildLockPath } from '../../../scripts/workspaces/workspacePackageBuildLock.mjs';
+import { resolveWorkspacePackageBuildAdmissionClass } from '../../../apps/stack/scripts/utils/dev_targets/remote_commands.mjs';
+import { runWorkspaceBuildAdmission } from '../../../apps/stack/scripts/utils/proc/workspace_build_admission.mjs';
+import { requiresTypeScriptAdmission } from '../../../scripts/workspaces/resolveTypeScriptCliInvocation.mjs';
 import {
   resolveWorkspaceBundleLockPath,
+  callerHoldsWorkspaceBundleLock,
 } from '../../../scripts/workspaces/workspaceBundleLock.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -38,6 +44,7 @@ export async function preparePluginSdkWorkspacePrerequisites(opts = {}) {
   return await ensureWorkspacePackagesBuiltForComponent(pluginSdkDir, {
     env,
     quiet: opts.quiet ?? true,
+    ...(opts.signal ? { signal: opts.signal } : {}),
   });
 }
 
@@ -71,7 +78,50 @@ export async function preparePluginSdkWorkspaceDeclarations(opts = {}) {
     publicationMode: 'live',
     pruneStale: true,
     consumePreparedWorkspace: opts.consumePreparedWorkspace,
+    ...(opts.lockPath ? { lockPath: opts.lockPath } : {}),
   });
+}
+
+async function preparedScriptPublicationPaths({ repoRoot, pluginSdkDir, env }) {
+  const packageJson = JSON.parse(await readFile(resolve(pluginSdkDir, 'package.json'), 'utf8'));
+  // Captured compilation uses the producer's exact publication authority; the
+  // capture remains only the source/tooling cwd and never gains another owner.
+  const publicationRoot = env.HAPPIER_WORKSPACE_CAPTURE_SOURCE_REPO_DIR || repoRoot;
+  const publicationPackageDir = resolve(publicationRoot, relative(repoRoot, pluginSdkDir));
+  return { packageJson, locks: [resolveWorkspaceBundleLockPath(publicationRoot),
+    resolveWorkspacePackageBuildLockPath(publicationPackageDir, packageJson)] };
+}
+
+async function runPreparedWorkspaceWorker({ repoRoot, pluginSdkDir, scriptName, signal }) {
+  const env = process.env;
+  const { locks } = await preparedScriptPublicationPaths({ repoRoot, pluginSdkDir, env });
+  const leases = JSON.parse(env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_LEASES || '[]');
+  const values = [env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD, ...(Array.isArray(leases) ? leases : [])];
+  if (locks.some(path => !values.some(value => callerHoldsWorkspaceBundleLock(path, value)))) {
+    throw new Error('Plugin SDK prepared worker requires its exact inherited publication leases');
+  }
+  await preparePluginSdkWorkspaceDeclarations({ repoRoot, pluginSdkDir, env, lockPath: locks[0],
+    consumePreparedWorkspace: ({ preparedWorkspaceEnv }) => runPluginSdkPreparedScript(scriptName,
+      { pluginSdkDir, env: preparedWorkspaceEnv, signal }),
+  });
+}
+
+async function runPreparedWorkspace(scriptName, { signal } = {}) {
+  const repoRoot = pluginSdkRepoRoot();
+  const pluginSdkDir = resolve(__dirname, '..');
+  await preparePluginSdkWorkspacePrerequisites({ repoRoot, pluginSdkDir, env: process.env, signal });
+  const env = { ...process.env, [WORKSPACE_PACKAGE_PREREQUISITES_READY_ENV_VAR]: '1' };
+  const { packageJson, locks } = await preparedScriptPublicationPaths({ repoRoot, pluginSdkDir, env });
+  const result = await runWorkspaceBuildAdmission({ command: process.execPath,
+    args: [fileURLToPath(import.meta.url), '--prepared-workspace-worker', JSON.stringify({ repoRoot, pluginSdkDir, scriptName })],
+    locks: locks.map(path => ({ path })), cwd: pluginSdkDir, env, signal,
+    admissionClass: resolveWorkspacePackageBuildAdmissionClass({ packageJson, cwd: pluginSdkDir, env, scriptName, repoRoot }),
+    admissionRequired: requiresTypeScriptAdmission({ env }),
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0 || result.signal) throw new Error(
+    `Plugin SDK prepared script ${scriptName} failed${result.signal ? ` with signal ${result.signal}` : ` with exit code ${result.status}`}.`,
+  );
 }
 
 export async function runPluginSdkPreparedScript(scriptName, opts = {}) {
@@ -89,6 +139,7 @@ export async function runPluginSdkPreparedScript(scriptName, opts = {}) {
       env,
       stdio: 'inherit',
       ownedProcessGroup: true,
+      ...(opts.signal ? { signal: opts.signal } : {}),
     });
     child.once('error', rejectRun);
     child.once('close', (code, signal) => {
@@ -110,30 +161,33 @@ const invokedAsMain = (() => {
 })();
 
 if (invokedAsMain) {
+  const args = process.argv.slice(2);
+  const preparedScript = args.find(arg => arg.startsWith('--run-script='))?.slice('--run-script='.length);
+  const preparedWorker = process.argv[2] === '--prepared-workspace-worker';
+  const preparedTransaction = preparedWorker || (args.includes('--declarations') && Boolean(preparedScript));
+  const cancellation = new AbortController();
+  const interrupt = () => cancellation.abort();
+  if (preparedTransaction) for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, interrupt);
   try {
-    const preparedScript = process.argv.slice(2)
-      .find((arg) => arg.startsWith('--run-script='))
-      ?.slice('--run-script='.length);
-    if (process.argv.slice(2).includes('--declarations')) {
-      await preparePluginSdkWorkspaceDeclarations({
-        ...(preparedScript
-          ? {
-              consumePreparedWorkspace: async ({ preparedWorkspaceEnv }) => {
-                await runPluginSdkPreparedScript(preparedScript, { env: preparedWorkspaceEnv });
-              },
-            }
-          : {}),
-      });
+    if (preparedWorker) {
+      await runPreparedWorkspaceWorker({ ...JSON.parse(process.argv[3]), signal: cancellation.signal });
     } else {
-      await bundleWorkspaceDeps({
-        publicationMode: resolveWorkspaceBundlePublicationMode({
-          argv: process.argv.slice(2),
-          env: process.env,
-        }),
-      });
+      if (args.includes('--declarations')) {
+        if (preparedScript) await runPreparedWorkspace(preparedScript, { signal: cancellation.signal });
+        else await preparePluginSdkWorkspaceDeclarations();
+      } else {
+        await bundleWorkspaceDeps({
+          publicationMode: resolveWorkspaceBundlePublicationMode({
+            argv: process.argv.slice(2),
+            env: process.env,
+          }),
+        });
+      }
     }
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
+  } finally {
+    for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.off(signal, interrupt);
   }
 }

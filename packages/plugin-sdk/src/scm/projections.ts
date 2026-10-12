@@ -239,6 +239,7 @@ export type ScmCapabilities = {
     writeRepositoryRemoveIndexLock?: boolean;
     writeStash?: boolean;
     worktreeCreate: boolean;
+    worktreeRetention?: boolean;
     changeSetModel: 'index' | 'working-copy';
     supportedDiffAreas: ('included' | 'pending' | 'both')[];
     operationLabels?: {
@@ -531,7 +532,9 @@ export type ScmStatusSnapshotRequest = {
     outcomeVersion?: 1;
 };
 export type ScmWorktreesEnrichmentRequest = Pick<ScmStatusSnapshotRequest, 'cwd' | 'backendPreference' | 'outcomeVersion'> & { worktreePaths: string[] };
-export type ScmWorktreeEnrichmentEntry = { path: string; changeCount?: number; lastActivityAt?: number };
+export type ScmWorktreeEnrichmentEntry = { path: string; changeCount?: number; lastActivityAt?: number;
+    ahead?: number; upstream?: string | null; upstreamGone?: boolean; mergedIntoDefault?: boolean;
+    isLocked?: boolean; lockReason?: string; headOid?: string; hasSubmodules?: boolean };
 export type ScmWorktreesEnrichmentResponse = {
     success: boolean;
     worktrees?: ScmWorktreeEnrichmentEntry[];
@@ -882,6 +885,12 @@ export type ScmWorktreeRemoveRequest = Pick<ScmStatusSnapshotRequest, 'cwd' | 'b
     confirmed: true;
     authorizationToken: 'remove-worktree';
 };
+export type ScmWorktreeRetireRequest = Pick<ScmStatusSnapshotRequest, 'cwd' | 'backendPreference' | 'outcomeVersion'> & {
+    worktreePath: string;
+    targetPath: string;
+    entryId: string;
+};
+export type ScmWorktreeReinstateRequest = ScmWorktreeRetireRequest;
 
 export type ScmWorktreeRemoveResponse = {
     success: boolean;
@@ -1234,11 +1243,24 @@ export type ScmPullRequestWorkEvidence = {
     checkpointRef: string;
     checkpointCommitSha: string;
     commitSha: string;
+    /** Actual Git committer timestamps; absent evidence is not an accounting time. */
+    committedAtMs?: number;
+    checkpointCommittedAtMs?: number;
+    retainedChange?: {
+        targetSha: string;
+        method: 'changed_file_tree_comparison';
+        status: 'retained' | 'partial';
+        addedLines: number;
+        removedLines: number;
+    };
+    branches?: { ref: string; headSha: string }[];
+    /** Same opaque local Git-directory identity as the branch reader. */
+    branchRepositoryKey?: string;
     attributionScope: 'no_happier_checkpoint_overlap_observed' | 'shared_worktree' | 'unknown';
     pullRequest: ScmPullRequestSummary;
 };
 
-type ScmPullRequestErrorResponse = Extract<ScmRepositoryCloneOutput, { success: false }> & {
+export type ScmPullRequestErrorResponse = Extract<ScmRepositoryCloneOutput, { success: false }> & {
     result?: 'opened_compose';
     composeUrl?: string;
 };

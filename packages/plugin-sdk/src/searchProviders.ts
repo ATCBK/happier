@@ -23,7 +23,7 @@ import type {
   PluginUiSemanticCommandV1,
 } from './ui/publicContract.js';
 
-export { MAX_PLUGIN_SEARCH_ITEMS_V1, MAX_PLUGIN_SEARCH_ITEM_COMMAND_UTF8_BYTES_V1, MAX_PLUGIN_SEARCH_ITEM_ID_UTF8_BYTES_V1, MAX_PLUGIN_SEARCH_QUERY_UTF8_BYTES_V1, MAX_PLUGIN_SEARCH_SUBTITLE_CODE_POINTS_V1, MAX_PLUGIN_SEARCH_TITLE_CODE_POINTS_V1 } from '@happier-dev/protocol/plugins/contributions/search-providers';
+export { MAX_PLUGIN_SEARCH_ITEM_COMMAND_UTF8_BYTES_V1 } from '@happier-dev/protocol/plugins/contributions/search-providers';
 
 export type PluginSearchProviderContributionV1 = Readonly<{
   id: string;
@@ -62,9 +62,9 @@ export const PluginSearchQueryV1Schema: ProtocolComposableSchema<
 export const PluginSearchItemV1Schema: ProtocolComposableSchema<
   PluginSearchItemV1,
   PluginSearchItemV1
-> = projectProtocolValue(canonicalPluginSearchItemV1Schema);
+> = /* @__PURE__ */ projectProtocolValue(canonicalPluginSearchItemV1Schema);
 
 export const PluginSearchResultV1Schema: ProtocolComposableSchema<
   PluginSearchResultV1,
   PluginSearchResultV1
-> = projectProtocolValue(canonicalPluginSearchResultV1Schema);
+> = /* @__PURE__ */ projectProtocolValue(canonicalPluginSearchResultV1Schema);

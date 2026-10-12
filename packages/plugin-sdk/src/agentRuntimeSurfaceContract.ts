@@ -27,6 +27,7 @@ import type {
   AgentSessionHostServices,
   AgentSessionMcpServer,
   AgentSessionMcpLaunchConfig,
+  AgentSessionSkillDelivery,
   AgentSessionMcpService,
   AgentSessionRuntimeContext,
   AgentSessionRuntime,
@@ -168,15 +169,19 @@ type _PublicAcpComposerMustRejectLiteralExecutables = AssertNever<
 type _AcpDefinitionAuthMustStayNarrow = AssertTrue<
   Equal<
     NonNullable<AgentAcpRuntimeDefinition['auth']>,
-    | Readonly<{ methodId: string }>
-    | Readonly<{
-        selectMethod(
-          context: import('./agent-runtime.js').AgentAcpAuthenticationContext,
-        ):
-          | import('./agent-runtime.js').AgentAcpAuthenticationSelection
-          | null
-          | Promise<import('./agent-runtime.js').AgentAcpAuthenticationSelection | null>;
-      }>
+    Readonly<{
+      setupFailure?: Readonly<{ requestErrorCode: number; dataReason: string }>;
+    }> & (
+      | Readonly<{ methodId: string }>
+      | Readonly<{
+          selectMethod(
+            context: import('./agent-runtime.js').AgentAcpAuthenticationContext,
+          ):
+            | import('./agent-runtime.js').AgentAcpAuthenticationSelection
+            | null
+            | Promise<import('./agent-runtime.js').AgentAcpAuthenticationSelection | null>;
+        }>
+    )
   >
 >;
 
@@ -492,6 +497,32 @@ type _ExecutionRunOpenMustCarryOnlyBoundedMcpLaunchConfigs = AssertTrue<
   >
 >;
 
+type _SessionOpenUsesTheCanonicalSkillDelivery = AssertTrue<
+  Equal<
+    NonNullable<AgentSessionOpenRequest['skills']>,
+    AgentSessionSkillDelivery
+  >
+>;
+
+type _ExecutionRunOpenUsesTheCanonicalSkillDelivery = AssertTrue<
+  Equal<
+    NonNullable<AgentExecutionRunOpenRequest['skills']>,
+    AgentSessionSkillDelivery
+  >
+>;
+
+type _SkillDeliveryShapeMustStayDataOnly = AssertTrue<
+  Equal<
+    AgentSessionSkillDelivery,
+    Readonly<{
+      pluginRoot: string;
+      skillsRoot: string;
+      items: readonly Readonly<{ name: string; skillId: string; digest: string }>[];
+      nativeDisables: readonly Readonly<{ name: string; path: string }>[];
+    }>
+  >
+>;
+
 type _ExecutionRunOpenMustNotExposeAnotherEnvironmentCarrier = AssertNever<
   Extract<keyof AgentExecutionRunOpenRequest, 'env' | 'environment' | 'unsetEnvKeys' | 'rawMetadata'>
 >;
@@ -511,7 +542,7 @@ type _SessionOpenMustNotExposeASecondPermissionOrMcpOwner = AssertNever<
 >;
 
 type _SessionMcpLaunchConfigMustStayDataOnly = AssertTrue<
-  Equal<keyof AgentSessionMcpLaunchConfig, 'command' | 'args' | 'env'>
+  Equal<keyof AgentSessionMcpLaunchConfig, 'command' | 'args' | 'env' | 'enabledTools'>
 >;
 
 type _SessionOpenMustCarryOnlyBoundedMcpLaunchConfigs = AssertTrue<
@@ -526,7 +557,15 @@ type _LaunchEnvironmentShapeMustStayDataOnly = AssertTrue<
 >;
 
 type _ConfigurationSnapshotShapeMustStayDataOnly = AssertTrue<
-  Equal<keyof AgentSessionConfigurationSnapshot, 'mode' | 'model' | 'permissionIntent' | 'workspaceWrites' | 'options'>
+  Equal<keyof AgentSessionConfigurationSnapshot, 'mode' | 'model' | 'permissionIntent' | 'workspaceWrites' | 'options' | 'allowedTools' | 'unlistedTools'>
+>;
+
+type _ConfigurationToolRulesMustStayDataOnly = AssertTrue<
+  Equal<AgentSessionConfigurationSnapshot['allowedTools'], readonly string[] | undefined>
+>;
+
+type _ConfigurationUnlistedToolsMustStayClosed = AssertTrue<
+  Equal<AgentSessionConfigurationSnapshot['unlistedTools'], 'ask' | 'deny' | undefined>
 >;
 
 type _PermissionIntentMustBeTheOneClosedDecision = AssertTrue<

@@ -104,6 +104,47 @@ afterEach(async () => {
 });
 
 describe('bounded JSONL session scanner', () => {
+  it('projects and releases lines before reading the rest while retaining the same page frontier', async () => {
+    const scanner = await import('./index.js');
+    const first = jsonlLine({ text: 'first' });
+    const second = jsonlLine({ text: 'second' });
+    const body = Buffer.from(first + second + jsonlLine({ text: 'third' }));
+    const projected: unknown[] = [];
+    const page = await scanner.readJsonlFileForwardLines({
+      filePath: 'stream.jsonl', offsetBytes: 0, maxBytes: body.length, maxItems: 2,
+      onLine(line) { projected.push(line.value); },
+      fileSystem: {
+        async stat() { return { size: body.length, mtimeMs: 0 }; },
+        async read(_path, position) {
+          if (position > 0) expect(projected).toEqual([{ text: 'first' }]);
+          return position === 0 ? body.subarray(0, first.length) : body.subarray(position);
+        },
+      },
+    });
+    expect(projected).toEqual([{ text: 'first' }, { text: 'second' }]);
+    expect(page.items).toEqual([]);
+    expect(page.nextOffsetBytes).toBe(Buffer.byteLength(first + second));
+    expect(page.hitPageLimit).toBe(true);
+    expect(page.reachedEnd).toBe(false);
+  });
+
+  it('propagates stopped projection before reading a later source chunk', async () => {
+    const scanner = await import('./index.js');
+    const first = Buffer.from(jsonlLine({ text: 'first' }));
+    const stopped = new Error('projection cancelled');
+    await expect(scanner.readJsonlFileForwardLines({
+      filePath: 'stream.jsonl', offsetBytes: 0, maxBytes: first.length * 2, maxItems: 2,
+      onLine() { throw stopped; },
+      fileSystem: {
+        async stat() { return { size: first.length * 2, mtimeMs: 0 }; },
+        async read(_path, position) {
+          if (position > 0) throw new Error('read after stopped projection');
+          return first;
+        },
+      },
+    })).rejects.toBe(stopped);
+  });
+
   it('distinguishes a bounded parsed page from an incomplete EOF without changing raw-line reads', async () => {
     const scanner = await import('./index.js');
     const root = await mkdtemp(join(tmpdir(), 'happier-file-store-incomplete-'));

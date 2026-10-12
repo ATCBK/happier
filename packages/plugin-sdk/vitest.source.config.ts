@@ -30,8 +30,16 @@ const workspacePackages: readonly WorkspacePackageSpec[] = [
         packageSourceRoot: resolve(packageRoot, '../cli-common/src'),
     },
     {
+        packageName: '@happier-dev/channels-protocol',
+        packageSourceRoot: resolve(packageRoot, '../channels-protocol/src'),
+    },
+    {
         packageName: '@happier-dev/triage-protocol',
         packageSourceRoot: resolve(packageRoot, '../triage-protocol/src'),
+    },
+    {
+        packageName: '@happier-dev/triage-sources',
+        packageSourceRoot: resolve(packageRoot, '../triage-sources/src'),
     },
 ] as const;
 

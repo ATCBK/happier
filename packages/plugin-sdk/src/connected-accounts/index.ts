@@ -48,6 +48,7 @@ export type { ConnectedAccountPurposeId } from '../connectedAccounts.js';
 export type { PluginConnectedAccountReadContext as ConnectedAccountReadContext } from '../services/connectedAccounts.js';
 export type { PluginConnectedAccountReconciliationResult as ConnectedAccountReconciliationResult } from '../services/connectedAccounts.js';
 export type { ConnectedAccountRef } from '../connectedAccounts.js';
+export type { ConnectedAccountRequestAuthClient } from './requestAuth.js';
 export type { ConnectedAccountRequestAuthClientSourceParams } from './requestAuth.js';
 export type { ConnectedAccountRuntime } from '../connectedAccounts.js';
 export type { ConnectedAccountRuntimeConfiguration } from '../connectedAccounts.js';
@@ -57,6 +58,9 @@ export type { PluginConnectedAccountState as ConnectedAccountState } from '../se
 export type { ConnectedAccountsService } from '../connectedAccounts.js';
 export type { ConnectedServiceCredentialRecordV1 } from '../connectedAccounts.js';
 export type { ConnectedServiceId } from '../connectedAccounts.js';
+export type { ConnectedServiceQuotaRecoveryCreditDetailsByIdV1 } from '../connectedAccounts.js';
+export type { ConnectedServiceQuotaRecoveryCreditDetailsV1 } from '../connectedAccounts.js';
+export type { ConnectedServiceQuotaRecoveryCreditV1 } from '../connectedAccounts.js';
 export type { CredentialRequirementOptions } from '../connectedAccounts.js';
 export { HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_JSON_ENV } from '../connectedAccounts.js';
 export { HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON_ENV } from '../connectedAccounts.js';

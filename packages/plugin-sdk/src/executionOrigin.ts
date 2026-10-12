@@ -26,4 +26,4 @@ export const arePluginMachineMaterializationRefsEqual: (
 export const arePluginMachineExecutionOriginsEqual: (
     left: PluginMachineExecutionOriginV1,
     right: PluginMachineExecutionOriginV1,
-) => boolean = projectProtocolValue(canonicalArePluginMachineExecutionOriginsEqual);
+) => boolean = /* @__PURE__ */ projectProtocolValue(canonicalArePluginMachineExecutionOriginsEqual);

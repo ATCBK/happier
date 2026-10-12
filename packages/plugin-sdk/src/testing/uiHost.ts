@@ -1191,6 +1191,7 @@ async function createPluginUiTestkitInternal<TSurface>(
             plugin: Object.freeze({ ...options.authorPlugin }),
             surface,
             hostApi,
+            activity: Object.freeze({ active }),
             signal: lifetime.signal,
             ...(launchInput === undefined ? {} : { launchInput }),
             ...(currentSubPath === undefined ? {} : { subPath: currentSubPath }),

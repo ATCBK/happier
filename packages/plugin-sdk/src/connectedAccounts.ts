@@ -30,8 +30,8 @@ import type {
 import type {
     ConnectedServiceCredentialRecordV1,
 } from '@happier-dev/protocol/connect/connected-service-schemas';
-import type { ProviderAccountSubscriptionV1 } from '@happier-dev/protocol';
-export type { ProviderAccountSubscriptionV1 } from '@happier-dev/protocol';
+import type { ProviderAccountSubscriptionV1 } from '@happier-dev/protocol/connect/accountSubscription';
+export type { ProviderAccountSubscriptionV1 } from '@happier-dev/protocol/connect/accountSubscription';
 export type {
     PluginConnectedAccountAuthenticationModeV2,
     PluginConnectedAccountAuthenticationV2,
@@ -219,6 +219,8 @@ export type {
     ConnectedServiceQuotaRecoveryCreditKindV1,
     ConnectedServiceQuotaRecoveryCreditStatusV1,
     ConnectedServiceQuotaRecoveryCreditV1,
+    ConnectedServiceQuotaRecoveryCreditDetailsV1,
+    ConnectedServiceQuotaRecoveryCreditDetailsByIdV1,
     ConnectedServiceQuotaRecoveryCreditsV1,
     ConnectedServiceQuotaMeterV1,
     ConnectedServiceQuotaSnapshotV1,
@@ -489,14 +491,15 @@ export interface ConnectedAccountRuntime {
         ): Promise<Readonly<{
             observedAtMs: number;
             availableCount: number;
-            credits: readonly Readonly<{
+            recoveryCreditDetails?: import('@happier-dev/protocol/connect/connected-service-schemas').ConnectedServiceQuotaRecoveryCreditDetailsByIdV1;
+            credits: readonly (Readonly<{
                 providerCreditId: string;
-                status: 'available' | 'unavailable';
-                expiresAtMs?: number;
-            }>[];
+                status: import('@happier-dev/protocol/connect/connected-service-schemas').ConnectedServiceQuotaRecoveryCreditV1['status'];
+            }> & Partial<Pick<import('@happier-dev/protocol/connect/connected-service-schemas').ConnectedServiceQuotaRecoveryCreditV1,
+                'kind' | 'title' | 'description' | 'providerResetType' | 'appliesToProviderLimitId' | 'grantedAtMs' | 'expiresAtMs' | 'redeemStartedAtMs' | 'redeemedAtMs'>>)[];
         }>>;
         consume(
-            request: Readonly<{ idempotencyKey: string; providerCreditId?: string }>,
+            request: Readonly<{ idempotencyKey: string; providerCreditId?: string; providerLimitIds?: readonly string[] }>,
             context: PluginConnectedAccountReadContext,
             options?: Readonly<{ signal?: AbortSignal }>,
         ): Promise<Readonly<{

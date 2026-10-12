@@ -1179,6 +1179,7 @@ export async function createPluginTestkit(
                     plugin: Object.freeze({ id: manifest.id, version: manifest.version }),
                     contribution: Object.freeze({ id: invocationOptions.localId, qualifiedId }),
                     surface: invocationOptions.surface,
+                    invocationId: globalThis.crypto.randomUUID(),
                     invokedAtMs: Date.now(),
                     ...(invocationOptions.caller === undefined ? {} : { caller: invocationOptions.caller }),
                     ...(invocationOptions.sessionId === undefined

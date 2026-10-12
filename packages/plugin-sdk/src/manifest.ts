@@ -37,7 +37,7 @@ export type PluginWorkflowContributionV1 = Readonly<{
 /** Typed input declarations use the incumbent Resource and UI-view families. */
 export type PluginInputTypeReferenceV1 =
   | Readonly<{ hostType: 'usageQuery'; field?: 'period' | 'session' }>
-  | Readonly<{ hostType: 'session' | 'workspace' }>
+  | Readonly<{ hostType: 'session' | 'workspace' | 'machine' }>
   | Readonly<{ pluginId: string; localId: string }>;
 
 export type PluginInputTypeContributionV1 = Readonly<{
@@ -49,6 +49,28 @@ export type PluginInputTypeContributionV1 = Readonly<{
     resource: string | Readonly<{ pluginId: string; localId: string }>;
   }>;
   picker?: string | Readonly<{ pluginId: string; localId: string }>;
+}>;
+
+/** Data-only author contract; the Protocol manifest owns runtime admission. */
+export type PluginAtmospherePictureContributionV1 = Readonly<{
+  id: string;
+  kind: 'photo' | 'painting';
+  title: string;
+  credit: Readonly<{ author: string; source: string; url: string; licence: string; note?: string }>;
+  src: Readonly<{ full: string; thumb: string }>;
+  horizon: Readonly<{ src?: number; at?: number }>;
+  focus: Readonly<{ x?: number; y?: number; zoom?: number }>;
+  hour: number;
+  grades: Readonly<{ light: number; dusk: number; night: number }>;
+  dark: 'dusk' | 'night';
+  look: Readonly<{
+    effect?: 'original' | 'fine' | 'painted-fine' | 'halftone' | 'mosaic' | 'painted' | 'haze' | 'engraving';
+    params?: Readonly<Record<string, number>>;
+    dissolve?: Readonly<{ style?: 'ordered' | 'gradient' | 'haze' | 'shrink' | 'rows'; from?: number; to?: number }>;
+    strength?: number;
+  }>;
+  adjust?: Readonly<{ exposure?: number; contrast?: number; saturation?: number; temperature?: number }>;
+  themes?: readonly ('light' | 'dark')[];
 }>;
 
 /** Observed ACP capability fingerprint used by a system-tool readiness declaration. */
@@ -592,6 +614,7 @@ export interface PluginManifest {
     /** Read-only definitions available through the host's workflow library. */
     workflows?: readonly PluginWorkflowContributionV1[];
     inputTypes?: readonly PluginInputTypeContributionV1[];
+    atmospherePictures?: readonly PluginAtmospherePictureContributionV1[];
     dragSources?: readonly PluginDragSourceContributionV1[];
     dropTargets?: readonly PluginDropTargetContributionV1[];
     /** Read-only role sources, overridable through the host's Roles settings. */
@@ -736,6 +759,7 @@ export type PluginContributes = Readonly<{
   roles: NonNullable<NonNullable<PluginManifest['contributes']>['roles']>;
   workflows: NonNullable<NonNullable<PluginManifest['contributes']>['workflows']>;
   inputTypes: NonNullable<NonNullable<PluginManifest['contributes']>['inputTypes']>;
+  atmospherePictures: NonNullable<NonNullable<PluginManifest['contributes']>['atmospherePictures']>;
   dragSources: NonNullable<NonNullable<PluginManifest['contributes']>['dragSources']>;
   dropTargets: NonNullable<NonNullable<PluginManifest['contributes']>['dropTargets']>;
   notifications: NonNullable<NonNullable<PluginManifest['contributes']>['notifications']>;

@@ -57,6 +57,7 @@ export const CAPABILITY_MATRIX_DECLARATIONS_V1 = Object.freeze({
     roles: available('packages/plugin-sdk/examples/public-authoring/definition.ts'),
     workflows: available(null),
     inputTypes: available('packages/plugin-sdk/examples/public-authoring/definition.ts'),
+    atmospherePictures: available(null),
     dragSources: available('packages/plugins/triage/src/manifest.ts'),
     dropTargets: available('packages/plugins/triage/src/manifest.ts'),
     notifications: available(null),

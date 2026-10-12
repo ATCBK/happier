@@ -37,17 +37,17 @@ import { projectProtocolValue } from '../protocol/projectProtocolValue.js';
 
 export const describeActionForVoiceTool: (
     spec: Pick<ActionSpec, 'title' | 'description' | 'inputHints'>,
-) => string = projectProtocolValue(canonicalDescribeActionForVoiceTool);
+) => string = /* @__PURE__ */ projectProtocolValue(canonicalDescribeActionForVoiceTool);
 export const describeActionInputFieldForVoice: (
     spec: Pick<ActionSpec, 'id'>,
     field: NonNullable<ActionSpec['inputHints']>['fields'][number],
     availability?: VoiceGuidanceAvailability,
 ) => string =
-    projectProtocolValue(canonicalDescribeActionInputFieldForVoice);
+    /* @__PURE__ */ projectProtocolValue(canonicalDescribeActionInputFieldForVoice);
 export const isVoiceSdkSafeActionSpec: (spec: Pick<ActionSpec, 'sideEffectClass'>) => boolean =
-    projectProtocolValue(canonicalIsVoiceSdkSafeActionSpec);
+    /* @__PURE__ */ projectProtocolValue(canonicalIsVoiceSdkSafeActionSpec);
 export const listVoiceSdkSafeToolActionSpecs: () => readonly ActionSpec[] =
-    projectProtocolValue(canonicalListVoiceSdkSafeToolActionSpecs);
+    /* @__PURE__ */ projectProtocolValue(canonicalListVoiceSdkSafeToolActionSpecs);
 
 export type VoiceClientToolAgentPromptOptions = Readonly<{
     assistantName?: string;
@@ -78,7 +78,7 @@ export type VoiceClientToolAgentPromptOptions = Readonly<{
  */
 export const buildVoiceClientToolAgentPrompt: (
     options?: VoiceClientToolAgentPromptOptions,
-) => string = projectProtocolValue(canonicalBuildVoiceClientToolAgentPrompt);
+) => string = /* @__PURE__ */ projectProtocolValue(canonicalBuildVoiceClientToolAgentPrompt);
 
 export const VoiceRealtimeJsonValueSchema: VoiceSchema<VoiceRealtimeJsonValue> =
     canonicalVoiceRealtimeJsonValueSchema;

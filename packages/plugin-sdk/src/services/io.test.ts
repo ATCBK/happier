@@ -70,6 +70,7 @@ describe('SVC08 public exec contract', () => {
         expectTypeOf<ExecService['systemTools']>().toEqualTypeOf<SystemToolsService>();
         expectTypeOf<Parameters<AgentCliReadinessService['checkReadiness']>[0]>()
             .toEqualTypeOf<Readonly<{
+                includeVersion?: boolean;
                 candidates: readonly string[];
                 requirement: 'any' | 'all';
                 cwd?: string;
@@ -79,7 +80,7 @@ describe('SVC08 public exec contract', () => {
             }>>();
         expectTypeOf<Awaited<ReturnType<AgentCliReadinessService['checkReadiness']>>>()
             .toEqualTypeOf<Readonly<{
-                launchable: readonly Readonly<{ agentId: string }>[];
+                launchable: readonly Readonly<{ agentId: string; version?: string }>[];
             }>>();
         expectTypeOf<Awaited<ReturnType<SystemToolsService['resolve']>>>()
             .toEqualTypeOf<Readonly<{

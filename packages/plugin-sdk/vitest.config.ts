@@ -11,7 +11,9 @@ export default defineConfig({
         { packageName: '@happier-dev/protocol', packageSourceRoot: sourceRoot('protocol') },
         { packageName: '@happier-dev/agents', packageSourceRoot: sourceRoot('agents') },
         { packageName: '@happier-dev/cli-common', packageSourceRoot: sourceRoot('cli-common') },
+        { packageName: '@happier-dev/channels-protocol', packageSourceRoot: sourceRoot('channels-protocol') },
         { packageName: '@happier-dev/triage-protocol', packageSourceRoot: sourceRoot('triage-protocol') },
+        { packageName: '@happier-dev/triage-sources', packageSourceRoot: sourceRoot('triage-sources') },
         { packageName: '@happier-dev/plugin-sdk', packageSourceRoot: sourceRoot('plugin-sdk') },
     ])],
     test: {

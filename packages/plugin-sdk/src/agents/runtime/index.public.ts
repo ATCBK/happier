@@ -51,6 +51,8 @@ export type { AgentAcpToolNameInference } from '../../agentRuntime/projections.j
 export type { AgentAcpToolNamePattern } from '../../agentRuntime/projections.js';
 export type { AgentAcpToolNameResolver } from '../../agentRuntime/projections.js';
 export type { PluginAgentAcpNativeSessionMcpConfigV2 } from '../../agentRuntime/projections.js';
+export type { PluginAgentAcpMcpInputPolicyV2 } from '../../agentRuntime/projections.js';
+export type { PluginAgentAcpSkillsSessionDeliveryV2 } from '../../agentRuntime/projections.js';
 export type { AgentAcpToolUpdateContentSanitizer } from '../../agentRuntime/projections.js';
 export type { AgentAcpToolUpdatePolicy } from '../../agentRuntime/projections.js';
 export type { AgentAcpTransport } from '../../agentRuntime/projections.js';
@@ -236,6 +238,7 @@ export type { AgentSessionNativeToolDescriptor } from '../../agentRuntime/projec
 export type { AgentSessionInFlightConfigurationOutcome } from '../../agentRuntime/projections.js';
 export type { AgentSessionInput } from '../../agentRuntime/projections.js';
 export type { AgentSessionMcpLaunchConfig } from '../../agentRuntime/projections.js';
+export type { AgentSessionSkillDelivery } from '../../agentRuntime/projections.js';
 export type { AgentSessionMcpServer } from '../../agentRuntime/projections.js';
 export type { AgentSessionMcpService } from '../../agentRuntime/projections.js';
 export type { AgentSessionMcpTransport } from '../../agentRuntime/projections.js';

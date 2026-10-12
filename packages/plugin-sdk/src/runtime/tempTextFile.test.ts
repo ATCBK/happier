@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -12,6 +12,7 @@ import {
   writeSecureTempTextFileSyncWithDeps,
 } from './tempTextFile.js';
 import type { WindowsProtectedAclBoundarySync } from '@happier-dev/cli-common/fs/windowsProtectedAcl';
+import { readProcessInstanceFingerprintSync } from '@happier-dev/cli-common/processInstance';
 
 function mode(path: string): number {
   return statSync(path).mode & 0o777;
@@ -25,11 +26,20 @@ describe('createSecureTempDirectorySync', () => {
         tmpDir: root,
         prefix: 'happier-provider-config',
       });
-      expect(dirname(directory.path)).toBe(root);
+      expect(dirname(dirname(directory.path))).toBe(realpathSync(root));
+      expect(basename(dirname(directory.path))).toMatch(/^happier-/);
+      expect(readdirSync(directory.path)).toEqual([]);
+      expect(JSON.parse(readFileSync(`${directory.path}.owner.json`, 'utf8'))).toEqual({
+        v: 1,
+        purpose: 'happier-provider-config',
+        pid: process.pid,
+        processInstanceFingerprint: readProcessInstanceFingerprintSync(process.pid),
+      });
       if (process.platform !== 'win32') expect(mode(directory.path)).toBe(0o700);
       directory.cleanup();
       directory.cleanup();
       expect(() => statSync(directory.path)).toThrow();
+      expect(() => statSync(`${directory.path}.owner.json`)).toThrow();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

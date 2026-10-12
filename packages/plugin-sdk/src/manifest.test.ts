@@ -68,6 +68,7 @@ describe('manifest authoring contract', () => {
             fields: [{
                 path: 'repository',
                 title: 'Repository',
+                prompt: 'Which repository?',
                 widget: 'text',
                 required: true,
             }, {

@@ -329,6 +329,8 @@ export class ConnectedServiceQuotaFetchError extends Error {
     readonly resetAtMs: number | null;
     readonly quotaFetchErrorCode: ConnectedServiceQuotaFetchErrorCode;
     readonly providerCode: string | null;
+    /** False proves no debit was attempted; omission retains conservative outcome handling. */
+    readonly recoveryCreditConsumeOutcomeUnknown: boolean | undefined;
 
     constructor(message: string, options: Readonly<{
         status?: number | null;
@@ -336,6 +338,7 @@ export class ConnectedServiceQuotaFetchError extends Error {
         resetAtMs?: number | null;
         quotaFetchErrorCode: ConnectedServiceQuotaFetchErrorCode;
         providerCode?: string | null;
+        recoveryCreditConsumeOutcomeUnknown?: boolean;
     }>) {
         super(message);
         this.name = 'ConnectedServiceQuotaFetchError';
@@ -348,6 +351,7 @@ export class ConnectedServiceQuotaFetchError extends Error {
         this.resetAtMs = typeof options.resetAtMs === 'number' && Number.isFinite(options.resetAtMs)
             ? Math.max(0, Math.trunc(options.resetAtMs))
             : null;
+        this.recoveryCreditConsumeOutcomeUnknown = options.recoveryCreditConsumeOutcomeUnknown;
         this.quotaFetchErrorCode = options.quotaFetchErrorCode;
         this.providerCode = typeof options.providerCode === 'string' && options.providerCode.trim()
             ? options.providerCode.trim()

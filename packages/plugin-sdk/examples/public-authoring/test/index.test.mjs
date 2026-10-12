@@ -7,6 +7,7 @@ test('authors independently bound UsageQuery fields and subscribes to their admi
   assert.ok(example, 'the public author build must expose the UsageQuery consumer');
   const { parsePluginManifest } = await import('@happier-dev/plugin-sdk/manifest');
   const { createWidgetActionInputResolverV1 } = await import('@happier-dev/protocol/widgets/widgetActionInputResolverV1');
+  const { validateInputFieldValue } = await import('@happier-dev/protocol/inputs/runtime');
   const { createPluginUiTestkit, createSurfaceContextFixture } = await import('@happier-dev/plugin-sdk/testing');
   const parsed = parsePluginManifest(example.manifest);
   assert.equal(parsed.ok, true, JSON.stringify(parsed));
@@ -17,7 +18,7 @@ test('authors independently bound UsageQuery fields and subscribes to their admi
     readDescriptor: async () => descriptor,
     readContext: async () => scope,
     readViewerValues: async () => ({ values: {} }),
-    validateValue: async () => ({ status: 'valid' }),
+    validateValue: async (field, value) => validateInputFieldValue({ field, value }),
     resolveOptions: async () => { throw new Error('The public host type needs no plugin options Resource'); },
   });
   const request = { ref: { surface: { serverId: 'home', accountId: 'account', owner: { kind: 'home' } }, instanceId: 'usage' },

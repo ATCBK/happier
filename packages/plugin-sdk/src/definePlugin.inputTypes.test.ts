@@ -5,8 +5,31 @@ import { createPluginTestkit } from './testing/host.js';
 import { parsePluginManifest } from './manifest.js';
 import { repositoryInputTypes, repositoryResources } from '../examples/public-authoring/inputTypes.js';
 import { externalAuthoringPlugin } from '../../plugin-ui/fixtures/external-authoring/src/index.js';
+import { defineProtocolObject, defineProtocolString } from './protocol/index.js';
 
 describe('public author input types', () => {
+  it('admits authored typed static restrictions through declaration and manifest parsing', () => {
+    const inputType = { pluginId: 'com.acme.inputs', localId: 'repository' };
+    const options = [{ value: { repositoryId: 'allowed' }, label: 'Allowed' },
+      { value: { repositoryId: 'disabled' }, label: 'Disabled', disabled: true }];
+    const plugin = definePlugin({ id: inputType.pluginId, version: '1.0.0',
+      inputTypes: { repository: { title: 'Repository', semantic: 'repository',
+        valueSchema: { type: 'object', properties: { repositoryId: { type: 'string' } },
+          required: ['repositoryId'], additionalProperties: false } } },
+      actions: { choose: { title: 'Choose', execution: { target: 'daemon' }, surfaces: ['cli'],
+        inputSchema: defineProtocolObject({ repository: defineProtocolObject({ repositoryId: defineProtocolString() }, { policy: 'closed' }) }, { policy: 'closed' }),
+        inputHints: { fields: [{ path: 'repository', title: 'Repository', prompt: 'Which repository?',
+          widget: 'select', inputType, options }] },
+        run: async () => null,
+      } },
+    });
+    const parsed = parsePluginManifest(plugin.manifest);
+    if (!parsed.ok) throw new Error(JSON.stringify(parsed.diagnostics));
+    expect(parsed.manifest.contributes.actions[0]?.inputHints).toEqual({ fields: [
+      { path: 'repository', title: 'Repository', prompt: 'Which repository?', widget: 'select', inputType, options },
+    ] });
+  });
+
   it('loads the external author’s top-level input descriptor and its Resource options', async () => {
     const parsed = parsePluginManifest(externalAuthoringPlugin.manifest);
     if (!parsed.ok) throw new Error(JSON.stringify(parsed.diagnostics));

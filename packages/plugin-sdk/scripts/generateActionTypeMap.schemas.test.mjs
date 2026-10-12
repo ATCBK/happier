@@ -8,6 +8,36 @@ import { deriveActionDtoSchemas } from './deriveActionDtos.mjs';
 import { prepareActionTypeMap } from './generateActionTypeMap.mjs';
 import { resolveTypeScriptCliInvocation } from '../../../scripts/workspaces/resolveTypeScriptCliInvocation.mjs';
 
+test('tuple-backed Action specs derive their keyed canonical input and output schemas', async t => {
+  const cache = resolve('packages/plugin-sdk/node_modules/.cache');
+  mkdirSync(cache, { recursive: true });
+  const root = mkdtempSync(resolve(cache, 'schema-action-tuples-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const actions = resolve(root, 'packages/protocol/src/actions');
+  mkdirSync(actions, { recursive: true });
+  writeFileSync(resolve(actions, 'actionIds.ts'), "export const ACTION_ID_FAMILIES_V1 = { processes: ['processes.read', 'processes.stop'] } as const;");
+  writeFileSync(resolve(actions, 'pluginActionSurface.ts'), 'export const PLUGIN_SURFACE_EXCLUSION_REASONS = {} as const;');
+  writeFileSync(resolve(actions, 'actionSpecs.ts'), `import { PROCESS_ACTION_SPECS } from './processes.js';
+    export const ACTION_SPECS = [...PROCESS_ACTION_SPECS];`);
+  writeFileSync(resolve(actions, 'processes.ts'), `import { z } from 'zod';
+    const INPUTS = { 'processes.read': z.object({ machineId: z.string() }), 'processes.stop': z.object({ processId: z.number() }) };
+    const OUTPUTS = { 'processes.read': z.object({ count: z.number() }), 'processes.stop': z.object({ stopped: z.boolean() }) };
+    const rows = [['processes.read', 'Read'], ['processes.stop', 'Stop']] as const;
+    export const PROCESS_ACTION_SPECS = rows.map(([id, title]) => ({ id, title,
+      inputSchema: INPUTS[id], outputSchema: OUTPUTS[id] }));`);
+  const derived = await deriveActionDtoSchemas({ repoRoot: root, onlyFamilies: ['processes'] });
+  const dto = derived.outputs.get(resolve(actions, 'processesActionDtos.ts'));
+  assert.ok(dto, 'the declared family must produce its public DTOs');
+  const source = ts.createSourceFile('dto.ts', dto, ts.ScriptTarget.ES2022, true);
+  const fieldType = (alias, action, field) => source.statements
+    .find(node => ts.isTypeAliasDeclaration(node) && node.name.text === alias).type.members
+    .find(member => member.name.text === action).type.members.find(member => member.name.text === field)?.type.kind;
+  assert.equal(fieldType('ProcessesActionInputById', 'processes.read', 'machineId'), ts.SyntaxKind.StringKeyword);
+  assert.equal(fieldType('ProcessesActionResultById', 'processes.read', 'count'), ts.SyntaxKind.NumberKeyword);
+  assert.equal(fieldType('ProcessesActionInputById', 'processes.stop', 'processId'), ts.SyntaxKind.NumberKeyword);
+  assert.equal(fieldType('ProcessesActionResultById', 'processes.stop', 'stopped'), ts.SyntaxKind.BooleanKeyword);
+});
+
 test('Account operand mapped keys stay lexical in public support projections', t => {
   const cache = resolve('packages/plugin-sdk/node_modules/.cache');
   mkdirSync(cache, { recursive: true });
@@ -354,6 +384,19 @@ test('versioned imported Action spec owners supply generated DTO schemas', async
   const adaptedDto = [...adapted.outputs.values()].join('\n');
   assert.match(adaptedDto, /query\?: string/u);
   assert.match(adaptedDto, /count: number/u);
+  writeFileSync(resolve(actions, 'specs/widgets.ts'), `
+    import { z } from 'zod';
+    const INPUTS = { 'widgets.catalog.list': z.object({ query: z.string().optional() }).strict() } as const;
+    const OUTPUTS = { 'widgets.catalog.list': z.object({ count: z.number() }).strict() } as const;
+    function actionRow<Id extends keyof typeof INPUTS>([title, id]: readonly [string, Id]) {
+      return { id, title, inputSchema: INPUTS[id], outputSchema: OUTPUTS[id] };
+    }
+    export const WIDGET_INSTANCE_ACTION_SPECS_V1 = Object.freeze([actionRow(['Read widgets', 'widgets.catalog.list'])]);
+  `);
+  const tupleAdapted = await deriveActionDtoSchemas({ repoRoot: root, onlyFamilies: ['widgets'] });
+  const tupleAdaptedDto = [...tupleAdapted.outputs.values()].join('\n');
+  assert.match(tupleAdaptedDto, /query\?: string/u);
+  assert.match(tupleAdaptedDto, /count: number/u);
   writeFileSync(resolve(actions, 'specs/widgetIds.ts'), `
     const IDS_BY_OPERATION = { list: 'widgets.catalog.list' } as const;
     export const WIDGET_IDS = Object.freeze([...Object.values(IDS_BY_OPERATION)]);
@@ -381,6 +424,65 @@ test('versioned imported Action spec owners supply generated DTO schemas', async
   const namespaceDto = [...namespaced.outputs.values()].join('\n');
   assert.match(namespaceDto, /query\?: string/u);
   assert.match(namespaceDto, /count: number/u);
+});
+
+test('nested imported Action spec owners supply generated DTO schemas', async t => {
+  const cache = resolve('packages/plugin-sdk/node_modules/.cache');
+  mkdirSync(cache, { recursive: true });
+  const root = mkdtempSync(resolve(cache, 'schema-nested-imported-action-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const actions = resolve(root, 'packages/protocol/src/actions');
+  mkdirSync(resolve(actions, 'specs'), { recursive: true });
+  writeFileSync(resolve(actions, 'actionIds.ts'), "export const ACTION_ID_FAMILIES_V1 = { widgets: ['widgets.catalog.list'] } as const;");
+  writeFileSync(resolve(actions, 'pluginActionSurface.ts'), 'export const PLUGIN_SURFACE_EXCLUSION_REASONS = {} as const;');
+  writeFileSync(resolve(actions, 'actionSpecs.ts'), `
+    import { WIDGET_ACTION_SPECS } from './specs/widgets.js';
+    export const ACTION_SPECS = [...WIDGET_ACTION_SPECS];
+  `);
+  writeFileSync(resolve(actions, 'specs/widgets.ts'), `
+    import { WIDGET_CATALOG_ACTION_SPECS } from './widgetCatalog.js';
+    export const WIDGET_ACTION_SPECS = [...WIDGET_CATALOG_ACTION_SPECS] as const;
+  `);
+  writeFileSync(resolve(actions, 'specs/widgetCatalog.ts'), `
+    import { z } from 'zod';
+    export const WIDGET_CATALOG_ACTION_SPECS = [{
+      id: 'widgets.catalog.list',
+      inputSchema: z.object({ query: z.string().optional() }).strict(),
+      outputSchema: z.object({ count: z.number() }).strict(),
+    }] as const;
+  `);
+  const derived = await deriveActionDtoSchemas({ repoRoot: root, onlyFamilies: ['widgets'] });
+  const dto = [...derived.outputs.values()].join('\n');
+  assert.match(dto, /query\?: string/u);
+  assert.match(dto, /count: number/u);
+});
+
+test('tuple-mapped imported Action spec owners supply generated DTO schemas', async t => {
+  const cache = resolve('packages/plugin-sdk/node_modules/.cache');
+  mkdirSync(cache, { recursive: true });
+  const root = mkdtempSync(resolve(cache, 'schema-tuple-mapped-action-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const actions = resolve(root, 'packages/protocol/src/actions');
+  mkdirSync(resolve(actions, 'specs'), { recursive: true });
+  writeFileSync(resolve(actions, 'actionIds.ts'), "export const ACTION_ID_FAMILIES_V1 = { widgets: ['widgets.catalog.list'] } as const;");
+  writeFileSync(resolve(actions, 'pluginActionSurface.ts'), 'export const PLUGIN_SURFACE_EXCLUSION_REASONS = {} as const;');
+  writeFileSync(resolve(actions, 'actionSpecs.ts'), `
+    import { WIDGET_ACTION_SPECS } from './specs/widgets.js';
+    export const ACTION_SPECS = [...WIDGET_ACTION_SPECS];
+  `);
+  writeFileSync(resolve(actions, 'specs/widgets.ts'), `
+    import { z } from 'zod';
+    const INPUTS = { 'widgets.catalog.list': z.object({ query: z.string().optional() }).strict() } as const;
+    const OUTPUTS = { 'widgets.catalog.list': z.object({ count: z.number() }).strict() } as const;
+    const specs = [['widgets.catalog.list', 'List widgets']] as const;
+    export const WIDGET_ACTION_SPECS = specs.map(([id, title]) => ({
+      id, title, inputSchema: INPUTS[id], outputSchema: OUTPUTS[id],
+    }));
+  `);
+  const derived = await deriveActionDtoSchemas({ repoRoot: root, onlyFamilies: ['widgets'] });
+  const dto = [...derived.outputs.values()].join('\n');
+  assert.match(dto, /query\?: string/u);
+  assert.match(dto, /count: number/u);
 });
 
 test('deferred canonical Team credential maps supply concrete input and result DTOs', async () => {

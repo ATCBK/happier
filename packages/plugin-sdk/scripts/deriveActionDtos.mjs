@@ -147,14 +147,20 @@ function selectSchemaRows(protocol, keys, readSource) {
   };
   visitType(source(actionPath));
   // Literal Action rows supply the remaining canonical definitions. Follow
-  // only the registry's imported spec-array owners, not arbitrary files.
-  const specPaths = new Set([actionPath]);
-  for (const node of source(actionPath).statements) {
-    if (ts.isImportDeclaration(node) && node.moduleSpecifier.text.startsWith('.') && node.importClause?.namedBindings
-      && ts.isNamedImports(node.importClause.namedBindings) && node.importClause.namedBindings.elements.some(n => /ACTION_SPECS(?:_V\d+)?$/u.test((n.propertyName ?? n.name).text))) {
-      specPaths.add(resolve(dirname(actionPath), node.moduleSpecifier.text.replace(/\.js$/u, '.ts')));
+  // only the registry's imported spec-array owners, including composed family
+  // owners, not arbitrary files.
+  const specPaths = new Set();
+  const addImportedSpecOwners = path => {
+    if (specPaths.has(path)) return;
+    specPaths.add(path);
+    for (const node of source(path).statements) {
+      if (ts.isImportDeclaration(node) && node.moduleSpecifier.text.startsWith('.') && node.importClause?.namedBindings
+        && ts.isNamedImports(node.importClause.namedBindings) && node.importClause.namedBindings.elements.some(n => /ACTION_SPECS(?:_V\d+)?$/u.test((n.propertyName ?? n.name).text))) {
+        addImportedSpecOwners(resolve(dirname(path), node.moduleSpecifier.text.replace(/\.js$/u, '.ts')));
+      }
     }
-  }
+  };
+  addImportedSpecOwners(actionPath);
   const stringArray = (path, expression) => {
     const node = unwrapped(expression);
     if (ts.isIdentifier(node)) {
@@ -165,19 +171,32 @@ function selectSchemaRows(protocol, keys, readSource) {
     return node.elements.flatMap(n => ts.isStringLiteral(n) ? [n.text]
       : ts.isSpreadElement(n) ? stringArray(path, n.expression) : []);
   };
+  const tupleStringArray = (path, expression, index) => {
+    const node = unwrapped(expression);
+    if (ts.isIdentifier(node)) {
+      const found = variable(path, node.text);
+      return found ? tupleStringArray(found.path, found.node, index) : [];
+    }
+    if (!ts.isArrayLiteralExpression(node)) return [];
+    return node.elements.flatMap(element => {
+      if (ts.isSpreadElement(element)) return tupleStringArray(path, element.expression, index);
+      const tuple = unwrapped(element);
+      const value = ts.isArrayLiteralExpression(tuple) ? tuple.elements[index] : undefined;
+      return value && ts.isStringLiteral(value) ? [value.text] : [];
+    });
+  };
   for (const path of specPaths) {
     const visit = node => {
-      // Scope adapters may construct rows by passing a literal Action id to
+      // Scope adapters may construct rows by passing a literal Action id or tuple to
       // a helper. Resolve only its keyed schema maps, without evaluating the
       // helper's runtime metadata or duplicating the family's schema owner.
       if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)
-        && node.arguments.length === 1 && ts.isStringLiteral(node.arguments[0])) {
-        const key = node.arguments[0].text;
+        && node.arguments.length === 1) {
+        const argument = unwrapped(node.arguments[0]);
         const helper = source(path).statements.find(statement => ts.isFunctionDeclaration(statement)
           && statement.name?.text === node.expression.text && statement.body);
-        const parameter = helper?.parameters.length === 1 && ts.isIdentifier(helper.parameters[0].name)
-          ? helper.parameters[0].name.text : null;
-        if (parameter && keys.includes(key) && !selected.has(key)) {
+        const binding = helper?.parameters.length === 1 ? helper.parameters[0].name : null;
+        if (binding) {
           for (const statement of helper.body?.statements ?? []) {
             if (!ts.isReturnStatement(statement) || !statement.expression) continue;
             const row = unwrapped(statement.expression);
@@ -185,12 +204,19 @@ function selectSchemaRows(protocol, keys, readSource) {
             const id = row.properties.find(member => member.name?.text === 'id');
             const idExpression = id && (ts.isShorthandPropertyAssignment(id) ? id.name
               : ts.isPropertyAssignment(id) ? id.initializer : undefined);
-            if (!idExpression || !ts.isIdentifier(idExpression) || idExpression.text !== parameter) continue;
+            if (!idExpression || !ts.isIdentifier(idExpression)) continue;
+            const idIndex = ts.isArrayBindingPattern(binding) ? binding.elements.findIndex(element =>
+              ts.isBindingElement(element) && ts.isIdentifier(element.name) && element.name.text === idExpression.text) : -1;
+            const idArgument = ts.isIdentifier(binding) && binding.text === idExpression.text ? argument
+              : idIndex >= 0 && ts.isArrayLiteralExpression(argument) ? argument.elements[idIndex] : undefined;
+            if (!idArgument || !ts.isStringLiteral(idArgument)) continue;
+            const key = idArgument.text;
+            if (!keys.includes(key) || selected.has(key)) continue;
             const keyed = name => {
               const field = property(path, row, name);
               if (!field || !ts.isElementAccessExpression(field.node)
                 || !ts.isIdentifier(field.node.argumentExpression)
-                || field.node.argumentExpression.text !== parameter) return null;
+                || field.node.argumentExpression.text !== idExpression.text) return null;
               return property(field.path, field.node.expression, key);
             };
             const input = keyed('inputSchema'), output = keyed('outputSchema');
@@ -202,21 +228,30 @@ function selectSchemaRows(protocol, keys, readSource) {
       // Resolve those maps by the actual id, never by evaluating runtime specs.
       if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'map') {
         const callback = node.arguments[0];
-        if (callback && ts.isArrowFunction(callback) && callback.parameters.length === 1 && ts.isIdentifier(callback.parameters[0].name)) {
-          const parameter = callback.parameters[0].name.text;
+        if (callback && ts.isArrowFunction(callback) && callback.parameters.length === 1) {
+          const binding = callback.parameters[0].name;
           const rows = ts.isBlock(callback.body) ? callback.body.statements.filter(ts.isReturnStatement).map(n => n.expression) : [callback.body];
           for (const expression of rows) {
             const row = expression && unwrapped(expression);
             if (!row || !ts.isObjectLiteralExpression(row)) continue;
             const id = row.properties.find(n => n.name?.text === 'id');
             const idExpression = id && (ts.isShorthandPropertyAssignment(id) ? id.name : ts.isPropertyAssignment(id) ? id.initializer : undefined);
-            if (!idExpression || !ts.isIdentifier(idExpression) || idExpression.text !== parameter) continue;
-            for (const key of stringArray(path, node.expression.expression)) {
+            if (!idExpression || !ts.isIdentifier(idExpression)) continue;
+            const mappedKeys = ts.isIdentifier(binding) && binding.text === idExpression.text
+              ? stringArray(path, node.expression.expression)
+              : ts.isArrayBindingPattern(binding)
+                ? (() => {
+                    const index = binding.elements.findIndex(element => ts.isBindingElement(element)
+                      && ts.isIdentifier(element.name) && element.name.text === idExpression.text);
+                    return index < 0 ? [] : tupleStringArray(path, node.expression.expression, index);
+                  })()
+                : [];
+            for (const key of mappedKeys) {
               if (!keys.includes(key) || selected.has(key)) continue;
               const keyed = name => {
                 const field = property(path, row, name);
                 if (!field || !ts.isElementAccessExpression(field.node) || !ts.isIdentifier(field.node.argumentExpression)
-                  || field.node.argumentExpression.text !== parameter) return null;
+                  || field.node.argumentExpression.text !== idExpression.text) return null;
                 return property(field.path, field.node.expression, key);
               };
               const input = keyed('inputSchema'), output = keyed('outputSchema');
@@ -295,14 +330,43 @@ export function readActionCatalog(repoRoot, recordInput = () => {}, readSource =
     const found = definition(path, node.text);
     return owner(found.path, found.node);
   };
-  const evaluate = (path, node) => {
-    if (ts.isAsExpression(node) || ts.isSatisfiesExpression(node) || ts.isParenthesizedExpression(node)) return evaluate(path, node.expression);
-    if (ts.isIdentifier(node)) return value(path, node.text);
+  const evaluate = (path, node, bindings = new Map()) => {
+    node = unwrap(node);
+    if (ts.isIdentifier(node)) return bindings.has(node.text) ? bindings.get(node.text) : value(path, node.text);
     if (ts.isStringLiteral(node)) return node.text;
-    if (ts.isArrayLiteralExpression(node)) return node.elements.flatMap(n => ts.isSpreadElement(n) ? evaluate(path, n.expression) : [evaluate(path, n)]);
-    if (ts.isObjectLiteralExpression(node)) return Object.assign({}, ...node.properties.map(n => ts.isSpreadAssignment(n) ? evaluate(path, n.expression) : { [n.name.text]: evaluate(path, n.initializer) }));
-    if (ts.isCallExpression(node) && node.expression.getText(source(path)) === 'Object.freeze') return evaluate(path, node.arguments[0]);
-    if (ts.isCallExpression(node) && node.expression.getText(source(path)) === 'Object.values') return Object.values(evaluate(path, node.arguments[0]));
+    if (ts.isArrayLiteralExpression(node)) return node.elements.flatMap(n => ts.isSpreadElement(n) ? evaluate(path, n.expression, bindings) : [evaluate(path, n, bindings)]);
+    if (ts.isObjectLiteralExpression(node)) return Object.assign({}, ...node.properties.map(n => ts.isSpreadAssignment(n) ? evaluate(path, n.expression, bindings) : { [n.name.text]: evaluate(path, n.initializer, bindings) }));
+    if (ts.isCallExpression(node) && node.expression.getText(source(path)) === 'Object.freeze') return evaluate(path, node.arguments[0], bindings);
+    if (ts.isCallExpression(node) && node.expression.getText(source(path)) === 'Object.values') return Object.values(evaluate(path, node.arguments[0], bindings));
+    // Canonical families partition literal ids with these predicates. Interpret
+    // only their syntax; catalog source and callback bodies never execute.
+    if (ts.isBinaryExpression(node) && [ts.SyntaxKind.EqualsEqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsEqualsToken].includes(node.operatorToken.kind)) {
+      const equal = evaluate(path, node.left, bindings) === evaluate(path, node.right, bindings);
+      return node.operatorToken.kind === ts.SyntaxKind.EqualsEqualsEqualsToken ? equal : !equal;
+    }
+    if (ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.ExclamationToken) return !evaluate(path, node.operand, bindings);
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.arguments.length === 1) {
+      const method = node.expression.name.text;
+      if (method === 'includes') {
+        const ids = evaluate(path, node.expression.expression, bindings);
+        if (Array.isArray(ids)) return ids.includes(evaluate(path, node.arguments[0], bindings));
+      }
+      if (method === 'filter') {
+        const callback = node.arguments[0];
+        if (ts.isArrowFunction(callback) && callback.parameters.length === 1 && !ts.isBlock(callback.body)
+          && !callback.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.AsyncKeyword)) {
+          const parameter = callback.parameters[0];
+          const ids = evaluate(path, node.expression.expression, bindings);
+          if (ts.isIdentifier(parameter.name) && !parameter.initializer && !parameter.dotDotDotToken && Array.isArray(ids)) {
+            return ids.filter(id => {
+              const selected = evaluate(path, callback.body, new Map([...bindings, [parameter.name.text, id]]));
+              if (typeof selected !== 'boolean') throw Error('Action catalog filter must use a boolean predicate');
+              return selected;
+            });
+          }
+        }
+      }
+    }
     throw Error(`Unsupported Action catalog expression: ${node.getText(source(path))}`);
   };
   const protocol = resolve(repoRoot, 'packages/protocol/src');

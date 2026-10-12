@@ -854,9 +854,14 @@ const documentedSnippetSupportFiles = new Map<string, readonly Readonly<{
     }]],
     ['ui/hosted-web.mdx#1', [{
         destination: 'ui/summaryDocument.ts',
-        // Models the author's generated string module for declaration compilation,
+        // Models the author's generated bundle module for declaration compilation,
         // not a guest runtime or evidence of the ready/bootstrap lifecycle.
-        content: 'export const html: string = "<!doctype html><html><body>Summary</body></html>";\n',
+        content: [
+            "import { artifactHtmlBundleFromBodyV1 } from '@happier-dev/plugin-sdk/ui';",
+            '',
+            'export const htmlBundle = artifactHtmlBundleFromBodyV1("<!doctype html><html><body>Summary</body></html>");',
+            '',
+        ].join('\n'),
     }]],
     ['surfaces/external-sessions.mdx#0', [{
         source: 'advanced-package-root/agent/reviewAgent.ts',

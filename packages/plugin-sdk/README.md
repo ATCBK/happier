@@ -290,6 +290,14 @@ rehydration. When canonical spelling matters, express it as an ordinary string
 constraint such as a pattern rather than a transform. The only Happier JSON
 Schema extensions are the UTF-8 byte and serialized UTF-8 byte ceilings.
 
+For retained schema-shaped JSON in the 0.3 development source contract, use
+`createProtocolStoredReadSchema(schema)` from `/protocol`. Its persistence-only
+reader projects declared fields recursively and validates known values; opaque
+JSON values remain opaque. Unknown fields do not grant identity or authority.
+Keep the original schema for fresh inputs and canonical writes: the stored
+reader is not an Action input schema. See the
+[stored-reader policy](../../docs/compatibility.md#tolerant-stored-data-readers).
+
 Daemon activation has an internal 30-second deadline for asynchronous
 `activate(api)` settlement. This deadline is host policy, not plugin
 configuration. It cannot preempt synchronous CPU or blocking work in the shared

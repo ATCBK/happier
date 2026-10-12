@@ -37,7 +37,7 @@ export type {
 } from './ui/publicContract.js';
 
 /** Canonical Protocol-owned vocabulary projected without a Protocol type edge. */
-export const PLUGIN_UI_ICON_TOKENS_V1: readonly PluginUiIconTokenV1[] = projectProtocolValue(canonicalPluginUiIconTokensV1);
+export const PLUGIN_UI_ICON_TOKENS_V1: readonly PluginUiIconTokenV1[] = /* @__PURE__ */ projectProtocolValue(canonicalPluginUiIconTokensV1);
 
 export type {
     OpenableContentBody,

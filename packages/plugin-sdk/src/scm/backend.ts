@@ -86,6 +86,8 @@ import type {
     ScmWorktreePruneResponse,
     ScmWorktreeRemoveRequest,
     ScmWorktreeRemoveResponse,
+    ScmWorktreeRetireRequest,
+    ScmWorktreeReinstateRequest,
     ScmCapabilities,
     ScmOperationErrorCode,
     ScmRefreshPolicy,
@@ -167,6 +169,7 @@ export type ScmBackendCapabilities = {
         executable?: ScmBackendCapabilityLeaf;
     };
     read: {
+        ignoredPaths?: ScmBackendCapabilityLeaf;
         status?: ScmBackendCapabilityLeaf;
         diffFile?: ScmBackendCapabilityLeaf;
         diffCommit?: ScmBackendCapabilityLeaf;
@@ -225,6 +228,8 @@ export type ScmBackendCapabilities = {
         remove?: ScmBackendCapabilityLeaf;
         prune?: ScmBackendCapabilityLeaf;
         prepare?: ScmBackendCapabilityLeaf;
+        retire?: ScmBackendCapabilityLeaf;
+        reinstate?: ScmBackendCapabilityLeaf;
     };
     lifecycle: {
         init?: ScmBackendCapabilityLeaf;
@@ -301,6 +306,8 @@ export type BackendRuntimeContext = Readonly<{
     projectKey: string;
     /** Host policy check for backend-derived filesystem mutation targets; throws on refusal. */
     assertFilesystemPathAuthorized?: (targetPath: string) => void;
+    /** Trusted host revalidation immediately before a queued filesystem effect; never request input. */
+    beforeFilesystemMutation?: () => Promise<void>;
     detection: Readonly<{
         isRepo: boolean;
         rootPath: string | null;
@@ -540,6 +547,9 @@ export type BackendRuntimeHandlers = Readonly<{
         ) => Promise<ScmBackendDescribeResponse> | ScmBackendDescribeResponse;
     }>;
     read?: Readonly<{
+        ignoredPaths?: (input: BackendRuntimeHandlerInput<Readonly<{ cwd?: string }>>) =>
+            Promise<Readonly<{ success: boolean; paths?: readonly string[]; error?: string; errorCode?: ScmOperationErrorCode }>>
+            | Readonly<{ success: boolean; paths?: readonly string[]; error?: string; errorCode?: ScmOperationErrorCode }>;
         statusSnapshot?: (
             input: BackendRuntimeHandlerInput<ScmStatusSnapshotRequest>
         ) => Promise<ScmStatusSnapshotResponse> | ScmStatusSnapshotResponse;
@@ -606,6 +616,8 @@ export type BackendRuntimeHandlers = Readonly<{
         create?: (input: BackendRuntimeHandlerInput<ScmWorktreeCreateRequest>) => Promise<ScmWorktreeCreateResponse> | ScmWorktreeCreateResponse;
         remove?: (input: BackendRuntimeHandlerInput<ScmWorktreeRemoveRequest>) => Promise<ScmWorktreeRemoveResponse> | ScmWorktreeRemoveResponse;
         prune?: (input: BackendRuntimeHandlerInput<ScmWorktreePruneRequest>) => Promise<ScmWorktreePruneResponse> | ScmWorktreePruneResponse;
+        retire?: (input: BackendRuntimeHandlerInput<ScmWorktreeRetireRequest>) => Promise<ScmWorktreeRemoveResponse> | ScmWorktreeRemoveResponse;
+        reinstate?: (input: BackendRuntimeHandlerInput<ScmWorktreeReinstateRequest>) => Promise<ScmWorktreeRemoveResponse> | ScmWorktreeRemoveResponse;
     }>;
     lifecycle?: Readonly<{
         init?: (input: BackendRuntimeHandlerInput<ScmRepositoryInitRequest>) => Promise<ScmRepositoryInitResponse> | ScmRepositoryInitResponse;

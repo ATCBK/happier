@@ -6,6 +6,8 @@
 import { randomUUID } from 'node:crypto';
 import { link, lstat, mkdir, open, readFile, readdir, rename, rmdir, stat, unlink } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
+import { z } from 'zod';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import { isPidPresent } from '@happier-dev/cli-common/process';
 import {
@@ -78,31 +80,32 @@ type LockArtifact = Readonly<{
   isLegacyDirectory: boolean;
 }>;
 
-function hasExactKeys(record: Record<string, unknown>, keys: readonly string[]): boolean {
-  const actual = Object.keys(record).sort();
-  const expected = [...keys].sort();
-  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
-}
+const CurrentOwnerStoredReadSchema = createStoredReadSchema(z.object({
+  pid: z.number().int().positive(),
+  ownerToken: z.string().min(1),
+  processStartedAtMs: z.number().finite(),
+  processWitness: z.literal('observed').optional(),
+  createdAtMs: z.number().finite(),
+  updatedAtMs: z.number().finite(),
+}).strict());
+const PredecessorDirectoryOwnerStoredReadSchema = createStoredReadSchema(z.object({
+  pid: z.number().int().positive(),
+  providerId: z.string().nullable(),
+  acquiredAt: z.string(),
+}).strict());
 
 function parseCurrentOwner(raw: string): JsonOwnerFileLockRecord | null {
   try {
-    const value = JSON.parse(raw) as unknown;
-    if (typeof value !== 'object' || value === null) return null;
-    const record = value as Record<string, unknown>;
-    const keys = ['pid', 'ownerToken', 'processStartedAtMs', 'createdAtMs', 'updatedAtMs'];
-    if (!(hasExactKeys(record, keys) || (hasExactKeys(record, [...keys, 'processWitness']) && record.processWitness === 'observed'))) return null;
-    if (!Number.isSafeInteger(record.pid) || (record.pid as number) <= 0) return null;
-    if (typeof record.ownerToken !== 'string' || record.ownerToken.length === 0) return null;
-    if (!Number.isFinite(record.processStartedAtMs) || !Number.isFinite(record.createdAtMs) || !Number.isFinite(record.updatedAtMs)) return null;
+    const record = CurrentOwnerStoredReadSchema.parse(JSON.parse(raw));
     return {
-      pid: record.pid as number,
+      pid: record.pid,
       ownerToken: record.ownerToken,
-      processStartedAtMs: Math.trunc(record.processStartedAtMs as number),
-      ...(record.processWitness === 'observed' || (record.ownerToken as string).startsWith('observed:')
+      processStartedAtMs: Math.trunc(record.processStartedAtMs),
+      ...(record.processWitness === 'observed' || record.ownerToken.startsWith('observed:')
         ? { processWitness: 'observed' as const }
         : {}),
-      createdAtMs: Math.trunc(record.createdAtMs as number),
-      updatedAtMs: Math.trunc(record.updatedAtMs as number),
+      createdAtMs: Math.trunc(record.createdAtMs),
+      updatedAtMs: Math.trunc(record.updatedAtMs),
     };
   } catch {
     return null;
@@ -116,17 +119,11 @@ function parseCurrentOwner(raw: string): JsonOwnerFileLockRecord | null {
  */
 function parsePredecessorDirectoryOwner(raw: string): PredecessorDirectoryOwnerRecord | null {
   try {
-    const value = JSON.parse(raw) as unknown;
-    if (typeof value !== 'object' || value === null) return null;
-    const record = value as Record<string, unknown>;
-    if (!hasExactKeys(record, ['pid', 'providerId', 'acquiredAt'])) return null;
-    if (!Number.isSafeInteger(record.pid) || (record.pid as number) <= 0) return null;
-    if (record.providerId !== null && typeof record.providerId !== 'string') return null;
-    if (typeof record.acquiredAt !== 'string') return null;
+    const record = PredecessorDirectoryOwnerStoredReadSchema.parse(JSON.parse(raw));
     const acquiredAtMs = Date.parse(record.acquiredAt);
     if (!Number.isFinite(acquiredAtMs)) return null;
     return {
-      pid: record.pid as number,
+      pid: record.pid,
       providerId: record.providerId,
       acquiredAt: record.acquiredAt,
       acquiredAtMs,

@@ -287,6 +287,8 @@ export type AgentExternalSessionsResolveSourceResult = Readonly<{
 }>;
 
 export type AgentExternalSessionAccountingSource = Readonly<{
+    /** Exact source ids emitted by this source's accounting codecs, discovered without reading records. */
+    accountingSources?: readonly string[];
     rootPath?: string;
     rootField?: string;
     resourceKey: string;

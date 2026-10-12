@@ -1,24 +1,9 @@
 /** @moduleRealm daemon */
-import {
-  chmodSync,
-  closeSync,
-  fsyncSync,
-  mkdirSync,
-  mkdtempSync,
-  openSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import {
-  createWindowsProtectedAclBoundarySync,
-  type WindowsProtectedAclBoundarySync,
-} from '@happier-dev/cli-common/fs/windowsProtectedAcl';
-
-const PRIVATE_DIR_MODE = 0o700;
-const PRIVATE_FILE_MODE = 0o600;
+import type { WindowsProtectedAclBoundarySync } from '@happier-dev/cli-common/fs/windowsProtectedAcl';
+import { writeSecureFileSync } from '@happier-dev/cli-common/fs/writeSecureFileSync';
+import { createHappierTempDir, removeHappierTempDir } from '@happier-dev/cli-common/tempDirs';
 
 export type SecureTempTextFileInputV1 = Readonly<{
   prefix: string;
@@ -42,19 +27,9 @@ type SecureTempTextFileDeps = Readonly<{
   windowsAclBoundary?: WindowsProtectedAclBoundarySync;
 }>;
 
-let defaultWindowsAclBoundary: WindowsProtectedAclBoundarySync | null = null;
-
 function validatePathToken(value: string, field: 'prefix' | 'suffix'): void {
   if (!value || value === '.' || value === '..' || value.includes('/') || value.includes('\\') || value.includes('\0')) {
     throw new Error(`Invalid temporary file ${field}`);
-  }
-}
-
-function bestEffortChmod(path: string, mode: number): void {
-  try {
-    chmodSync(path, mode);
-  } catch {
-    // Some platforms/filesystems do not fully support POSIX modes.
   }
 }
 
@@ -63,28 +38,11 @@ export function createSecureTempDirectorySyncWithDeps(
   deps: SecureTempTextFileDeps = {},
 ): SecureTempDirectoryV1 {
   validatePathToken(input.prefix, 'prefix');
-  const baseDir = input.tmpDir ?? tmpdir();
-  mkdirSync(baseDir, { recursive: true, mode: PRIVATE_DIR_MODE });
-  const directory = mkdtempSync(join(baseDir, `${input.prefix}-`));
-  try {
-    const platform = deps.platform ?? process.platform;
-    if (platform === 'win32') {
-      const windowsAclBoundary = deps.windowsAclBoundary
-        ?? (defaultWindowsAclBoundary ??= createWindowsProtectedAclBoundarySync());
-      windowsAclBoundary.applyAndVerify({ path: directory, kind: 'directory' });
-    } else {
-      bestEffortChmod(directory, PRIVATE_DIR_MODE);
-    }
-    return {
-      path: directory,
-      cleanup() {
-        rmSync(directory, { recursive: true, force: true });
-      },
-    };
-  } catch (error) {
-    rmSync(directory, { recursive: true, force: true });
-    throw error;
-  }
+  const directory = createHappierTempDir({
+    purpose: input.prefix,
+    ...(input.tmpDir == null ? {} : { root: input.tmpDir }),
+  }, deps);
+  return { path: directory, cleanup: () => removeHappierTempDir(directory) };
 }
 
 export function createSecureTempDirectorySync(
@@ -107,36 +65,11 @@ export function writeSecureTempTextFileSyncWithDeps(
     ...(input.tmpDir === undefined ? {} : { tmpDir: input.tmpDir }),
   }, deps);
   const directory = tempDirectory.path;
-  const platform = deps.platform ?? process.platform;
   const path = join(directory, `payload${input.suffix ?? ''}`);
-  let fileDescriptor: number | null = null;
   try {
-    if (platform !== 'win32') {
-      writeFileSync(path, input.contents, { encoding: 'utf8', mode: PRIVATE_FILE_MODE, flag: 'wx' });
-      bestEffortChmod(path, PRIVATE_FILE_MODE);
-      return path;
-    }
-
-    const windowsAclBoundary = deps.windowsAclBoundary
-      ?? (defaultWindowsAclBoundary ??= createWindowsProtectedAclBoundarySync());
-    windowsAclBoundary.applyAndVerify({ path: directory, kind: 'directory' });
-    fileDescriptor = openSync(path, 'wx', PRIVATE_FILE_MODE);
-    // Apply and verify the restrictive DACL while the file is still empty.
-    windowsAclBoundary.applyAndVerify({ path, kind: 'file' });
-    writeFileSync(fileDescriptor, input.contents, { encoding: 'utf8' });
-    fsyncSync(fileDescriptor);
-    closeSync(fileDescriptor);
-    fileDescriptor = null;
-    windowsAclBoundary.verify({ path, kind: 'file' });
+    writeSecureFileSync(path, input.contents, deps);
     return path;
   } catch (error) {
-    if (fileDescriptor !== null) {
-      try {
-        closeSync(fileDescriptor);
-      } catch {
-        // Preserve the original ACL/write failure.
-      }
-    }
     tempDirectory.cleanup();
     throw error;
   }

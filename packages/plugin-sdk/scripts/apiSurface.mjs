@@ -47,6 +47,7 @@ const HOST_EXPORTS_BY_ENTRYPOINT = new Map([
     ['withJsonOwnerFileLock', 'value'],
   ])],
   ['./host/ui', new Map([
+    ['HOSTED_HTML_GUEST_BOOTSTRAP_SCRIPT', 'value'],
     ['decodePluginUiClipboardReadResult', 'value'],
     ['decodePluginUiConfirmResult', 'value'],
     ['decodePluginUiResourceContent', 'value'],
@@ -652,10 +653,18 @@ export function createApiSurfaceGenerationPlan(input) {
   for (const entrypoint of entrypoints) {
     const entrypointSymbols = symbolsBySpecifier.get(entrypoint.specifier);
     const conditions = orderPackageExportConditions(entrypoint.conditions);
-    if (conditions.browser && conditions.browser !== conditions.default) {
+    if (conditions.browser) {
       conditions.browser = {
-        'happier-source': `./${apiSurfaceEntrypointBrowserSourceModule(entrypoint.specifier)}`,
+        'happier-source': `./${conditions.browser !== conditions.default
+          ? apiSurfaceEntrypointBrowserSourceModule(entrypoint.specifier)
+          : entrypoint.sourceModule}`,
         default: conditions.browser,
+      };
+    }
+    if (conditions['react-native']) {
+      conditions['react-native'] = {
+        'happier-source': `./${entrypoint.sourceModule}`,
+        default: conditions['react-native'],
       };
     }
     packageExports[entrypoint.specifier] = {

@@ -64,6 +64,7 @@ export {
     buildConnectedAccountRequestAuthClientSource,
 } from './requestAuth.js';
 export type { ConnectedAccountRequestAuthClientSourceParams } from './requestAuth.js';
+export type { ConnectedAccountRequestAuthClient } from './requestAuth.js';
 export {
     HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_JSON_ENV,
     HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON_ENV,
@@ -81,6 +82,11 @@ export type { PluginConnectedAccountMaterializationKind } from '../connectedAcco
 export type { PluginConnectedAccountRegistrationApi } from '../services/connectedAccounts.js';
 export type { ProviderAccountUsageQuotaScopeV1 } from '../connectedAccounts.js';
 export type { ProviderAccountSubscriptionV1 } from '../connectedAccounts.js';
+export type {
+    ConnectedServiceQuotaRecoveryCreditV1,
+    ConnectedServiceQuotaRecoveryCreditDetailsV1,
+    ConnectedServiceQuotaRecoveryCreditDetailsByIdV1,
+} from '../connectedAccounts.js';
 export type { QualifiedConnectedAccountRef } from '../connectedAccounts.js';
 export { QualifiedConnectedAccountRefJsonSchema } from '../connectedAccounts.js';
 export { QualifiedConnectedAccountRefSchema } from '../connectedAccounts.js';

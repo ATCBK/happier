@@ -184,6 +184,16 @@ if (false) {
       text: 'hello',
       idempotencyKey: 'message-1',
     };
+    const subagentCommandRequest: SessionSendRequest = {
+      kind: 'sessionSubagentCommand',
+      command: { kind: 'agent_team_member_delete', teamId: 'reviewers', memberId: 'worker-1' },
+      idempotencyKey: 'shutdown-worker-1',
+    };
+    const subagentLaunchRequest: SessionSendRequest = {
+      kind: 'sessionSubagentLaunch',
+      launch: { kind: 'agent_team_create', teamId: 'reviewers' },
+      idempotencyKey: 'launch-reviewers',
+    };
 /* @sdk-negative-type-case:src-corePublicContract-test-ts-232:LS0gZ2VuZXJpYyBTZXNzaW9uIHNlbmQgc3VwcG9ydHMgb25seSB1c2VyIHRleHQu:Y29uc3QgZXZlbnRSZXF1ZXN0OiBTZXNzaW9uU2VuZFJlcXVlc3QgPSB7IGtpbmQ6ICdldmVudCcsIGV2ZW50SWQ6ICdzZXNzaW9uLmNoYW5nZWQnIH07 */
 const eventRequest = undefined as never; /* @sdk-negative-type-case-end */
     /* @sdk-negative-type-case:src-corePublicContract-test-ts-233:LS0gc3RydWN0dXJlZCBtZXNzYWdlcyB1c2UgdGhlaXIgZGVkaWNhdGVkIFVJIG93bmVyLCBub3QgZ2VuZXJpYyBTZXNzaW9uIHNlbmQu:Y29uc3Qgc3RydWN0dXJlZE1lc3NhZ2VSZXF1ZXN0OiBTZXNzaW9uU2VuZFJlcXVlc3QgPSB7CgpraW5kOiAnc3RydWN0dXJlZE1lc3NhZ2UnLAogICAgICAgIG1lc3NhZ2U6IG51bGwsCiAgICAgICAgZGVsaXZlcnk6ICdjb21taXR0ZWQnLAogICAgfTs */
@@ -197,6 +207,8 @@ const structuredMessageRequest = undefined as never; /* @sdk-negative-type-case-
         updatedAtMs: 1,
     };
     void userTextRequest;
+    void subagentCommandRequest;
+    void subagentLaunchRequest;
     void eventRequest;
     void structuredMessageRequest;
     void recipientSafeSummary;

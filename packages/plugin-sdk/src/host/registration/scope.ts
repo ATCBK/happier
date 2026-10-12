@@ -303,7 +303,7 @@ const AGENT_EXTERNAL_SESSIONS_KEYS = Object.freeze([
     'resolveLinkedIdentity',
     'pageTranscript',
     'readAfterTranscript',
-] as const);
+] as const satisfies readonly (keyof AgentExternalSessionsContribution)[]);
 /**
  * Declarations a contribution may omit. They are snapshotted with the same
  * static capture as the required operations when present, so an optional
@@ -312,12 +312,12 @@ const AGENT_EXTERNAL_SESSIONS_KEYS = Object.freeze([
 const AGENT_EXTERNAL_SESSIONS_OPTIONAL_KEYS = Object.freeze([
     'resolveManagedEndpointService',
     'readAccounting',
-] as const);
+] as const satisfies readonly (keyof AgentExternalSessionsContribution)[]);
 const AGENT_EXTERNAL_SESSION_OBSERVATION_KEYS = Object.freeze([
     'describeResource',
     'observeResource',
     'reconcileResource',
-] as const);
+] as const satisfies readonly (keyof AgentExternalSessionObservationContribution)[]);
 function readAgentRegistrationObject(
     value: unknown,
     subject: string,
@@ -651,6 +651,16 @@ function snapshotAgentCliAuthContribution(
     });
 }
 
+function isCanonicalNativeHomeRelativePath(value: unknown): value is string {
+    return typeof value === 'string'
+        && value.length > 0
+        && value === value.trim()
+        && !value.includes('\\')
+        && !value.startsWith('/')
+        && !/^[A-Za-z]:/u.test(value)
+        && value.split('/').every((segment) => segment.length > 0 && segment !== '.' && segment !== '..');
+}
+
 function snapshotAgentConnectedAccountStateSharingDescriptor(
     value: AgentConnectedAccountStateSharingDescriptorV1,
 ): AgentConnectedAccountStateSharingDescriptorV1 {
@@ -659,25 +669,38 @@ function snapshotAgentConnectedAccountStateSharingDescriptor(
         'Agent connected-account launch state-sharing descriptor',
     ) as AgentConnectedAccountStateSharingDescriptorV1;
     if (snapshot.nativeHome === undefined) return snapshot;
-    const { environmentKey, defaultRelativePath } = snapshot.nativeHome;
+    const { environmentKey, defaultRelativePath, materializedDirectoryName, groupHome, runtimeDescriptorHome } = snapshot.nativeHome;
     if (typeof environmentKey !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(environmentKey)) {
         throw new TypeError('Agent connected-account launch state-sharing descriptor.nativeHome.environmentKey must be a canonical environment key');
     }
-    if (
-        typeof defaultRelativePath !== 'string'
-        || defaultRelativePath.length === 0
-        || defaultRelativePath !== defaultRelativePath.trim()
-        || defaultRelativePath.includes('\\')
-        || defaultRelativePath.startsWith('/')
-        || /^[A-Za-z]:/u.test(defaultRelativePath)
-        || defaultRelativePath.split('/').some((segment) => segment.length === 0 || segment === '.' || segment === '..')
-    ) {
+    if (!isCanonicalNativeHomeRelativePath(defaultRelativePath)) {
         throw new TypeError('Agent connected-account launch state-sharing descriptor.nativeHome.defaultRelativePath must be a safe canonical relative path');
+    }
+    if (materializedDirectoryName !== undefined && (
+        !isCanonicalNativeHomeRelativePath(materializedDirectoryName)
+        || materializedDirectoryName.includes('/')
+    )) {
+        throw new TypeError('Agent connected-account launch state-sharing descriptor.nativeHome.materializedDirectoryName must be a safe canonical directory name');
+    }
+    if (groupHome !== undefined && groupHome !== 'group' && groupHome !== 'selectedAccount') {
+        throw new TypeError('Agent connected-account launch state-sharing descriptor.nativeHome.groupHome must be group or selectedAccount');
+    }
+    if (runtimeDescriptorHome !== undefined) {
+        const declaration = readAgentRegistrationObject(
+            runtimeDescriptorHome,
+            'Agent connected-account launch state-sharing descriptor.nativeHome.runtimeDescriptorHome',
+        );
+        for (const field of ['pathField', 'scopeField', 'scopeValue'] as const) {
+            const value = declaration[field];
+            if (typeof value !== 'string' || value.length === 0 || value !== value.trim()) {
+                throw new TypeError(`Agent connected-account launch state-sharing descriptor.nativeHome.runtimeDescriptorHome.${field} must be a non-empty canonical string`);
+            }
+        }
     }
     return snapshot;
 }
 
-function snapshotAgentConnectedAccountLaunchUses<T extends 'fileEnvironmentUses' | 'environmentUses'>(
+function snapshotAgentConnectedAccountLaunchUses<T extends 'fileEnvironmentUses' | 'environmentUses' | 'environmentUnsetUses'>(
     value: unknown,
     field: T,
 ): T extends 'fileEnvironmentUses'
@@ -723,6 +746,9 @@ function snapshotAgentConnectedAccountLaunchContribution(
     const environmentUses = receiver.environmentUses === undefined
         ? undefined
         : snapshotAgentConnectedAccountLaunchUses(receiver.environmentUses, 'environmentUses');
+    const environmentUnsetUses = receiver.environmentUnsetUses === undefined
+        ? undefined
+        : snapshotAgentConnectedAccountLaunchUses(receiver.environmentUnsetUses, 'environmentUnsetUses');
     const switchContinuity = receiver.switchContinuity === undefined
         ? undefined
         : snapshotAgentConnectedAccountSwitchContinuity(receiver.switchContinuity);
@@ -791,7 +817,7 @@ function snapshotAgentConnectedAccountLaunchContribution(
                     }
                 }
             }
-            for (const callback of ['verifyResumeReachable'] as const) {
+            for (const callback of ['verifyResumeReachable', 'mergeSharedStateFile'] as const) {
                 if (source[callback] !== undefined && typeof source[callback] !== 'function') {
                     throw new TypeError(`Agent connected-account launch continuity.${callback} must be a function`);
                 }
@@ -801,6 +827,7 @@ function snapshotAgentConnectedAccountLaunchContribution(
                 && nativeAuthCodec === undefined
                 && runtimeAuthAdapter === undefined
                 && source.verifyResumeReachable === undefined
+                && source.mergeSharedStateFile === undefined
             ) {
                 throw new TypeError('Agent connected-account launch continuity must declare at least one callback');
             }
@@ -811,15 +838,22 @@ function snapshotAgentConnectedAccountLaunchContribution(
                 ...(source.verifyResumeReachable === undefined
                     ? {}
                     : { verifyResumeReachable: source.verifyResumeReachable }),
+                ...(source.mergeSharedStateFile === undefined
+                    ? {}
+                    : { mergeSharedStateFile: bindAgentRegistrationCallback<NonNullable<AgentConnectedAccountContinuityV1['mergeSharedStateFile']>>(
+                        source, source.mergeSharedStateFile,
+                        'Agent connected-account launch continuity.mergeSharedStateFile',
+                    ) }),
             });
         })() as AgentConnectedAccountContinuityV1;
-    if (requestAuthUses === undefined && fileEnvironmentUses === undefined && environmentUses === undefined && switchContinuity === undefined && stateSharingDescriptor === undefined && continuity === undefined) {
+    if (requestAuthUses === undefined && fileEnvironmentUses === undefined && environmentUses === undefined && environmentUnsetUses === undefined && switchContinuity === undefined && stateSharingDescriptor === undefined && continuity === undefined) {
         throw new TypeError('Agent connected-account launch contribution must declare at least one launch fact');
     }
     return Object.freeze({
         ...(requestAuthUses === undefined ? {} : { requestAuthUses }),
         ...(fileEnvironmentUses === undefined ? {} : { fileEnvironmentUses }),
         ...(environmentUses === undefined ? {} : { environmentUses }),
+        ...(environmentUnsetUses === undefined ? {} : { environmentUnsetUses }),
         ...(switchContinuity === undefined ? {} : { switchContinuity }),
         ...(stateSharingDescriptor === undefined ? {} : { stateSharingDescriptor }),
         ...(continuity === undefined ? {} : { continuity }),
@@ -1183,7 +1217,7 @@ function snapshotAgentPreflightSessionControlsContribution(
         'probeModes',
         'probeConfigOptions',
         'probePassiveRealtimeSetup',
-    ] as const) {
+    ] as const satisfies readonly (keyof AgentPreflightSessionControlsContributionV1)[]) {
         if (receiver[key] === undefined) continue;
         snapshot[key] = bindAgentRegistrationCallback(
             receiver,
