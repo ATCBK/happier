@@ -43,6 +43,7 @@ import {
 } from '@/components/settings/connectedServices/model/resolveConnectedServicesAuthLabel';
 import {
   CONNECTED_SERVICES_BINDINGS_KEY,
+  hasConnectedServicesBindingsInAgentOptionState,
   teamResourceConnectedServiceSelectionKey,
   type ConnectedServicesServiceBinding,
 } from '@/sync/domains/connectedServices/connectedServicesAgentOptionStateBindings';
@@ -88,6 +89,7 @@ export function useNewSessionConnectedServices(params: Readonly<{
   providerSources?: readonly ProviderRouteSource[];
   /** The selected Agent's Gateways and Providers for the "Runs through" popover; omitted, it names none. */
   routeSources?: SessionRouteSources;
+  nativeAgentTargetKey?: string;
   modelRouteTeamSources?: SessionRoutePresentationInput['teamSources'];
   providerSettings?: Pick<ProviderSettingsV1, 'connections' | 'secretBindingsByConnectionId'>;
   providerProjection?: PluginProjectionV2 | null;
@@ -154,7 +156,7 @@ export function useNewSessionConnectedServices(params: Readonly<{
   const [optimisticAuthored, setOptimisticAuthored] = React.useState<Readonly<{
     contextKey: string; options: Record<string, unknown> | null;
   }> | null>(null);
-  const hasControlledBindings = Boolean(agentOptionState && Object.prototype.hasOwnProperty.call(agentOptionState, CONNECTED_SERVICES_BINDINGS_KEY));
+  const hasControlledBindings = hasConnectedServicesBindingsInAgentOptionState(agentOptionState);
   const hasOptimisticBindings = optimisticAuthored?.contextKey === authoredContextKey && optimisticAuthored.options === agentOptionState;
   const hasExplicitBindings = hasControlledBindings || hasOptimisticBindings;
   const inheritsPurposeDefaults = connectedAccounts.length > 0 && !hasExplicitBindings;
@@ -449,6 +451,15 @@ export function useNewSessionConnectedServices(params: Readonly<{
     return {};
   }, [authLabel]);
 
+  const nativeAuthSource = connectedAccountDefaultsStatus !== 'ready' ? 'unknown' as const
+    : authLabel.connectedCount === 0 ? 'native' as const
+    : authLabel.connectedCount === supportedConnectedServiceIds.length ? 'connected' as const : 'mixed' as const;
+  const routePresentation = React.useMemo(() => resolveSessionRoutePresentation({
+    phase: 'draft', selection: params.modelSelection ?? null, sources: params.providerSources,
+    native: { label: authLabel.label, connectedCount: authLabel.connectedCount, authSource: nativeAuthSource },
+    teamSources: params.modelRouteTeamSources,
+  }), [params.modelSelection, params.providerSources, params.modelRouteTeamSources, authLabel, nativeAuthSource]);
+
   const connectedServicesAuthPopoverContent = React.useCallback(({ maxHeight }: AgentInputContentPopoverRenderArgs) => (
     <NewSessionConnectedServicesSelectionContent
       supportedServiceIds={supportedConnectedServiceIds}
@@ -465,6 +476,8 @@ export function useNewSessionConnectedServices(params: Readonly<{
       }}
       setBindingForService={setBindingForService}
       routeSources={params.routeSources}
+      nativeAgentTargetKey={params.nativeAgentTargetKey}
+      appliedRoute={routePresentation.applied}
       defaultProfileIdByServiceId={settings.connectedServicesDefaultProfileByServiceId}
       resolveOptionAvailability={resolveOptionAvailability}
       onOpenSettings={(serviceId) => {
@@ -496,17 +509,11 @@ export function useNewSessionConnectedServices(params: Readonly<{
     params.teamCredentialResourceCurrentKeys,
     params.teamNameById,
     params.routeSources,
+    params.nativeAgentTargetKey,
+    routePresentation.applied,
     targetServerId,
   ]);
 
-  const nativeAuthSource = connectedAccountDefaultsStatus !== 'ready' ? 'unknown' as const
-    : authLabel.connectedCount === 0 ? 'native' as const
-    : authLabel.connectedCount === supportedConnectedServiceIds.length ? 'connected' as const : 'mixed' as const;
-  const routePresentation = React.useMemo(() => resolveSessionRoutePresentation({
-    phase: 'draft', selection: params.modelSelection ?? null, sources: params.providerSources,
-    native: { label: authLabel.label, connectedCount: authLabel.connectedCount, authSource: nativeAuthSource },
-    teamSources: params.modelRouteTeamSources,
-  }), [params.modelSelection, params.providerSources, params.modelRouteTeamSources, authLabel, nativeAuthSource]);
   const selectedProviderSource = React.useMemo(() => {
     const route = routePresentation.applied;
     return route.kind === 'provider'
@@ -539,7 +546,7 @@ export function useNewSessionConnectedServices(params: Readonly<{
       machineId: params.sourceMachineId ?? '', resolveServiceTitle: resolveTitle }) : null;
     const providerPurposes = source && route.kind === 'provider' ? projectProviderRouteSignInPurposes({
       route: { ...route, sourceLabel: route.sourceLabel ?? providerConnectionSourceLabel(source.source) },
-      machineId: params.sourceMachineId ?? '', secretBindings: params.providerSettings?.secretBindingsByConnectionId[route.connectionId],
+      machineId: params.sourceMachineId ?? '', secretBindings: connection ? params.providerSettings?.secretBindingsByConnectionId[connection.id] : undefined,
       credentialSlotId: source.credentialSlotId, managedSignInPurposes: source.managedSignInPurposes,
     }) : [];
     const nativePurposes = route.kind === 'provider' && !selectedProviderSource ? [] : projectSessionCredentialSignInPurposes({ declarations: connectedAccounts,
@@ -564,10 +571,9 @@ export function useNewSessionConnectedServices(params: Readonly<{
             connectedCount: authLabel.connectedCount,
             authSource: nativeAuthSource,
             popoverContent: connectedServicesAuthPopoverContent,
-            maxHeightCap: 560,
-            maxWidthCap: 560,
+            agentId: defaultAuthAgentId,
         });
-    }, [authLabel, connectedAccountDefaultsStatus, connectedServicesAuthPopoverContent, nativeAuthSource, routePresentation, supportedConnectedServiceIds]);
+    }, [authLabel, connectedAccountDefaultsStatus, connectedServicesAuthPopoverContent, defaultAuthAgentId, nativeAuthSource, routePresentation, supportedConnectedServiceIds]);
 
   const selectedCredentialMachineAgent = React.useMemo(() => projectMachineAgentForCredential(params.machineAgent, {
     credentialBindings: connectedServicesBindingsPayload,

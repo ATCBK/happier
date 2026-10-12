@@ -6,6 +6,7 @@ import { AgentSessionStartBlocker } from '@/components/machines/agents/AgentSess
 import { getConnectedServiceRegistrySnapshot } from '@/sync/domains/connectedServices/connectedServiceRegistry';
 import { storage } from '@/sync/domains/state/storage';
 import { AccountProfileSchema, PluginProjectionV2Schema } from '@happier-dev/protocol';
+import { en } from '@/text/translations/en';
 import { profileDefaults } from '@/sync/domains/profiles/profile';
 import { buildServerFeaturesResponse } from '@/hooks/server/serverFeaturesTestUtils';
 import { setRuntimeFetch, resetRuntimeFetch } from '@/utils/system/runtimeFetch';
@@ -63,6 +64,7 @@ const newSessionConnectedAccountProjection = {
             modes: [{
                 id: 'oauth',
                 kind: 'oauthAuthorizationCode',
+                callbackUrl: 'http://127.0.0.1:4000/auth/callback',
                 scopes: ['openid', 'profile', 'email', 'offline_access'],
                 pkce: 'required',
                 outcomeReconciliation: 'none',
@@ -220,6 +222,13 @@ function seedClaudeProfile(): void {
 vi.mock('@expo/vector-icons', () => ({
     Ionicons: 'Ionicons',
 }));
+vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({
+    splitStreamingRevealTextParts: () => { throw new Error('Native Markdown reveal is outside the prompt authentication journey'); },
+}));
+vi.mock('@/components/ui/popover', async (importOriginal) => {
+    const { createInlinePopoverModuleMock } = await import('@/dev/testkit/mocks/popover');
+    return createInlinePopoverModuleMock(importOriginal, { maxHeight: 640, maxWidth: 380, placement: 'bottom' });
+});
 
 installNewSessionModulesCommonModuleMocks({
     modal: async () => {
@@ -246,7 +255,15 @@ installNewSessionModulesCommonModuleMocks({
         const { en } = await import('@/text/translations/en');
         return createTextModuleMock({
             translate: (key: string, params) => key === 'connectedServices.authChip.runsThrough' && typeof params?.source === 'string'
-                ? en.connectedServices.authChip.runsThrough({ source: params.source }) : key,
+                ? en.connectedServices.authChip.runsThrough({ source: params.source })
+                : key === 'connectedServices.authChip.runsThroughOwnSignIn'
+                    ? en.connectedServices.authChip.runsThroughOwnSignIn
+                    : key === 'agentInput.agent.claude'
+                        ? en.agentInput.agent.claude
+                        : key === 'connectedServices.authChip.popoverTitle'
+                            ? en.connectedServices.authChip.popoverTitle
+                            : key === 'connectedServices.authChip.popoverDescription' && typeof params?.agent === 'string'
+                                ? en.connectedServices.authChip.popoverDescription({ agent: params.agent }) : key,
         });
     },
 });
@@ -314,7 +331,11 @@ describe('new Session Connected Accounts from the machine catalog', () => {
                 },
             },
         });
-        const inputs = adaptDaemonContributionRegistryProjectionToMergedProjectionInputs(projection);
+        const adaptedInputs = adaptDaemonContributionRegistryProjectionToMergedProjectionInputs(projection);
+        const inputs = { ...adaptedInputs,
+            discoveredBackendIds: Object.keys(adaptedInputs.mergedBackendProjectionById),
+            pluginProjectionV2: projection,
+        };
         const catalog = {
             enabledAgentIds: ['claude'],
         };
@@ -458,7 +479,7 @@ describe('New Session purpose catalog authority', () => {
         const connectedServices = projectMachineAgentConnectedServices({ agents: [{ agentId: 'claude', connectedAccounts: CLAUDE_CONNECTED_ACCOUNTS }],
             profile, accountTransport: 'advertised-v4', entries: getConnectedServiceRegistrySnapshot().entries, now: Date.now() }).claude;
         const machineAgent = projectMachineAgent({ agentId: 'claude', title: 'Claude', checking: false, stale: false, job: null, connectedServices,
-            facts: { agentId: 'claude', title: 'Claude', installed: true, version: '1', latestVersion: '1', update: null,
+            facts: { agentId: 'claude', title: 'Claude', installed: true, version: '1', latestVersion: '1', update: { supported: false, command: null },
                 signIn: { status: scenario.native, loginSupport: 'login_terminal' }, platform: { supported: true },
                 install: { available: false, mode: 'manual', sizeBytes: null, guideUrl: null }, dependencies: [] } });
         const hook = await renderHook(() => {
@@ -546,7 +567,7 @@ describe('New Session purpose catalog authority', () => {
                 connectedAccounts: CLAUDE_CONNECTED_ACCOUNTS, agentOptionState: null,
                 settings: { connectedServicesDefaultProfileByServiceId: {},
                     connectedServicesDefaultAuthByAgentIdV1: { v: 1, bindingsByAgentId: {
-                        claude: { [CLAUDE_SERVICE_KEY]: { source: 'connected', selection: 'profile', profileId: 'retired-legacy' } },
+                        claude: { v: 1, bindingsByServiceId: { [CLAUDE_SERVICE_KEY]: { source: 'connected', selection: 'profile', profileId: 'retired-legacy' } } },
                     } } },
                 targetServerId: target.id, sourceMachineId: 'target-machine',
                 router: { push() {} }, setAgentOptionStateForCurrentAgent() {},
@@ -600,7 +621,7 @@ describe('New Session purpose catalog authority', () => {
         }));
         try {
             const popover = requireCollapsedContentPopover(hook.getCurrent().connectedServicesAuthChip);
-            if (!popover.renderContent) throw new Error('Expected real auth selection content');
+            if (typeof popover.renderContent !== 'function') throw new Error('Expected real auth selection content');
             const content = popover.renderContent({ maxHeight: 560, requestClose() {} }) as React.ReactElement<NewSessionConnectedServicesSelectionContentProps>;
             await act(async () => { await content.props.setBindingForService(CLAUDE_SERVICE_KEY, { source: 'native' }); });
             expect(hook.getCurrent().connectedAccountDefaultsStatus).toBe('ready');
@@ -637,13 +658,13 @@ describe('New Session purpose catalog authority', () => {
         applyConnectedAccountCatalogSnapshot(scope, 'purposes', { status: 'ready', revision: 5, record: { key: 'purposes', value } }, true);
         let withdrawing = false;
         const withdrawnLabels: string[] = [];
-        const hook = await renderHook((props: Readonly<{ agentOptionState: Record<string, unknown> | null; connectedAccounts: ConnectedAccountsParam }>) => {
+        const hook = await renderHook<ReturnType<typeof useNewSessionConnectedServices>, Readonly<{ agentOptionState: Record<string, unknown> | null; connectedAccounts: ConnectedAccountsParam }>>((props) => {
             const result = useNewSessionConnectedServices({
             agentCore: null, defaultAuthAgentId: 'claude', defaultAuthConsumer: consumer, connectedAccounts: props.connectedAccounts,
             agentOptionState: props.agentOptionState, settings: { connectedServicesDefaultProfileByServiceId: {} },
             targetServerId: connection.home.id, router: { push() {} }, setAgentOptionStateForCurrentAgent() {},
             });
-            if (withdrawing) withdrawnLabels.push(requireCollapsedContentPopover(result.connectedServicesAuthChip).label);
+            if (withdrawing) withdrawnLabels.push(requireCollapsedContentPopover(result.connectedServicesAuthChip).label ?? '');
             return result;
         }, { initialProps: { agentOptionState: null, connectedAccounts: CLAUDE_CONNECTED_ACCOUNTS } });
         try {
@@ -680,7 +701,7 @@ describe('New Session purpose catalog authority', () => {
         storage.setState({ profileScope: scope, profile: AccountProfileSchema.parse({ id: scope.accountId }) });
         applyConnectedAccountCatalogSnapshot(scope, 'purposes', { status: 'ready', revision: 1,
             record: { key: 'purposes', value: { v: 1, bindings: [] } } }, true);
-        const hook = await renderHook((agentOptionState: Record<string, unknown> | null) => useNewSessionConnectedServices({
+        const hook = await renderHook<ReturnType<typeof useNewSessionConnectedServices>, Record<string, unknown> | null>((agentOptionState) => useNewSessionConnectedServices({
             agentCore: null, defaultAuthAgentId: 'claude', defaultAuthConsumer: null,
             connectedAccounts: CLAUDE_CONNECTED_ACCOUNTS, agentOptionState,
             settings: { connectedServicesDefaultProfileByServiceId: {} }, targetServerId: connection.home.id,
@@ -696,6 +717,81 @@ describe('New Session purpose catalog authority', () => {
 
 describe('useNewSessionConnectedServices', () => {
     beforeEach(arrangeLegacyConnectedServicesHomes);
+    it('authors an Account prompt trigger with a profile picked through the New Session authentication owner', async () => {
+        const { TriggerPopover } = await import('@/components/workflows/triggers/TriggerPopover');
+        const { NewSessionConnectedServicesSelectionContent } = await import('../components/NewSessionConnectedServicesSelectionContent');
+        const { createDefaultWhen } = await import('@/components/workflows/triggers/sessionTriggerForm');
+        const { AuthProvider } = await import('@/auth/context/AuthContext');
+        const { resolveWorkflowStepSelectionV1 } = await import('@happier-dev/protocol/workflows/workflowStepSelectionV1');
+        const { materializeWorkflowAcceptedSnapshotV1 } = await import('@happier-dev/protocol/workflows/materializeWorkflowAcceptedSnapshotV1');
+        const submit = vi.fn(async () => {});
+        const screen = await renderScreen(<AuthProvider initialCredentials={legacyConnection!.credentials}><TriggerPopover testID="prompt-auth" anchorRef={React.createRef()}
+            onRequestClose={vi.fn()} whenKinds={['schedule']} sessionId={null} serverId={activeHomeId}
+            initial={{ when: createDefaultWhen('schedule'), enabled: true, then: { kind: 'sendPrompt', prompt: 'Review the project',
+                selection: { agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } } } } }}
+            workflowOptions={[]} onSubmit={submit} /></AuthProvider>);
+        await screen.pressByTestIdAsync('new-session-connected-services-auth-chip');
+        const panel = screen.root.findByType(NewSessionConnectedServicesSelectionContent);
+        expect(panel.props.profileOptionsByServiceId[CLAUDE_SERVICE_KEY]).toEqual(expect.arrayContaining([
+            expect.objectContaining({ profileId: 'work' }),
+        ]));
+        const { createConnectedServiceOptionId } = await import('../components/buildNewSessionConnectedServicesSelectionListModel');
+        await screen.pressByTestIdAsync(`new-session.connected-services.selection-list:new-session-connected-services-root:option:${createConnectedServiceOptionId(CLAUDE_SERVICE_KEY, 'work')}`);
+        await screen.pressByTestIdAsync('prompt-auth-submit');
+        const target = submit.mock.calls[0]?.[1].target;
+        if (target?.kind !== 'inline') throw new Error('Expected the authored prompt target');
+        const binding = { source: 'connected', selection: 'profile', profileId: 'work' };
+        expect(target.definition.defaults.connectedServices.bindingsByServiceId[CLAUDE_SERVICE_KEY]).toEqual(binding);
+        expect(resolveWorkflowStepSelectionV1({ defaults: target.definition.defaults, purpose: 'authoring' })
+            .selection.connectedServices?.bindingsByServiceId[CLAUDE_SERVICE_KEY]).toEqual(binding);
+        const materialized = await materializeWorkflowAcceptedSnapshotV1({ definition: target.definition,
+            context: { source: { kind: 'inline' }, inputs: {}, machineId: 'machine', executionTarget: { kind: 'session' },
+                workspaceTarget: { project: { machineId: 'machine', directory: '/project', checkoutRootPath: '/project' } },
+                origin: { kind: 'direct' }, authorization: { principal: { kind: 'host' } } },
+            admission: { kind: 'user' }, effects: { resolveTargetAvailability: async () => true } });
+        expect(materialized.ok).toBe(true);
+        if (!materialized.ok) throw new Error('Expected the bound prompt admission');
+        const leaf = materialized.snapshot.materializedLeaves[0];
+        expect(leaf?.kind).toBe('step');
+        if (leaf?.kind !== 'step') throw new Error('Expected a materialized Agent step');
+        expect(leaf.selection.connectedServices?.bindingsByServiceId[CLAUDE_SERVICE_KEY]).toEqual(binding);
+    });
+    it('updates chip content when the route sources its popover lists arrive', async () => {
+        const { useNewSessionConnectedServices } = await import('./useNewSessionConnectedServices');
+        let routeSources = {
+            machineId: 'machine-1', serverId: activeHomeId, agentTargetKey: 'agent:happier.agent.claude/claude',
+            shownSources: [] as Array<{ connectionId: string; rows: readonly unknown[] }>,
+            hiddenSources: [] as Array<{ connectionId: string; modelCount: number }>,
+        };
+        const hook = await renderHook(() =>
+            useNewSessionConnectedServices({
+                agentCore: null,
+                defaultAuthAgentId: 'claude',
+                defaultAuthConsumer: { pluginId: 'happier.agent.claude', localId: 'claude' },
+                connectedAccounts: CLAUDE_CONNECTED_ACCOUNTS,
+                agentOptionState: null,
+                settings: {
+                    connectedServicesDefaultProfileByServiceId: {},
+                    connectedServicesDefaultAuthByAgentIdV1: { v: 1, bindingsByAgentId: {} },
+                },
+                targetServerId: activeHomeId,
+                router: { push: vi.fn() },
+                setAgentOptionStateForCurrentAgent: vi.fn(),
+                routeSources,
+            }),
+        );
+        const before = hook.getCurrent().connectedServicesAuthChip;
+
+        // Sources arriving after the chip is built must reach its popover even when its label stays the same.
+        routeSources = { ...routeSources, shownSources: [{ connectionId: 'pc_deepseek', rows: [{}, {}] }] };
+        await hook.rerender();
+        const after = hook.getCurrent().connectedServicesAuthChip;
+
+        expect(after?.collapsedContentPopover?.label).toBe(before?.collapsedContentPopover?.label);
+        expect(after?.collapsedContentPopover?.renderContent).toBeDefined();
+        expect(after?.collapsedContentPopover?.renderContent).not.toBe(before?.collapsedContentPopover?.renderContent);
+    });
+
     it('returns a connected-services chip that opens the anchored account picker popover', async () => {
         const { useNewSessionConnectedServices } = await import('./useNewSessionConnectedServices');
 
@@ -728,10 +824,16 @@ describe('useNewSessionConnectedServices', () => {
         );
         expect(chip?.collapsedAction).toBeUndefined();
         expect(chip?.collapsedContentPopover).toEqual(expect.objectContaining({
-            title: 'connectedServices.authChip.runsThroughOwnSignIn',
-            label: 'connectedServices.authChip.runsThroughOwnSignIn',
+            title: en.connectedServices.authChip.runsThroughOwnSignIn,
+            label: en.connectedServices.authChip.runsThroughOwnSignIn,
             scrollEnabled: false,
             renderContent: expect.any(Function),
+            // The same titled, narrow source list a running session opens (RT1): one chip owner.
+            header: {
+                title: en.connectedServices.authChip.popoverTitle,
+                description: en.connectedServices.authChip.popoverDescription({ agent: 'Claude' }),
+            },
+            maxWidthCap: 400,
         }));
 
         const toggleCollapsedPopover = vi.fn();
@@ -805,9 +907,9 @@ describe('useNewSessionConnectedServices', () => {
             { [CLAUDE_SERVICE_KEY]: { source: 'connected', selection: 'profile', profileId: 'work' } },
         );
         expect(requireCollapsedContentPopover(hook.getCurrent().connectedServicesAuthChip).label)
-            .toBe('Runs through Anthropic API key: Work');
+            .toBe('Runs through Anthropic API key · Work');
         // "Runs through <account>": the account is the route's native source.
-        expect(hook.getCurrent().routePresentation.applied).toMatchObject({ kind: 'native', sourceLabel: 'Anthropic API key: Work' });
+        expect(hook.getCurrent().routePresentation.applied).toMatchObject({ kind: 'native', sourceLabel: 'Anthropic API key · Work' });
 
         const reopenedPopoverRenderer = requireCollapsedContentPopover(
             hook.getCurrent().connectedServicesAuthChip,
@@ -952,9 +1054,9 @@ describe('useNewSessionConnectedServices', () => {
             },
         });
         expect(requireCollapsedContentPopover(hook.getCurrent().connectedServicesAuthChip).label)
-            .toBe('Runs through Anthropic API key: Work');
+            .toBe('Runs through Anthropic API key · Work');
         // "Runs through <account>": the account is the route's native source.
-        expect(hook.getCurrent().routePresentation.applied).toMatchObject({ kind: 'native', sourceLabel: 'Anthropic API key: Work' });
+        expect(hook.getCurrent().routePresentation.applied).toMatchObject({ kind: 'native', sourceLabel: 'Anthropic API key · Work' });
 
         await hook.unmount();
     });
@@ -1151,9 +1253,9 @@ describe('useNewSessionConnectedServices', () => {
             },
         });
         expect(requireCollapsedContentPopover(hook.getCurrent().connectedServicesAuthChip).label)
-            .toBe('Runs through Codex: Primary pool');
+            .toBe('Runs through Codex · Primary pool');
         // "Runs through <account>": the account is the route's native source.
-        expect(hook.getCurrent().routePresentation.applied).toMatchObject({ kind: 'native', sourceLabel: 'Codex: Primary pool' });
+        expect(hook.getCurrent().routePresentation.applied).toMatchObject({ kind: 'native', sourceLabel: 'Codex · Primary pool' });
 
         await hook.unmount();
     });
@@ -1223,7 +1325,7 @@ describe('useNewSessionConnectedServices', () => {
             },
         });
         expect(requireCollapsedContentPopover(hook.getCurrent().connectedServicesAuthChip).label)
-            .toBe('connectedServices.authChip.runsThroughOwnSignIn');
+            .toBe(en.connectedServices.authChip.runsThroughOwnSignIn);
 
         const popoverRenderer = requireCollapsedContentPopover(
             hook.getCurrent().connectedServicesAuthChip,
@@ -1289,7 +1391,7 @@ describe('useNewSessionConnectedServices', () => {
 
         // Neutral/public presentation from the applied descriptor projection.
         expect(requireCollapsedContentPopover(hook.getCurrent().connectedServicesAuthChip).label)
-            .toBe('connectedServices.authChip.runsThroughOwnSignIn');
+            .toBe(en.connectedServices.authChip.runsThroughOwnSignIn);
 
         const popoverRenderer = requireCollapsedContentPopover(
             hook.getCurrent().connectedServicesAuthChip,
@@ -1321,9 +1423,9 @@ describe('useNewSessionConnectedServices', () => {
             },
         });
         expect(requireCollapsedContentPopover(hook.getCurrent().connectedServicesAuthChip).label)
-            .toBe('Runs through Acme Reviewer Auth: Reviewer');
+            .toBe('Runs through Acme Reviewer Auth · Reviewer');
         expect(hook.getCurrent().routePresentation).toEqual({
-            applied: { kind: 'native', sourceLabel: 'Acme Reviewer Auth: Reviewer',
+            applied: { kind: 'native', sourceLabel: 'Acme Reviewer Auth · Reviewer',
                 authSource: 'connected', connectedCount: 1, modelId: null },
             pending: null,
         });
