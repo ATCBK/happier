@@ -28,7 +28,6 @@ export function createScmDiffSummarySettingsCatalogReader(account: ActionAccount
         account.assertCurrent();
         const { catalog } = await readAcpCatalogInContext(account);
         account.assertCurrent();
-        if (catalog.status !== 'ready') return null;
         const selected = decodeScmDiffSummaryModelOverride(storedValue);
         if (!selected?.backendTargetKey) return null;
         const selectionKey = MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.sourceControl;
@@ -48,6 +47,8 @@ export function createScmDiffSummarySettingsCatalogReader(account: ActionAccount
             mergedBackendProjectionById: inputs?.mergedBackendProjectionById,
         }).find(candidate => candidate.backendTargetKey === selected.backendTargetKey);
         if (!entry) return null;
+        // The configured-ACP row owns only configured targets, just as in the picker.
+        if (entry.kind === 'configuredBackend' && catalog.status !== 'ready') return null;
         const backendTarget = readBackendTargetRefV2(entry.backendTarget);
         const core = getAgentCore(entry.agentId);
         const modelConfig = getAgentModelConfig(entry.agentId);
@@ -63,11 +64,16 @@ export function createScmDiffSummarySettingsCatalogReader(account: ActionAccount
             agentFormats: entry.kind === 'builtInAgent' ? core?.structuredOutput?.formats : null });
         return { profiles, isCurrent: current => {
             const cached = inputs && machineId ? readReusableDaemonMergedProjectionCacheEntry({ ...params, machineId }) : null;
-            return account.accountLifetime.isCurrent() && isAcpCatalogCaptureCurrent(account.accountLifetime.scope, catalog)
+            const currentProbe = probe && cacheKey ? readDynamicModelProbeCache(cacheKey) : null;
+            // Cache reads allocate envelopes; the observation and model list carry currentness.
+            const probeCurrent = !probe || currentProbe?.kind === probe.kind && currentProbe.updatedAt === probe.updatedAt
+                && (probe.kind !== 'success' || currentProbe.kind === 'success' && currentProbe.value === probe.value);
+            return account.accountLifetime.isCurrent()
+                && (entry.kind !== 'configuredBackend' || catalog.status === 'ready' && isAcpCatalogCaptureCurrent(account.accountLifetime.scope, catalog))
                 && areAccountSettingsJsonValuesEqual(current.backendEnabledByTargetKey, settings.backendEnabledByTargetKey)
                 && areAccountSettingsJsonValuesEqual(storage.getState().settings.machineAdministrationTargetsLocalV1[selectionKey] ?? null, selectedMachine)
                 && (!inputs || cached?.kind === 'ready' && cached.inputs === inputs)
-                && (!probe || cacheKey !== null && readDynamicModelProbeCache(cacheKey) === probe);
+                && probeCurrent;
         } };
     };
 }
