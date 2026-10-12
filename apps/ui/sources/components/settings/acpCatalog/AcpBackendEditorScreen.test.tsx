@@ -586,6 +586,18 @@ describe('AcpBackendEditorScreen', () => {
         await vi.waitFor(() => expect(loading.findAll((node) => node.props?.description === 'settingsAgents.customAcp.notFound').length).toBeGreaterThan(0));
     });
 
+    it('opens a saved agent with its fixed ID and short name when the catalog loads after the page', async () => {
+        shared.settingsState.value = { v: 2, backends: [existingKiro] };
+        shared.settingsVersion = null;
+        shared.holdRowRead = true;
+        const screen = await renderEditor('kiro');
+
+        await act(async () => { rowRead.resolve(); });
+        await vi.waitFor(() => expect(input(screen, `${EDITOR}.title`).props.value).toBe('Kiro'));
+        expect(screen.findByTestId(`${EDITOR}.editId`)).toBeFalsy();
+        expect(input(screen, `${EDITOR}.name`).props.value).toBe('kiro');
+    });
+
     it('deletes an existing agent from its menu after confirmation and leaves the page', async () => {
         shared.settingsState.value = { v: 2, backends: [existingKiro] };
         const screen = await renderEditor('kiro');

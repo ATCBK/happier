@@ -188,8 +188,11 @@ export const AcpBackendEditorScreen = React.memo(function AcpBackendEditorScreen
                 return current.authority ? current : { ...current, authority: currentAuthority };
             }
             const baseline = existing ?? current.baseline;
-            return baseline === current.baseline && JSON.stringify(current.authority) === JSON.stringify(currentAuthority)
-                ? current : { ...current, baseline, draft: baseline, authority: currentAuthority };
+            // A saved agent's identifiers are fixed, also when the catalog arrives after the page mounted.
+            const identifiersEdited = current.identifiersEdited || existing !== null;
+            return baseline === current.baseline && identifiersEdited === current.identifiersEdited
+                && JSON.stringify(current.authority) === JSON.stringify(currentAuthority)
+                ? current : { ...current, baseline, draft: baseline, identifiersEdited, authority: currentAuthority };
         });
     }, [currentAuthority, dirty, existing]);
 
