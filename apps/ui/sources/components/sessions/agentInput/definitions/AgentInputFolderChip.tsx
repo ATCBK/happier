@@ -154,12 +154,11 @@ export function AgentInputFolderChip(props: AgentInputFolderChipProps): React.Re
         remove();
         return true;
     }, [remove, removable]);
-    const handleChipFocusChange = React.useCallback((focused: boolean) => {
-        setChipFocusVisible(focused && isHappierFocusVisible());
-    }, []);
-    const handleRemoveFocusChange = React.useCallback((focused: boolean) => {
-        setRemoveFocusVisible(focused && isHappierFocusVisible());
-    }, []);
+    // × is shown (and enabled) while the chip or × holds keyboard focus. Losing focus settles after
+    // the focus move, so Tab from the chip lands on × (and Shift+Tab from × on the chip) instead of
+    // on a × disabled in between, which dropped focus to <body>.
+    const handleChipFocusChange = useSettledFocusVisible(setChipFocusVisible);
+    const handleRemoveFocusChange = useSettledFocusVisible(setRemoveFocusVisible);
 
     const handleAccessibilityAction = React.useCallback((event: { nativeEvent: { actionName: string } }) => {
         if (event.nativeEvent.actionName === 'remove') remove();
@@ -248,6 +247,25 @@ export function AgentInputFolderChip(props: AgentInputFolderChipProps): React.Re
             ) : null}
         </Animated.View>
     );
+}
+
+function useSettledFocusVisible(setVisible: (visible: boolean) => void): (focused: boolean) => void {
+    const blurTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+    React.useEffect(() => () => {
+        if (blurTimerRef.current !== null) clearTimeout(blurTimerRef.current);
+    }, []);
+    return React.useCallback((focused: boolean) => {
+        if (blurTimerRef.current !== null) clearTimeout(blurTimerRef.current);
+        blurTimerRef.current = null;
+        if (focused) {
+            setVisible(isHappierFocusVisible());
+            return;
+        }
+        blurTimerRef.current = setTimeout(() => {
+            blurTimerRef.current = null;
+            setVisible(false);
+        }, 0);
+    }, [setVisible]);
 }
 
 const FolderChipRemoveButton = React.memo(function FolderChipRemoveButton(props: Readonly<{

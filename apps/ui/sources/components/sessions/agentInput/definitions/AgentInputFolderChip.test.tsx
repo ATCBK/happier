@@ -76,6 +76,17 @@ describe('AgentInputFolderChip', () => {
         await act(async () => { remove.props.onFocus({}); });
         expect(flattenStyle(screen.findByTestId('agent-input-path-chip-remove')!.props.style)).toMatchObject({ outlineStyle: 'solid', outlineWidth: 2 });
     });
+    it('keeps × enabled while keyboard focus moves from the chip onto it, then hides it once focus has gone elsewhere', async () => {
+        const { screen } = await renderChip({});
+        await act(async () => { screen.findByTestId('agent-input-path-chip')!.props.onFocus({}); });
+        expect(screen.findByTestId('agent-input-path-chip-remove')!.props.disabled).toBe(false);
+        // Tab: the chip blurs before × is focused. A × disabled in between drops focus to <body>.
+        act(() => { screen.findByTestId('agent-input-path-chip')!.props.onBlur({}); });
+        expect(screen.findByTestId('agent-input-path-chip-remove')!.props.disabled).toBe(false);
+        await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+        expect(screen.findByTestId('agent-input-path-chip-remove')!.props.disabled).toBe(true);
+    });
+
     it('opens the picker from the chip and removes the folder only from ×, never both', async () => {
         const { screen, onPress, onRemove } = await renderChip({});
         const chip = screen.findByTestId('agent-input-path-chip');
