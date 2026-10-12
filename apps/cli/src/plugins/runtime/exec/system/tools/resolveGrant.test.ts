@@ -1,6 +1,7 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -18,6 +19,29 @@ afterEach(async () => {
 });
 
 describe('createPluginExecSystemToolResolver', () => {
+    it.skipIf(process.platform === 'win32')('keeps the granted executable exact while descendants resolve commands through the host PATH', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happier-system-tool-descendants-'));
+        temporaryRoots.add(root);
+        const selected = join(root, 'selected-agent');
+        await writeFile(selected, '#!/bin/sh\nexec descendant-command\n', { mode: 0o755 });
+        await writeFile(join(root, 'descendant-command'), '#!/bin/sh\nprintf descendant-ok\n', { mode: 0o755 });
+        await writeFile(join(root, 'agent'), '#!/bin/sh\nprintf substituted-agent\n', { mode: 0o755 });
+        const hostEnvironment = { ...process.env, PATH: `${root}${delimiter}${process.env.PATH ?? ''}` };
+        const resolver = createPluginExecSystemToolResolver({
+            definitions: [{ toolId: 'agent-cli', displayName: 'Agent', lookupNames: ['agent'] }],
+            baseEnv: hostEnvironment,
+            registerGrant() {},
+        });
+        const grant = await resolver.resolve({ toolId: 'agent-cli', purpose: 'Run selected Agent', preferredPath: selected });
+        const observed = spawnSync(grant.launch.executablePath, [...(grant.launch.args ?? [])], {
+            env: { ...hostEnvironment, ...grant.launch.env }, encoding: 'utf8',
+        });
+        expect(grant.launch.executablePath).toBe(selected);
+        expect(observed.error).toBeUndefined();
+        expect(observed.status).toBe(0);
+        expect(observed.stdout).toBe('descendant-ok');
+    });
+
     it('projects a host-private readable JavaScript preferred path through the captured runtime', async () => {
         const root = await mkdtemp(join(tmpdir(), 'happier-system-tool-runtime-'));
         temporaryRoots.add(root);

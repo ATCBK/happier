@@ -406,7 +406,8 @@ export function createPluginExecSystemToolResolver(params: CreatePluginExecSyste
                         cwd: request.cwd,
                         args: launch.args,
                         env: Object.freeze({
-                            PATH: '',
+                            // The grant pins an absolute executable, not its descendants'
+                            // command search environment. Leave the host PATH inherited.
                             ...(tool.env ?? {}),
                         }),
                     }),
