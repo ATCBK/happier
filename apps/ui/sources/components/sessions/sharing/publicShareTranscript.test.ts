@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import type { NormalizedMessage } from '@happier-dev/session-core/raw';
-import type { AgentState } from '@happier-dev/session-core/state';
+import { AgentStateSchema } from '@happier-dev/session-core/state';
 import { reducePublicShareTranscript } from './publicShareTranscript';
 
 // Public layout-v1 metadata carries completion outcomes, without private arguments or answers.
-const presentationAgentState: AgentState = {
+const presentationAgentState = AgentStateSchema.parse({
     completedRequests: {
         question: { tool: 'AskUserQuestion', createdAt: 1, completedAt: 2, status: 'approved' },
     },
-};
+});
 
 function textRow(seq: number, createdAt: number): NormalizedMessage {
     return {
@@ -19,6 +19,7 @@ function textRow(seq: number, createdAt: number): NormalizedMessage {
 
 describe('public share transcript reduction', () => {
     it('defers historical completion facts and retains them when the terminal page adds no rows', () => {
+        expect(presentationAgentState.completedRequests?.question).not.toHaveProperty('arguments');
         const acceptedHistory = [textRow(3, 20), textRow(2, 30)];
         const partial = reducePublicShareTranscript(acceptedHistory, presentationAgentState);
         expect(partial.messages.map((message) => message.seq)).toEqual([2, 3]);
