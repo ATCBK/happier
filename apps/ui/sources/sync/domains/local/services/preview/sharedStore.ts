@@ -1,4 +1,4 @@
-import { createLocalServicesSharedSubscriptionStore } from '../sharedSubscriptionStore';
+import { createSharedSubscriptionStore } from '@/sync/runtime/subscriptions/sharedSubscriptionStore';
 import {
     type LocalServicePreviewSnapshotClientInput,
     type LocalServicePreviewSnapshotClientResult,
@@ -26,7 +26,7 @@ import {
 // immediately without polling. No `setInterval` anywhere.
 //
 // The keyed subscription/refcount/in-flight machinery is owned by the shared
-// `createLocalServicesSharedSubscriptionStore` factory (the same owner backing the inventory,
+// `createSharedSubscriptionStore` factory (the same owner backing the inventory,
 // managed, and launcher stores) — this module is only the preview-domain adapter.
 
 export type LocalServicePreviewSnapshotClient = (
@@ -62,7 +62,7 @@ function storeKey(input: LocalServicePreviewStoreKeyInput): string {
     return `${input.serverId ?? ''}::${input.machineId}`;
 }
 
-const store = createLocalServicesSharedSubscriptionStore<
+const store = createSharedSubscriptionStore<
     LocalServicePreviewStoreKeyInput,
     LocalServicePreviewState,
     LocalServicePreviewSnapshot,

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { createLocalServicesSharedSubscriptionStore } from './sharedSubscriptionStore';
+import { createSharedSubscriptionStore } from './sharedSubscriptionStore';
 
 type TestInput = Readonly<{
     machineId: string;
@@ -14,10 +14,36 @@ type TestState = Readonly<{
 
 type TestSnapshot = Readonly<{ value: number }>;
 
-describe('createLocalServicesSharedSubscriptionStore', () => {
+describe('createSharedSubscriptionStore', () => {
+    it('keeps a retained snapshot after demand ends and shares a one-shot read without opening a watch', async () => {
+        const snapshotClient = vi.fn(async () => 7);
+        const watchClient = vi.fn(async () => ({ status: 'unavailable' as const }));
+        const store = createSharedSubscriptionStore({
+            emptyState: 0,
+            createState: () => 0,
+            normalizeInput: (input: string) => input,
+            storeKey: (input: string) => input,
+            defaultSnapshotClient: snapshotClient,
+            defaultWatchClient: watchClient,
+            retainState: true,
+            refresh: async ({ snapshotClient: client }) => client(),
+            applySnapshot: (_state: number, snapshot: number) => snapshot,
+            watch: async ({ watchClient: client }) => client(),
+        });
+        const unsubscribe = store.subscribe('machine-a', () => {});
+        await store.read('machine-a');
+        unsubscribe();
+        expect(store.getState('machine-a')).toBe(7);
+        snapshotClient.mockClear();
+        watchClient.mockClear();
+        await Promise.all([store.read('machine-a'), store.read('machine-a')]);
+        expect(snapshotClient).toHaveBeenCalledOnce();
+        expect(watchClient).not.toHaveBeenCalled();
+        expect(store.getState('machine-a')).toBe(7);
+    });
     it('centralizes keyed subscribe, refresh, publish, and cleanup behavior', async () => {
         const snapshotClient = vi.fn(async () => ({ ok: true as const, snapshot: { value: 7 } }));
-        const store = createLocalServicesSharedSubscriptionStore<
+        const store = createSharedSubscriptionStore<
             TestInput,
             TestState,
             TestSnapshot,

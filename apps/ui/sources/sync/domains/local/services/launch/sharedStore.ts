@@ -1,4 +1,4 @@
-import { createLocalServicesSharedSubscriptionStore } from '../sharedSubscriptionStore';
+import { createSharedSubscriptionStore } from '@/sync/runtime/subscriptions/sharedSubscriptionStore';
 import {
     type LocalServiceLauncherSnapshotClientInput,
     type LocalServiceLauncherSnapshotClientResult,
@@ -92,7 +92,7 @@ function failRefresh(
     });
 }
 
-const store = createLocalServicesSharedSubscriptionStore<
+const store = createSharedSubscriptionStore<
     LocalServiceLauncherStoreKeyInput,
     LocalServiceLauncherState,
     LocalServiceLauncherSnapshot,

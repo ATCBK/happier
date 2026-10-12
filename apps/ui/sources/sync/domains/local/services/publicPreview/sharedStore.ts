@@ -1,6 +1,6 @@
 import type { LocalServicePublicPreviewSnapshotV1 } from '@happier-dev/protocol';
 
-import { createLocalServicesSharedSubscriptionStore } from '../sharedSubscriptionStore';
+import { createSharedSubscriptionStore } from '@/sync/runtime/subscriptions/sharedSubscriptionStore';
 import type {
     LocalServicePublicPreviewStatusClientInput,
     LocalServicePublicPreviewStatusClientResult,
@@ -59,7 +59,7 @@ function sameServerAndMachine(
         && (entry.serverId ?? null) === (input.serverId ?? null);
 }
 
-const store = createLocalServicesSharedSubscriptionStore<
+const store = createSharedSubscriptionStore<
     LocalServicePublicPreviewStoreKeyInput,
     LocalServicePublicPreviewState,
     LocalServicePublicPreviewSnapshotV1,

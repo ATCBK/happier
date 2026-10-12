@@ -1,4 +1,4 @@
-import { createLocalServicesSharedSubscriptionStore } from '../sharedSubscriptionStore';
+import { createSharedSubscriptionStore } from '@/sync/runtime/subscriptions/sharedSubscriptionStore';
 import {
     type LocalServiceInventorySnapshotClientInput,
     type LocalServiceInventorySnapshotClientResult,
@@ -60,7 +60,7 @@ function storeKey(input: LocalServiceInventoryStoreKeyInput): string {
     return `${input.serverId ?? ''}::${input.machineId}::${input.sessionId ?? ''}`;
 }
 
-const store = createLocalServicesSharedSubscriptionStore<
+const store = createSharedSubscriptionStore<
     LocalServiceInventoryStoreKeyInput,
     LocalServiceInventoryState,
     LocalServiceInventorySnapshot,
