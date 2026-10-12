@@ -6,9 +6,10 @@
  * Design: 'Start coding anywhere. Continue everywhere.' with desktop and phones
  * Target: public/images/og.png (1200x630, 1.905:1)
  * 
- * The source is wider than the target, so we scale to fit the width and extend
- * the background at top and bottom to reach 630px height, sampling from the
- * dark gradient at the top.
+ * Method: Crop-to-fill approach to avoid visible bands and corner artifacts:
+ * 1. Inset-crop 28px on every side (removes white rounded corners and border)
+ * 2. Center-crop width to 1200:630 ratio (~2750px wide after inset)
+ * 3. Lanczos-resize to final 1200x630
  */
 
 import { fileURLToPath } from 'node:url';
@@ -23,6 +24,7 @@ const OUTPUT = path.join(ROOT, 'public', 'images', 'og.png');
 
 const TARGET_WIDTH = 1200;
 const TARGET_HEIGHT = 630;
+const INSET = 28; // Remove white rounded corners and border
 
 async function main() {
     // Load the source image to get its dimensions
@@ -32,60 +34,42 @@ async function main() {
     console.log(`Source: ${metadata.width}x${metadata.height} (${(metadata.width / metadata.height).toFixed(3)}:1)`);
     console.log(`Target: ${TARGET_WIDTH}x${TARGET_HEIGHT} (${(TARGET_WIDTH / TARGET_HEIGHT).toFixed(3)}:1)`);
     
-    // Scale the source to fit the target width
-    const scaledHeight = Math.round((metadata.height / metadata.width) * TARGET_WIDTH);
-    console.log(`After scaling to ${TARGET_WIDTH}px wide: ${TARGET_WIDTH}x${scaledHeight}`);
+    // Step 1: Inset-crop to remove the white corners and border
+    const insetWidth = metadata.width - (INSET * 2);
+    const insetHeight = metadata.height - (INSET * 2);
+    console.log(`After ${INSET}px inset: ${insetWidth}x${insetHeight}`);
     
-    // Calculate how much padding we need at top and bottom
-    const totalPadding = TARGET_HEIGHT - scaledHeight;
-    const topPadding = Math.floor(totalPadding / 2);
-    const bottomPadding = totalPadding - topPadding;
+    // Step 2: Calculate center-crop dimensions for target aspect ratio
+    const targetRatio = TARGET_WIDTH / TARGET_HEIGHT;
+    const insetRatio = insetWidth / insetHeight;
     
-    console.log(`Padding: ${topPadding}px top, ${bottomPadding}px bottom`);
+    let cropWidth, cropHeight, cropLeft, cropTop;
     
-    // Sample the background color from the top area (dark textured gradient)
-    // Sample from multiple points and average to get a smooth extension
-    const topY = Math.min(5, metadata.height - 1);
-    const samples = [];
-    for (let x = metadata.width * 0.3; x < metadata.width * 0.7; x += metadata.width * 0.1) {
-        const pixel = await sharp(SOURCE)
-            .extract({ left: Math.floor(x), top: topY, width: 1, height: 1 })
-            .raw()
-            .toBuffer();
-        samples.push({ r: pixel[0], g: pixel[1], b: pixel[2] });
+    if (insetRatio > targetRatio) {
+        // Source is wider than target - crop width, keep height
+        cropHeight = insetHeight;
+        cropWidth = Math.round(cropHeight * targetRatio);
+        cropLeft = INSET + Math.round((insetWidth - cropWidth) / 2);
+        cropTop = INSET;
+    } else {
+        // Source is taller than target - crop height, keep width
+        cropWidth = insetWidth;
+        cropHeight = Math.round(cropWidth / targetRatio);
+        cropLeft = INSET;
+        cropTop = INSET + Math.round((insetHeight - cropHeight) / 2);
     }
     
-    // Average the samples
-    const bg = {
-        r: Math.round(samples.reduce((sum, s) => sum + s.r, 0) / samples.length),
-        g: Math.round(samples.reduce((sum, s) => sum + s.g, 0) / samples.length),
-        b: Math.round(samples.reduce((sum, s) => sum + s.b, 0) / samples.length),
-        alpha: 1
-    };
-    console.log(`Background: rgba(${bg.r}, ${bg.g}, ${bg.b}, ${bg.alpha})`);
+    console.log(`Center-crop to ${cropWidth}x${cropHeight} at (${cropLeft}, ${cropTop})`);
     
-    // Scale the source image
-    const scaled = await source
-        .resize(TARGET_WIDTH, scaledHeight, { fit: 'fill' })
-        .png()
-        .toBuffer();
-    
-    // Create the output with padding
-    await sharp({
-        create: {
-            width: TARGET_WIDTH,
-            height: TARGET_HEIGHT,
-            channels: 4,
-            background: bg
-        }
-    })
-    .composite([{
-        input: scaled,
-        top: topPadding,
-        left: 0
-    }])
-    .png({ compressionLevel: 9, palette: false })
-    .toFile(OUTPUT);
+    // Step 3: Extract the cropped region and resize with Lanczos
+    await sharp(SOURCE)
+        .extract({ left: cropLeft, top: cropTop, width: cropWidth, height: cropHeight })
+        .resize(TARGET_WIDTH, TARGET_HEIGHT, {
+            kernel: 'lanczos3',
+            fit: 'fill'
+        })
+        .png({ compressionLevel: 9, palette: false })
+        .toFile(OUTPUT);
     
     const stats = await import('node:fs/promises').then(m => m.stat(OUTPUT));
     console.log(`\nWritten: ${OUTPUT}`);
