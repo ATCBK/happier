@@ -144,18 +144,43 @@ describe('IconButton', () => {
         expect(frame.marginVertical).toBe(0);
     });
 
-    it('keeps the outlined border on the visible surface and the interaction tint on the press frame', async () => {
+    it('paints hover, press and selection on the drawn square, never on the larger touch frame', async () => {
+        const screen = await renderScreen(
+            <IconButton
+                testID="icon-btn"
+                iconName="copy"
+                accessibilityLabel="Copy address"
+                variant="plain"
+                size={24}
+                minimumInteractiveTargetSize={44}
+                interactiveTargetGapPx={44}
+                onPress={() => {}}
+            />,
+        );
+
+        for (const state of [{ hovered: true }, { pressed: true }, { selected: true }]) {
+            const frame = flattenStyle(screen.findByTestId('icon-btn')?.props.style, state);
+            // The frame is only the hit region: it may be larger, but it never paints.
+            expect(frame.width).toBe(44);
+            expect(frame.backgroundColor).toBeUndefined();
+        }
+        await act(async () => {
+            screen.findByTestId('icon-btn')?.props.onHoverIn?.({ nativeEvent: { pointerType: 'mouse' } });
+        });
+        const hoveredSurface = flattenStyle(screen.findByTestId('icon-btn-surface')?.props.style);
+        expect(hoveredSurface.width).toBe(24);
+        expect(hoveredSurface.backgroundColor).toBeTruthy();
+    });
+
+    it('keeps the outlined border and its resting fill on the visible surface', async () => {
         const screen = await renderScreen(
             <IconButton testID="icon-btn" iconName="copy" accessibilityLabel="Copy address" onPress={() => {}} />,
         );
 
         const surface = flattenStyle(screen.findByTestId('icon-btn-surface')?.props.style);
         expect(surface.borderWidth).toBe(1);
-
-        const pressed = flattenStyle(screen.findByTestId('icon-btn')?.props.style, { pressed: true });
-        const idle = flattenStyle(screen.findByTestId('icon-btn')?.props.style);
-        expect(pressed.backgroundColor).toBeTruthy();
-        expect(pressed.backgroundColor).not.toBe(idle.backgroundColor);
+        expect(surface.backgroundColor).toBeTruthy();
+        expect(flattenStyle(screen.findByTestId('icon-btn')?.props.style).backgroundColor).toBeUndefined();
     });
 
     it('renders a plain control with no border and no background fill', async () => {

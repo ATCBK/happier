@@ -12,10 +12,37 @@ import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback
 import { resolveThemeControlEdge, resolveThemeGloss, resolveThemeSurfaceFinish } from '@/components/ui/surfaces/themeRaisedEdge';
 import { HappierSurfaceGradientLayer, happierSurfaceGradientWebStyle } from '@happier-dev/plugin-ui/presentation';
 import { usePressFeedback } from '@/components/ui/interactions/usePressFeedback';
-import { resolveTouchTargetFloorPx } from '@/components/ui/interactiveTargetSize';
+import { resolveMinimumInteractiveTargetSize, resolveTouchTargetFloorPx } from '@/components/ui/interactiveTargetSize';
 import { happierMaterialGradient, useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
 import { readSurfaceStyleProperty } from '@/components/ui/surfaces/surfaceStyle';
+import { parseThemeColor } from '@/theme/parseThemeColor';
 
+
+/** How much of the primary shows while it cannot act (unified-work lab `.uwr-dis`, opacity .38). */
+const DISABLED_PRIMARY_PRESENCE = 0.38;
+const disabledPrimaryColors = new WeakMap<object, Readonly<{ backgroundColor: string; textColor: string }>>();
+
+/** The primary's fill and words at {@link DISABLED_PRIMARY_PRESENCE} over the page, as solid colours; memoized per theme. */
+function resolveDisabledPrimaryColors(theme: Readonly<{ colors: Readonly<{
+    surface: Readonly<{ base: string }>;
+    button: Readonly<{ primary: Readonly<{ background: string; tint: string; disabled: string }> }>;
+}> }>): Readonly<{ backgroundColor: string; textColor: string }> {
+    const existing = disabledPrimaryColors.get(theme);
+    if (existing) return existing;
+    const { surface, button } = theme.colors;
+    const page = parseThemeColor(surface.base);
+    const background = parseThemeColor(button.primary.background);
+    const tint = parseThemeColor(button.primary.tint);
+    const resolved = page && background && tint
+        ? {
+            backgroundColor: page.mix(background, DISABLED_PRIMARY_PRESENCE).rgb().string(),
+            textColor: page.mix(tint, DISABLED_PRIMARY_PRESENCE).rgb().string(),
+        }
+        // A custom theme value the parser cannot read keeps the theme's own disabled slab.
+        : { backgroundColor: button.primary.disabled, textColor: button.primary.tint };
+    disabledPrimaryColors.set(theme, resolved);
+    return resolved;
+}
 
 /** `mini` is the inline action inside a compact capsule (a live call's Retry), not a call to action. */
 export type RoundButtonSize = 'large' | 'normal' | 'small' | 'mini';
@@ -68,17 +95,17 @@ const stylesheet = StyleSheet.create((theme) => ({
     contentContainer: {
         alignItems: 'center',
         justifyContent: 'center',
-        paddingHorizontal: 16,
-        paddingVertical: 8,
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s8,
         borderRadius: 9999,
     },
     // An inline row or header action: it sits beside a label, so it is shorter than a call to action.
     contentContainerSecondary: {
-        paddingHorizontal: 12,
-        paddingVertical: 5,
+        paddingHorizontal: theme.space.s12,
+        paddingVertical: theme.space.s4,
     },
     contentContainerSmall: {
-        paddingHorizontal: 10,
+        paddingHorizontal: theme.space.s10,
         paddingVertical: 3,
     },
     textSmall: {
@@ -86,7 +113,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     // A capsule's inline action: it shares the capsule's height band instead of setting its own.
     contentContainerMini: {
-        paddingHorizontal: 12,
+        paddingHorizontal: theme.space.s12,
         paddingVertical: 0,
     },
     // Applied only when a mark is present, so a title-only button keeps the exact
@@ -96,7 +123,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         // The seam between the words and the mark. The mark stands in for a word,
         // so this reads as the space between two words rather than as the wider
         // icon-to-label gutter a toolbar button would use.
-        gap: 5,
+        gap: theme.space.s4,
     },
     // The row already centres this slot on the label's own band, so the mark
     // needs no nudge of its own. Measured on an iPhone 17 Pro (iOS 26.3) against
@@ -113,7 +140,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     text: {
         ...Typography.default('semiBold'),
-        fontWeight: '600',
+
         includeFontPadding: false,
     },
 }));
@@ -257,12 +284,18 @@ export const RoundButton = React.memo((props: {
     // Native floors belong to the shared Pressable. A phone browser needs the same physical target;
     // keep pointer density on desktop and reserve real space instead of overlapping hit slop.
     const webTouchFloor = Platform.OS === 'web' ? resolveTouchTargetFloorPx() : null;
+    // One target, one mechanism: a real box at the platform's minimum (the touch floor, or a caller's
+    // own target box such as a header action) is the press target; slop is only for a pill smaller than that.
+    const callerMinHeight = readSurfaceStyleProperty(props.style, 'minHeight');
+    const slopDeclared = webTouchFloor === null
+        && !(typeof callerMinHeight === 'number' && callerMinHeight >= resolveMinimumInteractiveTargetSize(Platform.OS));
     const baseDisplay = displays[props.display || 'default'];
-    // A disabled primary is the theme's own disabled slab with quiet words (muted dark on dark,
-    // a light ink on light), not the primary fill dimmed: a dimmed light fill reads as a grey slab.
+    // A disabled primary is still the primary: its own fill and words, receded into the page
+    // (unified-work lab `.uwr-dis`), so the one action of a view stays recognisable while it waits
+    // for its reason. Laid over the page as solid colours, it never shows floating material through.
     const disabledPrimary = props.disabled === true && (props.display ?? 'default') === 'default';
     const display: (typeof displays)[RoundButtonDisplay] = disabledPrimary
-        ? { textColor: theme.colors.text.tertiary, backgroundColor: theme.colors.button.primary.disabled, borderColor: 'transparent' }
+        ? { ...resolveDisabledPrimaryColors(theme), borderColor: 'transparent' }
         : baseDisplay;
     const textColor = (props.display ?? 'default') === 'default' && !disabledPrimary ? paintColor(display.textColor, theme.colors.text.primary, 'solidControl') : display.textColor;
     const pillBackgroundColor = callerBackgroundColor ?? display.backgroundColor;
@@ -280,7 +313,7 @@ export const RoundButton = React.memo((props: {
             expanded={props.expanded}
             disabled={props.disabled}
             busy={props.loading}
-            hitSlop={webTouchFloor === null ? size.hitSlop : 0}
+            hitSlop={slopDeclared ? size.hitSlop : undefined}
             // The pressable keeps the caller's layout and the hit area; the visible
             // pill is the animated frame inside it, so the tactile press moves the
             // whole fill rather than only its label.
@@ -317,6 +350,20 @@ export const RoundButton = React.memo((props: {
                         pressFeedback.animatedStyle,
                     ]}
                 >
+                    {/* The fill's gloss belongs to the pill, not to its content: when a touch floor or a
+                        caller's layout makes the pill taller than its label, a gloss sized by the
+                        content would draw a second, smaller pill inside the fill. */}
+                    {display.gradient ? (
+                        <GradientSurface
+                            fallbackColor={paintColor(display.backgroundColor, undefined, 'solidControl')}
+                            gradient={happierMaterialGradient(display.gradient, color => paintColor(color, undefined, 'solidControl'))}
+                            overlay={resolveThemeSurfaceFinish(theme, 'primaryButton', { pressed: state.pressed, focused: state.focused, disabled: state.disabled })}
+                            clipToPaddingBox={!theme.dark}
+                            borderRadius={theme.borderRadius.md}
+                            style={StyleSheet.absoluteFillObject}
+                        />
+                    ) : null}
+                    {!display.gradient ? <HappierSurfaceGradientLayer gradient={resolveThemeSurfaceFinish(theme, (props.display ?? 'default') === 'default' ? 'primaryButton' : 'secondaryButton', { pressed: state.pressed, focused: state.focused, disabled: state.disabled || props.display === 'inverted' })} borderRadius={props.capsuleHeight !== undefined ? props.capsuleHeight / 2 : theme.borderRadius.md} /> : null}
                     <View
                         style={[
                             styles.contentContainer,
@@ -326,17 +373,6 @@ export const RoundButton = React.memo((props: {
                             props.size === 'mini' ? styles.contentContainerMini : null,
                         ]}
                     >
-                        {display.gradient ? (
-                            <GradientSurface
-                                fallbackColor={paintColor(display.backgroundColor, undefined, 'solidControl')}
-                                gradient={happierMaterialGradient(display.gradient, color => paintColor(color, undefined, 'solidControl'))}
-                                overlay={resolveThemeSurfaceFinish(theme, 'primaryButton', { pressed: state.pressed, focused: state.focused, disabled: state.disabled })}
-                                clipToPaddingBox={!theme.dark}
-                                borderRadius={theme.borderRadius.md}
-                                style={StyleSheet.absoluteFillObject}
-                            />
-                        ) : null}
-                        {!display.gradient ? <HappierSurfaceGradientLayer gradient={resolveThemeSurfaceFinish(theme, (props.display ?? 'default') === 'default' ? 'primaryButton' : 'secondaryButton', { pressed: state.pressed, focused: state.focused, disabled: state.disabled || props.display === 'inverted' })} borderRadius={props.capsuleHeight !== undefined ? props.capsuleHeight / 2 : theme.borderRadius.md} /> : null}
                         {state.busy && (
                             <View style={styles.loadingContainer}>
                                 <ActivitySpinner color={textColor} size='small' />

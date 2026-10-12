@@ -12,6 +12,7 @@ import { useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presenta
 import { happierRaisedEdgeStyle } from '@happier-dev/plugin-ui/presentation';
 import { readSurfaceStyleProperty } from '@/components/ui/surfaces/surfaceStyle';
 import { FIELD_BOX_METRICS } from '@/components/ui/forms/fieldBox';
+import { resolveTouchTargetFloorPx } from '@/components/ui/interactiveTargetSize';
 
 /**
  * The canonical small labelled action for pane toolbars and surface headers.
@@ -42,7 +43,8 @@ export type ToolbarButtonProps = Readonly<{
     icon?: React.ReactNode;
     /** Optional trailing glyph, for a control that opens a menu. */
     trailing?: React.ReactNode;
-    onPress?: (event: GestureResponderEvent) => void;
+    /** Receives the press event; a folded menu row (a phone header's `⋯`) presses it without one. */
+    onPress?: (event?: GestureResponderEvent) => void;
     disabled?: boolean;
     /**
      * The action this button issues is in flight and not yet settled. It is
@@ -53,6 +55,11 @@ export type ToolbarButtonProps = Readonly<{
     /** Renders the resting fill as if hovered — for a control that is toggled on. */
     active?: boolean;
     tone?: ToolbarButtonTone;
+    /**
+     * The action ends or removes something. A neutral desktop button (a Run's Stop) keeps its quiet
+     * chrome; folded into a phone header's `⋯`, it becomes a destructive row, last in the menu.
+     */
+    destructive?: boolean;
     /** Taller variant for form rows, where the button sits beside 34pt inputs. */
     size?: 'sm' | 'md';
     /** Overrides the label colour, for a destructive or accented action. */
@@ -67,10 +74,10 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        gap: 6,
+        gap: theme.space.s6,
         // A toolbar's buttons and its fields (search, selects) stand at one height.
         minHeight: FIELD_BOX_METRICS.minHeightPx,
-        paddingHorizontal: 10,
+        paddingHorizontal: theme.space.s10,
         // 8, not 10 and not a capsule: on the shared radius scale, and a small rounded rect among
         // the rectangular surfaces it sits on rather than a pill of its own kind.
         borderRadius: 8,
@@ -116,9 +123,9 @@ const stylesheet = StyleSheet.create((theme) => ({
     label: {
         minWidth: 0,
         flexShrink: 1,
-        fontSize: 12,
+        ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.text.secondary,
-        ...Typography.default('semiBold'),
+
     },
 }));
 
@@ -129,6 +136,10 @@ export const ToolbarButton = React.memo((props: ToolbarButtonProps) => {
     const { theme } = useUnistyles();
     const paintColor = useHappierMaterialColorResolver();
     const callerBackground = readSurfaceStyleProperty(props.style, 'backgroundColor');
+    // One target policy with `RoundButton`: a precise pointer keeps the dense toolbar box, a finger
+    // gets the platform floor as real box (the native floor is `HappierPressable`'s; slop is inert on
+    // the web). Callers never stretch the visible box to a touch target themselves.
+    const webTouchFloor = Platform.OS === 'web' ? resolveTouchTargetFloorPx() : null;
 
     return (
         <HappierPressable
@@ -150,6 +161,7 @@ export const ToolbarButton = React.memo((props: ToolbarButtonProps) => {
                 props.disabled ? styles.disabled : null,
                 // Native caller styles cross the portable adapter unchanged.
                 props.style as HappierSurfaceProps['style'],
+                webTouchFloor === null ? null : { minHeight: webTouchFloor },
                 callerBackground !== undefined && typeof callerBackground !== 'string' ? null : {
                     backgroundColor: paintColor(callerBackground ?? (isPrimary ? theme.colors.button.primary.background : pressed && !props.disabled ? theme.colors.surface.selected : props.active || hovered && !props.disabled ? theme.colors.surface.pressed : theme.colors.surface.base), undefined, isPrimary || callerBackground !== undefined ? 'solidControl' : 'surface'),
                 },

@@ -42,23 +42,23 @@ const stylesheet = StyleSheet.create((theme) => ({
         left: -110,
         right: -110,
         alignItems: 'center',
-        marginTop: 6,
+        marginTop: theme.space.s6,
         zIndex: 1000,
         pointerEvents: 'none',
     },
     tooltip: {
         maxWidth: 240,
-        paddingHorizontal: 8,
-        paddingVertical: 5,
+        paddingHorizontal: theme.space.s8,
+        paddingVertical: theme.space.s4,
         borderRadius: 6,
         borderWidth: 1,
         borderColor: theme.colors.border.surface,
         backgroundColor: theme.colors.surface.elevated,
     },
     tooltipText: {
-        ...Typography.default(),
-        fontSize: 12,
-        lineHeight: 16,
+
+        ...Typography.variant('meta'),
+
         color: theme.colors.text.primary,
     },
     iconWrap: {
@@ -228,26 +228,11 @@ export function IconButton(props: Readonly<{
             focus: theme.colors.border.focus,
         },
     });
-    /*
-     * A filled well is the drawn square itself: its fill (and its hover/selected step)
-     * paints the visible circle, never the larger touch frame around it, and it has no edge (the
-     * keyboard focus ring is the shared outline, outside it). Painting the frame drew a second, wider disc — a double ring on a selected
-     * Mute and a ring around End inside a touch target.
-     */
+    // The frame is only the press target; every fill and tint is on the drawn square (the chrome
+    // owner's contract). A filled well's fill is its own edge, so it draws no outline.
     const resolveChrome = (state: Parameters<typeof chrome>[0]) => {
         const resolved = chrome(state);
-        // An overhanging frame is only a target: its hover and press tint stay on the drawn square,
-        // so the control never looks bigger than it is.
-        if (overhang && fillColor === null) {
-            const { backgroundColor, ...frame } = resolved.frame;
-            return { frame, surface: { ...resolved.surface, backgroundColor } };
-        }
-        if (fillColor === null) return resolved;
-        const { backgroundColor, ...frame } = resolved.frame;
-        return {
-            frame,
-            surface: { ...resolved.surface, backgroundColor, borderWidth: 0 },
-        };
+        return fillColor === null ? resolved : { frame: resolved.frame, surface: { ...resolved.surface, borderWidth: 0 } };
     };
     const minimumInteractiveTargetSize = Number.isFinite(props.minimumInteractiveTargetSize)
         ? Math.max(size, Math.round(props.minimumInteractiveTargetSize!))
@@ -292,11 +277,10 @@ export function IconButton(props: Readonly<{
             ? { marginLeft: -leadingX, marginRight: -trailingX, paddingLeft: leadingX, paddingRight: trailingX }
             : { marginHorizontal: targetExpandX === 0 && leadingX === 0 ? 0 : -leadingX }),
         marginVertical: overhang && targetDeficitPerSide > 0 ? -targetDeficitPerSide : 0,
-        // The frame carries the fill and the interaction tint, so it stays a
-        // capsule around the narrow axis rather than a rounded rectangle. With no
-        // growth this is exactly the drawn square's `size / 2`.
-        borderRadius: Math.min(frameWidth, frameHeight) / 2,
     };
+    // Where the drawn square sits inside the frame: the tooltip anchors to what the user sees.
+    const drawnOffsetLeft = overhang ? leadingX : (frameWidth - size) / 2;
+    const drawnOffsetTop = (frameHeight - size) / 2;
     // A declared target is owned by the frame; nothing is delegated to inert slop.
     const hitSlop = minimumInteractiveTargetSize === null ? 8 : 0;
 
@@ -306,6 +290,18 @@ export function IconButton(props: Readonly<{
     const richTooltipContent = props.disabled === true && props.disabledReason ? undefined : props.tooltipContent;
     const hasTooltip = richTooltipContent != null || (tooltipContent != null && tooltipContent.length > 0);
     const tooltipAnchorRef = React.useRef<View | null>(null);
+    // A press answers the pointer: its tooltip steps aside until the pointer leaves, and stays away
+    // while the menu or popover the button opened is showing.
+    const [pressedSinceHover, setPressedSinceHover] = React.useState(false);
+    const onPressIn = props.onPressIn;
+    const handlePressIn = React.useCallback((event: Parameters<NonNullable<typeof onPressIn>>[0]) => {
+        setPressedSinceHover(true);
+        onPressIn?.(event);
+    }, [onPressIn]);
+    const onHoverChange = React.useCallback((hovered: boolean) => {
+        if (!hovered) setPressedSinceHover(false);
+    }, []);
+    const tooltipQuiet = props.tooltipHidden === true || props.expanded === true || pressedSinceHover;
     const descriptionId = React.useId();
     const disabledReason = props.disabled === true ? props.disabledReason : undefined;
 
@@ -327,7 +323,8 @@ export function IconButton(props: Readonly<{
             hitSlop={hitSlop}
             onPress={props.onPress}
             onLongPress={props.onLongPress}
-            onPressIn={props.onPressIn}
+            onPressIn={handlePressIn}
+            onHoverChange={onHoverChange}
             onPressOut={props.onPressOut}
             onFocusChange={props.onFocusChange}
             onContextMenu={props.onContextMenu}
@@ -337,9 +334,9 @@ export function IconButton(props: Readonly<{
                 resolveChrome(state).frame,
             ]}
             overlay={hasTooltip ? (state) => (
-                (state.hovered || state.focused) && props.tooltipHidden !== true ? (Platform.OS === 'web' ? (
+                (state.hovered || state.focused) && !tooltipQuiet ? (Platform.OS === 'web' ? (
                     <>
-                        <View ref={tooltipAnchorRef} style={{ pointerEvents: 'none', position: 'absolute', top: 0, left: 0, width: size, height: size }} />
+                        <View ref={tooltipAnchorRef} style={{ pointerEvents: 'none', position: 'absolute', top: drawnOffsetTop, left: drawnOffsetLeft, width: size, height: size }} />
                         <DeferredAnchoredTooltip activationKey={`${state.hovered}:${state.focused}`} anchorRef={tooltipAnchorRef} placement={props.tooltipPlacement} label={tooltipContent ?? props.accessibilityLabel} content={richTooltipContent} testID={props.testID ? `${props.testID}-tooltip` : undefined} />
                     </>
                 ) : (
@@ -357,7 +354,7 @@ export function IconButton(props: Readonly<{
                 <View
                     testID={props.testID ? `${props.testID}-surface` : undefined}
                     style={[
-                        resolveChrome({ ...state, pressed: false }).surface,
+                        resolveChrome(state).surface,
                     ]}
                 >
                     {disabledReason ? <Text nativeID={descriptionId} style={visuallyHiddenStyle}

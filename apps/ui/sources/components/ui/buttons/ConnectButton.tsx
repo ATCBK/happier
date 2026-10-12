@@ -97,13 +97,13 @@ const stylesheet = StyleSheet.create((theme) => ({
         width: 210,
     },
     manualToggle: {
-        marginTop: 12,
+        marginTop: theme.space.s12,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
     },
     manualToggleIcon: {
-        marginRight: 6,
+        marginRight: theme.space.s6,
     },
     manualToggleText: {
         fontSize: 14,
@@ -111,8 +111,8 @@ const stylesheet = StyleSheet.create((theme) => ({
         textDecorationLine: 'underline',
     },
     manualEntryContainer: {
-        marginTop: 12,
-        padding: 12,
+        marginTop: theme.space.s12,
+        padding: theme.space.s12,
         borderRadius: 8,
         backgroundColor: theme.colors.surface.inset,
         width: 210,
@@ -120,7 +120,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     manualEntryLabel: {
         fontSize: 12,
         color: theme.colors.text.secondary,
-        marginBottom: 8,
+        marginBottom: theme.space.s8,
     },
     manualEntryRow: {
         flexDirection: 'row',
@@ -132,13 +132,13 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderWidth: 1,
         borderColor: theme.colors.border.default,
         borderRadius: 6,
-        padding: 8,
+        padding: theme.space.s8,
         fontSize: 12,
         color: theme.colors.input.text,
     },
     manualSubmitButton: {
-        marginLeft: 8,
-        padding: 8,
+        marginLeft: theme.space.s8,
+        padding: theme.space.s8,
     },
     manualSubmitButtonDisabled: {
         opacity: 0.5,

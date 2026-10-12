@@ -1,16 +1,10 @@
 import { Platform } from 'react-native';
-import { resolveHappierMinimumInteractiveTargetSize } from '@happier-dev/plugin-ui/environment';
+import {
+    HAPPIER_POINTER_MINIMUM_INTERACTIVE_TARGET_SIZE,
+    resolveHappierMinimumInteractiveTargetSize,
+} from '@happier-dev/plugin-ui/environment';
 
 import { isCoarsePrimaryPointerEnvironment } from '@/utils/platform/webMobileHeuristics';
-
-/**
- * Core's compatibility name over the shared platform-policy owner. App code
- * still supplies its local `Platform.OS` fact; shared presentation reads the
- * equivalent fact from its environment provider.
- */
-export function resolveMinimumInteractiveTargetSize(platform: string): 44 | 48 {
-    return resolveHappierMinimumInteractiveTargetSize(platform);
-}
 
 let coarseWebPrimaryPointer: boolean | null = null;
 
@@ -26,7 +20,18 @@ export function isTouchPrimaryPointer(platform: string = Platform.OS): boolean {
     return coarseWebPrimaryPointer;
 }
 
+/**
+ * The smallest hit region a control may have on this device: the platform touch floor (44, 48 on
+ * Android) under a finger, the WCAG 2.2 pointer floor under a precise pointer. It is a hit region,
+ * never a drawn size: a control keeps its own visual size and grows only its press frame to this.
+ */
+export function resolveMinimumInteractiveTargetSize(platform: string = Platform.OS): number {
+    return isTouchPrimaryPointer(platform)
+        ? resolveHappierMinimumInteractiveTargetSize(platform)
+        : HAPPIER_POINTER_MINIMUM_INTERACTIVE_TARGET_SIZE;
+}
+
 /** The touch floor a control takes on this device, or `null` under a precise pointer. */
 export function resolveTouchTargetFloorPx(platform: string = Platform.OS): 44 | 48 | null {
-    return isTouchPrimaryPointer(platform) ? resolveMinimumInteractiveTargetSize(platform) : null;
+    return isTouchPrimaryPointer(platform) ? resolveHappierMinimumInteractiveTargetSize(platform) : null;
 }

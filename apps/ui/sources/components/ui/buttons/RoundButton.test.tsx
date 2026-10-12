@@ -7,6 +7,7 @@ import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { flattenTestStyle } from '@/dev/testkit';
 import { HappierMaterialRoleProvider } from '@happier-dev/plugin-ui/presentation';
 import { lightTheme } from '@/theme';
+import Color from 'color';
 import { useGlassMaterialColorResolver } from '@/components/ui/glass/useGlassSurfaceColor';
 
 function FloatingButtonScene() {
@@ -22,10 +23,13 @@ const { RoundButton, RoundButtonSizeScope } = await import('./RoundButton');
 describe('RoundButton', () => {
     it('keeps the primary and disabled primary solid inside floating material', async () => {
         const screen = await renderScreen(<FloatingButtonScene />);
-        for (const [id, fill] of [['glass-primary', lightTheme.colors.button.primary.background], ['glass-disabled', lightTheme.colors.button.primary.disabled]]) {
-            const pill = screen.findByTestId(id)!.findAll(node => String(node.type) === 'Animated.View')[0]!;
-            expect(flattenTestStyle(pill.props.style).backgroundColor).toBe(fill);
-        }
+        const fillOf = (id: string) => flattenTestStyle(screen.findByTestId(id)!.findAll(node => String(node.type) === 'Animated.View')[0]!.props.style).backgroundColor;
+        expect(fillOf('glass-primary')).toBe(lightTheme.colors.button.primary.background);
+        // The disabled primary keeps the primary's look, receded into the page, and stays one solid colour.
+        const disabledFill = Color(fillOf('glass-disabled'));
+        expect(disabledFill.alpha()).toBe(1);
+        expect(disabledFill.luminosity()).toBeGreaterThan(Color(lightTheme.colors.button.primary.background).luminosity());
+        expect(disabledFill.luminosity()).toBeLessThan(Color(lightTheme.colors.surface.base).luminosity());
     });
     it('forwards the press event to modifier-aware actions', async () => {
         const onPress = vi.fn();

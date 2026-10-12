@@ -65,6 +65,9 @@ it.each(['action', 'help'] as const)('keeps a focused %s tooltip outside a clipp
         }
         expect(document.activeElement).toBe(button);
         await act(async () => { button.blur(); });
+        // Losing focus settles after the focus move, so a trapped focus scope never sees the
+        // tooltip leave while nothing holds focus.
+        await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
         expect(document.body.querySelector('[data-testid="review-action-tooltip"]')).toBeNull();
         expect(contentMounts).toBe(0);
         await act(async () => { button.dispatchEvent(new MouseEvent(window.PointerEvent != null ? 'pointerenter' : 'mouseenter', { bubbles: true })); });
@@ -74,6 +77,60 @@ it.each(['action', 'help'] as const)('keeps a focused %s tooltip outside a clipp
         await act(async () => { root.unmount(); });
         container.remove();
         bounds.mockRestore();
+        vi.restoreAllMocks();
+        globalThis.requestAnimationFrame = originalRaf;
+        globalThis.cancelAnimationFrame = originalCancelRaf;
+    }
+});
+
+it('keeps the tooltip away once the button is pressed or its menu is open, until the pointer leaves', async () => {
+    vi.spyOn(document.documentElement, 'clientWidth', 'get').mockReturnValue(1024);
+    vi.spyOn(document.documentElement, 'clientHeight', 'get').mockReturnValue(768);
+    window.dispatchEvent(new Event('resize'));
+    const originalRaf = globalThis.requestAnimationFrame;
+    const originalCancelRaf = globalThis.cancelAnimationFrame;
+    globalThis.requestAnimationFrame = (callback) => window.setTimeout(() => callback(performance.now()), 0);
+    globalThis.cancelAnimationFrame = (handle) => window.clearTimeout(handle);
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+        x: 100, y: 100, width: 28, height: 28,
+        top: 100, left: 100, right: 128, bottom: 128, toJSON: () => ({}),
+    });
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    const tooltip = () => document.body.querySelector('[data-testid="more-tooltip"]');
+    const hover = (node: HTMLElement, type: 'enter' | 'leave') => node.dispatchEvent(new MouseEvent(
+        window.PointerEvent != null ? `pointer${type}` : `mouse${type}`, { bubbles: true }));
+    async function render(expanded: boolean) {
+        await act(async () => {
+            root.render(<IconButton testID="more" icon={<span>⋯</span>} accessibilityLabel="Overview actions"
+                tooltip="Overview actions" expanded={expanded} hasPopup="menu" onPress={() => {}} />);
+        });
+        return container.querySelector<HTMLElement>('[data-testid="more"]')!;
+    }
+    try {
+        let button = await render(false);
+        await act(async () => { hover(button, 'enter'); });
+        await vi.waitFor(() => expect(tooltip()).not.toBeNull());
+        // A press opens the menu: the tooltip leaves with the press and stays away while the menu is open.
+        await act(async () => {
+            button.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+            button.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+            button.click();
+        });
+        button = await render(true);
+        await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)); });
+        expect(tooltip()).toBeNull();
+        // Menu closed, pointer still on the button: still no tooltip until the pointer leaves and returns.
+        button = await render(false);
+        await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)); });
+        expect(tooltip()).toBeNull();
+        await act(async () => { hover(button, 'leave'); });
+        await act(async () => { hover(button, 'enter'); });
+        await vi.waitFor(() => expect(tooltip()).not.toBeNull());
+    } finally {
+        await act(async () => { root.unmount(); });
+        container.remove();
         vi.restoreAllMocks();
         globalThis.requestAnimationFrame = originalRaf;
         globalThis.cancelAnimationFrame = originalCancelRaf;
