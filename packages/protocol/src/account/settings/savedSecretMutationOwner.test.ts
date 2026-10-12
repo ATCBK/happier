@@ -34,6 +34,27 @@ import { NotificationChannelCatalogRecordV1Schema } from './notificationChannelS
 import { SecretStringV1Schema } from '../../crypto/settingsSecretStringSchemasV1.js';
 
 describe('Session-attested MCP reference census', () => {
+  it('counts and rewrites template variables through the MCP catalog and retained source owners', () => {
+    const template = { t: 'template' as const, template: 'Bearer {key}', vars: {
+      key: { t: 'savedSecret' as const, secretId: 'personal-key' },
+    } };
+    const mcp = McpServerCatalogV1Schema.parse({ v: 1, servers: [{ id: 'server', name: 'server', transport: 'http',
+      remote: { url: 'https://example.test/mcp', headers: { Authorization: template } },
+      env: {}, createdAt: 1, updatedAt: 1,
+    }], bindings: [] });
+    const catalogs = { profileRecords: [], mcp };
+    expect(listAccountSettingsSavedSecretReferences({}, 'personal-key', catalogs)).toEqual([
+      { owner: 'mcp', path: 'mcpCatalog.servers[0].remote.headers.Authorization.vars.key' },
+    ]);
+    const rewritten = savedSecretOwner.rewriteSavedSecretReferenceCatalogsV1(catalogs, 'personal-key', 'replacement');
+    expect(listAccountSettingsSavedSecretReferences({}, 'replacement', rewritten)).toEqual([
+      { owner: 'mcp', path: 'mcpCatalog.servers[0].remote.headers.Authorization.vars.key' },
+    ]);
+    const retained = { mcpServersSettingsV1: mcp };
+    expect(listAccountSettingsSavedSecretReferences(retained, 'personal-key', { profileRecords: [] })).toEqual([
+      { owner: 'mcp', path: 'mcpServersSettingsV1.servers[0].remote.headers.Authorization.vars.key' },
+    ]);
+  });
   it('retains symbolic facts in an inactive MCP source without classifying them as credentials', () => {
     const settings = { mcpServersSettingsV1: { v: 1, servers: [{ id: 'integrator', name: 'integrator',
       transport: 'http', remote: { url: 'https://example.test/mcp', headers: {

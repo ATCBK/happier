@@ -1,6 +1,6 @@
 import { resolveArtifactOrganizationHeaderV1, type ArtifactOrganizationHeaderV1 } from '../../artifacts/artifactOrganizationV1.js';
 import { readPromptLibraryCatalogRecordV1, type PromptLibraryCatalogSnapshotV1 } from './promptLibraryCatalogV1.js';
-import type { PromptLibraryRecordV1, PromptLibraryRowMutationResponseV1Schema } from './promptLibraryRowsV1.js';
+import type { PromptLibraryCatalogKeyV1, PromptLibraryRecordV1, PromptLibraryRowMutationResponseV1Schema } from './promptLibraryRowsV1.js';
 import { createPromptFolderV1, renamePromptFolderV1, movePromptFolderV1, removePromptFolderV1,
   placeArtifactInPromptFolderV1, type PromptFoldersV1 } from './promptFoldersV1.js';
 import type { ArtifactFolderActionIdV1 } from './artifactFolderActionIdsV1.js';
@@ -40,7 +40,7 @@ export type ArtifactFolderActionPortV1 = Readonly<{
   serverId: string;
   matchesServerId?(serverId: string): boolean;
   assertCurrent(): void;
-  readCatalog(signal?: AbortSignal): Promise<Readonly<{ catalog: PromptLibraryCatalogSnapshotV1;
+  readCatalog(signal?: AbortSignal, key?: PromptLibraryCatalogKeyV1): Promise<Readonly<{ catalog: PromptLibraryCatalogSnapshotV1;
     rawSettings?: Readonly<Record<string, unknown>>; sourceSettingsVersion?: number }>>;
   writeRecord(input: Readonly<{ record: PromptLibraryRecordV1; expectedRevision: number | 'absent'; sourceSettingsVersion?: number }>,
     signal?: AbortSignal): Promise<ReturnType<typeof PromptLibraryRowMutationResponseV1Schema.parse>>;

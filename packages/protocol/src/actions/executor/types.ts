@@ -14,6 +14,7 @@ import type { SetSessionPinRequest } from '../../sessions/organization/mutations
 import type { ProfileActionRequestV1 } from '../../profiles/profileActionsV1.js';
 import type { PromptDocCreateActionInputV1 } from '../../prompts/library/promptDocV2.js';
 import type { PromptBundleCreateActionInputV1, PromptBundleUpdateActionInputV1 } from '../../prompts/library/promptBundleSchemas.js';
+import type { SkillReadInputV1 } from '../../prompts/library/skills/skillReadV1.js';
 import type { McpServerActionRequestV1 } from '../../mcp/servers/serverActionsV1.js';
 import type { ProviderActionRequestV1 } from '../../providers/providerActionsV1.js';
 import type { RemoteHostActionRequestV1 } from '../../remoteHosts/remoteHostActionsV1.js';
@@ -1024,6 +1025,7 @@ export type ActionExecutorDeps = Readonly<{
   usageActions?: import('./usageActions.js').UsageActionPorts;
   artifactFolders?: import('../../prompts/library/promptFolderActionsV1.js').ArtifactFolderActionPortV1;
   promptStacks?: import('../../prompts/library/promptLibraryCatalogV1.js').PromptLibraryStackActionPortV1;
+  skillRules?: import('../../prompts/library/skillRulesActionsV1.js').SkillRulesActionPortV1;
   /** A client relays admitted contributed-type Resource discovery to the daemon's same options owner. */
   readAdmittedInputTypeOptions?: (request: Readonly<{ input: Readonly<Record<string, unknown>>;
     context: ActionExecutorContext }>) => Promise<unknown>;
@@ -2033,6 +2035,7 @@ export type ActionExecutorDeps = Readonly<{
   }>) => Promise<Readonly<{ ok: true; revision: number; cleanup?: AcpCatalogCleanupV1 }> | Readonly<{ ok: false; errorCode: string; error: string; details?: ActionExecuteFailure['details'] }>>;
   workBoardArtifacts?: Pick<WorkBoardArtifactPortV1, 'read' | 'apply' | 'readBoardAccess'> & Partial<Pick<WorkBoardArtifactPortV1, 'readBoard'>>;
   promptDocGet?: (args: Readonly<{ artifactId: string; signal?: AbortSignal }>) => Promise<unknown>;
+  skillsRead?: (args: SkillReadInputV1 & Readonly<{ signal?: AbortSignal }>, context: ActionExecutorContext) => Promise<unknown>;
   promptDocCreate?: (args: PromptDocCreateActionInputV1 & Readonly<{ signal?: AbortSignal }>) => Promise<unknown>;
   promptDocFavoriteSet?: (args: Readonly<{ artifactId: string; favorite: boolean; signal?: AbortSignal }>) => Promise<unknown>;
   modelFavoriteSet?: (input: import('../../providers/modelFavoritesV1.js').ModelFavoriteMutationV1, context: ActionExecutorContext) => Promise<Pick<import('../../account/settings/accountSettingMutationV1.js').AccountSettingsMutationResult, 'status'>>;

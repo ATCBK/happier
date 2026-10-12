@@ -1,1 +1,1 @@
-export const CAPABILITY_RULES_ACTION_IDS_V1 = ['mcp.rules.set'] as const;
+export const CAPABILITY_RULES_ACTION_IDS_V1 = ['mcp.rules.set', 'skills.rules.set'] as const;

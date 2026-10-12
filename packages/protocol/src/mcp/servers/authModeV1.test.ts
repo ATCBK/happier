@@ -3,6 +3,13 @@ import { describe, expect, it } from 'vitest';
 import { inferMcpServerAuthModeV1 } from './authModeV1.js';
 
 describe('inferMcpServerAuthModeV1', () => {
+  it('classifies secrets within templates through the value-reference owner', () => {
+    const ref = { t: 'template' as const, template: 'Bearer {key}', vars: {
+      key: { t: 'savedSecret' as const, secretId: 'personal-key' },
+    } };
+    expect(inferMcpServerAuthModeV1({ env: {}, remote: { url: 'https://example.test/mcp', headers: { Authorization: ref } } }))
+      .toBe('savedSecret');
+  });
   it('does not mistake Session facts for stored credentials or disrupt machine-environment auth', () => {
     const remote = { url: 'https://example.test/mcp', headers: {
       Sender: { t: 'sessionAttested' as const, field: 'externalPrincipalId' as const },

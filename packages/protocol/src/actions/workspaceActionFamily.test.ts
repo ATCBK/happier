@@ -1,8 +1,29 @@
 import { describe, expect, it } from 'vitest';
 import { ActionIdSchema } from './actionIds.js';
 import { WORKSPACE_ACTION_INPUT_SCHEMAS, WORKSPACE_ACTION_OUTPUT_SCHEMAS, WORKSPACE_ACTION_SPECS } from './workspaceActionFamily.js';
+import { getActionSpec } from './actionSpecs.js';
+import { normalizeActionsSettingsV1 } from './actionSettings.js';
+import { resolveActionApprovalRouting } from './actionApprovalPolicy.js';
 
 describe('workspace client actions', () => {
+  it('discovers strict pane-scoped bulk closes with user-configurable approval', () => {
+    for (const name of ['workspace.tabs.close_others', 'workspace.tabs.close_left', 'workspace.tabs.close_right', 'workspace.tabs.close_all']) {
+      const actionId = ActionIdSchema.parse(name);
+      const spec = getActionSpec(actionId);
+      const input = name === 'workspace.tabs.close_all' ? { groupId: 'pane-main' } : { tabId: 'tab-main' };
+      expect(spec.inputSchema.parse(input)).toEqual(input);
+      expect(spec.inputSchema.safeParse({ ...input, accountId: 'another-account' }).success).toBe(false);
+      expect(spec.executionPlacement).toBe('client');
+      expect(spec.surfaces).toMatchObject({ ui: true, agent: true, mcp: true });
+      for (const surface of ['ui', 'agent', 'mcp'] as const) {
+        const context = { surface, authority: 'account_automation' } as const;
+        const required = normalizeActionsSettingsV1({ v: 1, actions: { [actionId]: { approvalRequiredSurfaces: [surface] } } });
+        expect(resolveActionApprovalRouting({ actionId, spec, settings: required, context }).required).toBe(true);
+        const waived = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { [actionId]: [surface] } });
+        expect(resolveActionApprovalRouting({ actionId, spec, settings: waived, context }).required).toBe(false);
+      }
+    }
+  });
   it('accepts semantic placement for kept opens and moves while rejecting ambiguous reorder positions', () => {
     expect(WORKSPACE_ACTION_INPUT_SCHEMAS['workspace.tabs.open'].safeParse({ href: '/session/a', groupId: 'target', beforeTabId: 'anchor', reuseExisting: true, mode: 'splitLeft' }).success).toBe(true);
     expect(WORKSPACE_ACTION_INPUT_SCHEMAS['workspace.tabs.move'].safeParse({ tabId: 'a', targetGroupId: 'target', beforeTabId: 'anchor' }).success).toBe(true);

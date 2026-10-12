@@ -10,11 +10,14 @@ import { isWorkflowAuthoringActionId } from './workflowAuthoringActionIds.js';
 import { BackendTargetKeyV2InputSchema } from '../backends/targets/backendTargetRefV2.js';
 import { PromptDocRevisionV1Schema, PromptDocCreateActionInputV1Schema } from '../prompts/library/promptDocV2.js';
 import { PromptBundleCreateActionInputV1Schema, PromptBundleUpdateActionInputV1Schema } from '../prompts/library/promptBundleSchemas.js';
+import { SkillReadInputV1Schema } from '../prompts/library/skills/skillReadV1.js';
 import { ARTIFACT_FOLDER_ACTION_INPUT_SCHEMAS_V1, ArtifactFolderMutationResultV1Schema } from '../prompts/library/promptFolderActionSchemasV1.js';
 import { updatePromptLibraryStackV1 } from '../prompts/library/promptLibraryCatalogV1.js';
 import { createPromptInvocationInLibrary } from '../prompts/library/promptInvocationActionOperations.js';
 import { PromptInvocationCreateInputSchema } from './promptInvocationCreateActionSpecs.js';
 import { PromptLibraryStackUpdateInputV1Schema } from '../prompts/library/promptStacksV1.js';
+import { mutateSkillRulesV1 } from '../prompts/library/skillRulesActionsV1.js';
+import { SkillsRulesSetInputV1Schema } from './specs/capabilityRules.js';
 import { ProjectContextUpdateInputV1Schema } from '../projects/projectContextV1.js';
 import { SessionPendingWithdrawInputV1Schema } from '../sessions/control/pendingWithdrawV1.js';
 import { SetSessionPinRequestSchema, SetSessionPinResponseSchema } from '../sessions/organization/mutations.js';
@@ -4522,6 +4525,13 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         return await deps.profileActionExecute(parseProfileActionRequestV1(actionId, parsed.data), ctx);
       }
 
+      if (actionId === 'skills.rules.set') {
+        if (!deps.skillRules) return { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${actionId}` };
+        if (ctx.serverId && !(deps.skillRules.matchesServerId?.(ctx.serverId) ?? ctx.serverId === deps.skillRules.serverId)) {
+          return { ok: false, errorCode: 'server_scope_mismatch', error: 'server_scope_mismatch' };
+        }
+        return { ok: true, result: await mutateSkillRulesV1(deps.skillRules, SkillsRulesSetInputV1Schema.parse(parsed.data), ctx.signal) };
+      }
       if (isMcpServerActionIdV1(actionId) || actionId === 'mcp.rules.set') {
         if (!deps.mcpServerAction) return { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${actionId}` };
         return await deps.mcpServerAction({ actionId, input: parsed.data, context: ctx });
@@ -9166,6 +9176,12 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           if (!deps.promptsLibraryList) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:prompts.library.list' };
           return completeActionResult(await deps.promptsLibraryList({ ...(typeof data.query === 'string' ? { query: data.query } : {}),
             ...(data.includeBundles === false ? { includeBundles: false } : {}), ...(ctx.signal ? { signal: ctx.signal } : {}) }));
+        }
+
+        if (actionId === 'skills.read') {
+          if (!deps.skillsRead) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:skills.read' };
+          return completeActionResult(await deps.skillsRead({ ...SkillReadInputV1Schema.parse(data),
+            ...(ctx.signal ? { signal: ctx.signal } : {}) }, ctx));
         }
 
         if (actionId === 'prompt_doc.update') {

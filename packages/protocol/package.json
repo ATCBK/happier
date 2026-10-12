@@ -7,6 +7,31 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./prompts/library/skillRulesActionsV1": {
+      "happier-source": "./src/prompts/library/skillRulesActionsV1.ts",
+      "types": "./dist/prompts/library/skillRulesActionsV1.d.ts",
+      "default": "./dist/prompts/library/skillRulesActionsV1.js"
+    },
+    "./prompts/library/skills/readSkillLibraryCatalog": {
+      "happier-source": "./src/prompts/library/skills/readSkillLibraryCatalog.ts",
+      "types": "./dist/prompts/library/skills/readSkillLibraryCatalog.d.ts",
+      "default": "./dist/prompts/library/skills/readSkillLibraryCatalog.js"
+    },
+    "./prompts/library/skills/skillLibraryItemV1": {
+      "happier-source": "./src/prompts/library/skills/skillLibraryItemV1.ts",
+      "types": "./dist/prompts/library/skills/skillLibraryItemV1.d.ts",
+      "default": "./dist/prompts/library/skills/skillLibraryItemV1.js"
+    },
+    "./prompts/library/skills/resolveSessionSkillPlanV1": {
+      "happier-source": "./src/prompts/library/skills/resolveSessionSkillPlanV1.ts",
+      "types": "./dist/prompts/library/skills/resolveSessionSkillPlanV1.d.ts",
+      "default": "./dist/prompts/library/skills/resolveSessionSkillPlanV1.js"
+    },
+    "./prompts/library/skills/firstPartySkillsV1": {
+      "happier-source": "./src/prompts/library/skills/firstPartySkillsV1.ts",
+      "types": "./dist/prompts/library/skills/firstPartySkillsV1.d.ts",
+      "default": "./dist/prompts/library/skills/firstPartySkillsV1.js"
+    },
     "./valueRefs/valueRefV1": {
       "happier-source": "./src/valueRefs/valueRefV1.ts",
       "types": "./dist/valueRefs/valueRefV1.d.ts",

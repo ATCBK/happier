@@ -58,6 +58,7 @@ import { FILESYSTEM_ACTION_IDS } from './filesystemActionFamily.js';
 import { PROFILE_ACTION_IDS_V1 } from '../profiles/profileActionIdsV1.js';
 import { MCP_SERVER_ACTION_IDS_V1 } from '../mcp/servers/serverActionIdsV1.js';
 import { CAPABILITY_RULES_ACTION_IDS_V1 } from './capabilityRulesActionIdsV1.js';
+import { SKILL_ACTION_IDS_V1 } from '../prompts/library/skills/skillActionIdsV1.js';
 import { PROVIDER_ACTION_IDS_V1 } from '../providers/providerActionIdsV1.js';
 import { REMOTE_HOST_ACTION_IDS_V1 } from '../remoteHosts/remoteHostActionIdsV1.js';
 import { HOME_RUNTIME_ACTION_IDS_V1 } from '../home/runtime/actionIdsV1.js';
@@ -141,6 +142,7 @@ export const ACTION_ID_FAMILIES_V1 = Object.freeze({
   launch_profiles: ['launch_profiles.publish', ...PROFILE_ACTION_IDS_V1],
   mcp_servers: MCP_SERVER_ACTION_IDS_V1,
   capability_rules: CAPABILITY_RULES_ACTION_IDS_V1,
+  skills: SKILL_ACTION_IDS_V1,
   providers: PROVIDER_ACTION_IDS_V1,
   model_preferences: ['models.favorite.set'],
   remote_hosts: REMOTE_HOST_ACTION_IDS_V1,

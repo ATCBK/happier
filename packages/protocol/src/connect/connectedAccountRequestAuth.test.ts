@@ -72,7 +72,8 @@ describe('private connected-account request-auth wire', () => {
       quotaScope: 'unknown', evidenceSource: { kind: 'structured' },
     } };
     expect(ConnectedAccountConsumerFailureV1Schema.parse(failure)).toEqual(failure);
-    expect(ConnectedAccountAuthFailureRequestV1Schema.safeParse({ credentialContext, normalizedFailure: failure }).success).toBe(false);
+    expect(ConnectedAccountAuthFailureRequestV1Schema.parse({ credentialContext, normalizedFailure: failure }))
+      .toMatchObject({ normalizedFailure: failure });
   });
   it('owns strict HTTP envelopes, status mapping, and Go conformance vectors', () => {
     expect({

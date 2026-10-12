@@ -1,4 +1,6 @@
-import { encodeBase64 } from '../../crypto/base64.js';
+import { decodeBase64, encodeBase64 } from '../../crypto/base64.js';
+import { readSkillFrontmatterV1 } from './skills/skillLibraryItemV1.js';
+import type { SkillReadInputV1, SkillReadResultV1, SessionSkillReadItemV1 } from './skills/skillReadV1.js';
 import { normalizeArtifactTagsV1 as normalizePromptTags } from '../../artifacts/artifactOrganizationV1.js';
 import { resolveArtifactOrganizationHeaderV1 } from '../../artifacts/artifactOrganizationV1.js';
 import { ArtifactOrganizationMutationFailureV1, mutateArtifactOrganizationV1, readArtifactFolderCatalogV1, type ArtifactFolderActionPortV1 } from './promptFolderActionsV1.js';
@@ -90,6 +92,48 @@ function parseArtifactBody<T>(body: string | null, parse: (value: unknown) => T 
   } catch {
     return null;
   }
+}
+
+/** Reads skill bytes at the same Artifact boundary as other library operations. */
+export async function readSkillInLibrary(params: Readonly<{
+  store: Pick<PromptLibraryArtifactStore, 'read'>;
+  request: SkillReadInputV1;
+  sessionItems?: readonly SessionSkillReadItemV1[] | null;
+  signal?: AbortSignal;
+}>): Promise<SkillReadResultV1 | Readonly<{ ok: false; errorCode: 'not_found'; error: 'not_found' }>> {
+  const notFound = { ok: false as const, errorCode: 'not_found' as const, error: 'not_found' as const };
+  throwIfAborted(params.signal);
+  const request = params.request;
+  const sessionItem = request.sessionId ? params.sessionItems?.find(item =>
+    'skillId' in request ? item.skillId === request.skillId : item.name === request.name) : undefined;
+  if (request.sessionId && !sessionItem) return notFound;
+  const skillId = 'skillId' in request ? request.skillId : sessionItem?.skillId;
+  if (!skillId) return notFound;
+  const artifact = await params.store.read(skillId, params.signal ? { signal: params.signal } : undefined);
+  throwIfAborted(params.signal);
+  if (!artifact) return notFound;
+  const header = PromptBundleArtifactHeaderV1Schema.safeParse(artifact.header);
+  const body = parseArtifactBody(artifact.body, value => {
+    const parsed = PromptBundleBodyV1Schema.safeParse(value);
+    return parsed.success ? parsed.data : null;
+  });
+  if (!header.success || header.data.bundleSchemaId !== 'skills.skill_md_v1' || !body
+    || !validatePromptBundleBodyV1AgainstSchemaId({ bundleSchemaId: header.data.bundleSchemaId, body }).ok) return notFound;
+  if (sessionItem && sessionItem.digest !== computePromptBundleDigestV1(body)) return notFound;
+  const markdownEntry = body.entries.find(entry => entry.path === 'SKILL.md' && entry.contentKind === 'utf8');
+  if (!markdownEntry) return notFound;
+  const skillMd = new TextDecoder().decode(decodeBase64(markdownEntry.contentBase64));
+  const { name } = readSkillFrontmatterV1(skillMd);
+  if (!name || sessionItem && sessionItem.name !== name) return notFound;
+  const file = request.file === undefined ? undefined : body.entries.find(entry => entry.path === request.file);
+  if (request.file !== undefined && !file) return notFound;
+  return {
+    skillId, name, skillMd,
+    files: body.entries.map(entry => ({ path: entry.path, bytes: decodeBase64(entry.contentBase64).length,
+      ...(entry.unixMode == null ? {} : { unixMode: entry.unixMode }) })),
+    ...(file ? { file: { path: file.path, contentBase64: file.contentBase64, contentKind: file.contentKind,
+      ...(file.unixMode == null ? {} : { unixMode: file.unixMode }) } } : {}),
+  };
 }
 
 export type MemoryDocMutationTargetV1 = Readonly<{

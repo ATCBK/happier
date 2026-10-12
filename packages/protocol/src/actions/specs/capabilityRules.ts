@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
-import { ReachRuleDraftV1Schema } from '../../reach/reachRuleV1.js';
+import { ReachRuleDraftV1Schema, ReachRuleV1Schema } from '../../reach/reachRuleV1.js';
 import { McpServerCatalogMutationResponseV1Schema } from '../../mcp/servers/catalogSchemasV1.js';
 import { ReachRulesChangeV1Schema } from '../../reach/reachRulesChangeV1.js';
 import { readRecord } from '../../inputs/inputRecords.js';
@@ -17,6 +17,16 @@ export const McpRulesSetInputV1Schema = lazyZodSchema(() => z.object({
 export const McpRulesSetItemResultV1Schema = lazyZodSchema(() => McpServerCatalogMutationResponseV1Schema.options[0].shape.items.unwrap().element);
 export const McpRulesSetOutputV1Schema = lazyZodSchema(() => z.union([
   z.object({ ok: z.literal(true), items: z.array(McpRulesSetItemResultV1Schema),
+    revision: z.number().int().nonnegative() }).strict(),
+  z.object({ ok: z.literal(false), code: z.enum(['not_found', 'conflict', 'catalog_unavailable', 'replace_needs_one_item']) }).strict(),
+]));
+export const SkillsRulesSetInputV1Schema = lazyZodSchema(() => z.object({
+  items: z.array(z.union([z.object({ skillId: identity }).strict(), z.object({ name: identity }).strict()])).min(1),
+  change: ReachRulesChangeV1Schema,
+}).strict());
+export const SkillsRulesSetOutputV1Schema = lazyZodSchema(() => z.union([
+  z.object({ ok: z.literal(true), items: z.array(z.object({ skillId: identity,
+    rules: z.array(ReachRuleV1Schema), previous: z.array(ReachRuleV1Schema) }).strict()),
     revision: z.number().int().nonnegative() }).strict(),
   z.object({ ok: z.literal(false), code: z.enum(['not_found', 'conflict', 'catalog_unavailable', 'replace_needs_one_item']) }).strict(),
 ]));
@@ -86,4 +96,7 @@ export function createCapabilityRulesActionSpecV1<TId extends ActionId, TInput e
 export const CAPABILITY_RULES_ACTION_SPECS_V1 = [createCapabilityRulesActionSpecV1({
   id: 'mcp.rules.set', title: 'Change where MCP servers are on', itemKind: 'mcp', idField: 'serverId',
   inputSchema: McpRulesSetInputV1Schema, outputSchema: McpRulesSetOutputV1Schema,
+}), createCapabilityRulesActionSpecV1({
+  id: 'skills.rules.set', title: 'Change where skills are on', itemKind: 'skills', idField: 'skillId',
+  inputSchema: SkillsRulesSetInputV1Schema, outputSchema: SkillsRulesSetOutputV1Schema,
 })] as const;

@@ -27,6 +27,7 @@ import {
 } from './specs/filesystemApprovalPresentation.js';
 import { MCP_SERVER_ACTION_SPECS_V1 } from './specs/mcpServers.js';
 import { CAPABILITY_RULES_ACTION_SPECS_V1 } from './specs/capabilityRules.js';
+import { SKILL_READ_ACTION_SPECS_V1 } from './specs/skillRead.js';
 import { MCP_SERVER_ACTION_INPUT_SCHEMAS_V1, MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1, type McpServerActionIdV1 } from '../mcp/servers/serverActionsV1.js';
 import { PROVIDER_ACTION_SPECS_V1 } from './specs/providers.js';
 import { PROVIDER_ACTION_INPUT_SCHEMAS_V1, PROVIDER_ACTION_OUTPUT_SCHEMAS_V1, type ProviderActionIdV1 } from '../providers/providerActionsV1.js';
@@ -4765,6 +4766,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_FAMILIES: readonly (
   | (typeof PROFILE_ACTION_SPECS_V1)[number]
   | (typeof MCP_SERVER_ACTION_SPECS_V1)[number]
   | (typeof CAPABILITY_RULES_ACTION_SPECS_V1)[number]
+  | (typeof SKILL_READ_ACTION_SPECS_V1)[number]
   | (typeof PROVIDER_ACTION_SPECS_V1)[number]
   | (typeof REMOTE_HOST_ACTION_SPECS_V1)[number]
   | (typeof HOME_RUNTIME_ACTION_SPECS_V1)[number]
@@ -4799,6 +4801,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_FAMILIES: readonly (
   ...PROFILE_ACTION_SPECS_V1,
   ...MCP_SERVER_ACTION_SPECS_V1,
   ...CAPABILITY_RULES_ACTION_SPECS_V1,
+  ...SKILL_READ_ACTION_SPECS_V1,
   ...PROVIDER_ACTION_SPECS_V1,
   ...REMOTE_HOST_ACTION_SPECS_V1,
   ...HOME_RUNTIME_ACTION_SPECS_V1,
@@ -12403,6 +12406,7 @@ const ACTION_EXECUTION_PLACEMENT_BY_ID: ReadonlyMap<ActionId, ActionExecutionPla
     ...PROFILE_ACTION_SPECS_V1.filter(spec => spec.executionPlacement === 'account').map(spec => spec.id),
     ...MCP_SERVER_ACTION_SPECS_V1.filter(spec => spec.executionPlacement === 'account').map(spec => spec.id),
     ...CAPABILITY_RULES_ACTION_SPECS_V1.map(spec => spec.id),
+    ...SKILL_READ_ACTION_SPECS_V1.map(spec => spec.id),
     ...PROVIDER_ACTION_SPECS_V1.filter(spec => spec.executionPlacement === 'account').map(spec => spec.id),
     ...REMOTE_HOST_ACTION_SPECS_V1.filter(spec => spec.executionPlacement === 'account').map(spec => spec.id),
     ...ACTION_ID_FAMILIES_V1.approvals,
@@ -13047,6 +13051,7 @@ type AccountSecurityActionSpecDefinition =
 
 export type CanonicalActionSpecDefinition =
   | (typeof CAPABILITY_RULES_ACTION_SPECS_V1)[number]
+  | (typeof SKILL_READ_ACTION_SPECS_V1)[number]
   | (typeof ACCOUNT_LIFECYCLE_ACTION_SPECS)[number]
   | (typeof MEMORY_DOCUMENT_ACTION_SPECS_V1)[number]
   | { [Id in PluginExecutionOriginActionId]: CanonicalActionSchemaDefinition<Id,

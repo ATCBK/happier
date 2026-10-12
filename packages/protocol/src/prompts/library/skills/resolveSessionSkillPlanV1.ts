@@ -17,14 +17,44 @@ export type SessionSkillPlanV1 = {
   nativeDisables: { name: string; path: string; state: 'applied' | 'unsupported' }[];
   diagnostics: { kind: 'native_scan_failed'; root: string }[];
 };
-export function resolveSkillPlanKindV1(_input: {
+export function resolveSkillPlanKindV1(input: {
   agentSkills: PluginAgentSkillsCapabilityV2 | null; agentHasActionChannel: boolean;
-}): SessionSkillPlanV1['plan'] { return 'none'; }
+}): SessionSkillPlanV1['plan'] {
+  return input.agentSkills?.delivery === 'session_dir' ? 'session_dir' : input.agentHasActionChannel ? 'index' : 'none';
+}
 
-export function resolveSessionSkillPlanV1(_input: {
+export function resolveSessionSkillPlanV1(input: {
   items: readonly SkillLibraryItemV1[]; selected: readonly CapabilityItemStateV1[];
   excludeNativeSkillNames: readonly string[]; agentSkills: PluginAgentSkillsCapabilityV2 | null;
   agentHasActionChannel: boolean; nativeSkills: NativeSkillScanV1;
 }): SessionSkillPlanV1 {
-  return { plan: 'none', items: [], nativeDisables: [], diagnostics: [] };
+  const plan = resolveSkillPlanKindV1(input);
+  const selection = new Map(input.selected.filter(item => item.kind === 'skill').map(item => [item.id, item]));
+  const disabled = new Set(input.excludeNativeSkillNames);
+  const disableSupported = input.agentSkills?.nativeDisable === 'supported';
+  const nativeDisables: SessionSkillPlanV1['nativeDisables'] = input.nativeSkills.names
+    .filter(item => disabled.has(item.name))
+    .map(item => ({ name: item.name, path: item.path, state: disableSupported ? 'applied' : 'unsupported' }));
+  const activeNative = new Map(input.nativeSkills.names.filter(item => !disableSupported || !disabled.has(item.name))
+    .map(item => [item.name, item]));
+  const newest = new Map<string, SkillLibraryItemV1>();
+  for (const item of input.items) {
+    if (!selection.get(item.skillId)?.selected) continue;
+    const previous = newest.get(item.name);
+    if (!previous || (item.updatedAt ?? 0) > (previous.updatedAt ?? 0)
+      || (item.updatedAt ?? 0) === (previous.updatedAt ?? 0) && item.skillId.localeCompare(previous.skillId) > 0) newest.set(item.name, item);
+  }
+  const items: SessionSkillPlanV1['items'] = input.items.map(item => {
+    const selected = selection.get(item.skillId);
+    const identity = { skillId: item.skillId, name: item.name, digest: item.digest };
+    if (!selected?.selected) return { ...identity, state: selected?.reason === 'session_removed' ? 'excluded' : 'off', reason: selected?.reason ?? 'no_rule' };
+    if (plan === 'none') return { ...identity, state: 'unavailable', reason: 'agent_unsupported' };
+    const native = activeNative.get(item.name);
+    if (native) return { ...identity, state: 'masked_by_native', reason: 'native_same_name', maskedBy: { path: native.path } };
+    if (input.nativeSkills.status === 'failed') return { ...identity, state: 'unavailable', reason: 'native_scan_failed' };
+    if (newest.get(item.name)?.skillId !== item.skillId) return { ...identity, state: 'name_conflict', reason: 'duplicate_name' };
+    return { ...identity, state: 'delivered', reason: selected.reason };
+  });
+  return { plan, items, nativeDisables, diagnostics: input.nativeSkills.status === 'failed'
+    ? input.nativeSkills.roots.map(root => ({ kind: 'native_scan_failed', root })) : [] };
 }

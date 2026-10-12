@@ -501,6 +501,7 @@ const ADDITIONAL_SESSION_RPC_AUTHORIZATION_ROWS = [
   { method: 'session.permission.remote.grants.revoke', authority: 'submitAgentInput', routeToSessionOwnerDaemon: true },
   { method: 'session.user_action.answer', authority: 'submitAgentInput', actionId: 'session.user_action.answer', routeToSessionOwnerDaemon: true },
   { method: 'abort', authority: 'submitAgentInput', actionId: 'session.turn.cancel', routeToSessionOwnerDaemon: true },
+  { method: 'skills.read', authority: 'readTranscript', actionId: 'skills.read', routeToSessionOwnerDaemon: true },
 ] as const satisfies readonly SocketRpcSessionWriteClassificationV1[];
 
 export const API_TOKEN_SOCKET_EVENT_ACTIONS = Object.freeze({ message: 'session.message.send' } as const);

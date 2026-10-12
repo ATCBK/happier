@@ -4,6 +4,26 @@ import { McpServersSettingsV1Schema } from '../mcp/servers/settingsV1.js';
 import { resolveRunnerMcpMaterialV1, RunnerMcpMaterialV1Schema } from './runnerMcpMaterial.js';
 
 describe('resolveRunnerMcpMaterialV1', () => {
+  it('freezes template secrets and their revisions while refusing endpoint environment variables', () => {
+    const settings = McpServersSettingsV1Schema.parse({ servers: [{ id: 'tools', name: 'tools', transport: 'http',
+      remote: { url: 'https://example.test/mcp', headers: { Authorization: { t: 'template', template: 'Bearer {key}',
+        vars: { key: { t: 'savedSecret', secretId: 'token' } } } } }, env: {}, createdAt: 1, updatedAt: 2 }],
+      bindings: [{ id: 'all', serverId: 'tools', target: { t: 'allMachines' }, enabled: true, createdAt: 1, updatedAt: 2 }],
+    });
+    expect(resolveRunnerMcpMaterialV1({ agentId: 'claude', agentAcceptsUserMcp: true, settings,
+      resolveSavedSecret: () => ({ value: 'secret', revision: 3 }) })).toMatchObject({ ok: true, material: { servers: [{
+        savedSecretRevisions: [{ secretId: 'token', revision: 3 }],
+        config: { remote: { headers: { Authorization: { t: 'literal', v: 'Bearer secret' } } } },
+      }] } });
+    expect(resolveRunnerMcpMaterialV1({ agentId: 'claude', agentAcceptsUserMcp: true, settings, resolveSavedSecret: () => null }))
+      .toMatchObject({ ok: false, reason: 'saved_secret_unavailable', serverId: 'tools', valuePath: 'header:Authorization' });
+    const machineVariable = { ...settings, servers: settings.servers.map(server => ({ ...server, env: {
+      TOKEN: { t: 'template' as const, template: '{key}', vars: { key: { t: 'literal' as const, v: '${KEY}' } } },
+    } })) };
+    expect(resolveRunnerMcpMaterialV1({ agentId: 'claude', agentAcceptsUserMcp: true, settings: machineVariable,
+      resolveSavedSecret: () => ({ value: 'secret', revision: 3 }) }))
+      .toMatchObject({ ok: false, reason: 'endpoint_environment', serverId: 'tools', valuePath: 'env:TOKEN' });
+  });
   it('preserves both capability selections while materializing the MCP subset', () => {
     const settings = McpServersSettingsV1Schema.parse({ servers: [], bindings: [] });
     const capabilitySelection = {
