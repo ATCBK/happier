@@ -15,8 +15,11 @@ import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
 
+const shareCandidateAvailability = vi.hoisted(() => ({ value: false }));
+
 afterEach(() => {
     creationDecisionNetworkMode.enabled = false;
+    shareCandidateAvailability.value = false;
     resetRuntimeFetch();
     vi.restoreAllMocks();
 });
@@ -58,6 +61,13 @@ vi.mock('@/sync/domains/scope/useServerCredentialAccountScopes', () => ({
 vi.mock('@/hooks/session/useSessionCollaborationAvailability', () => ({
     useSessionCollaborationAvailability: () => 'available',
 }));
+vi.mock('./sessionShareCandidateAvailability', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('./sessionShareCandidateAvailability')>();
+    return {
+        ...actual,
+        useHasSessionShareCandidates: () => shareCandidateAvailability.value,
+    };
+});
 // This suite exercises the real draft/currentness and editor-controller
 // owners. Keep their presentation leaf inert so unrelated Markdown/plugin
 // renderer graphs are not part of this owner-level test.
@@ -507,6 +517,24 @@ describe('useNewSessionAccessDraft repository currentness', () => {
         subject: { kind: 'account', accountId: 'bob' }, accessLevel: 'edit', canApprovePermissions: false,
     }] };
 
+    it('only exposes Private sharing when the Account has a candidate, while retaining authored recovery', async () => {
+        let latest: NewSessionAccessDraftState | null = null;
+        const screen = await renderScreen(<AccessDraftProbe serverId="home-one" sourceRevision={1}
+            sourceAccess={null} sourcePrimaryTeamId={null} onReady={(state) => { latest = state; }} />);
+
+        expect(latest!.chip).toBeNull();
+
+        shareCandidateAvailability.value = true;
+        await screen.update(<AccessDraftProbe serverId="home-one" sourceRevision={1}
+            sourceAccess={null} sourcePrimaryTeamId={null} onReady={(state) => { latest = state; }} />);
+        expect(latest!.chip).not.toBeNull();
+
+        shareCandidateAvailability.value = false;
+        await screen.update(<AccessDraftProbe serverId="home-one" sourceRevision={2}
+            sourceAccess={alice} sourcePrimaryTeamId={null} onReady={(state) => { latest = state; }} />);
+        expect(latest!.chip).not.toBeNull();
+    });
+
     it('adopts a newer synchronized access/team choice and exposes that same snapshot to the editor', async () => {
         let latest: NewSessionAccessDraftState | null = null;
         const screen = await renderScreen(<AccessDraftProbe serverId="home-one" sourceRevision={1}
@@ -790,6 +818,7 @@ describe('useNewSessionAccessDraft repository currentness', () => {
 
     it('reaches the Home directory only once an editor presentation is open', async () => {
         runTeamActionMock.mockClear();
+        shareCandidateAvailability.value = true;
         let latest: NewSessionAccessDraftState | null = null;
         const probe = (popoverOpen: boolean) => (
             <AccessDraftProbe serverId="home-one" sourceRevision={1} sourceAccess={null}
@@ -799,8 +828,8 @@ describe('useNewSessionAccessDraft repository currentness', () => {
         const screen = await renderScreen(probe(false));
         await act(async () => {});
 
-        // The collapsed chip is projected from authored grants alone, so the
-        // composer must not spend a Team page on a picker nobody opened.
+        // The collapsed chip consumes only the candidate summary fact. It must
+        // not spend a detailed access-directory page on a picker nobody opened.
         expect(latest!.chip).not.toBeNull();
         expect(runTeamActionMock).not.toHaveBeenCalled();
 

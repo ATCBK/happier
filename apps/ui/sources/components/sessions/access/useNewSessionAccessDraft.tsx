@@ -11,12 +11,15 @@ import { t } from '@/text';
 
 import { SessionAccessEditor } from './SessionAccessEditor';
 import { useNewSessionAccessDraftController } from './useNewSessionAccessDraftController';
+import { useHasSessionShareCandidates } from './sessionShareCandidateAvailability';
 
 export type NewSessionAccessDraftState = Readonly<{
     /** The exact value that travels as `SessionSpawnNewInputV2.initialAccess`. */
     access: SessionInitialAccessDraftV1 | null;
     primaryTeamId: string | null;
     applyTeamCredentialPolicy: (teamId: string, requireVisibility: boolean) => void;
+    /** Whether an existing Teams/people owner currently has someone to share with. */
+    hasShareCandidates: boolean;
     /** Chip parameters for the New Session composer, or `null` when unavailable. */
     chip: Parameters<typeof createSessionAccessActionChip>[0] | null;
     screen: Readonly<{
@@ -203,6 +206,10 @@ export function useNewSessionAccessDraft(input: Readonly<{
     const resolution = useServerCredentialAccountScopeResolution(serverId);
     const availability = useSessionCollaborationAvailability(serverId ?? '');
     const scope = resolution.kind === 'bound' ? resolution.scope : null;
+    const hasShareCandidates = useHasSessionShareCandidates({
+        serverId,
+        enabled: scope !== null && availability === 'available',
+    });
     const [screenOpen, setScreenOpen] = React.useState(false);
     // The composer's collapsed chip needs only the authored-grant summary, so
     // candidate discovery stays with the presentation that is actually open.
@@ -255,7 +262,8 @@ export function useNewSessionAccessDraft(input: Readonly<{
         // A restored shared draft must remain reachable even if this Home can no
         // longer create shared Sessions. The read-only editor provides the explicit
         // recovery to Private instead of silently discarding authority-bearing input.
-        if (!scope || (availability === 'unavailable' && !access?.grants.length && !homeReconciled)) return null;
+        const hasRecoverableDraft = Boolean(access?.grants.length || primaryTeamId !== null || homeReconciled);
+        if (!scope || ((!hasShareCandidates || availability === 'unavailable') && !hasRecoverableDraft)) return null;
         return {
             label: controller.model.summary.label,
             accessibilityLabel: controller.model.summary.accessibilityLabel,
@@ -278,12 +286,12 @@ export function useNewSessionAccessDraft(input: Readonly<{
                 />
             ),
         };
-    }, [access?.grants.length, availability, controller.actions, controller.model, demandEditor, homeReconciled, input.useScreenHost, scope]);
+    }, [access?.grants.length, availability, controller.actions, controller.model, demandEditor, hasShareCandidates, homeReconciled, input.useScreenHost, primaryTeamId, scope]);
 
     // An unresolved scope hides the control; it never discards an authored
     // draft, which is authority-bearing creation input.
     return React.useMemo(
-        () => ({ access, primaryTeamId, chip, screen, applyTeamCredentialPolicy }),
-        [access, applyTeamCredentialPolicy, chip, primaryTeamId, screen],
+        () => ({ access, primaryTeamId, chip, screen, applyTeamCredentialPolicy, hasShareCandidates }),
+        [access, applyTeamCredentialPolicy, chip, hasShareCandidates, primaryTeamId, screen],
     );
 }
