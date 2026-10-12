@@ -12,6 +12,7 @@ import type { AuthorizationServerMetadata, OAuthTokens } from '@modelcontextprot
 import type { FetchLike } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { canonicalMcpOAuthResourceUrlV1 } from '@happier-dev/protocol/mcp/oauth/mcpOAuthResourceV1';
 import { PluginConnectedAccountDescriptorContributionV2Schema } from '@happier-dev/protocol/connect/plugin-connected-account-authentication-v2';
+import { ConnectedAccountRequestAuthMaterializationV1Schema } from '@happier-dev/protocol/connect/connected-account-request-auth';
 import {
     MCP_OAUTH_CALLBACK_URL_V1,
     MCP_OAUTH_CLIENT_METADATA_URL_V1,
@@ -75,6 +76,14 @@ const SecretsSchema = z.record(z.string(), z.string());
 
 function resourceUrl(value: string): URL {
     return new URL(canonicalMcpOAuthResourceUrlV1(value));
+}
+function resourceCanBeMaterialized(resource: URL): boolean {
+    return ConnectedAccountRequestAuthMaterializationV1Schema.safeParse({
+        kind: 'httpHeaders', origin: resource.origin, headerNames: ['authorization'],
+    }).success;
+}
+function resourceRefused() {
+    return { status: 'rejected' as const, diagnostic: diagnostic('mcp_oauth_resource_requires_https') };
 }
 function metadata(issuer: string, registration: Registration): AuthorizationServerMetadata {
     return { issuer, authorization_endpoint: registration.authorizationEndpoint,
@@ -151,6 +160,9 @@ export function createMcpSignInRuntime(params: Readonly<{ fetchFn?: FetchLike; n
                 try {
                     const configuration = ConfigurationSchema.parse(context.configuration.values);
                     const resource = resourceUrl(configuration.resource);
+                    // A successful grant must be usable through the incumbent
+                    // request-auth seam; do not stage one that seam cannot admit.
+                    if (!resourceCanBeMaterialized(resource)) return resourceRefused();
                     const response = await network.probe(resource);
                     const challenge = extractWWWAuthenticateParams(response);
                     await response.body?.cancel();
@@ -223,6 +235,8 @@ export function createMcpSignInRuntime(params: Readonly<{ fetchFn?: FetchLike; n
             async complete(input, context) {
                 const network = transport(context.signal);
                 try {
+                    const configuredResource = resourceUrl(ConfigurationSchema.parse(context.configuration.values).resource);
+                    if (!resourceCanBeMaterialized(configuredResource)) return resourceRefused();
                     const raw = await context.attemptCredentials.get(completionKey);
                     if (!raw) return { status: 'rejected', diagnostic: diagnostic('mcp_oauth_attempt_missing') };
                     const sealed = CompletionSchema.parse(JSON.parse(raw));

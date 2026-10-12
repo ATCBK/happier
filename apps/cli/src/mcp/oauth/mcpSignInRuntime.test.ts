@@ -159,8 +159,11 @@ describe('MCP server sign-in runtime', () => {
     });
 
     it('refuses an unusable HTTP OAuth resource before probing, registering or staging', async () => {
-        const { result, fixture, staged, entries } = await begin({ httpResource: true });
+        const { result, fixture, staged, entries, mode, context } = await begin({ httpResource: true });
+        const completion = await mode.complete({ code: 'http-code', callbackUrl: 'https://app.happier.dev/oauth/mcp/callback',
+            state: 'attempt-failure.state', pkceVerifier: 'http-verifier' }, context);
         expect(result).toMatchObject({ status: 'rejected', diagnostic: { code: 'mcp_oauth_resource_requires_https' } });
+        expect(completion).toMatchObject({ status: 'rejected', diagnostic: { code: 'mcp_oauth_resource_requires_https' } });
         expect(fixture.requests).toEqual([]);
         expect(staged.content).toBeNull();
         expect(entries.size).toBe(0);

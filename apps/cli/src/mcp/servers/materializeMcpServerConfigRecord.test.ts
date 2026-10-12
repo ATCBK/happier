@@ -45,6 +45,36 @@ function deterministicRandomBytesFactory(): (length: number) => Uint8Array {
 }
 
 describe('materializeMcpServerConfigRecord', () => {
+  it('keeps personal Saved Secret env out of plain stdio and remote Agent configurations', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'happier-mcp-private-env-'));
+    const key = deriveSettingsSecretsKeyV1(new Uint8Array(32).fill(3));
+    const secret = 'private-mcp-env-value';
+    const settings = McpServersSettingsV1Schema.parse({ v: 1, strictMode: true, servers: [
+      { id: 'local', name: 'local', transport: 'stdio', stdio: { command: 'example-mcp', args: ['serve'] },
+        env: { API_KEY: { t: 'savedSecret', secretId: 'personal-key' } }, createdAt: 0, updatedAt: 0 },
+      { id: 'remote', name: 'remote', transport: 'http', remote: { url: 'https://mcp.example.test', headers: {} },
+        env: { API_KEY: { t: 'savedSecret', secretId: 'personal-key' } }, createdAt: 0, updatedAt: 0 },
+    ], bindings: ['local', 'remote'].map(id => ({ id: `on-${id}`, serverId: id, enabled: true,
+      target: { t: 'allMachines' }, createdAt: 0, updatedAt: 0 })) });
+    const out = await materializeMcpServerConfigRecord({
+      resolved: resolveMcpMaterialization(settings, { machineId: 'm1', directory: '/repo' }), tmpDir: dir,
+      savedSecretMaterializer: createSavedSecretMaterializerV1({
+        accountSettings: { secrets: [{ id: 'personal-key', encryptedValue: {
+          _isSecretValue: true, encryptedValue: encryptSecretStringV1(secret, key, deterministicRandomBytesFactory()),
+        } }] }, settingsSecretsReadKeys: [key],
+      }), processEnv: {},
+    });
+    try {
+      expect(JSON.stringify(out.mcpServers)).not.toContain(secret);
+      for (const [name, pathKey] of [['local', 'HAPPIER_MCP_STDIO_LAUNCHER_CONFIG_FILE'],
+        ['remote', 'HAPPIER_MCP_REMOTE_BRIDGE_CONFIG_FILE']] as const) {
+        const path = out.mcpServers[name]!.env?.[pathKey];
+        expect(path).toBeDefined();
+        expect(JSON.parse(await readFile(path!, 'utf8')).env).toEqual({ API_KEY: secret });
+        expect((await stat(path!)).mode & 0o777).toBe(0o600);
+      }
+    } finally { out.cleanup(); await rm(dir, { recursive: true, force: true }); }
+  });
   it('refuses an OAuth server without a resource-bound request-auth capability', async () => {
     const settings = McpServersSettingsV1Schema.parse({ v: 1, strictMode: true, servers: [{
       id: 'oauth', name: 'oauth', transport: 'http', remote: { url: 'https://mcp.example.test/path', headers: {}, auth: { kind: 'oauth' } },
