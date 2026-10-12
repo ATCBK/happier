@@ -52,6 +52,24 @@ export type TranslationKeyNoParams = {
 let preferredLanguageOverride: SupportedLanguage | null = null;
 let requestedLanguageOverride: SupportedLanguage | null = null;
 let cachedDeviceLanguage: SupportedLanguage | null = null;
+const preferredLanguageListeners = new Set<() => void>();
+
+/** Observe committed UI language changes; loading an alternate locale does not activate it. */
+export function subscribePreferredLanguage(listener: () => void): () => void {
+    preferredLanguageListeners.add(listener);
+    return () => { preferredLanguageListeners.delete(listener); };
+}
+
+function commitPreferredLanguage(override: SupportedLanguage | null): void {
+    const previous = resolveActiveLanguage();
+    preferredLanguageOverride = override;
+    // The web document states the language it shows, so assistive technology reads it in the right
+    // voice and the browser can hyphenate a word wider than its column instead of cutting it.
+    if (typeof document !== 'undefined' && document.documentElement) document.documentElement.lang = resolveActiveLanguage();
+    if (resolveActiveLanguage() !== previous) {
+        for (const listener of preferredLanguageListeners) listener();
+    }
+}
 
 function isTranslationFunction(value: unknown): value is TranslationFunction {
     return typeof value === 'function';
@@ -203,7 +221,7 @@ export function setPreferredLanguageFromSettings(value: unknown): void {
     requestedLanguageOverride = normalizePreferredLanguage(value);
     const language = requestedLanguageOverride ?? resolveLanguageFromDeviceLocales();
     // An unloaded web chunk must never replace the current translated UI with fallback copy.
-    if (readLocaleBundle(language)) preferredLanguageOverride = requestedLanguageOverride;
+    if (readLocaleBundle(language)) commitPreferredLanguage(requestedLanguageOverride);
 }
 
 function normalizePreferredLanguage(value: unknown): SupportedLanguage | null {
@@ -228,7 +246,7 @@ export async function preloadTranslations(language?: SupportedLanguage): Promise
         const selected = requested ?? resolveLanguageFromDeviceLocales();
         await preloadLocaleBundle(selected);
         if (requestedLanguageOverride !== requested) continue;
-        preferredLanguageOverride = requested;
+        commitPreferredLanguage(requested);
         return;
     }
 }

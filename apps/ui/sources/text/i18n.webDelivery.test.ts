@@ -29,6 +29,8 @@ it('loads selected web copy before activation and keeps explicit voice demand in
                 frenchLoaded: text.getTranslationValue('tabs.inbox', 'fr') !== undefined,
                 pluginKeyKnown: text.getAllTranslationKeys().includes('agentInput.connectedServiceLabel.gemini'),
             };
+            const commits = [];
+            const unsubscribe = text.subscribePreferredLanguage(() => commits.push({ language: text.getPreferredLanguage(), copy: text.t('tabs.inbox') }));
             text.setPreferredLanguageFromSettings('es');
             const pendingActive = text.getPreferredLanguage();
             const ready = text.preloadTranslations();
@@ -39,7 +41,10 @@ it('loads selected web copy before activation and keeps explicit voice demand in
             const frenchCopy = text.getTranslationValue('tabs.inbox', 'fr');
             await text.preloadTranslations('de');
             await text.preloadTranslations('zh-Hant');
+            text.setPreferredLanguageFromSettings('fr');
+            unsubscribe();
             console.log(JSON.stringify({ initial, pendingActive, selected, selectedCopy, frenchCopy,
+                commits,
                 afterVoice: text.getPreferredLanguage(),
                 voiceLoaded: text.getTranslationValue('voicePresence.welcomeText', 'de') !== undefined,
                 traditionalChineseLoaded: text.getTranslationValue('tabs.inbox', 'zh-Hant') !== undefined,
@@ -50,10 +55,12 @@ it('loads selected web copy before activation and keeps explicit voice demand in
         expect(observation).toMatchObject({
             initial: { active: 'en', spanishLoaded: false, frenchLoaded: false, pluginKeyKnown: true },
             pendingActive: 'en', selected: 'fr', afterVoice: 'fr', voiceLoaded: true,
+            commits: [{ language: 'fr', copy: expect.any(String) }],
             traditionalChineseLoaded: true, simplifiedChineseActivated: false,
             unrelatedJapaneseLoaded: false, fallback: 'Google Gemini',
         });
         expect(observation.selectedCopy).toBe(observation.frenchCopy);
+        expect(observation.commits[0].copy).toBe(observation.frenchCopy);
         const entry = Object.values(result.metafile.outputs).find(output => output.entryPoint?.endsWith('/i18n.ts'));
         expect(entry).toBeDefined();
         const staticInputs = new Set<string>();
