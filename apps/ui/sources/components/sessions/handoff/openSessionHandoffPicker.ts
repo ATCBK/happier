@@ -48,6 +48,7 @@ export async function openSessionHandoffPicker(params: Readonly<{
                 return;
             }
             if (settled) {
+                if (value === null) { close(); return; }
                 if (!closed && value && params.retainOnSubmit) params.onSubmitAgain?.(value);
                 return;
             }

@@ -110,8 +110,11 @@ describe('openSessionHandoffPicker', () => {
         expect(onSubmitAgain).not.toHaveBeenCalled();
         capturedConfig.props.onResolve(selection);
         expect(onSubmitAgain).toHaveBeenCalledWith(selection);
-        onRetained.mock.calls[0]?.[0]();
+        capturedConfig.props.onResolve(null);
         expect(hideMock).toHaveBeenCalledWith('modal_1');
+        expect(onRetained.mock.calls[0]?.[2]()).toBe(false);
+        capturedConfig.props.onResolve(selection);
+        expect(onSubmitAgain).toHaveBeenCalledTimes(1);
     });
 
     it('permits truthful dismissal during admission and rejects duplicate submit', async () => {

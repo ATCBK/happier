@@ -8,7 +8,7 @@ import { createHomeGovernanceHarness, waitForHomeGovernance } from '@/dev/testki
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
-import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createSessionFixture, createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { applyProjectAccountRowsFixture } from '@/dev/testkit/fixtures/projectAccountRows';
 import type { Machine } from '@/sync/domains/state/storageTypes';
@@ -101,6 +101,7 @@ function answerHomeMachines(serverId: string) {
                 ...machine, metadata: { ...createMachineFixture().metadata!, ...machine.metadata },
             });
             return {
+                ...createPlainMachineRowFixture({ id: fixture.id, accountId: serverId === homeA.id ? 'account-a' : 'account-b' }),
                 id: fixture.id, seq: fixture.seq, createdAt: fixture.createdAt, updatedAt: fixture.updatedAt,
                 active: fixture.active, activeAt: fixture.activeAt,
                 metadata: encodePlainMachineStoredContent(fixture.metadata), metadataVersion: fixture.metadataVersion,
@@ -272,6 +273,7 @@ describe('SessionHandoffPickerModal', () => {
         await act(async () => { invokeTestInstanceHandler(screen.tree.findByType(MachineSelector), 'onSelect', allMachinesState[0]); });
         const transferSwitch = () => screen.tree.findByProps({ testID: 'session-handoff-transfer-session-data' });
         await vi.waitFor(() => expect(transferSwitch().props.disabled).toBe(false));
+        await act(async () => { screen.changeTextByTestId('path-selection-list:header:input', '/home/target/happier'); });
         expect(transferSwitch().props.value).toBe(true);
         const start = () => findElementByTestId(requireCardChrome(chrome).footer, 'session-handoff-start') as React.ReactElement<{ onPress: () => void }>;
         await act(async () => { start().props.onPress(); });
@@ -280,6 +282,7 @@ describe('SessionHandoffPickerModal', () => {
         await act(async () => { start().props.onPress(); });
         expect(onResolve).toHaveBeenLastCalledWith(expect.objectContaining({ stateTransfer: 'existing', workspaceAction: { kind: 'none' } }));
         expect(screen.tree.findByProps({ testID: 'session-handoff-workspace-sync-mode-trigger' }).props.disabled).toBe(true);
+        expect(screen.tree.findAllByType(DropdownMenu).find((node) => node.props.itemTrigger?.title === 'settingsSession.handoff.workspaceMode.title')?.props.selectedId).toBe('none');
     });
 
     it.each(['machine_source', 'machine_target'])('keeps transfer on and disabled when %s lacks existing-state support', async (unsupportedMachine) => {
@@ -347,7 +350,7 @@ describe('SessionHandoffPickerModal', () => {
         const flow = runSessionHandoffPickerFlow({ execute: executor.execute, sessionId: 'sess_1', sourceMachineId: 'machine_source', serverId: homeA.id, placement: 'session_info' });
         await vi.waitFor(() => expect(modalMock.spies.show).toHaveBeenCalled());
         // The modal presentation boundary exposes the real picker's submitted values.
-        const config = modalMock.spies.show.mock.calls[0]?.[0] as { props: SessionHandoffPickerModalProps };
+        const config = modalMock.spies.show.mock.calls[0]?.[0] as { props: Omit<SessionHandoffPickerModalProps, 'onClose' | 'setChrome'> };
         config.props.onResolve({ targetMachineId: 'machine_target', stateTransfer: 'existing', workspaceAction: { kind: 'none' } });
         await expect(flow).resolves.toMatchObject({ ok: false, errorCode: 'existing_session_state_unavailable' });
         expect(handoffCapabilityRpc).toHaveBeenCalledWith(expect.objectContaining({ method: RPC_METHODS.DAEMON_SESSION_HANDOFF_START_V3, payload: expect.objectContaining({ stateTransfer: 'existing' }) }));
@@ -650,6 +653,7 @@ describe('SessionHandoffPickerModal', () => {
             targetMachineId: 'machine_target',
             targetMachineLabel: 'Target machine',
             targetPath: '/home/target/happier',
+            stateTransfer: 'transfer',
             sourceRootPath: '~/projects/happier',
             targetSessionStorageMode: 'persisted',
             workspaceAction: {
@@ -1183,6 +1187,7 @@ describe('SessionHandoffPickerModal', () => {
             targetMachineLabel: 'Target machine',
             sourceRootPath: '~/projects/happier',
             targetSessionStorageMode: 'persisted',
+            stateTransfer: 'transfer',
             workspaceAction: { kind: 'none' },
         });
         expect(onClose).not.toHaveBeenCalled();
@@ -1629,6 +1634,7 @@ describe('SessionHandoffPickerModal', () => {
         const start = findElementByTestId(requireCardChrome(chrome).footer, 'session-handoff-start') as React.ReactElement<{ disabled: boolean; onPress: () => void }>;
         expect(start.props.disabled).toBe(true);
         expect(screen.findByTestId('session-handoff-retained-history')).toBeTruthy();
+        expect(screen.getTextContent()).toContain('machineRequester.resumeElsewhere');
         await act(async () => { start.props.onPress(); });
         expect(onResolve).not.toHaveBeenCalled();
         await screen.unmount();

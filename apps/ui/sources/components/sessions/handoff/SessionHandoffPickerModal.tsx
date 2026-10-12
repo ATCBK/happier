@@ -12,6 +12,7 @@ import type { CustomModalInjectedProps } from '@/modal';
 import { useModalCardChrome } from '@/modal/components/card/useModalCardChrome';
 import { t } from '@/text';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
+import { Switch } from '@/components/ui/forms/Switch';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { Item } from '@/components/ui/lists/Item';
@@ -30,6 +31,7 @@ import {
     type SessionHandoffWorkspaceMode,
 } from '@/sync/domains/sessionHandoff/sessionHandoffDefaults';
 import { resolveSessionHandoffPickerSourceMachineId } from '@/sync/domains/sessionHandoff/resolveSessionHandoffPickerSourceMachineId';
+import { useSessionHandoffExistingStateAvailability } from '@/sync/domains/sessionHandoff/useSessionHandoffExistingStateAvailability';
 import {
     selectWorkspaceSyncRelationshipSummariesForHandoff,
     selectWorkspaceSyncLinkedHandoffChoice,
@@ -107,7 +109,7 @@ function relationshipEndpointTitle(summary: WorkspaceSyncRelationshipSummary): s
 const EMPTY_PATH_SELECTION_FAVORITES = [] as const;
 const ignorePathSelectionRequestClose = () => {};
 
-export function SessionHandoffPickerModal({ onClose, setChrome, onResolve, sessionId, sourceMachineId, serverId, awaitingAdmission = false }: SessionHandoffPickerModalProps) {
+export function SessionHandoffPickerModal({ onClose, setChrome, onResolve, sessionId, sourceMachineId, serverId, inlineErrorCode, awaitingAdmission = false }: SessionHandoffPickerModalProps) {
     const { theme } = useUnistyles();
     const styles = stylesheet;
     const actionSpec = getActionSpec('session.handoff');
@@ -252,6 +254,13 @@ export function SessionHandoffPickerModal({ onClose, setChrome, onResolve, sessi
         setSelectedLinkedWorkspace(false);
     }, [awaitingAdmission]);
     const isSameMachine = Boolean(resolvedSourceMachineId && selectedMachineId === resolvedSourceMachineId);
+    const [transferSessionData, setTransferSessionData] = React.useState(true);
+    const existingStateAvailability = useSessionHandoffExistingStateAvailability({ serverId, sourceMachineId: resolvedSourceMachineId, targetMachineId: selectedMachineId });
+    const existingStateRequested = !isSameMachine && !transferSessionData;
+    const transferChoiceDisabled = awaitingAdmission || existingStateAvailability !== 'available';
+    const transferHintKey = existingStateAvailability === 'checking'
+        ? 'sessionHandoff.transferSessionData.checking'
+        : 'sessionHandoff.transferSessionData.updateRequired';
     const normalizedSourcePath = normalizeLocalPathForComparison(resolvedSourceRootPath);
     const normalizedTargetPath = normalizeLocalPathForComparison(resolvedTargetPath);
     const sameMachineDestinationAllowed = Boolean(normalizedSourcePath && normalizedTargetPath && normalizedTargetPath !== normalizedSourcePath);
@@ -331,7 +340,7 @@ export function SessionHandoffPickerModal({ onClose, setChrome, onResolve, sessi
             ?? SESSION_HANDOFF_WORKSPACE_SYNC_MODE_OPTIONS[0],
         [workspaceSyncMode],
     );
-    const workspacePolicyControlsDisabled = workspaceSyncMode === 'none';
+    const workspacePolicyControlsDisabled = existingStateRequested || workspaceSyncMode === 'none';
 
     const handleCancel = React.useCallback(() => {
         onResolve(null);
@@ -339,6 +348,7 @@ export function SessionHandoffPickerModal({ onClose, setChrome, onResolve, sessi
     }, [onClose, onResolve]);
 
     const parsedWorkspaceAction = React.useMemo(() => {
+        if (existingStateRequested) return HandoffWorkspaceActionV1Schema.parse({ kind: 'none' });
         if (selectedLinkedWorkspace && linkedWorkspaceChoice) return HandoffWorkspaceActionV1Schema.parse({ kind: 'linked_workspace' });
         const candidate = buildSessionHandoffWorkspaceAction({
             workspaceSyncRelationshipId: selectedRelationshipSummary?.relationshipId,
@@ -350,9 +360,9 @@ export function SessionHandoffPickerModal({ onClose, setChrome, onResolve, sessi
         if (!candidate) return null;
         const parsed = HandoffWorkspaceActionV1Schema.safeParse(candidate);
         return parsed.success ? parsed.data : null;
-    }, [contentSelection, ignoredIncludeGlobs, includeIgnoredMode, linkedWorkspaceChoice, selectedLinkedWorkspace, selectedRelationshipSummary?.relationshipId, workspaceSyncMode]);
+    }, [contentSelection, existingStateRequested, ignoredIncludeGlobs, includeIgnoredMode, linkedWorkspaceChoice, selectedLinkedWorkspace, selectedRelationshipSummary?.relationshipId, workspaceSyncMode]);
 
-    const workspaceEngineRequired = Boolean(selectedRelationshipSummary || selectedLinkedWorkspace || workspaceSyncMode !== 'none');
+    const workspaceEngineRequired = !existingStateRequested && Boolean(selectedRelationshipSummary || selectedLinkedWorkspace || workspaceSyncMode !== 'none');
     const sourceEngineReadiness = useWorkspaceSyncEngineReadiness(
         workspaceEngineRequired && resolvedSourceMachineId
             ? { serverId, machineId: resolvedSourceMachineId }
@@ -367,7 +377,7 @@ export function SessionHandoffPickerModal({ onClose, setChrome, onResolve, sessi
         targetMachineSelected: Boolean(selectedMachine),
         targetMachineAttemptable: canAttemptSelectedMachine,
         sourceMachineAttemptable: canAttemptSourceMachine,
-        relationshipRequested: Boolean(selectedRelationshipId || selectedLinkedWorkspace),
+        relationshipRequested: !existingStateRequested && Boolean(selectedRelationshipId || selectedLinkedWorkspace),
         relationshipResolved: Boolean(selectedRelationshipSummary || (selectedLinkedWorkspace && linkedWorkspaceChoice)),
         workspaceActionResolved: Boolean(parsedWorkspaceAction),
         workspaceEngineRequired,
@@ -394,16 +404,18 @@ export function SessionHandoffPickerModal({ onClose, setChrome, onResolve, sessi
         if (!startReadiness.canStart) return;
         if (!targetMachineId) return;
         if (!canAttemptSelectedMachine) return;
-        if (selectedRelationshipId && !selectedRelationshipSummary) return;
-        if (selectedLinkedWorkspace && !linkedWorkspaceChoice) return;
-        if ((selectedRelationshipSummary || selectedLinkedWorkspace || workspaceSyncMode !== 'none') && !workspaceSourcePathSafety.allowed) return;
-        if ((selectedRelationshipSummary || selectedLinkedWorkspace || workspaceSyncMode !== 'none') && !sourceWithoutFolder && !workspaceTargetPathSafety.allowed) return;
+        if (existingStateRequested && existingStateAvailability !== 'available') return;
+        if (!existingStateRequested && selectedRelationshipId && !selectedRelationshipSummary) return;
+        if (!existingStateRequested && selectedLinkedWorkspace && !linkedWorkspaceChoice) return;
+        if (workspaceEngineRequired && !workspaceSourcePathSafety.allowed) return;
+        if (workspaceEngineRequired && !sourceWithoutFolder && !workspaceTargetPathSafety.allowed) return;
         if (!parsedWorkspaceAction) return;
-        const reviewSummary = selectedRelationshipSummary ?? (selectedLinkedWorkspace && linkedWorkspaceChoice
+        const reviewSummary = existingStateRequested ? null : selectedRelationshipSummary ?? (selectedLinkedWorkspace && linkedWorkspaceChoice
             ? relationshipSummaries.find((summary) => linkedWorkspaceChoice.relationshipIds.includes(summary.relationshipId))
             : null);
         onResolve({
             targetMachineId,
+            stateTransfer: existingStateRequested ? 'existing' : 'transfer',
             targetMachineLabel: normalizeId(selectedMachine?.metadata?.displayName) || targetMachineId,
             // A no-folder session gets its own private folder on the target; no path is chosen here.
             ...(resolvedTargetPath && !sourceWithoutFolder ? { targetPath: resolvedTargetPath } : {}),
@@ -419,9 +431,9 @@ export function SessionHandoffPickerModal({ onClose, setChrome, onResolve, sessi
             ...(reviewSummary ? { workspaceSyncReviewRelationshipIds: selectedLinkedWorkspace && linkedWorkspaceChoice
                 ? linkedWorkspaceChoice.relationshipIds : [reviewSummary.relationshipId] } : {}),
         });
-    }, [awaitingAdmission, canAttemptSelectedMachine, currentSessionMetadata?.path, directTargetMode, sourceWithoutFolder, isExternalSession, linkedWorkspaceChoice, onResolve, parsedWorkspaceAction, relationshipSummaries, resolvedTargetPath, selectedLinkedWorkspace, selectedMachine?.metadata?.displayName, selectedMachineId, selectedRelationshipId, selectedRelationshipSummary, startReadiness.canStart, workspaceSourcePathSafety.allowed, workspaceSyncMode, workspaceTargetPathSafety.allowed]);
+    }, [awaitingAdmission, canAttemptSelectedMachine, currentSessionMetadata?.path, directTargetMode, existingStateAvailability, existingStateRequested, sourceWithoutFolder, isExternalSession, linkedWorkspaceChoice, onResolve, parsedWorkspaceAction, relationshipSummaries, resolvedTargetPath, selectedLinkedWorkspace, selectedMachine?.metadata?.displayName, selectedMachineId, selectedRelationshipId, selectedRelationshipSummary, startReadiness.canStart, workspaceEngineRequired, workspaceSourcePathSafety.allowed, workspaceTargetPathSafety.allowed]);
 
-    const canStart = startReadiness.canStart;
+    const canStart = startReadiness.canStart && (!existingStateRequested || existingStateAvailability === 'available');
 
     const footer = React.useMemo(() => (
         <View style={styles.footer}>
@@ -469,7 +481,7 @@ export function SessionHandoffPickerModal({ onClose, setChrome, onResolve, sessi
                             kind="warning"
                             size="line"
                             title={t('machineRequester.handoffUnavailable')}
-                            description={t('machineRequester.resumeElsewhere', { machine: getMachineDisplayName(sourceMachine) ?? currentSessionMetadata?.host ?? t('status.unknown') })}
+                            reason={t('machineRequester.resumeElsewhere', { machine: getMachineDisplayName(sourceMachine) ?? currentSessionMetadata?.host ?? t('status.unknown') })}
                         />
                     ) : null}
                     <WorkspaceActivationDestinationFields
@@ -484,6 +496,7 @@ export function SessionHandoffPickerModal({ onClose, setChrome, onResolve, sessi
                             dropdownTestID: 'session-handoff-machine-dropdown-trigger',
                             onSelect: (machine) => {
                                 if (awaitingAdmission) return;
+                                setTransferSessionData(true);
                                 setSelectedMachineId(normalizeId(machine?.id) || null);
                                 setTargetPath(null);
                                 setSelectedRelationshipId(null);
@@ -513,6 +526,21 @@ export function SessionHandoffPickerModal({ onClose, setChrome, onResolve, sessi
                             })
                             : null}
                     />
+                    {!isSameMachine ? <ItemGroup>
+                        <Item
+                            title={t('sessionHandoff.transferSessionData.title')}
+                            subtitle={t(existingStateAvailability === 'available' ? 'sessionHandoff.transferSessionData.subtitle' : transferHintKey)}
+                            rightElement={<Switch testID="session-handoff-transfer-session-data" value={transferSessionData}
+                                disabled={transferChoiceDisabled}
+                                accessibilityLabel={t('sessionHandoff.transferSessionData.title')}
+                                accessibilityHint={transferChoiceDisabled ? t(transferHintKey) : t('sessionHandoff.transferSessionData.subtitle')}
+                                onValueChange={(value) => { if (!transferChoiceDisabled) setTransferSessionData(value); }} />}
+                            disabled={transferChoiceDisabled}
+                            onPress={() => { if (!transferChoiceDisabled) setTransferSessionData(!transferSessionData); }}
+                            showChevron={false}
+                        />
+                        {inlineErrorCode === 'existing_session_state_unavailable' ? <Text testID="session-handoff-session-data-error" accessibilityRole="alert" accessibilityLiveRegion="polite" style={{ color: theme.colors.text.destructive }}>{t('sessionHandoff.transferSessionData.sessionMissing')}</Text> : null}
+                    </ItemGroup> : null}
                     <ItemGroup
                         title={t('settingsSession.handoff.groupTitle')}
                         description={t('settingsSession.handoff.groupFooter')}
@@ -520,16 +548,16 @@ export function SessionHandoffPickerModal({ onClose, setChrome, onResolve, sessi
                         <WorkspaceActivationModeField
                             open={openWorkspaceSyncModeMenu}
                             onOpenChange={setOpenWorkspaceSyncModeMenu}
-                            selectedId={selectedLinkedWorkspace && linkedWorkspaceChoice ? 'linked_workspace' : selectedRelationshipChoice?.id ?? workspaceSyncMode}
-                            title={selectedLinkedWorkspace && linkedWorkspaceChoice
+                            selectedId={existingStateRequested ? 'none' : selectedLinkedWorkspace && linkedWorkspaceChoice ? 'linked_workspace' : selectedRelationshipChoice?.id ?? workspaceSyncMode}
+                            title={existingStateRequested ? t('settingsSession.handoff.workspaceMode.title') : selectedLinkedWorkspace && linkedWorkspaceChoice
                                     ? t('settingsSession.handoff.workspaceMode.linkedTitle', { hub: linkedWorkspaceChoice.hubMachineName })
                                     : selectedRelationshipChoice?.title ?? t('settingsSession.handoff.workspaceMode.title')}
-                            subtitle={selectedLinkedWorkspace && linkedWorkspaceChoice
+                            subtitle={existingStateRequested ? t('sessionHandoff.transferSessionData.workspaceRequiresTransfer') : selectedLinkedWorkspace && linkedWorkspaceChoice
                                     ? linkedWorkspaceChoice.routeLabel
                                     : selectedRelationshipChoice?.subtitle ?? t(selectedWorkspaceSyncMode.subtitleKey)}
                             icon={<Icon name="folder" size={16} color={theme.colors.text.secondary} />}
                             testID="session-handoff-workspace-sync-mode-trigger"
-                            disabled={awaitingAdmission}
+                            disabled={awaitingAdmission || existingStateRequested}
                             items={[
                                 ...SESSION_HANDOFF_COMMON_WORKSPACE_SYNC_MODE_OPTIONS.map((item) => ({
                                     id: item.id,
@@ -544,6 +572,7 @@ export function SessionHandoffPickerModal({ onClose, setChrome, onResolve, sessi
                                 }] : []),
                             ]}
                             onSelect={(itemId) => {
+                                if (awaitingAdmission || existingStateRequested) return;
                                 const relationshipChoice = relationshipChoiceItems.find((item) => item.id === itemId);
                                 if (relationshipChoice) {
                                     setSelectedRelationshipId(relationshipChoice.relationshipId);
@@ -582,18 +611,19 @@ export function SessionHandoffPickerModal({ onClose, setChrome, onResolve, sessi
                                 <WorkspaceActivationModeField
                                     open={openAdvancedWorkspaceModeMenu}
                                     onOpenChange={setOpenAdvancedWorkspaceModeMenu}
-                                    selectedId={workspaceSyncMode}
+                                    selectedId={existingStateRequested ? 'none' : workspaceSyncMode}
                                     title={t('settingsSession.handoff.advanced.modeTitle')}
-                                    subtitle={t(selectedWorkspaceSyncMode.subtitleKey)}
+                                    subtitle={t(existingStateRequested ? 'sessionHandoff.transferSessionData.workspaceRequiresTransfer' : selectedWorkspaceSyncMode.subtitleKey)}
                                     icon={<Icon name="warning" size={16} color={theme.colors.text.secondary} />}
                                     testID="session-handoff-advanced-workspace-mode-trigger"
-                                    disabled={awaitingAdmission}
+                                    disabled={awaitingAdmission || existingStateRequested}
                                     items={SESSION_HANDOFF_ADVANCED_WORKSPACE_SYNC_MODE_OPTIONS.map((item) => ({
                                         id: item.id,
                                         title: t(item.titleKey),
                                         subtitle: t(item.subtitleKey),
                                     }))}
                                     onSelect={(itemId) => {
+                                        if (awaitingAdmission || existingStateRequested) return;
                                         setSelectedRelationshipId(null);
                                         setWorkspaceSyncMode(itemId as SessionHandoffWorkspaceMode);
                                         setOpenAdvancedWorkspaceModeMenu(false);
