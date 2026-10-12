@@ -20,7 +20,7 @@ It also helps the CLI:
 Machine Pools are a per-Home capability. A self-hosted Home offers them unless its
 operator sets `HAPPIER_FEATURE_MACHINES_POOLS__ENABLED` to a false value.
 
-> **Availability:** Machine Pools are in the current unreleased 0.3 checkout; the rest of this page describes the released background service. Stable 0.2 has no Pools — check the version of the server binary you are running.
+> **Availability:** Machine Pools are in the current unreleased 0.3 checkout. Outside the explicitly marked development sections, this page describes the released background service. Stable 0.2 has no Pools — check the version of the server binary you are running.
 
 A Machine Pool is a named group of your own persistent Machines on one Home. In
 **Settings → Machines**, you can create a Pool, give it an optional description,
@@ -241,7 +241,7 @@ happier service restart
 Platform notes:
 
 - **macOS**: LaunchAgent
-- **Linux**: `systemd --user`
+- **Linux**: `systemd --user`, with `systemctl` available and a working systemd user session. Linux systems without systemd cannot use this automatic startup path.
 - **Windows**: Scheduled Task (user-level)
 
 To remove it:
@@ -274,7 +274,51 @@ This carries the selected Home's strict target through remote request, local app
 
 ## Troubleshooting
 
+### Processes in the development build
+
+The current unreleased 0.3 daemon supplies the [Processes](/accounts/processes)
+view: ownership evidence, resource observations and reviewed process Actions.
+This is development-only behavior; the integrated authenticated journey is not
+yet verified. Stopping a session, or observing its runner exit, also ends its
+proven remaining processes through the same lifecycle controls. A process that
+may belong to an ended owner is offered as Left behind only after two matching
+observations at least a minute apart.
+
+Process sampling pauses when no surface is watching; bounded owner-exit and
+daemon-start cleanup checks are separate from live viewing. Restarting the
+daemon loses its temporary process history and starts confirmation again for
+leftovers. A read failure does not mean that every process ended. On macOS and
+Windows, a missing native helper makes process facts unavailable—check the
+machine's installation before retrying.
+
+In this development build, `hdev doctor clean` stops stale daemons of the local
+Home and then asks an interactive person to review the confirmed Left behind
+set when the daemon can answer. It is not a blanket cleanup of every related
+process. See [the CLI process guide](/apps/cli).
+
+### Connection and repair checks
+
 - **Check status**: `happier service status`
 - **Find logs**: `happier service logs`
 - **Service paths**: `happier service paths`
 - **Repair drift or broken state**: `happier doctor repair`
+
+### Linux without systemctl
+
+If `systemctl` is unavailable, automatic startup cannot be installed. After signing in, check
+`happier daemon status`. If no daemon is running for the selected relay, start one manually:
+
+```bash
+happier daemon start
+```
+
+This starts the daemon for the current machine session; it does not arrange startup after login
+or reboot. Missing `systemctl` in your shell does not prove systemd is stopped. Manual recovery
+does not disable an existing service: if its automatic startup resumes later, that service can
+take over a conflicting manually started daemon under the existing ownership rules.
+
+The development CLI checks for missing service commands before installation or doctor repair
+changes service definitions. It also lets manual startup proceed past readable leftover systemd
+units when `systemctl` is absent. Running daemon ownership and unreadable service state still
+protect against conflicting starts. This correction is not yet established as available in a
+published stable or preview release.

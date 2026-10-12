@@ -240,6 +240,40 @@ The plural `hdev machines` command lists Account machines. The singular
 `happier machine` command manages remote-machine setup over SSH; it is a
 different workflow.
 
+### Inspect processes (development only)
+
+With a CLI built from the current unreleased 0.3 source, inspect the exact
+machine before proposing a process action. These commands are development-only;
+the examples use `hdev`, but an installed development payload must actually
+include this implementation. The integrated authenticated Processes journey is
+not yet verified.
+
+```bash
+hdev machines processes list --machine-id <machine-id> --json
+hdev machines processes get --machine-id <machine-id> --ref <process-ref> --json
+hdev machines processes list --help
+```
+
+Use the process reference returned by the machine, not a PID guessed from an
+earlier listing. The commands are compiled from the same Action definitions and
+schemas as the app; nested inputs can use `--input-json`. Stop, Kill and cleanup
+have their own approval settings and default to Ask first on the CLI, Agent and
+MCP surfaces. Approval can narrow a selected set, and the machine rechecks each
+identity and expected owner before effects. A refusal or partial result is not a
+successful cleanup. Enabling All processes uses the machine's resources policy,
+not a separate `processes all` command.
+
+In this development implementation, `hdev doctor` uses the same admitted process
+view when the daemon answers. `hdev doctor clean` first stops a stale daemon of
+the selected local Home, then offers the confirmed Left behind selection for
+review in an interactive terminal. It does not kill every Happier-related
+process. Without an answering daemon, it cannot infer ownership or offer that
+cleanup; noninteractive use does not silently consent.
+
+See [Processes](/accounts/processes) for ownership, privacy and platform limits,
+and the [generated Host Actions reference](/plugins/api/host-actions) for the
+current catalog rather than a second hand-maintained command list.
+
 ### Search and inspect Actions
 
 Search the catalog by words from an Action's ID, title, or description:
@@ -915,7 +949,7 @@ Supported attach styles include:
 
 For the full workflow, see [Features → Attach to a running session](/sessions/attach-to-session).
 
-In development builds, `happier herdr` opens Herdr from the terminal. Both the installed executable and the running server must be a stable Herdr release, version `0.9.2` or newer. If you are already inside a Herdr pane, use Herdr's pane controls instead of starting a nested client.
+`happier herdr` opens Herdr from the terminal. This command shipped in stable Happier CLI 0.2.16 and remains available in the 0.3 development line. Both the installed executable and the running server must be a stable Herdr release, version `0.9.2` or newer. If you are already inside a Herdr pane, use Herdr's pane controls instead of starting a nested client.
 
 Development builds can recover an owned Claude terminal that survives its Happier controller without starting another Claude process. Recovery remains unavailable until Happier verifies the exact host and receives an authenticated observation of the requested Claude session. A restored foreground shell is borrowed, so stopping its Happier runner does not close that shell.
 

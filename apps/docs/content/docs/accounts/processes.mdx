@@ -1,0 +1,158 @@
+---
+title: Processes
+description: See what Happier started on a machine, understand the ownership evidence, and review what to stop or clean up.
+---
+
+Find the session, terminal or service using a machine's resources before deciding
+what to end. The **Processes** tab groups work by what started it, rather than
+asking you to guess from a list of executable names.
+
+## Availability
+
+<Callout type="info">
+  **Development only:** this guide describes the current unreleased 0.3 source,
+  not stable or preview availability. The integrated authenticated Processes
+  journey is not yet verified. Use a compatible development app and machine
+  runtime; an older or unavailable runtime cannot supply these process facts.
+</Callout>
+
+## What you need first
+
+The machine must be connected to your Home, its daemon must be answering, and
+your Account must have access to it. The machine's custodian—the Account that
+manages it—can see all Happier-owned work. A person using a shared machine sees
+their own work, with other Accounts' work represented only by a count.
+
+## Find the work using resources
+
+Open **Machines**, choose a machine, then open **Processes**. Start with
+**Started by Happier**: open a session, terminal, service or run to see its
+processes. Sort by **Memory** or **CPU**, or search by name, port or command.
+On a phone, opening an owner takes you to its processes. **Show details** opens
+the process's command, available ports and folder, and **How Happier knows**.
+
+CPU is a percentage of the whole machine, not of one core. The first observation
+has no CPU rate; it takes two observations of the same process to measure one.
+Memory is resident memory on Linux, footprint on macOS when available (otherwise
+resident), and private memory on Windows. Detail names the metric. Shared pages
+can count more than once, so these totals are not a promise of exactly how much
+machine-wide free memory an action will create.
+
+### Understand the ownership evidence
+
+The detail explains the system containment, parent chain, Happier marker, and
+process-group or port evidence that is available. Unavailable evidence is said
+explicitly; it is not treated as evidence that Happier did not start a process.
+
+- **Proven** means a live owner's system containment, parent chain or valid
+  Happier marker identifies the process. Proven rows normally need no ownership
+  badge.
+- **Likely** means a process-group or port association points to an owner, but
+  stronger evidence does not prove it. Review that evidence before killing it.
+- **Left behind** means the owner ended but the same process kept running. It
+  appears only after Happier observes it twice, at least a minute apart.
+- **Not Happier’s** means readable evidence does not attribute it to Happier.
+  These rows appear only in **All processes**.
+- **Not proven** is incomplete or unreadable evidence, not a claim that the
+  process is unrelated. Happier refuses destructive Actions on an unknown
+  process.
+
+Linux can use a systemd user scope or supported cgroup containment; without that
+support, it still uses the readable parent chain and marker. User scopes can end
+at logout when the user manager is not kept running. Windows uses a held Job
+Object where available, with parent-chain and marker evidence when containment
+cannot be read or its holder has ended. macOS has no equivalent fence: parent
+chains and inherited markers can prove ownership, while detached work that
+clears its marker may be only Likely—or remain unattributed.
+
+A process carrying only a shared Happier daemon marker can be Proven work under
+**Happier** without being Left behind. The marker alone does not prove that its
+spawner ended, and does not authorize an automatic sweep of similarly tagged
+processes.
+
+## Stop, kill or clean up
+
+Use **Stop session** or **Stop service** when you want the existing lifecycle
+control to stop that work. Stopping a session also ends its proven remaining
+processes after its runner exits; possible survivors can enter the Left behind
+flow. A stopped session wakes on your next message. **Start again** can restart
+supported service or browser work; it is not a way to relaunch every arbitrary
+process.
+
+**Kill process…** and **Kill tree…** ask you to review the consequence, including
+unsaved work. A session tree offers **Stop session instead** as the gentler
+choice. The machine checks each target's identity and expected ownership again
+before acting—even if the row was Proven when you opened it. A reused PID,
+changed owner, unreadable identity or protected process is refused. If Happier
+cannot confirm that a process ended, it reports that uncertainty instead of
+showing success.
+
+The custodian can stop or kill another Account's work on the machine. Before
+either action, the confirmation names whose work ends. That permission does not grant access
+to the other Account's private session content. Freeing a port held by the
+terminal's own shell asks you to confirm that **this closes the terminal** and
+may end work running there.
+
+For **Left behind**, search or filter first, choose **Clean up**, then review the
+selected rows. The displayed count describes that exact selection, not every
+process that might appear later. Cleanup sends only those process references;
+it checks each again and reports which ended and which were skipped. A restarted
+owner or changed process is not silently substituted. Cleanup cannot be undone.
+
+Process Stop, Kill and cleanup use their own Action approval settings. They
+default to **Ask first** on Agent, MCP and CLI surfaces; there is no inherited
+approval from a different Stop or service Action. One request covers the selected
+set, and the approver may narrow it rather than approve every target. See the
+[generated Action reference](/plugins/api/host-actions) for the current catalog
+and inputs.
+
+### Start a service again
+
+Restarting a service reuses the effect reviewed at its original start. If its
+definition changed, the restart is refused until you review the actual updated
+service through the existing service-start review. Declining or leaving that
+review starts nothing. Happier does not invent a new reviewed definition or
+quietly approve the change for you.
+
+## All processes and privacy
+
+**All processes** is off by default, and only the custodian can enable it for
+that machine. It is part of the machine's resources policy, not a second process
+setting. Turning it on there does not turn it on for your other machines.
+
+Unrelated apps are grouped by app or executable name. Their command lines,
+working folders and environment are never sent to the app. Processes belonging
+to a different operating-system user are shown only as an aggregate count,
+resource totals and available user names or identities—not as inspectable or killable rows.
+Home Account access and operating-system process ownership are separate checks.
+
+Even with All processes enabled, Happier can kill unrelated work only as one
+process at a time, under the daemon's own operating-system user, after the
+normal review and approval. It never tree-kills or automatically cleans up
+Not Happier’s processes.
+
+## Paused, offline or missing facts
+
+Live sampling runs while a surface is watching. A hidden Processes tab is
+**Paused**, not a signal that the machine's processes have stopped. Returning
+requests current facts. Unwatched periods do not add history samples.
+
+Owner trends and the one-hour detail window use observations taken while
+watched. They are temporary daemon memory, not a disk archive or server history.
+After the last watch is not renewed for the shared watch window, that history
+and its CPU baseline are dropped. A daemon restart also loses them. The app can
+keep last-known rows during this app session, but does not restore them after
+an app restart; offline rows are not current evidence for a destructive Action.
+
+If a read fails or the native process helper is missing on macOS or Windows,
+Happier shows unavailable facts rather than an empty live machine. Use **Retry**
+or **Open Doctor**, check the machine's runtime installation and connection, and
+refresh before acting. Linux reads its process facts without that native helper.
+
+## Related
+
+- [Machines in the app](/apps/app#machines)
+- [CLI process guide](/apps/cli)
+- [Background service](/apps/daemon)
+- [Local service previews](/self-hosting/local-service-previews)
+- [Host Actions reference](/plugins/api/host-actions)
