@@ -178,10 +178,11 @@ export function MachineAddFormWithFlow(props: MachineAddFormProps & Readonly<{ f
             {/* Two to four short ways in: one segmented bar, as wide as its words (lab m-add). Each pane
                 opens with its own lead line, so the bar carries names only. */}
             <View style={styles.pathsRow}>
-            <View style={styles.paths}>
+            <View style={[styles.paths, grouped ? styles.pathsFill : null]}>
             <SegmentedTabBar<MachineAddPathId | 'connect' | 'create'>
                 role="radiogroup"
-                segmentSizing="content"
+                // A phone's two segments share the row's width (lab m-add Ap); a wide bar is as wide as its words.
+                segmentSizing={grouped ? 'equal' : 'content'}
                 testIDPrefix={`${props.testID}.path`}
                 accessibilityLabel={t('settings.addMachine')}
                 tabs={grouped ? [
@@ -360,7 +361,7 @@ function MachineAddPane(props: Readonly<{
         }
         case 'ssh': {
             const host = flow.ssh.draft.host.trim();
-            const approvalNotice = flow.approval.approvalId ? <AttentionBanner title={t('approvals.title')} description={t('approvals.status.open')}
+            const approvalNotice = flow.approval.approvalId ? <AttentionBanner testID={`${testID}.approval`} title={t('approvals.title')} description={t('approvals.status.open')}
                 action={{ label: t('approvals.details'), onPress: () => router.push(`/inbox/approvals/${encodeURIComponent(flow.approval.approvalId!)}?serverId=${encodeURIComponent(flow.serverId)}` as never) }} /> : null;
             if (run) {
                 return (
@@ -461,9 +462,10 @@ function MachineAddPane(props: Readonly<{
         case 'anotherComputer':
             return (
                 <View style={styles.pane}>
+                    <MachineAddPaneHeader title={t('addFlows.pathAnotherTitle')} lead={t('homeSetup.pairingComputerBody', { home: flow.homeName })} />
                     <HomePairingPanel
                         purpose="computer"
-                        layout="inline"
+                        layout="section"
                         testIDPrefix={`${testID}.pairing`}
                         targetProfileId={flow.serverId}
                     />
@@ -495,14 +497,18 @@ const styles = StyleSheet.create((theme) => ({
         flexWrap: 'wrap',
         alignItems: 'center',
         justifyContent: 'space-between',
-        gap: 12,
+        gap: theme.space.s12,
     },
     paths: {
         alignSelf: 'flex-start',
         maxWidth: '100%',
     },
+    pathsFill: {
+        alignSelf: 'stretch',
+        flexGrow: 1,
+    },
     page: {
-        gap: 20,
+        gap: theme.space.s20,
     },
     pane: {
         gap: 14,
@@ -512,31 +518,25 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         flexWrap: 'wrap',
         alignItems: 'center',
-        gap: 12,
+        gap: theme.space.s12,
     },
     prompt: {
-        gap: 10,
+        gap: theme.space.s10,
     },
     suggestions: {
-        gap: 2,
+        gap: theme.space.s2,
     },
     suggestionsTitle: {
-        ...Typography.default('semiBold'),
-        fontSize: 12,
-        lineHeight: 16,
+        ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.text.secondary,
     },
     note: {
-        ...Typography.default(),
         flexShrink: 1,
-        fontSize: 13,
-        lineHeight: 18,
+        ...Typography.variant('body'),
         color: theme.colors.text.secondary,
     },
     hint: {
-        ...Typography.default(),
-        fontSize: 13,
-        lineHeight: 18,
+        ...Typography.variant('body'),
         color: theme.colors.text.secondary,
     },
     hintLink: {
@@ -544,15 +544,11 @@ const styles = StyleSheet.create((theme) => ({
         color: theme.colors.text.primary,
     },
     fieldError: {
-        ...Typography.default(),
-        fontSize: 13,
-        lineHeight: 18,
+        ...Typography.variant('body'),
         color: theme.colors.state.danger.foreground,
     },
     foot: {
-        ...Typography.default(),
-        fontSize: 12,
-        lineHeight: 16,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     footLink: {
@@ -561,19 +557,15 @@ const styles = StyleSheet.create((theme) => ({
         textDecorationLine: 'underline',
     },
     fallback: {
-        gap: 2,
-        padding: 20,
+        gap: theme.space.s2,
+        padding: theme.space.s20,
     },
     fallbackTitle: {
-        ...Typography.default('semiBold'),
-        fontSize: 15,
-        lineHeight: 20,
+        ...Typography.variant('heading'),
         color: theme.colors.text.primary,
     },
     fallbackBody: {
-        ...Typography.default(),
-        fontSize: 13,
-        lineHeight: 18,
+        ...Typography.variant('body'),
         color: theme.colors.text.secondary,
     },
 }));

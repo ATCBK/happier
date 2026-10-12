@@ -216,14 +216,12 @@ export const MachineArrivedCard = React.memo(function MachineArrivedCard(props: 
 
 const stylesheet = StyleSheet.create((theme) => ({
     header: {
-        gap: 6,
+        gap: theme.space.s6,
         paddingRight: 28,
     },
     title: {
-        ...Typography.default('semiBold'),
-        fontSize: 17,
+        ...Typography.variant('heading'),
         lineHeight: 24,
-        letterSpacing: -0.2,
         color: theme.colors.text.primary,
     },
     lead: {
@@ -235,17 +233,15 @@ const stylesheet = StyleSheet.create((theme) => ({
     watch: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 10,
-        paddingTop: 12,
+        gap: theme.space.s10,
+        paddingTop: theme.space.s12,
         borderTopWidth: StyleSheet.hairlineWidth,
         borderTopColor: theme.colors.border.default,
     },
     watchText: {
-        ...Typography.default(),
         flex: 1,
         minWidth: 0,
-        fontSize: 13,
-        lineHeight: 18,
+        ...Typography.variant('body'),
         color: theme.colors.text.secondary,
     },
     watchHome: {
@@ -253,9 +249,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         color: theme.colors.text.primary,
     },
     elapsed: {
-        ...Typography.default(),
-        fontSize: 12,
-        lineHeight: 16,
+        ...Typography.variant('meta'),
         fontVariant: ['tabular-nums'],
         color: theme.colors.text.tertiary,
     },
@@ -264,10 +258,10 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderWidth: StyleSheet.hairlineWidth,
         borderColor: theme.colors.border.default,
         overflow: 'hidden',
-        paddingHorizontal: 12,
+        paddingHorizontal: theme.space.s12,
     },
     arrived: {
-        gap: 12,
+        gap: theme.space.s12,
     },
     cardFrame: {
         position: 'relative',
@@ -284,33 +278,29 @@ const stylesheet = StyleSheet.create((theme) => ({
     cardRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 12,
+        gap: theme.space.s12,
     },
     cardCopy: {
         flex: 1,
         minWidth: 0,
-        gap: 2,
+        gap: theme.space.s2,
     },
     cardName: {
-        ...Typography.default('semiBold'),
-        fontSize: 15,
-        lineHeight: 20,
+        ...Typography.variant('heading'),
         color: theme.colors.text.primary,
     },
     cardFacts: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
     },
     cardFact: {
-        ...Typography.default(),
-        fontSize: 12.5,
-        lineHeight: 17,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     actions: {
         flexDirection: 'row',
         flexWrap: 'wrap',
-        gap: 8,
+        gap: theme.space.s8,
     },
 }));
