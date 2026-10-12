@@ -8,6 +8,7 @@ import {
     resolvePendingQueueHeadMaxHeightPx,
     resolvePendingQueueMessagePresentation,
     resolvePendingQueueScrollMaxHeightPx,
+    PENDING_QUEUE_TOP_INSET_PX,
 } from './pendingQueueContentClipping';
 
 const QUEUE_MAX_HEIGHT_PX = 80;
@@ -15,8 +16,8 @@ const QUEUE_MAX_HEIGHT_PX = 80;
 const LINE_PX = 24;
 /** `userMessageWrapper.paddingBottom` 22 — the committed row's only non-bubble chrome. */
 const COMMITTED_NON_BUBBLE_PX = 22;
-/** The block's own header row, above the scroll box. */
-const PENDING_HEADER_PX = 14.625;
+/** The block's only chrome above the scroll box (it carries no header). */
+const PENDING_HEADER_PX = PENDING_QUEUE_TOP_INSET_PX;
 
 describe('pending queue message presentation', () => {
     it('treats the front of the queue as the head and everything behind it as backlog', () => {

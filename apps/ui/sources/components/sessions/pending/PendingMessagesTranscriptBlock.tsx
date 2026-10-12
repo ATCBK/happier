@@ -20,9 +20,9 @@ import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { readLatestLocalOutboundPendingUserMessageAt } from '@/sync/domains/messages/outgoingUserMessage';
 import { projectUiSessionRuntimeAwareness } from '@/sync/domains/session/attention/runtimePresentation';
 import { fireAndForget } from '@/utils/system/fireAndForget';
-import { TranscriptSeparatorRow } from '@/components/sessions/transcript/separators/TranscriptSeparatorRow';
 import { transcriptMarkdownTextStyle } from '@/components/sessions/transcript/transcriptMarkdownTypography';
 import { PendingMessagesDragReorderList } from './PendingMessagesDragReorderList';
+import { RowActionRevealSlot } from '@/components/ui/lists/RowActionRevealSlot';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import {
     getPendingMessageVisualState,
@@ -32,6 +32,7 @@ import {
 } from './pendingMessageVisualState';
 import {
     clampsPendingMessageLines,
+    PENDING_QUEUE_TOP_INSET_PX,
     resolvePendingMessageGapPx,
     resolvePendingQueueMessagePresentation,
     resolvePendingQueueScrollMaxHeightPx,
@@ -264,12 +265,6 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
             ? Math.max(1, Math.trunc(maxHeightSetting))
             : settingsDefaults.transcriptPendingQueueMaxHeightPx;
 
-    const expandedMaxHeightSetting = useSetting('transcriptPendingQueueExpandedMaxHeightPx');
-    const expandedMaxHeightPx =
-        typeof expandedMaxHeightSetting === 'number' && Number.isFinite(expandedMaxHeightSetting)
-            ? Math.max(maxHeightPx, Math.trunc(expandedMaxHeightSetting))
-            : Math.max(maxHeightPx, settingsDefaults.transcriptPendingQueueExpandedMaxHeightPx);
-
     const collapseThresholdCharsSetting = useSetting('transcriptPendingMessageCollapseThresholdChars');
     const collapseThresholdChars =
         typeof collapseThresholdCharsSetting === 'number' && Number.isFinite(collapseThresholdCharsSetting)
@@ -325,7 +320,6 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
             : 'unknown';
 
     const [expandedMessageIds, setExpandedMessageIds] = React.useState<Record<string, true>>({});
-    const [isPendingQueueExpanded, setIsPendingQueueExpanded] = React.useState(false);
     const [openMenuKey, setOpenMenuKey] = React.useState<string | null>(null);
     const [menuPressAnchor, setMenuPressAnchor] = React.useState<Readonly<{
         menuKey: string;
@@ -344,12 +338,6 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
         [materializingLocalIdMap],
     );
 
-    React.useEffect(() => {
-        if (pendingMessages.length <= 0) {
-            setIsPendingQueueExpanded(false);
-        }
-    }, [pendingMessages.length]);
-
     const toggleMessageExpanded = React.useCallback((id: string) => {
         setExpandedMessageIds((prev) => {
             const next = { ...prev };
@@ -360,10 +348,6 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
             }
             return next;
         });
-    }, []);
-
-    const togglePendingQueueExpanded = React.useCallback(() => {
-        setIsPendingQueueExpanded((value) => !value);
     }, []);
 
     const handleEdit = React.useCallback(async (message: PendingMessage) => {
@@ -752,23 +736,34 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                         ? t('common.remove')
                     : visualState.kind === 'cancel_failed'
                         ? t('common.error')
-                    : visualState.queuedReason === 'waiting_for_foreground_turn'
-                        ? t('session.pendingMessages.queuedReasons.waitingForForegroundTurn')
-                    : visualState.queuedReason === 'waiting_for_runtime_activity'
-                        ? t('session.pendingMessages.queuedReasons.waitingForRuntimeActivity')
-                    : visualState.queuedReason === 'runtime_activity_unknown'
-                        ? t('session.pendingMessages.queuedReasons.runtimeActivityUnknown')
-                    : visualState.queuedReason === 'waiting_for_predecessor'
-                        ? t('session.pendingMessages.queuedReasons.waitingForPredecessor')
-                    : visualState.queuedReason === 'waiting_for_runtime'
-                        ? t('session.pendingMessages.queuedReasons.waitingForRuntime')
+                    // A delivery action that needs review is this message's own problem and says so.
                     : visualState.queuedReason === 'unsupported_action'
                         ? t('session.pendingMessages.queuedReasons.unsupportedAction')
+                    // A message waiting its turn wears one quiet "Queued" mark; why the queue waits
+                    // is the Session's cause, said once on the composer's status line.
+                    : visualState.queuedReason
+                        ? t('session.pendingMessages.badgeLabel', { count: 0 })
                     : visualState.queuedRequestedAction === 'steer_now'
                         ? t('session.pendingMessages.actions.steerNow')
                     : visualState.queuedRequestedAction === 'send_now'
                         ? t('session.pendingMessages.actions.sendNow')
                     : t('session.pendingMessages.badgeLabel', { count: 0 });
+        // Assistive tech still hears the row's own reason, which the line may not name (an earlier
+        // message, the current turn).
+        const queuedReasonLabel = visualState.queuedReason === 'waiting_for_foreground_turn'
+            ? t('session.pendingMessages.queuedReasons.waitingForForegroundTurn')
+            : visualState.queuedReason === 'waiting_for_runtime_activity'
+                ? t('session.pendingMessages.queuedReasons.waitingForRuntimeActivity')
+                : visualState.queuedReason === 'runtime_activity_unknown'
+                    ? t('session.pendingMessages.queuedReasons.runtimeActivityUnknown')
+                    : visualState.queuedReason === 'waiting_for_predecessor'
+                        ? t('session.pendingMessages.queuedReasons.waitingForPredecessor')
+                        : visualState.queuedReason === 'waiting_for_runtime'
+                            ? t('session.pendingMessages.queuedReasons.waitingForRuntime')
+                            : null;
+        const deliveryStateAccessibilityLabel = queuedReasonLabel
+            ? `${deliveryStateLabel}. ${queuedReasonLabel}`
+            : deliveryStateLabel;
         const blockedDeliveryLabel = deliveryBlockedPresentation
             ? t(deliveryBlockedPresentation.labelKey)
             : null;
@@ -888,64 +883,67 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                             viewerScope={accountActorViewerScope}
                             hasOtherNamedCollaborator={authorship.hasOtherNamedCollaborator}
                         />
-                        <Pressable
-                            onPress={(event) => {
-                                if (menuOpen) {
-                                    closeMenu();
-                                    return;
-                                }
-                                const anchor = resolvePendingMessageMenuPressAnchor(event);
-                                setMenuPressAnchor(anchor ? { menuKey, anchor } : null);
-                                openMenu();
-                            }}
-                            testID={`pendingMessages.message:${message.id}`}
-                            accessibilityRole="button"
-                            accessibilityLabel={text || t('session.pendingMessages.title')}
-                            onLayout={messagePresentation === 'head' ? (event) => {
-                                // The painted height of THIS utterance's bubble, carried to the
-                                // committed row that replaces it (`recordPaintedUtteranceBubbleHeight`).
-                                // HEAD only. A backlog row is line-clamped (not the height its twin
-                                // will have) and, once expanded, paints a "View less" Pressable
-                                // INSIDE this measured bubble that the committed row never has.
-                                const bubbleHeightPx = event?.nativeEvent?.layout?.height;
-                                const localId = typeof message.localId === 'string' ? message.localId : null;
-                                if (localId === null || typeof bubbleHeightPx !== 'number' || !Number.isFinite(bubbleHeightPx)) return;
-                                props.onPaintedUtteranceBubbleMeasured?.({ localId, bubbleHeightPx });
-                            } : undefined}
-                            style={({ pressed }) => ([
-                                styles.userMessageBubble,
-                                // Full opacity, like the committed bubble it becomes: a queued
-                                // utterance that paints dimmer BRIGHTENS one step at the crossover,
-                                // which reads as the message popping rather than settling. The
-                                // delivery state is carried by the status chip, not by the ink.
-                                { backgroundColor: theme.colors.message.user.background, borderRadius: theme.parts.userBubble.radius, opacity: pressed ? motionTokens.press.opacitySubtle : 1 },
-                            ])}
-                        >
-                            {isExpanded ? (
-                                <MarkdownView markdown={text} textStyle={styles.transcriptMarkdownText} />
-                            ) : (
-                                <Text
-                                    numberOfLines={collapsedLines}
-                                    style={[styles.collapsedPlainText, { color: theme.colors.text.primary }]}
-                                >
-                                    {text}
-                                </Text>
-                            )}
+                        {/* The bubble is a surface, not a button: its message opens the menu and its
+                            "View more" toggles the clamp, side by side, so the web never nests one
+                            <button> inside another. Full opacity, like the committed bubble it
+                            becomes: a queued utterance that paints dimmer BRIGHTENS one step at the
+                            crossover. The delivery state is carried by the status mark, not the ink. */}
+                        <View style={[styles.userMessageBubble, { backgroundColor: theme.colors.message.user.background, borderRadius: theme.parts.userBubble.radius }]}>
+                            <Pressable
+                                onPress={(event) => {
+                                    if (menuOpen) {
+                                        closeMenu();
+                                        return;
+                                    }
+                                    const anchor = resolvePendingMessageMenuPressAnchor(event);
+                                    setMenuPressAnchor(anchor ? { menuKey, anchor } : null);
+                                    openMenu();
+                                }}
+                                testID={`pendingMessages.message:${message.id}`}
+                                accessibilityRole="button"
+                                accessibilityLabel={text || t('session.pendingMessages.title')}
+                                onLayout={messagePresentation === 'head' ? (event) => {
+                                    // The painted height of THIS utterance's bubble, carried to the
+                                    // committed row that replaces it (`recordPaintedUtteranceBubbleHeight`).
+                                    // HEAD only, and the head is never clamped, so this press target IS
+                                    // the whole bubble. A backlog row is line-clamped (not the height its
+                                    // twin will have) and paints a "View more" toggle the committed row
+                                    // never has.
+                                    const bubbleHeightPx = event?.nativeEvent?.layout?.height;
+                                    const localId = typeof message.localId === 'string' ? message.localId : null;
+                                    if (localId === null || typeof bubbleHeightPx !== 'number' || !Number.isFinite(bubbleHeightPx)) return;
+                                    props.onPaintedUtteranceBubbleMeasured?.({ localId, bubbleHeightPx });
+                                } : undefined}
+                                style={({ pressed }) => ([
+                                    styles.userMessageBubbleBody,
+                                    isCollapsible ? styles.userMessageBubbleBodyAboveToggle : null,
+                                    { opacity: pressed ? motionTokens.press.opacitySubtle : 1 },
+                                ])}
+                            >
+                                {isExpanded ? (
+                                    <MarkdownView markdown={text} textStyle={styles.transcriptMarkdownText} />
+                                ) : (
+                                    <Text
+                                        numberOfLines={collapsedLines}
+                                        style={[styles.collapsedPlainText, { color: theme.colors.text.primary }]}
+                                    >
+                                        {text}
+                                    </Text>
+                                )}
+                            </Pressable>
                             {isCollapsible ? (
                                 <Pressable
-                                    onPress={(e: any) => {
-                                        e?.stopPropagation?.();
+                                    onPress={() => {
                                         toggleMessageExpanded(message.id);
                                     }}
                                     accessibilityRole="button"
                                     accessibilityState={{ expanded: isExpanded }}
                                     hitSlop={10}
                                     testID={`pendingMessages.viewMore:${message.id}`}
-                                    style={({ pressed }) => ({
-                                        alignSelf: 'flex-start',
-                                        marginTop: 6,
-                                        opacity: pressed ? motionTokens.press.opacitySubtle : 1,
-                                    })}
+                                    style={({ pressed }) => ([
+                                        styles.userMessageBubbleToggle,
+                                        { opacity: pressed ? motionTokens.press.opacitySubtle : 1 },
+                                    ])}
                                 >
                                     <Text style={{ color: theme.colors.text.link, fontSize: 12, ...Typography.default('semiBold') }}>
                                         {isExpanded ? t('session.pendingMessages.actions.viewLess') : t('session.pendingMessages.actions.viewMore')}
@@ -954,12 +952,12 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                             ) : null}
                             {/* The committed bubble's edge, so the crossover changes nothing but the status. */}
                             <SurfaceRim role="bubble" radius={theme.parts.userBubble.radius} border="surface" />
-                        </Pressable>
+                        </View>
 
                         <View
                             testID={`pendingMessages.pendingAffordance:${message.id}`}
                             accessible
-                            accessibilityLabel={deliveryStateLabel}
+                            accessibilityLabel={deliveryStateAccessibilityLabel}
                             {...(!isWeb ? { pointerEvents: 'none' as const } : null)}
                             style={[
                                 styles.pendingAffordanceChip,
@@ -1006,9 +1004,12 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
 	                        ) : null}
 
                         {isWeb ? (
-                            <View
+                            // The committed message's reveal owner: a queued row's actions keep their
+                            // band and fade in on hover or focus, like every transcript row; a delivery
+                            // that needs the person keeps its recovery in view.
+                            <RowActionRevealSlot
                                 testID={`pendingMessages.actionsOverlay:${message.id}`}
-                                pointerEvents="auto"
+                                revealed={hoveredMessageId === message.id || menuOpen || visualState.kind === 'send_failed' || usesDeliveryResolutionActions || isUncertainDelivery}
                                 style={styles.messageActionContainer}
                             >
                                 {text ? (
@@ -1131,7 +1132,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
 	                                        onPress={() => handleSendNow(message)}
 	                                    />
 	                                ) : null}
-	                            </View>
+	                            </RowActionRevealSlot>
                         ) : paintsMessageActionRow ? (
                             <View style={styles.messageActionContainer}>
                                 {renderDragHandle({
@@ -1272,6 +1273,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
                             accessibilityLabel={text || t('session.pendingMessages.discarded.label')}
                             style={({ pressed }) => ([
                                 styles.userMessageBubble,
+                                styles.userMessageBubbleBody,
                                 { backgroundColor: theme.colors.input.background, opacity: pressed ? motionTokens.press.opacity : 0.82 },
                             ])}
                         >
@@ -1388,23 +1390,14 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
         estimatedPendingContentHeightPx,
     );
     // The block's painted bound for this presentation. One owner, shared with the size estimate.
-    const collapsedMaxHeightPx = resolvePendingQueueScrollMaxHeightPx({
+    // The queue scrolls inside its own bound under the edge fades; its size and waiting state are
+    // said once, on the composer's status line, never by a header over the queue.
+    const maxHeight = resolvePendingQueueScrollMaxHeightPx({
         pendingCount,
         discardedCount,
         queueMaxHeightPx: maxHeightPx,
         lineHeightPx: transcriptMarkdownTextStyle.lineHeight,
     });
-    const canExpandPendingQueue =
-        pendingCount > 0
-        && effectiveScrollContentHeightPx > collapsedMaxHeightPx;
-    const isQueueExpanded = canExpandPendingQueue && isPendingQueueExpanded;
-    const maxHeight = isQueueExpanded
-        ? Math.max(expandedMaxHeightPx, collapsedMaxHeightPx)
-        : collapsedMaxHeightPx;
-    const headerLabel =
-        pendingCount > 0
-            ? `${t('session.pendingMessages.title')} (${pendingCount})`
-            : t('session.pendingMessages.discarded.title');
     const clampedViewportHeightPx = effectiveScrollContentHeightPx > 0
         ? Math.max(1, Math.min(effectiveScrollContentHeightPx, maxHeight))
         : undefined;
@@ -1414,26 +1407,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
             <View style={messageContentStyle}>
                 <View style={styles.userMessageContainer}>
                     <View style={constrainedRowStyle}>
-                        <View style={styles.sectionHeader}>
-                            <TranscriptSeparatorRow
-                                iconName="clock"
-                                title={headerLabel}
-                                titleTestID="pendingMessages.headerLabel"
-                                chipTestID={canExpandPendingQueue ? 'pendingMessages.headerToggle' : undefined}
-                                onPress={canExpandPendingQueue ? togglePendingQueueExpanded : undefined}
-                                accessibilityLabel={isQueueExpanded ? t('session.pendingMessages.actions.viewLess') : t('session.pendingMessages.actions.viewMore')}
-                                subtitle={discardedCount > 0 && pendingCount > 0 ? `${t('session.pendingMessages.discarded.label')} (${discardedCount})` : null}
-                                rightAccessory={canExpandPendingQueue ? (
-                                    <Icon
-                                        name={isQueueExpanded ? 'caret-down' : 'caret-up'}
-                                        size={14}
-                                        color={theme.colors.text.secondary}
-                                    />
-                                ) : null}
-                                padding="none"
-                                chipChrome="minimal"
-                            />
-                        </View>
+                        <View style={styles.queueTopInset} />
 
                         {showNonSteerableNotice ? (
                             <View
@@ -1645,8 +1619,8 @@ const styles = StyleSheet.create(() => ({
         justifyContent: 'flex-end',
         paddingHorizontal: 16,
     },
-    sectionHeader: {
-        marginTop: 0,
+    queueTopInset: {
+        height: PENDING_QUEUE_TOP_INSET_PX,
     },
     pendingAffordanceRow: {
         flexDirection: 'row',
@@ -1726,11 +1700,23 @@ const styles = StyleSheet.create(() => ({
         zIndex: 60,
     },
     userMessageBubble: {
-        paddingHorizontal: 14,
-        paddingVertical: 8,
         borderRadius: 12,
         maxWidth: '100%',
+    },
+    // The bubble's padding lives on its parts, so the message's press target fills the bubble.
+    userMessageBubbleBody: {
+        paddingHorizontal: 14,
+        paddingVertical: 8,
         textAlign: 'left',
+    },
+    userMessageBubbleBodyAboveToggle: {
+        paddingBottom: 0,
+    },
+    userMessageBubbleToggle: {
+        alignSelf: 'flex-start',
+        paddingHorizontal: 14,
+        paddingTop: 6,
+        paddingBottom: 8,
     },
     transcriptMarkdownText: {
         ...transcriptMarkdownTextStyle,

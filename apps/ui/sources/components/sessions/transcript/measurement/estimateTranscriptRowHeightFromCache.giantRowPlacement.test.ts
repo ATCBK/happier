@@ -184,8 +184,8 @@ describe('C-1 · a giant row must position its successor at its TRUE bottom', ()
                 discardedMessages: [],
             } as unknown as TranscriptRowShellItem,
         }) as number;
-        // header 14.625 + (head cap 166 + backlog strip 80).
-        expect(estimate).toBeLessThanOrEqual(14.625 + 166 + 80);
+        // top inset 16 + (head cap 166 + backlog strip 80).
+        expect(estimate).toBeLessThanOrEqual(16 + 166 + 80);
         expect(estimate).toBeGreaterThan(80);
     });
 });

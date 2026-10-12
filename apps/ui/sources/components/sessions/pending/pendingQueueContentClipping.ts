@@ -28,10 +28,11 @@
  * bottom-pinned transcript DOWN — the motion this whole corridor exists to remove. Upward growth is
  * fine (it is what any arriving message does); downward is not.
  *
- *   pending, last row:  header 14.625 + scroll paddingTop 6 + gap 0            = 20.625
+ *   pending, last row:  top inset 16 + scroll paddingTop 6 + gap 0             = 22.000
  *   committed:          `userMessageWrapper.paddingBottom` 22                  = 22.000
  *
- * so the committed row is 1.375px TALLER and the crossover can only move content UP. The gap under
+ * so the crossover does not step at all. (The inset is where the "Pending messages (N)" header sat
+ * until the queue's size moved to the composer's status line; it was 14.625, a 1.375px UP step.) The gap under
  * a pending bubble exists to separate it from the row BELOW it, so the last row in the scroll
  * content paints none — which is what buys the 8px that used to make this step a 6.625px DOWN.
  *
@@ -49,6 +50,11 @@
  */
 export type PendingQueueMessagePresentation = 'head' | 'backlog';
 
+/**
+ * The space above the queue. With the scroll box's padding it equals the committed row's 22px
+ * (see "No DOWNWARD step" above); the queue itself carries no header.
+ */
+export const PENDING_QUEUE_TOP_INSET_PX = 16;
 /** `contentContainerStyle.paddingTop` on the block's scroll box. */
 export const PENDING_QUEUE_SCROLL_PADDING_TOP_PX = 6;
 /** `userMessageBubble.paddingVertical` 8 x 2 — inside every pending bubble, head or backlog. */

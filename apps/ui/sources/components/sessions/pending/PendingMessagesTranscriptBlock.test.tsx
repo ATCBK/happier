@@ -555,7 +555,7 @@ describe('PendingMessagesTranscriptBlock', () => {
         });
     });
 
-    it('renders a block header label that reads as a section header', async () => {
+    it('paints no header over the queue: its size and waiting state belong to the composer line', async () => {
         const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
         const screen = await renderScreen(React.createElement(PendingMessagesTranscriptBlock, {
                 sessionId: 's1',
@@ -566,7 +566,9 @@ describe('PendingMessagesTranscriptBlock', () => {
                 discardedMessages: [],
             }));
 
-        expect(screen.findByTestId('pendingMessages.headerLabel')).toBeTruthy();
+        expect(screen.findByTestId('pendingMessages.headerLabel')).toBeNull();
+        expect(screen.findByTestId('pendingMessages.headerToggle')).toBeNull();
+        expect(screen.getTextContent()).not.toContain('Pending messages');
     });
 
     it('passes the main Session queue to the shared semantic reorder binding', async () => {
@@ -615,7 +617,7 @@ describe('PendingMessagesTranscriptBlock', () => {
         );
     });
 
-    it('shows per-message action icons without hover on web', async () => {
+    it('keeps a queued row\'s actions in their band and reveals them on hover, like a committed message', async () => {
         const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
         const screen = await renderScreen(React.createElement(PendingMessagesTranscriptBlock, {
                 sessionId: 's1',
@@ -623,10 +625,13 @@ describe('PendingMessagesTranscriptBlock', () => {
                 discardedMessages: [],
             }));
 
-        const overlay = screen.findByTestId('pendingMessages.actionsOverlay:p1');
-        expect(overlay).toBeTruthy();
-        expect(overlay!.props.pointerEvents).toBe('auto');
+        const overlayPointerEvents = () => flattenStyle(screen.findHostByTestId('pendingMessages.actionsOverlay:p1')!.props.style).pointerEvents;
+        expect(overlayPointerEvents()).toBe('none');
         expect(screen.findByTestId('pendingMessages.copy:p1')).toBeTruthy();
+        await act(async () => {
+            screen.findHostByTestId('pendingMessages.row:p1')!.props.onPointerEnter();
+        });
+        expect(overlayPointerEvents()).toBe('auto');
 
         const remove = screen.findByTestId('pendingMessages.remove:p1');
         expect(remove).toBeTruthy();
@@ -1853,7 +1858,7 @@ describe('PendingMessagesTranscriptBlock', () => {
             expect(screen.findByType('MarkdownView' as any)).toBeTruthy();
             expect(screen.findByTestId('pendingMessages.viewMore:p1')).toBeNull();
 
-            // Under the head bound nothing is hidden, so the header offers nothing to expand.
+            // Under the head bound nothing is hidden, and the queue has no header toggle at all.
             await act(async () => {
                 scroll!.props.onContentSizeChange(0, 120);
             });
@@ -1883,6 +1888,22 @@ describe('PendingMessagesTranscriptBlock', () => {
             await screen.pressByTestIdAsync('pendingMessages.viewMore:p2');
 
             expect(screen.findByTestId('pendingMessages.viewMore:p2')!.props.accessibilityState).toEqual({ expanded: true });
+        });
+
+        // On the web a button role renders a <button>; a toggle inside the message's press target
+        // is a <button> inside a <button>, which React rejects and browsers re-parent.
+        it('keeps the "View more" toggle beside the message\'s press target, never inside it', async () => {
+            settingValues = crossoverSettings;
+            const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
+            const screen = await renderScreen(React.createElement(PendingMessagesTranscriptBlock, {
+                sessionId: 's1',
+                pendingMessages: [longPendingMessage('p1', 0), longPendingMessage('p2', 1)],
+                discardedMessages: [],
+            }));
+
+            const message = screen.findHostByTestId('pendingMessages.message:p2')!;
+            expect(screen.findHostByTestId('pendingMessages.viewMore:p2')).toBeTruthy();
+            expect(message.findAll((node) => node.props?.testID === 'pendingMessages.viewMore:p2')).toHaveLength(0);
         });
     });
 
@@ -1986,10 +2007,9 @@ describe('PendingMessagesTranscriptBlock', () => {
         expect(scroll.props.contentContainerStyle).toMatchObject({ paddingTop: 6, paddingBottom: 0 });
     });
 
-    it('shows the collapsed header toggle only when pending content overflows the compact height', async () => {
+    it('keeps an overflowing queue inside its compact bound, scrolling under its edge fades', async () => {
         settingValues = {
             transcriptPendingQueueMaxHeightPx: 80,
-            transcriptPendingQueueExpandedMaxHeightPx: 520,
             transcriptPendingQueueReorderRowHeightPx: 24,
         };
         const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
@@ -1999,21 +2019,14 @@ describe('PendingMessagesTranscriptBlock', () => {
                 discardedMessages: [],
             }));
 
-        expect(screen.findByTestId('pendingMessages.headerToggle')).toBeNull();
-
         const scroll = screen.findByTestId('pendingMessages.scroll');
         await act(async () => {
             scroll!.props.onContentSizeChange(0, QUEUE_CAP_PX + 40);
         });
 
-        const headerToggle = screen.findByTestId('pendingMessages.headerToggle');
-        expect(headerToggle).toBeTruthy();
-        const headerToggleStyle = flattenStyle(headerToggle!.props.style({ pressed: false }));
-        expect(headerToggleStyle.borderWidth).toBe(0);
-        expect(headerToggleStyle.paddingHorizontal).toBe(0);
-        expect(headerToggleStyle.paddingVertical).toBe(0);
-        expect(screen.findByProps({ name: 'caret-up' })).toBeTruthy();
+        expect(screen.findByTestId('pendingMessages.headerToggle')).toBeNull();
         expect(screen.findByType('ScrollView').props.style?.maxHeight).toBe(QUEUE_CAP_PX);
+        expect(screen.findByType('ScrollView').props.style?.height).toBe(QUEUE_CAP_PX);
     });
 
     it('does not show a header toggle when pending content fits the compact height', async () => {
@@ -2058,96 +2071,6 @@ describe('PendingMessagesTranscriptBlock', () => {
         expect(screen.findByTestId('pendingMessages.headerToggle')).toBeNull();
     });
 
-    it('expands the pending queue from the header toggle without changing the compact default', async () => {
-        settingValues = {
-            transcriptPendingQueueMaxHeightPx: 80,
-            transcriptPendingQueueExpandedMaxHeightPx: 520,
-        };
-        const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
-        const screen = await renderScreen(React.createElement(PendingMessagesTranscriptBlock, {
-                sessionId: 's1',
-                pendingMessages: queuedPendingMessages(),
-                discardedMessages: [],
-            }));
-
-        const scroll = screen.findByTestId('pendingMessages.scroll');
-        await act(async () => {
-            scroll!.props.onContentSizeChange(0, QUEUE_CAP_PX + 40);
-        });
-
-        await screen.pressByTestIdAsync('pendingMessages.headerToggle');
-
-        expect(screen.findByProps({ name: 'caret-down' })).toBeTruthy();
-        expect(screen.findByType('ScrollView').props.style?.maxHeight).toBe(520);
-    });
-
-    it('collapses the pending queue from the expanded header toggle', async () => {
-        settingValues = {
-            transcriptPendingQueueMaxHeightPx: 80,
-            transcriptPendingQueueExpandedMaxHeightPx: 520,
-        };
-        const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
-        const screen = await renderScreen(React.createElement(PendingMessagesTranscriptBlock, {
-                sessionId: 's1',
-                pendingMessages: queuedPendingMessages(),
-                discardedMessages: [],
-            }));
-
-        const scroll = screen.findByTestId('pendingMessages.scroll');
-        await act(async () => {
-            scroll!.props.onContentSizeChange(0, QUEUE_CAP_PX + 40);
-        });
-        await screen.pressByTestIdAsync('pendingMessages.headerToggle');
-        await screen.pressByTestIdAsync('pendingMessages.headerToggle');
-
-        expect(screen.findByProps({ name: 'caret-up' })).toBeTruthy();
-        expect(screen.findByType('ScrollView').props.style?.maxHeight).toBe(QUEUE_CAP_PX);
-    });
-
-    it('resets expanded pending queue state after all pending rows clear', async () => {
-        settingValues = {
-            transcriptPendingQueueMaxHeightPx: 80,
-            transcriptPendingQueueExpandedMaxHeightPx: 520,
-        };
-        const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
-        const firstQueue = queuedPendingMessages();
-        const secondQueue = [
-            { id: 'p3', text: 'again', displayText: undefined, createdAt: 2, updatedAt: 2, localId: 'p3', rawRecord: {} },
-            { id: 'p4', text: 'and again', displayText: undefined, createdAt: 3, updatedAt: 3, localId: 'p4', rawRecord: {} },
-        ];
-        const screen = await renderScreen(React.createElement(PendingMessagesTranscriptBlock, {
-                sessionId: 's1',
-                pendingMessages: firstQueue,
-                discardedMessages: [],
-            }));
-
-        const scroll = screen.findByTestId('pendingMessages.scroll');
-        await act(async () => {
-            scroll!.props.onContentSizeChange(0, QUEUE_CAP_PX + 40);
-        });
-        await screen.pressByTestIdAsync('pendingMessages.headerToggle');
-        expect(screen.findByType('ScrollView').props.style?.maxHeight).toBe(520);
-
-        await screen.update(React.createElement(PendingMessagesTranscriptBlock, {
-            sessionId: 's1',
-            pendingMessages: [],
-            discardedMessages: [],
-        }));
-
-        await screen.update(React.createElement(PendingMessagesTranscriptBlock, {
-            sessionId: 's1',
-            pendingMessages: secondQueue,
-            discardedMessages: [],
-        }));
-        const nextScroll = screen.findByTestId('pendingMessages.scroll');
-        await act(async () => {
-            nextScroll!.props.onContentSizeChange(0, QUEUE_CAP_PX + 40);
-        });
-
-        expect(screen.findByProps({ name: 'caret-up' })).toBeTruthy();
-        expect(screen.findByType('ScrollView').props.style?.maxHeight).toBe(QUEUE_CAP_PX);
-    });
-
     it('shows the queued affordance instead of a loading spinner for accepted pending rows', async () => {
         const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
         const screen = await renderScreen(React.createElement(PendingMessagesTranscriptBlock, {
@@ -2187,7 +2110,7 @@ describe('PendingMessagesTranscriptBlock', () => {
         expect(screen.findByTestId('pendingMessages.pendingAffordanceLabel:malformed')?.props.children).toBe('Delivery action needs review');
     });
 
-    it('renders canonical Activity and predecessor defer reasons from live session facts', async () => {
+    it('marks a waiting message "Queued" and keeps its own defer reason for assistive tech', async () => {
         const PendingMessagesTranscriptBlock = await loadPendingMessagesTranscriptBlock();
         settingValues.sessionPendingQueueDeliveryTiming = 'after_runtime_idle';
         sessionValue = {
@@ -2202,10 +2125,12 @@ describe('PendingMessagesTranscriptBlock', () => {
             discardedMessages: [],
         }));
 
-        expect(screen.findByTestId('pendingMessages.pendingAffordanceLabel:head')?.props.children)
-            .toBe('Waiting for runtime activity to finish');
-        expect(screen.findByTestId('pendingMessages.pendingAffordanceLabel:later')?.props.children)
-            .toBe('Waiting for an earlier message');
+        expect(screen.findByTestId('pendingMessages.pendingAffordanceLabel:head')?.props.children).toBe('Queued');
+        expect(screen.findByTestId('pendingMessages.pendingAffordanceLabel:later')?.props.children).toBe('Queued');
+        expect(screen.findByTestId('pendingMessages.pendingAffordance:head')?.props.accessibilityLabel)
+            .toBe('Queued. Waiting for runtime activity to finish');
+        expect(screen.findByTestId('pendingMessages.pendingAffordance:later')?.props.accessibilityLabel)
+            .toBe('Queued. Waiting for an earlier message');
     });
 
     it('delegates pending edit to the composer owner without opening a prompt', async () => {

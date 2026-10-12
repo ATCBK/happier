@@ -6,6 +6,7 @@ import {
 import {
     PENDING_QUEUE_MESSAGE_BUBBLE_PADDING_PX,
     PENDING_QUEUE_SCROLL_PADDING_TOP_PX,
+    PENDING_QUEUE_TOP_INSET_PX,
     resolvePendingMessageGapPx,
     resolvePendingQueueScrollMaxHeightPx,
 } from '@/components/sessions/pending/pendingQueueContentClipping';
@@ -317,22 +318,19 @@ const ESTIMATE_TOOL_CARD_ROW_PX = 327;
  *     ~438 — a ~340px phantom gap under the tail row during exactly the send the user is watching.
  *
  * DERIVATION, cross-validated against that one measurement. The block paints
- * `TranscriptSeparatorRow` (`padding="none"`, `chipChrome="minimal"`) + optionally the
+ * a fixed top inset (`PENDING_QUEUE_TOP_INSET_PX`; it replaced the 14.625px header row measured
+ * below once the queue's size moved to the composer's status line) + optionally the
  * terminal-draft notice + the capped `ScrollView` (`contentContainerStyle.paddingTop: 6`). Each
  * message row is `userMessageWrapper` (`paddingBottom: 8`) wrapping `userMessageBubble`
  * (`paddingVertical: 8` ×2) around markdown at `transcriptMarkdownTextStyle.lineHeight`:
  *
  *   header 14.625 + [ paddingTop 6 + wrapper 8 + bubble 16 + one 24px line ] = 68.625  ✓ measured
  *
- * so `PENDING_QUEUE_HEADER_ROW_PX` is the measured total minus the source-derived content
- * (68.625 − 54). Everything else here is read off those same styles and is therefore DERIVED, not
- * measured: the two-line header (only when queued and discarded rows coexist), the per-message
- * notices, and the discarded section. They sit INSIDE the capped scroll box, so for any queue big
+ * so that header was the measured total minus the source-derived content (68.625 − 54); the
+ * inset that replaced it is source-derived. Everything else here is read off those same styles and
+ * is therefore DERIVED, not measured: the per-message notices, and the discarded section. They sit INSIDE the capped scroll box, so for any queue big
  * enough to reach the cap they cannot move the answer at all.
  */
-const PENDING_QUEUE_HEADER_ROW_PX = 14.625;
-/** Header grows a second 12px line when the "Discarded (n)" subtitle is present (`gap: 2`). */
-const PENDING_QUEUE_HEADER_WITH_SUBTITLE_PX = 31;
 /**
  * The in-flow action row under a pending bubble: `messageActionContainer.marginTop` 2 +
  * `IconAction` `padding: 2` x2 + `Icon size={14}` = 20.
@@ -427,21 +425,17 @@ function estimatePendingQueueRowPx(
                 + (discardedMessage.discardedReason ? PENDING_QUEUE_DISCARDED_REASON_PX : 0);
         }
     }
-    const headerPx = item.pendingMessages.length > 0 && item.discardedMessages.length > 0
-        ? PENDING_QUEUE_HEADER_WITH_SUBTITLE_PX
-        : PENDING_QUEUE_HEADER_ROW_PX;
     // NOT a ceiling on a position-bearing value (see C-1 above): this is the block's OWN painted
     // bound. The `ScrollView` carries `maxHeight`, so content past it is scrolled, never painted.
     // The account default is modelled because a pure estimate cannot read the setting; a user who
-    // raises `transcriptPendingQueueMaxHeightPx` (or expands the queue, which is a post-measurement
-    // interaction) undershoots until that row's next onLayout, instead of overshooting without end.
+    // raises `transcriptPendingQueueMaxHeightPx` undershoots until that row's next onLayout, instead of overshooting without end.
     const scrollBoxPx = Math.min(scrollContentPx, resolvePendingQueueScrollMaxHeightPx({
         pendingCount: item.pendingMessages.length,
         discardedCount: item.discardedMessages.length,
         queueMaxHeightPx: PENDING_QUEUE_SCROLL_MAX_HEIGHT_PX,
         lineHeightPx: transcriptMarkdownTextStyle.lineHeight,
     }));
-    return headerPx + scrollBoxPx;
+    return PENDING_QUEUE_TOP_INSET_PX + scrollBoxPx;
 }
 
 type ToolGroupUnitRowHeights = Readonly<{

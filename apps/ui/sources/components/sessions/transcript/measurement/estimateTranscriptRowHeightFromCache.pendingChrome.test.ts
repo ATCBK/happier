@@ -6,15 +6,15 @@ import { estimateTranscriptRowHeightFromContent } from './estimateTranscriptRowH
 import type { TranscriptRowShellItem } from './transcriptRowShellSignature';
 
 /**
- * The height ONE short queued message paints on native: header 14.625 + [ scroll paddingTop 6 +
+ * The height ONE short queued message paints on native: top inset 16 + [ scroll paddingTop 6 +
  * bubble paddingVertical 16 + one 24px line ], NO inter-row gap (it is the last row in the scroll
  * content) and NO action row (native paints that branch only for a reorderable queue).
  *
- * The gap under the last row is separation from a row that is not there, and carrying it made the
- * pending→committed crossover a DOWNWARD step; dropping it leaves the committed row 1.375px taller,
- * so the swap can only move content UP. See `pendingQueueContentClipping`.
+ * The queue carries no header (its size is the composer line's); the inset that replaced the
+ * measured 14.625px header makes the pending chrome equal the committed row's 22px, so the
+ * crossover does not step. See `pendingQueueContentClipping`.
  */
-const ONE_SHORT_PENDING_MESSAGE_NATIVE_PX = 60.625;
+const ONE_SHORT_PENDING_MESSAGE_NATIVE_PX = 62;
 /** The same row on web, which paints the copy/send action row unconditionally. */
 const PENDING_MESSAGE_ACTION_ROW_PX = 20;
 /** `transcriptPendingQueueMaxHeightPx` account default: the compact BACKLOG strip. */
@@ -23,8 +23,8 @@ const PENDING_QUEUE_BACKLOG_STRIP_PX = 80;
 const PENDING_QUEUE_HEAD_CAP_PX = 6 + 16 + 6 * 24;
 /** A queue keeps the head fully visible and scrolls the collapsed backlog beneath it. */
 const PENDING_QUEUE_CAP_PX = PENDING_QUEUE_HEAD_CAP_PX + PENDING_QUEUE_BACKLOG_STRIP_PX;
-const PENDING_QUEUE_HEADER_PX = 14.625;
-const PENDING_QUEUE_HEADER_WITH_SUBTITLE_PX = 31;
+/** `PENDING_QUEUE_TOP_INSET_PX`: the queue's only chrome above its scroll box. */
+const PENDING_QUEUE_HEADER_PX = 16;
 const PENDING_QUEUE_ONE_MESSAGE_CHROME_PX = 6 + 16;
 const TRANSCRIPT_MARKDOWN_LINE_PX = 24;
 /** `ESTIMATE_CHARS_PER_LINE` — the estimator's flat, width-blind wrap. */
@@ -132,11 +132,11 @@ describe('pending-queue estimate is chrome-aware', () => {
         expect(displayed).toBeGreaterThan(stored);
     });
 
-    it('accounts for the two-line header the block paints when queued and discarded rows coexist', () => {
+    it('keeps one top inset whether or not queued and discarded rows coexist', () => {
         const both = estimatePendingQueue([pendingMessage()], [discardedMessage()]) as number;
         const discardedOnly = estimatePendingQueue([], [discardedMessage()]) as number;
 
-        expect(both).toBeLessThanOrEqual(PENDING_QUEUE_HEADER_WITH_SUBTITLE_PX + PENDING_QUEUE_CAP_PX);
+        expect(both).toBeLessThanOrEqual(PENDING_QUEUE_HEADER_PX + PENDING_QUEUE_CAP_PX);
         expect(discardedOnly).toBeLessThanOrEqual(PENDING_QUEUE_HEADER_PX + PENDING_QUEUE_CAP_PX);
         expect(both).toBeGreaterThan(discardedOnly);
     });
