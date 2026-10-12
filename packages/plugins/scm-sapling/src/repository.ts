@@ -33,6 +33,11 @@ export async function detectSaplingRepo(input: { cwd: string }): Promise<ScmRepo
         args: ['root'],
         timeoutMs: 5000,
     });
+    if (root.executableMissing === true) {
+        throw Object.assign(new Error(root.stderr || 'Sapling is not installed'), {
+            errorCode: SCM_OPERATION_ERROR_CODES.BACKEND_NOT_INSTALLED,
+        });
+    }
     if (!root.success) {
         if (commandProducedNoAnswer(root)) {
             throw detectionUnavailable(root.stderr.trim() || 'the repository probe did not complete');

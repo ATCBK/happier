@@ -1,24 +1,17 @@
 import { realpathSync } from 'node:fs';
 import path, { relative, sep } from 'node:path';
 
-import {
-    ScmSelectedMutationPathSchema } from '@happier-dev/plugin-sdk/scm';
+import { ScmSelectedMutationPathSchema } from '@happier-dev/plugin-sdk/scm';
 import { isCanonicalAbsolutePathInsideRoot } from '@happier-dev/plugin-sdk/fs';
 import {
+    type BackendCommandRunResult,
     resolveBackendCommandMaxOutputBytes as resolveScmBackendCommandMaxOutputBytes,
     runBackendCommand as runScmBackendCommand,
 } from '@happier-dev/plugin-sdk/scm/backend';
 
 import { SAPLING_INSTALLABLE_DEP_ID } from './installables/saplingInstallable.js';
 
-export type SaplingExecResult = Readonly<{
-    success: boolean;
-    stdout: string;
-    stderr: string;
-    exitCode: number;
-    timedOut?: boolean;
-    outputLimitExceeded?: boolean;
-}>;
+export type SaplingExecResult = BackendCommandRunResult;
 
 const DEFAULT_MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 const SAFE_COMMIT_REF_REGEX = /^(?:[0-9a-fA-F]{7,64}|[A-Za-z0-9._/-]+)$/;
