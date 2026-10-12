@@ -93,4 +93,20 @@ describe('Session input live-work observation', () => {
     queue.pushImmediate('next', 'mode');
     expect(reads.at(-1)).toBe(lastRead);
   });
+
+  it('does not notify live-work observers for an empty pending drain', async () => {
+    const consumer = createSessionProviderInputConsumer({ messageQueue: new MessageQueue2<string>(() => 'mode'), session: {
+      waitForMetadataUpdate: async () => false,
+      getPendingQueueState: () => ({ known: true, pendingCount: 0, pendingBlockedCount: 0, pendingVersion: 1 }),
+      readRuntimeActivitySnapshotTail: idleTail,
+      readPendingQueueStateForLiveWork: async () => ({ known: true, pendingCount: 0, pendingBlockedCount: 0, pendingVersion: 1 }),
+    } });
+    let notifications = 0;
+    const unsubscribe = consumer.subscribeLiveWork(() => { notifications += 1; });
+
+    await consumer.drainPending();
+
+    expect(notifications).toBe(0);
+    unsubscribe();
+  });
 });

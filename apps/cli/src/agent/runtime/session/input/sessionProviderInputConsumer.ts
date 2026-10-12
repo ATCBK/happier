@@ -213,6 +213,7 @@ export function createSessionProviderInputConsumer<Mode, Message>(
   let activeProviderInputDispatches = 0;
   const activeDispatchDrainWaiters = new Set<() => void>();
   let activePendingMaterializationTurns = 0;
+  let activePendingMaterializationCustodies = 0;
   const activePendingMaterializationDrainWaiters = new Set<() => void>();
   let passSequence = 0;
   const markPassDirty = (): void => {
@@ -225,7 +226,7 @@ export function createSessionProviderInputConsumer<Mode, Message>(
     || opts.messageQueue.size() > 0;
   const hasAcceptedInputCustody = (): boolean => hasLocalInputCustody()
     || releasedInputBatch !== null || deferredContextOnlyBatch !== null
-    || activeProviderInputDispatches > 0 || activePendingMaterializationTurns > 0;
+    || activeProviderInputDispatches > 0 || activePendingMaterializationCustodies > 0;
   const readSessionLiveState = (): SessionInputLiveWork['session'] => {
     const tail = opts.session.readRuntimeActivitySnapshotTail?.();
     return tail && readExactIdleRuntimeActivityRevision(tail) !== undefined
@@ -250,13 +251,21 @@ export function createSessionProviderInputConsumer<Mode, Message>(
     pendingMaterializationTurn = previousTurn.catch(() => undefined).then(() => currentTurn);
 
     activePendingMaterializationTurns += 1;
-    notifyLiveWorkChanged();
+    const pending = opts.session.getPendingQueueState?.();
+    const holdsInputCustody = pending?.known !== true || pending.pendingCount > 0;
+    if (holdsInputCustody) {
+      activePendingMaterializationCustodies += 1;
+      notifyLiveWorkChanged();
+    }
     try {
       await previousTurn.catch(() => undefined);
       return await operation();
     } finally {
       activePendingMaterializationTurns -= 1;
-      notifyLiveWorkChanged();
+      if (holdsInputCustody) {
+        activePendingMaterializationCustodies -= 1;
+        notifyLiveWorkChanged();
+      }
       if (activePendingMaterializationTurns === 0) {
         for (const notify of [...activePendingMaterializationDrainWaiters]) {
           activePendingMaterializationDrainWaiters.delete(notify);

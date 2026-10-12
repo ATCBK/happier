@@ -1868,7 +1868,6 @@ export async function runHostSessionRuntime(
       sourceMaterialResolver: config.sessionFollowSourceMaterialResolver,
     }),
     sourceMaterialController: config.sessionFollowSourceMaterialResolver,
-    onRetryableTransportFailure: publishSessionFollowWakeInvalidation,
   });
   const effectivePrepareHostContext = async ({ signal, requiredPrompt, contextOnlyWorkerUpdate, contextOnlyWorkerLocalId, deliveryIntent = 'natural' }: Readonly<{
     signal: AbortSignal;

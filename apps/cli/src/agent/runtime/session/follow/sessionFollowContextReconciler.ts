@@ -5,7 +5,6 @@ import { renderSessionInputContextPromptV1, renderWorkerUpdatePromptBlockV1 } fr
 import type { SessionFollowAcknowledgeResponseV1, SessionFollowPendingObservationV1, SessionFollowUpdateEnvelopeV1, WorkerUpdateV1 } from '@happier-dev/protocol';
 
 import type { ApiSessionClient } from '@/api/session/sessionClient';
-import { SocketAckError } from '@/session/transport/shared/socketAck';
 
 import { applySessionFollowContextBudgetV1 } from './sessionFollowContextBudget';
 import { measureSessionFollowUtf8Bytes } from './sessionFollowContextBudget';
@@ -106,8 +105,6 @@ export function createSessionFollowContextReconciler(input: Readonly<{
   hydrateObservation: SessionFollowHydrateObservation;
   observer?: SessionFollowObserverV1;
   sourceMaterialController?: SessionFollowSourceMaterialController | null;
-  /** Re-arm the existing process-local wake signal only for retryable ACK timeouts. */
-  onRetryableTransportFailure?: () => void;
   /** Evidence-backed allowance from the final provider-context owner; null/absent disables optional Follow. */
   maxFollowContextUtf8Bytes?: number | null;
 }>): (options: Readonly<{
@@ -157,12 +154,9 @@ export function createSessionFollowContextReconciler(input: Readonly<{
         } else {
           current = await input.session.observePendingSessionFollow();
         }
-      } catch (error) {
+      } catch {
         // Follow is optional host context. Home unavailable, unsupported runtime, or a
         // test double without Follow transport must never break the real admitted turn.
-        if (deliveryIntent === 'wake' && error instanceof SocketAckError && error.code === 'socket_ack_timeout') {
-          input.onRetryableTransportFailure?.();
-        }
         return null;
       }
       if (observer.kind === 'destination_session' && current.ok && current.currentSourceSessionIds) {
