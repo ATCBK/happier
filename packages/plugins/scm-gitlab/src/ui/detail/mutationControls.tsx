@@ -621,7 +621,7 @@ export function GitlabMutationControls({
         {!issueWrites.includes('issueLabel') ? null : <NamedDeltaControls input={input} kind="labels" />}
         {!mergeRequestWrites.includes('close') || closeInput === null ? null : (
           <Text
-            variant="caption"
+            variant="micro"
             tone="neutral"
             valueKey="plugins.gitlab.ui.mutations.close.description"
             fallback="A closed merge request stays on GitLab and can be reopened there."
@@ -629,7 +629,7 @@ export function GitlabMutationControls({
         )}
         {headPinUnavailable ? (
           <Text
-            variant="caption"
+            variant="micro"
             tone="warning"
             valueKey="plugins.gitlab.ui.mutations.pinUnavailable"
             fallback="GitLab has not reported this merge request’s latest commit, so it cannot be merged or marked ready from here yet."

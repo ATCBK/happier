@@ -94,6 +94,10 @@ export const GITLAB_PLUGIN = definePlugin({
   version: '0.0.0',
   displayName: 'GitLab SCM hosting provider',
   description: 'Detects GitLab remotes and provides GitLab repository operations.',
+  brand: { iconResourceId: 'brand-icon', monochrome: true },
+  resources: {
+    'brand-icon': { kind: 'asset', path: 'assets/brand.png', contentType: 'image/png' },
+  },
   engines: { happier: '^0.0.0' }, runtime: { apiVersion: 1 },
   entrypoints: { daemon: './.happier-plugin/daemon.js' },
   hostAccess: {
@@ -376,7 +380,7 @@ export const GITLAB_PLUGIN = definePlugin({
         { locale: 'ru', messages: { ...GITLAB_RENDER_UI_TRANSLATIONS["ru"], ...GITLAB_ADDITIONAL_UI_TRANSLATIONS["ru"], 'plugins.gitlab.settings.group': 'GitLab', 'plugins.gitlab.settings.sources': 'PR и задачи', 'plugins.gitlab.settings.sources.subtitle': 'Выберите учетные записи и проекты GitLab, которые будут отображаться в разделе PR и задач.' } },
         { locale: 'pl', messages: { ...GITLAB_RENDER_UI_TRANSLATIONS["pl"], ...GITLAB_ADDITIONAL_UI_TRANSLATIONS["pl"], 'plugins.gitlab.settings.group': 'GitLab', 'plugins.gitlab.settings.sources': 'PR-y i zgłoszenia', 'plugins.gitlab.settings.sources.subtitle': 'Wybierz konta i projekty GitLab wyświetlane w sekcji PR-ów i zgłoszeń.' } },
         { locale: 'es', messages: { ...GITLAB_RENDER_UI_TRANSLATIONS["es"], ...GITLAB_ADDITIONAL_UI_TRANSLATIONS["es"], 'plugins.gitlab.settings.group': 'GitLab', 'plugins.gitlab.settings.sources': 'PR e incidencias', 'plugins.gitlab.settings.sources.subtitle': 'Elige qué cuentas y proyectos de GitLab aparecen en PR e incidencias.' } },
-        { locale: 'fr', messages: { ...GITLAB_RENDER_UI_TRANSLATIONS["fr"], ...GITLAB_ADDITIONAL_UI_TRANSLATIONS["fr"], 'plugins.gitlab.settings.group': 'GitLab', 'plugins.gitlab.settings.sources': 'PR et tickets', 'plugins.gitlab.settings.sources.subtitle': 'Choisissez les comptes et projets GitLab affichés dans PR et tickets.' } },
+        { locale: 'fr', messages: { ...GITLAB_RENDER_UI_TRANSLATIONS["fr"], ...GITLAB_ADDITIONAL_UI_TRANSLATIONS["fr"], 'plugins.gitlab.settings.group': 'GitLab', 'plugins.gitlab.settings.sources': 'PR et tickets', 'plugins.gitlab.settings.sources.subtitle': 'Choisis les comptes et projets GitLab affichés dans PR et tickets.' } },
         { locale: 'it', messages: { ...GITLAB_RENDER_UI_TRANSLATIONS["it"], ...GITLAB_ADDITIONAL_UI_TRANSLATIONS["it"], 'plugins.gitlab.settings.group': 'GitLab', 'plugins.gitlab.settings.sources': 'PR e segnalazioni', 'plugins.gitlab.settings.sources.subtitle': 'Scegli gli account e i progetti GitLab da mostrare in PR e segnalazioni.' } },
         { locale: 'pt', messages: { ...GITLAB_RENDER_UI_TRANSLATIONS["pt"], ...GITLAB_ADDITIONAL_UI_TRANSLATIONS["pt"], 'plugins.gitlab.settings.group': 'GitLab', 'plugins.gitlab.settings.sources': 'PRs e problemas', 'plugins.gitlab.settings.sources.subtitle': 'Escolha as contas e os projetos GitLab apresentados em PRs e problemas.' } },
         { locale: 'de', messages: { ...GITLAB_RENDER_UI_TRANSLATIONS["de"], ...GITLAB_ADDITIONAL_UI_TRANSLATIONS["de"], 'plugins.gitlab.settings.group': 'GitLab', 'plugins.gitlab.settings.sources': 'PRs & Tickets', 'plugins.gitlab.settings.sources.subtitle': 'Wähle aus, welche GitLab-Konten und -Projekte unter PRs & Tickets angezeigt werden.' } },

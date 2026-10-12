@@ -221,10 +221,10 @@ function ReadSummary({
   const incomplete = incompleteDescription(state.incomplete);
   return (
     <Stack gap="small">
-      <Text variant="caption" tone="neutral" valueKey={summaryKey} fallback={summary} values={summaryValues} />
+      <Text variant="micro" tone="neutral" valueKey={summaryKey} fallback={summary} values={summaryValues} />
       {state.omittedRowCount === 0 ? null : (
         <Text
-          variant="caption"
+          variant="micro"
           tone="neutral"
           valueKey="plugins.gitlab.ui.rowsUnreadable"
           fallback="{count} row(s) on the pages read could not be understood."
@@ -233,7 +233,7 @@ function ReadSummary({
       )}
       {incomplete === null ? null : (
         <Text
-          variant="caption"
+          variant="micro"
           tone="neutral"
           valueKey="plugins.gitlab.ui.paginationUnfollowable"
           fallback={incomplete}
@@ -417,7 +417,7 @@ function OverviewPanel({
         {story || pendingFields.length === 0 ? null : (
           <Stack gap="small">
             <Text
-              variant="caption"
+              variant="micro"
               tone="neutral"
               valueKey="plugins.gitlab.ui.pendingPanels.description"
               fallback="Answered in the panels beside this one, not on the list row:"
@@ -430,7 +430,7 @@ function OverviewPanel({
         {description === undefined || description === '' ? null : (
             <Stack gap="small">
               <Text
-                variant="caption"
+                variant="micro"
                 tone="neutral"
                 valueKey="plugins.gitlab.ui.overview.description"
                 fallback="Description"
@@ -438,7 +438,7 @@ function OverviewPanel({
               <Text value={description} />
               {!controller.value?.descriptionTruncated ? null : (
                 <Text
-                  variant="caption"
+                  variant="micro"
                   tone="neutral"
                   valueKey="plugins.gitlab.ui.overview.descriptionShortened"
                   fallback="The GitLab description was shortened to fit the Action response."
@@ -815,7 +815,7 @@ function ChangesPanel({ input }: Readonly<{ input: TriageDetailSurfaceInputV1 }>
           {rawDiff.state.kind !== 'ready' ? null : (
             <Stack gap="small">
               <Text
-                variant="caption"
+                variant="micro"
                 tone="neutral"
                 valueKey="plugins.gitlab.ui.rawDiffLabel"
                 fallback="Raw diff evidence · returned as text by GitLab"
@@ -947,7 +947,7 @@ function PipelinesPanel({
                 // a rendered `0 failing` over a job list nobody could read is the
                 // fabrication a reviewer acts on.
               <Text
-                variant="caption"
+                variant="micro"
                 tone="neutral"
                 valueKey="plugins.gitlab.ui.pipelineJobsUnavailable.description"
                 fallback="GitLab did not return a per-job breakdown for the newest pipeline, so no job counts are shown."
@@ -1076,7 +1076,7 @@ function ApprovalsSection({ input }: Readonly<{ input: TriageDetailSurfaceInputV
         : view.rules.kind === 'editionUnsupported'
           ? (
               <Text
-                variant="caption"
+                variant="micro"
                 tone="neutral"
                 valueKey="plugins.gitlab.ui.approvalRulesUnavailable.description"
                 fallback="Approval rules are a paid GitLab tier feature and are not available on this deployment. The approval state above is complete."

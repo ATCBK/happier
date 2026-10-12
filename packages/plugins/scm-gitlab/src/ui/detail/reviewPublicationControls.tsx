@@ -446,7 +446,7 @@ export function GitlabMergeRequestPublicationControls({
       <Stack gap="small">
         <Text variant="label" valueKey="plugins.gitlab.ui.publication.title" fallback="Publish review" />
         <Text
-          variant="caption"
+          variant="micro"
           tone="neutral"
           valueKey="plugins.gitlab.ui.publication.description"
           fallback="Publish proposed comments linked to this merge request. GitLab’s unrelated drafts stay pending."
@@ -492,7 +492,7 @@ export function GitlabMergeRequestPublicationControls({
       />
       {verdictNeedsBody ? (
         <Text
-          variant="caption"
+          variant="micro"
           tone="warning"
           valueKey="plugins.gitlab.ui.publication.summaryRequired"
           fallback="Add a summary before publishing this verdict."

@@ -5,8 +5,8 @@
  * therefore travels as `localInstanceKey`; the source contract forbids a token
  * that duplicates a configured origin, so it is deliberately absent here. What
  * remains is a strict versioned envelope: this source mints it, this source is
- * the only decoder, and a token it did not mint — another version, another
- * source's bytes, an oversize string — is rejected rather than tolerated.
+ * the only decoder. Retained tokens ignore retired fields; another version,
+ * malformed known facts or an oversize string remain rejected.
  *
  * The envelope is the seam a genuinely per-instance GitLab fact would land in.
  * Nothing is placed in it speculatively, and it can never carry a credential,
@@ -17,6 +17,10 @@ import {
   MAX_TRIAGE_CONFIGURATION_TOKEN_UTF8_BYTES_V1,
   type TriageSourceInstanceConfigurationV1,
 } from '@happier-dev/triage-protocol/v1';
+import { createProtocolStoredReadSchema, defineProtocolLiteral, defineProtocolObject } from '@happier-dev/plugin-sdk/protocol';
+
+const GitlabConfigurationRecordV1Schema = defineProtocolObject({ v: defineProtocolLiteral(1) }, { policy: 'closed' });
+const storedConfiguration = createProtocolStoredReadSchema(GitlabConfigurationRecordV1Schema);
 
 /** The closed source-owned configured-instance record. */
 export type GitlabConfigurationRecord = Readonly<{ v: 1 }>;
@@ -50,10 +54,6 @@ export function decodeGitlabConfiguration(
   } catch {
     return null;
   }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
-
-  const record = parsed as Readonly<Record<string, unknown>>;
-  const keys = Object.keys(record);
-  if (keys.length !== 1 || keys[0] !== 'v' || record.v !== 1) return null;
+  if (!storedConfiguration.safeParse(parsed).success) return null;
   return GITLAB_CONFIGURATION_RECORD_V1;
 }

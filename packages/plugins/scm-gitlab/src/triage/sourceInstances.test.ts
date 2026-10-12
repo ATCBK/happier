@@ -4,7 +4,7 @@ import {
 } from '@happier-dev/triage-protocol/v1';
 import { describe, expect, it, vi } from 'vitest';
 
-import { decodeGitlabConfiguration } from './configuration.js';
+import { decodeGitlabConfiguration, encodeGitlabConfiguration } from './configuration.js';
 import { GITLAB_CONNECTED_ACCOUNT_PURPOSE } from './contribution.js';
 import type { GitlabConnectedAccounts } from './http/gitlabClient.js';
 import { listGitlabTriageInstances } from './sourceInstances.js';
@@ -58,6 +58,14 @@ async function list(listing: Parameters<typeof connectedAccounts>[0]) {
 }
 
 describe('GitLab listInstances', () => {
+  it('reads a retained configuration with unknown fields and keeps encoded output canonical', () => {
+    const read = decodeGitlabConfiguration({ v: 1, token: JSON.stringify({ v: 1, retired: true }) });
+    expect(read).toEqual({ v: 1 });
+    if (read === null) throw new Error('stored configuration was unreadable');
+    expect(encodeGitlabConfiguration(read)).toEqual({ v: 1, token: '{"v":1}' });
+    expect(decodeGitlabConfiguration({ v: 1, token: JSON.stringify({ v: 2, retired: true }) })).toBeNull();
+  });
+
   it('projects two purpose-scoped account rows into two candidates with their exact binding refs', async () => {
     const { result, seam } = await list({
       status: 'complete',

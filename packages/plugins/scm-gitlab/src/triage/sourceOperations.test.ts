@@ -251,6 +251,10 @@ describe('GitLab scan', () => {
     expect(published).not.toContain('created_by_me');
     expect(published).not.toContain('authored');
     expect(first.snapshot.scopeLabel).toContain('/');
+    expect(first.snapshot).toMatchObject({
+      scopeLabel: REPOSITORY_KEY,
+      scopeDisplayName: 'example-project',
+    });
     expect(first.locator.routingToken).toBe(first.snapshot.scopeLabel);
   });
 

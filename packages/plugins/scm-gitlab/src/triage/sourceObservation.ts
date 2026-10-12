@@ -67,6 +67,8 @@ function projectSnapshot(
   locatorTruncated: boolean,
 ): TriageSourceEntrySnapshotV1 {
   const scopeLabel = boundGitlabText(entry.locator.repositoryKey);
+  // GitLab's source owns its nested group path; consumers never parse it for presentation.
+  const scopeDisplayName = boundGitlabText(entry.locator.repositoryKey.slice(entry.locator.repositoryKey.lastIndexOf('/') + 1));
   const reviewRevision = projectReviewRevision(entry);
   // Who opened it, by the name GitLab shows; a bounded display line, never an identity.
   const author = entry.snapshot.author === null ? null : boundGitlabText(entry.snapshot.author.displayName);
@@ -83,6 +85,7 @@ function projectSnapshot(
     // copies are shortened; the routing copy is omitted instead, because shortening it
     // would address another project.
     scopeLabel: scopeLabel.text,
+    ...(scopeDisplayName.text === '' ? {} : { scopeDisplayName: scopeDisplayName.text }),
     ...(authorLabel === null ? {} : { authorLabel }),
     ...(designation.text === '' ? {} : { designation: designation.text }),
     ...(entry.snapshot.sourceCreatedAtMs === null
@@ -94,7 +97,7 @@ function projectSnapshot(
     },
     facts: entry.rowFacts.map(projectRowFact),
     ...(reviewRevision === undefined ? {} : { reviewRevision }),
-    ...(entry.projectionTruncated || scopeLabel.truncated || author?.truncated === true || designation.truncated
+    ...(entry.projectionTruncated || scopeLabel.truncated || scopeDisplayName.truncated || author?.truncated === true || designation.truncated
       || locatorTruncated
       ? { projectionTruncated: true }
       : {}),
