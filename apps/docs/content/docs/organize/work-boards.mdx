@@ -50,6 +50,11 @@ Board settings. On the web, hold Shift during a drag to snap that move even when
 snapping is off. A focused Canvas card can also be moved with arrow keys; native
 accessibility actions offer directional moves.
 
+The carried card follows your pointer without jumping between grid positions.
+While snapping, alignment guides and an outlined **Snaps here** target show the
+admitted destination. Release settles the card there; reduced motion removes
+that animation. A cancelled or refused move does not save the preview position.
+
 **By status** groups work cards into **Needs you · Working · Finished · Idle ·
 Offline**. Switching layouts keeps the saved Canvas positions. Phones show the
 stacked By status view and retain those positions for wider devices. See the
@@ -62,14 +67,22 @@ widget composition remains under development and loaded-platform validation.
 
 Cards show summaries: session awareness; a workflow run's state, attention and
 available step progress; a workflow's triggers, last run and needs-you count;
-or machine presence and counts from loaded sessions. Scheduled next-run times
-currently show **Not loaded yet** on Board cards rather than a calculated time.
+or machine presence and counts from loaded sessions. When the schedule summary
+provides a next-run time, the workflow card shows it. **Not loaded yet** means
+that summary is unavailable; the card does not calculate a schedule itself.
 Missing summary data is not a zero count or proof that no run is scheduled.
 Open the workflow or run for its own detail surface.
 
 A Needs you session or run card opens its item in **Inbox** when that destination
 is available; otherwise it opens the work itself. Answer permissions or review
 requests there. Board cards do not approve work.
+
+A held workflow run also offers **Review**, which opens that run's native
+detail without answering the hold. Aggregate attention alone does not create
+that offer. A readable workflow definition offers **Run now**, opening its
+existing Run composer so you can review inputs and placement before starting;
+the Board does not start it directly. These secondary actions are available in
+both layouts, including the phone's By status view.
 
 ## Keep a board near your sessions
 
