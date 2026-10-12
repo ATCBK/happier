@@ -93,6 +93,6 @@ describe('presentDaemonMemoryStatus', () => {
     }));
 
     expect(presentation?.lightSize).toBe('512 B');
-    expect(presentation?.deepSize).toBe('1.5 KB');
+    expect(presentation?.deepSize).toBe('1.54 KB');
   });
 });

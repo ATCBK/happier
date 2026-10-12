@@ -1,5 +1,5 @@
 import type { MemoryStatusV1 } from '@happier-dev/protocol';
-import { formatByteSize } from '@/utils/files/formatByteSize';
+import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
 import {
   hasKnownEmptyMemoryIndexContent,
   readMemoryStatusTelemetry,
@@ -54,7 +54,7 @@ export function presentDaemonMemoryStatus(
     state,
     lightMb: bytesToRoundedMb(status.tier1DbBytes),
     deepMb: bytesToRoundedMb(status.deepDbBytes),
-    lightSize: typeof status.tier1DbBytes === 'number' ? formatByteSize(status.tier1DbBytes) : null,
-    deepSize: typeof status.deepDbBytes === 'number' ? formatByteSize(status.deepDbBytes) : null,
+    lightSize: typeof status.tier1DbBytes === 'number' ? formatHappierDataBytes(status.tier1DbBytes, { kind: 'storage' }) : null,
+    deepSize: typeof status.deepDbBytes === 'number' ? formatHappierDataBytes(status.deepDbBytes, { kind: 'storage' }) : null,
   };
 }
