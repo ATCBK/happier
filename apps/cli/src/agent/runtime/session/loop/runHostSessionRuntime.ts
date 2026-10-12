@@ -50,6 +50,7 @@ import { findTranscriptEncryptedMessageByLocalIdV2 } from '@/api/session/transcr
 import { openSessionMessageContent } from '@/session/transport/encryption/sessionEncryptionContext';
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { resolveCliVoicePromptPreparation } from '@/agent/prompts/library/resolveCliVoicePromptStackBlocks';
+import { PromptStackPreparationError } from '@happier-dev/protocol/prompts/library/resolvePromptStackSystemAppendBlocksV1';
 import { clearInitialGoalFromEnv, readInitialGoalFromEnv } from '@/daemon/spawn/initialGoal';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 
@@ -3557,8 +3558,9 @@ export async function runHostSessionRuntime(
     if (runtimeStopRequested) rejectRuntimeStop(error);
     if (!lifecycleOwnsConstructionResources) {
       if (hostOwnsSessionConstructionCleanup) {
-        if (!runtimeStopRequested && error instanceof DaemonPluginToolCatalogUnavailableError) {
-          // MCP resolves after Session custody, but before the live loop owns a
+        if (!runtimeStopRequested && (error instanceof DaemonPluginToolCatalogUnavailableError
+          || error instanceof PromptStackPreparationError)) {
+          // Required preparation resolves after Session custody, before the live loop owns a
           // turn lifecycle. Publish through that same canonical owner before
           // releasing durable delivery; an unavailable prerequisite is not idle.
           await createSessionTurnLifecycle({ session, agentId: policyAgentId }).failTurn({

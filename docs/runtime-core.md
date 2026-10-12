@@ -184,6 +184,16 @@ The [input consumer](../apps/cli/src/agent/runtime/session/input/sessionProvider
 
 In 0.3 development, a missing launchable Agent CLI carries `agent_cli_missing` from both the command/terminal launch owner and the native plugin system-tool binding. Startup sanitization preserves that code; the primary Session issue classifier projects `dependency_failure` with static installation/path remediation. It does not expose raw startup error text or infer acceptance from a failed prerequisite.
 
+Prompt preparation failures during construction use the same canonical turn
+lifecycle before Session cleanup releases durable delivery. The issue classifier
+preserves `preparation_pending` or `attachment_unavailable` as `dependency_failure`.
+Typed Home-resolution failures retain their specific code (such as `profile_missing`)
+through preparation and lifecycle publication. All use
+static document/Home remediation, without publishing private references or
+raw error text. Required context remains fail-closed; the issue does not imply
+that an Agent accepted the initial input. This is a development-source contract;
+loaded-runtime failure visibility and explicit recovery need separate validation.
+
 The daemon's existing runner-respawn owner reads this retained failed-turn issue
 before automatic recovery. A deterministic primary Session dependency failure
 observed after the exited runner's process start stops that

@@ -41,6 +41,7 @@ import {
 } from '@happier-dev/protocol';
 import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { SessionModelMutationReversalV1Schema } from '@happier-dev/protocol/sessions/control/modelTransitionV1';
+import { emptyMcpServerCatalogV1 } from '@happier-dev/protocol/mcp/servers/serverCatalogV1';
 import { SESSION_MESSAGE_PROVENANCE_META_KEY } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import type {
   AgentSessionRealtimeConversation,
@@ -102,8 +103,10 @@ import {
   HAPPIER_AGENT_RUNTIME_RUNNER_BOOTSTRAP_FILE_ENV_KEY,
 } from '@/agent/runtime/session/process/agentRuntimeRunnerProtocol';
 import { HAPPIER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_FILE_ENV_KEY } from '@/daemon/agentRuntime/sessionBridgeAuthorization';
-import { setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
-import { getResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
+import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
+import { createResolvedContributionRegistry, getResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
+import { resolveBuiltInContributions } from '@/plugins/projection/registry/resolveBuiltInContributions';
 import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
@@ -833,7 +836,9 @@ describe('runHostSessionRuntime', () => {
   beforeAll(async () => {
     runtimeRegistryLease = await pluginReloadController.acquireRuntimeRegistry({
       resolveRuntimeRegistry: async () => await resolveExecutablePluginRuntimeRegistry({
-        contributes: getResolvedContributionRegistry(),
+        // This harness substitutes the native Agent and activates no plugins.
+        // Keep the real declarations without admitting unrelated UI artifacts.
+        contributes: createResolvedContributionRegistry({ ...resolveBuiltInContributions(), activationTargets: [], pluginDeclarations: [] }),
         pluginIds: [],
       }),
     });
@@ -7646,6 +7651,17 @@ describe('runHostSessionRuntime', () => {
       if (!address || typeof address === 'string') throw new Error('expected daemon listener');
       envScope.patch({ HAPPIER_HOME_DIR: home });
       reloadConfiguration();
+      // The daemon refusal is downstream of the already admitted Account MCP
+      // catalog. Publish that prerequisite through its canonical snapshot owner.
+      harness.opts.accountSettingsContext = {
+        source: 'network', settings: {} as never, settingsVersion: 1,
+        loadedAtMs: Date.now(), settingsSecretsReadKeys: [], whenRefreshed: null,
+      };
+      setActiveAccountSettingsSnapshot({
+        ...harness.opts.accountSettingsContext,
+        scopeKey: resolveAccountSettingsScopeKey(harness.opts.credentials),
+        mcpServerCatalog: { status: 'ready', catalog: emptyMcpServerCatalogV1(), revision: 1, authority: 'active', diagnostics: [] },
+      });
       writeDaemonState({ pid: process.pid, httpPort: address.port, startedAt: Date.now(), startedWithCliVersion: 'test', controlToken: 'test-token' });
       await expect(runHostSessionRuntime(harness.opts, harness.config, harness.deps))
         .rejects.toMatchObject({ code: 'daemon_plugin_catalog_unavailable' });
@@ -7655,12 +7671,40 @@ describe('runHostSessionRuntime', () => {
       }));
       expect(harness.session.close).toHaveBeenCalledOnce();
     } finally {
+      resetActiveAccountSettingsSnapshotForTests();
       await clearDaemonStateForTestTeardown();
       envScope.restore();
       reloadConfiguration();
       await new Promise<void>((resolve) => server.close(() => resolve()));
       await rm(home, { recursive: true, force: true });
     }
+  });
+
+  it.each(['preparation_pending', 'profile_missing'] as const)('publishes typed %s before releasing Session startup custody', async (code) => {
+    const { PromptStackPreparationError } = await import('@happier-dev/protocol/prompts/library/resolvePromptStackSystemAppendBlocksV1');
+    const { HomeTargetResolutionError } = await import('@happier-dev/cli-common/homeTarget');
+    const harness = createHarness();
+    const failure = new PromptStackPreparationError('unavailable', { kind: 'doc', artifactId: 'private-prompt' });
+    if (code === 'profile_missing') Object.assign(failure, {
+      cause: new HomeTargetResolutionError('profile_missing', 'private Home reference'),
+    });
+    // The Agent runtime factory is the plugin boundary; host lifecycle and publication stay real.
+    setSessionRuntimeFactory(harness.config, async () => { throw failure; });
+
+    await expect(runHostSessionRuntime(harness.opts, harness.config, harness.deps)).rejects.toBe(failure);
+    expect(harness.session.enqueueSessionTurnMutation).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'fail',
+      issue: expect.objectContaining({ code, source: 'dependency_failure' }),
+    }));
+    const failureCallIndex = harness.session.enqueueSessionTurnMutation.mock.calls
+      .findIndex((call: readonly unknown[]) => {
+        const [mutation] = call;
+        return mutation !== null && typeof mutation === 'object'
+          && 'action' in mutation && mutation.action === 'fail';
+      });
+    expect(harness.session.enqueueSessionTurnMutation.mock.invocationCallOrder[failureCallIndex])
+      .toBeLessThan(harness.session.deactivateDurableMutationDelivery.mock.invocationCallOrder[0]!);
+    expect(harness.session.close).toHaveBeenCalledOnce();
   });
 
   it('resolves and passes native MCP servers for the Grok catalog policy', async () => {
