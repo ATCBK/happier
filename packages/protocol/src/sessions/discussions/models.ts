@@ -1,5 +1,6 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod';
+import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 import { StrictSessionStoredMessageContentEnvelopeSchema } from '../messages/sessionStoredMessageContent.js';
 import { SessionMessageAccountActorV1Schema } from '../messages/sessionMessageAccountActorV1.js';
@@ -55,7 +56,7 @@ export const SessionDiscussionSummaryV1Schema = lazyZodSchema(() => z.object({
   sessionId: SessionDiscussionIdSchema,
   /** Projected only to the creating Account; other viewers receive null. */
   creationLocalId: SessionDiscussionLocalIdSchema.nullable(),
-  titleContent: StrictSessionStoredMessageContentEnvelopeSchema,
+  titleContent: createStoredReadSchema(StrictSessionStoredMessageContentEnvelopeSchema),
   latestMessage: SessionDiscussionLatestMessageV1Schema,
   messageSeq: SequenceSchema,
   /** null means no active tracked cursor. It never means implicit zero. */
@@ -79,7 +80,7 @@ export const SessionDiscussionMessageV1Schema = lazyZodSchema(() => z.object({
   /** Stable sanitized actor identity; independent of current Presence/access. */
   accountActor: SessionMessageAccountActorV1Schema.nullable(),
   producerV1: SessionDiscussionProducerV1Schema.nullable(),
-  content: StrictSessionStoredMessageContentEnvelopeSchema,
+  content: createStoredReadSchema(StrictSessionStoredMessageContentEnvelopeSchema),
   mentionedAccountIds: z.array(SessionDiscussionAccountIdSchema),
   createdAt: z.number().int(),
 }).strict().superRefine(refineDiscussionAccountActor));

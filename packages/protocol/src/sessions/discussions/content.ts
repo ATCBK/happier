@@ -1,5 +1,6 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod';
+import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 import { SessionIndexedIdentifierMaxLengthV1 } from '../idsV1.js';
 
@@ -44,6 +45,7 @@ export const SessionDiscussionTitleV1Schema = lazyZodSchema(() => z.object({
   ),
 }).strict());
 export type SessionDiscussionTitleV1 = z.infer<typeof SessionDiscussionTitleV1Schema>;
+export const SessionDiscussionTitleV1StoredSchema = createStoredReadSchema(SessionDiscussionTitleV1Schema);
 
 export const SessionDiscussionMessagePartV1Schema = lazyZodSchema(() => z.discriminatedUnion('t', [
   z.object({ t: z.literal('text'), text: nfcString() }).strict(),
@@ -90,6 +92,7 @@ export const SessionDiscussionMessageContentV1Schema = lazyZodSchema(() => z.obj
   }
 }));
 export type SessionDiscussionMessageContentV1 = z.infer<typeof SessionDiscussionMessageContentV1Schema>;
+export const SessionDiscussionMessageContentV1StoredSchema = createStoredReadSchema(SessionDiscussionMessageContentV1Schema);
 
 /**
  * The one bounded, immutable, display-only provenance shape consumed by both
