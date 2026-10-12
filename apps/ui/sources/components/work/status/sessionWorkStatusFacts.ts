@@ -1,7 +1,9 @@
 import type { SessionReportsV1 } from '@happier-dev/protocol';
+import { readSessionAwarenessPresentationV1 } from '@happier-dev/protocol/sessions/awareness/presentationV1';
 
 import { hasProjectedActiveTurn } from '@/sync/domains/session/attention/runtimePresentation';
 import { getSessionStatus, type SessionStatus } from '@/utils/sessions/sessionUtils';
+import { t } from '@/text';
 
 import type { WorkStatusInput } from './resolveWorkStatusTone';
 
@@ -35,7 +37,12 @@ export function readSessionWorkStatusFacts(
     session: Parameters<typeof getSessionStatus>[0] & SessionReportCounts,
     nowMs: number,
 ): SessionWorkStatusFacts {
-    return sessionWorkStatusFactsFromStatus(session, getSessionStatus(session, nowMs, { workingTextMode: 'static', includeTitle: false }));
+    const status = getSessionStatus(session, nowMs, { workingTextMode: 'static', includeTitle: false });
+    // These rows carry their own time, so a detached Session's word says only that it is offline;
+    // "Last seen 1 day ago" beside "1d" would say the same thing twice.
+    return sessionWorkStatusFactsFromStatus(session, status.state === 'disconnected'
+        ? { ...status, statusText: t('status.offline') }
+        : status);
 }
 
 /**
@@ -48,7 +55,7 @@ export function sessionWorkStatusFactsFromStatus(
 ): SessionWorkStatusFacts {
     return withOutstandingReports({
         awareness: status.awareness,
-        word: status.statusText,
+        word: readSessionAwarenessPresentationV1(status.awareness) === 'unknown' ? t('status.unknownState') : status.statusText,
         // Settled is the Session's own statement — its latest turn completed and it reads Ready — not
         // merely "no turn in flight": a quiet Session with nothing to show is idle, not finished.
         settled: status.awareness.operational.primary === 'ready',
