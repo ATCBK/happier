@@ -4,6 +4,7 @@ import { Platform, Pressable, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { HorizontalScrollableRow } from '@/components/ui/scroll/HorizontalScrollableRow';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -26,7 +27,8 @@ export type AgentInputChipPickerTopSelectorProps = Readonly<{
     onFocusOption: (optionId: string) => void;
 }>;
 
-const PICKER_OPTION_TOUCH_TARGET_SIZE = resolveMinimumInteractiveTargetSize(Platform.OS);
+// An option is a control-height chip, grown to the touch floor where the pointer is a finger.
+const PICKER_OPTION_TOUCH_TARGET_SIZE = Math.max(HAPPIER_PAGE_METRICS.controlHeightPx, resolveMinimumInteractiveTargetSize(Platform.OS));
 
 type WebHoverablePressableState = Readonly<{
     pressed: boolean;

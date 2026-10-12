@@ -194,6 +194,30 @@ describe('useNewSessionSimplePanelProps', () => {
         await hook.unmount();
     });
 
+    it('keeps every field of a shared popover config: phone sheet, header and the latest close handler', async () => {
+        const firstClose = vi.fn();
+        const secondClose = vi.fn();
+        const machinePopover = (onRequestClose: () => void) => ({
+            renderContent: () => null,
+            maxHeightCap: 560,
+            phonePresentation: 'sheet' as const,
+            header: { title: 'Machine', description: 'Where it runs' },
+            onRequestClose,
+        });
+        const hook = await renderHook((props: NewSessionSimplePanelProps) => useNewSessionSimplePanelProps(props), {
+            initialProps: createPanelProps({ machinePopover: machinePopover(firstClose) }),
+        });
+        await hook.rerender(createPanelProps({ machinePopover: machinePopover(secondClose) }));
+
+        const stable = hook.getCurrent().machinePopover;
+        expect(stable?.phonePresentation).toBe('sheet');
+        expect(stable?.header).toEqual({ title: 'Machine', description: 'Where it runs' });
+        stable?.onRequestClose?.();
+        expect(firstClose).not.toHaveBeenCalled();
+        expect(secondClose).toHaveBeenCalledTimes(1);
+        await hook.unmount();
+    });
+
     it('keeps shared popover configs stable while calling the latest render content', async () => {
         const firstMachineContent = React.createElement('MachineContent', { value: 'first' });
         const secondMachineContent = React.createElement('MachineContent', { value: 'second' });

@@ -9,6 +9,7 @@ import { resolveCatalogAgentIdForBackendTarget } from '@/agents/backendCatalog/g
 import { getAgentCore, isBundledAgentId, type AgentId } from '@/agents/catalog/catalog';
 import { formatBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
 import { AgentInputEngineDetail } from '@/components/sessions/agentInput/components/AgentInputEngineDetail';
+import { agentInputChipPickerRailActionsRender } from '@/components/sessions/agentInput/components/AgentInputChipPickerOptionSelector';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { mergeOptionPickerProbes } from '@/components/sessions/pickers/mergeOptionPickerProbes';
 import type { OptionPickerProbeState } from '@/components/sessions/pickers/OptionPickerOverlay';
@@ -409,7 +410,8 @@ export function NewSessionEngineOptionDetail(props: NewSessionEngineOptionDetail
         providerSettings,
         { providersFeatureEnabled },
     ), [providersFeatureEnabled, providerSettings]);
-    const modelHeaderAccessory = props.favoriteEngine ? (
+    // Where the Agent rail draws its row star, a second one here would toggle the same favorite.
+    const modelHeaderAccessory = props.favoriteEngine && !agentInputChipPickerRailActionsRender() ? (
         <EngineFavoriteToggle
             favorite={props.favoriteEngine.favorite}
             onToggle={props.favoriteEngine.onToggle}

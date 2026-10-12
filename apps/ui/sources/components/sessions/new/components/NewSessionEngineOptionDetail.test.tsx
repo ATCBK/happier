@@ -251,6 +251,17 @@ vi.mock('@/providers/hooks/useProviderModelProjection', () => ({
 
 const { NewSessionEngineOptionDetail } = await import('./NewSessionEngineOptionDetail');
 
+async function withPlatformOS(os: 'web' | 'ios', run: () => Promise<void>) {
+    const { Platform } = await import('react-native');
+    const previous = Platform.OS;
+    (Platform as { OS: string }).OS = os;
+    try {
+        await run();
+    } finally {
+        (Platform as { OS: string }).OS = previous;
+    }
+}
+
 describe('NewSessionEngineOptionDetail', () => {
     const backendTarget: BackendTargetRefV2 = {
         kind: 'backend',
@@ -461,8 +472,9 @@ describe('NewSessionEngineOptionDetail', () => {
             const summary = await renderScreen(lastOptionPickerOverlayProps.summary);
             const errorItems = summary.findByType(ProviderErrorItems.type);
             expect(errorItems.props.error).toBe(projection.error);
-            expect(errorItems.props.retry).toBeTypeOf('function');
-            await act(async () => { await errorItems.props.retry(); });
+            // One refresh: the header's, which re-runs the projection the error line describes.
+            expect(errorItems.props.retry).toBeUndefined();
+            await act(async () => { lastOptionPickerOverlayProps?.probe?.onRefresh?.(); });
             expect(projection.refresh).toHaveBeenCalledTimes(1);
         }
 
@@ -476,43 +488,64 @@ describe('NewSessionEngineOptionDetail', () => {
         }));
     });
 
-    it('renders an engine favorite action in the model header and toggles it without refreshing models', async () => {
-        const onToggleFavoriteEngine = vi.fn();
-        const screen = await renderScreen(<NewSessionEngineOptionDetail
-            backendTarget={backendTarget}
-            selectedMachineId="machine-1"
-            capabilityServerId="server-1"
-            cwd="/repo"
-            selectedModelId="default"
-            selectedSessionModeId="default"
-            selectedConfigOverrides={{}}
-            favoriteEngine={{
-                favorite: true,
-                onToggle: onToggleFavoriteEngine,
-            }}
-        />);
+    it('renders an engine favorite action in the model header on native and toggles it without refreshing models', async () => {
+        // Native rails draw no row actions, so the model header carries the Agent favorite.
+        await withPlatformOS('ios', async () => {
+            const onToggleFavoriteEngine = vi.fn();
+            const screen = await renderScreen(<NewSessionEngineOptionDetail
+                backendTarget={backendTarget}
+                selectedMachineId="machine-1"
+                capabilityServerId="server-1"
+                cwd="/repo"
+                selectedModelId="default"
+                selectedSessionModeId="default"
+                selectedConfigOverrides={{}}
+                favoriteEngine={{
+                    favorite: true,
+                    onToggle: onToggleFavoriteEngine,
+                }}
+            />);
 
-        expect(lastOptionPickerOverlayProps?.headerAccessory).toBeTruthy();
+            expect(lastOptionPickerOverlayProps?.headerAccessory).toBeTruthy();
 
-        const favoriteAction = screen.findByTestId('new-session-engine-favorite-toggle');
-        const targetStyle = resolveInteractiveStyle(favoriteAction?.props.style);
-        // The press frame carries the target; the drawn box stays compact. Vertical is
-        // the free axis, horizontal is capped at half the header cluster's gap so the
-        // star cannot overlap the refresh control beside it (WCAG 2.2 AA SC 2.5.8).
-        expect(targetStyle.height ?? targetStyle.minHeight).toBeGreaterThanOrEqual(44);
-        expect(targetStyle.width ?? targetStyle.minWidth).toBeGreaterThanOrEqual(24);
-        expect(favoriteAction?.props.accessibilityLabel).toBe('profiles.actions.removeFromFavorites');
-        expect(typeof favoriteAction?.props.onFocus).toBe('function');
+            const favoriteAction = screen.findByTestId('new-session-engine-favorite-toggle');
+            const targetStyle = resolveInteractiveStyle(favoriteAction?.props.style);
+            // The press frame carries the target; the drawn box stays compact. Vertical is
+            // the free axis, horizontal is capped at half the header cluster's gap so the
+            // star cannot overlap the refresh control beside it (WCAG 2.2 AA SC 2.5.8).
+            expect(targetStyle.height ?? targetStyle.minHeight).toBeGreaterThanOrEqual(44);
+            expect(targetStyle.width ?? targetStyle.minWidth).toBeGreaterThanOrEqual(24);
+            expect(favoriteAction?.props.accessibilityLabel).toBe('profiles.actions.removeFromFavorites');
+            expect(typeof favoriteAction?.props.onFocus).toBe('function');
 
-        await act(async () => {
-            favoriteAction?.props.onFocus?.();
+            await act(async () => {
+                favoriteAction?.props.onFocus?.();
+            });
+            expect(screen.findByTestId('new-session-engine-favorite-toggle-tooltip')).toBeTruthy();
+
+            await screen.pressByTestIdAsync('new-session-engine-favorite-toggle');
+
+            expect(onToggleFavoriteEngine).toHaveBeenCalledTimes(1);
+            expect(probeRefreshSpies.models).not.toHaveBeenCalled();
         });
-        expect(screen.findByTestId('new-session-engine-favorite-toggle-tooltip')).toBeTruthy();
+    });
 
-        await screen.pressByTestIdAsync('new-session-engine-favorite-toggle');
-
-        expect(onToggleFavoriteEngine).toHaveBeenCalledTimes(1);
-        expect(probeRefreshSpies.models).not.toHaveBeenCalled();
+    it('leaves the engine favorite to the Agent rail where the rail draws it', async () => {
+        await withPlatformOS('web', async () => {
+            await renderScreen(<NewSessionEngineOptionDetail
+                backendTarget={backendTarget}
+                selectedMachineId="machine-1"
+                capabilityServerId="server-1"
+                cwd="/repo"
+                selectedModelId="default"
+                selectedSessionModeId="default"
+                selectedConfigOverrides={{}}
+                favoriteEngine={{ favorite: true, onToggle: vi.fn() }}
+            />);
+            // The rail row already carries this Agent's star; a second one in the model header
+            // toggles the same favorite.
+            expect(lastOptionPickerOverlayProps?.headerAccessory).toBeFalsy();
+        });
     });
 
     it('does not render session mode selection in the engine popover (mode is controlled by the dedicated chip) and preserves the incoming sessionModeId on model changes', async () => {

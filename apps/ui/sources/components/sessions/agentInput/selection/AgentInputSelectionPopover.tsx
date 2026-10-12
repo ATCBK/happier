@@ -14,7 +14,13 @@ export type AgentInputSelectionPopoverProps = Readonly<{
     maxHeightCap?: number;
     maxWidthCap?: number;
     portalTopBottomLayout?: 'anchored' | 'boundary';
-    children: (args: Readonly<{ maxHeight: number }>) => React.ReactNode;
+    /** `sheet`: a phone shows the content as the shared bottom sheet (see `Popover.phonePresentation`). */
+    phonePresentation?: 'sheet';
+    /** The sheet's header: the shared title band (default) or `none` when the content draws its own. */
+    sheetHeader?: 'band' | 'none';
+    sheetSubtitle?: string;
+    accessibilityLabel?: string;
+    children: (args: Readonly<{ maxHeight: number; presentation: 'popover' | 'sheet' }>) => React.ReactNode;
 }>;
 
 function OpenAgentInputSelectionPopover(props: AgentInputSelectionPopoverProps) {
@@ -46,6 +52,11 @@ function OpenAgentInputSelectionPopover(props: AgentInputSelectionPopoverProps) 
             gap={popoverLayout.gap}
             maxHeightCap={popoverLayout.maxHeightCap}
             maxWidthCap={props.maxWidthCap}
+            placementMinSpace={popoverLayout.placementMinSpace}
+            phonePresentation={props.phonePresentation}
+            sheetHeader={props.sheetHeader}
+            sheetSubtitle={props.sheetSubtitle}
+            accessibilityLabel={props.accessibilityLabel}
             edgePadding={popoverLayout.edgePadding}
             closeOnAnchorPress={false}
             // IMPORTANT:
@@ -66,9 +77,9 @@ function OpenAgentInputSelectionPopover(props: AgentInputSelectionPopoverProps) 
             containerStyle={{ paddingHorizontal: 0 }}
             keyboardBottomInset={popoverLayout.keyboardBottomInset}
         >
-            {({ maxHeight }) => (
+            {({ maxHeight, presentation }) => (
                 <SessionModelSourceBrowseHandoffContext.Provider value={modelSourceBrowseHandoff}>
-                    {props.children({ maxHeight })}
+                    {props.children({ maxHeight, presentation: presentation === 'sheet' ? 'sheet' : 'popover' })}
                 </SessionModelSourceBrowseHandoffContext.Provider>
             )}
         </Popover>

@@ -1,11 +1,14 @@
 import * as React from 'react';
-import { Platform, useWindowDimensions } from 'react-native';
+import { Platform, useWindowDimensions, View } from 'react-native';
+import { StyleSheet } from 'react-native-unistyles';
 
 import type { FloatingOverlayEdgeFades } from '@/components/ui/overlays/FloatingOverlay';
 import type { HoverPreviewHandlers } from '@/components/ui/popover/useHoverPreviewPopover';
 import type { ScrollEdgeVisibility } from '@/components/ui/scroll/useScrollEdgeFades';
 import { AgentInputSelectionPopover } from '@/components/sessions/agentInput/selection/AgentInputSelectionPopover';
 import { isMobileLayoutWidth } from '@/components/sessions/layout/isMobileLayoutWidth';
+import { Text } from '@/components/ui/text/Text';
+import { Typography } from '@/constants/Typography';
 
 import { AgentInputPopoverSurface } from './AgentInputPopoverSurface';
 
@@ -20,8 +23,17 @@ export type AgentInputPopoverContent =
     | React.ReactNode
     | ((args: AgentInputContentPopoverRenderArgs) => React.ReactNode);
 
+/** A popover that names itself: its title and one sentence of purpose, above the content. */
+export type AgentInputContentPopoverHeader = Readonly<{
+    title: string;
+    description?: string;
+}>;
+
 export type AgentInputContentPopoverConfig = Readonly<{
     renderContent: AgentInputPopoverContent;
+    header?: AgentInputContentPopoverHeader;
+    /** `sheet`: a phone presents it as the shared bottom sheet, whose band carries `header`. */
+    phonePresentation?: 'sheet';
     /** Invoked before the shared overlay closes so content-owned async work can be invalidated. */
     onRequestClose?: () => void;
     boundaryRef?: React.RefObject<any> | null;
@@ -43,6 +55,8 @@ export type AgentInputContentPopoverProps = Readonly<{
     anchorRef: React.RefObject<any>;
     boundaryRef?: React.RefObject<any> | null;
     content: AgentInputPopoverContent;
+    header?: AgentInputContentPopoverHeader;
+    phonePresentation?: 'sheet';
     onRequestClose: () => void;
     maxHeightCap?: number;
     maxWidthCap?: number;
@@ -75,6 +89,8 @@ export function AgentInputContentPopover(props: AgentInputContentPopoverProps) {
             Math.max(0, Math.floor(windowWidth - MOBILE_WEB_AGENT_INPUT_POPOVER_VIEWPORT_MARGIN * 2)),
         );
     }, [props.maxWidthCap, usesMobileWebBoundaryLayout, windowWidth]);
+    // The header sits outside the content's own height budget, so the content keeps what is left.
+    const [headerHeight, setHeaderHeight] = React.useState(0);
 
     return (
         <AgentInputSelectionPopover
@@ -85,9 +101,19 @@ export function AgentInputContentPopover(props: AgentInputContentPopoverProps) {
             maxHeightCap={props.maxHeightCap ?? 420}
             maxWidthCap={maxWidthCap}
             portalTopBottomLayout={usesMobileWebBoundaryLayout ? 'boundary' : undefined}
+            phonePresentation={props.phonePresentation}
+            // A titled popover names itself in the sheet's band; an untitled one (the machine list, led by
+            // its own search) keeps only the grabber instead of an empty band with a lone close button.
+            sheetHeader={props.header ? 'band' : 'none'}
+            accessibilityLabel={props.header?.title}
+            sheetSubtitle={props.header?.description}
             onRequestClose={props.onRequestClose}
         >
-            {({ maxHeight }) => (
+            {({ maxHeight, presentation }) => {
+                // On a phone sheet the shared band already shows the title and purpose.
+                const header = presentation === 'sheet' ? undefined : props.header;
+                const contentMaxHeight = header ? Math.max(0, maxHeight - headerHeight) : maxHeight;
+                return (
                 <AgentInputPopoverSurface
                     testID={props.testID ?? 'agent-input-content-popover'}
                     maxHeight={maxHeight}
@@ -98,12 +124,45 @@ export function AgentInputContentPopover(props: AgentInputContentPopoverProps) {
                     initialVisibility={props.initialVisibility}
                     hoverProps={props.hoverProps}
                 >
+                    {header ? (
+                        <View
+                            testID="agent-input-content-popover.header"
+                            style={styles.header}
+                            onLayout={(event) => {
+                                const height = Math.round(event.nativeEvent.layout.height);
+                                setHeaderHeight((current) => current === height ? current : height);
+                            }}
+                        >
+                            <Text accessibilityRole="header" style={styles.title}>{header.title}</Text>
+                            {header.description ? <Text style={styles.description}>{header.description}</Text> : null}
+                        </View>
+                    ) : null}
                     {renderPopoverContent(props.content, {
                         requestClose: props.onRequestClose,
-                        maxHeight,
+                        maxHeight: contentMaxHeight,
                     })}
                 </AgentInputPopoverSurface>
-            )}
+                );
+            }}
         </AgentInputSelectionPopover>
     );
 }
+
+const styles = StyleSheet.create((theme) => ({
+    header: {
+        gap: 2,
+        paddingHorizontal: theme.margins.md,
+        paddingTop: theme.margins.md,
+        paddingBottom: theme.margins.xs,
+    },
+    title: {
+        ...Typography.default('semiBold'),
+        fontSize: 14,
+        lineHeight: 18,
+        color: theme.colors.text.primary,
+    },
+    description: {
+        ...Typography.rowMeta(),
+        color: theme.colors.text.secondary,
+    },
+}));

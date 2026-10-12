@@ -28,9 +28,12 @@ import { SELECTION_LIST_LARGE_POPOVER_SIZE } from '@/components/ui/selectionList
 
 const LARGE_PICKER_LAYOUT: Pick<
     AgentInputContentPopoverConfig,
-    'maxHeightCap' | 'maxWidthCap' | 'keyboardShouldPersistTaps' | 'edgeFades' | 'edgeIndicators' | 'initialVisibility'
+    'maxHeightCap' | 'maxWidthCap' | 'keyboardShouldPersistTaps' | 'edgeFades' | 'edgeIndicators' | 'initialVisibility' | 'phonePresentation'
 > = {
     ...SELECTION_LIST_LARGE_POPOVER_SIZE,
+    // A phone gets the shared bottom sheet for the composer's long pickers (lab m-pick Ap), not a
+    // floating card squeezed above the chip row.
+    phonePresentation: 'sheet',
     keyboardShouldPersistTaps: 'handled',
     edgeFades: { top: true, bottom: true, size: 28 },
     edgeIndicators: true,
@@ -107,6 +110,8 @@ export function useNewSessionInputPopovers(params: Readonly<{
     onOpenMachinePoolSettings: (target: Readonly<{ serverId: string; poolId: string }>) => void;
     /** Existing Machines presets route, the managed group's trailing destination. */
     onOpenMachinePresets?: () => void;
+    /** Existing Add a machine route, the machine list's last row. */
+    onOpenAddMachine?: () => void;
     targetServerId: string | null;
     externalSessionsFeatureEnabled: boolean;
     resumeSessionId: string;
@@ -154,6 +159,7 @@ export function useNewSessionInputPopovers(params: Readonly<{
         onRefreshMachinePools: params.onRefreshMachinePools,
         onOpenMachinePoolSettings: params.onOpenMachinePoolSettings,
         onOpenMachinePresets: params.onOpenMachinePresets,
+        onOpenAddMachine: params.onOpenAddMachine,
         recentMachines: params.recentMachines,
         selectedMachine: params.selectedMachine,
         selectedServerId: params.selectedServerId,
@@ -302,6 +308,16 @@ export function useNewSessionInputPopovers(params: Readonly<{
                         renderParams.machinePoolSelection.cancelPendingSelection();
                         requestClose();
                         renderParams.onOpenMachinePresets?.();
+                    } : undefined}
+                    // The configurator is its own modal: the picker closes as it opens (lab m-pick).
+                    onConfigureManagedMachine={() => {
+                        renderParams.machinePoolSelection.cancelPendingSelection();
+                        requestClose();
+                    }}
+                    onConnectMachine={renderParams.onOpenAddMachine ? () => {
+                        renderParams.machinePoolSelection.cancelPendingSelection();
+                        requestClose();
+                        renderParams.onOpenAddMachine?.();
                     } : undefined}
                     recentMachines={renderParams.recentMachines}
                     favoriteMachines={renderParams.favoriteMachineItems}

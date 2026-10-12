@@ -8,19 +8,28 @@ import {
 import { useComposerKeyboardLayout } from '@/components/sessions/keyboardAvoidance/ComposerKeyboardContext';
 import { isMobileLayoutWidth } from '@/components/sessions/layout/isMobileLayoutWidth';
 import { useKeyboardHeight } from '@/hooks/ui/useKeyboardHeight';
+import { DESKTOP_MAIN_CONTENT_DRAG_HEIGHT_PX } from '@/components/navigation/shell/desktopChrome/desktopChromeMetrics';
 
 const MOBILE_AGENT_INPUT_POPOVER_EDGE_PADDING = 12;
 const DEFAULT_AGENT_INPUT_POPOVER_EDGE_PADDING = 16;
 const DEFAULT_POPOVER_MAX_HEIGHT = 400;
 const NATIVE_KEYBOARD_VISIBLE_POPOVER_FRACTION = 0.5;
 const DEFAULT_POPOVER_GAP = 8;
+/**
+ * A composer picker opens toward the roomier side of its chip (owner, 2026-10-12: more room above →
+ * above). No side is "enough" on its own, so the bottom placement flips whenever the top has more.
+ */
+const AGENT_INPUT_POPOVER_ROOMIER_SIDE_WINS = Number.POSITIVE_INFINITY;
 
 export type AgentInputPopoverLayout = Readonly<{
     maxHeightCap?: number;
     keyboardBottomInset: number;
-    placement: 'top';
+    /** Web opens toward the roomier side of the chip; native keeps above its keyboard-docked composer. */
+    placement: 'top' | 'bottom';
+    /** See `Popover.placementMinSpace`: on web, the roomier side always wins. */
+    placementMinSpace?: number;
     gap: number;
-    edgePadding: Readonly<{ horizontal: number }>;
+    edgePadding: Readonly<{ horizontal: number; vertical: number; top?: number }>;
     portal: PopoverPortalOptions;
 }>;
 
@@ -70,12 +79,18 @@ export function useAgentInputPopoverLayout(input: Readonly<{
                         ? retainedNativeKeyboardHeightRef.current
                         : 0;
 
-    const edgePadding = React.useMemo(() => ({
-        horizontal:
-            Platform.OS === 'web' && isMobileLayoutWidth(windowWidth)
-                ? MOBILE_AGENT_INPUT_POPOVER_EDGE_PADDING
-                : DEFAULT_AGENT_INPUT_POPOVER_EDGE_PADDING,
-    }), [windowWidth]);
+    // One margin on every side: a tall popover stops short of the window's top and bottom edges as
+    // it does of the sides (for a top/bottom placement the vertical inset only bounds its height).
+    const edgePadding = React.useMemo(() => {
+        const inset = Platform.OS === 'web' && isMobileLayoutWidth(windowWidth)
+            ? MOBILE_AGENT_INPUT_POPOVER_EDGE_PADDING
+            : DEFAULT_AGENT_INPUT_POPOVER_EDGE_PADDING;
+        // A desktop-width web window keeps its title strip (tabs, window controls) clear above.
+        const top = Platform.OS === 'web' && !isMobileLayoutWidth(windowWidth)
+            ? Math.max(inset, DESKTOP_MAIN_CONTENT_DRAG_HEIGHT_PX)
+            : inset;
+        return top === inset ? { horizontal: inset, vertical: inset } : { horizontal: inset, vertical: inset, top };
+    }, [windowWidth]);
 
     const maxHeightCap = React.useMemo(() => {
         if (Platform.OS === 'web' || effectiveKeyboardHeight <= 0) {
@@ -112,7 +127,8 @@ export function useAgentInputPopoverLayout(input: Readonly<{
     return {
         maxHeightCap,
         keyboardBottomInset: effectiveKeyboardHeight,
-        placement: 'top',
+        placement: Platform.OS === 'web' ? 'bottom' : 'top',
+        ...(Platform.OS === 'web' ? { placementMinSpace: AGENT_INPUT_POPOVER_ROOMIER_SIDE_WINS } : {}),
         // The popover now anchors correctly on every platform (Popover resolves the portal-relative
         // anchor via window-deltas on Android — see `resolvePortalRelativeAnchorRect`), so the gap is
         // the same snug value everywhere. Previously Android over-padded (32) to mask an anchor that

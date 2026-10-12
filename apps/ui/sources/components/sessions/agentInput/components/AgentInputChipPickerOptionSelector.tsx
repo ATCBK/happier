@@ -6,6 +6,7 @@ import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import { Typography } from "@/constants/Typography";
 import { Text } from "@/components/ui/text/Text";
 import { normalizeNodeForView } from "@/components/ui/rendering/normalizeNodeForView";
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { AgentInputChipPickerTopSelector } from "./AgentInputChipPickerTopSelector";
 import {
@@ -23,7 +24,8 @@ import type {
 } from "./AgentInputChipPickerTypes";
 
 const RAIL_ACTION_SIZE = 20;
-const PICKER_OPTION_TOUCH_TARGET_SIZE = resolveMinimumInteractiveTargetSize(Platform.OS);
+// An option is a control-height chip, grown to the touch floor where the pointer is a finger.
+const PICKER_OPTION_TOUCH_TARGET_SIZE = Math.max(HAPPIER_PAGE_METRICS.controlHeightPx, resolveMinimumInteractiveTargetSize(Platform.OS));
 
 type WebHoverablePressableState = Readonly<{
   pressed: boolean;
@@ -70,6 +72,11 @@ export type AgentInputChipPickerOptionSelectorProps = Readonly<{
   onFocusOption: (optionId: string) => void;
   variant: "rail" | "stacked";
 }>;
+
+/** Rail rows draw their trailing action (such as the Agent favorite) only where hover and focus reveal it. */
+export function agentInputChipPickerRailActionsRender(): boolean {
+  return Platform.OS === "web";
+}
 
 export function shouldShowAgentInputChipPickerRailAction(params: Readonly<{
   canRender: boolean;
@@ -166,7 +173,7 @@ function AgentInputChipPickerOptionButton(
     !props.compact &&
     Boolean(normalizedSubtitle) &&
     normalizedSubtitle?.toLowerCase() !== props.option.label.trim().toLowerCase();
-  const shouldRenderRailAction = Platform.OS === "web" && Boolean(props.option.railAction);
+  const shouldRenderRailAction = agentInputChipPickerRailActionsRender() && Boolean(props.option.railAction);
   const shouldShowRailAction = shouldShowAgentInputChipPickerRailAction({
     canRender: shouldRenderRailAction,
     hovered,
@@ -213,9 +220,10 @@ function AgentInputChipPickerOptionButton(
       <View style={styles.optionLeft}>
         {props.option.icon ? normalizeAgentInputChipPickerOptionIcon(props.option.icon) : null}
         <View style={styles.optionTextBlock}>
-          <Text style={[styles.optionLabel, props.focused ? styles.optionLabelFocused : null]}>{props.option.label}</Text>
+          {/* One line each: a rail row is a name to tap, and a wrapped name ("Qwen / Code") breaks the rail's rhythm. */}
+          <Text numberOfLines={1} style={[styles.optionLabel, props.focused ? styles.optionLabelFocused : null]}>{props.option.label}</Text>
           {shouldShowSubtitle ? (
-            <Text style={styles.optionSubtitle}>{normalizedSubtitle}</Text>
+            <Text numberOfLines={1} style={styles.optionSubtitle}>{normalizedSubtitle}</Text>
           ) : null}
         </View>
       </View>
@@ -375,6 +383,7 @@ const stylesheet = StyleSheet.create((theme) => ({
   },
   optionTextBlock: {
     flex: 1,
+    minWidth: 0,
     gap: 0,
   },
   optionRight: {

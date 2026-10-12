@@ -39,6 +39,7 @@ type SharedContentPopoverLike = Readonly<{
     edgeFades?: AgentInputContentPopoverConfig['edgeFades'];
     edgeIndicators?: AgentInputContentPopoverConfig['edgeIndicators'];
     initialVisibility?: AgentInputContentPopoverConfig['initialVisibility'];
+    phonePresentation?: AgentInputContentPopoverConfig['phonePresentation'];
 }>;
 
 type AgentInputContentPopoverEntry = Readonly<{
@@ -47,6 +48,8 @@ type AgentInputContentPopoverEntry = Readonly<{
     anchorRef: React.RefObject<View | null>;
     boundaryRef?: React.RefObject<View | null> | null;
     content: AgentInputContentPopoverConfig['renderContent'];
+    header?: AgentInputContentPopoverConfig['header'];
+    phonePresentation?: AgentInputContentPopoverConfig['phonePresentation'];
     onRequestClose: () => void;
     maxHeightCap?: AgentInputContentPopoverConfig['maxHeightCap'];
     maxWidthCap?: AgentInputContentPopoverConfig['maxWidthCap'];
@@ -74,6 +77,8 @@ function renderContentPopover(entry: AgentInputContentPopoverEntry): React.React
             anchorRef={entry.anchorRef}
             boundaryRef={entry.boundaryRef}
             content={entry.content}
+            header={entry.header}
+            phonePresentation={entry.phonePresentation}
             onRequestClose={entry.onRequestClose}
             maxHeightCap={entry.maxHeightCap}
             maxWidthCap={entry.maxWidthCap}
@@ -98,6 +103,7 @@ function resolveSharedContentPopoverOptions(
     | 'edgeFades'
     | 'edgeIndicators'
     | 'initialVisibility'
+    | 'phonePresentation'
 > {
     return {
         boundaryRef: popover.boundaryRef as React.RefObject<View | null> | null | undefined,
@@ -108,6 +114,7 @@ function resolveSharedContentPopoverOptions(
         edgeFades: popover.edgeFades,
         edgeIndicators: popover.edgeIndicators,
         initialVisibility: popover.initialVisibility,
+        phonePresentation: popover.phonePresentation,
     };
 }
 
@@ -245,6 +252,8 @@ export function AgentInputOverlayLayer(props: Readonly<{
                 ? (props.extraChipAnchorRefsByKey[props.activeExtraCollapsedPopoverChip.key] ?? props.actionMenuAnchorRef)
                 : props.actionMenuAnchorRef,
             content: props.activeExtraCollapsedPopoverChip.collapsedContentPopover.renderContent,
+            header: props.activeExtraCollapsedPopoverChip.collapsedContentPopover.header,
+            phonePresentation: props.activeExtraCollapsedPopoverChip.collapsedContentPopover.phonePresentation,
             onRequestClose: props.onActiveExtraCollapsedPopoverChipClose,
             boundaryRef: props.activeExtraCollapsedPopoverChip.collapsedContentPopover.boundaryRef as React.RefObject<View | null> | null | undefined,
             maxHeightCap: props.activeExtraCollapsedPopoverChip.collapsedContentPopover.maxHeightCap,
@@ -332,8 +341,10 @@ export function AgentInputOverlayLayer(props: Readonly<{
                     detailContentOwnsScroll
                     // Keep the popover narrower when the detail rail is hidden so stacked layouts
                     // don't waste horizontal space.
-                    maxWidthCap={shouldShowAgentInputChipPickerRail(props.agentPickerOptions, props.screenWidth) ? 720 : 570}
-                    maxHeightCap={460}
+                    maxWidthCap={shouldShowAgentInputChipPickerRail(props.agentPickerOptions, props.screenWidth) ? props.maxWidthCap : 570}
+                    // The lab's engine popover height (MP3); like every chip picker it hangs from its
+                    // chip on the roomier side (owner 2026-10-12).
+                    maxHeightCap={640}
                 />
             ) : null}
 

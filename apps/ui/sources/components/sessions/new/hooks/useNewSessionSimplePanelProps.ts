@@ -38,6 +38,8 @@ function buildContentPopoverStaticSignature(config: AgentInputContentPopoverConf
         edgeFades: config.edgeFades ?? null,
         edgeIndicators: config.edgeIndicators ?? null,
         initialVisibility: config.initialVisibility ?? null,
+        phonePresentation: config.phonePresentation ?? null,
+        header: config.header ?? null,
     });
 }
 
@@ -63,27 +65,27 @@ function useStableContentPopoverConfig(
             config?.maxHeightCap,
             config?.maxWidthCap,
             config?.scrollEnabled,
+            config?.phonePresentation,
+            config?.header,
         ],
     );
+    const onRequestCloseRef = useLatestRef(config?.onRequestClose);
+    const hasOnRequestClose = typeof config?.onRequestClose === 'function';
 
     return React.useMemo(() => {
         const currentConfig = configRef.current;
         if (!currentConfig) return undefined;
+        // Every field the config carries passes through; only the callbacks are re-pointed at their
+        // latest version so the stable config keeps its identity.
         return {
-            boundaryRef: currentConfig.boundaryRef,
-            maxHeightCap: currentConfig.maxHeightCap,
-            maxWidthCap: currentConfig.maxWidthCap,
-            scrollEnabled: currentConfig.scrollEnabled,
-            keyboardShouldPersistTaps: currentConfig.keyboardShouldPersistTaps,
-            edgeFades: currentConfig.edgeFades,
-            edgeIndicators: currentConfig.edgeIndicators,
-            initialVisibility: currentConfig.initialVisibility,
+            ...currentConfig,
+            ...(hasOnRequestClose ? { onRequestClose: () => onRequestCloseRef.current?.() } : {}),
             renderContent: (args: AgentInputContentPopoverRenderArgs) => {
                 const renderContent = renderContentRef.current;
                 return typeof renderContent === 'function' ? renderContent(args) : renderContent;
             },
         };
-    }, [configRef, renderContentRef, signature]);
+    }, [configRef, renderContentRef, onRequestCloseRef, hasOnRequestClose, signature]);
 }
 
 export function useNewSessionSimplePanelProps(

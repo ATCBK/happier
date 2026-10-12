@@ -3,7 +3,10 @@ import { Platform, ScrollView, type LayoutChangeEvent, type NativeScrollEvent, t
 
 import { ScrollEdgeFades } from '@/components/ui/scroll/ScrollEdgeFades';
 import { ScrollEdgeIndicators } from '@/components/ui/scroll/ScrollEdgeIndicators';
+import { resolveHorizontalScrollEdgeMaskStyle } from '@/components/ui/scroll/resolveScrollEdgeMaskStyle';
 import { useScrollEdgeFades } from '@/components/ui/scroll/useScrollEdgeFades';
+import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
+import { t } from '@/text';
 
 import { attachActionBarMouseDragScroll } from './attachActionBarMouseDragScroll';
 
@@ -12,8 +15,22 @@ const ACTION_BAR_SCROLL_END_GUTTER_WIDTH = 24;
 const ScrollViewWithWheel = ScrollView as unknown as React.ComponentType<
     React.ComponentPropsWithRef<typeof ScrollView> & {
         onWheel?: any;
+        onKeyDown?: (event: unknown) => void;
+        tabIndex?: number;
     }
 >;
+
+function readKeyboardKey(event: unknown): string | null {
+    if (!event || typeof event !== 'object') return null;
+    const candidate = event as Readonly<{ key?: unknown; nativeEvent?: Readonly<{ key?: unknown }> }>;
+    const key = candidate.nativeEvent?.key ?? candidate.key;
+    return typeof key === 'string' ? key : null;
+}
+
+function composerRailControls(node: any): any[] {
+    if (!node || typeof node.querySelectorAll !== 'function') return [];
+    return Array.from(node.querySelectorAll('button,[role="button"],[role="switch"]'));
+}
 
 export type AgentInputScrollableChipRowProps = Readonly<{
     children: React.ReactNode;
@@ -26,6 +43,7 @@ export type AgentInputScrollableChipRowProps = Readonly<{
 }>;
 
 export function AgentInputScrollableChipRow(props: AgentInputScrollableChipRowProps) {
+    const reducedMotion = useReducedMotionPreference();
     const fades = useScrollEdgeFades({
         enabledEdges: { left: true, right: true },
         overflowThreshold: 8,
@@ -156,14 +174,55 @@ export function AgentInputScrollableChipRow(props: AgentInputScrollableChipRowPr
     const canScroll = fades.canScrollX;
     const showFadeLeft = canScroll && fades.visibility.left;
     const showFadeRight = canScroll && fades.visibility.right;
+    const webEdgeMask = React.useMemo(
+        () => resolveHorizontalScrollEdgeMaskStyle({ top: false, bottom: false, left: showFadeLeft, right: showFadeRight }, { fadeSize: 24 }),
+        [showFadeLeft, showFadeRight],
+    );
+
+    const handleKeyDown = React.useCallback((event: unknown) => {
+        if (Platform.OS !== 'web') return;
+        const key = readKeyboardKey(event);
+        if (key !== 'ArrowLeft' && key !== 'ArrowRight' && key !== 'Home' && key !== 'End') return;
+        const node = getScrollNode() as any;
+        const controls = composerRailControls(node);
+        if (controls.length === 0) return;
+        const active = (globalThis as any).document?.activeElement;
+        const currentIndex = controls.indexOf(active);
+        const nextIndex = key === 'Home'
+            ? 0
+            : key === 'End'
+                ? controls.length - 1
+                : key === 'ArrowLeft'
+                    ? Math.max(0, currentIndex < 0 ? controls.length - 1 : currentIndex - 1)
+                    : Math.min(controls.length - 1, currentIndex < 0 ? 0 : currentIndex + 1);
+        const next = controls[nextIndex];
+        next?.focus?.();
+        next?.scrollIntoView?.({
+            behavior: reducedMotion ? 'auto' : 'smooth',
+            block: 'nearest',
+            inline: 'nearest',
+        });
+        (event as any)?.preventDefault?.();
+        (event as any)?.stopPropagation?.();
+    }, [getScrollNode, reducedMotion]);
 
     return (
         <View style={props.containerStyle}>
             <ScrollViewWithWheel
                 ref={scrollRef}
+                // Web: the chips fade out at a scrollable edge through a mask on the rail itself. The
+                // composer's glass surface is translucent, so a painted fade (native below) has no
+                // colour to paint and the last chip was simply cut off.
+                style={Platform.OS === 'web' ? webEdgeMask : undefined}
                 horizontal
+                accessibilityRole="toolbar"
+                accessibilityLabel={t('agentInput.chipRail.accessibilityLabel')}
+                accessibilityHint={canScroll ? t('agentInput.chipRail.moreControlsHint') : undefined}
+                tabIndex={0}
+                onKeyDown={handleKeyDown}
                 showsHorizontalScrollIndicator={false}
                 scrollEnabled
+                decelerationRate="fast"
                 alwaysBounceHorizontal={false}
                 directionalLockEnabled
                 keyboardShouldPersistTaps="handled"
@@ -215,13 +274,13 @@ export function AgentInputScrollableChipRow(props: AgentInputScrollableChipRowPr
                     {props.children}
                 </View>
             </ScrollViewWithWheel>
-            <ScrollEdgeFades
+            {Platform.OS === 'web' ? null : <ScrollEdgeFades
                 color={props.fadeColor}
                 size={24}
                 edges={{ left: showFadeLeft, right: showFadeRight }}
                 leftStyle={props.fadeLeftStyle}
                 rightStyle={props.fadeRightStyle}
-            />
+            />}
             <ScrollEdgeIndicators
                 edges={{ left: showFadeLeft, right: showFadeRight }}
                 color={props.indicatorColor}

@@ -250,6 +250,8 @@ export type AgentInputExtraActionChip = Readonly<{
         /** Rechecks mount/session currentness immediately before overflow opens. */
         isEnabled?: () => boolean;
         renderContent: AgentInputContentPopoverConfig['renderContent'];
+        header?: AgentInputContentPopoverConfig['header'];
+        phonePresentation?: AgentInputContentPopoverConfig['phonePresentation'];
         boundaryRef?: React.RefObject<any> | null;
         maxHeightCap?: number;
         maxWidthCap?: number;

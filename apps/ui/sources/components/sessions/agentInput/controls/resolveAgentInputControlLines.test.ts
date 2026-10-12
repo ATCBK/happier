@@ -3,6 +3,18 @@ import { describe, expect, it } from 'vitest';
 import { resolveAgentInputControlLines } from './resolveAgentInputControlLines';
 
 describe('resolveAgentInputControlLines', () => {
+    it('reads rail 1 as setup and rail 2 as location (owner 2026-10-12)', () => {
+        const lines = resolveAgentInputControlLines({
+            layout: 'scroll',
+            controlIds: ['workflow', 'mcp', 'checkout', 'automation', 'env', 'profile', 'connectedServices', 'mode',
+                'permission', 'engine', 'files', 'attachments', 'resume', 'path', 'machine'],
+        });
+
+        expect(lines.primary).toEqual(['attachments', 'files', 'engine', 'permission', 'mode', 'connectedServices',
+            'profile', 'env', 'workflow', 'mcp']);
+        expect(lines.secondary).toEqual(['machine', 'path', 'resume', 'checkout', 'automation']);
+    });
+
     it('preserves Session access independently from recipient routing in the composer and overflow', () => {
         const controlIds = ['recipient', 'sessionAccess'] as const;
         expect(resolveAgentInputControlLines({ layout: 'wrap', controlIds }).primary)
@@ -16,7 +28,7 @@ describe('resolveAgentInputControlLines', () => {
             controlIds: ['engine', 'permission', 'stop', 'files', 'reviewComments', 'machine', 'path', 'resume'],
         });
 
-        expect(lines.primary).toEqual(['engine', 'permission', 'stop', 'files', 'reviewComments']);
+        expect(lines.primary).toEqual(['files', 'engine', 'permission', 'stop', 'reviewComments']);
         expect(lines.secondary).toEqual(['machine', 'path', 'resume']);
         expect(lines.collapsed).toEqual([]);
     });
@@ -27,7 +39,7 @@ describe('resolveAgentInputControlLines', () => {
             controlIds: ['engine', 'permission', 'stop', 'files', 'reviewComments', 'machine', 'path', 'resume'],
         });
 
-        expect(lines.primary).toEqual(['engine', 'permission', 'stop', 'files', 'reviewComments']);
+        expect(lines.primary).toEqual(['files', 'engine', 'permission', 'stop', 'reviewComments']);
         expect(lines.secondary).toEqual(['machine', 'path', 'resume']);
         expect(lines.collapsed).toEqual([]);
     });
@@ -40,7 +52,7 @@ describe('resolveAgentInputControlLines', () => {
 
         expect(lines.primary).toEqual([]);
         expect(lines.secondary).toEqual([]);
-        expect(lines.collapsed).toEqual(['engine', 'permission', 'stop', 'files', 'reviewComments', 'machine', 'path', 'resume']);
+        expect(lines.collapsed).toEqual(['files', 'engine', 'permission', 'stop', 'reviewComments', 'machine', 'path', 'resume']);
     });
 
     it('keeps connected services on the primary line ahead of secondary machine/path controls', () => {
@@ -93,14 +105,14 @@ describe('resolveAgentInputControlLines', () => {
         expect(lines.secondary).toEqual(['machine', 'path']);
     });
 
-    it('keeps automation on the primary line ahead of secondary machine/path controls', () => {
+    it('puts automation on the location rail after machine and folder', () => {
         const lines = resolveAgentInputControlLines({
             layout: 'wrap',
             controlIds: ['engine', 'automation', 'machine', 'path'],
         });
 
-        expect(lines.primary).toEqual(['engine', 'automation']);
-        expect(lines.secondary).toEqual(['machine', 'path']);
+        expect(lines.primary).toEqual(['engine']);
+        expect(lines.secondary).toEqual(['machine', 'path', 'automation']);
     });
 
     it('keeps admitted plugin controls in supplied normalized contribution order after host controls', () => {
@@ -139,7 +151,7 @@ describe('resolveAgentInputControlLines', () => {
             'path', 'workflowTargets', 'sessionAccess', 'stop', 'workflowInputs', 'machine', 'automation', 'workflowRoles', 'workflow',
         ] });
         expect(lines.collapsed).toEqual([
-            'workflow', 'workflowInputs', 'workflowRoles', 'workflowTargets', 'automation', 'stop', 'sessionAccess', 'machine', 'path',
+            'stop', 'workflow', 'workflowInputs', 'workflowRoles', 'workflowTargets', 'sessionAccess', 'machine', 'path', 'automation',
         ]);
     });
 });

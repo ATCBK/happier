@@ -277,6 +277,9 @@ describe('AgentInput (action bar scroll layout)', () => {
         for (const scrollView of scrollViews) {
             expect(scrollView.props?.horizontal).toBe(true);
             expect(scrollView.props?.scrollEnabled).toBe(true);
+            expect(scrollView.props?.accessibilityRole).toBe('toolbar');
+            expect(scrollView.props?.accessibilityLabel).toBe('agentInput.chipRail.accessibilityLabel');
+            expect(typeof scrollView.props?.onKeyDown).toBe('function');
             expect(typeof scrollView.props?.onWheel).toBe('function');
             expect(typeof scrollView.props?.onContentSizeChange).toBe('function');
         }
@@ -309,6 +312,7 @@ describe('AgentInput (action bar scroll layout)', () => {
                 />)).tree;
 
         const scrollView = getActionBarScrollView(tree!, 0);
+        expect(scrollView.props?.accessibilityHint).toBe('agentInput.chipRail.moreControlsHint');
         expect(typeof scrollView?.props?.onContentSizeChange).toBe('function');
 
         const contentContainer = getActionBarContentView(tree!, 0);

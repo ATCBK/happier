@@ -19,6 +19,7 @@ type ResizeObserverRecord = Readonly<{
 
 const resizeObservers = new Set<ResizeObserverRecord>();
 const scrollOffsets = new WeakMap<HTMLElement, number>();
+const scrolledElements = new Set<HTMLElement>();
 let windowWidth = 390;
 const testTheme = lightTheme;
 
@@ -88,10 +89,30 @@ function flushResizeObservers(): void {
     }
 }
 
+/**
+ * A browser clamps a scroll container's offset when its content shrinks and reports it with a
+ * scroll event; the emulated `scrollTop` has to do the same or a filtered list stays scrolled past
+ * its end.
+ */
+function clampShrunkScrollOffsets(): void {
+    for (const element of scrolledElements) {
+        if (!element.isConnected) {
+            scrolledElements.delete(element);
+            continue;
+        }
+        const offset = scrollOffsets.get(element) ?? 0;
+        const max = Math.max(0, element.scrollHeight - element.clientHeight);
+        if (offset <= max) continue;
+        scrollOffsets.set(element, max);
+        element.dispatchEvent(new Event('scroll'));
+    }
+}
+
 async function flushLegendWork(): Promise<void> {
     for (let pass = 0; pass < 8; pass += 1) {
         await act(async () => {
             flushResizeObservers();
+            clampShrunkScrollOffsets();
             await vi.runOnlyPendingTimersAsync();
         });
     }
@@ -255,6 +276,7 @@ describe('AgentInputChipPickerPanel virtualized detail layout on web', () => {
             },
             set(value: number) {
                 scrollOffsets.set(this, value);
+                scrolledElements.add(this as HTMLElement);
             },
         });
         Object.defineProperty(HTMLElement.prototype, 'scrollTo', {

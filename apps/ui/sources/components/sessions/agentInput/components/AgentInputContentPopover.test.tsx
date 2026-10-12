@@ -7,6 +7,7 @@ const windowWidthState = vi.hoisted(() => ({ value: 480 }));
 const capturedSelectionPopoverProps = vi.hoisted(() => ({
     current: null as null | Record<string, unknown>,
 }));
+const presentationState = vi.hoisted(() => ({ value: 'popover' as 'popover' | 'sheet' }));
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -25,9 +26,9 @@ vi.mock('react-native', async () => {
 });
 
 vi.mock('@/components/sessions/agentInput/selection/AgentInputSelectionPopover', () => ({
-    AgentInputSelectionPopover: (props: Record<string, unknown> & { children?: (args: { maxHeight: number }) => React.ReactNode }) => {
+    AgentInputSelectionPopover: (props: Record<string, unknown> & { children?: (args: { maxHeight: number; presentation: 'popover' | 'sheet' }) => React.ReactNode }) => {
         capturedSelectionPopoverProps.current = props;
-        return React.createElement(React.Fragment, null, props.children?.({ maxHeight: 320 }) ?? null);
+        return React.createElement(React.Fragment, null, props.children?.({ maxHeight: 320, presentation: presentationState.value }) ?? null);
     },
 }));
 
@@ -37,6 +38,68 @@ vi.mock('./AgentInputPopoverSurface', () => ({
 }));
 
 describe('AgentInputContentPopover', () => {
+    it('heads the popover with its title and purpose, and hands both to the phone sheet instead of repeating them', async () => {
+        const { AgentInputContentPopover } = await import('./AgentInputContentPopover');
+        const header = { title: 'Runs through', description: 'Where Codex gets its models for this session.' };
+        const popover = await renderScreen(
+            <AgentInputContentPopover
+                open
+                anchorRef={{ current: null } as any}
+                header={header}
+                phonePresentation="sheet"
+                content={<React.Fragment />}
+                onRequestClose={() => {}}
+            />,
+        );
+        expect(popover.getTextContent()).toContain('Runs through');
+        expect(popover.getTextContent()).toContain('Where Codex gets its models for this session.');
+
+        presentationState.value = 'sheet';
+        const sheet = await renderScreen(
+            <AgentInputContentPopover
+                open
+                anchorRef={{ current: null } as any}
+                header={header}
+                phonePresentation="sheet"
+                content={<React.Fragment />}
+                onRequestClose={() => {}}
+            />,
+        );
+        presentationState.value = 'popover';
+        expect(sheet.getTextContent()).not.toContain('Runs through');
+        expect(capturedSelectionPopoverProps.current).toMatchObject({
+            phonePresentation: 'sheet',
+            accessibilityLabel: 'Runs through',
+            sheetSubtitle: 'Where Codex gets its models for this session.',
+        });
+    });
+
+    it('gives a phone sheet without a title no empty header band (its content leads, lab m-pick Ap)', async () => {
+        const { AgentInputContentPopover } = await import('./AgentInputContentPopover');
+        await renderScreen(
+            <AgentInputContentPopover
+                open
+                anchorRef={{ current: null } as any}
+                phonePresentation="sheet"
+                content={<React.Fragment />}
+                onRequestClose={() => {}}
+            />,
+        );
+        expect(capturedSelectionPopoverProps.current?.sheetHeader).toBe('none');
+
+        await renderScreen(
+            <AgentInputContentPopover
+                open
+                anchorRef={{ current: null } as any}
+                header={{ title: 'Runs through' }}
+                phonePresentation="sheet"
+                content={<React.Fragment />}
+                onRequestClose={() => {}}
+            />,
+        );
+        expect(capturedSelectionPopoverProps.current?.sheetHeader).toBe('band');
+    });
+
     it('expands the default max width cap to the mobile web viewport width', async () => {
         const { AgentInputContentPopover } = await import('./AgentInputContentPopover');
 

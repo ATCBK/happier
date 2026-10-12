@@ -82,10 +82,10 @@ describe('AgentInputSelectionPopover', () => {
         expect(capturedPopoverProps.current?.anchorRef).toBe(anchorRef);
         // On web, AgentInput popovers should default to the viewport boundary (ignore any boundary provider).
         expect(capturedPopoverProps.current?.boundaryRef).toBeNull();
-        expect(capturedPopoverProps.current?.placement).toBe('top');
+        expect(capturedPopoverProps.current?.placement).toBe('bottom');
         expect(capturedPopoverProps.current?.maxHeightCap).toBe(480);
         expect(capturedPopoverProps.current?.maxWidthCap).toBe(512);
-        expect(capturedPopoverProps.current?.edgePadding).toEqual({ horizontal: 12 });
+        expect(capturedPopoverProps.current?.edgePadding).toEqual({ horizontal: 12, vertical: 12 });
         expect(capturedPopoverProps.current?.portal).toEqual({
             web: true,
             native: true,
@@ -99,7 +99,7 @@ describe('AgentInputSelectionPopover', () => {
             style: { backgroundColor: 'transparent' },
             blockOutsidePointerEvents: false,
         });
-        expect(renderContent).toHaveBeenCalledWith({ maxHeight: 312 });
+        expect(renderContent).toHaveBeenCalledWith({ maxHeight: 312, presentation: 'popover' });
         expect(screen.findByTestId('content:312')).toBeTruthy();
     });
 
@@ -138,8 +138,36 @@ describe('AgentInputSelectionPopover', () => {
             </AgentInputSelectionPopover>,
         );
 
-        expect(capturedPopoverProps.current?.edgePadding).toEqual({ horizontal: 16 });
+        // The desktop title strip (tabs, window controls) stays clear above; below keeps the ordinary margin.
+        expect(capturedPopoverProps.current?.edgePadding).toEqual({ horizontal: 16, vertical: 16, top: 56 });
 
+        windowWidthState.value = 480;
+    });
+
+    it('opens every composer picker toward the roomier side of its chip (owner 2026-10-12: more room above, above)', async () => {
+        windowWidthState.value = 1440;
+        const { resolveHappierPopoverPlacement } = await import('@happier-dev/plugin-ui/presentation');
+        const { AgentInputSelectionPopover } = await import('./AgentInputSelectionPopover');
+        const anchorRef = { current: { nodeType: 'View' } } as any;
+        await renderScreen(
+            <AgentInputSelectionPopover open anchorRef={anchorRef} onRequestClose={() => {}} maxHeightCap={560}>
+                {() => <React.Fragment />}
+            </AgentInputSelectionPopover>,
+        );
+        const decide = (available: Readonly<{ top: number; bottom: number }>) => resolveHappierPopoverPlacement({
+            placement: capturedPopoverProps.current?.placement as 'top' | 'bottom',
+            preferredMinAvailable: (capturedPopoverProps.current?.placementMinSpace as number | undefined) ?? 560,
+            flip: true,
+            available: { ...available, left: 0, right: 0 },
+        });
+        // The Home composer at 1440×900: 256 px below, 400 above.
+        expect(decide({ top: 400, bottom: 256 })).toBe('top');
+        // A session composer docked at the window's foot.
+        expect(decide({ top: 700, bottom: 40 })).toBe('top');
+        // A composer near the top of a tall window: the room is below.
+        expect(decide({ top: 120, bottom: 640 })).toBe('bottom');
+        // Both sides hold the whole list: still the roomier one.
+        expect(decide({ top: 900, bottom: 700 })).toBe('top');
         windowWidthState.value = 480;
     });
 
