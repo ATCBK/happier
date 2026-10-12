@@ -315,6 +315,9 @@ describe('Set up from a preset (D53)', () => {
     await waitForHomeGovernance(() => expect(screen.tree.findAll(node => node.props?.testID === 'machine-environment-apply.state'
       && node.props.kind === 'empty').length).toBeGreaterThan(0));
     expect(screen.findByTestId('machine-environment-apply.state-action')).not.toBeNull();
+    // What a run would do is said only when there is something to run.
+    const { t } = await import('@/text');
+    expect(screen.getTextContent()).not.toContain(t('machinePresets.environment.applyDescription', { machine: 'devbox' }));
     await screen.pressByTestIdAsync('machine-environment-apply.state-action');
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(routerHandle.current?.spies.push.mock.calls.at(-1)?.[0])

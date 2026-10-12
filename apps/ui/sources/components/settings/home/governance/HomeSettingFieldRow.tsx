@@ -8,25 +8,16 @@ import {
     SchemaFieldValueSlot,
 } from '@/components/settings/schemaFields/SchemaFieldRow';
 import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
+import { t } from '@/text';
 
 import { HomeDeploymentFixedNote } from './HomeDeploymentFixedNote';
 import { homeSettingText } from './homeEmailSettingsForm';
 import { isHomeSettingWritable } from './homeSettingDeclaration';
 import type { HomeSettingDraftValue } from './homeSettingDraft';
-import { homeServerSettingNumberWords, homeServerSettingUnit, homeSettingChoiceLabel } from './homeServerSettingLabels';
+import { homeServerSettingUnit, homeSettingChoiceLabel } from './homeServerSettingLabels';
+import { homeSettingShownValue } from './HomeSettingRowState';
 
 export type HomeSettingStage = (key: string, value: HomeSettingDraftValue | null) => void;
-
-/** A value as the row shows it when it cannot be edited: its text, else the declared default. */
-export function homeSettingDisplayValue(entry: HomeSettingEntryV1): string | undefined {
-    const value = entry.value;
-    if (Array.isArray(value)) return value.join(', ');
-    const text = homeSettingText(entry);
-    if (text) return text;
-    const fallback = entry.declaration?.default;
-    if (fallback === undefined || fallback === null) return undefined;
-    return Array.isArray(fallback) ? fallback.join(', ') : String(fallback);
-}
 
 /** A list value is edited as comma-separated text, which the registry codec parses back. */
 function fieldText(entry: HomeSettingEntryV1): string {
@@ -98,15 +89,7 @@ export const HomeSettingFieldRow = React.memo(function HomeSettingFieldRow(props
     // An enum with one allowed value is not a choice (a reserved capability): nothing is offered.
     if (declaration?.type === 'enum' && declaration.bounds?.values?.length === 1) return null;
     if (kind === null) {
-        const shown = homeSettingDisplayValue(entry);
-        const numeric = declaration?.type === 'int' || declaration?.type === 'float';
-        return (
-            <SchemaFieldRow
-                {...row}
-                layout="inline"
-                value={shown !== undefined && numeric ? homeServerSettingNumberWords(entry.key, declaration?.type, shown) : shown}
-            />
-        );
+        return <SchemaFieldRow {...row} layout="inline" value={homeSettingShownValue(entry)} />;
     }
     const stagedValue = staged?.kind === 'value' ? staged.value : undefined;
     const values = declaration?.bounds?.values ?? [];
@@ -192,8 +175,9 @@ export const HomeSettingFieldRow = React.memo(function HomeSettingFieldRow(props
                                 testID: `${testID}.input`,
                                 accessibilityLabel: props.title,
                                 value: staged?.kind === 'text' ? staged.text : value,
-                                placeholder: fallback === undefined || fallback === null
-                                    ? undefined
+                                // An empty field says what empty means: the default it falls back to, or not set.
+                                placeholder: fallback === undefined || fallback === null || fallback === ''
+                                    ? t('homeSettings.row.notSet')
                                     : Array.isArray(fallback) ? fallback.join(', ') : String(fallback),
                                 editable: !props.disabled,
                                 autoCapitalize: 'none',

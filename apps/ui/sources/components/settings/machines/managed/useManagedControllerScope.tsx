@@ -10,10 +10,12 @@ import {
   resolveFreshMachineAdministrationExecutionTarget,
   doesMachineAdministrationTargetMatchActiveAccount,
   type MachineAdministrationTargetSelectionV1,
+  type MachineAdministrationExecutionTargetOptions,
 } from '@/sync/domains/machines/administration/useTargetSelection';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { useMachineListForServer, useActiveServerAccountScope } from '@/sync/domains/state/storage';
+import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { t } from '@/text';
 import { readMachineRequestReachabilityObservation } from '@/sync/domains/machines/reachability/machineReachability';
 
@@ -55,12 +57,13 @@ export function useManagedControllerScope(
 ): ManagedControllerScope {
   const machines = useMachineListForServer(input.serverId);
   const activeAccountScope = useActiveServerAccountScope();
+  const { binding } = useServerCredentialAccountScopeBinding(input.serverId);
   const rows = useMachineAdministrationTargetPickerRows();
   const thisMachineId = useThisComputerMachineId();
   const [chosen, setChosen] = React.useState<Readonly<{
     serverId: string; accountId: string | undefined; controller: ManagedControllerV1; explicit: boolean;
   }>>();
-  const accountId = activeAccountScope?.accountId;
+  const accountId = binding?.isCurrent() ? binding.scope.accountId : undefined;
   const scopedChoice = chosen && chosen.accountId === accountId && areServerProfileIdentifiersEquivalent(chosen.serverId, input.serverId)
     ? chosen : undefined;
   const preferredMachineId = input.preferred?.machineId;
@@ -90,7 +93,7 @@ export function useManagedControllerScope(
     : undefined;
   const automaticRetained = automaticRetainedRow && scopedChoice
     && readMachineRequestReachabilityObservation(
-      automaticRetainedRow.serverId,
+      binding?.isCurrent() ? binding.scope : null,
       automaticRetainedRow.candidate.target.machineId,
     )?.outcome !== 'failed'
     ? scopedChoice.controller
@@ -134,9 +137,9 @@ export function useManagedControllerScope(
           (row) => row.candidate.target.machineId === controller?.machineId,
         )?.candidate.target ?? null;
       const matchesAccount = doesMachineAdministrationTargetMatchActiveAccount({ target: selectedTarget, activeAccountServerId: activeAccountScope?.serverId });
-      const resolveExecutionTarget = () => {
-        if (!matchesAccount || !selectedTarget || !controller) return null;
-        const current = resolveFreshMachineAdministrationExecutionTarget(selectedTarget);
+      const resolveExecutionTarget = (options?: MachineAdministrationExecutionTargetOptions) => {
+        if (!matchesAccount || !selectedTarget || !controller || !binding?.isCurrent()) return null;
+        const current = resolveFreshMachineAdministrationExecutionTarget(selectedTarget, { ...options, accountScope: binding.scope });
         return current?.machine.installationId === controller.installationId ? current : null;
       };
       return {
@@ -150,6 +153,7 @@ export function useManagedControllerScope(
         selectedTarget,
         selectedTargetServerMatchesActiveAccount: matchesAccount,
         canExecute: resolveExecutionTarget() !== null,
+        changeIntent: onSelect ? 'draft' : 'scope',
         selectTarget: (target) => {
           if (!scopedRows.some(row => row.candidate.target.machineId === target.machineId
             && row.candidate.target.serverIdentityId === target.serverIdentityId
@@ -168,7 +172,7 @@ export function useManagedControllerScope(
         clearTarget: () => {},
         resolveExecutionTarget,
       };
-    }, [controller?.machineId, controller?.installationId, eligible, onSelect, scopedRows, activeAccountScope?.serverId, input.serverId, accountId]);
+    }, [binding, controller?.machineId, controller?.installationId, eligible, onSelect, scopedRows, activeAccountScope?.serverId, input.serverId, accountId]);
 
   const chip =
     scopedRows.length > 0 ? (

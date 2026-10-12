@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PluginManifestV2Schema } from '@happier-dev/protocol';
 import {
     PluginAvailabilityActionHttpPathsV1,
+    PluginAvailabilityIntentsListActionOutputV1Schema,
     type PluginMachineMaterializationV1,
 } from '@happier-dev/protocol/plugins/availability';
 
@@ -136,8 +137,7 @@ function createState() {
         executionServerId: null,
         executionMachineId: null,
         readOnlySnapshotNotice: null,
-        installedPlugins: [],
-        installedPluginById: new Map([['example.installed-plugin', {
+        installedPlugins: [{
             pluginId: 'example.installed-plugin',
             title: 'Installed plugin',
             description: null,
@@ -147,7 +147,7 @@ function createState() {
             install: { mode: 'managed', manifestVersion: '2' },
             compatibility: { status: 'compatible', diagnostics: [] },
             diagnostics: [],
-        } satisfies InstalledPluginEntry]]),
+        } satisfies InstalledPluginEntry],
         discoverSources: [],
         selectedDiscoverSourceId: null,
         discoverSearchText: '',
@@ -241,43 +241,41 @@ async function hydrateAccountRecoveryReaderAfterReset(
         }),
         getServerSnapshot: () => ({ serverId: ACCOUNT_SCOPE.serverId, generation: 1 }),
         captureRequestAuthority: async () => ({
-            request: async (path, init) => {
+            request: async (path) => {
                 if (path === PluginAvailabilityActionHttpPathsV1['account.plugins.availability.materializations.read']) {
                     return jsonResponse({ availabilityCursor: 42, snapshots: [] });
                 }
                 if (path === PluginAvailabilityActionHttpPathsV1['account.plugins.availability.intents.list']) {
-                    return jsonResponse({ availabilityCursor: 42, pluginIds: [pluginId] });
-                }
-                if (path === PluginAvailabilityActionHttpPathsV1['account.plugins.availability.intent.read']) {
-                    const input = JSON.parse(String(init?.body ?? '{}')) as { pluginId?: string };
-                    if (input.pluginId !== pluginId) {
-                        throw new Error(`Unexpected Availability intent id: ${String(input.pluginId)}`);
-                    }
-                    return jsonResponse({
+                    return jsonResponse(PluginAvailabilityIntentsListActionOutputV1Schema.parse({
                         availabilityCursor: 42,
-                        packageAssets: [],
-                        hostingCapability: { enabled: false },
-                        intent: {
-                            pluginId,
-                            desiredVersion: declaration.version,
-                            enabled: true,
-                            offlineUiHosting: 'disabled',
-                            writableCollections: [],
-                            revision: '1',
-                        },
-                        release: {
-                            ref: { pluginId, version: declaration.version },
-                            archiveDigestSha256: `sha256:${'a'.repeat(64)}`,
-                            normalizedManifest: declaration,
-                            collectionContracts: [],
-                            uiSlots: [],
-                            packageAssetArchive: {
-                                archiveDigestSha256: `sha256:${'d'.repeat(64)}`,
-                                resources: [],
+                        pluginIds: [pluginId],
+                        failedPluginIds: [],
+                        intentReads: [{ pluginId, response: {
+                            availabilityCursor: 42,
+                            packageAssets: [],
+                            hostingCapability: { enabled: false },
+                            intent: {
+                                pluginId,
+                                desiredVersion: declaration.version,
+                                enabled: true,
+                                offlineUiHosting: 'disabled',
+                                writableCollections: [],
+                                revision: '1',
                             },
-                        },
-                        uiArtifacts: [],
-                    });
+                            release: {
+                                ref: { pluginId, version: declaration.version },
+                                archiveDigestSha256: `sha256:${'a'.repeat(64)}`,
+                                normalizedManifest: declaration,
+                                collectionContracts: [],
+                                uiSlots: [],
+                                packageAssetArchive: {
+                                    archiveDigestSha256: `sha256:${'d'.repeat(64)}`,
+                                    resources: [],
+                                },
+                            },
+                            uiArtifacts: [],
+                        } }],
+                    }));
                 }
                 throw new Error(`Unexpected Availability path: ${path}`);
             },
@@ -395,7 +393,7 @@ describe('Account plugin data erase Settings entries', () => {
         const accountSettingsDeclaration = createAccountSettingsDeclaration();
         state.value = {
             ...createState(),
-            installedPluginById: new Map(),
+            installedPlugins: [],
         };
         accountAvailability.reader = await hydrateAccountRecoveryReaderAfterReset(accountSettingsDeclaration);
         const { PluginDetailScreen } = await import('./detail/PluginDetailScreen');
@@ -509,7 +507,7 @@ describe('Account plugin data erase Settings entries', () => {
         }));
         state.value = {
             ...createState(),
-            installedPluginById: new Map(),
+            installedPlugins: [],
             pluginProjectionById: { 'example.installed-plugin': daemonProjection },
         };
         accountAvailability.reader = createAccountAvailabilityReader({
@@ -541,7 +539,7 @@ describe('Account plugin data erase Settings entries', () => {
     it('retains erase-only recovery for a materialized plugin whose current declaration is unavailable', async () => {
         state.value = {
             ...createState(),
-            installedPluginById: new Map(),
+            installedPlugins: [],
         };
         accountAvailability.reader = createAccountAvailabilityReader({
             readMaterializations: () => ({
@@ -568,7 +566,7 @@ describe('Account plugin data erase Settings entries', () => {
     it('keeps an Account-retained cold/offline plugin log surface explicitly unavailable without a machine RPC', async () => {
         state.value = {
             ...createState(),
-            installedPluginById: new Map(),
+            installedPlugins: [],
         };
         accountAvailability.reader = createAccountAvailabilityReader({
             readMaterializations: () => ({
@@ -599,7 +597,7 @@ describe('Account plugin data erase Settings entries', () => {
     it('does not turn an unavailable Account admission into a plugin detail recovery route', async () => {
         state.value = {
             ...createState(),
-            installedPluginById: new Map(),
+            installedPlugins: [],
         };
         accountAvailability.reader = createAccountAvailabilityReader({
             readMaterializations: () => ({

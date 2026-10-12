@@ -75,12 +75,14 @@ export function useHomeSettingsWrite(
     context: HomeAdministrationContext;
     home: HomeSettingsRead;
     onFieldError: (key: string, message: string | null) => void;
+    /** Inline editors retain the same canonical refusal notice beside their draft. */
+    onFailure?: (message: string) => void;
   }>,
 ): Readonly<{
   writing: boolean;
   write: (request: HomeSettingsWriteRequest) => Promise<boolean>;
 }> {
-  const { context, home, onFieldError } = input;
+  const { context, home, onFieldError, onFailure } = input;
   const [writing, setWriting] = React.useState(false);
   const settingsRef = React.useRef(home.settings);
   settingsRef.current = home.settings;
@@ -110,10 +112,11 @@ export function useHomeSettingsWrite(
           return false;
         }
         if (outcome.failure.code === 'home_settings_revision_conflict') {
-          await Modal.alertAsync(
-            t('homeSettings.page.conflictTitle'),
-            t('homeSettings.page.conflictBody'),
-          );
+          if (onFailure) onFailure(t('homeSettings.page.conflictBody'));
+          else await Modal.alertAsync(
+              t('homeSettings.page.conflictTitle'),
+              t('homeSettings.page.conflictBody'),
+            );
           home.reload();
           return false;
         }
@@ -136,13 +139,14 @@ export function useHomeSettingsWrite(
           return false;
         }
         const notice = homeGovernanceFailureNotice(outcome.failure);
-        await Modal.alertAsync(notice.title, notice.body);
+        if (onFailure) onFailure(notice.body);
+        else await Modal.alertAsync(notice.title, notice.body);
         return false;
       } finally {
         setWriting(false);
       }
     },
-    [context, home, onFieldError],
+    [context, home, onFieldError, onFailure],
   );
 
   return { writing, write };

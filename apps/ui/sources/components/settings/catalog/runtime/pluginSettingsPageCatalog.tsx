@@ -5,7 +5,7 @@ import {
     normalizePluginUiSubPathV1,
 } from '@happier-dev/protocol/plugins/ui';
 
-import { Icon } from '@/components/ui/icons/Icon';
+import { InstalledPluginMarkById } from '@/components/plugins/shared/InstalledPluginMarkById';
 import { resolvePluginUiIconName } from '@/components/plugins/surfaces/iconToken/resolvePluginUiIconToken';
 import { resolvePluginUiText } from '@/sync/domains/plugins/ui/i18n';
 import type {
@@ -297,13 +297,10 @@ export function resolveAdmittedPluginSettingsPage(params: Readonly<{
         : null;
 }
 
-function makePluginIcon(iconToken: string | undefined) {
-    return ({ theme }: Parameters<NonNullable<SettingsPageNode['icon']>>[0]): React.ReactNode => (
-        <Icon
-            name={resolvePluginUiIconName(iconToken)}
-            size={16}
-            color={theme.colors.text.secondary}
-        />
+/** A plugin row leads with the plugin's own mark; its declared icon stands in until the mark arrives. */
+function makePluginIcon(pluginId: string, iconToken: string | undefined) {
+    return (): React.ReactNode => (
+        <InstalledPluginMarkById pluginId={pluginId} size={16} fallbackIcon={resolvePluginUiIconName(iconToken)} />
     );
 }
 
@@ -315,7 +312,7 @@ function makePluginPageNode(candidate: PluginSettingsPageCandidate): SettingsPag
         ...(candidate.subtitle ? { subtitle: candidate.subtitle } : {}),
         route: pluginSettingsPageRoute(pluginId, candidate.pageId),
         keywords: candidate.keywords,
-        icon: makePluginIcon(candidate.iconToken),
+        icon: makePluginIcon(pluginId, candidate.iconToken),
         pluginSettingsPage: Object.freeze({ pluginId, pageId: candidate.pageId }),
     });
 }
@@ -396,17 +393,33 @@ export function mergeAdmittedPluginSettingsPages(params: Readonly<{
             { defaultRank: left.group.defaultRank, id: left.group.entry.id },
             { defaultRank: right.group.defaultRank, id: right.group.entry.id },
         ))
-        .map(({ group, pages }): SettingsPageNode => Object.freeze({
-            id: `pluginSettingsGroup:${group.pluginId}:${group.localId}`,
-            title: group.title,
-            icon: makePluginIcon(group.iconToken),
-            children: Object.freeze([...pages]
-                .sort((left, right) => compareDefaultRankThenId(
-                    { defaultRank: left.defaultRank, id: left.entry.id },
-                    { defaultRank: right.defaultRank, id: right.entry.id },
-                ))
-                .map(makePluginPageNode)),
-        }));
+        .map(({ group, pages }): SettingsPageNode => {
+            // A plugin group with one page is one destination: name it once, by its plugin, rather
+            // than a heading per plugin over a row that repeats a generic page title ("PRs & Issues"
+            // under GitHub, GitLab, Sentry…). The page title stays a subtitle and a search keyword.
+            if (pages.length === 1) {
+                const only = pages[0]!;
+                const node = makePluginPageNode(only);
+                return Object.freeze({
+                    ...node,
+                    title: group.title,
+                    subtitle: only.subtitle ?? only.title,
+                    keywords: Object.freeze([...node.keywords ?? [], only.title]),
+                    icon: makePluginIcon(group.pluginId, group.iconToken ?? only.iconToken),
+                });
+            }
+            return Object.freeze({
+                id: `pluginSettingsGroup:${group.pluginId}:${group.localId}`,
+                title: group.title,
+                icon: makePluginIcon(group.pluginId, group.iconToken),
+                children: Object.freeze([...pages]
+                    .sort((left, right) => compareDefaultRankThenId(
+                        { defaultRank: left.defaultRank, id: left.entry.id },
+                        { defaultRank: right.defaultRank, id: right.entry.id },
+                    ))
+                    .map(makePluginPageNode)),
+            });
+        });
 
     const mergeHostPages = (nodes: readonly SettingsPageNode[]): readonly SettingsPageNode[] => Object.freeze(nodes.map((node) => {
         const children = node.children ? mergeHostPages(node.children) : undefined;
@@ -418,13 +431,28 @@ export function mergeAdmittedPluginSettingsPages(params: Readonly<{
         });
     }));
 
-    return Object.freeze(mergeHostPages(params.baseCatalog).map((node) => {
-        if (node.id !== 'settings' || pluginGroupNodes.length === 0) return node;
-        return Object.freeze({
-            ...node,
-            children: Object.freeze([...(node.children ?? []), ...pluginGroupNodes]),
-        });
+    // Every plugin-owned destination is disclosed under the Plugins page's own row, collapsed unless one is
+    // open: the rail stays a calm list of the host's pages instead of growing a heading and a row per plugin.
+    if (pluginGroupNodes.length === 0) return mergeHostPages(params.baseCatalog);
+    let placed = false;
+    const nestUnderPlugins = (nodes: readonly SettingsPageNode[]): readonly SettingsPageNode[] => Object.freeze(nodes.map((node) => {
+        if (node.id === 'plugins') {
+            placed = true;
+            return Object.freeze({ ...node, children: Object.freeze([...(node.children ?? []), ...pluginGroupNodes]) });
+        }
+        return node.children ? Object.freeze({ ...node, children: nestUnderPlugins(node.children) }) : node;
     }));
+    const nested = nestUnderPlugins(mergeHostPages(params.baseCatalog));
+    if (placed) return nested;
+    // The Plugins page is switched off on this Home: its destinations keep one heading after the host groups.
+    return Object.freeze(nested.map((node) => node.id !== 'settings' ? node : Object.freeze({
+        ...node,
+        children: Object.freeze([...(node.children ?? []), Object.freeze({
+            id: 'groupPlugins',
+            titleKey: 'settings.pluginPages',
+            children: Object.freeze(pluginGroupNodes),
+        }) as SettingsPageNode]),
+    })));
 }
 
 export const __testables = {

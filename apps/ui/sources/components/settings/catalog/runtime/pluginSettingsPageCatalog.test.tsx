@@ -9,6 +9,9 @@ import {
     type PluginUiSettingsPageProjection,
 } from '@/sync/domains/plugins/ui/projection';
 
+import type * as React from 'react';
+import { InstalledPluginMarkById } from '@/components/plugins/shared/InstalledPluginMarkById';
+
 import {
     mergeAdmittedPluginSettingsPages,
     readPluginSettingsPageRouteParams,
@@ -81,7 +84,7 @@ const baseCatalog = [{
     children: [{
         id: 'groupGeneral',
         titleKey: 'settings.general',
-        children: [],
+        children: [{ id: 'plugins', titleKey: 'settingsPlugins.surfaces.navigationTitle', route: '/settings/plugins' }],
     }, {
         id: 'groupSystem',
         titleKey: 'settings.system',
@@ -123,13 +126,56 @@ describe('mergeAdmittedPluginSettingsPages', () => {
                 pluginSettingsPage: { pluginId: 'acme.review', pageId: 'defaults' },
             }),
         ]));
-        expect(pluginGroup).toMatchObject({
-            title: 'Review',
+        expect(pluginGroup).toBeUndefined();
+        // Plugin destinations are disclosed under the Plugins page's own row, not a heading of their own.
+        expect(root.children?.find((entry) => entry.id === 'groupPlugins')).toBeUndefined();
+        const plugins = general?.children?.find((entry) => entry.id === 'plugins');
+        expect(plugins).toMatchObject({
+            route: '/settings/plugins',
             children: [expect.objectContaining({
                 id: 'pluginSettingsPage:acme.review:policy',
+                title: 'Review',
+                subtitle: 'Review policy',
                 route: '/settings/plugins/acme.review/policy',
             })],
         });
+    });
+
+    it('names a one-page plugin group once, by its plugin, and keeps a several-page group as its own section', () => {
+        const model = projection({
+            groups: [
+                group('acme.github', 'github', 'GitHub'),
+                group('acme.gitlab', 'gitlab', 'GitLab'),
+                group('acme.channels', 'channels', 'Conversation channels'),
+            ],
+            pages: [
+                page({ pluginId: 'acme.github', localId: 'sources', group: { kind: 'plugin', id: { pluginId: 'acme.github', localId: 'github' } }, title: 'PRs & Issues' }),
+                page({ pluginId: 'acme.gitlab', localId: 'sources', group: { kind: 'plugin', id: { pluginId: 'acme.gitlab', localId: 'gitlab' } }, title: 'PRs & Issues' }),
+                page({ pluginId: 'acme.channels', localId: 'connections', group: { kind: 'plugin', id: { pluginId: 'acme.channels', localId: 'channels' } }, title: 'Connections' }),
+                page({ pluginId: 'acme.channels', localId: 'routing', group: { kind: 'plugin', id: { pluginId: 'acme.channels', localId: 'channels' } }, title: 'Routing' }),
+            ],
+        });
+
+        const catalog = mergeAdmittedPluginSettingsPages({ baseCatalog, projection: model, locale: 'en' });
+        const rootChildren = catalog[0]?.children ?? [];
+        // Every plugin destination sits under the Plugins row (disclosed on demand); no heading per plugin
+        // and no heading of their own in the rail.
+        expect(rootChildren.map((entry) => entry.id)).toEqual(['groupGeneral', 'groupSystem']);
+        const plugins = rootChildren[0]!.children!.find((entry) => entry.id === 'plugins')!;
+        expect(plugins.children?.map((entry) => [entry.title, entry.route ?? null])).toEqual([
+            ['Conversation channels', null],
+            ['GitHub', '/settings/plugins/acme.github/sources'],
+            ['GitLab', '/settings/plugins/acme.gitlab/sources'],
+        ]);
+        // The page's own title stays findable even though the row is named by its plugin.
+        expect(plugins.children?.[1]?.keywords).toEqual(expect.arrayContaining(['PRs & Issues']));
+        expect(plugins.children?.[0]?.children?.map((entry) => entry.title)).toEqual(['Connections', 'Routing']);
+        // Each plugin row leads with that plugin's own mark, not a shared generic glyph.
+        const markOf = (entry: (typeof rootChildren)[number] | undefined) => {
+            const icon = entry?.icon?.({ theme: {} as never }) as React.ReactElement<{ pluginId?: string }> | undefined;
+            return icon?.type === InstalledPluginMarkById ? icon.props.pluginId : null;
+        };
+        expect(plugins.children?.map(markOf)).toEqual(['acme.channels', 'acme.github', 'acme.gitlab']);
     });
 
     it('fails closed for a foreign plugin group or a binding that is not its projected Settings destination', () => {

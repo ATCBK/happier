@@ -19,6 +19,7 @@
  * dimension other than Agent is a review-rejectable regression.
  */
 
+import { HAPPIER_SERIES_RAMP_ALPHAS, resolveHappierSeriesRampColor } from '@happier-dev/plugin-ui/presentation';
 import { getNeutralAgentIdentityColor } from '@/agents/catalog/catalog';
 
 type UsageAccentThemeSlice = Readonly<{
@@ -64,33 +65,14 @@ export function withUsageAccentAlpha(color: string, alpha: number): string {
  * which can list up to 8 context categories — gets a DISTINCT ordered tone per
  * category and never wraps back to the signature accent (D-6).
  */
-export const USAGE_SERIES_RAMP_ALPHAS = [1, 0.82, 0.68, 0.56, 0.46, 0.37, 0.29, 0.22] as const;
-
-const HEX6 = /^#([0-9a-fA-F]{6})$/;
-
-/** `accent` at `amount` over `paper`, as one solid colour; `null` when either is not `#RRGGBB`. */
-function mixOverPaper(accent: string, paper: string, amount: number): string | null {
-    const top = HEX6.exec(accent.trim());
-    const under = HEX6.exec(paper.trim());
-    if (!top || !under) return null;
-    const a = parseInt(top[1]!, 16);
-    const b = parseInt(under[1]!, 16);
-    const channel = (shift: number) =>
-        Math.round(((a >> shift) & 0xff) * amount + ((b >> shift) & 0xff) * (1 - amount));
-    return `#${[16, 8, 0].map((shift) => channel(shift).toString(16).padStart(2, '0')).join('')}`;
-}
+export const USAGE_SERIES_RAMP_ALPHAS = HAPPIER_SERIES_RAMP_ALPHAS;
 
 /**
  * Step `index` of the magnitude ramp. On a known paper the step is SOLID (the accent pre-mixed with
  * the paper), so stacked steps keep their order on glass and never show what is behind them.
  */
 export function usageSeriesColor(theme: UsageAccentThemeSlice, index: number): string {
-    const clampedIndex = Math.max(0, Math.min(index, USAGE_SERIES_RAMP_ALPHAS.length - 1));
-    const alpha = USAGE_SERIES_RAMP_ALPHAS[clampedIndex]!;
-    const accent = usageSignatureAccent(theme);
-    if (alpha >= 1) return accent;
-    const paper = theme.colors.surface?.base;
-    return (paper ? mixOverPaper(accent, paper, alpha) : null) ?? withUsageAccentAlpha(accent, alpha);
+    return resolveHappierSeriesRampColor(usageSignatureAccent(theme), theme.colors.surface?.base, index);
 }
 
 /**

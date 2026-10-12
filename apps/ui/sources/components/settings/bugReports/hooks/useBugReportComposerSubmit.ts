@@ -3,22 +3,21 @@ import * as React from 'react';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 
 import { Modal } from '@/modal';
-import type { Machine } from '@/sync/domains/state/storageTypes';
+import { BugReportSubmitOutputSchema } from '@happier-dev/protocol/actions/specs/bugReport';
+import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { t } from '@/text';
 import { clearBugReportUserActionTrail, recordBugReportUserAction } from '@/utils/system/bugReportActionTrail';
 import { clearBugReportLogBuffer } from '@/utils/system/bugReportLogBuffer';
 import { clearPreRestartBugReportSnapshot } from '@/utils/system/preRestartBugReportSnapshot';
 
-import { collectBugReportDiagnosticsArtifacts } from '../bugReportDiagnostics';
 import type { BugReportsFeature } from '../bugReportFeatureDefaults';
-import { openBugReportFallbackIssueUrl, openBugReportIssueUrlSilently } from '../openBugReportFallback';
-import { submitBugReportToService } from '../bugReportServiceClient';
-import { submitBugReportFromDraft, validateBugReportDraft } from '../bugReportSubmissionFlow';
+import { openBugReportIssueUrlSilently } from '../openBugReportFallback';
+import { validateBugReportDraft } from '../bugReportSubmissionFlow';
 import type { BugReportComposerSubmissionInput } from '../bugReportSubmissionFlow';
 
 export function useBugReportComposerSubmit(input: Readonly<{
   feature: BugReportsFeature;
-  machines: Machine[];
   route: string;
   includeDiagnostics: boolean;
   diagnosticsKinds: string[];
@@ -26,7 +25,7 @@ export function useBugReportComposerSubmit(input: Readonly<{
   issueRepo: string;
   existingIssueNumber: number | null;
   openFallbackIssue: (environment: BugReportComposerSubmissionInput['environment']) => Promise<void>;
-  collectDiagnosticsArtifacts?: typeof collectBugReportDiagnosticsArtifacts;
+  pastedCliDoctorSnapshotJson?: string;
   buildDraftInput: (input: Readonly<{
     includeDiagnostics: boolean;
     diagnosticsKinds: string[];
@@ -37,10 +36,10 @@ export function useBugReportComposerSubmit(input: Readonly<{
 } {
   const router = useRouter();
   const [submitting, setSubmitting] = React.useState(false);
+  const execute = React.useMemo(() => createFrontDoorActionExecute(), []);
 
   const {
     feature,
-    machines,
     route,
     includeDiagnostics,
     diagnosticsKinds,
@@ -48,7 +47,7 @@ export function useBugReportComposerSubmit(input: Readonly<{
     issueRepo,
     existingIssueNumber,
     openFallbackIssue,
-    collectDiagnosticsArtifacts,
+    pastedCliDoctorSnapshotJson,
     buildDraftInput,
   } = input;
 
@@ -77,17 +76,23 @@ export function useBugReportComposerSubmit(input: Readonly<{
     });
 
     try {
-      const result = await submitBugReportFromDraft({
-        feature,
-        machines,
-        input: draftInput,
-        issueOwner,
-        issueRepo,
-        existingIssueNumber: existingIssueNumber ?? undefined,
-        openFallbackIssue,
-        collectDiagnosticsArtifacts: collectDiagnosticsArtifacts ?? collectBugReportDiagnosticsArtifacts,
-        submitBugReport: submitBugReportToService,
-      });
+      const executed = await execute('bugreport.submit', {
+        draft: draftInput,
+        destination: { providerUrl: feature.enabled ? feature.providerUrl : null, issueOwner, issueRepo,
+          ...(existingIssueNumber === null ? {} : { existingIssueNumber }) },
+        ...(pastedCliDoctorSnapshotJson ? { pastedCliDoctorSnapshotJson } : {}),
+      }, { surface: 'ui' });
+      if (!executed.ok) {
+        // A refusal is not a service failure and must not offer a fallback
+        // that could send the same report after its approval was declined.
+        if (executed.errorCode !== 'bug_report_submission_failed') {
+          await Modal.alert(t('bugReports.composer.alerts.submitFailedTitle'), executed.error);
+          return;
+        }
+        throw new Error(executed.error);
+      }
+      if (ActionApprovalRequestCreatedResultSchema.safeParse(executed.result).success) return;
+      const result = BugReportSubmitOutputSchema.parse(executed.result);
 
       if (result.mode === 'fallback') {
         return;
@@ -145,12 +150,12 @@ export function useBugReportComposerSubmit(input: Readonly<{
     includeDiagnostics,
     issueOwner,
     issueRepo,
-    machines,
     openFallbackIssue,
     route,
     router,
     submitting,
-    collectDiagnosticsArtifacts,
+    pastedCliDoctorSnapshotJson,
+    execute,
   ]);
 
   return {

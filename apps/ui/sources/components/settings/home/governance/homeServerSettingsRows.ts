@@ -1,4 +1,5 @@
-import { isHomeGovernanceSettingKey, isHomeSignInPlatformSetting, type FeatureId } from '@happier-dev/protocol';
+import { isHomeGovernanceSettingKey, isHomeSignInPlatformSetting } from '@happier-dev/protocol/serverConfig/homeSettingsOwnership';
+import { type FeatureId } from '@happier-dev/protocol';
 import type { HomeSettingEntryV1, HomeSettingsProjectionV1 } from '@happier-dev/protocol/home/governance';
 import { SERVER_CONFIG } from '@happier-dev/protocol/serverConfig/registry';
 
@@ -17,7 +18,8 @@ import { homeServerSettingRateLimitRoute, homeServerSettingTitle } from './homeS
  * - grouped into the three open sections of the lab (API and network, Storage and files,
  *   Monitoring) and closed groups under "More", derived from each entry's `group`/`family` so a
  *   group this app does not know yet still renders (humanised, before "Other");
- * - every read-only (`bootstrap`) key, whatever its section, in "Read-only at startup".
+ * - every read-only (`bootstrap`) key, whatever its section, in "Read-only at startup": the values
+ *   the deployment set are listed (lab `hcServer-A`'s short list), the unset ones fold into one row.
  *
  * Pending and ignored are the projection's own answers (`applied.pending`, `applied.ignoredReason`),
  * the same ones Runtime counts, so the two pages never disagree.
@@ -27,7 +29,10 @@ export type HomeServerSettingsGroup = Readonly<{ id: string; entries: readonly H
 export type HomeServerSettingsLayout = Readonly<{
     primary: readonly HomeServerSettingsGroup[];
     more: readonly HomeServerSettingsGroup[];
+    /** Startup keys the deployment set (or a saved secret): listed. */
     readOnly: readonly HomeSettingEntryV1[];
+    /** Startup keys left unset: folded into one closed row. */
+    readOnlyUnset: readonly HomeSettingEntryV1[];
     /** Every setting on this Home the running server has not applied yet (any page's). */
     pending: readonly HomeSettingEntryV1[];
     /** Every setting whose stored value the last start ignored (any page's). */
@@ -39,6 +44,7 @@ export type HomeServerSettingsLayout = Readonly<{
 const PRIMARY_GROUPS = ['api', 'storage', 'monitoring'] as const;
 
 const MORE_ORDER = [
+    'errorReporting',
     'process', 'ui', 'realtime', 'retentionCaps', 'rpc', 'rateLimits', 'authCaches', 'limits',
     'liveActivity', 'voice', 'connectedServices', 'localServices', 'plugins', 'reviews', 'bugReports',
     'releases', 'github', 'oauth', 'oidc', 'workos', 'signInRequests', 'offboarding', 'friends',
@@ -107,10 +113,20 @@ function moreRank(group: string): number {
 export function selectHomeServerSettings(settings: HomeSettingsProjectionV1): HomeServerSettingsLayout {
     const byGroup = new Map<string, HomeSettingEntryV1[]>();
     const readOnly: HomeSettingEntryV1[] = [];
+    const readOnlyUnset: HomeSettingEntryV1[] = [];
     let changedCount = 0;
+    const entriesByKey = new Map(settings.entries.map((entry) => [entry.key, entry]));
     for (const entry of settings.entries) {
+        const condition = entry.declaration?.appliesWhen;
+        const controllingValue = condition ? entriesByKey.get(condition.key)?.value : undefined;
+        // Unknown controller facts keep older projections usable. Defaults are not configured
+        // values; explicit plain values and saved secrets must always stay reachable for repair.
+        const configured = entry.secretSet === true
+            || (entry.source !== 'default' && entry.value !== null && entry.value !== undefined);
+        if (condition && !configured && controllingValue !== null && controllingValue !== undefined
+            && !condition.values.includes(String(controllingValue))) continue;
         if (entry.editable === 'bootstrap') {
-            readOnly.push(entry);
+            (configured ? readOnly : readOnlyUnset).push(entry);
             continue;
         }
         if (!isHomeServerSettingsEntry(entry)) continue;
@@ -133,6 +149,7 @@ export function selectHomeServerSettings(settings: HomeSettingsProjectionV1): Ho
         primary,
         more,
         readOnly,
+        readOnlyUnset,
         pending: settings.entries.filter((entry) => entry.applied?.pending === true),
         ignored: settings.entries.filter((entry) => entry.applied?.ignoredReason !== undefined),
         changedCount,
@@ -171,5 +188,6 @@ export function filterHomeServerSettings(
         primary: groups(layout.primary),
         more: groups(layout.more),
         readOnly: layout.readOnly.filter((entry) => keep(entry, false)),
+        readOnlyUnset: layout.readOnlyUnset.filter((entry) => keep(entry, false)),
     });
 }

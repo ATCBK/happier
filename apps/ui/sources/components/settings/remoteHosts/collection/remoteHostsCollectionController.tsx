@@ -10,7 +10,6 @@ import type { RemoteHost } from '@/sync/domains/remoteHosts/remoteHostModel';
 import type { RemoteHostActionIdV1 } from '@happier-dev/protocol/remoteHosts/remoteHostActionIdsV1';
 import type { RemoteHostActionInputByIdV1 } from '@happier-dev/protocol/remoteHosts/remoteHostActionsV1';
 import { useRemoteHostCatalogSnapshot } from '@/sync/store/settings/remoteHostCatalogSnapshot';
-import { invalidateRemoteHostCatalogProjection } from '@/sync/engine/settings/remoteHostCatalogEngine';
 import { withProfileAccount } from '@/sync/api/account/apiProfileCatalog';
 import { prepareRemoteHostSaveInContext, readRemoteHostCatalogInContext,
     type RemoteHostCredentialChanges } from '@/sync/api/account/apiRemoteHostCatalog';
@@ -40,7 +39,7 @@ import { buildAccessEndpointProjection } from '@/sync/domains/accessEndpoints/bu
 import { getNativeSshTunnelRuntime } from '@/sync/runtime/nativeSshTunnels/runtime';
 import type { NativeSshTunnelSnapshot } from '@/sync/runtime/nativeSshTunnels/types';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
-import { router } from 'expo-router';
+import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 
 import { useRemoteHostOutcomeActions } from '../useRemoteHostOutcomeActions';
 import { useRemoteHostSshTunnelControl } from '../useRemoteHostSshTunnelControl';
@@ -177,9 +176,10 @@ export type RemoteHostSaveReceipt = Readonly<{ ok: false }>
     | Readonly<{ ok: true; revision: number; host: RemoteHost; localOverrides: 'saved' | 'pending' | 'retired' }>;
 
 export function useRemoteHostsCollectionController(gates: RemoteHostsGates) {
+    const router = useRouter();
     const scope = useActiveServerAccountScope();
     const tunnelExecution = useMountedActionExecution(scope, { onApprovalPending: registration => {
-        if (registration.scope) router.push(`/inbox/approvals/${encodeURIComponent(registration.artifactId)}?serverId=${encodeURIComponent(registration.scope.serverId)}`);
+        if (registration.scope) router.pushRetainingCurrent(`/inbox/approvals/${encodeURIComponent(registration.artifactId)}?serverId=${encodeURIComponent(registration.scope.serverId)}`);
     } });
     const snapshot = useRemoteHostCatalogSnapshot(scope);
     const remoteHosts = snapshot?.data ?? [];
@@ -325,7 +325,7 @@ export function useRemoteHostsCollectionController(gates: RemoteHostsGates) {
             void (async () => {
                 try {
                     const result = await tunnelExecution.execute('remote_hosts.tunnel.stop', { target: { kind: 'native', leaseId } });
-                    if (!result.ok) throw new Error(result.errorCode);
+                    if (!result.ok) throw new Error(result.error);
                     if (result.result && typeof result.result === 'object' && 'status' in result.result && result.result.status !== 'released') {
                         throw new Error('reason' in result.result ? String(result.result.reason) : String(result.result.status));
                     }
@@ -404,8 +404,6 @@ export function useRemoteHostsCollectionController(gates: RemoteHostsGates) {
                     const host = prepared.input.host;
                     try {
                         account.assertCurrent();
-                        await invalidateRemoteHostCatalogProjection(scope);
-                        account.assertCurrent();
                         upsertRemoteHostLocalOverrides(input.remoteHost.id, input.localOverrides);
                         return { ok: true, revision, host, localOverrides: 'saved' };
                     } catch (error) {
@@ -428,8 +426,6 @@ export function useRemoteHostsCollectionController(gates: RemoteHostsGates) {
         const result = await executeAction('remote_hosts.delete', { hostId: remoteHostId, expectedRevision: catalogRevision });
         if (!result?.ok || !result.result || typeof result.result !== 'object'
             || !('status' in result.result) || result.result.status !== 'updated' || !lifetime.isCurrent()) return false;
-        await invalidateRemoteHostCatalogProjection(scope);
-        if (!lifetime.isCurrent()) return false;
         try { deleteRemoteHostLocalOverrides(remoteHostId); }
         catch (error) { Modal.alert(t('common.error'), error instanceof Error ? error.message : t('errors.operationFailed')); }
         return true;

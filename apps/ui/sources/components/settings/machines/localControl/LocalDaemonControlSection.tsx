@@ -12,7 +12,7 @@ import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
 import { t } from '@/text';
 
 import type { ThisComputerConnection } from '@/sync/domains/server/relayDrift/thisComputerConnection';
-import { toServerUrlDisplay } from '@/sync/domains/server/url/serverUrlDisplay';
+import { resolveHomeDisplayNameForRelayUrl } from '@/components/settings/server/homeDisplayName';
 
 import { confirmThisComputerAccountMove, presentThisComputerConnection } from './thisComputerConnectionPresentation';
 import { ThisComputerServersGroup } from './ThisComputerServersGroup';
@@ -31,7 +31,7 @@ function resolveStatusSubtitle(
     if (!connection) {
         // No daemon here yet: the ordinary first-run state, stated plainly.
         return activeRelayUrl
-            ? t('machine.thisComputer.description.daemon_not_installed', { home: toServerUrlDisplay(activeRelayUrl) })
+            ? t('machine.thisComputer.description.daemon_not_installed', { home: resolveHomeDisplayNameForRelayUrl(activeRelayUrl) ?? t('settingsAccount.thisHomeTitle') })
             : t('machine.daemonStatus.stopped');
     }
     return presentThisComputerConnection(connection)?.description

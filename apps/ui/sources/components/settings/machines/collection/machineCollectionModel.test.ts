@@ -1,16 +1,19 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import type { ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
 import type { ManagedMachinePresetV1 } from '@happier-dev/protocol/machines/managed/managedMachinePresetV1';
 import { t } from '@/text';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed } from '@/sync/domains/machines/reachability/machineReachability';
 
 import type { ActiveSelectionMachineGroup } from '../hooks/useActiveSelectionMachineGroups';
 import {
     buildMachineCollection,
+    partitionMachineCollectionRailRows,
     machineCollectionHref,
-    resolveMachineCollectionLandingHref,
+    machinePageHref,
+    machinesIndexHref,
     resolveSelectedMachineCollectionKey,
     machineCollectionRowKey,
     machinePresetCollectionHref,
@@ -39,10 +42,74 @@ function machine(id: string, overrides: Partial<Machine> & { displayName?: strin
 }
 
 function group(serverId: string, machines: Machine[], overrides: Partial<ActiveSelectionMachineGroup> = {}): ActiveSelectionMachineGroup {
-    return { serverId, serverName: `Home ${serverId}`, machines, status: 'idle', ...overrides };
+    return { serverId, accountScope: { serverId, accountId: 'collection-account' }, serverName: `Home ${serverId}`, machines, status: 'idle', ...overrides };
 }
 
+afterEach(() => clearMachineRequestReachabilityForTest());
+
+describe('machine collection rail partition', () => {
+    it('keeps long-offline machines folded when the last online machine expires', () => {
+        const nowMs = 1_000_000_000;
+        const machines = [
+            machine('studio', { active: true, activeAt: nowMs }),
+            ...Array.from({ length: 9 }, (_, index) => machine(`retired-${index}`, {
+                displayName: 'lima-happier-fresh', activeAt: 1,
+            })),
+        ];
+        const readRows = (at: number) => buildMachineCollection({
+            groups: [group('a', machines)], groupedByHome: false, nowMs: at,
+        }).sections[0]!.rows;
+
+        const mixed = partitionMachineCollectionRailRows(readRows(nowMs), true);
+        expect(mixed.inline.map(machineCollectionRowKey)).toEqual(['machine:a:studio']);
+        expect(mixed.offline).toHaveLength(9);
+
+        const expiredRows = readRows(nowMs + 10 * 60_000);
+        expect(expiredRows.every(row => !row.online)).toBe(true);
+        const expired = partitionMachineCollectionRailRows(expiredRows, true);
+        expect(expired.inline).toEqual([]);
+        expect(expired.offline).toEqual(expiredRows);
+    });
+
+    it('keeps offline folds scoped to each Home and ownership group even if that group is entirely offline', () => {
+        const shared = machine('shared', { isShared: true, access: {
+            custodian: { accountId: 'alice', displayName: 'Alice' }, role: 'use', resourceMode: 'plain', accessState: 'ready',
+        } });
+        const collection = buildMachineCollection({
+            groups: [group('a', [
+                ...Array.from({ length: 9 }, (_, index) => machine(`owned-${index}`)), shared,
+            ]), group('b', [shared])], groupedByHome: true,
+        });
+        const partitions = collection.sections.map(section => partitionMachineCollectionRailRows(section.rows, true));
+        expect(partitions.map(partition => partition.inline)).toEqual([[], [], []]);
+        expect(partitions.map(partition => partition.offline.map(machineCollectionRowKey))).toEqual([
+            Array.from({ length: 9 }, (_, index) => `machine:a:owned-${index}`), ['machine:a:shared'], ['machine:b:shared'],
+        ]);
+    });
+
+    it('keeps short rails inline and does not create an empty fold for an online or empty section', () => {
+        const rows = buildMachineCollection({
+            groups: [group('a', [machine('offline')])], groupedByHome: false,
+        }).sections[0]!.rows;
+        expect(partitionMachineCollectionRailRows(rows, false)).toEqual({ inline: rows, offline: [] });
+        const online = [{ ...rows[0]!, online: true }];
+        expect(partitionMachineCollectionRailRows(online, true)).toEqual({ inline: online, offline: [] });
+        expect(partitionMachineCollectionRailRows([], true)).toEqual({ inline: [], offline: [] });
+    });
+});
+
 describe('buildMachineCollection', () => {
+    it('never presents a recently present machine as online after that Home cannot reach it', () => {
+        const present = machine('unreachable', { active: true, activeAt: Date.now() });
+        recordMachineRequestFailed({ serverId: 'a', accountId: 'collection-account', machineId: present.id, observedAtMs: Date.now() + 1 });
+
+        const row = buildMachineCollection({ groups: [group('a', [present])], groupedByHome: false })
+            .sections.flatMap(section => section.rows)[0];
+
+        expect(row).toMatchObject({ kind: 'machine', machineId: present.id, online: false });
+        expect(row?.presence).not.toBe(t('settingsOverview.machineOnline'));
+    });
+
     it('contracts enrolled managed rows without discarding observed retained sleep or borrowing another Home power', () => {
         const stopped = managed('retained', { enrolledMachineId: 'guest', wakeOnAcceptedMessage: true,
             retention: { kind: 'unused', afterMs: 3600000, effect: 'stop' },
@@ -61,11 +128,12 @@ describe('buildMachineCollection', () => {
         const row = collection.sections.flatMap(section => section.rows).find(row => row.kind === 'managed');
         expect(row).toMatchObject({ kind: 'managed', managedId: 'retired', serverId: 'a' });
         expect(collection.sections.find(section => section.rows.includes(row!))?.archived).toBe(true);
-        expect(resolveMachineCollectionLandingHref({ collection, lastVisited: null, isDesktop: false }))
-            .toBe('/settings/machines/joined?serverId=a');
-        expect(resolveMachineCollectionLandingHref({ collection, lastVisited: row!, isDesktop: false }))
-            .toBe('/settings/machines/managed/retired?serverId=a');
         expect(machineCollectionHref(row!)).toBe('/settings/machines/managed/retired?serverId=a');
+    });
+    it('titles the machines Happier created, beside your own machines', () => {
+        const collection = buildMachineCollection({ groups: [group('a', [machine('mine')])], groupedByHome: false,
+            managedByServerId: { a: [managed('pending')] } });
+        expect(collection.sections.map(section => section.title)).toEqual([t('machines.destinations.yours'), t('machines.destinations.created')]);
     });
     it('names preset audiences from the exact Home and owner rather than the operation label', () => {
         const preset: ManagedMachinePresetV1 = { id: 'recipe', homeId: 'home-a', revision: 1, name: 'Build recipe',
@@ -102,7 +170,7 @@ describe('buildMachineCollection', () => {
         const rows = collection.sections.flatMap(section => section.rows);
         expect(collection.count).toBe(2);
         expect(rows.map(machineCollectionRowKey)).toEqual(['managed:a:pending', 'managed:b:pending']);
-        expect(rows.map(machineCollectionHref)).toEqual(['/settings/machines/managed/pending?serverId=a', '/settings/machines/managed/pending?serverId=b']);
+        expect(rows.map(row => machineCollectionHref(row))).toEqual(['/settings/machines/managed/pending?serverId=a', '/settings/machines/managed/pending?serverId=b']);
         expect(rows[0]).toMatchObject({ kind: 'managed', managedId: 'pending', title: 'Build box' });
         expect(rows[0]).not.toHaveProperty('machineId');
         expect(isMachineCollectionRowSelected('managed:a:pending', rows[0]!)).toBe(true);
@@ -114,7 +182,7 @@ describe('buildMachineCollection', () => {
         const collection = buildMachineCollection({ groups: [group('a', [machine('joined', { displayName: 'Build box' })])], groupedByHome: false,
             managedByServerId: { a: [managed('pending', { enrolledMachineId: 'joined' }), managed('other', { launch: { ...managed('other').launch, name: 'Other' } })] }, query: 'BUILD' });
         expect(collection.count).toBe(1);
-        expect(collection.sections.flatMap(section => section.rows.map(machineCollectionHref))).toEqual(['/settings/machines/joined?serverId=a']);
+        expect(collection.sections.flatMap(section => section.rows.map(row => machineCollectionHref(row)))).toEqual(['/settings/machines/joined?serverId=a']);
         const waitingForMachine = buildMachineCollection({ groups: [group('a', [])], groupedByHome: false,
             managedByServerId: { a: [managed('pending', { enrolledMachineId: 'joined' })] } });
         expect(machineCollectionHref(waitingForMachine.sections[0]!.rows[0]!)).toBe('/settings/machines/joined?serverId=a');
@@ -140,11 +208,11 @@ describe('buildMachineCollection', () => {
         expect(new Set(collection.sections.map((section) => section.key)).size).toBe(2);
         expect(collection.sections[0]?.title).toContain('Home a');
         expect(collection.sections[1]?.title).toContain('Home b');
-        expect(collection.sections.flatMap((section) => section.rows.map(machineCollectionHref))).toEqual([
+        expect(collection.sections.flatMap((section) => section.rows.map(row => machineCollectionHref(row)))).toEqual([
             '/settings/machines/shared?serverId=a', '/settings/machines/shared?serverId=b',
         ]);
     });
-    it('lists one ungrouped section for a single Home, named and sorted by what the user sees', () => {
+    it('lists one section, Your machines, for a single Home, named and sorted by what the user sees', () => {
         const collection = buildMachineCollection({
             groups: [group('a', [machine('m2', { host: 'zeta.local' }), machine('m1', { displayName: 'Alpha', platform: 'darwin' })])],
             groupedByHome: false,
@@ -152,7 +220,8 @@ describe('buildMachineCollection', () => {
         });
         expect(collection.count).toBe(2);
         expect(collection.sections).toHaveLength(1);
-        expect(collection.sections[0]?.title).toBeNull();
+        // Labelled even alone (lab R): the list opens under Defaults, so its machines say whose they are.
+        expect(collection.sections[0]?.title).toBe(t('machines.destinations.yours'));
         expect(collection.sections[0]?.rows.map((row) => [row.title, row.platformLabel])).toEqual([
             ['Alpha', 'macOS'],
             ['zeta.local', 'Linux'],
@@ -270,17 +339,18 @@ describe('machine collection navigation', () => {
         expect(machineCollectionHref({ machineId: 'm 1', serverId: 'srv/a' })).toBe('/settings/machines/m%201?serverId=srv%2Fa');
     });
 
-    it('lands on the last visited machine, then the first machine', () => {
-        expect(resolveMachineCollectionLandingHref({ collection, lastVisited: { machineId: 'm2', serverId: 'a' }, isDesktop: false }))
-            .toBe('/settings/machines/m2?serverId=a');
-        expect(resolveMachineCollectionLandingHref({ collection, lastVisited: { machineId: 'gone', serverId: 'a' }, isDesktop: false }))
-            .toBe('/settings/machines/m1?serverId=a');
-    });
-
-    it('lands on this computer on desktop, else on adding a machine, when there are no machines', () => {
-        const empty = buildMachineCollection({ groups: [group('a', [])], groupedByHome: false, nowMs: 0 });
-        expect(resolveMachineCollectionLandingHref({ collection: empty, lastVisited: null, isDesktop: true })).toBe('/settings/machines/this-computer');
-        expect(resolveMachineCollectionLandingHref({ collection: empty, lastVisited: null, isDesktop: false })).toBe('/settings/machines/add');
+    it('builds every machine-page link inside the door it was opened from', () => {
+        expect(machinesIndexHref('rail')).toBe('/machines');
+        expect(machinesIndexHref('settings')).toBe('/settings/machines');
+        expect(machinePageHref({ door: 'rail', target: { machineId: 'm 1', serverId: 'srv/a' } })).toBe('/machines/m%201?serverId=srv%2Fa');
+        expect(machinePageHref({ door: 'settings', target: { machineId: 'm1' }, page: 'doctor' })).toBe('/settings/machines/m1/doctor');
+        // Overview is the page itself: it never names itself in the link.
+        expect(machinePageHref({ door: 'rail', target: { machineId: 'm1', serverId: 'a' }, tab: { id: 'overview' } })).toBe('/machines/m1?serverId=a');
+        expect(machineCollectionHref({ machineId: 'm1', serverId: 'a' }, 'rail')).toBe('/machines/m1?serverId=a');
+        expect(machineCollectionHref({ kind: 'managed', managedId: 'p', serverId: 'a' }, 'rail')).toBe('/machines/managed/p?serverId=a');
+        expect(machineCollectionHref({ kind: 'managed', managedId: 'p', enrolledMachineId: 'm1', serverId: 'a' }, 'rail')).toBe('/machines/m1?serverId=a');
+        // Configuration (recipes) has one home: the Settings door.
+        expect(machineCollectionHref({ kind: 'preset', presetId: 'r', serverId: 'a' }, 'rail')).toBe('/settings/machines/presets/r?serverId=a');
     });
 
     it('selects the row the route names', () => {
@@ -293,6 +363,14 @@ describe('machine collection navigation', () => {
         expect(resolveSelectedMachineCollectionKey('/settings/machines/pools/new', { serverId: 'a' })).toBe('poolDraft:a');
         // The machine being added is the collection's draft row (lab M4).
         expect(resolveSelectedMachineCollectionKey('/settings/machines/add', {})).toBe('machineDraft');
-        expect(resolveSelectedMachineCollectionKey('/settings/machines', {})).toBeNull();
+        // Both doors' index routes select "All machines", the list's first row.
+        expect(resolveSelectedMachineCollectionKey('/settings/machines', {})).toBe('allMachines');
+        expect(resolveSelectedMachineCollectionKey('/machines', {})).toBe('allMachines');
+        // A machine's sub-page keeps its machine selected, in either door.
+        expect(resolveSelectedMachineCollectionKey('/machines/m2', { serverId: 'a' })).toBe('machine:a:m2');
+        expect(resolveSelectedMachineCollectionKey('/machines/m2/terminal', { serverId: 'a' })).toBe('machine:a:m2');
+        expect(resolveSelectedMachineCollectionKey('/settings/machines/m2/doctor', {})).toBe('machine::m2');
+        expect(resolveSelectedMachineCollectionKey('/machines/managed/p', { serverId: 'a' })).toBe('managed:a:p');
+        expect(resolveSelectedMachineCollectionKey('/machine/m2', {})).toBeNull();
     });
 });

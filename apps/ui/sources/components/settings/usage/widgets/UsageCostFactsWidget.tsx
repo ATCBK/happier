@@ -12,7 +12,9 @@ import {
   usagePeriodPhrase,
   useUsagePluginTheme,
   type UsageBodyProps,
+  UsageBodyNoUsage,
 } from './usageBodyKit';
+import { UsageModelPricesLine } from './UsageModelPrices';
 
 /** Each kind of money is its own fact; they are never summed into one figure. */
 const KIND_ORDER: readonly UsageAnalyticsCostFactKind[] = [
@@ -53,20 +55,21 @@ export function UsageCostFactsWidget(props: UsageBodyProps) {
         : fact.eventCount > 0 || (fact.amountUsd ?? 0) > 0)
   ));
   if (!props.slice.accounting)
-    return (
-      <UsageBodyInsufficient
-        testID={`${props.testID}.empty`}
-        title={t('usage.board.page.noUsageTitle')}
-        reason={t('usage.board.page.noUsageReason')}
-      />
-    );
+    return <UsageBodyNoUsage slice={props.slice} testID={props.testID} />;
+  // The prices behind API-equivalent money live with the money they make (U10); unpriced models
+  // are exactly the case where there are no money facts yet.
+  const prices = <UsageModelPricesLine slice={props.slice} serverId={props.serverId} testID={`${props.testID}.prices`} />;
   if (facts.length === 0)
     return (
-      <UsageBodyInsufficient
-        testID={`${props.testID}.noMoney`}
-        title={t('usage.board.page.noCostFactsTitle')}
-        reason={t('usage.board.page.noCostFactsReason')}
-      />
+      <View style={styles.body}>
+        <UsageBodyInsufficient
+          testID={`${props.testID}.noMoney`}
+          replacesContent={false}
+          title={t('usage.board.page.noCostFactsTitle')}
+          reason={t('usage.board.page.noCostFactsReason')}
+        />
+        {prices}
+      </View>
     );
   return (
     <View style={styles.body} testID={`${props.testID}.costFacts`}>
@@ -102,6 +105,7 @@ export function UsageCostFactsWidget(props: UsageBodyProps) {
           </View>
         ))}
       </View>
+      {prices}
       <UsageCoverageLine
         slice={props.slice}
         sources={['accounting']}

@@ -35,9 +35,10 @@ import {
     listActionSettingsEntryStatusParts,
     resolveActionSettingsEntryStatusSummary,
 } from './resolveActionSettingsEntryStatusSummary';
-import { useActionSettingsNarrowLayout } from './useActionSettingsNarrowLayout';
 import { Icon } from '@/components/ui/icons/Icon';
 import { SettingsPageHeader } from '@/components/settings/shell/SettingsPageHeader';
+import { PluginMark } from '@/components/settings/plugins/PluginMark';
+import { parseQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
 
 const ACTION_SETTINGS_SEGMENT_SIZE = 8;
 
@@ -47,6 +48,7 @@ type ActionSettingsVirtualizedItem =
 
 type ActionSettingsVirtualizedSegment = Readonly<{
     key: string;
+    title?: string;
     titleKey: ReturnType<typeof groupActionSettingsEntriesByFamily>[number]['titleKey'];
     descriptionKey?: ReturnType<typeof groupActionSettingsEntriesByFamily>[number]['descriptionKey'];
     items: readonly ActionSettingsVirtualizedItem[];
@@ -71,7 +73,8 @@ function buildActionSettingsVirtualizedSegments(
             const first = start === 0;
             const last = start + ACTION_SETTINGS_SEGMENT_SIZE >= items.length;
             segments.push({
-                key: `${section.titleKey}:${start}`,
+                key: `${section.key}:${start}`,
+                ...(section.title === undefined ? {} : { title: section.title }),
                 titleKey: section.titleKey,
                 ...(section.descriptionKey ? { descriptionKey: section.descriptionKey } : {}),
                 items: items.slice(start, start + ACTION_SETTINGS_SEGMENT_SIZE),
@@ -89,19 +92,11 @@ const stylesheet = StyleSheet.create((theme) => ({
         alignItems: 'center',
         gap: Platform.select({ ios: 8, default: 10 }),
     },
-    actionStatus: {
-        maxWidth: Platform.select({ ios: 128, default: 260 }),
-    },
-    actionStatusText: {
-        color: theme.colors.text.secondary,
-        fontSize: Platform.select({ ios: 12, default: 12 }),
-        lineHeight: 16,
-    },
     actionStatusSubtitle: {
         color: theme.colors.text.secondary,
         fontSize: Platform.select({ ios: 12, default: 12 }),
         lineHeight: 16,
-        marginTop: Platform.select({ ios: 3, default: 2 }),
+        marginTop: theme.space.s4,
     },
     actionConfigureIcon: {
         width: Platform.select({ ios: 24, default: 24 }),
@@ -113,24 +108,13 @@ const stylesheet = StyleSheet.create((theme) => ({
 
 function ActionSettingsRowAccessory(props: Readonly<{
     entry: ActionSettingsEntry;
-    compactLayout: boolean;
-    statusText: string;
     testIDPrefix: string;
     onEnabledChange: (enabled: boolean) => void;
 }>) {
     const { theme } = useUnistyles();
     const styles = stylesheet;
-    const shouldShowStatusInline = Boolean(props.statusText) && !props.compactLayout;
-
     return (
         <View style={styles.actionRightAccessory}>
-            {shouldShowStatusInline ? (
-                <View testID={`${props.testIDPrefix}:status-container`} style={styles.actionStatus}>
-                    <Text testID={`${props.testIDPrefix}:status`} style={styles.actionStatusText} numberOfLines={1}>
-                        {props.statusText}
-                    </Text>
-                </View>
-            ) : null}
             <Switch
                 testID={`${props.testIDPrefix}:enabled`}
                 accessibilityLabel={props.entry.title}
@@ -160,7 +144,7 @@ function getActionSettingsEntryStatusText(
     });
     return (
         listActionSettingsEntryStatusParts(statusSummary)
-            .map((part) => t(part.labelKey, { count: part.count }))
+            .map((part) => t(part.labelKey, { partial: part.partial }))
             .join(' · ')
     );
 }
@@ -169,7 +153,6 @@ export const ActionsSettingsView = React.memo(function ActionsSettingsView() {
     const router = useRouter();
     const { theme } = useUnistyles();
     const styles = stylesheet;
-    const compactLayout = useActionSettingsNarrowLayout();
     const [searchQuery, setSearchQuery] = React.useState('');
     const [rawSettings, setRawSettings] = useSettingMutable('actionsSettingsV1');
     const voice = useSetting('voice') as Readonly<{ privacy?: { shareDeviceInventory?: boolean } }> | null;
@@ -226,7 +209,14 @@ export const ActionsSettingsView = React.memo(function ActionsSettingsView() {
     // Group actions into runtime FAMILY sections (FINALIZATION-PLAN §3.3) so the user can scan and
     // configure each family (browser, simulator, plugins, local services, …) together. The per-row
     // enable toggle + per-action approval controls (detail view) are unchanged.
-    const familySections = React.useMemo(() => groupActionSettingsEntriesByFamily(entries), [entries]);
+    const pluginTitles = React.useMemo(() => new Map(
+        Object.values(daemonMergedProjection.inputs?.pluginProjectionById ?? {})
+            .map((plugin) => [plugin.pluginId, plugin.title] as const),
+    ), [daemonMergedProjection.inputs]);
+    const familySections = React.useMemo(
+        () => groupActionSettingsEntriesByFamily(entries, pluginTitles),
+        [entries, pluginTitles],
+    );
     const virtualizedSegments = React.useMemo(
         () => buildActionSettingsVirtualizedSegments(familySections, entries),
         [entries, familySections],
@@ -253,12 +243,11 @@ export const ActionsSettingsView = React.memo(function ActionsSettingsView() {
                 key={entry.actionId}
                 testID={actionTestIdPrefix}
                 title={entry.title}
-                subtitle={entry.description ?? t('settingsActions.noDescription')}
-                subtitleAccessory={compactLayout && statusText ? (
+                subtitle={entry.description ?? undefined}
+                subtitleAccessory={statusText ? (
                     <Text
                         testID={`${actionTestIdPrefix}:status`}
                         style={styles.actionStatusSubtitle}
-                        numberOfLines={1}
                     >
                         {statusText}
                     </Text>
@@ -266,8 +255,6 @@ export const ActionsSettingsView = React.memo(function ActionsSettingsView() {
                 rightElement={(
                     <ActionSettingsRowAccessory
                         entry={entry}
-                        compactLayout={compactLayout}
-                        statusText={statusText}
                         testIDPrefix={actionTestIdPrefix}
                         onEnabledChange={(nextValue) => handleActionEnabledChange(entry.actionId, nextValue)}
                     />
@@ -277,11 +264,18 @@ export const ActionsSettingsView = React.memo(function ActionsSettingsView() {
                 onPress={() => openActionDetails(entry.actionId)}
             />
         );
-    }, [compactLayout, handleActionEnabledChange, openActionDetails, settings, styles.actionStatusSubtitle]);
+    }, [handleActionEnabledChange, openActionDetails, settings, styles.actionStatusSubtitle]);
 
-    const renderSegment = React.useCallback(({ item: segment }: Readonly<{ item: ActionSettingsVirtualizedSegment }>) => (
+    const renderSegment = React.useCallback(({ item: segment }: Readonly<{ item: ActionSettingsVirtualizedSegment }>) => {
+        const pluginId = segment.first && segment.items[0]?.entry.kind !== 'host'
+            ? parseQualifiedPluginActionId(segment.items[0]?.entry.actionId)?.pluginId : null;
+        const installedPackage = pluginId ? daemonMergedProjection.inputs?.pluginProjectionV2?.installedPackagesById[pluginId] : null;
+        return (
         <ItemGroup
-            title={segment.first ? t(segment.titleKey) : undefined}
+            title={segment.first ? segment.title ?? t(segment.titleKey) : undefined}
+            titleLeading={pluginId ? <PluginMark title={segment.title ?? t(segment.titleKey)} pluginId={pluginId}
+                installedPackage={installedPackage} machineId={executionTarget?.machine.id} serverId={executionTarget?.serverId}
+                testID={`settings-actions:plugin:${pluginId}:mark`} /> : undefined}
             description={segment.first && segment.descriptionKey ? t(segment.descriptionKey) : undefined}
             virtualizedSegment={{ first: segment.first, last: segment.last }}
             selectableItemCountOverride={segment.items.length}
@@ -298,7 +292,8 @@ export const ActionsSettingsView = React.memo(function ActionsSettingsView() {
                     />
                 ))}
         </ItemGroup>
-    ), [openActionDetails, renderEntryRow]);
+        );
+    }, [daemonMergedProjection.inputs, executionTarget, openActionDetails, renderEntryRow]);
 
     return (
         <ListPresentationProvider value="page">

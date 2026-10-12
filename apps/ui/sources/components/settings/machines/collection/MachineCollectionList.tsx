@@ -1,4 +1,5 @@
 import * as React from 'react';
+import type { Pressable } from 'react-native';
 import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
 import { useGlobalSearchParams, usePathname, useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -8,7 +9,7 @@ import { IconButton } from '@/components/ui/buttons/IconButton';
 import { CompactSearchField } from '@/components/ui/forms/CompactSearchField';
 import { SelectionTiles } from '@/components/ui/forms/SelectionTiles';
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
-import { Icon } from '@/components/ui/icons/Icon';
+import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
 import { ExpandableItem } from '@/components/ui/lists/ExpandableItem';
 import { EmptyState } from '@/components/ui/empty/EmptyState';
@@ -28,6 +29,8 @@ import {
     isMachineCollectionRowSelected,
     machineCollectionHref,
     machineCollectionRowKey,
+    machinesIndexHref,
+    partitionMachineCollectionRailRows,
     resolveSelectedMachineCollectionKey,
     type MachineCollectionRow,
     type MachineCollectionSection,
@@ -37,11 +40,12 @@ import { recordMachineCollectionVisit, readLastVisitedMachine } from './machineC
 import { useMachineAddOptions, type MachineAddOption } from './useMachineAddOptions';
 import { useMachineAddDraftRow } from '@/components/machines/add/useMachineAddFlow';
 import { CollectionDraftRow, CollectionList, CollectionListGroupLabel, collectionListStyles } from '@/components/ui/lists/collection/CollectionList';
+import { useRevealSelectedRow } from '@/components/ui/lists/collection/useRevealSelectedRow';
 import { HappierCollectionListMark } from '@happier-dev/plugin-ui/presentation';
 import { StatusDot } from '@/components/ui/status/StatusDot';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
-import { sync } from '@/sync/sync';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { SETTINGS_ROUTES } from '@/components/settings/catalog/routes';
 import { useActionApprovalContinuation } from '@/components/approvals/useActionApprovalContinuation';
 import type { MachinePresetQueryState } from '../managed/useMachinePresets';
@@ -49,6 +53,11 @@ import type { ManagedMachinePresetV1 } from '@happier-dev/protocol/machines/mana
 import { ManagedMachineReadApprovalNotice } from '../managed/ManagedMachineReadApprovalNotice';
 import { useTeamsDirectory } from '@/hooks/teams/useTeamsDirectory';
 import { useTeamBinding } from '@/hooks/teams/useTeamBinding';
+import { MANAGED_PROVISIONER_MARK_SIZE, ManagedPresetMark } from '@/components/settings/machines/managed/useManagedProvisionerPresentation';
+import { useMachinesDoor } from '@/components/machines/page/machinesDoor';
+import { useMachineResourceFleetAttention } from '@/sync/domains/machines/resources/useMachineResourceFleetAttention';
+import { MachineListRowSummary } from '@/components/machines/summary/MachineListRowSummary';
+import { useMachineResourceLiveDemand } from '@/sync/domains/machines/resources/useMachineResourceLiveDemand';
 
 /** The collection offers a search field only once it no longer fits at a glance. */
 const SEARCH_THRESHOLD = 8;
@@ -164,7 +173,11 @@ export const MachineAddOptionTiles = React.memo(function MachineAddOptionTiles(p
  * page sections where no rail shows. Selection comes from the route.
  */
 export const MachineCollectionList = React.memo(function MachineCollectionList(props: Readonly<{
-    variant: 'rail' | 'page';
+    /**
+     * `configuration`: only the collection's configuration (defaults, this computer, pools, recipes) and its
+     * read notices, under All machines where no list stands beside it; All machines lists the machines.
+     */
+    variant: 'rail' | 'page' | 'configuration';
     viewModel: MachinesSettingsViewModel;
     addOptions: readonly MachineAddOption[];
 }>) {
@@ -177,7 +190,17 @@ export const MachineCollectionList = React.memo(function MachineCollectionList(p
     const nowMs = useMachinePresenceNowMs(presenceMachines);
     const isDesktop = isDesktopHost();
     const rail = props.variant === 'rail';
-    const onDetailRoute = pathname.startsWith('/settings/machines/');
+    // Rows stay in the door the list stands in; configuration rows always open in Settings (MPG-2).
+    const door = useMachinesDoor();
+    const doorRoot = machinesIndexHref(door);
+    // "2 need a look" on the All machines row (lab `R`): machines that need you or are worth a look, from the fleet projection.
+    const fleetAttention = useMachineResourceFleetAttention();
+    const fleetLookCount = React.useMemo(() => new Set([
+        ...fleetAttention.needsYou.map(key => JSON.stringify([key.serverId ?? null, key.machineId])),
+        ...fleetAttention.look.map(entry => entry.machineKey),
+    ]).size, [fleetAttention]);
+    const onDetailRoute = pathname === doorRoot || pathname.startsWith(`${doorRoot}/`);
+    const replaceConfiguration = rail && onDetailRoute && door === 'settings';
     const selectedKey = rail ? resolveSelectedMachineCollectionKey(pathname, { serverId: readParam(params.serverId) }) : null;
 
     const [query, setQuery] = React.useState(() => readLastVisitedMachine()?.query ?? '');
@@ -185,7 +208,7 @@ export const MachineCollectionList = React.memo(function MachineCollectionList(p
         () => buildMachineCollection({ groups: viewModel.visibleMachineGroups,
             groupedByHome: viewModel.showMachinesGroupedByServer, managedByServerId: viewModel.managedByServerId,
             presetsByServerId: viewModel.presetsByServerId }).count,
-        [viewModel.visibleMachineGroups, viewModel.showMachinesGroupedByServer, viewModel.managedByServerId, viewModel.presetsByServerId],
+        [viewModel.visibleMachineGroups, viewModel.showMachinesGroupedByServer, viewModel.managedByServerId, viewModel.presetsByServerId, viewModel.reachabilityRevision],
     );
     const searchable = total > SEARCH_THRESHOLD;
     const teamServerIds = React.useMemo(() => Object.entries(viewModel.presetsByServerId ?? {})
@@ -204,7 +227,12 @@ export const MachineCollectionList = React.memo(function MachineCollectionList(p
         managedByServerId: viewModel.managedByServerId,
         presetsByServerId: viewModel.presetsByServerId,
         teamNamesByServerId,
-    }), [nowMs, query, searchable, viewModel.showMachinesGroupedByServer, viewModel.visibleMachineGroups, viewModel.managedByServerId, viewModel.presetsByServerId, teamNamesByServerId]);
+    }), [nowMs, query, searchable, viewModel.showMachinesGroupedByServer, viewModel.visibleMachineGroups, viewModel.managedByServerId, viewModel.presetsByServerId, viewModel.reachabilityRevision, teamNamesByServerId]);
+
+    // The column is an open surface: its online machines' summaries stay live while it shows (one batched demand).
+    const demandKeys = React.useMemo(() => rail ? collection.sections.flatMap(section => section.rows)
+        .flatMap(row => row.online && row.kind === 'machine' ? [{ serverId: row.serverId, machineId: row.machineId }] : []) : [], [collection.sections, rail]);
+    useMachineResourceLiveDemand(demandKeys, { detail: 'summary', enabled: rail });
 
     React.useEffect(() => {
         const selected = collection.sections.flatMap(section => section.rows).find(row => isMachineCollectionRowSelected(selectedKey, row));
@@ -214,10 +242,45 @@ export const MachineCollectionList = React.memo(function MachineCollectionList(p
     const openMachine = (row: MachineCollectionRow) => {
         recordMachineCollectionVisit({ ...row, query });
         // Beside a detail, switching machines replaces the shown detail instead of stacking history.
-        openHref(router, machineCollectionHref(row), rail && onDetailRoute, 'MachineCollectionList.openMachine');
+        openHref(router, machineCollectionHref(row, door), rail && onDetailRoute, 'MachineCollectionList.openMachine');
     };
 
-    const renderMachineRow = (row: MachineCollectionRow) => (
+    // A long fleet opens on its selected machine, not at the top of the column.
+    const selectedPresent = rail && collection.sections.some(section => section.rows.some(row => isMachineCollectionRowSelected(selectedKey, row)));
+    const selectedRowRef = useRevealSelectedRow<React.ComponentRef<typeof Pressable>>(selectedKey, selectedPresent);
+
+    const renderMachineRow = (row: MachineCollectionRow) => rail ? (
+        // Beside a page (lab `R`): one line — the mark, the name, and on the right its summary or one quiet word.
+        <Item
+            key={machineCollectionRowKey(row)}
+            testID={row.kind === 'managed' ? `settings.machines.managed.${row.serverId}.${row.managedId}` : `settings.machines.row.${row.serverId}.${row.machineId}`}
+            // One line: a long name shortens; what tells two same-named machines apart stays whole.
+            title={row.titleParts.name}
+            titleQualifier={row.titleParts.hint}
+            titleLines={1}
+            accessibilityLabel={[row.title, statusLine(row, true)].filter(Boolean).join(', ')}
+            rightElement={(
+                <MachineListRowSummary
+                    testID={`settings.machines.row.${row.serverId}.${row.kind === 'managed' ? row.managedId : row.machineId}.summary`}
+                    serverId={row.serverId}
+                    machineId={row.kind === 'machine' ? row.machineId : row.enrolledMachineId ?? null}
+                    online={row.online}
+                    quietWord={row.reason ?? (!row.online && row.kind === 'managed' ? row.presence : !row.online ? t('machineDetailPage.offline') : row.ownership)}
+                />
+            )}
+            icon={(
+                <HappierCollectionListMark>
+                    <Icon name="desktop" size={20} color={theme.colors.text.secondary} />
+                </HappierCollectionListMark>
+            )}
+            selected={isMachineCollectionRowSelected(selectedKey, row)}
+            pressableRef={isMachineCollectionRowSelected(selectedKey, row) ? selectedRowRef : undefined}
+            density="compact"
+            showChevron={false}
+            pressableStyle={collectionListStyles.row}
+            onPress={() => openMachine(row)}
+        />
+    ) : (
         <Item
             key={machineCollectionRowKey(row)}
             testID={row.kind === 'managed' ? `settings.machines.managed.${row.serverId}.${row.managedId}` : `settings.machines.row.${row.serverId}.${row.machineId}`}
@@ -259,7 +322,7 @@ export const MachineCollectionList = React.memo(function MachineCollectionList(p
             density={rail ? 'compact' : undefined}
             showChevron={!rail}
             pressableStyle={rail ? collectionListStyles.row : undefined}
-            onPress={() => openHref(router, MACHINES_THIS_COMPUTER_ROUTE, rail && onDetailRoute, 'MachineCollectionList.thisComputer')}
+            onPress={() => openHref(router, MACHINES_THIS_COMPUTER_ROUTE, replaceConfiguration, 'MachineCollectionList.thisComputer')}
         />
     ) : null;
 
@@ -279,18 +342,13 @@ export const MachineCollectionList = React.memo(function MachineCollectionList(p
             density={rail ? 'compact' : undefined}
             showChevron={!rail}
             pressableStyle={rail ? collectionListStyles.row : undefined}
-            onPress={() => openHref(router, SETTINGS_ROUTES.machineDefaults, rail && onDetailRoute, 'MachineCollectionList.defaults')}
+            onPress={() => openHref(router, SETTINGS_ROUTES.machineDefaults, replaceConfiguration, 'MachineCollectionList.defaults')}
         />
     );
 
     const loading = viewModel.isLoadingMachines && total === 0;
     const empty = !loading && total === 0;
-    const managedReadFailures = viewModel.visibleMachineGroups.filter(group => {
-        const status = viewModel.managedInventory?.entries[group.serverId]?.status;
-        return status === 'error' || status === 'denied'
-            || (status === 'unsupported' && (viewModel.managedByServerId?.[group.serverId]?.length ?? 0) > 0)
-            || viewModel.managedInventory?.accountScopes.get(group.serverId)?.resolution.kind === 'unavailable';
-    });
+    const managedReadFailures = readManagedMachineReadFailures(viewModel);
     const renderManagedReadFailures = () => managedReadFailures.map(group => {
         const entry = viewModel.managedInventory?.entries[group.serverId];
         return <SurfaceStateCard key={`managed-read:${group.serverId}`} testID={`settings.machines.managed.read.${group.serverId}`}
@@ -303,31 +361,24 @@ export const MachineCollectionList = React.memo(function MachineCollectionList(p
     const unreadableGroup = empty
         ? viewModel.visibleMachineGroups.find((group) => group.status === 'error') ?? null
         : null;
-    const renderUnreadable = (group: Readonly<{ serverId: string; serverName: string }>, compact: boolean) => {
-        // Retry reads the focused Home again; another Home recovers through its own connection.
-        const canRetry = group.serverId === viewModel.activeServerId;
+    const renderUnreadable = (group: Readonly<{ serverId: string; serverName: string }>, compact: boolean) => (
+        <MachineHomeUnreadableRow key={`unreadable:${group.serverId}`} group={group} compact={compact}
+            canRetry={group.serverId === viewModel.activeServerId} />
+    );
+    const noMatches = searchable && query.trim().length > 0 && collection.count === 0;
+    // A long list keeps its offline machines under one fold after the ones that can work (real fleets carry
+    // dozens of retired or sleeping machines); a short list shows them inline, as the lab's rail does.
+    const renderRailSectionRows = (section: MachineCollectionSection) => {
+        const { inline, offline } = partitionMachineCollectionRailRows(section.rows, searchable);
+        if (offline.length === 0) return inline.map(renderMachineRow);
         return (
-            <Item
-                key={`unreadable:${group.serverId}`}
-                testID="settings.machines.unreadable"
-                title={t('settingsMachines.unreadableTitle', { home: group.serverName })}
-                titleLines={0}
-                density={compact ? 'compact' : undefined}
-                showChevron={false}
-                mode="info"
-                rightElement={canRetry ? (
-                    <RoundButton
-                        testID="settings.machines.unreadable.retry"
-                        size="small"
-                        display="secondary"
-                        title={t('common.retry')}
-                        onPress={() => fireAndForget(sync.refreshMachines(), { tag: 'MachineCollectionList.retry' })}
-                    />
-                ) : undefined}
-            />
+            <>
+                {inline.map(renderMachineRow)}
+                <MachineRowsFold testID={`settings.machines.offline.${section.key}`} title={t('machineDetailPage.offline')}
+                    rows={offline} rail selectedKey={selectedKey} query={query} renderRow={renderMachineRow} />
+            </>
         );
     };
-    const noMatches = searchable && query.trim().length > 0 && collection.count === 0;
     const sectionStatusLabel = (section: MachineCollectionSection): string | undefined => {
         switch (section.status) {
             case 'signedOut': return t('server.signedOut');
@@ -338,11 +389,28 @@ export const MachineCollectionList = React.memo(function MachineCollectionList(p
     };
     const presetSections = viewModel.presetInventory ? collection.presetSections.map(section => <MachinePresetCollectionSectionView key={section.key}
         section={section} state={viewModel.presetInventory?.statesByServerId[section.serverId]} rail={rail}
-        selectedKey={selectedKey} replacing={rail && onDetailRoute} query={searchable ? query : ''}
+        selectedKey={selectedKey} replacing={replaceConfiguration} query={searchable ? query : ''}
         refresh={viewModel.presetInventory.refresh} />) : null;
     const managedReadApprovals = viewModel.visibleMachineGroups.map(group => <ManagedMachineReadApprovalNotice
         key={group.serverId} serverId={group.serverId} entry={viewModel.managedInventory?.entries[group.serverId]}
         testID={`settings.machines.managed.approval.${group.serverId}`} />);
+
+    if (props.variant === 'configuration') {
+        return (
+            <>
+                {renderManagedReadFailures()}
+                {managedReadApprovals}
+                <ItemGroup>{defaultsRow}{thisComputerRow}</ItemGroup>
+                {/* Retired created machines stay recoverable here; All machines lists only the active fleet. */}
+                {collection.sections.filter(section => section.archived).map(section => (
+                    <ArchivedMachineSection key={section.key} section={section} rail={false}
+                        selectedKey={selectedKey} query={searchable ? query : ''} renderRow={renderMachineRow} />
+                ))}
+                <MachinePoolsSection groups={viewModel.visibleMachineGroups} />
+                {presetSections}
+            </>
+        );
+    }
 
     if (!rail) {
         return (
@@ -412,7 +480,7 @@ export const MachineCollectionList = React.memo(function MachineCollectionList(p
             testID="settings.machines.rail"
             title={t('settings.machines')}
             count={loading ? null : total}
-            headerAction={<AddMachineMenu options={addOptions} replaceInCollection={onDetailRoute} />}
+            headerAction={<AddMachineMenu options={addOptions} replaceInCollection={replaceConfiguration} />}
             search={searchable ? {
                 value: query,
                 onChangeText: setQuery,
@@ -420,10 +488,26 @@ export const MachineCollectionList = React.memo(function MachineCollectionList(p
                 testID: 'settings.machines.rail.search',
             } : null}
         >
-            <MachineDraftRow selected={selectedKey === 'machineDraft'} replace={onDetailRoute} />
+            {/* The fleet first (lab `R`): All machines is the index of both doors. */}
+            <Item
+                testID="settings.machines.rail.all"
+                title={t('allMachines.rowTitle')}
+                detail={fleetLookCount > 0 ? t('machineAttention.listNeedLook', { count: fleetLookCount }) : undefined}
+                icon={(
+                    <HappierCollectionListMark>
+                        <Icon name="squares-four" size={20} color={theme.colors.text.secondary} />
+                    </HappierCollectionListMark>
+                )}
+                selected={selectedKey === 'allMachines'}
+                density="compact"
+                showChevron={false}
+                pressableStyle={collectionListStyles.row}
+                onPress={() => openHref(router, doorRoot, onDetailRoute, 'MachineCollectionList.allMachines')}
+            />
+            <MachineDraftRow selected={selectedKey === 'machineDraft'} replace={replaceConfiguration} />
             {selectedKey?.startsWith('poolDraft:') ? <MachinePoolDraftRow /> : null}
+            {/* Defaults head the list, above the machines they apply to (lab m-defaults). */}
             {defaultsRow}
-            {thisComputerRow}
             {renderManagedReadFailures()}
             {managedReadApprovals}
             {loading ? (
@@ -446,7 +530,8 @@ export const MachineCollectionList = React.memo(function MachineCollectionList(p
                     {section.title ? (
                         <CollectionListGroupLabel
                             title={section.title}
-                            count={section.rows.length}
+                            // One group already has its count in the header: say it once.
+                            count={collection.sections.length > 1 ? section.rows.length : undefined}
                         />
                     ) : null}
                     {section.rows.length === 0 && !noMatches && section.status === 'error' ? (
@@ -458,14 +543,58 @@ export const MachineCollectionList = React.memo(function MachineCollectionList(p
                             showChevron={false}
                             mode="info"
                         />
-                    ) : section.rows.map(renderMachineRow)}
+                    ) : renderRailSectionRows(section)}
                 </React.Fragment>
             ))}
+            {thisComputerRow}
             <MachinePoolsSection groups={viewModel.visibleMachineGroups} variant="rail" selectedKey={selectedKey} />
             {presetSections}
         </CollectionList>
     );
 });
+
+/** The Homes whose created-machine inventory could not be read: their notice, not an empty Home. */
+export function readManagedMachineReadFailures(viewModel: MachinesSettingsViewModel) {
+    return viewModel.visibleMachineGroups.filter(group => {
+        const status = viewModel.managedInventory?.entries[group.serverId]?.status;
+        return status === 'error' || status === 'denied'
+            || (status === 'unsupported' && (viewModel.managedByServerId?.[group.serverId]?.length ?? 0) > 0)
+            || viewModel.managedInventory?.accountScopes.get(group.serverId)?.resolution.kind === 'unavailable';
+    });
+}
+
+/** A Home whose machine list could not be read ends in that fact, with Retry for the focused Home. */
+export function MachineHomeUnreadableRow(props: Readonly<{
+    group: Readonly<{ serverId: string; serverName: string }>;
+    compact: boolean;
+    /** Retry reads the focused Home again; another Home recovers through its own connection. */
+    canRetry: boolean;
+}>) {
+    const { execute } = useMountedActionExecution(props.group.serverId);
+    const retry = React.useCallback(async () => {
+        const result = await execute('machines.list', { serverId: props.group.serverId, refresh: true });
+        if (!result.ok) throw new Error(result.error);
+    }, [execute, props.group.serverId]);
+    return (
+        <Item
+            testID="settings.machines.unreadable"
+            title={t('settingsMachines.unreadableTitle', { home: props.group.serverName })}
+            titleLines={0}
+            density={props.compact ? 'compact' : undefined}
+            showChevron={false}
+            mode="info"
+            rightElement={props.canRetry ? (
+                <RoundButton
+                    testID="settings.machines.unreadable.retry"
+                    size="small"
+                    display="secondary"
+                    title={t('common.retry')}
+                    onPress={() => fireAndForget(retry(), { tag: 'MachineCollectionList.retry' })}
+                />
+            ) : undefined}
+        />
+    );
+}
 
 /** Retired resources remain recoverable without rejoining the active Machines list. */
 function ArchivedMachineSection(props: Readonly<{
@@ -475,16 +604,42 @@ function ArchivedMachineSection(props: Readonly<{
     query: string;
     renderRow: (row: MachineCollectionRow) => React.ReactElement;
 }>) {
-    const [expanded, setExpanded] = React.useState(false);
-    const selected = props.section.rows.some(row => isMachineCollectionRowSelected(props.selectedKey, row));
-    const disclosure = <ExpandableItem expanded={expanded || selected || props.query.trim().length > 0}
-        onExpandedChange={setExpanded} header={state => <Item {...state.headerProps}
-            testID={`settings.machines.archived.${props.section.serverId}`}
-            title={t('managedCleanup.archiveTitle')} detail={String(props.section.rows.length)}
-            density={props.rail ? 'compact' : undefined} showChevron={false} /> }>
-        {props.section.rows.map(props.renderRow)}
-    </ExpandableItem>;
+    const disclosure = <MachineRowsFold testID={`settings.machines.archived.${props.section.serverId}`} title={t('managedCleanup.archiveTitle')}
+        rows={props.section.rows} rail={props.rail} selectedKey={props.selectedKey} query={props.query} renderRow={props.renderRow} />;
     return props.rail ? disclosure : <ItemGroup title={props.section.title ?? undefined}>{disclosure}</ItemGroup>;
+}
+
+function MachineRowsFoldCaret(props: Readonly<{ expanded: boolean }>) {
+    const { theme } = useUnistyles();
+    return <Icon name={props.expanded ? 'caret-down' : 'caret-right'} size={ICON_SIZE.xs} color={theme.colors.text.secondary} />;
+}
+
+/** Rows kept under one fold, with their count; it opens while one of them is selected or a search is typed. */
+function MachineRowsFold(props: Readonly<{
+    testID: string;
+    title: string;
+    rows: readonly MachineCollectionRow[];
+    rail: boolean;
+    selectedKey: string | null;
+    query: string;
+    renderRow: (row: MachineCollectionRow) => React.ReactElement;
+}>) {
+    const [expanded, setExpanded] = React.useState(false);
+    const selected = props.rows.some(row => isMachineCollectionRowSelected(props.selectedKey, row));
+    return <ExpandableItem expanded={expanded || selected || props.query.trim().length > 0}
+        // In the rail the fold is one more row of the list: no hairline of its own.
+        onExpandedChange={setExpanded} {...(props.rail ? { showDivider: false } : {})} header={state => <Item {...state.headerProps}
+            testID={props.testID}
+            title={props.title} detail={String(props.rows.length)}
+            // The rail's row geometry: the caret stands in the mark column, so the title lines up with the names.
+            {...(props.rail ? { pressableStyle: collectionListStyles.row, showDivider: false, icon: (
+                <HappierCollectionListMark>
+                    <MachineRowsFoldCaret expanded={state.expanded} />
+                </HappierCollectionListMark>
+            ) } : {})}
+            density={props.rail ? 'compact' : undefined} showChevron={false} /> }>
+        {props.rows.map(props.renderRow)}
+    </ExpandableItem>;
 }
 
 /** Accessible recipes remain separate from resources, with exact-Home read and approval custody. */
@@ -497,7 +652,6 @@ export function MachinePresetCollectionSectionView(props: Readonly<{
     query: string;
     refresh?: () => void;
 }>) {
-    const { theme } = useUnistyles();
     const router = useRouter();
     const scopeKey = JSON.stringify([props.section.serverId, props.state?.approval]);
     const approval = useActionApprovalContinuation({ scopeKey, serverId: props.section.serverId, onExecuted: () => {} });
@@ -507,7 +661,9 @@ export function MachinePresetCollectionSectionView(props: Readonly<{
     const title = [t('machinePresets.short'), props.section.title].filter(Boolean).join(' · ');
     const newHref = `/settings/machines/presets/new?serverId=${encodeURIComponent(props.section.serverId)}`;
     // The group's own "+" creates a preset (lab `m-presets`); it waits until the list is readable.
-    const add = !props.state?.loading && !props.state?.error ? <IconButton testID={`settings.machines.presets.new.${props.section.serverId}`}
+    // A re-read keeps the last answer on screen: "loading" is only the wait for the first one.
+    const awaiting = props.state?.loading === true && props.state.value == null;
+    const add = !awaiting && !props.state?.error ? <IconButton testID={`settings.machines.presets.new.${props.section.serverId}`}
         iconName="plus" accessibilityLabel={t('machinePresets.newPreset')} variant="plain"
         onPress={() => openHref(router, newHref, props.replacing, 'MachinePresetCollection.new')} /> : null;
     const rows = <>
@@ -524,7 +680,9 @@ export function MachinePresetCollectionSectionView(props: Readonly<{
             // The rail is an index: one line, with who it is for as the right-hand fact (lab m-presets).
             {...(props.rail ? { detail: row.preset.archivedAt !== undefined ? t('machinePresets.archivedShort') : audience }
                 : { subtitle: row.preset.archivedAt !== undefined ? `${audience} · ${t('machinePresets.archived')}` : audience })}
-            icon={<HappierCollectionListMark><Icon name="stack" color={theme.colors.text.secondary} /></HappierCollectionListMark>}
+            // The preset's provider mark, as the preset page draws it (lab m-presets rail).
+            icon={<HappierCollectionListMark><ManagedPresetMark serverId={row.serverId} preset={row.preset}
+                size={props.rail ? MANAGED_PROVISIONER_MARK_SIZE.rail : MANAGED_PROVISIONER_MARK_SIZE.row} /></HappierCollectionListMark>}
             density={props.rail ? 'compact' : undefined} selected={props.rail ? isMachineCollectionRowSelected(props.selectedKey, row) : undefined}
             showChevron={!props.rail} pressableStyle={props.rail ? collectionListStyles.row : undefined}
             onPress={() => { recordMachineCollectionVisit({ ...row, query: props.query });
@@ -532,11 +690,11 @@ export function MachinePresetCollectionSectionView(props: Readonly<{
             return row.preset.owner.kind === 'team' ? <MachinePresetTeamCollectionRow key={machineCollectionRowKey(row)}
                 serverId={row.serverId} teamId={row.preset.owner.teamId} knownName={row.teamName} render={render} /> : render(row.audience);
         })}
-        {props.section.rows.length === 0 && !props.state?.error ? (props.state?.loading
-            ? <Item testID={`settings.machines.presets.empty.${props.section.serverId}`} title={t('machinePresets.loading')}
-                mode="info" density={props.rail ? 'compact' : undefined} showChevron={false} />
-            : <EmptyState testID={`settings.machines.presets.empty.${props.section.serverId}`} layout="line"
-                title={props.query.trim() ? t('common.noMatches') : t('machinePresets.empty')}
+        {/* Loading and empty are one line on the rows' edge, so the section never shifts when the answer arrives. */}
+        {props.section.rows.length === 0 && !props.state?.error ? (
+            <EmptyState testID={`settings.machines.presets.empty.${props.section.serverId}`} layout="line"
+                title={awaiting ? t('machinePresets.loading') : props.query.trim() ? t('common.noMatches') : t('machinePresets.empty')}
+                lineLoading={awaiting}
                 lineDensity={props.rail ? 'compact' : undefined} lineRowStyle={props.rail ? collectionListStyles.row : undefined} />) : null}
     </>;
     if (!props.rail) return <ItemGroup title={title} action={add}>{rows}</ItemGroup>;

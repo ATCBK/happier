@@ -1,14 +1,13 @@
 import { act } from 'react-test-renderer';
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_ATTENTION_DELIVERY_POLICY_V1 } from '@happier-dev/protocol';
 
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { upsertAndActivateServer } from '@/sync/domains/server/serverRuntime';
 import { getStorage } from '@/sync/domains/state/storage';
 import { DEFAULT_ATTENTION_DEVICE_OVERRIDES_V1 } from '@/sync/domains/settings/attentionDeviceOverridesV1';
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
@@ -20,7 +19,26 @@ const nativeCapabilitiesState = vi.hoisted(() => ({
 const readExpoPushTokenSpy = vi.hoisted(() => vi.fn(async () => ({ ok: true as const, token: 'ExponentPushToken[test]' })));
 
 installDisconnectedServerSocketBoundary();
-beforeAll(loadSyncSingletonForTests);
+await loadSyncSingletonForTests();
+let restoredAccount: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
+async function restoreRemoteAlertHome(serverUrl: string, accountId: string, version: number) {
+    restoredAccount = await restoreServerAccountForTest({ serverUrl, accountId,
+        request: async (raw, init) => {
+            const path = new URL(String(raw)).pathname;
+            if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+            if (path === '/v2/account/settings') return accountSettingsResponse(init, version);
+            return null;
+        },
+    });
+    return restoredAccount.home;
+}
+function accountSettingsResponse(init: RequestInit | undefined, version: number) {
+    if (init?.method === 'POST') {
+        const input = JSON.parse(String(init.body)) as { expectedVersion: number };
+        return Response.json({ success: true, version: input.expectedVersion + 1 });
+    }
+    return Response.json({ content: { t: 'plain', v: {} }, version });
+}
 
 vi.mock('../../../../modules/happier-activity-notifications', () => ({
     readActivityNotificationCapabilities: () => nativeCapabilitiesState.current,
@@ -30,8 +48,10 @@ vi.mock('@/activity/notifications/permission/pushNotificationAccess', () => ({
     readExpoPushToken: () => readExpoPushTokenSpy(),
 }));
 
-afterEach(() => {
+afterEach(async () => {
     standardCleanup();
+    await restoredAccount?.dispose();
+    restoredAccount = undefined;
     nativeCapabilitiesState.current = { v: 1, platform: 'ios', events: ['ready'] };
     readExpoPushTokenSpy.mockClear();
     vi.restoreAllMocks();
@@ -40,7 +60,7 @@ afterEach(() => {
 
 describe('remote alert registration status', () => {
     it('reads only the captured Home and rejects an old unmarked response', async () => {
-        const home = await upsertAndActivateServer({ serverUrl: 'https://remote-alert-status.example', name: 'Home' });
+        const home = await restoreRemoteAlertHome('https://remote-alert-status.example', 'account-a', 7);
         const scope = { serverId: home.id, accountId: 'account-a' };
         getStorage().getState().activateProfileScope(scope);
         getStorage().setState({ settingsScope: scope, settingsVersion: 7 });
@@ -50,10 +70,13 @@ describe('remote alert registration status', () => {
         });
         let marked = true;
         const hosts: string[] = [];
-        setRuntimeFetch(async (url) => {
+        setRuntimeFetch(async (url, init) => {
             const target = new URL(url instanceof Request ? url.url : String(url));
             hosts.push(target.host);
             if (target.pathname === '/v1/auth/ping') return new Response('{}', { status: 200 });
+            if (target.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+            if (target.pathname === '/v2/account/settings') return accountSettingsResponse(init, 7);
+            if (target.pathname !== '/v1/push-tokens') return new Response(null, { status: 404 });
             return new Response(JSON.stringify(marked ? {
                 v: 2, accountRemoteAlerts: { settingsVersion: 7, status: 'stale' }, tokens: [],
             } : { tokens: [] }), { status: 200 });
@@ -101,16 +124,19 @@ describe('remote alert registration status', () => {
     });
 
     it('re-probes native capability on Refresh so a mounted screen can become enrollable', async () => {
-        const home = await upsertAndActivateServer({ serverUrl: 'https://remote-alert-refresh.example', name: 'Home' });
+        const home = await restoreRemoteAlertHome('https://remote-alert-refresh.example', 'account-refresh', 8);
         const scope = { serverId: home.id, accountId: 'account-refresh' };
         getStorage().getState().activateProfileScope(scope);
         getStorage().setState({ settingsScope: scope, settingsVersion: 8 });
         vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({
             token: `e30.${Buffer.from(JSON.stringify({ sub: scope.accountId })).toString('base64url')}.signature`,
         });
-        setRuntimeFetch(async (url) => {
+        setRuntimeFetch(async (url, init) => {
             const target = new URL(url instanceof Request ? url.url : String(url));
             if (target.pathname === '/v1/auth/ping') return new Response('{}', { status: 200 });
+            if (target.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+            if (target.pathname === '/v2/account/settings') return accountSettingsResponse(init, 8);
+            if (target.pathname !== '/v1/push-tokens') return new Response(null, { status: 404 });
             return Response.json({
                 v: 2,
                 accountRemoteAlerts: { settingsVersion: 8, status: 'current' },
@@ -148,7 +174,7 @@ describe('remote alert registration status', () => {
     });
 
     it('re-probes after the asynchronous Home projection resolves', async () => {
-        const home = await upsertAndActivateServer({ serverUrl: 'https://remote-alert-prepared.example', name: 'Home' });
+        const home = await restoreRemoteAlertHome('https://remote-alert-prepared.example', 'account-prepared', 9);
         const scope = { serverId: home.id, accountId: 'account-prepared' };
         getStorage().getState().activateProfileScope(scope);
         getStorage().setState({ settingsScope: scope, settingsVersion: 9 });
@@ -157,11 +183,13 @@ describe('remote alert registration status', () => {
         });
         let resolveProjection: ((response: Response) => void) | null = null;
         const projectionRequested = new Promise<void>((resolve) => {
-            setRuntimeFetch(async (url) => {
+            setRuntimeFetch(async (url, init) => {
                 const target = new URL(url instanceof Request ? url.url : String(url));
                 if (target.pathname === '/v1/auth/ping' || target.pathname === '/health') {
                     return Response.json({});
                 }
+                if (target.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+                if (target.pathname === '/v2/account/settings') return accountSettingsResponse(init, 9);
                 if (target.pathname !== '/v1/push-tokens' || target.searchParams.get('projectionVersion') !== '2') {
                     return new Response(null, { status: 404 });
                 }

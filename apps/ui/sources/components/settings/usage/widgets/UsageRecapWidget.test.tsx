@@ -11,6 +11,8 @@ import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness'
 import { publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { UsageRecapWidget } from './UsageRecapWidget';
+import { Modal } from '@/modal';
+import { UsageRecapComposer } from './recap/UsageRecapComposer';
 import type { UsageBodyProps } from './usageBodyKit';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
@@ -27,7 +29,7 @@ let home: Awaited<ReturnType<typeof serveAccountHomes>> | undefined;
 afterEach(() => { standardCleanup(); retireActiveServerAccountScopeLifetime(); home?.dispose(); home = undefined;
   vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
-async function mount(denied = false, queryResponse?: () => Response | Promise<Response>, hasAccounting = true) {
+async function mount(denied = false, queryResponse?: () => Response | Promise<Response>, hasAccounting = true, requestedQuery = shownQuery) {
   // Load the real lazy Action entry before a short assertion wait; no internal owner is mocked.
   await import('@/sync/ops/actions/defaultActionExecutor');
   home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://table-export.test', accountId: 'a' }],
@@ -38,7 +40,7 @@ async function mount(denied = false, queryResponse?: () => Response | Promise<Re
   publishAppliedActiveServerSnapshot({ serverId: server.id, serverUrl: server.serverUrl, generation: 0 });
   const slice = { key: getUsageQueryKey(shownQuery), requestedQuery: shownQuery, shownQuery, ...(hasAccounting ? { accounting } : {}),
     pending: false, sources: [{ source: 'accounting', status: 'available' as const }] };
-  const props: UsageBodyProps = { id: 'usage_recap', serverId: server.id, testID: 'recap', query: shownQuery, slice,
+  const props: UsageBodyProps = { id: 'usage_recap', serverId: server.id, testID: 'recap', query: requestedQuery, slice,
     model: { requestedQuery: { query: { ...shownQuery, period: { startMs: 1000, endMs: 1900 } }, authority },
       shownQuery: { query: shownQuery, authority }, slice,
       pending: true, error: null, freshness: 'stale', updatingPreviousPeriod: true, refreshing: false, refresh: async () => {} } };
@@ -46,10 +48,20 @@ async function mount(denied = false, queryResponse?: () => Response | Promise<Re
 }
 
 describe('Recap table/text controls through the admitted export Action', () => {
+  it('prepares the private composer from the facts actually shown while a different scope is pending', async () => {
+    const opened = vi.spyOn(Modal, 'show').mockReturnValue('recap-composer');
+    const screen = await mount(false, undefined, true, normalizeUsageQuery({ agents: ['codex'], machines: ['different-machine'] }));
+    await screen.pressByTestIdAsync('recap.share');
+    expect(opened).toHaveBeenCalledWith(expect.objectContaining({ component: UsageRecapComposer,
+      props: expect.objectContaining({ query: shownQuery }) }));
+  });
   it('keeps the admitted single-session autopsy visible when summary accounting is unavailable', async () => {
     const screen = await mount(false, undefined, false);
     expect(Boolean(screen.findByTestId('recap.empty'))).toBe(true);
-    expect(Boolean(screen.findByTestId('recap.autopsy.contributions'))).toBe(true);
+    // The autopsy is the shared Work owner's: its body (turns, or its own empty state) stays mounted.
+    expect(Boolean(screen.findByTestId('recap.autopsy'))).toBe(true);
+    // No Work facts in this read: the autopsy says so instead of drawing an empty table.
+    expect(Boolean(screen.findByTestId('recap.autopsy.workUnavailable'))).toBe(true);
     expect(home!.requests).toHaveLength(0);
   });
   it('copies the Action text bytes for the exact shown query with explicit summary fields', async () => {

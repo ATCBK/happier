@@ -34,6 +34,8 @@ import { classifyHomeActionOutcome } from '@/sync/ops/home/homeActionOutcome';
 import { homeDomainFailureCode } from '@/sync/api/home/homeDomainActions';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { describeMachinePresenceLine } from '@/utils/sessions/machinePresenceLine';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
+import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
 import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { openExternalUrl } from '@/utils/url/openExternalUrl';
@@ -91,6 +93,8 @@ export function ManagedMachineSections(props: SectionProps) {
     const compact = useDeviceType() === 'phone' || layout?.mode === 'stacked';
     const controller = useServerScopedMachine(props.serverId, machine.controller.machineId);
     const controllerMachines = useMachineListForServer(props.serverId);
+    const presenceNowMs = useMachinePresenceNowMs(controllerMachines ?? []);
+    useMachineReachabilityRevision();
     const controllerMachinesRef = React.useRef(controllerMachines);
     controllerMachinesRef.current = controllerMachines;
     const controllerName = getMachineDisplayName(controller) ?? t('common.unknown');
@@ -98,7 +102,8 @@ export function ManagedMachineSections(props: SectionProps) {
     const credentialPresentation = useQualifiedConnectedAccountTargetPresentations({
         binding: props.binding ?? null, targets: credentialTargets,
     });
-    const controllerPresence = controller ? describeMachinePresenceLine(controller) : null;
+    const reachabilityScope = props.binding?.isCurrent() ? props.binding.scope : null;
+    const controllerPresence = controller ? describeMachinePresenceLine(controller, presenceNowMs, undefined, reachabilityScope) : null;
     const requiredController = controller?.installationId === machine.controller.installationId ? controller : null;
     const provisionerPresentation = useManagedProvisionerPresentation({ serverId: props.serverId, controller: machine.controller,
         provider: machine.launch.provider, schemaVersion: machine.launch.schemaVersion });
@@ -170,7 +175,7 @@ export function ManagedMachineSections(props: SectionProps) {
     const [policyParent, setPolicyParent] = React.useState<ManagedMachinePolicyParent | null>(null);
     const [parentReadRevision, refreshPolicyParent] = React.useReducer(value => value + 1, 0);
     const policyController = requiredController && controllerPresence?.online ? machine.controller
-        : controllerMachines?.map(row => currentManagedMoveController(row, machine.custodianAccountId)).find(row => row !== null)
+        : controllerMachines?.map(row => currentManagedMoveController(row, machine.custodianAccountId, reachabilityScope)).find(row => row !== null)
             ?? (requiredController ? machine.controller : null);
     const parentReadKey = JSON.stringify([machine.homeId, machine.id, policyController, machine.launch.provider,
         machine.launch.schemaVersion, machine.launch.credentials, machine.preset?.id]);
@@ -351,7 +356,8 @@ export function ManagedMachineSections(props: SectionProps) {
     const moveController = (id: string) => {
         if (!canMutate || moveReview?.key !== deleteReviewKey) return;
         const candidate = moveReview.candidates.find(row => row.id === id);
-        const controller = currentManagedMoveController(controllerMachinesRef.current?.find(row => row.id === id), machine.custodianAccountId);
+        const controller = currentManagedMoveController(controllerMachinesRef.current?.find(row => row.id === id), machine.custodianAccountId,
+            props.binding?.isCurrent() ? props.binding.scope : null);
         if (!candidate?.reachable || !controller || !sameStrictJsonValue(controller, candidate.controller)
             || sameStrictJsonValue(controller, machine.controller)) return;
         fireAndForget(run('machines.managed.controller.update', { ...target, expectedIntentRevision: machine.intentRevision,
@@ -563,9 +569,9 @@ export function ManagedMachineSections(props: SectionProps) {
         {moveReview?.key === deleteReviewKey && canMutate ? <ManagedControllerMoveList testID="managed-machine.move-candidates"
             candidates={moveReview.candidates.map(candidate => {
                 const row = controllerMachines?.find(value => value.id === candidate.id);
-                const presence = row ? describeMachinePresenceLine(row) : null;
+                const presence = row ? describeMachinePresenceLine(row, presenceNowMs, undefined, reachabilityScope) : null;
                 const current = row?.id === machine.controller.machineId && row.installationId === machine.controller.installationId;
-                const currentInstallation = currentManagedMoveController(row, machine.custodianAccountId);
+                const currentInstallation = currentManagedMoveController(row, machine.custodianAccountId, reachabilityScope);
                 const reachable = candidate.reachable && sameStrictJsonValue(currentInstallation, candidate.controller) && currentInstallation !== null;
                 return { id: candidate.id, name: getMachineDisplayName(row) ?? candidate.id, icon: machineMark,
                     subtitle: presence?.online && machine.launch.credentials?.length ? t(reachable ? 'managedController.reachableAccount'

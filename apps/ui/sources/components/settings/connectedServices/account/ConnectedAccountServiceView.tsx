@@ -19,9 +19,10 @@ import {
     useProjectedPluginLocalizedTextResolver,
     useProjectedConnectedServicesRegistry,
 } from '@/components/appShell/plugins/AppShellPluginUiProjection';
-import { MachineAdministrationTargetSelector, presentMachineAdministrationTargetState } from '@/components/settings/machines/MachineAdministrationTargetSelector';
+import { MachineAdministrationTargetSelector } from '@/components/settings/machines/MachineAdministrationTargetSelector';
 import { reviewManagedResourceRemoval } from '@/components/settings/machines/managed/reviewManagedResourceRemoval';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import { MachineScopedSection } from '@/components/settings/machines/MachineScopedSection';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
@@ -337,7 +338,8 @@ const ConnectedAccountServiceController = React.memo(
     const operationAbortControllerRef = React.useRef(operationAbortController);
     operationAbortControllerRef.current = operationAbortController;
     const isAccountControllerCurrent = React.useCallback(() => (
-        activeControllerRef.current
+        'scope' in accountLifetime
+        && activeControllerRef.current
         && !accountSignal.aborted
         && accountLifetime.isCurrent()
     ), [accountLifetime, accountSignal]);
@@ -428,9 +430,9 @@ const ConnectedAccountServiceController = React.memo(
     const groups = useQualifiedConnectedAccountGroups({
         serverId,
         service,
-        peer: accountPeer,
     });
     const focusedAccountId = route?.focus?.kind === 'account' ? route.focus.accountId : null;
+    const focusedPool = route?.focus?.kind === 'group';
     const machineAccounts = React.useMemo<
         readonly ConnectedAccountServiceProfile[]
     >(() => {
@@ -491,21 +493,19 @@ const ConnectedAccountServiceController = React.memo(
     const visibleAccounts = React.useMemo<readonly ConnectedAccountServiceProfile[]>(() => {
         if (!('scope' in accountLifetime) || profile.id !== accountLifetime.scope.accountId) return machineAccounts;
         // The machine owns operational revisions; Account records supply saved display facts only.
-        const savedAccount = profile.connectedAccountsV4.find(account => account.ref.accountId === focusedAccountId
-            && account.ref.service.pluginId === servicePluginId && account.ref.service.localId === serviceLocalId);
-        if (!savedAccount || machineAccounts.some(account => account.ref.accountId === savedAccount.ref.accountId
-            && account.ref.service.pluginId === savedAccount.ref.service.pluginId
-            && account.ref.service.localId === savedAccount.ref.service.localId)) return machineAccounts;
-        return [...machineAccounts, savedAccount];
-    }, [accountLifetime, focusedAccountId, machineAccounts, profile.connectedAccountsV4, profile.id, serviceLocalId, servicePluginId]);
+        const savedAccounts = profile.connectedAccountsV4.filter(account => (focusedPool || account.ref.accountId === focusedAccountId)
+            && account.ref.service.pluginId === servicePluginId && account.ref.service.localId === serviceLocalId
+            && !machineAccounts.some(candidate => candidate.ref.accountId === account.ref.accountId));
+        return savedAccounts.length === 0 ? machineAccounts : [...machineAccounts, ...savedAccounts];
+    }, [accountLifetime, focusedAccountId, focusedPool, machineAccounts, profile.connectedAccountsV4, profile.id, serviceLocalId, servicePluginId]);
     const focusedAccountHasMachineAugmentation = focusedAccountId === null
         || machineAccounts.some(account => account.ref.accountId === focusedAccountId
             && account.ref.service.pluginId === servicePluginId
             && account.ref.service.localId === serviceLocalId);
-    const accountDetailAvailable = !controllerProps.panel && focusedAccountId !== null
-        && visibleAccounts.some(account => account.ref.accountId === focusedAccountId
+    const accountDetailAvailable = !controllerProps.panel && (focusedPool && 'scope' in accountLifetime
+        || focusedAccountId !== null && visibleAccounts.some(account => account.ref.accountId === focusedAccountId
             && account.ref.service.pluginId === servicePluginId
-            && account.ref.service.localId === serviceLocalId);
+            && account.ref.service.localId === serviceLocalId));
 
     const refreshDescription = React.useCallback(async (signal: AbortSignal = lifecycleSignal) => {
         if (
@@ -782,7 +782,7 @@ const ConnectedAccountServiceController = React.memo(
     const runAuthentication = React.useCallback(async (
         command: Parameters<typeof runConnectedAccountAuthenticationAction>[0]['command'],
     ): Promise<boolean> => {
-        if (!isControllerCurrent() || !serverId || !machineId) return false;
+        if (!('scope' in accountLifetime) || !isControllerCurrent() || !serverId || !machineId) return false;
         const draftEpoch = setupAttemptEpochRef.current;
         setBusy(true);
         try {
@@ -1059,14 +1059,14 @@ const ConnectedAccountServiceController = React.memo(
         );
     }
 
-    const serviceHeader = (headerTitle: string) => (
+    const serviceHeader = (headerTitle: string, machineChip = true) => (
         <SettingsPageHeader
             testID="connected-account-service-header"
             title={headerTitle}
             alwaysShowTitle
             leading={<ConnectedServiceMark legacyServiceId={legacyServiceId} size="page" />}
             description={t('connectedServicesSettings.servicePurpose', { service: headerTitle })}
-            actions={(
+            actions={machineChip ? (
                 <MachineAdministrationTargetSelector
                     selection={targetSelection}
                     presentation="chip"
@@ -1074,7 +1074,7 @@ const ConnectedAccountServiceController = React.memo(
                     chipOpen={targetPickerOpen}
                     onChipOpenChange={setTargetPickerOpen}
                 />
-            )}
+            ) : undefined}
         />
     );
 
@@ -1085,7 +1085,6 @@ const ConnectedAccountServiceController = React.memo(
         const pendingTitle = registryEntry
             ? resolveConnectedServiceRegistryEntryDisplayName(registryEntry, t, controllerProps.localizePluginText)
             : t('connectedServices.fallbackName');
-        const targetState = presentMachineAdministrationTargetState(targetSelection.state);
         if (targetSelection.selectedTarget && !targetSelection.selectedTargetServerMatchesActiveAccount) {
             return <ItemList>{serviceHeader(pendingTitle)}<ItemGroup><Item
                 testID="connected-account-account-scope-mismatch" mode="info"
@@ -1093,19 +1092,18 @@ const ConnectedAccountServiceController = React.memo(
                 subtitle={t('connectedServices.accountScopeMismatchDescription')} showChevron={false}
             /></ItemGroup></ItemList>;
         }
+        // The same one quiet machine line as an account's page, with its own chooser (lab csvc nomachine).
         return (
             <ItemList>
-                {serviceHeader(pendingTitle)}
-                <SurfaceStateCard
-                    testID="connected-account-choose-machine"
-                    kind="unavailable"
-                    layout="inline"
-                    title={targetSelection.state.kind === 'unselected'
-                        ? t('connectedServicesSettings.chooseMachineTitle')
-                        : targetState.detail ?? targetState.title}
-                    reason={t('connectedServicesSettings.chooseMachineDescription')}
-                    action={{ label: t('newSession.selectMachineTitle'), testID: 'connected-account-choose-machine:action', onPress: () => setTargetPickerOpen(true) }}
-                />
+                {serviceHeader(pendingTitle, false)}
+                <MachineScopedSection
+                    selection={targetSelection}
+                    unselectedInvitation={t('connectedServicesSettings.chooseMachineDescription')}
+                    testIDPrefix="connected-account-target"
+                >
+                    {/* A chosen machine whose inventory has not answered yet is not usable yet. */}
+                    <SurfaceStateCard testID="connected-account-target.state" size="line" kind="loading" title={t('common.loading')} />
+                </MachineScopedSection>
             </ItemList>
         );
     }
@@ -1260,6 +1258,7 @@ const ConnectedAccountServiceController = React.memo(
                     key={attempt.attemptId}
                     authorizationUrl={attempt.authorizationUrl ?? ''}
                     callbackUrl={attempt.callbackUrl}
+                    allowRawAuthorizationCode={activeMode?.kind === 'oauthAuthorizationCode' && activeMode.allowRawAuthorizationCode === true}
                     submitting={busy}
                     navigation={navigation}
                     onCancel={panelCancel}
@@ -1413,23 +1412,24 @@ const ConnectedAccountServiceController = React.memo(
             )) : null}
 
             {errorCode ? (
-                <ConnectedAccountFormSection embedded={embedded} title={t('common.error')}>
-                    <Item
+                // One failure line with its one next step, through the shared state owner.
+                <ConnectedAccountFormSection embedded={embedded}>
+                    <SurfaceStateCard
                         testID="connected-account:error"
+                        size="line"
+                        kind="error"
                         // ONE owner turns a daemon error code into copy, so this
                         // screen never re-decides which failures are explainable.
                         title={resolveConnectedServiceSettingsErrorMessage({
                             code: errorCode,
                         })}
-                        mode="info"
-                        showChevron={false}
-                    />
-                    <Item
-                        testID="connected-account:error:retry"
-                        title={t('common.retry')}
-                        loading={retryingDescription}
-                        disabled={busy || retryingDescription}
-                        onPress={() => void retryDescription()}
+                        action={{
+                            label: t('common.retry'),
+                            testID: 'connected-account:error:retry',
+                            busy: retryingDescription,
+                            disabled: busy || retryingDescription,
+                            onPress: () => void retryDescription(),
+                        }}
                     />
                 </ConnectedAccountFormSection>
             ) : null}
@@ -1491,24 +1491,14 @@ const ConnectedAccountServiceController = React.memo(
                     machineId={focusedAccountHasMachineAugmentation ? machineId || null : null}
                     machineSetupSection={(
                         <>
-                            <ItemGroup>
-                                <MachineAdministrationTargetSelector
-                                    selection={targetSelection}
-                                    presentation="chip"
-                                    testIDPrefix="connected-account-target"
-                                    chipOpen={targetPickerOpen}
-                                    onChipOpenChange={setTargetPickerOpen}
-                                />
-                                {!machineId ? <SurfaceStateCard
-                                    testID="connected-account-choose-machine"
-                                    kind="unavailable" layout="inline"
-                                    title={targetSelection.state.kind === 'unselected'
-                                        ? t('connectedServicesSettings.chooseMachineTitle')
-                                        : presentMachineAdministrationTargetState(targetSelection.state).title}
-                                    reason={t('connectedServicesSettings.chooseMachineDescription')}
-                                    action={{ label: t('newSession.selectMachineTitle'), testID: 'connected-account-choose-machine:action', onPress: () => setTargetPickerOpen(true) }}
-                                /> : null}
-                            </ItemGroup>
+                            {/* The account itself is Account data; only signing in again and removing it run on
+                                a machine. One quiet line says so, with its own chooser, and nothing shows while a
+                                usable machine is chosen (lab csvc nomachine). */}
+                            <MachineScopedSection
+                                selection={targetSelection}
+                                unselectedInvitation={t('connectedServicesSettings.accountMachineInvitation')}
+                                testIDPrefix="connected-account-target"
+                            />
                             {focusedScreenOwnsScroll ? renderFlow(false) : null}
                         </>
                     )}

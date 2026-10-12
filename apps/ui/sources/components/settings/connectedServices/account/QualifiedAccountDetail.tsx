@@ -5,6 +5,7 @@ import { useQualifiedConnectedAccountQuota } from '@/hooks/server/connectedServi
 import { useConnectedAccountIdentityPrivacy } from '@/hooks/ui/useConnectedAccountIdentityPrivacy';
 
 import { useAgentDefaultChoices } from '../defaults/useAgentDefaultChoices';
+import { ConnectedAccountActionApprovalNotice } from '../ConnectedAccountActionApprovalNotice';
 import { AccountDetailFactsSections, AccountDetailUsedBySection, AccountDetailWorksOnSection } from './AccountDetailSections';
 import { QualifiedAccountDetailView, type QualifiedAccountDetailViewProps } from './QualifiedAccountDetailView';
 
@@ -42,6 +43,8 @@ export const QualifiedAccountDetail = React.memo(function QualifiedAccountDetail
     } : props.presentation;
     const signedOut = props.status === 'needs_reauth';
     return (
+        <>
+        <ConnectedAccountActionApprovalNotice execution={agentDefaults.execution} testID="connected-account-default-approval-pending" />
         <QualifiedAccountDetailView
             {...props}
             presentation={presentation}
@@ -63,5 +66,6 @@ export const QualifiedAccountDetail = React.memo(function QualifiedAccountDetail
             usedBySection={<AccountDetailUsedBySection account={props.account} />}
             worksOnSection={<AccountDetailWorksOnSection />}
         />
+        </>
     );
 });

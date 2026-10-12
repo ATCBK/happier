@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { resolveBugReportOsVersion } from '../bugReportComposerDraft';
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 
@@ -71,9 +72,11 @@ export function useBugReportComposerDraftState(input: Readonly<{
 
   const [appVersion, setAppVersion] = React.useState(Constants.expoConfig?.version ?? 'unknown');
   const [platformValue, setPlatformValue] = React.useState<string>(Platform.OS);
-  const [osVersion, setOsVersion] = React.useState(
-    typeof Platform.Version === 'string' ? Platform.Version : String(Platform.Version ?? ''),
-  );
+  const [osVersion, setOsVersion] = React.useState(() => resolveBugReportOsVersion({
+    os: Platform.OS,
+    version: Platform.Version,
+    userAgent: typeof navigator === 'undefined' ? null : navigator.userAgent ?? null,
+  }));
   const [deviceModel, setDeviceModel] = React.useState(Constants.deviceName ?? '');
   const [serverUrl, setServerUrlState] = React.useState(input.serverUrlDefault);
   const [serverUrlEdited, setServerUrlEdited] = React.useState(false);

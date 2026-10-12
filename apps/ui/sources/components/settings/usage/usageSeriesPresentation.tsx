@@ -2,7 +2,9 @@ import { useCallback, useMemo, useState, type ReactNode } from 'react';
 import { StyleSheet as RNStyleSheet, View } from 'react-native';
 import { describeHappierSeriesBucket, type HappierSeries, type HappierSeriesBucket, type StackedSeriesChartProps } from '@happier-dev/plugin-ui/presentation';
 
-import { resolveUsageBucketBounds, type UsageAnalyticsCoverage } from '@happier-dev/protocol';
+import { resolveUsageBucketBounds } from '@happier-dev/protocol/usage/usageCalendar';
+import { resolveUsageCostBasis, resolveUsageCostForSelection } from '@happier-dev/protocol/usage/usageCostFacts';
+import { type UsagePageCostSelection, type UsageAnalyticsCoverage, type UsageAnalyticsQueryResponse, type UsageCostMode } from '@happier-dev/protocol';
 
 import { ChartTooltip, HorizontalChartFrame } from '@/components/ui/charts';
 import type { UsageHourRhythm, UsageModelMix, UsageTrendPoint } from '@/sync/api/account/usageAnalytics';
@@ -17,6 +19,8 @@ import { useEntrancesEnabled } from './usageEntrance';
 import { withUsageAccentAlpha } from './usageAccent';
 import { ScrubLens, type ScrubLensContent, type ScrubLensRow } from './UsageScrubLens';
 import { formatUsageCalendarDate, usageMissingBucketValue, type UsageCalendarRange } from '@/sync/domains/usage/usageCalendarPresentation';
+import { usageSourceTitle } from './widgets/usageBodyKit';
+import { usagePageCostRow } from './usageCostPresentation';
 export type { UsageCalendarRange } from '@/sync/domains/usage/usageCalendarPresentation';
 
 type UsageCalendarTrendPoint = Readonly<{ timestamp: number; tokens: number | null; cost: number | null; reportCount: number | null }>;
@@ -119,7 +123,7 @@ export function fillUsageMixCalendar(mix: UsageModelMix, range: UsageCalendarRan
     }) };
 }
 
-export function fillUsageTrendCalendar(points: readonly UsageTrendPoint[], range: UsageCalendarRange, coverage?: UsageAnalyticsCoverage): readonly UsageCalendarTrendPoint[] {
+export function fillUsageTrendCalendar(points: readonly UsageCalendarTrendPoint[], range: UsageCalendarRange, coverage?: UsageAnalyticsCoverage): readonly UsageCalendarTrendPoint[] {
     const starts = walkUsageCalendar(range, points.map((point) => point.timestamp * 1000));
     if (!starts || starts.length === points.length) return points;
     const recorded = new Map(points.map((point) => [point.timestamp * 1000, point]));
@@ -145,6 +149,62 @@ export function usageMixSeries(mix: UsageCalendarMix, label: (value: string) => 
         label: formatUsageCalendarDate(bucket.startMs, timeZoneOffsetMinutes, { month: 'short', day: 'numeric' }),
         y: bucket.tokens[index] ?? null,
     })) }));
+}
+
+export type UsageSourceSeries = HappierSeries & Readonly<{ dimensionKey: string;
+    sourceDetails?: Readonly<Record<string, readonly Readonly<{ label: string; execution: 'happier' | 'outside' | 'unknown'; value: number | null }>[]>>;
+}>;
+
+/** Present the producer's partitions; execution placement is never inferred from a source name. */
+export function usageSourceTimelineSeries(input: Readonly<{
+    timeline: UsageAnalyticsQueryResponse['engineTimeline'];
+    range: UsageCalendarRange | null;
+    coverage?: UsageAnalyticsCoverage;
+    metric: 'tokens' | 'cost';
+    costMode: UsageCostMode;
+    costSelection?: UsagePageCostSelection | null;
+    dimensionKey: (key: string) => string;
+    label: (key: string, fallback: string | undefined) => string;
+    color: (index: number, key: string) => string;
+    bucketLabel: (startMs: number) => string;
+}>): readonly UsageSourceSeries[] {
+    const timeline = input.timeline ?? [];
+    const parts = new Map<string, { key: string; label: string; values: Map<number, number | null>;
+        details: Record<string, { label: string; execution: 'happier' | 'outside' | 'unknown'; value: number | null }[]> }>();
+    for (const bucket of timeline) for (const leader of bucket.leaders) for (const part of leader.sources ?? []) {
+        const execution = part.execution === 'happier' ? t('usage.board.page.executionHappier')
+            : part.execution === 'outside' ? t('usage.board.page.executionOutside') : t('usage.board.page.executionUnknown');
+        const key = input.dimensionKey(leader.key);
+        const entry = parts.get(key) ?? { key, label: input.label(key, leader.key === key ? leader.label : undefined),
+            values: new Map<number, number | null>(), details: {} };
+        const value = input.metric === 'tokens' ? part.tokens.total : input.costSelection !== undefined
+            ? resolveUsageCostForSelection(part.cost, input.costSelection) : resolveUsageCostBasis(part.cost, input.costMode)?.amountUsd ?? null;
+        const previous = entry.values.get(bucket.bucketStartMs);
+        entry.values.set(bucket.bucketStartMs, value === null || previous === null ? null : (previous ?? 0) + value);
+        const details = entry.details[String(bucket.bucketStartMs)] ?? [];
+        const basisLabel = input.metric === 'cost' && input.costSelection !== undefined
+            ? usagePageCostRow(part.cost, input.costSelection)?.label : undefined;
+        details.push({ label: [execution, usageSourceTitle(part.source), basisLabel].filter(Boolean).join(' · '), execution: part.execution, value });
+        entry.details[String(bucket.bucketStartMs)] = details;
+        parts.set(key, entry);
+    }
+    const recorded = timeline.map(bucket => bucket.bucketStartMs);
+    const starts = input.range ? walkUsageCalendar(input.range, recorded) ?? recorded : recorded;
+    const buckets = new Map(timeline.map(bucket => [bucket.bucketStartMs, bucket]));
+    const dimensionIndexes = new Map<string, number>();
+    for (const entry of parts.values()) if (!dimensionIndexes.has(entry.key)) dimensionIndexes.set(entry.key, dimensionIndexes.size);
+    return [...parts].map(([id, entry]) => ({ id, dimensionKey: entry.key, label: entry.label, sourceDetails: entry.details,
+        color: input.color(dimensionIndexes.get(entry.key)!, entry.key),
+        ...(Object.values(entry.details).flat().every(part => part.execution === 'outside') ? { fillPattern: 'hatch' as const } : {}),
+        points: starts.map(startMs => {
+            const bucket = buckets.get(startMs);
+            // A truncated dimension or an older unpartitioned bucket cannot establish a source zero.
+            const value = bucket ? input.range && usageMissingBucketValue(startMs, input.range, input.coverage) === 0
+                && bucket.leaders.every(leader => leader.sources !== undefined)
+                && !input.coverage?.reasons.includes('ranked_truncation') ? 0 : null
+                : input.range ? usageMissingBucketValue(startMs, input.range, input.coverage) : null;
+            return { id: String(startMs), x: startMs, label: input.bucketLabel(startMs), y: entry.values.has(startMs) ? entry.values.get(startMs)! : value };
+        }) }));
 }
 
 /** Host Popover and scrolling stay at their incumbent owner; only inert chart facts cross this adapter. */
@@ -211,15 +271,19 @@ export function useUsageSeriesLens(input: Readonly<{
             const bucket = plot.buckets[index];
             if (!bucket) return null;
             const known = bucket.values.every((entry) => entry.value !== null);
-            const rows = bucket.values.map((entry): ScrubLensRow => {
+            const rows = bucket.values.flatMap((entry): ScrubLensRow[] => {
                 const chosen = choice?.(entry.seriesId) ?? null;
                 const color = entry.color ?? colors.get(entry.seriesId);
-                return { id: entry.seriesId, label: entry.label, ...(color ? { color } : {}),
+                const parent = { id: entry.seriesId, label: entry.label, ...(color ? { color } : {}),
                     value: entry.value === null ? t('common.unavailable') : format(entry.value),
                     ...(chosen ? chosen : {}) };
+                const details = (series.find(part => part.id === entry.seriesId) as UsageSourceSeries | undefined)?.sourceDetails?.[bucket.id] ?? [];
+                return [parent, ...details.map(part => ({ label: part.label,
+                    value: part.value === null ? t('common.unavailable') : format(part.value) }))];
             });
             return { title: bucket.label, rows, ...(footer ? { footer } : {}),
-                ...(known && bucket.values.length > 1
+                // Comparison overlays are independent observations, never additive parts.
+                ...(known && bucket.values.length > 1 && !series.some(entry => entry.overlay)
                     ? { total: format(bucket.values.reduce((sum, entry) => sum + (entry.value ?? 0), 0)) } : {}) };
         };
         const focusIndex = focusedId === null ? -1 : plot.buckets.findIndex((bucket) => bucket.id === focusedId);

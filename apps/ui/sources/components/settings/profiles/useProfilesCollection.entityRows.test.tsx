@@ -1,10 +1,12 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as React from 'react';
-import { renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
+import { act } from 'react-test-renderer';
+import { createDeferred, createModalModuleMock, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
+import { Modal } from '@/modal';
 import { getStorage } from '@/sync/domains/state/storageStore';
 import { applyProfileCatalogSnapshot, getProfileCatalogSnapshot, resetProfileCatalogSnapshotsForTests } from '@/sync/store/settings/profileCatalogSnapshot';
-import { useAiLaunchProfiles } from '@/sync/store/useAiLaunchProfiles';
-import { useApplyProfileSave, useApplyProfileSecretBindings, useDeleteAiLaunchProfile } from '@/sync/store/settingsWriters';
+import { useAiLaunchProfiles, useHomeAiLaunchProfiles } from '@/sync/store/useAiLaunchProfiles';
+import { useApplyProfileSave, useDeleteAiLaunchProfile } from '@/sync/store/settingsWriters';
 import { useSaveLaunchProfile } from '@/components/profiles/edit/useSaveLaunchProfile';
 import { useLaunchProfileEditorDraft } from '@/components/profiles/edit/useLaunchProfileEditorDraft';
 import { LaunchProfileEditForm } from '@/components/profiles/edit/LaunchProfileEditForm';
@@ -35,6 +37,11 @@ import { AccountSettingsV2UpdateRequestSchema } from '@happier-dev/protocol/acco
 import { getBuiltInBackendProfile } from '@happier-dev/protocol/profiles/builtInBackendProfiles';
 import { PROFILE_TRANSFER_ROUTE_V1, type ProfileTransferRowReadResponseV1 } from '@happier-dev/protocol/profiles/profileTransferV1';
 import { AUTHORING_MEMORY_ROUTE_V1 } from '@happier-dev/protocol/account/authoringMemory';
+
+// Static Profile consumers load the Socket runtime; install its genuine boundary
+// through the canonical hoisted factory before those imports are evaluated.
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 import { AuthoringMemoryMutationRequestV1Schema, type AuthoringMemoryRowV1 } from '@happier-dev/protocol/account/authoringMemory';
 import { SavedSecretResourceMaterialsResponseV1Schema } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
 import { buildLaunchProfileArtifactHeaderV1, LaunchProfileArtifactV1Schema } from '@happier-dev/protocol/launchProfiles/launchProfileArtifactV1';
@@ -45,6 +52,11 @@ import { refreshProfileCatalog, resetProfileCatalogEngineForTests } from '@/sync
 import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
 
 installDisconnectedServerSocketBoundary();
+vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async importOriginal => {
+    const original = await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>();
+    return { ...original, createFrontDoorActionExecute:
+        (await import('@/dev/testkit/harness/frontDoorActionExecutorBoundary')).createFrontDoorActionExecuteForVitest(original) };
+});
 
 const scope = { serverId: 'entity-profile-home', accountId: 'entity-profile-account' };
 const profile = { v: 2 as const, id: 'entity', name: 'Entity', extraEnvironmentVariables: [],
@@ -164,6 +176,7 @@ describe('Profile editor entity writer', () => {
     let accountSettingsVersion: number;
     let credentials: AuthCredentials;
     let acpRead: () => Response | Promise<Response>;
+    let beforeProfileRead: (() => Promise<void>) | undefined;
     const artifacts = new Map<string, Artifact>();
     const memoryRows = new Map<string, AuthoringMemoryRowV1>();
     const secretMaterials = SavedSecretResourceMaterialsResponseV1Schema.parse({ resources: [{
@@ -196,6 +209,7 @@ describe('Profile editor entity writer', () => {
         accountSettings = {};
         accountSettingsVersion = 13;
         acpRead = () => Response.json({ status: 'present', revision: 0, content: { t: 'plain', v: { v: 1, definitions: [] } } });
+        beforeProfileRead = undefined;
         record = { v: 1, id: profile.id, definition: { kind: 'inline', profile }, enabled: false,
             promptStack: [{ id: 'attached-prompt', ref: { kind: 'doc', artifactId: 'prompt-doc' },
                 enabled: true, placement: 'system_append' }],
@@ -234,9 +248,12 @@ describe('Profile editor entity writer', () => {
                 const artifact = artifacts.get(decodeURIComponent(path.slice('/v1/artifacts/'.length)));
                 if (artifact) return Response.json(artifact);
             }
-            if (path === PROFILE_ROWS_ROUTE_V1) return Response.json({ status: 'listed',
-                rows: rowAbsent ? [] : [{ id: record.id, revision, content: rowDeleted ? null : { t: 'plain', v: record } }],
-                nextCursor: null, complete: true, diagnostics: [], referenceGuardRevision: guardRevision, transferControl: transfer });
+            if (path === PROFILE_ROWS_ROUTE_V1) {
+                await beforeProfileRead?.();
+                return Response.json({ status: 'listed',
+                    rows: rowAbsent ? [] : [{ id: record.id, revision, content: rowDeleted ? null : { t: 'plain', v: record } }],
+                    nextCursor: null, complete: true, diagnostics: [], referenceGuardRevision: guardRevision, transferControl: transfer });
+            }
             if (path === PROFILE_REFERENCE_GUARD_ROUTE_V1) return Response.json({ status: 'ready', revision: guardRevision });
             if (path === PROFILE_TRANSFER_ROUTE_V1) return Response.json(transfer);
             if (path === PROFILE_RECORDS_ROUTE_V1 && init?.method === 'POST') return mutation(url, init);
@@ -272,6 +289,70 @@ describe('Profile editor entity writer', () => {
         applyProfileCatalogSnapshot(homeScope, { ...snapshot.catalog, records: [{ record, revision }] }, true);
     }
 
+    it('honors the profile delete waiver without an additional local confirmation', async () => {
+        accountSettings = { actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'launch_profiles.delete': ['ui'] } } };
+        getStorage().setState({ settings: settingsParse(accountSettings), settingsVersion: accountSettingsVersion });
+        mutation.mockImplementation(async (_url, init) => {
+            const request = ProfileRowMutationV1Schema.parse(JSON.parse(String(init?.body)));
+            expect(request).toMatchObject({ operation: 'remove', id: profile.id, expectedRevision: 7 });
+            revision = 8;
+            guardRevision = 4;
+            rowDeleted = true;
+            return Response.json({ status: 'updated', revision, cursor: 27, referenceGuardRevision: guardRevision });
+        });
+        const { useProfilesCollection } = await import('./useProfilesCollection');
+        const confirm = vi.spyOn(Modal, 'confirm').mockResolvedValue(false);
+        const hook = await renderHook(useProfilesCollection);
+        try {
+            let deleted = false;
+            await act(async () => { deleted = await hook.getCurrent().requestDelete({ id: profile.id, name: profile.name }); });
+            expect(confirm).not.toHaveBeenCalled();
+            expect(deleted).toBe(true);
+            expect(rowDeleted).toBe(true);
+        } finally { confirm.mockRestore(); await hook.unmount(); }
+    });
+
+    it('hydrates saved Profiles after the same Account lifetime changes during a cold read', async () => {
+        resetProfileCatalogSnapshotsForTests();
+        const firstRead = createDeferred<void>();
+        let readStarted = false;
+        beforeProfileRead = async () => {
+            readStarted = true;
+            await firstRead.promise;
+        };
+        const hook = await renderHook(useAiLaunchProfiles);
+        const picker = await renderHook(useAiLaunchProfiles);
+        try {
+            await vi.waitFor(() => expect(readStarted).toBe(true));
+            await act(async () => {
+                retireActiveServerAccountScopeLifetime();
+                beforeProfileRead = undefined;
+                firstRead.resolve();
+            });
+            await vi.waitFor(() => expect(hook.getCurrent()).toMatchObject([
+                { id: profile.id, enabled: false, profileRecordRevision: 7 },
+            ]));
+            expect(picker.getCurrent()).toMatchObject([{ id: profile.id, profileRecordRevision: 7 }]);
+            expect(getProfileCatalogSnapshot(homeScope)?.catalog.status).toBe('ready');
+        } finally {
+            firstRead.resolve();
+            await picker.unmount();
+            await hook.unmount();
+        }
+    });
+
+    it('keeps a secondary Home catalog stable when the focused Account lifetime changes', async () => {
+        const snapshot = getProfileCatalogSnapshot(scope);
+        const hook = await renderHook(() => useHomeAiLaunchProfiles(scope));
+        try {
+            await act(async () => { retireActiveServerAccountScopeLifetime(); });
+            expect(hook.getCurrent()).toMatchObject([{ id: profile.id, profileRecordRevision: 7 }]);
+            expect(getProfileCatalogSnapshot(scope)).toBe(snapshot);
+        } finally {
+            await hook.unmount();
+        }
+    });
+
     it.each([true, false])('atomically captures and retires the builtin no-entity enablement preference on first attachment (key present: %s)', async hasPreference => {
         accountSettings = { profileEnabledById: { ...(hasPreference ? { 'azure-openai': false } : {}), 'gemini-api-key': false },
             favoriteProfiles: ['keep-favorite'], lastUsedAgent: 'codex', futurePreference: { retain: 'opaque' } };
@@ -294,9 +375,8 @@ describe('Profile editor entity writer', () => {
             }
             return Response.json({ status: 'updated', revision, cursor: 25, referenceGuardRevision: guardRevision });
         });
-        const hook = await renderHook(useApplyProfileSecretBindings);
-        await hook.getCurrent()({ profileId: 'azure-openai', expectedRevision: 'absent',
-            secretBindings: { TOKEN: 'happier:shared-secret:v1:profile-token' } });
+        const hook = await renderHook(useCurrentSecretBindingsByProfileIdMutable);
+        await hook.getCurrent()[1]({ ...hook.getCurrent()[0], 'azure-openai': { TOKEN: 'happier:shared-secret:v1:profile-token' } });
         expect(captured).toMatchObject({ operation: 'attach-builtin', expectedRevision: 'absent',
             content: { t: 'plain', v: { id: 'azure-openai', enabled: !hasPreference,
                 secretBindings: { TOKEN: 'happier:shared-secret:v1:profile-token' } } },
@@ -456,7 +536,9 @@ describe('Profile editor entity writer', () => {
             environmentVariables: [{ name: 'PUBLIC_CONFIG', value: 'retained' }],
             createdAt: 1, updatedAt: 2 });
         record = { ...record, definition: { kind: 'legacy', profile: legacy }, secretBindings: { ...record.secretBindings, MASKED: null } };
-        admitBuiltinBindingRow(record);
+        const snapshot = getProfileCatalogSnapshot(homeScope);
+        if (snapshot?.catalog.status !== 'ready') throw new Error('Expected an admitted Profile catalog');
+        applyProfileCatalogSnapshot(homeScope, { ...snapshot.catalog, records: [{ record, revision }] }, true);
         const source = record;
         const draft = await renderHook(() => useLaunchProfileEditorDraft({ enabled: true, cloneFrom: legacy.id }));
         const captured = draft.getCurrent().draft;
@@ -472,6 +554,8 @@ describe('Profile editor entity writer', () => {
         const saveRef: React.MutableRefObject<(() => boolean | Promise<boolean>) | null> = { current: null };
         const form = await renderScreen(React.createElement(LaunchProfileEditForm, {
             profile: captured.profile, machineId: null, sourcePreservingClone: true, saveRef, onCancel: () => {},
+            draftSecretBindings: captured.secretBindings,
+            legacyCloneSource: captured.legacyCloneSource,
             onSave: async (next, bindings) => (await editor.getCurrent()(next, {
                 ...Object.fromEntries(Object.entries(captured.secretBindings ?? {}).filter(([, binding]) => binding === null)),
                 ...bindings,
@@ -498,7 +582,7 @@ describe('Profile editor entity writer', () => {
         await refreshing;
         await vi.waitFor(() => expect(getAcpCatalogSnapshot(homeScope)?.catalog.status).toBe('ready'));
         await vi.waitFor(() => expect(form.findHostByTestId('profile-legacy-name')?.props.value).toBe('Named Machine login copy'));
-        await expect(saveRef.current?.()).resolves.toBe(true);
+        await expect(Promise.resolve(saveRef.current?.())).resolves.toBe(true);
         expect(submitted).toMatchObject({ operation: 'clone-legacy', expectedRevision: 'absent',
             legacyCloneSource: { id: source.id, revision: 7 }, content: { t: 'plain', v: {
                 definition: { kind: 'legacy', profile: { environmentVariables: legacy.environmentVariables,
@@ -560,8 +644,10 @@ describe('Profile editor entity writer', () => {
         guardRevision = 4;
         acknowledge(Response.json({ status: 'updated', revision, cursor: 22, referenceGuardRevision: guardRevision }));
         await expect(pending).resolves.toEqual({ status: 'updated', id: profile.id, revision: 8 });
-        expect(getProfileCatalogSnapshot(homeScope)?.catalog).toMatchObject({ status: 'ready', source: 'destination',
-            records: [{ revision: 8, record: { definition: { profile: { name: draft.name } } } }] });
+        expect(getProfileCatalogSnapshot(homeScope)?.data).toMatchObject([
+            { revision: 8, record: { definition: { profile: { name: draft.name } } } }]);
+        await vi.waitFor(() => expect(getProfileCatalogSnapshot(homeScope)?.catalog).toMatchObject({ status: 'ready', source: 'destination',
+            records: [{ revision: 8, record: { definition: { profile: { name: draft.name } } } }] }));
         expect(settingsWrites).not.toHaveBeenCalled();
         expect(getStorage().getState().settingsVersion).toBe(13);
         const reopened = await renderHook(() => useAiLaunchProfiles([]));
@@ -591,7 +677,8 @@ describe('Profile editor entity writer', () => {
         // Exercise the already-loaded owner: its initial empty source import
         // must not stand in for observing a retained source at deletion time.
         await sync.applyAuthoringMemoryDelta({}, { expectedSettingsScope: homeScope });
-        accountSettings = { lastUsedProfile: profile.id, favoriteProfiles: [profile.id, 'neighbor'],
+        accountSettings = { actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'launch_profiles.delete': ['ui'] } },
+            lastUsedProfile: profile.id, favoriteProfiles: [profile.id, 'neighbor'],
             opaquePreference: { retained: true } };
         accountSettingsVersion = 14;
         getStorage().setState({ settings: settingsParse(accountSettings), settingsVersion: accountSettingsVersion });
@@ -619,8 +706,9 @@ describe('Profile editor entity writer', () => {
         });
         const hook = await renderHook(useDeleteAiLaunchProfile);
         await expect(hook.getCurrent()(profile.id, 7)).resolves.toMatchObject({ status: 'updated', id: profile.id, revision: 8 });
-        expect(getProfileCatalogSnapshot(homeScope)?.catalog).toMatchObject({ status: 'ready',
-            records: [], tombstones: [{ id: profile.id, revision: 8 }] });
+        expect(getProfileCatalogSnapshot(homeScope)?.data).toEqual([]);
+        await vi.waitFor(() => expect(getProfileCatalogSnapshot(homeScope)?.catalog).toMatchObject({ status: 'ready',
+            records: [], tombstones: [{ id: profile.id, revision: 8 }] }));
         await hook.unmount();
         // Reconfiguring the real Account owner runs the actual absence-only
         // importer again, including its canonical HTTP retirement path.
@@ -684,6 +772,10 @@ describe('Profile editor entity writer', () => {
         const resource = { artifactId: 'editable-profile', header: buildLaunchProfileArtifactHeaderV1(content),
             body: JSON.stringify(content), access: 'edit', ownerAccountId: homeScope.accountId,
             revision: { headerVersion: 2, bodyVersion: 3 } } satisfies ArtifactSharingResourceV1;
+        artifacts.set(resource.artifactId, { id: resource.artifactId, ownerAccountId: resource.ownerAccountId,
+            access: resource.access, encryptionMode: 'plain', dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+            header: encodePlainArtifactStoredContent(resource.header), body: encodePlainArtifactStoredContent({ body: resource.body }),
+            ...resource.revision, seq: 1, createdAt: 1, updatedAt: 1 });
         record = { ...record, definition: { kind: 'artifact', artifactId: resource.artifactId } };
         const admittedRecord = record;
         const snapshot = getProfileCatalogSnapshot(homeScope);
@@ -749,11 +841,74 @@ describe('Profile editor entity writer', () => {
         await hook.unmount();
     });
 
+    it.each([null, 'happier:shared-secret:v1:profile-token'])('saves the mounted Artifact editor selection %s privately without changing published defaults', async selection => {
+        const content = LaunchProfileArtifactV1Schema.parse({ kind: 'launch-profile.v1',
+            profile,
+            secretBindings: { TOKEN: 'happier:shared-secret:v1:profile-token' } });
+        const artifact: Artifact = { id: 'mounted-private-binding-profile', ownerAccountId: homeScope.accountId, access: 'owner',
+            encryptionMode: 'plain', dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+            header: encodePlainArtifactStoredContent(buildLaunchProfileArtifactHeaderV1(content)),
+            body: encodePlainArtifactStoredContent({ body: JSON.stringify(content) }),
+            headerVersion: 2, bodyVersion: 3, seq: 1, createdAt: 1, updatedAt: 1 };
+        artifacts.set(artifact.id, artifact);
+        record = { ...record, definition: { kind: 'artifact', artifactId: artifact.id }, secretBindings: { TOKEN: null, MASKED: null } };
+        // None is a meaningful edit from an inherited default; reference is a
+        // meaningful edit from a private mask, not an unchanged effective echo.
+        if (selection === null) record = { ...record, secretBindings: { MASKED: null } };
+        const admittedRecord = record;
+        await refreshProfileCatalog(homeScope);
+        mutation.mockImplementation(async (_url, init) => {
+            const request = ProfileRowMutationV1Schema.parse(JSON.parse(String(init?.body)));
+            if (request.content?.t !== 'plain') throw new Error('Expected private Plain Profile Save');
+            record = request.content.v; revision = 8; guardRevision = 4;
+            return Response.json({ status: 'updated', revision, cursor: 27, referenceGuardRevision: guardRevision });
+        });
+        const source = await renderHook(useAiLaunchProfiles);
+        const opened = source.getCurrent().find(entry => entry.id === profile.id);
+        if (!opened || !isLaunchProfileV2(opened)) throw new Error('Expected an opened V2 Artifact editor');
+        const editor = await renderHook(useSaveLaunchProfile);
+        const saveRef: React.MutableRefObject<(() => boolean | Promise<boolean>) | null> = { current: null };
+        // Modal presentation is the UI boundary; the mounted editor's private
+        // draft hook, selection logic and canonical Save path remain real.
+        const presentation = createModalModuleMock();
+        const showSpy = vi.spyOn(Modal, 'show').mockImplementation(presentation.spies.show);
+        const form = await renderScreen(React.createElement(LaunchProfileEditForm, {
+            profile: opened, machineId: null, saveRef, onCancel: () => {},
+            onSave: async (next, bindings) => (await editor.getCurrent()(next, bindings)) !== null,
+        }));
+        try {
+            await vi.waitFor(() => expect(saveRef.current).not.toBeNull());
+            expect(form.findHostByTestId('profile-requirement-secret-TOKEN')).not.toBeNull();
+            await form.pressByTestIdAsync('profile-requirement-secret-TOKEN');
+            const config = presentation.spies.show.mock.calls.at(-1)?.[0];
+            const props = config?.props as Readonly<{ onSetDefaultSecretId?: (id: string | null) => void }> | undefined;
+            const chooseDefault = props?.onSetDefaultSecretId;
+            expect(chooseDefault).toBeTypeOf('function');
+            await act(async () => { chooseDefault?.(selection); });
+            await expect(Promise.resolve(saveRef.current?.())).resolves.toBe(true);
+            expect(record).toEqual({ ...admittedRecord, secretBindings: { TOKEN: selection, MASKED: null } });
+            expect(getProfileCatalogSnapshot(homeScope)?.data).toMatchObject([{ revision: 8, record }]);
+            expect(artifacts.get(artifact.id)).toEqual(artifact);
+            expect(artifactWrites.mock.calls.filter(([url]) => !String(url).endsWith('/v1/artifacts/read'))).toEqual([]);
+            expect(settingsWrites).not.toHaveBeenCalled();
+            expect(getStorage().getState().settingsVersion).toBe(13);
+        } finally {
+            showSpy.mockRestore();
+            await form.unmount();
+            await editor.unmount();
+            await source.unmount();
+        }
+    });
+
     it('preserves a published draft when its captured Artifact revision is stale', async () => {
         const content = LaunchProfileArtifactV1Schema.parse({ kind: 'launch-profile.v1', profile, secretBindings: {} });
         const resource = { artifactId: 'published-profile', header: buildLaunchProfileArtifactHeaderV1(content),
             body: JSON.stringify(content), access: 'admin', ownerAccountId: homeScope.accountId,
             revision: { headerVersion: 2, bodyVersion: 3 } } satisfies ArtifactSharingResourceV1;
+        artifacts.set(resource.artifactId, { id: resource.artifactId, ownerAccountId: resource.ownerAccountId,
+            access: resource.access, encryptionMode: 'plain', dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+            header: encodePlainArtifactStoredContent(resource.header), body: encodePlainArtifactStoredContent({ body: resource.body }),
+            ...resource.revision, seq: 1, createdAt: 1, updatedAt: 1 });
         record = { ...record, definition: { kind: 'artifact', artifactId: resource.artifactId } };
         const snapshot = getProfileCatalogSnapshot(homeScope);
         if (snapshot?.catalog.status !== 'ready') throw new Error('Expected an admitted Profile catalog');

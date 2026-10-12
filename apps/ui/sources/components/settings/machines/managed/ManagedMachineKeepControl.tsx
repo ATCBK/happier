@@ -468,7 +468,6 @@ function DeadlineEditor(
           activeTabId={draft.effect}
           onSelectTab={(effect) => props.onChange({ ...draft, effect })}
           labelSize="field"
-          slidingThumb
           disabled={props.disabled}
         />
       ) : null}
@@ -563,13 +562,13 @@ const styles = StyleSheet.create((theme) => ({
   reserved: {
     // Two description lines: the longest consequence at the receipt's width.
     minHeight: rowDescription.lineHeight * 2,
-    marginTop: 6,
+    marginTop: theme.space.s6,
   },
   footer: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    marginTop: 8,
+    gap: theme.space.s12,
+    marginTop: theme.space.s8,
   },
   quiet: {
     ...Typography.default(),
@@ -593,8 +592,8 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: 'row',
     alignItems: 'baseline',
     justifyContent: 'space-between',
-    gap: 8,
-    marginBottom: 4,
+    gap: theme.space.s8,
+    marginBottom: theme.space.s4,
   },
   headEnd: {
     justifyContent: 'flex-end',
@@ -605,16 +604,16 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.text.primary,
   },
   deadline: {
-    gap: 12,
-    marginTop: 8,
-    paddingTop: 12,
+    gap: theme.space.s12,
+    marginTop: theme.space.s8,
+    paddingTop: theme.space.s12,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: theme.colors.border.subtle,
   },
   review: {
     // One title line and two warning lines at the receipt's width.
     minHeight: rowDescription.lineHeight * 3 + 4,
-    gap: 4,
+    gap: theme.space.s4,
   },
   reviewTitle: {
     ...Typography.default('semiBold'),
@@ -622,12 +621,12 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.text.primary,
   },
   deadlineNote: {
-    marginTop: 6,
+    marginTop: theme.space.s6,
   },
   interrupts: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    gap: 6,
+    gap: theme.space.s6,
   },
   interruptsText: {
     ...Typography.default(),
@@ -639,14 +638,14 @@ const styles = StyleSheet.create((theme) => ({
   deadlineActions: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
-    gap: 10,
+    gap: theme.space.s10,
   },
   wake: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    marginTop: 8,
-    paddingTop: 10,
+    gap: theme.space.s12,
+    marginTop: theme.space.s8,
+    paddingTop: theme.space.s10,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: theme.colors.border.subtle,
   },

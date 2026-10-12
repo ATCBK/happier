@@ -1,7 +1,7 @@
 import * as React from 'react';
 
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
-import { getDisplayName } from '@/sync/domains/profiles/profile';
+import { formatAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
 import { storage as syncStorage } from '@/sync/domains/state/storageStore';
 import {
     resolveThisComputerConnection,
@@ -16,7 +16,7 @@ export function useAppAccountIdentity(): Readonly<{ accountId: string | null; ac
         const id = state.profile?.id?.trim();
         return id ? id : null;
     });
-    const accountLabel = syncStorage((state) => (state.profile ? getDisplayName(state.profile) : null));
+    const accountLabel = syncStorage((state) => (state.profile ? formatAccountDisplayName(state.profile) : null));
     return React.useMemo(() => ({ accountId, accountLabel }), [accountId, accountLabel]);
 }
 

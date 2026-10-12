@@ -3,7 +3,7 @@ import { act } from 'react-test-renderer';
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMachineFixture, renderScreen } from '@/dev/testkit';
-import type { McpServerBindingV1 } from '@happier-dev/protocol';
+import type { McpServerRuleV1 } from '@happier-dev/protocol';
 
 import {
     installMcpServersCommonModuleMocks,
@@ -35,7 +35,7 @@ describe('McpWorkspaceRootPickerModal openers', () => {
                 homeDir: 'C:\\Users\\Ada',
             },
         });
-        const binding: McpServerBindingV1 = {
+        const binding: McpServerRuleV1 = {
             id: 'binding-1',
             serverId: 'server-1',
             enabled: true,

@@ -3,25 +3,30 @@ import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
-import { StatusPill } from '@/components/ui/status/StatusPill';
+import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
+
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 
 /**
- * A provider API key is never shown: a "Saved" pill and Replace, or Add when none is chosen. Either
+ * A provider API key is never shown: its selected Saved Secret name (or "Saved") and Replace, or Add when none is chosen. Either
  * opens the Saved Secret picker; the key itself stays in Saved Secrets.
  */
 export function ProviderSavedSecretControl(props: Readonly<{
     testID: string;
     saved: boolean;
+    selectedName?: string | null;
     disabled: boolean;
     onChoose: () => void;
 }>) {
     return (
         <View style={stylesheet.secretControl}>
             {props.saved ? (
-                <StatusPill testID={`${props.testID}.saved`} variant="success" label={t('settingsProvidersCollection.saved')} />
+                // Healthy is quiet: plain secondary meta beside Replace, never a coloured pill.
+                <Text testID={`${props.testID}.saved`} numberOfLines={1} style={stylesheet.savedMeta}>
+                    {props.selectedName ?? t('settingsProvidersCollection.saved')}
+                </Text>
             ) : null}
             <RoundButton
                 testID={`${props.testID}.choose`}
@@ -32,6 +37,32 @@ export function ProviderSavedSecretControl(props: Readonly<{
                 onPress={props.onChoose}
             />
         </View>
+    );
+}
+
+/**
+ * A save or Connect waiting for its approval: what was asked, and the way to the approval. The
+ * request's own continuation finishes the page once it is approved; this only says so.
+ */
+export function ProviderApprovalPendingBanner(props: Readonly<{
+    testID: string;
+    providerName: string;
+    onOpen: () => void;
+}>) {
+    return (
+        <AttentionBanner
+            testID={props.testID}
+            tone="neutral"
+            accessibilityLiveRegion="polite"
+            title={t('settingsProvidersCollection.approvalPendingTitle')}
+            description={t('settingsProvidersCollection.approvalPendingDescription', { provider: props.providerName })}
+            action={{
+                testID: `${props.testID}.open`,
+                label: t('settingsProvidersCollection.openApproval'),
+                display: 'secondary',
+                onPress: props.onOpen,
+            }}
+        />
     );
 }
 
@@ -57,17 +88,22 @@ const stylesheet = StyleSheet.create((theme) => ({
     secretControl: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
+    },
+    savedMeta: {
+        ...Typography.default(),
+        fontSize: 14,
+        lineHeight: 20,
+        flexShrink: 1,
+        color: theme.colors.text.secondary,
     },
     headerActions: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 10,
+        gap: theme.space.s10,
     },
     probeResult: {
-        ...Typography.default(),
-        fontSize: 13,
-        lineHeight: 18,
+        ...Typography.variant('body'),
         color: theme.colors.text.secondary,
     },
     probeFailed: {

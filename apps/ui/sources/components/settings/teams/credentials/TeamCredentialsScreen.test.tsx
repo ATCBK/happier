@@ -1,17 +1,8 @@
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import {
-    collectRenderedTestIds,
-    createHomeGovernanceHarness,
-    installHomeGovernanceBoundaries,
-    renderScreen,
-    standardCleanup,
-    teamCapabilitiesFixture,
-    teamCredentialResourceFixture,
-    teamCredentialViewerFixture,
-    teamSummaryFixture,
-} from '@/dev/testkit';
+import { collectRenderedTestIds, renderScreen, standardCleanup, teamCapabilitiesFixture, teamCredentialResourceFixture, teamCredentialViewerFixture, teamSummaryFixture } from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 
 import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelpers';
 
@@ -145,6 +136,27 @@ describe('TeamCredentialsScreen', () => {
         );
     });
 
+    it('puts the share action at the page header end beside the list, as Groups and Invitations do', async () => {
+        const serverId = await addHome();
+        harness.answer(serverId, CREDENTIALS_LIST_PATH, {
+            body: {
+                resources: [teamCredentialResourceFixture({ allMembersDeliveryMode: 'brokered' })],
+                viewer: teamCredentialViewerFixture({ manageCredentials: true, offerOwnCredential: true }),
+            },
+        });
+
+        const screen = await renderCredentials(serverId);
+        await waitForTestId(screen, 'team-credentials-row:resource-1');
+        await waitForTestId(screen, 'team-credentials-share');
+
+        const header = screen.tree.root.findByProps({ testID: 'team-page-header' });
+        expect(header.findAll((node) => node.props.testID === 'team-credentials-share').length).toBeGreaterThan(0);
+        screen.pressByTestId('team-credentials-share');
+        expect(routerPush).toHaveBeenCalledWith(
+            `/settings/teams/${serverId}/team-1/credentials/new`,
+        );
+    });
+
     it('hides the share entry from a viewer the Home does not let offer a source', async () => {
         const serverId = await addHome();
         harness.answer(serverId, CREDENTIALS_LIST_PATH, {
@@ -242,11 +254,30 @@ describe('TeamCredentialsScreen', () => {
         });
     });
 
-    it('exposes the Home-owned list filters through one SelectionList and sends the chosen filter', async () => {
+    it('offers no filter while the list is short enough to read at a glance', async () => {
         const serverId = await addHome();
         harness.answer(serverId, CREDENTIALS_LIST_PATH, {
             body: {
                 resources: [teamCredentialResourceFixture({ displayName: 'Needs review' })],
+                viewer: teamCredentialViewerFixture({ manageCredentials: true }),
+                nextCursor: null,
+            },
+        });
+
+        const screen = await renderCredentials(serverId);
+        await waitForTestId(screen, 'team-credentials-row:resource-1');
+        expect(collectRenderedTestIds(screen.tree.toJSON())).not.toContain('team-credentials-filter');
+        expect(collectRenderedTestIds(screen.tree.toJSON())).not.toContain('team-credentials-search');
+    });
+
+    it('exposes the Home-owned list filters through one SelectionList and sends the chosen filter', async () => {
+        const serverId = await addHome();
+        harness.answer(serverId, CREDENTIALS_LIST_PATH, {
+            body: {
+                resources: Array.from({ length: 10 }, (_, index) => teamCredentialResourceFixture({
+                    id: `resource-${index}`,
+                    displayName: `Shared account ${index}`,
+                })),
                 viewer: teamCredentialViewerFixture({ manageCredentials: true }),
                 nextCursor: null,
             },
@@ -392,10 +423,11 @@ describe('TeamCredentialsScreen', () => {
         const offered = screen.findAllByTestId('team-credentials-row:resource-2')[0];
         // Source family and disclosed delivery on one line, the Home's state on the other.
         expect(managed?.props.subtitle).toBe(
-            'teams.credentials.source.pool · teams.credentials.delivery.brokered\nteams.credentials.state.available',
+            // A healthy resource says nothing about its state (craft: healthy is quiet).
+            'teams.credentials.source.pool · teams.credentials.delivery.brokered',
         );
         // A masked audience is not "direct" and masked policy defaults are not facts.
-        expect(offered?.props.subtitle).toBe('teams.credentials.source.pool\nteams.credentials.state.available');
+        expect(offered?.props.subtitle).toBe('teams.credentials.source.pool');
         const text = screen.getTextContent();
         for (const privateFact of [
             'teams.credentials.usePolicy.teamContextRequired',

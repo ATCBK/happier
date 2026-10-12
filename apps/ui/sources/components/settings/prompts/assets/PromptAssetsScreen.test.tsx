@@ -5,8 +5,6 @@ import type { PromptAssetTypeDescriptorV1 } from '@happier-dev/protocol';
 import type { IModal } from '@/modal';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { createPromptLibraryCatalogBoundary } from '@/dev/testkit/harness/promptLibraryCatalogBoundary';
-import { createPromptMachineTransferFixture, installPromptMachineSocketBoundary } from '@/dev/testkit/harness/promptMachineTransferBoundary';
 import { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } from '@/sync/domains/machines/administration/selectionPreferences';
 import { installPromptAssetsCommonModuleMocks, promptAssetsRouterPushSpy } from './promptAssetsScreenTestHelpers';
 
@@ -14,7 +12,6 @@ const deletionConfirmation = vi.hoisted(() => vi.fn<IModal['confirm']>(async () 
 const deletionAlert = vi.hoisted(() => vi.fn<IModal['alert']>());
 vi.mock('socket.io-client', async original => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
 vi.mock('@happier-dev/iroh-native', async original => (await import('@/dev/testkit/harness/promptMachineTransferBoundary')).createPromptNativeTransferModuleBoundary(original));
-installPromptMachineSocketBoundary();
 installPromptAssetsCommonModuleMocks({ storage: original => original(), modal: async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
     return createModalModuleMock({ spies: { confirm: deletionConfirmation, alert: deletionAlert } }).module;
@@ -22,6 +19,9 @@ installPromptAssetsCommonModuleMocks({ storage: original => original(), modal: a
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock({ Platform: { OS: 'ios', select: ({ ios, default: fallback }: { ios?: unknown; default?: unknown }) => ios ?? fallback } });
 } });
+const { createPromptLibraryCatalogBoundary } = await import('@/dev/testkit/harness/promptLibraryCatalogBoundary');
+const { createPromptMachineTransferFixture, installPromptMachineSocketBoundary } = await import('@/dev/testkit/harness/promptMachineTransferBoundary');
+installPromptMachineSocketBoundary();
 const { storage } = await import('@/sync/domains/state/storage');
 const { refreshPromptLibraryCatalog } = await import('@/sync/engine/settings/promptLibraryCatalogEngine');
 const { getPromptLibraryCatalogValue } = await import('@/sync/store/settings/promptLibraryCatalogSnapshot');
@@ -119,9 +119,12 @@ describe('PromptAssetsScreen through Home and daemon boundaries', () => {
         expect(catalog.requests).toEqual([]);
     });
     async function prepareLinkedArtifact(serverIdentityId?: string) {
-        const { createPromptBundleArtifact } = await import('@/sync/ops/promptLibrary/promptBundles');
-        const artifactId = await createPromptBundleArtifact({ title: skill.title, bundleSchemaId: 'skills.skill_md_v1', origin: 'imported',
-            entries: [{ path: 'SKILL.md', contentBase64: Buffer.from('# Refactor').toString('base64'), contentKind: 'utf8' }] });
+        const { createPromptBundleInLibrary } = await import('@happier-dev/protocol/prompts/library/promptLibraryActionOperations');
+        const { withUiPromptLibraryArtifactStore } = await import('@/sync/ops/promptLibrary/promptLibraryArtifactStore');
+        const { artifactId } = await withUiPromptLibraryArtifactStore(store => createPromptBundleInLibrary({ store,
+            request: { title: skill.title, bundleSchemaId: 'skills.skill_md_v1', origin: 'imported',
+                entries: [{ path: 'SKILL.md', contentBase64: Buffer.from('# Refactor').toString('base64'), contentKind: 'utf8' }] } }),
+            { serverId: fixture.scope.serverId, expectedAccountId: fixture.scope.accountId });
         expect(storage.getState().artifacts[artifactId]?.header?.title).toBe(skill.title);
         const { writePromptLibraryRecord, requireUpdatedPromptLibraryMutation } = await import('@/sync/api/account/apiPromptLibraryCatalog');
         requireUpdatedPromptLibraryMutation(await writePromptLibraryRecord(fixture.scope, {

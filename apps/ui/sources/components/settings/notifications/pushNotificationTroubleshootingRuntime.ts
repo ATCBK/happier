@@ -1,13 +1,18 @@
 import { t } from '@/text';
+import { loadLastRegisteredExpoPushToken } from '@/sync/domains/state/pushTokenRegistration';
 
 import type {
     ExpoPushTokenOutcome,
     PushPermissionOutcome,
 } from '@/activity/notifications/permission/pushNotificationAccess';
 
+export function resolveTroubleshootingDeviceToken(outcome: ExpoPushTokenOutcome): string | null {
+    return outcome.ok ? outcome.token : (loadLastRegisteredExpoPushToken()?.trim() || null);
+}
+
 export function formatPushTokenFingerprint(token: string): string {
     const raw = token.replace(/^ExponentPushToken\[/, '').replace(/\]$/, '');
-    if (raw.length <= 10) return raw;
+    if (raw.length <= 10) return '…';
     return `${raw.slice(0, 5)}…${raw.slice(-5)}`;
 }
 

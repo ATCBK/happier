@@ -22,6 +22,7 @@ export async function completeAccountDeletion(params: Readonly<{
     deleteCurrentAccount(options?: DeleteCurrentAccountOptions): Promise<Readonly<{ status: 'deleted' }>>;
     logout(options?: Readonly<{ beforeMutation?: () => void | Promise<void> }>): Promise<AuthCredentialLifecycleResult>;
     replace(path: '/'): void | Promise<void>;
+    confirmManagedResourceRemoval?: boolean;
 }>): Promise<AuthCredentialLifecycleResult> {
     let confirmed = false;
     const abortError = () => {
@@ -49,7 +50,8 @@ export async function completeAccountDeletion(params: Readonly<{
                             } catch (cause) {
                                 if (!(cause instanceof AccountErasureManagedResourcesReviewRequiredError)) throw cause;
                                 if (!params.target.isCurrent() || abort.signal.aborted) throw abortError();
-                                const reviewed = await reviewManagedResourceRemoval(cause.resources);
+                                const reviewed = await reviewManagedResourceRemoval(cause.resources, undefined,
+                                    { confirmationRequired: params.confirmManagedResourceRemoval !== false });
                                 if (!reviewed || !params.target.isCurrent() || abort.signal.aborted) throw abortError();
                                 managedResourceDispositions = reviewed;
                             }

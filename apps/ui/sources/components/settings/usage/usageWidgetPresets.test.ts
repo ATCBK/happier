@@ -15,14 +15,16 @@ describe('Usage host fragment presets', () => {
         for (const row of flattenWidgetLayoutWidgetsV1(presets.find(preset => preset.id === 'overview')!.items)) {
             if (row.instance.definition.kind === 'builtin' && row.instance.definition.id === 'usage_sources') {
                 expect(Object.keys(row.instance.bindings).sort()).toEqual(['agents', 'machines', 'sources']);
-            } else expect(row.instance.bindings.metric).toEqual({ kind: 'value', value: 'cost' });
+            } else expect(row.instance.bindings.metric).toEqual(readBuiltinWidgetDescriptorV1(row.instance.definition)!.inputs?.fields
+                .some(field => field.path === 'metric') ? { kind: 'value', value: 'cost' } : undefined);
         }
         for (const preset of presets.filter(preset => preset.id !== 'overview')) {
             expect(preset.items).toEqual(WidgetAreaPresetV1Schema.parse(createUsageWidgetPresets(names).find(defaultPreset => defaultPreset.id === preset.id)!).items);
         }
         const costs = WidgetAreaPresetV1Schema.parse(createUsageWidgetPresets(names, { initialMetric: 'tokens' }).find(preset => preset.id === 'costs')!);
         for (const row of flattenWidgetLayoutWidgetsV1(costs.items)) {
-            expect(row.instance.bindings.metric).toEqual({ kind: 'value', value: 'cost' });
+            expect(row.instance.bindings.metric).toEqual(readBuiltinWidgetDescriptorV1(row.instance.definition)!.inputs?.fields
+                .some(field => field.path === 'metric') ? { kind: 'value', value: 'cost' } : undefined);
         }
     });
     it('offers every host view and reads missing defaults without a write through the actual area owner', async () => {
@@ -59,14 +61,12 @@ describe('Usage host fragment presets', () => {
         for (const preset of presets) for (const row of flattenWidgetLayoutWidgetsV1(preset.items)) {
             const descriptor = readBuiltinWidgetDescriptorV1(row.instance.definition)!;
             expect(descriptor).not.toBeNull();
-            if (row.instance.definition.kind !== 'builtin' || row.instance.definition.id !== 'usage_sources') {
-                expect(row.instance.bindings.metric?.kind).toBe('value');
-                expect(row.instance.bindings.breakdown?.kind).toBe('value');
-            }
+            for (const path of ['metric', 'breakdown']) expect(row.instance.bindings[path]?.kind)
+                .toBe(descriptor.inputs?.fields.some(field => field.path === path) ? 'value' : undefined);
             // The target's missing scopes are intentionally unavailable until its context is admitted.
             expect(resolveConfiguredWidgetInputs({ descriptor, instance: row.instance, providedContext: {}, viewerValues: {} }).status).toBe('selection_required');
         }
-        const candidate = selectBuiltinWidgetCandidates().find(row => row.definition?.kind === 'builtin' && row.definition.id === 'usage_daily')!;
+        const candidate = selectBuiltinWidgetCandidates().find(row => row.definition?.kind === 'builtin' && row.definition.id === 'usage_flow')!;
         const copiedInput = { period: { startMs: 10 }, agents: ['agent'], machines: [], projects: ['source-project'], sources: [], session: null,
             costBasis: 'reported', metric: 'cost', breakdown: ['agent'] };
         const setup = (context: Parameters<typeof buildWidgetCandidateSetup>[0]['context']) => buildWidgetCandidateSetup({

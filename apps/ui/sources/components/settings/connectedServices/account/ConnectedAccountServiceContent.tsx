@@ -45,6 +45,7 @@ import {
 } from '../connectedServiceSettingsErrors';
 import { resolveProjectedLocalizedText } from '@/components/plugins/surfaces/resolvePluginDisplayString';
 import { teamsDirectoryShareCredentialPath } from '@/components/settings/teams/teamsRoutes';
+import { ConnectedAccountActionApprovalNotice } from '../ConnectedAccountActionApprovalNotice';
 
 export type ConnectedAccountServiceProfile = QualifiedConnectedAccountProfileV4;
 
@@ -277,7 +278,7 @@ export const ConnectedAccountServiceContent = React.memo(function ConnectedAccou
         accounts,
         groups: groups.groups,
         labelsByKey,
-        accountLabel: accountLabels[account.ref.accountId] ?? null,
+        accountLabelsByAccountId: accountLabels,
         serviceTitle: props.title,
     });
 
@@ -307,6 +308,8 @@ export const ConnectedAccountServiceContent = React.memo(function ConnectedAccou
             );
         }
         return (
+            <>
+            <ConnectedAccountActionApprovalNotice execution={groups.execution} testID="connected-pool-create-approval-pending" />
             <QualifiedPoolDraft
                 serviceLabel={props.title}
                 accounts={accounts}
@@ -315,6 +318,7 @@ export const ConnectedAccountServiceContent = React.memo(function ConnectedAccou
                 onCreate={(draft) => { void createPoolFromDraft(draft); }}
                 onDiscard={leaveFocusedScreen}
             />
+            </>
         );
     }
 
@@ -341,6 +345,8 @@ export const ConnectedAccountServiceContent = React.memo(function ConnectedAccou
             );
         }
         return (
+            <>
+            <ConnectedAccountActionApprovalNotice execution={groups.execution} testID="connected-pool-mutation-approval-pending" />
             <QualifiedPoolDetail
                 group={group}
                 accounts={accounts}
@@ -371,6 +377,7 @@ export const ConnectedAccountServiceContent = React.memo(function ConnectedAccou
                     })),
                 } : {})}
             />
+            </>
         );
     }
 

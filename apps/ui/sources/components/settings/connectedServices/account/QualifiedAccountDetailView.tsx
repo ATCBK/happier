@@ -177,7 +177,10 @@ export const QualifiedAccountDetailView = React.memo(function QualifiedAccountDe
     const identityAnchorRef = React.useRef<View>(null);
 
     const status = parseDisplayableCredentialHealthStatus(props.status);
-    const email = providerEmail?.trim() ?? '';
+    // An account titled by its email (no name of its own, or a name that is that address) doesn't repeat it.
+    const providerEmailText = providerEmail?.trim() ?? '';
+    const email = presentation.primaryLabelKind === 'email' || presentation.primaryLabel.trim() === providerEmailText
+        ? '' : providerEmailText;
     const providerAccount = providerAccountId?.trim() ?? '';
 
     const memberships = React.useMemo(
@@ -274,7 +277,7 @@ export const QualifiedAccountDetailView = React.memo(function QualifiedAccountDe
                         ) : null}
                     </View>
                 )}
-                actions={<View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                actions={<View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 }}>
                     {props.agentDefaults ? (
                     <AgentDefaultMenuButton
                         testID={`${testID}:default-for`}
@@ -474,12 +477,12 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexWrap: 'wrap',
         alignItems: 'center',
         columnGap: 14,
-        rowGap: 2,
+        rowGap: theme.space.s2,
     },
     fact: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 5,
+        gap: theme.space.s4,
         minWidth: 0,
     },
     factText: {
@@ -495,10 +498,10 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         flexWrap: 'wrap',
         justifyContent: 'flex-end',
-        gap: 8,
+        gap: theme.space.s8,
     },
     dangerNote: {
-        marginTop: 8,
+        marginTop: theme.space.s8,
         fontSize: 13,
         lineHeight: 18,
         color: theme.colors.text.secondary,

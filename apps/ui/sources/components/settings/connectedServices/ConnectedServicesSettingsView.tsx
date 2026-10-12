@@ -26,10 +26,15 @@ import { buildConnectedAccountSettingsRoute, buildNewConnectedAccountPoolRoute }
 import { useActiveServerAccountScope, useAllMachines, useLocalSettingMutable } from '@/sync/store/hooks';
 import { selectConnectedMetadataLabels, useConnectedMetadataCatalog } from '@/hooks/server/connectedServices/useConnectedMetadataCatalog';
 import { useConnectedAccountPurposeDefaults } from '@/hooks/server/connectedServices/useConnectedAccountPurposeDefaults';
+import { ConnectedAccountActionApprovalNotice } from './ConnectedAccountActionApprovalNotice';
 import { t } from '@/text';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
-import { getMachineDisplayName, isMachineOnline } from '@/utils/sessions/machineUtils';
+import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
+import { isMachineSelectableForFleet } from '@/sync/domains/machines/administration/fleetUnion';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
+import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
 import { fireAndForget } from '@/utils/system/fireAndForget';
+import { presentProviderError } from '@/providers/connection/errorPresentation';
 import { useDeviceType } from '@/utils/platform/responsive';
 
 import { AgentDefaultMenuButton } from './defaults/AgentDefaultMenuButton';
@@ -62,10 +67,11 @@ export const ConnectedServicesSettingsView = React.memo(function ConnectedServic
   const activeAccountScope = useActiveServerAccountScope(activeServer.serverId);
   const providersEnabled = useFeatureEnabled('providers');
   const index = useConnectedServicesIndex({ agents: 'load', gateways: providersEnabled });
+  const addGateway = index.addGateway;
   const { indexModel, agentEntries, agentsKnown, registrySnapshot, appShellProjection } = index;
-  const { catalog: purposeCatalog, legacySettings, mutateDefaults } = useConnectedAccountPurposeDefaults();
+  const { catalog: purposeCatalog, legacySettings, mutateDefaults, execution: purposeExecution } = useConnectedAccountPurposeDefaults();
   const labelsByKey = useConnectedMetadataCatalog(activeAccountScope, selectConnectedMetadataLabels);
-  const privacy = useConnectedAccountIdentityPrivacy();
+  const privacy = useConnectedAccountIdentityPrivacy({ mutation: true });
   const [presentationSetting, setPresentation] = useLocalSettingMutable('connectedServicesIndexViewV1');
   const presentation: ConnectedServicesIndexPresentation = presentationSetting === 'grid' ? 'grid' : 'list';
   const layout = useHappierCollectionLayout();
@@ -131,10 +137,12 @@ export const ConnectedServicesSettingsView = React.memo(function ConnectedServic
   });
 
   const machines = useAllMachines();
+  const reachabilityRevision = useMachineReachabilityRevision();
+  const nowMs = useMachinePresenceNowMs(machines);
   const onlineMachineName = React.useMemo(() => {
-    const online = machines.find((machine) => isMachineOnline(machine));
+    const online = machines.find((machine) => isMachineSelectableForFleet(activeAccountScope, machine, nowMs));
     return online ? getMachineDisplayName(online) : null;
-  }, [machines]);
+  }, [machines, activeAccountScope, reachabilityRevision, nowMs]);
 
   const accountCount = indexModel.sheets.reduce((total, sheet) => total + sheet.accounts.length, 0);
   const needsYouCount = indexModel.sheets.reduce((total, sheet) => total
@@ -143,7 +151,8 @@ export const ConnectedServicesSettingsView = React.memo(function ConnectedServic
   const projectionFailed = registrySnapshot.status === 'error';
   const projectionReadFailed = projectionFailed || (registrySnapshot.status === 'stale' && registrySnapshot.errorReason !== null);
   const agentConnectable = indexModel.connectable.filter((service) => service.section === 'agents');
-  const firstRun = accountCount === 0 && indexModel.sheets.length === 0;
+  const hasSharedConnectedServices = teamCredentialCatalog.resources.some((resource) => resource.sourcePresentation?.kind === 'connected_service');
+  const firstRun = accountCount === 0 && indexModel.sheets.length === 0 && !hasSharedConnectedServices;
 
   const banner = projectionReadFailed ? (
     <AttentionBanner
@@ -183,6 +192,8 @@ export const ConnectedServicesSettingsView = React.memo(function ConnectedServic
     const canAdd = agentConnectable.length > 0 || projectionLoading;
     return (
       <ItemList>
+        <ConnectedAccountActionApprovalNotice execution={purposeExecution} testID="connected-services-default-approval-pending" />
+        <ConnectedAccountActionApprovalNotice execution={privacy.execution} testID="connected-services-privacy-approval-pending" />
         {!canAdd ? <SettingsPageHeader description={t('settings.connectedServicesSubtitle')} /> : null}
         {banner}
         {canAdd ? <ItemGroup surface="none">{connectMore}</ItemGroup> : !projectionFailed ? (
@@ -242,12 +253,29 @@ export const ConnectedServicesSettingsView = React.memo(function ConnectedServic
         asOf: usage.asOf,
         onRefreshAll: () => setRefreshToken((token) => token + 1),
       }}
-      banner={banner}
+      banner={<>
+        <ConnectedAccountActionApprovalNotice execution={purposeExecution} testID="connected-services-default-approval-pending" />
+        <ConnectedAccountActionApprovalNotice execution={privacy.execution} testID="connected-services-privacy-approval-pending" />
+        {banner}
+      </>}
       connectMore={connectMore}
-      gateways={index.gateways ? (
+      // On wide layouts the rail lists the gateways and owns Add gateway; this group is the phone's way in.
+      gateways={compact && (index.gateways || index.gatewaysLoading) ? (
         <ConnectedServicesGatewaysGroup
-          gateways={index.gateways}
+          gateways={index.gateways ?? []}
+          loading={index.gatewaysLoading}
           onOpen={(gateway) => navigate(gateway.detailRoute as never, 'ConnectedServices.openGateway')}
+          onAdd={addGateway ? () => {
+            // Creates the gateway, then opens its page like any other gateway row.
+            fireAndForget(addGateway().then((route) => {
+              if (route) navigate(route as never, 'ConnectedServices.addGateway');
+            }), { tag: 'ConnectedServices.addGateway' });
+          } : undefined}
+          adding={index.addingGateway}
+          addError={index.addGatewayError ? t(presentProviderError(index.addGatewayError).descriptionKey) : null}
+          approval={index.gatewayApproval ? (
+            <ConnectedAccountActionApprovalNotice pendingApproval={index.gatewayApproval} testID="connected-services-gateway-approval-pending" />
+          ) : null}
         />
       ) : null}
       preferences={<ProviderUsageGaugeSettingsGroup settings={CONNECTED_SERVICES_USAGE_GAUGE_SETTINGS.settings} />}

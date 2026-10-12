@@ -5,7 +5,7 @@ import type { ManagedIdentityProviderOwnerV1, ManagedIdentityProviderV1 } from '
 
 import { CopiedPill } from '@/components/ui/copy/CopiedPill';
 import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
-import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
 import { announceAccessibilityMessage } from '@/components/ui/accessibility/announceAccessibilityMessage';
 import { identityAdministrationFailureMessage } from '@/components/settings/identity/identityAdministrationFailure';
@@ -468,7 +468,7 @@ export const ManagedOidcProviderEditorContent = React.memo(function ManagedOidcP
     });
 
     if (props.loading) {
-        return <ItemGroup><Item title={t('common.loading')} leftElement={<ActivitySpinner />} showChevron={false} /></ItemGroup>;
+        return <ItemGroup><SurfaceStateCard kind="loading" size="line" title={t('common.loading')} /></ItemGroup>;
     }
     const callbackUrl = provider?.callbackUrl ?? null;
     return (

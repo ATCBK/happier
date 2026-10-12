@@ -30,6 +30,8 @@ export type ManagedProvisionerCard = Readonly<{
     kind: 'choose' | 'repair';
     label: string;
     onPress: () => void;
+    /** The step cannot start (its check could not be read): the button stays, quiet and inert. */
+    disabled?: boolean;
   }>;
 }>;
 

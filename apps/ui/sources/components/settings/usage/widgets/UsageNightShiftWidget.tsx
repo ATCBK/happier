@@ -6,14 +6,17 @@ import { formatHappierDataValue } from '@happier-dev/plugin-ui/presentation';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
-import { useSettingMutable } from '@/sync/domains/state/storage';
+import { useSetting } from '@/sync/domains/state/storage';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
+import { useSettingActionFeedback } from '@/components/settings/shell/useSettingActionFeedback';
 import { Typography } from '@/constants/Typography';
 import { useWidgetFrameBodyCaption } from '@/components/widgets/frame/widgetFrameBodyCaption';
 import { formatWithCachedDateTimeFormatter } from '@/utils/datetime/cachedIntlFormatters';
 import { t } from '@/text';
 import { usageSignatureAccent } from '../usageAccent';
 import { usageGridTooltip } from '../usageGridPresentation';
+import { USAGE_SETTINGS } from '../usageSettings';
+import { UsagePlanDisclosure } from './plans/UsagePlanParts';
 import {
   UsageBodyInsufficient,
   UsageCoverageLine,
@@ -31,7 +34,7 @@ const weekdayLabel = (weekday: number) =>
   formatWithCachedDateTimeFormatter(
     new Date(Date.UTC(2024, 0, 7 + weekday)),
     undefined,
-    { weekday: 'narrow', timeZone: 'UTC' },
+    { weekday: 'short', timeZone: 'UTC' },
   );
 const clock = (hour: number) => `${String(hour).padStart(2, '0')}:00`;
 
@@ -43,7 +46,8 @@ export function UsageNightShiftWidget(props: UsageBodyProps) {
   const { theme } = useUnistyles();
   const chartTheme = useUsagePluginTheme();
   const night = props.slice.howYouWork?.nightShift ?? null;
-  const [chosen, setChosen] = useSettingMutable('usageNightHoursV1');
+  const chosen = useSetting('usageNightHoursV1');
+  const { setSetting, isCurrent } = useSettingActionFeedback({ serverId: props.serverId });
   const settingsScope = useAccountSettingsScope();
   const [draft, setDraft] = React.useState<{ startHour: number | null; endHour: number | null }>(() => chosen ?? { startHour: null, endHour: null });
   const [open, setOpen] = React.useState<'startHour' | 'endHour' | null>(null);
@@ -58,12 +62,18 @@ export function UsageNightShiftWidget(props: UsageBodyProps) {
         disabled: draft[endpoint === 'startHour' ? 'endHour' : 'startHour'] === hour })),
         { id: 'clear', title: t('usage.board.howYouWork.nightClear') }]}
       onSelect={id => {
+        if (!isCurrent()) return;
         setOpen(null);
-        if (id === 'clear') { setDraft({ startHour: null, endHour: null }); setChosen(null); return; }
+        if (id === 'clear') {
+          void setSetting(USAGE_SETTINGS.settings.nightHours, null).then(accepted => {
+            if (accepted && isCurrent()) setDraft({ startHour: null, endHour: null });
+          });
+          return;
+        }
         const next = { ...draft, [endpoint]: Number(id) };
         setDraft(next);
         if (next.startHour !== null && next.endHour !== null && next.startHour !== next.endHour) {
-          setChosen({ startHour: next.startHour, endHour: next.endHour });
+          void setSetting(USAGE_SETTINGS.settings.nightHours, { startHour: next.startHour, endHour: next.endHour });
         }
       }} />)}
   </View>;
@@ -86,14 +96,15 @@ export function UsageNightShiftWidget(props: UsageBodyProps) {
         : null,
     [night, buckets, accent, theme.colors.surface.inset],
   );
-  useWidgetFrameBodyCaption(night ? usagePeriodPhrase(props.query) : null);
+  useWidgetFrameBodyCaption(usagePeriodPhrase(props.query));
   if (!night) {
+    // What is missing first, then the one choice that fills it (lab uloop N keeps settings out of the chart).
     return (
-      <View style={styles.body}>{controls}<UsageBodyInsufficient
+      <View style={styles.body}><UsageBodyInsufficient
         testID={`${props.testID}.empty`}
         title={t('usage.board.howYouWork.nightUnknownTitle')}
         reason={t('usage.board.howYouWork.nightUnknownReason')}
-      /></View>
+      />{controls}</View>
     );
   }
   const window = t('usage.board.howYouWork.nightWindow', {
@@ -107,7 +118,6 @@ export function UsageNightShiftWidget(props: UsageBodyProps) {
       : t('usage.board.howYouWork.notRecorded');
   return (
     <View style={styles.body} testID={`${props.testID}.night`}>
-      {controls}
       <View style={styles.hero}>
         <Icon name="moon" size={ICON_SIZE.lg} color={accent} />
         <View style={styles.heroText}>
@@ -135,6 +145,11 @@ export function UsageNightShiftWidget(props: UsageBodyProps) {
           renderCell={usageGridTooltip(accent, 'usage-night-cell-trigger')}
         />
       ) : null}
+      {/* Known hours are a quiet fact with Change behind it, never a form above the result. */}
+      <UsagePlanDisclosure testID={`${props.testID}.hours`} title={t('usage.board.howYouWork.nightHoursTitle')}
+        meta={`${clock(night.startHour)}–${clock(night.endHour)}`}>
+        {controls}
+      </UsagePlanDisclosure>
       <UsageCoverageLine
         testID={`${props.testID}.coverage`}
         slice={props.slice}
@@ -146,14 +161,12 @@ export function UsageNightShiftWidget(props: UsageBodyProps) {
 }
 
 const styles = StyleSheet.create((theme) => ({
-  body: { gap: 16, minWidth: 0 },
-  controls: { gap: 4, minWidth: 0 },
+  body: { gap: theme.space.s16, minWidth: 0 },
+  controls: { gap: theme.space.s4, minWidth: 0 },
   hero: { flexDirection: 'row', alignItems: 'flex-start', gap: 14 },
-  heroText: { flex: 1, minWidth: 0, gap: 2 },
+  heroText: { flex: 1, minWidth: 0, gap: theme.space.s2 },
   note: {
-    ...Typography.default(),
-    fontSize: 12,
-    lineHeight: 16,
+    ...Typography.variant('meta'),
     color: theme.colors.text.tertiary,
     fontVariant: ['tabular-nums'],
   },

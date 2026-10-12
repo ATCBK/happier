@@ -1,4 +1,6 @@
 import * as React from 'react';
+import { SettingAnchor } from '@/components/settings/shell/SettingRow';
+import { PROVIDER_GATEWAY_SETTINGS } from '../providersSettings';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
@@ -22,7 +24,7 @@ import { resolveQualifiedConnectedServiceRegistryDisplayName } from '@/component
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { Icon } from '@/components/ui/icons/Icon';
-import { ExpandableItem } from '@/components/ui/lists/ExpandableItem';
+import { ExpandableItem, ExpandableItemCaret } from '@/components/ui/lists/ExpandableItem';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
@@ -58,10 +60,7 @@ export type ProviderGatewayMachine = Readonly<{
  * Whether sessions on the user's other computers can reach the chosen one. Only a real peer
  * observation may say so; until one is projected to the app the row says it has not been checked.
  */
-export type ProviderGatewayHubReachability =
-  | 'unknown'
-  | 'reachable'
-  | 'unreachable';
+export type ProviderGatewayHubReachability = NonNullable<DaemonProviderConnectionViewV1['runtime']['gateway']>['reachability'];
 
 /** The chosen computer as the gateway's page states it; `null` while each session uses its own. */
 export function resolveProviderGatewayChosenMachine(
@@ -102,7 +101,7 @@ export type ProviderGatewaySectionsProps = Readonly<{
   onChangeHelperModels: (
     helperModels: ProviderClaudeHelperModelsV1 | null,
   ) => void;
-  /** The page cannot write right now (no computer to write through, or another Account's machine). */
+  /** The captured Account catalog is not writable or the selected target belongs to another Account. */
   disabled: boolean;
   disabledReason?: string;
   /** "Show in model picker" and the Models link, owned by the page. */
@@ -216,7 +215,7 @@ export const ProviderGatewaySections = React.memo(
             'settingsProvidersCollection.gateway.modelsFromDescription',
           )}
         >
-          {props.declarations.map((declaration) => (
+          <SettingAnchor setting={PROVIDER_GATEWAY_SETTINGS.settings.slots}><>{props.declarations.map((declaration) => (
             <GatewaySlotRow
               key={`${buildQualifiedPluginContributionKey(declaration.service)}/${declaration.purpose}`}
               declaration={declaration}
@@ -227,7 +226,7 @@ export const ProviderGatewaySections = React.memo(
               onChange={props.onChangeSlot}
               onConnect={props.onConnectService}
             />
-          ))}
+          ))}</></SettingAnchor>
         </ItemGroup>
 
         <ItemGroup
@@ -236,13 +235,12 @@ export const ProviderGatewaySections = React.memo(
             'settingsProvidersCollection.gateway.runsOnDescription',
           )}
         >
-          <SectionContentRow testID="provider-gateway-placement">
+          <SettingAnchor setting={PROVIDER_GATEWAY_SETTINGS.settings.placement}><SectionContentRow testID="provider-gateway-placement">
             <View style={styles.placement}>
               <SegmentedTabBar<PlacementMode>
                 tabs={placementTabs}
                 activeTabId={mode}
                 onSelectTab={selectMode}
-                slidingThumb
                 segmentSizing="equal"
                 targetSize="platform"
                 disabled={props.disabled}
@@ -262,7 +260,7 @@ export const ProviderGatewaySections = React.memo(
                     )}
               </Text>
             </View>
-          </SectionContentRow>
+          </SectionContentRow></SettingAnchor>
           {mode === 'machine' ? (
             <DropdownMenu
               open={computerMenuOpen}
@@ -331,7 +329,7 @@ export const ProviderGatewaySections = React.memo(
             'settingsProvidersCollection.gateway.helperDescription',
           )}
         >
-          {HELPER_ROLES.map((role) => {
+          <SettingAnchor setting={PROVIDER_GATEWAY_SETTINGS.settings.helpers}><>{HELPER_ROLES.map((role) => {
             const pinned = props.helperModels?.[role] ?? SAME_AS_SESSION;
             return (
               <DropdownMenu
@@ -363,7 +361,7 @@ export const ProviderGatewaySections = React.memo(
                 }}
               />
             );
-          })}
+          })}</></SettingAnchor>
         </ItemGroup>
 
         <ItemGroup
@@ -380,13 +378,7 @@ export const ProviderGatewaySections = React.memo(
                 {...state.headerProps}
                 title={t('settingsProvidersCollection.gateway.whatToKnow')}
                 detail={t('settingsProviders.compatibility.experimental')}
-                rightElement={
-                  <Icon
-                    name={state.expanded ? 'caret-down' : 'caret-right'}
-                    size={14}
-                    color={theme.colors.text.secondary}
-                  />
-                }
+                rightElement={<ExpandableItemCaret expanded={state.expanded} />}
                 showChevron={false}
               />
             )}
@@ -428,16 +420,14 @@ const GatewaySlotRow = React.memo(function GatewaySlotRow(
   const registry = useProjectedConnectedServicesRegistry();
   const localizePluginText = useProjectedPluginLocalizedTextResolver();
   const serviceKey = buildQualifiedPluginContributionKey(declaration.service);
-  const title =
-    (declaration.title
-      ? localizePluginText(props.localizedTextPluginId, declaration.title)
-      : '') ||
-    resolveQualifiedConnectedServiceRegistryDisplayName(
-      registry,
-      declaration.service,
-      t,
-      localizePluginText,
-    );
+  // The row names the service (lab GW1 "ChatGPT", "Claude"); the section already says each one
+  // takes an account or a pool, so the declaration's "… account or pool" title would say it twice.
+  const title = resolveQualifiedConnectedServiceRegistryDisplayName(
+    registry,
+    declaration.service,
+    t,
+    localizePluginText,
+  );
   const hasAccount = (profile.connectedAccountsV4 ?? []).some(
     (account) =>
       buildQualifiedPluginContributionKey(account.ref.service) === serviceKey,
@@ -450,6 +440,11 @@ const GatewaySlotRow = React.memo(function GatewaySlotRow(
       }
       size="inline"
     />
+  );
+  // Same name on the chooser row and its popover: the service, not the purpose title.
+  const serviceDeclaration = React.useMemo(
+    () => ({ ...declaration, title: undefined }),
+    [declaration],
   );
   const testID = `provider-gateway-slot:${declaration.purpose}`;
   const purpose = declaration.purpose;
@@ -493,7 +488,7 @@ const GatewaySlotRow = React.memo(function GatewaySlotRow(
     <ConnectedAccountPurposeTargetChooser
       testID={testID}
       localizedTextPluginId={props.localizedTextPluginId}
-      declaration={declaration}
+      declaration={serviceDeclaration}
       value={props.value}
       icon={mark}
       description={
@@ -512,7 +507,7 @@ const GatewaySlotRow = React.memo(function GatewaySlotRow(
 
 const styles = StyleSheet.create((theme) => ({
   placement: {
-    gap: 10,
+    gap: theme.space.s10,
   },
   consequence: {
     ...Typography.default(),

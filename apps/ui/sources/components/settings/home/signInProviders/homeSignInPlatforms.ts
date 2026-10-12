@@ -1,4 +1,4 @@
-import { isHomeSignInPlatformSetting } from '@happier-dev/protocol';
+import { isHomeSignInPlatformSetting } from '@happier-dev/protocol/serverConfig/homeSettingsOwnership';
 import type {
   HomeSettingEntryV1,
   HomeSettingsProjectionV1,
@@ -6,7 +6,9 @@ import type {
 import { SERVER_CONFIG_REGISTRY_BASE } from '@happier-dev/protocol/serverConfig/registry';
 
 import { buildSettingHref } from '@/components/settings/catalog/settingDeclarations';
-import type { IconName } from '@/components/ui/icons/Icon';
+import * as React from 'react';
+import { Icon } from '@/components/ui/icons/Icon';
+import { WorkosMark } from '@/components/settings/identity/WorkosMark';
 import { t } from '@/text';
 
 import { homeSettingIgnoredReasonLabel } from '../governance/homeServerSettingLabels';
@@ -199,11 +201,10 @@ export function homeSignInPlatformFieldTitle(
 }
 
 /**
- * A platform's mark, wherever it is named. WorkOS has no brand mark in the icon set yet, so it
- * stands on one stand-in glyph here rather than one per surface.
+ * A platform's shared identity mark, wherever it is named.
  */
-export function homeSignInPlatformIcon(id: HomeSignInPlatformId): IconName {
-  return id === 'github' ? 'github-logo' : 'shield-check';
+export function homeSignInPlatformMark(id: HomeSignInPlatformId): React.ReactElement {
+  return id === 'github' ? React.createElement(Icon, { name: 'github-logo' }) : React.createElement(WorkosMark);
 }
 
 export function homeSignInPlatformTitle(id: HomeSignInPlatformId): string {

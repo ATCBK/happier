@@ -1,16 +1,8 @@
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import {
-    accountDisplayProfileFixture,
-    createHomeGovernanceHarness,
-    installHomeGovernanceBoundaries,
-    renderScreen,
-    standardCleanup,
-    teamGroupFixture,
-    teamMembershipFixture,
-    withPopoverWebGlobals,
-} from '@/dev/testkit';
+import { accountDisplayProfileFixture, renderScreen, standardCleanup, teamGroupFixture, teamMembershipFixture, withPopoverWebGlobals } from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 
 import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelpers';
 

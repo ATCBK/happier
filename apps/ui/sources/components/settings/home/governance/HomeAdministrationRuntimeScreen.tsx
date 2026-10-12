@@ -1,50 +1,59 @@
 import * as React from 'react';
-import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 
-import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
-import { useHomeSettingsWithCompanion } from '@/hooks/home/useHomeSettingsWithCompanion';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import { useHomeSettings } from '@/hooks/home/useHomeSettings';
 import { t } from '@/text';
 
 import { useHomeRuntimeExecutor } from '../runtime/homeRuntimeExecutor';
 import {
     HomeRuntimeRestartSections,
-    HostedPersonalHomeRuntimeSection,
     countPendingRestartChanges,
     useHomeServerRelease,
 } from '../runtime/HomeRuntimeSections';
 import { HomeAdministrationSection } from './HomeAdministrationSection';
 import type { HomeAdministrationContext } from './homeAdministrationContext';
-
-/** The Runtime page reads only the settings projection: its pending restart state. */
-const NO_COMPANION = async (_scope: ServerAccountScope) => ({ kind: 'succeeded' as const, value: null });
+import { homeGovernanceFailureNotice } from './homeGovernanceLabels';
 
 const RuntimePage = React.memo(function RuntimePage(props: Readonly<{ context: HomeAdministrationContext }>) {
     const { context } = props;
     const canView = context.projection.capabilities.viewAdministration;
     const release = useHomeServerRelease(context.scope.serverId, canView);
     const executor = useHomeRuntimeExecutor(context.scope.serverId, release.flavor);
-    const reads = useHomeSettingsWithCompanion(context.scope, canView, NO_COMPANION);
+    const reads = useHomeSettings(context.scope, canView);
+    const settingsUnknown = reads.loading || reads.failure !== null || reads.settings === null;
 
     if (!canView) {
         return (
-            <ItemGroup description={t('homeGovernance.forbiddenBody')}>
-                <Item testID="home-runtime-forbidden" title={t('homeGovernance.forbiddenTitle')} mode="info" showChevron={false} />
+            <ItemGroup>
+                <SurfaceStateCard
+                    testID="home-runtime-forbidden"
+                    kind="denied"
+                    size="line"
+                    title={t('homeGovernance.forbiddenTitle')}
+                    reason={t('homeGovernance.forbiddenBody')}
+                />
             </ItemGroup>
         );
     }
     return (
         <>
+            {settingsUnknown ? <SurfaceStateCard
+                size="line"
+                testID="home-runtime-settings-unknown"
+                kind={reads.failure ? 'error' : 'loading'}
+                title={reads.failure ? t('homeGovernance.overviewPage.settingsFailed') : t('homeGovernance.loading')}
+                reason={reads.failure ? homeGovernanceFailureNotice(reads.failure, { effect: 'read' }).body : undefined}
+                action={reads.failure ? { label: t('homeGovernance.retry'), onPress: reads.reload, testID: 'home-runtime-settings-retry' } : undefined}
+                accessibilitySemantics={reads.failure ? 'alert' : 'status'}
+            /> : null}
             <HomeRuntimeRestartSections
                 context={context}
                 executor={executor}
                 release={release}
-                pendingCount={countPendingRestartChanges(reads.settings)}
+                pendingCount={settingsUnknown ? null : countPendingRestartChanges(reads.settings)}
                 onRestarted={reads.reload}
             />
-            {executor.kind === 'hosting_desktop' && context.projection.capabilities.manageHomeSettings ? (
-                <HostedPersonalHomeRuntimeSection />
-            ) : null}
         </>
     );
 });

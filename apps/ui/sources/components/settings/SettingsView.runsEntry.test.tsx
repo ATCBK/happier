@@ -60,7 +60,7 @@ installSettingsViewCommonModuleMocks({
         const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
         return createTextModuleMock({ translate: (key) => key });
     },
-    storage: async (importOriginal) => await importOriginal<typeof import('@/sync/domains/state/storage')>(),
+    storage: 'real',
 });
 
 const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
@@ -142,7 +142,6 @@ vi.mock('@/hooks/ui/useHappyAction', () => ({
 
 vi.mock('@/sync/domains/profiles/profile', async (importOriginal) => ({
     ...await importOriginal<typeof import('@/sync/domains/profiles/profile')>(),
-    getDisplayName: () => 'Test User',
     getAvatarUrl: () => null,
     getBio: () => '',
 }));
@@ -190,7 +189,7 @@ vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => ({
 }));
 
 beforeEach(async () => {
-    const { storage } = await import('@/sync/domains/state/storage');
+    const { storage } = await import('@/sync/domains/state/storageStore');
     const { settingsDefaults } = await import('@/sync/domains/settings/settings');
     storage.setState({ settings: settingsDefaults, machines: {}, machineListByServerId: {} });
 });

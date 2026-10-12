@@ -229,13 +229,6 @@ async function chooseDelete(screen: Awaited<ReturnType<typeof renderScreen>>): P
     if (!menu) throw new Error('Expected the pool ⋯ menu');
     await act(async () => { await menu.props.onSelect('delete'); });
 }
-function chooseDeleteWithoutAwaiting(screen: Awaited<ReturnType<typeof renderScreen>>): void {
-    const menu = screen.root.findAll((node) => node.props?.testID === 'settings.machinePools.editor.menu'
-        && typeof node.props?.onSelect === 'function')[0];
-    if (!menu) throw new Error('Expected the pool ⋯ menu');
-    void menu.props.onSelect('delete');
-}
-
 async function publishBoundaryState(): Promise<void> {
     const { storage } = await import('@/sync/domains/state/storage');
     storage.setState({
@@ -282,6 +275,22 @@ describe('MachinePoolEditorScreen', () => {
         await getServerFeaturesSnapshot({ serverId: boundaries.serverId, force: true });
         setRuntimeFetch((url, init) => boundaries.request(String(url), init));
         await act(async () => publishBoundaryState());
+    });
+
+    it('honors the pool Delete waiver without a second UI confirmation', async () => {
+        boundaries.pools = [poolView(1)];
+        await act(async () => publishBoundaryState());
+        getStorage().getState().applySettingsLocal({ actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1,
+            approvalWaivedSurfaces: { 'machines.pools.delete': ['ui'] },
+        }) });
+        vi.mocked(Modal.confirm).mockResolvedValue(false);
+        const { MachinePoolEditorScreen } = await import('./MachinePoolEditorScreen');
+        const screen = await renderScreen(<MachinePoolEditorScreen serverId={boundaries.serverId} poolId={poolView(1).pool.id} />);
+        await chooseDelete(screen);
+        await vi.waitFor(() => expect(boundaries.remove).toHaveBeenCalledOnce());
+        expect(boundaries.remove.mock.calls[0]?.[1]).toEqual({ poolId: poolView(1).pool.id, expectedRevision: 1 });
+        expect(artifactStore.list()).toHaveLength(0);
+        expect(boundaries.replace).toHaveBeenCalledWith('/settings/machines');
     });
 
     it('keeps Create disabled until the pool has a name, and sends nothing for a blank one', async () => {
@@ -502,7 +511,7 @@ describe('MachinePoolEditorScreen', () => {
         );
     });
 
-    it('keeps human Delete confirmation and restores the form after its pending approval is rejected', async () => {
+    it('restores the form after its policy-required Delete approval is rejected', async () => {
         // Request identities and artifact identities both use the OS randomness
         // boundary. Mint distinct values without assuming their consumption order.
         let nextUuid = 0;
@@ -516,11 +525,6 @@ describe('MachinePoolEditorScreen', () => {
         const { MachinePoolEditorScreen } = await import('./MachinePoolEditorScreen');
         const screen = await renderScreen(<MachinePoolEditorScreen serverId={boundaries.serverId} poolId={poolView(1).pool.id} />);
         await act(async () => screen.changeTextByTestId('settings.machinePools.editor.name', 'Unsaved change'));
-        vi.mocked(Modal.confirm).mockResolvedValueOnce(false);
-        await chooseDelete(screen);
-        expect(artifactStore.list()).toHaveLength(0);
-        expect(boundaries.remove).not.toHaveBeenCalled();
-
         await chooseDelete(screen);
         await vi.waitFor(() => expect(artifactStore.list()).toHaveLength(1));
         const rejectedApprovalId = artifactStore.list()[0]!.id;
@@ -674,21 +678,16 @@ describe('MachinePoolEditorScreen', () => {
         );
     });
 
-    it('retires an Account-scoped delete confirmation when the Home credential changes', async () => {
+    it('retires the editor with a pending Delete approval when the Home credential changes', async () => {
         boundaries.pools = [poolView(1)];
         await act(async () => publishBoundaryState());
-        let resolveConfirmation!: (confirmed: boolean) => void;
-        vi.mocked(Modal.confirm).mockReturnValueOnce(new Promise<boolean>((resolve) => {
-            resolveConfirmation = resolve;
-        }));
         const { MachinePoolEditorScreen } = await import('./MachinePoolEditorScreen');
         const screen = await renderScreen(
             <MachinePoolEditorScreen serverId={boundaries.serverId} poolId={poolView(1).pool.id} />,
         );
-        // Start the deliberately unresolved confirmation without keeping React's global `act`
-        // scope open across the credential mutation below.
-        chooseDeleteWithoutAwaiting(screen);
-        await vi.waitFor(() => expect(Modal.confirm).toHaveBeenCalledOnce());
+        await chooseDelete(screen);
+        await vi.waitFor(() => expect(artifactStore.list()).toHaveLength(1));
+        expect(boundaries.remove).not.toHaveBeenCalled();
 
         const accountBCredentials = { token: createAccountTokenForTests('account-b') };
         vi.mocked(TokenStorage.getCredentialsForServerUrl).mockResolvedValue(accountBCredentials);
@@ -699,9 +698,8 @@ describe('MachinePoolEditorScreen', () => {
                 accountBCredentials,
             );
         });
-        await act(async () => resolveConfirmation(true));
-        await vi.waitFor(() => expect(boundaries.remove).not.toHaveBeenCalled());
-
+        await vi.waitFor(() => expect(screen.findByTestId('settings.machinePools.editor.name')?.props.value).toBe(''));
+        await chooseDelete(screen);
         expect(boundaries.remove).not.toHaveBeenCalled();
         await TokenStorage.removeCredentialsForServerUrl(
             'https://machine-pools-editor.test',
@@ -710,6 +708,9 @@ describe('MachinePoolEditorScreen', () => {
     });
 
     it('uses the loaded CAS revision for delete and disables all writes while the Home is signed out', async () => {
+        getStorage().getState().applySettingsLocal({ actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1,
+            approvalWaivedSurfaces: { 'machines.pools.delete': ['ui'] },
+        }) });
         boundaries.pools = [poolView(3)];
         await publishBoundaryState();
         const { MachinePoolEditorScreen } = await import('./MachinePoolEditorScreen');
@@ -757,7 +758,7 @@ describe('MachinePoolEditorScreen', () => {
         const { MachinePoolEditorScreen } = await import('./MachinePoolEditorScreen');
         const screen = await renderScreen(<MachinePoolEditorScreen serverId={boundaries.serverId} poolId={offline.pool.id} />);
 
-        expect(screen.findByTestId('settings.machinePools.editor.member.machine-a.status')?.props.accessibilityLabel).toBe('offline');
+        expect(screen.findByTestId('settings.machinePools.editor.member.machine-a.status')?.props.accessibilityLabel).toBe(t('status.offline'));
     });
 
     it('names a member removed from this Home as removed, never locked, and still offers Remove', async () => {
@@ -934,6 +935,9 @@ describe('MachinePoolEditorScreen', () => {
     });
 
     it('retargets successful deletion to the next Pool row', async () => {
+        getStorage().getState().applySettingsLocal({ actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1,
+            approvalWaivedSurfaces: { 'machines.pools.delete': ['ui'] },
+        }) });
         const current = poolView(1);
         const next = {
             ...poolView(1),
@@ -954,6 +958,7 @@ describe('MachinePoolEditorScreen', () => {
         };
         const originTestId = `settings.machinePools.row.${boundaries.serverId}.${current.pool.id}`;
         const nextTestId = `settings.machinePools.row.${boundaries.serverId}.${next.pool.id}`;
+        boundaries.routeStack.push(`/settings/machines/pools/${current.pool.id}`);
         const screen = await renderScreen(
             <FocusReturnProvider><MachinePoolsSection groups={[group]} /></FocusReturnProvider>,
         );

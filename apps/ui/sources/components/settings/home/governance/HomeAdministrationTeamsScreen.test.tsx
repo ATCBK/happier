@@ -26,7 +26,6 @@ import {
 } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { collectRenderedTestIds } from '@/dev/testkit/render/collectRenderedTestIds';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
-import { resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 
 import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelpers';
 
@@ -62,6 +61,7 @@ installSettingsViewCommonModuleMocks({
 
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
+const { resetServerFeaturesClientForTests } = await import("@/sync/api/capabilities/serverFeaturesClient");
 
 const GOVERNANCE_PATH = '/v1/home/governance/get';
 const TEAMS_LIST_PATH = '/v1/teams/list';
@@ -212,6 +212,35 @@ describe('HomeAdministrationTeamsScreen', () => {
         expect(routerPush).toHaveBeenCalledWith(`/settings/teams/${home}/team-1`);
     });
 
+    it('says how many active members an administered Team has, and never invents the counts the Home withheld', async () => {
+        const home = await harness.addHome({
+            name: 'Home A',
+            serverUrl: 'https://home-a.example',
+            teamsEnabled: true,
+        });
+        await harness.selectHomes([home]);
+        harness.answer(home, GOVERNANCE_PATH, { body: homeGovernanceProjectionFixture() });
+        harness.answer(home, TEAMS_LIST_PATH, {
+            body: {
+                items: [
+                    // A Home-only administrator gets membership totals; Group and invitation counts stay unknown.
+                    { ...teamSummary('team-1', 'Platform'), counts: { members: 7, suspendedMembers: 1, groups: null, archivedGroups: null, waitingInvitations: null } },
+                    teamSummary('team-2', 'Design'),
+                ],
+                nextCursor: null,
+            },
+        });
+
+        const screen = await renderHomeTeams(home);
+        await waitForHomeGovernance(() => {
+            expect(collectRenderedTestIds(screen.tree.toJSON())).toContain(`teams-row:${home}:team-2`);
+        });
+
+        const text = screen.getTextContent();
+        expect(text).toContain('teams.groups.memberCount(count=6)');
+        expect(text.match(/teams\.groups\.memberCount\(/g)).toHaveLength(1);
+    });
+
     it('opens Team creation in an exact Home Administration context', async () => {
         const home = await harness.addHome({
             name: 'Home A',
@@ -313,7 +342,7 @@ describe('HomeAdministrationTeamsScreen', () => {
         await waitForHomeGovernance(() => {
             expect(collectRenderedTestIds(screen.tree.toJSON())).toContain('home-teams-archived-retry');
         });
-        expect(screen.findByTestId('home-teams-archived-retry')?.props.accessibilityLiveRegion).toBe('assertive');
+        expect(screen.findByTestId('home-teams-archived')?.props.accessibilityLiveRegion).toBe('assertive');
 
         const before = harness.requestsFor(TEAMS_LIST_PATH).length;
         await screen.pressByTestIdAsync('home-teams-archived-retry');

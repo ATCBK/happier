@@ -3,15 +3,16 @@ import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue'
 import type { ActionApprovalRegistration } from '@/components/approvals/actionApprovalContinuation';
 import type { ServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import type { Machine } from '@/sync/domains/state/storageTypes';
-import { describeMachinePresenceLine } from '@/utils/sessions/machinePresenceLine';
+import { isMachineReachable, type MachineReachabilityScope } from '@/sync/domains/machines/reachability/machineReachability';
 import { createManagedProvisionerClient } from './managedProvisionerClient';
 
 export type ManagedMachineMoveCandidate = Readonly<{ id: string; controller: ManagedControllerV1 | null; reachable: boolean }>;
 
-export function currentManagedMoveController(machine: Machine | undefined, custodianAccountId: string): ManagedControllerV1 | null {
+export function currentManagedMoveController(machine: Machine | undefined, custodianAccountId: string,
+    scope: MachineReachabilityScope | null | undefined): ManagedControllerV1 | null {
     if (!machine?.installationId || machine.revokedAt || machine.replacedByMachineId || machine.replacedAt
         || machine.access?.accessState !== 'ready' || machine.access.role !== 'manage'
-        || machine.access.custodian.accountId !== custodianAccountId || !describeMachinePresenceLine(machine).online) return null;
+        || machine.access.custodian.accountId !== custodianAccountId || !isMachineReachable(scope, machine)) return null;
     return { machineId: machine.id, installationId: machine.installationId };
 }
 
@@ -28,7 +29,7 @@ export async function readManagedMachineMoveCandidates(input: Readonly<{
     const client = createManagedProvisionerClient(binding.scope, machine.homeId);
     const options = { signal, onApprovalPending: input.onApprovalPending };
     return Promise.all(input.machines.map(async row => {
-        const controller = currentManagedMoveController(row, machine.custodianAccountId);
+        const controller = currentManagedMoveController(row, machine.custodianAccountId, current() ? binding.scope : null);
         const unavailable = { id: row.id, controller, reachable: false };
         if (!controller || !current() || !machine.launch.credentials?.length) return unavailable;
         const catalog = await client.read('machines.provisioners.list', { homeId: machine.homeId, controller }, options);

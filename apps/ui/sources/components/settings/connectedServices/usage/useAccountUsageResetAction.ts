@@ -1,12 +1,13 @@
 import * as React from 'react';
+import { ConnectedServiceQuotaRecoveryCreditConsumeResponseV1Schema } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateRpc';
 
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { useConnectedServiceRecoveryCreditMachineTarget } from '@/hooks/server/connectedServices/useConnectedServiceRecoveryCreditMachineTarget';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import { Modal } from '@/modal';
 import { resolveConnectedServiceQuotaRecoveryCreditReceiptNoticeKey } from '@/sync/domains/connectedServices/connectedServiceQuotaRecoveryCreditReceiptPresentation';
 import { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } from '@/sync/domains/machines/administration/selectionPreferences';
 import { doesMachineAdministrationTargetMatchActiveAccount, resolveFreshMachineAdministrationExecutionTarget } from '@/sync/domains/machines/administration/useTargetSelection';
-import { connectedServiceQuotaRecoveryCreditConsume } from '@/sync/ops/connectedServiceQuotaRecoveryCredits';
 import { storage } from '@/sync/domains/state/storageStore';
 import { t } from '@/text';
 import type { ConnectedServiceId } from '@happier-dev/protocol';
@@ -18,8 +19,8 @@ export type AccountUsageResetAction = Readonly<{
 }>;
 
 /**
- * "Use one" for an account's usage resets (Codex): the one consume operation
- * (`connectedServiceQuotaRecoveryCreditConsume`) with the built-in ingress service id and the account id. It runs
+ * "Use one" for an account's usage resets (Codex): the incumbent quota-reset Action
+ * reaches the canonical consume operation with the built-in ingress service id and the account id. It runs
  * on the machine a live session signs in with this account, else on the machine chosen for connected
  * accounts; with neither it says why instead of guessing. The typed receipt is spoken; a success
  * refreshes the shared account cache so every surface shows the fresh window.
@@ -34,6 +35,7 @@ export function useAccountUsageResetAction(params: Readonly<{
     onApplied: () => void;
 }>): AccountUsageResetAction {
     const activeServer = useActiveServerSnapshot();
+    const { execute } = useMountedActionExecution(activeServer.serverId);
     const sessionMachineId = useConnectedServiceRecoveryCreditMachineTarget({
         serviceId: params.legacyServiceId,
         profileId: params.accountId,
@@ -59,15 +61,23 @@ export function useAccountUsageResetAction(params: Readonly<{
         }
         setPending(true);
         try {
-            const result = await connectedServiceQuotaRecoveryCreditConsume({
+            const execution = await execute('connectedServices.quota.reset', {
                 machineId,
-                serverId: activeServer.serverId,
-                expectedActiveServer: activeServer,
                 serviceId: legacyServiceId,
                 profileId: accountId,
                 sourceSnapshotFetchedAtMs: snapshotFetchedAtMs,
                 ...(providerCreditId ? { providerCreditId } : {}),
             });
+            if (!execution.ok) {
+                await Modal.alert(t('common.error'), execution.error || execution.errorCode);
+                return;
+            }
+            const parsed = ConnectedServiceQuotaRecoveryCreditConsumeResponseV1Schema.safeParse(execution.result);
+            if (!parsed.success) {
+                await Modal.alert(t('common.error'), 'invalid_response');
+                return;
+            }
+            const result = parsed.data;
             if (!result.ok) {
                 await Modal.alert(t('common.error'), result.error || result.errorCode);
                 return;
@@ -78,6 +88,6 @@ export function useAccountUsageResetAction(params: Readonly<{
         } finally {
             setPending(false);
         }
-    }, [accountId, activeServer, admittedMachineId, legacyServiceId, onApplied, pending, sessionMachineId, snapshotFetchedAtMs]);
+    }, [accountId, activeServer, admittedMachineId, execute, legacyServiceId, onApplied, pending, sessionMachineId, snapshotFetchedAtMs]);
     return { pending, use };
 }

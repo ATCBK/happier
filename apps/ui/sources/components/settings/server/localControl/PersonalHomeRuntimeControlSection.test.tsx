@@ -587,7 +587,7 @@ describe('PersonalHomeRuntimeControlSection Personal Home operations', () => {
         expect(alertRef()).not.toHaveBeenCalled();
         expect(screen.findByTestId('settings.personalHomeRuntime.homeDetailsPanel')).toBeTruthy();
         expect(screen.findByTestId('settings.personalHomeRuntime.homeIdentity')?.props.subtitle).toBe('home-identity-1');
-        expect(screen.findByTestId('settings.personalHomeRuntime.storage')?.props.subtitle).toBe('4.8 MB');
+        expect(screen.findByTestId('settings.personalHomeRuntime.storage')?.props.subtitle).toBe('5.03 MB');
         expect(screen.findByTestId('settings.personalHomeRuntime.backupsCount')?.props.title).toBe('Backup archives');
         expect(screen.findByTestId('settings.personalHomeRuntime.backupsCount')?.props.subtitle).toBe('2');
         expect(screen.findByTestId('settings.personalHomeRuntime.masterSecret')?.props.subtitle).toBe('Present');
@@ -707,7 +707,7 @@ describe('PersonalHomeRuntimeControlSection Personal Home operations', () => {
         if (!backupResult) throw new Error('backup result was not rendered');
         expect(String(backupResult.props.subtitle)).not.toContain('/tmp/home-backup.tar');
         expect(String(backupResult.props.subtitle)).not.toContain('home-identity-1');
-        expect(String(backupResult.props.subtitle)).toContain('8.0 KB');
+        expect(String(backupResult.props.subtitle)).toContain('8.19 KB');
         expect(String(backupResult.props.subtitle)).not.toContain('T00:00:00.000Z');
 
         await screen.pressByTestIdAsync('settings.personalHomeRuntime.backupResultDetails');
@@ -874,7 +874,7 @@ describe('PersonalHomeRuntimeControlSection Personal Home operations', () => {
         expect(recoveryBackup?.props.title).toBe('Previous data saved');
         expect(recoveryBackup?.props.subtitle).not.toContain('Backup verified');
         expect(screen.findByTestId('settings.personalHomeRuntime.restoreRecoveryBackupDetails')?.props.title).toMatch(/^Previous data saved · /);
-        expect(recoveryBackup?.props.subtitle).toContain('16.0 KB');
+        expect(recoveryBackup?.props.subtitle).toContain('16.4 KB');
         expect(recoveryBackup?.props.subtitle).not.toContain('home-identity-1');
         expect(recoveryBackup?.props.subtitle).not.toContain('/backups/personal-home-pre-restore.tar');
         expect(recoveryBackup?.props.subtitle).not.toContain('recovery-sha256');
@@ -1112,7 +1112,7 @@ describe('PersonalHomeRuntimeControlSection Personal Home operations', () => {
         ));
         expect(erasePreview.findByTestId('settings.personalHomeRuntime.erasePreviewHome')?.props.subtitle).toBe('http://127.0.0.1:43123');
         expect(erasePreview.findByTestId('settings.personalHomeRuntime.erasePreviewIdentity')?.props.subtitle).toBe('home-identity-1');
-        expect(erasePreview.findByTestId('settings.personalHomeRuntime.erasePreviewSize')?.props.subtitle).toBe('4.0 KB');
+        expect(erasePreview.findByTestId('settings.personalHomeRuntime.erasePreviewSize')?.props.subtitle).toBe('4.1 KB');
         expect(erasePreview.findByTestId('settings.personalHomeRuntime.erasePreviewPath.0')?.props.subtitle).toBe('/locked/new.sqlite');
         expect(harness.respondMock).toHaveBeenCalledWith(confirmedTaskId, { confirmed: false });
         const eraseSpec = harness.specByKind('relay.runtime.personal_home.erase.v1');
@@ -2016,7 +2016,7 @@ describe('PersonalHomeRuntimeControlSection Personal Home operations', () => {
 
         const resultRow = screen.findByTestId('settings.personalHomeRuntime.backupResult');
         expect(String(resultRow?.props.subtitle)).not.toContain('/tmp/home-backup.tar');
-        expect(String(resultRow?.props.subtitle)).toContain('8.0 KB');
+        expect(String(resultRow?.props.subtitle)).toContain('8.19 KB');
         expect(String(resultRow?.props.subtitle)).not.toContain('home-identity-1');
         expect(String(resultRow?.props.subtitle)).toContain('2026');
         expect(String(resultRow?.props.subtitle)).not.toContain('T00:00:00.000Z');

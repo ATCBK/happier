@@ -19,7 +19,7 @@ import { useProfilesListModel } from '@/components/profiles/useProfilesListModel
 import { MachineAdministrationTargetSelector } from '@/components/settings/machines/MachineAdministrationTargetSelector';
 import { showDocumentShareSheet } from '@/components/sharing/documents/showDocumentShareSheet';
 import { PageHeader, type PageHeaderMetaFact } from '@/components/ui/layout/PageHeader';
-import { PageHeaderMenu, PageHeaderStateSwitch, type PageHeaderMenuAction } from '@/components/ui/layout/PageHeaderEntityParts';
+import { PageHeaderMenu, type PageHeaderMenuAction } from '@/components/ui/layout/PageHeaderEntityParts';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Modal } from '@/modal';
@@ -40,6 +40,8 @@ import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntim
 import { t } from '@/text';
 import { useUnsavedChangesBeforeRemoveGuard } from '@/utils/navigation/useUnsavedChangesBeforeRemoveGuard';
 import { useMountedRef } from '@/hooks/ui/useMountedRef';
+import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprovalPendingNotice';
+import type { ActionApprovalContinuation } from '@/components/approvals/actionApprovalContinuation';
 
 import { openProfileCollectionHref } from './ProfileCollectionList';
 import { newProfileRoute, PROFILES_COLLECTION_ROOT, profileRoute, publishProfileDraftTitle } from './profileCollectionRoutes';
@@ -208,10 +210,21 @@ const ProfileDetail = React.memo(function ProfileDetail(props: Readonly<{
         serverId: collection.executionTarget?.serverId ?? null,
     });
     const profileSummary = listModel.describeProfile(profile as AIBackendProfile);
+    // The header states what the profile sets; its description is already the field below.
+    const profileFacts = listModel.describeProfileFacts(
+        profile as AIBackendProfile,
+        isLaunchProfileV2(profile) ? profile.preferredAgentTargetKey ?? null : null,
+    );
     const params = useLocalSearchParams<{ draftId?: string | string[] }>();
     const [localDraftId] = React.useState(() => randomUUID());
     const draftId = typeof params.draftId === 'string' && params.draftId.length > 0 ? params.draftId : localDraftId;
-    const saveLaunchProfile = useSaveLaunchProfile();
+    // A save that needs approval stays pending on its original draft; the row opens that exact approval.
+    const [pendingApproval, setPendingApproval] = React.useState<Readonly<{ artifactId: string; serverId: string | null }> | null>(null);
+    const onApprovalPending = React.useCallback((registration: ActionApprovalContinuation) => {
+        setPendingApproval({ artifactId: registration.artifactId, serverId: registration.scope?.serverId ?? null });
+    }, []);
+    const saveOptions = React.useMemo(() => ({ onApprovalPending }), [onApprovalPending]);
+    const saveLaunchProfile = useSaveLaunchProfile(saveOptions);
     const [isDirty, setIsDirty] = React.useState(false);
     const isDirtyRef = React.useRef(false);
     const ignoreGuardRef = React.useRef(false);
@@ -288,7 +301,12 @@ const ProfileDetail = React.memo(function ProfileDetail(props: Readonly<{
             ...Object.fromEntries(Object.entries(props.draftSecretBindings ?? {}).filter(([, binding]) => binding === null)),
             ...secretBindings,
         };
-        const result = await saveLaunchProfile(next, bindings, props.legacyCloneSource);
+        let result: Awaited<ReturnType<typeof saveLaunchProfile>>;
+        try {
+            result = await saveLaunchProfile(next, bindings, props.legacyCloneSource);
+        } finally {
+            if (mountedRef.current) setPendingApproval(null);
+        }
         if (!result || !mountedRef.current || !lifetime?.isCurrent()
             || !areServerAccountScopesEqual(lifetime.scope, accountScope)) return false;
         isDirtyRef.current = false;
@@ -373,7 +391,16 @@ const ProfileDetail = React.memo(function ProfileDetail(props: Readonly<{
             }];
         }
         const favorite = collection.isFavorite(profile.id);
+        const offered = collection.isEnabled(profile as AIBackendProfile);
         return [
+            {
+                // Whether pickers offer this profile: a rare operation, so it lives here, and the
+                // header's meta says "Disabled" while it is hidden.
+                id: 'enabled',
+                title: offered ? t('profilesPage.hideFromPickers') : t('profilesPage.showInPickers'),
+                testID: 'settings.profiles.detail.enabled',
+                onSelect: () => collection.setEnabled(profile as AIBackendProfile, !offered),
+            },
             {
                 id: 'favorite',
                 title: favorite ? t('profiles.actions.removeFromFavorites') : t('profiles.actions.addToFavorites'),
@@ -445,7 +472,10 @@ const ProfileDetail = React.memo(function ProfileDetail(props: Readonly<{
 
     // Machine-scoped reads (agents, models, environment checks) use only the exact managed machine.
     const scopedToMachine = isLaunchProfileV2(profile);
+    const openApproval = pendingApproval ? () => router.pushRetainingCurrent(`/inbox/approvals/${encodeURIComponent(pendingApproval.artifactId)}${
+        pendingApproval.serverId ? `?serverId=${encodeURIComponent(pendingApproval.serverId)}` : ''}` as never) : null;
     const header = (
+        <>
         <ProfileDetailHeader
             profile={profile}
             isDraft={isDraft}
@@ -456,8 +486,13 @@ const ProfileDetail = React.memo(function ProfileDetail(props: Readonly<{
             onSave={saveEditor}
             menuActions={menuActions}
             showMachineChip={scopedToMachine}
-            profileSummary={profileSummary}
+            profileFacts={profileFacts}
         />
+        {openApproval ? (
+            <ActionApprovalPendingNotice testID="settings.profiles.detail.approval"
+                message={t('secrets.catalog.approvalPending')} onOpenApproval={openApproval} />
+        ) : null}
+        </>
     );
     return (
         <LaunchProfileEditForm
@@ -488,7 +523,7 @@ const ProfileDetailHeader = React.memo(function ProfileDetailHeader(props: Reado
     onSave: () => void;
     menuActions: readonly PageHeaderMenuAction[];
     showMachineChip: boolean;
-    profileSummary: string;
+    profileFacts: string;
 }>) {
     const { profile, collection } = props;
     const typedName = props.nameStore.useTitle().trim();
@@ -497,10 +532,9 @@ const ProfileDetailHeader = React.memo(function ProfileDetailHeader(props: Reado
         || (props.isDraft ? t('profilesPage.newProfileTitle') : getProfileDisplayName(legacy));
     const status = props.isDraft ? null : collection.describeStatus(legacy);
     const meta: PageHeaderMetaFact[] = [
-        { key: 'summary', text: props.profileSummary, testID: 'settings.profiles.detail.summary' },
+        { key: 'summary', text: props.profileFacts, testID: 'settings.profiles.detail.summary' },
         ...(status ? [{ key: 'status', text: status }] : []),
     ];
-    const enabled = props.isDraft ? null : collection.isEnabled(legacy);
     return (
         <PageHeader
             testID="settings.profiles.detail.header"
@@ -511,7 +545,8 @@ const ProfileDetailHeader = React.memo(function ProfileDetailHeader(props: Reado
             primaryAction={{
                 testID: 'settings.profiles.detail.save',
                 title: props.builtIn ? t('common.saveAs') : t('common.save'),
-                disabled: !props.dirty && !props.isDraft,
+                // A saved profile saves once it changed; a new one once it has a name (the one required field).
+                disabled: props.isDraft ? typedName.length === 0 : !props.dirty,
                 onPress: props.onSave,
             }}
             actions={(
@@ -521,15 +556,6 @@ const ProfileDetailHeader = React.memo(function ProfileDetailHeader(props: Reado
                             presentation="chip"
                             selection={collection.administrationTargetSelection}
                             testIDPrefix="settings.profiles.administration.target"
-                        />
-                    ) : null}
-                    {enabled !== null ? (
-                        <PageHeaderStateSwitch
-                            testID="settings.profiles.detail.enabled"
-                            label={t('common.enabled')}
-                            value={enabled}
-                            onValueChange={(next) => collection.setEnabled(legacy, next)}
-                            accessibilityHint={t('profilesPage.enabledHint')}
                         />
                     ) : null}
                     <PageHeaderMenu testID="settings.profiles.detail.menu" actions={props.menuActions} />
@@ -550,6 +576,6 @@ const styles = StyleSheet.create((theme) => ({
         flexWrap: 'wrap',
         alignItems: 'center',
         justifyContent: 'flex-end',
-        gap: 12,
+        gap: theme.space.s12,
     },
 }));

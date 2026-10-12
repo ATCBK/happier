@@ -202,7 +202,7 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
         } : null, [presetClient, catalog.homeId, props.presetId]);
     const presetQuery = useMachinePresetQuery({ serverId: props.serverId, homeId: catalog.homeId, presetId: props.presetId,
         binding: catalog.binding, read: readPreset, refreshRevision: readRevision, onApprovalPending,
-        onAccessLost: clearProtectedPreset, onInvalidated: () => { retirePending(); retry(); } });
+        onAccessLost: clearProtectedPreset, onInvalidated: retry });
     const teamDenied = !!props.presetId && (preset?.owner.kind === 'team' || !!teamId) && team.kind === 'bound'
         && (team.state.kind === 'ready' && !team.state.team.capabilities.viewTeam
             || team.state.kind === 'unavailable' && isAuthoritativeScopedSnapshotRefusal(team.state.error));
@@ -537,7 +537,7 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
         actions={scope.chip}
         compact={compact} testID="managed-config" receipt={receipt} summary={{ value: summaryValue,
             unit: summaryPrice ? formatPriceUnit(summaryPrice.unit) : '', spec: summarySpec }}>
-        {approval.approvalId ? <AttentionBanner title={t('approvals.title')} description={t('approvals.status.open')}
+        {approval.approvalId ? <AttentionBanner testID="managed-config.approval" title={t('approvals.title')} description={t('approvals.status.open')}
             action={{ label: t('approvals.details'), onPress: () => router.push(`/inbox/approvals/${encodeURIComponent(approval.approvalId!)}?serverId=${encodeURIComponent(props.serverId)}` as never) }} /> : null}
         {creationDisabledNotice}
         {draft && credentialFields.length ? <ItemGroup title={t('managedMachines.receipt.account')}>

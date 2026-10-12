@@ -57,22 +57,7 @@ vi.mock('react-native', async () => {
 
 vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
-    return createUnistylesMock({
-        theme: {
-            colors: {
-                text: '#000000',
-                textSecondary: '#777777',
-                accent: {
-                    indigo: '#0000ff',
-                    blue: '#0000ff',
-                    orange: '#ff8800',
-                    purple: '#9900ff',
-                },
-                success: '#00aa00',
-                warningCritical: '#cc5500',
-            },
-        },
-    });
+    return createUnistylesMock();
 });
 
 vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
@@ -180,7 +165,8 @@ vi.mock('@/sync/domains/state/storage', async () => {
     });
 });
 
-vi.mock('@/utils/sessions/machineUtils', () => ({
+vi.mock('@/utils/sessions/machineUtils', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@/utils/sessions/machineUtils')>(),
     isMachineOnline: () => false,
 }));
 
@@ -196,6 +182,8 @@ describe('SystemStatusView app runtime info', () => {
         expect(text).toContain('preview');
         expect(text).not.toContain('copy-me-never');
         expect(text).toContain('[redacted]');
+        // Connection state reads as a word from the status vocabulary, never the raw enum.
+        expect(text).toContain('status.connected');
 
         const copyRow = screen.find((node) => (
             node.props?.title === 'systemStatus.actions.copyJson' &&

@@ -2,16 +2,8 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import {
-    collectRenderedTestIds,
-    createHomeGovernanceHarness,
-    installHomeGovernanceBoundaries,
-    renderScreen,
-    standardCleanup,
-    teamCapabilitiesFixture,
-    teamInvitationRowFixture,
-    teamSummaryFixture,
-} from '@/dev/testkit';
+import { collectRenderedTestIds, renderScreen, standardCleanup, teamCapabilitiesFixture, teamInvitationRowFixture, teamSummaryFixture } from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 
 import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelpers';
 
@@ -117,7 +109,9 @@ async function renderInvitations(serverId: string) {
     const { TeamInvitationsScreen } = await import('./TeamInvitationsScreen');
     const { NavigationContext, useNavigation } = await import('@react-navigation/native');
     function NativeRoute({ children }: React.PropsWithChildren) {
-        return <NavigationContext.Provider value={useNavigation()}>{children}</NavigationContext.Provider>;
+        // A native navigator publishes a changed context on focus transitions;
+        // a plain mutable flag cannot wake the real memoized destination owner.
+        return <NavigationContext.Provider value={{ ...useNavigation() }}>{children}</NavigationContext.Provider>;
     }
     return renderScreen(<TeamInvitationsScreen serverId={serverId} teamId="team-1" />, { wrapper: NativeRoute });
 }
@@ -192,7 +186,7 @@ describe('TeamInvitationsScreen', () => {
         const screen = await renderInvitations(serverId);
         await waitForTestId(screen, 'team-invitations-row:invitation-1');
         expect(screen.getTextContent())
-            .toContain(new Intl.DateTimeFormat('de', { dateStyle: 'medium' }).format(expiresAt));
+            .toContain(new Intl.DateTimeFormat('de', { day: 'numeric', month: 'short', year: 'numeric' }).format(expiresAt));
     });
     it.each([
         { status: 403, label: 'teams.errors.forbidden' },
@@ -215,7 +209,7 @@ describe('TeamInvitationsScreen', () => {
 
         const screen = await renderInvitations(serverId);
         await waitForTestId(screen, 'team-invitations-retry');
-        expect(screen.getTextContent()).toContain('teams.unavailable.offline');
+        expect(screen.getTextContent()).toContain('teams.errors.loadFailed');
 
         harness.answer(serverId, INVITATIONS_LIST_PATH, {
             body: {
@@ -230,10 +224,14 @@ describe('TeamInvitationsScreen', () => {
         expect(collectRenderedTestIds(screen.tree.toJSON())).not.toContain('team-invitations-unavailable');
 
         harness.answer(serverId, INVITATIONS_LIST_PATH, { status: 503 });
-        await act(async () => { navigationState.focusEffects[0]?.(); });
+        const { TeamInvitationsScreen } = await import('./TeamInvitationsScreen');
+        navigationState.focused = false;
+        await screen.update(<TeamInvitationsScreen serverId={serverId} teamId="team-1" />);
+        navigationState.focused = true;
+        await screen.update(<TeamInvitationsScreen serverId={serverId} teamId="team-1" />);
         await waitForTestId(screen, 'team-invitations-retry');
         expect(collectRenderedTestIds(screen.tree.toJSON())).toContain('team-invitations-row:invitation-1');
-        expect(screen.getTextContent()).toContain('teams.unavailable.offline');
+        expect(screen.getTextContent()).toContain('teams.errors.loadFailed');
     });
 
     it('opens only one row action while the first choice is still pending', async () => {
@@ -327,6 +325,13 @@ describe('TeamInvitationsScreen', () => {
 
         const screen = await renderInvitations(serverId);
         await waitForTestId(screen, 'team-invitations-row:finished-accepted');
+        const { PageHeader } = await import('@/components/ui/layout/PageHeader');
+        expect(screen.tree.findByType(PageHeader).props.primaryAction).toMatchObject({ testID: 'team-invitations-create' });
+        // Its siblings (Authentication, Credentials) name the Team and its Home under the title.
+        expect(screen.tree.findByType(PageHeader).props.meta).toEqual([
+            expect.objectContaining({ key: 'team', text: 'Platform' }),
+            expect.objectContaining({ key: 'home', text: 'Home A' }),
+        ]);
 
         const keyExtractor = virtualizedBoundary.props?.keyExtractor as (item: unknown) => string;
         const data = virtualizedBoundary.props?.data as readonly unknown[];

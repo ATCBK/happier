@@ -18,6 +18,33 @@ import type {
 import type { HomeDomainFailure } from '@/sync/api/home/homeServerActionTransport';
 import { t } from '@/text';
 import { teamMutationFailureLabel } from '../teamMutationPresentation';
+import type { ConnectedServiceRegistrySnapshot } from '@/sync/domains/connectedServices/connectedServiceRegistry';
+import { resolveQualifiedConnectedServiceMarkId } from '@/components/settings/connectedServices/model/resolveQualifiedConnectedServiceMarkId';
+import { resolveAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
+
+/** Member keys are Account identities; their titles consume the Members presentation rule. */
+export function usageBreakdownPresentation(
+    dimension: TeamCredentialUsageBreakdownDimensionV1,
+    entry: Readonly<{ key: string; label?: string }>,
+    viewerAccountId?: string | null,
+): Readonly<{ name: string; hint: string | null }> {
+    if (dimension !== 'member') return { name: entry.label ?? entry.key, hint: null };
+    return resolveAccountDisplayName({
+        // The Home's label already resolves canonical name/username through Protocol.
+        profile: { name: entry.label ?? null, firstName: null, lastName: null, username: null, avatarUrl: null },
+        accountId: entry.key,
+        viewerAccountId,
+    });
+}
+
+export function resourceConnectedServiceMarkId(
+    resource: Readonly<{ sourcePresentation: TeamCredentialResourceSourcePresentationV1 | null }>,
+    registry: Pick<ConnectedServiceRegistrySnapshot, 'entries'>,
+): string | null {
+    return resource.sourcePresentation?.kind === 'connected_service'
+        ? resolveQualifiedConnectedServiceMarkId(registry, resource.sourcePresentation.service)
+        : null;
+}
 
 export function teamCredentialBrokerPlacementsEqual(
     left: TeamCredentialBrokerPlacementV1 | null,
@@ -245,9 +272,12 @@ export function resourceAccessibilityLabel(
  */
 export function resourceAdministrationSummaryLines(
     resource: TeamCredentialResourceSummaryV1,
-): readonly [string, string] {
+): readonly string[] {
     const facts = resourceRowFacts(resource);
-    return [facts.identity.join(' · '), facts.state];
+    // A usable resource says nothing about its state: only a state that needs someone earns a line.
+    return resourceState(resource) === 'available'
+        ? [facts.identity.join(' · ')]
+        : [facts.identity.join(' · '), facts.state];
 }
 
 /**

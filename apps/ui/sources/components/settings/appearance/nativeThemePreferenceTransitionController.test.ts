@@ -3,6 +3,26 @@ import { describe, expect, it, vi } from 'vitest';
 import { createNativeThemePreferenceTransitionController } from './nativeThemePreferenceTransitionController';
 
 describe('native theme preference transition controller', () => {
+    it('passes the resolved Horizon direction through capture and overlay custody', async () => {
+        let direction: string | undefined;
+        const controller = createNativeThemePreferenceTransitionController({
+            captureSurface: () => 'file://old-theme.png',
+            showOverlay: (_uri, nextDirection) => { direction = nextDirection; },
+            hideOverlay: () => {}, waitForFrame: () => {}, animateOverlay: () => {},
+        });
+        await controller.run(() => {}, 'night');
+        expect(direction).toBe('night');
+    });
+
+    it('releases the captured surface even when the theme mutation throws', async () => {
+        let released = false;
+        const controller = createNativeThemePreferenceTransitionController({
+            captureSurface: () => 'file://old-theme.png', showOverlay: () => {},
+            hideOverlay: () => {}, releaseSurface: () => { released = true; }, waitForFrame: () => {}, animateOverlay: () => {},
+        });
+        await expect(controller.run(() => { throw new Error('mutation failed'); })).rejects.toThrow('mutation failed');
+        expect(released).toBe(true);
+    });
     it('captures the current surface before applying the theme and mounts the overlay afterward', async () => {
         const events: string[] = [];
         const controller = createNativeThemePreferenceTransitionController({

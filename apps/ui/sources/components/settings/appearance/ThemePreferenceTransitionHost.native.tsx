@@ -1,0 +1,105 @@
+import * as React from 'react';
+import { useOptionalAuth } from '@/auth/context/AuthContext';
+import { Image, PixelRatio, StyleSheet, View } from 'react-native';
+import Animated, { cancelAnimation, Easing, runOnJS, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import { Canvas, Picture, createPicture, useImage, type SkPicture } from '@shopify/react-native-skia';
+import { captureRef, releaseCapture } from 'react-native-view-shot';
+import { FURTHER_PLANET_MOMENT_TIMINGS } from '@happier-dev/brand/planet-moments';
+import { useAtmosphereMoment } from '@/components/atmosphere/atmosphereMoments';
+import { useCanvasRenderState } from '@/components/atmosphere/useCanvasRenderState';
+import { useNativeMomentEnvironment } from '@/components/atmosphere/useNativeMomentEnvironment';
+import { paintNativeThemeHorizon } from './themeHorizonPaint.native';
+import { createNativeThemePreferenceTransitionController } from './nativeThemePreferenceTransitionController';
+import { registerNativeThemePreferenceTransitionController } from './themePreferenceTransition';
+import { THEME_TRANSITION_DURATION_MS, THEME_TRANSITION_EASING_BEZIER } from './themePreferenceTransitionMotion';
+
+type Overlay = Readonly<{ uri: string; direction: 'sunrise' | 'night'; horizon: boolean }>;
+
+/** The existing screenshot owner now reveals the brand Horizon when enabled; off keeps the native wipe. */
+export function ThemePreferenceTransitionHost(props: Readonly<{ children: React.ReactNode }>) {
+    const surface = React.useRef<View>(null);
+    const [size, setSize] = React.useState({ width: 0, height: 0 });
+    const [overlay, setOverlay] = React.useState<Overlay | null>(null);
+    const [playing, setPlaying] = React.useState(false);
+    const moment = useAtmosphereMoment('themeSwitch');
+    const signedIn = useOptionalAuth()?.isAuthenticated === true;
+    const preference = React.useRef(false); preference.current = moment.on && signedIn;
+    const complete = React.useRef<(() => void) | null>(null);
+    const disposed = React.useRef(false);
+    const reveal = useSharedValue(0);
+    const clip = useAnimatedStyle(() => ({ height: size.height * (1 - reveal.value) }));
+    const finish = React.useCallback(() => { complete.current?.(); complete.current = null; }, []);
+    React.useEffect(() => {
+        disposed.current = false;
+        let horizon = false;
+        const controller = createNativeThemePreferenceTransitionController({
+            async captureSurface() {
+                try {
+                    if (!surface.current) return null;
+                    const uri = await captureRef(surface, { format: 'png', quality: 1, result: 'tmpfile' });
+                    if (disposed.current) { releaseCapture(uri); return null; }
+                    return uri;
+                } catch { return null; }
+            },
+            showOverlay(uri, direction = 'sunrise') {
+                horizon = preference.current;
+                reveal.value = 0;
+                setOverlay({ uri, direction, horizon });
+            },
+            waitForFrame: () => new Promise<void>(resolve => requestAnimationFrame(() => resolve())),
+            animateOverlay: () => disposed.current ? undefined : new Promise<void>(resolve => {
+                complete.current = resolve;
+                if (horizon) setPlaying(true);
+                else reveal.value = withTiming(1, { duration: THEME_TRANSITION_DURATION_MS, easing: Easing.bezier(...THEME_TRANSITION_EASING_BEZIER) }, () => { runOnJS(finish)(); });
+            }),
+            hideOverlay() {
+                setPlaying(false); setOverlay(null);
+            },
+            releaseSurface: releaseCapture,
+        });
+        const unregister = registerNativeThemePreferenceTransitionController(controller);
+        return () => { disposed.current = true; unregister(); cancelAnimation(reveal); finish(); };
+    }, [reveal, finish]);
+    return <View ref={surface} collapsable={false} style={{ flex: 1 }} onLayout={event => setSize(event.nativeEvent.layout)}>
+        {props.children}
+        {overlay ? <View pointerEvents="none" accessible={false} accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={StyleSheet.absoluteFill}>
+            {overlay.horizon ? <HorizonOverlay overlay={overlay} size={size} playing={playing} reducedMotion={moment.reducedMotion} onDone={finish} /> : <Animated.View style={[StyleSheet.absoluteFill, { overflow: 'hidden' }, clip]}>
+                <Image source={{ uri: overlay.uri }} resizeMode="stretch" style={{ width: size.width, height: size.height }} />
+            </Animated.View>}
+        </View> : null}
+    </View>;
+}
+
+function HorizonOverlay(props: Readonly<{ overlay: Overlay; size: { width: number; height: number }; playing: boolean; reducedMotion: boolean; onDone: () => void }>) {
+    const [loadError, setLoadError] = React.useState(false);
+    const onLoadError = React.useCallback(() => setLoadError(true), []);
+    const env = useNativeMomentEnvironment(props.size.width, props.size.height, PixelRatio.get(), onLoadError);
+    const image = useImage(props.overlay.uri, onLoadError);
+    const state = useCanvasRenderState(props.size);
+    const [picture, setPicture] = React.useState<SkPicture | null>(null);
+    const latest = React.useRef({ env, image }); latest.current = { env, image };
+    const ready = env !== null && image !== null;
+    const { playing, reducedMotion, onDone, overlay } = props;
+    React.useEffect(() => {
+        if (!playing) return;
+        if (loadError || !state.visible || reducedMotion) { onDone(); return; }
+        if (!ready) return;
+        let frame = 0, live = true;
+        let start: number | null = null;
+        const step = (time: number) => {
+            if (!live || !latest.current.env || !latest.current.image) return;
+            start ??= time;
+            const t = (time - start) / 1000;
+            if (t >= FURTHER_PLANET_MOMENT_TIMINGS.TH.DUR) { onDone(); return; }
+            setPicture(createPicture(canvas => paintNativeThemeHorizon(canvas, latest.current.image!, t, overlay.direction, latest.current.env!), props.size));
+            frame = requestAnimationFrame(step);
+        };
+        frame = requestAnimationFrame(step);
+        return () => { live = false; cancelAnimationFrame(frame); };
+    }, [playing, ready, loadError, state.visible, reducedMotion, onDone, overlay.direction, props.size]);
+    React.useEffect(() => () => picture?.dispose(), [picture]);
+    return <>
+        {!picture ? <Image source={{ uri: overlay.uri }} resizeMode="stretch" style={StyleSheet.absoluteFill} /> : null}
+        <Canvas style={StyleSheet.absoluteFill}>{picture ? <Picture picture={picture} /> : null}</Canvas>
+    </>;
+}

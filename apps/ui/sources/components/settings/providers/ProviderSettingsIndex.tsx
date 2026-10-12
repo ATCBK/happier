@@ -1,30 +1,25 @@
 import * as React from 'react';
-import { View } from 'react-native';
 import { Redirect, useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { useIsFocused } from '@/components/appShell/workspace/destinationRoute';
-import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { StyleSheet } from 'react-native-unistyles';
 
-import { RoundButton } from '@/components/ui/buttons/RoundButton';
-import { EmptyState } from '@/components/ui/empty/EmptyState';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
-import { Text } from '@/components/ui/text/Text';
-import { SettingAnchor, SettingSection, useSettingRevealRequested } from '@/components/settings/shell/SettingRow';
-import { Typography } from '@/constants/Typography';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import { t } from '@/text';
+import { SettingSection, useSettingRevealRequested } from '@/components/settings/shell/SettingRow';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
-import { ProviderIcon } from '@/providers/connection/ProviderIcon';
 import { useProviderSettingsTarget } from '@/providers/hooks/targetMachine';
 import { useProviderConnections } from '@/providers/hooks/useProviderConnections';
-import { t } from '@/text';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
 import { ProviderConnectionsSettingsScreen } from './ProviderConnectionsSettingsScreen';
 import { useClaimProviderCollectionPane } from './ProviderSettingsLayout';
+import { ProviderCollectionInvitation } from './collection/ProviderCollectionInvitation';
 import { PROVIDERS_SETTINGS } from './providersSettings';
 import { ProviderErrorItems } from './ProviderErrorItems';
 import { ProviderFeatureAvailabilityNotice, useProviderFeatureAvailability } from './ProviderFeatureAvailability';
-import { AddProviderMenu, newProviderRoute } from './collection/AddProviderMenu';
 import {
     buildProviderCollection,
     providerConnectionDetailRoute,
@@ -33,10 +28,7 @@ import {
 } from './collection/providerCollectionModel';
 import { useHappierCollectionIndexView } from '@happier-dev/plugin-ui/presentation';
 
-/** How many catalog marks the invitation shows. */
-const INVITATION_MARK_COUNT = 5;
 const PROVIDER_COLLECTION_SETTINGS = Object.values(PROVIDERS_SETTINGS.settings);
-const CONNECTED_SERVICES_ROUTE = '/(app)/settings/connected-services';
 
 /**
  * `/settings/providers`. Beside the rail the index normally lands on a selected provider;
@@ -54,7 +46,6 @@ export const ProviderSettingsIndex = React.memo(function ProviderSettingsIndex()
 const ProviderCollectionLanding = React.memo(function ProviderCollectionLanding() {
     const router = useRouter();
     const focused = useIsFocused();
-    const { theme } = useUnistyles();
     const styles = stylesheet;
     const { enabled, presentation: availabilityPresentation } = useProviderFeatureAvailability();
     const localDiscoveryEnabled = useFeatureEnabled('providers.localDiscovery');
@@ -99,106 +90,26 @@ const ProviderCollectionLanding = React.memo(function ProviderCollectionLanding(
             </ItemList>
         );
     }
-    if (waiting) return <ItemList>{null}</ItemList>;
+    if (waiting) return (
+        <ItemList containerStyle={styles.centeredPane}>
+            <SurfaceStateCard testID="settings-providers-loading" kind="loading" title={t('common.loading')} replacesContent />
+        </ItemList>
+    );
     if (!data) return <ItemList>{null}</ItemList>;
 
-    const available = data.available;
-    const marks = available.filter((provider) => provider.icon).slice(0, INVITATION_MARK_COUNT);
-    const openConnectedServices = () => {
-        const result = runGuardedNavigation(() => router.push(CONNECTED_SERVICES_ROUTE as never));
-        if (result !== true) fireAndForget(result, { tag: 'ProviderCollectionLanding.connectedServices' });
-    };
+    // With nothing to list the invitation owns the whole pane, centred in it (lab PI1).
     return (
-        <ItemList>
+        <ItemList containerStyle={styles.centeredPane}>
             <SettingSection section={PROVIDERS_SETTINGS.sectionRefs.connections} answersFor={[PROVIDERS_SETTINGS.sectionRefs.local]}>
-                <SettingAnchor setting={PROVIDERS_SETTINGS.settings.connections}>
-                <EmptyState
-                    testID="settings-providers-invitation"
-                    layout="page"
-                    icon={marks.length > 0 ? (
-                        <View style={styles.marks}>
-                            {marks.map((provider) => (
-                                <ProviderIcon key={provider.contributionKey} icon={provider.icon} size={24} color={theme.colors.text.secondary} />
-                            ))}
-                        </View>
-                    ) : (
-                        <ProviderIcon icon={null} size={29} color={theme.colors.text.secondary} />
-                    )}
-                    title={t('settingsProvidersCollection.invitationTitle')}
-                    subtitle={t('settingsProvidersCollection.invitationAccountDescription')}
-                    action={(
-                        <View style={styles.invitationActions}>
-                            <View style={styles.actions}>
-                                <AddProviderMenu
-                                    available={available}
-                                    include="catalog"
-                                    onAdd={navigate}
-                                    renderTrigger={(toggle) => (
-                                        <RoundButton
-                                            testID="settings-providers-invitation-add"
-                                            size="normal"
-                                            title={t('settingsProvidersCollection.addProvider')}
-                                            disabled={available.length === 0}
-                                            onPress={toggle}
-                                        />
-                                    )}
-                                />
-                                <SettingAnchor setting={PROVIDERS_SETTINGS.settings.custom}>
-                                <RoundButton
-                                    testID="settings-providers-invitation-custom"
-                                    size="normal"
-                                    display="secondary"
-                                    title={t('settingsProvidersCollection.customEndpoint')}
-                                    onPress={() => navigate(newProviderRoute(null))}
-                                />
-                                </SettingAnchor>
-                            </View>
-                            {/* The most common confusion: subscriptions are not providers. */}
-                            <Text style={styles.pointer}>
-                                {t('settingsProvidersCollection.subscriptionsPointerLead')}
-                                <Text
-                                    testID="settings-providers-invitation-connected-services"
-                                    accessibilityRole="link"
-                                    style={styles.pointerLink}
-                                    onPress={openConnectedServices}
-                                >
-                                    {t('settingsProvidersCollection.subscriptionsPointerLink')}
-                                </Text>
-                                {t('settingsProvidersCollection.subscriptionsPointerTail')}
-                            </Text>
-                        </View>
-                    )}
-                />
-                </SettingAnchor>
+                <ProviderCollectionInvitation available={data.available} onAdd={navigate} />
             </SettingSection>
         </ItemList>
     );
 });
 
-const stylesheet = StyleSheet.create((theme) => ({
-    marks: {
-        flexDirection: 'row',
-        gap: 14,
-    },
-    invitationActions: {
-        alignItems: 'center',
-        gap: 14,
-    },
-    actions: {
-        flexDirection: 'row',
-        flexWrap: 'wrap',
+const stylesheet = StyleSheet.create({
+    centeredPane: {
+        flexGrow: 1,
         justifyContent: 'center',
-        gap: 8,
     },
-    pointer: {
-        ...Typography.default(),
-        fontSize: 12,
-        lineHeight: 17,
-        textAlign: 'center',
-        color: theme.colors.text.tertiary,
-    },
-    pointerLink: {
-        color: theme.colors.text.secondary,
-        textDecorationLine: 'underline',
-    },
-}));
+});

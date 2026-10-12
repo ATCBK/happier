@@ -20,7 +20,7 @@ function resolveMachinesChildRoute(pathname: string): string {
     if (rest.startsWith('presets/')) return 'presets/[presetId]';
     if (rest.startsWith('pools/')) return 'pools/[poolId]';
     if (rest.startsWith('managed/')) return 'managed/[id]';
-    return '[id]';
+    return rest.includes('/') ? '[id]/[page]' : '[id]/index';
 }
 
 /**

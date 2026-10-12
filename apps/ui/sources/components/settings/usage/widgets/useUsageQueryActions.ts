@@ -4,15 +4,13 @@ import {
   type UsageQuery,
 } from '@happier-dev/protocol/inputs/usageQuery';
 import type { UsageBuiltinWidgetIdV1 } from '@happier-dev/protocol/widgets';
-import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { publishPresentationNotice } from '@/components/sessions/presentation/presentationNotices';
-import { buildNewSessionLaunchRouteParams } from '@/components/sessions/new/navigation/newSessionRouteParams';
-import { seedAndOpenNewSession } from '@/components/sessions/new/newSessionSeedComposer';
+import { openSessionAuthoringAction } from '@/sync/ops/actions/sessionAuthoringActions';
 import type { ItemAction } from '@/components/ui/lists/itemActions';
 import { useWidgetFrameBodyActions } from '@/components/widgets/frame/widgetFrameBodyActions';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { t } from '@/text';
-import { setClipboardStringSafe } from '@/utils/ui/clipboard';
 import { usagePeriodPhrase } from './usageBodyKit';
 
 /** The query as an agent or a person reads it: the canonical input, nothing rendered. */
@@ -43,48 +41,31 @@ export function buildUsageAskPrompt(
 export function useUsageQueryActions(
   id: UsageBuiltinWidgetIdV1,
   query: UsageQuery | null,
+  /** One more entry a body owns for what it shows (Cost facts: its model prices). Identity-stable. */
+  bodyAction: ItemAction | null = null,
 ): void {
-  const router = useRouter();
   const key = query ? JSON.stringify(normalizeUsageQuery(query)) : null;
+  const lifetime = query ? captureActiveServerAccountScopeLifetime() : null;
+  const execution = useMountedActionExecution(lifetime?.scope);
   const actions = React.useMemo((): readonly ItemAction[] | null => {
-    if (!query) return null;
-    return [
+    if (!query || !lifetime?.isCurrent()) return null;
+    const base: ItemAction[] = [
       {
         id: 'usageAsk',
         title: t('usage.board.page.askAgent'),
         icon: 'chat-circle',
-        onPress: () => {
-          const lifetime = captureActiveServerAccountScopeLifetime();
-          if (!lifetime?.isCurrent()) return;
-          const outcome = seedAndOpenNewSession({
+        onPress: async () => {
+          if (!lifetime.isCurrent()) return;
+          const outcome = await openSessionAuthoringAction({
             seed: {
               prompt: buildUsageAskPrompt({
                 widget: t(`usage.widgets.${id}`),
                 query,
               }),
             },
-            scope: lifetime.scope,
-            isCurrent: lifetime.isCurrent,
-            navigateToNewSession: ({
-              draftId,
-              machineId,
-              directory,
-              spawnServerId,
-              worktree,
-            }) => {
-              router.push({
-                pathname: '/new',
-                params: buildNewSessionLaunchRouteParams({
-                  draftId,
-                  machineId,
-                  directory,
-                  targetServerId: spawnServerId,
-                  worktree,
-                }),
-              } as Parameters<typeof router.push>[0]);
-            },
-          });
-          if (outcome.kind !== 'routed')
+          }, lifetime, undefined, execution.execute);
+          if (!lifetime.isCurrent()) return;
+          if (outcome.kind !== 'opened')
             publishPresentationNotice({
               key: `usage-ask:${id}`,
               severity: 'error',
@@ -96,23 +77,30 @@ export function useUsageQueryActions(
         id: 'usageCopyQuery',
         title: t('usage.board.page.copyQuery'),
         icon: 'copy',
-        onPress: () => {
-          void setClipboardStringSafe(formatUsageQueryForHandoff(query)).then(
-            (copied) => {
-              publishPresentationNotice({
-                key: `usage-copy-query:${id}`,
-                severity: copied ? 'info' : 'error',
-                message: copied
-                  ? t('usage.board.page.copyQueryDone')
-                  : t('usage.board.page.copyQueryFailed'),
-              });
-            },
-          );
+        onPress: async () => {
+          if (!lifetime.isCurrent()) return;
+          let copied = false;
+          try {
+            copied = (await execution.execute('clipboard.write', {
+              text: formatUsageQueryForHandoff(query),
+            })).ok;
+          } catch {
+            // Failed clipboard admission/delivery uses the same failure notice as a typed refusal.
+          }
+          if (!lifetime.isCurrent()) return;
+          publishPresentationNotice({
+            key: `usage-copy-query:${id}`,
+            severity: copied ? 'info' : 'error',
+            message: copied
+              ? t('usage.board.page.copyQueryDone')
+              : t('usage.board.page.copyQueryFailed'),
+          });
         },
       },
     ];
+    return bodyAction ? [...base, bodyAction] : base;
     // The normalized key is the query's identity; a re-created equal object lends nothing new.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, key, router]);
+  }, [id, key, lifetime, execution.execute, bodyAction]);
   useWidgetFrameBodyActions(actions);
 }

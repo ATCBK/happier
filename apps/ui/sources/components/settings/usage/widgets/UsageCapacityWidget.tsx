@@ -9,6 +9,10 @@ import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 import {
+  UsageResetCelebration,
+  type UsageResetCelebrationWindow,
+} from './UsageResetCelebration';
+import {
   UsageCoverageLine,
   useUsagePluginTheme,
   type UsageBodyProps,
@@ -25,9 +29,10 @@ import {
   formatPlanMoment,
   formatPlanPercent,
   planExclusionText,
-  UsagePlanIdentity,
   UsagePlanRank,
   UsagePlansNothingRead,
+  UsagePlanIdentity,
+  UsagePlanAccountState,
   usePlanText,
 } from './plans/UsagePlanParts';
 import { UsagePoolQueue, UsagePoolSteps } from './plans/UsagePoolOrder';
@@ -130,6 +135,20 @@ export function UsageCapacityWidget(props: UsageBodyProps) {
     () => buildRuns(projection.accounts, projection.pools, selections, nowMs),
     [projection.accounts, projection.pools, selections, nowMs],
   );
+  // Every window's latest reading, for the one witnessed-reset moment (lab `kitmotion` reset).
+  const resetWindows = React.useMemo(
+    (): readonly UsageResetCelebrationWindow[] =>
+      projection.accounts.flatMap((account) =>
+        account.windows.map((window) => ({
+          key: window.key,
+          resetAtMs: window.resetAtMs,
+          remainingFraction: window.remainingFraction,
+          name: nameOf(account).title,
+          window: window.label,
+        })),
+      ),
+    [projection.accounts, nameOf],
+  );
   if (projection.accounts.length === 0) {
     return (
       <View style={styles.body}>
@@ -149,6 +168,11 @@ export function UsageCapacityWidget(props: UsageBodyProps) {
     width !== null && width / cellCount < CELL_MIN_WIDTH_PX ? ('46%' as const) : undefined;
   return (
     <View style={styles.body} testID={`${props.testID}.capacity`}>
+      <UsageResetCelebration
+        windows={resetWindows}
+        burst={!tile}
+        testID={`${props.testID}.resetBurst`}
+      />
       {tightest && tightestName ? (
         <View style={styles.hero}>
           <View style={styles.heroLine}>
@@ -201,8 +225,8 @@ export function UsageCapacityWidget(props: UsageBodyProps) {
                 name={nameOf(cell.account)}
                 nowMs={nowMs}
                 basis={run.pool ? cellBasis : undefined}
-                notes={!tile}
                 testID={`${props.testID}.cell.${cell.account.accountId}`}
+                onRetry={props.model.refresh}
               />
             ))}
           </View>
@@ -210,6 +234,7 @@ export function UsageCapacityWidget(props: UsageBodyProps) {
       </View>
       {tile ? (
         <UsagePoolSteps
+          serverId={props.serverId}
           pools={projection.pools}
           accounts={projection.accounts}
           selections={selections}
@@ -219,6 +244,7 @@ export function UsageCapacityWidget(props: UsageBodyProps) {
         />
       ) : (
         <UsagePoolQueue
+          serverId={props.serverId}
           pools={projection.pools}
           accounts={projection.accounts}
           selections={selections}
@@ -252,22 +278,23 @@ function CapacityCell(
     name: UsagePlanAccountName;
     nowMs: number;
     basis?: `${number}%`;
-    /** Secondary windows are listed under the cell; a tile keeps to the headline. */
-    notes: boolean;
     testID: string;
+    onRetry(): void | Promise<unknown>;
   }>,
 ) {
   const { cell, nowMs } = props;
   const text = usePlanText();
   const window = cell.account.headline;
   // Every other window of the plan, each in its own words; none is folded into the headline.
-  const others = props.notes ? cell.account.windows.filter((other) => other !== window) : [];
+  const otherWindows = cell.account.windows.filter((other) => other !== window);
   const remaining = window?.remainingFraction ?? null;
   const usedUp = remaining !== null && remaining <= 0;
   const countdown =
     window?.resetAtMs != null
       ? formatPlanCountdown(window.resetAtMs, nowMs)
       : null;
+  // Only a state that changes what the viewer can do speaks under the segment (excluded, stale, used
+  // up); the ordinary reset is the headline's job (lab ucap/wgusage-CD: one figure, one plan label).
   const detail =
     cell.excluded ??
     (cell.account.stale && cell.account.observedAtMs !== null
@@ -276,12 +303,10 @@ function CapacityCell(
         })
       : usedUp && countdown
         ? `${t('usage.board.plans.cellUsedUp')} · ${countdown}`
-        : countdown
-          ? t('connectedServicesCollection.meterResetsIn', { time: countdown })
-          : null);
+        : null);
   const value =
     remaining === null
-      ? t('usage.board.plans.cellUnknown')
+      ? '—'
       : formatPlanPercent(remaining);
   return (
     <View
@@ -293,12 +318,15 @@ function CapacityCell(
       ]}
       accessibilityLabel={[
         props.name.title,
+        props.name.qualifier,
         window?.label,
         remaining === null
-          ? value
+          ? t('usage.board.plans.cellUnknown')
           : t('usage.board.plans.cellLeft', { percent: value }),
+        countdown ? t('connectedServicesCollection.meterResetsIn', { time: countdown }) : null,
         detail,
-        ...others.map((other) => windowNote(other)),
+        // Every other window stays readable here and in Projections; none is stacked into the bar.
+        ...otherWindows.map((other) => windowNote(other)),
       ]
         .filter(Boolean)
         .join(', ')}
@@ -315,46 +343,47 @@ function CapacityCell(
           style={[
             styles.cellValue,
             text.title,
-            remaining === null ? [styles.cellValueUnknown, text.detail] : null,
+            remaining === null ? styles.cellValueUnknown : null,
             window?.tone === 'warning'
               ? styles.warning
               : window?.tone === 'danger'
                 ? styles.danger
                 : null,
           ]}
+          numberOfLines={1}
         >
           {value}
         </Text>
+      </View>
+      <View style={styles.cellHead}>
+        <View style={styles.cellIdentity}><UsagePlanIdentity name={props.name} compact /></View>
         {cell.rank !== null || cell.excluded !== null ? (
           <UsagePlanRank rank={cell.rank} selected={cell.selected} />
         ) : null}
       </View>
-      <UsagePlanIdentity name={props.name} compact />
       {detail ? (
         <Text
           style={[styles.cellDetail, text.detail, usedUp ? styles.danger : null]}
-          numberOfLines={1}
+          // A narrow segment wraps its note ("last read 07:31") rather than cutting the time off.
+          numberOfLines={2}
         >
           {detail}
         </Text>
       ) : null}
-      {others.map((other) => (
-        <Text key={other.key} style={[styles.cellDetail, text.detail]} numberOfLines={1}>
-          {windowNote(other)}
-        </Text>
-      ))}
+      <UsagePlanAccountState account={cell.account} name={props.name}
+        testID={`${props.testID}.state`} onRetry={props.onRetry} />
     </View>
   );
 }
 
 const styles = StyleSheet.create((theme) => ({
   body: { gap: 18 },
-  hero: { gap: 2 },
+  hero: { gap: theme.space.s2 },
   heroLine: {
     flexDirection: 'row',
     alignItems: 'baseline',
     flexWrap: 'wrap',
-    columnGap: 10,
+    columnGap: theme.space.s10,
   },
   heroUnit: {
     ...Typography.default(),
@@ -366,21 +395,22 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.text.secondary,
     fontVariant: ['tabular-nums'],
   },
-  bar: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 4, rowGap: 12 },
-  run: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 4, rowGap: 12, minWidth: 0 },
+  bar: { flexDirection: 'row', flexWrap: 'wrap', columnGap: theme.space.s4, rowGap: theme.space.s12 },
+  run: { flexDirection: 'row', flexWrap: 'wrap', columnGap: theme.space.s4, rowGap: theme.space.s12, minWidth: 0 },
   pool: {
     borderRadius: 10,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border.default,
-    padding: 5,
+    padding: theme.space.s4,
   },
-  cell: { flex: 1, minWidth: 0, gap: 6 },
+  cell: { flex: 1, minWidth: 0, gap: theme.space.s6 },
   cellHead: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 4,
+    gap: theme.space.s4,
+    minWidth: 0,
   },
+  cellIdentity: { flexShrink: 1, minWidth: 0 },
   cellValue: {
     ...Typography.default('semiBold'),
     color: theme.colors.text.primary,

@@ -29,7 +29,8 @@ function render(choices: readonly PoolGatewayChoice[], overrides: Partial<PoolGa
     const setEnabled = vi.fn(async () => true);
     const onOpenGateway = vi.fn();
     const usage = {
-        choices, setEnabled, refresh: vi.fn(async () => undefined), loading: false, ready: true, error: null, pending: false,
+        choices, setEnabled, firstGateway: null, createFirstGateway: vi.fn(async () => true),
+        refresh: vi.fn(async () => undefined), loading: false, ready: true, error: null, pending: false, pendingApproval: null,
         ...overrides,
     } as PoolGatewaySectionProps['usage'];
     return renderScreen(
@@ -85,6 +86,23 @@ describe('PoolGatewaySection (lab rgateway PL1/PL2)', () => {
         expect(on.setEnabled).toHaveBeenCalledWith('pc_gateway', false);
     });
 
+    it('keeps the switch when no gateway exists yet: turning it on creates one, and nothing is written to an existing slot', async () => {
+        const createFirstGateway = vi.fn(async () => true);
+        const { screen, setEnabled } = await render([], { firstGateway: { purpose: 'anthropic-upstream' }, createFirstGateway });
+
+        await flip(screen, `${TEST_ID}:first:toggle`, false);
+        expect(createFirstGateway).not.toHaveBeenCalled();
+        await flip(screen, `${TEST_ID}:first:toggle`, true);
+        expect(createFirstGateway).toHaveBeenCalledTimes(1);
+        expect(setEnabled).not.toHaveBeenCalled();
+    });
+
+    it('waits for the Account catalog without saying a machine is needed (D11)', async () => {
+        const { screen } = await render([choice()], { ready: false });
+        expect(screen.getTextContent()).not.toMatch(/poolSwitchNeedsComputer|needs to be online/);
+        const toggle = screen.findByTestId(`${ROW}:toggle`);
+        expect(toggle?.props.disabled).toBe(true);
+    });
     it('draws nothing when no gateway can draw on this pool’s vendor', async () => {
         const { screen } = await render([]);
         expect(screen.findByTestId(ROW)).toBeNull();

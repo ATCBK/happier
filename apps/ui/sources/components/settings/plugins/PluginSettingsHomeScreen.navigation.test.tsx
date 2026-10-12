@@ -228,8 +228,8 @@ describe('Settings > Plugins information architecture', () => {
         const { setPluginsInstalledQuery } = await import('./model/pluginsInstalledSearch');
         mocks.pathname = '/plugins';
         mocks.installedPlugins = [
-            { pluginId: 'acme.alpha', title: 'Alpha', description: null, version: '1', enabled: true, source: { kind: 'npm', locator: 'a' } },
-            { pluginId: 'acme.beta', title: 'Beta', description: null, version: '1', enabled: true, source: { kind: 'npm', locator: 'b' } },
+            { pluginId: 'acme.alpha', title: 'Alpha', description: null, version: '1', enabled: true, source: { kind: 'npm', locator: 'a' }, install: { mode: 'copy', manifestVersion: '1' }, compatibility: { status: 'compatible', diagnostics: [] }, diagnostics: [] },
+            { pluginId: 'acme.beta', title: 'Beta', description: null, version: '1', enabled: true, source: { kind: 'npm', locator: 'b' }, install: { mode: 'copy', manifestVersion: '1' }, compatibility: { status: 'compatible', diagnostics: [] }, diagnostics: [] },
         ];
         const screen = await renderInAppPanes(React.createElement(
             AppShellColumnContext.Provider,

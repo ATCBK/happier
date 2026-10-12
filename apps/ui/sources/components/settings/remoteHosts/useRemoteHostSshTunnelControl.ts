@@ -12,7 +12,7 @@ import { t } from '@/text';
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { REMOTE_HOST_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/remoteHosts/remoteHostActionsV1';
-import { router } from 'expo-router';
+import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 
 function readSshTunnelList(result: SystemTaskResult | null): readonly SshTunnelSnapshot[] | null {
     if (!result?.ok) {
@@ -38,9 +38,10 @@ function readErrorMessage(result: SystemTaskResult | null): string | null {
 export function useRemoteHostSshTunnelControl(options: Readonly<{
     runner?: SystemTaskRunner;
 }> = {}) {
+    const router = useRouter();
     const runner = options.runner ?? getDefaultSystemTaskRunner();
     const execution = useMountedActionExecution(useActiveServerAccountScope(), { onApprovalPending: registration => {
-        if (registration.scope) router.push(`/inbox/approvals/${encodeURIComponent(registration.artifactId)}?serverId=${encodeURIComponent(registration.scope.serverId)}`);
+        if (registration.scope) router.pushRetainingCurrent(`/inbox/approvals/${encodeURIComponent(registration.artifactId)}?serverId=${encodeURIComponent(registration.scope.serverId)}`);
     } });
     const [bridgeUnavailable, setBridgeUnavailable] = React.useState(false);
     const isUnavailable = runner.mode !== 'tauri' || bridgeUnavailable;
@@ -81,7 +82,7 @@ export function useRemoteHostSshTunnelControl(options: Readonly<{
         }
         try {
             const response = await execution.execute('remote_hosts.tunnel.stop', { target: { kind: 'desktop', tunnelKey } });
-            if (!response.ok) throw new Error(response.errorCode);
+            if (!response.ok) throw new Error(response.error);
             const result = REMOTE_HOST_ACTION_OUTPUT_SCHEMAS_V1['remote_hosts.tunnel.stop'].parse(response.result);
             if (result.status !== 'task_started') throw new Error(result.status === 'unavailable' ? result.reason : result.status);
             if (!execution.isCurrent()) return null;

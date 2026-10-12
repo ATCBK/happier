@@ -197,7 +197,7 @@ export function buildConnectedServicesIndexModel(input: Readonly<{
         service: PluginContributionIdentityV1,
         entry: ConnectedServiceRegistryEntry | null,
         published: boolean,
-    ): ConnectedServicesIndexSheet | 'connectable' => {
+    ): ConnectedServicesIndexSheet | 'connectable' | 'empty' => {
         const serviceKey = buildQualifiedPluginContributionKey(service);
         const legacyServiceId = entry?.legacyServiceId ?? null;
         let accounts: ConnectedServicesIndexAccount[] = [];
@@ -241,6 +241,19 @@ export function buildConnectedServicesIndexModel(input: Readonly<{
             && diagnostics.primary === null
         ) {
             return 'connectable';
+        }
+        // A known service with no accounts, no pools, no problem to report and nothing the user can
+        // do yet (its machines have not answered) has nothing to show: it returns as something to
+        // connect once a machine answers. Unknown accounts (indeterminate) still keep their sheet.
+        if (
+            published
+            && input.transport !== 'indeterminate'
+            && accounts.length === 0
+            && groupCount === 0
+            && !canAdd
+            && diagnostics.primary === null
+        ) {
+            return 'empty';
         }
 
         const connectedIds = accounts
@@ -315,6 +328,7 @@ export function buildConnectedServicesIndexModel(input: Readonly<{
         if (seen.has(serviceKey)) continue;
         seen.add(serviceKey);
         const result = buildSheet(entry.service, entry, true);
+        if (result === 'empty') continue;
         if (result === 'connectable') {
             const usedBy = usedByOf(entry.service);
             connectable.push({
@@ -341,7 +355,7 @@ export function buildConnectedServicesIndexModel(input: Readonly<{
             if (seen.has(serviceKey)) continue;
             seen.add(serviceKey);
             const sheet = buildSheet(service, input.resolveFallbackEntry(service), false);
-            if (sheet !== 'connectable') sheets.push(sheet);
+            if (sheet !== 'connectable' && sheet !== 'empty') sheets.push(sheet);
         }
     }
 

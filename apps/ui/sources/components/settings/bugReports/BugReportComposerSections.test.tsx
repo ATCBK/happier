@@ -1,5 +1,6 @@
 import * as React from 'react';
 import type { ReactTestInstance } from 'react-test-renderer';
+import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 
 import { renderScreen, type RenderScreenResult } from '@/dev/testkit';
@@ -73,6 +74,12 @@ describe('Bug report composer toggles (web)', () => {
             />,
         );
 
+        // The per-source switches open in place under "Choose what's included".
+        expect(switchNames(screen)).toEqual(['Include diagnostics']);
+        await act(async () => {
+            screen.findAll((node) => node.props?.testID === 'bug-report-diagnostics-sources.header'
+                && typeof node.props?.onPress === 'function').at(0)?.props.onPress();
+        });
         expect(switchNames(screen)).toEqual([
             'Include diagnostics',
             'App diagnostics',

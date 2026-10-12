@@ -13,7 +13,7 @@ import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch'
 import { useMcpServerCatalogForServer, useMcpServersSettings } from './useMcpServersSettings';
 import { refreshMcpServerCatalog, resetMcpServerCatalogEngineForTests } from '@/sync/engine/settings/mcpServerCatalogEngine';
 import { resetMcpServerCatalogSnapshotsForTests } from '@/sync/store/settings/mcpServerCatalogSnapshot';
-import type { McpServerBindingV1, McpServerCatalogEntryV1 } from '@happier-dev/protocol/mcp/servers/settingsV1';
+import type { McpServerRuleV1, McpServerCatalogEntryV1 } from '@happier-dev/protocol/mcp/servers/settingsV1';
 import { PROFILE_TRANSFER_ROUTE_V1 } from '@happier-dev/protocol/profiles/profileTransferV1';
 import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 import { mutateMcpServerCatalogInContext } from '@/sync/api/account/apiMcpServerCatalog';
@@ -130,7 +130,7 @@ describe('MCP destination-backed settings hook', () => {
         let revision = 3;
         const server: McpServerCatalogEntryV1 = { id: 'server-row', name: 'row', transport: 'stdio',
             stdio: { command: 'mcp-server', args: [] }, env: {}, createdAt: 1, updatedAt: 1 };
-        let catalog: { v: 1; servers: McpServerCatalogEntryV1[]; bindings: McpServerBindingV1[] } = { v: 1, servers: [server], bindings: [] };
+        let catalog: { v: 1; servers: McpServerCatalogEntryV1[]; bindings: McpServerRuleV1[] } = { v: 1, servers: [server], bindings: [] };
         let settingsWrites = 0;
         let rowWrites = 0;
         let maintenanceReads = 0;
@@ -190,14 +190,18 @@ describe('MCP destination-backed settings hook', () => {
             const sourceReadsBeforeMutation = maintenanceReads;
             context = await captureLazyActionAccountContext(home.id);
             actionWrite = mutateMcpServerCatalogInContext(context, { expectedRevision: 3,
-                change: { kind: 'server-update', entry: { ...server, title: 'Action edit' }, bindings: [] } });
+                change: { kind: 'server-update', entry: { ...server, title: 'Action edit' } } });
             // Optional retained-source maintenance cannot postpone an admitted row CAS.
             await vi.waitFor(() => expect(rowWrites).toBe(1));
             expect(await actionWrite).toMatchObject({ status: 'updated', revision: 4 });
             expect(maintenanceReads).toBe(sourceReadsBeforeMutation);
-            await hook.getCurrent().mutate('mcp.servers.update', {
-                expectedRevision: hook.getCurrent().snapshot.revision,
-                entry: { ...server, title: 'Edited', updatedAt: 2 }, bindings: [],
+            // Observe the acknowledged row before capturing the next edit's CAS.
+            await vi.waitFor(() => expect(hook.getCurrent().snapshot.revision).toBe(4));
+            await act(async () => {
+                expect(await hook.getCurrent().mutate('mcp.servers.update', {
+                    expectedRevision: hook.getCurrent().snapshot.revision,
+                    entry: { ...server, title: 'Edited', updatedAt: 2 },
+                })).toMatchObject({ status: 'updated', revision: 5 });
             });
             await vi.waitFor(() => expect(hook.getCurrent().settings.servers[0]?.title).toBe('Edited'));
             expect(getStorage().getState().settingsVersion).toBe(7);

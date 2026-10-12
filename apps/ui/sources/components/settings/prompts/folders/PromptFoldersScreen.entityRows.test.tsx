@@ -76,7 +76,7 @@ describe('folder editor catalog mutation', () => {
             await vi.waitFor(() => expect(value.folders.map(folder => folder.name)).toEqual(['Original', 'New folder']));
             expect(alert).not.toHaveBeenCalled();
         } else {
-            await vi.waitFor(() => expect(screen.findByTestId('promptFolders:edit:name.error')).toBeTruthy());
+            await vi.waitFor(() => expect(screen.findByTestId('promptFolders:edit:refused')).toBeTruthy());
             expect(screen.findByTestId('promptFolders:edit:name')!.props.value).toBe('New folder');
             expect(value.folders.map(folder => folder.name)).toEqual(['Original']);
         }

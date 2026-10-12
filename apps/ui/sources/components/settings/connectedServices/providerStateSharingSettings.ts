@@ -1,12 +1,9 @@
-import { prepareDefaultProviderStateSharingChangeV1, readProviderStateSharingRiskAgentIdsV1 } from '@happier-dev/protocol/actions/settings/providerStateSharingMutations';
+import { prepareDefaultProviderStateSharingChangeV1, prepareAgentProviderStateSharingChangeV1, AgentProviderStateSharingChangeV1Schema, readProviderStateSharingRiskAgentIdsV1, type ProviderStateSharingMutationServicesV1 } from '@happier-dev/protocol/actions/settings/providerStateSharingMutations';
 import { AGENT_IDS, getAgentCore, type AgentId } from '@/agents/catalog/catalog';
-import { Modal } from '@/modal';
-import { t } from '@/text';
 import type { ConnectedServicesProviderStateSharingSettingsV1 } from '@happier-dev/protocol/account/settings/connected-services';
 
 export type ProviderStateSharingSettingsMutation = (current: ConnectedServicesProviderStateSharingSettingsV1)
     => ConnectedServicesProviderStateSharingSettingsV1 | null;
-export type ProviderStateSharingSettingsWriter = (mutation: ProviderStateSharingSettingsMutation) => void;
 
 export function resolveProviderStateSharingAgentIds(agentIds: readonly AgentId[] = AGENT_IDS): readonly AgentId[] {
     return agentIds.filter(agentId => {
@@ -18,27 +15,34 @@ export function resolveProviderStateSharingAgentIds(agentIds: readonly AgentId[]
 function sharedStateRiskAgents(agentIds: readonly AgentId[]) {
     const agents = agentIds.flatMap(agentId => {
         const core = getAgentCore(agentId);
-        return core ? [{ agentId, title: t(core.displayNameKey), capability: core.connectedServices?.providerStateSharing }] : [];
+        return core ? [{ agentId, capability: core.connectedServices?.providerStateSharing }] : [];
     });
     const riskIds = new Set(readProviderStateSharingRiskAgentIdsV1(agents));
     return agents.filter(agent => riskIds.has(agent.agentId));
 }
 
-/** The rendered control and Actions share the human consent decision, then replay only its admitted intent. */
+function sharingMutationServices(agentIds: readonly AgentId[]): ProviderStateSharingMutationServicesV1 {
+    return {
+        readProviderStateSharingRiskAgentIds: () => sharedStateRiskAgents(agentIds).map(entry => entry.agentId),
+        // This preparation runs only after settings.set approval admission,
+        // including a waiver. The transport acknowledgement is not a second floor.
+        confirmProviderStateSharingRiskAgents: async () => true,
+    };
+}
+
+export async function prepareAgentProviderStateSharingChange(settings: ConnectedServicesProviderStateSharingSettingsV1, value: unknown) {
+    const change = AgentProviderStateSharingChangeV1Schema.safeParse(value);
+    if (!change.success) return null;
+    const result = await prepareAgentProviderStateSharingChangeV1(settings, change.data, sharingMutationServices(AGENT_IDS));
+    return result.status === 'prepared' ? result.mutate : null;
+}
+
+/** The admitted Settings Action supplies consent; only its catalog-backed intent is replayed. */
 export async function prepareDefaultProviderStateSharingChange(
     settings: ConnectedServicesProviderStateSharingSettingsV1,
     shared: boolean,
     agentIds: readonly AgentId[] = resolveProviderStateSharingAgentIds(),
 ): Promise<ProviderStateSharingSettingsMutation | null> {
-    const result = await prepareDefaultProviderStateSharingChangeV1(settings, shared, {
-        readProviderStateSharingRiskAgentIds: () => sharedStateRiskAgents(agentIds).map(entry => entry.agentId),
-        confirmProviderStateSharingRiskAgents: async ids => await Modal.confirm(
-            t('connectedServices.providerStateSharing.sharedStatePrivacyTitle'),
-            t('connectedServices.providerStateSharing.sharedStatePrivacyBody', {
-                agent: sharedStateRiskAgents(agentIds).filter(entry => ids.includes(entry.agentId)).map(entry => entry.title).join(', '),
-            }),
-            { confirmText: t('common.continue'), destructive: false },
-        ),
-    });
+    const result = await prepareDefaultProviderStateSharingChangeV1(settings, shared, sharingMutationServices(agentIds));
     return result.status === 'prepared' ? result.mutate : null;
 }

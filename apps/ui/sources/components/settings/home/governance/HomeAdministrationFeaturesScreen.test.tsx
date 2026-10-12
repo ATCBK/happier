@@ -24,7 +24,6 @@ import {
 } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { collectRenderedTestIds } from '@/dev/testkit/render/collectRenderedTestIds';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
-import { resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 
 import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelpers';
 
@@ -47,6 +46,7 @@ installSettingsViewCommonModuleMocks({
 // schemas, the protocol's dependency edges and the page's row logic are the production ones.
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
+const { resetServerFeaturesClientForTests } = await import("@/sync/api/capabilities/serverFeaturesClient");
 
 const GOVERNANCE_PATH = '/v1/home/governance/get';
 const SETTINGS_GET = '/v1/home/settings/get';
@@ -237,6 +237,7 @@ describe('HomeAdministrationFeaturesScreen', () => {
         const home = await addHome();
         harness.answer(home, SETTINGS_GET, { body: featuresProjection() });
         const screen = await renderFeatures(home);
+        expect(screen.findByTestId('home-features-save')).toBeNull();
 
         await act(async () => {
             screen.findByTestId('home-feature:automations.switch')?.props.onValueChange(false);
@@ -244,6 +245,9 @@ describe('HomeAdministrationFeaturesScreen', () => {
         await act(async () => {
             screen.pressByTestId('home-features-discard');
         });
+        // Discarding leaves nothing to save, so the row goes with the edit.
+        expect(screen.findByTestId('home-features-save')).toBeNull();
+        expect(screen.findByTestId('home-features-discard')).toBeNull();
 
         expect(screen.findByTestId('home-feature:automations.switch')?.props.value).toBe(true);
         expect(screen.findByTestId('home-feature:automations.dependents')).toBeNull();

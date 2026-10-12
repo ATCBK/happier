@@ -9,7 +9,7 @@ import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelp
 
 const routeParams = vi.hoisted(() => ({ value: {} as Record<string, string> }));
 installSettingsViewCommonModuleMocks({
-    storage: async (importOriginal) => await importOriginal(),
+    storage: 'real',
     router: async () => {
         const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
         return createExpoRouterMock({ params: () => routeParams.value, navigation: { setOptions: () => undefined } }).module;

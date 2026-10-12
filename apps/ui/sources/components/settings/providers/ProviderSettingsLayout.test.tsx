@@ -7,7 +7,7 @@ import { Text } from '@/components/ui/text/Text';
 import { installSettingsViewCommonModuleMocks } from '../settingsViewTestHelpers';
 
 installSettingsViewCommonModuleMocks({
-    storage: importOriginal => importOriginal(),
+    storage: 'real',
     router: async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({ pathname: '/settings/providers' }).module,
     reactNative: async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({
         useWindowDimensions: () => ({ width: 1200, height: 800, scale: 1, fontScale: 1 }),

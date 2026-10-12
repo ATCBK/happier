@@ -256,6 +256,7 @@ describe('QualifiedAccountDetailView', () => {
             account: { service: SERVICE, accountId: 'acct-77' },
             presentation: {
                 primaryLabel: 'work@example.com',
+                primaryLabelKind: 'email',
                 secondaryLabel: 'Codex · acct-77',
                 accessibilityLabel: 'Codex · work@example.com · acct-77',
             },
@@ -265,6 +266,19 @@ describe('QualifiedAccountDetailView', () => {
 
         expect(hasTitle(screen.root, 'work@example.com')).toBe(true);
         expect(hasTitle(screen.root, 'acct-77')).toBe(false);
+        // The title already is the email: the header says it once.
+        expect(metaTextOf(screen.root, 'qualified-account-detail:meta:email')).toBeUndefined();
+    });
+
+    it('does not repeat the email when the account is named by that same address', async () => {
+        const screen = await renderDetail({
+            presentation: { primaryLabel: 'work@example.com', accessibilityLabel: 'Codex · work@example.com' },
+            providerEmail: 'work@example.com',
+            status: 'connected',
+        });
+
+        expect(hasTitle(screen.root, 'work@example.com')).toBe(true);
+        expect(metaTextOf(screen.root, 'qualified-account-detail:meta:email')).toBeUndefined();
     });
 
     it('keeps a resolved account label ahead of the provider email', async () => {

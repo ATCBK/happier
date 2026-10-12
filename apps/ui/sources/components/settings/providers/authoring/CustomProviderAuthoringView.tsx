@@ -17,7 +17,8 @@ import { ProviderIcon } from '@/providers/connection/ProviderIcon';
 import { t } from '@/text';
 import { ProviderErrorItems } from '../ProviderErrorItems';
 import { ProviderFieldRow } from './ProviderFieldRow';
-import { ProviderProbeResult, ProviderSavedSecretControl } from '../ProviderPageParts';
+import { ProviderKeyEntryItem } from './ProviderKeyEntryItem';
+import { ProviderApprovalPendingBanner, ProviderProbeResult } from '../ProviderPageParts';
 
 export type CustomProviderAuthoringViewModel = Readonly<{
     machineId: string | null;
@@ -32,11 +33,21 @@ export type CustomProviderAuthoringViewModel = Readonly<{
     enableAfterSaving: boolean;
     draftRequiresApiKey: boolean;
     secretSelected: boolean;
+    selectedSecretName?: string | null;
     savedSecretSelectionEnabled: boolean;
+    /** A key typed into the sheet, saved as a Saved Secret when the provider is saved. */
+    pastedKey: string;
     manualModelsError: string | null;
     draftHasProbe: boolean;
+    /**
+     * Editing a saved custom connection (F08) rather than adding one: the same fields, while its key,
+     * models, on/off switch and test stay on the provider's own page.
+     */
+    editing?: boolean;
     probeState: 'idle' | 'probing' | 'success' | 'notSupported';
     savePending: boolean;
+    /** Save is waiting for its approval: say so and offer the approval, instead of a spinner. */
+    pendingApproval?: Readonly<{ onOpen: () => void }> | null;
     error: ProviderErrorV1 | string | null;
     errorRetry?: () => void | Promise<void>;
     probeError: ProviderErrorV1 | null;
@@ -57,6 +68,7 @@ export type CustomProviderAuthoringViewActions = Readonly<{
     onManualModelsChange: (text: string) => void;
     onEnableAfterSavingChange: (enabled: boolean) => void;
     onPickSecret: () => void;
+    onPastedKeyChange: (value: string) => void;
     onReviewConnection: () => void;
     onTest: () => void;
     onSave: () => void;
@@ -78,7 +90,7 @@ export function CustomProviderAuthoringView(props: Readonly<{
     const { theme } = useUnistyles();
     const saveBlocked = model.draftRequiresApiKey && !model.savedSecretSelectionEnabled;
     // A failed test shows once, with its recovery, in the problem section below the header.
-    const probeResult = model.probeError
+    const probeResult = model.probeError || model.editing
         ? null
         : model.probeState === 'success'
             ? t('settingsProviders.detail.testSucceeded')
@@ -94,7 +106,7 @@ export function CustomProviderAuthoringView(props: Readonly<{
                 testID="settings-provider-authoring-header"
                 alwaysShowTitle
                 title={draft.name.trim() || t('settingsProvidersCollection.newTitle')}
-                description={t('settingsProviders.customFooter')}
+                description={model.editing ? t('settingsProvidersCollection.editDescription') : t('settingsProviders.customFooter')}
                 leading={(
                     <PageHeaderMarkSlot>
                         <ProviderIcon icon={null} size={24} color={theme.colors.text.secondary} />
@@ -106,8 +118,8 @@ export function CustomProviderAuthoringView(props: Readonly<{
                 primaryAction={{
                     testID: 'settings-provider-authoring-save',
                     title: t('common.save'),
-                    loading: model.savePending,
-                    disabled: saveBlocked,
+                    loading: model.savePending && !model.pendingApproval,
+                    disabled: saveBlocked || Boolean(model.pendingApproval),
                     onPress: actions.onSave,
                 }}
                 cancelAction={{
@@ -116,7 +128,7 @@ export function CustomProviderAuthoringView(props: Readonly<{
                     disabled: model.savePending,
                     onPress: actions.onDiscard,
                 }}
-                actions={model.draftHasProbe ? (
+                actions={model.draftHasProbe && !model.editing ? (
                     <RoundButton
                         testID="settings-provider-authoring-test"
                         size="small"
@@ -129,6 +141,14 @@ export function CustomProviderAuthoringView(props: Readonly<{
                     />
                 ) : undefined}
             />
+
+            {model.pendingApproval ? (
+                <ProviderApprovalPendingBanner
+                    testID="settings-provider-authoring-approval"
+                    providerName={draft.name.trim() || t('settingsProvidersCollection.newTitle')}
+                    onOpen={model.pendingApproval.onOpen}
+                />
+            ) : null}
 
             {model.error ? (
                 <ItemGroup>
@@ -218,10 +238,7 @@ export function CustomProviderAuthoringView(props: Readonly<{
                         rightElementOutsidePressable
                     />
                     {draft.requiresApiKey ? <>
-                        <ProviderSavedSecretRow
-                            model={model}
-                            onPickSecret={actions.onPickSecret}
-                        />
+                        {!model.editing ? <CustomProviderKeyEntry model={model} actions={actions} /> : null}
                         <DropdownMenu
                             testID="settings-provider-authoring-credential-style"
                             open={model.credentialOpen}
@@ -251,9 +268,9 @@ export function CustomProviderAuthoringView(props: Readonly<{
                         ) : null}
                     </> : null}
                 </ItemGroup>
-            ) : model.draftRequiresApiKey ? (
+            ) : model.draftRequiresApiKey && !model.editing ? (
                 <ItemGroup title={t('settingsProviders.authoring.credentialsTitle')} description={t('settingsProviders.authoring.credentialsFooter')}>
-                    <ProviderSavedSecretRow model={model} onPickSecret={actions.onPickSecret} />
+                    <CustomProviderKeyEntry model={model} actions={actions} />
                 </ItemGroup>
             ) : null}
 
@@ -281,66 +298,68 @@ export function CustomProviderAuthoringView(props: Readonly<{
                         onChangeText={(modelsPath) => actions.onDraftChange((current) => ({ ...current, modelsPath }))}
                     />
                 ) : null}
-                <ProviderFieldRow
-                    ref={model.manualModelsFieldRef}
-                    testID="provider-manual-model-ids"
-                    title={t('settingsProviders.models.addFieldLabel')}
-                    description={t('settingsProviders.models.addHelp')}
-                    value={draft.manualModelsText}
-                    placeholder={t('settingsProviders.models.addPlaceholder')}
-                    multiline
-                    monospace
-                    error={model.manualModelsError}
-                    onChangeText={actions.onManualModelsChange}
-                />
-            </ItemGroup>
-
-            <ItemGroup title={t('settingsProvidersCollection.afterSavingTitle')}>
-                {model.localEndpoint ? (
-                    <Item
-                        mode="info"
-                        title={t('settingsProviders.authoring.localAddressTitle')}
-                        subtitle={model.machineId
-                            ? t('settingsProviders.authoring.localAddressDescription', { machine: model.currentMachineName, endpoint: model.localEndpoint })
-                            : t('settingsProvidersCollection.localNoComputer')}
-                        subtitleLines={0}
+                {!model.editing ? (
+                    <ProviderFieldRow
+                        ref={model.manualModelsFieldRef}
+                        testID="provider-manual-model-ids"
+                        title={t('settingsProviders.models.addFieldLabel')}
+                        description={t('settingsProviders.models.addHelp')}
+                        value={draft.manualModelsText}
+                        placeholder={t('settingsProviders.models.addPlaceholder')}
+                        multiline
+                        monospace
+                        error={model.manualModelsError}
+                        onChangeText={actions.onManualModelsChange}
                     />
                 ) : null}
-                <Item
-                    title={t('settingsProviders.authoring.enableAfterSaving')}
-                    subtitle={t('settingsProviders.authoring.enableAccountWide')}
-                    subtitleLines={0}
-                    showChevron={false}
-                    rightElement={<Switch testID="settings-provider-authoring-enable-after-save" accessibilityLabel={t('settingsProviders.authoring.enableAfterSaving')} value={model.enableAfterSaving} onValueChange={actions.onEnableAfterSavingChange} />}
-                    rightElementOutsidePressable
-                />
             </ItemGroup>
+
+            {!model.editing ? (
+                <ItemGroup title={t('settingsProvidersCollection.afterSavingTitle')}>
+                    {model.localEndpoint ? (
+                        <Item
+                            mode="info"
+                            title={t('settingsProviders.authoring.localAddressTitle')}
+                            subtitle={model.machineId
+                                ? t('settingsProviders.authoring.localAddressDescription', { machine: model.currentMachineName, endpoint: model.localEndpoint })
+                                : t('settingsProvidersCollection.localNoComputer')}
+                            subtitleLines={0}
+                        />
+                    ) : null}
+                    <Item
+                        title={t('settingsProviders.authoring.enableAfterSaving')}
+                        subtitle={t('settingsProviders.authoring.enableAccountWide')}
+                        subtitleLines={0}
+                        showChevron={false}
+                        rightElement={<Switch testID="settings-provider-authoring-enable-after-save" accessibilityLabel={t('settingsProviders.authoring.enableAfterSaving')} value={model.enableAfterSaving} onValueChange={actions.onEnableAfterSavingChange} />}
+                        rightElementOutsidePressable
+                    />
+                </ItemGroup>
+            ) : null}
         </ItemList>
     );
 }
 
-function ProviderSavedSecretRow(props: Readonly<{
+/** The custom endpoint's key, typed where it is asked for, as on a catalog provider (PA1). */
+function CustomProviderKeyEntry(props: Readonly<{
     model: CustomProviderAuthoringViewModel;
-    onPickSecret: () => void;
+    actions: CustomProviderAuthoringViewActions;
 }>) {
+    const { model, actions } = props;
     return (
-        <Item
-            testID="settings-provider-authoring-api-key"
-            title={t('settingsProviders.authoring.apiKey')}
-            subtitle={props.model.savedSecretSelectionEnabled
-                ? t('settingsProviders.detail.apiKeyFooter')
-                : t('settingsProviders.local.accountScopeMismatchDescription')}
-            subtitleLines={0}
-            showChevron={false}
-            rightElement={(
-                <ProviderSavedSecretControl
-                    testID="settings-provider-authoring-api-key"
-                    saved={props.model.secretSelected}
-                    disabled={!props.model.savedSecretSelectionEnabled}
-                    onChoose={props.onPickSecret}
-                />
-            )}
-            rightElementOutsidePressable
+        <ProviderKeyEntryItem
+            description={t('settingsProviders.detail.apiKeyFooter')}
+            placeholder={t('settingsProvidersCollection.addKeyPlaceholder', {
+                provider: model.draft.name.trim() || t('settingsProviders.authoring.providerTitle'),
+            })}
+            pastedKey={model.pastedKey}
+            onPastedKeyChange={actions.onPastedKeyChange}
+            onSubmit={actions.onSave}
+            secretSelected={model.secretSelected}
+            selectedSecretName={model.selectedSecretName}
+            savedSecretSelectionEnabled={model.savedSecretSelectionEnabled}
+            onPickSecret={actions.onPickSecret}
+            savePending={model.savePending}
         />
     );
 }

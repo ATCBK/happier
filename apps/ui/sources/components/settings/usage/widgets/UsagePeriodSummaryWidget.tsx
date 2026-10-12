@@ -2,18 +2,19 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { HappierDataMetric } from '@happier-dev/plugin-ui/presentation';
+import { projectUsagePageCost } from '@happier-dev/protocol/usage/usageCostFacts';
 import { useWidgetFrameBodyCaption } from '@/components/widgets/frame/widgetFrameBodyCaption';
 import { formatTokenCount, formatUsageCost } from '@/utils/format/usageNumbers';
 import { t } from '@/text';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import {
-  UsageBodyInsufficient,
   UsageCoverageLine,
   usagePeriodPhrase,
   useUsageAnalyticsView,
   useUsagePluginTheme,
   type UsageBodyProps,
+  UsageBodyNoUsage,
 } from './usageBodyKit';
 import { usageCostKindPhrase } from '../usageCostPresentation';
 import { formatUsageDuration } from './usageHowYouWorkPresentation';
@@ -29,24 +30,19 @@ export function UsagePeriodSummaryWidget(props: UsageBodyProps) {
   const view = useUsageAnalyticsView(props.slice, props.query);
   useWidgetFrameBodyCaption(usagePeriodPhrase(props.query));
   if (!view)
-    return (
-      <UsageBodyInsufficient
-        testID={`${props.testID}.empty`}
-        title={t('usage.board.page.noUsageTitle')}
-        reason={t('usage.board.page.noUsageReason')}
-      />
-    );
+    return <UsageBodyNoUsage slice={props.slice} testID={props.testID} />;
   const cost = props.query.metric === 'cost';
-  const currency = view.costPresentation.currency;
-  const current = cost ? view.hero.effectiveUsd : view.hero.totalTokens;
+  const selectedCost = view.pageCost;
+  const currency = selectedCost.selection?.currency ?? view.costPresentation.currency;
+  const current = cost ? selectedCost.amountUsd : view.hero.totalTokens;
   const previousAccounting = props.slice.comparison?.accounting;
   const previous = previousAccounting
     ? cost
-      ? (previousAccounting.costPresentation?.effectiveUsd ?? null)
+      ? projectUsagePageCost(previousAccounting, props.query.costBasis, selectedCost.selection).amountUsd
       : previousAccounting.totals.tokens.total
     : null;
   const delta =
-    previous !== null && previous > 0 ? (current - previous) / previous : null;
+    current !== null && previous !== null && previous > 0 ? (current - previous) / previous : null;
   const apiEquivalent = props.slice.costFactTotals?.find(fact => fact.kind === 'api_equivalent' && fact.currency === currency);
   const invoice = props.slice.costFactTotals?.find(fact => fact.kind === 'invoice' && fact.currency === currency);
   const merged =
@@ -68,7 +64,7 @@ export function UsagePeriodSummaryWidget(props: UsageBodyProps) {
     .filter(Boolean)
     .join(' · ');
   const stats: React.ReactElement[] = [];
-  if (invoice?.amountUsd != null)
+  if (!cost && invoice?.amountUsd != null)
     stats.push(
       <HappierDataMetric
         key="paid"
@@ -89,12 +85,13 @@ export function UsagePeriodSummaryWidget(props: UsageBodyProps) {
         size="stat"
         showLabel
         label={t('usage.cost')}
-        value={view.hero.effectiveUsd}
+        // An unknown is a quiet dash with its reason beneath, never a headline word (lab d2top "You paid").
+        value={selectedCost.amountUsd ?? UNKNOWN_VALUE}
         valueFormatter={(value) => formatUsageCost(value, currency)}
         caption={
-          view.costPresentation.source
-            ? usageCostKindPhrase(view.costPresentation.source)
-            : undefined
+          selectedCost.selection
+            ? usageCostKindPhrase(selectedCost.selection.kind)
+            : t('common.unavailable')
         }
       />,
     );
@@ -149,7 +146,9 @@ export function UsagePeriodSummaryWidget(props: UsageBodyProps) {
           theme={chartTheme}
           size="hero"
           label={cost ? t('usage.cost') : t('usage.tokens')}
-          value={current}
+          value={current ?? UNKNOWN_VALUE}
+          caption={current === null ? t('common.unavailable')
+            : cost && selectedCost.selection ? usageCostKindPhrase(selectedCost.selection.kind) : undefined}
           unit={cost ? undefined : t('usage.board.page.tokensUnit')}
           valueFormatter={
             cost
@@ -185,10 +184,12 @@ export function UsagePeriodSummaryWidget(props: UsageBodyProps) {
   );
 }
 
+const UNKNOWN_VALUE = '—';
+
 const styles = StyleSheet.create((theme) => ({
-  subline: { ...Typography.default(), fontSize: 13, lineHeight: 18, color: theme.colors.text.secondary },
-  body: { gap: 20 },
-  hero: { gap: 4 },
-  stats: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 24, rowGap: 16 },
+  subline: {  ...Typography.variant('body'),  color: theme.colors.text.secondary },
+  body: { gap: theme.space.s20 },
+  hero: { gap: theme.space.s4 },
+  stats: { flexDirection: 'row', flexWrap: 'wrap', columnGap: theme.space.s24, rowGap: theme.space.s16 },
   stat: { flexGrow: 1, flexBasis: 120, minWidth: 0 },
 }));

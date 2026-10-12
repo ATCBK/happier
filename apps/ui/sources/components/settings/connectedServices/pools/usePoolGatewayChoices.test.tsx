@@ -3,15 +3,16 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ProviderConnectionV1Schema } from '@happier-dev/protocol/providers/connections/v1';
 import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { PROVIDER_CONNECTIONS_ROWS_ROUTE_V1, ProviderConnectionsCatalogV1Schema, ProviderConnectionsRowMutationV1Schema } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
-import { createProviderSettingsAccountHarness,
-    renderHook, standardCleanup } from '@/dev/testkit';
+import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
+import { renderHook, standardCleanup } from '@/dev/testkit';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
-import { usePoolGatewayChoices } from './usePoolGatewayChoices';
+import { t } from '@/text';
 
 const machineRpc = vi.hoisted(() => vi.fn());
 // Machine transport is the boundary; catalog admission, Action policy and mutation lifecycle stay real.
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: machineRpc }));
 const account = createProviderSettingsAccountHarness();
+const { usePoolGatewayChoices } = await import('./usePoolGatewayChoices');
 const service = { pluginId: 'happier.agent.codex', localId: 'openai-codex' };
 const target = { kind: 'group' as const, service, groupId: 'pool-a' };
 
@@ -27,7 +28,7 @@ describe('pool gateway Action wiring', () => {
             source: { kind: 'contribution', contributionKey: 'example.unavailable/managed' }, purposeBindingDefaults: {} });
         let catalog = ProviderConnectionsCatalogV1Schema.parse({ ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, connections: [gateway, unavailable] });
         let revision = 1;
-        await account.restore({ catalog, machines: availability === 'offline'
+        await account.restore({ serverIdentityId: 'srv_pool_gateway', catalog, machines: availability === 'offline'
             ? [createMachineFixture({ id: 'machine-a', active: false, activeAt: 1 })] : [],
             waivedActions: ['providers.connections.update'] });
         if (availability === 'offline') await account.selectMachine(account.serverId, 'machine-a');
@@ -44,7 +45,8 @@ describe('pool gateway Action wiring', () => {
                 return { body: { status: 'updated', revision, cursor: revision } };
             },
         });
-        const hook = await renderHook(() => usePoolGatewayChoices({ target, enabled: true, resolveTarget: () => null }));
+        const resolveTarget = () => null;
+        const hook = await renderHook(() => usePoolGatewayChoices({ target, enabled: true, resolveTarget }));
         await vi.waitFor(() => expect(hook.getCurrent().choices).toHaveLength(1));
         expect(hook.getCurrent().ready).toBe(true);
         await act(async () => { expect(await hook.getCurrent().setEnabled(gateway.id, true)).toBe(true); });
@@ -53,6 +55,47 @@ describe('pool gateway Action wiring', () => {
         expect(catalog.connections[1]).toEqual(unavailable);
         await act(async () => { expect(await hook.getCurrent().setEnabled(gateway.id, false)).toBe(true); });
         expect(catalog.connections[0]?.purposeBindingDefaults).toEqual({});
+        expect(machineRpc).not.toHaveBeenCalled();
+    });
+    it.each([false, true])('creates Main gateway with this pool in its slot; repairs interrupted creation=%s', async interrupted => {
+        const half = ProviderConnectionV1Schema.parse({ v: 1, id: 'pc_half', source: { kind: 'contribution',
+            contributionKey: 'happier.provider.cliproxyapi/cliproxyapi' }, role: 'named',
+            displayName: t('settingsProvidersCollection.gateway.mainGatewayName'), displayNameMode: 'custom',
+            revision: 0, createdAt: 1, updatedAt: 1 });
+        let catalog = ProviderConnectionsCatalogV1Schema.parse({ ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, connections: interrupted ? [half] : [] });
+        let revision = 1;
+        await account.restore({ serverIdentityId: 'srv_first_gateway', catalog, waivedActions: [
+            'providers.connections.create_contribution', 'providers.connections.update', 'providers.connections.enabled.set'] });
+        account.home.answer(account.serverId, `GET ${PROVIDER_CONNECTIONS_ROWS_ROUTE_V1}`, {
+            select: () => ({ body: { status: 'present', revision, content: { t: 'plain', v: catalog } } }),
+        });
+        account.home.answer(account.serverId, `POST ${PROVIDER_CONNECTIONS_ROWS_ROUTE_V1}`, {
+            select: input => {
+                const mutation = ProviderConnectionsRowMutationV1Schema.parse(input);
+                if (mutation.content?.t !== 'plain') throw new Error('Expected Plain Account write');
+                catalog = mutation.content.v;
+                revision += 1;
+                return { body: { status: 'updated', revision, cursor: revision } };
+            },
+        });
+        const resolveTarget = () => null;
+        const hook = await renderHook(() => usePoolGatewayChoices({ target, enabled: true, resolveTarget }));
+        await vi.waitFor(() => expect(hook.getCurrent().firstGateway).toEqual({ purpose: 'openai-upstream' }));
+        expect(hook.getCurrent().choices).toEqual([]);
+        await act(async () => { expect(await hook.getCurrent().createFirstGateway()).toBe(true); });
+        expect(catalog.connections).toHaveLength(1);
+        const created = catalog.connections[0]!;
+        if (interrupted) expect(created.id).toBe(half.id);
+        expect(created).toMatchObject({ displayName: t('settingsProvidersCollection.gateway.mainGatewayName'), deployment: { kind: 'managedLocal' },
+            source: { kind: 'contribution', contributionKey: 'happier.provider.cliproxyapi/cliproxyapi' },
+            purposeBindingDefaults: { 'openai-upstream': target } });
+        expect(catalog.accountGrants.map(grant => grant.connectionId)).toEqual([created.id]);
+        expect(revision).toBe(2); // The complete gateway is acknowledged in one Account-row write.
+        await vi.waitFor(() => expect(hook.getCurrent().choices).toEqual([
+            expect.objectContaining({ connectionId: created.id, title: t('settingsProvidersCollection.gateway.mainGatewayName'), enabled: true })]));
+        expect(hook.getCurrent().firstGateway).toBeNull();
+        await act(async () => { expect(await hook.getCurrent().setEnabled(created.id, false)).toBe(true); });
+        expect(catalog.connections).toEqual([expect.objectContaining({ id: created.id, purposeBindingDefaults: {} })]);
         expect(machineRpc).not.toHaveBeenCalled();
     });
     it('does not offer slots from an unavailable Gateway declaration', async () => {
@@ -66,6 +109,8 @@ describe('pool gateway Action wiring', () => {
         const hook = await renderHook(() => usePoolGatewayChoices({ target, enabled: true, resolveTarget }));
         await vi.waitFor(() => expect(hook.getCurrent().loading).toBe(false));
         expect(hook.getCurrent().choices).toEqual([]);
+        // An existing gateway the app cannot read is not "no gateway": nothing is created beside it.
+        expect(hook.getCurrent().firstGateway).toBeNull();
         await expect(hook.getCurrent().setEnabled(saved.id, true)).rejects.toMatchObject({ code: 'provider_authorization_changed' });
         expect(machineRpc).not.toHaveBeenCalled();
     });

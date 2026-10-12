@@ -9,7 +9,9 @@ import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { getPreferredLanguage, t } from '@/text';
-import { useSettingMutable } from '@/sync/store/hooks';
+import { useSetting } from '@/sync/store/hooks';
+import { useSettingActionWriter } from '@/components/settings/catalog/useSettingActionWriter';
+import { Modal } from '@/modal';
 import {
     ConnectedServicesProviderStateSharingSettingsV1Schema,
     type ConnectedServicesProviderConfigSharingModeV1,
@@ -20,9 +22,8 @@ import { buildProviderConfigModeChoices, ProviderStateSharingRows } from './Prov
 import { CONNECTED_SERVICES_SETTINGS, CONNECTED_SERVICES_SHARING_SETTINGS } from './connectedServicesSettings';
 import { SettingsPageHeader } from '@/components/settings/shell/SettingsPageHeader';
 import { Icon } from '@/components/ui/icons/Icon';
-import { prepareDefaultProviderStateSharingChange, resolveProviderStateSharingAgentIds, type ProviderStateSharingSettingsWriter } from './providerStateSharingSettings';
+import { resolveProviderStateSharingAgentIds } from './providerStateSharingSettings';
 export { resolveProviderStateSharingAgentIds } from './providerStateSharingSettings';
-export type { ProviderStateSharingSettingsWriter } from './providerStateSharingSettings';
 
 type ProviderConfigMode = ConnectedServicesProviderConfigSharingModeV1;
 
@@ -39,11 +40,11 @@ function resolveConfigModeShortLabel(mode: ProviderConfigMode): string {
  */
 export function ConnectedServicesProviderStateSharingDisclosure(props: Readonly<{
     settings: ConnectedServicesProviderStateSharingSettingsV1;
-    setSettings: ProviderStateSharingSettingsWriter;
     onOpenBackendOverrides?: (() => void) | null;
     agentIds?: readonly AgentId[];
     showDivider?: boolean;
 }>) {
+    const writeSetting = useSettingActionWriter();
     const agentIds = props.agentIds ?? resolveProviderStateSharingAgentIds();
     const [expanded, setExpanded] = React.useState(false);
     const locale = getPreferredLanguage();
@@ -51,19 +52,17 @@ export function ConnectedServicesProviderStateSharingDisclosure(props: Readonly<
     const stateShared = props.settings.defaults.stateMode === 'shared';
 
     const setProviderConfigMode = React.useCallback((configMode: ProviderConfigMode) => {
-        props.setSettings(current => ({
-            ...current,
-            defaults: {
-                ...current.defaults,
-                configMode,
-            },
-        }));
-    }, [props]);
+        void writeSetting(CONNECTED_SERVICES_SETTINGS.settings.sharingConfig, configMode)
+            .then(result => { if (!result.ok) Modal.alert(t('common.error'), t('common.unavailable')); })
+            .catch(() => Modal.alert(t('common.error'), t('common.unavailable')));
+    }, [writeSetting]);
 
     const setProviderStateShared = React.useCallback(async (shared: boolean) => {
-        const apply = await prepareDefaultProviderStateSharingChange(props.settings, shared, agentIds);
-        if (apply) props.setSettings(apply);
-    }, [agentIds, locale, props]);
+        try {
+            const result = await writeSetting(CONNECTED_SERVICES_SETTINGS.settings.sharingState, shared);
+            if (!result.ok) await Modal.alert(t('common.error'), t('common.unavailable'));
+        } catch { await Modal.alert(t('common.error'), t('common.unavailable')); }
+    }, [writeSetting]);
 
     const summary = t('connectedServicesSettings.sharingSummary', {
         config: resolveConfigModeShortLabel(props.settings.defaults.configMode),
@@ -131,7 +130,6 @@ export function ConnectedServicesProviderStateSharingDisclosure(props: Readonly<
 
 export function ConnectedServicesProviderStateSharingBackendGroups(props: Readonly<{
     settings: ConnectedServicesProviderStateSharingSettingsV1;
-    setSettings: ProviderStateSharingSettingsWriter;
     agentIds?: readonly AgentId[];
 }>) {
     const agentIds = props.agentIds ?? resolveProviderStateSharingAgentIds();
@@ -151,7 +149,6 @@ export function ConnectedServicesProviderStateSharingBackendGroups(props: Readon
                             agentTitle={t(agentCore.displayNameKey)}
                             capability={agentCore.connectedServices?.providerStateSharing ?? null}
                             settings={props.settings}
-                            setSettings={props.setSettings}
                         />
                     </ItemGroup>
                 );
@@ -161,8 +158,7 @@ export function ConnectedServicesProviderStateSharingBackendGroups(props: Readon
 }
 
 export function ConnectedServicesProviderStateSharingSettingsView() {
-    const [providerStateSharingSettings, setProviderStateSharingSettings] =
-        useSettingMutable('connectedServicesProviderStateSharingSettingsV1');
+    const providerStateSharingSettings = useSetting('connectedServicesProviderStateSharingSettingsV1');
     const normalizedProviderStateSharingSettings = React.useMemo(
         () => ConnectedServicesProviderStateSharingSettingsV1Schema.parse(providerStateSharingSettings),
         [providerStateSharingSettings],
@@ -173,7 +169,6 @@ export function ConnectedServicesProviderStateSharingSettingsView() {
             <SettingsPageHeader description={t('connectedServicesSettings.perAgentPurpose')} />
             <ConnectedServicesProviderStateSharingBackendGroups
                 settings={normalizedProviderStateSharingSettings}
-                setSettings={setProviderStateSharingSettings}
             />
         </ItemList>
     );

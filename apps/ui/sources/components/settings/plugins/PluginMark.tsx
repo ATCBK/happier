@@ -4,7 +4,7 @@ import type { PluginProjectionInstalledPackageV2 } from '@happier-dev/protocol';
 
 import { PageHeaderMarkSlot } from '@/components/ui/layout/PageHeaderMarkSlot';
 import { InstalledPluginBrandMark } from '@/components/plugins/shared/InstalledPluginBrandMark';
-import { useInstalledPluginBrandPresentation, type InstalledPluginBrandPresentation } from '@/components/plugins/shared/installedPluginBrandPresentation';
+import { useBundledPluginBrandPresentation, useInstalledPluginBrandPresentation, type InstalledPluginBrandPresentation } from '@/components/plugins/shared/installedPluginBrandPresentation';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 
@@ -27,7 +27,7 @@ type PluginMarkProps = Readonly<{
 
 /** The same packaged-brand/Agent identity in cards, rows and headers, without a backing tile. */
 export const PluginMark = React.memo(function PluginMark(props: PluginMarkProps) {
-    if (props.installedPackage?.brand?.state === 'available' && props.machineId) {
+    if (props.installedPackage?.source.kind === 'bundled' || (props.installedPackage?.brand?.state === 'available' && props.machineId)) {
         return <ResolvedPluginMark {...props} />;
     }
     return <PluginIdentityMark {...props} />;
@@ -43,8 +43,9 @@ export function useServerInstalledPluginBrand(input: Readonly<{
     serverId?: string | null;
 }>): InstalledPluginBrandPresentation | null {
     const bindings = useServerCredentialAccountScopeBindings(input.serverId ? [input.serverId] : []);
+    const credentialBinding = input.serverId ? bindings.values().next().value ?? null : null;
     const accountLifetime = input.serverId
-        ? bindings.values().next().value ?? null
+        ? credentialBinding
         : captureActiveServerAccountScopeLifetime();
     const controller = React.useMemo(() => new AbortController(), [input.installedPackage, input.machineId, input.serverId, accountLifetime]);
     React.useEffect(() => () => controller.abort(), [controller]);
@@ -53,6 +54,7 @@ export function useServerInstalledPluginBrand(input: Readonly<{
         machineId: input.machineId,
         serverId: input.serverId,
         accountLifetime,
+        ...(credentialBinding ? { credentialAccountScope: credentialBinding.scope } : {}),
         signal: controller.signal,
         isCurrent: () => !controller.signal.aborted && accountLifetime?.isCurrent() === true,
     });
@@ -64,9 +66,10 @@ function ResolvedPluginMark(props: PluginMarkProps) {
 }
 
 function PluginIdentityMark(props: PluginMarkProps) {
+    const bundledBrand = useBundledPluginBrandPresentation(props.installedPackage ? null : props.pluginId);
     const page = props.size === 'page';
     const mark = <InstalledPluginBrandMark
-        brand={props.brand ?? { displayName: props.title }} pluginId={props.pluginId} iconAgentId={props.iconAgentId}
+        brand={props.brand ?? bundledBrand ?? { displayName: props.title }} pluginId={props.pluginId} iconAgentId={props.iconAgentId}
         pixelSize={28} externallyLabelled testID={props.testID}
     />;
     if (page) {

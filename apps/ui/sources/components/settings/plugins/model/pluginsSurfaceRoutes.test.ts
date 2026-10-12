@@ -15,7 +15,7 @@ import {
     buildPluginDetailRoute,
     buildPluginListingRoute,
     buildPluginsHomeRoute,
-    pluginsHomeTitleKey,
+    PLUGINS_HOME_TITLE_KEY,
     pluginsOpenItemParams,
     readPluginDetailRoutePluginId,
     readPluginsOpenItem,
@@ -133,8 +133,7 @@ describe('plugins surface routes', () => {
     });
 
     it('names the home by the host it is in, for the listing breadcrumb', () => {
-        expect(pluginsHomeTitleKey('settings')).toBe('settingsPlugins.title');
-        expect(pluginsHomeTitleKey('app')).toBe('settingsPlugins.surfaces.navigationTitle');
+        expect(PLUGINS_HOME_TITLE_KEY).toBe('settingsPlugins.surfaces.navigationTitle');
     });
 
     it('round-trips a source-qualified listing through its route params', () => {

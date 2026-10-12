@@ -8,9 +8,14 @@ import type {
 import { SearchHeader } from '@/components/ui/forms/SearchHeader';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { ItemLoadStateRows } from '@/components/ui/lists/ItemLoadStateRows';
+import { SectionActionButton } from '@/components/ui/lists/SectionActionButton';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { useTeamCredentialResources } from '@/hooks/teams/useTeamCredentialResources';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { t } from '@/text';
+import { useProjectedConnectedServicesRegistry } from '@/components/appShell/plugins/AppShellPluginUiProjection';
+import { ConnectedServiceMark } from '@/components/settings/connectedServices/ConnectedServiceMark';
 
 import { TeamSection } from '../TeamSection';
 import type { TeamSectionContext } from '../teamSectionContext';
@@ -19,6 +24,7 @@ import {
     orderTeamCredentialResources,
     resourceAdministrationSummaryLines,
     resourceAccessibilityLabel,
+    resourceConnectedServiceMarkId,
 } from './teamCredentialPresentation';
 import { TeamCredentialResourceFilterPicker } from './TeamCredentialResourceFilterPicker';
 
@@ -36,6 +42,7 @@ const CredentialRow = React.memo(function CredentialRow(props: Readonly<{
 }>) {
     const router = useRouter();
     const { context, resource } = props;
+    const registry = useProjectedConnectedServicesRegistry();
     // Whether the Home disclosed this resource's audience and policy to this
     // viewer is the resource's own `capabilities`, which the presentation owner
     // reads: a member is shown empty grant lists and masked policy defaults
@@ -46,6 +53,7 @@ const CredentialRow = React.memo(function CredentialRow(props: Readonly<{
         <Item
             testID={`team-credentials-row:${resource.id}`}
             title={resource.displayName}
+            icon={<ConnectedServiceMark legacyServiceId={resourceConnectedServiceMarkId(resource, registry)} size="row" />}
             subtitle={summaryLines.join('\n')}
             accessibilityLabel={resourceAccessibilityLabel(resource)}
             onPress={() => router.push(teamCredentialDetailPath(context.address, resource.id))}
@@ -54,38 +62,15 @@ const CredentialRow = React.memo(function CredentialRow(props: Readonly<{
 });
 
 /**
- * The one way into offering a source.
- *
- * It appears only once the Home has said this viewer may offer their own
- * credential: `offerOwnCredential` is a separate decision from administering the
- * Team's resources, so a manager who owns nothing shareable and an ordinary
- * member who does are each told the truth. While the answer is still open the
- * entry is absent rather than present-then-gone.
+ * The Home's own decision about this exact Home, not the Home set the person happens to be looking
+ * at: a Team screen is bound to one Home for its whole lifetime, and the destination must answer
+ * for that one. The list and the header's action read one shared observation.
  */
-const ShareCredentialEntry = React.memo(function ShareCredentialEntry(props: Readonly<{
-    context: TeamSectionContext;
-    testID: string;
-}>) {
-    const router = useRouter();
-    const { context, testID } = props;
-    return (
-        <Item
-            testID={testID}
-            title={t('teams.credentials.create.action')}
-            onPress={() => router.push(teamCredentialCreatePath(context.address))}
-        />
-    );
-});
-
-const CredentialsList = React.memo(function CredentialsList(props: Readonly<{
-    context: TeamSectionContext;
-}>) {
-    const { context } = props;
-    const [search, setSearch] = React.useState('');
-    const [filter, setFilter] = React.useState<TeamCredentialResourceListFilterV1>('all');
-    // The Home's own decision about this exact Home, not the Home set the person
-    // happens to be looking at: a Team screen is bound to one Home for its whole
-    // lifetime, and the destination must answer for that one.
+function useTeamCredentialsProjection(
+    context: TeamSectionContext,
+    search?: string,
+    filter?: TeamCredentialResourceListFilterV1,
+) {
     const featureEnabled = useFeatureEnabled('teams.credentialResources', {
         scopeKind: 'spawn',
         serverId: context.scope.serverId,
@@ -94,24 +79,66 @@ const CredentialsList = React.memo(function CredentialsList(props: Readonly<{
         scope: context.scope,
         address: context.address,
         enabled: featureEnabled,
-        search: search.trim() || undefined,
+        search,
         filter,
     });
+    return { featureEnabled, projection };
+}
+
+/**
+ * Offering your own source is the Home's separate decision from administering the Team's resources:
+ * it appears only once the Home has said this viewer may, never present-then-gone.
+ */
+function mayOfferCredential(
+    viewer: ReturnType<typeof useTeamCredentialResources>['viewer'],
+    context: TeamSectionContext,
+): boolean {
+    return viewer?.offerOwnCredential === true && context.canMutate;
+}
+
+/**
+ * Sharing a source starts at the head of the page, like adding a Group or inviting someone. With
+ * nothing shared yet the empty state's own action is the one way to start, so it is not offered twice.
+ */
+const ShareCredentialAction = React.memo(function ShareCredentialAction(props: Readonly<{ context: TeamSectionContext }>) {
+    const router = useRouter();
+    const { featureEnabled, projection } = useTeamCredentialsProjection(props.context);
+    if (!featureEnabled || projection.rows.length === 0 || !mayOfferCredential(projection.viewer, props.context)) return null;
+    return (
+        <SectionActionButton
+            testID="team-credentials-share"
+            icon="plus"
+            title={t('teams.credentials.create.action')}
+            onPress={() => router.push(teamCredentialCreatePath(props.context.address))}
+        />
+    );
+});
+
+const CredentialsList = React.memo(function CredentialsList(props: Readonly<{
+    context: TeamSectionContext;
+}>) {
+    const { context } = props;
+    const router = useRouter();
+    const [search, setSearch] = React.useState('');
+    const [filter, setFilter] = React.useState<TeamCredentialResourceListFilterV1>('all');
+    const { featureEnabled, projection } = useTeamCredentialsProjection(context, search.trim() || undefined, filter);
     const showSearch = projection.rows.length >= 10 || projection.hasMore || search.length > 0;
 
     if (!featureEnabled) {
         return (
-            <ItemGroup description={t('teams.credentials.unavailable')}>
-                <Item
-                    testID="team-credentials-unavailable"
-                    title={t('teams.credentials.title')}
-                    showChevron={false}
-                />
-            </ItemGroup>
+            <SurfaceStateCard
+                testID="team-credentials-unavailable"
+                kind="unavailable"
+                size="pane"
+                iconName="key"
+                title={t('teams.credentials.unavailable')}
+                reason={t('teams.credentials.subtitle')}
+            />
         );
     }
 
-    const mayOffer = projection.viewer?.offerOwnCredential === true && context.canMutate;
+    const mayOffer = mayOfferCredential(projection.viewer, context);
+    const share = () => router.push(teamCredentialCreatePath(context.address));
 
     // The Home answered that this viewer neither administers this Team's
     // resources nor may offer one of their own. That is a settled answer, not a
@@ -122,18 +149,52 @@ const CredentialsList = React.memo(function CredentialsList(props: Readonly<{
         && !projection.viewer.offerOwnCredential
         && projection.rows.length === 0) {
         return (
-            <ItemGroup description={t('teams.credentials.forbidden')}>
-                <Item
-                    testID="team-credentials-forbidden"
-                    title={t('teams.denied.title')}
-                    showChevron={false}
-                />
-            </ItemGroup>
+            <SurfaceStateCard
+                testID="team-credentials-forbidden"
+                kind="denied"
+                size="pane"
+                title={t('teams.denied.title')}
+                reason={t('teams.credentials.forbidden')}
+            />
         );
     }
 
     const rows = orderTeamCredentialResources(projection.rows);
     const hasActiveFilter = filter !== 'all' || search.trim().length > 0;
+    const retryLine = projection.error ? (
+        // Rows already read stay on screen through a failure; the failure is one line beside them.
+        <SurfaceStateCard
+            testID="team-credentials-error"
+            kind="error"
+            size="line"
+            title={t('teams.unavailable.offline')}
+            action={{ label: t('common.retry'), onPress: () => void projection.retry(), testID: 'team-credentials-retry' }}
+            accessibilitySemantics="alert"
+        />
+    ) : null;
+
+    // Nothing shared yet, and no search or filter narrowing it: the page itself becomes the invitation
+    // (what sharing does, and the one way to start). Search and the filter would act on an empty set.
+    if (rows.length === 0 && projection.status === 'ready' && !hasActiveFilter) {
+        return (
+            <>
+                <SurfaceStateCard
+                    testID="team-credentials-empty"
+                    kind="empty"
+                    size="pane"
+                    iconName="key"
+                    // The Team's other first-run pages (Groups, Invitations) draw their scene; this one too.
+                    scene="connectAccount"
+                    title={t('teams.credentials.emptyTitle')}
+                    reason={t('teams.credentials.subtitle')}
+                    action={mayOffer
+                        ? { label: t('teams.credentials.create.action'), onPress: share, testID: 'team-credentials-empty-share' }
+                        : undefined}
+                />
+                {retryLine ? <ItemGroup>{retryLine}</ItemGroup> : null}
+            </>
+        );
+    }
 
     return (
         <>
@@ -145,7 +206,9 @@ const CredentialsList = React.memo(function CredentialsList(props: Readonly<{
                     placeholder={t('teams.directory.searchPlaceholder')}
                 />
             ) : null}
-            {projection.viewer?.manageCredentials === true ? (
+            {/* Narrowing earns its place only once the list is too long to read at a glance (the same
+                threshold as search), or while a narrowing is in force and needs its way back. */}
+            {projection.viewer?.manageCredentials === true && (showSearch || filter !== 'all') ? (
                 <ItemGroup>
                     <TeamCredentialResourceFilterPicker
                         value={filter}
@@ -154,64 +217,38 @@ const CredentialsList = React.memo(function CredentialsList(props: Readonly<{
                     />
                 </ItemGroup>
             ) : null}
-            {projection.status === 'loading' && rows.length === 0 ? (
-                <ItemGroup>
-                    <Item
+            <ItemGroup>
+                {projection.status === 'loading' && rows.length === 0 ? (
+                    <ItemLoadStateRows
                         testID="team-credentials-loading"
-                        title={t('teams.credentials.title')}
-                        loading
-                        showChevron={false}
+                        state={{ kind: 'loading' }}
+                        rows={3}
+                        accessibilityLabel={t('common.loading')}
                     />
-                </ItemGroup>
-            ) : null}
-
-            {rows.length === 0 && projection.status === 'ready' ? (
-                <ItemGroup description={hasActiveFilter
-                    ? t('common.noMatches')
-                    : t('teams.credentials.emptyBody')}>
-                    <Item
+                ) : rows.length === 0 && projection.status === 'ready' ? (
+                    // Only a real search or filter reaches here: say so, with the way back.
+                    <SurfaceStateCard
                         testID="team-credentials-empty"
-                        title={hasActiveFilter ? t('common.noMatches') : t('teams.credentials.emptyTitle')}
-                        showChevron={false}
-                    />
-                    {hasActiveFilter ? (
-                        <Item
-                            testID="team-credentials-clear-filters"
-                            title={t('common.reset')}
-                            accessibilityLabel={`${t('common.reset')}: ${t('teams.credentials.title')}`}
-                            onPress={() => {
+                        kind="empty"
+                        size="line"
+                        title={t('common.noMatches')}
+                        action={{
+                            label: t('common.reset'),
+                            testID: 'team-credentials-clear-filters',
+                            onPress: () => {
                                 setSearch('');
                                 setFilter('all');
-                            }}
-                            showChevron={false}
-                        />
-                    ) : null}
-                    {mayOffer ? (
-                        <ShareCredentialEntry context={context} testID="team-credentials-empty-share" />
-                    ) : null}
-                </ItemGroup>
-            ) : null}
-
-            {rows.length > 0 ? (
-                <ItemGroup title={t('teams.credentials.title')} description={t('teams.credentials.subtitle')}>
-                    {rows.map((resource) => (
-                        <CredentialRow
-                            key={resource.id}
-                            context={context}
-                            resource={resource}
-                        />
-                    ))}
-                </ItemGroup>
-            ) : null}
-
-            {mayOffer && rows.length > 0 ? (
-                <ItemGroup>
-                    <ShareCredentialEntry context={context} testID="team-credentials-share" />
-                </ItemGroup>
-            ) : null}
-
-            {projection.hasMore && !projection.error ? (
-                <ItemGroup>
+                            },
+                        }}
+                    />
+                ) : rows.map((resource) => (
+                    <CredentialRow
+                        key={resource.id}
+                        context={context}
+                        resource={resource}
+                    />
+                ))}
+                {projection.hasMore && !projection.error ? (
                     <Item
                         testID="team-credentials-load-more"
                         title={t('homeGovernance.loadMore')}
@@ -219,20 +256,9 @@ const CredentialsList = React.memo(function CredentialsList(props: Readonly<{
                         onPress={() => void projection.loadMore()}
                         showChevron={false}
                     />
-                </ItemGroup>
-            ) : null}
-
-            {/* Rows already read stay on screen through a failure. */}
-            {projection.error ? (
-                <ItemGroup description={t('teams.unavailable.offline')}>
-                    <Item
-                        testID="team-credentials-retry"
-                        title={t('teams.unavailable.retry')}
-                        onPress={() => void projection.retry()}
-                        showChevron={false}
-                    />
-                </ItemGroup>
-            ) : null}
+                ) : null}
+                {retryLine}
+            </ItemGroup>
         </>
     );
 });
@@ -242,7 +268,13 @@ export const TeamCredentialsScreen = React.memo(function TeamCredentialsScreen(p
     teamId: string;
 }>) {
     return (
-        <TeamSection serverId={props.serverId} teamId={props.teamId} title={t('teams.credentials.title')} description={t('teams.pages.credentials')}>
+        <TeamSection
+            serverId={props.serverId}
+            teamId={props.teamId}
+            title={t('teams.credentials.title')}
+            description={t('teams.pages.credentials')}
+            renderHeaderActions={(context) => <ShareCredentialAction context={context} />}
+        >
             {(context) => <CredentialsList context={context} />}
         </TeamSection>
     );

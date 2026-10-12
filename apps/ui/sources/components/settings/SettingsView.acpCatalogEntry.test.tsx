@@ -147,7 +147,6 @@ vi.mock('@/hooks/ui/useHappyAction', () => ({
 
 vi.mock('@/sync/domains/profiles/profile', async (importOriginal) => ({
     ...await importOriginal<typeof import('@/sync/domains/profiles/profile')>(),
-    getDisplayName: () => 'Test User',
     getAvatarUrl: () => null,
     getBio: () => '',
 }));
@@ -204,9 +203,10 @@ afterEach(() => {
     routerPushSpy.mockClear();
 });
 
+const { SettingsView } = await import('./SettingsView');
+
 describe('SettingsView ACP catalog entry', () => {
     it('does not include a detached ACP backends entry in the main settings screen', async () => {
-        const { SettingsView } = await import('./SettingsView');
 
         let tree!: ReactTestRenderer;
         tree = (await renderSettingsView(React.createElement(SettingsView))).tree;

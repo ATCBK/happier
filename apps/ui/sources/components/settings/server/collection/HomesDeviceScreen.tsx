@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { Platform } from 'react-native';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
-import { useUnistyles } from 'react-native-unistyles';
+import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprovalPendingNotice';
 
 import { ConnectionStatusControl } from '@/components/navigation/ConnectionStatusControl';
 import { settingRendersOnHost } from '@/components/settings/catalog/settingDeclarations';
@@ -21,7 +21,7 @@ import { SettingRow } from '@/components/settings/shell/SettingRow';
 import { SettingsPageHeader } from '@/components/settings/shell/SettingsPageHeader';
 import { Switch } from '@/components/ui/forms/Switch';
 import { Icon } from '@/components/ui/icons/Icon';
-import { ExpandableItem } from '@/components/ui/lists/ExpandableItem';
+import { ExpandableItem, ExpandableItemCaret } from '@/components/ui/lists/ExpandableItem';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
@@ -42,8 +42,15 @@ type LocalRuntimeSectionProps = Readonly<{
 }>;
 
 function OwnedLocalRuntimeSection(props: LocalRuntimeSectionProps) {
+    const router = useRouter();
     const controller = useLocalRelayRuntimeControl();
-    return <ServerLocalRuntimeControlSection {...props} controller={controller} />;
+    return <>
+        <ServerLocalRuntimeControlSection {...props} controller={controller} />
+        {controller.approval.approvalPending && controller.approval.approvalId && controller.actionServerId ? <ItemGroup>
+            <ActionApprovalPendingNotice testID="device-runtime-approval" message={t('secrets.catalog.approvalPending')}
+                onOpenApproval={() => router.pushRetainingCurrent(`/inbox/approvals/${encodeURIComponent(controller.approval.approvalId!)}?serverId=${encodeURIComponent(controller.actionServerId)}`)} />
+        </ItemGroup> : null}
+    </>;
 }
 
 /** The runtime this desktop runs: the Personal Home's controls when it is one, else the generic relay runtime's. */
@@ -69,7 +76,6 @@ export const ServerLocalRuntimeControlSection = React.memo(function ServerLocalR
  * the connection it uses, and the Home runtime it runs itself (desktop app).
  */
 export const HomesDeviceScreen = React.memo(function HomesDeviceScreen() {
-    const { theme } = useUnistyles();
     const router = useRouter();
     const { controller } = useHomesCollection();
     const [homeApplicationCarrierEligibility, setHomeApplicationCarrierEligibility] = useLocalSettingMutable('homeApplicationCarrierEligibility');
@@ -84,7 +90,7 @@ export const HomesDeviceScreen = React.memo(function HomesDeviceScreen() {
         () => findPersonalHomeBootstrapCompletedProfile(controller.servers),
         [controller.servers],
     );
-    const { operations: unboundRuntimeOperations } = usePersonalHomeRuntimeOperations({ profiles: controller.servers });
+    const { operations: deviceRuntimeOperations, searchApproval: runtimeApproval, approvalServerId } = usePersonalHomeRuntimeOperations({ profiles: controller.servers });
     const handleLocalRelayStatusChange = React.useCallback((status: Readonly<{ relayUrl: string }> | null | undefined) => {
         const next = typeof status?.relayUrl === 'string' && status.relayUrl.trim().length > 0 ? status.relayUrl.trim() : null;
         setLocalRelayUrl((current) => (current === next ? current : next));
@@ -124,13 +130,7 @@ export const HomesDeviceScreen = React.memo(function HomesDeviceScreen() {
                             testID="settings.server.connectionDetails.header"
                             {...state.headerProps}
                             title={t('server.homes.connectionDetails')}
-                            rightElement={(
-                                <Icon
-                                    name={state.expanded ? 'caret-down' : 'caret-right'}
-                                    size={16}
-                                    color={theme.colors.text.secondary}
-                                />
-                            )}
+                            rightElement={<ExpandableItemCaret expanded={state.expanded} />}
                             showChevron={false}
                         />
                     )}
@@ -151,13 +151,17 @@ export const HomesDeviceScreen = React.memo(function HomesDeviceScreen() {
                         />
                     </ItemGroup>
                 ) : (
-                    // A local runtime without a Personal Home receipt is bound to no Home console, so its
-                    // runtime-scoped operations stay on this device's page.
+                    // Without a Personal Home receipt, controls stay on this device's page.
+                    // Signed-in admission still belongs to its active Account.
                     <>
                         <ServerLocalRuntimeControlSection
                             onStatusChange={handleLocalRelayStatusChange}
-                            operations={unboundRuntimeOperations}
+                            operations={deviceRuntimeOperations}
                         />
+                        {runtimeApproval.approvalPending && runtimeApproval.approvalId && approvalServerId ? <ItemGroup>
+                            <ActionApprovalPendingNotice testID="device-runtime-files-approval" message={t('secrets.catalog.approvalPending')}
+                                onOpenApproval={() => router.pushRetainingCurrent(`/inbox/approvals/${encodeURIComponent(runtimeApproval.approvalId!)}?serverId=${encodeURIComponent(approvalServerId)}`)} />
+                        </ItemGroup> : null}
                         <LocalRelayAccessControlSection upstreamUrl={localRelayUrl ?? knownLocalRelayUrl} />
                     </>
                 )

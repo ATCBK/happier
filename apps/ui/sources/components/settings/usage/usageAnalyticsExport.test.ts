@@ -203,7 +203,7 @@ describe('usageAnalyticsExport', () => {
         });
 
         expect(summaryText).toContain('Go-to model');
-        expect(summaryText).toContain('opencode');
+        expect(summaryText).toContain('OpenCode');
         expect(summaryText).not.toContain('unknown');
     });
 

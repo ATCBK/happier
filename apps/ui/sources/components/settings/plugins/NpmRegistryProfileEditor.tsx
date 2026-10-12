@@ -109,7 +109,7 @@ export function NpmRegistryProfileEditorModal(props: Readonly<{
             flexDirection: 'row',
             alignItems: 'center',
             justifyContent: 'space-between',
-            gap: 10,
+            gap: theme.space.s10,
         }}>
             <RoundButton
                 size="normal"
@@ -156,13 +156,13 @@ export function NpmRegistryProfileEditorModal(props: Readonly<{
                 keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
                 {...(Platform.OS === 'ios' ? { automaticallyAdjustKeyboardInsets: true } : {})}
                 contentContainerStyle={{
-                    paddingHorizontal: 20,
+                    paddingHorizontal: theme.space.s20,
                     paddingTop: 14,
                     paddingBottom: 18,
                     gap: 14,
                 }}
             >
-                <View style={[cardStyle, { padding: 12, gap: 14 }]}>
+                <View style={[cardStyle, { padding: theme.space.s12, gap: 14 }]}>
                     {/*
                       * The origin is the profile's identity, so an existing
                       * profile shows it rather than hiding or re-asking it: the

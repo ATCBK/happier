@@ -12,6 +12,7 @@ import { Item } from '@/components/ui/lists/Item';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { SectionButtonRow } from '@/components/ui/lists/SectionButtonRow';
+import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import { useTeamInvitations } from '@/hooks/teams/useTeamInvitations';
 import { randomUUID } from '@/platform/randomUUID';
 import {
@@ -23,6 +24,7 @@ import { t } from '@/text';
 import type { TeamSectionContext } from '../teamSectionContext';
 import { teamRoleLabel } from '../teamLabels';
 import { teamMutationFailureLabel } from '../teamMutationPresentation';
+import { historyConsequence, historyLabel } from '../teamPolicyPresentation';
 import { TeamLinkDelivery } from '../TeamLinkDelivery';
 
 const ADMISSIBLE_ROLES: readonly TeamInvitationAdmissibleRoleV1[] = Object.freeze([
@@ -32,12 +34,31 @@ const ADMISSIBLE_ROLES: readonly TeamInvitationAdmissibleRoleV1[] = Object.freez
 ]);
 
 type Delivery = 'link' | 'email';
+const DELIVERIES: readonly Delivery[] = Object.freeze(['link', 'email']);
+const HISTORY_CHOICES: readonly SessionHistoryAccessV1[] = Object.freeze(['from_membership', 'all_existing']);
+
+/** What a person invited with this role receives, said under the role choice. */
+function invitationRoleHelp(role: TeamInvitationAdmissibleRoleV1): string {
+    switch (role) {
+        case 'admin':
+            return t('teams.roleHelp.admin');
+        case 'member':
+            return t('teams.roleHelp.member');
+        case 'guest':
+            return t('teams.roleHelp.guest');
+    }
+}
 
 /**
  * The one invitation form: delivery, role, history access and the confined bearer. The Team's own
  * invitation page and the Home console's Invite people dialog both render it.
  */
-export const TeamInvitationForm = React.memo(function TeamInvitationForm(props: Readonly<{ context: TeamSectionContext }>) {
+export const TeamInvitationForm = React.memo(function TeamInvitationForm(props: Readonly<{
+    context: TeamSectionContext;
+    onDone?: () => void;
+    /** Told when the form becomes the issued invitation and back, so a dialog can retitle itself. */
+    onIssuedChange?: (issued: boolean) => void;
+}>) {
     const { context } = props;
     const [delivery, setDelivery] = React.useState<Delivery>('link');
     const [email, setEmail] = React.useState('');
@@ -54,6 +75,11 @@ export const TeamInvitationForm = React.memo(function TeamInvitationForm(props: 
      * be recovered from the invitation list afterwards.
      */
     const [issued, setIssued] = React.useState<TeamInvitationCreateResultV1 | null>(null);
+    const { onIssuedChange } = props;
+    const isIssued = issued !== null;
+    React.useEffect(() => {
+        onIssuedChange?.(isIssued);
+    }, [isIssued, onIssuedChange]);
 
     /**
      * Whether this Home can currently mail an invitation at all.
@@ -116,6 +142,22 @@ export const TeamInvitationForm = React.memo(function TeamInvitationForm(props: 
         invitationId: string;
         requestKey: string;
     }> | null>(null);
+    const startAnother = () => {
+        if (deliveryRetryInFlightRef.current) return;
+        setIssued(null);
+        setError(null);
+        setDelivery('link');
+        setEmail('');
+        setRole('member');
+        setHistoryAccess(context.team.policy.defaultSessionHistoryAccess);
+        deliveryRetryIdentity.current = null;
+        requestKey.current = randomUUID();
+    };
+    const done = () => {
+        if (deliveryRetryInFlightRef.current) return;
+        startAnother();
+        props.onDone?.();
+    };
     React.useEffect(() => {
         requestKey.current = randomUUID();
     }, [delivery, email, role, historyAccess]);
@@ -293,7 +335,6 @@ export const TeamInvitationForm = React.memo(function TeamInvitationForm(props: 
                     <TeamLinkDelivery
                         url={joinUrl}
                         testIDPrefix="team-invite"
-                        title={t('teams.invitations.linkRow')}
                         copyLabel={t('teams.invitations.copyLink')}
                         shareLabel={t('teams.invitations.shareLink')}
                         qrAccessibilityLabel={t('teams.invitations.qrLabel')}
@@ -303,51 +344,51 @@ export const TeamInvitationForm = React.memo(function TeamInvitationForm(props: 
                         })}
                     />
                 ) : null}
+                {/* The same closing row as the form's: the way on at the far edge, Done as the one primary. */}
+                <ItemGroup surface="none">
+                    <SectionButtonRow
+                        trailing={(
+                            <>
+                                <RoundButton
+                                    testID="team-invite-another"
+                                    size="small"
+                                    display="secondary"
+                                    title={t('teams.invitations.inviteAnother')}
+                                    disabled={retryingDelivery}
+                                    onPress={startAnother}
+                                />
+                                <RoundButton
+                                    testID="team-invite-done"
+                                    size="small"
+                                    title={t('common.done')}
+                                    disabled={retryingDelivery}
+                                    onPress={done}
+                                />
+                            </>
+                        )}
+                    >
+                        {null}
+                    </SectionButtonRow>
+                </ItemGroup>
             </>
         );
     }
 
+    // One sheet, one decision per row (lab `tsInvites-I`): how it is sent, the address when it is
+    // mailed, the role and the history it opens. Each choice of two to four short options is the
+    // shared segmented row, and the chosen option says what it means beneath its label.
+    const historyOptions = HISTORY_CHOICES.map((option) => ({
+        id: option,
+        label: historyLabel(option),
+        description: historyConsequence(option, context.team.name),
+    }));
     return (
         <>
-            {/* With no mail boundary there is only one way to invite, and a
-                chooser with a single option is noise. The transferable link
-                stays fully usable either way — email is the part that becomes
-                unavailable, never the invitation. */}
-            {emailAvailable ? (
-                <ItemGroup
-                    title={t('teams.invitations.inviteTitle', { team: context.team.name })}
-                    accessibilityRole="radiogroup"
-                    accessibilityLabel={t('teams.invitations.inviteTitle', { team: context.team.name })}
-                >
-                    <Item
-                        testID="team-invite-delivery:link"
-                        title={t('teams.invitations.byLink')}
-                        selected={delivery === 'link'}
-                        accessibilityRole="radio"
-                        webRole="radio"
-                        accessibilityChecked={delivery === 'link'}
-                        onPress={() => setDelivery('link')}
-                        showChevron={false}
-                    />
-                    <Item
-                        testID="team-invite-delivery:email"
-                        title={t('teams.invitations.byEmail')}
-                        selected={delivery === 'email'}
-                        accessibilityRole="radio"
-                        webRole="radio"
-                        accessibilityChecked={delivery === 'email'}
-                        onPress={() => setDelivery('email')}
-                        showChevron={false}
-                    />
-                </ItemGroup>
-            ) : linkUnavailable ? (
+            {linkUnavailable && !emailAvailable ? (
                 // No join target means no link and no mail: the sheet says the
                 // invitation will exist but has no way to reach anyone yet,
                 // instead of promising a link this Home cannot render.
-                <ItemGroup
-                    title={t('teams.invitations.inviteTitle', { team: context.team.name })}
-                    description={t('teams.invitations.linkUnavailableBody')}
-                >
+                <ItemGroup description={t('teams.invitations.linkUnavailableBody')}>
                     <Item
                         testID="team-invite-link-unavailable-notice"
                         title={t('teams.invitations.linkUnavailableRow')}
@@ -355,25 +396,41 @@ export const TeamInvitationForm = React.memo(function TeamInvitationForm(props: 
                         showChevron={false}
                     />
                 </ItemGroup>
-            ) : emailDelivery === 'unavailable' ? (
-                // The Home answered that it cannot mail an invitation. Silently
-                // dropping the option would leave a manager looking for it, so
-                // the sheet says the link is the way and why.
-                <ItemGroup
-                    title={t('teams.invitations.inviteTitle', { team: context.team.name })}
-                    description={t('teams.invitations.emailUnavailable')}
-                >
+            ) : null}
+
+            <ItemGroup>
+                {/* With no mail boundary there is only one way to invite, and a
+                    chooser with a single option is noise. The transferable link
+                    stays fully usable either way — email is the part that becomes
+                    unavailable, never the invitation, and the row says why. */}
+                {emailAvailable ? (
+                    <SegmentedChoiceItem<Delivery>
+                        testID="team-invite-delivery"
+                        testIDPrefix="team-invite-delivery"
+                        title={t('teams.invitations.sendAs')}
+                        options={DELIVERIES.map((option) => ({
+                            id: option,
+                            label: option === 'email' ? t('teams.invitations.byEmail') : t('teams.invitations.byLink'),
+                        }))}
+                        value={delivery}
+                        onChange={setDelivery}
+                    />
+                ) : emailDelivery === 'unavailable' && !linkUnavailable ? (
+                    // The Home answered that it cannot mail an invitation. Silently
+                    // dropping the option would leave a manager looking for it, so
+                    // the row says the link is the way and why.
                     <Item
                         testID="team-invite-delivery-link-only"
-                        title={t('teams.invitations.byLink')}
+                        title={t('teams.invitations.sendAs')}
+                        subtitle={t('teams.invitations.emailUnavailable')}
+                        subtitleLines={0}
+                        detail={t('teams.invitations.byLink')}
                         mode="info"
                         showChevron={false}
                     />
-                </ItemGroup>
-            ) : null}
+                ) : null}
 
-            {effectiveDelivery === 'email' ? (
-                <ItemGroup>
+                {effectiveDelivery === 'email' ? (
                     <Item
                         title={t('teams.invitations.emailLabel')}
                         accessoryLayout="adaptive"
@@ -391,66 +448,37 @@ export const TeamInvitationForm = React.memo(function TeamInvitationForm(props: 
                             />
                         )}
                     />
-                </ItemGroup>
-            ) : null}
+                ) : null}
 
-            <ItemGroup
-                title={t('teams.members.roleLabel')}
-                description={role === 'guest'
-                    ? t('teams.roleHelp.guest')
-                    : role === 'admin'
-                        ? t('teams.roleHelp.admin')
-                        : t('teams.roleHelp.member')}
-                accessibilityRole="radiogroup"
-                accessibilityLabel={t('teams.members.roleLabel')}
-            >
-                {ADMISSIBLE_ROLES.map((candidate) => (
-                    <Item
-                        key={candidate}
-                        testID={`team-invite-role:${candidate}`}
-                        title={teamRoleLabel(candidate)}
-                        selected={candidate === role}
-                        accessibilityRole="radio"
-                        webRole="radio"
-                        accessibilityChecked={candidate === role}
-                        onPress={() => setRole(candidate)}
-                        showChevron={false}
+                <SegmentedChoiceItem<TeamInvitationAdmissibleRoleV1>
+                    testID="team-invite-role"
+                    testIDPrefix="team-invite-role"
+                    title={t('teams.members.roleLabel')}
+                    subtitleLines={0}
+                    options={ADMISSIBLE_ROLES.map((candidate) => ({
+                        id: candidate,
+                        label: teamRoleLabel(candidate),
+                        description: invitationRoleHelp(candidate),
+                    }))}
+                    value={role}
+                    onChange={setRole}
+                />
+
+                {/* A guest never receives Team-principal access, so the server
+                    withholds the history choice for it rather than promising access
+                    the role does not carry. */}
+                {historyChoiceAvailable ? (
+                    <SegmentedChoiceItem<SessionHistoryAccessV1>
+                        testID="team-invite-history"
+                        testIDPrefix="team-invite-history"
+                        title={t('teams.history.label')}
+                        subtitleLines={0}
+                        options={historyOptions}
+                        value={historyAccess}
+                        onChange={setHistoryAccess}
                     />
-                ))}
+                ) : null}
             </ItemGroup>
-
-            {/* A guest never receives Team-principal access, so the server
-                withholds the history choice for it rather than promising access
-                the role does not carry. */}
-            {historyChoiceAvailable ? (
-                <ItemGroup
-                    title={t('teams.history.label')}
-                    description={t('teams.history.scopeNote')}
-                    accessibilityRole="radiogroup"
-                    accessibilityLabel={t('teams.history.label')}
-                >
-                    <Item
-                        testID="team-invite-history:from_membership"
-                        title={t('teams.history.fromMembership')}
-                        selected={historyAccess === 'from_membership'}
-                        accessibilityRole="radio"
-                        webRole="radio"
-                        accessibilityChecked={historyAccess === 'from_membership'}
-                        onPress={() => setHistoryAccess('from_membership')}
-                        showChevron={false}
-                    />
-                    <Item
-                        testID="team-invite-history:all_existing"
-                        title={t('teams.history.allExisting')}
-                        selected={historyAccess === 'all_existing'}
-                        accessibilityRole="radio"
-                        webRole="radio"
-                        accessibilityChecked={historyAccess === 'all_existing'}
-                        onPress={() => setHistoryAccess('all_existing')}
-                        showChevron={false}
-                    />
-                </ItemGroup>
-            ) : null}
 
             <ItemGroup surface="none">
                 <SectionButtonRow
@@ -461,15 +489,30 @@ export const TeamInvitationForm = React.memo(function TeamInvitationForm(props: 
                         })
                         : null)}
                     footnoteTone={error ? 'danger' : 'secondary'}
+                    trailing={(
+                        <>
+                            {props.onDone ? (
+                                <RoundButton
+                                    testID="team-invite-cancel"
+                                    size="small"
+                                    display="secondary"
+                                    title={t('common.cancel')}
+                                    disabled={submitting}
+                                    onPress={props.onDone}
+                                />
+                            ) : null}
+                            <RoundButton
+                                testID="team-invite-submit"
+                                size="small"
+                                title={t('teams.invitations.create')}
+                                loading={submitting}
+                                disabled={!canSubmit}
+                                onPress={() => void submit()}
+                            />
+                        </>
+                    )}
                 >
-                    <RoundButton
-                        testID="team-invite-submit"
-                        size="small"
-                        title={t('teams.invitations.create')}
-                        loading={submitting}
-                        disabled={!canSubmit}
-                        onPress={() => void submit()}
-                    />
+                    {null}
                 </SectionButtonRow>
             </ItemGroup>
         </>

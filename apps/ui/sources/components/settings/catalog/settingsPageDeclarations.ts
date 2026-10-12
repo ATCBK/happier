@@ -2,7 +2,12 @@ import { ACCOUNT_SETTINGS } from '@/components/settings/account/accountSettings'
 import { ACCOUNT_SECURITY_SETTINGS } from '@/components/settings/account/accountSecuritySettings';
 import { API_TOKEN_SETTINGS } from '@/components/settings/apiTokens/apiTokensSettings';
 import { EMBED_SETTINGS } from '@/components/settings/embeds/embedsSettings';
-import { APPEARANCE_SETTINGS } from '@/components/settings/appearance/appearanceSettings';
+// Named, not spread: a test that imports Appearance first reaches this list through an import cycle
+// (atmosphere settings → app shell → Actions) before Appearance's own list exists.
+import {
+    APPEARANCE_PAGE_SETTINGS, APPEARANCE_GLASS_SETTINGS, APPEARANCE_MOMENTS_SETTINGS,
+    APPEARANCE_WIDGETS_SETTINGS, APPEARANCE_MOTION_SETTINGS, APPEARANCE_MACHINE_SUMMARY_SETTINGS,
+} from '@/components/settings/appearance/appearanceSettings';
 import { THEMES_SETTINGS } from '@/components/settings/appearance/themeProfiles/themesSettings';
 import { SESSION_SETTINGS } from '@/components/settings/session/sessionSettings';
 import { SESSION_RUNTIME_SETTINGS } from '@/components/settings/session/sessionRuntimeSettings';
@@ -13,6 +18,7 @@ import { SESSION_RESUME_SETTINGS } from '@/components/settings/session/sessionRe
 import { TRANSCRIPT_ADVANCED_SETTINGS } from '@/components/settings/session/transcriptAdvancedSettings';
 import { MACHINES_ADD_SETTINGS } from '@/components/settings/machines/machinesAddSettings';
 import { MACHINES_DEFAULTS_SETTINGS } from '@/components/settings/machines/machinesDefaultsSettings';
+import { MACHINES_INDEX_SETTINGS } from '@/components/settings/machines/machinesIndexSettings';
 import { MACHINES_THIS_COMPUTER_SETTINGS } from '@/components/settings/machines/machinesThisComputerSettings';
 import { REMOTE_HOSTS_ACCESS_SETTINGS, REMOTE_HOSTS_SETTINGS } from '@/components/settings/remoteHosts/remoteHostsSettings';
 import { KEYBOARD_SETTINGS } from '@/components/settings/keyboard/keyboardSettings';
@@ -22,7 +28,8 @@ import { LANGUAGE_SETTINGS } from '@/components/settings/language/languageSettin
 import { DESKTOP_SETTINGS } from '@/components/settings/desktop/desktopSettings';
 import { SUB_AGENT_SETTINGS } from '@/components/settings/subAgent/subAgentSettings';
 import { PROFILES_SETTINGS } from '@/components/settings/profiles/profilesSettings';
-import { PROVIDERS_SETTINGS } from '@/components/settings/providers/providersSettings';
+import { PROVIDERS_SETTINGS, PROVIDER_DETAIL_SETTINGS, PROVIDER_GATEWAY_SETTINGS } from '@/components/settings/providers/providersSettings';
+import { AGENT_SETTINGS } from '@/components/settings/agents/agentsSettings';
 import { DELEGATION_SETTINGS } from '@/components/settings/delegation/delegationSettings';
 import { MCP_ON_MACHINE_SETTINGS, MCP_PREVIEW_SETTINGS } from '@/components/settings/mcpServers/mcpSettings';
 import { PLUGINS_SETTINGS } from '@/components/settings/plugins/pluginsSettings';
@@ -115,7 +122,12 @@ export const SETTINGS_PAGE_DECLARATIONS: readonly SettingsPageDeclaration[] = [
     ACCOUNT_SECURITY_SETTINGS,
     API_TOKEN_SETTINGS,
     EMBED_SETTINGS,
-    APPEARANCE_SETTINGS,
+    APPEARANCE_PAGE_SETTINGS,
+    APPEARANCE_GLASS_SETTINGS,
+    APPEARANCE_MOMENTS_SETTINGS,
+    APPEARANCE_WIDGETS_SETTINGS,
+    APPEARANCE_MOTION_SETTINGS,
+    APPEARANCE_MACHINE_SUMMARY_SETTINGS,
     THEMES_SETTINGS,
     SESSION_SETTINGS,
     SESSION_RUNTIME_SETTINGS,
@@ -125,6 +137,7 @@ export const SETTINGS_PAGE_DECLARATIONS: readonly SettingsPageDeclaration[] = [
     SESSION_RESUME_SETTINGS,
     MACHINES_ADD_SETTINGS,
     MACHINES_DEFAULTS_SETTINGS,
+    MACHINES_INDEX_SETTINGS,
     MACHINES_THIS_COMPUTER_SETTINGS,
     REMOTE_HOSTS_SETTINGS,
     REMOTE_HOSTS_ACCESS_SETTINGS,
@@ -136,6 +149,9 @@ export const SETTINGS_PAGE_DECLARATIONS: readonly SettingsPageDeclaration[] = [
     SUB_AGENT_SETTINGS,
     PROFILES_SETTINGS,
     PROVIDERS_SETTINGS,
+    PROVIDER_DETAIL_SETTINGS,
+    PROVIDER_GATEWAY_SETTINGS,
+    AGENT_SETTINGS,
     DELEGATION_SETTINGS,
     MCP_ON_MACHINE_SETTINGS,
     MCP_PREVIEW_SETTINGS,

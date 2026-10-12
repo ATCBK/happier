@@ -2,6 +2,7 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PluginProjectionV2Schema } from '@happier-dev/protocol';
+import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 import { normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
@@ -18,6 +19,7 @@ import { setRuntimeFetch, resetRuntimeFetch } from '@/utils/system/runtimeFetch'
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { publishAppliedActiveServerSnapshot, publishAppliedActiveServerRuntimeAvailability } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { UsageExternalSessionCandidates, UsageOutsideSessions } from './UsageExternalSessionCandidates';
+import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed } from '@/sync/domains/machines/reachability/machineReachability';
 
 const rpc = vi.hoisted(() => vi.fn());
 const homes = createHomeGovernanceHarness();
@@ -29,6 +31,8 @@ vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/ico
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 // The transport is the boundary; projection admission, candidates and Account lifetimes remain real.
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: rpc }));
 installDisconnectedServerSocketBoundary();
@@ -71,12 +75,38 @@ beforeEach(async () => {
     });
 });
 afterEach(async () => { standardCleanup(); restoreExecutorModuleLoader?.(); restoreExecutorModuleLoader = undefined;
+    clearMachineRequestReachabilityForTest();
     resetRuntimeFetch(); publishAppliedActiveServerRuntimeAvailability(false); vi.restoreAllMocks(); await homes.reset(); });
 
 describe('Usage shared outside-session candidates', () => {
+    it('withdraws Work source discovery after a machine request failure', async () => {
+        restoreExecutorModuleLoader = await installRealActionExecutorModuleLoader();
+        recordMachineRequestFailed({ serverId, accountId: 'usage-account', machineId: 'machine-1' });
+        await renderScreen(<UsageOutsideSessions serverId={serverId} query={normalizeUsageQuery({})} testID="work.outside" />);
+        await flushHookEffects({ cycles: 20 });
+        expect(rpc.mock.calls.some(([call]) => call.method === RPC_METHODS.USAGE_SOURCES_DISCOVER)).toBe(false);
+    });
+    it('refuses browsing when the canonical candidate-list Action is disabled without reading vendor records', async () => {
+        restoreExecutorModuleLoader = await installRealActionExecutorModuleLoader();
+        storage.setState(state => ({ settings: { ...state.settings, actionsSettingsV1: ActionsSettingsV1Schema.parse({
+            v: 1, actions: { 'sessions.external.candidates.list': { enabled: false } },
+        }) } }));
+        const lifetime: ServerAccountScopeLifetime = { scope: { serverId, accountId: 'usage-account' }, isCurrent: () => true,
+            onRetire: () => ({ dispose() {} }) };
+        const source = { serverId, machineId: 'machine-1', sourceId: 'source', agent: { pluginId: 'acme.review', localId: 'archive' },
+            externalSessionSource: { kind: 'archive' }, root: { kind: 'default' as const, path: '/root' },
+            consent: 'disabled' as const, status: 'found' as const, coverage: 'unknown' as const, pendingCount: 0, asOfMs: null };
+        const screen = await renderScreen(<UsageExternalSessionCandidates source={source} lifetime={lifetime} online testID="outside" />);
+        await waitForHomeGovernance(async () => { await flushHookEffects(); expect(screen.findByTestId('outside.browse')).toBeTruthy(); });
+        await screen.pressByTestIdAsync('outside.browse');
+        await flushHookEffects({ cycles: 20 });
+        expect(Boolean(screen.findByTestId('outside.continue.outside'))).toBe(false);
+        expect(rpc.mock.calls.some(([call]) => call.method === RPC_METHODS.DAEMON_EXTERNAL_SESSIONS_CANDIDATES_LIST)).toBe(false);
+    });
     it('keeps every discovered Work source metadata-only until its own explicit browse, within the pinned Machine scope', async () => {
         restoreExecutorModuleLoader = await installRealActionExecutorModuleLoader();
         const source = { serverId, machineId: 'machine-1', agent: { pluginId: 'acme.review', localId: 'archive' },
+            accountingSources: ['codex-native-accounting'], captureKind: 'from_logs',
             externalSessionSource: { kind: 'archive' }, root: { kind: 'default' as const, path: '/root' },
             consent: 'disabled' as const, coverage: 'unknown' as const, pendingCount: 0, asOfMs: null };
         const metadataBoundary = rpc.getMockImplementation();
@@ -86,7 +116,7 @@ describe('Usage shared outside-session candidates', () => {
         const excluded = createMachineFixture({ id: 'machine-excluded', activeAt: Date.now() });
         storage.setState(state => ({ machines: { ...state.machines, [excluded.id]: excluded },
             machineListByServerId: { [serverId]: [...(state.machineListByServerId[serverId] ?? []), excluded] } }));
-        const query = normalizeUsageQuery({ machines: ['machine-1'], agents: ['acme.archive'], sources: ['native'] });
+        const query = normalizeUsageQuery({ machines: ['machine-1'], agents: ['acme.archive'], sources: ['codex-native-accounting'] });
         const screen = await renderScreen(<UsageOutsideSessions serverId={serverId} query={query} testID="work.outside" />);
         const found = 'work.outside.machine-1.found';
         const stopped = 'work.outside.machine-1.stopped';
@@ -105,6 +135,13 @@ describe('Usage shared outside-session candidates', () => {
         expect(rpc.mock.calls.filter(([call]) => call.method === RPC_METHODS.DAEMON_EXTERNAL_SESSIONS_CANDIDATES_LIST)).toHaveLength(1);
         expect(rpc.mock.calls.filter(([call]) => call.method === RPC_METHODS.DAEMON_EXTERNAL_SESSIONS_CANDIDATES_LIST)
             .map(([call]) => call.accountId)).toEqual(['usage-account']);
+        await screen.update(<UsageOutsideSessions serverId={serverId}
+            query={normalizeUsageQuery({ ...query, sources: ['runtime'] })} testID="work.outside" />);
+        expect(screen.findByTestId(`${found}.continue.outside`)).toBeNull();
+        expect(screen.findByTestId(`${found}.browse`)).toBeNull();
+        await screen.update(<UsageOutsideSessions serverId={serverId}
+            query={normalizeUsageQuery({ ...query, sources: ['native'] })} testID="work.outside" />);
+        expect(screen.findByTestId(`${found}.browse`)).toBeNull();
         await act(async () => {
             publishAppliedActiveServerRuntimeAvailability(false);
             storage.setState(state => ({ profile: { ...state.profile, id: 'next-account' },

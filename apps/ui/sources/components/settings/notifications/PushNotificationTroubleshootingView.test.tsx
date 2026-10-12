@@ -29,6 +29,7 @@ async function renderSettingsView(node: React.ReactElement) {
     const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
     const credentials = await TokenStorage.getCredentialsForServerUrl(getActiveServerSnapshot().serverUrl, { serverId: home });
     const { storage } = await import('@/sync/domains/state/storage');
+    const { resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
     const { settingsParse } = await import('@/sync/domains/settings/settings');
     const settings = settingsParse({ ...storage.getState().settings, ...settingsValue, attentionDeliveryPolicyV1: undefined,
         actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, ...(deleteDisabled
@@ -36,7 +37,8 @@ async function renderSettingsView(node: React.ReactElement) {
             : { approvalWaivedSurfaces: {
             'notifications.push.tokens.remove': ['ui'], 'notifications.push.register': ['ui'],
         } }) }) });
-    storage.setState({ settings, settingsVersion: 1 });
+    const scope = { serverId: resolveServerProfileScopeIdForIdentifier(home), accountId: 'push-owner' };
+    storage.setState({ profileScope: scope, settingsScope: scope, settings, settingsVersion: 1 });
     harness.answer(home, '/v2/account/settings', { body: { version: 1, content: { t: 'plain', v: settings } } });
     return renderSettingsViewBoundary(<InjectedAuthProvider credentials={credentials}>{node}</InjectedAuthProvider>);
 }
@@ -231,11 +233,44 @@ describe('PushNotificationTroubleshootingView', () => {
         });
 
         if (disabled) {
-            await waitForHomeGovernance(() => expect(modalAlertMock).toHaveBeenCalledWith('common.error', 'settingsNotifications.pushTroubleshooting.remove.error'));
+            await flushHookEffects({ cycles: 20 });
             expect(harness.requestsFor(`/v1/push-tokens/${encodeURIComponent('ExponentPushToken[stale]')}`)).toEqual([]);
+            await waitForHomeGovernance(() => expect(modalAlertMock).toHaveBeenCalledWith('common.error', 'settingsNotifications.pushTroubleshooting.remove.error'));
         } else {
             await waitForHomeGovernance(() => expect(harness.requestsFor(`/v1/push-tokens/${encodeURIComponent('ExponentPushToken[stale]')}`)).toHaveLength(1));
         }
+    });
+
+    it('retires a token-list response when its captured Home is no longer displayed', async () => {
+        const Notifications = await import('expo-notifications');
+        vi.mocked(Notifications.getPermissionsAsync).mockResolvedValue({
+            status: PermissionStatus.GRANTED, expires: 'never', granted: true, canAskAgain: false,
+        } satisfies Awaited<ReturnType<typeof Notifications.getPermissionsAsync>>);
+        vi.mocked(Notifications.getExpoPushTokenAsync).mockResolvedValue({ type: 'expo', data: 'ExponentPushToken[current]' } satisfies Awaited<ReturnType<typeof Notifications.getExpoPushTokenAsync>>);
+        let releaseResponse!: () => void;
+        const responseReleased = new Promise<void>(resolve => { releaseResponse = resolve; });
+        const originalHome = home;
+        harness.answer(originalHome, '/v1/push-tokens', { respondAfter: responseReleased, body: { tokens: [
+            { id: 'retired-home-registration', token: 'ExponentPushToken[stale]', createdAt: 1, updatedAt: 2, clientServerUrl: null },
+        ] } });
+        const { PushNotificationTroubleshootingView } = await import('./PushNotificationTroubleshootingView');
+        const screen = await renderSettingsView(<PushNotificationTroubleshootingView />);
+        try {
+            await waitForHomeGovernance(() => expect(harness.requestsFor('/v1/push-tokens')
+                .some(request => request.serverId === originalHome)).toBe(true));
+            await act(async () => {
+                home = await harness.addHome({ name: 'Replacement Home', serverUrl: 'https://replacement-push-home.test',
+                    serverIdentityId: 'replacement-push-home', accountId: 'other', currentAccount: true });
+                const { storage } = await import('@/sync/domains/state/storage');
+                const { resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
+                const scope = { serverId: resolveServerProfileScopeIdForIdentifier(home), accountId: 'other' };
+                storage.setState({ profileScope: scope, settingsScope: scope });
+                answerPushTokens([]);
+            });
+            releaseResponse();
+            await flushHookEffects({ cycles: 20 });
+            expect(screen.findRow('settings-notifications-push-troubleshooting-device-retired-home-registration')).toBeNull();
+        } finally { releaseResponse(); }
     });
 
     it('routes a blocked permission to system settings and alerts when that fails', async () => {
@@ -269,13 +304,15 @@ describe('PushNotificationTroubleshootingView', () => {
             screen.pressByTestId('settings-notifications-push-troubleshooting-request-permission');
         });
 
-        expect(modalConfirmMock).toHaveBeenCalledWith(
+        await waitForHomeGovernance(() => expect(modalConfirmMock).toHaveBeenCalledWith(
             'settingsNotifications.pushPriming.blockedTitle',
             'settingsNotifications.pushPriming.blockedBody',
             expect.anything(),
-        );
+        ));
+        await waitForHomeGovernance(() => expect(modalAlertMock).toHaveBeenCalledWith(
+            'common.error', 'settingsNotifications.pushPriming.openSettingsFailed',
+        ));
         expect(Linking.openSettings).toHaveBeenCalled();
-        expect(modalAlertMock).toHaveBeenCalledWith('common.error', 'settingsNotifications.pushPriming.openSettingsFailed');
     });
 
     it('reports an unreachable notification runtime and keeps recovery actions usable', async () => {

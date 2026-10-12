@@ -3,26 +3,19 @@ import { act, type ReactTestInstance } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProviderConnectionIdSchema, type MachinePoolViewV1 } from '@happier-dev/protocol';
 
-import {
-    collectRenderedTestIds,
-    createHomeGovernanceHarness,
-    createMachineAdministrationTargetSelectionMock,
-    installHomeGovernanceBoundaries,
-    installMachineAdministrationTargetSelectionBoundary,
-    renderScreen,
-    standardCleanup,
-    teamCredentialResourceFixture,
-    teamCredentialSourceResourceFixture,
-} from '@/dev/testkit';
+import { collectRenderedTestIds, createDeferred, renderScreen, standardCleanup, teamCredentialResourceFixture, teamCredentialSourceResourceFixture } from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelpers';
 
 const CONNECTION_ID = ProviderConnectionIdSchema.parse('connection-1');
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-installSettingsViewCommonModuleMocks();
+installSettingsViewCommonModuleMocks({ storage: 'real' });
 
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
+const { createMachineAdministrationTargetSelectionMock, installMachineAdministrationTargetSelectionBoundary } = await import('@/dev/testkit/mocks/machineAdministrationTargetSelection');
 const machineSelection = createMachineAdministrationTargetSelectionMock({
     serverId: 'server-a',
     machines: [{ machineId: 'machine-exact', displayName: 'Exact broker' }],
@@ -62,6 +55,63 @@ beforeEach(async () => {
 afterEach(standardCleanup);
 
 describe('SharedWithTeamsSourceAdministration', () => {
+    it.each([
+        { operation: 'narrow', refreshFails: false },
+        { operation: 'delete', refreshFails: false },
+        { operation: 'narrow', refreshFails: true },
+        { operation: 'delete', refreshFails: true },
+    ] as const)('settles acknowledged $operation with retained rows read-only (refreshFails=$refreshFails)', async ({ operation, refreshFails }) => {
+        const serverId = await harness.addHome({ name: 'Home', serverUrl: 'https://home.example', accountId: 'owner' });
+        await harness.selectHomes([serverId]);
+        const row = teamCredentialSourceResourceFixture({
+            disclosureCeiling: 'direct_allowed',
+            capabilities: {
+                manageAudience: false, managePolicy: false, manageLimits: false,
+                updateBrokerPlacement: true, narrowDisclosure: true, widenDisclosure: false,
+                refreshDirectMaterial: false, disable: false, enable: false, delete: true,
+            },
+        });
+        harness.answer(serverId, LIST_PATH, { body: { resources: [row] } });
+        harness.answer(serverId, UPDATE_PATH, { body: { resourceId: row.id, revision: row.revision + 1 } });
+        harness.answer(serverId, '/v1/teams/credential-resources/delete', { body: { resourceId: row.id, revision: row.revision + 1 } });
+        const { SharedWithTeamsSourceAdministration } = await import('./SharedWithTeamsSourceAdministration');
+        const { Modal } = await import('@/modal');
+        if (operation === 'delete') vi.mocked(Modal.confirm).mockResolvedValue(true);
+        const screen = await renderScreen(<SharedWithTeamsSourceAdministration
+            scope={{ serverId, accountId: 'owner' }}
+            source={{ v: 1, kind: 'provider_connection', connectionId: CONNECTION_ID }}
+        />);
+        await screen.pressByTestIdAsync(`shared-with-teams:resource:${row.id}`);
+        const refresh = createDeferred<void>();
+        harness.answer(serverId, LIST_PATH, {
+            ...(refreshFails ? { status: 503 } : { body: { resources: operation === 'delete' ? [] : [{ ...row, revision: row.revision + 1, disclosureCeiling: 'brokered_only' }] } }),
+            respondAfter: refresh.promise,
+        });
+        const control = `shared-with-teams:${operation}:${row.id}`;
+        act(() => screen.pressByTestId(control));
+        try {
+            await vi.waitFor(() => expect(harness.requestsFor(LIST_PATH)).toHaveLength(2));
+            await vi.waitFor(() => {
+                const node = screen.findByTestId(control);
+                expect(node).not.toBeNull();
+                expect(Boolean(node?.props.disabled)).toBe(true);
+                const save = screen.findAllByTestId(`shared-with-teams:broker:${row.id}:save`)[0];
+                expect(save?.props.loading).toBe(false);
+            });
+            await screen.pressByTestIdAsync(control);
+            expect(harness.requestsFor(operation === 'delete' ? '/v1/teams/credential-resources/delete' : UPDATE_PATH)).toHaveLength(1);
+        } finally {
+            await act(async () => { refresh.resolve(); });
+        }
+        if (refreshFails) {
+            expect(screen.findByTestId(control)?.props.disabled).toBe(true);
+            await screen.pressByTestIdAsync(control);
+            expect(harness.requestsFor(operation === 'delete' ? '/v1/teams/credential-resources/delete' : UPDATE_PATH)).toHaveLength(1);
+        } else {
+            await vi.waitFor(() => expect(screen.findByTestId(control)).toBeNull());
+        }
+    });
+
     it('loads source-owner continuation explicitly without replacing prior rows', async () => {
         const serverId = await harness.addHome({ name: 'Home', serverUrl: 'https://home.example', accountId: 'owner' });
         await harness.selectHomes([serverId]);
@@ -163,6 +213,24 @@ describe('SharedWithTeamsSourceAdministration', () => {
         await vi.waitFor(() => expect(screen.findByTestId('shared-with-teams:approval')).not.toBeNull());
 
         expect(screen.findByTestId('shared-with-teams:disable:resource-1')?.props.disabled).toBe(true);
+
+        const refresh = createDeferred<void>();
+        const readsBeforeApproval = harness.requestsFor(LIST_PATH).length;
+        harness.answer(serverId, UPDATE_PATH, { body: { resourceId: row.id, revision: row.revision + 1 } });
+        harness.answer(serverId, LIST_PATH, { status: 503, respondAfter: refresh.promise });
+        const artifactId = harness.artifacts(serverId).list()[0]?.id;
+        expect(artifactId).toBeDefined();
+        try {
+            await expect(decideApprovalAsInbox(serverId, artifactId!, 'approve')).resolves.toMatchObject({ ok: true });
+            await vi.waitFor(() => expect(harness.requestsFor(LIST_PATH).length).toBeGreaterThan(readsBeforeApproval));
+            await vi.waitFor(() => expect(screen.findByTestId('shared-with-teams:approval')).toBeNull());
+            expect(screen.findByTestId('shared-with-teams:narrow:resource-1')?.props.disabled).toBe(true);
+            await screen.pressByTestIdAsync('shared-with-teams:narrow:resource-1');
+            expect(harness.requestsFor(UPDATE_PATH)).toHaveLength(1);
+        } finally {
+            await act(async () => { refresh.resolve(); });
+        }
+        expect(screen.findByTestId('shared-with-teams:narrow:resource-1')?.props.disabled).toBe(true);
     });
 
     it('submits one exact eligible Machine placement when the row grants that operation', async () => {
@@ -239,7 +307,7 @@ describe('SharedWithTeamsSourceAdministration', () => {
         harness.answer(serverId, LIST_PATH, { body: { resources: [{ ...initial, revision: 4 }] } });
         await screen.pressByTestIdAsync('shared-with-teams:narrow:resource-1');
         await vi.waitFor(() => expect(harness.requestsFor(UPDATE_PATH)).toHaveLength(1));
-        await vi.waitFor(() => expect(screen.findByTestId('shared-with-teams:broker:resource-1:save')).not.toBeNull());
+        await vi.waitFor(() => expect(screen.findByTestId('shared-with-teams:broker:resource-1:save')?.props.disabled).toBe(false));
         await screen.pressByTestIdAsync('shared-with-teams:broker:resource-1:save');
 
         expect(harness.requestsFor(UPDATE_PATH).at(-1)?.input).toMatchObject({
@@ -294,7 +362,7 @@ describe('SharedWithTeamsSourceAdministration', () => {
         });
     });
 
-    it('has translated accessible loading, empty, and error recovery states', async () => {
+    it('stays quiet while nothing is shared: no section that only says "none"', async () => {
         const serverId = await harness.addHome({ name: 'Home', serverUrl: 'https://home.example', accountId: 'owner' });
         await harness.selectHomes([serverId]);
         harness.answer(serverId, LIST_PATH, { body: { resources: [] } });
@@ -303,7 +371,10 @@ describe('SharedWithTeamsSourceAdministration', () => {
             scope={{ serverId, accountId: 'owner' }}
             source={{ v: 1, kind: 'provider_connection', connectionId: CONNECTION_ID }}
         />);
-        await expect.poll(() => collectRenderedTestIds(screen.tree.toJSON())).toContain('shared-with-teams:empty');
-        expect(screen.getTextContent()).toContain('teams.credentials.sourceAdministration.empty');
+        await expect.poll(() => harness.requestsFor(LIST_PATH).length).toBeGreaterThan(0);
+        await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+        expect(collectRenderedTestIds(screen.tree.toJSON())).not.toContain('shared-with-teams:loading');
+        expect(collectRenderedTestIds(screen.tree.toJSON())).not.toContain('shared-with-teams:empty');
+        expect(screen.getTextContent()).not.toContain('teams.credentials.sourceAdministration.title');
     });
 });

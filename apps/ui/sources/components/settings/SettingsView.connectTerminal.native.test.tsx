@@ -1,8 +1,7 @@
 import * as React from 'react';
-import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { act, ReactTestRenderer } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
-import { flushHookEffects, pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
+import { flushHookEffects, pressTestInstanceAsync, renderSettingsView } from '@/dev/testkit';
 import {
     installSettingsViewCommonModuleMocks,
     settingsViewScanProcessAuthUrlSpy,
@@ -66,9 +65,9 @@ installSettingsViewCommonModuleMocks({
             },
         }).module;
     },
-    storage: async (importOriginal) => {
-        const { createPartialStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-        return createPartialStorageModuleMock(importOriginal, {
+    storage: async () => {
+        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
+        return createStorageModuleStub({
             useEntitlement: () => false,
             useLocalSettingMutable: () => [false, vi.fn()],
             useSetting: () => null,
@@ -168,7 +167,6 @@ vi.mock('@/sync/domains/profiles/profile', async (importOriginal) => {
     const actual = await importOriginal<typeof import('@/sync/domains/profiles/profile')>();
     return {
         ...actual,
-        getDisplayName: () => 'Test User',
         getAvatarUrl: () => null,
         getBio: () => '',
     };
@@ -239,13 +237,15 @@ async function flushDeferredSettingsDelay(delayMs = 0): Promise<void> {
 }
 
 
+const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+await import('./SettingsView');
+
 describe('SettingsView (native connect terminal)', () => {
     it('shows terminal connect actions on native platforms', async () => {
-        vi.resetModules();
         const { SettingsView } = await import('./SettingsView');
 
         let tree!: ReactTestRenderer;
-        tree = (await renderScreen(<InjectedAuthProvider credentials={null}><SettingsView /></InjectedAuthProvider>)).tree;
+        tree = (await renderSettingsView(<InjectedAuthProvider credentials={null}><SettingsView /></InjectedAuthProvider>)).tree;
 
         const scanItem = findPressableByTestId(tree, 'settings-connect-terminal-scan');
         const manualItem = findPressableByTestId(tree, 'settings-connect-terminal-enter-url');
@@ -261,14 +261,13 @@ describe('SettingsView (native connect terminal)', () => {
     });
 
     it('routes manual auth URLs through the shared scanned auth processor', async () => {
-        vi.resetModules();
         promptSpy.mockReset();
         promptSpy.mockResolvedValueOnce('happier://terminal?key=abc123&server=https%3A%2F%2Frelay.example.test');
         settingsViewScanProcessAuthUrlSpy.mockReset();
         settingsViewScanProcessAuthUrlSpy.mockResolvedValueOnce(true);
 
         const { SettingsView } = await import('./SettingsView');
-        const tree = (await renderScreen(<InjectedAuthProvider credentials={null}><SettingsView /></InjectedAuthProvider>)).tree;
+        const tree = (await renderSettingsView(<InjectedAuthProvider credentials={null}><SettingsView /></InjectedAuthProvider>)).tree;
 
         const manualItem = findPressableByTestId(tree, 'settings-connect-terminal-enter-url');
         expect(manualItem).toBeTruthy();
@@ -288,12 +287,11 @@ describe('SettingsView (native connect terminal)', () => {
             return { cancel: () => {} };
         });
 
-        vi.resetModules();
         const { SettingsView } = await import('./SettingsView');
 
         vi.useFakeTimers();
         try {
-            const screen = await renderScreen(<InjectedAuthProvider credentials={null}><SettingsView /></InjectedAuthProvider>, { flushOptions: { cycles: 0 } });
+            const screen = await renderSettingsView(<InjectedAuthProvider credentials={null}><SettingsView /></InjectedAuthProvider>, { flushOptions: { cycles: 0 } });
 
             await flushDeferredSettingsDelay(1000);
 
@@ -312,15 +310,14 @@ describe('SettingsView (native connect terminal)', () => {
     });
 
     it('defers below-fold settings sections until after interactions settle', async () => {
-        vi.resetModules();
         const { SettingsView } = await import('./SettingsView');
 
         vi.useFakeTimers();
         try {
-            const screen = await renderScreen(<InjectedAuthProvider credentials={null}><SettingsView /></InjectedAuthProvider>, { flushOptions: { cycles: 0 } });
+            const screen = await renderSettingsView(<InjectedAuthProvider credentials={null}><SettingsView /></InjectedAuthProvider>, { flushOptions: { cycles: 0 } });
 
-            expect(findItemByTitle(screen.tree, 'settings.account')).toBeTruthy();
-            expect(findItemByTitle(screen.tree, 'settings.appearance')).toBeTruthy();
+            expect(screen.findByTestId('settings-overview-account')).toBeTruthy();
+            expect(screen.findByTestId('settings-overview-theme')).toBeTruthy();
             expect(Boolean(findItemByTitle(screen.tree, 'settingsAgents.title'))).toBe(false);
             expect(Boolean(findItemByTitle(screen.tree, 'settings.sessions'))).toBe(false);
 
@@ -333,12 +330,14 @@ describe('SettingsView (native connect terminal)', () => {
 
             await flushDeferredSettingsDelay(20);
 
-            expect(findItemByTitle(screen.tree, 'settings.sessions')).toBeTruthy();
+            expect(screen.findByTestId('settings-plugin-marketplace-item')).toBeTruthy();
+            expect(Boolean(findItemByTitle(screen.tree, 'settings.sessions'))).toBe(false);
             expect(Boolean(findItemByTitle(screen.tree, 'settings.servers'))).toBe(false);
             expect(Boolean(findItemByTitle(screen.tree, 'settings.github'))).toBe(false);
 
             await flushDeferredSettingsDelay(20);
 
+            expect(findItemByTitle(screen.tree, 'settings.sessions')).toBeTruthy();
             expect(findItemByTitle(screen.tree, 'settings.servers')).toBeTruthy();
             expect(Boolean(findItemByTitle(screen.tree, 'settings.github'))).toBe(false);
 

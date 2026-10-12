@@ -4,7 +4,7 @@ import { expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import { installSettingsViewCommonModuleMocks } from '@/components/settings/settingsViewTestHelpers';
 
-installSettingsViewCommonModuleMocks({ storage: importOriginal => importOriginal() });
+installSettingsViewCommonModuleMocks({ storage: 'real' });
 
 it('keeps Save directly available in phone navigation and in the page after widening', async () => {
     const { PromptEditorHeader } = await import('./PromptEditorHeader');

@@ -17,7 +17,6 @@ import {
 } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { collectRenderedTestIds } from '@/dev/testkit/render/collectRenderedTestIds';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
-import { resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 
 import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelpers';
 
@@ -26,6 +25,12 @@ import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelp
 vi.mock('@react-navigation/native', async () => {
     const { createReactNavigationNativeMock } = await import('@/dev/testkit/mocks/reactNavigation');
     return createReactNavigationNativeMock();
+});
+
+// Native file APIs are a platform boundary, loaded by the Reach host controls.
+vi.mock('expo-file-system', async () => {
+    const { createExpoFileSystemFileMock } = await import('@/dev/testkit/mocks/expoFileSystem');
+    return createExpoFileSystemFileMock().module;
 });
 
 installSettingsViewCommonModuleMocks({
@@ -40,6 +45,7 @@ installSettingsViewCommonModuleMocks({
 // schemas, the registry codec and the page's decisions are the production ones.
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
+const { resetServerFeaturesClientForTests } = await import("@/sync/api/capabilities/serverFeaturesClient");
 
 const GOVERNANCE_PATH = '/v1/home/governance/get';
 const SETTINGS_GET = '/v1/home/settings/get';
@@ -47,6 +53,7 @@ const SETTINGS_SET = '/v1/home/settings/set';
 const REACH_GET = '/v1/home/reachability/get';
 const IROH_SET = '/v1/home/reachability/iroh/set';
 const PUBLIC_ADDRESS = 'HAPPIER_PUBLIC_SERVER_URL';
+const SUBPATH_LINKS = 'HAPPIER_PUBLIC_SHARES_ALLOW_SUBPATH';
 
 function reachSettings(revision = 2) {
     return homeSettingsProjectionFixture({
@@ -54,6 +61,10 @@ function reachSettings(revision = 2) {
         entries: [
             homeSettingEntryFixture(PUBLIC_ADDRESS),
             homeSettingEntryFixture('HAPPIER_WEBAPP_URL'),
+            homeSettingEntryFixture(SUBPATH_LINKS, {
+                value: false,
+                declaration: { type: 'boolean', default: false, section: 'reach', group: 'publicLinks' },
+            }),
         ],
     });
 }
@@ -87,6 +98,86 @@ afterEach(() => {
 });
 
 describe('HomeAdministrationReachScreen', () => {
+    it.each(['owner', 'admin'] as const)('offers public-link configuration only to the Home %s', async (role) => {
+        const projection = homeGovernanceProjectionFixture();
+        const home = await addHome({
+            ...projection,
+            viewer: { ...projection.viewer, homeRole: role },
+            capabilities: { ...projection.capabilities, manageHomeSettings: role === 'owner' },
+        });
+        const { SessionPublicLinkCard } = await import('@/components/sessions/collaboration/SessionPublicLinkSection');
+        const { SessionAccessApiError } = await import('@/sync/api/session/sessionAccessApi');
+        const { resetHomeGovernanceEngineForTests } = await import('@/sync/engine/home/governance/homeGovernanceEngine');
+        resetHomeGovernanceEngineForTests();
+        const screen = await renderScreen(<SessionPublicLinkCard
+            testID="public-link-card" configurationScope={{ serverId: home, accountId: `account-${home}` }}
+            publicShare={null} serverUrl={null} loading={false} loaded failed={false} readOnly={false}
+            pendingApproval={false} onRetry={() => {}} onOpenPendingApproval={() => {}}
+            onCreate={async () => { throw new SessionAccessApiError('public_share_isolation_unavailable', 503); }}
+            onDelete={async () => {}}
+        />);
+        await screen.pressByTestIdAsync('session-public-link-create');
+        await screen.pressByTestIdAsync('session-public-link-options-create');
+        await waitForHomeGovernance(() => expect(screen.findByTestId('session-public-link-mutation-error')).not.toBeNull());
+        await waitForHomeGovernance(() => expect(harness.requestsFor(GOVERNANCE_PATH)).toHaveLength(1));
+        const { getHomeGovernanceSnapshot } = await import('@/sync/store/home/governance/homeGovernanceSnapshots');
+        await waitForHomeGovernance(() => expect(getHomeGovernanceSnapshot({ serverId: home, accountId: `account-${home}` })?.data)
+            .toMatchObject({ capabilities: { manageHomeSettings: role === 'owner' } }));
+        if (role === 'owner') {
+            expect(screen.findByTestId('session-public-link-configure')).not.toBeNull();
+        } else {
+            expect(screen.findByTestId('session-public-link-configure')).toBeNull();
+        }
+    });
+
+    it('lets the owner enable public hostname links through the revision-safe Home writer', async () => {
+        const home = await addHome();
+        harness.answer(home, SETTINGS_GET, { body: reachSettings(2) });
+        harness.answer(home, REACH_GET, { body: homeReachabilityFixture() });
+        const saved = reachSettings(3);
+        saved.entries = saved.entries.map(entry => entry.key === SUBPATH_LINKS ? { ...entry, value: true, source: 'home' as const } : entry);
+        harness.answer(home, SETTINGS_SET, { body: saved });
+        const screen = await renderReach(home);
+        expect(screen.findByTestId('home-reach-public-subpath.switch')?.props.value).toBe(false);
+        await act(async () => {
+            screen.findByTestId('home-reach-public-subpath.switch')?.props.onValueChange(true);
+        });
+        await waitForHomeGovernance(() => expect(screen.findByTestId('home-reach-public-subpath.switch')?.props.value).toBe(true));
+        expect(harness.requestsFor(SETTINGS_SET)[0]?.input).toEqual({ expectedRevision: 2, values: { [SUBPATH_LINKS]: true } });
+    });
+
+    it.each(['admin', 'deployment'] as const)('shows public hostname permission read-only for %s', async (lock) => {
+        const projection = homeGovernanceProjectionFixture();
+        const home = await addHome(lock === 'admin' ? {
+            ...projection,
+            viewer: { ...projection.viewer, homeRole: 'admin' },
+            capabilities: { ...projection.capabilities, manageHomeSettings: false },
+        } : projection);
+        const settings = reachSettings();
+        if (lock === 'deployment') Object.assign(settings.entries.find(entry => entry.key === SUBPATH_LINKS)!, { fixed: true, source: 'deployment' });
+        harness.answer(home, SETTINGS_GET, { body: settings });
+        harness.answer(home, REACH_GET, { body: homeReachabilityFixture() });
+        const screen = await renderReach(home);
+        expect(screen.findByTestId('home-reach-public-subpath')).not.toBeNull();
+        expect(screen.findByTestId('home-reach-public-subpath.switch')).toBeNull();
+        if (lock === 'deployment') expect(screen.findByTestId('home-reach-public-subpath.fixed-key:0')?.children).toEqual([SUBPATH_LINKS]);
+        expect(harness.requestsFor(SETTINGS_SET)).toHaveLength(0);
+    });
+
+    it('reloads a conflicting public hostname permission and keeps the refusal inline', async () => {
+        const home = await addHome();
+        harness.answer(home, SETTINGS_GET, { body: reachSettings(2) });
+        harness.answer(home, REACH_GET, { body: homeReachabilityFixture() });
+        harness.answer(home, SETTINGS_SET, { status: 409, body: { error: 'home_settings_revision_conflict' } });
+        const screen = await renderReach(home);
+        const current = reachSettings(3);
+        harness.answer(home, SETTINGS_GET, { body: current });
+        await act(async () => { screen.findByTestId('home-reach-public-subpath.switch')?.props.onValueChange(true); });
+        await waitForHomeGovernance(() => expect(screen.findByTestId('home-reach-public-subpath-error')).not.toBeNull());
+        expect(screen.findByTestId('home-reach-public-subpath.switch')?.props.value).toBe(false);
+        expect(harness.requestsFor(SETTINGS_GET).length).toBeGreaterThan(1);
+    });
+
     it('shows Retry when the companion read fails after settings succeed, and then renders the recovered reachability', async () => {
         const home = await addHome();
         harness.answer(home, SETTINGS_GET, { body: reachSettings() });

@@ -15,6 +15,7 @@ import { getServerProfileById, resolveServerProfileScopeIdForIdentifier } from '
 import { useMachineListForServer, useServerScopedMachine } from '@/sync/domains/state/storage';
 import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
+import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
 import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { fireAndForget } from '@/utils/system/fireAndForget';
@@ -68,6 +69,7 @@ function MachinePresetViewBody(props: Readonly<{ serverId: string; presetId: str
     const teamState = team.kind === 'bound' && team.state.kind === 'ready' ? team.state : null;
     const controllerRow = useServerScopedMachine(props.serverId, preset?.controller.machineId ?? '');
     const machines = useMachineListForServer(props.serverId);
+    const presenceNowMs = useMachinePresenceNowMs(machines ?? []);
     const controller = controllerRow?.installationId === preset?.controller.installationId ? controllerRow : undefined;
     const [mutating, setMutating] = React.useState(false);
     const [mutationError, setMutationError] = React.useState<string | null>(null);
@@ -173,9 +175,9 @@ function MachinePresetViewBody(props: Readonly<{ serverId: string; presetId: str
         controller: { description: t('managedMachines.controller.required', { controller: controllerName }),
             row: controllerChoices.length ? {
                 title: t('machinePresets.controllerRow'),
-                ...(controller ? { subtitle: isMachineReachable(props.serverId, controller) ? t('status.online') : t('status.offline') } : {}),
+                ...(controller ? { subtitle: isMachineReachable(catalog.binding?.isCurrent() ? catalog.binding.scope : null, controller, presenceNowMs) ? t('status.online') : t('status.offline') } : {}),
                 choices: controllerChoices.map(machine => ({ id: machine.id, title: getMachineDisplayName(machine) ?? machine.id,
-                    subtitle: isMachineReachable(props.serverId, machine) ? t('status.online') : t('status.offline') })),
+                    subtitle: isMachineReachable(catalog.binding?.isCurrent() ? catalog.binding.scope : null, machine, presenceNowMs) ? t('status.online') : t('status.offline') })),
                 value: visiblePreset.controller.machineId, disabled: busy,
                 onChange: id => {
                     const machine = controllerChoices.find(candidate => candidate.id === id);

@@ -5,6 +5,7 @@ import {
 } from '@happier-dev/protocol/teams';
 
 import { t } from '@/text';
+import { resolveAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
 
 import { teamRoleLabel } from '../teamLabels';
 
@@ -12,8 +13,8 @@ import { teamRoleLabel } from '../teamLabels';
  * How one invitation row is presented, and what may still be done to it.
  *
  * The Home's terminal answers are authoritative and are never recomputed here:
- * the row publishes `state`, not the instants that produced it, so inventing
- * those instants would make this a second — and wrong — decision-maker.
+ * the row publishes `state` and, when available, its terminal instant. That
+ * instant is presentation provenance, never a second state decision.
  *
  * Expiry is the one transition that can happen while this list is on screen, and
  * `expiresAt` is a real published fact, so it is the only state derived here.
@@ -30,6 +31,8 @@ function resolveState(row: TeamInvitationRowV1, now: number): TeamInvitationStat
 export type TeamInvitationPresentation = Readonly<{
     state: TeamInvitationStateV1;
     stateLabel: string;
+    finishedLabel: string | null;
+    finishedAt: number | null;
     /** Only a live invitation can be revoked. */
     canRevoke: boolean;
     /**
@@ -50,6 +53,11 @@ export type TeamInvitationPresentation = Readonly<{
      * email; `none` is a spent invitation with no replacement at all.
      */
     reissueMode: 'none' | 'link' | 'email';
+    /**
+     * Who the row is about: the person who joined, else the masked recipient, else the role the
+     * link grants. Seven links must not read as seven identical rows.
+     */
+    title: string;
     /** The masked recipient, or null for a link invitation. */
     recipientLabel: string | null;
     deliveryLabel: string | null;
@@ -63,14 +71,16 @@ export type TeamInvitationPresentation = Readonly<{
      *
      * A reviewer deciding whether to revoke an outstanding invitation needs the
      * role and history horizon it would grant; without them one live link is
-     * indistinguishable from another that admits an admin to every past Session.
+     * indistinguishable from another that admits an admin to every past Session. A link's title
+     * already names its role, so only the history horizon remains to say (`null` when ordinary).
      */
-    offerLabel: string;
+    offerLabel: string | null;
 }>;
 
 export function resolveTeamInvitationPresentation(
     row: TeamInvitationRowV1,
     now: number,
+    viewerAccountId?: string,
 ): TeamInvitationPresentation {
     const state = resolveState(row, now);
 
@@ -94,10 +104,23 @@ export function resolveTeamInvitationPresentation(
     // canonical reissue writer, which refuses both terminal transitions instead
     // of silently minting access again from either one.
     const canReissue = state === 'active' || state === 'expired';
+    const person = state === 'accepted' && row.acceptedByAccountId
+        ? resolveAccountDisplayName({ profile: row.finishedByAccount, accountId: row.acceptedByAccountId, viewerAccountId })
+        : null;
+
+    const recipientLabel = row.recipientEmailMask === null
+        ? null
+        : t('teams.invitations.maskedRecipient', { email: row.recipientEmailMask });
+    const historyLabel = row.historyAccess === 'all_existing' ? t('teams.history.allExisting') : null;
+    const titlesRole = person === null && recipientLabel === null;
 
     return Object.freeze({
         state,
         stateLabel,
+        finishedLabel: state === 'active' ? null
+            // The person is the title; the hint only tells apart Accounts that share a name.
+            : [stateLabel, person?.hint].filter(Boolean).join(' · '),
+        finishedAt: state === 'active' ? null : state === 'expired' ? row.expiresAt : row.finishedAt ?? null,
         canRevoke: state === 'active',
         canReissue,
         reissueMode: !canReissue
@@ -105,14 +128,15 @@ export function resolveTeamInvitationPresentation(
             : row.recipientEmailMask === null
                 ? 'link' as const
                 : 'email' as const,
-        recipientLabel: row.recipientEmailMask === null
-            ? null
-            : t('teams.invitations.maskedRecipient', { email: row.recipientEmailMask }),
+        title: person?.name ?? recipientLabel ?? t('teams.invitations.linkTitle', { role: teamRoleLabel(row.role) }),
+        recipientLabel,
         deliveryLabel,
         emailUndelivered: state === 'active' && row.lastEmailDelivery?.status === 'failed',
-        offerLabel: `${teamRoleLabel(row.role)} · ${row.historyAccess === 'all_existing'
-            ? t('teams.history.allExisting')
-            : t('teams.history.fromMembership')}`,
+        // From when they join is the ordinary horizon and stays unsaid; only a link that opens the
+        // Team's earlier sessions says so, which is what sets it apart from the others.
+        offerLabel: titlesRole
+            ? historyLabel
+            : [teamRoleLabel(row.role), historyLabel].filter(Boolean).join(' · '),
     });
 }
 

@@ -16,6 +16,7 @@ export type ActionSettingsFamily =
     | 'browser'
     | 'simulator'
     | 'localServices'
+    | 'resources'
     | 'plugins'
     | 'session'
     | 'scm'
@@ -29,6 +30,7 @@ export const ACTION_SETTINGS_FAMILY_ORDER: readonly ActionSettingsFamily[] = [
     'browser',
     'simulator',
     'localServices',
+    'resources',
     'plugins',
     'session',
     'scm',
@@ -39,10 +41,16 @@ export const ACTION_SETTINGS_FAMILY_TITLE_KEYS: Readonly<Record<ActionSettingsFa
     browser: 'settingsActions.families.browser.title',
     simulator: 'settingsActions.families.simulator.title',
     localServices: 'settingsActions.families.localServices.title',
+    resources: 'settingsActions.families.resources.title',
     plugins: 'settingsActions.families.plugins.title',
     session: 'settingsActions.families.session.title',
     scm: 'settingsActions.families.scm.title',
     general: 'settingsActions.families.general.title',
+};
+
+/** Only Resources is divided by the protocol Action's effect and safety facts. */
+export const ACTION_SETTINGS_FAMILY_SPLIT: Partial<Record<ActionSettingsFamily, 'safety'>> = {
+    resources: 'safety',
 };
 
 /**
@@ -61,7 +69,13 @@ const PROTOCOL_FAMILY_TO_SETTINGS_FAMILY: Partial<Record<ActionIdFamilyV1, Actio
     local_services_preview: 'localServices',
     local_services_public_preview: 'localServices',
     local_services_actions: 'localServices',
+    machine_vitals: 'resources',
+    machine_processes: 'resources',
+    machine_storage: 'resources',
+    machine_resources: 'resources',
+    machine_guard: 'resources',
     plugin_permission_grants: 'plugins',
+    capability_rules: 'general',
     session_lifecycle: 'session',
     messaging: 'session',
     session_control: 'session',
@@ -72,6 +86,7 @@ const PROTOCOL_FAMILY_TO_SETTINGS_FAMILY: Partial<Record<ActionIdFamilyV1, Actio
     scm_pull_request: 'scm',
     scm_repository: 'scm',
     scm_diff_summary: 'scm',
+    scm_git: 'scm',
 };
 
 /** The coarse settings family a protocol family is shown under; unlisted families fold into `general`. */

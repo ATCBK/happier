@@ -1,9 +1,8 @@
 import * as React from 'react';
-import { View } from 'react-native';
 import { Collection, type CollectionAnatomy, type CollectionGroupAction, type CollectionRowActions } from '@happier-dev/plugin-ui';
 import type { HappierCollectionModel } from '@happier-dev/plugin-ui/presentation';
 
-import { useLayoutMaxWidthStyle } from '@/components/ui/layout/layout';
+import { PageContentColumn } from '@/components/ui/lists/PageContentColumn';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { usePageNoticeActive } from '@/components/ui/lists/listPresentation';
 import { CoreCollectionScope } from '@/components/ui/lists/collection/CoreCollectionScope';
@@ -12,16 +11,11 @@ import { PLUGIN_CARD_MIN_WIDTH_PX } from './PluginCardStatus';
 import type { PluginsCollectionPresentation } from '../PluginMarketplaceSections';
 
 /** The page's content column, so the page header, the items and the entries below share one edge. */
-function PluginsPageColumn(props: Readonly<{ children?: React.ReactNode }>) {
-    const maxWidthStyle = useLayoutMaxWidthStyle();
-    return <View style={[{ width: '100%', alignSelf: 'center' }, maxWidthStyle]}>{props.children}</View>;
-}
-
 /** The Plugins page's one scroller: the settings page anatomy, the page's content column. */
 function renderPluginsPageScroller(children: React.ReactNode, pageNoticeActive: boolean): React.ReactNode {
     return (
         <ItemList style={{ paddingTop: 0 }} pageColumn="wide" pageNoticeActive={pageNoticeActive}>
-            <PluginsPageColumn>{children}</PluginsPageColumn>
+            <PageContentColumn>{children}</PageContentColumn>
         </ItemList>
     );
 }

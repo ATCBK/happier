@@ -20,6 +20,7 @@ import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { SavedSecretPickerModal } from '@/components/ui/forms/valueRefs/SavedSecretPickerModal';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { ExpandableItem, ExpandableItemCaret } from '@/components/ui/lists/ExpandableItem';
 import { SchemaFieldControl, resolveSchemaFieldKind } from '@/components/settings/schemaFields/SchemaFieldControl';
 import { SchemaFieldRow, SchemaFieldStatusLine } from '@/components/settings/schemaFields/SchemaFieldRow';
 import { SectionButtonRow } from '@/components/ui/lists/SectionButtonRow';
@@ -982,7 +983,68 @@ type PluginDetailGenericSettingsSectionProps = Readonly<{
      */
     isDaemonTargetCurrent?: (target: Extract<ScopedPluginSettingsTarget, { kind: 'daemon' }>) => boolean;
     policyContext?: PluginUiPolicyEvaluationContext;
+    /**
+     * Where the settings sit on the page. On the plugin's own page they are the content
+     * (`sections`, the default). On a page about something else (an Agent) they are expert
+     * detail: one titled section of disclosures, one per declared section, each summarised.
+     */
+    presentation?: Readonly<{ kind: 'sections' }> | Readonly<{ kind: 'disclosures'; title: string }>;
 }>;
+
+function isSameSettingValue(value: unknown, fallback: unknown): boolean {
+    const empty = (candidate: unknown) => candidate === undefined || candidate === null || candidate === '';
+    if (empty(value)) return true;
+    if (empty(fallback)) return false;
+    return JSON.stringify(value) === JSON.stringify(fallback);
+}
+
+/** How many of a section's settings differ from what the plugin declares as their default. */
+function countChangedSettings(
+    fields: readonly PluginProjectionEditableSettingField[],
+    values: Readonly<Record<string, unknown>>,
+): number {
+    return fields.filter((field) => !isSameSettingValue(
+        values[field.key],
+        field.defaultValue ?? field.defaultBooleanValue,
+    )).length;
+}
+
+/**
+ * One declared section as a disclosure row: its title, its description, and a summary of what
+ * changed. A section with a save problem opens, so an error is never hidden behind a closed row.
+ */
+const PluginSettingsSectionDisclosure = React.memo(function PluginSettingsSectionDisclosure(props: Readonly<{
+    testID: string;
+    title: string;
+    description: string | null;
+    summary: string;
+    forceExpanded: boolean;
+    showDivider: boolean;
+    children: React.ReactNode;
+}>) {
+    const [expanded, setExpanded] = React.useState(false);
+    return (
+        <ExpandableItem
+            testID={props.testID}
+            expanded={expanded || props.forceExpanded}
+            onExpandedChange={setExpanded}
+            showDivider={props.showDivider}
+            header={(state) => (
+                <Item
+                    {...state.headerProps}
+                    title={props.title}
+                    subtitle={props.description ?? undefined}
+                    subtitleLines={2}
+                    detail={props.summary}
+                    showChevron={false}
+                    rightElement={<ExpandableItemCaret expanded={state.expanded} />}
+                />
+            )}
+        >
+            {props.children}
+        </ExpandableItem>
+    );
+});
 
 export function PluginDetailGenericSettingsSection(props: PluginDetailGenericSettingsSectionProps) {
     const localizePluginText = useProjectedPluginLocalizedTextResolver();
@@ -1242,9 +1304,20 @@ function PluginDetailScopedSettingsSection(props: PluginDetailGenericSettingsSec
     // simply has none on its page. A read failure still shows, with its Retry, in the first group.
     const groupsWithFields = visibleGroups.filter((group) => group.fields.length > 0);
     const shownGroups = groupsWithFields.length === 0 && loadError ? visibleGroups.slice(0, 1) : groupsWithFields;
-    return (
-        <>
-            {shownGroups.map((group, groupIndex) => {
+    const asDisclosures = props.presentation?.kind === 'disclosures';
+    const disclosureTitle = props.presentation?.kind === 'disclosures' ? props.presentation.title : undefined;
+    const loadErrorRow = (
+        <Item
+            testID={`settings.plugins.detail.${props.pluginId}.settings.error`}
+            title={loadError ?? ''}
+            detail={t('common.retry')}
+            accessibilityHint={t('common.retry')}
+            onPress={() => void scopedSettings.refresh()}
+            icon={<Icon name="warning-circle" size={29} color={theme.colors.state.danger.foreground} />}
+            showChevron
+        />
+    );
+    const sectionElements = shownGroups.map((group, groupIndex) => {
                 const fields = [...group.fields].sort(compareSettingsFields);
                 const groupOutcomeUnknown = fields.some(
                     (field) => fieldModelByKey.get(field.key)?.error === 'outcomeUnknown',
@@ -1261,14 +1334,11 @@ function PluginDetailScopedSettingsSection(props: PluginDetailGenericSettingsSec
                 const scopeDescription = t(group.scope.kind === 'account'
                     ? 'settingsPlugins.genericSettingsAccountFooter'
                     : 'settingsPlugins.genericSettingsFooter');
-                return (
-                    <ItemGroup
-                        key={group.id}
-                        title={group.title}
-                        description={groupDescription ? `${groupDescription}\n${scopeDescription}` : scopeDescription}
-                    >
-                        {groupIndex === 0 && loadError ? (
+                // An array, not a fragment: the section counts its rows for corners and dividers.
+                const rows = [
+                        groupIndex === 0 && loadError && !asDisclosures ? (
                             <Item
+                                key="load-error"
                                 testID={`settings.plugins.detail.${props.pluginId}.settings.error`}
                                 title={loadError}
                                 detail={t('common.retry')}
@@ -1277,8 +1347,8 @@ function PluginDetailScopedSettingsSection(props: PluginDetailGenericSettingsSec
                                 icon={<Icon name="warning-circle" size={29} color={theme.colors.state.danger.foreground} />}
                                 showChevron
                             />
-                        ) : null}
-                        {fields.map((field) => {
+                        ) : null,
+                        ...fields.map((field) => {
                             const policy = evaluatePluginUiPolicy(
                                 { availability: field.availability },
                                 { ...props.policyContext, data: values },
@@ -1405,10 +1475,49 @@ function PluginDetailScopedSettingsSection(props: PluginDetailGenericSettingsSec
                                     onCommit={() => commitOrdinaryField({ field, model, hasDraft: false })}
                                 />
                             );
-                        })}
+                        }),
+                ];
+                if (asDisclosures) {
+                    const changed = countChangedSettings(fields, values);
+                    return (
+                        <PluginSettingsSectionDisclosure
+                            key={group.id}
+                            testID={`settings.plugins.detail.${props.pluginId}.settings.${group.id}.disclosure`}
+                            title={group.title}
+                            description={groupHasSaveError ? groupDescription : group.description}
+                            summary={changed > 0
+                                ? t('settingsPlugins.genericSettingsChangedCount', { count: changed })
+                                : t('settingsPlugins.genericSettingsDefaults')}
+                            forceExpanded={groupHasSaveError}
+                            showDivider={groupIndex < shownGroups.length - 1}
+                        >
+                            {rows}
+                        </PluginSettingsSectionDisclosure>
+                    );
+                }
+                return (
+                    <ItemGroup
+                        key={group.id}
+                        title={group.title}
+                        description={groupDescription ? `${groupDescription}\n${scopeDescription}` : scopeDescription}
+                    >
+                        {rows}
                     </ItemGroup>
                 );
-            })}
+            });
+    return (
+        <>
+            {asDisclosures && shownGroups.length > 0 ? (
+                <ItemGroup
+                    title={disclosureTitle}
+                    description={t(props.scope.kind === 'account'
+                        ? 'settingsPlugins.genericSettingsAccountFooter'
+                        : 'settingsPlugins.genericSettingsFooter')}
+                >
+                    {loadError ? loadErrorRow : null}
+                    {sectionElements}
+                </ItemGroup>
+            ) : sectionElements}
             {/*
               * A subagent item's destination is the declaring contribution's own
               * agent settings screen, resolved by the host route owner. A
@@ -1417,6 +1526,9 @@ function PluginDetailScopedSettingsSection(props: PluginDetailGenericSettingsSec
               */}
             {sortedGroups.flatMap((group) => {
                 if (group.target.kind !== 'agent') return [];
+                // On the Agent's own page (the disclosures presentation) these rows would link to the
+                // page they sit on: their settings are already the disclosures above.
+                if (asDisclosures) return [];
                 const agentSettingsRoute = createPluginAgentSettingsRoute(group.target.agent);
                 return group.presentation.subagentSections.map((section) => (
                     <ItemGroup

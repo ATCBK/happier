@@ -1,38 +1,15 @@
 import * as React from 'react';
-import { Redirect } from '@/components/appShell/workspace/destinationRoute';
 
-import { isDesktopHost } from '@/utils/platform/desktopHost';
-
-import { buildMachineCollection, resolveMachineCollectionLandingHref } from './collection/machineCollectionModel';
-import { readLastVisitedMachine } from './collection/machineCollectionVisit';
-import { useMachinesSettingsViewModel } from './machinesSettingsViewModel';
-import { MachinesSettingsView } from './MachinesSettingsView';
+import { AllMachinesIndex } from '@/components/machines/index/AllMachinesIndex';
 import { useHappierCollectionIndexView } from '@happier-dev/plugin-ui/presentation';
 
 /**
- * `/settings/machines`. Beside the rail something is always selected, so the index lands on the last
- * opened machine, the first machine, this computer, or adding a machine; where no rail shows, the
- * index is the machine list and each row pushes its detail.
+ * `/settings/machines`: All machines, the same index as the rail door's `/machines` (MPG-4). Beside
+ * the list it is the selected first row's page; where no list shows, it is followed by the
+ * collection's configuration groups. Nothing renders before the first measurement, so neither flashes.
  */
 export const MachineSettingsIndex = React.memo(function MachineSettingsIndex() {
     const view = useHappierCollectionIndexView();
     if (view === 'pending') return null;
-    if (view === 'land') return <MachineCollectionLanding />;
-    return <MachinesSettingsView />;
-});
-
-const MachineCollectionLanding = React.memo(function MachineCollectionLanding() {
-    const viewModel = useMachinesSettingsViewModel();
-    // Wait for the first machine list so "first machine" is not a guess.
-    if (viewModel.isLoadingMachines) return null;
-    const href = resolveMachineCollectionLandingHref({
-        collection: buildMachineCollection({
-            groups: viewModel.visibleMachineGroups,
-            groupedByHome: viewModel.showMachinesGroupedByServer,
-            managedByServerId: viewModel.managedByServerId,
-        }),
-        lastVisited: readLastVisitedMachine(),
-        isDesktop: isDesktopHost(),
-    });
-    return <Redirect href={href as never} />;
+    return <AllMachinesIndex />;
 });

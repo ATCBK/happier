@@ -4,17 +4,21 @@ import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { ItemLoadStateRows } from '@/components/ui/lists/ItemLoadStateRows';
+import { PageHeader } from '@/components/ui/layout/PageHeader';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { SectionButtonRow } from '@/components/ui/lists/SectionButtonRow';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Modal } from '@/modal';
 import { isTeamActionApprovalPendingError } from '@/sync/ops/teams/teamActionClient';
 import {
     deleteTeamCredentialResource,
-    listTeamCredentialDirectMaterialPreparation,
+    getTeamCredentialPreparation,
     testTeamCredentialResource,
     updateTeamCredentialResource,
 } from '@/sync/ops/teams/teamCredentialOperations';
 import { t } from '@/text';
+import { fireAndForget } from '@/utils/system/fireAndForget';
 
 import { TeamSection } from '../TeamSection';
 import type { TeamSectionContext } from '../teamSectionContext';
@@ -52,6 +56,9 @@ import {
 import { useTeamCredentialResourceView } from './useTeamCredentialResourceView';
 import { useTeamCredentialExternalApiAvailability } from './useTeamCredentialExternalApiAvailability';
 import { Icon } from '@/components/ui/icons/Icon';
+import { useProjectedConnectedServicesRegistry } from '@/components/appShell/plugins/AppShellPluginUiProjection';
+import { ConnectedServiceMark } from '@/components/settings/connectedServices/ConnectedServiceMark';
+import { resourceConnectedServiceMarkId } from './teamCredentialPresentation';
 
 function directMaterialStateLabel(state: NonNullable<ReturnType<typeof useTeamCredentialResourceView>['catalogResource']>['directMaterialState']): string {
     switch (state) {
@@ -113,6 +120,7 @@ const CredentialRecoveryRow = React.memo(function CredentialRecoveryRow(props: R
 const CredentialDetail = React.memo(function CredentialDetail(props: Readonly<{
     context: TeamSectionContext;
     resourceId: string;
+    conditionBanners?: React.ReactNode;
 }>) {
     const router = useRouter();
     const { context, resourceId } = props;
@@ -140,15 +148,38 @@ const CredentialDetail = React.memo(function CredentialDetail(props: Readonly<{
         setTestResult(null);
     }, [targetKey]);
 
+    // Identity first: the page opens with the credential itself — its name, and who shared it —
+    // rather than a generic title over a section repeating the name.
+    const named = view.resource ?? view.catalogResource;
+    const registry = useProjectedConnectedServicesRegistry();
+    const sharedBy = view.resource
+        ? view.resource.custodianAccountId === context.scope.accountId
+            ? t('teams.credentials.sharedByYou')
+            : view.resource.sourceOwnerDisplayName
+        : null;
+    const frame = (body: React.ReactNode) => (
+        <>
+            <PageHeader
+                testID="team-credential-header"
+                alwaysShowTitle
+                title={named?.displayName ?? t('teams.credentials.title')}
+                leading={named ? <ConnectedServiceMark legacyServiceId={resourceConnectedServiceMarkId(named, registry)} size="page" /> : undefined}
+                description={named ? (sharedBy ?? t('teams.pages.credentialDetail')) : t('teams.pages.credentialDetail')}
+            />
+            {props.conditionBanners}
+            {body}
+        </>
+    );
+
     if (!view.featureEnabled) {
-        return (
-            <ItemGroup description={t('teams.credentials.unavailable')}>
-                <Item
-                    testID="team-credential-unavailable"
-                    title={t('teams.credentials.title')}
-                    showChevron={false}
-                />
-            </ItemGroup>
+        return frame(
+            <SurfaceStateCard
+                testID="team-credential-unavailable"
+                kind="unavailable"
+                size="pane"
+                iconName="key"
+                title={t('teams.credentials.unavailable')}
+            />,
         );
     }
 
@@ -160,9 +191,9 @@ const CredentialDetail = React.memo(function CredentialDetail(props: Readonly<{
         const recipientRecovery = teamCredentialRecoveryPresentation(resource.recoveryAction, {
             isSourceCustodian: false,
         });
-        return (
+        return frame(
             <>
-                <ItemGroup title={resource.displayName} description={`${context.team.name} · ${context.homeName}`}>
+                <ItemGroup>
                     <Item
                         testID="team-credential-recipient-source"
                         title={t('teams.credentials.detail.sourceLabel')}
@@ -221,40 +252,43 @@ const CredentialDetail = React.memo(function CredentialDetail(props: Readonly<{
                         onChooseAnotherResource={() => router.push(teamCredentialsPath(context.address))}
                     />
                 )}
-            </>
+            </>,
         );
     }
 
     if (view.resource === null) {
         // Until the Home has answered, absence proves nothing; afterwards it is
         // the answer, and the retry belongs to whichever of the two it is.
-        return view.resolved ? (
-            <ItemGroup description={t('teams.credentials.detail.notFound')}>
-                <Item
-                    testID="team-credential-not-found"
-                    title={t('teams.errors.notFound')}
-                    showChevron={false}
-                />
-            </ItemGroup>
+        return frame(view.resolved ? (
+            <SurfaceStateCard
+                testID="team-credential-not-found"
+                kind="unavailable"
+                size="pane"
+                title={t('teams.errors.notFound')}
+                reason={t('teams.credentials.detail.notFound')}
+                action={{ label: t('teams.credentials.title'), onPress: () => router.push(teamCredentialsPath(context.address)) }}
+            />
         ) : view.error ? (
-            <ItemGroup description={t('teams.unavailable.offline')}>
-                <Item
-                    testID="team-credential-retry"
-                    title={t('teams.unavailable.retry')}
-                    onPress={() => void view.reload()}
-                    showChevron={false}
+            <ItemGroup>
+                <SurfaceStateCard
+                    testID="team-credential-error"
+                    kind="error"
+                    size="line"
+                    title={t('teams.unavailable.offline')}
+                    action={{ label: t('common.retry'), testID: 'team-credential-retry', onPress: () => void view.reload() }}
+                    accessibilitySemantics="alert"
                 />
             </ItemGroup>
         ) : (
             <ItemGroup>
-                <Item
+                <ItemLoadStateRows
                     testID="team-credential-loading"
-                    title={t('teams.credentials.title')}
-                    loading
-                    showChevron={false}
+                    state={{ kind: 'loading' }}
+                    rows={4}
+                    accessibilityLabel={t('common.loading')}
                 />
             </ItemGroup>
-        );
+        ));
     }
 
     const { resource } = view;
@@ -265,9 +299,6 @@ const CredentialDetail = React.memo(function CredentialDetail(props: Readonly<{
     const { capabilities } = resource;
     const state = resourceState(resource);
     const delivery = capabilities.manageAudience ? resourceDeliverySummary(resource) : null;
-    const custodian = resource.custodianAccountId === context.scope.accountId
-        ? t('teams.credentials.sharedByYou')
-        : null;
     const brokerConnectionSemantics = resource.brokerPlacement?.kind === 'machine_pool'
         ? t('machinePools.connectionSemantics')
         : undefined;
@@ -281,9 +312,18 @@ const CredentialDetail = React.memo(function CredentialDetail(props: Readonly<{
             || capabilities.refreshDirectMaterial,
     });
 
-    return (
+    return frame(
         <>
-            <ItemGroup title={resource.displayName} description={notice ?? custodian ?? undefined}>
+            <ItemGroup>
+                {notice ? (
+                    <SurfaceStateCard
+                        testID="team-credential-notice"
+                        kind="error"
+                        size="line"
+                        title={notice}
+                        accessibilitySemantics="alert"
+                    />
+                ) : null}
                 <Item
                     testID="team-credential-source"
                     title={t('teams.credentials.detail.sourceLabel')}
@@ -293,10 +333,64 @@ const CredentialDetail = React.memo(function CredentialDetail(props: Readonly<{
                 <Item
                     testID="team-credential-state"
                     title={resourceStateLabel(state)}
-                    subtitle={delivery ?? undefined}
+                    // The last test's answer, while there is one, says more than the delivery line.
+                    subtitle={testResult ?? delivery ?? undefined}
                     showChevron={false}
+                    rightElement={(
+                        <RoundButton
+                            testID="team-credential-test"
+                            size="small"
+                            display="secondary"
+                            title={t('settingsProviders.detail.testConnection')}
+                            loading={testBusy}
+                            // Test registers its own approval, so it shares this
+                            // screen's approval custody: starting a second unresolved
+                            // Action would orphan the decision already waiting.
+                            disabled={testBusy || busy}
+                            onPress={async () => {
+                                if (testBusy || busy) return;
+                                const requestedTargetKey = targetKey;
+                                setTestBusy(true);
+                                setTestResult(null);
+                                try {
+                                    const outcome = await testTeamCredentialResource({
+                                        scope: context.scope,
+                                        teamId: context.address.teamId,
+                                        resourceId,
+                                        handlers: {
+                                            // Test is the one intent whose whole value
+                                            // is its answer. A deferred approval must
+                                            // still deliver that readiness, not a bare
+                                            // "it ran".
+                                            onApprovalSucceeded: (result) => {
+                                                if (currentTargetKey.current !== requestedTargetKey) return;
+                                                setTestResult(result.recovery ?? resourceStateLabel(result.readiness.kind));
+                                            },
+                                            onApprovalFailed: (code) => {
+                                                if (currentTargetKey.current !== requestedTargetKey) return;
+                                                setTestResult(credentialApprovalFailureMessage(code));
+                                            },
+                                        },
+                                    });
+                                    if (currentTargetKey.current !== requestedTargetKey) return;
+                                    if (outcome.kind === 'succeeded') {
+                                        setTestResult(outcome.value.recovery
+                                            ?? resourceStateLabel(outcome.value.readiness.kind));
+                                    } else {
+                                        setTestResult(credentialFailureMessage(outcome.failure));
+                                    }
+                                } catch (cause) {
+                                    if (currentTargetKey.current !== requestedTargetKey) return;
+                                    if (isTeamActionApprovalPendingError(cause)) context.requestApproval(cause.registration);
+                                    else setTestResult(t('teams.errors.generic'));
+                                } finally {
+                                    if (currentTargetKey.current === requestedTargetKey) setTestBusy(false);
+                                }
+                            }}
+                        />
+                    )}
                 />
-                {capabilities.managePolicy ? <Item
+{capabilities.managePolicy ? <Item
                     testID="team-credential-use-policy"
                     title={t('teams.credentials.usePolicy.label')}
                     detail={sessionUsePolicyLabel(resource.sessionUsePolicy)}
@@ -305,57 +399,6 @@ const CredentialDetail = React.memo(function CredentialDetail(props: Readonly<{
                         : undefined}
                     showChevron={false}
                 /> : null}
-                <Item
-                    testID="team-credential-test"
-                    title={t('settingsProviders.detail.testConnection')}
-                    detail={testResult ?? undefined}
-                    loading={testBusy}
-                    // Test registers its own approval, so it shares this
-                    // screen's approval custody: starting a second unresolved
-                    // Action would orphan the decision already waiting.
-                    disabled={testBusy || busy}
-                    showChevron={false}
-                    onPress={async () => {
-                        if (testBusy || busy) return;
-                        const requestedTargetKey = targetKey;
-                        setTestBusy(true);
-                        setTestResult(null);
-                        try {
-                            const outcome = await testTeamCredentialResource({
-                                scope: context.scope,
-                                teamId: context.address.teamId,
-                                resourceId,
-                                handlers: {
-                                    // Test is the one intent whose whole value
-                                    // is its answer. A deferred approval must
-                                    // still deliver that readiness, not a bare
-                                    // "it ran".
-                                    onApprovalSucceeded: (result) => {
-                                        if (currentTargetKey.current !== requestedTargetKey) return;
-                                        setTestResult(result.recovery ?? resourceStateLabel(result.readiness.kind));
-                                    },
-                                    onApprovalFailed: (code) => {
-                                        if (currentTargetKey.current !== requestedTargetKey) return;
-                                        setTestResult(credentialApprovalFailureMessage(code));
-                                    },
-                                },
-                            });
-                            if (currentTargetKey.current !== requestedTargetKey) return;
-                            if (outcome.kind === 'succeeded') {
-                                setTestResult(outcome.value.recovery
-                                    ?? resourceStateLabel(outcome.value.readiness.kind));
-                            } else {
-                                setTestResult(credentialFailureMessage(outcome.failure));
-                            }
-                        } catch (cause) {
-                            if (currentTargetKey.current !== requestedTargetKey) return;
-                            if (isTeamActionApprovalPendingError(cause)) context.requestApproval(cause.registration);
-                            else setTestResult(t('teams.errors.generic'));
-                        } finally {
-                            if (currentTargetKey.current === requestedTargetKey) setTestBusy(false);
-                        }
-                    }}
-                />
                 {resource.source !== null ? <Item
                     testID="team-credential-broker"
                     title={t('teams.credentials.detail.brokerLabel')}
@@ -384,44 +427,43 @@ const CredentialDetail = React.memo(function CredentialDetail(props: Readonly<{
             ) : null}
 
             {capabilities.refreshDirectMaterial ? (
-                <ItemGroup description={t('teams.credentials.directReadiness.automatic')}>
+                <ItemGroup>
                     <Item
-                        testID="team-credential-preparation-refresh"
-                        title={t('teams.credentials.directReadiness.check')}
-                        detail={preparationPending === null
+                        testID="team-credential-preparation"
+                        title={t('teams.credentials.directReadiness.title')}
+                        subtitle={(preparationPending === null
                             ? undefined
                             : preparationPending === 0
                                 ? t('teams.credentials.directReadiness.allReady')
-                                : t('session.access.preparationPending', { count: preparationPending })}
-                        loading={preparationBusy}
-                        // The census registers its own approval too, so it
-                        // shares the same unresolved-approval custody as Test.
-                        disabled={preparationBusy || busy}
+                                : t('session.access.preparationPending', { count: preparationPending })) ?? t('teams.credentials.directReadiness.automatic')}
+                        subtitleLines={0}
                         showChevron={false}
-                        onPress={async () => {
+                        rightElement={(
+                            <RoundButton
+                                testID="team-credential-preparation-refresh"
+                                size="small"
+                                display="secondary"
+                                title={t('teams.credentials.directReadiness.check')}
+                                loading={preparationBusy}
+                                // All user intents share the Action admission owner.
+                                disabled={preparationBusy || busy}
+                                onPress={async () => {
                             if (preparationBusy || busy) return;
                             const requestedTargetKey = targetKey;
                             setPreparationBusy(true);
                             setNotice(null);
                             try {
-                                let cursor: string | null = null;
-                                let pending = 0;
-                                do {
-                                    const outcome = await listTeamCredentialDirectMaterialPreparation({
-                                        scope: context.scope,
-                                        teamId: context.address.teamId,
-                                        resourceId,
-                                        ...(cursor ? { cursor } : {}),
-                                    });
-                                    if (currentTargetKey.current !== requestedTargetKey) return;
-                                    if (outcome.kind === 'failed') {
-                                        setNotice(credentialFailureMessage(outcome.failure));
-                                        return;
-                                    }
-                                    pending += outcome.value.recipients.filter((recipient) => recipient.readiness !== 'ready').length;
-                                    cursor = outcome.value.nextCursor;
-                                } while (cursor !== null);
-                                setPreparationPending(pending);
+                                const outcome = await getTeamCredentialPreparation({
+                                    scope: context.scope,
+                                    teamId: context.address.teamId,
+                                    resourceId,
+                                });
+                                if (currentTargetKey.current !== requestedTargetKey) return;
+                                if (outcome.kind === 'failed') {
+                                    setNotice(credentialFailureMessage(outcome.failure));
+                                    return;
+                                }
+                                setPreparationPending(outcome.value.counts.pending);
                             } catch (cause) {
                                 if (currentTargetKey.current !== requestedTargetKey) return;
                                 if (isTeamActionApprovalPendingError(cause)) context.requestApproval(cause.registration);
@@ -430,6 +472,8 @@ const CredentialDetail = React.memo(function CredentialDetail(props: Readonly<{
                                 if (currentTargetKey.current === requestedTargetKey) setPreparationBusy(false);
                             }
                         }}
+                            />
+                        )}
                     />
                 </ItemGroup>
             ) : null}
@@ -501,71 +545,11 @@ const CredentialDetail = React.memo(function CredentialDetail(props: Readonly<{
                 ) : null}
             </ItemGroup>
 
-            {((resource.enabled && capabilities.disable) || (!resource.enabled && capabilities.enable)) ? (
-                <ItemGroup>
-                    {((resource.enabled && capabilities.disable) || (!resource.enabled && capabilities.enable)) ? <Item
-                        testID="team-credential-toggle-enabled"
-                        title={resource.enabled ? t('common.disable') : t('common.enable')}
-                        disabled={busy}
-                        onPress={async () => {
-                            const requestedTargetKey = targetKey;
-                            if (resource.enabled) {
-                                const confirmed = await Modal.confirm(
-                                    t('common.disable'),
-                                    t('teams.credentials.delete.body'),
-                                    { confirmText: t('common.disable'), destructive: true },
-                                );
-                                if (!confirmed) return;
-                            }
-                            if (currentTargetKey.current !== requestedTargetKey) return;
-                            setMutating(true);
-                            setNotice(null);
-                            try {
-                                const outcome = await updateTeamCredentialResource({
-                                    scope: context.scope,
-                                    address: context.address,
-                                    resourceId,
-                                    expectedRevision: resource.revision,
-                                    enabled: !resource.enabled,
-                                    ...(resource.enabled ? { confirmedByPresentUser: true } : {}),
-                                    handlers: {
-                                        // The projection was already invalidated
-                                        // for this exact Team when the approval
-                                        // executed; clearing the notice is what
-                                        // tells the person their change landed.
-                                        onApprovalSucceeded: () => {
-                                            if (currentTargetKey.current !== requestedTargetKey) return;
-                                            setNotice(null);
-                                            void view.reload();
-                                        },
-                                        onApprovalFailed: (code) => {
-                                            if (currentTargetKey.current !== requestedTargetKey) return;
-                                            setNotice(credentialApprovalFailureMessage(code));
-                                        },
-                                    },
-                                });
-                                if (currentTargetKey.current !== requestedTargetKey) return;
-                                if (outcome.kind === 'succeeded') {
-                                    await view.reload();
-                                } else {
-                                    setNotice(credentialFailureMessage(outcome.failure));
-                                }
-                            } catch (cause) {
-                                if (currentTargetKey.current !== requestedTargetKey) return;
-                                if (isTeamActionApprovalPendingError(cause)) context.requestApproval(cause.registration);
-                                else setNotice(t('teams.errors.generic'));
-                            } finally {
-                                if (currentTargetKey.current === requestedTargetKey) setMutating(false);
-                            }
-                        }}
-                        showChevron={false}
-                    /> : null}
-                </ItemGroup>
-            ) : null}
-            {capabilities.delete ? (
-                // Deleting closes this page, so it ends it as a quiet button row, not a red row in a sheet.
+            {(capabilities.delete || (resource.enabled && capabilities.disable) || (!resource.enabled && capabilities.enable)) ? (
+                // The lifecycle closes the page as one quiet row: turning it off or on, then deleting it,
+                // destructive and last (one button row, not rows in a sheet).
                 <ItemGroup surface="none">
-                    <SectionButtonRow>
+                    <SectionButtonRow trailing={capabilities.delete ? (
                         <RoundButton
                             testID="team-credential-delete"
                             size="small"
@@ -628,10 +612,71 @@ const CredentialDetail = React.memo(function CredentialDetail(props: Readonly<{
                                     }
                                 }}
                             />
+                    ) : undefined}>
+                        {((resource.enabled && capabilities.disable) || (!resource.enabled && capabilities.enable)) ? (
+                            <RoundButton
+                                testID="team-credential-toggle-enabled"
+                                size="small"
+                                display="secondary"
+                                title={resource.enabled ? t('common.disable') : t('common.enable')}
+                                disabled={busy}
+                                onPress={async () => {
+                            const requestedTargetKey = targetKey;
+                            if (resource.enabled) {
+                                const confirmed = await Modal.confirm(
+                                    t('common.disable'),
+                                    t('teams.credentials.delete.body'),
+                                    { confirmText: t('common.disable'), destructive: true },
+                                );
+                                if (!confirmed) return;
+                            }
+                            if (currentTargetKey.current !== requestedTargetKey) return;
+                            setMutating(true);
+                            setNotice(null);
+                            try {
+                                const outcome = await updateTeamCredentialResource({
+                                    scope: context.scope,
+                                    address: context.address,
+                                    resourceId,
+                                    expectedRevision: resource.revision,
+                                    enabled: !resource.enabled,
+                                    ...(resource.enabled ? { confirmedByPresentUser: true } : {}),
+                                    handlers: {
+                                        // The projection was already invalidated
+                                        // for this exact Team when the approval
+                                        // executed; clearing the notice is what
+                                        // tells the person their change landed.
+                                        onApprovalSucceeded: () => {
+                                            if (currentTargetKey.current !== requestedTargetKey) return;
+                                            setNotice(null);
+                                            void view.reload();
+                                        },
+                                        onApprovalFailed: (code) => {
+                                            if (currentTargetKey.current !== requestedTargetKey) return;
+                                            setNotice(credentialApprovalFailureMessage(code));
+                                        },
+                                    },
+                                });
+                                if (currentTargetKey.current !== requestedTargetKey) return;
+                                if (outcome.kind === 'succeeded') {
+                                    fireAndForget(view.reload(), { tag: 'TeamCredentialDetailScreen.revalidate' });
+                                } else {
+                                    setNotice(credentialFailureMessage(outcome.failure));
+                                }
+                            } catch (cause) {
+                                if (currentTargetKey.current !== requestedTargetKey) return;
+                                if (isTeamActionApprovalPendingError(cause)) context.requestApproval(cause.registration);
+                                else setNotice(t('teams.errors.generic'));
+                            } finally {
+                                if (currentTargetKey.current === requestedTargetKey) setMutating(false);
+                            }
+                        }}
+                            />
+                        ) : null}
                     </SectionButtonRow>
                 </ItemGroup>
             ) : null}
-        </>
+        </>,
     );
 });
 
@@ -641,8 +686,8 @@ export const TeamCredentialDetailScreen = React.memo(function TeamCredentialDeta
     resourceId: string;
 }>) {
     return (
-        <TeamSection serverId={props.serverId} teamId={props.teamId} title={t('teams.credentials.title')} description={t('teams.pages.credentialDetail')}>
-            {(context) => <CredentialDetail context={context} resourceId={props.resourceId} />}
+        <TeamSection serverId={props.serverId} teamId={props.teamId} title={t('teams.credentials.title')} description={t('teams.pages.credentialDetail')} childRendersHeader>
+            {(context, conditionBanners) => <CredentialDetail context={context} resourceId={props.resourceId} conditionBanners={conditionBanners} />}
         </TeamSection>
     );
 });

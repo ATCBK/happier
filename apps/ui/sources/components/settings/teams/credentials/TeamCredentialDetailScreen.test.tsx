@@ -1,10 +1,12 @@
 import * as React from 'react';
+import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TEAM_CREDENTIAL_EXTERNAL_PROVIDER_PROTOCOLS_V1 } from '@happier-dev/protocol';
 
 import { collectRenderedTestIds } from '@/dev/testkit/render/collectRenderedTestIds';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
@@ -46,7 +48,7 @@ const LIST_PATH = '/v1/teams/credential-resources/list';
 const GET_PATH = '/v1/teams/credential-resources/get';
 const ENTITLED_LIST_PATH = '/v1/teams/credential-resources/entitled/list';
 const UPDATE_PATH = '/v1/teams/credential-resources/update';
-const PREPARATION_LIST_PATH = '/v2/teams/team-1/credential-resources/resource-1/direct-material?view=census';
+const PREPARATION_READ_PATH = '/v2/teams/team-1/credential-resources/resource-1/direct-material?view=readiness';
 const ARTIFACT_CREATE_PATH = '/v1/artifacts';
 
 beforeEach(async () => {
@@ -380,7 +382,7 @@ describe('TeamCredentialDetailScreen', () => {
         expect(collectRenderedTestIds(screen.tree.toJSON())).not.toContain('team-credential-open-edit');
     });
 
-    it('checks the material-safe source-owner census through the gated resource read', async () => {
+    it('checks material-safe source-owner readiness through the gated resource read', async () => {
         const serverId = await harness.addHome({
             name: 'Home A', serverUrl: 'https://home-a.example', accountId: 'account-ada',
             teamsEnabled: true, credentialResourcesEnabled: true,
@@ -394,11 +396,9 @@ describe('TeamCredentialDetailScreen', () => {
                     disclosureCeiling: 'direct_allowed', allMembersDeliveryMode: 'direct',
                 }),
         });
-        harness.answer(serverId, PREPARATION_LIST_PATH, {
+        harness.answer(serverId, PREPARATION_READ_PATH, {
             body: {
-                resourceRevision: 3, sourceOwner: true,
-                recipients: [{ recipientAccountId: 'account-maya', readiness: 'preparing' }],
-                nextCursor: null,
+                status: 'not_ready', reason: 'preparation_pending', counts: { pending: 1 },
             },
         });
 
@@ -410,7 +410,7 @@ describe('TeamCredentialDetailScreen', () => {
             .toContain('team-credential-preparation-refresh'));
         await screen.pressByTestIdAsync('team-credential-preparation-refresh');
 
-        await vi.waitFor(() => expect(harness.requestsFor(PREPARATION_LIST_PATH)).toHaveLength(1));
+        await vi.waitFor(() => expect(harness.requestsFor(PREPARATION_READ_PATH)).toHaveLength(1));
         // The catalog mounts these strings at `session.access.*`; the old `sessionAccess.*`
         // spelling resolved to nothing and rendered the raw key to the admin.
         expect(JSON.stringify(screen.tree.toJSON())).toContain('session.access.preparationPending(count=1)');
@@ -513,7 +513,12 @@ describe('TeamCredentialDetailScreen', () => {
         expect(harness.requestsFor(ARTIFACT_CREATE_PATH)).toHaveLength(1);
     });
 
-    it('disables an active resource through the canonical update Action', async () => {
+    it.each([
+        { approved: false, refreshFails: false },
+        { approved: false, refreshFails: true },
+        { approved: true, refreshFails: false },
+        { approved: true, refreshFails: true },
+    ])('settles disable with retained detail read-only (approved=$approved, refreshFails=$refreshFails)', async ({ approved, refreshFails }) => {
         const serverId = await harness.addHome({
             name: 'Home A',
             serverUrl: 'https://home-a.example',
@@ -528,6 +533,7 @@ describe('TeamCredentialDetailScreen', () => {
         const resource = teamCredentialResourceFixture({ enabled: true });
         harness.answer(serverId, GET_PATH, { body: resource });
         harness.answer(serverId, UPDATE_PATH, { body: { resourceId: resource.id, revision: 4 } });
+        if (approved) await harness.requireUiApproval(serverId, 'teams.credentials.update');
 
         const { TeamCredentialDetailScreen } = await import('./TeamCredentialDetailScreen');
         const screen = await renderScreen(
@@ -536,11 +542,55 @@ describe('TeamCredentialDetailScreen', () => {
         await vi.waitFor(() => {
             expect(collectRenderedTestIds(screen.tree.toJSON())).toContain('team-credential-toggle-enabled');
         });
-        await screen.pressByTestIdAsync('team-credential-toggle-enabled');
-        await vi.waitFor(() => expect(harness.requestsFor(UPDATE_PATH)).toHaveLength(1));
-        await vi.waitFor(() => expect(harness.requestsFor(GET_PATH)).toHaveLength(2));
-        expect(harness.requestsFor(UPDATE_PATH)[0]?.input).toMatchObject({
-            resourceId: 'resource-1', expectedRevision: 3, enabled: false,
+        const refresh = createDeferred<void>();
+        if (approved) {
+            await screen.pressByTestIdAsync('team-credential-toggle-enabled');
+            await vi.waitFor(() => expect(harness.requestsFor(ARTIFACT_CREATE_PATH)).toHaveLength(1));
+        }
+        harness.answer(serverId, GET_PATH, {
+            ...(refreshFails ? { status: 503 } : { body: { ...resource, enabled: false, revision: 4 } }),
+            respondAfter: refresh.promise,
         });
+        let settled = approved;
+        if (approved) {
+            const artifactId = harness.artifacts(serverId).list()[0]?.id;
+            expect(artifactId).toBeDefined();
+            await expect(decideApprovalAsInbox(serverId, artifactId!, 'approve')).resolves.toMatchObject({ ok: true });
+        } else {
+            const { RoundButton } = await import('@/components/ui/buttons/RoundButton');
+            const toggle = screen.findAllByType(RoundButton).find((node) => node.props.testID === 'team-credential-toggle-enabled');
+            act(() => { void toggle?.props.onPress().then(() => { settled = true; }); });
+        }
+        try {
+            await vi.waitFor(() => expect(harness.requestsFor(UPDATE_PATH)).toHaveLength(1));
+            await vi.waitFor(() => expect(harness.requestsFor(GET_PATH)).toHaveLength(2));
+            await vi.waitFor(() => {
+                const control = screen.findByTestId('team-credential-toggle-enabled');
+                expect(control).not.toBeNull();
+                expect(Boolean(control?.props.disabled)).toBe(true);
+                expect(settled).toBe(true);
+            });
+            await screen.pressByTestIdAsync('team-credential-toggle-enabled');
+            expect(harness.requestsFor(UPDATE_PATH)).toHaveLength(1);
+            expect(harness.requestsFor(UPDATE_PATH)[0]?.input).toMatchObject({
+                resourceId: 'resource-1', expectedRevision: 3, enabled: false,
+            });
+        } finally {
+            await act(async () => { refresh.resolve(); });
+        }
+        if (refreshFails) {
+            expect(screen.findByTestId('team-credential-toggle-enabled')?.props.disabled).toBe(true);
+            await screen.pressByTestIdAsync('team-credential-toggle-enabled');
+            expect(harness.requestsFor(UPDATE_PATH)).toHaveLength(1);
+        } else {
+            await vi.waitFor(() => expect(screen.findByTestId('team-credential-toggle-enabled')?.props.disabled).toBe(false));
+            await screen.pressByTestIdAsync('team-credential-toggle-enabled');
+            if (approved) {
+                await vi.waitFor(() => expect(harness.requestsFor(ARTIFACT_CREATE_PATH)).toHaveLength(2));
+            } else {
+                await vi.waitFor(() => expect(harness.requestsFor(UPDATE_PATH)).toHaveLength(2));
+                expect(harness.requestsFor(UPDATE_PATH)[1]?.input).toMatchObject({ expectedRevision: 4, enabled: true });
+            }
+        }
     });
 });

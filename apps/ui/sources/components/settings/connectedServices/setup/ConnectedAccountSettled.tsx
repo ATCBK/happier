@@ -20,6 +20,7 @@ import type { ConnectedServicesIndexModel } from '../model/buildConnectedService
 import type { useConnectedServicesIndex } from '../model/useConnectedServicesIndex';
 import { selectConnectedAccountSettleOffer, type ConnectedAccountSettleOffer } from './selectConnectedAccountSettleOffer';
 import { suggestAgentDefaultForNewAccount } from './suggestAgentDefaultForNewAccount';
+import { ConnectedAccountActionApprovalNotice } from '../ConnectedAccountActionApprovalNotice';
 
 type AgentEntries = ReturnType<typeof useConnectedServicesIndex>['agentEntries'];
 
@@ -28,7 +29,6 @@ function sameService(left: Readonly<{ pluginId: string; localId: string }>, righ
 }
 
 /** Server-backed pools (V4) are reachable without a machine; the pool owner lists and writes them. */
-const V4_POOLS_PEER = { status: 'ready' as const, transport: { protocol: 'v4' as const }, errorCode: null };
 
 /**
  * Where a connect settles (lab `csvc` A5), under the new account's row: who it connected as (through
@@ -45,7 +45,7 @@ export function ConnectedAccountSettled(props: Readonly<{
     testID?: string;
 }>) {
     const labelsByKey = useConnectedMetadataCatalog(undefined, selectConnectedMetadataLabels);
-    const { catalog: purposeCatalog, legacySettings, mutateDefaults } = useConnectedAccountPurposeDefaults();
+    const { catalog: purposeCatalog, legacySettings, mutateDefaults, execution } = useConnectedAccountPurposeDefaults();
     const { present } = useConnectedAccountIdentityPrivacy();
     const { account, onDismiss } = props;
     const sheet = props.model.sheets.find((candidate) => sameService(candidate.service, account.service)) ?? null;
@@ -109,7 +109,10 @@ export function ConnectedAccountSettled(props: Readonly<{
             }}
         />
     ) : null;
-    return <ConnectedAccountSettledView identity={identity} offer={offer} primaryAction={primaryAction} onDismiss={onDismiss} testID={props.testID} />;
+    return <>
+        <ConnectedAccountActionApprovalNotice execution={execution} testID="connected-services-settle-approval-pending" />
+        <ConnectedAccountSettledView identity={identity} offer={offer} primaryAction={primaryAction} onDismiss={onDismiss} testID={props.testID} />
+    </>;
 }
 
 /** The shared settle presentation; specimens provide their own simulated action, never live pools. */
@@ -179,11 +182,12 @@ function AddToPoolButton(props: Readonly<{
     const pools = useQualifiedConnectedAccountGroups({
         serverId: scope?.serverId ?? '',
         service: props.account.service,
-        peer: V4_POOLS_PEER,
     });
     const group = pools.groups.find((candidate) => candidate.ref.groupId === props.offer.groupId) ?? null;
     const [failed, setFailed] = React.useState(false);
     return (
+        <>
+        <ConnectedAccountActionApprovalNotice execution={pools.execution} testID="connected-services-settle-pool-approval-pending" />
         <RoundButton
             testID="connected-services-settle:add-to-pool"
             size="small"
@@ -197,6 +201,7 @@ function AddToPoolButton(props: Readonly<{
                 else setFailed(true);
             }}
         />
+        </>
     );
 }
 
@@ -205,20 +210,18 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         flexWrap: 'wrap',
-        gap: 10,
-        paddingVertical: 10,
+        gap: theme.space.s10,
+        paddingVertical: theme.space.s10,
         paddingRight: 14,
-        paddingLeft: 32,
+        paddingLeft: theme.space.s32,
         borderTopWidth: StyleSheet.hairlineWidth,
         borderTopColor: theme.colors.border.default,
         backgroundColor: theme.colors.state.success.background,
     },
     text: {
-        ...Typography.default(),
         flex: 1,
         minWidth: 200,
-        fontSize: 12.5,
-        lineHeight: 17,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     strong: {
@@ -228,6 +231,6 @@ const styles = StyleSheet.create((theme) => ({
     actions: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
     },
 }));

@@ -2,7 +2,6 @@ import { Modal } from '@/modal';
 import { resolveHomeDisplayNameForRelayUrl } from '@/components/settings/server/homeDisplayName';
 import { isDaemonOnActiveRelay } from '@/sync/domains/server/relayDrift/relayDriftModel';
 import type { ThisComputerConnection, ThisComputerServiceRow } from '@/sync/domains/server/relayDrift/thisComputerConnection';
-import { toServerUrlDisplay } from '@/sync/domains/server/url/serverUrlDisplay';
 import { t } from '@/text';
 
 export type ThisComputerConnectionPresentation = Readonly<{
@@ -104,13 +103,13 @@ export async function confirmThisComputerAccountMove(connection: ThisComputerCon
 
 /**
  * One served Home's name and state, as every list of the Homes this computer serves reads it (R15 d):
- * the Home's name when the app knows one, else its address; the app's own Home says so.
+ * the Home's name when the app knows one, else "this Home"; the app's own Home says so.
  */
 export function presentThisComputerServiceRow(
     row: ThisComputerServiceRow,
     activeServer: Readonly<{ serverUrl: string | null | undefined; activeLocalRelayUrl?: string | null }>,
 ): Readonly<{ title: string; stateLabel: string }> {
-    const home = resolveHomeDisplayNameForRelayUrl(row.relayUrl) ?? toServerUrlDisplay(row.relayUrl);
+    const home = resolveHomeDisplayNameForRelayUrl(row.relayUrl) ?? t('settingsAccount.thisHomeTitle');
     const isActiveHome = isDaemonOnActiveRelay({
         activeRelayUrl: activeServer.serverUrl,
         activeLocalRelayUrl: activeServer.activeLocalRelayUrl ?? null,

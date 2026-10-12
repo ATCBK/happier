@@ -7,6 +7,7 @@ import type { DaemonProviderConnectionViewV1 } from '@happier-dev/protocol/rpc';
 import type { TextInput } from '@/components/ui/text/Text';
 import { Modal } from '@/modal';
 import { useProviderConnectionModels } from '@/providers/hooks/useProviderConnectionModels';
+import { useProviderCatalogCounts } from '@/providers/hooks/useProviderCatalogCounts';
 import { useProviderModelLoadAction } from '@/providers/hooks/useProviderModelLoadAction';
 import { useRetireProviderStateOnAccountChange } from '@/providers/hooks/accountLifetimeRetirement';
 import {
@@ -21,6 +22,7 @@ import {
     providerRetryRecoveryForError,
 } from '@/providers/connection/recovery';
 import { t } from '@/text';
+import { fireAndForget } from '@/utils/system/fireAndForget';
 
 type ProviderSettingsExecutionTarget = Readonly<{ machineId: string; serverId: string }>;
 
@@ -50,6 +52,7 @@ export function useProviderConnectionModelsSection(input: Readonly<{
     const { connectionId, connection, enabled, machineId, serverId, resolveCurrentTarget } = input;
     const { mutateProviderModelSettings, probeProviderConnection } = useProviderActionClient(serverId);
     const catalog = useProviderConnectionModels({ enabled, active: input.active, machineId, serverId, connectionId });
+    const catalogCount = useProviderCatalogCounts(serverId)?.[connectionId] ?? null;
     const [showHidden, setShowHidden] = React.useState(false);
     const [editorOpen, setEditorOpen] = React.useState(input.startAdding === true);
     const [manualModelText, setManualModelText] = React.useState('');
@@ -182,7 +185,9 @@ export function useProviderConnectionModelsSection(input: Readonly<{
             }
             if (!accountStillCurrent()) return false;
             setOperationError(null);
-            await catalog.refresh();
+            // Saved metadata is already published by the Account writer. Runtime
+            // model presentation can revalidate without retaining the authoring draft.
+            fireAndForget(catalog.refresh());
             return accountStillCurrent();
         });
         modelSettingsQueue.current = queued.catch(() => undefined);
@@ -356,7 +361,7 @@ export function useProviderConnectionModelsSection(input: Readonly<{
         groups,
         initialLoading: catalog.loading,
         modelCount: catalog.models.length,
-        shownModelCount: catalog.models.filter((model) => model.visibility !== 'hidden_all_agents').length,
+        catalogCount,
         manualModelPolicy: catalog.manualModelPolicy,
         error: displayError,
         errorRetry: operationError?.retry ?? (!operationError && displayError ? retryCatalog : undefined),

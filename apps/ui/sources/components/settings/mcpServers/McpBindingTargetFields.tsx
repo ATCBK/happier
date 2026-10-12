@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { useUnistyles } from 'react-native-unistyles';
 
-import type { McpServerBindingTargetV1 } from '@happier-dev/protocol';
+import type { ReachPlaceV1 } from '@happier-dev/protocol';
 
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { Item } from '@/components/ui/lists/Item';
@@ -10,12 +10,16 @@ import { t } from '@/text';
 import { Icon } from '@/components/ui/icons/Icon';
 import { getMachineDisplayName, resolveMachineDisplayNames } from '@/utils/sessions/machineDisplayNames';
 import { describeMachinePresenceLine } from '@/utils/sessions/machinePresenceLine';
+import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
+import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
 
-type BindingTargetType = McpServerBindingTargetV1['t'];
-type MachineScopedBindingTargetType = Exclude<BindingTargetType, 'allMachines'>;
+type BindingTargetType = ReachPlaceV1['t'];
+type MachineScopedBindingTargetType = Extract<BindingTargetType, 'machine' | 'workspace'>;
 
-export function describeBindingTarget(target: McpServerBindingTargetV1, machines: readonly Machine[]): string {
+export function describeBindingTarget(target: ReachPlaceV1, machines: readonly Machine[]): string {
     if (target.t === 'allMachines') return t('settings.mcpServersBindingTargetAllMachines');
+    if (target.t === 'project') return target.projectKey;
     const machine = machines.find((m) => m.id === target.machineId) ?? null;
     // A machine missing from the inventory has no name to show, so its id is the only truthful label.
     const machineLabel = getMachineDisplayName(machine) ?? target.machineId;
@@ -24,13 +28,16 @@ export function describeBindingTarget(target: McpServerBindingTargetV1, machines
 }
 
 export const McpBindingTargetFields = React.memo(function McpBindingTargetFields(props: Readonly<{
-    target: McpServerBindingTargetV1;
+    target: ReachPlaceV1;
     machines: readonly Machine[];
     onChangeTargetType: (nextType: BindingTargetType, selectedMachineId?: string) => void;
     onChangeMachineId: (machineId: string) => void;
     onOpenWorkspacePicker: () => void;
 }>) {
     const { theme } = useUnistyles();
+    const scope = useActiveServerAccountScope();
+    const presenceNowMs = useMachinePresenceNowMs(props.machines);
+    const reachabilityRevision = useMachineReachabilityRevision();
     const [openMenu, setOpenMenu] = React.useState<null | 'targetType' | 'machine'>(null);
     const [pendingMachineScopedTargetType, setPendingMachineScopedTargetType] = React.useState<MachineScopedBindingTargetType | null>(null);
 
@@ -62,15 +69,15 @@ export const McpBindingTargetFields = React.memo(function McpBindingTargetFields
         return props.machines.map((machine) => ({
             id: machine.id,
             title: names.get(machine.id) ?? machine.id,
-            subtitle: describeMachinePresenceLine(machine).label,
+            subtitle: describeMachinePresenceLine(machine, presenceNowMs, undefined, scope).label,
             icon: <Icon name="laptop" size={20} color={theme.colors.text.secondary} />,
         }));
-    }, [props.machines, theme.colors.text.secondary]);
+    }, [props.machines, presenceNowMs, scope, reachabilityRevision, theme.colors.text.secondary]);
 
-    const selectedMachineId = props.target.t === 'allMachines'
+    const selectedMachineId = props.target.t === 'allMachines' || props.target.t === 'project'
         ? null
         : props.target.machineId;
-    const needsMachineSelection = props.target.t !== 'allMachines' || pendingMachineScopedTargetType !== null;
+    const needsMachineSelection = props.target.t === 'machine' || props.target.t === 'workspace' || pendingMachineScopedTargetType !== null;
 
     return (
         <>
@@ -86,7 +93,7 @@ export const McpBindingTargetFields = React.memo(function McpBindingTargetFields
                         if (props.machines.length === 0) {
                             props.onChangeTargetType(nextType);
                         } else {
-                            setPendingMachineScopedTargetType(nextType);
+                            if (nextType === 'machine' || nextType === 'workspace') setPendingMachineScopedTargetType(nextType);
                         }
                         return;
                     }

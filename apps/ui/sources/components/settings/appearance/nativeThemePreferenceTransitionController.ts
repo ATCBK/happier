@@ -2,7 +2,8 @@ export type NativeThemePreferenceTransitionControllerDependencies = {
     animateOverlay: () => Promise<void> | void;
     captureSurface: () => Promise<string | null> | string | null;
     hideOverlay: () => void;
-    showOverlay: (uri: string) => void;
+    releaseSurface?: (uri: string) => void;
+    showOverlay: (uri: string, direction?: 'sunrise' | 'night') => void;
     waitForFrame: () => Promise<void> | void;
     recordBreadcrumb?: (breadcrumb: NativeThemePreferenceTransitionBreadcrumb) => void;
 };
@@ -15,21 +16,22 @@ export function createNativeThemePreferenceTransitionController(
     dependencies: NativeThemePreferenceTransitionControllerDependencies,
 ) {
     return {
-        async run(mutation: () => void): Promise<void> {
+        async run(mutation: () => void, direction?: 'sunrise' | 'night'): Promise<void> {
             const uri = await dependencies.captureSurface();
             if (!uri) {
                 mutation();
                 return;
             }
-            dependencies.recordBreadcrumb?.({ phase: 'mutation-before-overlay' });
-            mutation();
-            dependencies.recordBreadcrumb?.({ phase: 'overlay-shown' });
-            dependencies.showOverlay(uri);
             try {
+                dependencies.recordBreadcrumb?.({ phase: 'mutation-before-overlay' });
+                mutation();
+                dependencies.recordBreadcrumb?.({ phase: 'overlay-shown' });
+                dependencies.showOverlay(uri, direction);
                 await dependencies.waitForFrame();
                 await dependencies.animateOverlay();
             } finally {
                 dependencies.hideOverlay();
+                dependencies.releaseSurface?.(uri);
             }
         },
     };

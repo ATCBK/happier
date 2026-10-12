@@ -103,11 +103,13 @@ afterEach(() => {
     appShellProjectionState.value = null;
 });
 
+// Load real screen owners after boundary setup, outside behavior deadlines.
+const { NativeAppPluginPanelsSettingsEntry } = await import('./NativeAppPluginPanelsSettingsEntry');
+
 describe('NativeAppPluginPanelsSettingsEntry', () => {
     it.each(['ios', 'android'] as const)(
         'exposes renderable app-scoped plugin panels through native settings navigation on %s',
         async (platform) => {
-            const { NativeAppPluginPanelsSettingsEntry } = await import('./NativeAppPluginPanelsSettingsEntry');
             appShellProjectionState.value = projectionWith(appSidebarPlacement);
             const screen = await renderScreen(
                 <NativeAppPluginPanelsSettingsEntry
@@ -125,7 +127,6 @@ describe('NativeAppPluginPanelsSettingsEntry', () => {
     );
 
     it('does not advertise the native route when no app panel is renderable', async () => {
-        const { NativeAppPluginPanelsSettingsEntry } = await import('./NativeAppPluginPanelsSettingsEntry');
         appShellProjectionState.value = projectionWith({
             ...appSidebarPlacement,
             availability: { state: 'fallback', reason: 'feature_disabled', diagnostics: [] },
@@ -140,7 +141,6 @@ describe('NativeAppPluginPanelsSettingsEntry', () => {
     });
 
     it('leaves the established web/desktop path unchanged', async () => {
-        const { NativeAppPluginPanelsSettingsEntry } = await import('./NativeAppPluginPanelsSettingsEntry');
         appShellProjectionState.value = projectionWith(appSidebarPlacement);
         const screen = await renderScreen(
             <NativeAppPluginPanelsSettingsEntry

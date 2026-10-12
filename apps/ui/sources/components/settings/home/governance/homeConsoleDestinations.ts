@@ -35,8 +35,6 @@ export type HomeConsoleDestinationId =
 export type HomeConsoleDestination = Readonly<{
     id: HomeConsoleDestinationId;
     titleKey: TranslationKeyNoParams;
-    /** What the page is for: the phone index row's second line. */
-    subtitleKey: TranslationKeyNoParams;
     icon: IconName;
     path: (serverId: string) => string;
     /** Whether this viewer's projected capabilities back the page. */
@@ -54,24 +52,24 @@ const viewsAdministration = (projection: HomeGovernanceProjectionV1) => projecti
  */
 export const HOME_CONSOLE_DESTINATION_GROUPS: readonly (readonly HomeConsoleDestination[])[] = [
     [
-        { id: 'overview', titleKey: 'homeGovernance.overview', subtitleKey: 'homeGovernance.pages.overview', icon: 'house', path: homeAdministrationOverviewPath, available: always },
-        { id: 'people', titleKey: 'homeGovernance.people', subtitleKey: 'homeGovernance.pages.people', icon: 'user-circle', path: homeAdministrationPeoplePath, available: (p) => p.capabilities.manageAccounts },
+        { id: 'overview', titleKey: 'homeGovernance.overview', icon: 'house', path: homeAdministrationOverviewPath, available: always },
+        { id: 'people', titleKey: 'homeGovernance.people', icon: 'user-circle', path: homeAdministrationPeoplePath, available: (p) => p.capabilities.manageAccounts },
         // Team administration is governance, not content access. A Home with Teams turned off says so on the page.
-        { id: 'teams', titleKey: 'homeGovernance.teams', subtitleKey: 'homeGovernance.pages.teams', icon: 'users', path: homeAdministrationTeamsPath, available: (p) => p.capabilities.manageAllTeams },
-        { id: 'policies', titleKey: 'homeGovernance.policies', subtitleKey: 'homeGovernance.pages.policies', icon: 'shield-check', path: homeAdministrationPoliciesPath, available: (p) => p.capabilities.manageTeamCreationPolicy || p.capabilities.manageAuthentication },
-        { id: 'sign-in-providers', titleKey: 'homeGovernance.signInProviders.title', subtitleKey: 'homeGovernance.signInProviders.description', icon: 'key', path: homeAdministrationSignInProvidersPath, available: viewsAdministration },
+        { id: 'teams', titleKey: 'homeGovernance.teams', icon: 'users', path: homeAdministrationTeamsPath, available: (p) => p.capabilities.manageAllTeams },
+        { id: 'policies', titleKey: 'homeGovernance.policies', icon: 'shield-check', path: homeAdministrationPoliciesPath, available: (p) => p.capabilities.manageTeamCreationPolicy || p.capabilities.manageAuthentication },
+        { id: 'sign-in-providers', titleKey: 'homeGovernance.signInProviders.title', icon: 'key', path: homeAdministrationSignInProvidersPath, available: viewsAdministration },
     ],
     [
         // Owners change these; admins read them.
-        { id: 'reach', titleKey: 'homeGovernance.reach.title', subtitleKey: 'homeGovernance.pages.reach', icon: 'globe', path: homeAdministrationReachPath, available: viewsAdministration },
-        { id: 'email', titleKey: 'homeGovernance.email.title', subtitleKey: 'homeGovernance.pages.email', icon: 'envelope', path: homeAdministrationEmailPath, available: viewsAdministration },
-        { id: 'features', titleKey: 'homeGovernance.features.title', subtitleKey: 'homeGovernance.pages.features', icon: 'flask', path: homeAdministrationFeaturesPath, available: viewsAdministration },
-        { id: 'data', titleKey: 'homeGovernance.data.title', subtitleKey: 'homeGovernance.pages.data', icon: 'hard-drives', path: homeAdministrationDataPath, available: viewsAdministration },
-        { id: 'runtime', titleKey: 'homeGovernance.runtime.title', subtitleKey: 'homeGovernance.pages.runtime', icon: 'cpu', path: homeAdministrationRuntimePath, available: viewsAdministration },
-        { id: 'server-settings', titleKey: 'homeGovernance.console.serverSettings', subtitleKey: 'homeGovernance.console.serverSettingsDescription', icon: 'sliders-horizontal', path: homeAdministrationServerSettingsPath, available: viewsAdministration },
+        { id: 'reach', titleKey: 'homeGovernance.reach.title', icon: 'globe', path: homeAdministrationReachPath, available: viewsAdministration },
+        { id: 'email', titleKey: 'homeGovernance.email.title', icon: 'envelope', path: homeAdministrationEmailPath, available: viewsAdministration },
+        { id: 'features', titleKey: 'homeGovernance.features.title', icon: 'flask', path: homeAdministrationFeaturesPath, available: viewsAdministration },
+        { id: 'data', titleKey: 'homeGovernance.data.title', icon: 'hard-drives', path: homeAdministrationDataPath, available: viewsAdministration },
+        { id: 'runtime', titleKey: 'homeGovernance.runtime.title', icon: 'cpu', path: homeAdministrationRuntimePath, available: viewsAdministration },
+        { id: 'server-settings', titleKey: 'homeGovernance.console.serverSettings', icon: 'sliders-horizontal', path: homeAdministrationServerSettingsPath, available: viewsAdministration },
     ],
     [
-        { id: 'activity', titleKey: 'homeGovernance.activity.title', subtitleKey: 'homeGovernance.pages.activity', icon: 'clock-counter-clockwise', path: homeAdministrationActivityPath, available: viewsAdministration },
+        { id: 'activity', titleKey: 'homeGovernance.activity.title', icon: 'clock-counter-clockwise', path: homeAdministrationActivityPath, available: viewsAdministration },
     ],
 ];
 

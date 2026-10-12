@@ -4,6 +4,7 @@ import { useProviderSettings } from '@/providers/hooks/useProviderSettings';
 import * as React from 'react';
 import type { AiLaunchProfile } from '@happier-dev/protocol';
 import { isBuiltInAiLaunchProfileV1 } from '@happier-dev/protocol/profiles/read';
+import { PROFILE_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/profiles/profileActionsV1';
 import type { Settings } from '@/sync/domains/settings/settings';
 
 import { resolveProfileMigrationStatus } from '@/components/profiles/migration/status';
@@ -27,7 +28,7 @@ import {
     useSetting,
     useSettingMutable,
 } from '@/sync/domains/state/storage';
-import { requireUpdatedProfileOperation, useAccountSettingsScope, useDeleteAiLaunchProfile, useProfileOperations } from '@/sync/store/settingsWriters';
+import { requireUpdatedProfileOperation, useAccountSettingsScope, useDeleteAiLaunchProfile, useProfileActionExecute, useProfileFavoriteIdsMutable } from '@/sync/store/settingsWriters';
 import { t } from '@/text';
 import { getSecretSatisfaction } from '@/utils/secrets/secretSatisfaction';
 import { getStorage } from '@/sync/domains/state/storageStore';
@@ -38,10 +39,11 @@ export type ProfilesCollection = {
     useProfiles: Settings['useProfiles'];
     setUseProfiles: ReturnType<typeof useSettingMutable<'useProfiles'>>[1];
     catalog: ReturnType<typeof useProfileCatalog>;
+    isInitialLoading: boolean;
     launchProfiles: ReturnType<typeof useAiLaunchProfiles>;
     profiles: ReturnType<typeof projectAiLaunchProfileForLegacyUi>[];
     favoriteProfileIds: Settings['favoriteProfiles'];
-    setFavoriteProfileIds: ReturnType<typeof useSettingMutable<'favoriteProfiles'>>[1];
+    setFavoriteProfileIds: ReturnType<typeof useProfileFavoriteIdsMutable>[1];
     profileEnabledById: ReturnType<typeof readProfileEnabledById>;
     providerSettings: ReturnType<typeof useProviderSettings>;
     secretBindingsByProfileId: ReturnType<typeof useCurrentSecretBindingsByProfileIdMutable>[0];
@@ -69,9 +71,10 @@ export function useProfilesCollection(): ProfilesCollection {
     const launchProfiles = useAiLaunchProfiles();
     const scope = useAccountSettingsScope();
     const catalog = useProfileCatalog(scope);
-    const operations = useProfileOperations();
+    const isInitialLoading = !catalog || (catalog.catalog.status === 'loading' && catalog.data === null);
+    const execute = useProfileActionExecute();
     const profiles = React.useMemo(() => launchProfiles.map(projectAiLaunchProfileForLegacyUi), [launchProfiles]);
-    const [favoriteProfileIds, setFavoriteProfileIds] = useSettingMutable('favoriteProfiles');
+    const [favoriteProfileIds, setFavoriteProfileIds] = useProfileFavoriteIdsMutable();
     const profileEnabledByIdRaw = useSetting('profileEnabledById');
     const settingsVersion = getStorage()(state => state.settingsVersion);
     const profileEnabledById = React.useMemo(
@@ -109,23 +112,26 @@ export function useProfilesCollection(): ProfilesCollection {
     );
     const setEnabled = React.useCallback(async (profile: AIBackendProfile, enabled: boolean) => {
         const source = launchProfiles.find(entry => entry.id === profile.id);
-        if (!operations) throw new Error('Profile Account is unavailable');
         if (isBuiltInAiLaunchProfileV1(source ?? profile) && source?.profileRecordRevision === undefined) {
             if (settingsVersion === null) throw new Error('Account settings version is unavailable');
-            requireUpdatedProfileOperation(await operations.setEnabled({ subject: { kind: 'builtin', id: profile.id },
-                enabled, expectedSettingsVersion: settingsVersion }));
+            requireUpdatedProfileOperation(PROFILE_ACTION_OUTPUT_SCHEMAS_V1['launch_profiles.enabled.set'].parse(
+                await execute({ actionId: 'launch_profiles.enabled.set', input: { subject: { kind: 'builtin', id: profile.id },
+                    enabled, expectedSettingsVersion: settingsVersion } })));
             return;
         }
-        requireUpdatedProfileOperation(await operations.setEnabled({ id: profile.id, enabled,
-            expectedRevision: source?.profileRecordRevision }));
-    }, [launchProfiles, operations, settingsVersion]);
+        if (source?.profileRecordRevision === undefined) throw new Error('profile_review_unavailable');
+        requireUpdatedProfileOperation(PROFILE_ACTION_OUTPUT_SCHEMAS_V1['launch_profiles.enabled.set'].parse(
+            await execute({ actionId: 'launch_profiles.enabled.set', input: { id: profile.id, enabled,
+                expectedRevision: source.profileRecordRevision } })));
+    }, [launchProfiles, execute, settingsVersion]);
 
     const isFavorite = React.useCallback(
         (profileId: string) => favoriteProfileIds.includes(profileId),
         [favoriteProfileIds],
     );
     const toggleFavorite = React.useCallback((profileId: string) => {
-        setFavoriteProfileIds(toggleFavoriteProfileId(favoriteProfileIds, profileId));
+        void setFavoriteProfileIds(toggleFavoriteProfileId(favoriteProfileIds, profileId)).catch(error =>
+            Modal.alert(t('common.error'), error instanceof Error ? error.message : t('common.error')));
     }, [favoriteProfileIds, setFavoriteProfileIds]);
 
     const migrationStatusOf = React.useCallback((profileId: string): ProfileMigrationStatus | null => {
@@ -145,15 +151,9 @@ export function useProfilesCollection(): ProfilesCollection {
         return parts.length > 0 ? parts.join(' · ') : null;
     }, [migrationStatusOf, profileEnabledById]);
 
-    /** Deletes a saved profile after confirming; resolves `true` when it was deleted. */
+    /** The admitted Profile Action owns the user's confirmation policy. */
     const requestDelete = React.useCallback(async (profile: Readonly<{ id: string; name: string }>): Promise<boolean> => {
         const expectedRevision = launchProfiles.find(entry => entry.id === profile.id)?.profileRecordRevision;
-        const confirmed = await Modal.confirm(
-            t('profiles.delete.title'),
-            t('profiles.delete.message', { name: profile.name }),
-            { cancelText: t('profiles.delete.cancel'), confirmText: t('profiles.delete.confirm'), destructive: true },
-        );
-        if (!confirmed) return false;
         try {
             const result = await deleteAiLaunchProfile(profile.id, expectedRevision);
             if (result.status === 'updated' && result.authoringMemoryCleanup) {
@@ -239,6 +239,7 @@ export function useProfilesCollection(): ProfilesCollection {
         useProfiles,
         setUseProfiles,
         catalog,
+        isInitialLoading,
         launchProfiles,
         profiles,
         favoriteProfileIds,

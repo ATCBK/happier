@@ -7,6 +7,7 @@ vi.mock('@react-navigation/native', async () => (await import('@/dev/testkit/moc
 
 const mocks = vi.hoisted(() => ({
     activeView: 'installed' as 'installed' | 'discover',
+    installedPlugins: [] as readonly unknown[],
 }));
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({
@@ -36,7 +37,7 @@ vi.mock('./model/usePluginSettingsScreenState', () => ({
         isPluginActionInFlight: () => false,
         decidePendingPluginChange: () => {},
         administrationTargetSelection: { state: { kind: 'unselected' }, candidates: [], selectedTarget: null, canExecute: false, resolveExecutionTarget: () => null },
-        installedPlugins: [],
+        installedPlugins: mocks.installedPlugins,
         installedPluginById: new Map(),
         canRefreshInstalledPlugins: true,
         runInstalledPluginAction: () => {},
@@ -169,9 +170,16 @@ async function readSegmentMinimumWidths(testID: string, dimension: 'minWidth' | 
     return observed;
 }
 
+const DISABLED_PLUGIN = {
+    pluginId: 'off', title: 'Off', description: null, version: '1.0.0', enabled: false,
+    source: { kind: 'npm', locator: '@acme/off' }, install: { mode: 'copy', manifestVersion: '1.0.0' },
+    compatibility: { status: 'compatible', diagnostics: [] }, diagnostics: [],
+};
+
 describe('PluginSettingsHomeScreen segmented controls', () => {
     beforeEach(() => {
         mocks.activeView = 'installed';
+        mocks.installedPlugins = [DISABLED_PLUGIN];
     });
 
     afterEach(() => {
@@ -194,6 +202,16 @@ describe('PluginSettingsHomeScreen segmented controls', () => {
             .toEqual(['ios: 44', 'android: 48']);
         expect(await readSegmentMinimumWidths('settings.plugins.marketplace.installed.statusFilter.trigger', 'minHeight'))
             .toEqual(['ios: 44', 'android: 48']);
+    });
+
+    it('offers the Installed status filter only when it can narrow the list', async () => {
+        mocks.installedPlugins = [{ ...DISABLED_PLUGIN, pluginId: 'on', enabled: true }];
+        const healthy = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
+        expect(healthy.findByTestId('settings.plugins.marketplace.installed.statusFilter.trigger')).toBeNull();
+        standardCleanup();
+        mocks.installedPlugins = [DISABLED_PLUGIN];
+        const mixed = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
+        expect(mixed.findByTestId('settings.plugins.marketplace.installed.statusFilter.trigger')).not.toBeNull();
     });
 
     it('discloses the administration target above the pending decision controls', async () => {

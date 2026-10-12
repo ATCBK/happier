@@ -5,7 +5,7 @@ import { areAccountSettingsScopesEqual } from '@/sync/domains/settings/scope/acc
 import { subscribeAccountSettingsPersistenceMutations } from '@/sync/domains/state/accountSettingsPersistence';
 import { storage } from '@/sync/domains/state/storage';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
-import { subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
+import { isArtifactOnlyHomeAccountChange, subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 
 export type ManagedMachineAccountSettings = Pick<Settings, 'machineRetentionDefaultsV1' | 'managedMachineCreationEnabled'>;
@@ -24,6 +24,7 @@ export function useManagedMachineAccountSettings(binding?: ServerCredentialAccou
     React.useEffect(() => {
         if (!binding) return;
         const unsubscribeHome = subscribeHomeAccountChange(event => {
+            if (isArtifactOnlyHomeAccountChange(event)) return;
             if (areServerProfileIdentifiersEquivalent(event.serverId, binding.serverId) && binding.isCurrent()) refresh();
         });
         const unsubscribePersistence = subscribeAccountSettingsPersistenceMutations(scope => {

@@ -2,7 +2,9 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { parseDoctorSnapshotSafe, type DoctorSnapshot } from '@happier-dev/protocol/diagnostics/doctorSnapshot';
+import { parseDoctorSnapshotSafe, sanitizeDoctorDiagnosticErrorMessage, type DoctorSnapshot } from '@happier-dev/protocol/diagnostics/doctorSnapshot';
+import { DiagnosticsActionOutputSchemas } from '@happier-dev/protocol/actions/diagnosticsActionFamily';
+import { ClipboardWriteResultSchema } from '@happier-dev/protocol/actions/clipboardActionFamily';
 import { sanitizeBugReportUrl } from '@happier-dev/protocol/bugs/reports/sanitize';
 
 import { Item } from '@/components/ui/lists/Item';
@@ -13,20 +15,30 @@ import { Text } from '@/components/ui/text/Text';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
 import { useHappyAction } from '@/hooks/ui/useHappyAction';
 import { Modal } from '@/modal';
-import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import { listServerProfiles } from '@/sync/domains/server/serverProfiles';
 import { useMachineListByServerId, useProfile } from '@/sync/domains/state/storage';
-import { serverFetch } from '@/sync/http/client';
+import type { ServerFetch } from '@/sync/http/client';
 import { t } from '@/text';
-import { getMachineDisplayName, isMachineOnline } from '@/utils/sessions/machineUtils';
+import { getMachineDisplayName, resolveMachineDisplayNames } from '@/utils/sessions/machineUtils';
+import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
+import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
+import { isMachineVisibleForLaunchSelection } from '@/sync/domains/machines/identity/filterVisibleMachines';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { CopiedPill } from '@/components/ui/copy/CopiedPill';
 import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
-import { setClipboardStringSafe } from '@/utils/ui/clipboard';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { useMountedDiagnosticAction } from './useMountedDiagnosticAction';
+import type { DiagnosticInvocation } from './diagnosticsActionRuntime';
+import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
+import { requireActionSuccess } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 
 import { useMachineDoctorSnapshot } from '@/components/machines/doctorSnapshot/useMachineDoctorSnapshot';
 import { buildDiagnosisReport, type DiagnosisFinding, type DiagnosisReport, type ServerDiagnosticsStatus } from './engine/diagnosisEngine';
 import { Icon } from '@/components/ui/icons/Icon';
+import { CountedDisclosureItem } from '@/components/ui/lists/CountedDisclosureItem';
+import { UNKNOWN_VALUE } from '@/components/settings/systemStatus/systemStatusDiagnostics';
 import { SettingsPageHeader } from '@/components/settings/shell/SettingsPageHeader';
 import { SettingAnchor, SettingRow } from '@/components/settings/shell/SettingRow';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
@@ -38,11 +50,22 @@ type MachineRunStatus =
     | { status: 'ready' }
     | { status: 'error'; detail: string };
 
-function resolveServerDiagnosticsSubtitle(status: ServerDiagnosticsStatus): string | undefined {
-    if (status.state !== 'http_error') {
-        return undefined;
+/** The probe row in words: `null` is "still running", never a result nobody asked for. */
+function describeServerProbe(status: ServerDiagnosticsStatus | null): Readonly<{ detail: string; subtitle?: string }> {
+    if (!status) return { detail: t('diagnosis.machineRuns.loading') };
+    switch (status.state) {
+        case 'ok':
+            return { detail: t('diagnosis.machineRuns.ready') };
+        case 'disabled':
+            return { detail: t('common.disabled') };
+        case 'auth_error':
+            return { detail: t('diagnosis.machineRuns.error'), subtitle: t('diagnosis.findings.serverAuthError.title') };
+        case 'http_error':
+            return { detail: t('diagnosis.machineRuns.error'), subtitle: t('diagnosis.serverProbe.httpError', { status: String(status.httpStatus) }) };
+        case 'timeout':
+        case 'unknown':
+            return { detail: t('diagnosis.machineRuns.error'), subtitle: t('diagnosis.findings.serverUnreachable.title') };
     }
-    return t('diagnosis.serverProbe.httpError', { status: String(status.httpStatus) });
 }
 
 function normalizeUrl(raw: string): string {
@@ -81,7 +104,7 @@ function resolveFindingTitle(finding: DiagnosisFinding): string {
     }
 }
 
-function resolveFindingSubtitle(finding: DiagnosisFinding): string {
+function resolveFindingSubtitle(finding: DiagnosisFinding): string | null {
     const details = finding.details ?? {};
     switch (finding.code) {
         case 'server.mismatch.ui_vs_machine':
@@ -109,9 +132,8 @@ function resolveFindingSubtitle(finding: DiagnosisFinding): string {
                 status: String(details.httpStatus ?? details.detail ?? ''),
             });
         default:
-            return t('diagnosis.findings.generic.subtitle', {
-                code: finding.code,
-            });
+            // The finding's code is shown once, on its own line; no placeholder sentence repeats it.
+            return null;
     }
 }
 
@@ -148,13 +170,14 @@ function resolveFindingSteps(finding: DiagnosisFinding): string[] {
     }
 }
 
-async function probeServerDiagnostics(timeoutMs: number): Promise<ServerDiagnosticsStatus> {
+async function probeServerDiagnostics(request: ServerFetch, timeoutMs: number, signal?: AbortSignal): Promise<ServerDiagnosticsStatus> {
     const controller = new AbortController();
+    const cancellation = mergeAbortSignals([controller.signal, signal]);
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
-        const response = await serverFetch('/v1/diagnostics/bug-report-snapshot?lines=50', {
+        const response = await request('/v1/diagnostics/bug-report-snapshot?lines=50', {
             method: 'GET',
-            signal: controller.signal,
+            signal: cancellation.signal,
         });
 
         if (response.ok) return { state: 'ok' };
@@ -163,9 +186,10 @@ async function probeServerDiagnostics(timeoutMs: number): Promise<ServerDiagnost
         return { state: 'http_error', httpStatus: response.status };
     } catch (error) {
         if (controller.signal.aborted) return { state: 'timeout' };
-        return { state: 'unknown', detail: error instanceof Error ? error.message : 'unknown error' };
+        return { state: 'unknown', detail: sanitizeDoctorDiagnosticErrorMessage(error instanceof Error ? error.message : 'unknown error') };
     } finally {
         clearTimeout(timeout);
+        cancellation.dispose();
     }
 }
 
@@ -176,13 +200,15 @@ export const DiagnosisView = React.memo(function DiagnosisView() {
     const styles = diagnosisStyles;
     const { fetchMachineDoctorSnapshot, readMachineDoctorSnapshot } = useMachineDoctorSnapshot();
 
-    const activeServerSnapshot = getActiveServerSnapshot();
+    const activeServerSnapshot = useActiveServerSnapshot();
+    const execution = useMountedActionExecution(activeServerSnapshot.serverId);
     const activeServerUrl = React.useMemo(
         () => normalizeUrl(activeServerSnapshot.serverUrl),
         [activeServerSnapshot.serverUrl],
     );
     const profile = useProfile();
     const machineListByServerId = useMachineListByServerId();
+    const reachabilityRevision = useMachineReachabilityRevision();
 
     const serverProfiles = React.useMemo(() => {
         try {
@@ -197,39 +223,50 @@ export const DiagnosisView = React.memo(function DiagnosisView() {
     const [pastedSnapshot, setPastedSnapshot] = React.useState<DoctorSnapshot | null>(null);
 
     const [machineRunById, setMachineRunById] = React.useState<Record<string, MachineRunStatus>>({});
-    const [serverDiagnostics, setServerDiagnostics] = React.useState<ServerDiagnosticsStatus>({ state: 'ok' });
+    const [serverDiagnostics, setServerDiagnostics] = React.useState<ServerDiagnosticsStatus | null>(null);
     const [report, setReport] = React.useState<DiagnosisReport | null>(null);
+    React.useEffect(() => {
+        setReport(null);
+        setMachineRunById({});
+        setServerDiagnostics(null);
+    }, [execution.binding]);
 
-    const onlineMachinesActiveServer = React.useMemo(() => {
+    const machinesActiveServer = React.useMemo(() => {
         const list = machineListByServerId[activeServerSnapshot.serverId];
         if (!Array.isArray(list)) return [];
-        return list.filter((m) => isMachineOnline(m));
+        return list.filter(machine => isMachineVisibleForLaunchSelection(machine) && machine.availability?.kind !== 'locked');
     }, [activeServerSnapshot.serverId, machineListByServerId]);
+    const presenceNowMs = useMachinePresenceNowMs(machinesActiveServer);
+    const onlineMachinesActiveServer = React.useMemo(() => machinesActiveServer.filter(machine =>
+        isMachineReachable(execution.isCurrent() ? execution.binding?.scope : null, machine, presenceNowMs)),
+    [execution.binding, execution.isCurrent, machinesActiveServer, presenceNowMs, reachabilityRevision]);
 
-    const [running, runDiagnosis] = useHappyAction(async () => {
+    const performDiagnosis = React.useCallback(async (invocation: DiagnosticInvocation) => {
+        invocation.assertCurrent();
         const collected: Array<{ machineId: string; serverId: string; snapshot: DoctorSnapshot }> = [];
 
         setReport(null);
-        setMachineRunById({});
-
-        for (const machine of onlineMachinesActiveServer) {
-            setMachineRunById((prev) => ({ ...prev, [machine.id]: { status: 'loading' } }));
-
+        setMachineRunById(Object.fromEntries(machinesActiveServer.map((machine) => [machine.id, { status: 'loading' } as const])));
+        // Machines are checked together (each within its own budget), so one slow machine never holds the rest back.
+        const results = await Promise.all(machinesActiveServer.map(async (machine) => {
             const nextStatus = await fetchMachineDoctorSnapshot({
                 machineId: machine.id,
                 serverId: activeServerSnapshot.serverId,
                 timeoutMs: 4_000,
             });
+            invocation.assertCurrent();
             if (nextStatus.status !== 'ready') {
                 setMachineRunById((prev) => ({ ...prev, [machine.id]: { status: 'error', detail: t('diagnosis.machine.invalidDoctorSnapshot') } }));
-                continue;
+                return null;
             }
-
-            collected.push({ machineId: machine.id, serverId: activeServerSnapshot.serverId, snapshot: nextStatus.snapshot });
             setMachineRunById((prev) => ({ ...prev, [machine.id]: { status: 'ready' } }));
-        }
+            return { machineId: machine.id, serverId: activeServerSnapshot.serverId, snapshot: nextStatus.snapshot };
+        }));
+        for (const result of results) if (result) collected.push(result);
 
-        const serverStatus = await probeServerDiagnostics(4_000);
+        invocation.assertCurrent();
+        const serverStatus = await probeServerDiagnostics(invocation.request, 4_000, invocation.context.signal);
+        invocation.assertCurrent();
         setServerDiagnostics(serverStatus);
 
         const parsedPasted = (() => {
@@ -264,13 +301,19 @@ export const DiagnosisView = React.memo(function DiagnosisView() {
             nowMs: Date.now(),
         });
 
+        const output = DiagnosticsActionOutputSchemas['diagnostics.diagnosis.run'].parse({ status: 'completed', report: diagnosisReport });
         setReport(diagnosisReport);
+        return output;
+    }, [activeServerSnapshot, activeServerUrl, profile?.id, serverProfiles, machineListByServerId, machinesActiveServer, fetchMachineDoctorSnapshot, pastedJson]);
+    const running = useMountedDiagnosticAction('diagnostics.diagnosis.run', execution, performDiagnosis);
+    const [, runDiagnosis] = useHappyAction(async () => {
+        requireActionSuccess(await execution.execute('diagnostics.diagnosis.run', {}));
     });
 
     const [copying, copyReportJson] = useHappyAction(async () => {
         if (!report) return;
-        const copied = await setClipboardStringSafe(JSON.stringify(report, null, 2));
-        if (!copied) {
+        const copied = await execution.execute('clipboard.write', { text: JSON.stringify(report, null, 2) });
+        if (!copied.ok || !ClipboardWriteResultSchema.safeParse(copied.result).success) {
             Modal.alert(t('common.error'), t('items.failedToCopyToClipboard'));
             return;
         }
@@ -299,9 +342,12 @@ export const DiagnosisView = React.memo(function DiagnosisView() {
         return count;
     }, [activeServerSnapshot.serverId, machineListByServerId, readMachineDoctorSnapshot]);
 
-    const failedMachineNames = React.useMemo(() => onlineMachinesActiveServer
+    const failedMachineNames = React.useMemo(() => machinesActiveServer
         .filter((machine) => machineRunById[machine.id]?.status === 'error')
-        .map((machine) => getMachineDisplayName(machine) ?? machine.id), [machineRunById, onlineMachinesActiveServer]);
+        .map((machine) => getMachineDisplayName(machine) ?? machine.id), [machineRunById, machinesActiveServer]);
+
+    // Machine runs and the server probe report on a run; before one there is nothing to say about them.
+    const showRunResults = running || report !== null;
 
     const accessibilityStatus = React.useMemo(() => {
         if (running) {
@@ -374,24 +420,28 @@ export const DiagnosisView = React.memo(function DiagnosisView() {
                     <SettingRow
                         setting={DIAGNOSIS_SETTINGS.settings.activeServer}
                         icon={<Icon name="hard-drives" />}
-                        subtitle={<Text style={{ color: theme.colors.text.secondary }}>{activeServerUrl || t('status.unknown')}</Text>}
-                        detail={activeServerSnapshot.serverId}
+                        subtitle={<Text style={{ color: theme.colors.text.secondary }}>{activeServerUrl || UNKNOWN_VALUE}</Text>}
                         onPress={() => router.push('/server')}
                     />
                     <Item
                         title={t('diagnosis.overview.account')}
-                        detail={profile?.id ?? t('status.unknown')}
+                        detail={profile?.id ?? UNKNOWN_VALUE}
                         copy={profile?.id ?? false}
                     />
                     <Item
                         title={t('diagnosis.overview.onlineMachines')}
                         detail={`${onlineMachinesActiveServer.length}`}
-                        subtitle={t('diagnosis.overview.cachedAttribution', { count: cachedAttributionCount })}
+                        subtitle={cachedAttributionCount > 0 ? t('diagnosis.overview.cachedAttribution', { count: cachedAttributionCount }) : undefined}
                     />
                 </ItemGroup>
 
                 <ItemGroup title={t('diagnosis.sections.findings')}>
-                    {!report ? (
+                    {running && !report ? (
+                        <Item
+                            title={t('diagnosis.machineRuns.loading')}
+                            mode="info"
+                        />
+                    ) : !report ? (
                         <Item
                             title={t('diagnosis.findings.notRun')}
                             subtitle={t('diagnosis.findings.notRunSubtitle')}
@@ -419,8 +469,12 @@ export const DiagnosisView = React.memo(function DiagnosisView() {
                             title={resolveFindingTitle(finding)}
                             subtitle={
                                 <View>
-                                    <Text style={{ color: theme.colors.text.secondary }}>{resolveFindingSubtitle(finding)}</Text>
-                                    <View style={{ height: 8 }} />
+                                    {resolveFindingSubtitle(finding) ? (
+                                        <>
+                                            <Text style={{ color: theme.colors.text.secondary }}>{resolveFindingSubtitle(finding)}</Text>
+                                            <View style={{ height: 8 }} />
+                                        </>
+                                    ) : null}
                                     {resolveFindingSteps(finding).map((step, stepIdx) => (
                                         <Text key={stepIdx} style={{ color: theme.colors.text.secondary }}>
                                             {`${stepIdx + 1}. ${step}`}
@@ -432,48 +486,68 @@ export const DiagnosisView = React.memo(function DiagnosisView() {
                                     </Text>
                                 </View>
                             }
-                            icon={<Icon name="warning-circle" size={24} color={finding.severity === 'error' ? theme.colors.state.danger.foreground : theme.colors.accent.orange} />}
+                            icon={finding.severity === 'info'
+                                    ? <Icon name="info" size={24} color={theme.colors.text.secondary} />
+                                    : <Icon name="warning-circle" size={24} color={finding.severity === 'error' ? theme.colors.state.danger.foreground : theme.colors.accent.orange} />}
                             copy={finding.code}
                         />
                     ))}
                 </ItemGroup>
 
-                <ItemGroup title={t('diagnosis.sections.machineRuns')}>
-                    {onlineMachinesActiveServer.length === 0 ? (
-                        <Item
-                            title={t('diagnosis.machineRuns.none')}
-                            mode="info"
-                        />
-                    ) : onlineMachinesActiveServer.map((m) => {
-                        const status = machineRunById[m.id] ?? { status: 'idle' as const };
-                        const detail = status.status === 'loading'
-                            ? t('diagnosis.machineRuns.loading')
-                            : status.status === 'ready'
-                                ? t('diagnosis.machineRuns.ready')
-                                : status.status === 'error'
-                                    ? t('diagnosis.machineRuns.error')
-                                    : t('diagnosis.machineRuns.idle');
-                        const subtitle = status.status === 'error' ? status.detail : undefined;
+                {showRunResults ? (
+                    <>
+                        <ItemGroup title={t('diagnosis.sections.machineRuns')}>
+                            {machinesActiveServer.length === 0 ? (
+                                <Item
+                                    title={t('diagnosis.machineRuns.none')}
+                                    mode="info"
+                                />
+                            ) : (() => {
+                                const names = resolveMachineDisplayNames(machinesActiveServer.map((m) => ({ id: m.id, metadata: m.metadata, availability: m.availability })));
+                                const failed = machinesActiveServer.filter((m) => machineRunById[m.id]?.status === 'error');
+                                // One cause shown once: several machines failing the same way fold into one counted row.
+                                const foldFailures = failed.length > 1;
+                                const row = (m: (typeof machinesActiveServer)[number]) => {
+                                    const status = machineRunById[m.id] ?? { status: 'idle' as const };
+                                    const detail = status.status === 'loading'
+                                        ? t('diagnosis.machineRuns.loading')
+                                        : status.status === 'ready'
+                                            ? t('diagnosis.machineRuns.ready')
+                                            : status.status === 'error'
+                                                ? t('diagnosis.machineRuns.error')
+                                                : t('diagnosis.machineRuns.idle');
+                                    return (
+                                        <Item
+                                            key={m.id}
+                                            title={names.get(m.id) ?? m.id}
+                                            subtitle={status.status === 'error' && !foldFailures ? status.detail : undefined}
+                                            detail={detail}
+                                            icon={<Icon name="laptop" size={24} color={theme.colors.text.secondary} />}
+                                        />
+                                    );
+                                };
+                                const rest = machinesActiveServer.filter((m) => !foldFailures || machineRunById[m.id]?.status !== 'error');
+                                return (
+                                    <>
+                                        {rest.map(row)}
+                                        {foldFailures ? (
+                                            <CountedDisclosureItem testID="diagnosis-failed-machines" title={t('diagnosis.machine.invalidDoctorSnapshot')} count={failed.length}>
+                                                {failed.map(row)}
+                                            </CountedDisclosureItem>
+                                        ) : null}
+                                    </>
+                                );
+                            })()}
+                        </ItemGroup>
 
-                        return (
+                        <ItemGroup title={t('diagnosis.sections.serverProbe')}>
                             <Item
-                                key={m.id}
-                                title={getMachineDisplayName(m) ?? m.id}
-                                subtitle={subtitle}
-                                detail={detail}
-                                icon={<Icon name="laptop" size={24} color={theme.colors.text.secondary} />}
+                                title={t('diagnosis.serverProbe.title')}
+                                {...describeServerProbe(serverDiagnostics)}
                             />
-                        );
-                    })}
-                </ItemGroup>
-
-                <ItemGroup title={t('diagnosis.sections.serverProbe')}>
-                    <Item
-                        title={t('diagnosis.serverProbe.title')}
-                        detail={serverDiagnostics.state}
-                        subtitle={resolveServerDiagnosticsSubtitle(serverDiagnostics)}
-                    />
-                </ItemGroup>
+                        </ItemGroup>
+                    </>
+                ) : null}
 
                 <ItemGroup title={t('diagnosis.sections.pasteDoctorJson')} description={t('diagnosis.pasteDoctorJson.footer')}>
                     <View style={styles.pasteContainer}>
@@ -533,7 +607,7 @@ const diagnosisStyles = StyleSheet.create((theme) => ({
     headerActions: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
     },
     pasteActions: {
         flexDirection: 'row',
@@ -547,24 +621,24 @@ const diagnosisStyles = StyleSheet.create((theme) => ({
         pointerEvents: 'none',
     },
     pasteContainer: {
-        paddingHorizontal: 16,
-        paddingTop: 12,
-        paddingBottom: 8,
+        paddingHorizontal: theme.space.s16,
+        paddingTop: theme.space.s12,
+        paddingBottom: theme.space.s8,
     },
     pasteInput: {
         width: '100%',
-        marginBottom: 8,
+        marginBottom: theme.space.s8,
     },
     helperText: {
         color: theme.colors.text.secondary,
-        marginTop: 6,
+        marginTop: theme.space.s6,
     },
     okText: {
         color: theme.colors.state.success.foreground,
-        marginTop: 6,
+        marginTop: theme.space.s6,
     },
     errorText: {
         color: theme.colors.state.danger.foreground,
-        marginTop: 6,
+        marginTop: theme.space.s6,
     },
 }));

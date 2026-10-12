@@ -14,14 +14,13 @@ import {
 } from './usageBodyKit';
 import { useUsageWork } from './useUsageWork';
 import { formatUsageDuration } from './usageHowYouWorkPresentation';
-import type { UsageWorkOutcomeRow } from './usageWorkPresentation';
+import { partitionUsageWorkMoneyRows, type UsageWorkOutcomeRow } from './usageWorkPresentation';
 import {
   UsageWorkDisclosure,
   UsageWorkMarks,
   UsageWorkRowLead,
   UsageWorkSectionTitle,
   UsageWorkSessionRows,
-  usageWorkProviderUnknownLine,
   usageWorkPullRequestState,
   usageWorkPullRequestTitle,
   useUsageWorkDisclosures,
@@ -42,7 +41,7 @@ function mergedIn(row: UsageWorkOutcomeRow): string | null {
 export function UsageOutcomesWidget(props: UsageBodyProps) {
   const theme = useUsagePluginTheme();
   const { theme: appTheme } = useUnistyles();
-  const { summary, format, sessionLabel, openSession } = useUsageWork(
+  const { summary, format, cell, basisLabel, sessionLabel, openSession } = useUsageWork(
     props.slice,
     props.query,
     props.serverId,
@@ -82,6 +81,7 @@ export function UsageOutcomesWidget(props: UsageBodyProps) {
   const accent = usageSeriesColor(appTheme, 0);
   const { funnel } = summary;
   const byKey = new Map(summary.outcomes.map((row) => [row.key, row]));
+  const moneyGroups = partitionUsageWorkMoneyRows(summary.outcomes, props.query.metric);
   return (
     <View style={styles.body} testID={`${props.testID}.outcomes`}>
       <OutcomeFunnel
@@ -121,21 +121,24 @@ export function UsageOutcomesWidget(props: UsageBodyProps) {
       {summary.outcomes.length === 0 ? (
         <UsageBodyInsufficient
           testID={`${props.testID}.noPrs`}
+          replacesContent={false}
           title={t('usage.board.work.noPrsTitle')}
           reason={t('usage.board.work.noPrsReason')}
         />
       ) : (
         <View style={styles.section}>
           <UsageWorkSectionTitle>{t('usage.board.work.prLabel')}</UsageWorkSectionTitle>
-          <RankedRows
+          {moneyGroups.map(group => <RankedRows
+            key={group.key}
             theme={theme}
             label={t('usage.board.work.prLabel')}
             size="tile"
-            valueFormatter={format}
+            valueFormatter={value => format(value, group.moneyBasis)}
+            basis={basisLabel(group.moneyBasis)}
             unknownLabel={format(null)}
             testID={`${props.testID}.prs`}
             leads={Object.fromEntries(
-              summary.outcomes.map((row): [string, React.ReactNode] => [
+              group.rows.map((row): [string, React.ReactNode] => [
                 row.key,
                 <UsageWorkRowLead
                   expanded={disclosures.isOpen(row.key)}
@@ -145,7 +148,7 @@ export function UsageOutcomesWidget(props: UsageBodyProps) {
               ]),
             )}
             trails={Object.fromEntries(
-              summary.outcomes.map((row): [string, React.ReactNode] => [
+              group.rows.map((row): [string, React.ReactNode] => [
                 row.key,
                 <UsageWorkMarks
                   agentIds={row.agentIds}
@@ -155,7 +158,7 @@ export function UsageOutcomesWidget(props: UsageBodyProps) {
                 />,
               ]),
             )}
-            rows={summary.outcomes.map((row) => {
+            rows={group.rows.map((row) => {
               const pullRequest = row.outcome.pullRequest;
               return {
                 id: row.key,
@@ -168,7 +171,6 @@ export function UsageOutcomesWidget(props: UsageBodyProps) {
                     state: usageWorkPullRequestState(pullRequest),
                   }),
                   mergedIn(row),
-                  usageWorkProviderUnknownLine(row),
                 ]
                   .filter(Boolean)
                   .join(' · '),
@@ -188,6 +190,7 @@ export function UsageOutcomesWidget(props: UsageBodyProps) {
                       parts={row.sessions}
                       summary={summary}
                       format={format}
+                      cell={cell}
                       sessionLabel={sessionLabel}
                       openSession={openSession}
                       serverId={props.serverId}
@@ -199,7 +202,7 @@ export function UsageOutcomesWidget(props: UsageBodyProps) {
                 </UsageWorkDisclosure>
               );
             }}
-          />
+          />)}
         </View>
       )}
       <UsageCoverageLine
@@ -215,7 +218,7 @@ export function UsageOutcomesWidget(props: UsageBodyProps) {
 const styles = StyleSheet.create((theme) => ({
   body: { gap: 14, minWidth: 0 },
   section: {
-    gap: 10,
+    gap: theme.space.s10,
     paddingTop: 14,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: theme.colors.border.default,

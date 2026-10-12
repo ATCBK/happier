@@ -21,7 +21,6 @@ import {
 } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { collectRenderedTestIds } from '@/dev/testkit/render/collectRenderedTestIds';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
-import { resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 
 import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelpers';
 
@@ -44,6 +43,7 @@ installSettingsViewCommonModuleMocks({
 // schemas, the registry codec and the page's row logic are the production ones.
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
+const { resetServerFeaturesClientForTests } = await import("@/sync/api/capabilities/serverFeaturesClient");
 
 const GOVERNANCE_PATH = '/v1/home/governance/get';
 const SETTINGS_GET = '/v1/home/settings/get';
@@ -155,6 +155,24 @@ afterEach(() => {
 });
 
 describe('HomeAdministrationServerSettingsScreen', { timeout: 180_000 }, () => {
+    it('presents the projected effective default in the facts and unset segmented selection', async () => {
+        const home = await addHome();
+        const backend = homeSettingEntryFixture('HAPPIER_FILES_BACKEND', {
+            value: 's3', source: 'default', apply: 'restart',
+            // A resolved value is authoritative even when an older declaration is still static.
+            declaration: { type: 'enum', section: 'server', group: 'storage', default: 'local', bounds: { values: ['local', 's3'] } },
+        });
+        harness.answer(home, SETTINGS_GET, { body: serverProjection({ entries: [metricsPort(), backend] }) });
+        const screen = await renderServerSettings(home);
+        const { SegmentedChoiceItem } = await import('@/components/ui/lists/SegmentedChoiceItem');
+        const { homeSettingChoiceLabel } = await import('./homeServerSettingLabels');
+        const row = screen.findAllByType(SegmentedChoiceItem).find((node) => node.props.testID === 'home-server-setting:HAPPIER_FILES_BACKEND');
+        expect(row?.props.value).toBe('s3');
+        expect(textUnder(screen.findByTestId('home-server-setting:HAPPIER_FILES_BACKEND.facts')))
+            .toContain(`homeSettings.row.defaultValue(value=${homeSettingChoiceLabel('s3')})`);
+        expect(harness.requestsFor(SETTINGS_SET)).toHaveLength(0);
+    });
+
     it.each([
         { status: 500, reason: 'homeGovernance.unavailableBody' },
         { status: 200, reason: 'homeGovernance.unavailableBody' },
@@ -210,8 +228,32 @@ describe('HomeAdministrationServerSettingsScreen', { timeout: 180_000 }, () => {
         expect(ids).not.toContain('home-server-setting:HAPPIER_AUTH_EMAIL_SMTP_HOST');
 
         const database = screen.findByTestId('home-server-setting:DATABASE_URL');
-        expect(textUnder(database)).toContain('homeSettings.readOnly.before_database');
+        // The shared reason is the section's description, said once, not on every row.
+        expect(textUnder(database)).toContain('DATABASE_URL');
+        expect(textUnder(database)).not.toContain('homeSettings.readOnly.before_database');
         expect(ids.filter((id) => /^home-server-setting:DATABASE_URL.*(input|switch|-set|-replace)$/.test(id))).toEqual([]);
+    });
+
+    it('lists the startup values the deployment set, and folds the unset ones into one closed row', async () => {
+        const home = await addHome();
+        const logDir = homeSettingEntryFixture('HAPPIER_SERVER_LOG_DIR', {
+            value: null,
+            source: 'default',
+            editable: 'bootstrap',
+            apply: 'restart',
+            declaration: { type: 'string', section: 'server', group: 'logging', readOnlyReason: 'before_database' },
+        });
+        harness.answer(home, SETTINGS_GET, {
+            body: serverProjection({ entries: [listenPort(), metricsPort(), databaseUrl(), logDir] }),
+        });
+        const screen = await renderServerSettings(home);
+        const ids = collectRenderedTestIds(screen.tree.toJSON());
+
+        expect(ids).toContain('home-server-setting:DATABASE_URL');
+        expect(ids).toContain('home-server-settings-read-only-unset');
+        expect(ids).not.toContain('home-server-setting:HAPPIER_SERVER_LOG_DIR');
+        // No page footnote: the page ends with its last section.
+        expect(JSON.stringify(screen.tree.toJSON())).not.toContain('homeSettings.page.note');
     });
 
     it('says a deployment-fixed key through the shared fixed note, with the key as a chip and never as prose', async () => {
@@ -225,14 +267,14 @@ describe('HomeAdministrationServerSettingsScreen', { timeout: 180_000 }, () => {
         expect(screen.findByTestId('home-server-setting:PORT.input')).toBeNull();
     });
 
-    it('states each row\'s facts on one line with the key as a chip, the default in words, and a number\'s unit', async () => {
+    it('states each row\'s facts as one flowing line with the key as a chip, the default in words, and a number\'s unit', async () => {
         const home = await addHome();
         harness.answer(home, SETTINGS_GET, { body: serverProjection() });
         const screen = await renderServerSettings(home);
 
         expect(textUnder(screen.findByTestId('home-server-setting:METRICS_PORT.facts-key'))).toBe('METRICS_PORT');
         expect(textUnder(screen.findByTestId('home-server-setting:METRICS_PORT.facts'))).toContain('homeSettings.row.defaultValue(value=9090)');
-        expect(screen.findByTestId('home-server-setting:METRICS_PORT.facts')?.props.numberOfLines).toBe(1);
+        expect(screen.findByTestId('home-server-setting:METRICS_PORT.facts')?.props.numberOfLines).toBe(2);
         await act(async () => {
             screen.pressByTestId('home-server-settings-more:realtime.header');
         });

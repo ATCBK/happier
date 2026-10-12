@@ -1,5 +1,6 @@
 import { defineSettingsPage } from '@/components/settings/catalog/settingDeclarations';
 import { thinkingDisplayStorageBinding } from '@/components/settings/session/thinkingDisplayChoice';
+import { ACCOUNT_SETTING_DECLARATIONS_V1 } from '@happier-dev/protocol/actions/accountSettingDeclarations';
 
 /** The searchable settings of the `transcript` page. Rows render their labels from these declarations. */
 export const TRANSCRIPT_SETTINGS = defineSettingsPage({
@@ -40,6 +41,12 @@ export const TRANSCRIPT_SETTINGS = defineSettingsPage({
                 toolDetailOverrides: {},
             },
         },
+        agentVisuals: {
+            titleKey: 'settingsSessionPages.transcript.agentVisualsSection',
+            settings: {
+                agentHtmlNetworkPolicy: ACCOUNT_SETTING_DECLARATIONS_V1.agentHtmlNetworkPolicy,
+            },
+        },
         group: {
             titleKey: 'settingsSession.transcript.messageActions.groupTitle',
             settings: {
@@ -51,6 +58,11 @@ export const TRANSCRIPT_SETTINGS = defineSettingsPage({
                 makeRepeatableEnabled: {},
                 pluginsEnabled: {},
                 selectionEnabled: {},
+            },
+        },
+        selection: {
+            titleKey: 'settingsSession.transcript.messageActions.selectionTitle',
+            settings: {
                 sendToSessionEnabled: {},
                 sendToSessionTemplate: {},
                 bulkCopyFormat: {},

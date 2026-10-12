@@ -19,6 +19,7 @@ import { fireAndForget } from '@/utils/system/fireAndForget';
 import type { PoolGatewayChoice } from './poolGatewayChoices';
 
 import { useAgentDefaultChoices } from '../defaults/useAgentDefaultChoices';
+import { ConnectedAccountActionApprovalNotice } from '../ConnectedAccountActionApprovalNotice';
 import {
     QualifiedPoolDetailView,
     type PoolMemberQuota,
@@ -85,6 +86,8 @@ export const QualifiedPoolDetail = React.memo(function QualifiedPoolDetail(
     }, [router, service]);
 
     return (
+        <>
+        <ConnectedAccountActionApprovalNotice execution={agentDefaults.execution} testID="connected-pool-default-approval-pending" />
         <QualifiedPoolDetailView
             {...props}
             memberQuotaByAccountId={memberQuotaByAccountId}
@@ -97,5 +100,6 @@ export const QualifiedPoolDetail = React.memo(function QualifiedPoolDetail(
             legacyServiceId={getQualifiedConnectedServiceRegistryEntry(service)?.legacyServiceId ?? null}
             onConnectAccount={() => router.push(buildConnectedServiceSetupRoute({ kind: 'service', serviceKey: buildQualifiedPluginContributionKey(service) }))}
         />
+        </>
     );
 });

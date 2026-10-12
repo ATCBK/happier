@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { act } from 'react-test-renderer';
 import type { HomeGovernanceProjectionV1 } from '@happier-dev/protocol/home/governance';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -21,6 +22,7 @@ import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelp
 
 const routerPush = vi.hoisted(() => vi.fn());
 installSettingsViewCommonModuleMocks({
+    storage: 'real',
     router: async () => {
         const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
         return createExpoRouterMock({ router: { push: routerPush } }).module;
@@ -150,7 +152,9 @@ describe('SignInPolicyEditor', () => {
         const { screen, serverId, projection } = await renderEditor();
         harness.answer(serverId, POLICY_PATH, { body: { ...projection.policy, revision: 7 } });
 
-        expect(renderedControlIsDisabled(screen.findByTestId('home-policy-auth-save'))).toBe(true);
+        // No idle Save row: it appears with the first edit.
+        expect(screen.findByTestId('home-policy-auth-save')).toBeNull();
+        expect(screen.findByTestId('home-policy-auth-cancel')).toBeNull();
         await screen.pressByTestIdAsync('home-policy-auth-admission:closed');
         expect(renderedTabIsSelected(screen.findByTestId('home-policy-auth-admission:closed'))).toBe(true);
         await screen.pressByTestIdAsync('home-policy-auth-save');
@@ -169,7 +173,7 @@ describe('SignInPolicyEditor', () => {
         expect(vi.mocked((await modal()).confirm)).not.toHaveBeenCalled();
     });
 
-    it('asks at this Home’s address, inline at the row it widens, then resends the same document confirmed', async () => {
+    it('names this Home inline at the row it widens, then resends the same document confirmed', async () => {
         const { screen, serverId, projection } = await renderEditor();
         harness.answer(serverId, POLICY_PATH, {
             select: (input) => ((input as { confirmWidening?: unknown }).confirmWidening === true
@@ -188,7 +192,7 @@ describe('SignInPolicyEditor', () => {
         expect(vi.mocked((await modal()).confirm)).not.toHaveBeenCalled();
         const card = textUnder(screen.findByTestId('home-policy-auth-widening:admission'));
         expect(card).toContain('homeGovernance.signInPolicy.widening.titleAnyone');
-        expect(card).toContain('homeGovernance.signInPolicy.widening.exposureAnyone(host=home-a.example)');
+        expect(card).toContain('homeGovernance.signInPolicy.widening.exposureAnyone(host=Home A)');
         expect(card).toContain('homeGovernance.signInPolicy.widening.unchanged');
         expect(card).toContain('homeGovernance.signInPolicy.widening.recorded');
         expect(harness.requestsFor(POLICY_PATH)).toHaveLength(1);
@@ -333,7 +337,9 @@ describe('SignInPolicyEditor', () => {
         const { screen } = await renderEditor();
 
         expect(screen.findByTestId('home-policy-auth-method:key_challenge-switch')?.props.disabled).toBe(true);
-        expect(screen.findByTestId('home-policy-auth-mode:e2ee-switch')?.props.disabled).toBe(true);
+        // Account types are one choice among the three allowed sets; "none" is not one of them.
+        expect(['e2ee', 'both', 'plain'].map((id) => screen.findByTestId(`home-policy-auth-modes:${id}`) !== null)).toEqual([true, true, true]);
+        expect(screen.findByTestId('home-policy-auth-mode:e2ee-switch')).toBeNull();
     });
 
     it('keeps a stored method the deployment no longer lists visible until it is removed, and requires a valid recommendation', async () => {
@@ -350,8 +356,7 @@ describe('SignInPolicyEditor', () => {
         expect(screen.findByTestId('home-policy-auth-method:retired_method-switch')?.props.value).toBe(true);
         await screen.pressByTestIdAsync('home-policy-auth-method:key_challenge');
         await screen.pressByTestIdAsync('home-policy-auth-method:retired_method');
-        await screen.pressByTestIdAsync('home-policy-auth-mode:e2ee');
-        await screen.pressByTestIdAsync('home-policy-auth-mode:plain');
+        await screen.pressByTestIdAsync('home-policy-auth-modes:e2ee');
         // An authored recommendation is not silently removed by an account-type edit.
         expect(renderedControlIsDisabled(screen.findByTestId('home-policy-auth-save'))).toBe(true);
         await screen.pressByTestIdAsync('home-policy-auth-recommended:e2ee');
@@ -386,8 +391,12 @@ describe('SignInPolicyEditor', () => {
             options: { signInService: { deploymentMode: 'disabled', canDisable: false } },
         });
         harness.answer(serverId, POLICY_PATH, { body: { ...projection.policy, revision: 7 } });
-
-        await screen.pressByTestIdAsync('home-policy-auth-admission:closed');
+        const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
+        const admission = screen.root.findAllByType(DropdownMenu).find((node) => node.props.testID === 'home-policy-auth-admission');
+        expect(admission?.props.selectedId).toBe('inherited');
+        expect(admission?.props.items.map((item: { id: string }) => item.id)).toEqual(['inherited', 'self_service', 'invitation_only', 'closed']);
+        // Drive the shared select's public value callback; its portal/measurement is covered by the control's own suite.
+        await act(async () => admission?.props.onSelect('closed'));
         await screen.pressByTestIdAsync('home-policy-auth-save');
 
         await waitForHomeGovernance(() => expect(harness.requestsFor(POLICY_PATH)).toHaveLength(1));

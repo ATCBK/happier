@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import type { UsageSourceV1 } from '@happier-dev/protocol/usage/usageSources';
+import { matchesUsageSourceAccountingScope, type UsageSourceV1 } from '@happier-dev/protocol/usage/usageSources';
 import { UsageSourceInventoryScopeSchema, type UsageSourceInventoryScope } from '@happier-dev/protocol/inputs/usageQuery';
 import type { JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
@@ -20,11 +20,14 @@ import {
   useActiveServerAccountScope,
   useAllMachines,
 } from '@/sync/domains/state/storage';
-import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import type { ServerAccountScope, ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { formatPathRelativeToHome } from '@/utils/sessions/formatPathRelativeToHome';
-import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import { resolveMachineDisplayNames } from '@/utils/sessions/machineDisplayNames';
+import { isMachineSelectableForFleet } from '@/sync/domains/machines/administration/fleetUnion';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
+import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
 import { t } from '@/text';
+import { useWidgetPresentation } from '@happier-dev/plugin-ui';
 import { UsageAgentMark, usageAgentTitle } from './usageBodyKit';
 import type {
   UsageSourcesController,
@@ -32,6 +35,8 @@ import type {
 } from './usageSourcesController';
 import { useUsageSourcesController, type UsageSourcesHookOptions } from './useUsageSources';
 import { UsageExternalSessionCandidates } from './UsageExternalSessionCandidates';
+import type { Machine } from '@/sync/domains/state/storageTypes';
+import { isMachineReplaced } from '@happier-dev/protocol/machines/identity/canonicalMachineId';
 
 /**
  * Sources (lab d2src/usrc): agent usage already on your machines, found by reading metadata only.
@@ -48,22 +53,11 @@ export function UsageSourcesWidget(
     return captured?.scope.serverId === props.serverId ? captured : null;
   }, [viewer?.serverId, viewer?.accountId, props.serverId]);
   const machines = useAllMachines();
+  const reachabilityRevision = useMachineReachabilityRevision();
+  const nowMs = useMachinePresenceNowMs(machines);
+  const presentation = useWidgetPresentation();
   // Online machines first (they can answer now), then by name; offline ones wait quietly.
-  const ordered = React.useMemo(() => {
-    const now = Date.now();
-    return machines
-      .filter((machine) => !machine.revokedAt)
-      .map((machine): UsageSourcesMachine => ({
-        id: machine.id,
-        online: isMachineOnline(machine, now),
-        name: getMachineDisplayName(machine),
-        ...(machine.metadata?.homeDir ? { homeDir: machine.metadata.homeDir } : {}),
-      }))
-      .sort(
-        (a, b) =>
-          Number(b.online) - Number(a.online) || a.name.localeCompare(b.name),
-      );
-  }, [machines]);
+  const ordered = React.useMemo(() => projectUsageSourcesMachines(machines, nowMs, lifetime?.isCurrent() ? lifetime.scope : null), [machines, nowMs, lifetime, reachabilityRevision]);
   useWidgetFrameBodyCaption(t('usage.board.sources.foundCaption'));
   const inventory = UsageSourceInventoryScopeSchema.safeParse(props.input);
   if (!inventory.success) return <SurfaceStateCard testID={`${props.testID}.invalid`} kind="unavailable"
@@ -85,6 +79,7 @@ export function UsageSourcesWidget(
       serverId={props.serverId}
       testID={props.testID}
       input={inventory.data}
+      compact={presentation !== undefined && presentation.size !== 'large'}
     />
   );
 }
@@ -97,6 +92,15 @@ export type UsageSourcesMachine = Readonly<{
   homeDir?: string;
 }>;
 
+/** Sources' inventory projection consumes the canonical presence and display-name owners. */
+export function projectUsageSourcesMachines(machines: readonly Pick<Machine, 'id' | 'metadata' | 'active' | 'activeAt' | 'revokedAt' | 'replacedByMachineId' | 'availability'>[], nowMs: number, scope: ServerAccountScope | null): readonly UsageSourcesMachine[] {
+  const current = machines.filter(machine => !machine.revokedAt && !isMachineReplaced(machine));
+  const names = resolveMachineDisplayNames(current);
+  return current.map((machine): UsageSourcesMachine => ({ id: machine.id, online: isMachineSelectableForFleet(scope, machine, nowMs), name: names.get(machine.id)!,
+    ...(machine.metadata?.homeDir ? { homeDir: machine.metadata.homeDir } : {}) }))
+    .sort((a, b) => Number(b.online) - Number(a.online) || a.name.localeCompare(b.name));
+}
+
 /** The machine list beneath the live owners; the executor is the ordinary default unless supplied. */
 export function UsageSourcesMachines(
   props: Readonly<{
@@ -106,11 +110,32 @@ export function UsageSourcesMachines(
     executor?: UsageSourcesHookOptions['executor'];
     testID: string;
     input: UsageSourceInventoryScope;
+    compact?: boolean;
   }>,
 ): React.ReactElement {
-  // Native inventory cannot answer a runtime-only accounting scope. Do not mount discovery demand.
-  const machines = props.input.sources.length && !props.input.sources.includes('native') ? [] : props.machines
-    .filter(machine => !props.input.machines.length || props.input.machines.includes(machine.id));
+  // Source membership comes from metadata discovery, never an Agent or capture-path guess.
+  const machines = [...new Map(props.machines
+    .filter(machine => !props.input.machines.length || props.input.machines.includes(machine.id))
+    .map(machine => [machine.id, machine])).values()];
+  const online = machines.filter(machine => machine.online);
+  const offlineCount = machines.length - online.length;
+  // Only a derived loaded-empty bit leaves each controller. Inventory, source state and demand
+  // stay at the mounted leaf; this count cannot label a previous Account or selection as current.
+  const projectionKey = JSON.stringify([props.input.agents, props.input.sources, online.map(machine => machine.id)]);
+  const [emptyProjection, setEmptyProjection] = React.useState<Readonly<{
+    lifetime: ServerAccountScopeLifetime; key: string; ids: ReadonlySet<string>;
+  }> | null>(null);
+  const reportEmpty = React.useCallback((machineId: string, empty: boolean) => {
+    setEmptyProjection(previous => {
+      const current = previous?.lifetime === props.lifetime && previous.key === projectionKey ? previous : null;
+      if (current && current.ids.has(machineId) === empty) return previous;
+      const ids = new Set(current?.ids);
+      if (empty) ids.add(machineId); else ids.delete(machineId);
+      return { lifetime: props.lifetime, key: projectionKey, ids };
+    });
+  }, [props.lifetime, projectionKey]);
+  const emptyCount = emptyProjection?.lifetime === props.lifetime && emptyProjection.key === projectionKey
+    ? online.filter(machine => emptyProjection.ids.has(machine.id)).length : 0;
   if (machines.length === 0)
     return (
       <SurfaceStateCard
@@ -121,9 +146,13 @@ export function UsageSourcesMachines(
         reason={t(props.machines.length ? 'usage.board.sources.emptyScopedReason' : 'usage.board.sources.noMachinesReason')}
       />
     );
+  if (props.compact) return <View testID={`${props.testID}.summary`} style={styles.machines}>
+    <Text style={styles.machineName}>{t('projects.identity.machineCount', { count: machines.length })}</Text>
+    {offlineCount > 0 ? <Text style={styles.note}>{t('machines.widgets.body.fleet.offlineGroup', { count: offlineCount })}</Text> : null}
+  </View>;
   return (
     <View testID={props.testID} style={styles.machines}>
-      {machines.map((machine, index) => (
+      {online.map((machine, index) => (
         <MachineSources
           key={machine.id}
           machine={machine}
@@ -132,9 +161,19 @@ export function UsageSourcesMachines(
           executor={props.executor}
           first={index === 0}
           agentIds={props.input.agents}
+          accountingSources={props.input.sources}
+          onEmpty={reportEmpty}
           testID={`${props.testID}.machine.${machine.id}`}
         />
       ))}
+      {emptyCount > 0 ? <Text testID={`${props.testID}.emptyMachines`} style={styles.note}
+        accessibilityLabel={`${t('projects.identity.machineCount', { count: emptyCount })} · ${t('usage.board.sources.machineNone')}`}>
+        {t('projects.identity.machineCount', { count: emptyCount })} · {t('usage.board.sources.machineNone')}
+      </Text> : null}
+      {offlineCount > 0 ? <Text testID={`${props.testID}.offline`} style={styles.note}
+        accessibilityLabel={t('machines.widgets.body.fleet.offlineGroup', { count: offlineCount })}>
+        {t('machines.widgets.body.fleet.offlineGroup', { count: offlineCount })}
+      </Text> : null}
     </View>
   );
 }
@@ -148,6 +187,8 @@ function MachineSources(
     first: boolean;
     testID: string;
     agentIds: readonly string[];
+    accountingSources: readonly string[];
+    onEmpty(machineId: string, empty: boolean): void;
   }>,
 ) {
   const { theme } = useUnistyles();
@@ -160,9 +201,10 @@ function MachineSources(
   React.useEffect(() => {
     if (controller && props.machine.online) void controller.discover();
   }, [controller, props.machine.online]);
-  const scoped = snapshot.sources.filter(source => !props.agentIds.length || props.agentIds.some(agentId =>
+  const scoped = snapshot.sources.filter(source => matchesUsageSourceAccountingScope(source, props.accountingSources)
+    && (!props.agentIds.length || props.agentIds.some(agentId =>
     agentId === buildQualifiedPluginContributionKey(source.agent)
-      || agentId === resolveBundledAgentIdFromContributionIdentity(source.agent)));
+      || agentId === resolveBundledAgentIdFromContributionIdentity(source.agent))));
   const visible = scoped.filter(
     (source) =>
       !(
@@ -177,6 +219,8 @@ function MachineSources(
   const discovering = snapshot.pending.some(
     (operation) => operation.actionId === 'usage.sources.discover',
   );
+  const empty = snapshot.loaded && scoped.length === 0 && !snapshot.error && !snapshot.approval;
+  React.useEffect(() => { props.onEmpty(props.machine.id, empty); }, [props.onEmpty, props.machine.id, empty]);
   const status = !props.machine.online
     ? t('usage.board.sources.machineOffline')
     : !snapshot.loaded
@@ -186,6 +230,7 @@ function MachineSources(
         : counted > 0
           ? t('usage.board.sources.machineCounted', { count: counted })
           : null;
+  if (empty) return null;
   return (
     <View
       testID={props.testID}
@@ -263,7 +308,8 @@ function SourceRow(
 ) {
   const { theme } = useUnistyles();
   const { source, controller } = props;
-  const agent = usageAgentTitle(source.agent.localId);
+  const agentId = resolveBundledAgentIdFromContributionIdentity(source.agent) ?? buildQualifiedPluginContributionKey(source.agent);
+  const agent = usageAgentTitle(agentId);
   const busy = props.snapshot.pending.some(
     (operation) =>
       operation.sourceId === source.sourceId &&
@@ -342,7 +388,7 @@ function SourceRow(
     >
       <View style={styles.sourceMark}>
         <UsageAgentMark
-          agentId={source.agent.localId}
+          agentId={agentId}
           serverId={props.serverId}
         />
       </View>
@@ -491,11 +537,11 @@ function SourceRow(
 
 const styles = StyleSheet.create((theme) => ({
   machines: {
-    gap: 4,
+    gap: theme.space.s4,
   },
   machine: {
-    gap: 12,
-    paddingVertical: 12,
+    gap: theme.space.s12,
+    paddingVertical: theme.space.s12,
   },
   machineDivided: {
     borderTopWidth: StyleSheet.hairlineWidth,
@@ -504,7 +550,7 @@ const styles = StyleSheet.create((theme) => ({
   machineHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: theme.space.s8,
     minWidth: 0,
   },
   machineName: {
@@ -519,17 +565,17 @@ const styles = StyleSheet.create((theme) => ({
   },
   source: {
     flexDirection: 'row',
-    gap: 12,
+    gap: theme.space.s12,
     alignItems: 'flex-start',
-    paddingLeft: 4,
+    paddingLeft: theme.space.s4,
   },
   sourceMark: {
-    paddingTop: 2,
+    paddingTop: theme.space.s2,
   },
   sourceBody: {
     flex: 1,
     minWidth: 0,
-    gap: 2,
+    gap: theme.space.s2,
   },
   sourceTitle: {
     ...Typography.default('semiBold'),
@@ -542,8 +588,8 @@ const styles = StyleSheet.create((theme) => ({
   stateLine: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    marginTop: 6,
+    gap: theme.space.s6,
+    marginTop: theme.space.s6,
   },
   stateText: {
     ...Typography.default(),
@@ -559,7 +605,7 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: 'row',
     flexWrap: 'wrap',
     alignItems: 'center',
-    gap: 8,
-    marginTop: 10,
+    gap: theme.space.s8,
+    marginTop: theme.space.s10,
   },
 }));

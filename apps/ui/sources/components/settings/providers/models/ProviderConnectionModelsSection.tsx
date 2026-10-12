@@ -1,7 +1,10 @@
 import * as React from 'react';
 import { Platform, View } from 'react-native';
+import { useUnistyles } from 'react-native-unistyles';
+import { resolveHappierIconSize } from '@happier-dev/plugin-ui/presentation';
 
 import { IconButton } from '@/components/ui/buttons/IconButton';
+import { Icon } from '@/components/ui/icons/Icon';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { InlineAddExpander } from '@/components/ui/forms/InlineAddExpander';
 import { Item } from '@/components/ui/lists/Item';
@@ -12,21 +15,19 @@ import { ProviderManualModelsField } from '../ProviderManualModelsField';
 import type { ProviderConnectionModelsSectionState } from './useProviderConnectionModelsSection';
 
 /**
- * A provider connection's detail page with its Models section: the page's own sections above and
- * below, and between them the filterable model list with a switch per model. The page scrolls as
- * one; only the model rows near the viewport mount.
+ * A provider connection's Models page: its header above the filterable model list with a switch per
+ * model. The page scrolls as one; only the model rows near the viewport mount.
  */
 export function ProviderConnectionModelsPage(props: Readonly<{
     connectionId: string;
     models: ProviderConnectionModelsSectionState;
     header: React.ReactElement;
     footer: React.ReactElement;
-    revealOnMount: boolean;
-    /** Each new value scrolls the page to the Models section (the Connection section's Models row). */
-    revealRequest?: number;
+    revealOnMount?: boolean;
     onRequestClose: () => void;
 }>): React.ReactElement {
     const { models } = props;
+    const { theme } = useUnistyles();
     const listed = models.modelCount > 0;
     const contentState = !listed && models.initialLoading ? (
         <Item testID="provider-connection-models-loading" mode="info" loading title={t('common.loading')} />
@@ -62,6 +63,7 @@ export function ProviderConnectionModelsPage(props: Readonly<{
                     onOpenChange={models.onEditorOpenChange}
                     title={t('settingsProviders.models.add')}
                     subtitle={t('settingsProviders.models.addDescription')}
+                    icon={<Icon name="plus" size={resolveHappierIconSize('medium')} color={theme.colors.text.secondary} />}
                     helpText={models.editorError ?? t('settingsProviders.models.addHelp')}
                     onCancel={() => models.onEditorOpenChange(false)}
                     onSave={models.onAddManualModels}
@@ -88,7 +90,7 @@ export function ProviderConnectionModelsPage(props: Readonly<{
         </>
     );
     const listActions = (
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s4 }}>
             {models.canRefreshCatalog ? (
                 <IconButton
                     testID="provider-model-catalog-refresh"
@@ -122,7 +124,8 @@ export function ProviderConnectionModelsPage(props: Readonly<{
             groups={models.groups}
             showHidden={models.showHidden}
             onSetVisibility={models.onSetVisibility}
-            onShowAll={models.onShowAll}
+            // Show all is offered only while something is hidden (unknown counts keep it).
+            onShowAll={models.catalogCount && models.catalogCount.shown >= models.catalogCount.total ? undefined : models.onShowAll}
             onHideAll={models.onHideAll}
             onResetVisibility={models.onResetVisibility}
             onShowOnly={models.onShowOnly}
@@ -136,16 +139,15 @@ export function ProviderConnectionModelsPage(props: Readonly<{
             page={{
                 header: props.header,
                 footer: props.footer,
-                title: t('settingsProviders.detail.modelsTitle'),
-                description: t('settingsProvidersCollection.modelsDescription'),
+                // The page is "Models" (its header); the list's sheet needs no second title.
+                title: '',
                 leadingRows,
                 contentState,
-                summary: listed
-                    ? t('settingsProvidersCollection.modelsShown', { shown: models.shownModelCount, total: models.modelCount })
+                summary: models.catalogCount
+                    ? t('settingsProvidersCollection.modelsShown', models.catalogCount)
                     : null,
                 revealOnMount: props.revealOnMount,
-                revealRequest: props.revealRequest,
-                testID: 'provider-connection-detail',
+                testID: 'provider-connection-models-page',
             }}
         />
     );

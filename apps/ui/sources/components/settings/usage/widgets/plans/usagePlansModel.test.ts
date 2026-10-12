@@ -98,6 +98,25 @@ function quotaRead(
 }
 
 describe('Plans projection of admitted allowance reads', () => {
+  it('keeps qualified unanswered and failed accounts beside ready facts without inventing readings', () => {
+    const read = quotaRead({ accountId: 'ready', meters: [{ meterId: 'week', label: 'Weekly', usedPct: 40 }] });
+    const states = [
+      { source: `quota:${JSON.stringify(read.source)}`, status: 'available' as const },
+      { source: `quota:${JSON.stringify({ bindingKind: 'account', ref: { service, accountId: 'held' } })}`, status: 'pending' as const },
+      { source: `quota:${JSON.stringify({ bindingKind: 'account', ref: { service, accountId: 'failed' } })}`, status: 'error' as const, errorCode: 'snapshot_read_failed' },
+      { source: 'quota:not-json', status: 'error' as const },
+    ];
+    const projection = projectUsagePlans([read], NOW, undefined, states);
+    expect(projection.accounts.map(account => account.accountId)).toEqual(['ready', 'held', 'failed']);
+    expect(projection.accounts[0]?.headline?.remainingFraction).toBe(0.6);
+    expect(projection.accounts[1]).toMatchObject({ read: null, source: { ref: { service, accountId: 'held' } },
+      state: { status: 'pending' }, windows: [], headline: null });
+    expect(projection.accounts[2]).toMatchObject({ read: null, state: { status: 'error', errorCode: 'snapshot_read_failed' } });
+    expect(projection.tightest?.account.accountId).toBe('ready');
+    const retained = projectUsagePlans([read], NOW, undefined, [{ ...states[0]!, status: 'stale', errorCode: 'snapshot_read_failed' }]);
+    expect(retained.accounts[0]).toMatchObject({ stale: true, state: { status: 'stale', errorCode: 'snapshot_read_failed' } });
+    expect(retained.accounts[0]?.headline?.remainingFraction).toBe(0.6);
+  });
   it('keeps each Account fact unique while showing every qualified overlapping pool and standalone account', () => {
     const reads = ['work', 'personal', 'standalone'].map(accountId => quotaRead({ accountId, meters: [] }));
     const pools = [
@@ -326,16 +345,23 @@ describe('Plans detail projections', () => {
   });
 
   it('binds a reset start to the latest accepted entry of the current record, or says why it cannot', () => {
-    expect(resolveUsageResetStartBinding(accountOf(base), 'weekly')).toEqual({ status: 'unavailable', reason: 'no_witness' });
+    expect(resolveUsageResetStartBinding(accountOf(base), 'weekly', NOW)).toEqual({ status: 'unavailable', reason: 'no_witness' });
     const other = quotaRead({ accountId: 'other', meters: [weekly] });
     const read = ConnectedServiceQuotaGetResultV1Schema.parse({ ...base, history: { nextCursor: null, entries: [
-      { id: 'old', observedAtMs: NOW - 3 * HOUR, snapshot: base.current },
-      { id: 'latest', observedAtMs: NOW - HOUR, snapshot: base.current },
+      { id: 'old', observedAtMs: NOW - 3 * HOUR, snapshot: { ...base.current!, fetchedAtMs: NOW - 3 * HOUR } },
+      { id: 'latest', observedAtMs: NOW - HOUR, snapshot: { ...base.current!, fetchedAtMs: NOW - HOUR } },
       { id: 'foreign', observedAtMs: NOW - 60_000, snapshot: other.current },
     ] } });
-    expect(resolveUsageResetStartBinding(accountOf(read), 'weekly')).toEqual({ status: 'available',
+    expect(resolveUsageResetStartBinding(accountOf(read), 'weekly', NOW)).toEqual({ status: 'available',
       reset: { source: read.source, recordId, meterId: 'weekly', witness: { id: 'latest', observedAtMs: NOW - HOUR } } });
-    expect(resolveUsageResetStartBinding(accountOf(read), 'missing')).toEqual({ status: 'unavailable', reason: 'no_reset' });
+    expect(resolveUsageResetStartBinding(accountOf(read), 'missing', NOW)).toEqual({ status: 'unavailable', reason: 'no_reset' });
+  });
+
+  it('withholds reset binding when the displayed observation is stale even if it has a historical witness', () => {
+    const current = { ...base.current!, staleAfterMs: 1 };
+    const read = ConnectedServiceQuotaGetResultV1Schema.parse({ ...base, current, history: { nextCursor: null,
+      entries: [{ id: 'accepted', observedAtMs: current.fetchedAtMs, snapshot: current }] } });
+    expect(resolveUsageResetStartBinding(accountOf(read), 'weekly', NOW)).toMatchObject({ status: 'unavailable' });
   });
 
   it('advises a banked reset only by comparing its expiry with the natural reset it would replace', () => {

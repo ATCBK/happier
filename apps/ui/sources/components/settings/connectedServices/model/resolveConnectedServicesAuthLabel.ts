@@ -219,6 +219,7 @@ function resolveConnectedBindingState(
     };
 }
 
+// "Service · account": the meta separator every source label uses ("Gateway · Work").
 function resolveConnectedBindingLabel(
     params: ResolveConnectedServicesAuthLabelParams,
     serviceId: string,
@@ -236,15 +237,15 @@ function resolveConnectedBindingLabel(
         const group = (params.accountGroupOptionsByServiceId?.[serviceId] ?? []).find((option) =>
             option.groupId === state.groupId
         );
-        return group ? `${params.resolveServiceTitle(serviceId)}: ${group.label}`
-            : requested ? `${params.resolveServiceTitle(serviceId)}: ${state.groupId}` : null;
+        return group ? `${params.resolveServiceTitle(serviceId)} · ${group.label}`
+            : requested ? `${params.resolveServiceTitle(serviceId)} · ${state.groupId}` : null;
     }
 
     if ((requested ? state.requestedSelection : state.effectiveSelection) === 'profile' && state.profileId) {
         const profile = (params.profileOptionsByServiceId[serviceId] ?? [])
             .find((option) => isConnectedServiceProfileOptionSelectable(option) && option.profileId === state.profileId);
-        return profile ? `${params.resolveServiceTitle(serviceId)}: ${resolveProfileLabel(profile)}`
-            : requested ? `${params.resolveServiceTitle(serviceId)}: ${state.profileId}` : null;
+        return profile ? `${params.resolveServiceTitle(serviceId)} · ${resolveProfileLabel(profile)}`
+            : requested ? `${params.resolveServiceTitle(serviceId)} · ${state.profileId}` : null;
     }
 
     return null;

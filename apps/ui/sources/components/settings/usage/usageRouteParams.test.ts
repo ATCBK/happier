@@ -1,9 +1,23 @@
 import { describe, expect, it } from 'vitest';
 import { buildUsageRouteParams, resolveUsagePageInitialFilters } from './usageRouteParams';
 import { applyUsageWidgetPageScope, readUsageWidgetPageContext, readUsageWidgetPageScope, resolveUsageWidgetPageInitialQuery,
-    resolveUsageWidgetPeriod } from './usageWidgetPageContext';
+    resolveUsageWidgetPeriod, describeUsageWidgetSlotValue } from './usageWidgetPageContext';
+import { formatUsageCalendarPeriod } from '@/sync/domains/usage/usageCalendarPresentation';
+import { t } from '@/text';
+import { UsageQuerySchema } from '@happier-dev/protocol/inputs/usageQuery';
+import { normalizeStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 
 describe('Usage route filter owner', () => {
+    it('projects optional undefined calendar bounds into strict JSON context without changing the period', () => {
+        const query = UsageQuerySchema.parse({ period: { startMs: 1000, endMs: undefined } });
+        const context = readUsageWidgetPageContext(readUsageWidgetPageScope(query));
+        expect(normalizeStrictJsonValue(context)).toMatchObject({ period: [{ startMs: 1000 }] });
+    });
+    it('labels followed period slots by their admitted value rather than the toolbar preset', () => {
+        expect(describeUsageWidgetSlotValue('period', { relative: '30days' }, '7days')).toBe(t('usage.last30Days'));
+        const absolute = { startMs: 1000, endMs: 2000 };
+        expect(describeUsageWidgetSlotValue('period', absolute, '7days')).toBe(formatUsageCalendarPeriod(absolute));
+    });
     it('retains the exact query calendar and supported clauses through a scoped Session detail route', () => {
         const route = resolveUsagePageInitialFilters({ metric: 'cost', scope: JSON.stringify({ period: { startMs: 1000, endMs: 2000 }, costBasis: 'reported', session: 's1' }),
             queryOverrides: JSON.stringify({ timeZoneOffsetMinutes: -330, granularity: 'week', modelIds: ['specific-model'], workspaceIds: ['workspace'], backendModes: ['acp'], includeActivity: true }) });
@@ -52,10 +66,11 @@ describe('Usage route filter owner', () => {
 
     it('offers every unfiltered scope as a value while presentation stays widget owned', () => {
         const query = resolveUsageWidgetPageInitialQuery({ nowMs: Date.parse('2026-10-09T12:00:00Z'), timeZoneOffsetMinutes: 120 });
+        expect(query.period).toEqual({ relative: '7days' });
         expect(readUsageWidgetPageContext(readUsageWidgetPageScope(query))).toEqual({ period: [query.period], agents: [[]], machines: [[]],
             projects: [[]], sources: [[]], session: [null], costBasis: ['auto'] });
         const today = resolveUsageWidgetPeriod('today', Date.parse('2026-10-09T00:30:00Z'), 120);
-        expect(today).toEqual({ period: { startMs: Date.parse('2026-10-08T22:00:00Z') }, granularity: 'hour' });
+        expect(today).toEqual({ period: { relative: 'today' }, granularity: 'hour' });
         expect(resolveUsageWidgetPeriod('year', Date.parse('2026-10-09T12:00:00Z'), 120).granularity).toBe('month');
     });
 

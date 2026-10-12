@@ -6,13 +6,14 @@ import {
     createProviderConnectionViewFixture,
     createProviderConnectionsDescribeFixture,
     createProviderSettingsHarness,
-    flushHookEffects,
+    createProviderSettingsAccountHarness,
     installProviderSettingsRpcBoundary,
-    renderInCollectionLayout,
-    renderScreen,
-    standardCleanup,
-} from '@/dev/testkit';
-import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
+    installProviderConnectionsCatalogHttpBoundary,
+} from '@/dev/testkit/harness/providerSettingsHarness';
+import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
+import { renderInCollectionLayout } from '@/dev/testkit/render/renderInCollectionLayout';
+import { renderScreen } from '@/dev/testkit/render/renderScreen';
+import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
@@ -22,6 +23,19 @@ import { bindHomeDomainActionHttpRequestV1 } from '@happier-dev/protocol/actions
 import { installSettingsViewCommonModuleMocks } from '../settingsViewTestHelpers';
 import { clearActiveUnsavedChangesGuard, setActiveUnsavedChangesGuard } from '@/utils/navigation/runGuardedNavigation';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { ProviderConnectionV1Schema } from '@happier-dev/protocol/providers/connections/v1';
+import {
+    DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1,
+    PROVIDER_CONNECTIONS_ROWS_ROUTE_V1,
+    ProviderConnectionsCatalogV1Schema,
+} from '@happier-dev/protocol/providers/connections/connectionRowsV1';
+import { createAccountProviderActionExecuteV1 } from '@happier-dev/protocol/providers/connections/accountProviderActionV1';
+import { parseProviderActionRequestV1 } from '@happier-dev/protocol/providers/providerActionsV1';
+import { serializeModelVisibilityRefV1 } from '@happier-dev/protocol/providers/model-selection';
+import {
+    buildCustomProviderTemplate,
+    createCustomProviderDraft,
+} from '@/providers/authoring/state';
 
 function providerErrorState(screen: Awaited<ReturnType<typeof renderScreen>>) {
     return screen.findAll((node) => node.props.testID?.startsWith('provider-error:') && 'kind' in node.props)[0];
@@ -137,6 +151,8 @@ function findComposite(screen: Awaited<ReturnType<typeof renderScreen>>, testID:
 }
 
 await loadSyncSingletonForTests();
+// Install transport leaves before loading the screen; cold compilation is collection work.
+await import('./ProviderConnectionsSettingsScreen');
 const [{ Item }, { Switch }, { ShimmerView }] = await Promise.all([
     import('@/components/ui/lists/Item'), import('@/components/ui/forms/Switch'),
     import('@/components/ui/feedback/ShimmerView'),
@@ -187,6 +203,7 @@ describe('ProviderConnectionsSettingsScreen', () => {
             providers: { enabled: true, localDiscovery: { enabled: true }, localModelManagement: { enabled: true } },
             localServices: { enabled: true, inventory: { enabled: true } },
         } }) });
+        await account.home.selectHomes([account.serverId]);
         await account.selectMachine(account.serverId, 'machine-a');
         providerHarness.intercept(RPC_METHODS.DAEMON_PROVIDERS_CONNECTIONS_DESCRIBE, async () => {
             const query = state.describeReply as {
@@ -234,7 +251,7 @@ describe('ProviderConnectionsSettingsScreen', () => {
             resources: state.teamCredentialCatalog.resources, nextCursor: null,
         }) });
         await account.publishFeatures(account.serverId, createRootLayoutFeaturesResponse({ features: {
-            providers: { enabled: true }, teams: { enabled: true, credentialResources: { enabled: true } },
+            providers: { enabled: true }, teams: { enabled: true, credentialResources: { enabled: true, externalApi: { enabled: false } } },
         } }));
         const { ProviderConnectionsSettingsScreen } = await import('./ProviderConnectionsSettingsScreen');
         const screen = await renderScreen(<ProviderConnectionsSettingsScreen />);
@@ -402,12 +419,98 @@ describe('ProviderConnectionsSettingsScreen', () => {
         // Available providers are what you can add, not rows of the collection.
         expect(titles).not.toContain('Other');
         const acme = screen.findAllByType(Item).find((item) => item.props.title === 'Acme');
-        // A healthy connection is quiet: its models, no status word and no trouble dot.
-        expect(acme?.props.subtitle).toContain('settingsProviders.detail.modelCount');
+        // No admitted Account catalog means no model count, even when a machine reports three.
+        expect(acme?.props.subtitle).toBe('');
         expect(acme?.props.subtitleLeading).toBeUndefined();
         const menuItems = findComposite(screen, 'settings-providers-add-menu', 'items')?.props.items as Array<{ id: string; title: string; subtitle?: string }>;
         expect(menuItems.map((item) => item.id)).toEqual(['custom', 'catalog:plugin/other']);
         expect(menuItems[1]?.subtitle).toContain('settingsProviders.compatibility.experimental');
+    });
+
+    it('shows Account shown and total catalog counts in the rail without a machine', async () => {
+        const connection = ProviderConnectionV1Schema.parse({
+            v: 1,
+            id: 'pc_a',
+            source: {
+                kind: 'custom',
+                template: buildCustomProviderTemplate({
+                    ...createCustomProviderDraft('openai-responses'),
+                    name: 'Acme',
+                    baseUrl: 'https://acme.example/v1',
+                    requiresApiKey: false,
+                    catalog: 'manual',
+                }),
+            },
+            role: 'named',
+            displayName: 'Acme',
+            displayNameMode: 'custom',
+            revision: 0,
+            createdAt: 1,
+            updatedAt: 1,
+        });
+        let catalog = ProviderConnectionsCatalogV1Schema.parse({
+            ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1,
+            connections: [connection],
+            manualModelsByConnectionId: {
+                [connection.id]: [
+                    { id: 'shown', name: 'Shown model', addedAt: 1 },
+                    { id: 'hidden', name: 'Hidden model', addedAt: 1 },
+                ],
+            },
+            modelVisibilityByRef: {
+                [serializeModelVisibilityRefV1({
+                    scope: 'allAgents',
+                    providerConnectionId: connection.id,
+                    modelId: 'hidden',
+                })]: 'hidden',
+            },
+        });
+        // Build a saved grant through its real owner, with only the Account-row transport in memory.
+        const execute = createAccountProviderActionExecuteV1({
+            assertCurrent() {},
+            now: () => 10,
+            readCatalog: async () => ({ status: 'ready', revision: 1, catalog }),
+            readDefinitions: async () => [],
+            writeCatalog: async (input) => {
+                catalog = input.catalog;
+                return { status: 'updated' };
+            },
+        });
+        expect(
+            await execute(
+                parseProviderActionRequestV1('providers.connections.enabled.set', {
+                    action: 'setEnabled',
+                    connectionId: connection.id,
+                    scope: 'account',
+                    enabled: true,
+                }),
+                {},
+            ),
+        ).toMatchObject({ ok: true });
+        // A new Account admits its revision-1 catalog instead of replaying the prior Account's cursor.
+        await account.restore({
+            accountId: 'account-rail-counts',
+            machines: [],
+            catalog,
+        });
+        await account.home.selectHomes([account.serverId]);
+        await account.selectMachine(account.serverId, null);
+        providerHarness.state.requests = [];
+        const { ProviderConnectionsSettingsScreen } =
+            await import('./ProviderConnectionsSettingsScreen');
+        const screen = await renderScreen(
+            <ProviderConnectionsSettingsScreen variant="rail" />,
+        );
+        await waitForHomeGovernance(() =>
+            expect(findConnectionRow(screen, connection.id)).not.toBeNull(),
+        );
+        expect(findConnectionRow(screen, connection.id)?.props.subtitle).toBe(
+            'settingsProvidersCollection.modelsShown(shown=1,total=2)',
+        );
+        expect(
+            findConnectionRow(screen, connection.id)?.props.subtitleLeading,
+        ).toBeUndefined();
+        expect(providerHarness.state.requests).toHaveLength(0);
     });
 
     it('marks a connection that needs the user with a status line and a trouble dot', async () => {
@@ -421,6 +524,35 @@ describe('ProviderConnectionsSettingsScreen', () => {
         const acme = findConnectionRow(screen, 'pc_a');
         expect(acme?.props.subtitle).toBe('settingsProviders.status.unreachable');
         expect(acme?.props.subtitleLeading).toBeTruthy();
+    });
+
+    it('keeps an untested healthy row quiet: how it signs in, never "Not checked" (P3)', async () => {
+        const query = state.describeReply as {
+            data: { connections: Array<Record<string, unknown>> };
+        };
+        query.data.connections[0] = {
+            ...query.data.connections[0],
+            credential: { required: true, accountBound: true, boundMachineIds: [] },
+            runtime: {
+                health: 'not_checked',
+                modelCount: null,
+                checkedAt: null,
+                endpoints: [],
+            },
+        };
+        const { ProviderConnectionsSettingsScreen } =
+            await import('./ProviderConnectionsSettingsScreen');
+        const screen = await renderScreen(
+            <ProviderConnectionsSettingsScreen variant="rail" />,
+        );
+        const acme = findConnectionRow(screen, 'pc_a');
+        expect(acme?.props.subtitle).toContain(
+            'settingsProviders.authoring.apiKey',
+        );
+        expect(acme?.props.subtitle).not.toContain(
+            'settingsProviders.status.notChecked',
+        );
+        expect(acme?.props.subtitleLeading).toBeUndefined();
     });
 
     it('selects the route connection in the rail and searches only a collection too long to scan', async () => {
@@ -449,12 +581,12 @@ describe('ProviderConnectionsSettingsScreen', () => {
         const { CollectionListGroupLabel } = await import('@/components/ui/lists/collection/CollectionList');
         state.describeReply = { data: createProviderConnectionsDescribeFixture({ connections: [
             createProviderConnectionViewFixture({ connectionId: 'pc_gateway', displayName: 'Subscriptions',
-                contributionKey: 'example.gateway/native', deployment: { kind: 'managedLocal', targetMachineId: 'machine-a', effects: null },
+                contributionKey: 'happier.provider.cliproxyapi/cliproxyapi', deployment: { kind: 'managedLocal', targetMachineId: 'machine-a', effects: null },
                 managedLocalOption: { targetMachineId: 'machine-a', connectedAccountPurposes: [
                     { purpose: 'upstream', service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, required: false },
                 ] } }),
             createProviderConnectionViewFixture({ connectionId: 'pc_local', displayName: 'Local models',
-                contributionKey: 'example.local/native', deployment: { kind: 'managedLocal', targetMachineId: 'machine-a', effects: null },
+                contributionKey: 'happier.provider.ollama/ollama', deployment: { kind: 'managedLocal', targetMachineId: 'machine-a', effects: null },
                 managedLocalOption: { targetMachineId: 'machine-a', connectedAccountPurposes: [] } }),
         ] }) };
         const { ProviderConnectionsSettingsScreen } = await import('./ProviderConnectionsSettingsScreen');
@@ -640,40 +772,43 @@ describe('ProviderConnectionsSettingsScreen', () => {
         expect(routerReplace).toHaveBeenCalledWith('/(app)/settings/providers/new');
     });
 
-    it.each(['page', 'landing'] as const)('offers guarded machine setup in the no-machine %s presentation', async (presentation) => {
+    it.each(['page', 'landing'] as const)('offers guarded Account authoring in the no-machine %s presentation', async (presentation) => {
         await account.publishMachines(account.serverId, []);
+        await account.selectMachine(account.serverId, null);
         const { ProviderSettingsIndex } = await import('./ProviderSettingsIndex');
         const { ProviderConnectionsSettingsScreen } = await import('./ProviderConnectionsSettingsScreen');
         const screen = presentation === 'landing'
             ? await renderInCollectionLayout(<ProviderSettingsIndex />, 'split')
             : await renderScreen(<ProviderConnectionsSettingsScreen variant="page" />);
-        // With no machine to choose, the computer section leads to setting one up.
-        const setupId = 'settings.providers.administration.target.setUp';
-        expect(screen.findHostByTestId(setupId)).not.toBeNull();
+        // Empty Account configuration leads directly to authoring; no machine setup is needed.
+        const authoringId = 'settings-providers-invitation-custom';
+        await waitForHomeGovernance(() => expect(screen.findHostByTestId(authoringId)).not.toBeNull());
         setActiveUnsavedChangesGuard({ isDirtyRef: { current: true }, requestDecision: async () => 'keepEditing', tag: 'provider-prerequisite-test' });
-        await screen.pressByTestIdAsync(setupId);
+        await screen.pressByTestIdAsync(authoringId);
         expect(routerPush).not.toHaveBeenCalled();
+        expect(routerReplace).not.toHaveBeenCalled();
         clearActiveUnsavedChangesGuard();
-        await screen.pressByTestIdAsync(setupId);
-        expect(routerPush).toHaveBeenCalledWith('/(app)/settings/machines');
+        await screen.pressByTestIdAsync(authoringId);
+        expect(presentation === 'landing' ? routerReplace : routerPush).toHaveBeenCalledWith('/(app)/settings/providers/new');
+        expect(providerHarness.state.requests).toHaveLength(0);
     });
 
-    it('says what failed and offers its recovery when a wide collection cannot read the machine', async () => {
-        state.describeReply = {
-            loading: false, data: null,
-            error: createProviderErrorV1('provider_endpoint_unavailable', { machineId: 'machine-a' }),
-        };
+    it('says what failed and offers its recovery when a wide collection cannot read its Account', async () => {
+        account.home.answer(account.serverId, `GET ${PROVIDER_CONNECTIONS_ROWS_ROUTE_V1}`, { status: 503, body: { error: 'unavailable' } });
         const { ProviderSettingsIndex } = await import('./ProviderSettingsIndex');
         const screen = await renderInCollectionLayout(<ProviderSettingsIndex />, 'split');
-        expect(providerErrorState(screen)?.props.title).toBe('settingsProviders.errors.unreachableTitle');
+        await waitForHomeGovernance(() => expect(providerErrorState(screen)?.props.diagnosticCode).toBe('provider_catalog_unavailable'));
         expect(providerErrorState(screen)?.props.action.label).toBe('settingsProviders.errors.actions.retry');
         expect(screen.findByTestId('settings-providers-invitation')).toBeNull();
 
-        // Retry reads the machine again; once it answers, the collection lands on its connection.
+        // Recovery admits the Account, then augments it from the exact machine and lands on its connection.
         const describeReads = () => providerHarness.state.requests.filter(
             (request) => request.method === RPC_METHODS.DAEMON_PROVIDERS_CONNECTIONS_DESCRIBE,
         ).length;
         const readsBefore = describeReads();
+        account.home.answer(account.serverId, `GET ${PROVIDER_CONNECTIONS_ROWS_ROUTE_V1}`, { body: {
+            status: 'present', revision: 1, content: { t: 'plain', v: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 },
+        } });
         state.describeReply = {
             loading: false, error: null,
             data: createProviderConnectionsDescribeFixture({ connections: [createProviderConnectionViewFixture({ connectionId: 'pc_a' })] }),
@@ -814,7 +949,10 @@ describe('ProviderConnectionsSettingsScreen', () => {
     });
 
     it('uses three skeleton rows for first load and an honest configured empty state', async () => {
-        state.describeReply = { loading: true, data: null, error: null };
+        const firstRead = createDeferred<void>();
+        account.home.answer(account.serverId, `GET ${PROVIDER_CONNECTIONS_ROWS_ROUTE_V1}`, { body: {
+            status: 'present', revision: 1, content: { t: 'plain', v: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 },
+        }, respondAfter: firstRead.promise });
         const { ProviderConnectionsSettingsScreen } = await import('./ProviderConnectionsSettingsScreen');
         const loading = await renderScreen(<ProviderConnectionsSettingsScreen />);
         expect(loading.findAllByType(ShimmerView)).toHaveLength(3);
@@ -823,15 +961,38 @@ describe('ProviderConnectionsSettingsScreen', () => {
             loading: false, error: null,
             data: { status: 'success', diagnostics: [], diagnosticsTruncated: false, availableTruncated: false, discoveryCandidates: [], discoveryCandidatesTruncated: false, localInstallations: [], connections: [], available: [] },
         };
-        const empty = await renderScreen(<ProviderConnectionsSettingsScreen />);
-        expect(empty.findAllByType(Item).map((item) => item.props.title)).toContain('settingsProviders.emptyTitle');
-        expect(empty.findAllByType(ShimmerView)).toHaveLength(0);
+        await React.act(async () => { firstRead.resolve(); await flushHookEffects(); });
+        await waitForHomeGovernance(() => expect(loading.findByTestId('settings-providers-invitation')).not.toBeNull());
+        expect(loading.findAllByType(ShimmerView)).toHaveLength(0);
+    });
+
+    it('invites a narrow collection with nothing to list the same way as a wide one (lab PI1p)', async () => {
+        const query = state.describeReply as { data: { connections: Array<Record<string, unknown>> } };
+        query.data.connections = [];
+        const { ProviderSettingsIndex } = await import('./ProviderSettingsIndex');
+        const screen = await renderInCollectionLayout(<ProviderSettingsIndex />, 'stacked');
+        await waitForHomeGovernance(() => expect(screen.findByTestId('settings-providers-invitation')).not.toBeNull());
+        expect(screen.findAllByType(Item).map((item) => item.props.title)).not.toContain('settingsProviders.emptyTitle');
+        await screen.pressByTestIdAsync('settings-providers-invitation-custom');
+        expect(routerPush).toHaveBeenCalledWith('/(app)/settings/providers/new');
     });
 
     it('retains configured rows and renders an actionable typed error after a transport refresh failure', async () => {
+        installProviderConnectionsCatalogHttpBoundary({ home: account.home, serverId: account.serverId,
+            catalog: ProviderConnectionsCatalogV1Schema.parse({ ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1,
+                connections: [ProviderConnectionV1Schema.parse({ v: 1, id: 'pc_a', source: { kind: 'custom', template: buildCustomProviderTemplate({
+                    ...createCustomProviderDraft('openai-chat'), name: 'Acme', baseUrl: 'https://acme.test/v1', requiresApiKey: false, catalog: 'manual',
+                }) }, role: 'named', displayName: 'Acme', displayNameMode: 'custom', revision: 1, createdAt: 1, updatedAt: 1 })] }),
+        });
+        const query = state.describeReply as {
+            data: ReturnType<typeof createProviderConnectionsDescribeFixture>;
+            error: ReturnType<typeof createProviderErrorV1> | null;
+        };
+        query.data.connections[0] = createProviderConnectionViewFixture({
+            contributionKey: null, role: 'named', displayNameMode: 'custom', displayName: 'Acme', providerName: 'Acme',
+        });
         const { ProviderConnectionsSettingsScreen } = await import('./ProviderConnectionsSettingsScreen');
         const screen = await renderScreen(<ProviderConnectionsSettingsScreen />);
-        const query = state.describeReply as { error: ReturnType<typeof createProviderErrorV1> | null };
         query.error = createProviderErrorV1('provider_endpoint_unavailable', {
             machineId: 'machine-a',
         });

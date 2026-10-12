@@ -2,7 +2,7 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import type { McpServerBindingV1, McpServerCatalogEntryV1 } from '@happier-dev/protocol';
+import type { McpServerRuleV1, McpServerCatalogEntryV1 } from '@happier-dev/protocol';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import type { FreshMachineAdministrationExecutionTargetV1 } from '@/sync/domains/machines/administration/useTargetSelection';
 import {
@@ -86,7 +86,7 @@ describe('McpServerTestPanel', () => {
             createdAt: 1,
             updatedAt: 1,
         };
-        const bindings: McpServerBindingV1[] = [];
+        const bindings: McpServerRuleV1[] = [];
 
         const screen = await renderScreen(<McpServerTestPanel
             server={server}

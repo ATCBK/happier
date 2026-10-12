@@ -1,12 +1,15 @@
 import * as React from 'react';
 import { View } from 'react-native';
 
-import { getDefaultSystemTaskRunner, SystemTaskProgressCard } from '@/components/systemTasks';
+import { SystemTaskProgressCard } from '@/components/systemTasks';
 import type { SystemTaskRunner } from '@/components/systemTasks/types';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { t } from '@/text';
 import { useLocalRelayRuntimeControl } from './useLocalRelayRuntimeControl';
+import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprovalPendingNotice';
+import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { fireAndForget } from '@/utils/system/fireAndForget';
 
 function resolveStatusSubtitle(status: ReturnType<typeof useLocalRelayRuntimeControl>['status']): string {
     if (!status) {
@@ -31,8 +34,15 @@ type LocalRelayRuntimeControlSectionProps = Readonly<{
 }>;
 
 function OwnedLocalRelayRuntimeControlSection(props: LocalRelayRuntimeControlSectionProps) {
+    const router = useRouter();
     const controller = useLocalRelayRuntimeControl({ ...(props.runner ? { runner: props.runner } : {}) });
-    return <LocalRelayRuntimeControlSectionContent {...props} controller={controller} />;
+    return <>
+        <LocalRelayRuntimeControlSectionContent {...props} controller={controller} />
+        {controller.approval.approvalPending && controller.approval.approvalId && controller.actionServerId ? <ItemGroup>
+            <ActionApprovalPendingNotice message={t('secrets.catalog.approvalPending')}
+                onOpenApproval={() => router.pushRetainingCurrent(`/inbox/approvals/${encodeURIComponent(controller.approval.approvalId!)}?serverId=${encodeURIComponent(controller.actionServerId)}`)} />
+        </ItemGroup> : null}
+    </>;
 }
 
 const LocalRelayRuntimeControlSectionContent = React.memo(function LocalRelayRuntimeControlSectionContent(props: LocalRelayRuntimeControlSectionProps & Readonly<{
@@ -40,6 +50,7 @@ const LocalRelayRuntimeControlSectionContent = React.memo(function LocalRelayRun
 }>) {
     const {
         activeTaskSnapshot,
+        cancelTask,
         installOrUpdate,
         isBusy,
         isUnavailable,
@@ -49,16 +60,14 @@ const LocalRelayRuntimeControlSectionContent = React.memo(function LocalRelayRun
         status,
         stopRelay,
     } = props.controller;
-    const runner = props.runner ?? getDefaultSystemTaskRunner();
-
     const canStart = !isUnavailable && status?.installed === true && status.service.active !== true && !isBusy;
     const canStop = !isUnavailable && status?.service.active === true && !isBusy;
     const cancel = React.useCallback(() => {
         if (!activeTaskSnapshot) {
             return;
         }
-        void runner.cancel(activeTaskSnapshot.taskId);
-    }, [activeTaskSnapshot, runner]);
+        fireAndForget(cancelTask(activeTaskSnapshot.taskId), { tag: 'LocalRelayRuntimeControlSection.cancel' });
+    }, [activeTaskSnapshot, cancelTask]);
 
     React.useEffect(() => {
         props.onStatusChange?.(status);

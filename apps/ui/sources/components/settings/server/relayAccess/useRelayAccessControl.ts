@@ -16,6 +16,8 @@ import {
 import { t } from '@/text';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import type { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
+import { useLocalRuntimeActionExecution } from '@/components/approvals/useLocalRuntimeActionExecution';
+import { createUiHomeRuntimeActionClient } from '@/sync/ops/actions/homeRuntimeActionClient';
 
 function readRelayAccessSnapshot(result: SystemTaskResult | null): RelayAccessTaskSnapshot | null {
     if (!result?.ok) {
@@ -85,11 +87,14 @@ export type RelayAccessControlOptions = Readonly<{
     target?: RelayAccessTaskTarget;
     upstreamUrl?: string | null;
     remoteHost?: Readonly<{ scope: ServerAccountScope; hostId: string; expectedRevision: number | 'absent' }>;
+    actionScope?: ServerAccountScope;
     runWithTarget?: <T>(run: (target: RelayAccessTaskTarget, startSpec?: (spec: SystemTaskSpec) => Promise<string>, admittedUpstreamUrl?: string | null) => Promise<T>) => Promise<T>;
 }>;
 
 export function useRelayAccessControl(options: RelayAccessControlOptions = {}) {
     const runner = options.runner ?? getDefaultSystemTaskRunner();
+    const mountedAction = useLocalRuntimeActionExecution(options.actionScope ?? options.remoteHost?.scope, { runner });
+    const runtimeAction = React.useMemo(() => createUiHomeRuntimeActionClient(runner, mountedAction.execute), [runner, mountedAction.execute]);
     const target = options.target ?? { kind: 'local' as const };
     const upstreamUrl = React.useMemo(() => {
         const value = typeof options.upstreamUrl === 'string' ? options.upstreamUrl.trim() : '';
@@ -114,6 +119,17 @@ export function useRelayAccessControl(options: RelayAccessControlOptions = {}) {
         config?: RelayAccessConfig;
     }>) => {
         try {
+            if (!options.remoteHost && !options.runWithTarget && target.kind === 'local' && mountedAction.requiresAction) {
+                const actionId = kind === 'relay.access.status.v1' ? 'relay.access.status'
+                    : kind === 'relay.access.disable.v1' ? 'relay.access.disable' : 'relay.access.configure';
+                const outcome = await runtimeAction(actionId, kind === 'relay.access.configure.v1' ? { ...params, upstreamUrl } : {});
+                if (!('status' in outcome) || outcome.status !== 'task_started') {
+                    throw new Error('reason' in outcome ? outcome.reason : t('settings.systemTaskStartFailed'));
+                }
+                setBridgeUnavailable(false);
+                setLastErrorMessage(null);
+                return outcome.taskId;
+            }
             if (options.remoteHost) {
                 // Capture the addressed host/Home before loading policy or awaiting consent.
                 const { scope, hostId, expectedRevision } = options.remoteHost;
@@ -138,7 +154,7 @@ export function useRelayAccessControl(options: RelayAccessControlOptions = {}) {
                 return parsed.data.taskId;
             }
             const start = async (target: RelayAccessTaskTarget,
-                startSpec: (spec: SystemTaskSpec) => Promise<string> = spec => runner.start(spec),
+                startSpec: (spec: SystemTaskSpec) => Promise<string> = spec => mountedAction.runSignedOutDraft(() => runner.start(spec)),
                 admittedUpstreamUrl?: string | null) =>
                 kind === 'relay.access.status.v1'
                     ? await startSpec(buildRelayAccessStatusSystemTaskSpec({ target }))
@@ -165,7 +181,7 @@ export function useRelayAccessControl(options: RelayAccessControlOptions = {}) {
                 : (message ?? t('settings.systemTaskStartFailed')));
             return null;
         }
-    }, [options.remoteHost, options.runWithTarget, runner, target, upstreamUrl]);
+    }, [mountedAction.requiresAction, mountedAction.runSignedOutDraft, options.remoteHost, options.runWithTarget, runner, runtimeAction, target, upstreamUrl]);
 
     const refreshStatus = React.useCallback(async () => {
         if (isUnavailable) {
@@ -193,11 +209,12 @@ export function useRelayAccessControl(options: RelayAccessControlOptions = {}) {
     }, [isUnavailable, startTask]);
 
     React.useEffect(() => {
+        if (!mountedAction.ready) return;
         if (isUnavailable) return;
         if (autoRefreshRequestedRef.current) return;
         autoRefreshRequestedRef.current = true;
         void refreshStatus().catch(() => {});
-    }, [isUnavailable, refreshStatus]);
+    }, [isUnavailable, mountedAction.ready, refreshStatus]);
 
     React.useEffect(() => {
         const nextSnapshot = readRelayAccessSnapshot(statusSnapshot?.result ?? null);
@@ -246,9 +263,23 @@ export function useRelayAccessControl(options: RelayAccessControlOptions = {}) {
         return snapshot ?? null;
     }, [actionSnapshot, statusSnapshot]);
 
-    const isBusy = activeTaskSnapshot != null && activeTaskSnapshot.result == null;
+    const isBusy = !mountedAction.ready || mountedAction.approval.approvalPending || (activeTaskSnapshot != null && activeTaskSnapshot.result == null);
 
     return {
+        actionServerId: mountedAction.binding?.serverId ?? '',
+        approval: mountedAction.approval,
+        cancelTask: React.useCallback(async (taskId: string) => {
+            try {
+                if (!mountedAction.requiresAction) return await mountedAction.runSignedOutDraft(() => runner.cancel(taskId));
+                const outcome = await runtimeAction('relay.runtime.task.cancel', { taskId });
+                if (!('status' in outcome) || outcome.status === 'unavailable' || outcome.status === 'outcome_unknown') {
+                    throw new Error('reason' in outcome ? outcome.reason : t('errors.operationFailed'));
+                }
+            } catch (error) {
+                setLastErrorMessage(readSystemTaskStartErrorMessage(error) ?? t('errors.operationFailed'));
+                throw error;
+            }
+        }, [mountedAction.requiresAction, mountedAction.runSignedOutDraft, runner, runtimeAction]),
         activeTaskSnapshot,
         actionSnapshot,
         configure: React.useCallback(async (payload: Readonly<{ providerId: RelayAccessProviderId; config: RelayAccessConfig }>) => {

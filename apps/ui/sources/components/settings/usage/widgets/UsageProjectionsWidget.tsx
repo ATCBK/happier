@@ -9,6 +9,7 @@ import {
   HappierDataMetric,
   HappierPressable,
   type HappierSeries,
+  type StackedSeriesBand,
 } from '@happier-dev/plugin-ui/presentation';
 import {
   UsageMeterRow,
@@ -24,8 +25,10 @@ import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 import { usageSignatureAccent } from '../usageAccent';
 import {
+  leadingUsageRows,
   UsageBodyInsufficient,
   UsageCoverageLine,
+  UsageShowAllRows,
   useUsagePluginTheme,
   type UsageBodyProps,
 } from './usageBodyKit';
@@ -48,6 +51,7 @@ import {
   planWindowStatement,
   UsagePlanDisclosure,
   UsagePlanLegend,
+  UsagePlanAccountStates,
   UsagePlansNothingRead,
   usePlanText,
 } from './plans/UsagePlanParts';
@@ -55,6 +59,7 @@ import { readUsagePersonalPaceTarget, selectUsageWindowsAboveTarget } from './pl
 
 /** Below this width a meter stacks its name over the bar and the projection beneath it. */
 const STACKED_BELOW_PX = 460;
+const EMPIRICAL_BAND = [{ id: 'empirical', lowerSeriesId: 'rangeLow', upperSeriesId: 'rangeHigh' }] as const satisfies readonly StackedSeriesBand[];
 
 type Focus = Readonly<{ account: UsagePlanAccount; window: UsagePlanWindow }>;
 type ChartLabels = Readonly<{ observed: string; projected: string; rangeLow: string; rangeHigh: string }>;
@@ -85,8 +90,17 @@ function buildBurnUp(
   ];
   const resetAtMs = focus.window.resetAtMs;
   if (!last || resetAtMs === null) return series;
+  // A line that would pass the limit flattens at it from the moment it gets there (lab p2burn "runs
+  // out"), so the scale stays 0–100% instead of stretching to "578%". Every line shares the same moments
+  // (now, the projected run-out, the reset), so the empirical band between them stays continuous.
+  const projectedAt = pace.projectedUsedFraction * 100;
+  const runOutAtMs = projectedAt > 100 && last.y < 100
+    ? Math.round(last.x + (resetAtMs - last.x) * (100 - last.y) / (projectedAt - last.y)) : null;
+  const moments = [last.x, ...(runOutAtMs !== null && runOutAtMs > last.x && runOutAtMs < resetAtMs ? [runOutAtMs] : []), resetAtMs];
   const toReset = (id: string, label: string, fraction: number, color: string, lineStyle: 'dashed' | 'dotted'): HappierSeries => ({
-    id, label, color, lineStyle, points: [{ ...last }, point(resetAtMs, fraction * 100)],
+    id, label, color, lineStyle,
+    points: moments.map((x, index) => index === 0 ? { ...last }
+      : point(x, Math.min(100, last.y + (fraction * 100 - last.y) * (x - last.x) / (resetAtMs - last.x)))),
   });
   series.push(toReset('projected', labels.projected, pace.projectedUsedFraction, colors.line, 'dashed'));
   if (pace.empiricalRange && 'rangeLow' in labels) {
@@ -98,7 +112,8 @@ function buildBurnUp(
     const ended = formatPlanMoment(curve.window.resetAtMs, nowMs);
     series.push({
       id: `earlier:${curve.window.resetAtMs}`,
-      label: t('usage.board.plans.earlierCurve', { time: ended }),
+      // One look, one key: the legend shows "Earlier windows" once; each point still names its window.
+      label: t('usage.board.plans.earlierCurves'),
       color: earlier!.color,
       points: curve.points.map((sample, index) => {
         const x = Math.round(pace.windowStartAtMs + sample.elapsedFraction * curve.window.windowDurationMs);
@@ -132,12 +147,16 @@ export function UsageProjectionsWidget(props: UsageBodyProps) {
   const presentation = useWidgetPresentation();
   const width = presentation?.geometry?.width ?? null;
   const tile = presentation?.size === 'small';
+  // Beside other widgets (Medium, Wide) Projections is the lab's Limits list (`wgusage-CD`): one meter
+  // per reported window with its projection, no burn-up, no disclosures. Its own view keeps the chart.
+  const list = presentation?.size === 'medium' || presentation?.size === 'wide';
   const { projection, nameOf, nowMs } = useUsagePlans(props.slice, props.model);
   useWidgetFrameBodyCaption(t('usage.board.plans.projectionsCaption'));
   const paced = React.useMemo(() => selectUsagePacedWindows(projection.accounts), [projection.accounts]);
   // The viewer's pick, kept by window identity; a window that stops having a pace falls back to the default.
   const [pickedKey, setPickedKey] = React.useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = React.useState(false);
+  const [expanded, setExpanded] = React.useState(false);
   const focus = React.useMemo(
     () => paced.find((entry) => entry.window.key === pickedKey) ?? pickDefaultFocus(paced, projection.tightest),
     [paced, pickedKey, projection.tightest],
@@ -204,11 +223,10 @@ export function UsageProjectionsWidget(props: UsageBodyProps) {
     : above.length > 0
       ? t('usage.board.plans.targetAbove', { percent: Math.round(target * 100), windows: above.join(', ') })
       : t('usage.board.plans.targetWithin', { percent: Math.round(target * 100) });
-  const rows = projection.accounts.flatMap((account) =>
-    account.windows
-      .filter((window) => window.comparable || window.remainingFraction === null)
-      .map((window) => ({ account, window, name: nameOf(account) })),
-  );
+  const windows = projection.accounts.flatMap(account => account.windows
+    .map(window => ({ account, window, name: nameOf(account) })));
+  const rows = windows.filter(row => row.window.remainingFraction !== null);
+  const unreported = windows.filter(row => row.window.remainingFraction === null);
   const focusName = focus ? nameOf(focus.account) : null;
   const focusTitle = focus && focusName ? `${focusName.title} · ${focus.window.label}` : '';
   const pace = focus?.window.pace ?? null;
@@ -220,8 +238,71 @@ export function UsageProjectionsWidget(props: UsageBodyProps) {
         count: pace.sampleCount,
       })
     : null;
+  const depletingNote = depleting ? (
+    <View style={styles.paceNote} testID={`${props.testID}.ahead`}>
+      <Icon name="warning" size={13} color={theme.colors.state.danger.foreground} />
+      <Text style={[styles.paceNoteText, text.detail]}>
+        {[
+          `${depleting.name.title} · ${depleting.window.label}`,
+          t('usage.board.plans.projectionRunsOut', {
+            time: formatPlanMoment(depleting.window.pace!.depletesAtMs!, nowMs),
+          }),
+          t('usage.board.plans.projectionBeforeReset'),
+        ].join(' · ')}
+      </Text>
+    </View>
+  ) : null;
+  if (list) {
+    const lead = leadingUsageRows(rows, expanded);
+    // One cause, said once: when every listed window lacks a projection for the same reason ("reading is
+    // old"), the rows show their reset instead and the reason is one quiet line under the list.
+    const reasons = lead.rows.map((row) => (row.window.pace ? null : planWindowStatement(row.window, nowMs).text));
+    const sharedReason = reasons.length > 1 && reasons[0] && reasons.every((reason) => reason === reasons[0]) ? reasons[0] : null;
+    return (
+      <View style={styles.body} testID={`${props.testID}.projections`}>
+        {rows.length ? (
+          <UsageMeterStack testID={`${props.testID}.windows`}>
+            {lead.rows.map((row) => (
+              <ProjectionRow
+                key={row.window.key}
+                name={row.name}
+                window={row.window}
+                nowMs={nowMs}
+                stacked={stacked}
+                {...(sharedReason ? { resetOnly: true } : {})}
+                testID={`${props.testID}.window.${row.account.accountId}.${row.window.meterId}`}
+              />
+            ))}
+          </UsageMeterStack>
+        ) : null}
+        {sharedReason ? (
+          <Text style={[styles.quiet, text.detail]} testID={`${props.testID}.sharedReason`}>
+            {t('usage.board.plans.paceSharedReason', { reason: sharedReason })}
+          </Text>
+        ) : null}
+        {lead.rows.length < rows.length || expanded ? (
+          <UsageShowAllRows testID={`${props.testID}.showAll`} total={rows.length} expanded={expanded}
+            onToggle={() => setExpanded((value) => !value)} />
+        ) : null}
+        {unreported.length ? (
+          <Text style={[styles.quiet, text.detail]} testID={`${props.testID}.unreported`}>
+            {t('usage.board.plans.unreportedWindows', { count: unreported.length })}
+          </Text>
+        ) : null}
+        {depletingNote}
+        {/* The legend explains pace marks; without any pace it explains nothing. */}
+        {rows.some(row => row.window.pace) ? <UsagePlanLegend testID={`${props.testID}.legend`} parts={[t('usage.board.plans.legendEvenPace'), t('usage.board.plans.legendHatched')]} /> : null}
+        <UsageCoverageLine slice={props.slice} sources={['quota']} onRetry={props.model.refresh}
+          testID={`${props.testID}.coverage`} />
+        <UsagePlanAccountStates accounts={projection.accounts} nameOf={nameOf} onRetry={props.model.refresh}
+          testID={`${props.testID}.state`} />
+      </View>
+    );
+  }
   return (
     <View style={styles.body} testID={`${props.testID}.projections`}>
+      <UsagePlanAccountStates accounts={projection.accounts} nameOf={nameOf} onRetry={props.model.refresh}
+        testID={`${props.testID}.state`} />
       {focus && focusName && pace ? (
         <View style={styles.chart}>
           {paced.length > 1 ? (
@@ -274,10 +355,11 @@ export function UsageProjectionsWidget(props: UsageBodyProps) {
             {...(tile ? {} : { viewportHeight: stacked ? 120 : 150 })}
             label={focusTitle}
             series={series}
+            bands={pace.empiricalRange ? EMPIRICAL_BAND : undefined}
             minimumMaximum={100}
             reference={{ value: 100, label: t('usage.board.plans.burnLimit') }}
             valueFormatter={(value) => `${Math.round(value)}%`}
-            unknownLabel={t('common.unavailable')}
+            unknownLabel="—"
             valuesLabel={t('usage.showAll')}
             valuesCollapseLabel={t('usage.showLess')}
             summary={[planWindowStatement(focus.window, nowMs).text, range].filter(Boolean).join(' · ')}
@@ -305,10 +387,13 @@ export function UsageProjectionsWidget(props: UsageBodyProps) {
       ) : (
         <UsageBodyInsufficient
           testID={`${props.testID}.noPace`}
+          replacesContent={rows.length === 0}
           title={t('usage.board.plans.noPaceAnywhere')}
           reason={t('usage.board.plans.noPaceAnywhereReason')}
         />
       )}
+      {rows.length ? <UsagePlanDisclosure testID={`${props.testID}.reported`}
+        title={t('usage.board.plans.reportedWindows', { count: rows.length })}>
       {!tile && focus && paced.length > 1 ? (
         <View style={styles.multiples} testID={`${props.testID}.multiples`} accessibilityRole="list">
           {paced.map((entry) => (
@@ -326,7 +411,7 @@ export function UsageProjectionsWidget(props: UsageBodyProps) {
           ))}
         </View>
       ) : null}
-      {tile ? null : (
+      {(
         <UsageMeterStack testID={`${props.testID}.windows`}>
           {rows.map((row) => (
             <ProjectionRow
@@ -340,6 +425,15 @@ export function UsageProjectionsWidget(props: UsageBodyProps) {
           ))}
         </UsageMeterStack>
       )}
+      </UsagePlanDisclosure> : null}
+      {unreported.length ? <UsagePlanDisclosure testID={`${props.testID}.unreported`}
+        title={t('usage.board.plans.unreportedWindows', { count: unreported.length })}>
+        <UsageMeterStack testID={`${props.testID}.unreported.windows`}>
+          {unreported.map(row => <ProjectionRow key={row.window.key} name={row.name}
+            window={row.window} nowMs={nowMs} stacked={stacked}
+            testID={`${props.testID}.window.${row.account.accountId}.${row.window.meterId}`} />)}
+        </UsageMeterStack>
+      </UsagePlanDisclosure> : null}
       {!tile && focus && focusName ? (
         <UsagePlanDisclosure
           testID={`${props.testID}.pastCycles`}
@@ -349,25 +443,13 @@ export function UsageProjectionsWidget(props: UsageBodyProps) {
           <PastCycles account={focus.account} window={focus.window} nowMs={nowMs} testID={`${props.testID}.pastCycles`} />
         </UsagePlanDisclosure>
       ) : null}
-      {depleting ? (
-        <View style={styles.paceNote} testID={`${props.testID}.ahead`}>
-          <Icon name="warning" size={13} color={theme.colors.state.danger.foreground} />
-          <Text style={[styles.paceNoteText, text.detail]}>
-            {[
-              `${depleting.name.title} · ${depleting.window.label}`,
-              t('usage.board.plans.projectionRunsOut', {
-                time: formatPlanMoment(depleting.window.pace!.depletesAtMs!, nowMs),
-              }),
-              t('usage.board.plans.projectionBeforeReset'),
-            ].join(' · ')}
-          </Text>
-        </View>
-      ) : null}
+      {depletingNote}
       {targetNote ? (
         <Text style={[styles.targetNote, text.detail]} testID={`${props.testID}.target`}>{targetNote}</Text>
       ) : null}
-      {tile ? null : (
+      {tile || !rows.some(row => row.window.pace) ? null : (
         <UsagePlanLegend
+          testID={`${props.testID}.legend`}
           parts={[
             t('usage.board.plans.legendEvenPace'),
             t('usage.board.plans.legendHatched'),
@@ -474,7 +556,7 @@ function SmallMultiple(
         series={series}
         minimumMaximum={100}
         valueFormatter={(value) => `${Math.round(value)}%`}
-        unknownLabel={t('common.unavailable')}
+        unknownLabel="—"
         summary={statement.text}
         showAxis={false}
         showLegend={false}
@@ -562,6 +644,8 @@ function ProjectionRow(
     window: UsagePlanWindow;
     nowMs: number;
     stacked: boolean;
+    /** The list says the missing projection once; this row then shows its reset countdown. */
+    resetOnly?: boolean;
     testID: string;
   }>,
 ) {
@@ -582,7 +666,7 @@ function ProjectionRow(
       estimated={window.estimated}
       size={props.stacked ? 'default' : 'wide'}
       layout={props.stacked ? 'stacked' : 'inline'}
-      resetText={statement.text}
+      {...(props.resetOnly ? {} : { resetText: statement.text })}
       {...(window.pace
         ? {
             pace: {
@@ -597,13 +681,13 @@ function ProjectionRow(
 }
 
 const styles = StyleSheet.create((theme) => ({
-  body: { gap: 16 },
-  chart: { gap: 10 },
+  body: { gap: theme.space.s16 },
+  chart: { gap: theme.space.s10 },
   picker: {
     flexDirection: 'row',
     alignItems: 'center',
     alignSelf: 'flex-start',
-    gap: 6,
+    gap: theme.space.s6,
     maxWidth: '100%',
     borderRadius: theme.borderRadius.sm,
   },
@@ -612,26 +696,26 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.text.primary,
     flexShrink: 1,
   },
-  headline: { gap: 4 },
+  headline: { gap: theme.space.s4 },
   quiet: {
     ...Typography.default(),
     color: theme.colors.text.tertiary,
     fontVariant: ['tabular-nums'],
   },
   danger: { color: theme.colors.state.danger.foreground },
-  multiples: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 16, rowGap: 14 },
-  multiple: { flexGrow: 1, minWidth: 0, gap: 6, borderRadius: theme.borderRadius.sm },
+  multiples: { flexDirection: 'row', flexWrap: 'wrap', columnGap: theme.space.s16, rowGap: 14 },
+  multiple: { flexGrow: 1, minWidth: 0, gap: theme.space.s6, borderRadius: theme.borderRadius.sm },
   multipleTitle: { ...Typography.default('medium'), color: theme.colors.text.secondary },
-  cycles: { gap: 10 },
-  cycle: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
+  cycles: { gap: theme.space.s10 },
+  cycle: { flexDirection: 'row', alignItems: 'flex-start', gap: theme.space.s12 },
   cycleWhen: {
     ...Typography.default('medium'),
     color: theme.colors.text.secondary,
     fontVariant: ['tabular-nums'],
     width: 96,
   },
-  cycleBody: { flex: 1, minWidth: 0, gap: 5 },
-  paceNote: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  cycleBody: { flex: 1, minWidth: 0, gap: theme.space.s4 },
+  paceNote: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s6 },
   paceNoteText: {
     ...Typography.default('medium'),
     color: theme.colors.state.danger.foreground,

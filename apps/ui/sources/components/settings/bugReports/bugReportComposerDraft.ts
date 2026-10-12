@@ -1,3 +1,4 @@
+import { detectClientCommandOs } from '@/components/machines/add/machineAddCommand';
 import { Platform } from 'react-native';
 
 import type { BugReportDeploymentType, BugReportFrequency, BugReportSeverity } from './bugReportFallback';
@@ -52,4 +53,15 @@ export function buildBugReportComposerDraftInput(input: {
         diagnosticsKinds: Array.isArray(input.diagnosticsKinds) ? input.diagnosticsKinds : undefined,
         acceptedPrivacyNotice: input.acceptedPrivacyNotice,
     };
+}
+
+/**
+ * The OS line of a report. Native platforms report a real version; React Native Web reports a
+ * placeholder ("0.0.0"), so on web the OS is named from the browser through the existing detector,
+ * and left empty when it cannot be told.
+ */
+export function resolveBugReportOsVersion(input: Readonly<{ os: string; version: string | number | null | undefined; userAgent: string | null }>): string {
+    if (input.os !== 'web') return input.version == null ? '' : String(input.version);
+    const os = detectClientCommandOs(input.userAgent);
+    return os === 'macos' ? 'macOS' : os === 'windows' ? 'Windows' : os === 'linux' ? 'Linux' : '';
 }

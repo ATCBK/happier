@@ -3,6 +3,7 @@ import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 
 import type { DaemonMcpServersDetectWarningV1, DetectedMcpServerV1 } from '@happier-dev/protocol';
 import { MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/mcp/servers/serverActionsV1';
+import { McpRulesSetOutputV1Schema } from '@happier-dev/protocol/actions/specs/capabilityRules';
 
 import { MachineAdministrationTargetSelector } from '@/components/settings/machines/MachineAdministrationTargetSelector';
 import { SettingsPageHeader } from '@/components/settings/shell/SettingsPageHeader';
@@ -32,11 +33,11 @@ import { useMcpServersSettings } from './useMcpServersSettings';
  */
 export const McpDetectedServersScreen = React.memo(function McpDetectedServersScreen() {
     const router = useRouter();
-    const { writable, snapshot, mutate, approval: importApproval, scope } = useMcpServersSettings();
+    const { writable, snapshot, mutate, executeRules, approval: importApproval, scope } = useMcpServersSettings();
     const targetSelection = useMachineAdministrationTargetSelection(MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.mcpServers);
     const selectedTarget = targetSelection.selectedTarget;
     const { selectionKey, resolveExactExecutionTarget, isExecutionTargetCurrent } = useMachineAdministrationExecutionTargetBinding(targetSelection);
-    const executionTarget = resolveExactExecutionTarget(selectedTarget);
+    const executionTarget = resolveExactExecutionTarget(selectedTarget, { intent: 'retry' });
     const probeExecution = useMountedActionExecution(executionTarget?.serverId);
     const [directory, setDirectory] = React.useState('');
     const [detected, setDetected] = React.useState<DetectedMcpServerV1[] | null>(null);
@@ -55,9 +56,9 @@ export const McpDetectedServersScreen = React.memo(function McpDetectedServersSc
         setWarnings(null);
     }, [selectionKey]);
 
-    const detectAction = React.useCallback(async () => {
+    const detectAction = React.useCallback(async (intent?: 'retry') => {
         const requestedSelection = selectionKey;
-        const executionTarget = resolveExactExecutionTarget(selectedTarget);
+        const executionTarget = resolveExactExecutionTarget(selectedTarget, intent ? { intent } : undefined);
         if (!executionTarget || !probeExecution.ready) return;
         // No `providers` filter: the daemon on this exact machine owns the
         // current MCP discovery-source registry, including the sources an
@@ -68,7 +69,7 @@ export const McpDetectedServersScreen = React.memo(function McpDetectedServersSc
             machineId: executionTarget.machine.id,
             directory: directory.trim() || undefined,
         });
-        if (!isExecutionTargetCurrent(requestedSelection, executionTarget)) return;
+        if (!isExecutionTargetCurrent(requestedSelection, executionTarget, intent ? { intent } : undefined)) return;
         if (!receipt.ok) {
             setDetected(null);
             setWarnings(null);
@@ -118,13 +119,15 @@ export const McpDetectedServersScreen = React.memo(function McpDetectedServersSc
             if (snapshot.revision === 'absent') throw new Error('authority-not-confirmed');
             if (imported.action === 'created') {
                 requireUpdatedMcpServerCatalogMutation(await mutate('mcp.servers.create', {
-                    expectedRevision: snapshot.revision, entry: imported.entry, bindings: [imported.binding],
+                    expectedRevision: snapshot.revision, entry: imported.entry,
                 }));
             } else if (imported.action === 'updated') {
-                requireUpdatedMcpServerCatalogMutation(await mutate(
-                    imported.bindingAction === 'add' ? 'mcp.bindings.add' : 'mcp.bindings.edit', {
-                        expectedRevision: snapshot.revision, binding: imported.binding,
-                    }));
+                const receipt = await executeRules({ items: [{ serverId: imported.entry.id }], change: { kind: 'write', write: {
+                    place: imported.binding.target, state: 'on', ...(imported.binding.agentId ? { agentId: imported.binding.agentId } : {}),
+                } } });
+                if (!receipt.ok) throw new Error(receipt.errorCode ?? receipt.error);
+                const result = McpRulesSetOutputV1Schema.parse(receipt.result);
+                if (!result.ok) throw new Error(result.code);
             }
             if (!isExecutionTargetCurrent(requestedSelection, executionTarget)) return;
             const result = runGuardedNavigation(() => router.replace(mcpServerRoute(imported.entry.id) as never));
@@ -132,7 +135,7 @@ export const McpDetectedServersScreen = React.memo(function McpDetectedServersSc
         } catch (error) {
             Modal.alert(t('common.error'), error instanceof Error ? error.message : t('errors.unknownError'));
         }
-    }, [isExecutionTargetCurrent, resolveExactExecutionTarget, router, selectedTarget, selectionKey, mutate, snapshot.revision, writable]);
+    }, [isExecutionTargetCurrent, resolveExactExecutionTarget, router, selectedTarget, selectionKey, mutate, executeRules, snapshot.revision, writable]);
 
     return (
         <ItemList keyboardShouldPersistTaps="handled">
@@ -165,7 +168,7 @@ export const McpDetectedServersScreen = React.memo(function McpDetectedServersSc
                 loading={loading}
                 detected={detected}
                 warnings={warnings}
-                onRefresh={runDetect}
+                onRefresh={() => { void runDetect('retry'); }}
                 onImport={(server) => { void importServer(server); }}
             />
         </ItemList>

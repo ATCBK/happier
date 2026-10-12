@@ -64,20 +64,7 @@ vi.mock('react-native', async () => {
 
 vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
-    return createUnistylesMock({
-        theme: {
-            colors: {
-                text: '#000000',
-                textSecondary: '#777777',
-                accent: {
-                    indigo: '#0000ff',
-                    blue: '#0000ff',
-                    orange: '#ff8800',
-                    purple: '#9900ff',
-                },
-            },
-        },
-    });
+    return createUnistylesMock();
 });
 
 vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
@@ -243,9 +230,11 @@ vi.mock('@/sync/domains/state/storage', async () => {
 });
 });
 
+// Load real screen owners after boundary setup, outside behavior deadlines.
+const { SystemStatusView } = await import('./SystemStatusView');
+
 describe('SystemStatusView (endpoint connectivity)', () => {
     it('subscribes to active Home diagnostics and separates effective carrier from last-known Iroh path', async () => {
-        const { SystemStatusView } = await import('./SystemStatusView');
         const screen = await renderScreen(<SystemStatusView />);
 
         expect(useActiveServerSnapshotMock).toHaveBeenCalled();
@@ -304,7 +293,6 @@ describe('SystemStatusView (endpoint connectivity)', () => {
 
     it('keeps unknown public ingress distinct from a Home known to have no public ingress', async () => {
         serverProfilesState.publicServerUrl = undefined;
-        const { SystemStatusView } = await import('./SystemStatusView');
         const screen = await renderScreen(<SystemStatusView />);
 
         const joined = screen.getTextContent();

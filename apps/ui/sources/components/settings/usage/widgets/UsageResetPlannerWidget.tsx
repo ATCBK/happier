@@ -21,7 +21,7 @@ import {
 } from './usageBodyKit';
 import { adviseUsageBankedReset, type UsagePlanAccount, type UsagePlanEvent } from './plans/usagePlansModel';
 import { UsageCalendarExportButton, useUsagePlanAction } from './plans/UsagePlanActions';
-import { UsageResetStartSection } from './plans/UsageResetStartControl';
+import { UsageAccountResetStartSection, UsageResetStartSection } from './plans/UsageResetStartControl';
 import type { UsageCalendarExportInput } from '@happier-dev/protocol/usage/usageCalendarExport';
 import {
   useUsagePlans,
@@ -32,6 +32,7 @@ import {
   formatPlanMoment,
   formatPlanPercent,
   UsagePlanIdentity,
+  UsagePlanAccountStates,
   UsagePlanSectionHead,
   UsagePlansNothingRead,
   usePlanText,
@@ -63,7 +64,7 @@ export function UsageResetPlannerWidget(props: UsageBodyProps) {
   const tile = useWidgetPresentation()?.size === 'small';
   const refresh = plans.refresh;
   const settle = React.useCallback(() => { void refresh(); }, [refresh]);
-  // Binding a queued message to a reset needs exactly one Session: the Session Usage view names it.
+  // A scoped Session keeps its private queued-message list. The Account view uses metadata only.
   const sessions = props.query.session;
   const sessionId = Array.isArray(sessions) ? (sessions.length === 1 ? sessions[0]! : null) : (sessions ?? null);
   useWidgetFrameBodyCaption(t('usage.board.plans.resetsCaption'));
@@ -82,12 +83,12 @@ export function UsageResetPlannerWidget(props: UsageBodyProps) {
     (account) => (account.recoveryCredits?.availableCount ?? 0) > 0,
   );
   const waiting = projection.accounts.flatMap((account) =>
-    account.read.waitingWork.status === 'available'
+    account.read?.waitingWork.status === 'available'
       ? account.read.waitingWork.entries.map((entry) => ({ account, entry }))
       : [],
   );
   const selectedEvents = projection.events.flatMap<UsageCalendarExportInput['selectedEvents'][number]>(event => {
-    const account = projection.accounts.find(account => account.key === event.accountKey)?.read.source.ref;
+    const account = projection.accounts.find(account => account.key === event.accountKey)?.source.ref;
     if (!account) return [];
     if (event.kind === 'renews') return [{ account, kind: 'renewal' as const }];
     if (event.kind === 'reset' && event.window) return [{ account, kind: 'reset' as const, meterId: event.window.meterId }];
@@ -95,9 +96,12 @@ export function UsageResetPlannerWidget(props: UsageBodyProps) {
   });
   return (
     <View style={styles.body} testID={`${props.testID}.resets`}>
-      {projection.events.length === 0 ? (
+      <UsagePlanAccountStates accounts={projection.accounts} nameOf={nameOf} onRetry={props.model.refresh}
+        testID={`${props.testID}.state`} />
+      {projection.events.length === 0 ? projection.accounts.some(account => !account.read?.current) ? null : (
         <UsageBodyInsufficient
           testID={`${props.testID}.noResets`}
+          replacesContent={false}
           title={t('usage.board.plans.resetsNone')}
           reason={t('usage.board.plans.resetsNoneReason')}
         />
@@ -112,13 +116,13 @@ export function UsageResetPlannerWidget(props: UsageBodyProps) {
               testID={`${props.testID}.list`}
             />
           )}
-          <ResetTimeline
+          {tile ? <ResetTimeline
             accounts={projection.accounts}
             events={projection.events}
             nameOf={nameOf}
             nowMs={nowMs}
             testID={`${props.testID}.timeline`}
-          />
+          /> : null}
         </>
       )}
       {selectedEvents.length > 0 ? <UsageCalendarExportButton input={{ query: props.query, selectedEvents }}
@@ -184,6 +188,15 @@ export function UsageResetPlannerWidget(props: UsageBodyProps) {
       {sessionId ? (
         <UsageResetStartSection
           sessionId={sessionId}
+          serverId={props.serverId}
+          accounts={projection.accounts}
+          nameOf={nameOf}
+          nowMs={nowMs}
+          onSettled={settle}
+          testID={`${props.testID}.resetStart`}
+        />
+      ) : sessions === null ? (
+        <UsageAccountResetStartSection
           serverId={props.serverId}
           accounts={projection.accounts}
           nameOf={nameOf}
@@ -375,7 +388,7 @@ function WaitingRow(
 }
 
 const styles = StyleSheet.create((theme) => ({
-  body: { gap: 16 },
+  body: { gap: theme.space.s16 },
   dot: { width: 8, height: 8, borderRadius: 4 },
   ring: { backgroundColor: theme.colors.surface.base, borderWidth: 1.5 },
   diamond: {
@@ -384,7 +397,7 @@ const styles = StyleSheet.create((theme) => ({
     borderWidth: 1.5,
     transform: [{ rotate: '45deg' }],
   },
-  listRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 9 },
+  listRow: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s10, paddingVertical: theme.space.s8 },
   listDivider: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.colors.border.default },
   listMarker: { width: 14, alignItems: 'center' },
   listText: { flex: 1, minWidth: 0, gap: 1 },
@@ -395,9 +408,9 @@ const styles = StyleSheet.create((theme) => ({
     fontVariant: ['tabular-nums'],
   },
   warning: { color: theme.colors.state.warning.foreground },
-  credits: { gap: 4 },
-  waiting: { gap: 8 },
-  waitingRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  credits: { gap: theme.space.s4 },
+  waiting: { gap: theme.space.s8 },
+  waitingRow: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s12 },
   waitingName: {
     ...Typography.default('medium'),
     color: theme.colors.text.primary,

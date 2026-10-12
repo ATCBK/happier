@@ -79,8 +79,8 @@ describe('HomeSettingFieldRow', { timeout: 180_000 }, () => {
         onStage={vi.fn()}
       />,
     );
-    // Read as a size a person recognises, through the app's one byte formatter.
-    expect(readOnly.getTextContent()).toContain('100 MB');
+    // Storage uses decimal units through the shared formatter (memory alone is binary).
+    expect(readOnly.getTextContent()).toContain('105 MB');
     expect(readOnly.getTextContent()).not.toContain('104857600');
   });
 });

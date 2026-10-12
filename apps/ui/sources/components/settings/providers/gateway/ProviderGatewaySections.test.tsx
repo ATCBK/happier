@@ -2,6 +2,9 @@ import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
 
 import { ProviderGatewaySections, resolveProviderGatewayChosenMachine, type ProviderGatewaySectionsProps } from './ProviderGatewaySections';
 
@@ -20,7 +23,7 @@ function render(overrides: Partial<ProviderGatewaySectionsProps> = {}) {
         onConnectService: vi.fn(),
         placement: undefined,
         machines: MACHINES,
-        reachability: 'unknown',
+        reachability: 'not_checked',
         onChangePlacement: vi.fn(),
         helperModels: undefined,
         models: [{ id: 'gpt-6.1-luna', name: 'GPT-6.1 Luna' }],

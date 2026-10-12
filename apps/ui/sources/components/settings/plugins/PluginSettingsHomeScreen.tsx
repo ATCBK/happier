@@ -55,7 +55,7 @@ import { setPluginsInstalledQuery, usePluginsInstalledQuery } from './model/plug
 import {
     buildPluginDetailRoute,
     buildPluginListingRoute,
-    pluginsHomeTitleKey,
+    PLUGINS_HOME_TITLE_KEY,
     usePluginsSurfaceHost,
 } from './model/pluginsSurfaceRoutes';
 import { PluginReadOnlySnapshotNotice } from './PluginReadOnlySnapshotNotice';
@@ -205,7 +205,7 @@ export const PluginSettingsHomeScreen = React.memo(function PluginSettingsHomeSc
     const pageHeader = (
         <>
         <SettingsPageHeader
-            title={t(pluginsHomeTitleKey(host))}
+            title={t(PLUGINS_HOME_TITLE_KEY)}
             description={t('settingsPlugins.surfaces.purpose')}
             actions={(
                 /*
@@ -258,6 +258,9 @@ export const PluginSettingsHomeScreen = React.memo(function PluginSettingsHomeSc
                 onChangeQuery: setPluginsInstalledQuery,
                 status: installedStatus,
                 onSelectStatus: setInstalledStatus,
+                // The status filter earns its place only when it could change the list.
+                statusFilterUseful: installedStatus !== 'all' || state.installedPlugins.some((entry) => (
+                    filterInstalledPlugins([entry], { query: '', status: 'enabled' }).length === 0)),
             } : null}
             discover={state.activeView === 'discover' ? {
                 searchText: state.discoverSearchText,
@@ -334,6 +337,10 @@ export const PluginSettingsHomeScreen = React.memo(function PluginSettingsHomeSc
                   */}
                 {state.activeView === 'installed' ? (
                     <InstalledPluginsSection
+                        // A registry or snapshot notice means the machine could not say what was added.
+                        // A background refresh keeps the machine's answer standing; only a real notice withholds it.
+                        machineAnswered={state.readOnlySnapshotNotice === null
+                            || state.readOnlySnapshotNotice.reason === 'refreshing'}
                         header={(
                             <>
                                 {pageHeader}
@@ -429,6 +436,8 @@ type InstalledToolbarState = Readonly<{
     onChangeQuery: (text: string) => void;
     status: InstalledPluginStatusFilter;
     onSelectStatus: (status: InstalledPluginStatusFilter) => void;
+    /** Some plugin is disabled or needs attention, or a status is already chosen. */
+    statusFilterUseful: boolean;
 }>;
 
 type DiscoverToolbarState = Readonly<{
@@ -492,7 +501,6 @@ function PluginsToolbar(props: Readonly<{
                     testIDPrefix="settings.plugins.management.view"
                     accessibilityLabel={t('settingsPlugins.viewSelectorLabel')}
                     segmentSizing="content"
-                    slidingThumb
                     // The page owns the toolbar's width, so the platform floor costs a
                     // wider track rather than an undersized target.
                     targetSize="platform"
@@ -526,7 +534,7 @@ function PluginsToolbar(props: Readonly<{
                     </>
                 ) : null}
                 <View style={styles.viewControls}>
-                    {props.installed ? <ToolbarSelect
+                    {props.installed?.statusFilterUseful ? <ToolbarSelect
                         testID="settings.plugins.marketplace.installed.statusFilter"
                         label={t('settingsPlugins.surfaces.statusFilterLabel')}
                         items={INSTALLED_STATUS_FILTERS.map((status) => ({ id: status, title: installedStatusFilterTitle(status) }))}
@@ -556,7 +564,6 @@ function PluginsToolbar(props: Readonly<{
                     testIDPrefix="settings.plugins.collectionView"
                     accessibilityLabel={t('settingsPlugins.surfaces.viewLabel')}
                     segmentSizing="content"
-                    slidingThumb
                     targetSize="platform"
                 />
                 </View>
@@ -612,11 +619,11 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         flexWrap: 'wrap',
         alignItems: 'center',
-        columnGap: 10,
-        rowGap: 10,
+        columnGap: theme.space.s10,
+        rowGap: theme.space.s10,
         paddingHorizontal: resolveItemGroupContentHorizontalInsetPx(),
-        paddingTop: 16,
-        paddingBottom: 4,
+        paddingTop: theme.space.s16,
+        paddingBottom: theme.space.s4,
     },
     controls: {
         flexGrow: 1,
@@ -626,7 +633,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         flexWrap: 'wrap',
         alignItems: 'center',
-        gap: 10,
+        gap: theme.space.s10,
     },
     // On a phone the search keeps a usable width: the filter and Grid | List wrap under it
     // rather than squeezing it to a sliver (lab P1).
@@ -640,7 +647,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         alignSelf: 'flex-start',
-        gap: 10,
+        gap: theme.space.s10,
     },
     developer: {
         width: '100%',
@@ -649,27 +656,23 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexWrap: 'wrap',
         alignItems: 'center',
         columnGap: 14,
-        rowGap: 4,
+        rowGap: theme.space.s4,
         paddingHorizontal: resolveItemGroupContentHorizontalInsetPx() + PAGE_LIST_METRICS.headingOpticalInsetPx,
-        paddingTop: 20,
+        paddingTop: theme.space.s20,
         paddingBottom: 28,
     },
     developerLabel: {
-        ...Typography.default(),
-        fontSize: 12.5,
-        lineHeight: 18,
+        ...Typography.variant('meta'),
         color: theme.colors.text.tertiary,
     },
     developerLink: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 2,
+        gap: theme.space.s2,
         minHeight: resolveMinimumInteractiveTargetSize(Platform.OS),
     },
     developerLinkText: {
-        ...Typography.default(),
-        fontSize: 12.5,
-        lineHeight: 18,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
 }));

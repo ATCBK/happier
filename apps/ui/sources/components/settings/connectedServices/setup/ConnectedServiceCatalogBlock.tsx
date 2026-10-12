@@ -138,9 +138,7 @@ const styles = StyleSheet.create((theme) => ({
         justifyContent: 'space-between',
     },
     count: {
-        ...Typography.default(),
-        fontSize: 11.5,
-        lineHeight: 15,
+        ...Typography.variant('micro'),
         color: theme.colors.text.tertiary,
         fontVariant: ['tabular-nums'],
     },
@@ -148,7 +146,7 @@ const styles = StyleSheet.create((theme) => ({
         flex: 1,
         minWidth: 0,
     },
-    rowIdentity: { alignItems: 'center', gap: 4 },
+    rowIdentity: { alignItems: 'center', gap: theme.space.s4 },
     title: {
         ...Typography.default('semiBold'),
         ...happierPageTextMetrics('rowTitle'),
@@ -157,7 +155,7 @@ const styles = StyleSheet.create((theme) => ({
     body: {
         ...Typography.default(),
         ...happierPageTextMetrics('rowDescription'),
-        marginTop: 2,
+        marginTop: theme.space.s2,
         color: theme.colors.text.secondary,
     },
     press: {
@@ -168,12 +166,12 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        gap: 8,
+        gap: theme.space.s8,
     },
     agents: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
     },
-    rowFoot: { alignItems: 'flex-end', gap: 5 },
+    rowFoot: { alignItems: 'flex-end', gap: theme.space.s4 },
 }));

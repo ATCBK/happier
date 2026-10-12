@@ -87,10 +87,8 @@ export function ConnectedServiceCapacityAvatar(props: ConnectedServiceCapacityAv
 
 const stylesheet = StyleSheet.create(() => ({
     pct: {
-        ...Typography.default(),
-        fontSize: 13,
+        ...Typography.variant('body', 'semiBold'),
         lineHeight: 15,
-        fontWeight: '700',
         textAlign: 'center',
     },
 }));

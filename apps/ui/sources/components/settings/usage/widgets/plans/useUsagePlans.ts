@@ -5,8 +5,13 @@ import type { ConnectedServicePoolSelectionGetResponseV1 } from '@happier-dev/pr
 import { useConnectedServiceQuotaSummaries } from '@/hooks/server/connectedServices/useConnectedServiceQuotaSummaries';
 import { useConnectedAccountIdentityPrivacy } from '@/hooks/ui/useConnectedAccountIdentityPrivacy';
 import { presentConnectedAccountNames } from '@/sync/domains/connectedServices/qualifiedConnectedAccountTargetPresentation';
-import { useAllMachines } from '@/sync/domains/state/storage';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import { useActiveServerAccountScope, useAllMachines } from '@/sync/domains/state/storage';
+import { isMachineSelectableForFleet } from '@/sync/domains/machines/administration/fleetUnion';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
+import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
+import { useProjectedConnectedServicesRegistry, useProjectedPluginLocalizedTextResolver } from '@/components/appShell/plugins/AppShellPluginUiProjection';
+import { resolveConnectedServiceRegistryEntryDisplayName, resolveQualifiedConnectedServiceRegistryEntry } from '@/components/settings/connectedServices/model/resolveConnectedServiceDisplayName';
+import { t } from '@/text';
 import {
   projectUsagePlans,
   type UsagePlanAccount,
@@ -50,10 +55,14 @@ export function useUsagePlans(slice: UsageQueryResultSlice, resource: Readonly<{
   // is what the reset/stale wording shows.
   const minute = Math.floor(nowMs / 60_000);
   const projection = React.useMemo(
-    () => projectUsagePlans(quota, minute * 60_000, slice.pools),
-    [quota, minute, slice.pools],
+    () => projectUsagePlans(quota, minute * 60_000, slice.pools, slice.sources),
+    [quota, minute, slice.pools, slice.sources],
   );
   const summaries = useConnectedServiceQuotaSummaries({ fetchPolicy: 'cache_only' });
+  const registry = useProjectedConnectedServicesRegistry();
+  const localizePluginText = useProjectedPluginLocalizedTextResolver();
+  const serviceEntryOf = React.useCallback((account: UsagePlanAccount) =>
+    resolveQualifiedConnectedServiceRegistryEntry(registry, account.service), [registry]);
   const { present } = useConnectedAccountIdentityPrivacy();
   const summaryByKey = React.useMemo(
     () =>
@@ -65,6 +74,12 @@ export function useUsagePlans(slice: UsageQueryResultSlice, resource: Readonly<{
       ),
     [summaries.summaries],
   );
+  const serviceLabelOf = React.useCallback((account: UsagePlanAccount) => {
+    const summary = summaryByKey.get(account.key);
+    if (summary) return summary.serviceLabel;
+    const entry = serviceEntryOf(account);
+    return entry ? resolveConnectedServiceRegistryEntryDisplayName(entry, t, localizePluginText) : t('connectedServices.fallbackName');
+  }, [summaryByKey, serviceEntryOf, localizePluginText]);
   const names = React.useMemo(
     () =>
       presentConnectedAccountNames(
@@ -72,7 +87,7 @@ export function useUsagePlans(slice: UsageQueryResultSlice, resource: Readonly<{
           const summary = summaryByKey.get(account.key);
           return {
             key: account.key,
-            serviceTitle: summary?.serviceLabel ?? account.service.localId,
+            serviceTitle: serviceLabelOf(account),
             displayName:
               summary?.accountLabel ??
               summary?.profileLabel ??
@@ -84,13 +99,13 @@ export function useUsagePlans(slice: UsageQueryResultSlice, resource: Readonly<{
           };
         }),
       ),
-    [projection.accounts, summaryByKey, present],
+    [projection.accounts, summaryByKey, present, serviceLabelOf],
   );
   const nameOf = React.useCallback(
     (account: UsagePlanAccount): UsagePlanAccountName => {
       const summary = summaryByKey.get(account.key);
       const name = names.get(account.key);
-      const serviceLabel = summary?.serviceLabel ?? account.service.localId;
+      const serviceLabel = serviceLabelOf(account);
       const accountName = name?.primaryLabel ?? serviceLabel;
       const plan = account.planLabel;
       return {
@@ -99,10 +114,10 @@ export function useUsagePlans(slice: UsageQueryResultSlice, resource: Readonly<{
           .filter(Boolean)
           .join(' · '),
         serviceLabel,
-        legacyServiceId: summary?.legacyServiceId ?? null,
+        legacyServiceId: summary?.legacyServiceId ?? serviceEntryOf(account)?.legacyServiceId ?? null,
       };
     },
-    [names, summaryByKey],
+    [names, summaryByKey, serviceLabelOf, serviceEntryOf],
   );
   const inUse = React.useMemo(
     () =>
@@ -125,9 +140,12 @@ export function useUsagePlans(slice: UsageQueryResultSlice, resource: Readonly<{
 /** An online machine of this Home: the daemon whose selector the read projects. */
 export function useUsageSelectorMachineId(): string | null {
   const machines = useAllMachines();
+  const scope = useActiveServerAccountScope();
+  const reachabilityRevision = useMachineReachabilityRevision();
+  const nowMs = useMachinePresenceNowMs(machines);
   return React.useMemo(
-    () => machines.find((machine) => isMachineOnline(machine))?.id ?? null,
-    [machines],
+    () => machines.find((machine) => isMachineSelectableForFleet(scope, machine, nowMs))?.id ?? null,
+    [machines, scope, reachabilityRevision, nowMs],
   );
 }
 

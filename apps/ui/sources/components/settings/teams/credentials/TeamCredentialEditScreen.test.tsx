@@ -8,21 +8,8 @@ import {
     type MachinePoolViewV1,
 } from '@happier-dev/protocol';
 
-import {
-    collectRenderedTestIds,
-    createDeferred,
-    createHomeGovernanceHarness,
-    createMachineAdministrationTargetSelectionMock,
-    installHomeGovernanceBoundaries,
-    installMachineAdministrationTargetSelectionBoundary,
-    renderScreen,
-    standardCleanup,
-    teamCapabilitiesFixture,
-    teamCredentialResourceFixture,
-    teamCredentialSourceCandidateFixture,
-    teamCredentialViewerFixture,
-    teamSummaryFixture,
-} from '@/dev/testkit';
+import { collectRenderedTestIds, createDeferred, renderScreen, standardCleanup, teamCapabilitiesFixture, teamCredentialResourceFixture, teamCredentialSourceCandidateFixture, teamCredentialViewerFixture, teamSummaryFixture } from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import {
     applyTeamCredentialResource,
     applyTeamCredentialResourcesPage,
@@ -39,11 +26,9 @@ const routerBack = vi.hoisted(() => vi.fn());
 let storage: typeof import('@/sync/domains/state/storage')['storage'];
 
 installSettingsViewCommonModuleMocks({
-    router: async () => ({
-        useRouter: () => ({ push: vi.fn(), back: routerBack, replace: vi.fn() }),
-        useNavigation: () => ({ setOptions: vi.fn() }),
-        useLocalSearchParams: () => ({}),
-    }),
+    router: async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({
+        router: { back: routerBack },
+    }).module,
     storage: async (importOriginal) => {
         const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
         return createStorageModuleMock({ importOriginal, overrides: {} });
@@ -53,6 +38,7 @@ installSettingsViewCommonModuleMocks({
 
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
+const { createMachineAdministrationTargetSelectionMock, installMachineAdministrationTargetSelectionBoundary } = await import('@/dev/testkit/mocks/machineAdministrationTargetSelection');
 const administrationTarget = createMachineAdministrationTargetSelectionMock({ selectedMachineId: null });
 installMachineAdministrationTargetSelectionBoundary(administrationTarget);
 
@@ -618,8 +604,12 @@ describe('TeamCredentialEditScreen broker placement', () => {
     it('keeps a Pool projection failure actionable and preserves the credential draft while retrying', async () => {
         const { screen, serverId } = await renderEditor();
         const response = createDeferred<void>();
-        harness.answer(serverId, machinePoolActionEndpointPathV1('machines.pools.list'), {
-            body: { pools: storage.getState().machinePoolListByServerId[serverId] },
+        const listPath = machinePoolActionEndpointPathV1('machines.pools.list');
+        const priorReads = harness.requestsFor(listPath).length;
+        const retainedPools = storage.getState().machinePoolListByServerId[serverId];
+        const retainedChoices = brokerChoiceTestIds(screen);
+        harness.answer(serverId, listPath, {
+            body: { pools: retainedPools },
             respondAfter: response.promise,
         });
         act(() => screen.changeTextByTestId('team-credential-edit-name', 'Draft name'));
@@ -630,12 +620,18 @@ describe('TeamCredentialEditScreen broker placement', () => {
         expect(retry?.props.disabled).not.toBe(true);
         expect(retry?.props.accessibilityLabel).toBe('Retry: My machine pools');
 
-        await screen.pressByTestIdAsync('team-credential-edit-broker:machine_pool:retry');
-
-        expect(screen.findByTestId('team-credential-edit-name')?.props.value).toBe('Draft name');
-        await vi.waitFor(() => expect(screen.findByTestId('team-credential-edit-broker:machine_pool:loading')).not.toBeNull());
-        await act(async () => response.resolve());
-        await vi.waitFor(() => expect(screen.findByTestId('team-credential-edit-broker:machine_pool:loading')).toBeNull());
+        try {
+            await screen.pressByTestIdAsync('team-credential-edit-broker:machine_pool:retry');
+            await vi.waitFor(() => expect(harness.requestsFor(listPath)).toHaveLength(priorReads + 1));
+            // A hydrated Pool list stays painted during a background retry.
+            expect(storage.getState().machinePoolListByServerId[serverId]).toEqual(retainedPools);
+            expect(brokerChoiceTestIds(screen)).toEqual(retainedChoices);
+            expect(screen.findByTestId('team-credential-edit-broker:machine_pool:loading')).toBeNull();
+            expect(screen.findByTestId('team-credential-edit-name')?.props.value).toBe('Draft name');
+        } finally {
+            await act(async () => response.resolve());
+        }
+        await vi.waitFor(() => expect(screen.findByTestId('team-credential-edit-broker:machine_pool:retry')).toBeNull());
         expect(screen.findByTestId('team-credential-edit-name')?.props.value).toBe('Draft name');
     });
 

@@ -3,6 +3,7 @@ import { t } from '@/text';
 import { describeManagedLifecycleState, type ManagedLifecycleState } from './managedLifecyclePresentation';
 import type { ActionOperationProjection } from '@/sync/domains/actionOperations/actionOperationSelectors';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
+import { machinePageHref } from '@/components/machines/page/machinePageHref';
 
 /** Setup is observed on the admitted row; Join alone cannot complete this stage. */
 export function managedCreationSetup(machine: ManagedMachineV1) {
@@ -102,6 +103,6 @@ export function currentManagedCreationOperation(machine: ManagedMachineV1, opera
 /** A durable managed deep link becomes an ordinary Machine destination only after verified binding. */
 export function managedMachineDestination(machine: ManagedMachineV1, serverId: string): string | null {
     return machine.enrolledMachineId
-        ? `/machine/${encodeURIComponent(machine.enrolledMachineId)}?serverId=${encodeURIComponent(serverId)}`
+        ? machinePageHref({ door: 'rail', target: { machineId: machine.enrolledMachineId, serverId } })
         : null;
 }

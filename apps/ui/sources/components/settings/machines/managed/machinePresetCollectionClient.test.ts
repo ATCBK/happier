@@ -8,6 +8,8 @@ import type { ActionApprovalRegistration } from '@/components/approvals/actionAp
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 import type { PresetMutationResultV1 } from '@happier-dev/protocol/machines/managed/managedMachinePresetV1';
+import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
+import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
@@ -31,6 +33,84 @@ const resource = { id: 'resource', homeId: 'srv_history', custodianAccountId: 'o
     retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false, archivedAt: 0 } as const;
 
 describe('preset collection and history through Actions', () => {
+    it('refreshes ordinary history reads invalidated after an approved preset read settles', async () => {
+        const serverId = await harness.addHome({ name: 'History', serverUrl: 'https://history.example',
+            serverIdentityId: 'srv_history', accountId: 'owner', currentAccount: true });
+        let releaseHistory!: () => void;
+        const historyGate = new Promise<void>(resolve => { releaseHistory = resolve; });
+        harness.answer(serverId, '/v1/machines/presets/get', { body: { kind: 'found', preset } });
+        harness.answer(serverId, '/v1/machines/managed/actions/list', { body: { machines: [resource] }, respondAfter: historyGate });
+        await harness.requireUiApproval(serverId, 'machines.presets.get');
+        const rendered = await renderHook(() => {
+            const registration = React.useRef<(approval: ActionApprovalRegistration) => void>(() => {});
+            const onApprovalPending = React.useCallback((approval: ActionApprovalRegistration) => registration.current(approval), []);
+            const detail = useMachinePresetDetail(serverId, 'preset', onApprovalPending);
+            const approval = useActionApprovalContinuation({ serverId, scopeKey: `${serverId}:owner:history`, onExecuted: () => {} });
+            registration.current = approval.requestApproval;
+            return { detail, approval };
+        });
+        try {
+            await waitForHomeGovernance(() => expect(rendered.getCurrent().approval.approvalStatus).toBe('open'));
+            const approvalId = rendered.getCurrent().approval.approvalId;
+            if (!approvalId) throw new Error('Expected the preset read approval');
+            await expect(decideApprovalAsInbox(serverId, approvalId, 'approve')).resolves.toMatchObject({ ok: true });
+            await waitForHomeGovernance(() => expect(harness.requestsFor('/v1/machines/managed/actions/list')).toHaveLength(2));
+            await act(async () => publishHomeAccountChange(serverId));
+            await flushHookEffects();
+            expect(harness.artifacts(serverId).list()).toHaveLength(2);
+            expect(rendered.getCurrent().approval.approvalId).not.toBe(approvalId);
+        } finally {
+            releaseHistory();
+            await rendered.unmount();
+        }
+    });
+    it.each(['collection', 'detail'] as const)('keeps the %s read approval through Home wakes while another Home refreshes, then settles mixed-change rejection', async kind => {
+        const serverId = await harness.addHome({ name: 'History', serverUrl: 'https://history.example',
+            serverIdentityId: 'srv_history', accountId: 'owner', currentAccount: true });
+        const otherId = await harness.addHome({ name: 'Other', serverUrl: 'https://other-history.example',
+            serverIdentityId: 'srv_other_history', accountId: 'owner', currentAccount: true, active: false });
+        harness.answer(serverId, '/v1/machines/presets/list', { body: { kind: 'listed', presets: [preset] } });
+        harness.answer(serverId, '/v1/machines/presets/get', { body: { kind: 'found', preset } });
+        harness.answer(serverId, '/v1/machines/managed/actions/list', { body: { machines: [resource] } });
+        const otherPreset = { ...preset, id: 'other', homeId: 'srv_other_history' };
+        harness.answer(otherId, '/v1/machines/presets/list', { body: { kind: 'listed', presets: [otherPreset] } });
+        await harness.requireUiApproval(serverId, kind === 'collection' ? 'machines.presets.list' : 'machines.presets.get');
+        const rendered = await renderHook(() => {
+            const registration = React.useRef<(approval: ActionApprovalRegistration) => void>(() => {});
+            const onApprovalPending = React.useCallback((approval: ActionApprovalRegistration) => registration.current(approval), []);
+            const collection = useMachinePresets(kind === 'collection' ? [serverId, otherId] : [otherId], onApprovalPending);
+            const detail = useMachinePresetDetail(serverId, kind === 'detail' ? 'preset' : '', onApprovalPending);
+            const approval = useActionApprovalContinuation({ serverId, scopeKey: `${serverId}:owner:${kind}`, onExecuted: () => {} });
+            registration.current = approval.requestApproval;
+            return { collection, detail, approval };
+        });
+        const state = () => kind === 'collection' ? rendered.getCurrent().collection.statesByServerId[serverId] : rendered.getCurrent().detail.state;
+        await waitForHomeGovernance(() => expect(rendered.getCurrent().approval.approvalStatus).toBe('open'));
+        const approvalId = rendered.getCurrent().approval.approvalId;
+        if (!approvalId) throw new Error('Expected the read approval');
+        await act(async () => publishHomeAccountChange(serverId));
+        await flushHookEffects();
+        expect(rendered.getCurrent().approval.approvalId).toBe(approvalId);
+        expect(harness.artifacts(serverId).list()).toHaveLength(1);
+        const otherReads = () => harness.requestsFor('/v1/machines/presets/list').filter(request => request.serverId === otherId);
+        const readsBefore = otherReads().length;
+        await act(async () => publishHomeAccountChange(otherId));
+        await waitForHomeGovernance(() => expect(otherReads()).toHaveLength(readsBefore + 1));
+        expect(rendered.getCurrent().approval.approvalId).toBe(approvalId);
+        expect(harness.artifacts(serverId).list()).toHaveLength(1);
+        await expect(decideApprovalAsInbox(serverId, approvalId, 'approve')).resolves.toMatchObject({ ok: true });
+        await waitForHomeGovernance(() => expect(state()).toMatchObject({ loading: false, error: null }));
+        const retained = state()?.value;
+        expect(retained).toEqual(kind === 'collection' ? [preset] : { preset, machines: [resource] });
+        await act(async () => publishHomeAccountChange(serverId, [preset.id], { changeKinds: ['artifact', 'account'] }));
+        await waitForHomeGovernance(() => expect(rendered.getCurrent().approval.approvalStatus).toBe('open'));
+        const rejectedId = rendered.getCurrent().approval.approvalId;
+        if (!rejectedId || rejectedId === approvalId) throw new Error('Expected the fresh read approval');
+        await expect(decideApprovalAsInbox(serverId, rejectedId, 'reject')).resolves.toMatchObject({ ok: true });
+        await waitForHomeGovernance(() => expect(state()).toMatchObject({ loading: false, error: 'approval_rejected' }));
+        expect(state()?.value).toBe(retained);
+        await rendered.unmount();
+    });
     it.each([
         { kind: 'conflict', currentRevision: 5 },
         { kind: 'refused', code: 'permission_denied' },

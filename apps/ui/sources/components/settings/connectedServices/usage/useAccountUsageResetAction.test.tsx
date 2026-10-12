@@ -2,7 +2,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, expect, it, vi } from 'vitest';
 
 import { renderHook, standardCleanup } from '@/dev/testkit';
-import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
@@ -21,10 +21,16 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { buildRecoveryCreditConsumeIdempotencyKey } from '@happier-dev/protocol/connect/recoveryCreditConsumeIdempotencyKey';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { Modal } from '@/modal';
+import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
+import { serverScopedRpcSocketPool } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool';
+import { resetScopedMachineTransportCacheForTests } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool';
 import { useAccountUsageResetAction } from './useAccountUsageResetAction';
 
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
+vi.mock('socket.io-client', async importOriginal => (
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
 installDisconnectedServerSocketBoundary();
 // Substitute only Metro's lazy loader; the default and Protocol Action executors stay real.
 vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async importOriginal => {
@@ -46,6 +52,7 @@ it.each(['approve', 'reject', 'disabled', 'stale'] as const)('admits the shared 
             const path = new URL(String(input)).pathname;
             const artifact = artifacts.handle(path, init);
             if (artifact) return artifact;
+            if (path === '/v1/machines/selected-machine') return Response.json({ machine: createPlainMachineRowFixture({ id: 'selected-machine', accountId: 'reset-account' }) });
             if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
             if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: { actionsSettingsV1 } }, version: 1 });
             if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
@@ -62,7 +69,7 @@ it.each(['approve', 'reject', 'disabled', 'stale'] as const)('admits the shared 
     storage.getState().applyMachines([machine], true, { sourceServerId: active.serverId });
     storage.setState({ isDataReady: true });
     const spends: unknown[] = [];
-    const rpc = vi.spyOn(apiSocket, 'machineRPC').mockImplementation(async (machineId, method, payload) => {
+    const respond = async (machineId: string, method: string, payload: unknown) => {
         if (method === RPC_METHODS.APPROVAL_REQUEST_REPLAY_APPROVED) {
             return await replayApprovedAsDaemon({ serverId: active.serverId, machineId,
                 artifactId: String(Reflect.get(payload as object, 'artifactId')) });
@@ -70,6 +77,21 @@ it.each(['approve', 'reject', 'disabled', 'stale'] as const)('admits the shared 
         if (method !== RPC_METHODS.DAEMON_CONNECTED_SERVICE_QUOTA_RECOVERY_CREDIT_CONSUME) throw new Error(`Unexpected machine RPC ${method}`);
         spends.push(payload);
         return { ok: true, receipt: { idempotencyKey: 'reset-receipt', providerCreditId: 'credit-1', status: 'nothing_to_reset' }, snapshot: null };
+    };
+    installDisconnectedServerSocketBoundary(socket => {
+        socket.connected = true;
+        vi.spyOn(socket, 'emitWithAck').mockImplementation(async (event, payload: unknown) => {
+            if (event !== SOCKET_RPC_EVENTS.CALL) return { v: 1, ok: true, admittedSessionIds: [] };
+            if (!payload || typeof payload !== 'object' || !('method' in payload)
+                || typeof payload.method !== 'string' || !('params' in payload)) throw new Error('Malformed scoped machine RPC');
+            const separator = payload.method.indexOf(':');
+            return { ok: true, result: await respond(payload.method.slice(0, separator), payload.method.slice(separator + 1), payload.params) };
+        });
+    });
+    const rpc = vi.spyOn(apiSocket, 'machineRPC').mockImplementation(async (machineId, method, payload, options) => {
+        options?.signal?.throwIfAborted();
+        options?.onIssued?.();
+        return await respond(machineId, method, payload);
     });
     let applied = false;
     const hook = await renderHook(() => useAccountUsageResetAction({ legacyServiceId: 'openai-codex', accountId: 'work',
@@ -78,7 +100,7 @@ it.each(['approve', 'reject', 'disabled', 'stale'] as const)('admits the shared 
         snapshotFetchedAtMs: 123, onApplied: () => { applied = true; } }));
     let request: Promise<void> | undefined;
     try {
-        if (decision === 'stale') storage.getState().applyMachines([{ ...machine, active: false, activeAt: 0 }], true, { sourceServerId: active.serverId });
+        if (decision === 'stale') storage.getState().applyMachines([{ ...machine, revokedAt: Date.now() }], true, { sourceServerId: active.serverId });
         await act(async () => { request = hook.getCurrent().use('credit-1'); });
         if (decision === 'disabled' || decision === 'stale') {
             await act(async () => { await request; });
@@ -87,6 +109,8 @@ it.each(['approve', 'reject', 'disabled', 'stale'] as const)('admits the shared 
             expect(applied).toBe(false);
             return;
         }
+        expect(rpc).not.toHaveBeenCalled();
+        expect(applied).toBe(false);
         await waitForHomeGovernance(() => expect(artifacts.list()).toHaveLength(1));
         const artifactId = artifacts.list()[0]!.id;
         expect(hook.getCurrent().pending).toBe(true);
@@ -101,21 +125,26 @@ it.each(['approve', 'reject', 'disabled', 'stale'] as const)('admits the shared 
         await waitForHomeGovernance(() => expect(hook.getCurrent().pending).toBe(false));
         await request;
         if (decision === 'approve') {
+            expect(StoredApprovalRequestSchema.parse(JSON.parse(artifacts.readPlainBody(artifactId)!))).toMatchObject({
+                status: 'executed', execution: { ok: true, result: { receipt: { status: 'nothing_to_reset' } } },
+            });
             expect(spends).toEqual([expect.objectContaining({
-                serviceId: 'openai-codex', profileId: 'work', providerCreditId: 'credit-1',
+                serviceId: 'happier.agent.codex/openai-codex', profileId: 'work', providerCreditId: 'credit-1',
                 idempotencyKey: buildRecoveryCreditConsumeIdempotencyKey({ serviceId: 'openai-codex', profileId: 'work',
                     providerCreditId: 'credit-1', sourceSnapshotFetchedAtMs: 123 }),
             })]);
             expect(applied).toBe(true);
             expect(Modal.alert).toHaveBeenCalledWith('common.info', 'connectedServices.quota.recoveryCreditNothingToReset');
-            expect(StoredApprovalRequestSchema.parse(JSON.parse(artifacts.readPlainBody(artifactId)!))).toMatchObject({
-                status: 'executed', execution: { ok: true, result: { receipt: { status: 'nothing_to_reset' } } },
-            });
         } else {
             expect(rpc).not.toHaveBeenCalled();
             expect(applied).toBe(false);
         }
-    } finally { await hook.unmount(); await request; await account.dispose(); bridge.dispose(); storage.getState().clearProfileScope(); }
+    } finally {
+        await hook.unmount(); await request;
+        await serverScopedRpcSocketPool.stopAll(); resetScopedMachineTransportCacheForTests();
+        installDisconnectedServerSocketBoundary();
+        await account.dispose(); bridge.dispose(); storage.getState().clearProfileScope();
+    }
 });
 
 it.each([null, 'different-machine'])('refuses a usage reset outside the explicitly admitted detail machine (%s)', async machineId => {

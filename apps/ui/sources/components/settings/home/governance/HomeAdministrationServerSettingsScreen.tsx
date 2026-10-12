@@ -1,6 +1,5 @@
 import * as React from 'react';
-import { View } from 'react-native';
-import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { useUnistyles } from 'react-native-unistyles';
 import type {
     HomeSettingEntryV1,
     HomeSettingSecretWriteV1,
@@ -21,7 +20,7 @@ import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
 import { ExpandableItem, ExpandableItemCaret } from '@/components/ui/lists/ExpandableItem';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
-import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
+import { ItemLoadStateRows, type ItemLoadState } from '@/components/ui/lists/ItemLoadStateRows';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { SelectionListFilterChip } from '@/components/ui/selectionList/SelectionListFilterChips';
 import type { SelectionListFilter } from '@/components/ui/selectionList/_types';
@@ -34,13 +33,13 @@ import type { HomeAdministrationContext } from './homeAdministrationContext';
 import { homeGovernanceFailureNotice } from './homeGovernanceLabels';
 import { HomeSecretSettingRow, KEEP_HOME_SECRET, type HomeSecretDraft } from './HomeSecretSettingRow';
 import { buildHomeSettingWrite, type HomeSettingDraftValue } from './homeSettingDraft';
-import { HomeSettingFieldRow, homeSettingDisplayValue, type HomeSettingStage } from './HomeSettingFieldRow';
+import { HomeSettingFieldRow, type HomeSettingStage } from './HomeSettingFieldRow';
 import { HOME_SERVER_SETTINGS } from './homeServerSettings';
 import {
     homeServerSettingGroupTitle,
     homeSettingIgnoredReasonLabel,
 } from './homeServerSettingLabels';
-import { HomeSettingRowPills, homePendingRestartSummary, homeSettingRunningState, homeSettingValueWords } from './HomeSettingRowState';
+import { HomeSettingRowPills, homePendingRestartSummary, homeSettingRunningState, homeSettingShownValue, homeSettingValueWords } from './HomeSettingRowState';
 import {
     homeSettingBoundsLine,
     homeSettingFieldError,
@@ -58,6 +57,7 @@ import {
 
 const ROW_TESTID = 'home-server-setting';
 const NO_ERRORS: Readonly<Record<string, string>> = Object.freeze({});
+const LOADING: ItemLoadState = Object.freeze({ kind: 'loading' as const });
 
 function declaredSetting(key: string): SettingRef | undefined {
     return (HOME_SERVER_SETTINGS.settings as Readonly<Record<string, SettingRef | undefined>>)[key];
@@ -75,7 +75,9 @@ function rowFacts(entry: HomeSettingEntryV1): HomeSettingFactSegment[] {
     if (entry.secretSet !== undefined) {
         segments.push(t('homeSettings.row.storedEncrypted'));
     } else if (entry.source === 'default') {
-        const fallback = homeSettingValueWords(entry, entry.declaration?.default);
+        const raw = entry.value ?? entry.declaration?.default;
+        // A choice that is itself the default ("Server default") is already labelled so by the control.
+        const fallback = raw === 'default' ? null : homeSettingValueWords(entry, raw);
         if (fallback) segments.push(t('homeSettings.row.defaultValue', { value: fallback }));
     }
     return segments;
@@ -103,12 +105,14 @@ const ServerSettingRow = React.memo(function ServerSettingRow(props: Readonly<{
     readOnly: boolean;
     disabled: boolean;
     handlers: RowHandlers;
+    /** `false` when the section says "applies after restart" once for all its rows. */
+    restartPill: boolean;
     showDivider?: boolean;
 }>) {
     const { entry, handlers } = props;
     const testID = `${ROW_TESTID}:${entry.key}`;
     const title = homeSettingTitle(entry);
-    const pills = <HomeSettingRowPills entry={entry} testID={testID} />;
+    const pills = <HomeSettingRowPills entry={entry} testID={testID} restartPill={props.restartPill} />;
     const onSecretChange = React.useCallback((draft: HomeSecretDraft) => handlers.onSecretChange(entry.key, draft), [entry.key, handlers]);
     const onSecretCommit = React.useCallback(() => handlers.onSecretCommit(entry.key), [entry.key, handlers]);
     const row = entry.secretSet !== undefined ? (
@@ -149,20 +153,23 @@ const ServerSettingRow = React.memo(function ServerSettingRow(props: Readonly<{
     return setting ? <SettingAnchor setting={setting} showDivider={props.showDivider}>{row}</SettingAnchor> : row;
 });
 
-/** A read-only (bootstrap) key: its value or presence, the key and why only the deployment sets it. */
+/**
+ * A read-only (bootstrap) key: its value or presence and the key. The section's description says the
+ * shared reason (read before the database opens) once; only a different reason is said on the row.
+ */
 const ReadOnlySettingRow = React.memo(function ReadOnlySettingRow(props: Readonly<{ entry: HomeSettingEntryV1; showDivider?: boolean }>) {
     const { entry } = props;
     const reasonCode = entry.declaration?.readOnlyReason;
-    const reason = reasonCode ? t(`homeSettings.readOnly.${reasonCode}`) : t('homeSettings.readOnly.other');
+    const reason = reasonCode === 'invariant' || reasonCode === 'per_process_identity' ? t(`homeSettings.readOnly.${reasonCode}`) : null;
     const secret = entry.secretSet !== undefined;
     const detail = secret
         ? (entry.secretSet ? t('homeSettings.readOnly.set') : t('homeSettings.row.notSet'))
-        : (homeSettingDisplayValue(entry) ?? t('homeSettings.row.notSet'));
+        : (homeSettingShownValue(entry) ?? t('homeSettings.row.notSet'));
     const row = (
         <Item
             testID={`${ROW_TESTID}:${entry.key}`}
             title={homeSettingTitle(entry)}
-            subtitleAccessory={<HomeSettingFactsLine segments={[{ envKey: entry.key }, reason]} testID={`${ROW_TESTID}:${entry.key}.facts`} />}
+            subtitleAccessory={<HomeSettingFactsLine segments={reason ? [{ envKey: entry.key }, reason] : [{ envKey: entry.key }]} testID={`${ROW_TESTID}:${entry.key}.facts`} />}
             detail={detail}
             mode="info"
             showChevron={false}
@@ -181,7 +188,18 @@ type GroupRowsProps = Readonly<{
     readOnly: boolean;
     disabled: boolean;
     handlers: RowHandlers;
+    /** `false` when the section says "applies after restart" once for all its rows. */
+    restartPill?: boolean;
 }>;
+
+/**
+ * Whether every row of a group that can still change applies only after a restart: the section then
+ * says so once instead of a pill on each row.
+ */
+function groupAppliesAfterRestart(group: HomeServerSettingsGroup): boolean {
+    const changeable = group.entries.filter((entry) => !entry.fixed);
+    return changeable.length > 1 && changeable.every((entry) => entry.apply === 'restart');
+}
 
 function GroupRows(props: GroupRowsProps) {
     const { group } = props;
@@ -197,6 +215,7 @@ function GroupRows(props: GroupRowsProps) {
                     readOnly={props.readOnly}
                     disabled={props.disabled}
                     handlers={props.handlers}
+                    restartPill={props.restartPill !== false}
                     showDivider={index < group.entries.length - 1}
                 />
             ))}
@@ -204,39 +223,63 @@ function GroupRows(props: GroupRowsProps) {
     );
 }
 
-/** One closed group under "More": opened by the owner, a search, or a reveal request. */
-const MoreGroupDisclosure = React.memo(function MoreGroupDisclosure(props: GroupRowsProps & Readonly<{
+/** One closed group of settings: opened by the owner, a search, or a reveal request. */
+function SettingsGroupDisclosure(props: Readonly<{
+    testID: string;
+    entries: readonly HomeSettingEntryV1[];
+    title: string;
+    subtitle: string;
     forceOpen: boolean;
     showDivider?: boolean;
+    children: () => React.ReactNode;
 }>) {
-    const { group } = props;
     const declared = React.useMemo(
-        () => group.entries.flatMap((entry) => declaredSetting(entry.key) ?? []),
-        [group.entries],
+        () => props.entries.flatMap((entry) => declaredSetting(entry.key) ?? []),
+        [props.entries],
     );
     const [expanded, setExpanded] = React.useState(false);
     const open = expanded || props.forceOpen;
-    const count = group.entries.length;
-    const changed = group.entries.filter((entry) => entry.source === 'home').length;
     return (
         <SettingAnchor settings={declared}><ExpandableItem
-            testID={`home-server-settings-more:${group.id}`}
+            testID={props.testID}
             expanded={open}
             onExpandedChange={setExpanded}
             showDivider={props.showDivider}
             header={(state) => (
                 <Item
-                    testID={`home-server-settings-more:${group.id}.header`}
+                    testID={`${props.testID}.header`}
                     {...state.headerProps}
-                    title={homeServerSettingGroupTitle(group.id)}
-                    subtitle={changed > 0 ? t('homeSettings.groupSummaryChanged', { count, changed }) : t('homeSettings.groupSummary', { count })}
+                    title={props.title}
+                    subtitle={props.subtitle}
                     rightElement={<ExpandableItemCaret expanded={state.expanded} />}
                     showChevron={false}
                 />
             )}
         >
-            {open ? <GroupRows {...props} /> : null}
+            {open ? props.children() : null}
         </ExpandableItem></SettingAnchor>
+    );
+}
+
+/** One closed group under "More". */
+const MoreGroupDisclosure = React.memo(function MoreGroupDisclosure(props: GroupRowsProps & Readonly<{
+    forceOpen: boolean;
+    showDivider?: boolean;
+}>) {
+    const { group } = props;
+    const count = group.entries.length;
+    const changed = group.entries.filter((entry) => entry.source === 'home').length;
+    return (
+        <SettingsGroupDisclosure
+            testID={`home-server-settings-more:${group.id}`}
+            entries={group.entries}
+            title={homeServerSettingGroupTitle(group.id)}
+            subtitle={changed > 0 ? t('homeSettings.groupSummaryChanged', { count, changed }) : t('homeSettings.groupSummary', { count })}
+            forceOpen={props.forceOpen}
+            showDivider={props.showDivider}
+        >
+            {() => <GroupRows {...props} />}
+        </SettingsGroupDisclosure>
     );
 });
 
@@ -358,8 +401,9 @@ const ServerSettingsPage = React.memo(function ServerSettingsPage(props: Readonl
     const { reload } = home;
     if (!canView) {
         return (
-            <ItemGroup description={t('homeGovernance.forbiddenBody')}>
-                <Item testID="home-server-settings-forbidden" title={t('homeGovernance.forbiddenTitle')} mode="info" showChevron={false} />
+            <ItemGroup>
+                <SurfaceStateCard testID="home-server-settings-forbidden" kind="denied" size="line"
+                    title={t('homeGovernance.forbiddenTitle')} reason={t('homeGovernance.forbiddenBody')} />
             </ItemGroup>
         );
     }
@@ -375,9 +419,10 @@ const ServerSettingsPage = React.memo(function ServerSettingsPage(props: Readonl
                 />
             );
         }
+        // The first section's rows are reserved in their final shape; nothing moves when they land.
         return (
             <ItemGroup>
-                <Item testID="home-server-settings-loading" title={t('homeGovernance.loading')} loading mode="info" showChevron={false} />
+                <ItemLoadStateRows testID="home-server-settings-loading" state={LOADING} rows={4} accessibilityLabel={t('homeSettings.page.title')} />
             </ItemGroup>
         );
     }
@@ -385,7 +430,8 @@ const ServerSettingsPage = React.memo(function ServerSettingsPage(props: Readonl
     const pendingSummary = homePendingRestartSummary(layout.pending);
     const firstIgnored = layout.ignored[0];
     const searching = query.trim().length > 0 || changedOnly;
-    const empty = shown.primary.length === 0 && shown.more.length === 0 && shown.readOnly.length === 0;
+    const empty = shown.primary.length === 0 && shown.more.length === 0
+        && shown.readOnly.length === 0 && shown.readOnlyUnset.length === 0;
     const rowsProps = { drafts, secretDrafts, errors, readOnly, disabled, handlers } as const;
     // The one filter chip (funnel, value, popover), as in every other filtered list.
     const changedFilter: SelectionListFilter = {
@@ -436,20 +482,15 @@ const ServerSettingsPage = React.memo(function ServerSettingsPage(props: Readonl
                 onRestarted={reload}
             />
 
-            <ItemGroup surface="none">
-                <SectionContentRow showDivider={false}>
-                    <View style={styles.toolbar}>
-                        <CompactSearchField
-                            testID="home-server-settings-search"
-                            value={query}
-                            onChangeText={setQuery}
-                            placeholder={t('homeSettings.page.searchPlaceholder')}
-                            style={styles.search}
-                        />
-                        <SelectionListFilterChip filter={changedFilter} />
-                    </View>
-                </SectionContentRow>
-            </ItemGroup>
+            {/* The page's search on the content column, its one filter beside it (lab `hcServer`). */}
+            <CompactSearchField
+                testID="home-server-settings-search"
+                value={query}
+                onChangeText={setQuery}
+                placeholder={t('homeSettings.page.searchPlaceholder')}
+                placement="page"
+                accessory={<SelectionListFilterChip filter={changedFilter} />}
+            />
 
             {empty ? (
                 <ItemGroup>
@@ -462,11 +503,18 @@ const ServerSettingsPage = React.memo(function ServerSettingsPage(props: Readonl
                 </ItemGroup>
             ) : null}
 
-            {shown.primary.map((group) => (
-                <ItemGroup key={group.id} title={homeServerSettingGroupTitle(group.id)}>
-                    <GroupRows group={group} {...rowsProps} />
-                </ItemGroup>
-            ))}
+            {shown.primary.map((group) => {
+                const restartOnce = groupAppliesAfterRestart(group);
+                return (
+                    <ItemGroup
+                        key={group.id}
+                        title={homeServerSettingGroupTitle(group.id)}
+                        description={restartOnce ? t('homeGovernance.signInProviders.appliesAfterRestart') : undefined}
+                    >
+                        <GroupRows group={group} {...rowsProps} restartPill={!restartOnce} />
+                    </ItemGroup>
+                );
+            })}
 
             {shown.more.length > 0 ? (
                 <ItemGroup title={t('homeSettings.page.more')}>
@@ -482,18 +530,33 @@ const ServerSettingsPage = React.memo(function ServerSettingsPage(props: Readonl
                 </ItemGroup>
             ) : null}
 
-            {shown.readOnly.length > 0 ? (
+            {shown.readOnly.length > 0 || shown.readOnlyUnset.length > 0 ? (
                 <ItemGroup
                     title={t('homeSettings.page.readOnlyTitle')}
                     description={t('homeSettings.page.readOnlyDescription')}
                 >
                     {shown.readOnly.map((entry, index) => (
-                        <ReadOnlySettingRow key={entry.key} entry={entry} showDivider={index < shown.readOnly.length - 1} />
+                        <ReadOnlySettingRow
+                            key={entry.key}
+                            entry={entry}
+                            showDivider={index < shown.readOnly.length - 1 || shown.readOnlyUnset.length > 0}
+                        />
                     ))}
+                    {shown.readOnlyUnset.length > 0 ? (
+                        <SettingsGroupDisclosure
+                            testID="home-server-settings-read-only-unset"
+                            entries={shown.readOnlyUnset}
+                            title={t('homeSettings.page.readOnlyUnsetTitle')}
+                            subtitle={t('homeSettings.groupSummary', { count: shown.readOnlyUnset.length })}
+                            forceOpen={searching}
+                        >
+                            {() => shown.readOnlyUnset.map((entry, index) => (
+                                <ReadOnlySettingRow key={entry.key} entry={entry} showDivider={index < shown.readOnlyUnset.length - 1} />
+                            ))}
+                        </SettingsGroupDisclosure>
+                    ) : null}
                 </ItemGroup>
             ) : null}
-
-            <ItemGroup surface="none" description={t('homeSettings.page.note')}>{null}</ItemGroup>
         </>
     );
 });
@@ -518,15 +581,3 @@ export const HomeAdministrationServerSettingsScreen = React.memo(function HomeAd
         </HomeAdministrationSection>
     );
 });
-
-const styles = StyleSheet.create(() => ({
-    toolbar: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-    },
-    search: {
-        flexGrow: 1,
-        flexShrink: 1,
-    },
-}));

@@ -1,146 +1,55 @@
 import * as React from 'react';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { describe, expect, it, vi } from 'vitest';
-import { renderScreen } from '@/dev/testkit';
-import { installServerSettingsHooksCommonModuleMocks } from './serverSettingsHooksTestHelpers';
+import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { renderHook } from '@/dev/testkit/hooks/renderHook';
 
-
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-
-const settingsState = {
-    serverSelectionGroups: [] as any[],
-    serverSelectionActiveTargetKind: 'server' as 'server' | 'group' | null,
-    serverSelectionActiveTargetId: 'server-a' as string | null,
-};
-const storageState = settingsState as Record<string, unknown>;
-const activeServerSnapshot = { serverId: 'server-a', serverUrl: 'https://a.example.test', generation: 1 } as const;
-const useSettingMutableMock = ((key: string) => [
-    storageState[key],
-    (value: unknown) => {
-        storageState[key] = value;
-    },
-]) as typeof import('@/sync/domains/state/storage')['useSettingMutable'];
-
-installServerSettingsHooksCommonModuleMocks({
-    router: async () => {
-        const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
-        const routerMock = createExpoRouterMock({
-            router: { replace: vi.fn() },
-            params: {},
-        });
-        return routerMock.module;
-    },
-    modal: async () => {
-        const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-        return createModalModuleMock({
-            spies: {
-                alert: vi.fn(),
-                confirm: vi.fn(async () => false),
-            },
-        }).module;
-    },
-    text: async () => {
-        const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-        return createTextModuleMock({ translate: (key) => key });
-    },
-    storage: async () => {
-        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleStub({
-            useSettingMutable: useSettingMutableMock,
-        });
-    },
+vi.mock('react-native', async () => {
+    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    return createReactNativeWebMock();
+});
+vi.mock('expo-router', async () => {
+    const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
+    return createExpoRouterMock().module;
+});
+vi.mock('@/modal', async () => {
+    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+    return createModalModuleMock().module;
+});
+vi.mock('@/text', async () => {
+    const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
+    return createTextModuleMock();
 });
 
-vi.mock('@/auth/context/AuthContext', () => ({
-    useAuth: () => ({ refreshFromActiveServer: vi.fn(async () => {}) }),
-}));
-
-vi.mock('@/sync/runtime/orchestration/connectionManager', () => ({
-    switchConnectionToActiveServer: vi.fn(async () => {}),
-    getAppliedActiveServerSnapshot: () => activeServerSnapshot,
-    isAppliedActiveServerRuntimeAvailable: () => true,
-    subscribeAppliedActiveServer: () => () => {},
-    subscribeAppliedActiveServerRuntimeAvailability: () => () => {},
-    subscribeApplyingActiveServer: () => () => {},
-}));
-
-vi.mock('@/sync/domains/server/serverProfiles', () => ({
-    loadHomeViewState: () => null,
-    subscribeHomeViewState: () => () => {},
-    getActiveServerSnapshot: () => activeServerSnapshot,
-    // Intentionally not sorted by recency.
-    listServerProfiles: () => ([
-        { id: 'server-a', name: 'A', serverUrl: 'https://a.example.test', lastUsedAt: 1 },
-        { id: 'server-b', name: 'B', serverUrl: 'https://b.example.test', lastUsedAt: 999 },
-    ]),
-    getActiveServerId: () => 'server-a',
-    getDeviceDefaultServerId: () => 'server-a',
-    getServerProfileById: (serverId: string) => ([
-        { id: 'server-a', name: 'A', serverUrl: 'https://a.example.test', lastUsedAt: 1 },
-        { id: 'server-b', name: 'B', serverUrl: 'https://b.example.test', lastUsedAt: 999 },
-    ].find((profile) => profile.id === serverId) ?? null),
-    resolveServerProfileScopeId: (profile: { id: string; serverIdentityId?: string | null }) => profile.serverIdentityId ?? profile.id,
-    getResetToDefaultServerId: () => 'server-a',
-    subscribeActiveServer: vi.fn(() => () => {}),
-    getServerProfilesGeneration: () => 1,
-    subscribeServerProfiles: vi.fn(() => () => {}),
-    setActiveServerId: vi.fn(),
-    upsertServerProfile: vi.fn(() => ({ id: 'server-a' })),
-}));
-
-vi.mock('@/sync/domains/server/serverConfig', () => ({
-    validateServerUrl: () => ({ valid: true, error: null }),
-}));
-
-vi.mock('@/sync/domains/server/selection/serverSelectionMutations', () => ({
-    normalizeStoredServerSelectionGroups: (raw: unknown) => (Array.isArray(raw) ? raw : []),
-    filterServerSelectionGroupsToAvailableServers: (profiles: any) => profiles,
-}));
-
-vi.mock('@/components/settings/server/hooks/useServerAuthStatusByServerId', () => ({
-    useServerAuthStatusByServerId: () => ({}),
-}));
-
-vi.mock('@/components/settings/server/hooks/useServerAutoAddFromRoute', () => ({
-    useServerAutoAddFromRoute: () => {},
-}));
-
-vi.mock('@/components/settings/server/hooks/useServerSettingsServerProfileActions', () => ({
-    useServerSettingsServerProfileActions: () => ({
-        onSwitchServer: vi.fn(async () => {}),
-        onRenameServer: vi.fn(async () => {}),
-        onRemoveServer: vi.fn(async () => {}),
-    }),
-}));
-
-vi.mock('@/components/settings/server/hooks/useServerSettingsGroupActions', () => ({
-    useServerSettingsGroupActions: () => ({
-        onSwitchGroup: vi.fn(async () => {}),
-        onRenameGroup: vi.fn(async () => {}),
-        onRemoveGroup: vi.fn(async () => {}),
-        onCreateServerGroup: vi.fn(async () => false),
-    }),
-}));
-
-vi.mock('@/components/settings/server/hooks/useServerSettingsConcurrentActions', () => ({
-    useServerSettingsConcurrentActions: () => ({
-        onTogglePresentation: vi.fn(),
-        onToggleConcurrentServer: vi.fn(),
-    }),
-}));
+const harness = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(harness);
+installDisconnectedServerSocketBoundary();
+vi.stubEnv('EXPO_PUBLIC_SYSTEM_TASKS_RUNNER_MODE', 'unavailable');
+const modules = await (async () => {
+    await loadSyncSingletonForTests();
+    return Promise.all([
+        import('@/auth/context/AuthContext'),
+        import('./useServerSettingsScreenController'),
+        import('@/sync/domains/server/serverProfiles'),
+    ]);
+})();
+beforeEach(() => harness.reset());
+afterEach(standardCleanup);
+afterAll(() => vi.unstubAllEnvs());
 
 describe('useServerSettingsScreenController', () => {
     it('does not reorder servers by lastUsedAt in server configuration list', async () => {
-        const { useServerSettingsScreenController } = await import('./useServerSettingsScreenController');
+        const a = await harness.addHome({ name: 'A', serverUrl: 'https://a.example.test', accountId: null, active: false });
+        const b = await harness.addHome({ name: 'B', serverUrl: 'https://b.example.test', accountId: null });
+        const [{ InjectedAuthProvider }, { useServerSettingsScreenController }, { getServerProfileById }] = modules;
+        expect(getServerProfileById(a)!.lastUsedAt).toBeLessThan(getServerProfileById(b)!.lastUsedAt);
+        const hook = await renderHook(() => useServerSettingsScreenController(), {
+            wrapper: ({ children }) => <InjectedAuthProvider credentials={null}>{children}</InjectedAuthProvider>,
+        });
 
-        let value: any = null;
-        function Probe() {
-            value = useServerSettingsScreenController();
-            return null;
-        }
-
-        await renderScreen(React.createElement(Probe));
-
-        expect(value.servers.map((srv: any) => srv.id)).toEqual(['server-a', 'server-b']);
+        expect(hook.getCurrent().servers.filter(server => server.id === a || server.id === b).map(server => server.id)).toEqual([a, b]);
     });
 });

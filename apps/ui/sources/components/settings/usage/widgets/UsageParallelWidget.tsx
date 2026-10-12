@@ -79,7 +79,7 @@ export function UsageParallelWidget(props: UsageBodyProps) {
   useWidgetFrameBodyCaption(
     today && today.maxParallel > 1
       ? t('usage.board.howYouWork.peakAtOnce', { count: today.maxParallel })
-      : null,
+      : t('usage.today'),
   );
   if (!today) {
     return (
@@ -130,6 +130,7 @@ export function UsageParallelWidget(props: UsageBodyProps) {
       {groups.length === 0 ? (
         <UsageBodyInsufficient
           testID={`${props.testID}.idle`}
+          replacesContent={false}
           title={t('usage.board.howYouWork.noRunsToday')}
         />
       ) : (
@@ -154,6 +155,7 @@ export function UsageParallelWidget(props: UsageBodyProps) {
       {unknownEnds > 0 ? (
         <UsageBodyInsufficient
           testID={`${props.testID}.unknownEnds`}
+          replacesContent={false}
           title={t('usage.board.howYouWork.unknownEnds', {
             count: unknownEnds,
           })}

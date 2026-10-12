@@ -166,7 +166,7 @@ export const QualifiedPoolDraft = React.memo(function QualifiedPoolDraft(props: 
             accounts,
             groups: [],
             labelsByKey: {},
-            accountLabel: accountLabels[account.ref.accountId],
+            accountLabelsByAccountId: accountLabels,
             serviceTitle: serviceLabel,
         });
         const name = presentation.primaryLabel;

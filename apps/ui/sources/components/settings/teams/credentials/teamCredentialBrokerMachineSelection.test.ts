@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { createMachineAdministrationTargetSelectionFixture } from '@/dev/testkit';
+import { createMachineAdministrationTargetSelectionFixture } from '@/dev/testkit/mocks/machineAdministrationTargetSelection';
 
 import {
     buildTeamCredentialBrokerMachineSelection,

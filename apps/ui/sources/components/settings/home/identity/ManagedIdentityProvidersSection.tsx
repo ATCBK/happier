@@ -11,6 +11,7 @@ import {
     type SignInConnectionStatus,
 } from '@/components/settings/identity/signInConnectionStatus';
 import { Item } from '@/components/ui/lists/Item';
+import { identityProviderKindMark } from '@/components/settings/teams/identity/identityAdministrationPresentation';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { SectionActionButton } from '@/components/ui/lists/SectionActionButton';
 import { StatusDot } from '@/components/ui/status/StatusDot';
@@ -57,6 +58,7 @@ const ManagedIdentityProviderRow = React.memo(function ManagedIdentityProviderRo
         <Item
             testID={`home-identity-provider:${provider.id}`}
             title={provider.displayName}
+            icon={identityProviderKindMark(provider.kind)}
             subtitle={[where, signInConnectionStatusLabel(status)].filter(Boolean).join(' · ')}
             subtitleLeading={tone === 'quiet' ? undefined : (
                 <StatusDot color={tone === 'trouble' ? theme.colors.state.danger.foreground : theme.colors.state.warning.foreground} />

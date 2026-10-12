@@ -11,7 +11,6 @@ import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
-import { Icon } from '@/components/ui/icons/Icon';
 import { Typography } from '@/constants/Typography';
 import { CompactSearchField } from '@/components/ui/forms/CompactSearchField';
 import {
@@ -29,7 +28,8 @@ import { PROVIDER_CONNECTION_STATUS_KEY } from '@/providers/connection/presentat
 import { ProviderIcon } from '@/providers/connection/ProviderIcon';
 import { useProviderSettingsTarget } from '@/providers/hooks/targetMachine';
 import { useProviderConnectionMutation } from '@/providers/hooks/useProviderConnectionMutation';
-import { useProviderConnections } from '@/providers/hooks/useProviderConnections';
+import { useProviderConnections, type ProviderConnectionRefreshScope } from '@/providers/hooks/useProviderConnections';
+import { useProviderCatalogCounts } from '@/providers/hooks/useProviderCatalogCounts';
 import { t } from '@/text';
 import { useNavigationFocusReturn } from '@/utils/navigation/useNavigationFocusReturn';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
@@ -42,6 +42,7 @@ import {
     useProviderFeatureAvailability,
 } from './ProviderFeatureAvailability';
 import { AddProviderMenu, newProviderRoute } from './collection/AddProviderMenu';
+import { ProviderCollectionInvitation } from './collection/ProviderCollectionInvitation';
 import { PROVIDERS_SETTINGS } from './providersSettings';
 import { providerDraftTitle } from './collection/providerDraftTitle';
 import {
@@ -69,8 +70,9 @@ function resolveConnectionRowSubtitle(row: ProviderCollectionConnectionRow): str
     if (row.trouble || row.off) return t(PROVIDER_CONNECTION_STATUS_KEY[row.status]);
     // A gateway is set up where its subscriptions live; this list opens the same page.
     if (row.gateway) return t('settingsProvidersCollection.gateway.managedFromConnectedServices');
-    const modelCount = row.modelCount === null ? null : t('settingsProviders.detail.modelCount', { count: row.modelCount });
-    return [row.provenance, modelCount].filter(Boolean).join(' · ') || t(PROVIDER_CONNECTION_STATUS_KEY[row.status]);
+    const modelCount = row.catalogCount === null ? null : t('settingsProvidersCollection.modelsShown', row.catalogCount);
+    // Healthy is quiet: what it is ("API key · 2 models"), never "Not checked" for an untested row.
+    return [row.provenance, row.keySaved ? t('settingsProviders.authoring.apiKey') : null, modelCount].filter(Boolean).join(' · ');
 }
 
 /**
@@ -93,6 +95,7 @@ export const ProviderConnectionsSettingsScreen = React.memo(function ProviderCon
     const localDiscoveryEnabled = useFeatureEnabled('providers.localDiscovery');
     const providerTarget = useProviderSettingsTarget();
     const { machineId, machineRows, resolveCurrentTarget, serverId } = providerTarget;
+    const catalogCounts = useProviderCatalogCounts(serverId);
     const teamCredentialResourcesEnabled = useFeatureEnabled('teams.credentialResources', {
         scopeKind: 'spawn',
         serverId: serverId ?? undefined,
@@ -101,7 +104,7 @@ export const ProviderConnectionsSettingsScreen = React.memo(function ProviderCon
         serverId,
         enabled: active && teamCredentialResourcesEnabled,
     });
-    const { data, error, loading, refresh } = useProviderConnections({
+    const { data, error, machineError, loading, refresh } = useProviderConnections({
         enabled, active, machineId, serverId,
     });
     const captureNavigationFocusReturn = useNavigationFocusReturn({
@@ -117,15 +120,15 @@ export const ProviderConnectionsSettingsScreen = React.memo(function ProviderCon
         }));
         if (result !== true) fireAndForget(result, { tag: 'ProviderConnectionsSettingsScreen.navigate' });
     }, [besideDetail, captureNavigationFocusReturn, router]);
-    const refreshConnections = React.useCallback(async (): Promise<void> => {
-        await refresh();
+    const refreshConnections = React.useCallback(async (scope?: ProviderConnectionRefreshScope): Promise<void> => {
+        await refresh(scope);
     }, [refresh]);
     const mutation = useProviderConnectionMutation({ resolveTarget: resolveCurrentTarget, serverId, refresh: refreshConnections });
     const [searchQuery, setSearchQuery] = React.useState('');
     const [discoverySelectionError, setDiscoverySelectionError] = React.useState<ProviderErrorV1 | null>(null);
     const collection = React.useMemo(() => buildProviderCollection({
-        data, query: searchQuery, localDiscoveryEnabled,
-    }), [data, localDiscoveryEnabled, searchQuery]);
+        data, query: searchQuery, localDiscoveryEnabled, catalogCounts,
+    }), [catalogCounts, data, localDiscoveryEnabled, searchQuery]);
     const searchable = collection.total > SEARCH_THRESHOLD || searchQuery.trim().length > 0;
     const noMatches = collection.total > 0 && collection.connections.length === 0 && collection.found.length === 0;
     const machineLabel = machineId
@@ -214,7 +217,7 @@ export const ProviderConnectionsSettingsScreen = React.memo(function ProviderCon
                 ) : undefined}
                 icon={(
                     <HappierCollectionListMark dimmed={row.off}>
-                        <ProviderIcon icon={row.icon} size={20} color={theme.colors.text.secondary} />
+                        <ProviderIcon contributionKey={row.contributionKey} icon={row.icon} size={20} color={theme.colors.text.secondary} />
                     </HappierCollectionListMark>
                 )}
                 titleStyle={row.off ? collectionListStyles.dimmedTitle : undefined}
@@ -241,7 +244,7 @@ export const ProviderConnectionsSettingsScreen = React.memo(function ProviderCon
                     testID={`settings-provider-found:${row.key}`}
                     title={row.title}
                     subtitle={evidenceLabel}
-                    icon={<HappierCollectionListMark><Icon name="cpu" size={20} color={theme.colors.text.secondary} /></HappierCollectionListMark>}
+                    icon={<HappierCollectionListMark><ProviderIcon contributionKey={candidate.contributionKey} icon={row.icon} size={20} color={theme.colors.text.secondary} /></HappierCollectionListMark>}
                     mode="info"
                     density={rail ? 'compact' : undefined}
                     pressableStyle={rail ? collectionListStyles.row : undefined}
@@ -270,7 +273,7 @@ export const ProviderConnectionsSettingsScreen = React.memo(function ProviderCon
                     ? t('settingsProviders.local.appRunningServerOff')
                     : t('settingsProviders.local.installedNotRunning')}
                 subtitleLeading={<View style={collectionListStyles.troubleDot} />}
-                icon={<HappierCollectionListMark><Icon name="cpu" size={20} color={theme.colors.text.secondary} /></HappierCollectionListMark>}
+                icon={<HappierCollectionListMark><ProviderIcon contributionKey={installation.contributionKey} icon={row.icon} size={20} color={theme.colors.text.secondary} /></HappierCollectionListMark>}
                 mode="info"
                 density={rail ? 'compact' : undefined}
                 pressableStyle={rail ? collectionListStyles.row : undefined}
@@ -314,7 +317,7 @@ export const ProviderConnectionsSettingsScreen = React.memo(function ProviderCon
     const notice = availabilityPresentation
         ? <ProviderFeatureAvailabilityNotice presentation={availabilityPresentation} />
         : null;
-    const localScopeShown = localDiscoveryEnabled && !availabilityPresentation;
+    const localScopeShown = (localDiscoveryEnabled || Boolean(machineError)) && !availabilityPresentation;
     const machineState = providerTarget.selection.state;
     const firstLoad = !availabilityPresentation && loading && !data;
     const empty = !availabilityPresentation && data !== null && collection.total === 0;
@@ -347,11 +350,20 @@ export const ProviderConnectionsSettingsScreen = React.memo(function ProviderCon
                 {firstLoad ? <ProviderRailSkeleton /> : null}
                 {empty && !draftOpen ? <Item mode="info" title={t('settingsProviders.emptyTitle')} /> : null}
                 {noMatches ? <Item mode="info" title={t('settingsProviders.searchEmptyTitle')} /> : null}
-                {collection.connections.map(renderConnectionRow)}
+                {collection.connections.filter(row => !row.gateway).map(renderConnectionRow)}
+                {collection.connections.some(row => row.gateway) ? (
+                    <CollectionListGroupLabel
+                        title={t('settingsProvidersCollection.gateway.railGroup')}
+                        count={collection.connections.filter(row => row.gateway).length}
+                        first={!draftOpen && collection.connections.every(row => row.gateway)}
+                    />
+                ) : null}
+                {collection.connections.filter(row => row.gateway).map(renderConnectionRow)}
                 {collection.found.length > 0 ? (
                     <CollectionListGroupLabel title={foundTitle} count={collection.found.length} first={collection.connections.length === 0} />
                 ) : null}
                 {collection.found.map(renderFoundRow)}
+                {machineError ? <ProviderErrorItems size="line" error={machineError} retry={refreshConnections} /> : null}
                 {localScopeShown && machineState.kind !== 'online' ? (
                     <ProviderRailLocalScope
                         selection={providerTarget.selection}
@@ -368,6 +380,30 @@ export const ProviderConnectionsSettingsScreen = React.memo(function ProviderCon
                 />
                 {failure}
             </CollectionList>
+        );
+    }
+
+    const teamResources = (
+        <TeamCredentialCatalogSettingsGroup
+            title={t('teams.credentials.providedByTeams')}
+            sourceKind="provider"
+            catalog={teamCredentialCatalog}
+            onRetry={teamCredentialCatalog.reload}
+            onOpen={openTeamResource}
+        />
+    );
+
+    // Nothing to list: the same invitation as beside the rail (lab PI1p), owning the page.
+    if (empty) {
+        return (
+            <ItemList testID="settings-providers-screen" containerStyle={styles.centeredPane}>
+                <SettingSection section={PROVIDERS_SETTINGS.sectionRefs.connections}
+                    answersFor={[PROVIDERS_SETTINGS.sectionRefs.local]}>
+                    <ProviderCollectionInvitation available={data?.available ?? []} onAdd={navigate} />
+                </SettingSection>
+                {teamResources}
+                {failure ? <ItemGroup>{failure}</ItemGroup> : null}
+            </ItemList>
         );
     }
 
@@ -403,18 +439,11 @@ export const ProviderConnectionsSettingsScreen = React.memo(function ProviderCon
                 answersFor={[PROVIDERS_SETTINGS.sectionRefs.local]}>
             {notice ? <ItemGroup>{notice}</ItemGroup> : null}
             {firstLoad ? <ItemGroup><ProviderRailSkeleton /></ItemGroup> : null}
-            {empty ? (
-                <ItemGroup>
-                    <Item mode="info" title={t('settingsProviders.emptyTitle')} subtitle={t('settingsProvidersCollection.emptyDescription')} subtitleLines={0} />
-                </ItemGroup>
-            ) : null}
             {noMatches ? <ItemGroup><Item mode="info" title={t('settingsProviders.searchEmptyTitle')} subtitle={t('settingsProviders.searchEmptyDescription')} /></ItemGroup> : null}
             {collection.connections.length > 0 ? (
                 <SettingAnchor setting={PROVIDERS_SETTINGS.settings.connections}>
-                <ItemGroup
-                    title={t('settingsProviders.configuredTitle')}
-                    description={t('settingsProviders.configuredFooter')}
-                >
+                {/* The page header already says what the list is (lab PI2p): the list follows it untitled. */}
+                <ItemGroup>
                     {collection.connections.map(renderConnectionRow)}
                 </ItemGroup>
                 </SettingAnchor>
@@ -444,7 +473,8 @@ export const ProviderConnectionsSettingsScreen = React.memo(function ProviderCon
                     offlineDetail={t('settingsProvidersCollection.localOfflineDetail')}
                     testIDPrefix="settings.providers.administration.target"
                 >
-                    {collection.found.length > 0 ? collection.found.map(renderFoundRow) : (
+                    {machineError ? <ProviderErrorItems error={machineError} retry={refreshConnections} />
+                        : collection.found.length > 0 ? collection.found.map(renderFoundRow) : (
                         <EmptyState
                             testID="settings-providers-local-none"
                             layout="line"
@@ -455,13 +485,7 @@ export const ProviderConnectionsSettingsScreen = React.memo(function ProviderCon
                 </SettingAnchor>
                 </SettingSection>
             ) : null}
-            <TeamCredentialCatalogSettingsGroup
-                title={t('teams.credentials.providedByTeams')}
-                sourceKind="provider"
-                catalog={teamCredentialCatalog}
-                onRetry={teamCredentialCatalog.reload}
-                onOpen={openTeamResource}
-            />
+            {teamResources}
             {failure ? <ItemGroup>{failure}</ItemGroup> : null}
         </ItemList>
     );
@@ -475,8 +499,10 @@ function presentLocalScopeTitle(state: ReturnType<typeof useProviderSettingsTarg
 }
 
 /**
- * The rail's local-servers group when no online computer can be asked: what a computer is needed
- * for, or that the chosen one is offline, with the machine chip that changes it.
+ * The rail's local-servers group when no online machine can be asked: what a machine is needed
+ * for, or that the chosen one is offline. It is a summary only: the rail always sits beside a
+ * detail whose "On this machine" section carries the one machine control for this page (both
+ * read and write the same Providers target selection).
  */
 const ProviderRailLocalScope = React.memo(function ProviderRailLocalScope(props: Readonly<{
     selection: ReturnType<typeof useProviderSettingsTarget>['selection'];
@@ -500,15 +526,6 @@ const ProviderRailLocalScope = React.memo(function ProviderRailLocalScope(props:
                 density="compact"
                 pressableStyle={collectionListStyles.row}
                 showChevron={false}
-                accessoryLayout="stacked"
-                rightElement={(
-                    <MachineAdministrationTargetSelector
-                        selection={props.selection}
-                        presentation="chip"
-                        testIDPrefix="settings.providers.rail.target"
-                    />
-                )}
-                rightElementOutsidePressable
             />
         </>
     );
@@ -541,19 +558,23 @@ function ProviderRailSkeleton() {
 }
 
 const styles = StyleSheet.create((theme) => ({
+    centeredPane: {
+        flexGrow: 1,
+        justifyContent: 'center',
+    },
     headerActions: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 4,
+        gap: theme.space.s4,
     },
     railScopeText: {
         ...Typography.default(),
         color: theme.colors.text.secondary,
     },
     skeleton: {
-        gap: 6,
-        paddingHorizontal: 12,
-        paddingVertical: 6,
+        gap: theme.space.s6,
+        paddingHorizontal: theme.space.s12,
+        paddingVertical: theme.space.s6,
     },
     skeletonRow: {
         borderRadius: 8,

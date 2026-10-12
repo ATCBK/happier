@@ -6,12 +6,14 @@ import { useWidgetFrameBodyCaption } from '@/components/widgets/frame/widgetFram
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { formatUsageCost } from '@/utils/format/usageNumbers';
-import { t } from '@/text';
+import { getPreferredLanguage, t } from '@/text';
+import { formatWithCachedDateTimeFormatter } from '@/utils/datetime/cachedIntlFormatters';
 import { projectProviderAccountSubscriptionMonetaryFacts } from '@happier-dev/protocol/connect/accountSubscription';
-import { UsageCoverageLine, type UsageBodyProps } from './usageBodyKit';
+import type { UsagePlanInsights } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
+import { UsageCoverageLine, usageDimensionLabel, type UsageBodyProps } from './usageBodyKit';
 import { summarizeUsagePlanFit, type UsagePlanAccount } from './plans/usagePlansModel';
 import { readUsagePersonalPaceTarget } from './plans/usagePacingTarget';
-import { UsageBillingButton } from './plans/UsagePlanActions';
+import { UsageBillingButton, UsageSubscriptionPriceEditor } from './plans/UsagePlanActions';
 import {
   useUsagePlans,
   type UsagePlanAccountName,
@@ -21,16 +23,18 @@ import {
   formatPlanPercent,
   planPaceReasonText,
   UsagePlanIdentity,
+  UsagePlanAccountState,
   UsagePlanSectionHead,
   UsagePlansNothingRead,
   usePlanText,
+  UsagePlanDisclosure,
 } from './plans/UsagePlanParts';
 
 /**
  * What each plan costs and how it ends, from the connected-account producer's own facts: paid versus
  * dated list price, renewal or ending, what the current pace leaves unused, and how the plan's ended
- * windows actually finished (plain counts of the B owner's rows, with the count shown). Value multiples,
- * replays on another plan and multi-account strategies need facts no producer records; each says so.
+ * windows actually finished. The shared query owner also supplies qualified weather, model-meter
+ * headroom, recorded-reset prices and recorded weeks. Unsupported account value remains explicit.
  */
 export function UsagePlanFitWidget(props: UsageBodyProps) {
   const { projection, nameOf, nowMs } = useUsagePlans(props.slice, props.model);
@@ -45,9 +49,12 @@ export function UsagePlanFitWidget(props: UsageBodyProps) {
       <View style={styles.body}>
         <UsagePlansNothingRead
           testID={`${props.testID}.none`}
+          replacesContent={props.slice.planInsights?.recordedWeek.status !== 'available'}
           slice={props.slice}
           onRetry={props.model.refresh}
         />
+        {props.slice.planInsights?.recordedWeek.status === 'available'
+          ? <RecordedWeek value={props.slice.planInsights.recordedWeek} compact={tile} testID={`${props.testID}.recordedWeek`} /> : null}
       </View>
     );
   }
@@ -63,31 +70,22 @@ export function UsagePlanFitWidget(props: UsageBodyProps) {
             target={target}
             compact={tile}
             serverId={props.serverId}
+            onSettled={props.model.refresh}
+            insights={props.slice.planInsights?.accounts.find(entry => entry.source.ref.accountId === account.accountId
+              && entry.source.ref.service.pluginId === account.service.pluginId && entry.source.ref.service.localId === account.service.localId)}
             testID={`${props.testID}.plan.${account.accountId}`}
           />
         ))}
       </View>
-      <View style={styles.notRecorded} testID={`${props.testID}.notRecorded`}>
-        {tile ? (
-          <Text style={[styles.note, text.detail]} numberOfLines={2}>
-            <Text style={styles.noteTitle}>{t('usage.board.plans.notRecordedTitle')}</Text>
-            {` · ${[t('usage.board.plans.notRecordedValue'), t('usage.board.plans.notRecordedWhatIf'), t('usage.board.plans.notRecordedStrategy')].join(', ')}`}
-          </Text>
-        ) : null}
-        {tile ? null : <UsagePlanSectionHead title={t('usage.board.plans.notRecordedTitle')} />}
-        {tile ? null : (
-          [
-            ['usage.board.plans.notRecordedValue', 'usage.board.plans.planValueInsufficient'],
-            ['usage.board.plans.notRecordedWhatIf', 'usage.board.plans.notRecordedWhatIfReason'],
-            ['usage.board.plans.notRecordedStrategy', 'usage.board.plans.notRecordedStrategyReason'],
-          ] as const
-        ).map(([title, reason]) => (
-          <Text key={title} style={[styles.note, text.detail]}>
-            <Text style={styles.noteTitle}>{t(title)}</Text>
-            {` · ${t(reason)}`}
-          </Text>
-        ))}
-      </View>
+      {props.slice.planInsights?.recordedWeek.status === 'available'
+        ? <RecordedWeek value={props.slice.planInsights.recordedWeek} compact={tile} testID={`${props.testID}.recordedWeek`} /> : null}
+      {/* What has no basis yet is not a list of feature names: one quiet promise, said once. */}
+      {(props.slice.planInsights?.accounts ?? []).some(entry => readPlanInsightMissing(entry).length > 0)
+        || props.slice.planInsights?.recordedWeek.status !== 'available' ? (
+        <Text testID={`${props.testID}.notRecorded`} style={[styles.quiet, text.detail]}>
+          {t('usage.board.plans.moreDetailLater')}
+        </Text>
+      ) : null}
       <UsageCoverageLine
         slice={props.slice}
         sources={['quota']}
@@ -107,11 +105,19 @@ function PlanRow(
     compact: boolean;
     testID: string;
     serverId: string;
+    onSettled(): void;
+    insights?: UsagePlanInsights['accounts'][number];
   }>,
 ) {
   const { account, nowMs } = props;
   const text = usePlanText();
   const fit = summarizeUsagePlanFit(account, props.target);
+  if (!account.read?.current) {
+    return <View testID={props.testID} style={styles.row}>
+      <UsagePlanIdentity name={props.name} compact />
+      <UsagePlanAccountState account={account} name={props.name} testID={`${props.testID}.state`} onRetry={props.onSettled} />
+    </View>;
+  }
   const fitWindow = fit.window?.label ?? null;
   const fitText = fit.observed === 0
     ? [fitWindow, t(
@@ -139,14 +145,16 @@ function PlanRow(
       : `${headline.label} · ${planPaceReasonText(headline.paceUnavailable ?? 'not_derived')}`
     : null;
   const price = projectProviderAccountSubscriptionMonetaryFacts({ subscription: account.subscription, nowMs, tier: account.planLabel });
-  const priceText = price.paid
+  const priceText = price.entered
+    ? t('usage.board.plans.planEntered', { amount: formatUsageCost(price.entered.amount, price.entered.currency) })
+    : price.paid
     ? t('usage.board.plans.planPaid', {
         amount: formatUsageCost(price.paid.amount, price.paid.currency),
       })
     : price.list
       ? t('usage.board.plans.planList', {
           amount: formatUsageCost(price.list.amount, price.list.currency),
-          date: new Date(price.list.asOfMs).toLocaleDateString([], {
+          date: formatWithCachedDateTimeFormatter(price.list.asOfMs, getPreferredLanguage(), {
             day: 'numeric',
             month: 'short',
             year: 'numeric',
@@ -181,82 +189,150 @@ function PlanRow(
             })
           : t('usage.board.plans.planRenewalUnknown');
   const ending = subscription?.renewal === 'off';
+  // One row per plan (lab p2sheet-D "Plan value"): who, the one figure, a verdict, and one quiet line;
+  // the rest (pace, value basis, weather, headroom, billing, your price) waits behind Details.
+  const value = props.insights?.value.value;
+  const multiple = value?.status === 'available' && value.priceMultiple.status === 'available' ? value.priceMultiple.multiple : null;
+  const known = Boolean(price.entered || price.paid || price.list);
+  const keyFact = multiple !== null
+    ? `${multiple.toLocaleString(getPreferredLanguage(), { maximumFractionDigits: 1 })}×`
+    : known ? priceText : '—';
+  const verdict = fit.observed === 0 ? null : t('usage.board.plans.fitUsedUp', { count: fit.usedUp, total: fit.observed });
+  const secondary = [
+    subscription?.status === 'subscribed' && end !== undefined && subscription.renewal !== 'unknown' ? periodText : null,
+    fitWindow, verdict ?? (fit.observed === 0 ? t('usage.board.plans.fitNoneEnded') : null),
+  ].filter(Boolean).join(' · ');
   return (
     <View
       testID={props.testID}
       style={styles.row}
       accessibilityLabel={[props.name.title, priceText, periodText, paceText].filter(Boolean).join(', ')}
     >
-      <View style={styles.rowIdentity}>
-        <UsagePlanIdentity name={props.name} />
-      </View>
-      <View style={styles.rowFacts}>
-        <Text
-          style={[
-            styles.price,
-            text.title,
-            !price.paid && !price.list ? styles.quiet : null,
-          ]}
-          numberOfLines={1}
-        >
-          {priceText}
-        </Text>
-        <Text
-          style={[styles.period, text.detail, ending ? styles.warning : null]}
-          numberOfLines={2}
-        >
-          {periodText}
-        </Text>
-        {props.compact ? null : (
-          <UsageBillingButton account={account} serverId={props.serverId} testID={`${props.testID}.billing`} />
-        )}
-      </View>
-      <View style={styles.rowFit}>
-        {paceText && !props.compact ? (
-          <Text style={[styles.fit, text.detail]} numberOfLines={2}>
-            {paceText}
-          </Text>
-        ) : null}
-        <Text
-          testID={fit.observed === 0 ? `${props.testID}.fit.insufficient` : `${props.testID}.fit`}
-          accessibilityLabel={`${t('usage.board.plans.fitTitle')}: ${fitText}`}
-          style={[fit.observed === 0 ? styles.period : styles.fit, text.detail]}
-          numberOfLines={props.compact ? 2 : 3}
-        >
-          {`${t('usage.board.plans.fitTitle')} · ${fitText}`}
+      <View style={styles.rowHead}>
+        <View style={styles.rowIdentity}>
+          <UsagePlanIdentity name={props.name} compact />
+        </View>
+        <Text style={[styles.price, text.title, multiple === null && !known ? styles.quiet : null]} numberOfLines={1}>
+          {keyFact}
         </Text>
       </View>
+      <Text
+        testID={fit.observed === 0 ? `${props.testID}.fit.insufficient` : `${props.testID}.fit`}
+        accessibilityLabel={`${t('usage.board.plans.fitTitle')}: ${fitText}`}
+        style={[styles.secondary, text.detail, ending ? styles.warning : null]}
+        numberOfLines={1}
+      >
+        {secondary}
+      </Text>
+      {props.compact ? null : (
+        <UsagePlanDisclosure title={t('usage.board.plans.planDetails')} testID={`${props.testID}.details`}>
+          <View style={styles.details}>
+            {paceText ? <Text style={[styles.fit, text.detail]}>{paceText}</Text> : null}
+            <Text style={[styles.fit, text.detail]}>{`${t('usage.board.plans.fitTitle')} · ${fitText}`}</Text>
+            <Text style={[styles.fit, text.detail]}>{[priceText, periodText].join(' · ')}</Text>
+            {props.insights ? <PlanExtras value={props.insights} compact={false} testID={props.testID} /> : null}
+            <UsageBillingButton account={account} serverId={props.serverId} testID={`${props.testID}.billing`} />
+            <UsageSubscriptionPriceEditor account={account} serverId={props.serverId}
+              testID={`${props.testID}.priceEditor`} onSettled={props.onSettled} />
+          </View>
+        </UsagePlanDisclosure>
+      )}
+      <UsagePlanAccountState account={account} name={props.name} testID={`${props.testID}.state`} onRetry={props.onSettled} />
     </View>
   );
+}
+
+function PlanExtras(props: Readonly<{ value: UsagePlanInsights['accounts'][number]; compact: boolean; testID: string }>) {
+  const text = usePlanText();
+  const unavailable = t('usage.board.plans.insightUnavailable');
+  const value = props.value.value;
+  const multiple = value.status === 'available' ? value.priceMultiple : null;
+  const valueText = value.status === 'available' ? [
+    t('usage.board.plans.planValueApiEquivalent', { amount: formatUsageCost(value.amountUsd, value.currency) }),
+    value.coverage === 'partial' ? t('usage.board.plans.planValuePartial') : null,
+    multiple?.status === 'available' ? t('usage.board.plans.planValueMultiple', {
+      multiple: multiple.multiple.toLocaleString(getPreferredLanguage(), { maximumFractionDigits: 2 }),
+    }) : unavailable,
+    multiple?.status === 'available' ? multiple.priceKind === 'entered'
+      ? t('usage.board.plans.planEntered', { amount: formatUsageCost(multiple.priceAmount, multiple.currency) })
+      : multiple.priceKind === 'paid' ? t('usage.board.plans.planPaid', { amount: formatUsageCost(multiple.priceAmount, multiple.currency) })
+        : t('usage.board.plans.planList', { amount: formatUsageCost(multiple.priceAmount, multiple.currency),
+          date: formatWithCachedDateTimeFormatter(multiple.priceAsOfMs, getPreferredLanguage(), { day: 'numeric', month: 'short', year: 'numeric' }) }) : null,
+  ].filter(Boolean).join(' · ') : t('usage.board.plans.planValueInsufficient');
+  return <View style={styles.rowFit}>
+    {value.status === 'available' ? <Text testID={`${props.testID}.value`} accessibilityLabel={valueText}
+      style={[styles.note, text.detail]} numberOfLines={props.compact ? 2 : undefined}>{valueText}</Text> : null}
+    {props.value.weather.filter(row => row.status === 'available').map(row => <Text key={`weather:${row.meterId}`} testID={`${props.testID}.weather.${row.meterId}`}
+      style={[styles.note, text.detail]} numberOfLines={props.compact ? 2 : undefined}>
+      {`${t('usage.board.plans.weatherTitle')} · ${row.label} · ${[t(row.outlook === 'within_even_pace' ? 'usage.board.plans.paceWithin' : 'usage.board.plans.paceFaster'),
+          t('usage.board.plans.weatherResult', { percent: formatPlanPercent(row.projectedUsedFraction) }),
+          t('usage.board.plans.estimatedFrom', { count: row.sampleCount })].join(' · ')}`}
+    </Text>)}
+    {props.value.modelHeadroom.filter(row => row.status === 'available').map(row => <Text key={`model:${row.meterId}`} testID={`${props.testID}.modelHeadroom.${row.meterId}`}
+      style={[styles.note, text.detail]} numberOfLines={props.compact ? 2 : undefined}>
+      {`${t('usage.board.plans.modelHeadroomTitle')} · ${t('usage.board.plans.modelHeadroomResult', { model: usageDimensionLabel('model', row.modelId), percent: formatPlanPercent(row.remainingFraction) })}`}
+    </Text>)}
+    {props.value.pricePerReset.filter(row => row.status === 'available').map(row => <Text key={`price:${row.meterId}`} testID={`${props.testID}.pricePerReset.${row.meterId}`}
+      style={[styles.note, text.detail]} numberOfLines={props.compact ? 2 : undefined}>
+      {`${t('usage.board.plans.pricePerResetTitle')} · ${row.label} · ${[t('usage.board.plans.pricePerResetResult', { amount: formatUsageCost(row.amount, row.currency), count: row.recordedResetCount }),
+          row.priceKind === 'entered' ? t('usage.board.plans.planEntered', { amount: formatUsageCost(row.priceAmount, row.currency) })
+            : row.priceKind === 'paid' ? t('usage.board.plans.planPaid', { amount: formatUsageCost(row.priceAmount, row.currency) })
+              : t('usage.board.plans.planList', { amount: formatUsageCost(row.priceAmount, row.currency), date: formatWithCachedDateTimeFormatter(row.priceAsOfMs, getPreferredLanguage(), { day: 'numeric', month: 'short', year: 'numeric' }) })].join(' · ')}`}
+    </Text>)}
+  </View>;
+}
+
+/** What one account has no basis for yet; the widget says the union once, under every plan. */
+function readPlanInsightMissing(value: UsagePlanInsights['accounts'][number]): string[] {
+  return [
+    ...(value.value.status !== 'available' ? [t('usage.board.plans.planValueTitle')] : []),
+    ...(value.weather.some(row => row.status !== 'available') ? [t('usage.board.plans.weatherTitle')] : []),
+    ...(value.modelHeadroom.some(row => row.status !== 'available') ? [t('usage.board.plans.modelHeadroomTitle')] : []),
+    ...(value.pricePerReset.some(row => row.status !== 'available') ? [t('usage.board.plans.pricePerResetTitle')] : []),
+  ];
+}
+
+function RecordedWeek(props: Readonly<{ value: UsagePlanInsights['recordedWeek']; compact: boolean; testID: string }>) {
+  const text = usePlanText();
+  const value = props.value;
+  return <View style={styles.notRecorded}>
+    <UsagePlanSectionHead title={t('usage.board.plans.recordedWeekTitle')} />
+    <Text style={[styles.note, text.detail]} numberOfLines={props.compact ? 2 : undefined}
+      testID={`${props.testID}${value.status === 'available' ? '' : '.insufficient'}`}>
+      {value.status === 'available'
+        ? [t('usage.board.plans.recordedWeekResult', { days: value.recordedActiveDays, events: value.recordedEvents }),
+          value.coverage === 'partial' ? t('usage.board.plans.insightPartial') : null].filter(Boolean).join(' · ')
+        : t('usage.board.plans.recordedWeekRequires')}
+    </Text>
+  </View>;
 }
 
 const styles = StyleSheet.create((theme) => ({
   body: { gap: 14 },
   rows: { gap: 0 },
   row: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    alignItems: 'center',
-    columnGap: 16,
-    rowGap: 4,
-    paddingVertical: 10,
+    gap: theme.space.s4,
+    paddingVertical: theme.space.s10,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: theme.colors.border.default,
   },
-  rowIdentity: { flexGrow: 1, flexBasis: 180, minWidth: 0 },
+  rowHead: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s16 },
+  secondary: { ...Typography.default(), color: theme.colors.text.tertiary },
+  details: { gap: theme.space.s4 },
+  rowIdentity: { flex: 1, minWidth: 0 },
   rowFacts: {
     flexGrow: 1,
     flexBasis: 200,
     minWidth: 0,
     alignItems: 'flex-end',
   },
-  rowFit: { flexBasis: '100%', gap: 2 },
+  rowFit: { flexBasis: '100%', gap: theme.space.s2 },
   fit: {
     ...Typography.default(),
     color: theme.colors.text.secondary,
     fontVariant: ['tabular-nums'],
   },
-  notRecorded: { gap: 4 },
+  notRecorded: { gap: theme.space.s4 },
   noteTitle: { ...Typography.default('medium'), color: theme.colors.text.secondary },
   price: {
     ...Typography.default('semiBold'),

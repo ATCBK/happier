@@ -20,6 +20,7 @@ import {
     updateTeamCredentialResource,
 } from '@/sync/ops/teams/teamCredentialOperations';
 import { t } from '@/text';
+import { fireAndForget } from '@/utils/system/fireAndForget';
 
 import {
     credentialFailureMessage,
@@ -32,6 +33,7 @@ function SourceBrokerPlacementEditor(props: Readonly<{
     scope: ServerAccountScope;
     row: TeamCredentialSourceResourceAdministrationV1;
     pending: boolean;
+    disabled: boolean;
     onSave: (placement: TeamCredentialBrokerPlacementV1 | null, expectedRevision: number) => Promise<boolean>;
 }>) {
     const [draft, setDraft] = React.useState<TeamCredentialBrokerPlacementV1 | null>(props.row.brokerPlacement);
@@ -56,14 +58,14 @@ function SourceBrokerPlacementEditor(props: Readonly<{
                 brokerPresentation={props.row.brokerPresentation}
                 savedPlacement={props.row.brokerPlacement}
                 placement={draft}
-                disabled={props.pending}
+                disabled={props.disabled}
                 onChange={chooseDraft}
             />
             <ItemGroup>
                 <Item
                     testID={`shared-with-teams:broker:${props.row.id}:save`}
                     title={t('common.save')}
-                    disabled={!changed || props.pending}
+                    disabled={!changed || props.disabled}
                     loading={props.pending}
                     onPress={() => void props.onSave(draft, basisRevision.current).then((saved) => {
                         if (!saved) basisRevision.current = latestRevision.current;
@@ -90,25 +92,35 @@ export const SharedWithTeamsSourceAdministration = React.memo(function SharedWit
     const [openId, setOpenId] = React.useState<string | null>(null);
     const [nextCursor, setNextCursor] = React.useState<string | null>(null);
     const [loadingMore, setLoadingMore] = React.useState(false);
+    const [rowsCurrent, setRowsCurrent] = React.useState(false);
+    // Retained display rows cannot admit a new write while their reload is open.
+    // The ref also withdraws admission before React commits the disabled controls.
+    const rowsCurrentRef = React.useRef(false);
     const generation = React.useRef(0);
 
     const reload = React.useCallback(async () => {
         const requestGeneration = ++generation.current;
+        rowsCurrentRef.current = false;
+        setRowsCurrent(false);
         const outcome = await listTeamCredentialSourceResources(props);
         if (generation.current !== requestGeneration) return;
         if (outcome.kind === 'succeeded') {
             setRows(outcome.value.resources);
             setNextCursor(readSourceResourceNextCursor(outcome.value));
             setError(null);
+            rowsCurrentRef.current = true;
+            setRowsCurrent(true);
         } else {
             setError(credentialFailureMessage(outcome.failure));
         }
     }, [props.scope, props.source]);
     const loadMore = React.useCallback(async () => {
-        if (!nextCursor) return;
+        if (!nextCursor || !rowsCurrentRef.current) return;
+        const requestGeneration = generation.current;
         setLoadingMore(true);
         try {
             const outcome = await listTeamCredentialSourceResources({ ...props, cursor: nextCursor });
+            if (generation.current !== requestGeneration) return;
             if (outcome.kind === 'succeeded') {
                 setRows((current) => [...(current ?? []), ...outcome.value.resources.filter(
                     (row) => !(current ?? []).some((existing) => existing.id === row.id),
@@ -128,7 +140,10 @@ export const SharedWithTeamsSourceAdministration = React.memo(function SharedWit
         setError(null);
         setNextCursor(null);
         void reload();
-        return () => { generation.current += 1; };
+        return () => {
+            generation.current += 1;
+            rowsCurrentRef.current = false;
+        };
     }, [reload]);
 
     const update = React.useCallback(async (
@@ -136,6 +151,7 @@ export const SharedWithTeamsSourceAdministration = React.memo(function SharedWit
         patch: Readonly<{ enabled?: boolean; disclosureCeiling?: 'brokered_only'; brokerPlacement?: TeamCredentialBrokerPlacementV1 | null }>,
         expectedRevision = row.revision,
     ): Promise<boolean> => {
+        if (!rowsCurrentRef.current) return false;
         setPendingId(row.id);
         try {
             const outcome = await updateTeamCredentialResource({
@@ -150,7 +166,7 @@ export const SharedWithTeamsSourceAdministration = React.memo(function SharedWit
                 setError(credentialFailureMessage(outcome.failure));
                 return false;
             }
-            await reload();
+            fireAndForget(reload(), { tag: 'SharedWithTeamsSourceAdministration.revalidate' });
             return true;
         } catch (cause) {
             if (isTeamActionApprovalPendingError(cause)) approval.requestApproval(cause.registration);
@@ -162,6 +178,10 @@ export const SharedWithTeamsSourceAdministration = React.memo(function SharedWit
         }
     }, [approval, props.scope, reload]);
     const openRow = rows?.find((row) => row.id === openId) ?? null;
+    // Nothing shared is the quiet, healthy state: the page's own share action is the way in, so a
+    // section that only says "none" (or a loading row for it) is not shown. A share, a failure or a
+    // pending approval still speaks.
+    if (!approval.approvalId && !error && (rows === null || rows.length === 0)) return null;
 
     return (
         <>
@@ -174,12 +194,6 @@ export const SharedWithTeamsSourceAdministration = React.memo(function SharedWit
                 onPress={() => router.push(`/inbox/approvals/${encodeURIComponent(approval.approvalId!)}?serverId=${encodeURIComponent(props.scope.serverId)}`)}
                 showChevron={false}
             /> : null}
-            {rows === null && !error ? (
-                <Item testID="shared-with-teams:loading" title={t('common.loading')} loading showChevron={false} />
-            ) : null}
-            {rows?.length === 0 ? (
-                <Item testID="shared-with-teams:empty" mode="info" title={t('teams.credentials.sourceAdministration.empty')} showChevron={false} />
-            ) : null}
             {rows?.map((row) => (
                 <React.Fragment key={row.id}>
                     <Item
@@ -194,7 +208,7 @@ export const SharedWithTeamsSourceAdministration = React.memo(function SharedWit
                         <Item
                             testID={`shared-with-teams:narrow:${row.id}`}
                             title={t('teams.credentials.edit.ceilingBrokeredOnly')}
-                            disabled={pendingId === row.id || approval.approvalPending}
+                            disabled={!rowsCurrent || pendingId === row.id || approval.approvalPending}
                             onPress={() => void update(row, { disclosureCeiling: 'brokered_only' })}
                             showChevron={false}
                         />
@@ -203,7 +217,7 @@ export const SharedWithTeamsSourceAdministration = React.memo(function SharedWit
                         <Item
                             testID={`shared-with-teams:disable:${row.id}`}
                             title={t('common.disable')}
-                            disabled={pendingId === row.id || approval.approvalPending}
+                            disabled={!rowsCurrent || pendingId === row.id || approval.approvalPending}
                             onPress={async () => {
                                 if (!await Modal.confirm(t('common.disable'), t('teams.credentials.delete.body'), { confirmText: t('common.disable'), destructive: true })) return;
                                 await update(row, { enabled: false });
@@ -215,7 +229,7 @@ export const SharedWithTeamsSourceAdministration = React.memo(function SharedWit
                         <Item
                             testID={`shared-with-teams:enable:${row.id}`}
                             title={t('common.enable')}
-                            disabled={pendingId === row.id || approval.approvalPending}
+                            disabled={!rowsCurrent || pendingId === row.id || approval.approvalPending}
                             onPress={() => void update(row, { enabled: true })}
                             showChevron={false}
                         />
@@ -225,14 +239,20 @@ export const SharedWithTeamsSourceAdministration = React.memo(function SharedWit
                             testID={`shared-with-teams:delete:${row.id}`}
                             title={t('teams.credentials.delete.action')}
                             destructive
-                            disabled={pendingId === row.id || approval.approvalPending}
+                            disabled={!rowsCurrent || pendingId === row.id || approval.approvalPending}
                             onPress={async () => {
+                                if (!rowsCurrentRef.current) return;
                                 if (!await Modal.confirm(t('teams.credentials.delete.title', { name: row.displayName }), t('teams.credentials.delete.body'), { confirmText: t('teams.credentials.delete.action'), destructive: true })) return;
+                                if (!rowsCurrentRef.current) return;
                                 setPendingId(row.id);
                                 try {
                                     const outcome = await deleteTeamCredentialResource({ scope: props.scope, resourceId: row.id, expectedRevision: row.revision, confirmedByPresentUser: true });
-                                    await reload();
-                                    if (outcome.kind === 'failed') setError(credentialFailureMessage(outcome.failure));
+                                    if (outcome.kind === 'failed') {
+                                        await reload();
+                                        setError(credentialFailureMessage(outcome.failure));
+                                    } else {
+                                        fireAndForget(reload(), { tag: 'SharedWithTeamsSourceAdministration.revalidate' });
+                                    }
                                 } catch (cause) {
                                     if (isTeamActionApprovalPendingError(cause)) approval.requestApproval(cause.registration);
                                     await reload();
@@ -246,7 +266,7 @@ export const SharedWithTeamsSourceAdministration = React.memo(function SharedWit
                     ) : null}
                 </React.Fragment>
             ))}
-            {nextCursor ? <Item testID="shared-with-teams:load-more" title={t('common.next')} disabled={loadingMore} loading={loadingMore} onPress={() => void loadMore()} showChevron={false} /> : null}
+            {nextCursor ? <Item testID="shared-with-teams:load-more" title={t('common.next')} disabled={!rowsCurrent || loadingMore} loading={loadingMore} onPress={() => void loadMore()} showChevron={false} /> : null}
             {error && rows === null ? (
                 <Item testID="shared-with-teams:retry" title={t('common.retry')} onPress={() => void reload()} showChevron={false} />
             ) : null}
@@ -257,6 +277,7 @@ export const SharedWithTeamsSourceAdministration = React.memo(function SharedWit
                 scope={props.scope}
                 row={openRow}
                 pending={pendingId === openRow.id || approval.approvalPending}
+                disabled={!rowsCurrent || pendingId === openRow.id || approval.approvalPending}
                 onSave={(brokerPlacement, expectedRevision) => update(openRow, { brokerPlacement }, expectedRevision)}
             />
         ) : null}

@@ -100,6 +100,7 @@ export function buildTeamCredentialBrokerMachineSelection(params: Readonly<{
         isInventoryKnown: () => params.selectedMachineId === null || !eligibleByMachineId.has(params.selectedMachineId),
     });
     const selection: MachineAdministrationTargetSelectionV1 = {
+        changeIntent: 'draft',
         candidates,
         pickerRows,
         state,

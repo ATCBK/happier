@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
@@ -27,13 +27,15 @@ vi.mock('@/text', async () => {
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
 installDisconnectedServerSocketBoundary();
-beforeAll(async () => {
-    vi.stubEnv('EXPO_PUBLIC_SYSTEM_TASKS_RUNNER_MODE', 'unavailable');
-    await loadSyncSingletonForTests();
-});
+vi.stubEnv('EXPO_PUBLIC_SYSTEM_TASKS_RUNNER_MODE', 'unavailable');
+await loadSyncSingletonForTests();
+const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+const { useServerSettingsScreenController } = await import('./useServerSettingsScreenController');
+const { updateEffectiveHomeViewState, loadEffectiveHomeViewState } = await import('@/sync/domains/server/selection/homeViewSelectionState');
+const { readUsableHomeServerIds } = await import('@/sync/domains/scope/usableHomeServerIds');
+const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
 beforeEach(async () => {
     await harness.reset();
-    const { updateEffectiveHomeViewState } = await import('@/sync/domains/server/selection/homeViewSelectionState');
     await updateEffectiveHomeViewState(() => ({
         version: 1, groups: [], activeTargetKind: null, activeTargetId: null,
     }), { scope: 'device' });
@@ -48,8 +50,6 @@ async function addHomes() {
 }
 
 async function renderController() {
-    const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
-    const { useServerSettingsScreenController } = await import('./useServerSettingsScreenController');
     return renderHook(() => useServerSettingsScreenController(), {
         wrapper: ({ children }) => <InjectedAuthProvider credentials={null}>{children}</InjectedAuthProvider>,
     });
@@ -58,7 +58,6 @@ async function renderController() {
 describe('useServerSettingsScreenController', () => {
     it('uses explicit active server target kind/id when present', async () => {
         const { a } = await addHomes();
-        const { updateEffectiveHomeViewState } = await import('@/sync/domains/server/selection/homeViewSelectionState');
         await updateEffectiveHomeViewState(() => ({
             version: 1,
             groups: [{ id: 'grp-one', name: 'Group One', serverIds: [a], presentation: 'grouped' }],
@@ -70,9 +69,7 @@ describe('useServerSettingsScreenController', () => {
 
     it('keeps an explicit All Homes selection rather than treating it as a stale group', async () => {
         const { a, b } = await addHomes();
-        const { readUsableHomeServerIds } = await import('@/sync/domains/scope/usableHomeServerIds');
         await waitForHomeGovernance(() => expect(readUsableHomeServerIds()).toEqual([a, b].sort()));
-        const { updateEffectiveHomeViewState, loadEffectiveHomeViewState } = await import('@/sync/domains/server/selection/homeViewSelectionState');
         await updateEffectiveHomeViewState(() => ({
             version: 1, groups: [], activeTargetKind: 'group', activeTargetId: '@all-homes',
         }), { scope: 'device' });
@@ -85,8 +82,6 @@ describe('useServerSettingsScreenController', () => {
 
     it('keeps a valid explicit Home target when another Home is focused', async () => {
         const { a, b } = await addHomes();
-        const { updateEffectiveHomeViewState } = await import('@/sync/domains/server/selection/homeViewSelectionState');
-        const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
         await updateEffectiveHomeViewState(() => ({
             version: 1, groups: [], activeTargetKind: 'server', activeTargetId: a,
         }), { scope: 'device' });

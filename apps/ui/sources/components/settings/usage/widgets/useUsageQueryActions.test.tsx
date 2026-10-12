@@ -2,7 +2,11 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { normalizeUsageQuery, type UsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
+import { ActionsSettingsV1Schema } from '@happier-dev/protocol';
 import { createDeferred, renderScreen } from '@/dev/testkit';
+import { serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { InjectedAuthProvider } from '@/auth/context/AuthContext';
+import type { Credentials } from '@/auth/storage/tokenStorage';
 import { readNewSessionDraftFromRepository } from '@/components/sessions/composer/newSessionDraftRepositoryAdapter';
 import { readPresentationNotice, retirePresentationNotice } from '@/components/sessions/presentation/presentationNotices';
 import type { ItemAction } from '@/components/ui/lists/itemActions';
@@ -14,7 +18,7 @@ import { useUsageQueryActions } from './useUsageQueryActions';
 
 const navigation = vi.hoisted(() => ({ push: vi.fn<(route: unknown) => void>() }));
 // The system clipboard is the only boundary below the real clipboard adapter.
-const clipboard = vi.hoisted(() => ({ setStringAsync: vi.fn<(value: string) => Promise<void>>() }));
+const clipboard = vi.hoisted(() => ({ setStringAsync: vi.fn<(value: string) => Promise<boolean>>() }));
 vi.mock('expo-clipboard', () => clipboard);
 vi.mock('expo-router', async () =>
   (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({ router: navigation }).module,
@@ -23,10 +27,14 @@ vi.mock('react-native-unistyles', async () =>
   (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock(),
 );
 vi.mock('@/text', async () =>
-  (await import('@/dev/testkit/mocks/text')).createTextModuleMock(),
+  (await import('@/dev/testkit/mocks/text')).createTextModuleMock({
+    translate: (key, params) => key === 'usage.board.page.askPrompt' ? String(params?.query) : key,
+  }),
 );
 
-const scope = { serverId: 'usage-ask-home', accountId: 'account-a' } as const;
+let home: Awaited<ReturnType<typeof serveActionHomes>>;
+let credentials: Credentials;
+let scope: { serverId: string; accountId: string };
 const query = normalizeUsageQuery({
   period: { startMs: 1_700_000_000_000, endMs: 1_700_086_400_000 },
   agents: ['codex', 'claude'],
@@ -48,7 +56,7 @@ async function mountActions(shownQuery: UsageQuery | null = query) {
     return null;
   }
   const screen = await renderScreen(
-    <WidgetFrameBodyActionsContext.Provider value={lend}><Body /></WidgetFrameBodyActionsContext.Provider>,
+    <InjectedAuthProvider credentials={credentials}><WidgetFrameBodyActionsContext.Provider value={lend}><Body /></WidgetFrameBodyActionsContext.Provider></InjectedAuthProvider>,
   );
   const ask = projection.actions?.find(action => action.id === 'usageAsk');
   const copy = projection.actions?.find(action => action.id === 'usageCopyQuery');
@@ -62,9 +70,14 @@ function openedDraft() {
   return readNewSessionDraftFromRepository({ scope, draftId: route!.params.draftId });
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  home = await serveActionHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-ask.test', accountId: 'account-a' }],
+    route: request => request.path === '/v1/kv/bulk' ? Response.json({ values: [] }) : undefined });
+  scope = { serverId: home.homes.a!.id, accountId: 'account-a' };
+  const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+  credentials = (await TokenStorage.getCredentialsForServerUrl(home.homes.a!.serverUrl))!;
   navigation.push.mockReset();
-  clipboard.setStringAsync.mockReset().mockResolvedValue();
+  clipboard.setStringAsync.mockReset().mockResolvedValue(true);
   retirePresentationNotice();
   resetSessionDraftRepositoryForTests();
   storage.getState().activateProfileScope(scope);
@@ -72,18 +85,29 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  home?.dispose();
   publishAppliedActiveServerRuntimeAvailability(false);
   resetSessionDraftRepositoryForTests();
   retirePresentationNotice();
 });
 
 describe('Usage Ask composer handoff', () => {
+  it('honours disabled Session authoring Action admission before preparing a draft', async () => {
+    const settings = storage.getState().settings;
+    storage.getState().applySettingsForScope(scope, { ...settings, actionsSettingsV1: ActionsSettingsV1Schema.parse({
+      v: 1, actions: { 'session.authoring.open': { disabledSurfaces: ['ui'] } },
+    }) }, 2);
+    const { ask } = await mountActions();
+    await act(async () => { await ask!.onPress!(); });
+    expect(navigation.push).not.toHaveBeenCalled();
+  });
+
   it('opens the real durable composer with the selected normalized query and reports no failure', async () => {
     const { ask } = await mountActions();
     expect(ask).toBeDefined();
-    act(() => ask!.onPress!());
+    await act(async () => { await ask!.onPress!(); });
     const draft = openedDraft();
-    expect(draft?.input).toContain(JSON.stringify(query, null, 2));
+    expect(normalizeUsageQuery(JSON.parse(draft?.input ?? 'null'))).toEqual(query);
     expect(draft?.entryIntent).toBe('session');
     // Preparation leaves the target choices editable; it does not request execution.
     expect(draft?.selectedMachineId).toBeNull();
@@ -94,7 +118,7 @@ describe('Usage Ask composer handoff', () => {
   it('does not reuse a retained Account-A query action after Account B becomes active', async () => {
     const { ask } = await mountActions();
     storage.getState().activateProfileScope({ ...scope, accountId: 'account-b' });
-    act(() => ask!.onPress!());
+    await act(async () => { await ask!.onPress!(); });
     expect(navigation.push).not.toHaveBeenCalled();
     expect(readPresentationNotice()).toBeNull();
   });
@@ -102,7 +126,7 @@ describe('Usage Ask composer handoff', () => {
   it('cancels a retained action when its active Home runtime retires', async () => {
     const { ask } = await mountActions();
     publishAppliedActiveServerRuntimeAvailability(false);
-    act(() => ask!.onPress!());
+    await act(async () => { await ask!.onPress!(); });
     expect(navigation.push).not.toHaveBeenCalled();
     expect(readPresentationNotice()).toBeNull();
   });
@@ -110,8 +134,8 @@ describe('Usage Ask composer handoff', () => {
   it('keeps a navigation failure visible while retaining the editable draft for recovery', async () => {
     const { ask } = await mountActions();
     navigation.push.mockImplementation(() => { throw new Error('navigation unavailable'); });
-    act(() => ask!.onPress!());
-    expect(openedDraft()?.input).toContain(JSON.stringify(query, null, 2));
+    await act(async () => { await ask!.onPress!(); });
+    expect(normalizeUsageQuery(JSON.parse(openedDraft()?.input ?? 'null'))).toEqual(query);
     expect(readPresentationNotice()).toMatchObject({ key: 'usage-ask:usage_daily', severity: 'error' });
   });
 
@@ -127,14 +151,37 @@ describe('Usage Ask composer handoff', () => {
     expect(readPresentationNotice()).toBeNull();
   });
 
+  it('honours disabled clipboard Action admission before copying the shown query', async () => {
+    const settings = storage.getState().settings;
+    storage.getState().applySettingsForScope(scope, { ...settings, actionsSettingsV1: ActionsSettingsV1Schema.parse({
+      v: 1, actions: { 'clipboard.write': { disabledSurfaces: ['ui'] } },
+    }) }, 2);
+    const { copy } = await mountActions();
+    await act(async () => { await copy!.onPress!(); });
+    expect(clipboard.setStringAsync).not.toHaveBeenCalled();
+    expect(readPresentationNotice()).toMatchObject({ key: 'usage-copy-query:usage_daily', severity: 'error' });
+  });
+
+  it.each([true, false])('copies the normalized shown query and reports clipboard success %s', async copied => {
+    clipboard.setStringAsync.mockResolvedValue(copied);
+    const { copy } = await mountActions();
+    await act(async () => { await copy!.onPress!(); });
+    await vi.waitFor(() => expect(readPresentationNotice()).toMatchObject({
+      key: 'usage-copy-query:usage_daily', severity: copied ? 'info' : 'error',
+    }));
+    expect(normalizeUsageQuery(JSON.parse(clipboard.setStringAsync.mock.calls[0]?.[0] ?? 'null'))).toEqual(query);
+  });
+
   it('copies the selected query but retires a late clipboard notification with its Account', async () => {
-    const pending = createDeferred<void>();
+    const pending = createDeferred<boolean>();
     clipboard.setStringAsync.mockImplementation(() => pending.promise);
     const { copy } = await mountActions();
-    act(() => copy!.onPress!());
-    expect(clipboard.setStringAsync).toHaveBeenCalledWith(JSON.stringify(query, null, 2));
+    let copying: unknown;
+    act(() => { copying = copy!.onPress!(); });
+    await vi.waitFor(() => expect(normalizeUsageQuery(JSON.parse(clipboard.setStringAsync.mock.calls[0]?.[0] ?? 'null'))).toEqual(query));
+    expect(readPresentationNotice()).toBeNull();
     storage.getState().activateProfileScope({ ...scope, accountId: 'account-b' });
-    await act(async () => pending.resolve());
+    await act(async () => { pending.resolve(true); await copying; });
     expect(readPresentationNotice()).toBeNull();
   });
 });

@@ -16,7 +16,8 @@ import { SelectionTiles } from '@/components/ui/forms/SelectionTiles';
 import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
-import { useSettingMutable } from '@/sync/domains/state/storage';
+import { useSetting, useSettingMutable } from '@/sync/domains/state/storage';
+import { useSettingActionFeedback } from '@/components/settings/shell/useSettingActionFeedback';
 import {
     type ToolTimelineChromeMode,
     type ToolViewDetailLevelSetting,
@@ -58,6 +59,8 @@ export const TranscriptSettingsView = React.memo(function TranscriptSettingsView
 
     const [transcriptGroupingMode, setTranscriptGroupingMode] = useSettingMutable('transcriptGroupingMode');
     const [transcriptShowToolCalls, setTranscriptShowToolCalls] = useSettingMutable('transcriptShowToolCalls');
+    const agentHtmlNetworkPolicy = useSetting('agentHtmlNetworkPolicy');
+    const { setSetting } = useSettingActionFeedback();
     const [transcriptGroupToolCalls, setTranscriptGroupToolCalls] = useSettingMutable('transcriptGroupToolCalls');
     const [transcriptTurnToolCallsGroupStrategy, setTranscriptTurnToolCallsGroupStrategy] = useSettingMutable('transcriptTurnToolCallsGroupStrategy');
     const [transcriptToolCallsCollapsedPreviewCount, setTranscriptToolCallsCollapsedPreviewCount] = useSettingMutable('transcriptToolCallsCollapsedPreviewCount');
@@ -512,6 +515,28 @@ export const TranscriptSettingsView = React.memo(function TranscriptSettingsView
                 </ItemGroup>
             </SettingSection>
 
+            <SettingSection section={TRANSCRIPT_SETTINGS.sectionRefs.agentVisuals}>
+                <ItemGroup title={t('settingsSessionPages.transcript.agentVisualsSection')} description={t('settingsSessionPages.transcript.agentVisualsDescription')}>
+                    {/* The pre-approval for network in agent HTML: it decides new visuals only; an existing visual's network changes through its own approval. */}
+                    <SettingAnchor setting={TRANSCRIPT_SETTINGS.settings.agentHtmlNetworkPolicy}>
+                        <SegmentedChoiceItem<AccountSettings['agentHtmlNetworkPolicy']>
+                            subtitleLines={0}
+                            testID="settings-session-transcript-agent-html-network"
+                            testIDPrefix="settings-session-transcript-agent-html-network"
+                            title={t(TRANSCRIPT_SETTINGS.settings.agentHtmlNetworkPolicy.titleKey)}
+                            options={[
+                                { id: 'allowed', label: t('settingsSession.transcript.agentHtmlNetworkAllowed'), description: t('settingsSession.transcript.agentHtmlNetworkAllowedSubtitle') },
+                                { id: 'ask', label: t('settingsSession.transcript.agentHtmlNetworkAsk'), description: t('settingsSession.transcript.agentHtmlNetworkAskSubtitle') },
+                                { id: 'off', label: t('settingsSession.transcript.agentHtmlNetworkOff'), description: t('settingsSession.transcript.agentHtmlNetworkOffSubtitle') },
+                            ]}
+                            value={agentHtmlNetworkPolicy}
+                            onChange={value => { void setSetting(TRANSCRIPT_SETTINGS.settings.agentHtmlNetworkPolicy, value); }}
+                        />
+                    </SettingAnchor>
+                </ItemGroup>
+            </SettingSection>
+
+            <SettingSection section={TRANSCRIPT_SETTINGS.sectionRefs.group}>
             <ItemGroup title={t('settingsSession.transcript.messageActions.groupTitle')} description={t('settingsSession.transcript.messageActions.groupFooter')}>
                 <SettingRow testID="settings-transcript-copy-enabled" setting={TRANSCRIPT_SETTINGS.settings.copyEnabled}
                     rightElement={<Switch value={transcriptMessageCopyActionEnabled !== false} onValueChange={setTranscriptMessageCopyActionEnabled} />}
@@ -541,6 +566,11 @@ export const TranscriptSettingsView = React.memo(function TranscriptSettingsView
                     showChevron={false}
                     onPress={() => setTranscriptMessageSelectionEnabled(!(transcriptMessageSelectionEnabled === true))}
                 />
+            </ItemGroup>
+            </SettingSection>
+
+            <SettingSection section={TRANSCRIPT_SETTINGS.sectionRefs.selection}>
+            <ItemGroup title={t('settingsSession.transcript.messageActions.selectionTitle')} description={t('settingsSession.transcript.messageActions.selectionDescription')}>
                 <SettingRow
                     testID="settings-session-transcript-message-send-to-session-enabled"
                     setting={TRANSCRIPT_SETTINGS.settings.sendToSessionEnabled}
@@ -556,7 +586,7 @@ export const TranscriptSettingsView = React.memo(function TranscriptSettingsView
                     accessoryLayout="stacked"
                     showChevron={false}
                     rightElement={(
-                        <View style={{ gap: 6 }}>
+                        <View style={{ gap: theme.space.s6 }}>
                             <FieldTextInput
                                 testID="settings-session-transcript-message-send-template-input"
                                 accessibilityLabel={t('settingsSession.transcript.messageActions.template.title')}
@@ -589,6 +619,7 @@ export const TranscriptSettingsView = React.memo(function TranscriptSettingsView
                     />
                 </SettingAnchor>
             </ItemGroup>
+            </SettingSection>
 
             <ItemGroup title={t('settingsSession.transcript.motionTitle')} description={t('settingsSession.transcript.motionFooter')}>
                 <SettingAnchor setting={TRANSCRIPT_SETTINGS.settings.motionPicker}>
@@ -653,9 +684,7 @@ export const TranscriptSettingsView = React.memo(function TranscriptSettingsView
 
 const styles = StyleSheet.create({
     templateTip: {
-        ...Typography.default('regular'),
-        fontSize: 12,
-        lineHeight: 16,
+        ...Typography.variant('meta'),
     },
 });
 

@@ -4,7 +4,7 @@ import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { Modal } from '@/modal';
 import { ArtifactActionOutputSchemasV1, type ArtifactRevisionV1 } from '@happier-dev/protocol/artifacts/artifactActionsV1';
 import { ArtifactOrganizationMutationFailureV1 } from '@happier-dev/protocol/prompts/library/promptFolderActionsV1';
-import { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
@@ -27,6 +27,7 @@ export function usePromptLibraryEntryActions(kind: 'doc' | 'bundle', requestedSc
     const scope = requestedScope === undefined ? activeScope : requestedScope;
     const serverId = scope?.serverId;
     const accountId = scope?.accountId;
+    const { execute } = useMountedActionExecution(scope);
 
     /** Resolves `true` once the item is gone, so its editor can leave. */
     const remove = React.useCallback(async (artifactId: string): Promise<boolean> => {
@@ -50,11 +51,10 @@ export function usePromptLibraryEntryActions(kind: 'doc' | 'bundle', requestedSc
             context = await captureLazyActionAccountContext(serverId);
             if (context.accountId !== accountId) throw new Error('action_account_scope_changed');
             retirement = context.accountLifetime.onRetire(() => controller.abort());
-            const executor = createDefaultActionExecutor();
-            const actionContext = { serverId: context.serverId, surface: 'ui' as const, authority: 'present_user' as const, signal: controller.signal };
+            const actionContext = { signal: controller.signal };
             let expectedRevision = review?.expectedRevision;
             if (!expectedRevision) {
-                const opened = await executor.execute('artifact.get', { artifactId }, actionContext);
+                const opened = await execute('artifact.get', { artifactId }, actionContext);
                 if (!opened.ok) throw new Error(opened.errorCode);
                 const document = ArtifactActionOutputSchemasV1['artifact.get'].parse(opened.result).artifact;
                 if (!document) throw new Error('not_found');
@@ -62,15 +62,17 @@ export function usePromptLibraryEntryActions(kind: 'doc' | 'bundle', requestedSc
             }
             context.assertCurrent();
             review?.assertCurrent?.();
-            const deleted = await executor.execute('artifact.delete', { artifactId, expectedRevision }, actionContext);
+            const deleted = await execute('artifact.delete', { artifactId, expectedRevision }, actionContext);
             if (!deleted.ok) throw new Error(deleted.errorCode);
             ArtifactActionOutputSchemasV1['artifact.delete'].parse(deleted.result);
+            context.assertCurrent();
+            review?.assertCurrent?.();
             return true;
         } catch {
             Modal.alert(t('common.error'), t('errors.unknownError'));
             return false;
         } finally { retirement?.dispose(); context?.dispose(); }
-    }, [accountId, serverId, review?.assertCurrent, review?.expectedRevision]);
+    }, [accountId, serverId, execute, review?.assertCurrent, review?.expectedRevision]);
 
     const duplicate = React.useCallback(async (artifactId: string) => {
         let context: Awaited<ReturnType<typeof captureLazyActionAccountContext>> | undefined;
@@ -83,8 +85,10 @@ export function usePromptLibraryEntryActions(kind: 'doc' | 'bundle', requestedSc
             if (context.accountId !== accountId) throw new Error('action_account_scope_changed');
             retirement = context.accountLifetime.onRetire(() => controller.abort());
             const nextArtifactId = kind === 'doc'
-                ? await duplicatePromptDoc(artifactId, { serverId: context.serverId, signal: controller.signal })
-                : await duplicatePromptBundle(artifactId, { serverId: context.serverId, signal: controller.signal });
+                ? await duplicatePromptDoc(artifactId, { serverId: context.serverId, expectedAccountId: context.accountId,
+                    signal: controller.signal, executeAction: execute })
+                : await duplicatePromptBundle(artifactId, { serverId: context.serverId, expectedAccountId: context.accountId,
+                    signal: controller.signal, executeAction: execute });
             context.assertCurrent();
             review?.assertCurrent?.();
             router.push(promptCollectionItemHref(kind, nextArtifactId, { serverId }) as never);
@@ -98,7 +102,7 @@ export function usePromptLibraryEntryActions(kind: 'doc' | 'bundle', requestedSc
             }
             Modal.alert(t('common.error'), t('errors.unknownError'));
         } finally { retirement?.dispose(); context?.dispose(); }
-    }, [kind, router, serverId, accountId, review?.assertCurrent]);
+    }, [kind, router, serverId, accountId, execute, review?.assertCurrent]);
 
     const manageExternalAssets = React.useCallback((artifactId: string) => {
         if (!serverId) return;

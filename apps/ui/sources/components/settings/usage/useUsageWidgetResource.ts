@@ -73,10 +73,16 @@ export function useUsageWidgetBodyModel(resource: UsageWidgetResource, instanceI
     const error = React.useMemo(() => snapshot.error ?? (sourceError
         ? { code: sourceError.errorCode!, message: sourceError.errorCode! } : null), [snapshot.error, sourceError]);
     const refresh = React.useCallback(async () => { if (lifetime?.isCurrent()) await entry?.refresh(); }, [entry, lifetime]);
+    // The batch may still be reading private detail or allowance after accounting
+    // settles. Those sources keep their own pending state; they do not re-read
+    // the already shown accounting. Before the first progress snapshot, retain
+    // the entry's activity so an actual refresh is still visible immediately.
+    const accountingPending = !slice || slice.sources.some(source => source.source === 'accounting' && source.status === 'pending')
+        || slice.comparison?.source.status === 'pending';
     return { requestedQuery: current ? identity : null,
         shownQuery: slice ? identity : retained?.identity ?? null, slice: shownSlice,
         pending: current && (snapshot.pending !== 'idle' || slice?.pending === true),
         error: current ? error : null, freshness: shownSlice && sourceError ? 'stale' : snapshot.freshness,
         updatingPreviousPeriod: !slice && retained !== null,
-        refreshing: current && shownSlice !== null && snapshot.pending !== 'idle', refresh };
+        refreshing: current && shownSlice !== null && snapshot.pending !== 'idle' && accountingPending, refresh };
 }

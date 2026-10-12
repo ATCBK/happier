@@ -1,6 +1,8 @@
 import * as React from 'react';
 import type { PluginUiThemeV1 } from '@happier-dev/plugin-sdk/ui';
-import { useUnistyles } from 'react-native-unistyles';
+import { View } from 'react-native';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import type { UsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import type { UsageBuiltinWidgetIdV1 } from '@happier-dev/protocol/widgets';
 import type {
@@ -13,14 +15,20 @@ import { resolveAgentCatalogProjection } from '@/agents/backendCatalog/agentCata
 import { ICON_SIZE } from '@/components/ui/icons/Icon';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
+import { HappierSkeletonBlock } from '@happier-dev/plugin-ui/presentation';
+import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import {
   buildUsageAnalyticsViewModel,
   type UsageAnalyticsViewModel,
 } from '@/sync/api/account/usageAnalytics';
 import { getPreferredLanguage, t, type TranslationKeyNoParams } from '@/text';
-import type { UsageAnalyticsCoverage } from '@happier-dev/protocol';
+import { projectUsagePageCost } from '@happier-dev/protocol/usage/usageCostFacts';
+import { type UsagePageCostProjection, type UsageAnalyticsCoverage } from '@happier-dev/protocol';
 import type { UsageWidgetBodyModel } from '../useUsageWidgetResource';
-import { formatUsageCalendarPeriod } from '@/sync/domains/usage/usageCalendarPresentation';
+import { formatUsageCalendarPeriod, formatUsageObservedAt } from '@/sync/domains/usage/usageCalendarPresentation';
+import { usageSourceTitle } from '@/sync/domains/usage/usageLabels';
+export { usageSourceTitle, usageAgentTitle, usageDimensionLabel } from '@/sync/domains/usage/usageLabels';
+import { useUsageWidgetPageHasCoverageDetail } from './usageWidgetBatch';
 
 /** What every Usage body receives from the one dispatcher: admitted facts, never a fetch handle. */
 export type UsageBodyProps = Readonly<{
@@ -44,13 +52,14 @@ export function usagePeriodPhrase(query: Pick<UsageQuery, 'period' | 'timeZoneOf
 }
 
 // One projection per admitted accounting response and presentation; bodies share it, never rebuild it.
-const viewModels = new WeakMap<object, Map<string, UsageAnalyticsViewModel>>();
+type UsageBodyAnalyticsView = UsageAnalyticsViewModel & Readonly<{ pageCost: UsagePageCostProjection }>;
+const viewModels = new WeakMap<object, Map<string, UsageBodyAnalyticsView>>();
 
 /** The incumbent UI projection of A facts for this slice (A owns the numbers, this only shapes them). */
 export function useUsageAnalyticsView(
   slice: UsageQueryResultSlice,
   query: UsageQuery,
-): UsageAnalyticsViewModel | null {
+): UsageBodyAnalyticsView | null {
   const accounting = slice.accounting;
   const language = getPreferredLanguage();
   return React.useMemo(() => {
@@ -63,12 +72,13 @@ export function useUsageAnalyticsView(
     }
     const cached = byKey.get(key);
     if (cached) return cached;
-    const built = buildUsageAnalyticsViewModel(
+    const analytics = buildUsageAnalyticsViewModel(
       accounting,
       // The response already carries the admitted range; the legacy array filter is unused here.
       { period: 'all', metric: query.metric, costMode: query.costBasis, focus: null },
       query.timeZoneOffsetMinutes ?? 0,
     );
+    const built = { ...analytics, pageCost: analytics.pageCost ?? projectUsagePageCost(accounting, query.costBasis) };
     byKey.set(key, built);
     return built;
   }, [
@@ -84,11 +94,51 @@ export function useUsageAnalyticsView(
  * A supported, visible result for a fact this query cannot answer yet. It says what is missing and
  * why; it never draws zero.
  */
+/**
+ * A first read that has not answered yet holds the body's room with the shared skeleton, in the shape of
+ * what lands (a figure, its meter, a caption line); it never reads as "none" (lab kitstates "Loading ·
+ * first time"). The page header already says what is still being read.
+ */
+export function UsageBodyReading(props: Readonly<{ testID: string }>) {
+  const { theme } = useUnistyles();
+  const reducedMotion = useReducedMotionPreference();
+  const color = theme.colors.surface.pressedOverlay;
+  return (
+    <View testID={props.testID} style={readingStyles.body}>
+      <HappierSkeletonBlock color={color} width="28%" height={28} radius={6} reducedMotion={reducedMotion} />
+      <HappierSkeletonBlock color={color} width="100%" height={8} radius={4} reducedMotion={reducedMotion} />
+      <HappierSkeletonBlock color={color} width="56%" height={12} radius={4} reducedMotion={reducedMotion} />
+    </View>
+  );
+}
+
+const readingStyles = StyleSheet.create(() => ({ body: { gap: 12, paddingVertical: 4 } }));
+
+/** True while every read a body depends on is still outstanding (pending or not yet loaded). */
+export function isUsageReadOutstanding(slice: UsageQueryResultSlice, sources: readonly string[]): boolean {
+  const gaps = readUsageCoverageGaps(slice, sources);
+  return gaps.length > 0 && gaps.every(gap => gap.status === 'pending' || gap.status === 'not_loaded');
+}
+
+/** "No usage in this period" only once the usage read answered; until then the body is loading. */
+export function UsageBodyNoUsage(props: Readonly<{ slice: UsageQueryResultSlice; testID: string }>) {
+  if (isUsageReadOutstanding(props.slice, ['accounting'])) return <UsageBodyReading testID={`${props.testID}.loading`} />;
+  return (
+    <UsageBodyInsufficient
+      testID={`${props.testID}.empty`}
+      title={t('usage.board.page.noUsageTitle')}
+      reason={t('usage.board.page.noUsageReason')}
+    />
+  );
+}
+
 export function UsageBodyInsufficient(
   props: Readonly<{
     title: string;
     reason?: string;
     testID: string;
+    /** False for an insufficient sub-section beside admitted facts. */
+    replacesContent?: boolean;
     action?: Readonly<{ label: string; onPress: () => void }>;
   }>,
 ) {
@@ -96,6 +146,7 @@ export function UsageBodyInsufficient(
     <SurfaceStateCard
       testID={props.testID}
       kind="empty"
+      replacesContent={props.replacesContent !== false}
       layout="inline"
       size="line"
       title={props.title}
@@ -110,27 +161,6 @@ export function UsageBodyInsufficient(
         : {})}
     />
   );
-}
-
-const SOURCE_LABEL_KEYS: Readonly<
-  Record<
-    string,
-    | 'usage.board.page.sourceAccounting'
-    | 'usage.board.page.sourceQuota'
-    | 'usage.board.page.sourceWork'
-    | 'usage.board.page.sourceHowYouWork'
-    | 'usage.board.page.sourceComparison'
-  >
-> = {
-  accounting: 'usage.board.page.sourceAccounting',
-  quota: 'usage.board.page.sourceQuota',
-  work: 'usage.board.page.sourceWork',
-  how_you_work: 'usage.board.page.sourceHowYouWork',
-  comparison: 'usage.board.page.sourceComparison',
-};
-function sourceLabel(source: string): string {
-  const key = SOURCE_LABEL_KEYS[source];
-  return key ? t(key) : source;
 }
 
 const COVERAGE_REASON_KEYS = {
@@ -161,7 +191,54 @@ export function readUsageCoverageGaps(
     && !gaps.some(source => source.source === 'accounting')) {
     gaps.unshift({ source: 'accounting', status: accounting.status === 'complete' ? 'partial' : accounting.status });
   }
-  return gaps;
+  const unique = new Map<string, UsageQuerySourceState>();
+  const severity = { available: 0, unsupported: 1, unknown: 2, stale: 3, partial: 4, not_loaded: 5, pending: 6, error: 7 };
+  for (const gap of gaps) {
+    const previous = unique.get(gap.source);
+    if (!previous) { unique.set(gap.source, gap); continue; }
+    const worst = severity[gap.status] > severity[previous.status] ? gap : previous;
+    const dates = [previous.asOfMs, gap.asOfMs].filter((date): date is number => date !== undefined);
+    unique.set(gap.source, { ...worst, ...(dates.length ? { asOfMs: Math.min(...dates) } : {}) });
+  }
+  return [...unique.values()];
+}
+
+/** One wording owner for inline coverage and the page's Sources chooser. */
+export function usageCoverageDescription(slice: UsageQueryResultSlice, sources: readonly string[]): string {
+  const gaps = readUsageCoverageGaps(slice, sources);
+  if (!gaps.length) return '';
+  const names = [...new Set(gaps.map(gap => gap.status === 'unsupported'
+    ? `${usageSourceTitle(gap.source)} (${t('usage.board.sources.unsupported')})` : usageSourceTitle(gap.source)))].join(', ');
+  const key = gaps.some(gap => gap.status === 'error') ? 'usage.board.page.coverageFailed'
+    : gaps.every(gap => gap.status === 'pending' || gap.status === 'not_loaded') ? 'usage.board.page.coveragePending'
+      : 'usage.board.page.coveragePartial';
+  const reasons = sources.includes('accounting')
+    ? [...new Set(slice.accounting?.coverage?.reasons ?? [])].map(reason => t(COVERAGE_REASON_KEYS[reason])) : [];
+  return [t(key, { sources: names }), ...reasons].join(' · ');
+}
+
+export type UsageCoverageLineMode = 'hidden' | 'failed' | 'detail';
+
+/**
+ * Coverage is said once per surface. On the Usage page the Sources chooser carries the one quiet dot
+ * and its detail, and the page header says once what is still being read, so a body keeps a line only
+ * for a failed read (with Retry). Hosts without those page indicators keep the full detail line.
+ */
+export function usageCoverageLineMode(gaps: readonly Pick<UsageQuerySourceState, 'status'>[], pageHasDetail: boolean): UsageCoverageLineMode {
+  if (gaps.length === 0) return 'hidden';
+  if (gaps.some(gap => gap.status === 'error')) return pageHasDetail ? 'failed' : 'detail';
+  return pageHasDetail ? 'hidden' : 'detail';
+}
+
+/** The page header's one "Still reading …" fact: every source any view's read still waits on, named once. */
+const USAGE_PAGE_READ_SOURCES: ReadonlySet<string> = new Set(['accounting', 'quota', 'work', 'how_you_work']);
+
+export function describeUsagePagePendingSources(slices: readonly Pick<UsageQueryResultSlice, 'sources'>[]): string | null {
+  // Only the page's shared reads; a widget's own read (a pool selection) is said by that widget.
+  const names = [...new Set(slices.flatMap(slice => slice.sources
+    .filter(source => USAGE_PAGE_READ_SOURCES.has(source.source) && (source.status === 'pending' || source.status === 'not_loaded'))
+    .map(source => usageSourceTitle(source.source))))];
+  return names.length ? t('usage.board.page.coveragePending', { sources: names.join(', ') }) : null;
 }
 
 export function UsageCoverageLine(
@@ -172,20 +249,26 @@ export function UsageCoverageLine(
     testID: string;
   }>,
 ) {
+  const pageHasDetail = useUsageWidgetPageHasCoverageDetail();
   const gaps = readUsageCoverageGaps(props.slice, props.sources);
-  if (gaps.length === 0) return null;
-  const failed = gaps.some((gap) => gap.status === 'error');
+  const mode = usageCoverageLineMode(gaps, pageHasDetail);
+  if (mode === 'hidden') return null;
+  const failed = mode === 'failed' || gaps.some((gap) => gap.status === 'error');
+  if (mode === 'failed') {
+    // One short line: what failed, with its Retry; the detail is in Sources.
+    const names = [...new Set(gaps.filter(gap => gap.status === 'error').map(gap => usageSourceTitle(gap.source)))].join(', ');
+    return (
+      <SurfaceFreshnessLine
+        testID={props.testID}
+        tone="warning"
+        reason={t('usage.board.page.coverageFailed', { sources: names })}
+        {...(props.onRetry ? { action: { label: t('common.retry'), onPress: props.onRetry } } : {})}
+      />
+    );
+  }
   const pending = gaps.every(
     (gap) => gap.status === 'pending' || gap.status === 'not_loaded',
   );
-  const names = gaps.map((gap) => gap.status === 'unsupported'
-    ? `${sourceLabel(gap.source)} (${t('usage.board.sources.unsupported')})` : sourceLabel(gap.source)).join(', ');
-  const accountingReasons = props.sources.includes('accounting')
-    ? [...new Set(props.slice.accounting?.coverage?.reasons ?? [])].map(reason => t(COVERAGE_REASON_KEYS[reason])) : [];
-  const statusReason = failed
-    ? t('usage.board.page.coverageFailed', { sources: names })
-    : pending ? t('usage.board.page.coveragePending', { sources: names })
-      : t('usage.board.page.coveragePartial', { sources: names });
   const asOf = gaps.reduce<number | null>(
     (oldest, gap) =>
       gap.asOfMs === undefined
@@ -198,10 +281,9 @@ export function UsageCoverageLine(
   return (
     <SurfaceFreshnessLine
       testID={props.testID}
-      asOf={asOf}
       busy={pending}
       tone={failed ? 'warning' : 'neutral'}
-      reason={[statusReason, ...accountingReasons].join(' · ')}
+      reason={[...(asOf === null ? [] : [t('surfaceState.asOf', { time: formatUsageObservedAt(asOf) })]), usageCoverageDescription(props.slice, props.sources)].join(' · ')}
       {...(failed && props.onRetry
         ? { action: { label: t('common.retry'), onPress: props.onRetry } }
         : {})}
@@ -209,23 +291,32 @@ export function UsageCoverageLine(
   );
 }
 
-const agentEntries = new Map<string, ReturnType<typeof resolveAgentCatalogProjection>>();
-function readAgentEntry(agentId: string) {
-    let entry = agentEntries.get(agentId);
-    if (!entry) { entry = resolveAgentCatalogProjection(agentId, { enabledAgentIds: [] }); agentEntries.set(agentId, entry); }
-    return entry;
-}
-
-/** An Agent's catalog title ("Claude Code"); unknown or unattributed ids keep their own words. */
-export function usageAgentTitle(agentId: string, fallback?: string): string {
-    if (!agentId || agentId === 'unknown') return fallback || t('usage.board.page.unattributed');
-    try { return readAgentEntry(agentId).title || fallback || agentId; } catch { return fallback || agentId; }
-}
-
 /** The Agent's catalog mark, standing on its own (no tile), in ink. */
 export function UsageAgentMark(props: Readonly<{ agentId: string; serverId: string | null; size?: number; color?: string }>) {
-    const entry = React.useMemo(() => { try { return readAgentEntry(props.agentId); } catch { return null; } }, [props.agentId]);
+    const entry = React.useMemo(() => { try { return resolveAgentCatalogProjection(props.agentId, { enabledAgentIds: [] }); } catch { return null; } }, [props.agentId]);
     if (!entry) return null;
     return <AgentCatalogIdentityIcon entry={entry} machineId={null} serverId={props.serverId} current={false}
         size={props.size ?? ICON_SIZE.sm} {...(props.color ? { color: props.color } : {})} />;
 }
+
+/** A list leads with its largest rows; a long tail stays one press away, never a wall. */
+const LEADING_ROWS = 6;
+/** A tail this short is shown whole: a disclosure for a row or two is only noise. */
+const SHORT_TAIL_ROWS = 2;
+
+export function leadingUsageRows<Row>(rows: readonly Row[], expanded: boolean): Readonly<{ rows: readonly Row[]; hidden: number }> {
+  if (expanded || rows.length <= LEADING_ROWS + SHORT_TAIL_ROWS) return { rows, hidden: 0 };
+  return { rows: rows.slice(0, LEADING_ROWS), hidden: rows.length - LEADING_ROWS };
+}
+
+/** The one Show all · N / Show less control under a led list (Breakdowns, Session value). */
+export function UsageShowAllRows(props: Readonly<{ total: number; complete?: boolean; expanded: boolean; onToggle: () => void; testID: string }>) {
+  return (
+    <View style={showAllStyles.action}>
+      <RoundButton size="small" display="inverted" testID={props.testID}
+        title={props.expanded ? t('usage.showLess') : `${t(props.complete === false ? 'usage.showAvailable' : 'usage.showAll')} · ${props.total}`} onPress={props.onToggle} />
+    </View>
+  );
+}
+
+const showAllStyles = StyleSheet.create(() => ({ action: { alignSelf: 'flex-start' } }));

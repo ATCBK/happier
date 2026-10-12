@@ -1,4 +1,7 @@
 import * as React from 'react';
+import { useUnistyles } from 'react-native-unistyles';
+import { summarizeMachinesNeedingAttention, useMachinesNeedingAttention } from '@/components/machines/attention/useMachinesNeedingAttention';
+import { Text } from '@/components/ui/text/Text';
 
 import { MachinePresenceCounts } from '@/components/machines/MachinePresenceCounts';
 import { SettingsAboutSection } from '@/components/settings/SettingsAboutSection';
@@ -29,9 +32,17 @@ function resolveProfileAndAccountSubtitle(page: ResolvedSettingsPageNode, defaul
     return page.id === 'machines' ? <SettingsMachinesRowPresence /> : defaultSubtitle;
 }
 
-/** Its own leaf, so a presence change re-renders the row's subtitle and nothing else. */
+/**
+ * Its own leaf, so a presence change re-renders the row's subtitle and nothing else. When machines need
+ * you it says who and why instead, in the attention tone (MPG-23, lab `rm` Hp); otherwise presence.
+ */
 const SettingsMachinesRowPresence = React.memo(function SettingsMachinesRowPresence() {
+    const { theme } = useUnistyles();
     const counts = useMachinePresenceCounts();
+    const needingYou = summarizeMachinesNeedingAttention(useMachinesNeedingAttention());
+    if (needingYou) {
+        return <Text testID="settings-machines-row-attention" style={{ color: theme.colors.state.attention.textForeground }} numberOfLines={1}>{needingYou.title}</Text>;
+    }
     return <MachinePresenceCounts testID="settings-machines-row-presence" counts={counts} />;
 });
 

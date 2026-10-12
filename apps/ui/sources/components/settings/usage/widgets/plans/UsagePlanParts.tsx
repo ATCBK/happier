@@ -5,6 +5,8 @@ import { ConnectedAccountIdentityText } from '@/components/settings/connectedSer
 import { ConnectedServiceMark } from '@/components/settings/connectedServices/ConnectedServiceMark';
 import { ACCOUNT_BLOCK_GAUGE_LABEL_FORMATTER } from '@/components/settings/connectedServices/account/accountBlockFormatters';
 import { Text } from '@/components/ui/text/Text';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { ExpandableItem } from '@/components/ui/lists/ExpandableItem';
 import { usePageRowMetrics } from '@/components/ui/lists/useResolvedItemDensity';
 import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback';
@@ -18,35 +20,81 @@ import { Typography } from '@/constants/Typography';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { SETTINGS_ROUTES } from '@/components/settings/catalog/routes';
 import { formatResetCountdown } from '@/sync/domains/connectedServices/formatResetCountdown';
-import { t } from '@/text';
+import { getPreferredLanguage, t } from '@/text';
+import { formatWithCachedDateTimeFormatter } from '@/utils/datetime/cachedIntlFormatters';
 import type { UsageQueryResultSlice } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
 import {
   UsageBodyInsufficient,
   UsageCoverageLine,
   readUsageCoverageGaps,
+  UsageBodyReading,
 } from '../usageBodyKit';
-import type { UsagePlanWindow } from './usagePlansModel';
+import { useUsageWidgetPageHasCoverageDetail } from '../usageWidgetBatch';
+import type { UsagePlanAccount, UsagePlanWindow } from './usagePlansModel';
 import type { UsagePlanAccountName } from './useUsagePlans';
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
+/** A qualified allowance read's state, without turning an absent reading into plan facts. */
+export function UsagePlanAccountState(props: Readonly<{
+  account: UsagePlanAccount;
+  name: UsagePlanAccountName;
+  testID: string;
+  onRetry(): void | Promise<unknown>;
+}>) {
+  const { account } = props;
+  const status = account.state.status;
+  const pending = status === 'pending' || status === 'not_loaded';
+  const failed = status === 'error';
+  const reason = t(failed ? 'usage.board.page.coverageFailed'
+    : pending ? 'usage.board.page.coveragePending' : 'usage.board.page.coveragePartial', { sources: props.name.title });
+  const action = { label: t('common.retry'), onPress: props.onRetry };
+  if (account.read?.current) {
+    if (status !== 'stale' && !failed && !pending) return null;
+    return <SurfaceFreshnessLine testID={props.testID} asOf={account.state.asOfMs ?? account.observedAtMs}
+      reason={reason} busy={pending} tone={pending ? 'neutral' : 'warning'} {...(!pending ? { action } : {})} />;
+  }
+  return <SurfaceStateCard testID={props.testID} replacesContent={false} size="line"
+    kind={pending ? 'loading' : failed ? 'error' : 'unavailable'} title={reason}
+    diagnosticCode={account.state.errorCode} {...(!pending ? { action } : {})} />;
+}
+
+/** Projections and events cannot draw an account without a reading, but must still name its state. */
+export function UsagePlanAccountStates(props: Readonly<{
+  accounts: readonly UsagePlanAccount[];
+  nameOf(account: UsagePlanAccount): UsagePlanAccountName;
+  testID: string;
+  onRetry(): void | Promise<unknown>;
+}>) {
+  return <>{props.accounts.map(account => <UsagePlanAccountState key={account.key} account={account}
+    name={props.nameOf(account)} testID={`${props.testID}.${account.accountId}`} onRetry={props.onRetry} />)}</>;
+}
+
 export function formatPlanPercent(fraction: number): string {
   return `${Math.round(Math.max(0, fraction) * 100)}%`;
 }
 
-/** A reset or ending moment: a clock time today, a weekday and time this week, else a date. */
+/** A plan moment: today's clock time, a nearby weekday and time, else its calendar date. */
 export function formatPlanMoment(atMs: number, nowMs: number): string {
   const when = new Date(atMs);
-  const time = when.toLocaleTimeString([], {
+  const now = new Date(nowMs);
+  const locale = getPreferredLanguage();
+  const time = formatWithCachedDateTimeFormatter(when, locale, {
     hour: '2-digit',
     minute: '2-digit',
   });
-  if (atMs - nowMs < DAY_MS && when.getDate() === new Date(nowMs).getDate())
+  if (when.getFullYear() === now.getFullYear()
+    && when.getMonth() === now.getMonth()
+    && when.getDate() === now.getDate())
     return time;
-  if (atMs - nowMs < 6 * DAY_MS)
-    return `${when.toLocaleDateString([], { weekday: 'short' })} ${time}`;
-  return when.toLocaleDateString([], { day: 'numeric', month: 'short' });
+  if (Math.abs(atMs - nowMs) < 6 * DAY_MS)
+    return `${formatWithCachedDateTimeFormatter(when, locale, { weekday: 'short' })} ${time}`;
+  return formatWithCachedDateTimeFormatter(when, locale, {
+    day: 'numeric',
+    month: 'short',
+    ...(when.getFullYear() !== now.getFullYear() ? { year: 'numeric' } : {}),
+  });
 }
 
 /** "in 2h 15m" through the one countdown owner. */
@@ -156,7 +204,9 @@ export function UsagePlanIdentity(
         <ConnectedAccountIdentityText
           value={props.name.title}
           style={[styles.identityTitle, text.title]}
-          numberOfLines={1}
+          // Compact identities sit in narrow columns (capacity segments, reset rows): one line, so an
+          // account address can never run into its neighbour.
+          numberOfLines={props.compact ? 1 : 2}
         />
         {qualifier && !props.compact ? (
           <ConnectedAccountIdentityText
@@ -178,11 +228,23 @@ export function UsagePlanIdentity(
 export function UsagePlansNothingRead(
   props: Readonly<{
     testID: string;
-    slice: UsageQueryResultSlice;
+    slice?: UsageQueryResultSlice;
+    /** False when other witnessed facts remain beside this allowance notice. */
+    replacesContent?: boolean;
+    /** Unsupported secondary insights share one quiet statement, without another empty card. */
+    missing?: readonly string[];
     onRetry?: () => void | Promise<unknown>;
   }>,
 ) {
   const router = useRouter();
+  const text = usePlanText();
+  const pageHasDetail = useUsageWidgetPageHasCoverageDetail();
+  if (props.missing) return props.missing.length ? (
+    <Text testID={props.testID} style={[styles.legend, text.detail]}>
+      {t('usage.board.plans.insufficientSummary', { items: [...new Set(props.missing)].join(', ') })}
+    </Text>
+  ) : null;
+  if (!props.slice) return null;
   const gaps = readUsageCoverageGaps(props.slice, ['quota']);
   const outstanding =
     gaps.length > 0 &&
@@ -195,11 +257,16 @@ export function UsagePlansNothingRead(
       testID={`${props.testID}.coverage`}
     />
   );
+  // On the Usage page the header says once what is still being read; the body holds its room with the
+  // first-load skeleton (lab kitstates "Loading · first time"), never a spinner or a repeated sentence.
+  // On the Usage page the header says once what is still being read; the body holds its room.
+  if (outstanding && pageHasDetail) return <UsageBodyReading testID={`${props.testID}.loading`} />;
   if (outstanding) return coverage;
   return (
     <View style={styles.nothingRead}>
       <UsageBodyInsufficient
         testID={props.testID}
+        replacesContent={props.replacesContent}
         title={t('usage.board.plans.capacityNoReads')}
         reason={t('usage.board.plans.capacityNoReadsReason')}
         action={{
@@ -230,11 +297,11 @@ export function UsagePlanLegend(
 }
 
 const styles = StyleSheet.create((theme) => ({
-  nothingRead: { gap: 12 },
+  nothingRead: { gap: theme.space.s12 },
   identity: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: theme.space.s8,
     minWidth: 0,
   },
   identityText: {
@@ -243,7 +310,7 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: 'row',
     alignItems: 'baseline',
     flexWrap: 'wrap',
-    columnGap: 6,
+    columnGap: theme.space.s6,
   },
   identityTitle: {
     ...Typography.default('semiBold'),
@@ -261,8 +328,8 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: 'row',
     flexWrap: 'wrap',
     alignItems: 'baseline',
-    columnGap: 8,
-    rowGap: 2,
+    columnGap: theme.space.s8,
+    rowGap: theme.space.s2,
   },
   sectionTitle: {
     ...Typography.default('semiBold'),
@@ -277,16 +344,16 @@ const styles = StyleSheet.create((theme) => ({
   disclosureHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: theme.space.s6,
     alignSelf: 'flex-start',
     borderRadius: theme.borderRadius.sm,
   },
-  disclosureBody: { paddingTop: 8 },
+  disclosureBody: { paddingTop: theme.space.s8 },
   rank: {
     minWidth: 18,
     height: 18,
     borderRadius: 9,
-    paddingHorizontal: 5,
+    paddingHorizontal: theme.space.s4,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: StyleSheet.hairlineWidth,

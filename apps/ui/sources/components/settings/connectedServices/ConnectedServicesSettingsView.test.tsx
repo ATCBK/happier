@@ -342,7 +342,8 @@ describe('ConnectedServicesSettingsView', () => {
 
         expect(row).toBeTruthy();
         expect(row?.props.subtitle).toContain('common.blocked');
-        expect(row?.props.subtitle).toContain('common.unavailable');
+        expect(row?.props.subtitle).toContain('connectedServicesSettings.runtimeNotLoaded');
+        expect(row?.props.subtitle).toContain('connectedServicesSettings.projectionErrorDescription');
         expect(row?.props.subtitle).not.toContain('missing_runtime');
         expect(row?.props.subtitle).not.toContain('/private/plugin/error');
         expect(row?.props.subtitle).not.toContain('/unexpected/path-shaped-diagnostic');
@@ -354,14 +355,14 @@ describe('ConnectedServicesSettingsView', () => {
         } as never);
         await pressTestInstanceAsync(details);
         const supportBody = String(modalAlertSpy.mock.calls[0]?.[1] ?? '');
-        expect(supportBody).toContain('common.unavailable');
-        expect(supportBody).toContain('connectedServices.errors.generic');
+        expect(supportBody).toContain('connectedServicesSettings.runtimeNotLoaded');
+        expect(supportBody).toContain('connectedServicesSettings.projectionErrorDescription');
         expect(supportBody).not.toContain('missing_runtime');
         expect(supportBody).not.toContain('/private/plugin/error');
         expect(supportBody).not.toContain('/unexpected/path-shaped-diagnostic');
         expect(supportBody).not.toContain('token=never-render-this-primary');
         expect(supportBody).not.toContain(longDiagnostic);
-        expect(supportBody.split('\n')).toEqual(['common.unavailable', 'connectedServices.errors.generic']);
+        expect(supportBody.split('\n')).toEqual(['connectedServicesSettings.runtimeNotLoaded', 'connectedServicesSettings.projectionErrorDescription']);
     });
 
     it('keeps projection failure detail product-safe in the failure banner, and retries the read', async () => {
@@ -419,7 +420,8 @@ describe('ConnectedServicesSettingsView', () => {
         expect(screen.findByTestId('connected-services-index:happier.agent.codex/openai-codex:support-details')).toBeNull();
         expect(screen.findByTestId('connected-services-service:happier.agent.codex/openai-codex:add-account')).toBeNull();
         expect(serviceRows.find((node) => node.props.title === 'Bitbucket Cloud')?.props.subtitle).toContain('common.blocked');
-        expect(serviceRows.find((node) => node.props.title === 'Bitbucket Cloud')?.props.subtitle).toContain('connectedServices.errors.accountConfigurationRequired');
+        expect(serviceRows.find((node) => node.props.title === 'Bitbucket Cloud')?.props.subtitle).toContain('connectedServicesSettings.projectionErrorDescription');
+        expect(serviceRows.find((node) => node.props.title === 'Bitbucket Cloud')?.props.subtitle).toContain('connectedServicesSettings.runtimeNotLoaded');
         expect(screen.findByTestId('connected-services-index:happier.scm.forge.bitbucket/bitbucket-account:support-details')).not.toBeNull();
         await pressTestInstanceAsync(screen.tree.root.findByProps({ testID: 'connected-services-projection-retry' } as never));
         expect(projectionReloadSpy).toHaveBeenCalledOnce();
@@ -594,7 +596,8 @@ describe('ConnectedServicesSettingsView', () => {
         }, true));
         const unavailableControl = screen.findHostByTestId('connected-services-account:happier.agent.codex/openai-codex:work:star');
         expect(unavailableControl?.props.accessibilityState).toMatchObject({ disabled: true });
-        expect(unavailableControl?.props.accessibilityLabel).toBe('common.unavailable');
+        expect(unavailableControl?.props.accessibilityLabel).toBe('connectedServicesPool.makeDefaultA11y');
+        expect(unavailableControl?.props.accessibilityHint).toBe('common.unavailable');
     });
 
     it('renders default-auth rows from the live qualified external Agent projection', async () => {

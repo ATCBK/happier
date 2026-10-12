@@ -82,25 +82,19 @@ export function UsageFootprintWidget(props: UsageBodyProps) {
 
 const styles = StyleSheet.create((theme) => ({
   body: { gap: 18, minWidth: 0 },
-  head: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
-  headText: { flex: 1, minWidth: 0, gap: 4 },
+  head: { flexDirection: 'row', alignItems: 'flex-start', gap: theme.space.s12 },
+  headText: { flex: 1, minWidth: 0, gap: theme.space.s4 },
   title: {
-    ...Typography.default('semiBold'),
-    fontSize: 15,
-    lineHeight: 20,
+    ...Typography.variant('heading'),
     color: theme.colors.text.primary,
   },
   reason: {
-    ...Typography.default(),
-    fontSize: 13,
-    lineHeight: 19,
+    ...Typography.variant('body'),
     color: theme.colors.text.secondary,
   },
-  method: { gap: 4 },
+  method: { gap: theme.space.s4 },
   methodTitle: {
-    ...Typography.default('semiBold'),
-    fontSize: 13,
-    lineHeight: 18,
+    ...Typography.variant('body', 'semiBold'),
     color: theme.colors.text.primary,
   },
 }));

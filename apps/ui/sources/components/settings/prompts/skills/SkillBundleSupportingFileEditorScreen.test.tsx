@@ -5,22 +5,33 @@ import { flushHookEffects, renderScreen } from '@/dev/testkit';
 import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { createPromptLibraryCatalogBoundary } from '@/dev/testkit/harness/promptLibraryCatalogBoundary';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
+import { decodePlainArtifactStoredContent, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { createPromptBundleArtifact } from '@/sync/ops/promptLibrary/promptBundles';
 import { storage } from '@/sync/domains/state/storage';
-import { installSkillBundleCommonModuleMocks, skillBundleRouterReplaceSpy } from './skillBundleScreenTestHelpers';
+import { installSkillBundleCommonModuleMocks } from './skillBundleScreenTestHelpers';
 
 const route = vi.hoisted(() => ({ params: {} as Record<string, string> }));
-installSkillBundleCommonModuleMocks({ storage: importOriginal => importOriginal(), router: async () => {
+const { skillBundleRouterReplaceSpy } = vi.hoisted(() => ({ skillBundleRouterReplaceSpy: vi.fn() }));
+installSkillBundleCommonModuleMocks({ storage: importOriginal => importOriginal() });
+// Hoist platform boundaries in the importing test before testkit/storage can
+// cache the default Expo module; keep the internal store and Actions real.
+vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     return createExpoRouterMock({ params: () => route.params, router: { replace: skillBundleRouterReplaceSpy },
         navigation: { canGoBack: () => false } }).module;
-} });
+});
 // Navigation and browser-hosted Monaco are platform boundaries; draft, codecs,
 // captured Account authority and the Artifact HTTP/CAS path stay real.
 vi.mock('@react-navigation/native', async importOriginal => ({
-    ...await importOriginal<typeof import('@react-navigation/native')>(), usePreventRemove: () => {},
+    ...await importOriginal<typeof import('@react-navigation/native')>(),
+    ...(await import('@/dev/testkit/mocks/reactNavigation')).createReactNavigationNativeMock(),
 }));
+vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async importOriginal => {
+    const original = await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>();
+    return { ...original, createFrontDoorActionExecute:
+        (await import('@/dev/testkit/harness/frontDoorActionExecutorBoundary')).createFrontDoorActionExecuteForVitest(original) };
+});
 
 let fixture: Awaited<ReturnType<typeof createPlainArtifactHomeFixture>> | undefined;
 beforeEach(async () => {
@@ -37,9 +48,16 @@ function body(content: string) {
         { path: 'templates/review.md', contentBase64: Buffer.from(content).toString('base64'), contentKind: 'utf8' as const },
     ] };
 }
-async function home() {
+async function home(updateDisabled = false, updateRequiresApproval = false) {
     const catalog = createPromptLibraryCatalogBoundary();
-    fixture = await createPlainArtifactHomeFixture('https://reviewed-skill-supporting-editor.test', { handleRequest: catalog.handle });
+    fixture = await createPlainArtifactHomeFixture('https://reviewed-skill-supporting-editor.test', { handleRequest: async (path, init) => {
+        if ((updateDisabled || updateRequiresApproval) && path === '/v2/account/settings') return Response.json({ version: 1, content: { t: 'plain', v: {
+            actionsSettingsV1: { v: 1, actions: { 'prompt_bundle.update': updateDisabled
+                ? { disabledSurfaces: ['ui'] } : { approvalRequiredSurfaces: ['ui'] } } },
+        } } });
+        return catalog.handle(path, init);
+    } });
+    await fixture.hydrateAccountSettings();
     const id = await createPromptBundleArtifact({ title: 'Skill title', bundleSchemaId: 'skills.skill_md_v1', entries: body('review template').entries });
     return { fixture, id };
 }
@@ -71,6 +89,49 @@ function savedEntry(f: NonNullable<typeof fixture>, id: string, path: string) {
 }
 
 describe('SkillBundleSupportingFileEditorScreen reviewed native content', () => {
+    it('freezes the submitted supporting file until its mounted approval executes', async () => {
+        const { fixture: f, id } = await home(false, true);
+        const screen = await renderEditor(id, null);
+        await act(async () => {
+            screen.changeTextByTestId('skillSupportingFile.path', 'docs/submitted.md');
+            screen.findAllByType('TextInput').find(node => node.props.multiline === true)?.props.onChangeText('Submitted supporting content');
+        });
+        act(() => { screen.findByTestId('skillSupportingFile.save')!.props.onPress(); });
+        await vi.waitFor(() => expect(f.boundary.list().some(row => {
+            const header = decodePlainArtifactStoredContent(row.header);
+            return header && typeof header === 'object' && 'kind' in header && header.kind === 'approval_request.v1';
+        })).toBe(true));
+        const approval = f.boundary.list().find(row => {
+            const header = decodePlainArtifactStoredContent(row.header);
+            return header && typeof header === 'object' && 'kind' in header && header.kind === 'approval_request.v1';
+        })!;
+        expect(savedEntry(f, id, 'docs/submitted.md')).toBeNull();
+        expect(skillBundleRouterReplaceSpy).not.toHaveBeenCalled();
+        const path = screen.findByTestId('skillSupportingFile.path')!;
+        const content = screen.findAllByType('TextInput').find(node => node.props.multiline === true)!;
+        expect([path.props.editable, content.props.editable]).toEqual([false, false]);
+        // Honor the native editable boundary when attempting later input.
+        await act(async () => {
+            if (path.props.editable !== false) path.props.onChangeText('docs/later.md');
+            if (content.props.editable !== false) content.props.onChangeText('Later supporting content');
+        });
+        expect(screen.findByTestId('skillSupportingFile.path')?.props.value).toBe('docs/submitted.md');
+        expect(content.props.value).toBe('Submitted supporting content');
+        expect(await decideApprovalAsInbox(f.home.id, approval.id, 'approve')).toMatchObject({ ok: true, result: { status: 'executed' } });
+        await vi.waitFor(() => expect(skillBundleRouterReplaceSpy).toHaveBeenCalled());
+        expect(savedEntry(f, id, 'docs/submitted.md')).toBe('Submitted supporting content');
+        expect(savedEntry(f, id, 'docs/later.md')).toBeNull();
+        expect(savedEntry(f, id, 'templates/review.md')).toBe('review template');
+    });
+    it('preserves the supporting-file draft and stored bundle when update admission is disabled', async () => {
+        const { fixture: f, id } = await home(true);
+        const screen = await renderEditor(id, 'templates/review.md');
+        await act(async () => { screen.findAllByType('TextInput').find(node => node.props.multiline === true)?.props.onChangeText('Denied template'); });
+        await screen.pressByTestIdAsync('skillSupportingFile.save');
+        expect(savedEntry(f, id, 'templates/review.md')).toBe('review template');
+        expect(screen.findAllByType('TextInput').find(node => node.props.multiline === true)?.props.value).toBe('Denied template');
+        expect(skillBundleRouterReplaceSpy).not.toHaveBeenCalled();
+    });
     it('loads the current native supporting file rather than an ambient cached body and saves its reviewed revision', async () => {
         const { fixture: f, id } = await home();
         await replaceNative(f, id, 'Current native template');

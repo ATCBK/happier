@@ -5,8 +5,12 @@ import { useUnistyles } from 'react-native-unistyles';
 import { Avatar } from '@/components/ui/avatar/Avatar';
 import { EmptyState } from '@/components/ui/empty/EmptyState';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
+import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { SectionButtonRow } from '@/components/ui/lists/SectionButtonRow';
+import { ItemLoadStateRows } from '@/components/ui/lists/ItemLoadStateRows';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { formatRelativeTimeShort } from '@/utils/time/formatShortRelativeTime';
 import { useHomePagedList, type HomePageReader } from '@/hooks/home/useHomePagedList';
 import { listHomeAudit } from '@/sync/ops/home/homeGovernanceOperations';
@@ -34,7 +38,10 @@ export const HomeActivityRow = React.memo(function HomeActivityRow(props: Readon
 }>) {
     const { theme } = useUnistyles();
     const row = presentHomeAuditEvent(props.event, props.viewerAccountId, props.names);
-    const lines = [row.area, ...row.changes.map((change) => `${change.label}  ${change.from} → ${change.to}`)];
+    const lines = [
+        ...(row.area ? [row.area] : []),
+        ...row.changes.map((change) => `${change.label ? `${change.label}  ` : ''}${change.from} → ${change.to}`),
+    ];
     return (
         <Item
             testID={`home-activity-row:${props.event.id}`}
@@ -72,24 +79,44 @@ const ActivityList = React.memo(function ActivityList(props: Readonly<{
 
     if (!canView) {
         return (
-            <ItemGroup description={t('homeGovernance.forbiddenBody')}>
-                <Item testID="home-activity-forbidden" title={t('homeGovernance.forbiddenTitle')} mode="info" showChevron={false} />
+            <ItemGroup>
+                <SurfaceStateCard
+                    testID="home-activity-forbidden"
+                    kind="denied"
+                    size="line"
+                    title={t('homeGovernance.forbiddenTitle')}
+                    reason={t('homeGovernance.forbiddenBody')}
+                />
             </ItemGroup>
         );
     }
 
     if (audit.rows.length === 0) {
+        // The first page's rows hold their place while it is read.
         if (audit.status === 'loading') {
             return (
                 <ItemGroup>
-                    <Item testID="home-activity-loading" title={t('homeGovernance.loading')} loading mode="info" showChevron={false} />
+                    <ItemLoadStateRows
+                        testID="home-activity-loading"
+                        state={{ kind: 'loading' }}
+                        rows={4}
+                        accessibilityLabel={t('homeGovernance.activity.title')}
+                    />
                 </ItemGroup>
             );
         }
         if (audit.error) {
             return (
-                <ItemGroup description={t('homeGovernance.activity.loadFailed')}>
-                    <Item testID="home-activity-retry" title={t('homeGovernance.retry')} onPress={audit.reload} showChevron={false} />
+                <ItemGroup>
+                    <ItemLoadStateRows
+                        testID="home-activity"
+                        state={{
+                            kind: 'failed',
+                            reason: t('homeGovernance.activity.loadFailed'),
+                            onRetry: audit.reload,
+                            homeServerIds: [context.scope.serverId],
+                        }}
+                    />
                 </ItemGroup>
             );
         }
@@ -112,19 +139,31 @@ const ActivityList = React.memo(function ActivityList(props: Readonly<{
                 {audit.rows.map((event) => <HomeActivityRow key={event.id} event={event} now={now} viewerAccountId={context.scope.accountId} names={names} />)}
             </ItemGroup>
             {audit.error ? (
-                <ItemGroup description={t('homeGovernance.activity.loadFailed')}>
-                    <Item testID="home-activity-retry" title={t('homeGovernance.retry')} onPress={audit.loadMore} showChevron={false} />
+                <ItemGroup>
+                    <ItemLoadStateRows
+                        testID="home-activity"
+                        state={{
+                            kind: 'failed',
+                            reason: t('homeGovernance.activity.loadFailed'),
+                            onRetry: audit.loadMore,
+                            homeServerIds: [context.scope.serverId],
+                        }}
+                    />
                 </ItemGroup>
             ) : audit.hasMore ? (
-                <ItemGroup>
-                    <Item
-                        testID="home-activity-show-older"
-                        title={t('homeGovernance.activity.showOlder')}
-                        loading={audit.status === 'loading_more'}
-                        disabled={audit.status === 'loading_more'}
-                        onPress={audit.loadMore}
-                        showChevron={false}
-                    />
+                // A quiet button under the list (lab `hcActivity-A`), the control Groups and Teams use.
+                <ItemGroup surface="none">
+                    <SectionButtonRow>
+                        <RoundButton
+                            testID="home-activity-show-older"
+                            size="small"
+                            display="inverted"
+                            title={t('homeGovernance.activity.showOlder')}
+                            loading={audit.status === 'loading_more'}
+                            disabled={audit.status === 'loading_more'}
+                            onPress={audit.loadMore}
+                        />
+                    </SectionButtonRow>
                 </ItemGroup>
             ) : null}
         </>

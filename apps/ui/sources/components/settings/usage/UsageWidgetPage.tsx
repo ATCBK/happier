@@ -1,17 +1,23 @@
 import * as React from 'react';
+import { normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import { ScrollView, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import {
   flattenWidgetLayoutWidgetsV1,
+  readBuiltinWidgetDescriptorV1,
   type WidgetAreaLayoutSummaryV1,
   type WidgetSurfaceRefV1,
 } from '@happier-dev/protocol/widgets';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation';
 import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
+import { CurrentUiContextCommandsProvider } from '@/components/appShell/currentUiContext/CurrentUiContextCommands';
+import { useActionApprovalContinuation } from '@/components/approvals/useActionApprovalContinuation';
+import { publishPresentationNotice, retirePresentationNotice } from '@/components/sessions/presentation/presentationNotices';
 import {
   PageHeader,
   type PageHeaderMetaFact,
 } from '@/components/ui/layout/PageHeader';
-import { useLayoutMaxWidthStyle } from '@/components/ui/layout/layout';
+import { useLayoutMaxWidth } from '@/components/ui/layout/layout';
 import type { IconName } from '@/components/ui/icons/Icon';
 import { WidgetArea } from '@/components/widgets/area/WidgetArea';
 import { WidgetAreaPresetLine } from '@/components/widgets/area/WidgetAreaPresetLine';
@@ -24,18 +30,18 @@ import {
   WidgetAreaLayoutBar,
   type WidgetAreaLayoutLabels,
 } from '@/components/widgets/area/WidgetAreaLayoutBar';
-import { useDeviceType } from '@/utils/platform/responsive';
 import { useWidgetAreaLayouts } from '@/components/projects/overview/useProjectDashboards';
 import { Modal } from '@/modal';
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { buildUsageAnalyticsViewModel } from '@/sync/api/account/usageAnalytics';
-import { formatWithCachedDateTimeFormatter } from '@/utils/datetime/cachedIntlFormatters';
+import { formatUsageObservedAt } from '@/sync/domains/usage/usageCalendarPresentation';
 import { t } from '@/text';
 import { UsageFilterBar } from './UsageFilterBar';
 import { useUsageWidgetPageFilters } from './useUsageWidgetPageFilters';
 import { UsageDrillProvider, usageDrillFromPageFilters } from './usageDrill';
-import { SessionUsageDrilldownFrame } from './SessionUsageDrilldownFrame';
+import { SessionRetentionNotice } from '@/components/sessions/info/SessionRetentionNotice';
+import { useSessionDisplayTitles } from '@/utils/sessions/sessionDisplayTitle';
 import {
   USAGE_WIDGET_PRESET_IDS,
   type UsageWidgetPresetId,
@@ -54,7 +60,9 @@ import { setUsageWidgetMetric } from './usageWidgetActions';
 import {
   UsageWidgetBatchProvider,
   useUsageWidgetBatchSlices,
+  useUsageWidgetBatchInventorySlice,
 } from './widgets/usageWidgetBatch';
+import { describeUsagePagePendingSources } from './widgets/usageBodyKit';
 
 const PRESET_ICON: Readonly<Record<UsageWidgetPresetId, IconName>> = {
   overview: 'squares-four',
@@ -76,27 +84,6 @@ const PRESET_NAME_KEYS = {
   'how-you-work': 'usage.presets.how-you-work',
   sources: 'usage.presets.sources',
 } as const satisfies Record<UsageWidgetPresetId, string>;
-const SLOT_LABEL_KEYS: Readonly<
-  Record<
-    string,
-    | 'usage.board.page.slotPeriod'
-    | 'usage.board.page.filterAgents'
-    | 'usage.board.page.filterMachines'
-    | 'usage.board.page.filterProjects'
-    | 'usage.board.page.filterSources'
-    | 'usage.board.page.slotSession'
-    | 'usage.costMode'
-  >
-> = {
-  period: 'usage.board.page.slotPeriod',
-  agents: 'usage.board.page.filterAgents',
-  machines: 'usage.board.page.filterMachines',
-  projects: 'usage.board.page.filterProjects',
-  sources: 'usage.board.page.filterSources',
-  session: 'usage.board.page.slotSession',
-  costBasis: 'usage.costMode',
-};
-
 export type UsageWidgetPageProps = Readonly<{
   /** Supplied only by the Session route after its own scope/hydration admission. */
   sessionId?: string;
@@ -133,24 +120,29 @@ export function UsageWidgetPage(
       ) as Record<UsageWidgetPresetId, string>,
     [],
   );
-  const labelForSlot = React.useCallback(
-    (path: string) =>
-      SLOT_LABEL_KEYS[path] ? t(SLOT_LABEL_KEYS[path]!) : path,
-    [],
-  );
   const binding = useUsageWidgetAreaBinding({
     serverId: viewer?.serverId ?? '',
     providedContext: page.providedContext,
+    sessionId: props.sessionId,
+    period: page.period,
     names,
     initialMetric: page.initialMetric,
-    labelForSlot,
+    initialLayoutId: page.initialLayoutId,
+    onLayoutChange: props.onLayoutChange,
   });
-  const contentMaxWidth = useLayoutMaxWidthStyle();
+  // Usage is a dashboard grid, so it takes the page's wide column role (a grid or a library), not the
+  // reading column: at 1920 and 2560 the lab's two-column groups need the room (lab wgusage-CD).
+  const wideColumn = useLayoutMaxWidth('wide');
+  const contentMaxWidth = React.useMemo(() => ({ maxWidth: wideColumn }), [wideColumn]);
+  const inventoryQuery = React.useMemo(() => normalizeUsageQuery({ ...page.queryOverrides, ...page.scope,
+    agents: [], machines: [], projects: [], sources: [], metric: 'tokens', breakdown: ['agent', 'machine', 'project', 'source'] }),
+  [page.queryOverrides, page.scope.period, page.scope.session, page.scope.costBasis]);
   return (
     <PluginSurfaceFocusEligibilityProvider
       active
       currentUiContextActive={props.sessionId === undefined}
     >
+      <CurrentUiContextCommandsProvider authority={authority} active={page.isCurrent}>
       <ScrollView
         style={styles.screen}
         contentContainerStyle={[
@@ -162,10 +154,7 @@ export function UsageWidgetPage(
         testID="usage-page"
       >
         <View style={[styles.column, contentMaxWidth]}>
-          {props.sessionId ? (
-            <SessionUsageDrilldownFrame sessionId={props.sessionId} />
-          ) : null}
-          <UsageWidgetBatchProvider clauses={page.queryOverrides}>
+          <UsageWidgetBatchProvider clauses={page.queryOverrides} inventoryQuery={inventoryQuery}>
             {binding.port ? (
               <UsagePageDocument
                 port={binding.port}
@@ -174,7 +163,6 @@ export function UsageWidgetPage(
                 page={page}
                 names={names}
                 sessionId={props.sessionId}
-                onLayoutChange={props.onLayoutChange}
                 authority={authority}
               />
             ) : (
@@ -193,6 +181,7 @@ export function UsageWidgetPage(
           </UsageWidgetBatchProvider>
         </View>
       </ScrollView>
+      </CurrentUiContextCommandsProvider>
     </PluginSurfaceFocusEligibilityProvider>
   );
 }
@@ -207,13 +196,14 @@ function UsagePageDocument(
     page: UsageWidgetPageContextState;
     names: Readonly<Record<UsageWidgetPresetId, string>>;
     sessionId?: string;
-    onLayoutChange?: (layoutId: string) => void;
     authority: ReturnType<typeof captureActiveServerAccountScopeLifetime>;
   }>,
 ) {
   const { binding, page } = props;
   const layout = useWidgetAreaLayout(props.port, props.context);
   const slices = useUsageWidgetBatchSlices();
+  const inventorySlice = useUsageWidgetBatchInventorySlice();
+  const filterSlices = React.useMemo(() => inventorySlice ? [inventorySlice] : slices, [inventorySlice, slices]);
   const areaSurface = React.useMemo(
     (): WidgetSurfaceRefV1 | null =>
       binding.surface && binding.surface.owner.kind === 'corePage'
@@ -233,9 +223,11 @@ function UsagePageDocument(
     surface: areaSurface,
     execute: binding.executeLayoutAction,
   });
+  // The title/tabs and body describe the same admitted document while a selection read is pending.
+  const admittedSurface = layout.state.status === 'ready' ? layout.state.surface : binding.surface;
   const selectedLayoutId =
-    binding.surface?.owner.kind === 'corePage'
-      ? (binding.surface.owner.layoutId ?? 'overview')
+    admittedSurface?.owner.kind === 'corePage'
+      ? (admittedSurface.owner.layoutId ?? 'overview')
       : 'overview';
   const listed = layouts.state.dashboards;
   const views = React.useMemo(
@@ -271,6 +263,7 @@ function UsagePageDocument(
       tabs.map((tab) => ({
         id: tab.id,
         name: tab.name,
+        isPreset: tab.isPreset,
         edited: tab.summary?.isEdited ?? false,
         icon:
           tab.isPreset && tab.id in PRESET_ICON
@@ -289,7 +282,7 @@ function UsagePageDocument(
             (row) =>
               row.instance.definition.kind === 'builtin' &&
               row.instance.definition.id.startsWith('usage_') &&
-              row.instance.definition.id !== 'usage_sources',
+              readBuiltinWidgetDescriptorV1(row.instance.definition)?.inputs?.fields.some(field => field.path === 'metric'),
           )
         : [],
     [ready],
@@ -302,15 +295,48 @@ function UsagePageDocument(
   );
   const metric =
     metrics.size === 1 ? ([...metrics][0] as 'tokens' | 'cost') : null;
+  const metricLifetime = React.useMemo(() => ({ controller: new AbortController(), running: false }), [props.port, props.authority]);
+  const [pendingMetric, setPendingMetric] = React.useState<typeof metricLifetime | null>(null);
+  const metricApproval = useActionApprovalContinuation({
+    scopeKey: JSON.stringify(props.authority?.scope ?? null),
+    serverId: props.authority?.scope.serverId ?? '',
+    onExecuted: React.useCallback(() => {}, []),
+  });
+  React.useEffect(() => {
+    if (metricLifetime.controller.signal.aborted) metricLifetime.controller = new AbortController();
+    const controller = metricLifetime.controller;
+    const retired = props.authority?.onRetire(() => controller.abort());
+    return () => { retired?.dispose(); controller.abort(); };
+  }, [metricLifetime, props.authority]);
   const onMetricChange = React.useCallback(
     (next: 'tokens' | 'cost') => {
+      if (!ready || !ready.isCurrent() || metricLifetime.running || metricLifetime.controller.signal.aborted) return;
+      metricLifetime.running = true;
+      setPendingMetric(metricLifetime);
+      const key = `usage-metric:${JSON.stringify(ready.surface)}`;
       void setUsageWidgetMetric({
         port: props.port,
+        target: { surface: ready.surface, context: ready.context },
         instanceIds: usageWidgets.map((row) => row.instance.id),
         metric: next,
+        signal: metricLifetime.controller.signal,
+        onApprovalPending: registration => {
+          publishPresentationNotice({ key, severity: 'info', message: t('widgetAdd.areaApprovalPending') });
+          metricApproval.requestApproval(registration);
+        },
+      }).then(writes => {
+        retirePresentationNotice(key);
+        if (!metricLifetime.controller.signal.aborted && writes.some(write => !write.result.ok))
+          publishPresentationNotice({ key, severity: 'error', message: t('widgetAdd.saveFailed') });
+      }, () => {
+        if (!metricLifetime.controller.signal.aborted)
+          publishPresentationNotice({ key, severity: 'error', message: t('widgetAdd.saveFailed') });
+      }).finally(() => {
+        metricLifetime.running = false;
+        setPendingMetric(current => current === metricLifetime ? null : current);
       });
     },
-    [props.port, usageWidgets],
+    [metricApproval.requestApproval, metricLifetime, props.port, ready, usageWidgets],
   );
   const firstAccounting = slices.find((slice) => slice.accounting)?.accounting;
   const costBasisOptions = React.useMemo(
@@ -328,14 +354,14 @@ function UsagePageDocument(
   const bindingSelectLayout = binding.selectLayout;
   const selectAreaLayout = React.useCallback(async (layoutId: string) => (await bindingSelectLayout(layoutId)).ok, [bindingSelectLayout]);
   const publishedLayouts = React.useMemo(() => tabs.map((tab) => ({ id: tab.id, name: tab.name })), [tabs]);
-  const scopeFilters = useUsageWidgetPageFilters(page, slices, props.sessionId !== undefined);
-  // A chart segment, legend entry or ledger row narrows through this same owner (lab drill-down).
-  const drill = React.useMemo(() => usageDrillFromPageFilters(scopeFilters), [scopeFilters]);
+  const scopeFilters = useUsageWidgetPageFilters(page, filterSlices, props.sessionId !== undefined);
   const filterCommands = React.useMemo(() => scopeFilters.flatMap(filter => filter.options.map(option => ({
+    field: filter.field,
+    id: option.id,
     title: `${filter.title}: ${option.label}`,
     invoke: () => filter.select(option.id),
   }))), [scopeFilters]);
-  const { selectLayout } = usePublishUsageWidgetPageContext({
+  const { selectLayout, selectPeriod, selectCostBasis, selectFilter } = usePublishUsageWidgetPageContext({
     page,
     authority: props.authority,
     layoutId: selectedLayoutId,
@@ -343,17 +369,13 @@ function UsagePageDocument(
     costBasisOptions,
     filterCommands,
     selectLayout: selectAreaLayout,
-    onLayoutChange: props.onLayoutChange,
   });
+  // Toolbar and chart intents borrow the published command, not a second setter path.
+  const admittedFilters = React.useMemo(() => scopeFilters.map(filter => ({
+    ...filter, select: (id: string) => selectFilter(filter.field, id),
+  })), [scopeFilters, selectFilter]);
+  const drill = React.useMemo(() => usageDrillFromPageFilters(admittedFilters), [admittedFilters]);
 
-  // Route intent opens its named view once the area lists it; the area stays the selection owner.
-  const initialLayoutId = page.initialLayoutId;
-  const appliedIntent = React.useRef<string | null>(null);
-  React.useEffect(() => {
-    if (!initialLayoutId || appliedIntent.current === initialLayoutId || layouts.state.status !== 'ready') return;
-    appliedIntent.current = initialLayoutId;
-    if (initialLayoutId !== selectedLayoutId && tabs.some((tab) => tab.id === initialLayoutId)) void selectLayout(initialLayoutId);
-  }, [initialLayoutId, layouts.state.status, selectedLayoutId, tabs, selectLayout]);
   const createView = React.useCallback(() => {
     void Modal.prompt(
       t('usage.board.page.newViewTitle'),
@@ -364,8 +386,8 @@ function UsagePageDocument(
       },
     ).then(async (name) => {
       const trimmed = name?.trim();
-      if (!trimmed || !binding.surface) return;
-      const created = await layouts.create(trimmed, binding.surface);
+      if (!trimmed || !admittedSurface) return;
+      const created = await layouts.create(trimmed, admittedSurface);
       if (
         created.ok &&
         created.dashboard?.surface.owner.kind === 'corePage' &&
@@ -374,7 +396,7 @@ function UsagePageDocument(
         await selectLayout(created.dashboard.surface.owner.layoutId);
       }
     });
-  }, [binding.surface, layouts, selectLayout]);
+  }, [admittedSurface, layouts, selectLayout]);
   const selected = tabs.find((tab) => tab.id === selectedLayoutId) ?? null;
   const actions = React.useMemo(() => {
     const summary = selected?.summary;
@@ -422,15 +444,10 @@ function UsagePageDocument(
         : {}),
       delete: {
         onPress: () => {
-          void Modal.confirm(
-            t('usage.board.page.deleteViewTitle', { name: summary.name }),
-            t('usage.board.page.deleteViewBody'),
-            { confirmText: t('common.delete'), destructive: true },
-          ).then(async (confirmed) => {
-            if (!confirmed) return;
+          void (async () => {
             const removed = await layouts.remove(summary);
-            if (removed.ok) await selectLayout('overview');
-          });
+            if (removed.ok && !removed.approvalPending) await selectLayout('overview');
+          })();
         },
       },
     };
@@ -451,18 +468,16 @@ function UsagePageDocument(
     [],
   );
   const preset = ready?.preset ?? null;
-  const phone = useDeviceType() === 'phone';
 
   return (
     <>
-      <UsagePageHeader slices={slices} query={null} />
+      <UsagePageHeader slices={slices} query={null} {...(props.sessionId ? { sessionId: props.sessionId } : {})} />
       <WidgetAreaLayoutBar
         layouts={tabViews}
         selectedId={selectedLayoutId}
         onSelect={(value) => {
           void selectLayout(value);
         }}
-        narrow={phone}
         onCreate={createView}
         actions={actions}
         labels={labels}
@@ -471,9 +486,12 @@ function UsagePageDocument(
       <UsageFilterBar
         page={page}
         slices={slices}
-        scopeFilters={scopeFilters}
+        scopeFilters={admittedFilters}
+        onPeriodChange={selectPeriod}
+        onCostBasisChange={selectCostBasis}
         costBasisOptions={costBasisOptions}
         metric={metric}
+        metricPending={pendingMetric === metricLifetime}
         onMetricChange={
           usageWidgets.length && ready?.canEdit ? onMetricChange : null
         }
@@ -514,13 +532,19 @@ function UsagePageHeader(
   props: Readonly<{
     slices: ReturnType<typeof useUsageWidgetBatchSlices>;
     query: null;
+    /** A session's own usage: the page is about that session, so it opens with its name (`surf-SES`). */
+    sessionId?: string;
   }>,
 ) {
+  const sessionTitle = useSessionDisplayTitles(React.useMemo(() => props.sessionId ? [{ sessionId: props.sessionId }] : [], [props.sessionId]))[0] ?? null;
   const facts = React.useMemo((): PageHeaderMetaFact[] => {
+    // A source still being read is one cause for the whole page: said here once, never in each body.
+    const pending = describeUsagePagePendingSources(props.slices);
+    const reading = pending ? [{ key: 'reading', text: pending }] : [];
     const accounting = props.slices.find(
       (slice) => slice.accounting,
     )?.accounting;
-    if (!accounting) return [];
+    if (!accounting) return reading;
     const asOf = props.slices.flatMap((slice) =>
       slice.sources.flatMap((source) =>
         source.asOfMs === undefined ? [] : [source.asOfMs],
@@ -536,15 +560,12 @@ function UsagePageHeader(
               key: 'asOf',
               icon: 'clock' as const,
               text: t('usage.board.page.asOf', {
-                time: formatWithCachedDateTimeFormatter(
-                  new Date(latest),
-                  undefined,
-                  { hour: '2-digit', minute: '2-digit' },
-                ),
+                time: formatUsageObservedAt(latest),
               }),
             },
           ]
         : []),
+      ...reading,
       ...(machines
         ? [
             {
@@ -563,24 +584,30 @@ function UsagePageHeader(
         : []),
     ];
   }, [props.slices]);
+  // The header insets its own text to the page column; the page's views, filters and cards share that
+  // edge, so the header bleeds back by the same step instead of indenting twice (lab d2top, QA-V F23).
   return (
-    <PageHeader
-      title={t('usage.board.page.title')}
-      description={t('usage.board.page.subtitle')}
-      meta={facts}
-      alwaysShowTitle
-      testID="usage-page.header"
-    />
+    <View style={styles.headerBleed}>
+      <PageHeader
+        title={props.sessionId ? sessionTitle ?? t('usage.sessionUsage') : t('usage.board.page.title')}
+        description={t(props.sessionId ? 'usage.board.page.sessionSubtitle' : 'usage.board.page.subtitle')}
+        meta={facts}
+        alwaysShowTitle
+        testID="usage-page.header"
+      />
+      {props.sessionId ? <SessionRetentionNotice sessionId={props.sessionId} /> : null}
+    </View>
   );
 }
 
 const styles = StyleSheet.create((theme) => ({
   screen: { flex: 1, backgroundColor: theme.colors.surface.base },
-  content: { paddingBottom: 32 },
+  content: { paddingBottom: theme.space.s32 },
   column: {
     alignSelf: 'center',
     width: '100%',
-    paddingHorizontal: 16,
+    paddingHorizontal: HAPPIER_PAGE_METRICS.pageTextInsetPx,
     gap: 14,
   },
+  headerBleed: { marginHorizontal: -HAPPIER_PAGE_METRICS.pageTextInsetPx },
 }));

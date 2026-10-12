@@ -35,3 +35,14 @@ it('keeps the default control pending until its Account write acknowledges', asy
         expect(screen.findHostByTestId('pending-purpose-default')?.props.accessibilityState.disabled).not.toBe(true);
     } finally { acknowledge(); await screen.unmount(); }
 });
+
+it('keeps its label while it waits, so the header does not change shape during a reload', async () => {
+    const screen = await renderScreen(React.createElement(AgentDefaultMenuButton, {
+        choices: [{ agentId: 'codex', title: 'Codex', isDefault: false }], onChange: () => undefined,
+        disabledReason: 'Loading', testID: 'reloading-purpose-default',
+    }));
+    try {
+        expect(screen.getTextContent()).not.toContain('Loading');
+        expect(screen.findHostByTestId('reloading-purpose-default')?.props.accessibilityState).toMatchObject({ disabled: true });
+    } finally { await screen.unmount(); }
+});

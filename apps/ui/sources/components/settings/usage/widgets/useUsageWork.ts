@@ -10,10 +10,12 @@ import { t } from '@/text';
 import {
   summarizeUsageWork,
   type UsageWorkSummary,
+  type UsageWorkMoneyBasis,
 } from './usageWorkPresentation';
 import { useUsageAnalyticsView } from './usageBodyKit';
 import { readUsageWidgetPageScope, readUsageWidgetQueryOverrides } from '../usageWidgetPageContext';
 import { buildUsageRouteParams } from '../usageRouteParams';
+import { usageCostKindPhrase } from '../usageCostPresentation';
 
 const summaries = new WeakMap<object, Map<string, UsageWorkSummary>>();
 
@@ -42,17 +44,20 @@ export function useUsageWork(
     byKey.set(key, built);
     return built;
   }, [work, query.metric, query.costBasis]);
-  const currency =
-    slice.accounting?.costPresentation?.currency ??
-    slice.accounting?.totals.cost.currency ??
-    'USD';
   const format = React.useCallback(
-    (value: number | null) =>
+    (value: number | null, moneyBasis: UsageWorkMoneyBasis | null = summary?.moneyBasis ?? null) =>
       value === null ? t('usage.board.recap.money_unpriced') : query.metric === 'cost'
-        ? formatUsageCost(value, currency)
+        ? moneyBasis ? `${formatUsageCost(value, moneyBasis.currency)} ${usageCostKindPhrase(moneyBasis.kind)}`
+          : t('usage.board.recap.money_unpriced')
         : formatTokenCount(value),
-    [currency, query.metric],
+    [summary?.moneyBasis, query.metric],
   );
+  const cell = React.useCallback((value: number | null, moneyBasis: UsageWorkMoneyBasis | null) =>
+    query.metric !== 'cost' || moneyBasis !== null && summary?.moneyBasis?.kind === moneyBasis.kind
+      && summary.moneyBasis.currency === moneyBasis.currency ? value ?? format(null) : format(value, moneyBasis),
+    [format, query.metric, summary?.moneyBasis]);
+  const basisLabel = React.useCallback((moneyBasis: UsageWorkMoneyBasis | null) => moneyBasis
+    ? `${usageCostKindPhrase(moneyBasis.kind)} · ${moneyBasis.currency}` : undefined, []);
   const projectLabels = React.useMemo(
     () =>
       new Map(
@@ -92,5 +97,5 @@ export function useUsageWork(
     },
     [router, serverId, query],
   );
-  return { summary, format, projectLabel, sessionLabel, openSession };
+  return { summary, format, cell, basisLabel, projectLabel, sessionLabel, openSession };
 }

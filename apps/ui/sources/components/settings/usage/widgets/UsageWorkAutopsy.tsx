@@ -6,20 +6,27 @@ import {
   HappierDataMetric,
   HappierDataRows,
   IntervalTimeline,
+  StackedSeriesChart,
   type IntervalTimelineInterval,
 } from '@happier-dev/plugin-ui/presentation';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { usePageRowMetrics } from '@/components/ui/lists/useResolvedItemDensity';
-import { t } from '@/text';
+import { getPreferredLanguage, t } from '@/text';
+import { formatWithCachedDateTimeFormatter } from '@/utils/datetime/cachedIntlFormatters';
+import { formatUsageCost } from '@/utils/format/usageNumbers';
 import { usageMeterFill, usageSignatureAccent } from '../usageAccent';
 import {
   UsageBodyInsufficient,
   UsageCoverageLine,
+  usageDimensionLabel,
   useUsagePluginTheme,
   type UsageBodyProps,
 } from './usageBodyKit';
 import { useUsageWork } from './useUsageWork';
+import { usageCostKindPhrase } from '../usageCostPresentation';
+import { useMachineDisplayNamesById, useSessionMetadata } from '@/sync/store/hooks';
+import { findModelOptionForEffectiveModelId, getModelOptionsForSession } from '@/sync/domains/models/modelOptions';
 import { summarizeUsageWorkSession, type UsageWorkTurnRow } from './usageWorkPresentation';
 import {
   formatUsageDuration,
@@ -30,10 +37,10 @@ import {
   UsageWorkMarks,
   UsageWorkSectionTitle,
   usageWorkBranchName,
-  usageWorkProviderUnknownLine,
   usageWorkPullRequestState,
   usageWorkPullRequestTitle,
   usageWorkShortCommit,
+  usageWorkRetainedChangeLine,
 } from './UsageWorkParts';
 
 const PLOT_MIN_WIDTH_PX = 360;
@@ -43,18 +50,24 @@ const WAIT_LABELS = {
   child_wait: 'usage.board.howYouWork.waitChild',
   user_wait: 'usage.board.howYouWork.waitReply',
 } as const;
+const PHASE_LABELS = {
+  read: 'usage.board.work.phase_read', change: 'usage.board.work.phase_change', execute: 'usage.board.work.phase_execute',
+  delegate: 'usage.board.work.phase_delegate', compaction: 'usage.board.work.phase_compaction', unknown: 'usage.board.work.phase_unknown',
+} as const;
 
 /**
  * One Session, read back: what it cost and what that is linked to, its witnessed working and waiting
  * phases with the checkpoints that fell in them, then every turn with its own exact amount and
  * evidence. Shared by Work and Recap; only the admitted usage.query slice supplies any of it.
  */
-export function UsageWorkAutopsy(props: UsageBodyProps) {
+export function UsageWorkAutopsy(
+  props: UsageBodyProps & Readonly<{ /** The host body already said Work is unavailable. */ unavailableSaid?: boolean }>,
+) {
   const theme = useUsagePluginTheme();
   const { theme: appTheme } = useUnistyles();
   const presentation = useWidgetPresentation();
   const rowMetrics = usePageRowMetrics('list');
-  const { format, sessionLabel } = useUsageWork(props.slice, props.query, props.serverId);
+  const { format, cell, sessionLabel } = useUsageWork(props.slice, props.query, props.serverId);
   const selected =
     typeof props.query.session === 'string'
       ? props.query.session
@@ -67,6 +80,22 @@ export function UsageWorkAutopsy(props: UsageBodyProps) {
     () => (selected && work ? summarizeUsageWorkSession(work, { metric, costBasis }, selected) : null),
     [selected, work, metric, costBasis],
   );
+  const metadata = useSessionMetadata(selected ?? '', props.serverId);
+  const contributions = React.useMemo(() => new Map((work?.allocations ?? [])
+    .filter(row => row.contribution.sessionId === selected).map(row => [row.contribution.id, row.contribution])), [work, selected]);
+  const machineIds = React.useMemo(() => [...new Set([...contributions.values()]
+    .flatMap(row => row.machineId === null ? [] : [row.machineId]))], [contributions]);
+  const machineNames = useMachineDisplayNamesById(machineIds);
+  const modelOptions = React.useMemo(() => new Map([...new Set([...contributions.values()]
+    .flatMap(row => row.agentId === null ? [] : [row.agentId]))].map(agentId => [agentId,
+      getModelOptionsForSession(agentId, metadata)])), [contributions, metadata]);
+  const identityLine = (turn: UsageWorkTurnRow) => {
+    const row = contributions.get(turn.contributionId);
+    const model = row?.modelId ? findModelOptionForEffectiveModelId(modelOptions.get(row.agentId ?? '') ?? [], row.modelId)?.label
+      ?? usageDimensionLabel('model', row.modelId) : t('usage.board.howYouWork.notRecorded');
+    const machine = row?.machineId ? machineNames[row.machineId] ?? usageDimensionLabel('machine', row.machineId) : t('usage.board.howYouWork.notRecorded');
+    return `${model} · ${machine}`;
+  };
   if (!selected) return null;
   const turns = autopsy?.turns ?? [];
   // A turn is named by its place in the witnessed order, never by its raw id.
@@ -79,10 +108,16 @@ export function UsageWorkAutopsy(props: UsageBodyProps) {
       ? t('usage.board.work.turn')
       : t('usage.board.work.turnNumber', { number: ordinal });
   };
+  const gitTime = (atMs: number) => formatWithCachedDateTimeFormatter(atMs, getPreferredLanguage(),
+    { dateStyle: 'medium', timeStyle: 'short' });
   const evidenceLine = (turn: UsageWorkTurnRow) =>
     [
       ...turn.branches.map(usageWorkBranchName),
-      ...turn.commits.map((sha) => `${t('usage.board.work.commit')} ${usageWorkShortCommit(sha)}`),
+      ...turn.commits.map((sha) => {
+        const moment = turn.moments.find(item => item.kind === 'commit' && item.sha === sha);
+        return `${t('usage.board.work.commit')} ${usageWorkShortCommit(sha)} · ${moment ? gitTime(moment.atMs)
+          : t('usage.board.howYouWork.notRecorded')}`;
+      }),
     ].join(' · ');
   const outcomeLine = (turn: UsageWorkTurnRow) =>
     turn.outcome
@@ -90,9 +125,14 @@ export function UsageWorkAutopsy(props: UsageBodyProps) {
       : t(`usage.board.work.reason_${turn.reason === 'allocated' ? 'missing_evidence' : turn.reason}`);
 
   const phases = props.slice.howYouWork?.intervals;
+  const phaseEvents = props.slice.howYouWork?.autopsy?.events.filter(event => event.sessionId === selected) ?? [];
   const accent = usageSignatureAccent(appTheme);
   const quiet = usageMeterFill(appTheme, false);
   const intervals: IntervalTimelineInterval[] = [
+    ...phaseEvents.map(event => ({ id: `phase:${event.evidenceId}`, kind: 'point' as const,
+      label: t(PHASE_LABELS[event.kind]), start: event.observedAtMs, end: event.observedAtMs,
+      color: event.kind === 'compaction' ? accent : quiet,
+      annotation: event.turnId === null ? t('usage.board.howYouWork.notRecorded') : turnLabel(event.turnId) })),
     ...(phases?.lanes ?? [])
       .filter((lane) => readUsageWorkSessionId(lane.workId) === selected)
       .flatMap((lane) => {
@@ -117,17 +157,16 @@ export function UsageWorkAutopsy(props: UsageBodyProps) {
           })),
         ];
       }),
-    // A checkpoint is one witnessed moment: the turn's own observation time, never a span.
-    ...turns
-      .filter((turn) => turn.checkpoints.length > 0)
-      .map((turn) => ({
-        id: `checkpoint:${turn.contributionId}`,
+    // Git object times are independent of accounting observations. Missing object times create no marker.
+    ...[...new Map(turns.flatMap(turn => turn.moments.map(moment => ({ turn, moment })))
+      .map(row => [JSON.stringify(row.moment), row])).values()].map(({ turn, moment }) => ({
+        id: `${moment.kind}:${moment.sha}`,
         kind: 'point' as const,
-        label: t('usage.board.work.checkpoint'),
-        start: turn.observedAtMs,
-        end: turn.observedAtMs,
+        label: t(`usage.board.work.${moment.kind}`),
+        start: moment.atMs,
+        end: moment.atMs,
         color: appTheme.colors.text.primary,
-        annotation: [turnLabel(turn.turnId), evidenceLine(turn), turn.outcome ? outcomeLine(turn) : '']
+        annotation: [turnLabel(turn.turnId), gitTime(moment.atMs), evidenceLine(turn), turn.outcome ? outcomeLine(turn) : '']
           .filter(Boolean)
           .join(' · '),
       })),
@@ -139,7 +178,7 @@ export function UsageWorkAutopsy(props: UsageBodyProps) {
   const first = instants.length > 0 ? Math.min(...instants) : null;
   const last = instants.length > 0 ? Math.max(...instants) : null;
   const domain =
-    first !== null && last !== null && last > first
+    first !== null && last !== null
       ? { start: first, end: last }
       : phases
         ? { start: phases.period.startMs, end: phases.period.endMs }
@@ -158,7 +197,7 @@ export function UsageWorkAutopsy(props: UsageBodyProps) {
               size="stat"
               showLabel
               label={t('usage.board.work.autopsyTitle')}
-              value={autopsy.amount ?? format(null)}
+              value={format(autopsy.amount, autopsy.moneyBasis)}
               valueFormatter={format}
               caption={sessionLabel(selected)}
             />
@@ -189,7 +228,6 @@ export function UsageWorkAutopsy(props: UsageBodyProps) {
                         )
                         .join(', ')
                 }`,
-                usageWorkProviderUnknownLine(autopsy),
               ]
                 .filter(Boolean)
                 .join(' · ')}
@@ -199,11 +237,42 @@ export function UsageWorkAutopsy(props: UsageBodyProps) {
       ) : work ? (
         <UsageBodyInsufficient
           testID={`${props.testID}.empty`}
+          replacesContent={false}
           title={t('usage.board.work.emptyTitle')}
           reason={t('usage.board.work.emptyReason')}
         />
+      ) : props.unavailableSaid ? null : (
+        // No Work facts were admitted for this read: say so rather than show an empty autopsy.
+        <UsageBodyInsufficient
+          testID={`${props.testID}.workUnavailable`}
+          replacesContent={false}
+          title={t('usage.board.work.workUnavailableTitle')}
+          reason={t('usage.board.work.workUnavailableReason')}
+        />
+      )}
+      {autopsy && autopsy.costTimeline.length > 0 ? (
+        <View style={styles.section}>
+          <UsageWorkSectionTitle caption={autopsy.costTimelineBasis
+            ? `${usageCostKindPhrase(autopsy.costTimelineBasis.kind)} · ${autopsy.costTimelineBasis.currency}`
+            : t('usage.board.recap.money_unpriced')}>{t('usage.board.work.costOverTime')}</UsageWorkSectionTitle>
+          <StackedSeriesChart
+            theme={theme}
+            testID={`${props.testID}.costTimeline`}
+            label={t('usage.board.work.costOverTime')}
+            variant="line"
+            size={width !== undefined && width < PLOT_MIN_WIDTH_PX ? 'tile' : 'full'}
+            valueFormatter={value => autopsy.costTimelineBasis && value !== null
+              ? formatUsageCost(value, autopsy.costTimelineBasis.currency) : t('usage.board.recap.money_unpriced')}
+            unknownLabel={t('usage.board.recap.money_unpriced')}
+            series={[{ id: 'cost', label: t('usage.cost'), color: accent,
+              points: autopsy.costTimeline.map(point => ({ id: point.id,
+                x: point.observedAtMs,
+                label: formatUsageDuration(point.observedAtMs - autopsy.costTimeline[0]!.observedAtMs),
+                y: point.amount })) }]}
+          />
+        </View>
       ) : null}
-      {phases && domain ? (
+      {domain && intervals.length > 0 ? (
         <View style={styles.section}>
           <UsageWorkSectionTitle caption={t('usage.board.work.phasesCaption')}>
             {t('usage.board.work.phases')}
@@ -220,7 +289,7 @@ export function UsageWorkAutopsy(props: UsageBodyProps) {
             endLabel={t('usage.board.howYouWork.ended')}
             unknownLabel={t('usage.board.howYouWork.notRecorded')}
           />
-          {phases.unknownEndCount ? (
+          {phases?.unknownEndCount ? (
             <Text style={[styles.note, caption]} testID={`${props.testID}.unknownEnds`}>
               {t('usage.board.howYouWork.unknownEnds', { count: phases.unknownEndCount })} ·{' '}
               {t('usage.board.howYouWork.unknownEndsReason')}
@@ -245,15 +314,21 @@ export function UsageWorkAutopsy(props: UsageBodyProps) {
               { label: t('usage.board.work.linkedOutcome') },
               { label: t('usage.board.work.checkpoint') },
               { label: t('usage.board.work.commit') },
+              { label: `${t('usage.board.page.byModel')} · ${t('common.machine')}` },
+              { label: t('usage.board.work.linesKept') },
             ]}
             rows={turns.map((turn) => [
               turn.turnId === null ? t('usage.board.work.reason_missing_turn') : turnLabel(turn.turnId),
-              turn.amount ?? format(null),
+              cell(turn.amount, turn.moneyBasis),
               outcomeLine(turn),
               turn.checkpoints.join(' · '),
               evidenceLine(turn),
+              identityLine(turn),
+              usageWorkRetainedChangeLine(turn.retainedChanges),
             ])}
           />
+          {turns.some(turn => turn.retainedChanges.length > 0) ?
+            <Text style={[styles.note, caption]}>{t('usage.board.work.linesKeptMethod')}</Text> : null}
         </View>
       ) : null}
       <UsageCoverageLine
@@ -268,12 +343,12 @@ export function UsageWorkAutopsy(props: UsageBodyProps) {
 
 const styles = StyleSheet.create((theme) => ({
   body: { gap: 14, minWidth: 0 },
-  summary: { gap: 10, minWidth: 0 },
-  facts: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 32, rowGap: 12 },
-  outcome: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', columnGap: 8, rowGap: 4 },
+  summary: { gap: theme.space.s10, minWidth: 0 },
+  facts: { flexDirection: 'row', flexWrap: 'wrap', columnGap: theme.space.s32, rowGap: theme.space.s12 },
+  outcome: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', columnGap: theme.space.s8, rowGap: theme.space.s4 },
   outcomeText: { ...Typography.default(), color: theme.colors.text.secondary, flexShrink: 1 },
   section: {
-    gap: 10,
+    gap: theme.space.s10,
     paddingTop: 14,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: theme.colors.border.default,

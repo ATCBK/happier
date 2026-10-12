@@ -4,7 +4,7 @@ import type { ManagedConfigurationFactsV1 } from '@happier-dev/protocol/machines
 import type { ManagedReceiptModel } from './MachineConfigurationReceipt';
 import { countryFlag, formatProviderAmount, formatPriceUnit, type ManagedReceiptCost } from './managedMachineDisplay';
 import type { ManagedLocalResourceFactsV1 } from '@happier-dev/protocol/machines/managed/providerFactsV1';
-import { formatByteCapacity } from '@/utils/files/formatByteSize';
+import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
 import type { MachineRetentionOverrideV1 } from '@happier-dev/protocol/account/settings/machineRetentionDefaultsV1';
 import type { BillingCapabilitiesV1 } from '@happier-dev/protocol/machines/managed/providerFactsV1';
 import { t } from '@/text';
@@ -137,8 +137,8 @@ type NativeSizeFact = NonNullable<NonNullable<ManagedConfigurationFactsV1['nativ
 /** The labelled native dimensions a size declares, as the receipt says them: "4 cores", "8 GB", "80 GB". */
 export function managedSizeDimensions(size: NativeSizeFact): string[] {
     return [size.cpuCores === undefined ? null : t('managedMachines.receipt.cores', { count: size.cpuCores }),
-        size.memoryBytes === undefined ? null : formatByteCapacity(size.memoryBytes),
-        size.diskBytes === undefined ? null : formatByteCapacity(size.diskBytes)]
+        size.memoryBytes === undefined ? null : formatHappierDataBytes(size.memoryBytes, { kind: 'memory' }),
+        size.diskBytes === undefined ? null : formatHappierDataBytes(size.diskBytes, { kind: 'storage' })]
         .filter((part): part is string => part !== null);
 }
 
@@ -163,14 +163,14 @@ function describeLocalCost(input: Readonly<{ computer: string; size?: NativeSize
     if (cores) meters.push({ id: 'cpu', label: t('managedMachines.config.columns.cpu'), fraction: Math.min(1, cores.used / cores.free),
         value: t('managedMachines.receipt.coresOfFree', { count: cores.used, free: String(cores.free) }) });
     if (memory) meters.push({ id: 'memory', label: t('managedMachines.config.columns.memory'), fraction: Math.min(1, memory.used / memory.free),
-        value: t('managedMachines.receipt.amountOfFree', { amount: formatByteCapacity(memory.used), free: formatByteCapacity(memory.free) }) });
+        value: t('managedMachines.receipt.amountOfFree', { amount: formatHappierDataBytes(memory.used, { kind: 'memory' }), free: formatHappierDataBytes(memory.free, { kind: 'memory' }) }) });
     if (input.omitHeadroom) return { kind: 'local', computer, meters: [] };
     if (!cores && !memory) return { kind: 'local', computer, meters, note: t('managedMachines.receipt.headroomUnknown', { computer }) };
     if (cores && cores.used > cores.free || memory && memory.used > memory.free) {
         return { kind: 'local', computer, meters, note: t('managedMachines.receipt.exceedsFree', { computer }) };
     }
     const leftCores = cores ? t('managedMachines.receipt.cores', { count: cores.free - cores.used }) : null;
-    const leftMemory = memory ? formatByteCapacity(memory.free - memory.used) : null;
+    const leftMemory = memory ? formatHappierDataBytes(memory.free - memory.used, { kind: 'memory' }) : null;
     return { kind: 'local', computer, meters, note: leftCores && leftMemory
         ? t('managedMachines.receipt.leavesBoth', { cores: leftCores, memory: leftMemory, computer })
         : t('managedMachines.receipt.leavesOne', { amount: leftCores ?? leftMemory ?? '', computer }) };
@@ -188,5 +188,5 @@ export function describeLocalHeadroom(size: NativeSizeFact, resources: ManagedLo
     if (cores === null && memory === null) return undefined;
     if ((cores ?? 0) < 0 || (memory ?? 0) < 0) return t('managedMachines.config.notEnoughFree');
     return [cores === null ? null : t('managedMachines.receipt.cores', { count: cores }),
-        memory === null ? null : formatByteCapacity(memory)].filter((part): part is string => part !== null).join(' · ');
+        memory === null ? null : formatHappierDataBytes(memory, { kind: 'memory' })].filter((part): part is string => part !== null).join(' · ');
 }

@@ -116,8 +116,9 @@ export const TeamCredentialResourceFilterPicker = React.memo(function TeamCreden
     return (
         <Item
             testID="team-credentials-filter"
-            title={filterLabel(props.value)}
-            accessibilityLabel={`${t('teams.credentials.title')}, ${filterLabel(props.value)}`}
+            title={t('teams.credentials.filterTitle')}
+            detail={filterLabel(props.value)}
+            accessibilityLabel={`${t('teams.credentials.filterTitle')}, ${filterLabel(props.value)}`}
             disabled={props.disabled}
             onPress={open}
         />

@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { View } from 'react-native';
-import type { UsageSourceV1 } from '@happier-dev/protocol/usage/usageSources';
+import { matchesUsageSourceAccountingScope, type UsageSourceV1 } from '@happier-dev/protocol/usage/usageSources';
 import type { UsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import { useDaemonMergedProjectionInputs } from '@/agents/backendCatalog/useDaemonMergedProjectionInputs';
 import { resolveExternalSessionBrowseTargetForQualifiedSource } from '@/components/sessions/external/browse/resolveExternalSessionBrowseSourceOptions';
@@ -15,7 +15,9 @@ import { Text } from '@/components/ui/text/Text';
 import { t } from '@/text';
 import { useAllMachines, useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import { isMachineSelectableForFleet } from '@/sync/domains/machines/administration/fleetUnion';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
+import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
 import { useUsageSourcesController } from './useUsageSources';
 
 /** Vendor-backed candidate titles require consent or an explicit browse; linking never enables capture. */
@@ -96,7 +98,7 @@ function OutsideMachine(props: Readonly<{ machineId: string; online: boolean; li
     query: UsageQuery; testID: string }>) {
     const { controller, snapshot } = useUsageSourcesController({ machineId: props.machineId, lifetime: props.lifetime });
     React.useEffect(() => { if (controller && props.online) void controller.discover(); }, [controller, props.online]);
-    return <View>{snapshot.sources.filter(source => source.externalSessionSource)
+    return <View>{snapshot.sources.filter(source => source.externalSessionSource && matchesUsageSourceAccountingScope(source, props.query.sources))
         .map(source => <UsageExternalSessionCandidates key={source.sourceId} source={source} online={props.online}
             agentIds={props.query.agents} lifetime={props.lifetime} testID={`${props.testID}.${source.sourceId}`} />)}</View>;
 }
@@ -109,11 +111,13 @@ export function UsageOutsideSessions(props: Readonly<{ serverId: string; query: 
         return captured?.scope.serverId === props.serverId ? captured : null;
     }, [scope?.serverId, scope?.accountId, props.serverId]);
     const machines = useAllMachines();
+    useMachineReachabilityRevision();
+    const nowMs = useMachinePresenceNowMs(machines);
     // These filters require accounting/session evidence candidates cannot establish; never broaden them.
-    if (!lifetime || (props.query.sources.length && !props.query.sources.includes('native')) || props.query.session !== null
+    if (!lifetime || props.query.session !== null
         || props.query.projects.length || props.query.workspaceIds.length || props.query.modelIds.length || props.query.backendModes.length) return null;
     return <View testID={props.testID}>{machines.filter(machine => !machine.revokedAt &&
         (!props.query.machines.length || props.query.machines.includes(machine.id))).map(machine =>
-        <OutsideMachine key={machine.id} machineId={machine.id} online={isMachineOnline(machine)} lifetime={lifetime}
+        <OutsideMachine key={machine.id} machineId={machine.id} online={lifetime.isCurrent() && isMachineSelectableForFleet(lifetime.scope, machine, nowMs)} lifetime={lifetime}
             query={props.query} testID={`${props.testID}.${machine.id}`} />)}</View>;
 }

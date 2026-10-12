@@ -4,24 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { ProviderConnectionIdSchema, ProviderConnectionSecurityFingerprintV1Schema } from '@happier-dev/protocol';
 
-import {
-    collectRenderedTestIds,
-    createMachineAdministrationTargetSelectionMock,
-    createProviderConnectionViewFixture,
-    createProviderConnectionsDescribeFixture,
-    createProviderSettingsHarness,
-    createHomeGovernanceHarness,
-    installHomeGovernanceBoundaries,
-    installMachineAdministrationTargetSelectionBoundary,
-    installProviderSettingsRpcBoundary,
-    renderScreen,
-    standardCleanup,
-    teamCapabilitiesFixture,
-    teamCredentialResourceFixture,
-    teamCredentialSourceCandidateFixture,
-    teamCredentialViewerFixture,
-    teamSummaryFixture,
-} from '@/dev/testkit';
+import { collectRenderedTestIds, renderScreen, standardCleanup, teamCapabilitiesFixture, teamCredentialResourceFixture, teamCredentialSourceCandidateFixture, teamCredentialViewerFixture, teamSummaryFixture } from '@/dev/testkit';
+import { createProviderConnectionViewFixture, createProviderConnectionsDescribeFixture, createProviderSettingsHarness, installProviderSettingsRpcBoundary } from '@/dev/testkit/harness/providerSettingsHarness';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 
 import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelpers';
 
@@ -41,8 +26,6 @@ const confirmPolicyInvalidation = vi.hoisted(() => vi.fn(async () => true));
 const shownModals = vi.hoisted(() => [] as { chrome?: { testID?: string }; props?: Record<string, unknown> }[]);
 const providerHarness = createProviderSettingsHarness();
 installProviderSettingsRpcBoundary(providerHarness);
-const administrationTarget = createMachineAdministrationTargetSelectionMock();
-installMachineAdministrationTargetSelectionBoundary(administrationTarget);
 
 installSettingsViewCommonModuleMocks({
     router: async () => ({
@@ -68,6 +51,9 @@ installSettingsViewCommonModuleMocks({
 
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
+const { createMachineAdministrationTargetSelectionMock, installMachineAdministrationTargetSelectionBoundary } = await import('@/dev/testkit/mocks/machineAdministrationTargetSelection');
+const administrationTarget = createMachineAdministrationTargetSelectionMock();
+installMachineAdministrationTargetSelectionBoundary(administrationTarget);
 
 const TEAM_GET_PATH = '/v1/teams/get';
 const LIST_PATH = '/v1/teams/credential-resources/list';

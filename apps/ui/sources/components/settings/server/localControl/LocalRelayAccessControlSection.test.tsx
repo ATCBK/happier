@@ -1,8 +1,8 @@
 import * as React from 'react';
 import renderer from 'react-test-renderer';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { renderScreen } from '@/dev/testkit';
+import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { installMachinesSettingsCommonModuleMocks } from '@/components/settings/machines/machinesSettingsTestHelpers';
 
 type WizardPrimaryState = {
@@ -17,8 +17,6 @@ function readWizardPrimary(state: WizardPrimaryState): Exclude<WizardPrimaryStat
     return state;
 }
 
-const setActiveServerShareableUrlSpy = vi.hoisted(() => vi.fn());
-const setServerProfileShareableUrlSpy = vi.hoisted(() => vi.fn());
 const openExternalUrlSpy = vi.hoisted(() => vi.fn(
     async (_url: string, _options?: Readonly<{ platformOS?: string }>) => true,
 ));
@@ -46,42 +44,9 @@ installMachinesSettingsCommonModuleMocks({
     },
     unistyles: async () => {
         const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
-        return createUnistylesMock({
-            theme: {
-                colors: {
-                    accent: {
-                        blue: 'blue',
-                    },
-                    success: 'success',
-                    warningCritical: 'warningCritical',
-                    textSecondary: 'gray',
-                    textTertiary: 'textTertiary',
-                    divider: 'divider',
-                    surface: 'surface',
-                    text: 'text',
-                    overlay: {
-                        scrimWizard: 'scrimWizard',
-                    },
-                },
-            },
-        });
+        return createUnistylesMock();
     },
 });
-
-vi.mock('@/sync/domains/server/serverRuntime', () => ({
-    getActiveServerSnapshot: () => ({
-        serverId: 'server-1',
-        serverUrl: 'https://relay.example.test',
-        activeShareableServerUrl: null,
-        generation: 0,
-    }),
-    setActiveShareableServerUrl: (value: string | null) => setActiveServerShareableUrlSpy(value),
-    setServerProfileShareableUrl: (
-        serverProfileId: string,
-        value: string | null,
-        options?: { validatedAgainstServerUrl?: string | null },
-    ) => setServerProfileShareableUrlSpy(serverProfileId, value, options),
-}));
 
 vi.mock('@/utils/url/openExternalUrl', () => ({
     openExternalUrl: (url: string, options?: Record<string, unknown>) => openExternalUrlSpy(url, options),
@@ -115,6 +80,26 @@ vi.mock('@/components/ui/text/Text', () => ({
         React.createElement('Text', props, props.children),
     TextInput: (props: Record<string, unknown>) => React.createElement('TextInput', props),
 }));
+
+const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+const { getServerProfileById, removeServerProfile, setActiveServerId, setServerProfileShareableUrl, upsertServerProfile } = await import('@/sync/domains/server/serverProfiles');
+const { LocalRelayAccessControlSection } = await import('./LocalRelayAccessControlSection');
+let activeProfileId = '';
+let candidateProfileId = '';
+beforeEach(async () => {
+    const active = await upsertServerProfile({ serverUrl: 'https://relay.example.test', name: 'Active relay' });
+    const candidate = await upsertServerProfile({ serverUrl: 'http://127.0.0.1:3005', name: 'Candidate relay' });
+    activeProfileId = active.id;
+    candidateProfileId = candidate.id;
+    await setServerProfileShareableUrl(activeProfileId, null);
+    await setServerProfileShareableUrl(candidateProfileId, null);
+    await setActiveServerId(activeProfileId);
+});
+afterEach(async () => {
+    await standardCleanup();
+    await removeServerProfile(activeProfileId);
+    await removeServerProfile(candidateProfileId);
+});
 
 describe('LocalRelayAccessControlSection', () => {
     it('labels relay providers as available to other devices in settings presentation', async () => {
@@ -426,8 +411,6 @@ describe('LocalRelayAccessControlSection', () => {
     });
 
     it('runs relay.access.configure.v1 for LAN and updates the active shareable URL on success', async () => {
-        setActiveServerShareableUrlSpy.mockClear();
-        setServerProfileShareableUrlSpy.mockClear();
 
         const { createSystemTaskRunner } = await import('@/components/systemTasks/createSystemTaskRunner');
         const { SystemTaskSpecSchema, SYSTEM_TASK_PROTOCOL_VERSION } = await import('@happier-dev/protocol');
@@ -513,13 +496,11 @@ describe('LocalRelayAccessControlSection', () => {
                 },
             });
         });
-        expect(setActiveServerShareableUrlSpy).toHaveBeenCalledWith('https://relay.lan.example.test');
-        expect(setServerProfileShareableUrlSpy).not.toHaveBeenCalled();
+        expect(getActiveServerSnapshot().activeShareableServerUrl).toBe('https://relay.lan.example.test');
+        expect(getServerProfileById(candidateProfileId)?.shareableServerUrl ?? null).toBeNull();
     });
 
     it('persists a configured share URL onto the provided server profile without updating the active profile', async () => {
-        setActiveServerShareableUrlSpy.mockClear();
-        setServerProfileShareableUrlSpy.mockClear();
 
         const { createSystemTaskRunner } = await import('@/components/systemTasks/createSystemTaskRunner');
         const { SystemTaskSpecSchema, SYSTEM_TASK_PROTOCOL_VERSION } = await import('@happier-dev/protocol');
@@ -553,7 +534,7 @@ describe('LocalRelayAccessControlSection', () => {
             React.createElement(LocalRelayAccessControlSection as any, {
                 runner,
                 upstreamUrl: 'http://127.0.0.1:3005/',
-                serverProfileId: 'candidate-relay',
+                serverProfileId: candidateProfileId,
             }),
         );
         await renderer.act(async () => {});
@@ -588,14 +569,14 @@ describe('LocalRelayAccessControlSection', () => {
             });
         });
 
-        expect(setServerProfileShareableUrlSpy).toHaveBeenCalledWith('candidate-relay', 'https://relay.lan.example.test', {
-            validatedAgainstServerUrl: 'http://127.0.0.1:3005/',
+        expect(getServerProfileById(candidateProfileId)).toMatchObject({
+            shareableServerUrl: 'https://relay.lan.example.test',
+            shareableServerUrlValidatedAgainstServerUrl: 'http://127.0.0.1:3005',
         });
-        expect(setActiveServerShareableUrlSpy).not.toHaveBeenCalled();
+        expect(getActiveServerSnapshot().activeShareableServerUrl).toBeNull();
     });
 
     it('runs secure access for Tailscale providers and includes upstreamUrl in the task spec', async () => {
-        setActiveServerShareableUrlSpy.mockClear();
 
         const { createSystemTaskRunner } = await import('@/components/systemTasks/createSystemTaskRunner');
         const { SystemTaskSpecSchema, SYSTEM_TASK_PROTOCOL_VERSION } = await import('@happier-dev/protocol');

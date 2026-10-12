@@ -6,7 +6,8 @@ import { SettingAnchor, SettingRow } from '@/components/settings/shell/SettingRo
 import type { SettingRef } from '@/components/settings/catalog/settingDeclarations';
 import { SESSION_PROVIDER_LIMITS_SETTINGS } from '@/components/settings/session/sessionProviderLimitsSettings';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
-import { useSettingMutable } from '@/sync/domains/state/storage';
+import { useSetting, useSettingMutable } from '@/sync/domains/state/storage';
+import { useSettingActionFeedback } from '@/components/settings/shell/useSettingActionFeedback';
 import { isQuotaGaugeWindowMode, resolveQuotaGaugeWindowModes } from '@/sync/domains/connectedServices/quotaGaugeWindows';
 import { t } from '@/text';
 
@@ -19,7 +20,8 @@ export const ProviderUsageGaugeSettingsGroup = React.memo(function ProviderUsage
     const [legacyWindow] = useSettingMutable('sessionProviderUsageGaugeWindowMode');
     const [windows, setWindows] = useSettingMutable('sessionProviderUsageGaugeWindowModes');
     const [labels, setLabels] = useSettingMutable('sessionUsageGaugeLabels');
-    const [routingHints, setRoutingHints] = useSettingMutable('usageRoutingHintsEnabled');
+    const routingHints = useSetting('usageRoutingHintsEnabled');
+    const { setSetting } = useSettingActionFeedback();
     const selectedIds = resolveQuotaGaugeWindowModes(windows, legacyWindow);
     const visible = visibility !== 'hidden';
     const candidates = [
@@ -67,9 +69,9 @@ export const ProviderUsageGaugeSettingsGroup = React.memo(function ProviderUsage
             setting={settings.routingHints}
             testID="settings-session-providerUsageGauge-routingHints"
             subtitle={t('usage.board.plans.routingHintsSettingSubtitle')}
-            rightElement={<Switch testID="settings-session-providerUsageGauge-routingHints-toggle" value={routingHints !== false} onValueChange={setRoutingHints} />}
+            rightElement={<Switch testID="settings-session-providerUsageGauge-routingHints-toggle" value={routingHints !== false} onValueChange={value => { void setSetting(settings.routingHints, value); }} />}
             showChevron={false}
-            onPress={() => setRoutingHints(routingHints === false)}
+            onPress={() => { void setSetting(settings.routingHints, routingHints === false); }}
         />
     </ItemGroup>;
 });

@@ -34,15 +34,13 @@ function EmbeddedFormSection(props: Readonly<{
 }>): React.ReactElement {
     const { theme } = useUnistyles();
     const text = {
-        ...Typography.default('regular'),
-        fontSize: 13,
-        lineHeight: 18,
-        paddingHorizontal: 16,
+        ...Typography.variant('body'),
+        paddingHorizontal: theme.space.s16,
     };
     return (
-        <View style={{ paddingTop: 8 }}>
+        <View style={{ paddingTop: theme.space.s8 }}>
             {props.title ? (
-                <Text style={{ ...text, ...Typography.default('medium'), color: theme.colors.text.primary, paddingTop: 4 }}>
+                <Text style={{ ...text, ...Typography.default('medium'), color: theme.colors.text.primary, paddingTop: theme.space.s4 }}>
                     {props.title}
                 </Text>
             ) : null}

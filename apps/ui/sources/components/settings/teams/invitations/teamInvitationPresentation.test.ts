@@ -23,6 +23,22 @@ function row(overrides?: Partial<TeamInvitationRowV1>): TeamInvitationRowV1 {
 }
 
 describe('resolveTeamInvitationPresentation', () => {
+    it('presents the accepting person through the Members display-name owner and the terminal instant', () => {
+        const accepted = resolveTeamInvitationPresentation(row({
+            state: 'accepted', acceptedByAccountId: 'ada', finishedAt: NOW - 500,
+            finishedByAccount: { firstName: 'Ada', lastName: 'Lovelace', name: 'Ada Lovelace', username: null, avatarUrl: null },
+        }), NOW);
+        expect(accepted.title).toBe('Ada Lovelace');
+        expect(accepted.finishedLabel).toBe('Accepted');
+        expect(accepted.finishedAt).toBe(NOW - 500);
+        const revoked = resolveTeamInvitationPresentation(row({ state: 'revoked', finishedAt: NOW - 300 }), NOW);
+        expect(revoked.finishedAt).toBe(NOW - 300);
+        const stale = resolveTeamInvitationPresentation(row({ expiresAt: NOW - 1 }), NOW);
+        expect(stale.finishedAt).toBe(NOW - 1);
+        // An older row has no terminal instant: never substitute creation or expiry for acceptance.
+        expect(resolveTeamInvitationPresentation(row({ state: 'accepted' }), NOW).finishedAt).toBeNull();
+    });
+
     it('offers revocation only while an invitation is genuinely live', () => {
         expect(resolveTeamInvitationPresentation(row(), NOW).canRevoke).toBe(true);
         expect(resolveTeamInvitationPresentation(row({ state: 'revoked' }), NOW).canRevoke).toBe(false);
@@ -79,12 +95,44 @@ describe('resolveTeamInvitationPresentation', () => {
             row({ role: 'admin', historyAccess: 'all_existing' }),
             NOW,
         );
-        expect(wideOpen.offerLabel).toContain('Admin');
-        expect(wideOpen.offerLabel).toContain('Include sessions already shared with the Team');
+        // The link's title names the role it grants; the subtitle carries the one thing that sets it apart.
+        expect(wideOpen.title).toBe('Admin link');
+        expect(wideOpen.offerLabel).toBe('Include sessions already shared with the Team');
 
+        // The ordinary horizon (from when they join) is the quiet case: the row names only the
+        // role, so the one link that opens earlier history is the one that reads differently.
         const restrained = resolveTeamInvitationPresentation(row({ role: 'guest' }), NOW);
-        expect(restrained.offerLabel).toContain('Guest');
-        expect(restrained.offerLabel).toContain('Only sessions shared after they join');
+        expect(restrained.title).toBe('Guest link');
+        expect(restrained.offerLabel).toBeNull();
+    });
+});
+
+describe('row identity', () => {
+    it('titles an email invitation by its masked recipient and leaves the role to the subtitle', () => {
+        const presented = resolveTeamInvitationPresentation(row({ recipientEmailMask: 'a•••@example.com', role: 'admin' }), NOW);
+        expect(presented.title).toContain('a•••@example.com');
+        expect(presented.offerLabel).toBe('Admin');
+    });
+
+    it('titles a link by the role it grants, so seven links do not read as seven identical rows', () => {
+        const member = resolveTeamInvitationPresentation(row({ role: 'member' }), NOW);
+        const guest = resolveTeamInvitationPresentation(row({ role: 'guest' }), NOW);
+        expect(member.title).toBe('Member link');
+        expect(guest.title).toBe('Guest link');
+        // The role is said once: the subtitle keeps only what the title cannot carry.
+        expect(member.offerLabel).toBeNull();
+        expect(resolveTeamInvitationPresentation(row({ role: 'member', historyAccess: 'all_existing' }), NOW).offerLabel)
+            .toBe('Include sessions already shared with the Team');
+    });
+
+    it('titles an accepted invitation by the person who joined, whichever way it was sent', () => {
+        const accepted = resolveTeamInvitationPresentation(row({
+            state: 'accepted', acceptedByAccountId: 'grace', finishedAt: NOW - 500,
+            finishedByAccount: { firstName: 'Grace', lastName: 'Lin', name: 'Grace Lin', username: null, avatarUrl: null },
+        }), NOW);
+        expect(accepted.title).toBe('Grace Lin');
+        expect(accepted.finishedLabel).toBe('Accepted');
+        expect(accepted.offerLabel).toBe('Member');
     });
 });
 

@@ -239,7 +239,7 @@ describe('mounted managed configurator', () => {
         expect(summary).toContain('Compute');
         expect(summary).toContain('0.005');
         expect(summary).toContain('€');
-        expect(summary).toContain('hour');
+        expect(summary).toContain((await import('@/text')).t('managedMachines.price.perHour'));
         expect(summary).not.toContain('0.0058');
         await screen.unmount();
     });
@@ -438,7 +438,8 @@ describe('mounted managed configurator', () => {
         const { storage } = await import('@/sync/domains/state/storage');
         const metadata = createMachineFixture().metadata;
         if (!metadata) throw new Error('The canonical controller fixture has no metadata');
-        storage.setState({ machineListByServerId: { [serverId]: [createMachineFixture({ id: 'host', installationId: 'installation', metadata: { ...metadata, host: 'Build host', platform: 'linux' } })] } });
+        storage.setState({ machineListByServerId: { [serverId]: [createMachineFixture({ id: 'host', installationId: 'installation', activeAt: Date.now(), metadata: { ...metadata, host: 'Build host', platform: 'linux' } })] },
+            machineListStatusByServerId: { [serverId]: 'idle' } });
         for (const [actionId, result] of [
             ['machines.provisioners.list', { controller: defaultController, provisioners: [provisioner] }],
             ['machines.provisioners.check', { available: true }],

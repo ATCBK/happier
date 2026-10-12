@@ -612,6 +612,7 @@ async function renderSection(
         perActiveServerIdentityId?: string | null;
         /** The platform fact the app's presentation provider supplies (touch floors). */
         uiPlatform?: 'ios' | 'android' | 'web';
+        presentation?: Readonly<{ kind: 'disclosures'; title: string }>;
     }> = {},
 ) {
     const { PluginDetailGenericSettingsSection } = await import('./PluginDetailGenericSettingsSection');
@@ -632,6 +633,7 @@ async function renderSection(
                 : options.perActiveServerIdentityId}
             daemonOperationsAvailable={options.daemonOperationsAvailable ?? true}
             isDaemonTargetCurrent={options.isDaemonTargetCurrent}
+            presentation={options.presentation}
         />
     );
     const { HappierUiPlatformProvider } = await import('@happier-dev/plugin-ui/environment');
@@ -717,6 +719,42 @@ describe('PluginDetailGenericSettingsSection', () => {
         const { screen } = await renderSection(createProjection(1, []));
         expect(screen.findByTestId(`settings.plugins.detail.${PLUGIN_ID}.settings.${GROUP_ID}.empty`)).toBeNull();
         expect(screen.findAll((node) => node.props?.title === 'Acme hook settings')).toHaveLength(0);
+    });
+
+    it('summarises each section as a closed disclosure on a page about something else, and opens it on a save failure', async () => {
+        machinePluginSettingsSetMock.mockResolvedValue(unsupportedSetResult);
+        const disclosureId = `settings.plugins.detail.${PLUGIN_ID}.settings.${GROUP_ID}.disclosure`;
+        const { screen } = await renderSection(createProjection(1), {
+            presentation: { kind: 'disclosures', title: 'Plugin settings' },
+        });
+        const header = () => screen.findAll((node) => (
+            node.props?.title === 'Acme hook settings' && node.props?.accessibilityState !== undefined
+        ))[0] ?? null;
+
+        // Closed, with the endpoint (no declared default) counted as changed and `enabled` at its default.
+        expect(header()?.props.accessibilityState).toEqual({ expanded: false });
+        expect(header()?.props.detail).toContain('settingsPlugins.genericSettingsChangedCount');
+        expect(screen.findByTestId(ENDPOINT_INPUT_ID)).toBeNull();
+
+        await act(async () => {
+            header()?.props.onPress();
+        });
+        await act(async () => {
+            screen.changeTextByTestId(ENDPOINT_INPUT_ID, 'https://api.next.test');
+        });
+        await act(async () => {
+            screen.pressByTestId(ENDPOINT_SAVE_ID);
+            await Promise.resolve();
+        });
+        await flushAsync();
+        await act(async () => {
+            header()?.props.onPress();
+        });
+
+        // A failed save is never hidden behind a closed row.
+        expect(header()?.props.accessibilityState).toEqual({ expanded: true });
+        expect(screen.findByTestId(ENDPOINT_INPUT_ID)).toBeTruthy();
+        expect(screen.findByTestId(disclosureId)).toBeTruthy();
     });
 
     it('refreshes mounted generic and declarative Settings consumers from one shared record watch', async () => {
@@ -898,6 +936,32 @@ describe('PluginDetailGenericSettingsSection', () => {
         expect(routerPushSpy).toHaveBeenCalledWith(
             '/(app)/settings/agents/assistant?pluginId=example.agent-two',
         );
+    });
+
+    it('drops the link to the Agent page when the settings already sit on that page', async () => {
+        const baseGroup = createProjection(1).editableSettingsGroups[0]!;
+        const projection: PluginProjectionEntry = {
+            ...createProjection(1),
+            editableSettingsGroups: [{
+                ...baseGroup,
+                target: { kind: 'agent', agent: { pluginId: 'example.agent-two', localId: 'assistant' } },
+                presentation: {
+                    sections: [],
+                    subagentSections: [{
+                        id: 'external-agent-settings',
+                        title: 'External Agent settings',
+                        items: [{ id: 'open-external-agent-settings', title: 'Open external Agent settings' }],
+                    }],
+                },
+            }],
+        };
+        const { screen } = await renderSection(projection, {
+            presentation: { kind: 'disclosures', title: 'Plugin settings' },
+        });
+        expect(screen.findAll((node) => node.props?.title === 'Open external Agent settings')).toHaveLength(0);
+        expect(screen.findAll((node) => node.props?.title === 'External Agent settings')).toHaveLength(0);
+        // The settings themselves are still there, as the page's disclosures.
+        expect(screen.findAll((node) => node.props?.title === 'Acme hook settings').length).toBeGreaterThan(0);
     });
 
     it('renders an external notification channel through the canonical Account Plugin Settings record', async () => {

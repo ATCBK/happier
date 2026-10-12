@@ -5,6 +5,8 @@ import { renderScreen, flushHookEffects } from '@/dev/testkit';
 import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { createPromptLibraryCatalogBoundary } from '@/dev/testkit/harness/promptLibraryCatalogBoundary';
 import { createPromptDoc } from '@/sync/ops/promptLibrary/promptDocs';
+import { resetPromptLibraryCatalogEngineForTests } from '@/sync/engine/settings/promptLibraryCatalogEngine';
+import { resetPromptLibraryCatalogSnapshotsForTests } from '@/sync/store/settings/promptLibraryCatalogSnapshot';
 import { sealArtifactPrivateRevisionMetadata } from '@/sync/domains/artifacts/accountArtifactEnvelope';
 import { encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import type { PromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
@@ -34,15 +36,26 @@ vi.mock('@/modal', async () => {
 });
 // Native navigation interception is external to the editor's draft/save owner.
 vi.mock('@react-navigation/native', async importOriginal => ({
-  ...await importOriginal<typeof import('@react-navigation/native')>(), usePreventRemove: (prevent: boolean) => { navigation.preventRemove = prevent; },
+  ...await importOriginal<typeof import('@react-navigation/native')>(),
+  ...(await import('@/dev/testkit/mocks/reactNavigation')).createReactNavigationNativeMock(),
+  usePreventRemove: (prevent: boolean) => { navigation.preventRemove = prevent; },
 }));
+vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async importOriginal => {
+  const original = await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>();
+  return { ...original, createFrontDoorActionExecute:
+    (await import('@/dev/testkit/harness/frontDoorActionExecutorBoundary')).createFrontDoorActionExecuteForVitest(original) };
+});
 
 let fixture: Awaited<ReturnType<typeof createPlainArtifactHomeFixture>> | undefined;
 let catalog = createPromptLibraryCatalogBoundary();
 // The browser-hosted Monaco adapter is a platform boundary. With no installed
 // Monaco API it uses its real text-input fallback; draft/save logic stays real.
 beforeEach(() => { vi.stubGlobal('window', {}); navigation.push.mockClear(); navigation.replace.mockClear(); navigation.back.mockClear(); navigation.preventRemove = false; modal.alert.mockClear(); });
-afterEach(() => { fixture?.dispose(); fixture = undefined; vi.unstubAllGlobals(); });
+afterEach(() => {
+  resetPromptLibraryCatalogEngineForTests();
+  resetPromptLibraryCatalogSnapshotsForTests();
+  fixture?.dispose(); fixture = undefined; vi.unstubAllGlobals();
+});
 
 async function home(records: readonly PromptLibraryRecordV1[] = []) {
   catalog = createPromptLibraryCatalogBoundary({ records });

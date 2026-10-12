@@ -4,7 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 import { installSettingsViewCommonModuleMocks } from '../settingsViewTestHelpers';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
+import { renderHook } from '@/dev/testkit/hooks/renderHook';
+import { renderScreen } from '@/dev/testkit/render/renderScreen';
+import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 installSettingsViewCommonModuleMocks({ storage: 'real', text: async () => vi.importActual<typeof import('@/text')>('@/text') });
@@ -28,30 +30,43 @@ describe('MCP strict mode declared settings admission', () => {
     it.each([
         { entry: 'catalog', disabled: true }, { entry: 'preview', disabled: true },
         { entry: 'catalog', disabled: false }, { entry: 'preview', disabled: false },
+        { entry: 'owner', disabled: false },
     ] as const)('honors disabled settings Actions at the $entry ingress (disabled=$disabled)', async ({ entry, disabled }) => {
         const home = await harness.addHome({ name: 'Policy', serverUrl: 'https://mcp-strict.example', serverIdentityId: 'srv_mcp_strict', accountId: 'owner', currentAccount: true });
         const { storage } = await import('@/sync/domains/state/storage');
+        const { resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
+        const scope = { serverId: resolveServerProfileScopeIdForIdentifier(home), accountId: 'owner' };
         const settings = { ...storage.getState().settings, mcpServersStrictMode: false,
             actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, ...(disabled
                 ? { actions: { 'settings.set': { disabledSurfaces: ['ui'] } } }
                 : { approvalWaivedSurfaces: { 'settings.set': ['ui'] } }) }) };
-        storage.setState({ settings, settingsVersion: 1 });
+        storage.setState({ settings, settingsVersion: 1, settingsScope: scope, profileScope: scope });
         harness.answer(home, '/v2/account/settings', { body: { content: { t: 'plain', v: settings }, version: 1 } });
         harness.answer(home, 'POST /v2/account/settings', { body: { success: true, version: 2 } });
         const { Modal } = await import('@/modal');
         const alert = vi.spyOn(Modal, 'alert');
         try {
-            if (entry === 'catalog') {
+            if (entry === 'owner') {
+                const { createFrontDoorActionExecute } = await import('@/sync/ops/actions/frontDoorRuntimeActionExecutor');
+                const result = await createFrontDoorActionExecute()('settings.set', { anchor: 'mcp.preview.mcpServersStrictMode', value: true }, {
+                    surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
+                    serverId: home, expectedAccountId: 'owner',
+                });
+                expect(result).toMatchObject({ ok: true });
+                await waitForHomeGovernance(() => expect(storage.getState().settings.mcpServersStrictMode).toBe(true));
+            } else if (entry === 'catalog') {
                 const { useMcpServersSettings } = await import('./useMcpServersSettings');
                 const hook = await renderHook(useMcpServersSettings);
                 await act(async () => hook.getCurrent().setStrictMode(true));
-                await waitForHomeGovernance(() => expect(storage.getState().settings.mcpServersStrictMode).toBe(!disabled));
+                if (disabled) expect(storage.getState().settings.mcpServersStrictMode).toBe(false);
+                else await waitForHomeGovernance(() => expect(storage.getState().settings.mcpServersStrictMode).toBe(true));
                 await hook.unmount();
             } else {
                 const { McpSessionPreviewScreen } = await import('./McpSessionPreviewScreen');
                 const screen = await renderScreen(<McpSessionPreviewScreen />);
-                await act(async () => screen.findByTestId('settings.mcpServers.strictMode')!.props.onChange('stop'));
-                await waitForHomeGovernance(() => expect(storage.getState().settings.mcpServersStrictMode).toBe(!disabled));
+                await screen.pressByTestIdAsync('settings.mcpServers.strictMode:stop');
+                if (disabled) expect(storage.getState().settings.mcpServersStrictMode).toBe(false);
+                else await waitForHomeGovernance(() => expect(storage.getState().settings.mcpServersStrictMode).toBe(true));
                 await screen.unmount();
             }
             if (disabled) {

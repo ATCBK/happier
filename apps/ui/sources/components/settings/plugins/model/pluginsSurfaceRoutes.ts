@@ -105,10 +105,11 @@ export function isPluginsHomePathname(pathname: string | null | undefined): bool
     return trimmed === PLUGINS_APP_ROUTE || trimmed === SETTINGS_ROUTES.plugins;
 }
 
-/** The home's name in `host`: Settings calls it "Plugin marketplace", the sidebar "Plugins". */
-export function pluginsHomeTitleKey(host: PluginsSurfaceHost) {
-    return host === 'settings' ? 'settingsPlugins.title' as const : 'settingsPlugins.surfaces.navigationTitle' as const;
-}
+/**
+ * The home's one name, in Settings and in the sidebar alike: "Plugins" (lab app-surfaces R1p, settings
+ * cplugins G1). "Plugin marketplace" named only its Browse half (R-APP-11).
+ */
+export const PLUGINS_HOME_TITLE_KEY = 'settingsPlugins.surfaces.navigationTitle' as const;
 
 export type PluginListingRouteParams = Readonly<{ sourceId: string; pluginId: string }>;
 

@@ -9,6 +9,7 @@ import type {
 } from '@happier-dev/protocol/home/governance';
 
 import type { SettingRef } from '@/components/settings/catalog/settingDeclarations';
+import { SCHEMA_FIELD_INPUT_STYLE, SchemaFieldValueSlot } from '@/components/settings/schemaFields/SchemaFieldRow';
 import { SettingAnchor } from '@/components/settings/shell/SettingRow';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
@@ -17,8 +18,9 @@ import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
 import { ExpandableItem, ExpandableItemCaret } from '@/components/ui/lists/ExpandableItem';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import { ItemLoadStateRows, type ItemLoadState } from '@/components/ui/lists/ItemLoadStateRows';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
-import { Text } from '@/components/ui/text/Text';
 import { useHomeSettings } from '@/hooks/home/useHomeSettings';
 import { Modal } from '@/modal';
 import type { HomeDomainFailure } from '@/sync/api/home/homeServerActionTransport';
@@ -60,6 +62,7 @@ type DryRunState =
 type DomainError = 'daysRequired' | 'daysInvalid';
 
 const IDLE: DryRunState = Object.freeze({ kind: 'idle' as const });
+const LOADING: ItemLoadState = Object.freeze({ kind: 'loading' as const });
 
 function lastDryRun(state: DryRunState): HomeRetentionDryRunResultV1 | null {
     if (state.kind === 'answered') return state.result;
@@ -248,14 +251,14 @@ const RetentionDomainRow = React.memo(function RetentionDomainRow(props: Readonl
                         ]}
                         activeTabId={selected}
                         onSelectTab={selectMode}
-                        slidingThumb
                         segmentSizing="content"
                         disabled={props.disabled}
                         accessibilityLabel={title}
                         testIDPrefix={`${testID}.mode`}
                     />
                     {selected === 'delete' ? (
-                        <>
+                        // The days are a number in its unit: the shared schema-field value slot.
+                        <SchemaFieldValueSlot kind="number" unit={t('homeGovernance.data.days')}>
                             <FieldTextInput
                                 testID={`${testID}.days`}
                                 accessibilityLabel={t('homeGovernance.data.daysFor', { domain: title })}
@@ -267,10 +270,9 @@ const RetentionDomainRow = React.memo(function RetentionDomainRow(props: Readonl
                                 onChangeText={setDaysText}
                                 onBlur={commitDays}
                                 onSubmitEditing={commitDays}
-                                style={styles.daysField}
+                                style={SCHEMA_FIELD_INPUT_STYLE}
                             />
-                            <Text style={styles.unit}>{t('homeGovernance.data.days')}</Text>
-                        </>
+                        </SchemaFieldValueSlot>
                     ) : null}
                 </View>
             ) : undefined}
@@ -445,22 +447,28 @@ const DataPage = React.memo(function DataPage(props: Readonly<{ context: HomeAdm
 
     if (!canView) {
         return (
-            <ItemGroup description={t('homeGovernance.forbiddenBody')}>
-                <Item testID="home-data-forbidden" title={t('homeGovernance.forbiddenTitle')} mode="info" showChevron={false} />
+            <ItemGroup>
+                <SurfaceStateCard testID="home-data-forbidden" kind="denied" size="line"
+                    title={t('homeGovernance.forbiddenTitle')} reason={t('homeGovernance.forbiddenBody')} />
             </ItemGroup>
         );
     }
     if (!retention) {
         if (home.failure) {
             return (
-                <ItemGroup description={t('homeGovernance.data.loadFailed')}>
-                    <Item testID="home-data-retry" title={t('homeGovernance.retry')} onPress={home.reload} showChevron={false} />
-                </ItemGroup>
+                <SurfaceStateCard
+                    testID="home-data-error"
+                    kind="error"
+                    title={t('homeGovernance.data.loadFailed')}
+                    reason={homeGovernanceFailureNotice(home.failure, { effect: 'read' }).body}
+                    action={{ testID: 'home-data-retry', label: t('homeGovernance.retry'), onPress: home.reload }}
+                />
             );
         }
+        // The retention rows are reserved in their final shape, so nothing moves when they land.
         return (
             <ItemGroup>
-                <Item testID="home-data-loading" title={t('homeGovernance.loading')} loading mode="info" showChevron={false} />
+                <ItemLoadStateRows testID="home-data-loading" state={LOADING} rows={5} accessibilityLabel={t('homeGovernance.data.title')} />
             </ItemGroup>
         );
     }
@@ -549,17 +557,11 @@ export const HomeAdministrationDataScreen = React.memo(function HomeAdministrati
     );
 });
 
-const styles = StyleSheet.create((theme) => ({
+const styles = StyleSheet.create(() => ({
     inlineControls: {
         flexDirection: 'row',
         alignItems: 'center',
         gap: 8,
         flexShrink: 1,
-    },
-    daysField: {
-        width: 72,
-    },
-    unit: {
-        color: theme.colors.text.secondary,
     },
 }));

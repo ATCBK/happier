@@ -7,13 +7,9 @@ import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import type { SystemTaskPromptContinuation, SystemTaskRunner } from '@/components/systemTasks/types';
 import { disconnectThisComputerBeforeForgettingHome } from '@/components/serverProfiles/disconnectThisComputerFromHome';
-import { toServerUrlDisplay } from '@/sync/domains/server/url/serverUrlDisplay';
-import { formatByteSize } from '@/utils/files/formatByteSize';
+import { resolveHomeDisplayNameForRelayUrl } from '@/components/settings/server/homeDisplayName';
+import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
 import { t, tLoose } from '@/text';
-
-function formatBytes(bytes: number | null): string {
-    return bytes == null ? t('personalHome.settings.unknownSize') : formatByteSize(bytes);
-}
 
 type PersonalHomeErasePreviewProps = CustomModalInjectedProps & Readonly<{
     canonicalServerUrl: string;
@@ -40,7 +36,7 @@ const PersonalHomeErasePreview = React.memo(function PersonalHomeErasePreview(
         <ItemGroup>
             <Item testID="settings.personalHomeRuntime.erasePreviewHome" title={t('personalHome.settings.eraseHomeTarget')} subtitle={props.canonicalServerUrl} subtitleLines={0} showChevron={false} mode="info" />
             <Item testID="settings.personalHomeRuntime.erasePreviewIdentity" title={t('personalHome.settings.identityTitle')} subtitle={props.homeServerIdentityId ?? t('personalHome.settings.identityUnavailable')} subtitleLines={0} showChevron={false} mode="info" />
-            <Item testID="settings.personalHomeRuntime.erasePreviewSize" title={t('personalHome.settings.estimatedSize')} subtitle={formatBytes(props.estimatedBytes)} showChevron={false} mode="info" />
+            <Item testID="settings.personalHomeRuntime.erasePreviewSize" title={t('personalHome.settings.estimatedSize')} subtitle={props.estimatedBytes == null ? t('personalHome.settings.unknownSize') : formatHappierDataBytes(props.estimatedBytes, { kind: 'storage' })} showChevron={false} mode="info" />
         </ItemGroup>
         <ItemGroup title={t('personalHome.settings.eraseDataBody')}>
             {props.paths.map((path, index) => <Item key={path} testID={`settings.personalHomeRuntime.erasePreviewPath.${index}`} title={pathLeaf(path)} subtitle={path} subtitleLines={0} showChevron={false} mode="info" />)}
@@ -132,7 +128,7 @@ export function withPersonalHomeEraseDisconnect(
         const identity = typeof prompt.data.homeServerIdentityId === 'string' ? prompt.data.homeServerIdentityId.trim() || null : null;
         onConfirmedIdentity?.(identity);
         const mayErase = await disconnectThisComputerBeforeForgettingHome({
-            serverUrl, serverIdentityId: identity, label: toServerUrlDisplay(serverUrl),
+            serverUrl, serverIdentityId: identity, label: resolveHomeDisplayNameForRelayUrl(serverUrl) ?? t('settingsAccount.thisHomeTitle'),
         }, runner);
         return mayErase ? answer : { confirmed: false };
     };

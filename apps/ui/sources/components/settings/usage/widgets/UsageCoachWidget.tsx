@@ -2,7 +2,7 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useWidgetPresentation } from '@happier-dev/plugin-ui';
-import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
+import { HappierDataMetric, HappierPressable, StackedSeriesChart } from '@happier-dev/plugin-ui/presentation';
 import type {
   UsageCoachConceptEvaluation,
   UsageCoachDetectorId,
@@ -14,6 +14,7 @@ import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { TriggerPopover } from '@/components/workflows/triggers/TriggerPopover';
 import { TriggerRunsOnRow } from '@/components/workflows/triggers/TriggerRunsOnRow';
 import { resolveTriggerEditorHref } from '@/components/workflows/triggers/triggerEditorDestination';
+import { useActionApprovalContinuation } from '@/components/approvals/useActionApprovalContinuation';
 import type { UsageCoachRemedy } from '@happier-dev/protocol/usage/coach/coachRemedy';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
@@ -26,13 +27,19 @@ import { useWidgetFrameBodyCaption } from '@/components/widgets/frame/widgetFram
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
-import { formatByteSize } from '@/utils/files/formatByteSize';
+import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
 import { formatTokenCount, formatUsageCost } from '@/utils/format/usageNumbers';
-import { t } from '@/text';
+import { getPreferredLanguage, t } from '@/text';
+import { formatWithCachedDateTimeFormatter } from '@/utils/datetime/cachedIntlFormatters';
+import { UsagePlanDisclosure } from './plans/UsagePlanParts';
+import { openExternalUrl } from '@/utils/url/openExternalUrl';
+import { UsageCoachSettingsGroup } from '../UsageCoachSettingsGroup';
 import {
   UsageBodyInsufficient,
   UsageCoverageLine,
   usagePeriodPhrase,
+  useUsageAnalyticsView,
+  useUsagePluginTheme,
   type UsageBodyProps,
 } from './usageBodyKit';
 import { formatUsageDuration } from './usageHowYouWorkPresentation';
@@ -44,6 +51,9 @@ import {
 } from './usageCoachController';
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+/** Below this body width the Overview strip's three columns would crush their titles; it lists instead. */
+const STRIP_MIN_WIDTH_PX = 760;
+const STRIP_FINDINGS = 3;
 const DETECTOR_GLYPHS: Readonly<Record<UsageCoachDetectorId, IconName>> = {
   duplicated_instructions: 'file-text',
   model_misfit: 'cpu',
@@ -56,6 +66,9 @@ const DETECTOR_GLYPHS: Readonly<Record<UsageCoachDetectorId, IconName>> = {
   cache_busting_prompt_changes: 'arrows-clockwise',
   outside_usage: 'terminal',
   context_bloat: 'stack',
+  cache_economics: 'arrows-clockwise',
+  effort_audit: 'cpu',
+  subagent_fanout: 'stack',
 };
 const EMPTY_SNAPSHOT: UsageCoachSnapshot = {
   pending: [],
@@ -74,13 +87,55 @@ function formatMeasurement(
     measurement.unit === 'currency'
       ? formatUsageCost(measurement.value, measurement.currency ?? 'USD')
       : measurement.unit === 'bytes'
-        ? formatByteSize(measurement.value)
+        ? formatHappierDataBytes(measurement.value, { kind: 'storage' })
         : measurement.unit === 'tokens'
           ? formatTokenCount(measurement.value)
           : measurement.unit === 'milliseconds'
             ? formatUsageDuration(measurement.value)
             : new Intl.NumberFormat().format(measurement.value);
   return `${value} ${t(`usage.board.coach.metric_${measurement.metric}`)}`;
+}
+
+/**
+ * The finding's own measured samples (lab d2coach-A mini chart): its first series as a quiet line with the
+ * latest value under it. A single sample is one observation, not a trend, so it draws nothing here.
+ */
+function UsageCoachFindingTrend(props: Readonly<{ finding: UsageCoachFinding; testID: string }>) {
+  const chartTheme = useUsagePluginTheme();
+  const { theme } = useUnistyles();
+  const metrics = usePageRowMetrics('standard');
+  const sample = props.finding.evidenceSeries?.find(entry => entry.points.length > 1);
+  if (!sample) return null;
+  const last = sample.points[sample.points.length - 1]!;
+  const caption = formatMeasurement({ ...sample, value: last.value });
+  return (
+    <View style={styles.trend} testID={props.testID}>
+      <StackedSeriesChart theme={chartTheme} variant="line" size="inline" viewportHeight={24} label={caption}
+        series={[{ id: sample.metric, label: caption, color: theme.colors.text.secondary,
+          points: sample.points.map(point => ({ id: point.evidenceId, x: point.observedAtMs, y: point.value })) }]} />
+      <Text style={[styles.quiet, { fontSize: metrics.subtitle.fontSize, lineHeight: metrics.subtitle.lineHeight }]} numberOfLines={1}>{caption}</Text>
+    </View>
+  );
+}
+
+/** A citation reads as its site; the full address stays in its accessible name and opens on press. */
+function readCitationHost(url: string): string {
+  try {
+    return new URL(url).host.replace(/^www\./, '');
+  } catch {
+    return url;
+  }
+}
+
+function formatModelResponseSource(source: NonNullable<UsageCoachFinding['modelComparison']>['modelResponseSource']): string {
+  if (source?.kind === 'native' && source.connectedAccount) {
+    const { service, accountId } = source.connectedAccount;
+    return `${service.pluginId}/${service.localId} · ${accountId}`;
+  }
+  if (source?.kind === 'provider') {
+    return `${source.providerId ?? t('usage.board.coach.modelProviderUnknown')} · ${source.providerConnectionId}`;
+  }
+  return t('usage.board.coach.modelProviderUnknown');
 }
 
 function remedyLabel(remedy: UsageCoachRemedy): string {
@@ -124,6 +179,13 @@ function useUsageCoachController(
   );
   const settled = React.useRef(onSettled);
   settled.current = onSettled;
+  const approvals = useActionApprovalContinuation({
+    scopeKey: JSON.stringify([viewer?.serverId ?? null, viewer?.accountId ?? null]),
+    serverId: viewer?.serverId ?? '',
+    onExecuted: () => settled.current(),
+  });
+  const requestApproval = React.useRef(approvals.requestApproval);
+  requestApproval.current = approvals.requestApproval;
   const [controller, setController] =
     React.useState<UsageCoachController | null>(null);
   React.useEffect(() => {
@@ -134,6 +196,7 @@ function useUsageCoachController(
     const created = createUsageCoachController({
       lifetime,
       onSettled: () => settled.current(),
+      onApproval: (registration) => requestApproval.current(registration),
     });
     setController(created);
     return () => created.dispose();
@@ -155,15 +218,21 @@ function useUsageCoachController(
  * admitted one, its Apply and exact Undo. Insufficient evidence is a visible result, never a finding.
  */
 export function UsageCoachWidget(props: UsageBodyProps) {
+  const { theme } = useUnistyles();
+  const presentation = useWidgetPresentation();
+  const view = useUsageAnalyticsView(props.slice, props.query);
   const coach = props.slice.coach;
   const { refresh } = props.model;
   const { controller, snapshot } = useUsageCoachController(refresh);
-  const [showChecks, setShowChecks] = React.useState(false);
+  // Preferences are rare: a quiet disclosure after the findings, never a bar above them (lab d2coach).
+  const configuration = <UsagePlanDisclosure title={t('usage.board.coach.configure')} testID={`${props.testID}.configure`}>
+    <UsageCoachSettingsGroup serverId={props.serverId} testID={`${props.testID}.preferences`} />
+  </UsagePlanDisclosure>;
   const nowMs = Date.now();
   useWidgetFrameBodyCaption(
     coach
       ? t('usage.board.coach.caption', {
-          checks: coach.evaluations.length,
+          checks: coach.evaluations.filter(row => row.status !== 'disabled').length,
           period: usagePeriodPhrase(props.query),
         })
       : null,
@@ -175,6 +244,7 @@ export function UsageCoachWidget(props: UsageBodyProps) {
           testID={`${props.testID}.unavailable`}
           title={t('usage.board.coach.unavailableTitle')}
         />
+        {configuration}
         <UsageCoverageLine
           slice={props.slice}
           sources={['how_you_work', 'accounting']}
@@ -193,6 +263,7 @@ export function UsageCoachWidget(props: UsageBodyProps) {
         finding.state.snoozedUntilMs > nowMs
       ),
   );
+  const suppressed = coach.findings.filter(finding => !visible.includes(finding));
   const appliedOnly = snapshot.applied.filter(
     (entry) =>
       !visible.some((finding) => finding.evidenceKey === entry.evidenceKey),
@@ -206,23 +277,30 @@ export function UsageCoachWidget(props: UsageBodyProps) {
     > => row.status === 'insufficient_evidence',
   );
   const clear = coach.evaluations.filter((row) => row.status === 'no_finding');
+  const disabled = coach.evaluations.filter(row => row.status === 'disabled');
+  // What the checks found, as one row of facts (lab d2coach "This week"). Savings are never summed:
+  // overlapping estimates would double count, so the band counts findings and checks only.
+  const checked = coach.evaluations.length - disabled.length;
   const summary = [
-    t('usage.board.coach.findingsCount', { count: visible.length }),
-    ...(insufficient.length
-      ? [
-          t('usage.board.coach.insufficientCount', {
-            count: insufficient.length,
-          }),
-        ]
-      : []),
-    ...(clear.length
-      ? [t('usage.board.coach.clearCount', { count: clear.length })]
-      : []),
-  ].join(' · ');
+    { key: 'findings', label: t('usage.board.coach.summaryFindings'), value: visible.length,
+      caption: t('usage.board.coach.summaryOfChecks', { count: checked }) },
+    ...(view ? [{ key: 'sessions', label: t('usage.board.coach.summarySessions'), value: view.hero.sessions,
+      caption: usagePeriodPhrase(props.query) }] : []),
+    { key: 'insufficient', label: t('usage.board.coach.summaryNeedEvidence'), value: insufficient.length,
+      caption: clear.length ? t('usage.board.coach.summaryClearCaption', { count: clear.length }) : undefined },
+    ...(disabled.length ? [{ key: 'disabled', label: t('usage.board.coach.summaryOff'), value: disabled.length }] : []),
+  ];
+  // On Overview the Coach is a strip of up to three findings (lab wgusage-CD); its own view lists all.
+  // Anywhere but its own view (size Large) the Coach is a glance: up to three findings, the rest of
+  // the Coach (hidden, checks, digest, preferences) stays on the Coach view.
+  const glance = presentation?.size !== undefined && presentation.size !== 'large';
+  const strip = glance && (presentation?.geometry?.width ?? 0) >= STRIP_MIN_WIDTH_PX;
+  const shown = glance ? visible.slice(0, STRIP_FINDINGS) : visible;
   const row = (finding: UsageCoachFinding) => (
     <UsageCoachFindingRow
       key={finding.evidenceKey}
       finding={finding}
+      layout={strip ? 'card' : 'row'}
       applied={
         snapshot.applied.find(
           (entry) => entry.evidenceKey === finding.evidenceKey,
@@ -236,7 +314,8 @@ export function UsageCoachWidget(props: UsageBodyProps) {
   );
   return (
     <View style={styles.body} testID={`${props.testID}.coach`}>
-      <UsageCoachSummaryLine text={summary} />
+      {/* The facts band belongs to the Coach view; the Overview strip is the findings alone (lab wgusage-CD). */}
+      {glance ? null : <UsageCoachSummaryBand facts={summary} testID={`${props.testID}.summary`} />}
       {visible.length === 0 && appliedOnly.length === 0 ? (
         <SurfaceStateCard
           testID={`${props.testID}.empty`}
@@ -244,23 +323,53 @@ export function UsageCoachWidget(props: UsageBodyProps) {
           layout="inline"
           size="line"
           title={t('usage.board.coach.emptyTitle')}
-          reason={t('usage.board.coach.emptyReason')}
+          // "Every check ran" is only true when none is waiting for evidence.
+          reason={insufficient.length ? t('usage.board.coach.insufficientCount', { count: insufficient.length }) : t('usage.board.coach.emptyReason')}
         />
       ) : null}
-      <View style={styles.list}>
-        {visible.map(row)}
-        {appliedOnly.map((entry) => row(entry.finding))}
+      <View style={strip ? styles.strip : styles.list}>
+        {strip ? shown.map((finding, index) => <React.Fragment key={finding.evidenceKey}>
+          {index > 0 ? <View style={styles.stripRule} /> : null}
+          {row(finding)}
+        </React.Fragment>) : shown.map(row)}
+        {glance ? null : appliedOnly.map((entry) => row(entry.finding))}
       </View>
-      {insufficient.length + clear.length > 0 ? (
+      {glance && visible.length > shown.length ? <Text style={styles.quiet}>
+        {t('usage.board.coach.moreFindings', { count: visible.length - shown.length })}</Text> : null}
+      {!glance && suppressed.length ? <UsagePlanDisclosure testID={`${props.testID}.hidden`}
+        title={t('usage.board.coach.hiddenFindings', { count: suppressed.length })}>
+        {suppressed.map(finding => <View key={finding.evidenceKey} style={styles.hiddenRow}>
+          <Icon name={DETECTOR_GLYPHS[finding.detectorId]} size={ICON_SIZE.sm} color={theme.colors.text.tertiary} />
+          <View style={styles.hiddenText}>
+            <Text style={styles.checkName} numberOfLines={2}>{t(`usage.board.coach.summary_${finding.summaryCode}`)}</Text>
+            <Text style={styles.quiet}>{finding.state.snoozedUntilMs !== null && finding.state.snoozedUntilMs > nowMs
+              ? t('usage.board.coach.hiddenSnoozed', { time: formatAsOfTime(finding.state.snoozedUntilMs) })
+              : t('usage.board.coach.hiddenDismissed')}</Text>
+          </View>
+          <RoundButton size="small" display="secondary" testID={`${props.testID}.hidden.${finding.detectorId}.restore`}
+            title={t('common.restore')} disabled={!controller || snapshot.retired || snapshot.pending.some(row => row.evidenceKey === finding.evidenceKey)}
+            action={async () => {
+              if (!controller) return;
+              if (finding.state.snoozedUntilMs !== null && finding.state.snoozedUntilMs > nowMs) {
+                await controller.snooze(props.query, finding.evidenceKey, null);
+              } else {
+                await controller.dismiss(props.query, finding.evidenceKey, false);
+              }
+            }} />
+          {snapshot.error?.evidenceKey === finding.evidenceKey ? <Text accessibilityRole="alert" style={styles.error}>
+            {t('usage.board.coach.actionFailed')}</Text> : null}
+          {snapshot.approval?.evidenceKey === finding.evidenceKey ? <Text style={styles.pendingNote}>
+            {t('usage.board.coach.approvalPending')}</Text> : null}
+        </View>)}
+      </UsagePlanDisclosure> : null}
+      {!glance && insufficient.length + clear.length > 0 ? (
         <UsageCoachChecks
-          open={showChecks}
-          onToggle={() => setShowChecks((open) => !open)}
           insufficient={insufficient}
           clear={clear}
           testID={`${props.testID}.checks`}
         />
       ) : null}
-      {coach.digestSuggestion ? (
+      {!glance && coach.digestSuggestion ? (
         <UsageCoachDigestSuggestionRow
           key={coach.digestSuggestion.queryKey}
           suggestion={coach.digestSuggestion}
@@ -270,6 +379,7 @@ export function UsageCoachWidget(props: UsageBodyProps) {
           testID={`${props.testID}.digest`}
         />
       ) : null}
+      {glance ? null : configuration}
       <UsageCoverageLine
         slice={props.slice}
         sources={['how_you_work', 'accounting']}
@@ -300,20 +410,22 @@ function UsageCoachDigestSuggestionRow(props: Readonly<{
   const created = snapshot.digest?.queryKey === suggestion.queryKey ? snapshot.digest.result : null;
   const subtitle = { fontSize: metrics.subtitle.fontSize, lineHeight: metrics.subtitle.lineHeight };
   return (
-    <View style={styles.checks} testID={props.testID} accessibilityState={{ busy: pending }}>
-      <Text style={[styles.title, { fontSize: metrics.title.fontSize, lineHeight: metrics.title.lineHeight }]}
-        accessibilityRole="header">{t('usage.board.coach.digestTitle')}</Text>
-      <Text style={[styles.evidence, subtitle]}>{t('usage.board.coach.digestDescription', {
-        duration: formatUsageDuration(suggestion.lookbackMs),
-      })}</Text>
+    // A quiet offer on one line beside its action, not a second section inside the widget (QA-V F19).
+    <View style={styles.digest} testID={props.testID} accessibilityState={{ busy: pending }}>
+      <View style={styles.digestText}>
+        <Text style={[styles.checkName, subtitle]} accessibilityRole="header">{t('usage.board.coach.digestTitle')}</Text>
+        <Text style={[styles.quiet, subtitle]}>{t('usage.board.coach.digestDescription', {
+          duration: formatUsageDuration(suggestion.lookbackMs),
+        })}</Text>
+      </View>
       {approval ? (
         <View style={styles.appliedRow}>
           <RoundButton size="small" display="secondary" title={t('detailPages.approval.requestTitle')}
-            testID={`${props.testID}.approval`} action={() => router.push(
+            testID={`${props.testID}.approval`} onPress={() => router.push(
               `/inbox/approvals/${encodeURIComponent(approval.request.artifactId)}?serverId=${encodeURIComponent(props.serverId)}`,
             )} />
           <RoundButton size="small" display="secondary" title={t('automations.pluralEditor.triggersTitle')}
-            testID={`${props.testID}.manage`} action={() => router.push(resolveTriggerEditorHref({ serverId: props.serverId }))} />
+            testID={`${props.testID}.manage`} onPress={() => router.push(resolveTriggerEditorHref({ serverId: props.serverId }))} />
         </View>
       ) : null}
       {error && !editing ? <Text style={[styles.error, subtitle]} testID={`${props.testID}.error`}>
@@ -322,16 +434,16 @@ function UsageCoachDigestSuggestionRow(props: Readonly<{
         <View style={styles.appliedRow}>
           <Text style={[styles.applied, subtitle]}>{t('usage.board.coach.digestCreated')}</Text>
           <RoundButton size="small" display="secondary" title={t('automations.pluralEditor.triggersTitle')}
-            testID={`${props.testID}.manage`} action={() => router.push(resolveTriggerEditorHref({
+            testID={`${props.testID}.manage`} onPress={() => router.push(resolveTriggerEditorHref({
               automationId: created.set.automationId, serverId: props.serverId,
               scopeSessionId: created.set.scopeSessionId,
             }))} />
         </View>
       ) : (
-        <View ref={anchorRef} style={styles.actionsBelow}>
+        <View ref={anchorRef} style={styles.appliedRow}>
           <RoundButton size="small" display="secondary" title={t('usage.board.coach.digestConfigure')}
             testID={`${props.testID}.configure`} disabled={!controller || snapshot.retired || pending}
-            action={() => setEditing(true)} />
+            onPress={() => setEditing(true)} />
         </View>
       )}
       {editing ? (
@@ -354,26 +466,25 @@ function UsageCoachDigestSuggestionRow(props: Readonly<{
   );
 }
 
-function UsageCoachSummaryLine(props: Readonly<{ text: string }>) {
-  const metrics = usePageRowMetrics('list');
+function UsageCoachSummaryBand(props: Readonly<{ facts: readonly Readonly<{ key: string; label: string; value: number; caption?: string }>[]; testID: string }>) {
+  const chartTheme = useUsagePluginTheme();
   return (
-    <Text
-      style={[
-        styles.summary,
-        {
-          fontSize: metrics.subtitle.fontSize,
-          lineHeight: metrics.subtitle.lineHeight,
-        },
-      ]}
-    >
-      {props.text}
-    </Text>
+    <View style={styles.band} testID={props.testID}>
+      {props.facts.map(fact => (
+        <View key={fact.key} style={styles.bandFact}>
+          <HappierDataMetric theme={chartTheme} size="stat" showLabel label={fact.label} value={fact.value}
+            {...(fact.caption ? { caption: fact.caption } : {})} testID={`${props.testID}.${fact.key}`} />
+        </View>
+      ))}
+    </View>
   );
 }
 
 const UsageCoachFindingRow = React.memo(function UsageCoachFindingRow(
   props: Readonly<{
     finding: UsageCoachFinding;
+    /** `row` lists findings (the Coach view); `card` is one of the Overview strip's columns. */
+    layout: 'row' | 'card';
     applied: UsageCoachAppliedEntry | null;
     controller: UsageCoachController | null;
     snapshot: UsageCoachSnapshot;
@@ -384,7 +495,7 @@ const UsageCoachFindingRow = React.memo(function UsageCoachFindingRow(
   const { theme } = useUnistyles();
   const metrics = usePageRowMetrics('standard');
   const presentation = useWidgetPresentation();
-  const wide = (presentation?.geometry?.width ?? 0) >= 560;
+  const wide = props.layout === 'row' && (presentation?.geometry?.width ?? 0) >= 560;
   const { finding, applied, controller, snapshot } = props;
   const pending = snapshot.pending.some(
     (row) => row.evidenceKey === finding.evidenceKey,
@@ -393,6 +504,13 @@ const UsageCoachFindingRow = React.memo(function UsageCoachFindingRow(
     snapshot.error?.evidenceKey === finding.evidenceKey ? snapshot.error : null;
   const approval = snapshot.approval?.evidenceKey === finding.evidenceKey;
   const title = t(`usage.board.coach.summary_${finding.summaryCode}`);
+  const comparison = finding.modelComparison;
+  const qualifiedModel = comparison ? [t('usage.board.coach.modelQualified', {
+    model: comparison.modelId, candidate: comparison.candidateModelId,
+    cost: formatUsageCost(comparison.modelCost, comparison.currency),
+    candidateCost: formatUsageCost(comparison.candidateCost, comparison.currency),
+    provider: `${comparison.modelId}: ${formatModelResponseSource(comparison.modelResponseSource)}; ${comparison.candidateModelId}: ${formatModelResponseSource(comparison.candidateResponseSource)}`,
+  }), t('usage.board.coach.modelN1Cache')].join(' ') : null;
   const evidence = [
     ...finding.measurements.map(formatMeasurement),
     t('usage.board.coach.evidenceLine', {
@@ -410,7 +528,7 @@ const UsageCoachFindingRow = React.memo(function UsageCoachFindingRow(
   const estimateValue = estimate
     ? estimate.unit === 'currency'
       ? formatUsageCost(estimate.value, estimate.currency ?? 'USD')
-      : formatByteSize(estimate.value)
+      : formatHappierDataBytes(estimate.value, { kind: 'storage' })
     : null;
   const canApply =
     finding.action !== null &&
@@ -465,14 +583,10 @@ const UsageCoachFindingRow = React.memo(function UsageCoachFindingRow(
           {appliedLabel(applied)}
         </Text>
       </View>
-    ) : finding.remedy === null ? (
-      <Text style={[styles.quiet, text('subtitle')]}>
-        {t('usage.board.coach.noRemedy')}
-      </Text>
     ) : null;
   return (
     <View
-      style={[styles.row, wide ? styles.rowWide : null]}
+      style={[styles.row, wide ? styles.rowWide : null, props.layout === 'card' ? styles.card : null]}
       testID={props.testID}
       accessibilityState={{ busy: pending }}
     >
@@ -494,8 +608,44 @@ const UsageCoachFindingRow = React.memo(function UsageCoachFindingRow(
         <Text style={[styles.title, text('title')]} accessibilityRole="header">
           {title}
         </Text>
+        {qualifiedModel ? <Text style={[styles.evidence, text('subtitle')]}>{qualifiedModel}</Text> : null}
         <Text style={[styles.evidence, text('subtitle')]}>{evidence}</Text>
-        {estimate && estimateValue ? (
+        <UsagePlanDisclosure title={t('usage.board.coach.why')} testID={`${props.testID}.why`}>
+        <View testID={`${props.testID}.evidence`} style={styles.why}>
+          <Text style={[styles.whyHeading, text('subtitle')]}>{t('usage.board.coach.methodTitle')}</Text>
+          <Text style={[styles.evidence, text('subtitle')]}>{t(`usage.board.coach.basis_${finding.basis.kind}`)}</Text>
+          {finding.basis.limitations.map((limitation, index) => <Text key={index} style={[styles.quiet, text('subtitle')]}>{limitation}</Text>)}
+          {finding.basis.advice.map((advice, index) => <Text key={index} style={[styles.evidence, text('subtitle')]}>{advice}</Text>)}
+          {estimate?.assumptions.map((assumption, index) => <Text key={index} style={[styles.quiet, text('subtitle')]}>{assumption}</Text>)}
+          <Text style={[styles.whyHeading, text('subtitle')]}>{t('usage.board.coach.observationsTitle')}</Text>
+          <View testID={`${props.testID}.evidence.measurements`}>
+            {finding.measurements.map((measurement, index) => <Text key={index} style={[styles.evidence, text('subtitle')]}>
+              {formatMeasurement(measurement)}
+            </Text>)}
+          </View>
+          {finding.evidence.map(reference => <Text key={`${reference.kind}:${reference.id}`}
+            testID={`${props.testID}.evidence.${reference.id}`} selectable style={[styles.evidence, text('subtitle')]}>
+            {`${t(`usage.board.coach.evidence_${reference.kind}`)} · ${formatWithCachedDateTimeFormatter(reference.observedAtMs, getPreferredLanguage(), {
+              year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+            })}`}
+          </Text>)}
+          {finding.basis.citations.length ? <Text style={[styles.whyHeading, text('subtitle')]}>{t('usage.board.coach.citationsTitle')}</Text> : null}
+          {finding.basis.citations.map(citation => <HappierPressable key={citation.url} accessibilityRole="link"
+            accessibilityLabel={`${citation.url}, ${t(`usage.board.coach.citation_${citation.sourceKind}`)}, ${citation.asOf}`} onPress={() => { void openExternalUrl(citation.url); }}>
+            <Text style={text('subtitle')} numberOfLines={1}>
+              <Text style={styles.link}>{readCitationHost(citation.url)}</Text>
+              <Text style={styles.quiet}>{` · ${t(`usage.board.coach.citation_${citation.sourceKind}`)} · ${citation.asOf}`}</Text>
+            </Text>
+          </HappierPressable>)}
+          <UsagePlanDisclosure testID={`${props.testID}.evidence.diagnostics`} title={t('usage.board.coach.diagnostics')}>
+            <Text selectable style={[styles.evidence, text('subtitle')]}>{`${t('usage.board.coach.methodTitle')} · ${finding.basis.method}`}</Text>
+            {finding.evidence.map(reference => <Text selectable key={`${reference.kind}:${reference.id}`} style={[styles.evidence, text('subtitle')]}>
+              {`${t(`usage.board.coach.evidence_${reference.kind}`)} · ${reference.id}`}
+            </Text>)}
+          </UsagePlanDisclosure>
+        </View>
+        </UsagePlanDisclosure>
+        {!wide && estimate && estimateValue ? (
           <Text style={[styles.estimate, text('subtitle')]}>
             {t(`usage.board.coach.estimate_${estimate.kind}`, {
               value: estimateValue,
@@ -523,6 +673,14 @@ const UsageCoachFindingRow = React.memo(function UsageCoachFindingRow(
         ) : null}
         {wide ? null : <View style={styles.actionsBelow}>{action}</View>}
       </View>
+      {/* Wide rows read across: what was found · what was measured · what it costs · what to do (lab d2coach-A). */}
+      {wide ? <UsageCoachFindingTrend finding={finding} testID={`${props.testID}.trend`} /> : null}
+      {wide ? <View style={styles.impact}>
+        {estimate && estimateValue ? <>
+          <Text style={[styles.impactValue, text('title')]}>{estimateValue}</Text>
+          <Text style={[styles.quiet, text('subtitle')]} numberOfLines={2}>{t(`usage.board.coach.method_${estimate.method}`)}</Text>
+        </> : <Text style={[styles.quiet, text('subtitle')]}>—</Text>}
+      </View> : null}
       {wide ? <View style={styles.actionsSide}>{action}</View> : null}
       {controller ? (
         <ItemRowActions
@@ -565,8 +723,6 @@ const UsageCoachFindingRow = React.memo(function UsageCoachFindingRow(
 
 function UsageCoachChecks(
   props: Readonly<{
-    open: boolean;
-    onToggle: () => void;
     testID: string;
     insufficient: readonly Extract<
       UsageCoachConceptEvaluation,
@@ -582,26 +738,7 @@ function UsageCoachChecks(
     lineHeight: metrics.subtitle.lineHeight,
   };
   return (
-    <View style={styles.checks}>
-      <HappierPressable
-        accessibilityRole="button"
-        testID={`${props.testID}.toggle`}
-        expanded={props.open}
-        onPress={props.onToggle}
-        style={styles.checksToggle}
-      >
-        <Icon
-          name={props.open ? 'caret-down' : 'caret-right'}
-          size={ICON_SIZE.xs}
-          color={theme.colors.text.secondary}
-        />
-        <Text style={[styles.checksToggleLabel, size]}>
-          {props.open
-            ? t('usage.board.coach.hideChecks')
-            : t('usage.board.coach.showChecks')}
-        </Text>
-      </HappierPressable>
-      {props.open ? (
+    <UsagePlanDisclosure title={t('usage.board.coach.showChecks')} testID={props.testID}>
         <View style={styles.checksList} testID={`${props.testID}.list`}>
           {props.insufficient.map((row) => (
             <View key={row.detectorId} style={styles.checkRow}>
@@ -640,30 +777,49 @@ function UsageCoachChecks(
             </View>
           ))}
         </View>
-      ) : null}
-    </View>
+    </UsagePlanDisclosure>
   );
 }
 
 const styles = StyleSheet.create((theme) => ({
-  body: { gap: 12, minWidth: 0 },
-  summary: {
-    ...Typography.default('semiBold'),
-    color: theme.colors.text.secondary,
-    fontVariant: ['tabular-nums'],
+  body: { gap: theme.space.s12, minWidth: 0 },
+  band: { flexDirection: 'row', flexWrap: 'wrap', columnGap: theme.space.s24, rowGap: theme.space.s12, paddingBottom: theme.space.s4 },
+  bandFact: { minWidth: 112, flexGrow: 1, flexBasis: 0 },
+  // The Why panel: method, observations and sources on one quiet rule under the finding.
+  why: {
+    gap: theme.space.s4,
+    marginTop: theme.space.s6,
+    paddingLeft: theme.space.s12,
+    borderLeftWidth: 2,
+    borderLeftColor: theme.colors.border.default,
   },
+  whyHeading: { ...Typography.default('semiBold'), color: theme.colors.text.secondary, marginTop: theme.space.s6 },
+  link: { ...Typography.default(), color: theme.colors.text.link },
+  digest: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', columnGap: theme.space.s12, rowGap: theme.space.s6 },
+  digestText: { flex: 1, minWidth: 220, gap: 1 },
+  hiddenRow: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s10, paddingVertical: theme.space.s6 },
+  hiddenText: { flex: 1, minWidth: 0, gap: 1 },
   list: { gap: 0 },
   row: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    gap: 12,
+    gap: theme.space.s12,
     paddingVertical: 14,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: theme.colors.border.default,
   },
   rowWide: { alignItems: 'center' },
-  glyph: { paddingTop: 2 },
-  main: { flex: 1, minWidth: 0, gap: 2 },
+  // Overview strip: equal columns divided by hairlines, no boxes (lab wgusage-CD Coach).
+  strip: { flexDirection: 'row', alignItems: 'stretch' },
+  card: { flex: 1, minWidth: 0, borderTopWidth: 0, paddingVertical: theme.space.s4 },
+  // Columns sit on the card's own inset; a hairline divides neighbours, never the first one.
+  stripRule: { width: StyleSheet.hairlineWidth, marginHorizontal: 18, backgroundColor: theme.colors.border.default },
+  impact: { width: 120, alignItems: 'flex-end', gap: 1 },
+  trend: { width: 180, gap: theme.space.s4, justifyContent: 'center' },
+
+  impactValue: { ...Typography.default('semiBold'), color: theme.colors.state.success.foreground, fontVariant: ['tabular-nums'] },
+  glyph: { paddingTop: theme.space.s2 },
+  main: { flex: 1, minWidth: 0, gap: theme.space.s2 },
   category: { ...Typography.default(), color: theme.colors.text.tertiary },
   title: {
     ...Typography.default('semiBold'),
@@ -691,31 +847,20 @@ const styles = StyleSheet.create((theme) => ({
   actionsBelow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    marginTop: 8,
+    gap: theme.space.s8,
+    marginTop: theme.space.s8,
   },
   actionsSide: { flexShrink: 0, alignItems: 'flex-end' },
   appliedRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: theme.space.s6,
     flexWrap: 'wrap',
   },
   applied: { ...Typography.default(), color: theme.colors.text.secondary },
-  checks: { gap: 6 },
-  checksToggle: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    alignSelf: 'flex-start',
-    paddingVertical: 4,
-  },
-  checksToggleLabel: {
-    ...Typography.default(),
-    color: theme.colors.text.secondary,
-  },
-  checksList: { gap: 6 },
-  checkRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+  checks: { gap: theme.space.s6 },
+  checksList: { gap: theme.space.s6 },
+  checkRow: { flexDirection: 'row', alignItems: 'flex-start', gap: theme.space.s8 },
   checkText: {
     ...Typography.default(),
     color: theme.colors.text.secondary,

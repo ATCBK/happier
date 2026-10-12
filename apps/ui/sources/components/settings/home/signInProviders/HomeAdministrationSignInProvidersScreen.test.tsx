@@ -11,7 +11,12 @@ import {
 } from '@/dev/testkit/fixtures/homeGovernanceFixtures';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
-import { teamCapabilitiesFixture, teamSummaryFixture } from '@/dev/testkit/fixtures/teamFixtures';
+import { withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
+import { teamCapabilitiesFixture, teamPolicyFixture, teamSummaryFixture } from '@/dev/testkit/fixtures/teamFixtures';
+import { TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1 } from '@happier-dev/protocol';
+import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
+import { buildSettingHref } from '@/components/settings/catalog/settingDeclarations';
+import { TEAM_AUTHENTICATION_SETTINGS } from '../../teams/identity/teamAuthenticationSettings';
 import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelpers';
 
 const workosClientId = (overrides?: Partial<HomeSettingEntryV1>) => homeSettingEntryFixture('WORKOS_CLIENT_ID', {
@@ -32,7 +37,7 @@ const routeParams = vi.hoisted(() => ({ value: {} as Record<string, string> }));
 const routerPush = vi.hoisted(() => vi.fn());
 const routerReplace = vi.hoisted(() => vi.fn());
 installSettingsViewCommonModuleMocks({
-    storage: async (importOriginal) => await importOriginal(),
+    storage: 'real',
     router: async () => {
         const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
         return createExpoRouterMock({ params: () => routeParams.value, navigation: { setOptions: () => undefined }, router: { push: routerPush, replace: routerReplace, dismissTo: vi.fn() } }).module;
@@ -43,12 +48,14 @@ installHomeGovernanceBoundaries(harness);
 const { HomeAdministrationSignInProvidersScreen } = await import('./HomeAdministrationSignInProvidersScreen');
 const { TeamAuthenticationSettingsScreen } = await import('../../teams/identity/TeamAuthenticationSettingsScreen');
 const { TeamIdentityProviderSetupScreen } = await import('../../teams/identity/TeamIdentityProviderSetupScreen');
+const { IdentityConnectionDetailScreen } = await import('../../teams/identity/IdentityConnectionDetailScreen');
 const { resetTeamsSnapshotsForTests } = await import('@/sync/store/teams/teamsSnapshots');
 const { resetTeamsDirectoryEngineForTests } = await import('@/sync/engine/teams/teamsDirectoryEngine');
 const { resetTeamActionClientForTests } = await import('@/sync/ops/teams/teamActionClient');
 const { resetHomeGovernanceEngineForTests } = await import('@/sync/engine/home/governance/homeGovernanceEngine');
 const { resetHomeGovernanceSnapshotsForTests } = await import('@/sync/store/home/governance/homeGovernanceSnapshots');
 const { resetServerFeaturesClientForTests } = await import('@/sync/api/capabilities/serverFeaturesClient');
+let restorePopoverGlobals: (() => void) | undefined;
 
 beforeEach(async () => {
     standardCleanup();
@@ -62,8 +69,11 @@ beforeEach(async () => {
     resetHomeGovernanceSnapshotsForTests();
     resetServerFeaturesClientForTests();
     await harness.reset();
+    // The real menu needs the browser frame/window boundary; leave selection,
+    // availability and the scoped Action path running inside the process.
+    restorePopoverGlobals = withPopoverWebGlobals();
 });
-afterEach(() => standardCleanup());
+afterEach(() => { standardCleanup(); restorePopoverGlobals?.(); restorePopoverGlobals = undefined; });
 
 describe('Sign-in providers page', () => {
     const companyConnection = (teamId: string | null) => ({
@@ -90,6 +100,7 @@ describe('Sign-in providers page', () => {
         await act(async () => { screen.pressByTestId('home-identity-connection:company-connection'); });
         expect(routerPush).toHaveBeenLastCalledWith(`/settings/home/${serverId}/sign-in-providers/connections/company-connection`);
         await act(async () => { screen.pressByTestId('home-identity-provider-add'); });
+        await waitForHomeGovernance(() => expect(screen.findHostByTestId('home-eligible-provider:workos')).not.toBeNull());
         await act(async () => { screen.pressByTestId('home-eligible-provider:workos'); });
         expect(routerPush).toHaveBeenLastCalledWith(`/settings/home/${serverId}/sign-in-providers/connections/new`);
         expect(harness.requestsFor('/v1/home/identity/workos/connection/create')).toHaveLength(0);
@@ -106,6 +117,7 @@ describe('Sign-in providers page', () => {
         const screen = await renderScreen(<TeamAuthenticationSettingsScreen serverId={serverId} teamId="team-1" />);
         await waitForHomeGovernance(() => expect(screen.findByTestId('team-authentication-add-connection')).not.toBeNull());
         await act(async () => { screen.pressByTestId('team-authentication-add-connection'); });
+        await waitForHomeGovernance(() => expect(screen.findHostByTestId('team-eligible-provider:workos_sso')).not.toBeNull());
         await act(async () => { screen.pressByTestId('team-eligible-provider:workos_sso'); });
         expect(routerPush).toHaveBeenLastCalledWith(`/settings/teams/${serverId}/team-1/authentication/new?kind=workos_sso`);
         expect(harness.requestsFor('/v1/teams/identity/workos/connection/create')).toHaveLength(0);
@@ -115,6 +127,22 @@ describe('Sign-in providers page', () => {
         await screen.pressByTestIdAsync('identity-workos-create');
         await waitForHomeGovernance(() => expect(routerReplace).toHaveBeenCalledWith(`/settings/teams/${serverId}/team-1/authentication/company-connection`));
         expect(harness.requestsFor('/v1/teams/identity/workos/connection/create').map((request) => request.input)).toEqual([{ v: 1, teamId: 'team-1', displayName: 'Acme' }]);
+    });
+
+    it('explains why WorkOS cannot be set up instead of offering a form that cannot succeed', async () => {
+        const serverId = await harness.addHome({ name: 'Company Home', serverUrl: 'https://company-team-blocked.example', accountId: 'owner-1', teamsEnabled: true });
+        harness.answer(serverId, '/v1/teams/get', { body: teamSummaryFixture({ capabilities: teamCapabilitiesFixture({ manageAuthentication: true }) }) });
+        harness.answer(serverId, '/v1/teams/identity/connections/list', { body: {
+            items: [],
+            eligibleProviders: [{ ...companyChoice('team'), availability: { status: 'unavailable', code: 'workos_platform_unavailable' } }],
+            memberSignInUrl: null,
+            admissionModeApplicability: { v: 1, modes: { invite_only: { status: 'available' }, provisioned: { status: 'unavailable', reason: 'directory_source_required' }, jit: { status: 'unavailable', reason: 'team_connection_required' } } },
+        } });
+        const screen = await renderScreen(<TeamIdentityProviderSetupScreen serverId={serverId} teamId="team-1" providerKind="workos_sso" />);
+        await waitForHomeGovernance(() => expect(screen.findByTestId('identity-workos-unavailable')).not.toBeNull());
+        expect(screen.findByTestId('identity-workos-company-name')).toBeNull();
+        expect(screen.findByTestId('identity-workos-create')).toBeNull();
+        expect(harness.requestsFor('/v1/teams/identity/workos/connection/create')).toHaveLength(0);
     });
 
     it('keeps WorkOS setup available while the managed-provider read is unavailable, without admitting OIDC creation', async () => {
@@ -127,10 +155,38 @@ describe('Sign-in providers page', () => {
         await waitForHomeGovernance(() => expect(screen.findByTestId('home-identity-providers-unavailable')).not.toBeNull());
         await waitForHomeGovernance(() => expect(screen.findHostByTestId('home-identity-provider-add')?.props.accessibilityState).toMatchObject({ disabled: false }));
         await act(async () => { screen.pressByTestId('home-identity-provider-add'); });
+        await waitForHomeGovernance(() => expect(screen.findHostByTestId('home-eligible-provider:oidc')).not.toBeNull());
         await act(async () => { screen.pressByTestId('home-eligible-provider:oidc'); });
         expect(routerPush).not.toHaveBeenCalled();
         await act(async () => { screen.pressByTestId('home-eligible-provider:workos'); });
         expect(routerPush).toHaveBeenLastCalledWith(`/settings/home/${serverId}/sign-in-providers/connections/new`);
+    });
+
+    it('shows current Team accepted-sign-in policy on the shared active connection and opens its existing owner', async () => {
+        const serverId = await harness.addHome({ name: 'Company Home', serverUrl: 'https://company-team-policy.example', accountId: 'owner-1', teamsEnabled: true });
+        const team = teamSummaryFixture({ capabilities: teamCapabilitiesFixture({ manageAuthentication: true }), policy: teamPolicyFixture({
+            authenticationPolicy: { v: 1, mode: 'restricted', accepted: [{ kind: 'team_connection', connectionId: 'company-connection' }, { kind: 'home_method', methodId: 'github' }] },
+        }) });
+        harness.answer(serverId, '/v1/teams/get', { body: team });
+        harness.answer(serverId, '/v1/teams/identity/connections/list', { body: {
+            items: [{ ...companyConnection('team-1'), enabled: true, firstEnabledAt: 1, state: 'connected', externalReference: { v: 1, kind: 'workos_sso', organizationId: 'org_acme', connectionId: 'conn_acme' } }],
+            eligibleProviders: [], memberSignInUrl: null,
+            admissionModeApplicability: { v: 1, modes: { invite_only: { status: 'available' }, provisioned: { status: 'unavailable', reason: 'directory_source_required' }, jit: { status: 'unavailable', reason: 'team_connection_required' } } },
+        } });
+        const screen = await renderScreen(<IdentityConnectionDetailScreen serverId={serverId} teamId="team-1" connectionId="company-connection" />);
+        await waitForHomeGovernance(() => expect(screen.findHostByTestId('identity-workos-current-connection')).not.toBeNull());
+        expect(screen.findHostByTestId('identity-workos-required-for-team')).not.toBeNull();
+        expect(screen.getTextContent()).toContain('common.yes');
+        expect(screen.getTextContent()).not.toContain('identityAdministration.homeWorkosCompanyName');
+        await screen.pressByTestIdAsync('identity-workos-required-for-team');
+        expect(routerPush).toHaveBeenLastCalledWith(buildSettingHref(`/settings/teams/${serverId}/team-1/authentication`, TEAM_AUTHENTICATION_SETTINGS.settings.acceptedMethods));
+
+        harness.answer(serverId, '/v1/teams/get', { body: { ...team, policy: teamPolicyFixture() } });
+        await act(async () => { publishHomeAccountChange(serverId, [TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1]); });
+        await waitForHomeGovernance(() => expect(screen.getTextContent()).toContain('common.no'));
+        harness.answer(serverId, '/v1/teams/get', { body: { ...team, policy: teamPolicyFixture({ authenticationPolicyStatus: 'repair_required' }) } });
+        await act(async () => { publishHomeAccountChange(serverId, [TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1]); });
+        await waitForHomeGovernance(() => expect(screen.getTextContent()).toContain('teams.authentication.policy.repairRequired'));
     });
 
     it('lists what the deployment provides beside the Home\'s own providers, with the key that sets it', async () => {

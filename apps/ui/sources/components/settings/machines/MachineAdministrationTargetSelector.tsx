@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 
 import type { MachineAdministrationTargetV1 } from '@happier-dev/protocol';
@@ -11,6 +12,7 @@ import type {
     ServerScopedMachinePresentation,
 } from '@/components/sessions/new/hooks/machines/useServerScopedMachineOptions';
 import { Item } from '@/components/ui/lists/Item';
+import { CONTENT_SIZED_POPOVER_WIDTH } from '@/components/ui/popover/Popover';
 import { Icon } from '@/components/ui/icons/Icon';
 import { SelectionListFilterChip, type SelectionListFilter } from '@/components/ui/selectionList';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
@@ -26,7 +28,7 @@ import {
 } from '@/sync/domains/machines/administration/targetSelection';
 import type { MachineAdministrationTargetSelectionV1 } from '@/sync/domains/machines/administration/useTargetSelection';
 import { t } from '@/text';
-import { lockedMachineName, unnamedMachineName } from '@/utils/sessions/machineDisplayNames';
+import { lockedMachineName, resolveMachineDisplayNames, unnamedMachineName } from '@/utils/sessions/machineDisplayNames';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
@@ -135,6 +137,7 @@ function presentCurrentTarget(
     resolveCandidatePresentation: MachineAdministrationTargetSelectorProps['resolveCandidatePresentation'],
     resolveCandidateAvailability: MachineAdministrationTargetSelectorProps['resolveCandidateAvailability'],
     compact: boolean,
+    pickerRows: MachineAdministrationTargetSelectionV1['pickerRows'] = [],
 ): CurrentTargetPresentation {
     if (state.kind === 'unselected') {
         return {
@@ -174,8 +177,14 @@ function presentCurrentTarget(
     }
     const presentation = resolveCandidatePresentation?.(candidate);
     const availability = resolveCandidateAvailability?.(candidate);
+    const row = pickerRows.find((entry) => machineAdministrationTargetsEqual(entry.candidate.target, candidate.target));
+    const machineName = row && readMachineAdministrationCandidateName(candidate) !== null && candidate.availability !== 'locked'
+        ? resolveMachineDisplayNames(pickerRows
+            .filter((entry) => entry.serverId === row.serverId)
+            .map((entry) => entry.machine)).get(row.machine.id) : undefined;
     return {
         title: presentation?.title
+            ?? machineName
             ?? readMachineAdministrationCandidateName(candidate)
             ?? (candidate.availability === 'locked' ? lockedMachineName() : unnamedMachineName()),
         subtitle: presentation?.subtitle ?? presentTargetHome(state.target, candidate),
@@ -226,9 +235,25 @@ function resolvePickerAvailability(machine: MachineAdministrationPickerMachine):
         storedTarget: machine.target, candidates: [machine.candidate],
     }));
     return {
-        detail: presentation.detail ?? presentation.title,
+        // The shared row already states presence, including last-seen. Administration adds only
+        // a different obstruction; repeating Offline here loses the row's useful identity detail.
+        detail: machine.candidate.availability === 'online' || machine.candidate.availability === 'offline'
+            ? '' : presentation.detail ?? presentation.title,
         selectable: isMachineAdministrationCandidateSelectable(machine.candidate),
     };
+}
+
+function useTargetChange(intent: MachineAdministrationTargetSelectionV1['changeIntent']) {
+    return React.useCallback((change: () => void) => {
+        if (intent === 'draft') {
+            change();
+            return;
+        }
+        const result = runGuardedNavigation(change);
+        if (result !== true) {
+            fireAndForget(result, { tag: 'MachineAdministrationTargetSelector.changeTarget' });
+        }
+    }, [intent]);
 }
 
 /**
@@ -249,6 +274,7 @@ export function MachineAdministrationTargetSelector(props: MachineAdministration
         props.resolveCandidatePresentation,
         props.resolveCandidateAvailability,
         compact,
+        props.selection.pickerRows,
     );
     const groups = buildPickerGroups(props.selection);
     const canOpenPicker = groups.length > 0 || (compact && props.selection.selectedTarget !== null);
@@ -261,12 +287,7 @@ export function MachineAdministrationTargetSelector(props: MachineAdministration
     const accessibilityLabel = [compact ? groupTitle : undefined, current.title, current.subtitle, current.detail]
         .filter((value): value is string => Boolean(value))
         .join(', ');
-    const changeTarget = React.useCallback((change: () => void) => {
-        const result = runGuardedNavigation(change);
-        if (result !== true) {
-            fireAndForget(result, { tag: 'MachineAdministrationTargetSelector.changeTarget' });
-        }
-    }, []);
+    const changeTarget = useTargetChange(props.selection.changeIntent);
 
     if (props.presentation === 'chip') {
         return <MachineTargetChip {...props} />;
@@ -353,6 +374,7 @@ export function useMachineAdministrationTargetFilter(
         props.resolveCandidatePresentation,
         props.resolveCandidateAvailability,
         true,
+        props.selection.pickerRows,
     );
     const groups = buildPickerGroups(props.selection);
     const selectedRow = props.selection.selectedTarget
@@ -365,12 +387,7 @@ export function useMachineAdministrationTargetFilter(
     const presence = props.selection.state.kind === 'online' || props.selection.state.kind === 'offline'
         ? props.selection.state.kind
         : undefined;
-    const changeTarget = React.useCallback((change: () => void) => {
-        const result = runGuardedNavigation(change);
-        if (result !== true) {
-            fireAndForget(result, { tag: 'MachineAdministrationTargetSelector.changeTarget' });
-        }
-    }, []);
+    const changeTarget = useTargetChange(props.selection.changeIntent);
     const { selection, resolveCandidateAvailability, resolveCandidatePresentation } = props;
     const selectedServerId = selectedRow?.serverId ?? null;
     const canOpen = groups.length > 0 && props.disabled !== true;
@@ -447,7 +464,10 @@ function MachineTargetChipList(props: Readonly<{
     const resolveMachinePresentation = React.useMemo(() => (resolveCandidatePresentation
         ? (machine: MachineAdministrationPickerMachine) => resolveCandidatePresentation(machine.candidate)
         : undefined), [resolveCandidatePresentation]);
+    // Its rows are virtualized, so they cannot give the popover a natural width: the list asks for the
+    // popover's full width, where a long hostname and its id suffix read whole.
     return (
+        <View style={MACHINE_CHIP_LIST_STYLE}>
         <NewSessionMachineSelectionContent<MachineAdministrationPickerMachine>
             groups={props.groups}
             selectedMachine={selectedMachine}
@@ -467,5 +487,8 @@ function MachineTargetChipList(props: Readonly<{
             testID={`${props.testIDPrefix}.picker-list`}
             maxHeight={props.maxHeight}
         />
+        </View>
     );
 }
+
+const MACHINE_CHIP_LIST_STYLE = { width: CONTENT_SIZED_POPOVER_WIDTH.maxPx, maxWidth: '100%' } as const;

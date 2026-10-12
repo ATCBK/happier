@@ -1,10 +1,12 @@
 import * as React from 'react';
 
 import {
-    type McpServerBindingV1,
+    type McpServerRuleV1,
     type McpServerCatalogEntryTransportV1,
     type McpServerCatalogEntryV1,
 } from '@happier-dev/protocol';
+import { reachPlaceKeyV1 } from '@happier-dev/protocol/reach/reachPlaceV1';
+import { applyMcpServerConfigOverrideV1 } from '@happier-dev/protocol/mcp/servers/resolveMcpServerConfigForContextV1';
 
 import { McpServerBindingEditor } from '@/components/settings/mcpServers/McpServerBindingEditor';
 import { McpServerBindingDraftExpander } from '@/components/settings/mcpServers/McpServerBindingDraftExpander';
@@ -31,13 +33,13 @@ import { t } from '@/text';
  */
 export const McpServerConfigureForm = React.memo(function McpServerConfigureForm(props: Readonly<{
     draftServer: McpServerCatalogEntryV1;
-    draftBindings: McpServerBindingV1[];
+    draftBindings: McpServerRuleV1[];
     machines: readonly Machine[];
     targetSelection: MachineAdministrationTargetSelectionV1;
     secrets: SavedSecret[];
     scope?: AccountSettingsScope | null;
     onChangeServer: (updater: (current: McpServerCatalogEntryV1) => McpServerCatalogEntryV1) => void;
-    onChangeBindings: (updater: (current: McpServerBindingV1[]) => McpServerBindingV1[]) => void;
+    onChangeBindings: (updater: (current: McpServerRuleV1[]) => McpServerRuleV1[]) => void;
 }>) {
     const [favoriteDirectoriesRaw, setFavoriteDirectoriesRaw] = useSettingMutable('favoriteDirectories');
     const favoriteDirectories = Array.isArray(favoriteDirectoriesRaw) ? favoriteDirectoriesRaw : [];
@@ -275,12 +277,21 @@ export const McpServerConfigureForm = React.memo(function McpServerConfigureForm
                     <McpServerBindingEditor
                         key={binding.id}
                         binding={binding}
+                        configOverride={props.draftServer.configOverrides?.find(override => reachPlaceKeyV1(override.target) === reachPlaceKeyV1(binding.target))}
                         serverTransport={props.draftServer.transport}
                         secrets={props.secrets}
                         scope={props.scope}
                         machines={props.machines}
                         onChange={(next) => props.onChangeBindings((current) => current.map((item) => (item.id === binding.id ? next : item)))}
                         onDelete={() => props.onChangeBindings((current) => current.filter((item) => item.id !== binding.id))}
+                        onChangeConfigOverride={(fields) => onChangeServer((current) => {
+                            if (binding.target.t === 'allMachines' || binding.target.t === 'project') {
+                                return { ...applyMcpServerConfigOverrideV1(current, fields), updatedAt: Date.now() };
+                            }
+                            const configOverrides = (current.configOverrides ?? []).filter(override => reachPlaceKeyV1(override.target) !== reachPlaceKeyV1(binding.target));
+                            if (fields) configOverrides.push({ ...fields, target: binding.target });
+                            return { ...current, configOverrides, updatedAt: Date.now() };
+                        })}
                     />
                 ))}
                 <McpServerBindingDraftExpander

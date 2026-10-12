@@ -129,7 +129,7 @@ function buildSettingDoc(params: Readonly<{
 }>): SettingsPageSearchDoc {
     const { ref } = params;
     const title = ref.title ?? String(t(ref.titleKey));
-    const sectionTitle = ref.sectionTitleKey ? String(t(ref.sectionTitleKey)) : null;
+    const sectionTitle = ref.sectionTitle ?? (ref.sectionTitleKey ? String(t(ref.sectionTitleKey)) : null);
     const path = sectionTitle && sectionTitle !== title && !params.pagePath.includes(sectionTitle)
         ? [...params.pagePath, sectionTitle]
         : [...params.pagePath];

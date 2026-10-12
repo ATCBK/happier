@@ -3,6 +3,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import tweetnacl from 'tweetnacl';
 import { signAccountContentKeyBindingV1, tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol';
+import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 
 import {
     createRootLayoutFeaturesResponse,
@@ -77,13 +78,6 @@ async function setupMountedMemberRequest(
     request: (url: string, init?: RequestInit) => Promise<Response>,
     options?: Readonly<{ accountEncryption?: 'e2ee' }>,
 ) {
-    const profile = await upsertServerProfile({
-        serverUrl: `https://member-encryption-${crypto.randomUUID()}.example.test`,
-        name: 'Member encryption Home',
-    });
-    storage.getState().activateProfileScope({ serverId: profile.id, accountId: 'manager-1' });
-    primeCollaboration(profile.id);
-
     const managerKeys = tweetnacl.box.keyPair();
     const token = `e30.${Buffer.from(JSON.stringify({ sub: 'manager-1' })).toString('base64url')}.signature`;
     vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({
@@ -96,9 +90,32 @@ async function setupMountedMemberRequest(
         } : {}),
     });
     setRuntimeFetch(async (url, init) => {
-        if (new URL(String(url)).pathname === '/v1/auth/ping') return new Response('{}');
+        const path = new URL(String(url)).pathname;
+        if (path === '/health' || path === '/v1/auth/ping') return new Response('{}');
+        if (path === '/v1/features' || path === '/v1/features/authenticated') {
+            return Response.json(createRootLayoutFeaturesResponse());
+        }
+        // Action admission reads the real Account settings baseline before the encryption host.
+        if (path === '/v2/account/settings') return new Response(JSON.stringify({ content: null, version: 0 }));
+        if (path === '/v1/account/encryption') {
+            return Response.json({ mode: options?.accountEncryption ?? 'plain', updatedAt: 1 });
+        }
+        if (path === '/v1/account/encryption/currentness' && options?.accountEncryption !== 'e2ee') {
+            return Response.json({ mode: 'plain', version: 1, signingKeyFingerprint: null,
+                contentKeyFingerprint: null, updatedAt: 1 });
+        }
         return await request(String(url), init);
     });
+    // Publishing the Home can immediately probe readiness and authenticated features.
+    const profile = await upsertServerProfile({
+        serverUrl: `https://member-encryption-${crypto.randomUUID()}.example.test`,
+        name: 'Member encryption Home',
+    });
+    const scope = { serverId: profile.id, accountId: 'manager-1' };
+    storage.getState().activateProfileScope(scope);
+    await storage.getState().activateSettingsScope(scope);
+    storage.getState().applySettingsForScope(scope, storage.getState().settings, 1);
+    primeCollaboration(profile.id);
     return { profile, managerKeys };
 }
 
@@ -134,8 +151,8 @@ describe('member encrypted-access state', () => {
 
     it('keeps repairable and permanently non-transferable history distinct', () => {
         expect(projectTeamMemberEncryptionReadyState({
-            items: [],
-            nextCursor: null,
+            status: 'ready',
+            actionable: false,
             exceptions: {
                 callerEnvelopeRepairRequiredCount: 2,
                 callerVisibleNonTransferableSessionCount: 3,
@@ -153,7 +170,7 @@ describe('member encrypted-access state', () => {
             status: 'incomplete',
             preparedCount: 4,
             skippedCount: 1,
-            repairRequiredSessions: [{ serverId: 'home-1', sessionId: 'session-1' }],
+            repairRequiredCount: 1,
             recipientUnavailableReason: null,
             exceptions: {
                 callerEnvelopeRepairRequiredCount: 0,
@@ -173,7 +190,7 @@ describe('member encrypted-access state', () => {
             preparedCount: 9,
             skippedCount: 0,
             // Nothing failed on this device, which must not erase what the Home reported.
-            repairRequiredSessions: [],
+            repairRequiredCount: 0,
             recipientUnavailableReason: null,
             exceptions: {
                 callerEnvelopeRepairRequiredCount: 1,
@@ -194,7 +211,7 @@ describe('member encrypted-access state', () => {
             status: 'recipient_changed',
             preparedCount: 2,
             skippedCount: 0,
-            repairRequiredSessions: [],
+            repairRequiredCount: 0,
             recipientUnavailableReason: null,
             exceptions: null,
         })).toEqual({ kind: 'recipient_changed' });
@@ -205,7 +222,7 @@ describe('member encrypted-access state', () => {
             status: 'membership_changed',
             preparedCount: 0,
             skippedCount: 0,
-            repairRequiredSessions: [],
+            repairRequiredCount: 0,
             recipientUnavailableReason: null,
             exceptions: null,
         })).toEqual({ kind: 'membership_changed' });
@@ -216,7 +233,7 @@ describe('member encrypted-access state', () => {
             status: 'scope_changed',
             preparedCount: 0,
             skippedCount: 0,
-            repairRequiredSessions: [],
+            repairRequiredCount: 0,
             recipientUnavailableReason: null,
             exceptions: null,
         })).toEqual({ kind: 'checking' });
@@ -227,7 +244,7 @@ describe('member encrypted-access state', () => {
             status: 'invalid_recipient_binding',
             preparedCount: 0,
             skippedCount: 0,
-            repairRequiredSessions: [],
+            repairRequiredCount: 0,
             recipientUnavailableReason: null,
             exceptions: null,
         })).toEqual({ kind: 'failed' });
@@ -238,7 +255,7 @@ describe('member encrypted-access state', () => {
             status: 'recipient_unavailable',
             preparedCount: 0,
             skippedCount: 0,
-            repairRequiredSessions: [],
+            repairRequiredCount: 0,
             recipientUnavailableReason: 'encryption_setup_required',
             exceptions: null,
         })).toEqual({ kind: 'setup_required', reason: 'encryption_setup_required' });
@@ -246,6 +263,18 @@ describe('member encrypted-access state', () => {
 });
 
 describe('TeamMemberEncryptionSection mounted membership history', () => {
+    it('refuses the disabled UI read without reaching the membership envelope collection', async () => {
+        const request = vi.fn(async () => new Response('{}'));
+        const setup = await setupMountedMemberRequest(request);
+        storage.setState({ settings: { ...storage.getState().settings, actionsSettingsV1: ActionsSettingsV1Schema.parse({
+            v: 1, actions: { 'teams.members.history.preparation.get': { disabledSurfaces: ['ui'] } },
+        }) } });
+        const screen = await renderSettingsView(React.createElement(TeamMemberEncryptionSection, {
+            context: createMountedContext(setup.profile.id, vi.fn()),
+        }));
+        await vi.waitFor(() => expect(screen.findRow('team-member-encryption-unavailable')).not.toBeNull());
+        expect(request).not.toHaveBeenCalled();
+    });
     it('qualifies prepared history to the sessions this manager can manage', async () => {
         const recipientContent = tweetnacl.box.keyPair();
         const recipientSigning = tweetnacl.sign.keyPair();
@@ -274,11 +303,48 @@ describe('TeamMemberEncryptionSection mounted membership history', () => {
             }));
         });
         const setup = await setupMountedMemberRequest(request, { accountEncryption: 'e2ee' });
+        const context = createMountedContext(setup.profile.id, vi.fn());
         const screen = await renderSettingsView(React.createElement(TeamMemberEncryptionSection, {
-            context: createMountedContext(setup.profile.id, vi.fn()),
+            context,
         }));
         await vi.waitFor(() => expect(screen.findRow('team-member-encryption-status')).not.toBeNull());
         expect(screen.getTextContent()).toContain(t('teams.members.encryption.scopeBody'));
+    });
+
+    it('routes add-journey Group auto-preparation through Action admission before committing envelopes', async () => {
+        const recipientContent = tweetnacl.box.keyPair();
+        const recipientSigning = tweetnacl.sign.keyPair();
+        let managerKeys!: ReturnType<typeof tweetnacl.box.keyPair>;
+        const request = vi.fn(async (url: string, init?: RequestInit) => {
+            if (new URL(url).pathname.includes('/account/encryption')) return Response.json({
+                mode: 'e2ee', version: 1, signingKeyFingerprint: 'signing-current',
+                contentKeyFingerprint: 'content-current', updatedAt: 1,
+                recipientEnvelopeReadiness: { status: 'available' },
+            });
+            if (init?.method === 'PATCH') return Response.json({ appliedCount: 1 });
+            return Response.json({ status: 'ready', recipientAccountId: 'recipient-1',
+                contentKey: { status: 'available', accountSigningPublicKey: encodeHex(recipientSigning.publicKey),
+                    contentPublicKey: encodeBase64(recipientContent.publicKey, 'base64'),
+                    contentPublicKeySignature: encodeBase64(signAccountContentKeyBindingV1({
+                        accountSigningSecretKey: recipientSigning.secretKey, contentPublicKey: recipientContent.publicKey,
+                    }), 'base64') },
+                items: [{ sessionId: 'session-1', callerDataKeyEnvelope: encryptDataKeyForRecipientV0(
+                    new Uint8Array(32).fill(7), encodeBase64(managerKeys.publicKey, 'base64')) }],
+                exceptions: { callerEnvelopeRepairRequiredCount: 0, callerVisibleNonTransferableSessionCount: 0 },
+                nextCursor: null,
+            });
+        });
+        const setup = await setupMountedMemberRequest(request, { accountEncryption: 'e2ee' });
+        managerKeys = setup.managerKeys;
+        storage.setState({ settings: { ...storage.getState().settings, actionsSettingsV1: ActionsSettingsV1Schema.parse({
+            v: 1, actions: { 'teams.members.history.prepare': { disabledSurfaces: ['ui'] } },
+        }) } });
+        const screen = await renderSettingsView(React.createElement(TeamMemberEncryptionSection, {
+            context: createMountedContext(setup.profile.id, vi.fn()), autoStartPreparation: true,
+            target: { kind: 'group', teamGroupId: 'group-1', accountId: 'recipient-1' },
+        }));
+        await vi.waitFor(() => expect(screen.findRow('team-member-encryption-retry')).not.toBeNull());
+        expect(request.mock.calls.some(([, init]) => init?.method === 'PATCH')).toBe(false);
     });
 
     it('rechecks later Account setup in the same mounted detail and announces only material preparation changes', async () => {

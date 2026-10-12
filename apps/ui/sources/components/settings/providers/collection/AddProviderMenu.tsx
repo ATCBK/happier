@@ -49,10 +49,12 @@ export const AddProviderMenu = React.memo(function AddProviderMenu(props: Readon
             id: `${CATALOG_PREFIX}${provider.contributionKey}`,
             testID: `settings-provider-available:${provider.contributionKey}`,
             title: provider.name,
-            subtitle: provider.provenance === 'external'
-                ? `${t(`settingsProviders.kind.${provider.kind}`)} · ${t('settingsProviders.compatibility.experimental')}`
-                : t(`settingsProviders.kind.${provider.kind}`),
-            icon: <ProviderIcon icon={provider.icon} size={18} color={theme.colors.text.secondary} />,
+            // A plain model provider is what the list is: only a different kind, or experimental, is said.
+            subtitle: [
+                provider.kind === 'frontier' ? null : t(`settingsProviders.kind.${provider.kind}`),
+                provider.provenance === 'external' ? t('settingsProviders.compatibility.experimental') : null,
+            ].filter(Boolean).join(' · ') || undefined,
+            icon: <ProviderIcon contributionKey={provider.contributionKey} icon={provider.icon} size={18} color={theme.colors.text.secondary} />,
             category: t('settingsProvidersCollection.menuCatalogCategory'),
         })),
     ], [includeCustom, props.available, theme.colors.text.secondary]);
@@ -84,6 +86,8 @@ export const AddProviderMenu = React.memo(function AddProviderMenu(props: Readon
                     iconName="plus"
                     accessibilityLabel={t('settingsProvidersCollection.addProvider')}
                     tooltip={t('settingsProvidersCollection.addProvider')}
+                    // The open menu answers the hover; its label would sit beside it.
+                    tooltipHidden={open}
                     variant="plain"
                     disabled={props.disabled}
                     onPress={toggle}

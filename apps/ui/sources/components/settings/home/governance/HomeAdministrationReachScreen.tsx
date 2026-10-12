@@ -20,9 +20,11 @@ import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { ItemLoadStateRows, type ItemLoadState } from '@/components/ui/lists/ItemLoadStateRows';
 import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
-import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
+import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { useHomeSettingsWithCompanion } from '@/hooks/home/useHomeSettingsWithCompanion';
@@ -40,6 +42,7 @@ import { t } from '@/text';
 
 import { useHomeRuntimeExecutor, type HomeRuntimeExecutor } from '../runtime/homeRuntimeExecutor';
 import { HomeDeploymentFixedNote } from './HomeDeploymentFixedNote';
+import { HomeSettingFieldRow, type HomeSettingStage } from './HomeSettingFieldRow';
 import { HomeAdministrationSection } from './HomeAdministrationSection';
 import type { HomeAdministrationContext } from './homeAdministrationContext';
 import { homeAdministrationPoliciesPath } from './homeAdministrationRoutes';
@@ -57,8 +60,10 @@ import {
 
 const PUBLIC_ADDRESS_KEY = SERVER_CONFIG.HAPPIER_PUBLIC_SERVER_URL.key;
 const WEBAPP_KEY = SERVER_CONFIG.HAPPIER_WEBAPP_URL.key;
+const PUBLIC_SUBPATH_KEY = SERVER_CONFIG.HAPPIER_PUBLIC_SHARES_ALLOW_SUBPATH.key;
 const RELAY_POLICY_KEY = SERVER_CONFIG.HAPPIER_IROH_RELAY_POLICY.key;
 const RELAY_URLS_KEY = SERVER_CONFIG.HAPPIER_IROH_RELAY_URLS.key;
+const LOADING: ItemLoadState = Object.freeze({ kind: 'loading' as const });
 
 const readReachability = (scope: ServerAccountScope) => getHomeReachability({ scope });
 
@@ -333,6 +338,9 @@ const ReachPage = React.memo(function ReachPage(props: Readonly<{ context: HomeA
         features.status === 'ready' ? features.features.capabilities.serverRelease?.flavor ?? null : null,
     );
     const [irohBusy, setIrohBusy] = React.useState(false);
+    const [publicLinksBusy, setPublicLinksBusy] = React.useState(false);
+    const [publicLinksFailure, setPublicLinksFailure] = React.useState<string | null>(null);
+    const publicLinksInFlight = React.useRef(false);
     const disabled = !context.mutationsAvailable || !isOwner;
 
     const wasPendingRef = React.useRef(context.approvalPending);
@@ -365,6 +373,18 @@ const ReachPage = React.memo(function ReachPage(props: Readonly<{ context: HomeA
         if (invalid) return invalid.reason === 'out_of_bounds' ? t('homeGovernance.reach.httpsRequired') : t('homeGovernance.reach.invalidAddress');
         return homeGovernanceFailureNotice(outcome.failure).body;
     }, [context, reads]);
+
+    const savePublicLinks: HomeSettingStage = React.useCallback((_key, next) => {
+        const entry = entryFor(reads.settings, PUBLIC_SUBPATH_KEY);
+        if (disabled || entry?.fixed || publicLinksInFlight.current || next?.kind !== 'value' || typeof next.value !== 'boolean') return;
+        publicLinksInFlight.current = true;
+        setPublicLinksBusy(true);
+        setPublicLinksFailure(null);
+        void writeSetting(PUBLIC_SUBPATH_KEY, next.value).then(setPublicLinksFailure).finally(() => {
+            publicLinksInFlight.current = false;
+            setPublicLinksBusy(false);
+        });
+    }, [disabled, reads.settings, writeSetting]);
 
     const saveAddress = React.useCallback(async (entry: HomeSettingEntryV1, text: string): Promise<string | null> => {
         const trimmed = text.trim();
@@ -407,29 +427,37 @@ const ReachPage = React.memo(function ReachPage(props: Readonly<{ context: HomeA
 
     if (!canView) {
         return (
-            <ItemGroup description={t('homeGovernance.forbiddenBody')}>
-                <Item testID="home-reach-forbidden" title={t('homeGovernance.forbiddenTitle')} mode="info" showChevron={false} />
+            <ItemGroup>
+                <SurfaceStateCard testID="home-reach-forbidden" kind="denied" size="line"
+                    title={t('homeGovernance.forbiddenTitle')} reason={t('homeGovernance.forbiddenBody')} />
             </ItemGroup>
         );
     }
     const reach = reads.companion;
     if (!reach || !reads.settings) {
-        if (reads.failure || reads.companionFailure) {
+        const loadFailure = reads.failure ?? reads.companionFailure;
+        if (loadFailure) {
             return (
-                <ItemGroup description={t('homeGovernance.reach.loadFailed')}>
-                    <Item testID="home-reach-retry" title={t('homeGovernance.retry')} onPress={reads.reload} showChevron={false} />
-                </ItemGroup>
+                <SurfaceStateCard
+                    testID="home-reach-error"
+                    kind="error"
+                    title={t('homeGovernance.reach.loadFailed')}
+                    reason={homeGovernanceFailureNotice(loadFailure, { effect: 'read' }).body}
+                    action={{ testID: 'home-reach-retry', label: t('homeGovernance.retry'), onPress: reads.reload }}
+                />
             );
         }
+        // The address rows are reserved in their final shape, so nothing moves when they land.
         return (
             <ItemGroup>
-                <Item testID="home-reach-loading" title={t('homeGovernance.loading')} loading mode="info" showChevron={false} />
+                <ItemLoadStateRows testID="home-reach-loading" state={LOADING} rows={3} accessibilityLabel={t('homeGovernance.reach.title')} />
             </ItemGroup>
         );
     }
 
     const publicEntry = entryFor(reads.settings, PUBLIC_ADDRESS_KEY);
     const webAppEntry = entryFor(reads.settings, WEBAPP_KEY);
+    const publicSubpathEntry = entryFor(reads.settings, PUBLIC_SUBPATH_KEY);
     const relayEntry = entryFor(reads.settings, RELAY_POLICY_KEY);
     const relayUrlsEntry = entryFor(reads.settings, RELAY_URLS_KEY);
     const addressCaption = publicAddressCaption(reach);
@@ -437,12 +465,24 @@ const ReachPage = React.memo(function ReachPage(props: Readonly<{ context: HomeA
     const irohAvailable = reach.iroh.availability === 'available';
     const irohOn = reach.iroh.mode === 'enabled';
     const irohLocked = !isOwner || reach.iroh.modeFixed || !irohAvailable;
-    const cannotRetire = irohOn && !reachCanRetireIroh(reach);
+    // Only a running Iroh can be retired; an unavailable one has nothing to turn off.
+    const cannotRetire = irohAvailable && irohOn && !reachCanRetireIroh(reach);
     const relayCustomCount = Array.isArray(relayUrlsEntry?.value) ? relayUrlsEntry.value.length : 0;
     const relayPolicy = relayEntry?.value === 'disabled' ? 'disabled' : 'automatic';
     const relayPending = relayEntry?.applied?.pending === true;
     const locallyHosted = executor.kind === 'hosting_desktop' ? findPersonalHomeBootstrapCompletedProfile(listServerProfiles()) : null;
     const readFailure = reads.failure ?? reads.companionFailure;
+    const relayRow = {
+        testID: 'home-reach-relay',
+        title: t('homeGovernance.reach.relay'),
+        subtitle: relayEntry?.fixed ? undefined : relayPending
+            ? t('homeGovernance.reach.appliesAfterRestartPending')
+            : relayCustomCount > 0
+                ? t('homeGovernance.reach.relayCustom', { count: relayCustomCount })
+                : t('homeGovernance.reach.appliesAfterRestart'),
+        subtitleLines: 0,
+        subtitleAccessory: relayEntry?.fixed ? <HomeDeploymentFixedNote keys={[relayEntry.key]} testID="home-reach-relay" /> : undefined,
+    };
 
     return (
         <>
@@ -503,8 +543,27 @@ const ReachPage = React.memo(function ReachPage(props: Readonly<{ context: HomeA
                 </SettingAnchor>
             </ItemGroup>
 
+            {publicSubpathEntry ? (
+                <ItemGroup title={t('homeGovernance.reach.publicLinks')} description={t('homeGovernance.reach.publicLinksHelp')}>
+                    <SettingAnchor setting={HOME_REACH_SETTINGS.settings.allowPublicSubpath}>
+                        <HomeSettingFieldRow
+                            testID="home-reach-public-subpath"
+                            entry={publicSubpathEntry}
+                            title={t('homeGovernance.reach.allowPublicSubpath')}
+                            subtitle={t('homeGovernance.reach.allowPublicSubpathDescription')}
+                            staged={undefined}
+                            readOnly={!isOwner}
+                            disabled={disabled || publicLinksBusy}
+                            error={publicLinksFailure}
+                            onStage={savePublicLinks}
+                        />
+                    </SettingAnchor>
+                    {publicLinksFailure ? <SurfaceStateCard testID="home-reach-public-subpath-error" size="line" kind="error" title={publicLinksFailure} /> : null}
+                </ItemGroup>
+            ) : null}
+
             {executor.kind === 'hosting_desktop' && isOwner ? (
-                <LocalRelayAccessControlSection upstreamUrl={locallyHosted?.serverUrl ?? null} />
+                <LocalRelayAccessControlSection upstreamUrl={locallyHosted?.serverUrl ?? null} actionScope={context.scope} />
             ) : null}
 
             <ItemGroup title={t('homeGovernance.reach.directConnections')} description={t('homeGovernance.reach.directConnectionsDescription')}>
@@ -535,39 +594,21 @@ const ReachPage = React.memo(function ReachPage(props: Readonly<{ context: HomeA
                 </SettingAnchor>
                 {irohAvailable && relayEntry ? (
                     <SettingAnchor setting={HOME_REACH_SETTINGS.settings.relay}>
-                        <Item
-                            testID="home-reach-relay"
-                            title={t('homeGovernance.reach.relay')}
-                            subtitle={relayEntry.fixed
-                                ? undefined
-                                : relayPending
-                                    ? t('homeGovernance.reach.appliesAfterRestartPending')
-                                    : relayCustomCount > 0
-                                        ? t('homeGovernance.reach.relayCustom', { count: relayCustomCount })
-                                        : t('homeGovernance.reach.appliesAfterRestart')}
-                            subtitleLines={0}
-                            subtitleAccessory={relayEntry.fixed ? <HomeDeploymentFixedNote keys={[relayEntry.key]} testID="home-reach-relay" /> : undefined}
-                            accessoryLayout="adaptive"
-                            showChevron={false}
-                            rightElement={isOwner && !relayEntry.fixed ? (
-                                <SegmentedTabBar<'automatic' | 'disabled'>
-                                    role="radiogroup"
+                        {isOwner && !relayEntry.fixed ? (
+                                <SegmentedChoiceItem<'automatic' | 'disabled'>
+                                    {...relayRow}
                                     testIDPrefix="home-reach-relay-policy"
-                                    tabs={[
+                                    options={[
                                         { id: 'automatic', label: t('homeGovernance.reach.relayAutomatic') },
                                         { id: 'disabled', label: t('homeGovernance.reach.relayOff') },
                                     ]}
-                                    activeTabId={relayPolicy}
-                                    onSelectTab={(tabId) => {
+                                    value={relayPolicy}
+                                    onChange={(tabId) => {
                                         if (tabId !== relayPolicy && !disabled) void writeSetting(RELAY_POLICY_KEY, tabId);
                                     }}
                                     disabled={disabled}
-                                    slidingThumb
-                                    segmentSizing="content"
                                 />
-                            ) : undefined}
-                            detail={isOwner && !relayEntry.fixed ? undefined : relayPolicy === 'disabled' ? t('homeGovernance.reach.relayOff') : t('homeGovernance.reach.relayAutomatic')}
-                        />
+                            ) : <Item {...relayRow} mode="info" showChevron={false} detail={relayPolicy === 'disabled' ? t('homeGovernance.reach.relayOff') : t('homeGovernance.reach.relayAutomatic')} />}
                     </SettingAnchor>
                 ) : null}
             </ItemGroup>

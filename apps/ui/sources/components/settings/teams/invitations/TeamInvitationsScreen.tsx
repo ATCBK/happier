@@ -15,7 +15,7 @@ import { StatusDot } from '@/components/ui/status/StatusDot';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
-import { SectionActionButton } from '@/components/ui/lists/SectionActionButton';
+import { PageHeader } from '@/components/ui/layout/PageHeader';
 import { VirtualizedList } from '@/components/ui/lists/virtualized';
 import { useTeamInvitations } from '@/hooks/teams/useTeamInvitations';
 import { Modal } from '@/modal';
@@ -26,10 +26,10 @@ import {
 } from '@/sync/ops/teams/teamInvitationOperations';
 import { isTeamActionApprovalPendingError } from '@/sync/ops/teams/teamActionClient';
 import { getPreferredLanguage, t } from '@/text';
-import { formatWithCachedDateTimeFormatter } from '@/utils/datetime/cachedIntlFormatters';
+import { formatCalendarDate } from '@/utils/datetime/cachedIntlFormatters';
 
 import { TeamSection } from '../TeamSection';
-import type { TeamSectionContext } from '../teamSectionContext';
+import { teamPageHeaderMeta, type TeamSectionContext } from '../teamSectionContext';
 import { teamMutationFailureLabel, teamReadFailureLabel } from '../teamMutationPresentation';
 import { presentHomeInvitePeople } from '@/components/settings/home/governance/HomeInvitePeopleDialog';
 import { TeamLinkDelivery } from '../TeamLinkDelivery';
@@ -169,7 +169,7 @@ const InvitationsList = React.memo(function InvitationsList(props: Readonly<{
 
     /** What may be done to one row right now: the row's own answer, and this page's readiness. */
     const rowActions = (row: TeamInvitationRowV1) => {
-        const presentation = resolveTeamInvitationPresentation(row, now);
+        const presentation = resolveTeamInvitationPresentation(row, now, context.scope.accountId);
         const canRevoke = presentation.canRevoke && context.canMutate;
         const canReissue = presentation.reissueMode !== 'none'
             && context.canMutate
@@ -200,7 +200,7 @@ const InvitationsList = React.memo(function InvitationsList(props: Readonly<{
             let chosen = preset as 'revoke' | 'retry' | 'change_email' | null;
             if (chosen === null) {
                 await Modal.alertAsync(
-                    presentation.recipientLabel ?? t('teams.invitations.linkRow'),
+                    presentation.title,
                     canReissue ? t('teams.invitations.reissueNotice') : t('teams.invitations.revokeBody'),
                     [
                         ...(canReissue ? [{
@@ -338,22 +338,7 @@ const InvitationsList = React.memo(function InvitationsList(props: Readonly<{
         }
     };
 
-    // Adding happens in the collection: the Invitations section carries its "+", which opens the
-    // one Invite people dialog with this Team chosen — the same invitation the Team's Overview and
-    // Members "+" open (DR-06), so there is one way to invite rather than one per page.
-    const inviteAction = canManage && context.canMutate ? (
-        <SectionActionButton
-            testID="team-invitations-create"
-            icon="plus"
-            title={t('teams.invitations.invite')}
-            onPress={() => presentHomeInvitePeople({
-                serverId: context.address.serverId,
-                teamId: context.address.teamId,
-            })}
-        />
-    ) : undefined;
-
-    const date = (at: number) => formatWithCachedDateTimeFormatter(new Date(at), getPreferredLanguage(), { dateStyle: 'medium' });
+    const date = (at: number) => formatCalendarDate(at, getPreferredLanguage());
     const firstSegmentKey = invitationSegments[0]?.key ?? null;
 
     return (
@@ -363,6 +348,20 @@ const InvitationsList = React.memo(function InvitationsList(props: Readonly<{
             keyExtractor={(segment) => segment.key}
             ListHeaderComponent={(
                 <>
+                    <PageHeader
+                        title={t('teams.tabs.invitations')}
+                        description={t('teams.pages.invitations')}
+                        meta={teamPageHeaderMeta({
+                            pageTitle: t('teams.tabs.invitations'),
+                            teamName: context.team.name,
+                            homeName: context.homeName,
+                        })}
+                        primaryAction={canManage && context.canMutate && !(invitations.status === 'ready' && invitations.rows.length === 0) ? {
+                            title: t('homeGovernance.invite.action'),
+                            testID: 'team-invitations-create',
+                            onPress: () => presentHomeInvitePeople({ serverId: context.address.serverId, teamId: context.address.teamId }),
+                        } : undefined}
+                    />
                     {props.header}
                     {!canManage ? (
                         <ItemGroup>
@@ -391,7 +390,7 @@ const InvitationsList = React.memo(function InvitationsList(props: Readonly<{
                     ) : null}
                     {/* The list's known first section holds its rows while the first page is read. */}
                     {canManage && invitations.status === 'loading' && invitations.rows.length === 0 ? (
-                        <ItemGroup title={t('teams.invitations.waitingSection')} action={inviteAction}>
+                        <ItemGroup title={t('teams.invitations.waitingSection')}>
                             <ItemLoadStateRows
                                 testID="team-invitations-loading"
                                 state={{ kind: 'loading' }}
@@ -407,6 +406,7 @@ const InvitationsList = React.memo(function InvitationsList(props: Readonly<{
                             testID="team-invitations-empty"
                             kind="empty"
                             iconName="envelope"
+                            scene="noAttachments"
                             title={t('teams.invitations.emptyTitle')}
                             reason={t('teams.invitations.emptyBody')}
                             action={context.canMutate ? {
@@ -426,9 +426,8 @@ const InvitationsList = React.memo(function InvitationsList(props: Readonly<{
                     title={segment.first
                         ? t(segment.group === 'waiting' ? 'teams.invitations.waitingSection' : 'teams.invitations.finishedSection')
                         : undefined}
-                    action={segment.key === firstSegmentKey ? inviteAction : undefined}
                     description={segment.first && segment.group === 'waiting'
-                        ? notice ?? t('teams.invitations.bearerUnavailable')
+                        ? notice ?? t('teams.invitations.waitingDescription')
                         : segment.key === firstSegmentKey ? notice ?? undefined : undefined}
                     virtualizedSegment={{ first: segment.first, last: segment.last }}
                 >
@@ -442,20 +441,18 @@ const InvitationsList = React.memo(function InvitationsList(props: Readonly<{
                             <Item
                                 key={row.id}
                                 testID={`team-invitations-row:${row.id}`}
-                                title={presentation.recipientLabel ?? t('teams.invitations.byLink')}
+                                title={presentation.title}
                                 subtitle={(waiting
                                     ? [
                                         presentation.deliveryLabel,
                                         presentation.offerLabel,
                                         t('teams.invitations.expires', { when: date(row.expiresAt) }),
                                     ]
-                                    : [presentation.stateLabel, presentation.offerLabel])
+                                    : [presentation.finishedLabel, presentation.offerLabel])
                                     .filter((part): part is string => part !== null)
                                     .join(' · ')}
                                 subtitleLines={0}
-                                // A finished invitation's one dated fact the row carries is when it
-                                // expired; accepted and revoked rows publish no instant to show.
-                                detail={presentation.state === 'expired' ? date(row.expiresAt) : undefined}
+                                detail={presentation.finishedAt === null ? undefined : date(presentation.finishedAt)}
                                 subtitleLeading={waiting && presentation.emailUndelivered
                                     ? <StatusDot size={6} color={theme.colors.state.warning.foreground} />
                                     : undefined}
@@ -530,6 +527,7 @@ export const TeamInvitationsScreen = React.memo(function TeamInvitationsScreen(p
             title={t('teams.tabs.invitations')}
             description={t('teams.pages.invitations')}
             presentation="virtualized-list"
+            childRendersHeader
         >
             {(context, header) => <InvitationsList context={context} header={header} />}
         </TeamSection>

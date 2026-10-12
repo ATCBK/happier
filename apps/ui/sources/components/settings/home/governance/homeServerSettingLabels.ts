@@ -2,7 +2,7 @@ import type { HomeSettingIgnoredReasonV1 } from '@happier-dev/protocol/home/gove
 
 import { t, type TranslationKeyNoParams } from '@/text';
 import { en } from '@/text/translations/en';
-import { formatByteCapacity } from '@/utils/files/formatByteSize';
+import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
 
 import { humanizeIdentifier } from './homeFeatureLabels';
 
@@ -90,7 +90,7 @@ const BYTES_KEY = /_BYTES(?:_PER_[A-Z_]+)?$/;
 export function homeServerSettingNumberWords(key: string, type: string | undefined, value: number | string): string {
     const amount = typeof value === 'number' ? value : Number(value);
     if ((type === 'int' || type === 'float') && BYTES_KEY.test(key) && Number.isFinite(amount) && String(value).trim() !== '') {
-        return formatByteCapacity(amount);
+        return formatHappierDataBytes(amount, { kind: 'storage' });
     }
     const unit = homeServerSettingUnit(key, type);
     return unit ? `${String(value)} ${unit}` : String(value);

@@ -2,11 +2,10 @@ import * as React from 'react';
 import { providerConnectionDetailRoute } from './collection/providerCollectionModel';
 import { useIsFocused } from '@/components/appShell/workspace/destinationRoute';
 import type { TextInput } from 'react-native';
-import { useNavigation, useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { Redirect, useNavigation, useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { useUnistyles } from 'react-native-unistyles';
 import { areProviderContributionKeysEqualV1 } from '@happier-dev/protocol/providers/contribution-identity';
 import { createProviderErrorV1, type ProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
-import { createProviderSavedSecretRecordFingerprintV1 } from '@happier-dev/protocol/providers/securityFingerprintsV1';
 import { parseProviderIpAddress } from '@happier-dev/protocol/providers/safety/locality';
 import { parseProviderManualModelInput } from '@happier-dev/protocol/providers/manualModelInput';
 import type { ProviderEndpointOverrideV1 } from '@happier-dev/protocol/providers/connections/v1';
@@ -22,6 +21,7 @@ import { randomUUID } from '@/platform/randomUUID';
 import {
     buildCustomProviderTemplate,
     createCustomProviderDraft,
+    createCustomProviderDraftFromTemplate,
     type CustomProviderDraft,
     type CustomProviderPreset,
     updateCustomProviderDraftPreset,
@@ -31,10 +31,11 @@ import {
 } from '@/providers/hooks/accountLifetimeRetirement';
 import { useProviderSettingsTarget } from '@/providers/hooks/targetMachine';
 import { useProviderConnectionMutation } from '@/providers/hooks/useProviderConnectionMutation';
-import { useProviderConnections } from '@/providers/hooks/useProviderConnections';
+import { useProviderConnections, type ProviderConnectionRefreshScope } from '@/providers/hooks/useProviderConnections';
 import { providerErrorFromRpcFailure } from '@/providers/actions/client';
-import { useProviderActionClient } from '@/providers/actions/useProviderActionClient';
-import { useAllMachines, useSetting } from '@/sync/domains/state/storage';
+import { providerApprovalHref, useProviderActionClient } from '@/providers/actions/useProviderActionClient';
+import { useAllMachines } from '@/sync/domains/state/storage';
+import { useProviderCatalogForServer } from '@/sync/store/useProviderCatalog';
 import { t } from '@/text';
 import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
 import { ProviderFeatureAvailabilityNotice, useProviderFeatureAvailability } from './ProviderFeatureAvailability';
@@ -44,11 +45,13 @@ import { BuiltInProviderAuthoringView } from './authoring/BuiltInProviderAuthori
 import { CustomProviderAuthoringView } from './authoring/CustomProviderAuthoringView';
 import { useSavedSecretCatalog } from '@/components/secrets/useSavedSecretCatalog';
 import { MachineAdministrationContextBar } from '@/components/settings/machines/MachineAdministrationContextBar';
-import { openExternalUrl } from '@/utils/url/openExternalUrl';
+
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { publishProviderDraftTitle } from './collection/providerDraftTitle';
 import { ProviderFieldRow } from './authoring/ProviderFieldRow';
+import { useActionApprovalContinuation } from '@/components/approvals/useActionApprovalContinuation';
+import { serverAccountScopeKeySuffix } from '@/sync/domains/scope/serverAccountScope';
 
 const PRESETS: readonly CustomProviderPreset[] = ['openai-responses', 'openai-chat', 'anthropic'];
 
@@ -64,10 +67,13 @@ function buildAuthoringStateKey(input: Readonly<{
     selectedCandidateId: string | null;
     contributionDisplayName: string | null;
     contributionEndpointValues: Readonly<Record<string, string>>;
+    /** A key typed into the add sheet is unsaved work; its value never enters this key. */
+    keyTyped?: boolean;
 }>): string {
     return JSON.stringify({
         draft: input.draft,
         secretId: input.secretId,
+        keyTyped: input.keyTyped ?? false,
         enableAfterSaving: input.enableAfterSaving,
         selectedCandidateId: input.selectedCandidateId,
         contributionDisplayName: input.contributionDisplayName,
@@ -129,15 +135,22 @@ function draftProbeObservationFacts(draft: CustomProviderDraft): Readonly<Record
     };
 }
 
+/** A saved custom connection reopened in this editor (F08), captured when the editor opened. */
+type ProviderCustomConnectionEdit = Readonly<{
+    connectionId: string;
+    /** The connection revision the draft was read from; a newer write refuses the save instead of overwriting it. */
+    expectedRevision: number;
+    initialDraft: CustomProviderDraft;
+}>;
+
 export const ProviderConnectionAuthoringScreen = React.memo(function ProviderConnectionAuthoringScreen(
-    props: Readonly<{ contributionKey?: string; candidateId?: string; displayName?: string }>,
+    props: Readonly<{ contributionKey?: string; candidateId?: string; displayName?: string; edit?: ProviderCustomConnectionEdit }>,
 ) {
     const router = useRouter();
     const navigation = useNavigation();
     const { theme } = useUnistyles();
     const { enabled, presentation: availabilityPresentation } = useProviderFeatureAvailability();
     const machines = useAllMachines();
-    const savedSecrets = useSetting('secrets');
     const savedSecretCatalog = useSavedSecretCatalog();
     const providerTarget = useProviderSettingsTarget();
     const {
@@ -146,20 +159,30 @@ export const ProviderConnectionAuthoringScreen = React.memo(function ProviderCon
         selectedTargetServerMatchesActiveAccount,
         serverId,
     } = providerTarget;
+    // Route seeds belong to the selected target, whose identity exists before
+    // its credential/presence resolution can admit machine execution.
+    const candidateMachineId = providerTarget.selection.selectedTarget?.machineId ?? null;
     const { describeProviderConnections, probeProviderDraft } = useProviderActionClient(serverId);
     const focused = useIsFocused();
     const query = useProviderConnections({ enabled, active: focused, machineId, serverId });
-    const refreshConnections = React.useCallback(async (): Promise<void> => {
-        await query.refresh();
+    const refreshConnections = React.useCallback(async (scope?: ProviderConnectionRefreshScope): Promise<void> => {
+        await query.refresh(scope);
     }, [query.refresh]);
     const mutation = useProviderConnectionMutation({
         resolveTarget: resolveCurrentTarget,
         serverId,
         refresh: refreshConnections,
     });
-    const connectionId = React.useRef(`pc_${randomUUID()}`).current;
-    const [draft, setDraft] = React.useState<CustomProviderDraft>(() => createCustomProviderDraft('openai-responses'));
+    const connectionId = React.useRef(props.edit?.connectionId ?? `pc_${randomUUID()}`).current;
+    const [draft, setDraft] = React.useState<CustomProviderDraft>(() => props.edit?.initialDraft ?? createCustomProviderDraft('openai-responses'));
     const [secretId, setSecretId] = React.useState<string | null>(null);
+    const [pastedKey, setPastedKey] = React.useState('');
+    const [saveInProgress, setSaveInProgress] = React.useState(false);
+    const saveOperation = React.useRef<{ promise: Promise<boolean> | null; controller: AbortController } | null>(null);
+    React.useEffect(() => () => {
+        saveOperation.current?.controller.abort();
+        saveOperation.current = null;
+    }, []);
     const effectiveSecretId = selectedTargetServerMatchesActiveAccount ? secretId : null;
     React.useEffect(() => {
         if (!selectedTargetServerMatchesActiveAccount) setSecretId(null);
@@ -187,7 +210,7 @@ export const ProviderConnectionAuthoringScreen = React.memo(function ProviderCon
     const probeGenerationRef = React.useRef(0);
     const authoringPreviewGenerationRef = React.useRef(0);
     const candidateContextRef = React.useRef({
-        machineId,
+        machineId: candidateMachineId,
         serverId,
         candidateId: props.candidateId ?? null,
         displayName: props.displayName ?? null,
@@ -223,30 +246,16 @@ export const ProviderConnectionAuthoringScreen = React.memo(function ProviderCon
         : draft.catalog === 'probe';
     const selectedSecretObservation = React.useMemo(() => {
         if (!draftRequiresApiKey || effectiveSecretId === null) return null;
-        const secret = savedSecrets.find((candidate) => candidate.id === effectiveSecretId);
-        if (!secret) {
-            const shared = savedSecretCatalog.resolveReference(effectiveSecretId);
-            if (shared.status !== 'ready' || !shared.secret) {
-                return { status: 'missing' as const };
-            }
-            return {
-                status: 'present' as const,
-                hasPendingValue: false,
-                recordFingerprint: shared.fingerprint,
-            };
+        const selected = savedSecretCatalog.resolveReference(effectiveSecretId);
+        if (selected.status !== 'ready' || !selected.secret) {
+            return { status: 'missing' as const };
         }
-        const persistedEnvelope = secret.encryptedValue.encryptedValue;
         return {
             status: 'present' as const,
-            hasPendingValue: typeof secret.encryptedValue.value === 'string',
-            recordFingerprint: persistedEnvelope
-                ? createProviderSavedSecretRecordFingerprintV1({
-                    secretId: effectiveSecretId,
-                    persistedEncryptedEnvelope: persistedEnvelope,
-                })
-                : null,
+            name: selected.secret.name,
+            recordFingerprint: selected.fingerprint,
         };
-    }, [draftRequiresApiKey, effectiveSecretId, savedSecretCatalog.resolveReference, savedSecrets]);
+    }, [draftRequiresApiKey, effectiveSecretId, savedSecretCatalog.resolveReference]);
     // Unsaved work is the draft itself. The target machine is a persisted
     // Machine Administration preference that survives navigation and is
     // restored on return, and it can be initialized automatically from a sole
@@ -255,13 +264,17 @@ export const ProviderConnectionAuthoringScreen = React.memo(function ProviderCon
     const authoringStateKey = buildAuthoringStateKey({
         draft, secretId: effectiveSecretId, enableAfterSaving,
         selectedCandidateId, contributionDisplayName,
-        contributionEndpointValues,
+        contributionEndpointValues, keyTyped: pastedKey.trim() !== '',
     });
     const probeObservationKey = JSON.stringify({
         machineId,
         draft: draftProbeObservationFacts(draft),
         savedSecretId: draftRequiresApiKey ? effectiveSecretId : null,
-        selectedSecretObservation,
+        // Display names are not probe input.
+        selectedSecretObservation: selectedSecretObservation?.status === 'present' ? {
+            status: selectedSecretObservation.status,
+            recordFingerprint: selectedSecretObservation.recordFingerprint,
+        } : selectedSecretObservation,
     });
     const initialAuthoringStateKeyRef = React.useRef(authoringStateKey);
     isDirtyRef.current = authoringStateKey !== initialAuthoringStateKeyRef.current;
@@ -275,11 +288,11 @@ export const ProviderConnectionAuthoringScreen = React.memo(function ProviderCon
     // independently by the target resolver, so a buffer captured under A can
     // reach neither this screen's state nor B's daemon.
     const discardAuthoringDraft = React.useCallback(() => {
-        const freshDraft = createCustomProviderDraft('openai-responses');
-        const resetCandidateContext = candidateContextRef.current.machineId === machineId
+        const freshDraft = props.edit?.initialDraft ?? createCustomProviderDraft('openai-responses');
+        const resetCandidateContext = candidateContextRef.current.machineId === candidateMachineId
             && candidateContextRef.current.serverId === serverId
             ? candidateContextRef.current
-            : { machineId, serverId, candidateId: null, displayName: null };
+            : { machineId: candidateMachineId, serverId, candidateId: null, displayName: null };
         const resetStateKey = buildAuthoringStateKey({
             draft: freshDraft,
             secretId: null,
@@ -291,6 +304,10 @@ export const ProviderConnectionAuthoringScreen = React.memo(function ProviderCon
         closeSecretPicker();
         setDraft(freshDraft);
         setSecretId(null);
+        setPastedKey('');
+        saveOperation.current?.controller.abort();
+        saveOperation.current = null;
+        setSaveInProgress(false);
         setPresetOpen(false);
         setCredentialOpen(false);
         setProbeState('idle');
@@ -316,18 +333,22 @@ export const ProviderConnectionAuthoringScreen = React.memo(function ProviderCon
         // The reset form is pristine again, so the guard must not claim
         // unsaved Account A work on Account B's behalf.
         initialAuthoringStateKeyRef.current = resetStateKey;
-    }, [closeSecretPicker, machineId, mutation.clearError, serverId]);
+    }, [candidateMachineId, closeSecretPicker, mutation.clearError, props.edit, serverId]);
     const discardAccountScopedAuthoringState = React.useCallback(() => {
         // Discovery defaults came from the retiring Account, even when its
         // successor restores the same server and machine identifiers.
-        candidateContextRef.current = { machineId, serverId, candidateId: null, displayName: null };
+        candidateContextRef.current = { machineId: candidateMachineId, serverId, candidateId: null, displayName: null };
         discardAuthoringDraft();
-    }, [discardAuthoringDraft, machineId, serverId]);
+    }, [candidateMachineId, discardAuthoringDraft, serverId]);
     // One incumbent lifetime owns both synchronous form retirement and every
     // callback fence; there is no Provider-local Account epoch.
     const accountLifetime = useRetireProviderStateOnAccountChange(discardAccountScopedAuthoringState);
     const accountStillCurrent = React.useCallback(
         () => accountLifetime?.isCurrent() ?? true, [accountLifetime]);
+    const secretApproval = useActionApprovalContinuation({
+        scopeKey: accountLifetime ? serverAccountScopeKeySuffix(accountLifetime.scope) : '',
+        serverId: serverId ?? '', onExecuted: () => {},
+    });
 
     React.useEffect(() => {
         probeGenerationRef.current += 1;
@@ -336,8 +357,8 @@ export const ProviderConnectionAuthoringScreen = React.memo(function ProviderCon
     }, [probeObservationKey]);
 
     React.useEffect(() => {
-        if (candidateContextRef.current.machineId === machineId && candidateContextRef.current.serverId === serverId) return;
-        candidateContextRef.current = { machineId, serverId, candidateId: null, displayName: null };
+        if (candidateContextRef.current.machineId === candidateMachineId && candidateContextRef.current.serverId === serverId) return;
+        candidateContextRef.current = { machineId: candidateMachineId, serverId, candidateId: null, displayName: null };
         // Discovery route seeds belong to the old machine. Retiring them from
         // a pristine (including just-discarded) form is not a user edit.
         if (!isDirtyRef.current) {
@@ -349,7 +370,7 @@ export const ProviderConnectionAuthoringScreen = React.memo(function ProviderCon
         }
         setSelectedCandidateId(null);
         setContributionDisplayName(null);
-    }, [contributionEndpointValues, draft, effectiveSecretId, enableAfterSaving, machineId, serverId]);
+    }, [candidateMachineId, contributionEndpointValues, draft, effectiveSecretId, enableAfterSaving, serverId]);
 
     React.useEffect(() => {
         const generation = authoringPreviewGenerationRef.current + 1;
@@ -428,18 +449,24 @@ export const ProviderConnectionAuthoringScreen = React.memo(function ProviderCon
         baseUrlFieldRef.current?.focus();
     }, [accountStillCurrent, mutation.clearError]);
 
-    const save = React.useCallback(async (): Promise<boolean> => {
-        if (!accountStillCurrent()) return false;
+    const executeSave = React.useCallback(async (signal: AbortSignal): Promise<boolean> => {
+        if (!accountStillCurrent() || signal.aborted) return false;
         setLocalError(null);
         setManualModelsError(null);
         setInvalidField(null);
         const previewCredential = authoringPreview?.credential ?? contribution?.credential ?? null;
-        if (props.contributionKey && previewCredential?.required && !effectiveSecretId) {
-            setLocalError('provider_secret_missing');
-            pickSecret();
-            return false;
-        }
-        if (!props.contributionKey) {
+        let contributionSecretId = effectiveSecretId;
+        const typedKey = pastedKey.trim();
+        const asksForKey = props.contributionKey ? previewCredential !== null : draftRequiresApiKey && !props.edit;
+        const manualModels = parseProviderManualModelInput(draft.manualModelsText);
+        let template: ReturnType<typeof buildCustomProviderTemplate> | null = null;
+        if (props.contributionKey) {
+            if (authoringPreview?.status !== 'resolved') return false;
+            if (previewCredential?.required && !contributionSecretId && !typedKey) {
+                setLocalError('provider_secret_missing');
+                return false;
+            }
+        } else {
             if (!draft.name.trim()) {
                 setInvalidField('name');
                 setLocalError('provider_connection_invalid');
@@ -452,27 +479,67 @@ export const ProviderConnectionAuthoringScreen = React.memo(function ProviderCon
                 baseUrlFieldRef.current?.focus();
                 return false;
             }
-            if (draftRequiresApiKey && !effectiveSecretId) {
+            if (manualModels.rejected.length > 0) {
+                setManualModelsError(t('settingsProviders.models.invalidModelIds', {
+                    ids: manualModels.rejected.map(entry => entry.value).join(', '),
+                }));
+                manualModelsFieldRef.current?.focus();
+                return false;
+            }
+            try { template = buildCustomProviderTemplate(draft); }
+            catch {
+                setLocalError('provider_connection_invalid');
+                return false;
+            }
+            if (draftRequiresApiKey && !contributionSecretId && !typedKey && !props.edit) {
                 setLocalError('provider_secret_missing');
-                pickSecret();
                 return false;
             }
         }
-        const manualModels = parseProviderManualModelInput(draft.manualModelsText);
-        if (!props.contributionKey && manualModels.rejected.length > 0) {
-            setManualModelsError(t('settingsProviders.models.invalidModelIds', {
-                ids: manualModels.rejected.map((entry) => entry.value).join(', '),
-            }));
-            manualModelsFieldRef.current?.focus();
-            return false;
+        if (asksForKey && !contributionSecretId && typedKey) {
+            // PA1: the pasted key becomes a Saved Secret through its catalog owner, then the provider uses it.
+            let created: string | null = null;
+            try {
+                created = await savedSecretCatalog.personalMutations.create({
+                    name: (props.contributionKey
+                        ? contributionDisplayName?.trim() || contribution?.name
+                        : draft.name.trim()) || t('settingsProviders.authoring.apiKey'),
+                    value: typedKey,
+                }, { signal,
+                    onApprovalPending: secretApproval.requestApproval });
+            } catch {
+                created = null;
+            }
+            if (!accountStillCurrent() || signal.aborted) return false;
+            if (!created) {
+                setLocalError('provider_secret_unavailable');
+                return false;
+            }
+            contributionSecretId = created;
+            setSecretId(created);
+            setPastedKey('');
         }
         try {
+            if (props.edit) {
+                // The connection's own update owner: same identity, its bindings and manual models kept.
+                const result = await mutation.updateCustomTemplate({
+                    connectionId,
+                    expectedRevision: props.edit.expectedRevision,
+                    template: template!,
+                }, 'save');
+                if (!accountStillCurrent() || signal.aborted || result?.status !== 'success') return false;
+                isDirtyRef.current = false;
+                ignoreUnsavedGuardRef.current = true;
+                router.replace(providerConnectionDetailRoute(connectionId) as never);
+                return true;
+            }
             const request = props.contributionKey ? (() => {
                 if (authoringPreview?.status !== 'resolved') return null;
                 return {
                     action: 'createContribution' as const,
                     ...(machineId ? { machineId } : {}), connectionId, contributionKey: props.contributionKey,
-                    displayName: contributionDisplayName, savedSecretId: effectiveSecretId, enable: enableAfterSaving,
+                    // One step (PA1): a provider someone just connected is simply on.
+                    displayName: contributionDisplayName, savedSecretId: contributionSecretId, enable: true,
                     authoringReview: {
                         candidateId: authoringPreview.candidateId,
                         fingerprint: authoringPreview.fingerprint,
@@ -482,13 +549,13 @@ export const ProviderConnectionAuthoringScreen = React.memo(function ProviderCon
                 };
             })() : {
                 action: 'createCustom' as const,
-                ...(machineId ? { machineId } : {}), connectionId, template: buildCustomProviderTemplate(draft),
+                ...(machineId ? { machineId } : {}), connectionId, template: template!,
                 manualModels: manualModels.accepted.map((id) => ({ id })),
-                savedSecretId: draftRequiresApiKey ? effectiveSecretId : null, enable: enableAfterSaving,
+                savedSecretId: draftRequiresApiKey ? contributionSecretId : null, enable: enableAfterSaving,
             };
             if (!request) return false;
             const result = await mutation.run(request, 'save');
-            if (accountStillCurrent() && result?.status === 'success' && 'connection' in result) {
+            if (accountStillCurrent() && !signal.aborted && result?.status === 'success' && 'connection' in result) {
                 isDirtyRef.current = false;
                 ignoreUnsavedGuardRef.current = true;
                 // A catalog provider opens on its detail, which may close the setup with one note.
@@ -496,10 +563,23 @@ export const ProviderConnectionAuthoringScreen = React.memo(function ProviderCon
                 return true;
             }
         } catch {
-            if (accountStillCurrent()) setLocalError('provider_connection_invalid');
+            if (accountStillCurrent() && !signal.aborted) setLocalError('provider_connection_invalid');
         }
         return false;
-    }, [accountStillCurrent, authoringPreview, connectionId, contribution?.credential, contributionDisplayName, contributionEndpointOverrides, draft, draftRequiresApiKey, effectiveSecretId, enableAfterSaving, machineId, mutation, pickSecret, props.contributionKey, router]);
+    }, [accountStillCurrent, authoringPreview, connectionId, contribution?.credential, contribution?.name, contributionDisplayName, contributionEndpointOverrides, draft, draftRequiresApiKey, effectiveSecretId, enableAfterSaving, machineId, mutation, pastedKey, props.contributionKey, props.edit, router, savedSecretCatalog.personalMutations, secretApproval.requestApproval]);
+    const save = React.useCallback((): Promise<boolean> => {
+        if (!accountStillCurrent()) return Promise.resolve(false);
+        if (saveOperation.current?.promise) return saveOperation.current.promise;
+        const operation = { promise: null as Promise<boolean> | null, controller: new AbortController() };
+        saveOperation.current = operation;
+        setSaveInProgress(true);
+        operation.promise = executeSave(operation.controller.signal).finally(() => {
+            if (saveOperation.current !== operation) return;
+            saveOperation.current = null;
+            setSaveInProgress(false);
+        });
+        return operation.promise;
+    }, [accountStillCurrent, executeSave]);
 
     const chooseAuthoringCandidate = React.useCallback((candidateId: string) => {
         const candidate = query.data?.discoveryCandidates.find((entry) => entry.candidateId === candidateId);
@@ -608,22 +688,21 @@ export const ProviderConnectionAuthoringScreen = React.memo(function ProviderCon
         const result = runGuardedNavigation(() => router.replace('/(app)/settings/providers' as never));
         if (result !== true) fireAndForget(result, { tag: 'ProviderConnectionAuthoringScreen.discard' });
     }, [discardAuthoringDraft, router]);
-    const openWebsite = React.useCallback(async (url: string) => {
-        let opened = false;
-        try {
-            opened = await openExternalUrl(url);
-        } catch {
-            opened = false;
-        }
-        if (!opened) await Modal.alert(t('common.error'), t('settingsProviders.links.failedToOpen'));
-    }, []);
+    // While Connect or Save waits for its approval the page says so and reopens that approval; the
+    // request's continuation then lands on the saved provider.
+    const pendingApprovalHref = mutation.pendingApproval?.href ?? (secretApproval.approvalPending && secretApproval.approvalId
+        ? providerApprovalHref(secretApproval.approvalId, accountLifetime?.scope.serverId ?? serverId ?? '') : null);
+    const pendingApproval = React.useMemo(() => pendingApprovalHref ? {
+        onOpen: () => router.pushRetainingCurrent(pendingApprovalHref as never),
+    } : null, [pendingApprovalHref, router]);
     // The collection's draft row shows the name being written here.
     const draftTitle = props.contributionKey
         ? contributionDisplayName ?? contribution?.name ?? ''
         : draft.name;
     React.useEffect(() => {
-        publishProviderDraftTitle(draftTitle);
-    }, [draftTitle]);
+        // Only a new provider has a draft row in the rail; an edited one keeps its saved row.
+        publishProviderDraftTitle(props.edit ? '' : draftTitle);
+    }, [draftTitle, props.edit]);
     React.useEffect(() => () => publishProviderDraftTitle(''), []);
     const retryMutation = React.useCallback(async (): Promise<void> => {
         if (!accountStillCurrent() || !mutation.retry) return;
@@ -646,15 +725,30 @@ export const ProviderConnectionAuthoringScreen = React.memo(function ProviderCon
         );
     }
 
-    const displayError = mutation.error ?? authoringPreviewError ?? localError;
+    // An incomplete pristine draft is expected while choosing endpoints. Only
+    // preview validation waits for an edit; transport/authentication failures,
+    // submitted mutations and explicit Test failures keep their own lifecycle.
+    const visibleAuthoringPreviewError = authoringPreviewError?.code === 'provider_connection_invalid' && !isDirtyRef.current
+        ? null
+        : authoringPreviewError;
+    const displayError = mutation.error ?? visibleAuthoringPreviewError ?? localError;
     const displayErrorRetry = mutation.error
         ? (mutation.retry ? retryMutation : undefined)
-        : authoringPreviewError
+        : visibleAuthoringPreviewError
             ? retryAuthoringPreview
             : undefined;
     const localEndpoint = localEndpointHint(draft);
     const targetMachine = machines.find((machine) => machine.id === machineId);
     const currentMachineName = getMachineDisplayName(targetMachine) ?? machineId ?? '';
+
+    // The catalog entry is still arriving: reserve the page rather than draw a generic form.
+    if (props.contributionKey && !contribution && !query.data && !query.error) {
+        return (
+            <ItemList testID="settings-provider-authoring-loading">
+                <ItemGroup><Item mode="info" loading title={t('common.loading')} /></ItemGroup>
+            </ItemList>
+        );
+    }
 
     if (props.contributionKey) {
         const previewCredential = authoringPreview?.credential ?? contribution?.credential ?? null;
@@ -678,18 +772,24 @@ export const ProviderConnectionAuthoringScreen = React.memo(function ProviderCon
                 currentMachineName={currentMachineName}
                 providerName={contribution?.name ?? null}
                 icon={contribution?.icon ?? null}
+                contributionKey={props.contributionKey}
                 provenance={contribution?.provenance ?? null}
-                websiteUrl={contribution?.websiteUrl}
+
                 keyUrl={contribution?.credential?.keyUrl}
                 previewCredential={previewCredential}
                 endpointTemplates={contributionEndpointTemplates}
                 endpointValues={contributionEndpointValues}
                 secretSelected={selectedSecretObservation?.status === 'present'}
+                selectedSecretName={selectedSecretObservation?.status === 'present' ? selectedSecretObservation.name : null}
+                pastedKey={pastedKey}
+                onPastedKeyChange={(value) => {
+                    if (accountStillCurrent()) setPastedKey(value);
+                }}
                 savedSecretSelectionEnabled={selectedTargetServerMatchesActiveAccount}
                 preview={authoringPreview}
                 previewLoading={authoringPreviewLoading}
-                enableAfterSaving={enableAfterSaving}
-                savePending={mutation.isPending('save')}
+                savePending={saveInProgress}
+                pendingApproval={pendingApproval}
                 error={displayError}
                 errorRetry={displayErrorRetry}
                 secondaryTextColor={theme.colors.text.secondary}
@@ -704,11 +804,8 @@ export const ProviderConnectionAuthoringScreen = React.memo(function ProviderCon
                         [endpointTemplateId]: baseUrl,
                     }));
                 }}
-                onEnableAfterSavingChange={(enable) => {
-                    if (accountStillCurrent()) setEnableAfterSaving(enable);
-                }}
                 onSave={() => { void save(); }}
-                onOpenWebsite={(url) => { void openWebsite(url); }}
+
                 onDiscard={leaveDraft}
             />
         );
@@ -716,7 +813,8 @@ export const ProviderConnectionAuthoringScreen = React.memo(function ProviderCon
 
     return (
         <CustomProviderAuthoringView
-            contextBar={contextBar}
+            // Editing changes the Account's connection; no computer is involved (D11).
+            contextBar={props.edit ? undefined : contextBar}
             model={{
                 machineId,
                 currentMachineName,
@@ -728,13 +826,17 @@ export const ProviderConnectionAuthoringScreen = React.memo(function ProviderCon
                 invalidField,
                 localEndpoint,
                 enableAfterSaving,
+                editing: props.edit !== undefined,
                 draftRequiresApiKey,
                 secretSelected: selectedSecretObservation?.status === 'present',
+                selectedSecretName: selectedSecretObservation?.status === 'present' ? selectedSecretObservation.name : null,
                 savedSecretSelectionEnabled: selectedTargetServerMatchesActiveAccount,
+                pastedKey,
                 manualModelsError,
                 draftHasProbe,
                 probeState,
-                savePending: mutation.isPending('save'),
+                savePending: saveInProgress,
+                pendingApproval,
                 error: displayError,
                 errorRetry: displayErrorRetry,
                 probeError,
@@ -786,6 +888,9 @@ export const ProviderConnectionAuthoringScreen = React.memo(function ProviderCon
                     if (accountStillCurrent()) setEnableAfterSaving(enable);
                 },
                 onPickSecret: pickSecret,
+                onPastedKeyChange: (value: string) => {
+                    if (accountStillCurrent()) setPastedKey(value);
+                },
                 onReviewConnection: reviewConnectionDraft,
                 onTest: () => { void testDraft(); },
                 onSave: () => { void save(); },
@@ -794,3 +899,27 @@ export const ProviderConnectionAuthoringScreen = React.memo(function ProviderCon
         />
     );
 });
+
+/**
+ * A saved custom connection reopened in the custom editor (F08), from its detail page. The editor is
+ * captured once, from the revision it was read at; a connection the form cannot express (or that is
+ * not custom) opens its detail instead.
+ */
+export function ProviderCustomConnectionEditScreen(props: Readonly<{ connectionId: string }>) {
+    const { serverId } = useProviderSettingsTarget();
+    const catalog = useProviderCatalogForServer(serverId);
+    const saved = catalog?.data?.connections.find((connection) => connection.id === props.connectionId) ?? null;
+    const editRef = React.useRef<ProviderCustomConnectionEdit | 'unsupported' | null>(null);
+    // Loaded without this connection (removed, or another Account's target): its detail page explains.
+    if (editRef.current === null && !saved && catalog?.data) editRef.current = 'unsupported';
+    if (editRef.current === null && saved) {
+        const initialDraft = saved.source.kind === 'custom' ? createCustomProviderDraftFromTemplate(saved.source.template) : null;
+        editRef.current = initialDraft
+            ? { connectionId: saved.id, expectedRevision: saved.revision, initialDraft }
+            : 'unsupported';
+    }
+    const edit = editRef.current;
+    if (edit === 'unsupported') return <Redirect href={providerConnectionDetailRoute(props.connectionId) as never} />;
+    if (edit === null) return <ItemList testID="settings-provider-edit-loading">{null}</ItemList>;
+    return <ProviderConnectionAuthoringScreen edit={edit} />;
+}

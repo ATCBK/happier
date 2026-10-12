@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
+import { View } from 'react-native';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen as renderBaseScreen } from '@/dev/testkit';
@@ -7,6 +8,7 @@ import { AccountProfileSchema } from '@happier-dev/protocol';
 import { storage } from '@/sync/domains/state/storageStore';
 import { profileDefaults } from '@/sync/domains/profiles/profile';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
+import { t } from '@/text';
 
 const initialStorageState = storage.getState();
 
@@ -21,7 +23,11 @@ const connectedAccountState = vi.hoisted(() => ({
   additionalAccounts: [] as Array<Record<string, unknown>>,
   profileId: 'account-a' as string,
 }));
-const modalSpies = vi.hoisted(() => ({ show: vi.fn((_config: unknown) => 'purpose-target-modal'), hide: vi.fn() }));
+const modalSpies = vi.hoisted(() => ({
+  show: vi.fn((_config: unknown) => 'purpose-target-modal'),
+  hide: vi.fn(),
+  update: vi.fn((_id: string, _props: Record<string, unknown>) => undefined),
+}));
 const localizationSpies = vi.hoisted(() => ({ resolve: vi.fn((_pluginId: string, value: string | { key: string; fallback: string }) => (
   typeof value === 'string' ? value : `localized:${value.key}`
 )) }));
@@ -44,6 +50,7 @@ vi.mock('@/modal', () => ({
   Modal: {
     show: modalSpies.show,
     hide: modalSpies.hide,
+    update: modalSpies.update,
   },
 }));
 
@@ -111,6 +118,7 @@ vi.mock('@/sync/domains/connectedServices/connectedServiceRegistry', () => ({
     modes: [{
       id: 'oauth',
       kind: 'oauthAuthorizationCode',
+      callbackUrl: 'http://127.0.0.1:4000/auth/callback',
       pkce: 'required',
       outcomeReconciliation: 'none',
     }],
@@ -133,6 +141,7 @@ afterEach(() => {
   connectedAccountState.profileId = 'account-a';
   modalSpies.show.mockClear();
   modalSpies.hide.mockClear();
+  modalSpies.update.mockClear();
   localizationSpies.resolve.mockClear();
 });
 
@@ -240,10 +249,6 @@ describe('ConnectedAccountPurposeTargetChooser', () => {
       expect(item.subtitle ?? '').not.toContain('35f1d8ec-633c-4bda-9e0d-7055ac95b8af');
       expect(item.accessibilityLabel ?? '').not.toContain('35f1d8ec-633c-4bda-9e0d-7055ac95b8af');
     }
-    expect(screen.tree.findAll((node) => (
-      node.props?.testID === `${props.testID}:reload`
-    ))[0]?.props.subtitle).toBe('settingsProviders.status.disabled');
-
     expect(modalSpies.show).toHaveBeenCalledTimes(1);
 
     routeState.pathname = '/settings/connected-services';
@@ -354,7 +359,7 @@ describe('ConnectedAccountPurposeTargetChooser', () => {
     });
 
     expect(findItemByTestId(screen, props.testID)?.props.accessibilityLabel).toBe(
-      'Use OpenAI upstream account · Loading...',
+      `Use OpenAI upstream account · ${t('common.loading')}`,
     );
   });
 
@@ -382,8 +387,8 @@ describe('ConnectedAccountPurposeTargetChooser', () => {
 
     const trigger = findItemByTestId(screen, 'provider-connection-managed-purpose-chooser:hydrating');
     expect(trigger?.props).toEqual(expect.objectContaining({
-      subtitle: 'Loading...',
-      detail: 'Loading...',
+      subtitle: t('common.loading'),
+      detail: t('common.loading'),
     }));
 
     connectedAccountState.profileId = 'account-a';
@@ -451,6 +456,123 @@ describe('ConnectedAccountPurposeTargetChooser', () => {
       />);
     });
     expect(findItemByTestId(screen, 'provider-connection-managed-purpose-chooser:legacy')?.props.detail).toBe('Unavailable');
+  });
+
+  it('keeps Refresh inside its picker sheet and reflects the reload there', async () => {
+    const { ConnectedAccountPurposeTargetChooser } = await import('./ConnectedAccountPurposeTargetChooser');
+    let finishReload: () => void = () => undefined;
+    const onReload = vi.fn(() => new Promise<void>((resolve) => { finishReload = resolve; }));
+    const testID = 'agent-connected-account-purpose:primary';
+    const screen = await renderScreen(<ConnectedAccountPurposeTargetChooser
+      testID={testID}
+      localizedTextPluginId="acme.provider.author"
+      declaration={{
+        purpose: 'primary',
+        service: { pluginId: 'acme.managed.provider', localId: 'gateway' },
+        required: false,
+      }}
+      value={null}
+      onChange={vi.fn()}
+      onReload={onReload}
+      reloadSubtitle="Ready"
+    />);
+
+    // The page carries one row per purpose: the choice itself, never a bare Refresh row.
+    expect(screen.findAllByType('Item').map((node) => node.props.testID)).toEqual([testID]);
+
+    await act(async () => {
+      findItemByTestId(screen, testID)?.props.onPress();
+    });
+    type RefreshProps = Readonly<{ refresh?: Readonly<{ status?: string; refreshing: boolean; onRefresh: () => void }> | null }>;
+    const shown = (modalSpies.show.mock.calls.at(-1)?.[0] as { props: RefreshProps }).props.refresh;
+    expect(shown).toEqual(expect.objectContaining({ status: 'Ready', refreshing: false }));
+
+    await act(async () => {
+      shown?.onRefresh();
+    });
+    expect(onReload).toHaveBeenCalledTimes(1);
+    const latestUpdate = () => modalSpies.update.mock.calls.at(-1)?.[1] as RefreshProps | undefined;
+    expect(modalSpies.update.mock.calls.at(-1)?.[0]).toBe('purpose-target-modal');
+    expect(latestUpdate()?.refresh?.refreshing).toBe(true);
+
+    await act(async () => {
+      finishReload();
+    });
+    expect(latestUpdate()?.refresh?.refreshing).toBe(false);
+  });
+
+  it('draws a page row as the shared field select, saying the pool summary or what repairs it', async () => {
+    const { ConnectedAccountPurposeTargetChooser } = await import('./ConnectedAccountPurposeTargetChooser');
+    const { ListPresentationProvider } = await import('@/components/ui/lists/listPresentation');
+    const service = { pluginId: 'acme.managed.provider', localId: 'gateway' };
+    const pool = (groupId: string, displayName: string, members: string[]) => ({
+      v: 1, ref: { service, groupId }, incarnation: `row-${groupId}`, displayName,
+      policy: { v: 1, strategy: 'expiry_first', autoSwitch: true },
+      activeConnectedAccountId: members[0] ?? null, generation: 1, runtimeStateRevision: 1, state: { status: 'ready' },
+      createdAt: 1, updatedAt: 1,
+      members: members.map((connectedAccountId) => ({ v: 1, connectedAccountId, priority: 1, enabled: true, state: {}, createdAt: 1, updatedAt: 1 })),
+    });
+    const testID = 'provider-gateway-slot:openai';
+    const render = (groupId: string) => (
+      <ListPresentationProvider value="page">
+        <ConnectedAccountPurposeTargetChooser testID={testID} localizedTextPluginId="acme.provider.author"
+          declaration={{ purpose: 'openai', service, required: false }}
+          value={{ kind: 'group', service, groupId }} onChange={vi.fn()} />
+      </ListPresentationProvider>
+    );
+    seedAccountProfile();
+    const screen = await renderBaseScreen(<View />);
+    await act(async () => {
+      storage.setState({ profile: { ...storage.getState().profile,
+        connectedAccountGroupsV4: [pool('work', 'Work pool', ['35f1d8ec-633c-4bda-9e0d-7055ac95b8af']), pool('codex', 'Codex pool', [])] } as never });
+      screen.tree.update(render('work'));
+    });
+    const row = () => findItemByTestId(screen, testID)!;
+    // The value lives in the bordered field (lab GW1), not as a navigation row's detail.
+    expect(row().props).toMatchObject({ fieldAccessory: true, accessoryLayout: 'adaptive', showChevron: false });
+    expect(row().props.detail).toBeUndefined();
+    expect(row().props.rightElement).toBeTruthy();
+    expect(row().props.subtitle).toBe('1 account · using Personal OpenAI');
+    // A saved pool that cannot serve (D14) keeps its value and says what fixes it.
+    await act(async () => { screen.tree.update(render('codex')); });
+    expect(row().props.subtitle).toBe(t('connectedServices.purposeTargets.poolEmpty'));
+    await act(async () => { row().props.onPress(); });
+    expect(latestPurposeTargetModalConfig().props.rootStep.sections[0].options.length).toBeGreaterThan(0);
+  });
+
+  it('names an unset optional purpose in words, from the consumer when it knows what unset means', async () => {
+    const { ConnectedAccountPurposeTargetChooser } = await import('./ConnectedAccountPurposeTargetChooser');
+    const declaration = {
+      purpose: 'primary',
+      service: { pluginId: 'acme.managed.provider', localId: 'gateway' },
+      required: false,
+    };
+    const testID = 'agent-connected-account-purpose:primary';
+    const screen = await renderScreen(<ConnectedAccountPurposeTargetChooser
+      testID={testID}
+      localizedTextPluginId="acme.provider.author"
+      declaration={declaration}
+      value={null}
+      onChange={vi.fn()}
+    />);
+    expect(findItemByTestId(screen, testID)?.props.detail).toBe('Not set');
+
+    await act(async () => {
+      screen.tree.update(<ConnectedAccountPurposeTargetChooser
+        testID={testID}
+        localizedTextPluginId="acme.provider.author"
+        declaration={declaration}
+        value={null}
+        noneLabel="Claude’s own sign-in"
+        onChange={vi.fn()}
+      />);
+    });
+    expect(findItemByTestId(screen, testID)?.props.detail).toBe('Claude’s own sign-in');
+    await act(async () => {
+      findItemByTestId(screen, testID)?.props.onPress();
+    });
+    const options = latestPurposeTargetModalConfig().props.rootStep.sections[0].options;
+    expect(options[0]).toEqual(expect.objectContaining({ id: 'none', label: 'Claude’s own sign-in' }));
   });
 
   it('falls back to the canonical service display name for a legacy titleless purpose', async () => {

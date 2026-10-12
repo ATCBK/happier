@@ -110,8 +110,8 @@ describe('ManagedGitHubAppsSection', () => {
             createPath="/github-apps/new"
         />);
 
-        const unavailableItem = screen.findByTestId('managed-github-apps-unavailable');
-        expect(unavailableItem?.props.title).toBe('identityAdministration.error');
-        expect(unavailableItem?.props.title).not.toBe('github_installation_unverified');
+        expect(screen.findByTestId('managed-github-apps-unavailable')).not.toBeNull();
+        expect(screen.getTextContent()).toContain('identityAdministration.error');
+        expect(screen.getTextContent()).not.toContain('github_installation_unverified');
     });
 });

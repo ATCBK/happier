@@ -4,7 +4,7 @@ import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import type { ConnectedServiceId } from '@happier-dev/protocol/connect/connected-service-bindings';
-import type { ConnectedServiceQuotaRecoveryCreditsV1 } from '@happier-dev/protocol/connect/connected-service-schemas';
+import type { ConnectedServiceQuotaRecoveryCreditsV1, ConnectedServiceQuotaRecoveryCreditDetailsByIdV1 } from '@happier-dev/protocol/connect/connected-service-schemas';
 import type { ProviderAccountSubscriptionV1 } from '@happier-dev/protocol/connect/accountSubscription';
 import type { QualifiedConnectedAccountRef } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
 
@@ -27,10 +27,15 @@ import { useQualifiedConnectedAccountQuota } from '@/hooks/server/connectedServi
 import { buildQuotaResetRows } from '@/sync/domains/connectedServices/buildQuotaResetRows';
 import { presentAccountSubscription } from '@/sync/domains/connectedServices/presentAccountSubscription';
 import { resolveQuotaMeterTone } from '@/sync/domains/connectedServices/resolveQuotaTone';
-import { useAllMachines } from '@/sync/store/hooks';
+import { useActiveServerAccountScope, useAllMachines } from '@/sync/store/hooks';
+import type { Machine } from '@/sync/domains/state/storageTypes';
 import { t } from '@/text';
 import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
-import { getMachineDisplayName, isMachineOnline } from '@/utils/sessions/machineUtils';
+import { getMachineDisplayName, resolveMachineDisplayNames } from '@/utils/sessions/machineUtils';
+import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { isMachineSelectableForFleet } from '@/sync/domains/machines/administration/fleetUnion';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
+import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
 
 import { ACCOUNT_BLOCK_RESET_COUNTDOWN_DAYS_FORMATTER } from './accountBlockFormatters';
 import { formatAgentNames } from '../ConnectedServiceMark';
@@ -48,6 +53,7 @@ export type AccountDetailUsageFacts = Readonly<{
     planLabel: string | null;
     subscription: ProviderAccountSubscriptionV1 | null;
     recoveryCredits: ConnectedServiceQuotaRecoveryCreditsV1 | null;
+    recoveryCreditDetails?: ConnectedServiceQuotaRecoveryCreditDetailsByIdV1;
     loading: boolean;
     error: string | null;
     refreshing: boolean;
@@ -201,7 +207,7 @@ export const AccountDetailSubscriptionSectionView = React.memo(function AccountD
             : presented.state === 'renews' ? `${[props.serviceLabel, props.planLabel].filter(Boolean).join(' ')} · ${t('connectedServicesCollection.subscriptionRenewsIn', { days })}`
             : presented.state === 'ends' ? t('connectedServicesCollection.subscriptionEndsIn', { days })
             : t('connectedServicesCollection.subscriptionPeriodEndsIn', { days });
-        return <ItemGroup><Item testID={testID} density="compact" title={<View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+        return <ItemGroup><Item testID={testID} density="compact" title={<View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s6 }}>
             <StatusDot color={presented.state === 'ends' ? theme.colors.state.warning.foreground : presented.state === 'renews' ? theme.colors.state.success.foreground : theme.colors.text.tertiary} />
             <Text style={[styles.compactSubscription, presented.state === 'ends' ? styles.warning : null]}>{summary}</Text>
         </View>} mode="info" showChevron={false} rightElement={checked} /></ItemGroup>;
@@ -245,7 +251,14 @@ export const AccountDetailFactsSectionsView = React.memo(function AccountDetailF
     }, []);
     const subscription = <AccountDetailSubscriptionSectionView key="subscription" subscription={props.facts.subscription} serviceLabel={props.serviceLabel} planLabel={props.facts.planLabel} now={props.now} compact={compact} />;
     const usage = <AccountDetailUsageSectionView key="usage" facts={props.facts} signedOut={props.signedOut} now={props.now} pins={props.pins} compact={compact} />;
-    return <View onLayout={onLayout}>{compact ? [subscription, usage] : [usage, subscription]}{props.resetsSection}</View>;
+    const resets = props.resetsSection ?? <AccountDetailResetsSectionView
+        recoveryCredits={props.facts.recoveryCredits}
+        recoveryCreditDetails={props.facts.recoveryCreditDetails}
+        now={props.now}
+        pending={false}
+        onUse={null}
+    />;
+    return <View onLayout={onLayout}>{compact ? [subscription, usage] : [usage, subscription]}{resets}</View>;
 });
 
 /**
@@ -254,13 +267,14 @@ export const AccountDetailFactsSectionsView = React.memo(function AccountDetailF
  */
 export const AccountDetailResetsSectionView = React.memo(function AccountDetailResetsSectionView(props: Readonly<{
     recoveryCredits: ConnectedServiceQuotaRecoveryCreditsV1 | null;
+    recoveryCreditDetails?: ConnectedServiceQuotaRecoveryCreditDetailsByIdV1;
     now: number;
     pending: boolean;
     onUse: ((providerCreditId: string | null) => void) | null;
     testID?: string;
 }>) {
     const { theme } = useUnistyles();
-    const rows = buildQuotaResetRows(props.recoveryCredits, props.now, ACCOUNT_BLOCK_RESET_COUNTDOWN_DAYS_FORMATTER);
+    const rows = buildQuotaResetRows(props.recoveryCredits, props.now, ACCOUNT_BLOCK_RESET_COUNTDOWN_DAYS_FORMATTER, props.recoveryCreditDetails);
     if (rows.length === 0) return null;
     const testID = props.testID ?? 'account-detail-resets';
     return (
@@ -270,26 +284,38 @@ export const AccountDetailResetsSectionView = React.memo(function AccountDetailR
         >
             {rows.map((row) => {
                 const expires = row.expiresAtMs === null ? null : new Date(row.expiresAtMs).toLocaleDateString([], { day: 'numeric', month: 'short' });
+                const detailLines = [
+                    row.description,
+                    row.details ? t('connectedServices.account.resets.remainingCount', { count: row.details.remainingCount }) : null,
+                    row.details?.appliesToProviderLimitIds.length ? t('connectedServices.account.resets.appliesTo', {
+                        limits: row.details.appliesToProviderLimitIds.map((id) => id === 'five_hour'
+                            ? t('connectedServices.account.resets.fiveHourLimit')
+                            : id === 'seven_day' ? t('connectedServices.account.resets.weeklyLimit') : id).join(' · '),
+                    }) : null,
+                    !row.canUse ? row.details?.unavailableReason
+                        ? t(`connectedServices.account.resets.unavailableReasons.${row.details.unavailableReason}`)
+                        : t('common.unavailable') : null,
+                    expires ? [t('connectedServicesCollection.usageResetExpiresOn', { date: expires }), row.countdownLabel].filter(Boolean).join(' · ') : null,
+                ].filter(Boolean).join('\n');
                 return (
                     <Item
                         key={row.key}
                         testID={`${testID}:${row.key}`}
-                        title={t('connectedServicesCollection.usageResetTitle')}
-                        subtitle={expires
-                            ? [t('connectedServicesCollection.usageResetExpiresOn', { date: expires }), row.countdownLabel].filter(Boolean).join(' · ')
-                            : undefined}
+                        title={row.title ?? t('connectedServicesCollection.usageResetTitle')}
+                        subtitle={detailLines || undefined}
+                        subtitleLines={0}
                         icon={<Icon name="clock-counter-clockwise" size={17} color={theme.colors.text.secondary} />}
                         mode="info"
                         showChevron={false}
-                        rightElement={props.onUse && row.canUse ? (
+                        rightElement={props.onUse ? (
                             <RoundButton
                                 testID={`${testID}:${row.key}:use`}
                                 size="small"
                                 display="secondary"
                                 title={t('connectedServicesCollection.use')}
                                 loading={props.pending}
-                                disabled={props.pending}
-                                onPress={() => props.onUse?.(row.consumableCreditId)}
+                                disabled={props.pending || !row.canUse}
+                                onPress={() => { if (row.canUse && !props.pending) props.onUse?.(row.consumableCreditId); }}
                             />
                         ) : undefined}
                         rightElementOutsidePressable
@@ -321,6 +347,7 @@ export const AccountDetailFactsSections = React.memo(function AccountDetailFacts
         planLabel: snapshot?.planLabel ?? null,
         subscription,
         recoveryCredits: snapshot?.recoveryCredits ?? null,
+        recoveryCreditDetails: snapshot?.recoveryCreditDetails,
         loading: quota.loading,
         error: quota.error,
         refreshing: quota.refreshing,
@@ -333,6 +360,7 @@ export const AccountDetailFactsSections = React.memo(function AccountDetailFacts
                     accountId={props.account.accountId}
                     machineId={props.machineId}
                     recoveryCredits={facts.recoveryCredits}
+                    recoveryCreditDetails={facts.recoveryCreditDetails}
                     fetchedAt={facts.fetchedAt}
                     onApplied={retry}
                     now={now}
@@ -346,6 +374,7 @@ const LiveResetsSection = React.memo(function LiveResetsSection(props: Readonly<
     accountId: string;
     machineId?: string | null;
     recoveryCredits: ConnectedServiceQuotaRecoveryCreditsV1 | null;
+    recoveryCreditDetails?: ConnectedServiceQuotaRecoveryCreditDetailsByIdV1;
     fetchedAt: number | null;
     onApplied: () => void;
     now: number;
@@ -360,6 +389,7 @@ const LiveResetsSection = React.memo(function LiveResetsSection(props: Readonly<
     return (
         <AccountDetailResetsSectionView
             recoveryCredits={props.recoveryCredits}
+            recoveryCreditDetails={props.recoveryCreditDetails}
             now={props.now}
             pending={action.pending}
             onUse={(creditId) => { void action.use(creditId); }}
@@ -501,32 +531,47 @@ export const AccountDetailWorksOnSectionView = React.memo(function AccountDetail
     );
 });
 
+/**
+ * The machines as Works on names them: the machine list's own names (same-named machines told apart
+ * the way the machine picker does), online ones first, each group in its stored order.
+ */
+export function projectAccountDetailMachines(
+    machines: readonly Machine[],
+    nowMs: number = Date.now(),
+    scope: ServerAccountScope | null = null,
+): AccountDetailMachine[] {
+    const names = resolveMachineDisplayNames(machines);
+    const rows = machines.map((machine) => ({
+        id: machine.id,
+        name: names.get(machine.id) ?? getMachineDisplayName(machine),
+        online: isMachineSelectableForFleet(scope, machine, nowMs),
+    }));
+    return [...rows.filter((row) => row.online), ...rows.filter((row) => !row.online)];
+}
+
 export const AccountDetailWorksOnSection = React.memo(function AccountDetailWorksOnSection(props: Readonly<{ testID?: string }>) {
     const machines = useAllMachines();
-    const rows = React.useMemo(() => machines.map((machine) => ({
-        id: machine.id,
-        name: getMachineDisplayName(machine),
-        online: isMachineOnline(machine),
-    })), [machines]);
+    const scope = useActiveServerAccountScope();
+    const reachabilityRevision = useMachineReachabilityRevision();
+    const nowMs = useMachinePresenceNowMs(machines);
+    const rows = React.useMemo(() => projectAccountDetailMachines(machines, nowMs, scope), [machines, scope, reachabilityRevision, nowMs]);
     return <AccountDetailWorksOnSectionView machines={rows} testID={props.testID} />;
 });
 
 const stylesheet = StyleSheet.create((theme) => ({
-    compactSubscription: { ...Typography.default(), fontSize: 13, lineHeight: 18, color: theme.colors.text.primary, flexShrink: 1 },
+    compactSubscription: {  ...Typography.variant('body'),  color: theme.colors.text.primary, flexShrink: 1 },
     headerActions: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 10,
+        gap: theme.space.s10,
     },
     checked: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 5,
+        gap: theme.space.s4,
     },
     checkedText: {
-        ...Typography.default(),
-        fontSize: 12.5,
-        lineHeight: 17,
+        ...Typography.variant('meta'),
         color: theme.colors.text.tertiary,
     },
     warning: {
@@ -535,14 +580,14 @@ const stylesheet = StyleSheet.create((theme) => ({
     machines: {
         flexDirection: 'row',
         flexWrap: 'wrap',
-        gap: 6,
+        gap: theme.space.s6,
     },
     machine: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
-        paddingLeft: 8,
-        paddingRight: 9,
+        gap: theme.space.s6,
+        paddingLeft: theme.space.s8,
+        paddingRight: theme.space.s8,
         height: 26,
         borderRadius: 8,
         borderWidth: StyleSheet.hairlineWidth,
@@ -554,16 +599,14 @@ const stylesheet = StyleSheet.create((theme) => ({
     pinnableMeter: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 4,
+        gap: theme.space.s4,
     },
     pinnableMeterRow: {
         flex: 1,
         minWidth: 0,
     },
     machineName: {
-        ...Typography.default(),
-        fontSize: 12.5,
-        lineHeight: 17,
+        ...Typography.variant('meta'),
         color: theme.colors.text.primary,
     },
 }));

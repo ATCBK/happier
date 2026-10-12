@@ -12,6 +12,8 @@ import { useServerProfilesGeneration } from '@/hooks/server/useServerProfilesGen
 import { listServerProfiles } from '@/sync/domains/server/serverProfiles';
 import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
 import { resolveMachinePickerPresence } from '@/sync/domains/machines/identity/resolveMachinePickerPresence';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
+import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
 import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
 import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
 import { useViewportClass } from '@/utils/platform/useViewportClass';
@@ -60,6 +62,7 @@ function MachineProvisionerOwnScopeCatalog(props: Omit<MachineProvisionerPickerP
 }
 
 function MachineProvisionerCatalog(props: Omit<MachineProvisionerPickerProps, 'scope'> & Readonly<{ scope: ManagedControllerScope; pageOwnsChip: boolean }>) {
+    useMachineReachabilityRevision();
     const handler = React.useRef<(registration: ActionApprovalRegistration) => void>(() => {});
     const onApprovalPending = React.useCallback((registration: ActionApprovalRegistration) => handler.current(registration), []);
     const [checks, setChecks] = React.useState<Readonly<Record<string, MachinePresetCollectionSettledResult<MachineProvisionerCheckResultV1>>>>({});
@@ -111,17 +114,23 @@ function MachineProvisionerCatalog(props: Omit<MachineProvisionerPickerProps, 's
         const repairAction = check?.prerequisites?.find(prerequisite => prerequisite.status !== 'available' && prerequisite.repairAction)?.repairAction;
         const missingExecutable = check?.prerequisites?.some(prerequisite => prerequisite.status !== 'available');
         const noAccount = check?.code === 'credential_unavailable' || outcome?.kind === 'failed' && outcome.code === 'credential_unavailable';
+        // A check that failed or never ran says nothing about this provisioner: the catalog's one line owns the cause.
+        const unreadable = outcome?.kind === 'failed' && !noAccount;
         const statusLabel = check?.status ? localized(provisioner.contribution.pluginId, check.status)
             : noAccount ? t('managedMachines.add.status.noAccount')
             : check ? t(check.available ? 'managedMachines.add.status.ready'
                 : missingExecutable ? 'managedMachines.add.status.notInstalled' : 'managedMachines.add.status.needsSetup')
-                : outcome ? t('managedMachines.providers.unavailable')
+                : unreadable ? ''
                 : t('managedMachines.providers.loading');
-        return [{ id, title: localized(provisioner.contribution.pluginId, provisioner.descriptor.title),
-            kind: provisioner.descriptor.kindTitle ? localized(provisioner.contribution.pluginId, provisioner.descriptor.kindTitle) : undefined,
+        const title = localized(provisioner.contribution.pluginId, provisioner.descriptor.title);
+        const kind = provisioner.descriptor.kindTitle ? localized(provisioner.contribution.pluginId, provisioner.descriptor.kindTitle) : undefined;
+        // Two provisioners of one product ("Cua") are told apart by what each creates, from their own declarations.
+        const sharesTitle = catalog.provisioners.some(other => other !== provisioner
+            && localized(other.contribution.pluginId, other.descriptor.title) === title);
+        return [{ id, title: sharesTitle && kind ? `${title} ${kind}` : title, kind,
             description: provisioner.descriptor.description ? localized(provisioner.contribution.pluginId, provisioner.descriptor.description) : '',
             location: location === 'local' ? 'local' : 'cloud', mark: (size: number) => markFor(provisioner, size),
-            status: { tone: outcome ? check?.available && location !== 'unknown' ? 'ready' : 'attention' : 'none',
+            status: { tone: check ? check.available && location !== 'unknown' ? 'ready' : 'attention' : noAccount ? 'attention' : 'none',
                 label: [statusLabel, location === 'unknown' ? t('managedMachines.add.status.billingUnknown') : null].filter(Boolean).join(' · ') },
             action: repairAction ? { kind: 'repair', label: t(noAccount ? 'managedMachines.add.action.connect'
                 : missingExecutable ? 'managedMachines.add.action.getApp' : 'managedMachines.add.action.setUp'), onPress: () => {
@@ -134,10 +143,15 @@ function MachineProvisionerCatalog(props: Omit<MachineProvisionerPickerProps, 's
                     if (outcome.ok) catalog.refresh(); else setError(outcome.reason);
                 }).catch(() => { if (!abort.signal.aborted && binding.isCurrent()) setError('unavailable'); });
             } } : { kind: 'choose', label: t(noAccount ? 'managedMachines.add.action.connect' : 'managedMachines.add.action.choose'),
-                onPress: () => open(id, noAccount ? provisioner.credentialPurposes?.[0]?.purpose.purpose : undefined) } }];
+                onPress: () => open(id, noAccount ? provisioner.credentialPurposes?.[0]?.purpose.purpose : undefined),
+                // Nothing to start while this provisioner's check could not be read.
+                ...(unreadable ? { disabled: true } : {}) } }];
     });
     const controllerName = scope.machine ? getMachineDisplayName(scope.machine) ?? scope.machine.id : '';
-    const controllerOnline = scope.machine ? resolveMachinePickerPresence(scope.machine).status === 'online' : false;
+    const observedMachines = React.useMemo(() => scope.machine ? [scope.machine] : [], [scope.machine]);
+    const presenceNowMs = useMachinePresenceNowMs(observedMachines);
+    const controllerOnline = scope.machine ? resolveMachinePickerPresence(scope.machine, presenceNowMs,
+        catalog.binding?.isCurrent() ? catalog.binding.scope : null).status === 'online' : false;
     const failure = catalog.error ?? error;
     // The controller's own state, said once under the chip that changes it.
     // A catalog that answered speaks for itself; presence only explains an empty or failed one.

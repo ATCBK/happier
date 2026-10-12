@@ -122,7 +122,7 @@ describe('one managed configuration receipt projection', () => {
     it('meters a local size against what its computer reported free, and says what it leaves (RV-C F13)', () => {
         const receipt = buildManagedConfigurationReceipt({ launch, providerTitle: 'Lume', controllerName: 'MacBook Pro', reviewedFacts: { ...localFacts,
             localResources: { observedAt: 5, availableCpuCores: 12, availableMemoryBytes: 36 * 2 ** 30 } } });
-        expect(receipt.spec).toBe(`Medium · ${t('managedMachines.receipt.cores', { count: 6 })} · 16 GB · 128 GB`);
+        expect(receipt.spec).toBe(`Medium · ${t('managedMachines.receipt.cores', { count: 6 })} · 16 GB · 137 GB`);
         // A local VM names what it runs before where it is.
         expect(receipt.facts[0]).toMatchObject({ id: 'image', value: 'macOS Tahoe' });
         expect(receipt.cost).toEqual({ kind: 'local', computer: 'MacBook Pro', meters: [

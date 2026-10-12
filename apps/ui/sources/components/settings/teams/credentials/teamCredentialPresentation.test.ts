@@ -13,9 +13,24 @@ import {
     credentialFailureMessage,
     recoveryDestinationIsNavigable,
     teamCredentialRecoveryPresentation,
+    resourceConnectedServiceMarkId,
 } from './teamCredentialPresentation';
 
 describe('teamCredentialPresentation', () => {
+    it('resolves a recipient-safe service presentation through the connected-service mark owner', () => {
+        expect(resourceConnectedServiceMarkId({
+            sourcePresentation: { kind: 'connected_service', service: {
+                pluginId: 'happier.agent.claude', localId: 'claude-subscription',
+            } },
+        }, { entries: [] })).toBe('claude-subscription');
+        expect(resourceConnectedServiceMarkId({
+            sourcePresentation: { kind: 'connected_service', service: {
+                pluginId: 'external.plugin', localId: 'claude-subscription',
+            } },
+        }, { entries: [] })).toBeNull();
+        expect(resourceConnectedServiceMarkId({ sourcePresentation: null }, { entries: [] })).toBeNull();
+    });
+
     it('reports mixed delivery rather than flattening disagreeing grants', () => {
         const brokeredOnly = teamCredentialResourceFixture({
             groupGrants: [{ teamGroupId: 'group-1', deliveryMode: 'brokered' }],
@@ -40,12 +55,12 @@ describe('teamCredentialPresentation', () => {
         expect(audienceSummary(teamCredentialResourceFixture({
             allMembersDeliveryMode: 'brokered',
             groupGrants: [{ teamGroupId: 'group-1', deliveryMode: 'brokered' }],
-        }))).toBe('Everyone in the Team · 1 Groups');
+        }))).toBe('Everyone in the Team · 1 Group');
         // A Team-wide grant is not one more counted audience: collapsing it into
         // the counts would hide the broadest grant behind the narrowest ones.
         expect(audienceSummary(teamCredentialResourceFixture({
             memberGrants: [{ teamMembershipId: 'membership-1', deliveryMode: 'brokered' }],
-        }))).toBe('1 people');
+        }))).toBe('1 person');
     });
 
     it('renders the Home-owned readiness instead of inferring it from audience or enabled state', () => {

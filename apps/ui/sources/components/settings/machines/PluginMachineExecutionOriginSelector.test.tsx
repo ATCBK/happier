@@ -9,6 +9,8 @@ import type {
     ServerScopedMachinePresentation,
 } from '@/components/sessions/new/hooks/machines/useServerScopedMachineOptions';
 import { renderScreen } from '@/dev/testkit';
+import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import type {
     PluginMachineExecutionOriginCandidateV1,
     PluginMachineExecutionOriginStateV1,
@@ -80,6 +82,10 @@ vi.mock('@/components/sessions/new/components/ServerScopedMachineSelector', () =
     },
 }));
 
+const { PluginMachineExecutionOriginSelectorView, resolvePluginMachineExecutionOriginPresentation }
+    = await import('./PluginMachineExecutionOriginSelector');
+const { storage } = await import('@/sync/domains/state/storageStore');
+
 function candidate(input: Readonly<{
     machineId: string;
     materializationId: string;
@@ -132,12 +138,41 @@ function selection(input: Readonly<{
 }
 
 describe('PluginMachineExecutionOriginSelector', () => {
+    it('does not report an unsettled preference save as failed and clears feedback when it applies', async () => {
+        const machine = candidate({ machineId: 'machine-a', materializationId: 'mat-a', version: '1.0.0' });
+        const origin: PluginMachineExecutionOriginV1 = { serverIdentityId: 'srv_one', materializationRef: {
+            machineId: 'machine-a', materializationId: 'mat-a', pluginId: 'acme.plugin' } };
+        const fixture = selection({ candidates: [machine], selectedOrigin: origin,
+            state: { kind: 'selected', candidate: machine, origin, selectionSource: 'stored' } });
+        const pending = createDeferred<Awaited<ReturnType<PluginMachineExecutionOriginSelectionV1['clearOrigin']>>>();
+        fixture.clearOrigin.mockReturnValueOnce(pending.promise);
+        const screen = await renderScreen(<PluginMachineExecutionOriginSelectorView selection={fixture.value} testIDPrefix="origin" />);
+        await screen.pressByTestIdAsync('origin.clear');
+        expect(screen.findAllByTestId('origin.settlementError')).toHaveLength(0);
+        await act(async () => { pending.resolve({ status: 'applied', settingsVersion: 8, value: undefined }); });
+        expect(screen.findAllByTestId('origin.settlementError')).toHaveLength(0);
+        await screen.unmount();
+    });
+    it('keeps a configured pending review distinct from a failed preference save', async () => {
+        const machine = candidate({ machineId: 'machine-a', materializationId: 'mat-a', version: '1.0.0' });
+        const origin: PluginMachineExecutionOriginV1 = { serverIdentityId: 'srv_one', materializationRef: {
+            machineId: 'machine-a', materializationId: 'mat-a', pluginId: 'acme.plugin' } };
+        const fixture = selection({ candidates: [machine], selectedOrigin: origin,
+            state: { kind: 'selected', candidate: machine, origin, selectionSource: 'stored' } });
+        fixture.clearOrigin.mockResolvedValueOnce({ status: 'approvalPending', scope: { serverId: 'home', accountId: 'account' },
+            approval: { kind: 'approval_request_created', artifactId: 'pending-origin', actionId: 'plugins.execution_origin.clear' },
+            input: { pluginId: 'acme.plugin', expectedSettingsVersion: 7 } });
+        const screen = await renderScreen(<PluginMachineExecutionOriginSelectorView selection={fixture.value} testIDPrefix="origin" />);
+        await screen.pressByTestIdAsync('origin.clear');
+        expect(screen.findAllByTestId('origin.settlementError')).toHaveLength(0);
+        expect(screen.findAllByTestId('origin.approvalPending').length).toBeGreaterThan(0);
+        await screen.unmount();
+    });
     it('preserves the typed rejection and exact friendly target without selecting a replacement', async () => {
         const machine = candidate({ machineId: 'machine-a', materializationId: 'mat-a', version: '1.0.0' });
         const rejected = { ...machine, validation: { kind: 'rejected' as const, reason: 'disabled' as const } };
         const origin: PluginMachineExecutionOriginV1 = { serverIdentityId: 'srv_one', materializationRef: { machineId: 'machine-a', materializationId: 'mat-a', pluginId: 'acme.plugin' } };
         const fixture = selection({ candidates: [rejected], selectedOrigin: origin, state: { kind: 'unavailable', storedOrigin: origin, candidates: [rejected], reasons: ['disabled'] } });
-        const { resolvePluginMachineExecutionOriginPresentation } = await import('./PluginMachineExecutionOriginSelector');
         const presentation = resolvePluginMachineExecutionOriginPresentation(fixture.value, [{ target: { serverIdentityId: 'srv_one', machineId: 'machine-a' }, displayName: 'Studio', serverLabel: 'Work', availability: 'online', observation: 'live', observedAt: 100 }]);
         expect(presentation.title).toBe('Studio');
         expect(presentation.subtitle).toContain('Work');
@@ -164,7 +199,6 @@ describe('PluginMachineExecutionOriginSelector', () => {
                 selectionSource: 'soleCandidate',
             },
         });
-        const { PluginMachineExecutionOriginSelectorView } = await import('./PluginMachineExecutionOriginSelector');
         capturedPickerProps.length = 0;
         capturedItemProps.length = 0;
 
@@ -175,8 +209,8 @@ describe('PluginMachineExecutionOriginSelector', () => {
 
         expect(capturedItemProps).toContainEqual(expect.objectContaining({
             testID: 'plugin.origin.current',
-            title: 'machine-a',
-            subtitle: 'srv_one\ncommon.version 1.0.0',
+            title: 'machine.unlistedMachine',
+            subtitle: expect.stringContaining('common.version 1.0.0'),
             detail: 'common.change',
             selected: true,
         }));
@@ -192,7 +226,6 @@ describe('PluginMachineExecutionOriginSelector', () => {
             candidates: [machineA, machineB],
             state: { kind: 'conflict', candidates: [machineA, machineB], reasons: ['different_versions'] },
         });
-        const { PluginMachineExecutionOriginSelectorView } = await import('./PluginMachineExecutionOriginSelector');
         capturedPickerProps.length = 0;
         capturedItemProps.length = 0;
 
@@ -231,6 +264,33 @@ describe('PluginMachineExecutionOriginSelector', () => {
         expect(picker.getMachineKey?.(presentedA)).not.toBe(picker.getMachineKey?.(presentedB));
     });
 
+    it('lets the picker row state an offline machine once, with its version only', async () => {
+        storage.getState().applyMachines([createMachineFixture({ id: 'machine-b', active: false, activeAt: 100 })], true,
+            { sourceServerId: 'srv_one' });
+        const online = candidate({ machineId: 'machine-a', materializationId: 'mat-a', version: '1.0.0' });
+        const offline = { ...candidate({ machineId: 'machine-b', materializationId: 'mat-b', version: '0.9.0' }),
+            validation: { kind: 'rejected' as const, reason: 'offline' as const } };
+        const fixture = selection({
+            candidates: [online, offline],
+            state: { kind: 'conflict', candidates: [online, offline], reasons: ['different_versions'] },
+        });
+        capturedPickerProps.length = 0;
+        capturedItemProps.length = 0;
+        await renderScreen(React.createElement(PluginMachineExecutionOriginSelectorView, {
+            selection: fixture.value,
+            testIDPrefix: 'plugin.origin',
+        }));
+        await act(async () => { capturedItemProps.find((item) => item.testID === 'plugin.origin.current')?.onPress?.(); });
+        const picker = capturedPickerProps[0]!;
+        const presentedOffline = picker.groups.flatMap((group) => group.machines).find((machine) => machine.id === 'machine-b')
+            ?? picker.groups.flatMap((group) => group.machines)[1]!;
+        // The shared row already says "Offline · last seen …"; the plugin adds only what differs.
+        expect(picker.resolveMachineAvailability?.(presentedOffline)).toEqual({
+            detail: 'common.version 0.9.0',
+            selectable: false,
+        });
+    });
+
     it('keeps a typed selection conflict visible instead of silently dropping it', async () => {
         const machineA = candidate({ machineId: 'machine-a', materializationId: 'mat-a', version: '1.0.0' });
         const fixture = selection({
@@ -238,7 +298,6 @@ describe('PluginMachineExecutionOriginSelector', () => {
             state: { kind: 'conflict', candidates: [machineA], reasons: ['different_versions'] },
         });
         fixture.selectOrigin.mockResolvedValueOnce({ status: 'conflict', currentSettingsVersion: 9 });
-        const { PluginMachineExecutionOriginSelectorView } = await import('./PluginMachineExecutionOriginSelector');
         capturedPickerProps.length = 0;
         capturedItemProps.length = 0;
 
@@ -274,7 +333,6 @@ describe('PluginMachineExecutionOriginSelector', () => {
                 reasons: ['content_conflict'],
             },
         });
-        const { PluginMachineExecutionOriginSelectorView } = await import('./PluginMachineExecutionOriginSelector');
         capturedPickerProps.length = 0;
         capturedItemProps.length = 0;
 
@@ -318,7 +376,6 @@ describe('PluginMachineExecutionOriginSelector', () => {
                 reasons: ['missing'],
             },
         });
-        const { PluginMachineExecutionOriginSelectorView } = await import('./PluginMachineExecutionOriginSelector');
         capturedPickerProps.length = 0;
         capturedItemProps.length = 0;
 
@@ -329,8 +386,8 @@ describe('PluginMachineExecutionOriginSelector', () => {
 
         expect(capturedItemProps).toContainEqual(expect.objectContaining({
             testID: 'plugin.origin.current',
-            title: 'machine-old',
-            subtitle: 'srv_old\nsettingsPlugins.targetSelection.missing',
+            title: 'machine.unlistedMachine',
+            subtitle: expect.stringContaining('settingsPlugins.targetSelection.missing'),
             selected: true,
         }));
         const clear = capturedItemProps.find((item) => item.testID === 'plugin.origin.clear');
@@ -346,7 +403,6 @@ describe('PluginMachineExecutionOriginSelector', () => {
             candidates: [machineA],
             state: { kind: 'conflict', candidates: [machineA], reasons: ['different_versions'] },
         });
-        const { PluginMachineExecutionOriginSelectorView } = await import('./PluginMachineExecutionOriginSelector');
         capturedGroupTitleProps.length = 0;
 
         await renderScreen(React.createElement(PluginMachineExecutionOriginSelectorView, {
@@ -364,7 +420,6 @@ describe('PluginMachineExecutionOriginSelector', () => {
             candidates: [machineA],
             state: { kind: 'conflict', candidates: [machineA], reasons: ['different_versions'] },
         });
-        const { PluginMachineExecutionOriginSelectorView } = await import('./PluginMachineExecutionOriginSelector');
         capturedGroupTitleProps.length = 0;
 
         await renderScreen(React.createElement(PluginMachineExecutionOriginSelectorView, {

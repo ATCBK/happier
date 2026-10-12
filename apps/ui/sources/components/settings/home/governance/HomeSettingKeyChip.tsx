@@ -18,12 +18,13 @@ export type HomeSettingFactSegment = string | Readonly<{ envKey: string }>;
 
 /**
  * A row's facts on one line ("0–65535 · `METRICS_PORT` · Default: 9090"), separated by " · ",
- * truncated at the end rather than wrapped. Keys render as chips.
+ * wrapping to a second line rather than hiding the default behind an ellipsis (a phone, or a row
+ * whose control takes half the width). Keys render as chips.
  */
 export function HomeSettingFactsLine(props: Readonly<{ segments: readonly HomeSettingFactSegment[]; testID: string }>) {
     if (props.segments.length === 0) return null;
     return (
-        <Text testID={props.testID} style={styles.line} numberOfLines={1}>
+        <Text testID={props.testID} style={styles.line} numberOfLines={2}>
             {props.segments.map((segment, index) => (
                 <React.Fragment key={index}>
                     {index > 0 ? ' · ' : null}
@@ -49,7 +50,7 @@ const styles = StyleSheet.create((theme) => ({
         color: theme.colors.text.secondary,
         backgroundColor: theme.colors.surface.elevated,
         borderRadius: 4,
-        paddingHorizontal: 5,
+        paddingHorizontal: theme.space.s4,
         paddingVertical: 1,
     },
 }));

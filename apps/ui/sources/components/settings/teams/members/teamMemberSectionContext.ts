@@ -2,6 +2,7 @@ import type { TeamMembershipV1, TeamSummaryV1 } from '@happier-dev/protocol/team
 
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import type { TeamAddress } from '@/sync/domains/teams/teamAddress';
+import type { ActionApprovalRegistration } from '@/components/approvals/actionApprovalContinuation';
 
 /**
  * The contract a contributed member-detail section receives.
@@ -29,6 +30,7 @@ export type TeamMemberSectionContext = Readonly<{
     mutationsAvailable: boolean;
     /** Re-reads this membership and its Team after an accepted change. */
     refresh: () => void;
+    requestApproval?: (registration: ActionApprovalRegistration) => void;
 }>;
 
 /**

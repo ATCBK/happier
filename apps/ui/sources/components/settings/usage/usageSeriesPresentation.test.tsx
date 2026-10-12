@@ -5,7 +5,7 @@ import { StackedSeriesChart } from '@happier-dev/plugin-ui/presentation';
 import { pressTestInstance, renderScreen } from '@/dev/testkit';
 import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { lightTheme } from '@/theme';
-import { fillUsageMixCalendar, fillUsageTrendCalendar, usageSeriesFrame, usageVolumeSeries, useUsageSeriesLens, type UsageSeriesChoice } from './usageSeriesPresentation';
+import { fillUsageMixCalendar, fillUsageTrendCalendar, usageSeriesFrame, usageSourceTimelineSeries, usageVolumeSeries, useUsageSeriesLens, type UsageSeriesChoice } from './usageSeriesPresentation';
 import type { UsageAnalyticsCoverage } from '@happier-dev/protocol';
 
 const coverage = (startMs: number, endMs: number, complete: boolean): UsageAnalyticsCoverage => ({
@@ -68,6 +68,33 @@ describe('the all-series lens', () => {
 });
 
 describe('usage projection into the shared series renderer', () => {
+    it('keeps source appearance orthogonal to dimension hue and missing calendar evidence', () => {
+        const day = 86_400_000;
+        const tokens = { input: 5, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 5 };
+        const cost = { reportedUsd: 0, estimatedUsd: 0, currency: 'USD' };
+        const sources = [
+            { source: 'runtime', path: 'runtime' as const, execution: 'happier' as const, eventCount: 1, tokens, cost },
+            { source: 'native', path: 'native' as const, execution: 'outside' as const, eventCount: 1, tokens, cost },
+        ];
+        const series = usageSourceTimelineSeries({ timeline: [
+            { bucketStartMs: 0, bucketEndMs: day, leaders: [
+                { key: 'model:local', eventCount: 1, tokens, cost, sources: [sources[0]!] },
+                { key: 'model:remote', eventCount: 1, tokens, cost, sources: [sources[1]!] },
+            ] },
+            { bucketStartMs: day * 2, bucketEndMs: day * 3, leaders: [{ key: 'model:local', eventCount: 1, tokens, cost, sources: [sources[0]!] }] },
+        ], range: { startMs: 0, endMs: day * 3, granularity: 'day', timeZoneOffsetMinutes: 0 }, coverage: coverage(0, day * 3, false),
+        metric: 'tokens', costMode: 'auto', dimensionKey: key => key.split(':')[0]!, label: key => key, color: index => `hue-${index}`, bucketLabel: String });
+        expect(series.map(entry => ({ color: entry.color, values: entry.points.map(point => point.y) }))).toEqual([
+            { color: 'hue-0', values: [10, null, 5] },
+        ]);
+        expect(series[0]!.label).toBe('model');
+        expect(series[0]!.sourceDetails?.['0']?.map(part => ({ execution: part.execution, value: part.value }))).toEqual([
+            { execution: 'happier', value: 5 }, { execution: 'outside', value: 5 },
+        ]);
+        expect(series[0]!.sourceDetails?.['0']?.every(part => !part.label.includes('runtime'))).toBe(true);
+        expect(usageSourceTimelineSeries({ timeline: [{ bucketStartMs: 0, bucketEndMs: day, leaders: [{ key: 'old', eventCount: 1, tokens, cost }] }],
+            range: null, metric: 'tokens', costMode: 'auto', dimensionKey: key => key, label: key => key, color: () => 'ink', bucketLabel: String })).toEqual([]);
+    });
     it('retains older accounting buckets and the current currency in exact selected values', async () => {
         const points = Array.from({ length: 40 }, (_, index) => ({ timestamp: 1_710_000_000 + index * 86_400, tokens: index, cost: index === 0 ? 0.00004 : index, reportCount: 1 }));
         const screen = await renderScreen(<StackedSeriesChart theme={projectPluginUiTheme(lightTheme)} label="Cost"

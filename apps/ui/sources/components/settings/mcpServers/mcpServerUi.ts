@@ -5,7 +5,7 @@ import type {
     McpServerCatalogEntryTransportV1,
     McpPreviewAuthModeV1,
     McpPreviewScopeKindV1,
-    McpServerBindingV1,
+    McpServerRuleV1,
     McpServerCatalogEntryV1,
 } from '@happier-dev/protocol';
 import type { AgentToolsDelivery } from '@happier-dev/agents';
@@ -24,7 +24,7 @@ export function describeMachine(machineId: string, machines: readonly Machine[])
     return getMachineDisplayName(machine) ?? machineId;
 }
 
-export function summarizeBindings(bindings: ReadonlyArray<McpServerBindingV1>, machines: readonly Machine[]): string {
+export function summarizeBindings(bindings: ReadonlyArray<McpServerRuleV1>, machines: readonly Machine[]): string {
     const enabled = bindings.filter((binding) => binding.enabled);
     const hasAll = enabled.some((binding) => binding.target.t === 'allMachines');
     const machineTargets = enabled.filter((binding) => binding.target.t === 'machine');
@@ -53,12 +53,13 @@ export function describeConfiguredServerEndpoint(server: McpServerCatalogEntryV1
     return server.remote?.url ?? '';
 }
 
-export function resolveBindingBadgeLabels(bindings: ReadonlyArray<McpServerBindingV1>, machines: readonly Machine[]): string[] {
+export function resolveBindingBadgeLabels(bindings: ReadonlyArray<McpServerRuleV1>, machines: readonly Machine[]): string[] {
     return bindings
         .filter((binding) => binding.enabled)
         .map((binding) => {
             if (binding.target.t === 'allMachines') return t('settings.mcpServersBindingSummaryAllMachines');
             if (binding.target.t === 'machine') return describeMachine(binding.target.machineId, machines);
+            if (binding.target.t === 'project') return binding.target.projectKey;
             return binding.target.workspaceRoot;
         });
 }

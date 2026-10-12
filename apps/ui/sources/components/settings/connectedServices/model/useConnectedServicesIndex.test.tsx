@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AccountProfileSchema, PluginProjectionV2Schema } from '@happier-dev/protocol';
 import { ConnectedAccountCatalogRowMutationV1Schema, type ConnectedAccountCatalogRowMutationV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
@@ -14,11 +15,13 @@ import { resetConnectedAccountCatalogEngineForTests } from '@/sync/engine/settin
 import { resetConnectedAccountCatalogSnapshotsForTests } from '@/sync/store/settings/connectedAccountCatalogSnapshot';
 import { clearDaemonMergedProjectionCacheForTests } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
 import { ProviderConnectionV1Schema, type ProviderConnectionV1 } from '@happier-dev/protocol/providers/connections/v1';
-import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, PROVIDER_CONNECTIONS_ROWS_ROUTE_V1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
+import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, PROVIDER_CONNECTIONS_ROWS_ROUTE_V1, ProviderConnectionsRowMutationV1Schema,
+    type ProviderConnectionsCatalogV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { resetProviderCatalogEngineForTests } from '@/sync/engine/settings/providerCatalogEngine';
-import { resetProviderCatalogSnapshotsForTests } from '@/sync/store/settings/providerCatalogSnapshot';
+import { applyProviderCatalogSnapshot, beginProviderCatalogLoad, resetProviderCatalogSnapshotsForTests } from '@/sync/store/settings/providerCatalogSnapshot';
 import { installConnectedServicesCommonModuleMocks } from '../connectedServicesTestHelpers';
 import { useConnectedServicesIndex } from './useConnectedServicesIndex';
+import { t } from '@/text';
 
 installConnectedServicesCommonModuleMocks();
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
@@ -33,7 +36,9 @@ const purposeValue = { v: 1 as const, bindings: [{ purpose: { consumer, purpose:
     target: { kind: 'account' as const, account: { service, accountId: 'work' } } }] };
 const source = { connectedServicesDefaultAuthByAgentIdV1: { v: 1, bindingsByAgentId: {
     codex: { v: 1, bindingsByServiceId: { 'openai-codex': { source: 'connected', selection: 'profile', profileId: 'work' } } },
-} } };
+} }, actionsSettingsV1: { v: 1, actions: {}, approvalWaivedSurfaces: Object.fromEntries([
+    'providers.connections.create_contribution', 'providers.connections.update', 'providers.connections.enabled.set',
+].map(id => [id, ['ui']])) } };
 const gateway = ProviderConnectionV1Schema.parse({ v: 1, id: 'pc_gateway',
     source: { kind: 'contribution', contributionKey: 'happier.provider.cliproxyapi/cliproxyapi' },
     role: 'named', displayName: 'Subscriptions', displayNameMode: 'custom', deployment: { kind: 'managedLocal' },
@@ -44,9 +49,12 @@ let savedConnections: readonly ProviderConnectionV1[] = [gateway];
 let rowStatus: 'absent' | 'present' | 'deleted' = 'absent';
 let content: ConnectedAccountCatalogRowMutationV1['content'] | null = null;
 let beforeNextPurposeRead: (() => Promise<void>) | undefined;
+let providerCatalog: ProviderConnectionsCatalogV1 | null = null;
+let providerRevision = 1;
+let catalogReadGate: Promise<void> | null = null;
 
 beforeEach(() => {
-    savedConnections = [gateway];
+    savedConnections = [gateway]; providerCatalog = null; providerRevision = 1; catalogReadGate = null;
     rowStatus = 'absent'; content = null; mutations.length = 0; machineRpc.mockReset();
     beforeNextPurposeRead = undefined;
     resetConnectedAccountCatalogEngineForTests(); resetConnectedAccountCatalogSnapshotsForTests();
@@ -67,8 +75,15 @@ const runtime = installSessionPaneRuntimeTestHarness({
         if (path === '/v1/account/saved-secrets/resources/materials') return Response.json({ resources: [] });
         if (path === PROFILE_TRANSFER_ROUTE_V1) return Response.json({ status: 'absent' });
         if (path === '/v2/account/settings/history') return Response.json({ snapshots: [] });
-        if (path === PROVIDER_CONNECTIONS_ROWS_ROUTE_V1) return Response.json({ status: 'present', revision: 1,
-            content: { t: 'plain', v: { ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, connections: savedConnections } } });
+        if (path === PROVIDER_CONNECTIONS_ROWS_ROUTE_V1 && init?.method === 'POST') {
+            const mutation = ProviderConnectionsRowMutationV1Schema.parse(JSON.parse(String(init.body)));
+            if (mutation.content?.t !== 'plain') throw new Error('Expected Plain Account write');
+            providerCatalog = mutation.content.v; providerRevision += 1;
+            return Response.json({ status: 'updated', revision: providerRevision, cursor: providerRevision });
+        }
+        if (path === PROVIDER_CONNECTIONS_ROWS_ROUTE_V1) await catalogReadGate;
+        if (path === PROVIDER_CONNECTIONS_ROWS_ROUTE_V1) return Response.json({ status: 'present', revision: providerRevision,
+            content: { t: 'plain', v: providerCatalog ?? { ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, connections: savedConnections } } });
         if (path === '/v1/account/entity-rows/connected-accounts/purposes') {
             if (init?.method === 'POST') {
                 const mutation = ConnectedAccountCatalogRowMutationV1Schema.parse(JSON.parse(String(init.body)));
@@ -111,6 +126,23 @@ async function mount(mode: 'load' | 'cached', machineId: string | null, retiredP
 }
 
 describe('Connected Services index purpose source admission', () => {
+    it('retains the Gateway place and exact refusal on a fresh catalog failure, then recovers Add', async () => {
+        let releaseRead!: () => void;
+        catalogReadGate = new Promise<void>(resolve => { releaseRead = resolve; });
+        savedConnections = [];
+        const hook = await mount('cached', null, false, true);
+        try {
+            const scope = { serverId: runtime.serverId, accountId: 'account-a' };
+            await act(async () => { applyProviderCatalogSnapshot(scope, { status: 'unavailable', reason: 'encryption-material-unavailable' }, true); });
+            expect(hook.getCurrent().gatewaySectionVisible).toBe(true);
+            expect(hook.getCurrent().gatewayUnavailable).toEqual({ kind: 'catalog', catalog: { status: 'unavailable', reason: 'encryption-material-unavailable' } });
+            expect(hook.getCurrent().gatewaysLoading).toBe(false);
+            expect(hook.getCurrent().addGateway).toBeNull();
+            releaseRead();
+            await vi.waitFor(() => expect(hook.getCurrent().addGateway).toEqual(expect.any(Function)));
+            expect(hook.getCurrent().gatewayUnavailable).toBeNull();
+        } finally { releaseRead(); await hook.unmount(); }
+    });
     it('admits the selected Machine when its consumer joins a pending generic purpose read', async () => {
         let releaseRead!: () => void;
         let markReadStarted!: () => void;
@@ -143,6 +175,8 @@ describe('Connected Services index purpose source admission', () => {
                 expect.objectContaining({ connectionId: gateway.id, title: gateway.displayName }),
             ]));
             expect(hook.getCurrent().gatewayCatalog?.data?.connections[0]).toEqual(gateway);
+            expect(hook.getCurrent().gatewaysKnown).toBe(false);
+            expect(hook.getCurrent().addGateway).toBeNull();
             expect(machineRpc).not.toHaveBeenCalled();
         } finally { await hook.unmount(); }
     });
@@ -153,6 +187,70 @@ describe('Connected Services index purpose source admission', () => {
             await vi.waitFor(() => expect(hook.getCurrent().gatewayCatalog?.status).toBe('ready'));
             expect(hook.getCurrent().gateways).toEqual([]);
             expect(hook.getCurrent().gatewaysKnown).toBe(true);
+            expect(machineRpc).not.toHaveBeenCalled();
+        } finally { await hook.unmount(); }
+    });
+    it('keeps the Gateway place unavailable when a managed source cannot be admitted', async () => {
+        savedConnections = [ProviderConnectionV1Schema.parse({ ...gateway, id: 'pc_unknown',
+            source: { kind: 'contribution', contributionKey: 'example.unknown/source' } })];
+        const hook = await mount('cached', null, false, true);
+        try {
+            await vi.waitFor(() => expect(hook.getCurrent().gatewayCatalog?.status).toBe('ready'));
+            expect(hook.getCurrent().gatewaySectionVisible).toBe(true);
+            expect(hook.getCurrent().gatewayUnavailable).toEqual({ kind: 'declaration' });
+            expect(hook.getCurrent().addGateway).toBeNull();
+            expect(machineRpc).not.toHaveBeenCalled();
+        } finally { await hook.unmount(); }
+    });
+    it('keeps the known gateways listed while the Account catalog reloads, without offering another', async () => {
+        const hook = await mount('cached', null, false, true);
+        try {
+            await vi.waitFor(() => expect(hook.getCurrent().gateways).toEqual([expect.objectContaining({ connectionId: gateway.id })]));
+            await act(async () => { beginProviderCatalogLoad({ serverId: runtime.serverId, accountId: 'account-a' }); });
+            expect(hook.getCurrent().gateways).toEqual([expect.objectContaining({ connectionId: gateway.id })]);
+            expect(hook.getCurrent().addGateway).toBeNull();
+        } finally { await hook.unmount(); }
+    });
+    it('keeps an empty Gateways group while the Account catalog reloads, but adds only once it is current', async () => {
+        savedConnections = [];
+        const hook = await mount('cached', null, false, true);
+        try {
+            await vi.waitFor(() => expect(hook.getCurrent().addGateway).toEqual(expect.any(Function)));
+            await act(async () => { beginProviderCatalogLoad({ serverId: runtime.serverId, accountId: 'account-a' }); });
+            expect(hook.getCurrent().gateways).toEqual([]);
+            expect(hook.getCurrent().addGateway).toBeNull();
+        } finally { await hook.unmount(); }
+    });
+    it('holds the Gateways group while the first Account catalog loads, and names what a gateway draws on', async () => {
+        let releaseRead!: () => void;
+        catalogReadGate = new Promise<void>((resolve) => { releaseRead = resolve; });
+        savedConnections = [ProviderConnectionV1Schema.parse({ ...gateway, purposeBindingDefaults: {
+            'anthropic-upstream': { kind: 'account', account: { service: { pluginId: 'happier.agent.claude', localId: 'claude-subscription' }, accountId: 'work' } },
+        } })];
+        const hook = await mount('cached', null, false, true);
+        try {
+            expect(hook.getCurrent().gateways).toBeNull();
+            expect(hook.getCurrent().gatewaysLoading).toBe(true);
+            releaseRead();
+            await vi.waitFor(() => expect(hook.getCurrent().gateways).toEqual([expect.objectContaining({ connectionId: gateway.id })]));
+            expect(hook.getCurrent().gatewaysLoading).toBe(false);
+            expect(hook.getCurrent().gateways?.[0]?.summary).toMatch(/claude/i);
+        } finally { releaseRead(); await hook.unmount(); }
+    });
+    it('adds a first gateway from an empty Account: one managed connection, no slot yet, on, then its page', async () => {
+        savedConnections = [];
+        const hook = await mount('cached', null, false, true);
+        try {
+            await vi.waitFor(() => expect(hook.getCurrent().addGateway).toEqual(expect.any(Function)));
+            let route: string | null = null;
+            await act(async () => { route = await hook.getCurrent().addGateway!(); });
+            const created = providerCatalog?.connections ?? [];
+            expect(created).toEqual([expect.objectContaining({ displayName: t('settingsProvidersCollection.gateway.mainGatewayName'), deployment: { kind: 'managedLocal' },
+                source: { kind: 'contribution', contributionKey: 'happier.provider.cliproxyapi/cliproxyapi' }, purposeBindingDefaults: {} })]);
+            expect(providerCatalog?.accountGrants.map(grant => grant.connectionId)).toEqual([created[0]!.id]);
+            expect(route).toBe(`/(app)/settings/providers/${created[0]!.id}`);
+            await vi.waitFor(() => expect(hook.getCurrent().gateways).toEqual([expect.objectContaining({ connectionId: created[0]!.id })]));
+            expect(hook.getCurrent().addGateway).toBeNull();
             expect(machineRpc).not.toHaveBeenCalled();
         } finally { await hook.unmount(); }
     });

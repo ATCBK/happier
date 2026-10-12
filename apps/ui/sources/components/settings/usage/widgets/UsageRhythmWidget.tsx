@@ -49,10 +49,10 @@ export function UsageRhythmWidget(props: UsageBodyProps) {
   const activity = view?.activity;
   const language = getPreferredLanguage();
   const calendar = React.useMemo(() => {
-    const range = resolveUsageShownCalendarRange(props.query, props.slice.accounting?.coverage);
+    const range = resolveUsageShownCalendarRange(props.query, props.slice.accounting?.coverage, props.slice.accounting);
     return activity && range ? usageHeatmapPresentation({ calendarDays: activity.calendarDays, mode: 'daily', range,
       coverage: props.slice.accounting?.coverage, accentColor: accent, emptyColor: theme.colors.surface.inset }) : null;
-  }, [activity, props.query, props.slice.accounting?.coverage, accent, theme.colors.surface.inset, language]);
+  }, [activity, props.query, props.slice.accounting, accent, theme.colors.surface.inset, language]);
   const hasCalendar = (activity?.calendarDays.length ?? 0) > 0;
   const hasRhythm =
     (view?.punchCard.total ?? 0) > 0 || (view?.hourRhythm.total ?? 0) > 0;
@@ -155,15 +155,13 @@ export function UsageRhythmWidget(props: UsageBodyProps) {
 }
 
 const styles = StyleSheet.create((theme) => ({
-  body: { gap: 12, minWidth: 0 },
-  blocks: { gap: 20 },
+  body: { gap: theme.space.s12, minWidth: 0 },
+  blocks: { gap: theme.space.s20 },
   row: { flexDirection: 'row', alignItems: 'flex-start' },
-  block: { gap: 8, minWidth: 0 },
+  block: { gap: theme.space.s8, minWidth: 0 },
   half: { flex: 1 },
   label: {
-    ...Typography.default('semiBold'),
-    fontSize: 13,
-    lineHeight: 18,
+    ...Typography.variant('body', 'semiBold'),
     color: theme.colors.text.secondary,
   },
 }));

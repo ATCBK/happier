@@ -1,5 +1,6 @@
 import type { Machine } from '@/sync/domains/state/storageTypes';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import { isMachineSelectableForFleet } from '@/sync/domains/machines/administration/fleetUnion';
+import type { MachineReachabilityScope } from '@/sync/domains/machines/reachability/machineReachability';
 
 type RecentMachinePathEntry = Readonly<{ machineId?: string | null }> | null | undefined;
 
@@ -15,6 +16,7 @@ function pushUniqueMachineId(next: string[], seen: Set<string>, value: unknown):
 }
 
 export function listPreferredMachineIds(params: Readonly<{
+  scope?: MachineReachabilityScope | null;
   machines: ReadonlyArray<Machine>;
   recentMachinePaths: ReadonlyArray<RecentMachinePathEntry>;
   preferredMachineId?: string | null;
@@ -33,7 +35,7 @@ export function listPreferredMachineIds(params: Readonly<{
     if (!normalizedMachineId) return;
     const machine = machineById.get(normalizedMachineId);
     if (!machine) return;
-    if (onlineOnly && !isMachineOnline(machine)) return;
+    if (onlineOnly && !isMachineSelectableForFleet(params.scope, machine)) return;
     pushUniqueMachineId(ordered, seen, normalizedMachineId);
   };
 
@@ -46,7 +48,7 @@ export function listPreferredMachineIds(params: Readonly<{
   }
 
   for (const machine of machines) {
-    if (isMachineOnline(machine)) {
+    if (isMachineSelectableForFleet(params.scope, machine)) {
       pushUniqueMachineId(ordered, seen, machine.id);
     }
   }
@@ -71,6 +73,7 @@ export function listPreferredMachineIds(params: Readonly<{
 }
 
 export function resolvePreferredMachineId(params: Readonly<{
+  scope?: MachineReachabilityScope | null;
   machines: ReadonlyArray<Machine>;
   recentMachinePaths: ReadonlyArray<RecentMachinePathEntry>;
   preferredMachineId?: string | null;
@@ -84,6 +87,7 @@ export function resolvePreferredMachineId(params: Readonly<{
  * machines, and only when none is online the same order over every machine.
  */
 export function resolvePreferredLaunchMachineId(params: Readonly<{
+  scope?: MachineReachabilityScope | null;
   machines: ReadonlyArray<Machine>;
   recentMachinePaths: ReadonlyArray<RecentMachinePathEntry>;
   preferredMachineId?: string | null;

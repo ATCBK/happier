@@ -17,8 +17,12 @@ import { Icon } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
-import { useArtifacts } from '@/sync/domains/state/storage';
+import { useArtifacts, useArtifactsLoaded } from '@/sync/domains/state/storage';
 import { usePromptLibraryCatalogValue } from '@/sync/store/usePromptLibraryCatalog';
+import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
+import { refreshPromptLibraryCatalog } from '@/sync/engine/settings/promptLibraryCatalogEngine';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { t } from '@/text';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { fireAndForget } from '@/utils/system/fireAndForget';
@@ -107,16 +111,47 @@ function collectionCopy(kind: PromptCollectionKind) {
 }
 
 /** The items of one prompt collection, filtered by `query`, grouped by folder where that says something. */
-export function usePromptCollection(kind: PromptCollectionKind, query: string): PromptCollection {
+export function usePromptCollection(kind: PromptCollectionKind, query: string): PromptCollection & Readonly<{
+    status: 'loading' | 'ready' | 'unavailable';
+    stale: boolean;
+    retry?: () => Promise<void>;
+}> {
     const artifacts = useArtifacts();
+    const artifactsLoaded = useArtifactsLoaded();
+    const scope = useAccountSettingsScope();
     const { value: folders } = usePromptLibraryCatalogValue('folders');
-    const { value: invocations } = usePromptLibraryCatalogValue('invocations');
+    const invocations = usePromptLibraryCatalogValue('invocations');
     const untitled = kind === 'doc' ? t('promptLibrary.untitledPrompt') : t('promptLibrary.untitledSkill');
-    return React.useMemo(() => (kind === 'template'
-        ? buildPromptTemplateCollection({ invocations, query })
+    const collection = React.useMemo(() => (kind === 'template'
+        ? buildPromptTemplateCollection({ invocations: invocations.value, query })
         : buildPromptLibraryCollection({ kind, artifacts, folders, query, untitledTitle: untitled })),
-    [artifacts, folders, invocations, kind, query, untitled]);
+    [artifacts, folders, invocations.value, kind, query, untitled]);
+    const retry = React.useCallback(async () => {
+        if (scope) await refreshPromptLibraryCatalog(scope);
+    }, [scope]);
+    const status = kind === 'template' ? invocations.status : artifactsLoaded ? 'ready' : 'loading';
+    const stale = kind === 'template' ? invocations.stale : !artifactsLoaded;
+    return React.useMemo(() => ({ ...collection, status, stale, retry: kind === 'template' && scope ? retry : undefined }),
+        [collection, status, stale, kind, scope, retry]);
 }
+
+/** Readiness comes from the catalog/artifact owner, never from an empty projected array. */
+const PromptCollectionReadState = React.memo(function PromptCollectionReadState(props: Readonly<{
+    kind: PromptCollectionKind;
+    collection: ReturnType<typeof usePromptCollection>;
+}>) {
+    const { collection } = props;
+    if (collection.status === 'ready' && !collection.stale) return null;
+    const copy = collectionCopy(props.kind);
+    const loading = collection.status === 'loading';
+    const title = t(loading ? 'common.loading' : 'common.error');
+    const action = !loading && collection.retry ? { label: t('common.retry'), onPress: collection.retry } : undefined;
+    return collection.total > 0 ? (
+        <SurfaceFreshnessLine testID={`${copy.testID}.freshness`} reason={title} busy={loading} action={action} />
+    ) : (
+        <SurfaceStateCard testID={`${copy.testID}.readState`} kind={loading ? 'loading' : 'unavailable'} title={title} action={action} />
+    );
+});
 
 function openHref(router: ReturnType<typeof useRouter>, href: string, replace: boolean, tag: string) {
     const result = runGuardedNavigation(() => (replace ? router.replace(href as never) : router.push(href as never)));
@@ -186,7 +221,7 @@ export const PromptCollectionRail = React.memo(function PromptCollectionRail(pro
         <CollectionList
             testID={`${copy.testID}.rail`}
             title={copy.title}
-            count={collection.total}
+            count={collection.status === 'ready' && !collection.stale ? collection.total : undefined}
             headerAction={<PromptCollectionAddButton kind={props.kind} />}
             search={collection.total > SEARCH_THRESHOLD ? {
                 testID: `${copy.testID}.search`,
@@ -195,6 +230,7 @@ export const PromptCollectionRail = React.memo(function PromptCollectionRail(pro
                 placeholder: copy.search,
             } : null}
         >
+            <PromptCollectionReadState kind={props.kind} collection={collection} />
             {route?.kind === 'draft' ? <PromptCollectionDraftRow kind={props.kind} /> : null}
             {collection.total > 0 && rows.length === 0 ? (
                 <Item title={t('common.noMatches')} mode="info" />
@@ -259,7 +295,11 @@ const PromptCollectionLanding = React.memo(function PromptCollectionLanding(prop
     return (
         <ItemList>
             <View style={styles.emptyPane}>
-                <PromptCollectionEmpty kind={props.kind} />
+                {collection.status === 'ready' && !collection.stale ? (
+                    <PromptCollectionEmpty kind={props.kind} />
+                ) : (
+                    <PromptCollectionReadState kind={props.kind} collection={collection} />
+                )}
             </View>
         </ItemList>
     );
@@ -279,6 +319,7 @@ const PromptCollectionPage = React.memo(function PromptCollectionPage(props: Rea
                 description={copy.description}
                 actions={<PromptCollectionAddButton kind={props.kind} />}
             />
+            <PromptCollectionReadState kind={props.kind} collection={collection} />
             {collection.total > SEARCH_THRESHOLD ? (
                 <CompactSearchField
                     testID={`${copy.testID}.search`}
@@ -289,9 +330,11 @@ const PromptCollectionPage = React.memo(function PromptCollectionPage(props: Rea
                 />
             ) : null}
             {collection.total === 0 ? (
-                <ItemGroup surface="none">
-                    <PromptCollectionEmpty kind={props.kind} />
-                </ItemGroup>
+                collection.status === 'ready' && !collection.stale ? (
+                    <ItemGroup surface="none">
+                        <PromptCollectionEmpty kind={props.kind} />
+                    </ItemGroup>
+                ) : null
             ) : rows.length === 0 ? (
                 <ItemGroup>
                     <Item title={t('common.noMatches')} mode="info" />

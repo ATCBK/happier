@@ -3,6 +3,9 @@ import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import { router } from 'expo-router';
+import { getPreferredLanguage, preloadTranslations, setPreferredLanguageFromSettings, t } from '@/text';
+import { IntervalTimeline } from '@happier-dev/plugin-ui/presentation';
+import { DEFAULT_USAGE_COACH_PREFERENCES_V1 } from '@happier-dev/protocol/account/settings/usageCoachPreferencesV1';
 import {
   getUsageQueryKey,
   normalizeUsageQuery,
@@ -24,12 +27,8 @@ import { UsageProjectLedgerWidget } from './UsageProjectLedgerWidget';
 import { UsageSessionValueWidget } from './UsageSessionValueWidget';
 import { UsageOutcomesWidget } from './UsageOutcomesWidget';
 import { UsageCoachWidget } from './UsageCoachWidget';
-import { UsageNightShiftWidget } from './UsageNightShiftWidget';
-import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { storage } from '@/sync/domains/state/storage';
-import { settingsParse } from '@/sync/domains/settings/settings';
-import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { UsagePlanFitWidget } from './UsagePlanFitWidget';
 import { WidgetPresentationProvider } from '@happier-dev/plugin-ui';
@@ -109,8 +108,9 @@ const work = UsageWorkProjectionSchema.parse(allocateUsageOutcomes({
   evidence: [evidence('s1', 't1', 2493)],
 }));
 const compactions = [
-  { evidenceId: 'c1', observedAtMs: 10, sessionId: 's', turnId: 't' },
-  { evidenceId: 'c2', observedAtMs: 20, sessionId: 's', turnId: 't' },
+  { evidenceId: 'c1', observedAtMs: 10, sessionId: 's', turnId: 't', immediateRefillToLimit: true },
+  { evidenceId: 'c2', observedAtMs: 20, sessionId: 's', turnId: 't', immediateRefillToLimit: true },
+  { evidenceId: 'c3', observedAtMs: 30, sessionId: 's', turnId: 't', immediateRefillToLimit: true },
 ];
 const coach = evaluateUsageCoach({
   queryKey: key,
@@ -155,15 +155,62 @@ const model: UsageWidgetBodyModel = {
 const props = { model, slice, query, serverId: 'home' };
 
 describe('Work and Coach widget bodies', () => {
-  it('offers digest scheduling only after the person opens its existing Automation editor', async () => {
+  it('projects the measured growing request into Coach Why after a later zero-input observation', async () => {
+    const rows = [100, 200, 300, 200, 0].map((input, index) => {
+      const categories = { input, cacheRead: 0, cacheWrite: 0, output: 10, reasoning: 0, total: input + 10 };
+      return { ...contribution(`growth-${index}`, 'growth-session', `turn-${index}`),
+        eventCount: 1, observedAtMs: 10 + index * 10, tokens: categories, tokenCategories: categories };
+    });
+    const evaluation = evaluateUsageCoach({ queryKey: key, period: { startMs: 0, endMs: 1000 }, asOfMs: 1000,
+      currentness: 'current', accounting: { ...slice.accounting!, contributions: rows } });
+    const screen = await renderScreen(<UsageCoachWidget {...props} slice={{ ...slice, coach: evaluation }}
+      id="usage_coach" testID="coach" />);
+    await screen.pressByTestIdAsync('coach.finding.context_bloat.why-header');
+    const measured = screen.findByTestId('coach.finding.context_bloat.evidence.measurements')!;
+    const texts = measured.findAll(node => typeof node.props.children === 'string').map(node => node.props.children);
+    expect(texts).toContain(`300 ${t('usage.board.coach.metric_composed_tokens')}`);
+    expect(texts).not.toContain(`0 ${t('usage.board.coach.metric_composed_tokens')}`);
+  });
+  it('draws a finding\'s measured samples as its mini chart on the Coach view, never a single sample as a trend', async () => {
+    const rows = [100, 200, 300, 200, 0].map((input, index) => {
+      const categories = { input, cacheRead: 0, cacheWrite: 0, output: 10, reasoning: 0, total: input + 10 };
+      return { ...contribution(`growth-${index}`, 'growth-session', `turn-${index}`),
+        eventCount: 1, observedAtMs: 10 + index * 10, tokens: categories, tokenCategories: categories };
+    });
+    const evaluation = evaluateUsageCoach({ queryKey: key, period: { startMs: 0, endMs: 1000 }, asOfMs: 1000,
+      currentness: 'current', accounting: { ...slice.accounting!, contributions: rows } });
+    const finding = evaluation.findings.find(entry => entry.detectorId === 'context_bloat')!;
+    expect(finding.evidenceSeries?.[0]?.points.length).toBeGreaterThan(1);
+    const single = { ...evaluation, findings: evaluation.findings.map(entry => entry === finding
+      ? { ...entry, evidenceSeries: [{ ...entry.evidenceSeries![0]!, points: [entry.evidenceSeries![0]!.points[0]!] }] } : entry) };
+    const wide = (coach: typeof evaluation) => <WidgetPresentationProvider value={{ size: 'large',
+      footprint: { columns: 2, columnSpan: 2, rowSpan: 4, width: 'full', height: 'tall' }, geometry: { width: 1000, height: 800 } }}>
+      <UsageCoachWidget {...props} slice={{ ...slice, coach }} id="usage_coach" testID="coach" />
+    </WidgetPresentationProvider>;
+    const once = await renderScreen(wide(single));
+    expect(once.findByTestId('coach.finding.context_bloat')).toBeTruthy();
+    expect(once.findHostByTestId('coach.finding.context_bloat.trend')).toBeFalsy();
+    const screen = await renderScreen(wide(evaluation));
+    expect(screen.findHostByTestId('coach.finding.context_bloat.trend')).toBeTruthy();
+  });
+  it('does not open digest scheduling without a captured Account', async () => {
     const digestSlice = resolveUsagePageAggregation({ queries: [query],
       accounting: [{ query, value: slice.accounting!, status: 'available', asOfMs: 1000 }] }).results[0]!;
     const screen = await renderScreen(<UsageCoachWidget {...props} slice={digestSlice} id="usage_coach" testID="coach" />);
     expect(screen.findByTestId('coach.digest.configure')).toBeTruthy();
+    expect(screen.findByTestId('coach.digest.configure')?.props.disabled).toBe(true);
     expect(screen.findByTestId('coach.digest.editor')).toBeNull();
     await screen.pressByTestIdAsync('coach.digest.configure');
-    expect(screen.findByTestId('coach.digest.editor')).toBeTruthy();
-    expect(screen.findByTestId('coach.digest.editor-submit')?.props.disabled).toBe(true);
+    expect(screen.findByTestId('coach.digest.editor')).toBeNull();
+  });
+  it('collapses the ledger summary to one sentence when nothing is linked, instead of repeating the total', async () => {
+    const unlinked = UsageWorkProjectionSchema.parse(allocateUsageOutcomes({ contributions, evidence: [] }));
+    const screen = await renderScreen(<UsageProjectLedgerWidget {...props} slice={{ ...slice, work: unlinked }} id="usage_project_ledger" testID="ledger" />);
+    const summary = screen.findHostByTestId('ledger.conservation')!;
+    const text = summary.findAll(node => typeof node.props.children === 'string').map(node => node.props.children as string).join(' ');
+    expect(text).toContain(t('usage.board.work.noneLinked'));
+    expect(text).not.toContain(t('usage.board.work.notLinked'));
+    expect(text).not.toContain(t('usage.board.work.linkedToPrs'));
   });
   it('shows a standalone exact branch and a separate bound Provider mark without inventing one from the Agent', async () => {
     const bound = { ...contribution('branch', 's1', 't1'), providerId: 'provider.openrouter', providerConnectionId: 'connection' };
@@ -177,13 +224,15 @@ describe('Work and Coach widget bodies', () => {
     expect(screen.getTextContent()).toContain(branch.headSha.slice(0, 7));
     expect(screen.findByTestId('ledger.provider.provider.openrouter')).toBeTruthy();
     expect(screen.findAllByTestId('ledger.provider.claude')).toHaveLength(0);
-    // The Session without a binding stays unknown in words; it never borrows the Agent's name.
-    expect(screen.getTextContent()).toContain('Provider: Not recorded');
+    // The Session without a binding never borrows the Agent's name, and an unknown provider is not
+    // information: no "Provider: Not recorded" line (quiet truth).
+    expect(screen.getTextContent()).not.toContain('Not recorded');
   });
   it('opens a selected Session autopsy with exact contribution, checkpoint and witnessed wait phases', async () => {
     const sessionQuery = normalizeUsageQuery({ ...query, session: 's1' });
     const howYouWork = resolveUsageHowYouWork({ period: { startMs: 0, endMs: 1000 }, timeZoneOffsetMinutes: 0,
-      detail: { status: 'partial', facts: [
+      detail: { status: 'partial', phaseEvents: [{ evidenceId: 'native-compaction', sessionId: 's1', turnId: 't1',
+        observedAtMs: 400, kind: 'compaction', method: 'native_event' }], facts: [
         { workId: JSON.stringify(['s1', 't1']), evidenceId: 't1', agentId: 'claude', machineId: 'machine', kind: 'busy', startMs: 10, endMs: 800 },
         { workId: JSON.stringify(['s1', 't1']), evidenceId: 'approval', agentId: 'claude', machineId: 'machine', kind: 'permission_wait', startMs: 200, endMs: 300 },
         { workId: JSON.stringify(['s1', 't2']), evidenceId: 't2', agentId: 'claude', machineId: 'machine', kind: 'busy', startMs: 900, endMs: null },
@@ -201,7 +250,78 @@ describe('Work and Coach widget bodies', () => {
     expect(text).not.toContain('b'.repeat(40));
     expect(screen.findByTestId('value.autopsy.summary')).toBeTruthy();
     expect(screen.findByTestId('value.autopsy.turns')).toBeTruthy();
+    expect(screen.findByTestId('value.autopsy.costTimeline')).toBeTruthy();
+    expect(screen.findByTestId('value.autopsy.phases-select-checkpoint:' + 'a'.repeat(40))).toBeNull();
+    expect(screen.findByTestId('value.autopsy.phases-select-commit:' + 'b'.repeat(40))).toBeNull();
+    expect(text).toContain('Compaction');
     expect(screen.findByTestId('value.autopsy.unknownEnds')).toBeTruthy();
+  });
+  it('formats witnessed Autopsy git moments in the preferred language without changing their instants', async () => {
+    const previous = getPreferredLanguage();
+    const committedAtMs = 500;
+    const checkpointCommittedAtMs = 300;
+    const sessionQuery = normalizeUsageQuery({ ...query, session: 's1' });
+    const timedWork = UsageWorkProjectionSchema.parse(allocateUsageOutcomes({ contributions,
+      evidence: [{ ...evidence('s1', 't1', 2493), committedAtMs, checkpointCommittedAtMs }] }));
+    try {
+      setPreferredLanguageFromSettings('fr');
+      await preloadTranslations();
+      const screen = await renderScreen(<UsageSessionValueWidget {...props} query={sessionQuery}
+        slice={{ ...slice, shownQuery: sessionQuery, work: timedWork }} id="usage_session_value" testID="value" />);
+      const formatted = new Intl.DateTimeFormat('fr', { dateStyle: 'medium', timeStyle: 'short' }).format(committedAtMs);
+      expect(screen.getTextContent()).toContain(formatted);
+      expect(screen.findByType(IntervalTimeline).props.intervals).toContainEqual(expect.objectContaining({
+        id: `commit:${'b'.repeat(40)}`, start: committedAtMs, end: committedAtMs, annotation: expect.stringContaining(formatted),
+      }));
+      expect(screen.findByType(IntervalTimeline).props.intervals).toContainEqual(expect.objectContaining({
+        id: `checkpoint:${'a'.repeat(40)}`, start: checkpointCommittedAtMs, end: checkpointCommittedAtMs,
+      }));
+    } finally {
+      setPreferredLanguageFromSettings(previous);
+      await preloadTranslations();
+    }
+  });
+  it('names the admitted historical model and machine through the existing catalog and display reader', async () => {
+    const previous = storage.getState().machineDisplayById;
+    const machine = createMachineFixture({ id: 'machine' });
+    storage.setState({ machineDisplayById: { ...previous, machine: { ...machine,
+      metadata: { ...machine.metadata!, displayName: 'Evidence workstation' } } } });
+    try {
+      const sessionQuery = normalizeUsageQuery({ ...query, session: 's1' });
+      const namedWork = allocateUsageOutcomes({ contributions: [{ ...contribution('named', 's1', 't1'), modelId: 'claude-opus-4-5' }], evidence: [] });
+      const screen = await renderScreen(<UsageSessionValueWidget {...props} query={sessionQuery}
+        slice={{ ...slice, shownQuery: sessionQuery, work: namedWork }} id="usage_session_value" testID="value" />);
+      expect(screen.getTextContent()).toContain('Opus 4.5');
+      expect(screen.getTextContent()).toContain('Evidence workstation');
+      const unknownWork = allocateUsageOutcomes({ contributions: [{ ...contribution('unlisted', 's1', 't1'),
+        modelId: 'third-party/model-snapshot', machineId: 'unknown-machine-uuid' }], evidence: [] });
+      await screen.update(<UsageSessionValueWidget {...props} query={sessionQuery}
+        slice={{ ...slice, shownQuery: sessionQuery, work: unknownWork }} id="usage_session_value" testID="value" />);
+      expect(screen.getTextContent()).toContain('Third Party Model Snapshot');
+      expect(screen.getTextContent()).not.toContain('third-party/model-snapshot');
+      expect(screen.getTextContent()).not.toContain('unknown-machine-uuid');
+    } finally { await act(async () => { storage.setState({ machineDisplayById: previous }); }); }
+  });
+  it('shows independently known Work currencies and kinds without using the mixed whole as their formatter', async () => {
+    const rows = [{ ...contribution('eur', 'eur-session', 'eur-turn'), projectKey: 'eur-project',
+      cost: { reportedUsd: 3, estimatedUsd: 4, currency: 'EUR' } },
+    { ...contribution('usd', 'usd-session', 'usd-turn'), projectKey: 'usd-project',
+      cost: { reportedUsd: 0, estimatedUsd: 4, currency: 'USD', costSource: 'pricing_estimate' as const } }];
+    const mixedQuery = normalizeUsageQuery({ ...query, costBasis: 'auto' });
+    const mixedSlice = { ...slice, shownQuery: mixedQuery,
+      work: allocateUsageOutcomes({ contributions: rows, evidence: [evidence('eur-session', 'eur-turn', 1),
+        evidence('usd-session', 'usd-turn', 2)] }),
+      accounting: { ...slice.accounting!, totals: { ...slice.accounting!.totals,
+        cost: { reportedUsd: 3, estimatedUsd: 4, currency: 'MIXED' } } } };
+    for (const Widget of [UsageProjectLedgerWidget, UsageSessionValueWidget, UsageOutcomesWidget]) {
+      const screen = await renderScreen(<Widget {...props} query={mixedQuery} slice={mixedSlice} id="work" testID="work" />);
+      const text = screen.getTextContent();
+      expect(text).toContain('€3.00');
+      expect(text).toContain('$4.00');
+      expect(text).toContain('reported');
+      expect(text).toContain('estimated');
+      expect(text).not.toContain('$3.00');
+    }
   });
   it('expands a project row in place into every Session, linked PR and branch, and opens a Session\'s autopsy from there', async () => {
     const navigation = vi.spyOn(router, 'push');
@@ -317,37 +437,6 @@ describe('Work and Coach widget bodies', () => {
       expect(screen.getTextContent()).toContain('60%');
     } finally { clock.mockRestore(); }
   });
-  it('requires both chosen night endpoints before persisting the interval and can clear it', async () => {
-    await loadSyncSingletonForTests();
-    const previousState = storage.getState();
-    type PendingState = { pendingSettings: Partial<typeof previousState.settings>; pendingSettingsFlushTimer: ReturnType<typeof setTimeout> | null; pendingSettingsDirty: boolean };
-    const runtime = getSyncSingleton() as unknown as PendingState;
-    const previousPending = { pendingSettings: runtime.pendingSettings, pendingSettingsFlushTimer: runtime.pendingSettingsFlushTimer, pendingSettingsDirty: runtime.pendingSettingsDirty };
-    let rendered: Awaited<ReturnType<typeof renderScreen>> | undefined;
-    // Hold the real writer's external network/persistence flush on its clock boundary.
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
-    try {
-      storage.setState({ settings: settingsParse({}), settingsScope: { serverId: 'home', accountId: 'account' }, settingsVersion: 1 });
-      const screen = await renderScreen(<UsageNightShiftWidget {...props} id="usage_night_shift" testID="night" />);
-      rendered = screen;
-      expect(storage.getState().settings.usageNightHoursV1).toBeNull();
-      const controls = screen.findAllByType(DropdownMenu);
-      expect(controls).toHaveLength(2);
-      await act(async () => controls[0]!.props.onSelect('23'));
-      expect(storage.getState().settings.usageNightHoursV1).toBeNull();
-      await act(async () => screen.findAllByType(DropdownMenu)[1]!.props.onSelect('7'));
-      expect(storage.getState().settings.usageNightHoursV1).toEqual({ startHour: 23, endHour: 7 });
-      await act(async () => screen.findAllByType(DropdownMenu)[0]!.props.onSelect('clear'));
-      expect(storage.getState().settings.usageNightHoursV1).toBeNull();
-      await act(async () => screen.findAllByType(DropdownMenu)[0]!.props.onSelect('23'));
-      await act(async () => { storage.setState({ settingsScope: { serverId: 'home', accountId: 'other-account' } }); });
-      expect(screen.findAllByType(DropdownMenu).map(control => control.props.selectedId)).toEqual([null, null]);
-    } finally {
-      await rendered?.unmount();
-      vi.clearAllTimers(); vi.useRealTimers();
-      Object.assign(runtime, previousPending); storage.setState(previousState, true);
-    }
-  });
   it('ledger states the PR-linked amount and the unlinked remainder that add back to the total', async () => {
     const screen = await renderScreen(
       <UsageProjectLedgerWidget
@@ -375,6 +464,18 @@ describe('Work and Coach widget bodies', () => {
     expect(screen.findByTestId('value.unlinked')).toBeTruthy();
   });
 
+  it('shows unlinked Sessions once when a wide scatter has no witnessed outcome axis', async () => {
+    const unlinked = allocateUsageOutcomes({ contributions, evidence: [] });
+    const screen = await renderScreen(<WidgetPresentationProvider value={{ size: 'full',
+      footprint: { columns: 2, columnSpan: 2, rowSpan: 2, width: 'full', height: 'tall' },
+      geometry: { width: 700, height: 500 } }}>
+      <UsageSessionValueWidget {...props} slice={{ ...slice, work: unlinked }} id="usage_session_value" testID="value" />
+    </WidgetPresentationProvider>);
+    expect(screen.findByTestId('value.scatter')).toBeFalsy();
+    expect(screen.findAllHostsByTestId('value.open.s1')).toHaveLength(1);
+    expect(screen.findAllHostsByTestId('value.open.s2')).toHaveLength(1);
+  });
+
   it('outcomes shows the exact PR and the session funnel', async () => {
     const screen = await renderScreen(
       <UsageOutcomesWidget {...props} id="usage_outcomes" testID="outcomes" />,
@@ -383,16 +484,47 @@ describe('Work and Coach widget bodies', () => {
     expect(screen.getTextContent()).toContain('2493');
   });
 
+  it('coach on Overview is the findings alone: no facts band, checks, digest or preferences', async () => {
+    const screen = await renderScreen(<WidgetPresentationProvider value={{ size: 'full',
+      footprint: { columns: 2, columnSpan: 2, rowSpan: 2, width: 'full', height: 'tall' }, geometry: { width: 900, height: 300 } }}>
+      <UsageCoachWidget {...props} id="usage_coach" testID="coach" />
+    </WidgetPresentationProvider>);
+    expect(screen.findByTestId('coach.finding.compaction_storms')).toBeTruthy();
+    expect(screen.findByTestId('coach.summary')).toBeFalsy();
+    expect(screen.findByTestId('coach.checks')).toBeFalsy();
+    expect(screen.findByTestId('coach.configure')).toBeFalsy();
+  });
+
   it('coach shows the evidence-backed finding, hides a dismissed one and keeps insufficient checks visible', async () => {
     const screen = await renderScreen(
       <UsageCoachWidget {...props} id="usage_coach" testID="coach" />,
     );
     expect(screen.findByTestId('coach.finding.compaction_storms')).toBeTruthy();
-    expect(screen.findByTestId('coach.checks.toggle')).toBeTruthy();
+    expect(screen.findByTestId('coach.finding.compaction_storms.why')).toBeTruthy();
+    expect(screen.findByTestId('coach.finding.compaction_storms.evidence')).toBeFalsy();
+    await screen.pressByTestIdAsync('coach.finding.compaction_storms.why-header');
+    expect(screen.findByTestId('coach.finding.compaction_storms.evidence')).toBeTruthy();
+    // A citation reads as its site; its exact address is the link's accessible name and target.
+    const citation = coach.findings[0]!.basis.citations[0]!;
+    expect(screen.getTextContent()).toContain(new URL(citation.url).host);
+    expect(screen.findAll(node => node.props.accessibilityRole === 'link'
+      && String(node.props.accessibilityLabel ?? '').startsWith(citation.url))).not.toHaveLength(0);
+    expect(screen.getTextContent()).toContain(coach.findings[0]!.basis.limitations[0]!);
+    expect(screen.findByTestId('coach.finding.compaction_storms.evidence.c1')).toBeTruthy();
+    expect(String(screen.findByTestId('coach.finding.compaction_storms.evidence.c1')!.props.children)).not.toContain('c1');
+    const measurements = screen.findByTestId('coach.finding.compaction_storms.evidence.measurements')!;
+    const measurementsText = measurements.findAll(node => typeof node.props.children === 'string')
+      .map(node => node.props.children).join(' ');
+    const observedCompactions = coach.findings[0]!.measurements.find(measurement => measurement.metric === 'compactions')!;
+    expect(measurementsText).toContain(`${observedCompactions.value} ${t('usage.board.coach.metric_compactions')}`);
+    expect(screen.getTextContent()).not.toContain(coach.findings[0]!.basis.method);
+    await screen.pressByTestIdAsync('coach.finding.compaction_storms.evidence.diagnostics-header');
+    expect(screen.getTextContent()).toContain(coach.findings[0]!.basis.method);
+    expect(screen.findByTestId('coach.checks-header')).toBeTruthy();
     const dismissed = applyUsageCoachPreferences(
       coach,
       {
-        v: 1,
+        ...DEFAULT_USAGE_COACH_PREFERENCES_V1,
         suppressions: [
           { kind: 'dismissed', evidenceKey: coach.findings[0]!.evidenceKey },
         ],
@@ -409,5 +541,8 @@ describe('Work and Coach widget bodies', () => {
     );
     expect(hidden.findByTestId('coach.finding.compaction_storms')).toBeFalsy();
     expect(hidden.findByTestId('coach.empty')).toBeTruthy();
+    expect(hidden.findByTestId('coach.hidden-header')).toBeTruthy();
+    await hidden.pressByTestIdAsync('coach.hidden-header');
+    expect(hidden.findByTestId('coach.hidden.compaction_storms.restore')).toBeTruthy();
   });
 });

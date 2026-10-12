@@ -5,9 +5,10 @@ import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import { SettingAnchor, SettingRow } from '@/components/settings/shell/SettingRow';
 import { SESSION_PROVIDER_LIMITS_SETTINGS } from '@/components/settings/session/sessionProviderLimitsSettings';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
-import { useSettingMutable } from '@/sync/domains/state/storage';
+import { useSetting } from '@/sync/domains/state/storage';
+import { useSettingActionFeedback } from '@/components/settings/shell/useSettingActionFeedback';
 import { t } from '@/text';
-import { readUsagePersonalPaceTarget, setUsagePersonalPaceTarget } from '@/components/settings/usage/widgets/plans/usagePacingTarget';
+import { readUsagePersonalPaceTarget } from '@/components/settings/usage/widgets/plans/usagePacingTarget';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 type Toggle = 'pace' | 'depletion' | 'reset' | 'unused';
@@ -29,8 +30,9 @@ const fromRemaining = (choice: Remaining): number | null => choice === 'off' ? n
  */
 export const UsageCapacityAlertsSettingsGroup = React.memo(function UsageCapacityAlertsSettingsGroup() {
     const enabled = useFeatureEnabled('connectedServices.quotas');
-    const [alerts, setAlerts] = useSettingMutable('usageQuotaNotificationsV1');
-    const [targets, setTargets] = useSettingMutable('usagePacingTargetsV1');
+    const alerts = useSetting('usageQuotaNotificationsV1');
+    const targets = useSetting('usagePacingTargetsV1');
+    const { setSetting } = useSettingActionFeedback();
     const target = readUsagePersonalPaceTarget(targets);
     const settings = SESSION_PROVIDER_LIMITS_SETTINGS.settings;
     if (!enabled) return null;
@@ -56,7 +58,7 @@ export const UsageCapacityAlertsSettingsGroup = React.memo(function UsageCapacit
                         id, label: id === 'off' ? t('usage.board.plans.alertOff') : t('usage.board.plans.targetPercent', { percent: Number(id) }),
                     }))}
                     value={toTarget(target)}
-                    onChange={(choice) => setTargets(setUsagePersonalPaceTarget(targets, choice === 'off' ? null : Number(choice) / 100))}
+                    onChange={(choice) => { void setSetting(settings.personalPaceTarget, choice === 'off' ? null : Number(choice) / 100); }}
                 />
             </SettingAnchor>
             {toggles.map((toggle) => (
@@ -66,9 +68,9 @@ export const UsageCapacityAlertsSettingsGroup = React.memo(function UsageCapacit
                     testID={`settings-usage-alerts-${toggle.key}`}
                     subtitle={toggle.subtitle}
                     rightElement={<Switch testID={`settings-usage-alerts-${toggle.key}-toggle`} value={alerts[toggle.key]}
-                        onValueChange={(value) => setAlerts({ ...alerts, [toggle.key]: value })} />}
+                        onValueChange={(value) => { void setSetting(toggle.setting, value); }} />}
                     showChevron={false}
-                    onPress={() => setAlerts({ ...alerts, [toggle.key]: !alerts[toggle.key] })}
+                    onPress={() => { void setSetting(toggle.setting, !alerts[toggle.key]); }}
                 />
             ))}
             <SettingAnchor setting={settings.alertAlmostOut}>
@@ -80,7 +82,7 @@ export const UsageCapacityAlertsSettingsGroup = React.memo(function UsageCapacit
                         id, label: id === 'off' ? t('usage.board.plans.alertOff') : t('usage.board.plans.alertPercentLeft', { percent: Number(id) }),
                     }))}
                     value={toRemaining(alerts.almostOutRemainingFraction)}
-                    onChange={(choice) => setAlerts({ ...alerts, almostOutRemainingFraction: fromRemaining(choice) })}
+                    onChange={(choice) => { void setSetting(settings.alertAlmostOut, fromRemaining(choice)); }}
                 />
             </SettingAnchor>
             <SettingAnchor setting={settings.alertEnding}>
@@ -90,7 +92,7 @@ export const UsageCapacityAlertsSettingsGroup = React.memo(function UsageCapacit
                     title={t(settings.alertEnding.titleKey)}
                     options={leadOptions}
                     value={toLead(alerts.endingBeforeMs)}
-                    onChange={(lead) => setAlerts({ ...alerts, endingBeforeMs: fromLead(lead) })}
+                    onChange={(lead) => { void setSetting(settings.alertEnding, fromLead(lead)); }}
                 />
             </SettingAnchor>
             <SettingAnchor setting={settings.alertCreditExpiry}>
@@ -100,7 +102,7 @@ export const UsageCapacityAlertsSettingsGroup = React.memo(function UsageCapacit
                     title={t(settings.alertCreditExpiry.titleKey)}
                     options={leadOptions}
                     value={toLead(alerts.creditExpiryBeforeMs)}
-                    onChange={(lead) => setAlerts({ ...alerts, creditExpiryBeforeMs: fromLead(lead) })}
+                    onChange={(lead) => { void setSetting(settings.alertCreditExpiry, fromLead(lead)); }}
                 />
             </SettingAnchor>
         </ItemGroup>

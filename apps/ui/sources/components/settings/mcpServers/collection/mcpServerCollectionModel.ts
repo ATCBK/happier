@@ -1,4 +1,4 @@
-import type { McpServerBindingV1, McpServerCatalogEntryV1, McpServersSettingsV1 } from '@happier-dev/protocol';
+import type { McpServerRuleV1, McpServerCatalogEntryV1, McpServersSettingsV1 } from '@happier-dev/protocol';
 
 import { t } from '@/text';
 import { SETTINGS_ROUTES } from '@/components/settings/catalog/routes';
@@ -24,7 +24,7 @@ export function newMcpServerRoute(mode: McpAddMode = 'configure', presetId?: str
 
 export type McpServerCollectionRow = Readonly<{
     server: McpServerCatalogEntryV1;
-    bindings: readonly McpServerBindingV1[];
+    bindings: readonly McpServerRuleV1[];
     title: string;
     /** Applies nowhere: no enabled rule. Only this gets the rail's trouble dot. */
     unbound: boolean;
@@ -32,7 +32,7 @@ export type McpServerCollectionRow = Readonly<{
 
 /** Servers by display name, each with the rules that apply it. */
 export function buildMcpServerCollection(settings: McpServersSettingsV1, query: string): readonly McpServerCollectionRow[] {
-    const bindingsByServerId = new Map<string, McpServerBindingV1[]>();
+    const bindingsByServerId = new Map<string, McpServerRuleV1[]>();
     for (const binding of settings.bindings) {
         const list = bindingsByServerId.get(binding.serverId);
         if (list) list.push(binding);

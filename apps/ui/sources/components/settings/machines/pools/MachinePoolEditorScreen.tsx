@@ -434,8 +434,6 @@ function MachinePoolEditorContent(props: MachinePoolEditorContentProps) {
     }, [draft, existing?.pool.revision, formDisabled, isNew, navigation, props.poolId, props.serverId, router]);
     const remove = React.useCallback(async () => {
         if (!existing || formDisabled) return;
-        const confirmed = await Modal.confirm(t('machinePools.deleteTitle'), t('machinePools.deleteBody'), { cancelText: t('common.cancel'), confirmText: t('common.delete'), destructive: true });
-        if (!confirmed || !lifetimeCurrentRef.current) return;
         pendingDeleteFocusTargetRef.current = null;
         setSaving(true); setError(null); setApprovalId(null);
         const nextFocusTarget = resolveMachinePoolDeleteFocusTargetTestId(
@@ -784,11 +782,11 @@ export function MachinePoolEditorRoute(props: Readonly<{ params: { serverId?: st
 }
 
 const styles = StyleSheet.create((theme) => ({
-    headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    headerActions: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 },
     // The field's quiet "Optional" suffix beside its label.
     optionalMarker: { ...Typography.default('regular'), fontSize: 15, color: theme.colors.text.tertiary },
-    tierActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 4 },
-    presenceDot: { width: 6, height: 6, borderRadius: 3, marginRight: 6 },
+    tierActions: { flexDirection: 'row', flexWrap: 'wrap', gap: theme.space.s4 },
+    presenceDot: { width: 6, height: 6, borderRadius: 3, marginRight: theme.space.s6 },
     presenceOnline: { backgroundColor: theme.colors.status.connected },
     presenceOther: { backgroundColor: theme.colors.text.tertiary },
 }));

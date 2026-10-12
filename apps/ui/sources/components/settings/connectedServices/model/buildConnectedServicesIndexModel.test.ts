@@ -117,6 +117,28 @@ describe('buildConnectedServicesIndexModel · who uses what', () => {
         expect(model.sheets.every((sheet) => sheet.section === 'agents' && sheet.usedBy.length === 0)).toBe(true);
     });
 
+    it('leaves out a service with nothing in it and nothing to do yet, instead of an empty sheet', () => {
+        // The machines did not answer: nothing can be added right now, and these services have no accounts.
+        const unreachable = [entry(CODEX, 'ChatGPT'), entry(GEMINI, 'Gemini'), entry(GITHUB, 'GitHub')]
+            .map((candidate): ConnectedServiceRegistryEntry => ({ ...candidate, executable: false, projectionStatus: 'stale' }));
+        const model = buildConnectedServicesIndexModel({
+            transport: 'advertised-v4',
+            entries: unreachable,
+            qualifiedAccounts: [account(CODEX, 'me')],
+            qualifiedGroups: [],
+            legacyServices: [],
+            defaultAccountByServiceKey: {},
+            resolveLabel: (candidate) => String(candidate?.projectedTitle ?? 'Unknown'),
+            resolveFallbackEntry: () => null,
+            presentDiagnostics: () => ({ primary: null, supportDetails: null }),
+            loadingLabel: 'Loading',
+            agentUses: AGENTS,
+        });
+
+        expect(model.sheets.map((sheet) => sheet.label)).toEqual(['ChatGPT']);
+        expect(model.connectable).toEqual([]);
+    });
+
     it('keeps known stale services navigable with credential health and diagnostics without admitting setup', () => {
         const staleEntries = [entry(CODEX, 'ChatGPT'), entry(GEMINI, 'Gemini')].map((candidate): ConnectedServiceRegistryEntry => ({
             ...candidate,

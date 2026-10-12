@@ -15,25 +15,28 @@ import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { openExternalUrl } from '@/utils/url/openExternalUrl';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
+import { SchemaFieldControl } from '@/components/settings/schemaFields/SchemaFieldControl';
+import { buildActionRowAccessibilityLabel } from '@/components/ui/lists/actionRowAccessibility';
 import { Item } from '@/components/ui/lists/Item';
 import { t } from '@/text';
 import { resolveProjectedLocalizedText } from '@/components/plugins/surfaces/resolvePluginDisplayString';
 
 import { useConnectedAccountInvalidFieldFocus } from './useConnectedAccountInvalidFieldFocus';
 import { useConnectedAccountDraftNavigationGuard } from './useConnectedAccountDraftNavigationGuard';
+import { createConnectedAccountConfigurationDraft } from './connectedAccountConfigurationDraft';
 
 const stylesheet = StyleSheet.create((theme) => ({
     guided: { gap: 14 },
     field: { width: '100%' },
     accessories: { flexDirection: 'row', alignItems: 'center' },
-    note: { ...Typography.default(), fontSize: 12, lineHeight: 17, color: theme.colors.text.secondary },
+    note: {  ...Typography.variant('meta'),  color: theme.colors.text.secondary },
     panelActions: {
-        paddingTop: 12,
+        paddingTop: theme.space.s12,
     },
     actions: {
         alignItems: 'flex-end',
-        paddingHorizontal: 16,
-        paddingVertical: 12,
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s12,
     },
 }));
 
@@ -71,11 +74,69 @@ type ConnectedAccountManualFormProps = Readonly<{
     }>): Promise<boolean | void> | boolean | void;
 }>;
 
+function ManualChoiceField(props: Readonly<{
+    field: ManualAuthenticationField;
+    value: string;
+    disabled: boolean;
+    error: string | null;
+    localize: ConnectedAccountManualFormProps['localize'];
+    focusTarget: React.ComponentProps<typeof Item>['pressableRef'];
+    onChange(value: string): void;
+}>) {
+    const [open, setOpen] = React.useState(false);
+    const title = resolveProjectedLocalizedText(props.field.title, props.localize);
+    const description = resolveProjectedLocalizedText(props.field.description, props.localize);
+    const items = (props.field.presentation?.options ?? []).flatMap(option => {
+        if (typeof option.value !== 'string') return [];
+        const optionTitle = resolveProjectedLocalizedText(option.title, props.localize);
+        const subtitle = resolveProjectedLocalizedText(option.description, props.localize);
+        return [{ id: option.value, title: optionTitle, subtitle: subtitle || undefined,
+            accessibilityLabel: buildActionRowAccessibilityLabel([optionTitle, subtitle]) ?? optionTitle }];
+    });
+    const selected = items.find(item => item.id === props.value);
+    React.useEffect(() => { if (props.disabled) setOpen(false); }, [props.disabled]);
+    return <SchemaFieldControl control="select" inputProps={{
+        testID: `connected-account-manual:${props.field.id}`,
+        open,
+        onOpenChange: next => { if (!props.disabled) setOpen(next); },
+        selectedId: props.value,
+        items,
+        variant: 'selectable',
+        search: false,
+        itemTrigger: {
+            title,
+            subtitle: [selected?.title, description, props.error].filter(Boolean).join('\n') || undefined,
+            showSelectedSubtitle: false,
+            itemProps: {
+                disabled: props.disabled,
+                subtitleLines: 0,
+                pressableRef: props.focusTarget,
+                accessibilityLabel: buildActionRowAccessibilityLabel([title, selected?.title, description, props.error]) ?? title,
+                accessibilityHint: props.error ?? undefined,
+            },
+        },
+        onSelect: id => {
+            if (props.disabled || !items.some(item => item.id === id)) return;
+            props.onChange(id);
+            setOpen(false);
+        },
+    }} />;
+}
+
 function ConnectedAccountManualFormBody(props: ConnectedAccountManualFormProps) {
     const styles = stylesheet;
-    const initialDraft = React.useMemo(() => (
-        Object.fromEntries(props.fields.map((field) => [field.id, '']))
-    ), [props.fields]);
+    const initialDraft = React.useMemo(() => {
+        const choiceDefaults = createConnectedAccountConfigurationDraft({
+            fields: props.fields.flatMap(field => field.secret !== true && field.presentation?.control === 'select'
+                ? [{ ...field, secret: false as const }]
+                : []),
+            values: {},
+        });
+        return Object.fromEntries(props.fields.map(field => {
+            const value = choiceDefaults[field.id];
+            return [field.id, typeof value === 'string' ? value : ''] as const;
+        }));
+    }, [props.fields]);
     const [draft, setDraft] = React.useState<Readonly<Record<string, string>>>(() => (
         initialDraft
     ));
@@ -137,6 +198,14 @@ function ConnectedAccountManualFormBody(props: ConnectedAccountManualFormProps) 
         const error = invalid ? (draft[field.id]
             ? t('connectedServicesSettings.manualFieldInvalid', { field: title })
             : t('common.error')) : null;
+        if (field.presentation?.control === 'select') {
+            return <ManualChoiceField field={field} value={draft[field.id] ?? ''} disabled={props.submitting}
+                error={error} localize={props.localize} focusTarget={registerInvalidFieldTarget(field.id)}
+                onChange={value => {
+                    setDraft(current => ({ ...current, [field.id]: value }));
+                    setInvalidFieldIds(current => current.filter(id => id !== field.id));
+                }} />;
+        }
         return <FieldTextInput
             testID={`connected-account-manual:${field.id}`}
             ref={registerInvalidFieldTarget(field.id)}
@@ -183,6 +252,9 @@ function ConnectedAccountManualFormBody(props: ConnectedAccountManualFormProps) 
                 ]} />
                 <Text style={styles.note}>{guided.billingNote}</Text>
             </View> : fields.map((field) => {
+                if (field.presentation?.control === 'select') {
+                    return <React.Fragment key={field.id}>{fieldControl(field)}</React.Fragment>;
+                }
                 const title = resolveProjectedLocalizedText(field.title, props.localize);
                 const description = resolveProjectedLocalizedText(field.description, props.localize);
                 const multiline = field.presentation?.control === 'textarea';

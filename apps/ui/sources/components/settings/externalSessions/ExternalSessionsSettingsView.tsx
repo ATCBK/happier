@@ -24,7 +24,7 @@ import {
     useMachineAdministrationTargetSelection,
 } from '@/sync/domains/machines/administration/useTargetSelection';
 import { isMachineAdministrationExecutionTargetCurrent } from '@/sync/domains/machines/administration/operationCurrentness';
-import { useAllMachines, useAllSessions, useSetting } from '@/sync/domains/state/storage';
+import { useActiveServerAccountScope, useAllMachines, useAllSessions, useSetting } from '@/sync/domains/state/storage';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { readSessionDisplayTitleField } from '@/sync/state/selectors';
 import { sync } from '@/sync/sync';
@@ -32,7 +32,9 @@ import { useSettingsVersion } from '@/sync/store/hooks';
 import { requireOneShotAccountSettingsMutationApplied } from '@/sync/engine/settings/syncSettings';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { t } from '@/text';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import { isMachineSelectableForFleet } from '@/sync/domains/machines/administration/fleetUnion';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
+import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
 import { supportsExternalSessionBackgroundFollow } from '@/components/sessions/external/browse/resolveExternalSessionBrowseSourceOptions';
 import {
     ExternalSessionsIntegrationSection,
@@ -207,6 +209,9 @@ export const ExternalSessionsSettingsView = React.memo(function ExternalSessions
     props: ExternalSessionsSettingsViewProps,
 ) {
     const machines = useAllMachines();
+    const accountScope = useActiveServerAccountScope();
+    const reachabilityRevision = useMachineReachabilityRevision();
+    const nowMs = useMachinePresenceNowMs(machines);
     const sessions = useAllSessions();
     const backendEnabledByTargetKey = useSetting('backendEnabledByTargetKey');
     const rawSettings = useSetting('externalSessionsSettingsV1');
@@ -218,8 +223,8 @@ export const ExternalSessionsSettingsView = React.memo(function ExternalSessions
         autoLinkSourcePolicies: [],
     };
     const machineOnlineById = React.useMemo(
-        () => new Map(machines.map((machine) => [machine.id, isMachineOnline(machine)])),
-        [machines],
+        () => new Map(machines.map((machine) => [machine.id, isMachineSelectableForFleet(accountScope, machine, nowMs)])),
+        [machines, accountScope, reachabilityRevision, nowMs],
     );
     const rows = React.useMemo(
         () => buildFollowRows(sessions, machineOnlineById),

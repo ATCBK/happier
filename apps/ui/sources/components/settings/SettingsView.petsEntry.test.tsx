@@ -1,5 +1,4 @@
 import * as React from 'react';
-import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -19,37 +18,32 @@ const shared = vi.hoisted(() => ({
 }));
 
 installSettingsViewCommonModuleMocks({
-    storage: async (importOriginal) => {
+    storage: async () => {
         const {
-            createStorageModuleMock,
+            createStorageModuleStub,
             createUseLocalSettingMock,
             createUseLocalSettingMutableMock,
         } = await import('@/dev/testkit/mocks/storage');
-        const actual = await importOriginal<typeof import('@/sync/domains/state/storage')>();
         const { profileDefaults } = await import('@/sync/domains/profiles/profile');
         const useLocalSetting = createUseLocalSettingMock({ values: { devModeEnabled: false } });
-        return createStorageModuleMock({
-            importOriginal,
-            overrides: {
-                ...actual,
-                useEntitlement: () => false,
-                useLocalSetting,
-                useLocalSettingMutable: createUseLocalSettingMutableMock(useLocalSetting),
-                useSetting: createUseSettingMock({ fallback: (key) => {
-                    if (key === 'serverSelectionGroups') return [];
-                    if (key === 'serverSelectionActiveTargetKind') return null;
-                    if (key === 'serverSelectionActiveTargetId') return null;
-                    if (key === 'experiments') return false;
-                    if (key === 'featureToggles') return {};
-                    if (key === 'useProfiles') return false;
-                    if (key === 'sessionUseTmux') return false;
-                    return null;
-                } }),
-                useAllMachines: () => [],
-                useMachineListByServerId: () => ({}),
-                useMachineListStatusByServerId: () => ({}),
-                useProfile: () => ({ ...profileDefaults, id: 'prof_1', firstName: '', connectedServices: [] }),
-            },
+        return createStorageModuleStub({
+            useEntitlement: () => false,
+            useLocalSetting,
+            useLocalSettingMutable: createUseLocalSettingMutableMock(useLocalSetting),
+            useSetting: createUseSettingMock({ fallback: (key) => {
+                if (key === 'serverSelectionGroups') return [];
+                if (key === 'serverSelectionActiveTargetKind') return null;
+                if (key === 'serverSelectionActiveTargetId') return null;
+                if (key === 'experiments') return false;
+                if (key === 'featureToggles') return {};
+                if (key === 'useProfiles') return false;
+                if (key === 'sessionUseTmux') return false;
+                return null;
+            } }),
+            useAllMachines: () => [],
+            useMachineListByServerId: () => ({}),
+            useMachineListStatusByServerId: () => ({}),
+            useProfile: () => ({ ...profileDefaults, id: 'prof_1', name: '', connectedServices: [] }),
         });
     },
     router: async () => {
@@ -122,7 +116,6 @@ vi.mock('@/sync/domains/profiles/profile', async (importOriginal) => {
     const actual = await importOriginal<typeof import('@/sync/domains/profiles/profile')>();
     return {
         ...actual,
-        getDisplayName: () => 'Test User',
         getAvatarUrl: () => null,
         getBio: () => '',
     };
@@ -173,6 +166,9 @@ vi.mock('@/utils/platform/desktopHost', async (importOriginal) => ({
     ...await importOriginal<typeof import('@/utils/platform/desktopHost')>(),
     isDesktopHost: () => false,
 }));
+
+const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+await import('./SettingsView');
 
 describe('SettingsView pets entry', () => {
     afterEach(() => {

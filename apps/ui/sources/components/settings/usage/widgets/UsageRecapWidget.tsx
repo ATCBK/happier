@@ -107,7 +107,7 @@ export function UsageRecapWidget(props: UsageBodyProps): React.ReactElement {
     Modal.show({
       component: UsageRecapComposer,
       props: {
-        query: props.query,
+        query: shownQuery,
         serverId: props.serverId,
       },
       chrome: {
@@ -115,11 +115,14 @@ export function UsageRecapWidget(props: UsageBodyProps): React.ReactElement {
         material: 'solid',
         title: t('usage.board.recap.shareTitle'),
         phonePresentation: 'fullscreen',
-        dimensions: { size: 'lg' },
+        // Held to the window, so Copy, Save and Share stay in view while the controls scroll.
+        scrollHost: 'body',
+        // The stage needs the room of the lab sheet (s2card C): card left, controls right.
+        dimensions: { size: 'lg', width: 1120 },
         testID: 'usage-recap-composer.modal',
       },
     });
-  }, [props.query, props.serverId]);
+  }, [shownQuery, props.serverId]);
   const playStory = React.useCallback(() => {
     if (!viewModel) return;
     let modalId: string | null = null;
@@ -148,6 +151,7 @@ export function UsageRecapWidget(props: UsageBodyProps): React.ReactElement {
       <View style={styles.root}>
         <UsageBodyInsufficient
           testID={`${props.testID}.empty`}
+          replacesContent={false}
           title={t('usage.board.recap.noRecapTitle')}
           reason={t('usage.board.recap.noRecapReason')}
         />
@@ -164,19 +168,19 @@ export function UsageRecapWidget(props: UsageBodyProps): React.ReactElement {
       />
       <UsageWorkAutopsy {...props} testID={`${props.testID}.autopsy`} />
       <View style={styles.actions}>
+        {/* The one primary: the private card is what this widget makes (lab urecap/s2card). */}
+        <RoundButton
+          size="small"
+          title={t('usage.board.recap.shareCard')}
+          onPress={openComposer}
+          testID={`${props.testID}.share`}
+        />
         <RoundButton
           size="small"
           display="secondary"
           title={t('usage.recap.play')}
           onPress={playStory}
           testID={`${props.testID}.play`}
-        />
-        <RoundButton
-          size="small"
-          display="secondary"
-          title={t('usage.board.recap.shareCard')}
-          onPress={openComposer}
-          testID={`${props.testID}.share`}
         />
         <View style={styles.grow} />
         <RoundButton

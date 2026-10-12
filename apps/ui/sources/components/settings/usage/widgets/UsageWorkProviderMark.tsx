@@ -25,11 +25,11 @@ export function UsageWorkProviderMark(
     machineId: props.machineId,
     serverId: props.serverId,
   });
-  const definition =
+  const contribution =
     cached?.kind === 'ready'
-      ? cached.inputs.pluginProjectionV2?.familiesById.providers?.entriesById[props.providerId]?.definition
+      ? cached.inputs.pluginProjectionV2?.familiesById.providers?.entriesById[props.providerId]
       : undefined;
-  const parsed = ProviderContributionV1Schema.safeParse(definition);
+  const parsed = ProviderContributionV1Schema.safeParse(contribution?.definition);
   const label = parsed.success ? parsed.data.name : props.providerId;
   return (
     <View
@@ -39,6 +39,7 @@ export function UsageWorkProviderMark(
       style={styles.mark}
     >
       <ProviderIcon
+        contributionKey={contribution?.id}
         icon={parsed.success ? parsed.data.icon : null}
         size={ICON_SIZE.sm}
         color={theme.colors.text.secondary}
@@ -58,6 +59,6 @@ export function UsageWorkProviderMark(
 }
 
 const styles = StyleSheet.create((theme) => ({
-  mark: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  mark: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s4 },
   label: { ...Typography.default(), color: theme.colors.text.secondary },
 }));

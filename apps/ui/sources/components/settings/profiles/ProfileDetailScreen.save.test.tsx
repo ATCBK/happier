@@ -39,11 +39,14 @@ import { storage } from '@/sync/domains/state/storageStore';
 import { refreshProfileCatalog, resetProfileCatalogEngineForTests } from '@/sync/engine/settings/profileCatalogEngine';
 import { resetProfileCatalogSnapshotsForTests } from '@/sync/store/settings/profileCatalogSnapshot';
 import { ProfileDetailScreen } from './ProfileDetailScreen';
+import { ProfileCollectionRail } from './ProfileCollectionList';
+import { ProfileSettingsIndex } from './ProfileSettingsIndex';
+import { CollectionList } from '@/components/ui/lists/collection/CollectionList';
 import ProfileEditScreen from '@/app/(app)/new/pick/profile-edit';
 
 installDisconnectedServerSocketBoundary();
 
-async function setupAcknowledgedSave(options: Readonly<{ initialRecord?: ProfileRecordV1; holdInitialCatalog?: boolean }> = {}) {
+async function setupAcknowledgedSave(options: Readonly<{ initialRecord?: ProfileRecordV1; holdInitialCatalog?: boolean; useProfiles?: boolean }> = {}) {
         await loadSyncSingletonForTests();
         const initial = storage.getState();
         navigation.replace.mockClear();
@@ -63,7 +66,8 @@ async function setupAcknowledgedSave(options: Readonly<{ initialRecord?: Profile
             if (path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse());
             if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
             if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
-            if (path === '/v2/account/settings') return Response.json({ version: 1, content: { t: 'plain', v: {} } });
+            if (path === '/v2/account/settings') return Response.json({ version: 1, content: { t: 'plain',
+                v: options.useProfiles === undefined ? {} : { useProfiles: options.useProfiles } } });
             if (path === '/v1/artifacts') return Response.json([]);
             if (path === '/v1/account/authoring-memory') return Response.json({ rows: [] });
             if (path === `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`) return Response.json({ status: 'listed', rows: [], coverage: 'complete' });
@@ -110,6 +114,63 @@ async function setupAcknowledgedSave(options: Readonly<{ initialRecord?: Profile
 }
 
 describe('Profile editor acknowledged save', () => {
+    it('keeps the collection rail loading before inventory arrives and retains it during refresh', async () => {
+        const source = { ...createEmptyCustomProfile(), name: 'Research' };
+        const save = await setupAcknowledgedSave({ holdInitialCatalog: true, initialRecord: { v: 1, id: source.id,
+            definition: { kind: 'inline', profile: source }, enabled: true, promptStack: [], secretBindings: {} } });
+        const screen = await renderScreen(<ProfileCollectionRail />);
+        expect(screen.tree.findByTestId('settings.profiles.rail.loading')).not.toBeNull();
+        expect(screen.tree.findByType(CollectionList).props.count).toBeUndefined();
+        expect(screen.tree.findByTestId(`settings.profiles.row.${source.id}`)).toBeNull();
+        await act(async () => { save.loadCatalog(); });
+        await vi.waitFor(() => expect(screen.tree.findByTestId(`settings.profiles.row.${source.id}`)).not.toBeNull());
+        expect(screen.tree.findByTestId('settings.profiles.rail.loading')).toBeNull();
+        const count = screen.tree.findByType(CollectionList).props.count;
+        let refresh: Promise<void> = Promise.resolve();
+        await act(async () => { refresh = save.refreshWhilePending(); });
+        expect(screen.tree.findByTestId(`settings.profiles.row.${source.id}`)).not.toBeNull();
+        expect(screen.tree.findByType(CollectionList).props.count).toBe(count);
+        await act(async () => { save.loadCatalog(); await refresh; });
+    });
+
+    it('renders the standalone collection loading, then its genuinely empty default environment', async () => {
+        const save = await setupAcknowledgedSave({ holdInitialCatalog: true, useProfiles: true });
+        storage.setState(state => ({ settings: { ...state.settings, useProfiles: true } }));
+        const page = await renderScreen(<ProfileSettingsIndex />);
+        const rail = await renderScreen(<ProfileCollectionRail />);
+        expect(page.tree.findHostByTestId('settings.profiles.collection.loading'), page.getTextContent()).not.toBeNull();
+        expect(rail.tree.findHostByTestId('settings.profiles.row.defaultEnvironment')).toBeNull();
+        await act(async () => { save.loadCatalog(); });
+        await vi.waitFor(() => expect(rail.tree.findHostByTestId('settings.profiles.row.defaultEnvironment')).not.toBeNull());
+        expect(page.tree.findHostByTestId('settings.profiles.collection.loading')).toBeNull();
+        expect(rail.tree.findByType(CollectionList).props.count).toBe(1);
+    });
+
+    it('keeps the header to Save and the menu: whether pickers offer the profile is a menu action', async () => {
+        const source = { ...createEmptyCustomProfile(), name: 'Research' };
+        const record: ProfileRecordV1 = { v: 1, id: source.id, definition: { kind: 'inline', profile: source },
+            enabled: true, promptStack: [], secretBindings: {} };
+        await setupAcknowledgedSave({ initialRecord: record });
+        const screen = await renderScreen(<ProfileDetailScreen target={{ kind: 'profile', profileId: source.id }} />);
+        await vi.waitFor(() => expect(screen.findAll((node) => node.props.testID === 'settings.profiles.detail.menu').length).toBeGreaterThan(0));
+        expect(screen.findAll((node) => node.props.testID === 'settings.profiles.detail.enabled' && 'onValueChange' in node.props)).toHaveLength(0);
+        const menu = screen.findAll((node) => node.props.testID === 'settings.profiles.detail.menu' && Array.isArray(node.props.actions)).at(0);
+        expect(menu?.props.actions.map((action: { id: string }) => action.id)).toContain('enabled');
+    });
+
+    it('keeps Save disabled on a new draft until it has a name, instead of refusing the press with an alert', async () => {
+        await setupAcknowledgedSave();
+        const screen = await renderScreen(<ProfileDetailScreen target={{ kind: 'draft', cloneFrom: null }} />);
+        const saveDisabled = () => screen.findAll((node) => node.props.testID === 'settings.profiles.detail.save'
+            && typeof node.props.disabled === 'boolean').at(0)?.props.disabled;
+        expect(saveDisabled()).toBe(true);
+        await act(async () => { screen.tree.changeTextByTestId('profile-slim-name', '   '); });
+        expect(saveDisabled()).toBe(true);
+        await act(async () => { screen.tree.changeTextByTestId('profile-slim-name', 'Research'); });
+        expect(saveDisabled()).toBe(false);
+        expect(alerts).not.toHaveBeenCalled();
+    });
+
     it('awaits the pending catalog through the canonical save owner without refusing the new draft', async () => {
         const save = await setupAcknowledgedSave({ holdInitialCatalog: true });
         const screen = await renderScreen(<ProfileDetailScreen target={{ kind: 'draft', cloneFrom: null }} />);

@@ -1,43 +1,50 @@
 import * as React from 'react';
-import type { UsageAnalyticsBreakdownDimension } from '@happier-dev/protocol';
+import { readUsageScopeOptions } from '@happier-dev/protocol/usage/usageFilterOptions';
 import type { UsageQueryResultSlice } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
 import { useAllMachines } from '@/sync/domains/state/storage';
-import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
+import { getMachineDisplayName, resolveMachineDisplayNames } from '@/utils/sessions/machineDisplayNames';
 import { t } from '@/text';
 import type { UsageWidgetPageContextState } from './useUsageWidgetPageContext';
 import { toggleUsageScopeSelection } from './usageWidgetPageContext';
-import { usageAgentTitle } from './widgets/usageBodyKit';
+import { usageSourceAgentId } from '@/sync/domains/usage/usageLabels';
+import { readUsageCoverageGaps, usageAgentTitle, usageSourceTitle, usageCoverageDescription } from './widgets/usageBodyKit';
 
 export const USAGE_SCOPE_FILTER_ALL = '\u0000all';
 type ScopeField = 'sources' | 'agents' | 'machines' | 'projects';
-const DIMENSION_OF: Readonly<Record<ScopeField, UsageAnalyticsBreakdownDimension>> = {
-    sources: 'source', agents: 'agent', machines: 'machine', projects: 'project',
-};
 const FIELD_TITLE = { sources: 'usage.board.page.filterSources', agents: 'usage.board.page.filterAgents',
     machines: 'usage.board.page.filterMachines', projects: 'usage.board.page.filterProjects' } as const;
 
-/** Current authorized facts and chosen values are the mounted page's supported filter inventory. */
-function readScopeOptions(slices: readonly UsageQueryResultSlice[], field: ScopeField, selected: readonly string[]) {
-    const labels = new Map<string, string>();
-    for (const slice of slices) {
-        for (const entry of slice.accounting?.breakdowns?.[DIMENSION_OF[field]] ?? []) {
-            if (!labels.has(entry.key)) labels.set(entry.key, entry.label ?? entry.key);
-        }
-        if (field === 'sources') for (const source of slice.accounting?.coverage?.sources ?? []) {
-            if (!labels.has(source.source)) labels.set(source.source, source.source);
-        }
-    }
-    for (const value of selected) if (!labels.has(value)) labels.set(value, value);
-    return labels;
+/** A choice's name starts a line: source names are composed for mid-sentence use ("usage · Claude"). */
+function sentenceCase(text: string): string {
+    return text.charAt(0).toLocaleUpperCase() + text.slice(1);
 }
 
 export type UsageWidgetPageFilter = Readonly<{
     field: ScopeField;
     title: string;
     selected: readonly string[];
-    options: readonly Readonly<{ id: string; label: string }>[];
-    select(id: string): boolean;
+    /** `agentId`: the Agent a source belongs to. `partial`: this source has a coverage gap; its detail is said once, on "All". */
+    options: readonly Readonly<{ id: string; label: string; subtitle?: string; agentId?: string; partial?: boolean }>[];
+    select(id: string): boolean | Promise<boolean>;
 }>;
+
+const CAPTURE_KIND_KEY = {
+    measured: 'usage.board.page.sourceKindMeasured',
+    from_logs: 'usage.board.page.sourceKindFromLogs',
+    not_added: 'usage.board.page.sourceKindNotAdded',
+} as const;
+
+/** One source's second line: the opened machines it was read on and how it is counted; unknown facts are left out. */
+function sourceOptionDetail(slices: readonly UsageQueryResultSlice[], source: string, partial: boolean): { subtitle?: string; partial?: true } {
+    const records = slices.flatMap(slice => (slice.accounting?.coverage?.sources ?? []).filter(record => record.source === source));
+    const locations = [...new Set(records.flatMap(record => record.displayLocation ? [record.displayLocation] : []))];
+    const kinds = [...new Set(records.flatMap(record => record.captureKind ? [t(CAPTURE_KIND_KEY[record.captureKind])] : []))];
+    // One machine is named; several are counted, so the line never truncates mid-name.
+    const where = locations.length === 1 ? locations : locations.length > 1 ? [t('usage.board.page.machinesCount', { count: locations.length })] : [];
+    const facts = [...where, ...kinds];
+    const subtitle = facts.length > 0 ? facts.join(' · ') : partial ? sentenceCase(t('usage.board.page.factIncomplete')) : undefined;
+    return { ...(subtitle ? { subtitle } : {}), ...(partial ? { partial: true as const } : {}) };
+}
 
 /** One choice/toggle owner consumed by both the toolbar and mounted current-context commands. */
 export function useUsageWidgetPageFilters(page: UsageWidgetPageContextState, slices: readonly UsageQueryResultSlice[], sessionScoped: boolean) {
@@ -46,14 +53,25 @@ export function useUsageWidgetPageFilters(page: UsageWidgetPageContextState, sli
     return React.useMemo((): readonly UsageWidgetPageFilter[] => sessionScoped ? [] :
         (['sources', 'agents', 'machines', 'projects'] as const).map(field => {
             const selected = scope[field];
-            const labels = readScopeOptions(slices, field, selected);
+            const labels = readUsageScopeOptions(slices, field, selected);
+            const machineNames = field === 'machines' ? resolveMachineDisplayNames([...machines,
+                ...[...labels.keys()].filter(id => !machines.some(machine => machine.id === id)).map(id => ({ id, absence: 'unlisted' as const }))]) : new Map<string, string>();
             const title = t(FIELD_TITLE[field]);
             const listed = [...labels.keys()];
-            const options = [{ id: USAGE_SCOPE_FILTER_ALL, label: t('usage.board.page.filterAllOf', { what: title.toLocaleLowerCase() }) },
+            const gaps = field === 'sources' ? slices.flatMap(slice => readUsageCoverageGaps(slice, ['accounting'])) : [];
+            const coverageDetail = field === 'sources' ? [...new Set(slices.map(slice => usageCoverageDescription(slice, ['accounting'])).filter(Boolean))].join(' · ') : '';
+            const options = [{ id: USAGE_SCOPE_FILTER_ALL, label: t('usage.board.page.filterAllOf', { what: title.toLocaleLowerCase() }),
+                ...(coverageDetail ? { subtitle: coverageDetail } : {}) },
                 ...[...labels].map(([id, fallback]) => {
-                    const machine = field === 'machines' ? machines.find(candidate => candidate.id === id) : null;
+                    const sourceGap = gaps.find(gap => gap.source === id);
                     return { id, label: field === 'agents' ? usageAgentTitle(id, fallback)
-                        : machine ? getMachineDisplayName(machine) ?? id : fallback };
+                        : field === 'machines' ? machineNames.get(id) ?? getMachineDisplayName({ id, absence: 'unlisted' })
+                        : field === 'sources' ? sentenceCase(usageSourceTitle(id, fallback))
+                        : fallback,
+                        ...(field === 'sources' && usageSourceAgentId(id) ? { agentId: usageSourceAgentId(id)! } : {}),
+                        // Where it was read and how it is counted (lab d2filter-SRC); coverage is said once, on
+                        // "All sources", so a source with a gap carries the dot and, failing other facts, the short fact.
+                        ...(field === 'sources' ? sourceOptionDetail(slices, id, sourceGap !== undefined) : {}) };
                 })];
             return { field, title, selected, options, select: (id: string) => {
                 if (id !== USAGE_SCOPE_FILTER_ALL && !labels.has(id)) return false;

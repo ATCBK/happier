@@ -1,18 +1,8 @@
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import {
-    collectRenderedTestIds,
-    createHomeGovernanceHarness,
-    installHomeGovernanceBoundaries,
-    renderScreen,
-    standardCleanup,
-    teamCapabilitiesFixture,
-    teamCredentialResourceFixture,
-    teamGroupFixture,
-    teamMembershipFixture,
-    teamSummaryFixture,
-} from '@/dev/testkit';
+import { collectRenderedTestIds, renderScreen, standardCleanup, teamCapabilitiesFixture, teamCredentialResourceFixture, teamGroupFixture, teamMembershipFixture, teamSummaryFixture } from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 
 import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelpers';
 
@@ -28,6 +18,9 @@ installSettingsViewCommonModuleMocks({
 
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
+
+vi.mock('@/components/ui/popover', async (importOriginal) =>
+    (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(importOriginal));
 
 const TEAM_GET_PATH = '/v1/teams/get';
 const CREDENTIAL_GET_PATH = '/v1/teams/credential-resources/get';
@@ -153,6 +146,7 @@ beforeEach(async () => {
 
 afterEach(() => {
     standardCleanup();
+    vi.unstubAllGlobals();
     if (vi.isMockFunction(Date.now)) vi.mocked(Date.now).mockRestore();
 });
 
@@ -357,9 +351,16 @@ describe('TeamCredentialUsageScreen', () => {
         const screen = await renderUsage(serverId);
         await waitForTestId(screen, 'team-credential-usage-requests');
 
+        expect(screen.findAllHostsByTestId('team-credential-usage-breakdown:member')).toHaveLength(0);
+        await screen.pressByTestIdAsync('team-credential-usage-breakdown-trigger');
+        await waitForTestId(screen, 'team-credential-usage-breakdown:member');
         harness.answer(serverId, USAGE_QUERY_PATH, {
             body: usageResult({
-                breakdown: [{ key: 'account-maya', label: 'Maya Chen', requestCount: 7, tokens: 900 }],
+                breakdown: [
+                    { key: 'account-maya', label: 'Maya Chen', requestCount: 7, tokens: 900 },
+                    { key: 'account-unnamed', requestCount: 2, tokens: 100 },
+                    { key: 'account-ada', requestCount: 3, tokens: 200 },
+                ],
             }),
         });
         screen.pressByTestId('team-credential-usage-breakdown:member');
@@ -367,8 +368,23 @@ describe('TeamCredentialUsageScreen', () => {
         await waitForTestId(screen, 'team-credential-usage-slice:account-maya');
         const last = harness.requestsFor(USAGE_QUERY_PATH).at(-1);
         expect((last?.input as { breakdown?: string } | undefined)?.breakdown).toBe('member');
-        // The Home names its own slices; the screen does not decorate a key.
         expect(screen.getTextContent()).toContain('Maya Chen');
+        expect(screen.findAllByTestId('team-credential-usage-slice:account-unnamed')[0]?.props.title).toBe('accountDisplay.unnamed');
+        expect(screen.findAllByTestId('team-credential-usage-slice:account-unnamed')[0]?.props.subtitle).toContain('accountDisplay.shortId');
+        expect(screen.findAllByTestId('team-credential-usage-slice:account-ada')[0]?.props.title).toBe('accountDisplay.yours');
+        expect(screen.findAllByTestId('team-credential-usage-slice:account-ada')[0]?.props.subtitle).not.toContain('accountDisplay.shortId');
+        expect(screen.getTextContent()).not.toContain('account-unnamed');
+        expect(screen.getTextContent()).not.toContain('account-ada');
+        expect(screen.findAllHostsByTestId('team-credential-usage-breakdown:member')).toHaveLength(0);
+
+        await screen.pressByTestIdAsync('team-credential-usage-breakdown-trigger');
+        await waitForTestId(screen, 'team-credential-usage-breakdown:model');
+        harness.answer(serverId, USAGE_QUERY_PATH, {
+            body: usageResult({ breakdown: [{ key: 'model-without-label', requestCount: 1, tokens: 100 }] }),
+        });
+        await screen.pressByTestIdAsync('team-credential-usage-breakdown:model');
+        await waitForTestId(screen, 'team-credential-usage-slice:model-without-label');
+        expect(screen.findAllByTestId('team-credential-usage-slice:model-without-label')[0]?.props.title).toBe('model-without-label');
     });
 
     it('loads every usage page without replacing already visible slices', async () => {
@@ -384,7 +400,9 @@ describe('TeamCredentialUsageScreen', () => {
                 nextCursor: 'usage-page-2',
             }),
         });
-        screen.pressByTestId('team-credential-usage-breakdown:member');
+        await screen.pressByTestIdAsync('team-credential-usage-breakdown-trigger');
+        await waitForTestId(screen, 'team-credential-usage-breakdown:member');
+        await screen.pressByTestIdAsync('team-credential-usage-breakdown:member');
         await waitForTestId(screen, 'team-credential-usage-load-more');
 
         let releaseSecondPage!: () => void;
@@ -425,7 +443,9 @@ describe('TeamCredentialUsageScreen', () => {
                 nextCursor: 'usage-page-2',
             }),
         });
-        screen.pressByTestId('team-credential-usage-breakdown:member');
+        await screen.pressByTestIdAsync('team-credential-usage-breakdown-trigger');
+        await waitForTestId(screen, 'team-credential-usage-breakdown:member');
+        await screen.pressByTestIdAsync('team-credential-usage-breakdown:member');
         await waitForTestId(screen, 'team-credential-usage-load-more');
 
         harness.answer(serverId, USAGE_QUERY_PATH, { status: 503, body: { error: 'unavailable' } });
@@ -507,6 +527,8 @@ describe('TeamCredentialUsageScreen', () => {
         harness.answer(serverId, USAGE_QUERY_PATH, { body: usageResult() });
 
         const screen = await renderUsage(serverId);
+        await waitForTestId(screen, 'team-credential-usage-breakdown-trigger');
+        await screen.pressByTestIdAsync('team-credential-usage-breakdown-trigger');
         await waitForTestId(screen, 'team-credential-usage-breakdown:member');
 
         // The usage owner drops these two for an ordinary recipient, so an
@@ -526,6 +548,8 @@ describe('TeamCredentialUsageScreen', () => {
         harness.answer(serverId, USAGE_QUERY_PATH, { body: usageResult() });
 
         const screen = await renderUsage(serverId);
+        await waitForTestId(screen, 'team-credential-usage-breakdown-trigger');
+        await screen.pressByTestIdAsync('team-credential-usage-breakdown-trigger');
         await waitForTestId(screen, 'team-credential-usage-breakdown:source_member');
 
         expect(collectRenderedTestIds(screen.tree.toJSON()))
@@ -554,7 +578,9 @@ describe('TeamCredentialUsageScreen', () => {
         // The chart and the list must show the same measurement; a chart-only
         // metric is not reachable without sight.
         expect(screen.findAllByTestId('team-credential-usage-series')
-            .find((node) => node.props.metric !== undefined)?.props.metric).toBe('cost');
+            .find((node) => Array.isArray(node.props.series))?.props.series).toMatchObject([
+                { id: 'cost', points: [{ y: 0 }] },
+            ]);
         expect(screen.findAllByTestId('team-credential-usage-series-list-row')[0]?.props.detail)
             .not.toContain('usage.tokens');
     });
@@ -575,7 +601,9 @@ describe('TeamCredentialUsageScreen', () => {
         await screen.pressByTestIdAsync('team-credential-usage-metric:requests');
 
         expect(screen.findAllByTestId('team-credential-usage-series')
-            .find((node) => node.props.metric !== undefined)?.props.metric).toBe('requests');
+            .find((node) => Array.isArray(node.props.series))?.props.series).toMatchObject([
+                { id: 'requests', points: [{ y: 2 }] },
+            ]);
         expect(screen.findAllByTestId('team-credential-usage-series-list-row')[0]?.props.detail)
             .toContain('2');
     });
@@ -706,6 +734,29 @@ describe('TeamCredentialUsageScreen', () => {
         await waitForTestId(screen, 'team-credential-usage-export');
 
         expect(screen.findAllByTestId('team-credential-usage-export')[0]?.props.disabled).toBeFalsy();
+    });
+
+    it('reauthorizes the shown usage query through export before delivering the CSV', async () => {
+        const serverId = await addHome();
+        harness.answer(serverId, USAGE_QUERY_PATH, { body: usageResult() });
+        const screen = await renderUsage(serverId);
+        await waitForTestId(screen, 'team-credential-usage-export');
+        const shownQuery = harness.requestsFor(USAGE_QUERY_PATH).at(-1)?.input;
+        const reads = harness.requestsFor(USAGE_QUERY_PATH).length;
+        const click = vi.fn();
+        vi.stubGlobal('document', { createElement: () => ({ click, remove: vi.fn(), style: {} }), body: { appendChild: vi.fn() } });
+        vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:test-usage-export');
+        vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+        screen.pressByTestId('team-credential-usage-export');
+        await vi.waitFor(() => expect(harness.requestsFor(USAGE_QUERY_PATH)).toHaveLength(reads + 1));
+        expect(harness.requestsFor(USAGE_QUERY_PATH).at(-1)?.input).toEqual(shownQuery);
+        await vi.waitFor(() => expect(click).toHaveBeenCalled());
+
+        harness.answer(serverId, USAGE_QUERY_PATH, { status: 403, body: { error: 'not_found_or_not_visible' } });
+        click.mockClear();
+        screen.pressByTestId('team-credential-usage-export');
+        await vi.waitFor(() => expect(screen.getTextContent()).toContain('teams.credentials.usage.exportFailed'));
+        expect(click).not.toHaveBeenCalled();
     });
 
     it('opens no usage read at all when this Home has shared credentials turned off', async () => {

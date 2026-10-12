@@ -1,4 +1,7 @@
 import * as React from 'react';
+import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprovalPendingNotice';
+import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { fireAndForget } from '@/utils/system/fireAndForget';
 import { View } from 'react-native';
 import type { SystemTaskSpec } from '@happier-dev/protocol';
 import { isHappierRuntimePathWithinRoot } from '@happier-dev/cli-common/happierRuntime/runtimePathMatching';
@@ -13,7 +16,7 @@ import { Text } from '@/components/ui/text/Text';
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { getPreferredLanguage, t, tLoose } from '@/text';
 import { formatWithCachedDateTimeFormatter } from '@/utils/datetime/cachedIntlFormatters';
-import { formatByteSize } from '@/utils/files/formatByteSize';
+import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
 import { useLocalRelayRuntimeControl } from './useLocalRelayRuntimeControl';
 import { canCancelPersonalHomeOperationProgress } from './personalHomeOperationCancellation';
 import { useServerFeaturesSnapshotForServerId } from '@/sync/domains/features/featureDecisionRuntime';
@@ -86,11 +89,6 @@ function resolveSearchStatusLabel(readiness: 'ready' | 'indexing' | 'unavailable
     return t('personalHome.settings.notAvailable');
 }
 
-function formatBytes(bytes: number | null): string {
-    if (bytes == null) return t('personalHome.settings.unknownSize');
-    return formatByteSize(bytes);
-}
-
 function formatTimestamp(value: string | null): string {
     if (!value) return t('personalHome.settings.unknownTimestamp');
     const parsed = new Date(value);
@@ -98,7 +96,6 @@ function formatTimestamp(value: string | null): string {
         ? t('personalHome.settings.unknownTimestamp')
         : formatWithCachedDateTimeFormatter(parsed, getPreferredLanguage(), { dateStyle: 'medium', timeStyle: 'short' });
 }
-
 
 type PersonalHomeDetailRow = Readonly<{
     testID?: string;
@@ -276,12 +273,22 @@ type PersonalHomeRuntimeControlSectionProps = Readonly<{
     controller?: ReturnType<typeof useLocalRelayRuntimeControl>;
     operations?: PersonalHomeRuntimeControlOperations;
     homeLabel?: string;
+    /** Home-console composition owns restart; native bootstrap consumers keep their local task. */
+    restartAction?: Readonly<{ onPress: () => void; loading: boolean; disabled: boolean }>;
+    repairSearchPending?: boolean;
     onStatusChange?: (status: ReturnType<typeof useLocalRelayRuntimeControl>['status']) => void;
 }>;
 
 function OwnedPersonalHomeRuntimeControlSection(props: PersonalHomeRuntimeControlSectionProps) {
+    const router = useRouter();
     const controller = useLocalRelayRuntimeControl({ ...(props.runner ? { runner: props.runner } : {}) });
-    return <PersonalHomeRuntimeControlSectionContent {...props} controller={controller} />;
+    return <>
+        <PersonalHomeRuntimeControlSectionContent {...props} controller={controller} />
+        {controller.approval.approvalPending && controller.approval.approvalId && controller.actionServerId ? <ItemGroup>
+            <ActionApprovalPendingNotice message={t('secrets.catalog.approvalPending')}
+                onOpenApproval={() => router.pushRetainingCurrent(`/inbox/approvals/${encodeURIComponent(controller.approval.approvalId!)}?serverId=${encodeURIComponent(controller.actionServerId)}`)} />
+        </ItemGroup> : null}
+    </>;
 }
 
 const PersonalHomeRuntimeControlSectionContent = React.memo(function PersonalHomeRuntimeControlSectionContent(
@@ -345,7 +352,7 @@ const PersonalHomeRuntimeControlSectionContent = React.memo(function PersonalHom
                 `${t('personalHome.settings.identityTitle')}: ${verified.homeServerIdentityId ?? t('personalHome.settings.identityUnavailable')}`,
                 `${t('personalHome.settings.restoreBackupDate')}: ${formatTimestamp(verified.createdAt)}`,
                 `${t('personalHome.settings.restoreCompatibility')}: ${verified.format === 'happier-personal-home-backup' && verified.version === 1 ? t('personalHome.settings.restoreCompatible') : t('personalHome.settings.restoreCompatibilityVerified')}`,
-                verified.archiveBytes == null ? null : `${t('personalHome.settings.restoreBackupSize')}: ${formatBytes(verified.archiveBytes)}`,
+                verified.archiveBytes == null ? null : `${t('personalHome.settings.restoreBackupSize')}: ${formatHappierDataBytes(verified.archiveBytes, { kind: 'storage' })}`,
                 t('personalHome.settings.restoreReplacementNotice'),
             ].filter((value): value is string => value !== null).join('\n');
             if (!await Modal.confirm(
@@ -481,8 +488,9 @@ const PersonalHomeRuntimeControlSectionContent = React.memo(function PersonalHom
 
     const [operationDetailsOpen, setOperationDetailsOpen] = React.useState(false);
 
-    const disabled = control.isBusy || control.isUnavailable || control.status?.purpose?.kind !== 'personal-home';
-    const operationsUnavailableReason = !disabled || control.isBusy
+    const isBusy = control.isBusy || props.restartAction?.loading === true;
+    const disabled = isBusy || control.isUnavailable || control.status?.purpose?.kind !== 'personal-home';
+    const operationsUnavailableReason = !disabled || isBusy
         ? null
         : control.isUnavailable
             ? t('settings.systemTaskBridgeUnavailable')
@@ -551,8 +559,8 @@ const PersonalHomeRuntimeControlSectionContent = React.memo(function PersonalHom
         setOperationDetailsOpen(false);
     }, [control.operationSnapshot?.taskId]);
 
-    const canStart = !control.isUnavailable && control.status?.installed === true && control.status.service.active !== true && !control.isBusy;
-    const canStop = !control.isUnavailable && control.status?.service.active === true && !control.isBusy;
+    const canStart = !control.isUnavailable && control.status?.installed === true && control.status.service.active !== true && !isBusy;
+    const canStop = !control.isUnavailable && control.status?.service.active === true && !isBusy;
     const homeLabel = props.homeLabel?.trim() || t('personalHome.settings.defaultHomeLabel');
     // Search readiness and public reachability are facts this Home already publishes.
     // Read them through their existing owners instead of probing or re-deriving here.
@@ -573,7 +581,7 @@ const PersonalHomeRuntimeControlSectionContent = React.memo(function PersonalHom
                     { title: t('personalHome.settings.canonicalAddress'), value: control.status?.relayUrl ?? t('personalHome.settings.notAvailable') },
                 ]}
             /> : null}
-            <Item testID="settings.personalHomeRuntime.storage" title={t('personalHome.settings.storageTitle')} subtitle={formatBytes(control.inspection?.databaseBytes ?? null)} showChevron={false} mode="info" />
+            <Item testID="settings.personalHomeRuntime.storage" title={t('personalHome.settings.storageTitle')} subtitle={control.inspection?.databaseBytes == null ? t('personalHome.settings.unknownSize') : formatHappierDataBytes(control.inspection?.databaseBytes, { kind: 'storage' })} showChevron={false} mode="info" />
             <Item testID="settings.personalHomeRuntime.search" title={t('personalHome.settings.searchTitle')} subtitle={searchStatusLabel} showChevron={false} mode="info" />
             {localOnlyIngress ? <Item
                 testID="settings.personalHomeRuntime.localOnlyIngress"
@@ -631,14 +639,14 @@ const PersonalHomeRuntimeControlSectionContent = React.memo(function PersonalHom
                 onPress={() => void runExternalOperation(() => recoverRelocation(returnRelocationRecovery))}
                 disabled={disabled}
             /> : null}
-            {backupResult ? <Item testID="settings.personalHomeRuntime.backupResult" title={t('personalHome.settings.backupVerified')} subtitle={[formatTimestamp(backupResult.createdAt), formatBytes(backupResult.bytes), backupResult.cleanupRequired ? t('personalHome.settings.backupCleanupRequired') : backupResult.homeNeedsAttention ? t('personalHome.settings.backupNeedsAttention') : t('personalHome.settings.backupHomeReady')].join(' · ')} showChevron={false} mode="info" /> : null}
+            {backupResult ? <Item testID="settings.personalHomeRuntime.backupResult" title={t('personalHome.settings.backupVerified')} subtitle={[formatTimestamp(backupResult.createdAt), backupResult.bytes == null ? t('personalHome.settings.unknownSize') : formatHappierDataBytes(backupResult.bytes, { kind: 'storage' }), backupResult.cleanupRequired ? t('personalHome.settings.backupCleanupRequired') : backupResult.homeNeedsAttention ? t('personalHome.settings.backupNeedsAttention') : t('personalHome.settings.backupHomeReady')].join(' · ')} showChevron={false} mode="info" /> : null}
             {backupResult ? <PersonalHomeDetailRows
                 testID="settings.personalHomeRuntime.backupResultDetails"
                 title={`${t('personalHome.settings.backupVerified')} · ${t('common.details')}`}
                 rows={[
                     { testID: 'settings.personalHomeRuntime.backupResultPath', title: t('personalHome.settings.restoreBackupTitle'), value: backupResult.path },
                     { title: t('personalHome.settings.restoreBackupDate'), value: formatTimestamp(backupResult.createdAt) },
-                    { title: t('personalHome.settings.restoreBackupSize'), value: formatBytes(backupResult.bytes) },
+                    { title: t('personalHome.settings.restoreBackupSize'), value: backupResult.bytes == null ? t('personalHome.settings.unknownSize') : formatHappierDataBytes(backupResult.bytes, { kind: 'storage' }) },
                     { testID: 'settings.personalHomeRuntime.backupResultIdentity', title: t('personalHome.settings.identityTitle'), value: backupResult.homeServerIdentityId },
                     { title: 'SHA-256', value: backupResult.sha256 },
                     ...(backupResult.cleanupRequired ? [
@@ -648,14 +656,14 @@ const PersonalHomeRuntimeControlSectionContent = React.memo(function PersonalHom
                 ]}
             /> : null}
             {backupResult && operations?.revealBackupOutput ? <Item testID="settings.personalHomeRuntime.backupReveal" title={t('personalHome.settings.backupRevealAction')} onPress={() => void runExternalOperation(() => operations.revealBackupOutput!(backupResult.path))} /> : null}
-            {control.lastVerification ? <Item testID="settings.personalHomeRuntime.verifyResult" title={t('personalHome.settings.backupVerified')} subtitle={[formatTimestamp(control.lastVerification.createdAt), control.lastVerification.archiveBytes === null ? null : formatBytes(control.lastVerification.archiveBytes)].filter((value): value is string => value !== null).join(' · ')} showChevron={false} mode="info" /> : null}
+            {control.lastVerification ? <Item testID="settings.personalHomeRuntime.verifyResult" title={t('personalHome.settings.backupVerified')} subtitle={[formatTimestamp(control.lastVerification.createdAt), control.lastVerification.archiveBytes === null ? null : control.lastVerification.archiveBytes == null ? t('personalHome.settings.unknownSize') : formatHappierDataBytes(control.lastVerification.archiveBytes, { kind: 'storage' })].filter((value): value is string => value !== null).join(' · ')} showChevron={false} mode="info" /> : null}
             {control.lastVerification ? <PersonalHomeDetailRows
                 testID="settings.personalHomeRuntime.verifyResultDetails"
                 title={`${t('personalHome.settings.verifyAction')} · ${t('common.details')}`}
                 rows={[
                     { testID: 'settings.personalHomeRuntime.verifyResultPath', title: t('personalHome.settings.restoreBackupTitle'), value: control.lastVerification.archivePath },
                     { title: t('personalHome.settings.restoreBackupDate'), value: formatTimestamp(control.lastVerification.createdAt) },
-                    { title: t('personalHome.settings.restoreBackupSize'), value: formatBytes(control.lastVerification.archiveBytes) },
+                    { title: t('personalHome.settings.restoreBackupSize'), value: control.lastVerification.archiveBytes == null ? t('personalHome.settings.unknownSize') : formatHappierDataBytes(control.lastVerification.archiveBytes, { kind: 'storage' }) },
                     { testID: 'settings.personalHomeRuntime.verifyResultIdentity', title: t('personalHome.settings.identityTitle'), value: control.lastVerification.homeServerIdentityId ?? t('personalHome.settings.identityUnavailable') },
                     { title: t('personalHome.settings.restoreCompatibility'), value: `${control.lastVerification.format} v${control.lastVerification.version}` },
                     { testID: 'settings.personalHomeRuntime.verifyResultIdentityComparison', title: t('personalHome.settings.identityComparison'), value: formatIdentityComparison(control.lastVerification.identityMatchesCurrentHome) },
@@ -670,7 +678,7 @@ const PersonalHomeRuntimeControlSectionContent = React.memo(function PersonalHom
             {restoreRecoveryBackup ? <Item
                 testID="settings.personalHomeRuntime.restoreRecoveryBackup"
                 title={t('personalHome.settings.restorePreviousDataTitle')}
-                subtitle={`${formatTimestamp(restoreRecoveryBackup.createdAt)} · ${formatBytes(restoreRecoveryBackup.bytes)}`}
+                subtitle={`${formatTimestamp(restoreRecoveryBackup.createdAt)} · ${restoreRecoveryBackup.bytes == null ? t('personalHome.settings.unknownSize') : formatHappierDataBytes(restoreRecoveryBackup.bytes, { kind: 'storage' })}`}
                 showChevron={false}
                 mode="info"
             /> : null}
@@ -680,7 +688,7 @@ const PersonalHomeRuntimeControlSectionContent = React.memo(function PersonalHom
                 rows={[
                     { testID: 'settings.personalHomeRuntime.restoreRecoveryBackupPath', title: t('personalHome.settings.restoreBackupTitle'), value: restoreRecoveryBackup.path },
                     { title: t('personalHome.settings.restoreBackupDate'), value: formatTimestamp(restoreRecoveryBackup.createdAt) },
-                    { title: t('personalHome.settings.restoreBackupSize'), value: formatBytes(restoreRecoveryBackup.bytes) },
+                    { title: t('personalHome.settings.restoreBackupSize'), value: restoreRecoveryBackup.bytes == null ? t('personalHome.settings.unknownSize') : formatHappierDataBytes(restoreRecoveryBackup.bytes, { kind: 'storage' }) },
                     { title: t('personalHome.settings.identityTitle'), value: restoreRecoveryBackup.homeServerIdentityId },
                     { testID: 'settings.personalHomeRuntime.restoreRecoveryBackupHash', title: 'SHA-256', value: restoreRecoveryBackup.sha256 },
                 ]}
@@ -703,7 +711,7 @@ const PersonalHomeRuntimeControlSectionContent = React.memo(function PersonalHom
             {canCancel ? <Item
                 testID="system-task-progress-cancel"
                 title={t('common.cancel')}
-                onPress={() => void control.cancelTask(control.operationSnapshot!.taskId)}
+                onPress={() => fireAndForget(control.cancelTask(control.operationSnapshot!.taskId), { tag: 'PersonalHomeRuntimeControlSection.cancel' })}
             /> : null}
             <Item
                 testID="settings.personalHomeRuntime.operationDetails"
@@ -717,7 +725,7 @@ const PersonalHomeRuntimeControlSectionContent = React.memo(function PersonalHom
             {control.operationSnapshot.result ? <Item testID="settings.personalHomeRuntime.dismissResult" title={t('personalHome.settings.dismissResult')} onPress={control.dismissOperationResult} /> : null}
         </View> : null}
         <ItemGroup title={t('personalHome.settings.protectionTitle')}>
-            <Item testID="settings.personalHomeRuntime.lastBackup" title={t('personalHome.settings.lastBackupTitle')} subtitle={latestBackup ? `${formatTimestamp(latestBackup.createdAt)} · ${formatBytes(latestBackup.archiveBytes)}` : t('personalHome.settings.lastBackupUnknown')} showChevron={false} mode="info" />
+            <Item testID="settings.personalHomeRuntime.lastBackup" title={t('personalHome.settings.lastBackupTitle')} subtitle={latestBackup ? `${formatTimestamp(latestBackup.createdAt)} · ${latestBackup.archiveBytes == null ? t('personalHome.settings.unknownSize') : formatHappierDataBytes(latestBackup.archiveBytes, { kind: 'storage' })}` : t('personalHome.settings.lastBackupUnknown')} showChevron={false} mode="info" />
             <Item testID="settings.personalHomeRuntime.backupsCount" title={t('personalHome.settings.backupsTitle')} subtitle={`${String(control.inspection?.backupsCount ?? 0)}${backupInventoryComplete ? '' : '+'}`} showChevron={false} mode="info" />
             {control.inspection?.restoreRecovery.status === 'rollback_available' ? <Item testID="settings.personalHomeRuntime.recoverRestore" title={t('personalHome.settings.recoverRestoreAction')} subtitle={t('personalHome.settings.recoverRestoreSubtitle')} onPress={() => void recoverRestore()} disabled={disabled} destructive /> : null}
             {control.inspection?.restoreRecovery.status === 'ambiguous' ? <Item testID="settings.personalHomeRuntime.restoreRecoveryWarning" title={t('personalHome.settings.restoreRecoveryWarningTitle')} subtitle={t('personalHome.settings.restoreRecoveryWarningBody')} showChevron={false} mode="info" /> : null}
@@ -725,16 +733,16 @@ const PersonalHomeRuntimeControlSectionContent = React.memo(function PersonalHom
         </ItemGroup>
         <ItemGroup title={t('personalHome.settings.advancedTitle')} description={t('personalHome.settings.advancedFooter')}>
             {control.status?.version ? <Item title={t('settings.localRelayRuntime.versionTitle')} subtitle={control.status.version} showChevron={false} mode="info" /> : null}
-            <Item testID="settings.localRelayRuntime.installOrUpdate" title={t('personalHome.settings.installOrUpdateAction')} onPress={() => void control.installOrUpdate()} disabled={control.isBusy || control.isUnavailable} />
+            <Item testID="settings.localRelayRuntime.installOrUpdate" title={t('personalHome.settings.installOrUpdateAction')} onPress={() => void control.installOrUpdate()} disabled={isBusy || control.isUnavailable} />
             <Item testID="settings.localRelayRuntime.start" title={t('personalHome.settings.startAction')} onPress={() => void control.startRelay()} disabled={!canStart} />
             <Item testID="settings.localRelayRuntime.stop" title={t('personalHome.settings.stopAction')} onPress={() => void control.stopRelay()} disabled={!canStop} />
-            <Item testID="settings.personalHomeRuntime.restart" title={t('personalHome.settings.restartAction')} onPress={() => void control.restartRelay()} disabled={disabled} />
+            <Item testID="settings.personalHomeRuntime.restart" title={t('personalHome.settings.restartAction')} onPress={props.restartAction?.onPress ?? (() => { void control.restartRelay(); })} disabled={disabled || props.restartAction?.disabled === true} />
             {operations?.repairSearch ? <Item
                 testID="settings.personalHomeRuntime.repairSearch"
                 title={t('personalHome.settings.repairSearchAction')}
                 subtitle={t('personalHome.settings.repairSearchSubtitle')}
                 onPress={() => void runExternalOperation(repairSearch)}
-                disabled={disabled || control.status?.service.active !== true || control.status.healthy !== true}
+                disabled={disabled || props.repairSearchPending === true || control.status?.service.active !== true || control.status.healthy !== true}
             /> : null}
             {operations?.openDataLocation ? <Item testID="settings.personalHomeRuntime.openDataLocation" title={t('personalHome.settings.openDataLocationAction')} onPress={() => void runExternalOperation(() => operations.openDataLocation!(control.inspection?.layoutPaths.dataDir ?? ''))} disabled={!control.inspection?.layoutPaths.dataDir} /> : null}
             {operations?.openLogs ? <Item testID="settings.personalHomeRuntime.openLogs" title={t('personalHome.settings.openLogsAction')} onPress={() => void runExternalOperation(() => operations.openLogs!(control.inspection?.layoutPaths.logsDir ?? ''))} disabled={!control.inspection?.layoutPaths.logsDir} /> : null}

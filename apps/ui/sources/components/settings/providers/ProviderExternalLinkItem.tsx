@@ -14,10 +14,25 @@ export function ProviderExternalLinkItem(props: Readonly<{
     kind: ProviderExternalLinkKind;
     url: string;
 }>): React.ReactElement {
+    const label = t(`settingsProviders.links.${props.kind}`);
+    return (
+        <Item
+            title={<ProviderExternalLink kind={props.kind} url={props.url} />}
+            accessibilityLabel={label}
+            mode="info"
+            style={{ paddingVertical: 0 }}
+        />
+    );
+}
+
+/** The same external link set inline, beside other quiet actions (the add sheet's key field). */
+export function ProviderExternalLink(props: Readonly<{
+    kind: ProviderExternalLinkKind;
+    url: string;
+}>): React.ReactElement {
     const { theme } = useUnistyles();
     const presentationTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
     const label = t(`settingsProviders.links.${props.kind}`);
-
     const open = React.useCallback(async () => {
         let opened = false;
         try {
@@ -29,21 +44,13 @@ export function ProviderExternalLinkItem(props: Readonly<{
             await Modal.alert(t('common.error'), t('settingsProviders.links.failedToOpen'));
         }
     }, [props.url]);
-
     return (
-        <Item
-            title={(
-                <HappierLink
-                    label={label}
-                    onPress={open}
-                    theme={presentationTheme}
-                >
-                    {label}
-                </HappierLink>
-            )}
-            accessibilityLabel={label}
-            mode="info"
-            style={{ paddingVertical: 0 }}
-        />
+        <HappierLink
+            label={label}
+            onPress={open}
+            theme={presentationTheme}
+        >
+            {label}
+        </HappierLink>
     );
 }

@@ -89,12 +89,9 @@ installSettingsViewCommonModuleMocks({
             },
         }).module;
     },
-    storage: async (importOriginal) => {
-        const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleMock({
-            importOriginal,
-            overrides: createSettingsViewStorageOverrides(),
-        });
+    storage: async () => {
+        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
+        return createStorageModuleStub(createSettingsViewStorageOverrides());
     },
 });
 
@@ -152,13 +149,6 @@ vi.mock('@/hooks/session/useConnectTerminal', () => ({
 }));
 
 
-vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
-    const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleMock({
-        importOriginal,
-        overrides: createSettingsViewStorageOverrides(),
-    });
-});
 
 vi.mock('@/sync/sync', () => ({
     sync: {
@@ -195,7 +185,6 @@ vi.mock('@/sync/domains/profiles/profile', async (importOriginal) => {
     const actual = await importOriginal<typeof import('@/sync/domains/profiles/profile')>();
     return {
         ...actual,
-        getDisplayName: () => 'Test User',
         getAvatarUrl: () => null,
         getBio: () => '',
     };

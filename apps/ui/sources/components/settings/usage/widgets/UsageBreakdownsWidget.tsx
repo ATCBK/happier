@@ -1,11 +1,8 @@
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import {
-  resolveEffectiveUsageCostUsd,
-  type UsageAnalyticsBreakdownDimension,
-  type UsageAnalyticsBreakdownEntry,
-} from '@happier-dev/protocol';
+import { resolveUsageCostForSelection } from '@happier-dev/protocol/usage/usageCostFacts';
+import { type UsageAnalyticsBreakdownDimension, type UsageAnalyticsBreakdownEntry } from '@happier-dev/protocol';
 import {
   HappierPressable,
   RankedRows,
@@ -22,11 +19,18 @@ import {
   UsageAgentMark,
   UsageBodyInsufficient,
   UsageCoverageLine,
-  usageAgentTitle,
+  usageDimensionLabel,
   usagePeriodPhrase,
+  useUsageAnalyticsView,
   useUsagePluginTheme,
   type UsageBodyProps,
+  leadingUsageRows,
+  UsageShowAllRows,
+  UsageBodyNoUsage,
 } from './usageBodyKit';
+import { useAllMachines } from '@/sync/domains/state/storage';
+import { resolveMachineDisplayNames } from '@/utils/sessions/machineDisplayNames';
+import { usagePageCostRow } from '../usageCostPresentation';
 
 const DEFAULT_DIMENSIONS: readonly UsageAnalyticsBreakdownDimension[] = [
   'agent',
@@ -72,44 +76,45 @@ const DRILL_FIELD: Readonly<
  */
 export function UsageBreakdownsWidget(props: UsageBodyProps) {
   const { theme } = useUnistyles();
+  const [expanded, setExpanded] = React.useState<readonly string[]>([]);
   const chartTheme = useUsagePluginTheme();
+  const machines = useAllMachines();
+  const machineEntries = props.slice.accounting?.breakdowns?.machine;
+  const machineNames = React.useMemo(() => resolveMachineDisplayNames([...machines,
+    ...(machineEntries ?? []).filter(entry => !machines.some(machine => machine.id === entry.key)).map(entry => ({ id: entry.key, absence: 'unlisted' as const }))]), [machines, machineEntries]);
   const metric = props.query.metric;
   const dimensions = props.query.breakdown.length
     ? props.query.breakdown
     : DEFAULT_DIMENSIONS;
   useWidgetFrameBodyCaption(usagePeriodPhrase(props.query));
   const drill = useUsageDrill(props.query);
-  const accounting = props.slice.accounting;
-  const currency = accounting?.totals.cost.currency ?? 'USD';
+  const view = useUsageAnalyticsView(props.slice, props.query);
+  const accounting = metric === 'cost' ? view?.pageCost.accounting : props.slice.accounting;
+  const selection = view?.pageCost.selection ?? null;
+  const currency = selection?.currency ?? 'USD';
   const valueOf = React.useCallback(
     (entry: UsageAnalyticsBreakdownEntry) =>
       metric === 'cost'
-        ? resolveEffectiveUsageCostUsd(entry.cost, props.query.costBasis)
+        ? resolveUsageCostForSelection(entry.cost, selection)
         : entry.tokens.total,
-    [metric, props.query.costBasis],
+    [metric, selection],
   );
   const total = accounting
     ? metric === 'cost'
-      ? resolveEffectiveUsageCostUsd(
-          accounting.totals.cost,
-          props.query.costBasis,
-        )
+      ? view?.pageCost.amountUsd ?? null
       : accounting.totals.tokens.total
     : null;
   const blocks = dimensions.flatMap((dimension) => {
     const entries = accounting?.breakdowns?.[dimension];
     if (!entries?.length) return [];
     const rows = [...entries]
-      .sort((left, right) => valueOf(right) - valueOf(left))
+      .sort((left, right) => (valueOf(right) ?? -1) - (valueOf(left) ?? -1))
       .map((entry) => ({
         id: entry.key,
         value: valueOf(entry),
-        label:
-          dimension === 'agent'
-            ? usageAgentTitle(entry.key, entry.label)
-            : (entry.label ?? entry.key),
+        label: usageDimensionLabel(dimension, entry.key, entry.label, machineNames),
         annotation:
-          metric === 'cost' ? formatTokenCount(entry.tokens.total) : undefined,
+          metric === 'cost' ? [formatTokenCount(entry.tokens.total), usagePageCostRow(entry.cost, selection)?.label].filter(Boolean).join(' · ') : undefined,
       }));
     const ranked = accounting?.coverage?.ranked.find(
       (row) => row.dimension === dimension,
@@ -120,19 +125,13 @@ export function UsageBreakdownsWidget(props: UsageBodyProps) {
         rows,
         truncated:
           ranked && !ranked.complete
-            ? ranked.totalEntries - ranked.returnedEntries
+            ? Math.max(0, ranked.totalEntries - rows.length)
             : 0,
       },
     ];
   });
   if (!accounting)
-    return (
-      <UsageBodyInsufficient
-        testID={`${props.testID}.empty`}
-        title={t('usage.board.page.noUsageTitle')}
-        reason={t('usage.board.page.noUsageReason')}
-      />
-    );
+    return <UsageBodyNoUsage slice={props.slice} testID={props.testID} />;
   if (blocks.length === 0)
     return (
       <UsageBodyInsufficient
@@ -143,23 +142,25 @@ export function UsageBreakdownsWidget(props: UsageBodyProps) {
     );
   return (
     <View style={styles.body} testID={`${props.testID}.breakdowns`}>
-      {blocks.map((block) => (
+      {blocks.map((block) => {
+        const lead = leadingUsageRows(block.rows, expanded.includes(block.dimension));
+        const long = block.rows.length > lead.rows.length || expanded.includes(block.dimension);
+        return (
         <View key={block.dimension} style={styles.block}>
-          {blocks.length > 1 ? (
             <Text style={styles.heading} accessibilityRole="header">
               {t(DIMENSION_TITLE[block.dimension])}
             </Text>
-          ) : null}
           <RankedRows
             theme={chartTheme}
             label={t(DIMENSION_TITLE[block.dimension])}
-            rows={block.rows.map((row, index) => ({
+            rows={lead.rows.map((row, index) => ({
               ...row,
               color: block.dimension === 'agent' ? getAgentIdentityColor(theme, row.id) : usageMeterFill(theme, index === 0),
             }))}
             total={total}
             size="full"
-            unknownLabel={t('common.unavailable')}
+            // An unknown value is a quiet dash in the value column, never a bold word (states: unknowns stay quiet).
+            unknownLabel="—"
             testID={`${props.testID}.${block.dimension}`}
             valueFormatter={
               metric === 'cost'
@@ -212,13 +213,18 @@ export function UsageBreakdownsWidget(props: UsageBodyProps) {
                 }
               : {})}
           />
+          {long ? <UsageShowAllRows total={block.rows.length} complete={block.truncated === 0} expanded={lead.hidden === 0}
+            testID={`${props.testID}.${block.dimension}.more`}
+            onToggle={() => setExpanded(current => current.includes(block.dimension)
+              ? current.filter(entry => entry !== block.dimension) : [...current, block.dimension])} /> : null}
           {block.truncated > 0 ? (
             <Text style={styles.more}>
               {t('usage.board.page.moreRows', { count: block.truncated })}
             </Text>
           ) : null}
         </View>
-      ))}
+        );
+      })}
       <UsageCoverageLine
         slice={props.slice}
         sources={['accounting']}
@@ -230,18 +236,14 @@ export function UsageBreakdownsWidget(props: UsageBodyProps) {
 }
 
 const styles = StyleSheet.create((theme) => ({
-  body: { gap: 20 },
-  block: { gap: 10 },
+  body: { gap: theme.space.s20 },
+  block: { gap: theme.space.s10 },
   heading: {
-    ...Typography.default('semiBold'),
-    fontSize: 13,
-    lineHeight: 18,
+    ...Typography.variant('body', 'semiBold'),
     color: theme.colors.text.secondary,
   },
   more: {
-    ...Typography.default(),
-    fontSize: 12,
-    lineHeight: 16,
+    ...Typography.variant('meta'),
     color: theme.colors.text.tertiary,
   },
 }));

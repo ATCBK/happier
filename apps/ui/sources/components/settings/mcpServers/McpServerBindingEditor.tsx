@@ -12,7 +12,7 @@ import { t } from '@/text';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import type { SavedSecret } from '@/sync/domains/settings/savedSecretTypes';
 import type { AccountSettingsScope } from '@/sync/domains/settings/scope/accountSettingsScope';
-import type { McpServerBindingTargetV1, McpServerBindingV1, McpServerCatalogEntryTransportV1 } from '@happier-dev/protocol';
+import type { ReachPlaceV1, McpServerRuleV1, McpServerConfigOverrideFieldsV1, McpServerCatalogEntryTransportV1 } from '@happier-dev/protocol';
 
 import { McpWorkspaceRootPickerModal } from './McpWorkspaceRootPickerModal';
 import { McpBindingOverridesEditorModal } from './McpBindingOverridesEditorModal';
@@ -21,13 +21,15 @@ import { resolveMcpBindingTargetTypeChange } from './resolveMcpBindingTarget';
 import { Icon } from '@/components/ui/icons/Icon';
 
 export const McpServerBindingEditor = React.memo(function McpServerBindingEditor(props: Readonly<{
-    binding: McpServerBindingV1;
+    binding: McpServerRuleV1;
+    configOverride?: McpServerConfigOverrideFieldsV1;
     serverTransport: McpServerCatalogEntryTransportV1;
     secrets: SavedSecret[];
     scope?: AccountSettingsScope | null;
     machines: readonly Machine[];
-    onChange: (next: McpServerBindingV1) => void;
+    onChange: (next: McpServerRuleV1) => void;
     onDelete: () => void;
+    onChangeConfigOverride?: (next: McpServerConfigOverrideFieldsV1 | undefined) => void;
 }>) {
     const styles = stylesheet;
     const [expanded, setExpanded] = React.useState(false);
@@ -38,11 +40,11 @@ export const McpServerBindingEditor = React.memo(function McpServerBindingEditor
         [props.binding.target, props.machines],
     );
 
-    const update = React.useCallback((updater: (current: McpServerBindingV1) => McpServerBindingV1) => {
+    const update = React.useCallback((updater: (current: McpServerRuleV1) => McpServerRuleV1) => {
         props.onChange(updater(props.binding));
     }, [props]);
 
-    const setTargetType = React.useCallback((nextType: McpServerBindingTargetV1['t'], selectedMachineId?: string) => {
+    const setTargetType = React.useCallback((nextType: ReachPlaceV1['t'], selectedMachineId?: string) => {
         update((current) => {
             const now = Date.now();
             const nextTarget = resolveMcpBindingTargetTypeChange(current.target, nextType, props.machines, selectedMachineId);
@@ -100,14 +102,15 @@ export const McpServerBindingEditor = React.memo(function McpServerBindingEditor
     }, [favoriteDirectories, props.binding.target, props.machines, setFavoriteDirectoriesRaw, setWorkspaceRoot]);
 
     const openOverrides = React.useCallback(() => {
+        if (!props.onChangeConfigOverride) return;
         Modal.show({
             component: McpBindingOverridesEditorModal,
             props: {
-                binding: props.binding,
+                overrides: props.configOverride,
                 serverTransport: props.serverTransport,
                 secrets: props.secrets,
                 ...(props.scope === undefined ? {} : { scope: props.scope }),
-                onSubmit: props.onChange,
+                onSubmit: props.onChangeConfigOverride,
             },
             chrome: {
                 kind: 'card',
@@ -116,10 +119,10 @@ export const McpServerBindingEditor = React.memo(function McpServerBindingEditor
             },
             closeOnBackdrop: true,
         });
-    }, [props.binding, props.onChange, props.secrets, props.serverTransport, props.scope]);
+    }, [props.binding.target, props.configOverride, props.onChangeConfigOverride, props.secrets, props.serverTransport, props.scope]);
 
     const overridesSummary = React.useMemo(() => {
-        const overrides = props.binding.overrides;
+        const overrides = props.configOverride;
         if (!overrides) return t('settings.mcpServersBindingOverridesNone');
         let count = 0;
         if (overrides.envPatch && Object.keys(overrides.envPatch).length > 0) count += Object.keys(overrides.envPatch).length;
@@ -129,7 +132,7 @@ export const McpServerBindingEditor = React.memo(function McpServerBindingEditor
         if (overrides.remote?.url !== undefined) count += 1;
         if (count === 0) return t('settings.mcpServersBindingOverridesNone');
         return t('settings.mcpServersBindingOverridesCount', { count });
-    }, [props.binding.overrides]);
+    }, [props.configOverride]);
 
     const toggleEnabled = React.useCallback((value: boolean) => {
         update((b) => ({ ...b, enabled: value, updatedAt: Date.now() }));
@@ -192,9 +195,9 @@ const stylesheet = StyleSheet.create((theme) => ({
     actions: {
         flexDirection: 'row',
         justifyContent: 'flex-end',
-        paddingHorizontal: 16,
-        paddingTop: 4,
-        paddingBottom: 16,
+        paddingHorizontal: theme.space.s16,
+        paddingTop: theme.space.s4,
+        paddingBottom: theme.space.s16,
     },
     disabledTitle: {
         color: theme.colors.text.secondary,

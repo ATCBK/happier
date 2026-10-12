@@ -157,10 +157,13 @@ it('keeps device overrides unchanged until the captured row save is acknowledged
   home.answer(serverId, '/v1/account/entity-rows/profiles/transfer', { body: { status: 'absent' } });
   const acknowledgement = createDeferred<void>();
   let saved = false;
-  home.answer(serverId, '/v1/account/entity-rows/remote-hosts', { select: () => ({ body: {
+  const revalidation = createDeferred<void>();
+  home.answer(serverId, '/v1/account/entity-rows/remote-hosts', { select: async () => {
+    if (saved) await revalidation.promise;
+    return { body: {
     status: 'present', revision: saved ? 5 : 4,
     content: { t: 'plain', v: { v: 1, hosts: [saved ? { ...host, name: 'Edited' } : host] } },
-  } }) });
+  } }; } });
   home.answer(serverId, 'POST /v1/account/entity-rows/remote-hosts', { select: async () => {
     await acknowledgement.promise;
     saved = true;
@@ -170,12 +173,15 @@ it('keeps device overrides unchanged until the captured row save is acknowledged
     runner: getDefaultSystemTaskRunner(), secretMaterialAllowed: false, remoteSshMachineSetupAllowed: false,
     nativeSshTransportAllowed: false, supportsWholeRowPress: false }));
   await vi.waitFor(() => { expect(getRemoteHostCatalogSnapshot(scope)?.stale).toBe(false); });
+  let settled = false;
   const receipt = hook.getCurrent().saveHost({ remoteHost: { ...host, name: 'Edited' },
-    localOverrides: { identityFilePath: '/device/key', sshConfigFilePath: null } });
+    localOverrides: { identityFilePath: '/device/key', sshConfigFilePath: null } }).then(result => { settled = true; return result; });
   try {
     expect(getRemoteHostLocalOverrides(host.id)).toBeNull();
     acknowledgement.resolve();
+    await vi.waitFor(() => { expect(settled).toBe(true); });
     expect(await receipt).toMatchObject({ ok: true, revision: 5, localOverrides: 'saved' });
+    expect(getRemoteHostCatalogSnapshot(scope)?.data?.[0]?.name).toBe('Edited');
     expect(getRemoteHostLocalOverrides(host.id)?.identityFilePath).toBe('/device/key');
     expect(home.requestsFor('/v1/account/entity-rows/remote-hosts').map(request => request.input)).toContainEqual({
       mutation: { expectedRevision: 4, referencedSavedSecretRevisions: [],
@@ -183,6 +189,7 @@ it('keeps device overrides unchanged until the captured row save is acknowledged
     });
   } finally {
     acknowledgement.resolve();
+    revalidation.resolve();
     await receipt;
     await hook.unmount();
     deleteRemoteHostLocalOverrides(host.id);
@@ -207,10 +214,13 @@ it('keeps the host and its device overrides until the Account acknowledges delet
   home.answer(serverId, '/v1/account/entity-rows/profiles/transfer', { body: { status: 'absent' } });
   const acknowledgement = createDeferred<void>();
   let removed = false;
-  home.answer(serverId, '/v1/account/entity-rows/remote-hosts', { select: () => ({ body: {
+  const revalidation = createDeferred<void>();
+  home.answer(serverId, '/v1/account/entity-rows/remote-hosts', { select: async () => {
+    if (removed) await revalidation.promise;
+    return { body: {
     status: 'present', revision: removed ? 5 : 4,
     content: { t: 'plain', v: { v: 1, hosts: removed ? [] : [host] } },
-  } }) });
+  } }; } });
   home.answer(serverId, 'POST /v1/account/entity-rows/remote-hosts', { select: async () => {
     await acknowledgement.promise;
     removed = true;
@@ -220,16 +230,19 @@ it('keeps the host and its device overrides until the Account acknowledges delet
     runner: getDefaultSystemTaskRunner(), secretMaterialAllowed: false, remoteSshMachineSetupAllowed: false,
     nativeSshTransportAllowed: false, supportsWholeRowPress: false }));
   await vi.waitFor(() => { expect(getRemoteHostCatalogSnapshot(scope)?.stale).toBe(false); });
-  const receipt = hook.getCurrent().deleteHost(host.id);
+  let settled = false;
+  const receipt = hook.getCurrent().deleteHost(host.id).then(result => { settled = true; return result; });
   try {
     expect(getRemoteHostLocalOverrides(host.id)?.identityFilePath).toBe('/device/key');
     expect(getRemoteHostCatalogSnapshot(scope)?.data?.map(entry => entry.id)).toEqual([host.id]);
     acknowledgement.resolve();
+    await vi.waitFor(() => { expect(settled).toBe(true); });
     expect(await receipt).toBe(true);
     expect(getRemoteHostLocalOverrides(host.id)).toBeNull();
     expect(getRemoteHostCatalogSnapshot(scope)?.data).toEqual([]);
   } finally {
     acknowledgement.resolve();
+    revalidation.resolve();
     await receipt;
     await hook.unmount();
     deleteRemoteHostLocalOverrides(host.id);
@@ -295,7 +308,10 @@ it.each(['save', 'delete'] as const)('keeps an acknowledged %s successful when d
       host: { ...host, name: 'Acknowledged edit' }, localOverrides: 'pending' } });
     else expect(outcome).toEqual({ value: true });
     expect(modalBoundary.spies.alert).toHaveBeenCalled();
-    expect(getRemoteHostCatalogSnapshot(scope)?.catalog).toMatchObject({ status: 'ready', revision: 5 });
+    expect(getRemoteHostCatalogSnapshot(scope)?.data).toEqual(operation === 'save' ? [{ ...host, name: 'Acknowledged edit' }] : []);
+    await act(async () => {
+      await vi.waitFor(() => expect(getRemoteHostCatalogSnapshot(scope)?.catalog).toMatchObject({ status: 'ready', revision: 5 }));
+    });
   } finally {
     nativeWrite.mockRestore();
     nativeDelete.mockRestore();

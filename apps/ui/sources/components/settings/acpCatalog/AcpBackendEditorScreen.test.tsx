@@ -131,8 +131,7 @@ const existingKiro = {
     id: 'kiro',
     name: 'kiro',
     title: 'Kiro',
-    command: 'kiro-cli',
-    args: ['acp'],
+    launch: { kind: 'command' as const, command: 'kiro-cli', args: ['acp'] },
     env: {},
     capabilities: {
         supportsLoadSession: false,
@@ -412,11 +411,11 @@ describe('AcpBackendEditorScreen', () => {
         const secondBody = artifacts.readPlainBody(secondArtifact);
         if (secondBody === null) throw new Error('Missing second approval body');
         expect(StoredApprovalRequestSchema.parse(JSON.parse(secondBody))).toMatchObject({
-            actionArgs: { expectedRevision: 2, backend: { id: 'submitted-agent', title: 'Later agent title', args: [' later argument ', ''] } },
+            actionArgs: { expectedRevision: 2, backend: { id: 'submitted-agent', title: 'Later agent title', launch: { args: [' later argument ', ''] } } },
         });
         await act(async () => { await decideApprovalAsInbox(scope.serverId, secondArtifact, 'approve'); });
         await waitForHomeGovernance(() => expectSavePending(screen, false));
-        expect(shared.settingsState.value.backends).toEqual([expect.objectContaining({ id: 'submitted-agent', title: 'Later agent title', args: [' later argument ', ''] })]);
+        expect(shared.settingsState.value.backends).toEqual([expect.objectContaining({ id: 'submitted-agent', title: 'Later agent title', launch: expect.objectContaining({ args: [' later argument ', ''] }) })]);
         expect(revision).toBe(3);
         expect(screen.findByTestId(`${EDITOR}.save`)?.props.disabled).toBe(true);
         expect(shared.routerReplaceSpy).toHaveBeenCalledWith('/(app)/settings/agents/custom/submitted-agent');
@@ -425,15 +424,25 @@ describe('AcpBackendEditorScreen', () => {
     it('preserves exact launch and login argv through a title-only edit and the public Action', async () => {
         const launchArgs = ['  x  ', '', 'two  words', '\t'];
         const loginArgs = ['', ' login ', 'two\twords', '  '];
-        shared.settingsState.value = { v: 2, backends: [{ ...existingKiro, args: launchArgs,
+        shared.settingsState.value = { v: 2, backends: [{ ...existingKiro, launch: { ...existingKiro.launch, args: launchArgs },
             auth: { support: 'login_terminal', loginCommand: { command: 'kiro-cli', args: loginArgs } },
         }] };
         const screen = await renderEditor('kiro');
         await type(screen, `${EDITOR}.title`, 'Renamed agent');
         await press(screen, `${EDITOR}.save`);
         expect(shared.settingsState.value.backends).toEqual([expect.objectContaining({
-            id: 'kiro', title: 'Renamed agent', args: launchArgs,
+            id: 'kiro', title: 'Renamed agent', launch: { kind: 'command', command: 'kiro-cli', args: launchArgs },
             auth: expect.objectContaining({ loginCommand: { command: 'kiro-cli', args: loginArgs } }),
+        })]);
+    });
+    it('preserves a pinned non-command launch through a title edit', async () => {
+        const launch = { kind: 'npm' as const, package: '@test/acp-agent', version: '1.2.3', args: ['--stdio'] };
+        shared.settingsState.value = { v: 2, backends: [{ ...existingKiro, launch }] };
+        const screen = await renderEditor('kiro');
+        await type(screen, `${EDITOR}.title`, 'Renamed registry agent');
+        await press(screen, `${EDITOR}.save`);
+        expect(shared.settingsState.value.backends).toEqual([expect.objectContaining({
+            id: 'kiro', title: 'Renamed registry agent', launch,
         })]);
     });
     it('asks for sign-in details only when the agent has a sign-in method', async () => {
@@ -528,8 +537,7 @@ describe('AcpBackendEditorScreen', () => {
             id: 'my-kiro',
             name: 'my-kiro',
             title: 'My Kiro',
-            command: 'kiro-cli',
-            args: ['acp', '--stdio'],
+            launch: { kind: 'command' as const, command: 'kiro-cli', args: ['acp', '--stdio'] },
         })]);
         expect(shared.routerReplaceSpy).toHaveBeenCalledWith('/(app)/settings/agents/custom/my-kiro');
         expect(shared.modalAlertSpy).not.toHaveBeenCalled();
@@ -572,7 +580,7 @@ describe('AcpBackendEditorScreen', () => {
         await press(screen, `${EDITOR}.save`);
 
         expect(shared.writes).toHaveLength(1);
-        expect(shared.writes[0]?.backends).toEqual([expect.objectContaining({ id: 'kiro', title: 'Kiro CLI', args: [] })]);
+        expect(shared.writes[0]?.backends).toEqual([expect.objectContaining({ id: 'kiro', title: 'Kiro CLI', launch: { kind: 'command', command: 'kiro-cli', args: [] } })]);
         expect(shared.routerReplaceSpy).not.toHaveBeenCalled();
     });
 

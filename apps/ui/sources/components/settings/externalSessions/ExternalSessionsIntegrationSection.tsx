@@ -209,6 +209,7 @@ export const ExternalSessionsIntegrationSection = React.memo(function ExternalSe
     const { theme } = useUnistyles();
     const listPresentation = useListPresentation();
     const pageNoticeActive = usePageNoticeActive();
+    const showMachinePrivacy = props.machineId !== null;
     const integrations = React.useMemo(
         () => props.integrations == null
             ? null
@@ -544,7 +545,9 @@ export const ExternalSessionsIntegrationSection = React.memo(function ExternalSe
                 last: offset + autoLinkChunkSize >= autoLinkSources!.length,
             });
         }
-        rows.push({ kind: 'privacy', key: 'privacy' });
+        if (showMachinePrivacy) {
+            rows.push({ kind: 'privacy', key: 'privacy' });
+        }
         rows.push(...(props.supplementalRows ?? []).map((row) => ({
             kind: 'supplemental' as const,
             key: `supplemental:${row.key}`,
@@ -559,6 +562,7 @@ export const ExternalSessionsIntegrationSection = React.memo(function ExternalSe
         props.loadingMoreInventory,
         props.supplementalRows,
         props.virtualized,
+        showMachinePrivacy,
     ]);
 
     const requestMoreInventory = React.useCallback(() => {
@@ -1017,7 +1021,7 @@ export const ExternalSessionsIntegrationSection = React.memo(function ExternalSe
                 </ItemGroup>
             ) : null}
 
-            <ItemGroup title={t('externalSessions.settingsPrivacyGroupTitle')}>
+            {showMachinePrivacy ? <ItemGroup title={t('externalSessions.settingsPrivacyGroupTitle')}>
                 <Item
                     testID="settings-external-sessions-integration-privacy"
                     mode="info"
@@ -1025,7 +1029,7 @@ export const ExternalSessionsIntegrationSection = React.memo(function ExternalSe
                     subtitle={t('externalSessions.settingsPrivacySubtitle')}
                     showChevron={false}
                 />
-            </ItemGroup>
+            </ItemGroup> : null}
         </View>
     );
 });

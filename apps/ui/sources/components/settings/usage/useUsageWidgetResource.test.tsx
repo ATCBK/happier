@@ -48,7 +48,7 @@ describe('Usage widget shared Resource selection', () => {
             const resource = useUsageWidgetResource({ credentials, enabled: true, plan: queryPlan });
             return { first: useUsageWidgetBodyModel(resource, 'first'), second: useUsageWidgetBodyModel(resource, 'second') };
         }, { flushOptions: { cycles: 20 } });
-        expect(hook.getCurrent().first.slice?.accounting).toEqual(accounting);
+        expect(hook.getCurrent().first.slice?.accounting).toMatchObject(accounting);
         expect(hook.getCurrent().second.slice).toBe(hook.getCurrent().first.slice);
         denied = true;
         await act(async () => { await hook.getCurrent().first.refresh(); });
@@ -68,7 +68,7 @@ describe('Usage widget shared Resource selection', () => {
                 plan: plan(normalizeUsageQuery({ period: { startMs }, granularity: 'day', costBasis })) });
             return useUsageWidgetBodyModel(resource, 'first');
         }, { initialProps: { startMs: 1000, costBasis: 'auto' }, flushOptions: { cycles: 20 } });
-        expect(hook.getCurrent().slice?.accounting).toEqual(accounting);
+        expect(hook.getCurrent().slice?.accounting).toMatchObject(accounting);
         held = true;
         await hook.rerender({ startMs: 2000, costBasis: 'auto' });
         expect(hook.getCurrent().updatingPreviousPeriod).toBe(true);
@@ -91,17 +91,52 @@ describe('Usage widget shared Resource selection', () => {
         const hook = await renderHook(() => useUsageWidgetBodyModel(
             useUsageWidgetResource({ credentials, enabled: true, plan: queryPlan }), 'first'),
         { flushOptions: { cycles: 20 } });
-        expect(hook.getCurrent().slice?.accounting).toEqual(accounting);
+        expect(hook.getCurrent().slice?.accounting).toMatchObject(accounting);
         // Quota, Work and How-you-work have no producer in this Home: their state belongs to their own lines.
         expect(hook.getCurrent().refreshing).toBe(false);
         held = true;
         let refreshed: Promise<void> | undefined;
         await act(async () => { refreshed = hook.getCurrent().refresh(); });
         await flushHookEffects({ cycles: 5 });
-        expect(hook.getCurrent().slice?.accounting).toEqual(accounting);
+        expect(hook.getCurrent().slice?.accounting).toMatchObject(accounting);
         expect(hook.getCurrent().refreshing).toBe(true);
         await act(async () => { delayed.resolve(Response.json(accounting)); await refreshed; });
         await flushHookEffects({ cycles: 20 });
         expect(hook.getCurrent().refreshing).toBe(false);
+    });
+
+    it('releases accounting activity while slow private detail is still being read', async () => {
+        const detail = createDeferred<Response>();
+        const issued = createDeferred<void>();
+        const withDetail: UsageAnalyticsQueryResponse = { ...accounting, contributions: [{ id: 'fact', observedAtMs: 500,
+            sessionId: 'slow-session', turnId: 'turn', agentId: null, modelId: null, machineId: null, projectKey: null,
+            workspaceId: null, source: null, tokens: accounting.totals.tokens, cost: accounting.totals.cost }] };
+        const credentials = await mountHome(request => {
+            if (request.path === '/v2/usage/query') return Response.json(withDetail);
+            if (request.path === '/v1/account/encryption/currentness') return Response.json({ mode: 'plain', version: 1,
+                signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 });
+            if (request.path === '/v2/sessions/slow-session') { issued.resolve(); return detail.promise; }
+            return undefined;
+        });
+        const queryPlan = plan(normalizeUsageQuery({ session: 'slow-session', period: { startMs: 0, endMs: 1000 } }));
+        const hook = await renderHook(() => {
+            const resource = useUsageWidgetResource({ credentials, enabled: true, plan: queryPlan });
+            return { ...useUsageWidgetBodyModel(resource, 'first'), entry: resource.entry };
+        },
+        { flushOptions: { cycles: 30 } });
+        const settled = createDeferred<void>();
+        const entry = hook.getCurrent().entry!;
+        const release = entry.subscribe(() => { if (entry.getSnapshot().pending === 'idle') settled.resolve(); }, false);
+        try {
+            await act(async () => { await issued.promise; });
+            expect(hook.getCurrent().slice?.accounting).toMatchObject(withDetail);
+            expect(hook.getCurrent().pending).toBe(true);
+            expect(hook.getCurrent().refreshing).toBe(false);
+            await act(async () => { detail.resolve(Response.json({ error: 'not_found' }, { status: 404 })); await settled.promise; });
+            await flushHookEffects({ cycles: 30 });
+            expect(entry.getSnapshot().pending).toBe('idle');
+            expect(hook.getCurrent().slice?.sources.find(source => source.source === 'how_you_work')?.status).not.toBe('pending');
+            expect(hook.getCurrent().refreshing).toBe(false);
+        } finally { release(); detail.resolve(Response.json({ error: 'not_found' }, { status: 404 })); }
     });
 });

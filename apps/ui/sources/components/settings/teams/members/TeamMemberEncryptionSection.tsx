@@ -5,13 +5,13 @@ import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { useSessionCollaborationAvailability } from '@/hooks/session/useSessionCollaborationAvailability';
 import {
-    createMembershipSessionDataKeyEnvelopeClient,
     membershipHistoryPreparationScopeKey,
-    prepareMembershipHistoryEnvelopesDetached,
     type MembershipSessionDataKeyEnvelopeTarget,
 } from '@/sync/api/teams/membershipSessionDataKeyEnvelopesApi';
 import { SessionAccessApiError } from '@/sync/api/session/sessionAccessApi';
-import type { MembershipHistoryPreparationOutcome } from '@/sync/encryption/prepareMembershipHistorySessionDataKeyEnvelopes';
+import type { TeamMembershipHistoryPreparationResultV1, TeamMembershipHistoryReadinessV1 } from '@happier-dev/protocol/teams/membershipHistoryPreparationV1';
+import { getTeamMembershipHistoryReadiness, prepareTeamMembershipHistory } from '@/sync/ops/teams/teamMembershipHistoryOperations';
+import { isTeamActionApprovalPendingError } from '@/sync/ops/teams/teamActionClient';
 import { t } from '@/text';
 
 import type { TeamMemberSectionContext } from './teamMemberSectionContext';
@@ -20,8 +20,8 @@ import type { TeamMemberSectionContext } from './teamMemberSectionContext';
  * The member-detail encrypted-access row.
  *
  * It consumes the first page of the one membership-history resource when the detail is opened or
- * refreshed, and derives everything it shows from that page: whether an action exists (`items`,
- * `nextCursor`), why some manageable Sessions are not actionable (`exceptions`), and whether the
+ * refreshed, and derives everything it shows from the Action's safe projection: whether an action
+ * exists (`actionable`), why some manageable Sessions are not actionable (`exceptions`), and whether the
  * recipient can receive envelopes at all. There is no second count query, no member mirror, and no
  * summary service — a state this page cannot express is not shown.
  *
@@ -105,18 +105,12 @@ export function classifyTeamMemberEncryptionDiscoveryFailure(error: unknown): Ex
  * are the Home's truth about manageable Sessions that are not actionable, and they
  * stay separate because only one of them has a remedy.
  */
-export function projectTeamMemberEncryptionReadyState(page: Readonly<{
-    items: readonly unknown[];
-    nextCursor: string | null;
-    exceptions: Readonly<{
-        callerEnvelopeRepairRequiredCount: number;
-        callerVisibleNonTransferableSessionCount: number;
-    }>;
-}>): Extract<EncryptedAccess, { kind: 'ready' }> {
+export function projectTeamMemberEncryptionReadyState(
+    page: Extract<TeamMembershipHistoryReadinessV1, { status: 'ready' }>,
+): Extract<EncryptedAccess, { kind: 'ready' }> {
     return {
         kind: 'ready',
-        // More work may exist beyond this page; either fact makes the action available.
-        actionable: page.items.length > 0 || page.nextCursor !== null,
+        actionable: page.actionable,
         callerRepairRequired: page.exceptions.callerEnvelopeRepairRequiredCount > 0,
         nonTransferableHistory: page.exceptions.callerVisibleNonTransferableSessionCount > 0,
     };
@@ -132,7 +126,7 @@ export function projectTeamMemberEncryptionReadyState(page: Readonly<{
  * so this stays one decision rather than two.
  */
 export function projectTeamMemberPreparationOutcome(
-    outcome: MembershipHistoryPreparationOutcome,
+    outcome: TeamMembershipHistoryPreparationResultV1,
 ): EncryptedAccess {
     if (outcome.status === 'recipient_unavailable' && outcome.recipientUnavailableReason) {
         return { kind: 'setup_required', reason: outcome.recipientUnavailableReason };
@@ -150,7 +144,7 @@ export function projectTeamMemberPreparationOutcome(
             // A locally empty failure set cannot erase what the Home reported, and a
             // locally unopenable envelope is repair work even when the Home saw none.
             callerRepairRequired: (server?.callerEnvelopeRepairRequiredCount ?? 0) > 0
-                || outcome.repairRequiredSessions.length > 0,
+                || outcome.repairRequiredCount > 0,
             nonTransferableHistory: (server?.callerVisibleNonTransferableSessionCount ?? 0) > 0,
         };
     }
@@ -206,20 +200,16 @@ export function TeamMemberEncryptionSection(props: Readonly<{
         setState((previous) => previous.kind === 'checking' ? CHECKING : previous);
         void (async () => {
             try {
-                const page = await createMembershipSessionDataKeyEnvelopeClient({
+                const page = await getTeamMembershipHistoryReadiness({
                     ...request,
                     isCurrent: () => currentGeneration === generation.current,
-                }).fetchPage(null);
+                });
                 if (currentGeneration !== generation.current) return;
                 if (page.status === 'recipient_unavailable') {
-                    setState({ kind: 'setup_required', reason: page.contentKey.reason });
+                    setState({ kind: 'setup_required', reason: page.reason });
                     return;
                 }
-                const exceptions = page.exceptions;
-                if (exceptions === null) {
-                    throw new Error('Cursorless membership-history discovery omitted its exceptions');
-                }
-                setState(projectTeamMemberEncryptionReadyState({ ...page, exceptions }));
+                setState(projectTeamMemberEncryptionReadyState(page));
             } catch (error) {
                 if (currentGeneration !== generation.current) return;
                 // Preserve the boundary's typed distinction: unsupported or denied resources stay
@@ -245,63 +235,54 @@ export function TeamMemberEncryptionSection(props: Readonly<{
     }, [discover, availability]);
 
     const prepare = React.useCallback(() => {
+        const previousState = state;
         const currentGeneration = (generation.current += 1);
         setRefreshing(false);
         setState({ kind: 'preparing', preparedCount: 0 });
         announceAccessibilityMessage(t('teams.members.encryption.preparing', { prepared: 0 }));
         void (async () => {
             try {
+                const settle = (outcome: TeamMembershipHistoryPreparationResultV1) => {
+                    if (currentGeneration !== generation.current) return;
+                    const settled = projectTeamMemberPreparationOutcome(outcome);
+                    if (settled.kind === 'recipient_changed') { setState(settled); context.refresh(); return; }
+                    if (settled.kind === 'membership_changed') { context.refresh(); discover(); return; }
+                    if (settled.kind === 'checking') { discover(); return; }
+                    announceAccessibilityMessage(
+                        settled.kind === 'ready'
+                            ? settled.actionable || settled.callerRepairRequired
+                                ? t('teams.members.encryption.pending') : t('teams.members.encryption.ready')
+                            : settled.kind === 'setup_required' ? t('teams.members.encryption.setupRequired') : t('teams.members.encryption.failed'),
+                    );
+                    setState(settled);
+                };
                 // Detached on purpose: closing the member sheet stops this row from
                 // observing progress, but it does not cancel a pass whose exact
                 // Home/Account/membership/recipient scope and encryption generation are
                 // still current. The authority guard inside the operation stops the next
                 // write when one of those actually changes.
-                const outcome = await prepareMembershipHistoryEnvelopesDetached({
+                const outcome = await prepareTeamMembershipHistory({
                     ...request,
                     onProgress: (progress) => {
                         if (currentGeneration !== generation.current) return;
                         setState({ kind: 'preparing', preparedCount: progress.preparedCount });
                     },
+                    onApprovalSucceeded: settle,
+                    onApprovalFailed: () => { if (currentGeneration === generation.current) setState(FAILED); },
                 });
+                settle(outcome);
+            } catch (cause) {
                 if (currentGeneration !== generation.current) return;
-                const settled = projectTeamMemberPreparationOutcome(outcome);
-                // A replacement Account must reload the canonical membership before any
-                // retry; a scope change must ask the Home again instead of settling.
-                if (settled.kind === 'recipient_changed') {
-                    setState(settled);
-                    context.refresh();
+                if (isTeamActionApprovalPendingError(cause) && context.requestApproval) {
+                    setState(previousState);
+                    context.requestApproval(cause.registration);
                     return;
                 }
-                if (settled.kind === 'membership_changed') {
-                    // Refresh the host's Team membership and ask the exact nested
-                    // Team/Group resource again. A removed Group membership can
-                    // leave the Team membership itself valid, so host refresh
-                    // alone would leave a stale encrypted-access row mounted.
-                    context.refresh();
-                    discover();
-                    return;
-                }
-                if (settled.kind === 'checking') {
-                    discover();
-                    return;
-                }
-                announceAccessibilityMessage(
-                    settled.kind === 'ready'
-                        ? settled.actionable || settled.callerRepairRequired
-                            ? t('teams.members.encryption.pending')
-                            : t('teams.members.encryption.ready')
-                        : settled.kind === 'setup_required'
-                            ? t('teams.members.encryption.setupRequired')
-                            : t('teams.members.encryption.failed'),
-                );
-                setState(settled);
-            } catch {
-                if (currentGeneration !== generation.current) return;
                 announceAccessibilityMessage(t('teams.members.encryption.failed'));
                 setState(FAILED);
             }
         })();
-    }, [context, discover, request]);
+    }, [context, discover, request, state]);
 
     // The `all_existing` add journey already made this decision, so the first pass
     // starts on arrival rather than asking for it again. It is gated on real
@@ -444,7 +425,8 @@ export function TeamMemberEncryptionSection(props: Readonly<{
         >
             <Item
                 testID="team-member-encryption-status"
-                title={t('teams.members.encryption.title')}
+                // The section already names encrypted access; the row names whose sessions it covers.
+                title={t('teams.members.encryption.rowTitle')}
                 loading={refreshing}
                 // Ready means every eligible Session was prepared. A caller envelope the
                 // Home still reports as needing repair is not that, even when this

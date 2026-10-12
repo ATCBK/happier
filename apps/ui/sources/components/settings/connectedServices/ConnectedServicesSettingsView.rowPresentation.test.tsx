@@ -37,7 +37,9 @@ vi.mock('@/sync/domains/features/featureDecisionRuntime', () => ({
     }),
 }));
 
-vi.mock('@/sync/store/hooks', () => ({
+vi.mock('@/sync/store/hooks', async () => {
+    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
+    return createStorageModuleStub({
     useActiveServerAccountScope: () => null,
     useAllMachines: () => [],
     useProfile: () => ({
@@ -55,9 +57,8 @@ vi.mock('@/sync/store/hooks', () => ({
     useSetting: () => undefined,
     useLocalSetting: () => undefined,
     useLocalSettingMutable: () => [undefined, vi.fn()],
-}));
-
-vi.mock('@/sync/store/settingsWriters', () => ({ useApplySettings: () => vi.fn() }));
+    });
+});
 
 vi.mock('@/hooks/teams/useHomeTeamCredentialModelCatalog', () => ({
     useHomeTeamCredentialModelCatalog: () => ({
@@ -74,20 +75,6 @@ vi.mock('@/components/appShell/plugins/AppShellPluginUiProjection', () => ({
         errorReason: registryState.errorReason,
         entries: registryState.entries,
     }),
-}));
-
-vi.mock('@/sync/domains/connectedServices/connectedServiceRegistry', () => ({
-    getLegacyConnectedServiceRegistryEntry: (serviceId: string) => registryState.entries
-        .find((entry) => entry.legacyServiceId === serviceId)
-        ?? { serviceId, connectCommand: `happier connect ${serviceId}`, supportsOauth: false, executable: false },
-    getConnectedServiceRegistrySnapshot: () => ({
-        scopeKey: 'server-1',
-        status: 'ready',
-        errorReason: null,
-        entries: registryState.entries,
-    }),
-    getGeneratedLegacyConnectedServiceRegistryFallback: () => null,
-    installConnectedAccountDescriptorProjection: vi.fn(),
 }));
 
 vi.mock('@/hooks/server/connectedServices/useConnectedServiceQuotaBadges', () => ({

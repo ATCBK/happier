@@ -6,17 +6,21 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import {
     createProviderConnectionsDescribeFixture,
     createProviderSettingsHarness,
-    flushHookEffects,
+    createProviderSettingsAccountHarness,
     installProviderSettingsRpcBoundary,
-    renderScreen,
-    standardCleanup,
-} from '@/dev/testkit';
-import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
+    installProviderConnectionsCatalogHttpBoundary,
+} from '@/dev/testkit/harness/providerSettingsHarness';
+import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, PROVIDER_CONNECTIONS_ROWS_ROUTE_V1, ProviderConnectionsRowMutationV1Schema } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
+import { PROVIDER_ACTION_INPUT_SCHEMAS_V1 } from '@happier-dev/protocol/providers/providerActionsV1';
+import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
+import { renderScreen } from '@/dev/testkit/render/renderScreen';
+import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 import { installSettingsViewCommonModuleMocks } from '../settingsViewTestHelpers';
 import { getActiveUnsavedChangesGuard, runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 
@@ -59,6 +63,7 @@ const navigationPreventRemove = vi.hoisted(() => ({
 const providerHarness = createProviderSettingsHarness();
 installProviderSettingsRpcBoundary(providerHarness);
 const account = createProviderSettingsAccountHarness();
+let stored: ReturnType<typeof installProviderConnectionsCatalogHttpBoundary>;
 let foreignServerId = '';
 let machine = createMachineFixture({ id: 'machine-a', kind: 'persistent', activeAt: Date.now(), metadata: {
     host: 'mac.local', platform: 'darwin', displayName: 'Mac', happyCliVersion: 'test',
@@ -169,8 +174,9 @@ function presentedTitles(screen: RenderedScreen) {
 }
 
 function findProviderRecoveryAction(screen: RenderedScreen, label: string) {
-    return screen.findAll(node => node.props.accessibilityRole === 'button'
-        && node.props.accessibilityLabel === label && typeof node.props.onPress === 'function')[0];
+    const node = screen.findAll(node => node.props.accessibilityLabel === label
+        && (typeof node.props.onPress === 'function' || typeof node.props.action === 'function'))[0];
+    return node ? { props: { onPress: node.props.onPress ?? node.props.action } } : undefined;
 }
 
 
@@ -179,7 +185,27 @@ function findComposite(screen: RenderedScreen, testID: string, prop: string) {
     return screen.findAllByTestId(testID).find((node) => node.props[prop] !== undefined) ?? null;
 }
 
+/** SavedSecret's HTTP materialization boundary; creation and Action continuation remain real. */
+function installPastedSecretResourceBoundary(respondAfter?: Promise<void>) {
+    const materials: unknown[] = [];
+    account.home.answer(account.serverId, 'POST /v1/account/saved-secrets/resources', {
+        select: input => {
+            const { resourceId, displayName, storedContent } = input as { resourceId: string; displayName: string; storedContent: unknown };
+            materials.push({ resourceId, encryptionMode: 'plain', recipientEnvelope: null, storedContent,
+                entry: { ref: `happier:shared-secret:v1:${resourceId}`, source: 'shared_resource', relationship: 'owner',
+                    name: displayName, kind: 'apiKey', revision: 1, materialStatus: 'ready',
+                    capabilities: { use: true, rename: true, rotate: true, manageAccess: true, delete: true } } });
+            return { respondAfter, body: { resourceId, revision: 1 } };
+        },
+    });
+    account.home.answer(account.serverId, '/v1/account/saved-secrets/resources/materials', {
+        select: () => ({ body: { resources: materials } }),
+    });
+}
+
 await loadSyncSingletonForTests();
+// Install transport leaves before loading the screen; cold compilation is collection work.
+await import('./ProviderConnectionAuthoringScreen');
 const [{ Item }, { ItemGroup }, { FieldTextInput }] = await Promise.all([
     import('@/components/ui/lists/Item'), import('@/components/ui/lists/ItemGroup'),
     import('@/components/ui/forms/FieldTextInput'),
@@ -235,12 +261,17 @@ describe('ProviderConnectionAuthoringScreen', () => {
         });
         await account.restore({ serverIdentityId: 'srv_provider_screen', machines: [machine], waivedActions: [
             'providers.connections.create_contribution', 'providers.connections.create_custom',
-            'providers.connections.enabled.set', 'providers.probe',
+            'providers.connections.enabled.set', 'providers.probe', 'secrets.shared.create',
         ] });
         await account.selectMachine(account.serverId, 'machine-a');
+        stored = installProviderConnectionsCatalogHttpBoundary({ home: account.home, serverId: account.serverId,
+            catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 });
         foreignServerId = await account.addHome({
             name: 'Other Provider Account', serverUrl: 'https://provider-foreign.test', serverIdentityId: 'srv_b', accountId: 'account-foreign', active: false,
         });
+        installProviderConnectionsCatalogHttpBoundary({ home: account.home, serverId: foreignServerId,
+            catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 });
+        await account.home.selectHomes([account.serverId]);
         const { storage } = await import('@/sync/domains/state/storage');
         const { getSyncSingleton } = await import('@/sync/runtime/getSyncSingleton');
         Object.defineProperty(state, 'savedSecrets', {
@@ -359,10 +390,8 @@ describe('ProviderConnectionAuthoringScreen', () => {
             <ProviderConnectionAuthoringScreen contributionKey="acme.plugin/ollama" />,
         );
 
-        const getKeyRow = screen.findAllByType(Item)
-            .find((item) => item.props.accessibilityLabel === 'settingsProviders.links.getApiKey');
-        expect(getKeyRow?.props.accessibilityLabel).toBe('settingsProviders.links.getApiKey');
-        expect(getKeyRow?.props.onPress).toBeUndefined();
+        // Where to get a key sits beside the key field as a quiet link, not a row of its own.
+        expect(findProviderExternalLink(screen, 'settingsProviders.links.getApiKey')).toBeDefined();
         await React.act(async () => {
             await findProviderExternalLink(screen, 'settingsProviders.links.getApiKey')?.props.onPress?.();
             await Promise.resolve();
@@ -403,13 +432,14 @@ describe('ProviderConnectionAuthoringScreen', () => {
         const credentialRow = screen.findAllByType(Item).find(
             (item) => item.props.testID === 'settings-provider-authoring-api-key',
         );
-        expect(credentialRow?.props.rightElement.props.disabled).toBe(true);
+        await waitForHomeGovernance(() => expect(findComposite(screen, 'settings-provider-authoring-api-key.choose', 'disabled')?.props.disabled).toBe(true));
         expect(credentialRow?.props.onPress).toBeUndefined();
         expect(credentialRow?.props.subtitle).toBe('settingsProviders.local.accountScopeMismatchDescription');
         const connect = screen.findByTestId('settings-provider-authoring-connect');
         expect(connect?.props.disabled).toBe(true);
         expect(modalShow).not.toHaveBeenCalled();
         expect(run).not.toHaveBeenCalled();
+        expect(stored.writes).toBe(0);
         expect(providerHarness.state.requests.some((request) => (
             request.method === RPC_METHODS.DAEMON_PROVIDERS_CONNECTIONS_DESCRIBE
             && request.serverId === resolveServerProfileScopeIdForIdentifier(foreignServerId)
@@ -437,17 +467,60 @@ describe('ProviderConnectionAuthoringScreen', () => {
         if (!scope) throw new Error('Expected the restored Account settings scope');
         await React.act(async () => { await refreshSavedSecretCatalog(scope); });
         await React.act(async () => {
-            screen.findByTestId('settings-provider-authoring-api-key.choose')?.props.onPress?.();
+            findComposite(screen, 'settings-provider-authoring-api-key.useSaved', 'onPress')?.props.onPress?.();
         });
         const picker = modalShow.mock.calls.at(-1)?.[0] as { props?: { onSelectId?: (id: string | null) => void } } | undefined;
         await React.act(async () => { picker?.props?.onSelectId?.(ref); });
+        // Settings may still hold importer input; it never overrides the
+        // selected resource's canonical catalog identity or availability.
+        await React.act(async () => {
+            state.savedSecrets = [{ id: ref, name: 'Legacy key collision', kind: 'apiKey',
+                encryptedValue: { _isSecretValue: true, value: 'legacy-private-key' }, createdAt: 1, updatedAt: 1 }];
+        });
         expect(screen.findByTestId('settings-provider-authoring-api-key.saved')).not.toBeNull();
+        expect(screen.getTextContent()).toContain('Provider key');
+        expect(screen.getTextContent()).not.toContain('Legacy key collision');
+        expect(screen.getTextContent()).not.toContain('private-key');
 
         account.home.answer(account.serverId, '/v1/account/saved-secrets/resources/materials', {
             status: 503, body: { error: 'unavailable' },
         });
         await React.act(async () => { await refreshSavedSecretCatalog(scope).catch(() => undefined); });
         expect(screen.findByTestId('settings-provider-authoring-api-key.saved')).toBeNull();
+        expect(screen.getTextContent()).not.toContain('Provider key');
+        expect(run).not.toHaveBeenCalled();
+    });
+
+    it('defers pristine contribution validation, then presents invalid edited endpoints without enabling Connect', async () => {
+        state.contributionKey = 'happier.provider.cliproxyapi/cliproxyapi';
+        state.providerName = 'CLIProxyAPI';
+        describeProviderConnections.mockResolvedValue({ status: 'error', error: createProviderErrorV1('provider_connection_invalid') });
+        const { ProviderConnectionAuthoringScreen } = await import('./ProviderConnectionAuthoringScreen');
+        const screen = await renderScreen(<ProviderConnectionAuthoringScreen contributionKey={state.contributionKey} />);
+        await waitForHomeGovernance(() => expect(describeProviderConnections).toHaveBeenCalled());
+        expect(screen.findAll(node => node.props.testID === 'provider-error:provider_connection_invalid')).toHaveLength(0);
+        expect(screen.findByTestId('settings-provider-authoring-connect')?.props.disabled).toBe(true);
+
+        await waitForHomeGovernance(() => expect(screen.findAllByType(FieldTextInput).find(
+            field => field.props.testID === 'settings-provider-authoring-endpoint-chat',
+        )).toBeDefined());
+        await React.act(async () => {
+            screen.findAllByType(FieldTextInput).find(
+                field => field.props.testID === 'settings-provider-authoring-endpoint-chat',
+            )!.props.onChangeText('https://rejected.example.test/v1');
+            await flushHookEffects();
+        });
+        expect(screen.findAll(node => node.props.testID === 'provider-error:provider_connection_invalid').length).toBeGreaterThan(0);
+        expect(screen.findByTestId('settings-provider-authoring-connect')?.props.disabled).toBe(true);
+        expect(run).not.toHaveBeenCalled();
+    });
+
+    it('presents transport failures before any contribution draft interaction', async () => {
+        describeProviderConnections.mockResolvedValue({ status: 'error', error: createProviderErrorV1('provider_machine_unavailable') });
+        const { ProviderConnectionAuthoringScreen } = await import('./ProviderConnectionAuthoringScreen');
+        const screen = await renderScreen(<ProviderConnectionAuthoringScreen contributionKey="acme.plugin/ollama" />);
+        await waitForHomeGovernance(() => expect(describeProviderConnections).toHaveBeenCalled());
+        expect(screen.findAll(node => node.props.testID === 'provider-error:provider_machine_unavailable').length).toBeGreaterThan(0);
         expect(run).not.toHaveBeenCalled();
     });
 
@@ -478,7 +551,7 @@ describe('ProviderConnectionAuthoringScreen', () => {
         );
         await flushHookEffects();
         await React.act(async () => {
-            screen.findByTestId('settings-provider-authoring-api-key.choose')?.props.onPress?.();
+            findComposite(screen, 'settings-provider-authoring-api-key.useSaved', 'onPress')?.props.onPress?.();
         });
         const picker = modalShow.mock.calls.at(-1)?.[0] as {
             props?: { onSelectId?: (id: string | null) => void };
@@ -493,9 +566,8 @@ describe('ProviderConnectionAuthoringScreen', () => {
         });
 
         expect(run).not.toHaveBeenCalled();
-        expect(screen.findAllByType(Item).find(
-            (item) => item.props.testID === 'settings-provider-authoring-api-key',
-        )?.props.rightElement.props.disabled).toBe(true);
+        await waitForHomeGovernance(() => expect(findComposite(screen, 'settings-provider-authoring-api-key.choose', 'disabled')?.props.disabled).toBe(true));
+        expect(stored.writes).toBe(0);
     });
 
     it('retires Account A authored authoring buffers when the active Account lifetime retires', async () => {
@@ -516,7 +588,7 @@ describe('ProviderConnectionAuthoringScreen', () => {
         });
         expect(navigationPreventRemove.enabled).toBe(true);
         await React.act(async () => {
-            screen.findByTestId('settings-provider-authoring-api-key.choose')?.props.onPress?.();
+            findComposite(screen, 'settings-provider-authoring-api-key.useSaved', 'onPress')?.props.onPress?.();
         });
         expect(modalShow).toHaveBeenCalledTimes(1);
         // Captured while Account A is still current: even this stale callback
@@ -623,22 +695,15 @@ describe('ProviderConnectionAuthoringScreen', () => {
         }
     });
 
-    it('shows the Provider website independently from credential metadata', async () => {
+    it('keeps a draft free of the saved provider\'s `⋯` menu, website included (P2-7)', async () => {
         state.websiteUrl = 'https://provider.example.test';
         const { ProviderConnectionAuthoringScreen } = await import('./ProviderConnectionAuthoringScreen');
         const screen = await renderScreen(
             <ProviderConnectionAuthoringScreen contributionKey="acme.plugin/ollama" />,
         );
-        const titles = presentedTitles(screen);
+        await waitForHomeGovernance(() => expect(screen.findByTestId('settings-provider-authoring-built-in')).not.toBeNull());
 
-        expect(findEditorMenuAction(screen, 'website')).toBeDefined();
-        expect(titles).not.toContain('settingsProviders.links.getApiKey');
-        await React.act(async () => {
-            await findEditorMenuAction(screen, 'website')?.props.onPress?.();
-            await Promise.resolve();
-        });
-
-        expect(openUrl).toHaveBeenCalledWith('https://provider.example.test');
+        expect(findEditorMenuAction(screen, 'website')).toBeUndefined();
         expect(run).not.toHaveBeenCalled();
     });
 
@@ -727,9 +792,16 @@ describe('ProviderConnectionAuthoringScreen', () => {
         );
 
         expect(describeProviderConnections).toHaveBeenCalledTimes(2);
-        const subtitles = screen.findAllByType(Item).map((item) => item.props.subtitle);
-        expect(subtitles).toContain('http://127.0.0.1:11434/v1');
-        expect(subtitles).not.toContain('http://127.0.0.1:19999/v1');
+        // The add sheet no longer lists a computer destination (PA1), so the adopted review is read
+        // from what Connect submits: the current preview, never the late one.
+        await React.act(async () => {
+            await screen.findByTestId('settings-provider-authoring-connect')?.props.onPress?.();
+        });
+        expect(run).toHaveBeenCalledWith(expect.objectContaining({
+            action: 'createContribution',
+            authoringReview: expect.objectContaining({ fingerprint: 'authoring-review:v1:default' }),
+        }), 'save');
+        expect(JSON.stringify(run.mock.calls)).not.toContain('authoring-review:v1:late');
     });
 
     it('does not show a fake API-key control for a no-auth contribution', async () => {
@@ -767,25 +839,50 @@ describe('ProviderConnectionAuthoringScreen', () => {
         state.credential = { required: true };
         const { ProviderConnectionAuthoringScreen } = await import('./ProviderConnectionAuthoringScreen');
         const screen = await renderScreen(<ProviderConnectionAuthoringScreen contributionKey="acme.plugin/ollama" />);
+        // Connect waits for a key: it stays disabled, and pressing it anyway creates nothing.
         const connect = screen.findByTestId('settings-provider-authoring-connect');
+        expect(connect?.props.disabled).toBe(true);
         await React.act(async () => { await connect?.props.onPress?.(); });
         expect(run).not.toHaveBeenCalled();
-        expect(presentedTitles(screen))
-            .toContain('settingsProviders.errors.secretMissingTitle');
+        expect(modalShow).not.toHaveBeenCalled();
     });
 
-    it('preserves explicit disabled intent when connecting a built-in contribution', async () => {
+    it('turns a pasted key into a Saved Secret and connects with it in one step (PA1)', async () => {
+        state.credential = { required: true };
+        installPastedSecretResourceBoundary();
         const { ProviderConnectionAuthoringScreen } = await import('./ProviderConnectionAuthoringScreen');
         const screen = await renderScreen(<ProviderConnectionAuthoringScreen contributionKey="acme.plugin/ollama" />);
-        const enable = screen.findAllByType(Item)
-            .find((item) => item.props.title === 'settingsProviders.authoring.enableAfterSaving');
-        expect(enable).toBeDefined();
-        await React.act(async () => { enable?.props.rightElement.props.onValueChange(false); });
+        // The key is typed where it is asked for: no picker, no detour through Saved Secrets.
+        const keyField = screen.findAllByType(FieldTextInput).find((input) => input.props.testID === 'settings-provider-authoring-api-key.field');
+        expect(keyField).toBeDefined();
+        await React.act(async () => { keyField!.props.onChangeText('  sk-pasted-key\n'); });
+        await React.act(async () => {
+            await screen.findByTestId('settings-provider-authoring-connect')?.props.onPress?.();
+        });
+        await vi.waitFor(() => expect(run).toHaveBeenCalled());
+        const created = account.home.requestsFor('/v1/account/saved-secrets/resources')
+            .map((request) => request.input as { resourceId?: string; displayName?: string } | null)
+            .filter((input) => input?.resourceId);
+        expect(created).toHaveLength(1);
+        expect(created[0]!.displayName).toBe('Ollama');
+        expect(modalShow).not.toHaveBeenCalled();
+        expect(run).toHaveBeenCalledWith(expect.objectContaining({
+            action: 'createContribution',
+            savedSecretId: `happier:shared-secret:v1:${created[0]!.resourceId}`,
+        }), 'save');
+    });
+
+    it('connects a built-in contribution in one step, switched on (PA1)', async () => {
+        const { ProviderConnectionAuthoringScreen } = await import('./ProviderConnectionAuthoringScreen');
+        const screen = await renderScreen(<ProviderConnectionAuthoringScreen contributionKey="acme.plugin/ollama" />);
+        // No "Enable after saving" on the add sheet: a provider someone just connected is simply on.
+        expect(screen.findAllByType(Item)
+            .find((item) => item.props.title === 'settingsProviders.authoring.enableAfterSaving')).toBeUndefined();
         const connect = screen.findByTestId('settings-provider-authoring-connect');
         await React.act(async () => { await connect?.props.onPress?.(); });
         expect(run).toHaveBeenCalledWith(expect.objectContaining({
             action: 'createContribution',
-            enable: false,
+            enable: true,
             authoringReview: {
                 candidateId: 'discovery-candidate:v1:default',
                 fingerprint: 'authoring-review:v1:default',
@@ -829,7 +926,7 @@ describe('ProviderConnectionAuthoringScreen', () => {
         expect(run).toHaveBeenCalledOnce();
     });
 
-    it('requires an exact daemon candidate, reviews its normalized destination, and never probes from the browser', async () => {
+    it('requires an exact daemon candidate, keeps the computer destination off the add sheet, and never probes from the browser', async () => {
         describeProviderConnections
             .mockResolvedValueOnce({
                 status: 'success', connections: [], available: [], discoveryCandidates: [], localInstallations: [],
@@ -887,11 +984,11 @@ describe('ProviderConnectionAuthoringScreen', () => {
             await Promise.resolve();
         });
 
+        // Choosing is the decision; the resolved computer destination is shown under "On this computer" on the
+        // saved provider, not reviewed again here.
         const rows = screen.findAllByType(Item);
-        expect(rows.find((item) => item.props.title === 'settingsProviders.authoring.destinationScope')?.props.subtitle)
-            .toBe('settingsProviders.authoring.destinationMachine · Mac');
-        expect(rows.find((item) => item.props.title === 'openai-chat')?.props.subtitle)
-            .toBe('http://127.0.0.1:22434/v1');
+        expect(rows.find((item) => item.props.title === 'settingsProviders.authoring.destinationScope')).toBeUndefined();
+        expect(rows.find((item) => item.props.title === 'openai-chat')).toBeUndefined();
         await React.act(async () => {
             await screen.findByTestId('settings-provider-authoring-connect')?.props.onPress?.();
         });
@@ -911,8 +1008,9 @@ describe('ProviderConnectionAuthoringScreen', () => {
         state.contributionKey = 'happier.provider.cliproxyapi/cliproxyapi';
         state.providerName = 'CLIProxyAPI';
         state.endpointTemplates = [
-            { id: 'responses', protocol: 'openai-responses' },
-            { id: 'anthropic', protocol: 'anthropic' },
+            { id: 'cliproxyapi-openai-responses', protocol: 'openai-responses' },
+            { id: 'cliproxyapi-openai-chat', protocol: 'openai-chat' },
+            { id: 'cliproxyapi-anthropic', protocol: 'anthropic' },
         ];
         describeProviderConnections.mockResolvedValueOnce({
             status: 'success', connections: [], available: [], discoveryCandidates: [], localInstallations: [],
@@ -927,13 +1025,13 @@ describe('ProviderConnectionAuthoringScreen', () => {
                 scope: 'machine',
                 machineId: 'machine-a',
                 endpoints: [{
-                    endpointTemplateId: 'responses',
+                    endpointTemplateId: 'cliproxyapi-openai-responses',
                     protocol: 'openai-responses',
                     normalizedUrl: 'http://127.0.0.1:8317/v1',
                     locality: 'loopback',
                     scope: 'machine',
                 }, {
-                    endpointTemplateId: 'anthropic',
+                    endpointTemplateId: 'cliproxyapi-anthropic',
                     protocol: 'anthropic',
                     normalizedUrl: 'http://127.0.0.1:8317/',
                     locality: 'loopback',
@@ -943,35 +1041,12 @@ describe('ProviderConnectionAuthoringScreen', () => {
                 fingerprint: 'authoring-review:v1:local',
                 revision: 1,
             },
-        }).mockResolvedValueOnce({
-            status: 'success', connections: [], available: [], discoveryCandidates: [], localInstallations: [],
-            diagnostics: [], diagnosticsTruncated: false, availableTruncated: false,
-            discoveryCandidatesTruncated: false,
-            authoringPreview: {
-                status: 'resolved',
-                connectionId: 'pc_preview',
-                contributionKey: state.contributionKey,
-                created: true,
-                candidateId: null,
-                scope: 'account',
-                machineId: null,
-                endpoints: [{
-                    endpointTemplateId: 'responses',
-                    protocol: 'openai-responses',
-                    normalizedUrl: 'https://remote.gateway.example/v1',
-                    locality: 'public',
-                    scope: 'account',
-                }, {
-                    endpointTemplateId: 'anthropic',
-                    protocol: 'anthropic',
-                    normalizedUrl: 'https://remote.gateway.example/',
-                    locality: 'public',
-                    scope: 'account',
-                }],
-                credential: null,
-                fingerprint: 'authoring-review:v1:remote',
-                revision: 1,
-            },
+        }).mockImplementation(async (payload: unknown) => {
+            // The daemon's remote review uses the same Account semantics as the subsequent create.
+            // Let the real owner derive its fingerprint from the admitted CPX declaration.
+            const { describeProviderConnections: describeAccount } = await import('@/providers/actions/client');
+            const input = PROVIDER_ACTION_INPUT_SCHEMAS_V1['providers.connections.describe'].parse(payload);
+            return describeAccount({ ...input, machineId: undefined, serverId: account.serverId });
         });
         const { ProviderConnectionAuthoringScreen } = await import('./ProviderConnectionAuthoringScreen');
         const screen = await renderScreen(
@@ -980,21 +1055,26 @@ describe('ProviderConnectionAuthoringScreen', () => {
 
         const fields = screen.findAllByType(FieldTextInput);
         const responses = fields.find((field) =>
-            field.props.testID === 'settings-provider-authoring-endpoint-responses');
+            field.props.testID === 'settings-provider-authoring-endpoint-cliproxyapi-openai-responses');
+        const chat = fields.find((field) =>
+            field.props.testID === 'settings-provider-authoring-endpoint-cliproxyapi-openai-chat');
         const anthropic = fields.find((field) =>
-            field.props.testID === 'settings-provider-authoring-endpoint-anthropic');
+            field.props.testID === 'settings-provider-authoring-endpoint-cliproxyapi-anthropic');
         expect(responses).toBeDefined();
+        expect(chat).toBeDefined();
         expect(anthropic).toBeDefined();
 
         await React.act(async () => {
             responses?.props.onChangeText('https://remote.gateway.example/v1');
+            chat?.props.onChangeText('https://remote.gateway.example/v1');
             anthropic?.props.onChangeText('https://remote.gateway.example');
             await flushHookEffects({ cycles: 2, turns: 2 });
         });
 
         const endpointOverrides = [
-            { endpointTemplateId: 'responses', baseUrl: 'https://remote.gateway.example/v1' },
-            { endpointTemplateId: 'anthropic', baseUrl: 'https://remote.gateway.example/' },
+            { endpointTemplateId: 'cliproxyapi-openai-responses', baseUrl: 'https://remote.gateway.example/v1' },
+            { endpointTemplateId: 'cliproxyapi-openai-chat', baseUrl: 'https://remote.gateway.example/v1' },
+            { endpointTemplateId: 'cliproxyapi-anthropic', baseUrl: 'https://remote.gateway.example/' },
         ];
         expect(describeProviderConnections).toHaveBeenLastCalledWith(expect.objectContaining({
             authoringPreview: expect.objectContaining({
@@ -1008,16 +1088,12 @@ describe('ProviderConnectionAuthoringScreen', () => {
             await screen.findByTestId('settings-provider-authoring-connect')
                 ?.props.onPress?.();
         });
-        expect(run).toHaveBeenCalledWith(expect.objectContaining({
-            action: 'createContribution',
-            contributionKey: state.contributionKey,
-            authoringReview: {
-                candidateId: null,
-                fingerprint: 'authoring-review:v1:remote',
-                revision: 1,
-                endpointOverrides,
-            },
-        }), 'save');
+        expect(stored.writes).toBe(1);
+        expect(stored.catalog.connections).toEqual([expect.objectContaining({
+            source: { kind: 'contribution', contributionKey: state.contributionKey },
+            endpointOverrides: [...endpointOverrides].sort((left, right) => left.endpointTemplateId.localeCompare(right.endpointTemplateId)),
+        })]);
+        expect(run).not.toHaveBeenCalled();
     });
 
     it('progressively reveals all advanced protocol endpoints without a modal', async () => {
@@ -1232,10 +1308,7 @@ describe('ProviderConnectionAuthoringScreen', () => {
         const nameField = () => screen.findAllByType(FieldTextInput)
             .find((field) => field.props.accessibilityLabel === 'settingsProviders.authoring.name');
         await React.act(async () => {
-            if (kind === 'custom') nameField()?.props.onChangeText('Discard this draft');
-            else screen.findAllByType(Item)
-                .find((item) => item.props.title === 'settingsProviders.authoring.enableAfterSaving')
-                ?.props.rightElement.props.onValueChange(false);
+            nameField()?.props.onChangeText('Discard this draft');
         });
         expect(getActiveUnsavedChangesGuard()?.isDirtyRef.current).toBe(true);
         let navigationResult: true | Promise<boolean> = true;
@@ -1248,13 +1321,11 @@ describe('ProviderConnectionAuthoringScreen', () => {
             buttons.find((button) => button.style === 'destructive')?.onPress?.();
             await navigationResult;
         });
-        if (kind === 'custom') expect(nameField()?.props.value).toBe('');
+        expect(nameField()?.props.value ?? '').toBe('');
         expect(getActiveUnsavedChangesGuard()?.isDirtyRef.current).toBe(false);
         if (kind === 'detected') {
             await React.act(async () => {
-                screen.findAllByType(Item)
-                    .find((item) => item.props.title === 'settingsProviders.authoring.enableAfterSaving')
-                    ?.props.rightElement.props.onValueChange(false);
+                nameField()?.props.onChangeText('Discard this one too');
             });
             await React.act(async () => {
                 navigationResult = runGuardedNavigation(() => { routerPush('/settings/providers/pc_other'); });
@@ -1326,14 +1397,190 @@ describe('ProviderConnectionAuthoringScreen', () => {
         });
         const save = screen.findByTestId('settings-provider-authoring-save');
         await React.act(async () => { await save?.props.onPress?.(); });
-        expect(run).toHaveBeenCalledWith(expect.objectContaining({
-            action: 'createCustom',
-            manualModels: [{ id: 'first/model' }, { id: 'second/model' }],
-        }), 'save');
+        expect(stored.writes).toBe(1);
+        const connection = stored.catalog.connections[0]!;
+        expect(connection.source.kind).toBe('custom');
+        expect(stored.catalog.manualModelsByConnectionId[connection.id]).toEqual([
+            expect.objectContaining({ id: 'first/model' }), expect.objectContaining({ id: 'second/model' }),
+        ]);
+        expect(run).not.toHaveBeenCalled();
+    });
+
+    it.each(['name', 'url', 'models'] as const)('validates custom %s before creating a pasted-key Secret', async invalid => {
+        const { ProviderConnectionAuthoringScreen } = await import('./ProviderConnectionAuthoringScreen');
+        const screen = await renderScreen(<ProviderConnectionAuthoringScreen />);
+        await React.act(async () => {
+            const fields = screen.findAllByType(FieldTextInput);
+            fields.find(field => field.props.accessibilityLabel === 'settingsProviders.authoring.name')?.props.onChangeText(invalid === 'name' ? '' : 'Gateway');
+            fields.find(field => field.props.accessibilityLabel === 'settingsProviders.authoring.baseUrl')?.props.onChangeText(invalid === 'url' ? 'invalid-url' : 'https://gateway.example/v1');
+            if (invalid === 'models') fields.find(field => field.props.accessibilityLabel === 'settingsProviders.models.addFieldLabel')?.props.onChangeText('bad model');
+            screen.findAllByType('TextInput').find(input => input.props.secureTextEntry === true)!.props.onChangeText('sk-custom-key');
+        });
+        await React.act(async () => { await screen.findByTestId('settings-provider-authoring-save')?.props.onPress?.(); });
+        expect(account.home.requestsFor('/v1/account/saved-secrets/resources').filter(request => request.input != null)).toHaveLength(0);
+        expect(stored.writes).toBe(0);
+    });
+
+    it.each(['custom', 'built-in'] as const)('keeps the %s save busy across Secret creation and coalesces repeated submit', async kind => {
+        state.credential = { required: true };
+        let release!: () => void;
+        const response = new Promise<void>(resolve => { release = resolve; });
+        installPastedSecretResourceBoundary(response);
+        const { ProviderConnectionAuthoringScreen } = await import('./ProviderConnectionAuthoringScreen');
+        const screen = await renderScreen(<ProviderConnectionAuthoringScreen {...(kind === 'built-in' ? { contributionKey: 'acme.plugin/ollama' } : {})} />);
+        await React.act(async () => {
+            const fields = screen.findAllByType(FieldTextInput);
+            if (kind === 'custom') {
+                fields.find(field => field.props.accessibilityLabel === 'settingsProviders.authoring.name')?.props.onChangeText('Gateway');
+                fields.find(field => field.props.accessibilityLabel === 'settingsProviders.authoring.baseUrl')?.props.onChangeText('https://gateway.example/v1');
+            }
+            screen.findAllByType('TextInput').find(input => input.props.secureTextEntry === true)!.props.onChangeText('sk-custom-key');
+        });
+        const id = kind === 'custom' ? 'settings-provider-authoring-save' : 'settings-provider-authoring-connect';
+        const submit = screen.findByTestId(id)!.props.onPress;
+        let first: unknown;
+        await React.act(async () => { first = submit(); });
+        await waitForHomeGovernance(() => expect(account.home.requestsFor('/v1/account/saved-secrets/resources').some(request => request.input != null)).toBe(true));
+        const pending = findComposite(screen, id, 'loading')?.props.loading;
+        let second: unknown;
+        await React.act(async () => { second = submit(); });
+        await React.act(async () => { release(); await Promise.all([first, second]); });
+        expect(pending).toBe(true);
+        expect(account.home.requestsFor('/v1/account/saved-secrets/resources').filter(request => request.input != null)).toHaveLength(1);
+        if (kind === 'built-in') await waitForHomeGovernance(() => expect(run).toHaveBeenCalledTimes(1));
+        else await waitForHomeGovernance(() => expect(stored.writes).toBe(1));
+    });
+
+    it('retains an acknowledged pasted-key Secret for an intentional connection-save retry', async () => {
+        state.credential = { required: true };
+        installPastedSecretResourceBoundary();
+        run.mockResolvedValueOnce({ status: 'error', error: createProviderErrorV1('provider_endpoint_unreachable') });
+        const { ProviderConnectionAuthoringScreen } = await import('./ProviderConnectionAuthoringScreen');
+        const screen = await renderScreen(<ProviderConnectionAuthoringScreen contributionKey="acme.plugin/ollama" />);
+        await React.act(async () => {
+            screen.findAllByType('TextInput').find(input => input.props.secureTextEntry === true)!.props.onChangeText('sk-custom-key');
+        });
+        await React.act(async () => { screen.findByTestId('settings-provider-authoring-connect')!.props.onPress(); });
+        await waitForHomeGovernance(() => expect(run).toHaveBeenCalledTimes(1));
+        await flushHookEffects();
+        await React.act(async () => { screen.findByTestId('settings-provider-authoring-connect')!.props.onPress(); });
+        await waitForHomeGovernance(() => expect(run).toHaveBeenCalledTimes(2));
+        expect(run.mock.calls[0]![0].savedSecretId).toBe(run.mock.calls[1]![0].savedSecretId);
+        expect(account.home.requestsFor('/v1/account/saved-secrets/resources').filter(request => request.input != null)).toHaveLength(1);
+    });
+
+    it.each(['custom', 'built-in'] as const)('stops a discarded %s save from binding a late Secret result', async kind => {
+        state.credential = { required: true };
+        let release!: () => void;
+        const response = new Promise<void>(resolve => { release = resolve; });
+        installPastedSecretResourceBoundary(response);
+        const { ProviderConnectionAuthoringScreen } = await import('./ProviderConnectionAuthoringScreen');
+        const screen = await renderScreen(<ProviderConnectionAuthoringScreen {...(kind === 'built-in' ? { contributionKey: 'acme.plugin/ollama' } : {})} />);
+        await React.act(async () => {
+            const fields = screen.findAllByType(FieldTextInput);
+            if (kind === 'custom') {
+                fields.find(field => field.props.accessibilityLabel === 'settingsProviders.authoring.name')?.props.onChangeText('Gateway');
+                fields.find(field => field.props.accessibilityLabel === 'settingsProviders.authoring.baseUrl')?.props.onChangeText('https://gateway.example/v1');
+            }
+            screen.findAllByType('TextInput').find(input => input.props.secureTextEntry === true)!.props.onChangeText('sk-custom-key');
+        });
+        const guard = getActiveUnsavedChangesGuard();
+        let operation: boolean | Promise<boolean> | undefined;
+        await React.act(async () => { operation = guard?.onSave?.(); });
+        await waitForHomeGovernance(() => expect(account.home.requestsFor('/v1/account/saved-secrets/resources')
+            .some(request => request.input != null)).toBe(true));
+        await React.act(async () => { await guard?.onDiscard?.(); });
+        let result: boolean | undefined;
+        await React.act(async () => { release(); result = await operation; });
+        expect(result).toBe(false);
+        expect(run).not.toHaveBeenCalled();
+        expect(stored.writes).toBe(0);
+        expect(routerReplace).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        ['custom', 'approve'], ['built-in', 'approve'], ['custom', 'reject'], ['built-in', 'reject'],
+        ['custom', 'retire'], ['built-in', 'retire'],
+    ] as const)('continues the %s pasted-key save from the original Secret approval result: %s', async (kind, outcome) => {
+        await account.home.requireUiApproval(account.serverId, 'secrets.shared.create');
+        state.credential = { required: true };
+        installPastedSecretResourceBoundary();
+        const { ProviderConnectionAuthoringScreen } = await import('./ProviderConnectionAuthoringScreen');
+        const screen = await renderScreen(<ProviderConnectionAuthoringScreen {...(kind === 'built-in' ? { contributionKey: 'acme.plugin/ollama' } : {})} />);
+        await React.act(async () => {
+            const fields = screen.findAllByType(FieldTextInput);
+            if (kind === 'custom') {
+                fields.find(field => field.props.accessibilityLabel === 'settingsProviders.authoring.name')?.props.onChangeText('Gateway');
+                fields.find(field => field.props.accessibilityLabel === 'settingsProviders.authoring.baseUrl')?.props.onChangeText('https://gateway.example/v1');
+            }
+            screen.findAllByType('TextInput').find(input => input.props.secureTextEntry === true)!.props.onChangeText('sk-custom-key');
+        });
+        let operation: unknown;
+        await React.act(async () => { operation = screen.findByTestId(kind === 'custom' ? 'settings-provider-authoring-save' : 'settings-provider-authoring-connect')!.props.onPress(); });
+        await waitForHomeGovernance(() => expect(account.home.artifacts(account.serverId).list()).toHaveLength(1));
+        const presented = screen.findByTestId('settings-provider-authoring-approval') !== null;
+        const originalServerId = account.serverId;
+        const artifactId = account.home.artifacts(originalServerId).list()[0]!.id;
+        if (outcome === 'retire') {
+            await React.act(async () => {
+                await account.restore({ accountId: 'account-b', serverIdentityId: 'srv_provider_screen', machines: [machine] });
+                await account.home.selectHomes([account.serverId]);
+            });
+        } else await expect(decideApprovalAsInbox(originalServerId, artifactId, outcome)).resolves.toMatchObject({ ok: true });
+        await flushHookEffects();
+        expect(presented).toBe(true);
+        if (outcome !== 'approve') {
+            expect(run).not.toHaveBeenCalled();
+            expect(stored.writes).toBe(0);
+            expect(account.home.requestsFor('/v1/account/saved-secrets/resources').filter(request => request.input != null)).toHaveLength(0);
+            expect(screen.findByTestId('settings-provider-authoring-approval')).toBeNull();
+            return;
+        }
+        // Requiring Secret approval replaces the fixture's waived policy. The
+        // subsequent Provider Action therefore still needs its own consent.
+        await waitForHomeGovernance(() => expect(account.home.artifacts(originalServerId).list()).toHaveLength(2));
+        const providerArtifactId = account.home.artifacts(originalServerId).list().find(artifact => artifact.id !== artifactId)!.id;
+        expect(run).not.toHaveBeenCalled();
+        expect(stored.writes).toBe(0);
+        await expect(decideApprovalAsInbox(originalServerId, providerArtifactId, 'approve')).resolves.toMatchObject({ ok: true });
+        await waitForHomeGovernance(() => expect(kind === 'built-in' ? run.mock.calls.length : stored.writes).toBe(1));
+        await operation;
+        const resourceWrites = account.home.requestsFor('/v1/account/saved-secrets/resources').filter(request => request.input != null);
+        expect(resourceWrites).toHaveLength(1);
+        const ref = `happier:shared-secret:v1:${(resourceWrites[0]!.input as { resourceId: string }).resourceId}`;
+        if (kind === 'built-in') expect(run).toHaveBeenCalledWith(expect.objectContaining({ savedSecretId: ref }), 'save');
+        else expect(JSON.stringify(stored.catalog)).toContain(ref);
+    });
+
+    it('turns a key pasted into a custom endpoint into a Saved Secret named for it, with no picker', async () => {
+        installPastedSecretResourceBoundary();
+        const { ProviderConnectionAuthoringScreen } = await import('./ProviderConnectionAuthoringScreen');
+        const screen = await renderScreen(<ProviderConnectionAuthoringScreen />);
+        const fields = screen.findAllByType(FieldTextInput);
+        await React.act(async () => {
+            fields.find((field) => field.props.accessibilityLabel === 'settingsProviders.authoring.name')?.props.onChangeText('Gateway');
+            fields.find((field) => field.props.accessibilityLabel === 'settingsProviders.authoring.baseUrl')?.props.onChangeText('https://gateway.example/v1');
+        });
+        // The key is typed where it is asked for, as on a built-in provider.
+        const keyField = screen.findAllByType('TextInput').find((input) => input.props.secureTextEntry === true);
+        expect(keyField).toBeDefined();
+        await React.act(async () => { keyField!.props.onChangeText('sk-custom-key'); });
+        await React.act(async () => {
+            await screen.findByTestId('settings-provider-authoring-save')?.props.onPress?.();
+        });
+        const created = account.home.requestsFor('/v1/account/saved-secrets/resources')
+            .map((request) => request.input as { resourceId?: string; displayName?: string } | null)
+            .filter((input) => input?.resourceId);
+        expect(created).toHaveLength(1);
+        expect(created[0]!.displayName).toBe('Gateway');
+        expect(modalShow).not.toHaveBeenCalled();
+        const writes = account.home.requestsFor(PROVIDER_CONNECTIONS_ROWS_ROUTE_V1).filter(request => request.input != null);
+        expect(writes).toHaveLength(1);
+        expect(JSON.stringify(writes[0]!.input)).toContain(created[0]!.resourceId!);
     });
 
     it('retains no save replay after an unknown custom create outcome', async () => {
-        run.mockRejectedValueOnce(new Error('create acknowledgement lost after dispatch'));
+        account.home.answer(account.serverId, `POST ${PROVIDER_CONNECTIONS_ROWS_ROUTE_V1}`, { dispatchThenFail: true });
         const { ProviderConnectionAuthoringScreen } = await import('./ProviderConnectionAuthoringScreen');
         const { ProviderErrorItems } = await import('./ProviderErrorItems');
         const screen = await renderScreen(<ProviderConnectionAuthoringScreen />);
@@ -1352,8 +1599,11 @@ describe('ProviderConnectionAuthoringScreen', () => {
         expect(screen.findByType(ProviderErrorItems.type).props.error)
             .toMatchObject({ code: 'provider_rpc_mutation_outcome_unknown' });
         expect(screen.findByType(ProviderErrorItems.type).props.retry).toBeUndefined();
-        expect(run).toHaveBeenCalledOnce();
-        const createRequest = run.mock.calls[0]?.[0] as { connectionId: string };
+        const writes = () => account.home.requestsFor(PROVIDER_CONNECTIONS_ROWS_ROUTE_V1).filter(request => request.input != null);
+        expect(writes()).toHaveLength(1);
+        const mutation = ProviderConnectionsRowMutationV1Schema.parse(writes()[0]!.input);
+        if (mutation.content?.t !== 'plain') throw new Error('Expected a Plain Account write');
+        const connectionId = mutation.content.v.connections[0]!.id;
         const reviewCurrentState = findProviderRecoveryAction(screen, 'settingsProviders.errors.actions.reviewCurrentState');
         expect(reviewCurrentState).toBeDefined();
         expect(routerPush).not.toHaveBeenCalled();
@@ -1364,11 +1614,12 @@ describe('ProviderConnectionAuthoringScreen', () => {
         });
 
         expect(routerPush).toHaveBeenCalledWith(
-            `/(app)/settings/providers/${encodeURIComponent(createRequest.connectionId)}`,
+            `/(app)/settings/providers/${encodeURIComponent(connectionId)}`,
         );
         expect(screen.findByType(ProviderErrorItems.type).props.error)
             .toMatchObject({ code: 'provider_rpc_mutation_outcome_unknown' });
-        expect(run).toHaveBeenCalledOnce();
+        expect(writes()).toHaveLength(1);
+        expect(run).not.toHaveBeenCalled();
         expect(focusField).not.toHaveBeenCalled();
     });
 
@@ -1416,7 +1667,11 @@ describe('ProviderConnectionAuthoringScreen', () => {
         await React.act(async () => { enable?.props.rightElement.props.onValueChange(false); });
         const save = screen.findByTestId('settings-provider-authoring-save');
         await React.act(async () => { await save?.props.onPress?.(); });
-        expect(run).toHaveBeenCalledWith(expect.objectContaining({ action: 'createCustom', enable: false }), 'save');
+        expect(stored.writes).toBe(1);
+        expect(stored.catalog.connections[0]!.source.kind).toBe('custom');
+        expect(stored.catalog.accountGrants).toEqual([]);
+        expect(stored.catalog.machineGrants).toEqual([]);
+        expect(run).not.toHaveBeenCalled();
     });
 
     it('ignores a probe response that completes after the draft changes', async () => {
@@ -1526,27 +1781,37 @@ describe('ProviderConnectionAuthoringScreen', () => {
     });
 
     it('invalidates successful Test connection truth after the selected Saved Secret value rotates', async () => {
-        state.savedSecrets = [{
-            id: 'secret-a',
-            name: 'Gateway key',
-            kind: 'apiKey',
-            encryptedValue: { _isSecretValue: true, value: 'gateway-private-a' },
-            createdAt: 1,
-            updatedAt: 1,
-        }];
+        await account.publishFeatures(account.serverId, createRootLayoutFeaturesResponse({
+            features: { providers: { enabled: true }, teams: { enabled: true } },
+        }));
+        const ref = 'happier:shared-secret:v1:gateway-key';
+        const publishSecret = (revision: number, value: string) => account.home.answer(account.serverId,
+            '/v1/account/saved-secrets/resources/materials', { body: { resources: [{
+                resourceId: 'gateway-key', encryptionMode: 'plain', recipientEnvelope: null,
+                storedContent: { t: 'plain', v: { v: 1, name: 'Gateway key', kind: 'token', value } },
+                entry: { ref, source: 'shared_resource', relationship: 'owner', name: 'Gateway key', kind: 'token',
+                    revision, materialStatus: 'ready',
+                    capabilities: { use: true, rename: true, rotate: true, manageAccess: true, delete: true } },
+            }] } });
+        publishSecret(1, 'gateway-private-a');
         const { ProviderConnectionAuthoringScreen } = await import('./ProviderConnectionAuthoringScreen');
         const screen = await renderScreen(<ProviderConnectionAuthoringScreen />);
+        const { refreshSavedSecretCatalog } = await import('@/sync/engine/settings/savedSecretCatalogEngine');
+        const { storage } = await import('@/sync/domains/state/storage');
+        const scope = storage.getState().settingsScope;
+        if (!scope) throw new Error('Expected the restored Account settings scope');
+        await React.act(async () => { await refreshSavedSecretCatalog(scope); });
         await React.act(async () => {
             const fields = screen.findAllByType(FieldTextInput);
             fields.find((field) => field.props.accessibilityLabel === 'settingsProviders.authoring.name')
                 ?.props.onChangeText('Gateway');
             fields.find((field) => field.props.accessibilityLabel === 'settingsProviders.authoring.baseUrl')
                 ?.props.onChangeText('https://gateway.example/v1');
-            screen.findByTestId('settings-provider-authoring-api-key.choose')?.props.onPress?.();
+            findComposite(screen, 'settings-provider-authoring-api-key.useSaved', 'onPress')?.props.onPress?.();
         });
         const picker = modalShow.mock.calls.at(-1)?.[0] as { props?: { onSelectId?: (id: string | null) => void } } | undefined;
         await React.act(async () => {
-            picker?.props?.onSelectId?.('secret-a');
+            picker?.props?.onSelectId?.(ref);
         });
         const test = findDraftTestRow(screen);
         await React.act(async () => {
@@ -1557,12 +1822,8 @@ describe('ProviderConnectionAuthoringScreen', () => {
             .toBe('settingsProviders.detail.testSucceeded');
 
         await React.act(async () => {
-            state.savedSecrets = [{
-                ...state.savedSecrets[0]!,
-                encryptedValue: { _isSecretValue: true, value: 'gateway-private-b' },
-                updatedAt: 2,
-            }];
-
+            publishSecret(2, 'gateway-private-b');
+            await refreshSavedSecretCatalog(scope);
         });
 
         expect(findDraftTestRow(screen)?.props.subtitle)

@@ -43,7 +43,9 @@ vi.mock('@/sync/domains/features/featureDecisionRuntime', () => ({
     }),
 }));
 
-vi.mock('@/sync/store/hooks', () => ({
+vi.mock('@/sync/store/hooks', async () => {
+    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
+    return createStorageModuleStub({
     useActiveServerAccountScope: () => null,
     useAllMachines: () => [],
     useProfile: () => ({
@@ -61,10 +63,8 @@ vi.mock('@/sync/store/hooks', () => ({
     useSetting: () => undefined,
     useLocalSetting: () => undefined,
     useLocalSettingMutable: () => [undefined, vi.fn()],
-}));
-
-// Saving settings crosses the sync/persistence boundary; model and presentation stay real.
-vi.mock('@/sync/store/settingsWriters', () => ({ useApplySettings: () => vi.fn() }));
+    });
+});
 
 vi.mock('@/hooks/teams/useHomeTeamCredentialModelCatalog', () => ({
     useHomeTeamCredentialModelCatalog: () => ({

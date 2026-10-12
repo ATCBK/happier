@@ -1,4 +1,7 @@
 import React from 'react';
+import { useAgentPreferenceWriter } from './useAgentPreferenceWriter';
+import { SettingAnchor, SettingRow } from '@/components/settings/shell/SettingRow';
+import { AGENT_SETTINGS } from './agentsSettings';
 import { View } from 'react-native';
 import { Redirect, useLocalSearchParams, useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { useUnistyles } from 'react-native-unistyles';
@@ -6,7 +9,7 @@ import { useUnistyles } from 'react-native-unistyles';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
-import { ExpandableItem } from '@/components/ui/lists/ExpandableItem';
+import { ExpandableItem, ExpandableItemCaret } from '@/components/ui/lists/ExpandableItem';
 import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import { SettingsPageHeader } from '@/components/settings/shell/SettingsPageHeader';
 import { AgentDetailHeader, AgentMachineContextBar } from '@/components/settings/agents/detail/AgentDetailHeader';
@@ -22,12 +25,17 @@ import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { BadgeGrid, type BadgeGridItem } from '@/components/ui/layout/BadgeGrid';
-import { useSettingsSelector } from '@/sync/domains/state/storage';
-import { useApplySettings } from '@/sync/store/settingsWriters';
+import { useSetting, useSettingsSelector } from '@/sync/domains/state/storage';
 import { useActiveServerAccountScope } from '@/sync/store/hooks';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
+import { useProviderSettings } from '@/providers/hooks/useProviderSettings';
+import { useProviderModelProjection } from '@/providers/hooks/useProviderModelProjection';
+import { providerModelConnectionTitle } from '@/providers/models/providerModelConnectionTitle';
+import { getModelOptionsForAgentType } from '@/sync/domains/models/modelOptions';
+import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { useHomeTeamCredentialModelCatalog } from '@/hooks/teams/useHomeTeamCredentialModelCatalog';
 import { useConnectedAccountPurposeDefaults } from '@/hooks/server/connectedServices/useConnectedAccountPurposeDefaults';
+import { ConnectedAccountActionApprovalNotice } from '@/components/settings/connectedServices/ConnectedAccountActionApprovalNotice';
 import { Modal } from '@/modal';
 import {
     resolveBundledAgentIdFromContributionIdentity,
@@ -90,6 +98,8 @@ import {
 } from '@/sync/domains/machines/administration/useTargetSelection';
 import { isAdministrationScopedPluginSettingsTargetCurrent } from '@/sync/domains/machines/administration/scopedPluginSettingsTarget';
 import { AgentContributedSettingsSection, areAgentAccountSettingsAvailable } from './AgentContributedSettingsSection';
+import { resolveAgentNativeModels, summarizeAgentModelVisibility } from './agentModelVisibility';
+import { getFavoriteModelRef } from '@/sync/domains/models/favoriteModelSelections';
 
 export { AgentContributedSettingsSection } from './AgentContributedSettingsSection';
 import { publishMachineContributionRegistryProjectionInvalidation } from '@/sync/ops/machineContributionRegistryProjection';
@@ -241,7 +251,7 @@ const AgentSettingsNotFound = React.memo(function AgentSettingsNotFound(props: R
             <ItemGroup>
                 <View style={{ alignItems: 'center', paddingVertical: 32, paddingHorizontal: 16 }}>
                     <Icon name="warning" size={48} color={props.theme.colors.state.danger.foreground} style={{ marginBottom: 16 }} />
-                    <Text style={{ ...Typography.default('semiBold'), fontSize: 16, color: props.theme.colors.state.danger.foreground, textAlign: 'center', marginBottom: 8 }}>
+                    <Text style={{  ...Typography.variant('heading'), color: props.theme.colors.state.danger.foreground, textAlign: 'center', marginBottom: 8 }}>
                         {t('settingsAgents.notFoundTitle')}
                     </Text>
                     <Text style={{ ...Typography.default(), fontSize: 14, color: props.theme.colors.text.secondary, textAlign: 'center', lineHeight: 20 }}>
@@ -286,7 +296,7 @@ const AgentConnectedAccountPurposeRows = React.memo(function AgentConnectedAccou
         machineId?: string;
     }>,
 ) {
-    const { catalog: purposeCatalog, legacySettings, mutateDefaults } = useConnectedAccountPurposeDefaults();
+    const { catalog: purposeCatalog, legacySettings, mutateDefaults, execution } = useConnectedAccountPurposeDefaults();
     const identity = props.projection.identity;
     const declarations = React.useMemo(
         () => props.projection.connectedAccounts ?? [],
@@ -330,7 +340,7 @@ const AgentConnectedAccountPurposeRows = React.memo(function AgentConnectedAccou
             service: declaration.service,
             purpose: declaration.purpose,
             selection: teamResource?.selection ?? (target?.kind === 'account'
-                ? { source: 'connected', profileId: target.account.accountId }
+                ? { source: 'connected', selection: 'profile', profileId: target.account.accountId }
                 : target?.kind === 'group'
                     ? { source: 'connected', selection: 'group', groupId: target.groupId }
                     : { source: 'native' }),
@@ -342,6 +352,7 @@ const AgentConnectedAccountPurposeRows = React.memo(function AgentConnectedAccou
     if (!identity || declarations.length === 0) return null;
     return (
         <>
+            <ConnectedAccountActionApprovalNotice execution={execution} testID="agent-connected-account-purpose-approval-pending" />
             {declarations.map((declaration) => {
                 const purpose = { consumer: identity, purpose: declaration.purpose };
                 const purposeKey = qualifiedPurposeKey(purpose);
@@ -354,6 +365,7 @@ const AgentConnectedAccountPurposeRows = React.memo(function AgentConnectedAccou
                         value={defaultsByPurposeKey.get(purposeKey)?.target ?? null}
                         teamResourceValue={defaultsByPurposeKey.get(purposeKey)?.teamResource ?? null}
                         teamCredentialCatalog={teamCredentialCatalog}
+                        noneLabel={t('connectedServices.purposeTargets.ownSignIn', { agent: props.projection.title })}
                         onReload={teamCredentialCatalog.reload}
                         disabled={!props.accountSettingsAvailable || purposeCatalog.status !== 'ready' || purposeCatalog.stale}
                         disabledReason={!props.accountSettingsAvailable
@@ -386,11 +398,60 @@ const AgentSessionDefaultsSection = React.memo(function AgentSessionDefaultsSect
     const settings = useSettingsSelector((settings) => ({
         sessionDefaultPermissionModeByTargetKey: settings.sessionDefaultPermissionModeByTargetKey,
     }));
-    const applySettings = useApplySettings();
+    const writePreference = useAgentPreferenceWriter();
     const [permissionMenuOpen, setPermissionMenuOpen] = React.useState(false);
     const { projection, compatibilityTargetKeys, accountSettingsAvailable } = props;
     const providerTargetKey = projection.backendTargetKey;
-    const defaultPermissionByTargetKey = settings.sessionDefaultPermissionModeByTargetKey;
+    const providersEnabled = useFeatureEnabled('providers');
+    const providerSettings = useProviderSettings(accountSettingsAvailable ? undefined : null);
+    const accountScope = useAccountSettingsScope();
+    const defaultSelection = providerTargetKey ? providerSettings.defaultsByAgentTargetKey[providerTargetKey] ?? null : null;
+    // The Models row says what the picker shows; both reads are the Account's, with no machine.
+    const summarizeModels = Boolean(providersEnabled && accountSettingsAvailable && props.onOpenModels);
+    const favorites = useSetting('currentFavoriteModelSelectionsV1');
+    const favoriteSelections = React.useMemo(() => favorites.map(getFavoriteModelRef)
+        .filter(ref => ref.agentTargetKey === providerTargetKey), [favorites, providerTargetKey]);
+    const models = useProviderModelProjection({
+        enabled: summarizeModels || Boolean(providersEnabled && defaultSelection && accountSettingsAvailable),
+        machineId: null,
+        serverId: accountScope?.serverId ?? null,
+        agentTargetKey: providerTargetKey,
+        mode: 'management',
+        ...(defaultSelection ? { currentSelection: defaultSelection.ref } : {}),
+    });
+    const pickerModels = useProviderModelProjection({
+        enabled: summarizeModels,
+        machineId: null,
+        serverId: accountScope?.serverId ?? null,
+        agentTargetKey: providerTargetKey,
+        mode: 'picker',
+        ...(defaultSelection ? { currentSelection: defaultSelection.ref } : {}),
+        favoriteSelections,
+    });
+    const defaultGroup = defaultSelection?.ref.providerConnectionId
+        ? models.data?.groups.find(group => group.connectionId === defaultSelection.ref.providerConnectionId)
+        : undefined;
+    const defaultModel = defaultGroup?.rows.find(row => row.ref.modelId === defaultSelection?.ref.modelId);
+    const nativeAgentId = resolveBundledAgentIdFromContributionIdentity(projection.identity);
+    const nativeModel = defaultSelection?.ref.providerConnectionId === null && nativeAgentId
+        ? getModelOptionsForAgentType(nativeAgentId).find(option => option.value === defaultSelection.ref.modelId)
+        : undefined;
+    const nativeModels = React.useMemo(() => providerTargetKey ? resolveAgentNativeModels({
+        runtimeAgentId: nativeAgentId,
+        agentTargetKey: providerTargetKey,
+        modelVisibilityByRef: providerSettings.modelVisibilityByRef,
+    }) : [], [nativeAgentId, providerSettings.modelVisibilityByRef, providerTargetKey]);
+    const visibilitySummary = summarizeModels && models.data && pickerModels.data
+        ? summarizeAgentModelVisibility({
+            nativeModels,
+            pickerGroups: pickerModels.data.groups,
+            managementGroups: models.data.groups,
+        })
+        : null;
+    const modelSummary = defaultSelection
+        ? [defaultModel?.descriptor.name ?? nativeModel?.label ?? defaultSelection.ref.modelId,
+            ...(defaultGroup ? [t('agentInput.model.viaSource', { source: providerModelConnectionTitle(defaultGroup) })] : [])].join(' ')
+        : undefined;
     const permissionModeOptions = getPermissionModeOptionsForAgentType(projection.agentId, 'settings');
     const permissionPreference = providerTargetKey
         ? [providerTargetKey, ...compatibilityTargetKeys]
@@ -404,12 +465,7 @@ const AgentSessionDefaultsSection = React.memo(function AgentSessionDefaultsSect
     const permissionMode = isPermissionMode(permissionPreference) ? permissionPreference : 'default';
     const setPermissionMode = (next: PermissionMode) => {
         if (!providerTargetKey || !accountSettingsAvailable) return;
-        applySettings({
-            sessionDefaultPermissionModeByTargetKey: {
-                ...(defaultPermissionByTargetKey ?? {}),
-                [providerTargetKey]: next,
-            },
-        });
+        void writePreference('defaultPermission', providerTargetKey, next);
     };
     const showPermissionMode = Boolean(providerTargetKey) && permissionModeOptions.length > 0;
     const hasAccountRows = Boolean(projection.identity) && (projection.connectedAccounts?.length ?? 0) > 0;
@@ -419,13 +475,12 @@ const AgentSessionDefaultsSection = React.memo(function AgentSessionDefaultsSect
             title={t('settingsAgents.detailPage.sessionDefaultsTitle')}
             description={t('settingsAgents.detailPage.sessionDefaultsSavedDescription', { agent: projection.title })}
         >
-            {showPermissionMode ? (
+            <SettingAnchor setting={AGENT_SETTINGS.settings.defaultPermission}>{showPermissionMode ? (
                 permissionModeOptions.length <= 4 ? (
                     <SegmentedChoiceItem<PermissionMode>
                         testID="settings.agents.detail.permissionMode"
                         testIDPrefix="settings.agents.detail.permissionMode"
                         title={t('settingsSession.permissions.defaultPermissionModeTitle')}
-                        subtitle={t('settingsSession.permissions.backendFooter')}
                         options={permissionModeOptions.map((option) => ({ id: option.value, label: option.label }))}
                         value={permissionMode}
                         disabled={!accountSettingsAvailable}
@@ -446,7 +501,6 @@ const AgentSessionDefaultsSection = React.memo(function AgentSessionDefaultsSect
                         popoverPortalWebTarget="body"
                         itemTrigger={{
                             title: t('settingsSession.permissions.defaultPermissionModeTitle'),
-                            subtitle: t('settingsSession.permissions.backendFooter'),
                             itemProps: { disabled: !accountSettingsAvailable, testID: 'settings.agents.detail.permissionMode' },
                         }}
                         items={permissionModeOptions.map((option) => ({
@@ -461,17 +515,19 @@ const AgentSessionDefaultsSection = React.memo(function AgentSessionDefaultsSect
                         }}
                     />
                 )
-            ) : null}
+            ) : null}</SettingAnchor>
             <AgentConnectedAccountPurposeRows
                 projection={projection}
                 accountSettingsAvailable={accountSettingsAvailable}
                 machineId={props.machineId}
             />
             {props.onOpenModels ? (
-                <Item
+                <SettingRow setting={AGENT_SETTINGS.settings.models}
                     testID="settings.agents.detail.models"
-                    icon={<Icon name="stack-simple" />}
-                    title={t('settingsProviders.detail.modelsTitle')}
+                    subtitle={modelSummary}
+                    detail={visibilitySummary
+                        ? t('settingsAgents.detailPage.modelsVisibilitySummary', visibilitySummary)
+                        : undefined}
                     onPress={props.onOpenModels}
                 />
             ) : null}
@@ -496,22 +552,15 @@ const AgentSettingsFallbackScreenInner = React.memo(function AgentSettingsFallba
     machineLockedReason: string | null;
     onRetryMachine: () => void;
 }>) {
-    const settings = useSettingsSelector((settings) => ({
-        backendEnabledByTargetKey: settings.backendEnabledByTargetKey,
-    }));
-    const applySettings = useApplySettings();
+    const writePreference = useAgentPreferenceWriter();
     const providerTargetKey = props.projection.backendTargetKey;
-    const backendEnabledByTargetKey = settings.backendEnabledByTargetKey;
+    const router = useRouter();
+    const providersEnabled = useFeatureEnabled('providers');
     const backendEnabled = props.projection.enabled;
     const setBackendEnabled = React.useCallback((next: boolean) => {
         if (!providerTargetKey || !props.accountSettingsAvailable) return;
-        applySettings({
-            backendEnabledByTargetKey: {
-                ...(backendEnabledByTargetKey ?? {}),
-                [providerTargetKey]: next,
-            },
-        });
-    }, [applySettings, backendEnabledByTargetKey, props.accountSettingsAvailable, providerTargetKey]);
+        void writePreference('enabled', providerTargetKey, next);
+    }, [writePreference, props.accountSettingsAvailable, providerTargetKey]);
     const machine = props.executionTarget?.machine ?? null;
 
     return (
@@ -545,7 +594,15 @@ const AgentSettingsFallbackScreenInner = React.memo(function AgentSettingsFallba
                 compatibilityTargetKeys={props.compatibilityTargetKeys}
                 accountSettingsAvailable={props.accountSettingsAvailable}
                 machineId={props.executionTarget?.machine.id}
-                onOpenModels={null}
+                onOpenModels={providersEnabled && providerTargetKey ? () => router.push({
+                    pathname: '/(app)/settings/agents/[agentId]/models',
+                    params: {
+                        agentId: props.projection.agentId,
+                        agentTargetKey: providerTargetKey,
+                        pluginId: props.projection.identity?.pluginId ?? '',
+                        runtimeAgentId: resolveBundledAgentIdFromContributionIdentity(props.projection.identity) ?? '',
+                    },
+                } as never) : null}
             />
             <AgentSetupAndStatusSection
                 state={props.machineState}
@@ -615,7 +672,6 @@ const AgentSettingsScreenInner = React.memo(function AgentSettingsScreenInner(pr
     machineLockedReason: string | null;
     onRetryMachine: () => void;
 }>) {
-    const { theme } = useUnistyles();
     const router = useRouter();
     const supportsDesktopControls = isDesktopHost();
     const {
@@ -646,25 +702,18 @@ const AgentSettingsScreenInner = React.memo(function AgentSettingsScreenInner(pr
         () => `settings:provider:${agentId}`,
         [agentId],
     );
-    const applySettings = useApplySettings();
+    const writePreference = useAgentPreferenceWriter();
 
     const popoverBoundaryRef = React.useRef<any>(null);
 
     const agentCli = projection.cli;
     const providerTargetKey = projection.backendTargetKey;
-    const backendEnabledByTargetKey = settings.backendEnabledByTargetKey;
     const backendEnabled = projection.enabled;
     const setBackendEnabled = (next: boolean) => {
         if (!providerTargetKey || !accountSettingsAvailable) return;
-        applySettings({
-            backendEnabledByTargetKey: {
-                ...(backendEnabledByTargetKey ?? {}),
-                [providerTargetKey]: next,
-            },
-        });
+        void writePreference('enabled', providerTargetKey, next);
     };
 
-    const backendCliSourcePreferenceByTargetKey = settings.backendCliSourcePreferenceByTargetKey;
     const cliSourcePreference = providerTargetKey && agentCli
         ? [providerTargetKey, ...compatibilityTargetKeys]
             .map((targetKey) => readAccountSettingValueForBackendTarget(
@@ -680,12 +729,7 @@ const AgentSettingsScreenInner = React.memo(function AgentSettingsScreenInner(pr
         : providerTargetKey && agentCli ? agentCli.executable.sourcePreference : 'system-first';
     const setProviderCliSourcePreference = (next: 'system-first' | 'managed-first') => {
         if (!providerTargetKey || !accountSettingsAvailable) return;
-        applySettings({
-            backendCliSourcePreferenceByTargetKey: {
-                ...(backendCliSourcePreferenceByTargetKey ?? {}),
-                [providerTargetKey]: next,
-            },
-        });
+        void writePreference('executableSource', providerTargetKey, next);
     };
 
     const supportsResume = supportsCurrentProjectedAgentSessionOpen(currentAgentCapabilities, 'resume');
@@ -766,7 +810,7 @@ const AgentSettingsScreenInner = React.memo(function AgentSettingsScreenInner(pr
                 accountSettingsAvailable={accountSettingsAvailable}
                 machineId={primaryMachine?.id}
                 popoverBoundaryRef={popoverBoundaryRef}
-                onOpenModels={currentAgentCapabilities && providerTargetKey ? () => router.push({
+                onOpenModels={providerTargetKey ? () => router.push({
                     pathname: '/(app)/settings/agents/[agentId]/models',
                     params: {
                         agentId,
@@ -823,7 +867,7 @@ const AgentSettingsScreenInner = React.memo(function AgentSettingsScreenInner(pr
             {showCliSourcePreference || currentAgentCapabilities ? (
                 <ItemGroup title={t('settingsAgents.detailPage.advancedTitle')}>
                     {showCliSourcePreference ? (
-                        <SegmentedChoiceItem<'system-first' | 'managed-first'>
+                        <SettingAnchor setting={AGENT_SETTINGS.settings.executableSource}><SegmentedChoiceItem<'system-first' | 'managed-first'>
                             testID="settings-provider-cli-source-preference"
                             testIDPrefix="settings-provider-cli-source-preference"
                             title={t('settingsAgents.cliSourcePreference.title')}
@@ -835,7 +879,7 @@ const AgentSettingsScreenInner = React.memo(function AgentSettingsScreenInner(pr
                             value={providerCliSourcePreference}
                             disabled={!accountSettingsAvailable}
                             onChange={setProviderCliSourcePreference}
-                        />
+                        /></SettingAnchor>
                     ) : null}
                     {currentAgentCapabilities ? (
                         <ExpandableItem
@@ -849,13 +893,7 @@ const AgentSettingsScreenInner = React.memo(function AgentSettingsScreenInner(pr
                                     title={t('settingsAgents.capabilities')}
                                     detail={capabilitySummary}
                                     showChevron={false}
-                                    rightElement={(
-                                        <Icon
-                                            name={state.expanded ? 'caret-down' : 'caret-right'}
-                                            size={16}
-                                            color={theme.colors.text.secondary}
-                                        />
-                                    )}
+                                    rightElement={<ExpandableItemCaret expanded={state.expanded} />}
                                 />
                             )}
                         >

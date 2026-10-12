@@ -242,7 +242,8 @@ describe('reachable preset detail', () => {
         harness.answer(serverId, '/v1/machines/presets/update', { body: { kind: 'saved', preset: { ...preset, revision: 4 } } });
         await expect(decideApprovalAsInbox(scopeId, pendingId, 'approve')).resolves.toMatchObject({ ok: true });
         await flushHookEffects();
-        expect(route.replace).not.toHaveBeenCalled();
+        if (code === 'permission_denied') expect(route.replace).not.toHaveBeenCalled();
+        else expect(route.replace).toHaveBeenCalledWith(`/settings/machines/presets/preset?serverId=${encodeURIComponent(scopeId)}`);
     });
     it.each([true, false])('revalidates saved native sizing only through its current declared same-path selectors (schema available: %s)', async schemaAvailable => {
         const serverId = await seed();
@@ -448,6 +449,11 @@ describe('reachable preset detail', () => {
         await waitForHomeGovernance(() => expect(harness.artifacts(serverId).list()).toHaveLength(1));
         expect(harness.requestsFor('/v1/machines/presets/update')).toEqual([]);
         const rejectedId = harness.artifacts(serverId).list()[0]!.id;
+        const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
+        await act(async () => publishHomeAccountChange(scopeId));
+        await flushHookEffects();
+        expect(harness.requestsFor('/v1/machines/presets/get')).toHaveLength(2);
+        expect(screen.findByTestId('managed-config.approval')).not.toBeNull();
         await expect(decideApprovalAsInbox(scopeId, rejectedId, 'reject')).resolves.toMatchObject({ ok: true });
         await waitForHomeGovernance(() => expect(screen.findByTestId('managed-config.error')).not.toBeNull());
         expect(screen.findAllByType(Item).find(node => node.props.testID === 'managed-config.choice:large')?.props.selected).toBe(true);
@@ -456,6 +462,11 @@ describe('reachable preset detail', () => {
         await act(async () => screen.pressByTestId('managed-config.create'));
         await waitForHomeGovernance(() => expect(harness.artifacts(serverId).list()).toHaveLength(2));
         const conflictId = harness.artifacts(serverId).list()[1]!.id;
+        harness.answer(serverId, '/v1/machines/presets/get', { body: { kind: 'found', preset: { ...preset, revision: 4 } } });
+        await act(async () => publishHomeAccountChange(scopeId, [preset.id], { changeKinds: ['artifact', 'account'] }));
+        await flushHookEffects();
+        expect(screen.findByTestId('managed-config.approval')).not.toBeNull();
+        expect(screen.findAllByType(Item).find(node => node.props.testID === 'managed-config.choice:large')?.props.selected).toBe(true);
         await expect(decideApprovalAsInbox(scopeId, conflictId, 'approve')).resolves.toMatchObject({ ok: true });
         await waitForHomeGovernance(() => expect(harness.requestsFor('/v1/machines/presets/update')).toHaveLength(1));
         await waitForHomeGovernance(() => expect(screen.findByTestId('managed-config.create')?.props.disabled).toBe(false));
@@ -464,7 +475,7 @@ describe('reachable preset detail', () => {
         harness.answer(serverId, '/v1/machines/presets/get', { body: { kind: 'found', preset: { ...preset, revision: 4 } } });
         await act(async () => screen.pressByTestId('managed-config.error-action'));
         await flushHookEffects();
-        expect(harness.requestsFor('/v1/machines/presets/get')).toHaveLength(2);
+        expect(harness.requestsFor('/v1/machines/presets/get')).toHaveLength(4);
         expect(screen.findAllByType(Item).find(node => node.props.testID === 'managed-config.choice:large')?.props.selected).toBe(true);
         harness.answer(serverId, '/v1/machines/presets/update', { body: { kind: 'saved', preset: { ...preset, revision: 5,
             recipe: { ...preset.recipe, choices: { cpu: 4 } } } } });

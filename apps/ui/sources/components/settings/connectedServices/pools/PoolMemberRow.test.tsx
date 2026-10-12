@@ -7,7 +7,7 @@ import { installSettingsViewCommonModuleMocks } from '@/components/settings/sett
 
 const platformState = vi.hoisted(() => ({ os: 'web' as 'web' | 'ios' | 'android' }));
 installSettingsViewCommonModuleMocks({
-    storage: (importOriginal) => importOriginal(),
+    storage: 'real',
     reactNative: async () => {
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
         return createReactNativeWebMock({ Platform: {

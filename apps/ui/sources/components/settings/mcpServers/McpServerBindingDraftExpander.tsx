@@ -1,7 +1,8 @@
 import * as React from 'react';
 import { StyleSheet } from 'react-native-unistyles';
 
-import { McpServerBindingV1Schema, type McpServerBindingTargetV1, type McpServerBindingV1 } from '@happier-dev/protocol/mcp/servers/settingsV1';
+import { McpServerRuleV1Schema, type ReachPlaceV1, type McpServerRuleV1 } from '@happier-dev/protocol/mcp/servers/settingsV1';
+import { resolveCreateReachV1 } from '@happier-dev/protocol/reach/reachRulesChangeV1';
 
 import { McpBindingTargetFields, describeBindingTarget } from '@/components/settings/mcpServers/McpBindingTargetFields';
 import { InlineAddExpander } from '@/components/ui/forms/InlineAddExpander';
@@ -11,18 +12,13 @@ import { randomUUID } from '@/platform/randomUUID';
 import { t } from '@/text';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { McpWorkspaceRootPickerModal } from './McpWorkspaceRootPickerModal';
-import { createDefaultMcpBindingTarget, resolveMcpBindingTargetTypeChange } from './resolveMcpBindingTarget';
+import { resolveMcpBindingTargetTypeChange } from './resolveMcpBindingTarget';
 
-function createDraftBinding(serverId: string, machines: readonly Machine[]): McpServerBindingV1 {
-    const now = Date.now();
-    return {
-        id: randomUUID(),
-        serverId,
-        enabled: true,
-        target: createDefaultMcpBindingTarget(machines),
-        createdAt: now,
-        updatedAt: now,
-    };
+function createDraftBinding(serverId: string, _machines: readonly Machine[]): McpServerRuleV1 {
+    const reach = resolveCreateReachV1({ kind: 'mcp_server', caller: { surface: 'ui' },
+        ctx: { nowMs: Date.now(), newId: randomUUID } });
+    if (!reach.ok) throw new Error(reach.code);
+    return { ...reach.rules[0]!, serverId };
 }
 
 export const McpServerBindingDraftExpander = React.memo(function McpServerBindingDraftExpander(props: Readonly<{
@@ -30,12 +26,12 @@ export const McpServerBindingDraftExpander = React.memo(function McpServerBindin
     machines: readonly Machine[];
     favoriteDirectories: string[];
     onChangeFavoriteDirectories: (next: string[]) => void;
-    onAddBinding: (binding: McpServerBindingV1) => void;
+    onAddBinding: (binding: McpServerRuleV1) => void;
     expandedContainerStyle?: React.ComponentProps<typeof InlineAddExpander>['expandedContainerStyle'];
 }>) {
     const [isOpen, setIsOpen] = React.useState(false);
-    const [draftBinding, setDraftBinding] = React.useState<McpServerBindingV1>(() => createDraftBinding(props.serverId, props.machines));
-    const draftBindingParse = React.useMemo(() => McpServerBindingV1Schema.safeParse(draftBinding), [draftBinding]);
+    const [draftBinding, setDraftBinding] = React.useState<McpServerRuleV1>(() => createDraftBinding(props.serverId, props.machines));
+    const draftBindingParse = React.useMemo(() => McpServerRuleV1Schema.safeParse(draftBinding), [draftBinding]);
 
     React.useEffect(() => {
         setDraftBinding((current) => ({ ...current, serverId: props.serverId }));
@@ -45,11 +41,11 @@ export const McpServerBindingDraftExpander = React.memo(function McpServerBindin
         setDraftBinding(createDraftBinding(props.serverId, props.machines));
     }, [props.machines, props.serverId]);
 
-    const updateDraftBinding = React.useCallback((updater: (current: McpServerBindingV1) => McpServerBindingV1) => {
+    const updateDraftBinding = React.useCallback((updater: (current: McpServerRuleV1) => McpServerRuleV1) => {
         setDraftBinding((current) => updater(current));
     }, []);
 
-    const setDraftBindingTargetType = React.useCallback((nextType: McpServerBindingTargetV1['t'], selectedMachineId?: string) => {
+    const setDraftBindingTargetType = React.useCallback((nextType: ReachPlaceV1['t'], selectedMachineId?: string) => {
         updateDraftBinding((current) => {
             const now = Date.now();
             const nextTarget = resolveMcpBindingTargetTypeChange(current.target, nextType, props.machines, selectedMachineId);
@@ -69,7 +65,7 @@ export const McpServerBindingDraftExpander = React.memo(function McpServerBindin
     const setDraftBindingMachineId = React.useCallback((machineId: string) => {
         updateDraftBinding((current) => {
             const now = Date.now();
-            if (current.target.t === 'allMachines') return current;
+            if (current.target.t === 'allMachines' || current.target.t === 'project') return current;
             return { ...current, target: { ...current.target, machineId }, updatedAt: now };
         });
     }, [updateDraftBinding]);
@@ -167,6 +163,6 @@ const styles = StyleSheet.create((theme) => ({
         fontSize: 14,
         lineHeight: 20,
         color: theme.colors.text.secondary,
-        marginBottom: 12,
+        marginBottom: theme.space.s12,
     },
 }));

@@ -5,15 +5,19 @@ import type { McpServerCatalogRowMutationResponseV1 } from '@happier-dev/protoco
 import { MCP_SERVER_ACTION_INPUT_SCHEMAS_V1, MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1,
     type McpServerActionIdV1 } from '@happier-dev/protocol/mcp/servers/serverActionsV1';
 import type { z } from 'zod';
+import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
+import type { McpRulesSetInputV1Schema } from '@happier-dev/protocol/actions/specs/capabilityRules';
 
-import { useSettingMutable } from '@/sync/domains/state/storage';
+import { useSetting } from '@/sync/domains/state/storage';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { observeMcpServerCatalog, refreshMcpServerCatalog } from '@/sync/engine/settings/mcpServerCatalogEngine';
 import { getMcpServerCatalogSnapshot, projectMcpServerCatalogSnapshot, subscribeMcpServerCatalogSnapshots,
     type McpServerCatalogValueSnapshot } from '@/sync/store/settings/mcpServerCatalogSnapshot';
 import { McpServerCatalogOperationError } from '@/sync/api/account/apiMcpServerCatalog';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { useDeclaredSettingsWrite } from '@/components/settings/shell/useDeclaredSettingsWrite';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
+import { MCP_PREVIEW_SETTINGS } from './mcpSettings';
 
 const emptyCatalog = emptyMcpServerCatalogV1();
 export type McpCatalogAuthoringActionId = Exclude<McpServerActionIdV1,
@@ -22,7 +26,7 @@ type ExecuteMcpCatalogMutation = <A extends McpCatalogAuthoringActionId>(actionI
     input: z.input<(typeof MCP_SERVER_ACTION_INPUT_SCHEMAS_V1)[A]>) => Promise<McpServerCatalogRowMutationResponseV1>;
 
 /** Read the selected Home's Account, rather than borrowing the focused Account's projection. */
-export function useMcpServerCatalogForServer(targetServerId: string | null | undefined): McpServerCatalogValueSnapshot {
+export function useMcpServerCatalogForServer(targetServerId: string | null | undefined, demanded = true): McpServerCatalogValueSnapshot {
     const { resolution, binding } = useServerCredentialAccountScopeBinding(targetServerId);
     const unavailable = React.useMemo(() => {
         if (!targetServerId || resolution.kind === 'resolving') return null;
@@ -30,11 +34,12 @@ export function useMcpServerCatalogForServer(targetServerId: string | null | und
         return projectMcpServerCatalogSnapshot({ status: 'unavailable', reason: resolution.kind === 'signed_out'
             ? 'unauthorized' : resolution.kind === 'unknown_home' ? 'scope-retired' : 'unreachable' });
     }, [resolution, targetServerId]);
-    React.useEffect(() => binding ? observeMcpServerCatalog(binding.scope) : undefined, [binding]);
-    const read = React.useCallback(() => binding?.isCurrent()
+    React.useEffect(() => demanded && binding ? observeMcpServerCatalog(binding.scope) : undefined, [binding, demanded]);
+    const read = React.useCallback(() => !demanded ? getMcpServerCatalogSnapshot(null) : binding?.isCurrent()
         ? getMcpServerCatalogSnapshot(binding.scope)
-        : unavailable ?? getMcpServerCatalogSnapshot(null), [binding, unavailable]);
-    return React.useSyncExternalStore(subscribeMcpServerCatalogSnapshots, read, read);
+        : unavailable ?? getMcpServerCatalogSnapshot(null), [binding, unavailable, demanded]);
+    const subscribe = React.useCallback((listener: () => void) => demanded ? subscribeMcpServerCatalogSnapshots(listener) : () => {}, [demanded]);
+    return React.useSyncExternalStore(subscribe, read, read);
 }
 
 /**
@@ -48,6 +53,7 @@ export function useMcpServersSettings(): Readonly<{
     setStrictMode: (value: boolean) => void;
     reload: () => Promise<void>;
     mutate: ExecuteMcpCatalogMutation;
+    executeRules: (input: z.input<typeof McpRulesSetInputV1Schema>) => Promise<ActionExecuteResult>;
     approval: ReturnType<typeof useMountedActionExecution>['approval'];
 }> {
     const activeScope = useAccountSettingsScope();
@@ -55,7 +61,11 @@ export function useMcpServersSettings(): Readonly<{
     const accountId = activeScope?.accountId;
     const scope = React.useMemo(() => serverId && accountId ? { serverId, accountId } : null, [serverId, accountId]);
     const execution = useMountedActionExecution(scope);
-    const [strictMode, setStrictMode] = useSettingMutable('mcpServersStrictMode');
+    const strictMode = useSetting('mcpServersStrictMode');
+    const writeSetting = useDeclaredSettingsWrite(execution);
+    const setStrictMode = React.useCallback((value: boolean) => {
+        void writeSetting(MCP_PREVIEW_SETTINGS.settings.mcpServersStrictMode, value);
+    }, [writeSetting]);
     React.useEffect(() => scope ? observeMcpServerCatalog(scope) : undefined, [scope]);
     const read = React.useCallback(() => getMcpServerCatalogSnapshot(scope), [scope]);
     const snapshot = React.useSyncExternalStore(subscribeMcpServerCatalogSnapshots, read, read);
@@ -68,6 +78,7 @@ export function useMcpServersSettings(): Readonly<{
         return MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1[actionId].parse(result.result);
     }, [execution.execute, scope, writable, snapshot.revision]);
     const reload = React.useCallback(() => scope ? refreshMcpServerCatalog(scope) : Promise.resolve(), [scope]);
-    return React.useMemo(() => ({ settings, writable, snapshot, scope, mutate, setStrictMode, reload, approval: execution.approval }),
-        [settings, writable, snapshot, scope, mutate, setStrictMode, reload, execution.approval]);
+    const executeRules = React.useCallback((input: z.input<typeof McpRulesSetInputV1Schema>) => execution.execute('mcp.rules.set', input), [execution.execute]);
+    return React.useMemo(() => ({ settings, writable, snapshot, scope, mutate, executeRules, setStrictMode, reload, approval: execution.approval }),
+        [settings, writable, snapshot, scope, mutate, executeRules, setStrictMode, reload, execution.approval]);
 }

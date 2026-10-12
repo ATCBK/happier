@@ -3,6 +3,8 @@ import type { PersistedSyncReliabilityEvent } from '@/sync/domains/state/persist
 import type { SyncPerformanceTelemetrySummary } from '@/sync/runtime/syncPerformanceTelemetry';
 import type { PreRestartBugReportSnapshotV1 } from '@/utils/system/preRestartBugReportSnapshot';
 import { installBugReportComponentCommonModuleMocks } from './bugReportComponentTestHelpers';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed } from '@/sync/domains/machines/reachability/machineReachability';
 
 vi.mock('expo-constants', () => ({
   default: {
@@ -25,6 +27,7 @@ installBugReportComponentCommonModuleMocks({
     return {
       getStorage: () => ({
         getState: () => ({
+          profileScope: { serverId: 'cloud', accountId: 'acct_ui_1' },
           sessions: {},
           sessionMessages: {},
           sessionPending: {},
@@ -48,7 +51,8 @@ vi.mock('@/sync/domains/server/serverRuntime', () => ({
   }),
 }));
 
-vi.mock('@/sync/domains/server/serverProfiles', () => ({
+vi.mock('@/sync/domains/server/serverProfiles', async importOriginal =>
+  (await import('@/dev/testkit/mocks/serverProfiles')).createPartialServerProfilesModuleMock(importOriginal, {
   listServerProfiles: () => ([
     {
       id: 'cloud',
@@ -57,7 +61,7 @@ vi.mock('@/sync/domains/server/serverProfiles', () => ({
       createdAt: 0,
       updatedAt: 0,
       lastUsedAt: 0,
-      source: 'preconfigured',
+      source: 'preconfigured' as const,
     },
     {
       id: 'local',
@@ -66,7 +70,7 @@ vi.mock('@/sync/domains/server/serverProfiles', () => ({
       createdAt: 0,
       updatedAt: 0,
       lastUsedAt: 0,
-      source: 'manual',
+      source: 'manual' as const,
     },
   ]),
 }));
@@ -193,13 +197,6 @@ vi.mock('@/sync/ops/machines', () => ({
   ) => machineGetBugReportLogTailMock(machineId, params, options),
 }));
 
-const { isMachineOnlineMock } = vi.hoisted(() => ({
-  isMachineOnlineMock: vi.fn((..._args: unknown[]) => true),
-}));
-vi.mock('@/utils/sessions/machineUtils', () => ({
-  isMachineOnline: isMachineOnlineMock,
-}));
-
 vi.mock('@/utils/system/bugReportActionTrail', () => ({
   getBugReportUserActionTrail: () => [],
 }));
@@ -219,6 +216,7 @@ vi.mock('@/utils/system/preRestartBugReportSnapshot', () => ({
 
 describe('collectBugReportDiagnosticsArtifacts', () => {
   beforeEach(() => {
+    clearMachineRequestReachabilityForTest();
     serverFetchMock.mockClear();
     machineCollectBugReportDiagnosticsMock.mockClear();
     machineGetBugReportLogTailMock.mockClear();
@@ -231,8 +229,18 @@ describe('collectBugReportDiagnosticsArtifacts', () => {
     syncPerformanceTelemetryFlushSummaryMock.mockReset();
     syncPerformanceTelemetryFlushSummaryMock.mockReturnValue(null);
     syncPerformanceTelemetryResetMock.mockReset();
-    isMachineOnlineMock.mockReset();
-    isMachineOnlineMock.mockReturnValue(true);
+  });
+
+  it('collects machine diagnostics only from selectable machines despite live pushed presence', async () => {
+    recordMachineRequestFailed({ serverId: 'cloud', accountId: 'acct_ui_1', machineId: 'failed' });
+    await collectBugReportDiagnosticsArtifacts({
+      machines: [
+        createMachineFixture({ id: 'failed', activeAt: Date.now() }),
+        createMachineFixture({ id: 'replaced', activeAt: Date.now(), replacedByMachineId: 'ready' }),
+        createMachineFixture({ id: 'ready', activeAt: Date.now() }),
+      ], includeDiagnostics: true, acceptedKinds: ['daemon'], maxArtifactBytes: 128_000,
+    });
+    expect(machineCollectBugReportDiagnosticsMock.mock.calls.map(([id]) => id)).toEqual(['ready']);
   });
 
   it('includes persisted sync reliability events from the diagnostics context window', async () => {
@@ -346,7 +354,7 @@ describe('collectBugReportDiagnosticsArtifacts', () => {
 
   it('includes stack diagnostics artifacts from machine diagnostics', async () => {
     const result = await collectBugReportDiagnosticsArtifacts({
-      machines: [{ id: 'machine-1' } as any],
+      machines: [createMachineFixture({ activeAt: Date.now() })],
       includeDiagnostics: true,
       acceptedKinds: ['stack-service', 'daemon', 'ui-mobile', 'server'],
       maxArtifactBytes: 128_000,
@@ -393,7 +401,7 @@ describe('collectBugReportDiagnosticsArtifacts', () => {
 
   it('includes a pasted CLI doctor snapshot artifact when provided and daemon artifacts are accepted', async () => {
     const result = await collectBugReportDiagnosticsArtifacts({
-      machines: [{ id: 'machine-1' } as any],
+      machines: [createMachineFixture({ activeAt: Date.now() })],
       includeDiagnostics: true,
       acceptedKinds: ['daemon', 'ui-mobile'],
       maxArtifactBytes: 128_000,
@@ -421,7 +429,7 @@ describe('collectBugReportDiagnosticsArtifacts', () => {
 
   it('skips server and machine diagnostics when accepted kinds exclude those sources', async () => {
     const result = await collectBugReportDiagnosticsArtifacts({
-      machines: [{ id: 'machine-1' } as any],
+      machines: [createMachineFixture({ activeAt: Date.now() })],
       includeDiagnostics: true,
       acceptedKinds: ['ui-mobile'],
       maxArtifactBytes: 128_000,
@@ -434,10 +442,8 @@ describe('collectBugReportDiagnosticsArtifacts', () => {
   });
 
   it('does not mark machine diagnostics as an error when there are no online machines', async () => {
-    isMachineOnlineMock.mockReturnValue(false);
-
     const result = await collectBugReportDiagnosticsArtifacts({
-      machines: [{ id: 'machine-1' } as any],
+      machines: [createMachineFixture({ active: false, activeAt: 1 })],
       includeDiagnostics: true,
       acceptedKinds: ['ui-mobile', 'daemon'],
       maxArtifactBytes: 128_000,
@@ -484,7 +490,7 @@ describe('collectBugReportDiagnosticsArtifacts', () => {
 
     const outcome = await Promise.race([
       collectBugReportDiagnosticsArtifacts({
-        machines: [{ id: 'machine-1' } as any],
+        machines: [createMachineFixture({ activeAt: Date.now() })],
         includeDiagnostics: true,
         acceptedKinds: ['daemon'],
         maxArtifactBytes: 128_000,
@@ -611,7 +617,7 @@ describe('collectBugReportDiagnosticsArtifacts', () => {
     });
 
     const result = await collectBugReportDiagnosticsArtifacts({
-      machines: [{ id: 'machine-1' } as any],
+      machines: [createMachineFixture({ activeAt: Date.now() })],
       includeDiagnostics: true,
       acceptedKinds: ['stack-service', 'daemon'],
       maxArtifactBytes: 128_000,

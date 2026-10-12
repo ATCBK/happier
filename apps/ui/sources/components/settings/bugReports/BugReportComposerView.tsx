@@ -21,6 +21,7 @@ import {
   BugReportEnvironmentSection,
   BugReportFrequencySeveritySection,
   BugReportIssueDetailsSection,
+  BugReportMoreDetailSection,
 } from './BugReportComposerSections';
 import { BugReportSimilarIssuesSection } from './BugReportSimilarIssuesSection';
 import { DEFAULT_BUG_REPORT_CAPABILITIES, type BugReportsFeature } from './bugReportFeatureDefaults';
@@ -59,9 +60,6 @@ export const BugReportComposerView = React.memo(function BugReportComposerView()
     : model.existingIssueNumber
       ? t('bugReports.composer.submit.addToIssue', { number: model.existingIssueNumber })
       : t('bugReports.composer.submit.submitNew');
-  const untouched = model.title.trim().length === 0
-    && model.summary.trim().length === 0
-    && !model.includeDiagnostics;
 
   return (
     <ItemList keyboardAware testID="bug-report-composer" contentContainerStyle={{ paddingBottom: safeArea.bottom + 32 }}>
@@ -69,18 +67,8 @@ export const BugReportComposerView = React.memo(function BugReportComposerView()
       <BugReportIssueDetailsSection
         title={model.title}
         onTitleChange={model.setTitle}
-        reporterGithubUsername={model.reporterGithubUsername}
-        onReporterGithubUsernameChange={model.setReporterGithubUsername}
         summary={model.summary}
         onSummaryChange={model.setSummary}
-        currentBehavior={model.currentBehavior}
-        onCurrentBehaviorChange={model.setCurrentBehavior}
-        expectedBehavior={model.expectedBehavior}
-        onExpectedBehaviorChange={model.setExpectedBehavior}
-        reproductionStepsText={model.reproductionStepsText}
-        onReproductionStepsTextChange={model.setReproductionStepsText}
-        whatChangedRecently={model.whatChangedRecently}
-        onWhatChangedRecentlyChange={model.setWhatChangedRecently}
         fieldErrors={{
           title: model.fieldErrors.title,
           summary: model.fieldErrors.summary,
@@ -99,6 +87,19 @@ export const BugReportComposerView = React.memo(function BugReportComposerView()
         onFrequencyChange={model.setFrequency}
         severity={model.severity}
         onSeverityChange={model.setSeverity}
+      />
+      <BugReportMoreDetailSection
+        reporterGithubUsername={model.reporterGithubUsername}
+        onReporterGithubUsernameChange={model.setReporterGithubUsername}
+        currentBehavior={model.currentBehavior}
+        onCurrentBehaviorChange={model.setCurrentBehavior}
+        expectedBehavior={model.expectedBehavior}
+        onExpectedBehaviorChange={model.setExpectedBehavior}
+        reproductionStepsText={model.reproductionStepsText}
+        onReproductionStepsTextChange={model.setReproductionStepsText}
+        whatChangedRecently={model.whatChangedRecently}
+        onWhatChangedRecentlyChange={model.setWhatChangedRecently}
+        disabled={model.submitting}
       />
       <BugReportEnvironmentSection
         appVersion={model.appVersion}
@@ -141,12 +142,12 @@ export const BugReportComposerView = React.memo(function BugReportComposerView()
       <ItemGroup surface="none">
         <SectionContentRow showDivider={false}>
           <View style={submitRowStyle}>
-            <Text style={{ flex: 1, minWidth: 0, color: untouched || model.validation.code === 'ok' ? theme.colors.text.secondary : theme.colors.state.danger.foreground }}>
-              {model.validation.code === 'ok'
-                ? null
-                : untouched
-                  ? t('bugReports.composer.submit.requiredFieldsHint')
-                  : model.validation.message}
+            <Text variant="body" style={{ flex: 1, minWidth: 0, color: model.submitHint === 'problem' ? theme.colors.state.danger.foreground : theme.colors.text.secondary }}>
+              {model.submitHint === 'required'
+                ? t('bugReports.composer.submit.requiredFieldsHint')
+                : model.submitHint === 'problem'
+                  ? model.validation.message
+                  : null}
             </Text>
             <RoundButton
               testID="bug-report-submit"

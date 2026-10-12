@@ -1,5 +1,4 @@
 import * as React from 'react';
-import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { flushHookEffects, renderSettingsView, standardCleanup } from '@/dev/testkit';
@@ -161,7 +160,6 @@ vi.mock('@/hooks/ui/useHappyAction', () => ({
 
 vi.mock('@/sync/domains/profiles/profile', async (importOriginal) => ({
     ...await importOriginal<typeof import('@/sync/domains/profiles/profile')>(),
-    getDisplayName: () => 'Test User',
     getAvatarUrl: () => null,
     getBio: () => '',
 }));
@@ -215,17 +213,22 @@ afterEach(() => {
     vi.useRealTimers();
 });
 
+const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+await import('./SettingsView');
+
 describe('SettingsView plugin marketplace entry', () => {
     it('routes the curated plugin discovery entry to the new descriptor-only surface', async () => {
         vi.useFakeTimers();
         const { SettingsView } = await import('./SettingsView');
         const screen = await renderSettingsView(<InjectedAuthProvider credentials={null}><SettingsView /></InjectedAuthProvider>);
 
-        await flushHookEffects({ cycles: 4, advanceTimersMs: 1000 });
+        for (let stage = 0; stage < 4; stage += 1) {
+            await flushHookEffects({ cycles: 1, advanceTimersMs: 1000 });
+        }
 
         const marketplaceItem = screen.findRow('settings-plugin-marketplace-item');
         expect(marketplaceItem).toBeTruthy();
-        expect(marketplaceItem?.props.title).toBe('settingsPlugins.title');
+        expect(marketplaceItem?.props.title).toBe('settingsPlugins.surfaces.navigationTitle');
         expect(marketplaceItem?.props.subtitle).toBe('settingsPlugins.subtitle');
 
         marketplaceItem?.props.onPress?.();

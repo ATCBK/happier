@@ -105,10 +105,6 @@ vi.mock('@/components/ui/text/Text', () => ({
     Text: ({ children, ...props }: any) => React.createElement('Text', props, children),
 }));
 
-vi.mock('@/constants/Typography', () => ({
-    Typography: { default: () => ({}) },
-}));
-
 vi.mock('expo-clipboard', () => ({
     setStringAsync: vi.fn(),
 }));
@@ -126,7 +122,17 @@ vi.mock('@/components/ui/forms/Switch', () => ({
 }));
 
 vi.mock('@/components/ui/lists/virtualized', () => ({
-    VirtualizedList: (props: any) => React.createElement('VirtualizedList', props),
+    // Native viewport scheduling is a platform boundary; mount its supplied real rows.
+    VirtualizedList: (props: Readonly<{
+        data: readonly unknown[];
+        keyExtractor: (item: unknown, index: number) => string;
+        renderItem: (args: Readonly<{ item: unknown; index: number }>) => React.ReactNode;
+    }>) => React.createElement('VirtualizedList', props,
+        props.data.map((item: unknown, index: number) => React.createElement(
+            'VirtualizedRow',
+            { key: props.keyExtractor(item, index) },
+            props.renderItem({ item, index }),
+        ))),
 }));
 
 vi.mock('@/components/settings/plugins/diagnostics/PluginDiagnosticsSection', () => ({
@@ -184,6 +190,33 @@ describe('ExternalSessionsIntegrationSection Item boundary', () => {
         modalConfirmMock.mockReset();
         modalConfirmMock.mockResolvedValue(false);
     });
+
+    it.each([false, true])(
+        'discloses machine-local privacy only while a machine is selected (virtualized=%s)',
+        async (virtualized) => {
+            const { ExternalSessionsIntegrationSection } = await import(
+                './ExternalSessionsIntegrationSection'
+            );
+            const section = (machineId: string | null) => (
+                <ExternalSessionsIntegrationSection
+                    integrations={null}
+                    autoLinkSources={null}
+                    machineId={machineId}
+                    agent={null}
+                    virtualized={virtualized}
+                />
+            );
+            const screen = await renderScreen(section('machine-1'));
+            const privacyTestID = 'settings-external-sessions-integration-privacy';
+            expect(screen.findByTestId(privacyTestID)).toBeTruthy();
+
+            await act(async () => { screen.tree.update(section(null)); });
+            expect(Boolean(screen.findByTestId(privacyTestID))).toBe(false);
+
+            await act(async () => { screen.tree.update(section('machine-1')); });
+            expect(screen.findByTestId(privacyTestID)).toBeTruthy();
+        },
+    );
 
     it.each(['web', 'ios'] as const)(
         'returns user-initiated Disable focus to its surviving Enable replacement on %s',

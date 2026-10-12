@@ -77,7 +77,7 @@ export function PluginRegistryProfileSelectionDialog(props: PluginRegistryProfil
             flexDirection: 'row',
             alignItems: 'center',
             justifyContent: 'space-between',
-            gap: 10,
+            gap: theme.space.s10,
         }}>
             <RoundButton
                 size="normal"
@@ -111,9 +111,9 @@ export function PluginRegistryProfileSelectionDialog(props: PluginRegistryProfil
             <ScrollView
                 style={{ flex: 1 }}
                 keyboardShouldPersistTaps="handled"
-                contentContainerStyle={{ paddingTop: 14, paddingBottom: 18, gap: 12 }}
+                contentContainerStyle={{ paddingTop: 14, paddingBottom: 18, gap: theme.space.s12 }}
             >
-                <View style={{ paddingHorizontal: 20, gap: 6 }}>
+                <View style={{ paddingHorizontal: theme.space.s20, gap: theme.space.s6 }}>
                     <Text
                         testID="settings.plugins.registrySelection.body"
                         style={{ ...Typography.default(), color: theme.colors.text.primary }}

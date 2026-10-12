@@ -17,6 +17,7 @@ import { WorkflowTriggerWriteResultV1Schema, type WorkflowTriggerAddRequestV1 } 
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import type { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import { createActionApprovalContinuation, type ActionApprovalRegistration } from '@/components/approvals/actionApprovalContinuation';
 
 type CoachActionId =
   | 'usage.coach.apply'
@@ -64,7 +65,7 @@ export type UsageCoachController = Readonly<{
     finding: UsageCoachFinding,
   ): Promise<ActionExecuteResult>;
   undo(evidenceKey: string): Promise<ActionExecuteResult>;
-  dismiss(query: UsageQuery, evidenceKey: string): Promise<ActionExecuteResult>;
+  dismiss(query: UsageQuery, evidenceKey: string, dismissed?: boolean): Promise<ActionExecuteResult>;
   snooze(
     query: UsageQuery,
     evidenceKey: string,
@@ -101,6 +102,8 @@ export function createUsageCoachController(
     executor?: Pick<ReturnType<typeof createDefaultActionExecutor>, 'execute'>;
     /** Ask the shared Resource to re-read after an acknowledged change; never a second fetch. */
     onSettled?: () => void;
+    /** The shared mounted approval owner reconnects the durable Action result. */
+    onApproval?: (registration: ActionApprovalRegistration) => void;
   }>,
 ): UsageCoachController {
   let snapshot: UsageCoachSnapshot = EMPTY;
@@ -135,6 +138,7 @@ export function createUsageCoachController(
     )
       return failure('usage_coach_operation_pending');
     const controller = new AbortController();
+    let deferred = false;
     operations.set(controller, operation);
     publish({
       ...snapshot,
@@ -148,6 +152,8 @@ export function createUsageCoachController(
     const fail = (result: ActionExecuteFailure) => {
       publish({
         ...snapshot,
+        pending: [...operations.values()],
+        approval: snapshot.approval?.evidenceKey === operation.evidenceKey ? null : snapshot.approval,
         error: {
           evidenceKey: operation.evidenceKey,
           actionId: operation.actionId,
@@ -155,6 +161,19 @@ export function createUsageCoachController(
         },
       });
       return result;
+    };
+    const complete = (value: unknown) => {
+      if (!current() || !operations.has(controller)) return false;
+      const next = settle(value);
+      operations.delete(controller);
+      if (!next) {
+        fail(failure('usage_coach_result_invalid'));
+        return false;
+      }
+      publish({ ...next, pending: [...operations.values()],
+        approval: next.approval?.evidenceKey === operation.evidenceKey ? null : next.approval });
+      options.onSettled?.();
+      return true;
     };
     try {
       const result = await execute(operation.actionId, input, {
@@ -177,14 +196,28 @@ export function createUsageCoachController(
             request: approval.data,
           },
         });
+        if (options.onApproval) {
+          deferred = true;
+          options.onApproval(createActionApprovalContinuation({
+            artifactId: approval.data.artifactId,
+            actionId: operation.actionId,
+            scope: options.lifetime.scope,
+            expectedInput: input,
+            signal: controller.signal,
+            refreshAfterExecution: false,
+            onSucceeded: (value: unknown) => { complete(value); },
+            onFailed: (code, ownerFailure) => {
+              if (!current() || !operations.delete(controller)) return;
+              fail(ownerFailure ?? failure(code));
+            },
+          }));
+        }
         return result;
       }
-      const next = settle(result.result);
-      if (!next) return fail(failure('usage_coach_result_invalid'));
-      publish(next);
-      options.onSettled?.();
+      if (!complete(result.result)) return failure('usage_coach_result_invalid');
       return result;
     } catch {
+      deferred = false;
       if (!current()) return failure('action_account_scope_changed');
       return fail(
         failure(
@@ -194,7 +227,7 @@ export function createUsageCoachController(
         ),
       );
     } finally {
-      if (operations.delete(controller) && !snapshot.retired)
+      if (!deferred && operations.delete(controller) && !snapshot.retired)
         publish({ ...snapshot, pending: [...operations.values()] });
     }
   }
@@ -267,13 +300,14 @@ export function createUsageCoachController(
         },
       );
     },
-    dismiss: (query, evidenceKey) =>
+    dismiss: (query, evidenceKey, dismissed = true) =>
       run(
         { actionId: 'usage.coach.dismiss', evidenceKey },
-        { query, evidenceKey, dismissed: true },
+        { query, evidenceKey, dismissed },
         (value) =>
           UsageCoachPreferenceResultSchema.safeParse(value).success
-            ? { ...snapshot, hiddenEvidenceKeys: hide(evidenceKey) }
+            ? { ...snapshot, hiddenEvidenceKeys: dismissed ? hide(evidenceKey)
+              : snapshot.hiddenEvidenceKeys.filter(key => key !== evidenceKey) }
             : null,
       ),
     snooze: (query, evidenceKey, untilMs) =>

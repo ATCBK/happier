@@ -17,6 +17,8 @@ installApprovalCommonModuleMocks({
 });
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
+// Prepare the real owner graph after installing boundaries, outside per-operation test budgets.
+await import('./useManagedControllerScope');
 const { resetScopedHomeActionExecutorsForTests } =
   await import('@/sync/ops/actions/scopedHomeActionExecutor');
 beforeEach(async () => {
@@ -69,6 +71,7 @@ describe('provisioner picker demand', () => {
     await act(async () => storage.setState({ machineListByServerId: { srv_build: [online('z'), asleep,
       createMachineFixture({ id: 'a', installationId: 'a-installation', active: false, activeAt: 0 })] } }));
     expect(scope.getCurrent().controller?.machineId).toBe('a');
+    expect(scope.getCurrent().selection?.canExecute).toBe(false);
     const target = scope.getCurrent().selection?.pickerRows.find(row => row.candidate.target.machineId === 'z')?.candidate.target;
     expect(target).toBeDefined();
     await act(async () => scope.getCurrent().selection?.selectTarget(target!));
@@ -93,7 +96,8 @@ describe('provisioner picker demand', () => {
     const scope = await renderHook(() => useManagedControllerScope({ serverId, testIDPrefix: 'scope-probe' }));
     expect(scope.getCurrent().controller?.machineId).toBe('a');
 
-    await act(async () => recordMachineRequestFailed({ serverId, machineId: 'a' }));
+    // Request observations use the Home's canonical scope, not its device-local route profile id.
+    await act(async () => recordMachineRequestFailed({ serverId: 'srv_build', accountId: 'owner', machineId: 'a' }));
 
     expect(scope.getCurrent().controller?.machineId).toBe('z');
     await scope.unmount();
@@ -137,9 +141,11 @@ describe('provisioner picker demand', () => {
     { location: 'cloud', credentialFailure: false },
     { location: 'unknown', credentialFailure: false },
     { location: 'cloud', credentialFailure: true },
+    { location: 'cloud', credentialFailure: false, checkFailure: true },
   ] as const)(
     'retains completed provider status without acquiring ($location, credential failure=$credentialFailure)',
-    async ({ location, credentialFailure }) => {
+    async ({ location, credentialFailure, ...rest }) => {
+      const checkFailure = 'checkFailure' in rest;
       const serverId = await harness.addHome({
         name: 'Build',
         serverUrl: 'https://build.example',
@@ -229,7 +235,9 @@ describe('provisioner picker demand', () => {
                 requestId: request.requestId,
                 execution: credentialFailure && actionId === 'machines.provisioners.check'
                   ? { ok: false, errorCode: 'credential_unavailable', error: 'credential_unavailable' }
-                  : { ok: true, result },
+                  : checkFailure && actionId === 'machines.provisioners.check'
+                    ? { ok: false, errorCode: 'controller_unavailable', error: 'controller_unavailable' }
+                    : { ok: true, result },
               },
             };
           },
@@ -255,6 +263,15 @@ describe('provisioner picker demand', () => {
             screen.findByTestId('managed-picker.unavailable'),
         ).not.toBeNull(),
       );
+      if (checkFailure) {
+        // One honest state: the line says the read failed, and the card claims nothing and cannot start.
+        await waitForHomeGovernance(() => expect(screen.findByTestId('managed-picker.unavailable')).not.toBeNull());
+        const unreadable = screen.tree.findAll(node => Array.isArray(node.props.cards)).flatMap(node => node.props.cards);
+        expect(unreadable[0].status.label).toBe('');
+        expect(unreadable[0].action.disabled).toBe(true);
+        await screen.unmount();
+        return;
+      }
       await waitForHomeGovernance(() => {
         const cards = screen.tree
           .findAll((node) => Array.isArray(node.props.cards))
@@ -268,7 +285,7 @@ describe('provisioner picker demand', () => {
               status: expect.objectContaining({
                 label:
                   credentialFailure ? t('managedMachines.add.status.noAccount') : location === 'unknown'
-                    ? 'License required · Billing unknown'
+                    ? `License required · ${t('managedMachines.add.status.billingUnknown')}`
                     : 'License required',
               }),
             }),

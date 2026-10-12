@@ -22,8 +22,11 @@ import { useTeamsDirectory } from '@/hooks/teams/useTeamsDirectory';
 import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
 import type { FocusReturnRef } from '@/keyboard/focusReturn';
 import { Modal } from '@/modal';
-import type { CustomModalInjectedProps } from '@/modal/types';
+import { useModalCardChrome } from '@/modal/components/card/useModalCardChrome';
+import type { CustomModalChromeCardConfig, CustomModalInjectedProps } from '@/modal/types';
 import { t } from '@/text';
+
+import type { TeamSectionContext } from '@/components/settings/teams/teamSectionContext';
 
 import type { HomeAdministrationContext } from './homeAdministrationContext';
 
@@ -46,20 +49,58 @@ export type HomeInvitePeopleDialogProps = CustomModalInjectedProps & Readonly<{
 export const HomeInvitePeopleDialog = React.memo(function HomeInvitePeopleDialog(props: HomeInvitePeopleDialogProps) {
     // The Team is fixed for the dialog's lifetime, so the two compositions never swap in place.
     return props.teamId
-        ? <TeamInvitePeople serverId={props.serverId} teamId={props.teamId} />
+        ? <TeamInvitePeople serverId={props.serverId} teamId={props.teamId} onClose={props.onClose} setChrome={props.setChrome} />
         : <HomeInvitePeopleChooser {...props} />;
 });
 
 /** The invitation form of one known Team, with that Team's own conditions (embedded `TeamSection`). */
-const TeamInvitePeople = React.memo(function TeamInvitePeople(props: Readonly<{ serverId: string; teamId: string }>) {
+const TeamInvitePeople = React.memo(function TeamInvitePeople(props: Readonly<{
+    serverId: string;
+    teamId: string;
+    onClose: () => void;
+    setChrome?: CustomModalInjectedProps['setChrome'];
+}>) {
     return (
         <ItemList presentation="grouped" style={{ paddingTop: 0 }} keyboardShouldPersistTaps="handled" testID="home-invite-people">
             <TeamSection serverId={props.serverId} teamId={props.teamId} presentation="embedded">
-                {(context) => <TeamInvitationForm context={context} />}
+                {(context) => <TeamInviteForm context={context} onClose={props.onClose} setChrome={props.setChrome} />}
             </TeamSection>
         </ItemList>
     );
 });
+
+/**
+ * One Team's form inside the dialog. The dialog is titled by that Team and says where people land
+ * (lab `tsInvites-I`): "Invite to Platform · They join Personal Home as part of Platform." Once the
+ * invitation exists the dialog becomes it (lab `tsInvites-K`): "Invitation ready". It keeps the
+ * generic title only until the Team has been read.
+ */
+const TeamInviteForm = React.memo(function TeamInviteForm(props: Readonly<{
+    context: TeamSectionContext;
+    onClose: () => void;
+    setChrome?: CustomModalInjectedProps['setChrome'];
+}>) {
+    const [issued, setIssued] = React.useState(false);
+    const team = props.context.team.name;
+    const home = props.context.homeName;
+    useModalCardChrome(props.setChrome, React.useMemo(() => homeInvitePeopleChrome({
+        title: issued ? t('teams.invitations.readyTitle') : t('teams.invitations.inviteTitle', { team }),
+        subtitle: t('teams.overview.setup.inviteBody', { home, team }),
+    }), [home, issued, team]));
+    return <TeamInvitationForm context={props.context} onDone={props.onClose} onIssuedChange={setIssued} />;
+});
+
+/** The dialog's card: one width, a sheet on a phone, titled by the caller. */
+function homeInvitePeopleChrome(text: Readonly<{ title: string; subtitle: string }>): CustomModalChromeCardConfig {
+    return {
+        kind: 'card',
+        title: text.title,
+        subtitle: text.subtitle,
+        dimensions: { width: 480 },
+        phonePresentation: 'sheet',
+        testID: 'home-invite-people-dialog',
+    };
+}
 
 const HomeInvitePeopleChooser = React.memo(function HomeInvitePeopleChooser(props: HomeInvitePeopleDialogProps) {
     const serverIds = React.useMemo(() => [props.serverId], [props.serverId]);
@@ -171,7 +212,7 @@ const HomeInvitePeopleChooser = React.memo(function HomeInvitePeopleChooser(prop
                     teamId={selected.address.teamId}
                     presentation="embedded"
                 >
-                    {(context) => <TeamInvitationForm context={context} />}
+                    {(context) => <TeamInviteForm context={context} onClose={props.onClose} setChrome={props.setChrome} />}
                 </TeamSection>
             ) : null}
         </ItemList>
@@ -216,13 +257,10 @@ export function presentHomeInvitePeople(input: Readonly<{
         props: { serverId: input.serverId, ...(input.teamId ? { teamId: input.teamId } : {}) },
         ...(input.focusReturnRef ? { focusReturnRef: input.focusReturnRef } : {}),
         closeOnBackdrop: true,
-        chrome: {
-            kind: 'card',
+        chrome: homeInvitePeopleChrome({
             title: t('homeGovernance.invite.action'),
             subtitle: t('homeGovernance.invite.description'),
-            dimensions: { width: 480 },
-            testID: 'home-invite-people-dialog',
-        },
+        }),
     });
 }
 

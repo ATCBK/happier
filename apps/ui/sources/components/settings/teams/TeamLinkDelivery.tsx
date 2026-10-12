@@ -1,3 +1,4 @@
+import { HappierLinkDelivery, type HappierLinkDeliveryBindings } from '@happier-dev/plugin-ui/presentation';
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
@@ -9,9 +10,9 @@ import { CopiedPill } from '@/components/ui/copy/CopiedPill';
 import { useTemporaryCopyFeedback } from '@/components/ui/copy/useTemporaryCopyFeedback';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
-import { SectionButtonRow } from '@/components/ui/lists/SectionButtonRow';
 import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
 import { Modal } from '@/modal';
+import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 import { setClipboardStringSafe } from '@/utils/ui/clipboard';
 import { isTextSharingAvailable, shareTextSafe } from '@/utils/ui/shareText';
@@ -64,7 +65,6 @@ const TeamLinkQr = React.memo(function TeamLinkQr(props: Readonly<{
             testID={props.testID}
             accessible
             accessibilityLabel={props.accessibilityLabel}
-            style={styles.qr}
         >
             <QRCode data={props.url} size={QR_SIZE} />
         </View>
@@ -75,7 +75,8 @@ export const TeamLinkDelivery = React.memo(function TeamLinkDelivery(props: Read
     url: string;
     /** Distinguishes the surfaces that hand a link over, so a test can tell them apart. */
     testIDPrefix: string;
-    title: string;
+    /** The section's title; left out where the surrounding surface already names the link (the issued invitation dialog). */
+    title?: string;
     copyLabel: string;
     shareLabel: string;
     qrAccessibilityLabel: string;
@@ -94,7 +95,6 @@ export const TeamLinkDelivery = React.memo(function TeamLinkDelivery(props: Read
     open?: Readonly<{ label: string; onPress: () => void }>;
 }>) {
     const copyFeedback = useTemporaryCopyFeedback();
-    const [qrRevealed, setQrRevealed] = React.useState(props.qrActionLabel === undefined);
     const { url } = props;
     // Asked once per render rather than per press: a control that is offered and
     // then does nothing is worse than one that was never offered.
@@ -115,89 +115,60 @@ export const TeamLinkDelivery = React.memo(function TeamLinkDelivery(props: Read
         }
     }, [url]);
 
-    // The link itself, then its handover in one place (lab `tsInvites-K`): the QR beside the
-    // buttons that copy and share it. What the link authorizes, and that it is shown once, is the
-    // section's description.
+    // The link itself, then its handover in one place (lab `tsInvites-K`): the shared composition puts
+    // the QR beside the buttons that copy and share it. What the link authorizes, and that it is shown
+    // once, is the section's description; the URL never leaves this adapter's props.
     return (
         <ItemGroup title={props.title} description={props.description}>
             <Item
                 testID={`${props.testIDPrefix}-link`}
                 title={url}
                 titleLines={1}
+                // A link is an identifier: mono, the one role for addresses and codes (DESIGN.md).
+                titleStyle={styles.link}
                 mode="info"
                 showChevron={false}
             />
             <SectionContentRow>
-                <View style={styles.handover}>
-                    {qrRevealed ? (
-                        <TeamLinkQr
-                            url={url}
-                            accessibilityLabel={props.qrAccessibilityLabel}
-                            testID={`${props.testIDPrefix}-qr`}
+                <HappierLinkDelivery
+                    url={url}
+                    testIDPrefix={props.testIDPrefix}
+                    copyLabel={props.copyLabel}
+                    qrAccessibilityLabel={props.qrAccessibilityLabel}
+                    qrActionLabel={props.qrActionLabel}
+                    onCopy={copy}
+                    share={sharingAvailable ? { label: props.shareLabel, onPress: share } : undefined}
+                    open={props.open}
+                    copiedIndicator={(
+                        <CopiedPill
+                            visible={copyFeedback.isCopied()}
+                            testID={`${props.testIDPrefix}-copy-link-copied`}
                         />
-                    ) : null}
-                    <View style={styles.actions}>
-                        <SectionButtonRow>
-                            <RoundButton
-                                testID={`${props.testIDPrefix}-copy-link`}
-                                size="small"
-                                display="secondary"
-                                title={props.copyLabel}
-                                onPress={copy}
-                            />
-                            {sharingAvailable ? (
-                                <RoundButton
-                                    testID={`${props.testIDPrefix}-share-link`}
-                                    size="small"
-                                    display="inverted"
-                                    title={props.shareLabel}
-                                    onPress={share}
-                                />
-                            ) : null}
-                            {props.qrActionLabel ? (
-                                <RoundButton
-                                    testID={`${props.testIDPrefix}-show-qr`}
-                                    size="small"
-                                    display="inverted"
-                                    title={props.qrActionLabel}
-                                    expanded={qrRevealed}
-                                    onPress={() => setQrRevealed((visible) => !visible)}
-                                />
-                            ) : null}
-                            {props.open ? (
-                                <RoundButton
-                                    testID={`${props.testIDPrefix}-open`}
-                                    size="small"
-                                    display="inverted"
-                                    title={props.open.label}
-                                    onPress={props.open.onPress}
-                                />
-                            ) : null}
-                            <CopiedPill
-                                visible={copyFeedback.isCopied()}
-                                testID={`${props.testIDPrefix}-copy-link-copied`}
-                            />
-                        </SectionButtonRow>
-                    </View>
-                </View>
+                    )}
+                    bindings={TEAM_LINK_DELIVERY_BINDINGS}
+                />
             </SectionContentRow>
         </ItemGroup>
     );
 });
 
+/** Core's controls for the shared link handover: RoundButton and the app's QR encoder. */
+const TEAM_LINK_DELIVERY_BINDINGS: HappierLinkDeliveryBindings = {
+    Button: (button) => (
+        <RoundButton
+            testID={button.testID}
+            size="small"
+            display={button.emphasis === 'secondary' ? 'secondary' : 'inverted'}
+            title={button.label}
+            expanded={button.expanded}
+            onPress={button.onPress}
+        />
+    ),
+    renderQr: (qr) => <TeamLinkQr url={qr.url} accessibilityLabel={qr.accessibilityLabel} testID={qr.testID} />,
+};
+
 const styles = StyleSheet.create(() => ({
-    // The QR and its buttons sit side by side and wrap beneath each other on a narrow page.
-    handover: {
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-        alignItems: 'center',
-        gap: 16,
-    },
-    actions: {
-        flexGrow: 1,
-        flexShrink: 1,
-    },
-    qr: {
-        alignSelf: 'center',
+    link: {
+        ...Typography.mono(),
     },
 }));

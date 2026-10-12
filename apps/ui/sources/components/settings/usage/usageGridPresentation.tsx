@@ -7,7 +7,8 @@ import type { UsagePunchCard, UsageSummaryActivityPoint } from '@/sync/api/accou
 import { buildDayStrip, buildHeatmapGrid, type UsageHeatmapMode } from '@/sync/api/account/usageCalendar';
 import { t } from '@/text';
 import { formatUsageHourLabel } from '@/sync/api/account/formatUsageRhythmLabel';
-import { resolveUsageBucketBounds, resolveUsageCalendarDateStart, type UsageAnalyticsCoverage } from '@happier-dev/protocol';
+import { resolveUsageBucketBounds, resolveUsageCalendarDateStart } from '@happier-dev/protocol/usage/usageCalendar';
+import { type UsageAnalyticsCoverage } from '@happier-dev/protocol';
 import { formatUsageCalendarDate, usageMissingBucketValue, type UsageCalendarRange } from '@/sync/domains/usage/usageCalendarPresentation';
 import { withUsageAccentAlpha } from './usageAccent';
 import { RippleCell, rippleDelayMs } from '@/components/instrument/charts/RippleGrid';
@@ -17,7 +18,8 @@ import { useEntrancesEnabled } from './usageEntrance';
 type GridFacts = Pick<HeatmapProps, 'label' | 'cells' | 'rows' | 'columns' | 'layout' | 'size' | 'annotation' | 'order'>;
 const dateLabel = (iso: string) => formatUsageCalendarDate(resolveUsageCalendarDateStart(iso, 0), 0);
 const events = (value: number) => `${formatHappierDataValue(value)} ${t('usage.events')}`;
-const weekdayLabel = (weekday: number, width: 'long' | 'narrow') => formatUsageCalendarDate(Date.UTC(2024, 0, 7 + weekday), 0, { weekday: width });
+const MONDAY_FIRST_WEEKDAYS = [1, 2, 3, 4, 5, 6, 0] as const;
+const weekdayLabel = (weekday: number, width: 'long' | 'short' | 'narrow') => formatUsageCalendarDate(Date.UTC(2024, 0, 7 + weekday), 0, { weekday: width });
 
 /** Usage owns calendar/date shaping; the public renderer receives already positioned facts. */
 export function usageHeatmapPresentation(input: Readonly<{ calendarDays: readonly { date: string; eventCount: number }[]; mode: UsageHeatmapMode; nowMs?: number; days?: number; range?: UsageCalendarRange; coverage?: UsageAnalyticsCoverage; accentColor: string; emptyColor: string }>): GridFacts {
@@ -55,7 +57,8 @@ export function usageDotGridPresentation(punchCard: UsagePunchCard, accentColor:
     const peak = Math.max(1, punchCard.peak);
     return { label: t('usage.workRhythm'),
         annotation: punchCard.busiest ? `${weekdayLabel(punchCard.busiest.weekday, 'long')} · ${hourLabel(punchCard.busiest.hour)} · ${t('usage.busiestTag')}` : undefined,
-        rows: Array.from({ length: 7 }, (_, weekday) => ({ id: String(weekday), label: weekdayLabel(weekday, 'narrow') })),
+        // Monday-first rows with short names: "S"/"T" twice cannot tell the days apart (lab Mon…Sun).
+        rows: MONDAY_FIRST_WEEKDAYS.map((weekday) => ({ id: String(weekday), label: weekdayLabel(weekday, 'short') })),
         columns: Array.from({ length: 24 }, (_, hour) => ({ id: String(hour), label: [0, 6, 12, 18].includes(hour) ? hourLabel(hour) : '' })),
         cells: punchCard.cells.flatMap((row, weekday) => row.map((value, hour) => ({ id: `${weekday}:${hour}`, row: String(weekday), column: String(hour), label: `${weekdayLabel(weekday, 'long')} · ${hourLabel(hour)}`, value, valueLabel: events(value),
             color: value > 0 ? withUsageAccentAlpha(accentColor, 0.16 + 0.84 * value / peak) : withUsageAccentAlpha(emptyColor, 0.4),

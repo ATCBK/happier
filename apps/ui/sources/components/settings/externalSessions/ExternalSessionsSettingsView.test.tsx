@@ -134,10 +134,13 @@ vi.mock('@/sync/sync', () => ({
     },
 }));
 
-vi.mock('@/sync/store/hooks', () => ({
-    useLocalSetting: () => null,
-    useSettingsVersion: () => 1,
-}));
+vi.mock('@/sync/store/hooks', async () => {
+    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
+    return createStorageModuleStub({
+        useLocalSetting: () => null,
+        useSettingsVersion: () => 1,
+    });
+});
 
 vi.mock('@/sync/store/settingsWriters', () => ({
     useAccountSettingsScope: () => ({ serverId: 'server-1', accountId: 'account-1' }),

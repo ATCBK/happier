@@ -23,7 +23,6 @@ import {
 const capture = vi.hoisted(() => ({
   items: [] as Array<Record<string, unknown>>,
   searchHeaders: [] as Array<Record<string, unknown>>,
-  statusTexts: [] as Array<Record<string, unknown>>,
   groupTitles: [] as Array<unknown>,
   virtualizedListProps: null as Record<string, unknown> | null,
   windowWidth: 800,
@@ -32,7 +31,6 @@ const capture = vi.hoisted(() => ({
   reset() {
     this.items = [];
     this.searchHeaders = [];
-    this.statusTexts = [];
     this.groupTitles = [];
     this.virtualizedListProps = null;
     this.windowWidth = 800;
@@ -211,9 +209,6 @@ vi.mock('@/components/ui/lists/Item', () => ({
 
 vi.mock('@/components/ui/text/Text', () => ({
   Text: (props: { children?: React.ReactNode; testID?: string }) => {
-    if (props.testID?.endsWith(':status')) {
-      capture.statusTexts.push(props as Record<string, unknown>);
-    }
     return React.createElement(
       'TextMock',
       { testID: props.testID },
@@ -537,7 +532,7 @@ describe('ActionsSettingsView', () => {
     );
   });
 
-  it('shows a compact target status and settings affordance beside each action switch', async () => {
+  it('keeps the switch and settings affordance beside each action and the status in its text column', async () => {
     capture.reset();
     const { ActionsSettingsView } = await import('./ActionsSettingsView');
 
@@ -549,9 +544,13 @@ describe('ActionsSettingsView', () => {
     expect(reviewRow).toBeTruthy();
     expect(reviewRow?.showChevron).toBe(false);
     expect(reviewRow?.rightElementOutsidePressable).toBe(true);
+    // Status reads under the description at every width; a narrow column beside the switch
+    // wrapped one fact into four lines.
+    expect(reviewRow?.subtitleAccessory).toBeTruthy();
     expect(
       await screen.findByTestId('settings-actions:action:review.start:status'),
     ).toBeTruthy();
+    expect(screen.findAllByTestId('settings-actions:action:review.start:status-container')).toHaveLength(0);
     expect(
       await screen.findByTestId(
         'settings-actions:action:review.start:configure',
@@ -564,25 +563,5 @@ describe('ActionsSettingsView', () => {
         )
       )?.props.accessibilityLabel,
     ).toBe(reviewRow?.title);
-  });
-
-  it('moves compact status into the text column on narrow mobile widths', async () => {
-    capture.reset();
-    capture.windowWidth = 390;
-    const { ActionsSettingsView } = await import('./ActionsSettingsView');
-
-    await renderScreen(<ActionsSettingsView />);
-
-    const reviewRow = capture.items.find(
-      (item) => item.testID === 'settings-actions:action:review.start',
-    );
-    expect(reviewRow).toBeTruthy();
-    expect(reviewRow?.subtitleAccessory).toBeTruthy();
-    expect(
-      capture.statusTexts.some(
-        (status) =>
-          status.testID === 'settings-actions:action:review.start:status',
-      ),
-    ).toBe(true);
   });
 });

@@ -256,21 +256,7 @@ installSettingsViewCommonModuleMocks({
     },
     unistyles: async () => {
         const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
-        return createUnistylesMock({
-            theme: {
-                colors: {
-                    textSecondary: '#666',
-                    deleteAction: '#c00',
-                    button: { secondary: { tint: '#333' } },
-                    accent: { blue: '#06f', orange: '#f90' },
-                    surface: '#fff',
-                    overlay: { scrimWizard: '#fff' },
-                    header: { background: '#fff', tint: '#000' },
-                },
-                margins: { sm: 4, lg: 16 },
-                dark: false,
-            },
-        });
+        return createUnistylesMock();
     },
     storage: 'real',
 });
@@ -440,6 +426,7 @@ async function seedRemoteHostCatalog() {
         'remote_hosts.save': ['ui'], 'remote_hosts.delete': ['ui'], 'remote_hosts.connect': ['ui'],
         'remote_hosts.setup_as_machine': ['ui'], 'remote_hosts.relay.use': ['ui'],
         'remote_hosts.relay.configure': ['ui'], 'remote_hosts.relay.test': ['ui'],
+        'remote_hosts.tunnel.stop': ['ui'],
     } } };
     storage.setState({ profileScope: catalogScope, settingsScope: catalogScope, settings: settingsParse(settings) });
     publishAppliedActiveServerSnapshot(getActiveServerSnapshot(), true);

@@ -21,7 +21,6 @@ import {
 } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { collectRenderedTestIds } from '@/dev/testkit/render/collectRenderedTestIds';
 import { renderScreen, type RenderScreenResult } from '@/dev/testkit/render/renderScreen';
-import { resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 
 import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelpers';
 
@@ -72,6 +71,7 @@ installSettingsViewCommonModuleMocks({
 // the Team section and the invitation form below them are the production ones.
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
+const { resetServerFeaturesClientForTests } = await import("@/sync/api/capabilities/serverFeaturesClient");
 
 const GOVERNANCE_PATH = '/v1/home/governance/get';
 const ACCOUNTS_PATH = '/v1/home/accounts/list';
@@ -233,7 +233,7 @@ describe('Home console Overview (A)', () => {
 
     it('names the viewer "Your account" when they have no name, never "Unnamed account"', async () => {
         const home = await addHome();
-        const unnamed = { firstName: null, lastName: null, username: null, avatarUrl: null };
+        const unnamed = { name: null, firstName: null, lastName: null, username: null, avatarUrl: null };
         harness.answer(home, ACCOUNTS_PATH, {
             body: {
                 items: [
@@ -281,14 +281,39 @@ describe('Home console Overview (A)', () => {
 
         const screen = await renderOverview(home);
         await waitForHomeGovernance(() => expect(ids(screen)).toContain('home-overview-name.rename'));
-        modal.prompt!.mockResolvedValueOnce('Studio');
         await act(async () => screen.pressByTestId('home-overview-name.rename'));
+        expect(harness.requestsFor(SETTINGS_SET_PATH)).toHaveLength(0);
+        await act(async () => screen.changeTextByTestId('home-overview-name.input', 'Studio'));
+        await screen.pressByTestIdAsync('home-overview-name.save');
 
         await waitForHomeGovernance(() => {
             expect(harness.requestsFor(SETTINGS_SET_PATH).map((request) => request.input)).toEqual([
                 { expectedRevision: 3, values: { HAPPIER_HOME_DISPLAY_NAME: 'Studio' } },
             ]);
         });
+    });
+
+    it('keeps a refused rename in the inline draft rather than opening an error dialog', async () => {
+        const home = await addHome();
+        harness.answer(home, SETTINGS_PATH, { body: homeSettingsProjectionFixture({ entries: [homeSettingEntryFixture('HAPPIER_HOME_DISPLAY_NAME', { value: 'Acme', source: 'home' })] }) });
+        harness.answer(home, SETTINGS_SET_PATH, { status: 403, body: { error: 'home_forbidden' } });
+        const { Modal } = await import('@/modal');
+        const alert = vi.spyOn(Modal, 'alertAsync');
+        const screen = await renderOverview(home);
+        await waitForHomeGovernance(() => expect(ids(screen)).toContain('home-overview-name.rename'));
+        await screen.pressByTestIdAsync('home-overview-name.rename');
+        await act(async () => screen.changeTextByTestId('home-overview-name.input', 'Studio'));
+        await screen.pressByTestIdAsync('home-overview-name.save');
+        await waitForHomeGovernance(() => {
+            expect(harness.requestsFor(SETTINGS_SET_PATH)).toHaveLength(1);
+            expect(alert.mock.calls.length > 0 || screen.findByTestId('home-overview-name.input.error') !== null).toBe(true);
+        });
+        expect(alert).not.toHaveBeenCalled();
+        expect(screen.findHostByTestId('home-overview-name.input.error')?.props.accessibilityRole).toBe('alert');
+        expect(screen.findByTestId('home-overview-name.input')?.props.value).toBe('Studio');
+        await screen.pressByTestIdAsync('home-overview-name.cancel');
+        expect(ids(screen)).not.toContain('home-overview-name.input');
+        expect(harness.requestsFor(SETTINGS_SET_PATH)).toHaveLength(1);
     });
 
     it('lists the pages under what needs attention on a phone, where there is no sidebar', async () => {
@@ -343,9 +368,12 @@ describe('Invite people', () => {
         expect(ids(screen)).not.toContain('home-overview-invite');
     });
 
+    // The dialog names the Team it invites to in its own title, through the modal card chrome.
+    const chromeTitles: unknown[] = [];
     async function renderDialog(home: string) {
+        chromeTitles.length = 0;
         const { HomeInvitePeopleDialog } = await import('./HomeInvitePeopleDialog');
-        return renderScreen(<HomeInvitePeopleDialog serverId={home} onClose={vi.fn()} />);
+        return renderScreen(<HomeInvitePeopleDialog serverId={home} onClose={vi.fn()} setChrome={(chrome) => { chromeTitles.push(chrome?.title); }} />);
     }
 
     function answerTeam(home: string, teamId: string, name: string) {
@@ -370,7 +398,7 @@ describe('Invite people', () => {
         const screen = await renderDialog(home);
         await waitForHomeGovernance(() => expect(ids(screen)).toContain('team-invite-submit'));
         expect(ids(screen).filter((id) => id.startsWith('home-invite-people-team:'))).toEqual([]);
-        expect(screen.getTextContent()).toContain('teams.invitations.inviteTitle(team=Personal)');
+        expect(chromeTitles.at(-1)).toBe('teams.invitations.inviteTitle(team=Personal)');
     });
 
     it('asks which Team first when there are several, then shows that Team\'s form', async () => {
@@ -391,7 +419,7 @@ describe('Invite people', () => {
 
         await act(async () => screen.pressByTestId('home-invite-people-team:team-2'));
         await waitForHomeGovernance(() => expect(ids(screen)).toContain('team-invite-submit'));
-        expect(screen.getTextContent()).toContain('teams.invitations.inviteTitle(team=Design)');
+        expect(chromeTitles.at(-1)).toBe('teams.invitations.inviteTitle(team=Design)');
     });
 
     it('says who invites when the Home has Teams but the viewer administers none of them', async () => {

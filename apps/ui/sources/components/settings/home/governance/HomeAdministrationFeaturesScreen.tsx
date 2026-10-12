@@ -1,7 +1,5 @@
 import * as React from 'react';
-import { View } from 'react-native';
 import { useNavigation, useRouter } from '@/components/appShell/workspace/destinationRoute';
-import { StyleSheet } from 'react-native-unistyles';
 import type { FeatureDecision, FeatureId } from '@happier-dev/protocol';
 import type {
     HomeSettingEntryV1,
@@ -18,7 +16,9 @@ import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
 import { ExpandableItem, ExpandableItemCaret } from '@/components/ui/lists/ExpandableItem';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
-import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import { ItemLoadStateRows, type ItemLoadState } from '@/components/ui/lists/ItemLoadStateRows';
+import { SectionButtonRow } from '@/components/ui/lists/SectionButtonRow';
 import { useHomeSettings } from '@/hooks/home/useHomeSettings';
 import { Modal } from '@/modal';
 import { readHomeSettingsInvalidFailure, setHomeSettings } from '@/sync/ops/home/homeGovernanceOperations';
@@ -56,6 +56,7 @@ type StageValue = HomeSettingStage;
 const NO_DEPENDENTS: readonly FeatureId[] = Object.freeze([]);
 
 const FEATURE_ROW_TESTID = 'home-feature';
+const LOADING: ItemLoadState = Object.freeze({ kind: 'loading' as const });
 
 function featureSetting(featureId: FeatureId): SettingRef | undefined {
     return (HOME_FEATURE_SETTINGS.settings as Readonly<Record<string, SettingRef | undefined>>)[featureId];
@@ -467,22 +468,28 @@ const FeaturesPage = React.memo(function FeaturesPage(props: Readonly<{ context:
 
     if (!canView) {
         return (
-            <ItemGroup description={t('homeGovernance.forbiddenBody')}>
-                <Item testID="home-features-forbidden" title={t('homeGovernance.forbiddenTitle')} mode="info" showChevron={false} />
+            <ItemGroup>
+                <SurfaceStateCard testID="home-features-forbidden" kind="denied" size="line"
+                    title={t('homeGovernance.forbiddenTitle')} reason={t('homeGovernance.forbiddenBody')} />
             </ItemGroup>
         );
     }
     if (!rows) {
         if (home.failure) {
             return (
-                <ItemGroup description={t('homeGovernance.features.loadFailed')}>
-                    <Item testID="home-features-retry" title={t('homeGovernance.retry')} onPress={home.reload} showChevron={false} />
-                </ItemGroup>
+                <SurfaceStateCard
+                    testID="home-features-error"
+                    kind="error"
+                    title={t('homeGovernance.features.loadFailed')}
+                    reason={homeGovernanceFailureNotice(home.failure, { effect: 'read' }).body}
+                    action={{ testID: 'home-features-retry', label: t('homeGovernance.retry'), onPress: home.reload }}
+                />
             );
         }
+        // The Common rows are reserved in their final shape, so nothing moves when they land.
         return (
             <ItemGroup>
-                <Item testID="home-features-loading" title={t('homeGovernance.loading')} loading mode="info" showChevron={false} />
+                <ItemLoadStateRows testID="home-features-loading" state={LOADING} rows={6} accessibilityLabel={t('homeGovernance.features.title')} />
             </ItemGroup>
         );
     }
@@ -535,28 +542,27 @@ const FeaturesPage = React.memo(function FeaturesPage(props: Readonly<{ context:
                 </ItemGroup>
             ) : null}
 
-            {!readOnly ? (
+            {/* Save appears with an edit and leaves with it; at rest the page ends on its sections. */}
+            {!readOnly && (unsaved || saving) ? (
                 <ItemGroup surface="none">
-                    <SectionContentRow>
-                        <View style={styles.formActions}>
-                            <RoundButton
-                                testID="home-features-discard"
-                                size="small"
-                                display="inverted"
-                                title={t('common.discard')}
-                                disabled={!unsaved || saving}
-                                onPress={discard}
-                            />
-                            <RoundButton
-                                testID="home-features-save"
-                                size="small"
-                                title={t('common.save')}
-                                loading={saving}
-                                disabled={!unsaved || disabled}
-                                onPress={() => { void save(); }}
-                            />
-                        </View>
-                    </SectionContentRow>
+                    <SectionButtonRow>
+                        <RoundButton
+                            testID="home-features-discard"
+                            size="small"
+                            display="inverted"
+                            title={t('common.discard')}
+                            disabled={!unsaved || saving}
+                            onPress={discard}
+                        />
+                        <RoundButton
+                            testID="home-features-save"
+                            size="small"
+                            title={t('common.save')}
+                            loading={saving}
+                            disabled={!unsaved || disabled}
+                            onPress={() => { void save(); }}
+                        />
+                    </SectionButtonRow>
                 </ItemGroup>
             ) : null}
 
@@ -592,11 +598,3 @@ export const HomeAdministrationFeaturesScreen = React.memo(function HomeAdminist
         </HomeAdministrationSection>
     );
 });
-
-const styles = StyleSheet.create(() => ({
-    formActions: {
-        flexDirection: 'row',
-        justifyContent: 'flex-end',
-        gap: 8,
-    },
-}));

@@ -16,7 +16,9 @@ import { loadSyncReliabilityEvents } from '@/sync/domains/state/persistence';
 import { serverFetch } from '@/sync/http/client';
 import { machineCollectBugReportDiagnostics, machineGetBugReportLogTail } from '@/sync/ops/machines';
 import { syncPerformanceTelemetry } from '@/sync/runtime/syncPerformanceTelemetry';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
+import { isMachineVisibleForLaunchSelection } from '@/sync/domains/machines/identity/filterVisibleMachines';
+import { selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
 import { getBugReportUserActionTrail } from '@/utils/system/bugReportActionTrail';
 import { getBugReportLogText } from '@/utils/system/bugReportLogBuffer';
 import { peekPreRestartBugReportSnapshot } from '@/utils/system/preRestartBugReportSnapshot';
@@ -274,8 +276,9 @@ export async function collectBugReportDiagnosticsArtifacts(input: {
     const allowDaemonDiagnostics = hasAcceptedBugReportArtifactKind(input.acceptedKinds, 'daemon');
     const allowStackDiagnostics = hasAcceptedBugReportArtifactKind(input.acceptedKinds, 'stack-service');
     const collectMachineDiagnostics = allowDaemonDiagnostics || allowStackDiagnostics;
+    const machineScope = selectActiveServerAccountScopeForServer(storageState.profileScope ?? null, snapshot.serverId);
     const onlineMachines = collectMachineDiagnostics
-        ? input.machines.filter((machine) => isMachineOnline(machine)).slice(0, 3)
+        ? input.machines.filter((machine) => isMachineVisibleForLaunchSelection(machine) && isMachineReachable(machineScope, machine)).slice(0, 3)
         : [];
     if (collectMachineDiagnostics) {
         diagnosticsCollection.machineDiagnostics = onlineMachines.length > 0

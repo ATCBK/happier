@@ -14,6 +14,7 @@ import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { SectionActionButton } from '@/components/ui/lists/SectionActionButton';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Modal } from '@/modal';
 import {
   useActiveServerAccountScope,
@@ -148,7 +149,7 @@ export const PromptStackEditorScreen = React.memo(
           />
         ) : null}
         {account ? <AccountMemoryDefaultsSection /> : null}
-        {account && scope ? (
+        {account && scope && stack.hasLoadedEntries ? (
           <ContextMemorySection
             key={`${scope.serverId}:${scope.accountId}`}
             testID="context.accountMemory"
@@ -160,8 +161,23 @@ export const PromptStackEditorScreen = React.memo(
             footer={`${t('memoryContext.memory.accessPrivate')} · ${t('memoryContext.memory.usedWithMemoryOn')}`}
             emptyText={t('contextPages.account.memoryEmpty')}
             onBudgetChange={setMemoryBudget}
-            onEnabledChange={memoryEntry ? (enabled) => update({ kind: 'set_enabled', entryId: memoryEntry.id, enabled }) : undefined}
+            disabled={!stack.canUpdate}
+            // Whether sessions use memory is the defaults above and each session's own switch (plan 65 D45,
+            // lab `c-ctx A`): the header carries search and + only. A memory turned off at this layer keeps
+            // its way back on here, since no session can turn an upstream entry on.
+            onEnabledChange={memoryEntry && !memoryEntry.enabled ? (enabled) => update({ kind: 'set_enabled', entryId: memoryEntry.id, enabled }) : undefined}
           />
+        ) : null}
+        {!stack.hasLoadedEntries || stack.status !== 'ready' || stack.stale ? (
+          stack.hasLoadedEntries ? (
+            <SurfaceFreshnessLine testID="promptStack.freshness"
+              busy={stack.status === 'loading'}
+              reason={t(stack.status === 'loading' ? 'common.loading' : 'common.error')} />
+          ) : (
+            <SurfaceStateCard testID="promptStack.readState"
+              kind={stack.status === 'loading' ? 'loading' : 'unavailable'}
+              title={t(stack.status === 'loading' ? 'common.loading' : 'common.error')} />
+          )
         ) : null}
         <ItemGroup
           title={
@@ -185,10 +201,10 @@ export const PromptStackEditorScreen = React.memo(
                 }
                 icon="plus"
                 expanded={adding}
-                disabled={!scope}
+                disabled={!stack.canUpdate}
                 onPress={() => setAdding(true)}
               />
-              {adding && scope ? (
+              {adding && scope && stack.canUpdate ? (
                 <PromptStackDocumentMenu
                   testID="promptStack.addMenu"
                   anchorRef={addAnchorRef}
@@ -208,6 +224,7 @@ export const PromptStackEditorScreen = React.memo(
               entry={entry}
               title={promptStackEntryTitle(entry, presentations)}
               unavailable={presentations(entry).kind === 'unknown'}
+              disabled={!stack.canUpdate}
               onOpen={presentations(entry).kind === 'unknown' ? undefined : () => {
                 const href = promptStackEntryHref(entry, presentations(entry).kind, scope?.serverId ?? '');
                 if (href) router.push(href as never);
@@ -228,7 +245,7 @@ export const PromptStackEditorScreen = React.memo(
             />
           ))}
 
-          {documents.length === 0 ? (
+          {stack.hasLoadedEntries && documents.length === 0 ? (
             <Item
               testID="promptStack.empty"
               title={

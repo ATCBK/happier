@@ -11,16 +11,16 @@ import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { SettingAnchor } from '@/components/settings/shell/SettingRow';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Switch } from '@/components/ui/forms/Switch';
+import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
-import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
+import { SectionButtonRow } from '@/components/ui/lists/SectionButtonRow';
 import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import { Modal } from '@/modal';
-import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
 import { setHomeAuthenticationPolicies } from '@/sync/ops/home/homeGovernanceOperations';
 import { t } from '@/text';
 
-import { homeCompanySignInHref, homeSignInPlatformForKeys, homeSignInPlatformHref } from '../signInProviders/homeSignInPlatforms';
+import { homeCompanySignInHref, homeSignInPlatformForKeys, homeSignInPlatformHref, homeSignInPlatformMark } from '../signInProviders/homeSignInPlatforms';
 import { HomeDeploymentFixedNote } from './HomeDeploymentFixedNote';
 import type { HomeAdministrationContext } from './homeAdministrationContext';
 import { HOME_AUTHENTICATION_SETTINGS } from './homeAuthenticationSettings';
@@ -40,7 +40,13 @@ type AuthenticationMethod = HomeAuthenticationOptionsV1['methods'][number];
 
 const ADMISSION_CHOICES: readonly HomeAdmissionModeV1[] = ['self_service', 'invitation_only', 'closed'];
 const STORAGE_CHOICES: readonly StoragePolicy[] = ['required_e2ee', 'optional', 'plaintext_only'];
-const ACCOUNT_MODES: readonly AccountMode[] = ['e2ee', 'plain'];
+type AccountModeSet = 'e2ee' | 'both' | 'plain';
+const ACCOUNT_MODE_SETS: readonly AccountModeSet[] = ['e2ee', 'both', 'plain'];
+const ACCOUNT_MODE_SET_MODES: Readonly<Record<AccountModeSet, readonly AccountMode[]>> = {
+    e2ee: ['e2ee'],
+    both: ['e2ee', 'plain'],
+    plain: ['plain'],
+};
 const STORAGE_STRICTNESS: Readonly<Record<StoragePolicy, number>> = { required_e2ee: 0, optional: 1, plaintext_only: 2 };
 
 /**
@@ -233,16 +239,25 @@ function storagePolicyDescription(policy: StoragePolicy): string {
     }
 }
 
-function accountModeTitle(mode: AccountMode): string {
-    return mode === 'plain' ? t('homeGovernance.signInPolicy.allowPlain') : t('homeGovernance.signInPolicy.allowE2ee');
+function accountModeSetOf(modes: readonly AccountMode[]): AccountModeSet {
+    const e2ee = modes.includes('e2ee');
+    const plain = modes.includes('plain');
+    return e2ee && plain ? 'both' : plain ? 'plain' : 'e2ee';
 }
 
-function homeHost(serverId: string, fallback: string): string {
-    const serverUrl = getServerProfileById(serverId)?.serverUrl ?? '';
-    try {
-        return new URL(serverUrl).host || fallback;
-    } catch {
-        return fallback;
+function accountModeSetLabel(set: AccountModeSet): string {
+    switch (set) {
+        case 'e2ee': return t('homeGovernance.signInPolicy.accountTypesE2ee');
+        case 'both': return t('homeGovernance.signInPolicy.accountTypesBoth');
+        case 'plain': return t('homeGovernance.signInPolicy.accountTypesPlain');
+    }
+}
+
+function accountModeSetDescription(set: AccountModeSet): string {
+    switch (set) {
+        case 'e2ee': return t('homeGovernance.signInPolicy.accountTypesE2eeDescription');
+        case 'both': return t('homeGovernance.signInPolicy.accountTypesBothDescription');
+        case 'plain': return t('homeGovernance.signInPolicy.accountTypesPlainDescription');
     }
 }
 
@@ -267,6 +282,7 @@ export const SignInPolicyEditor = React.memo(function SignInPolicyEditor(
     const committedKey = committed ? JSON.stringify(committed) : '';
     const [draft, setDraft] = React.useState<SignInPolicyDraft | null>(null);
     const [saving, setSaving] = React.useState(false);
+    const [admissionOpen, setAdmissionOpen] = React.useState(false);
     const [widening, setWidening] = React.useState<PendingWidening | null>(null);
     const wideningRef = React.useRef<PendingWidening | null>(null);
     const operationInFlightRef = React.useRef<symbol | null>(null);
@@ -319,11 +335,6 @@ export const SignInPolicyEditor = React.memo(function SignInPolicyEditor(
         if (on && onIds.length === 1) return;
         patch({ enabledMethodIds: on ? onIds.filter((id) => id !== method.id) : [...onIds, method.id] });
     };
-    const toggleMode = (mode: AccountMode) => {
-        const included = modes.includes(mode);
-        if (included && modes.length === 1) return;
-        patch({ permittedAccountModes: included ? modes.filter((candidate) => candidate !== mode) : [...modes, mode] });
-    };
 
     const save = async () => {
         if (operationInFlightRef.current !== null || !draft || !valid) return;
@@ -340,7 +351,7 @@ export const SignInPolicyEditor = React.memo(function SignInPolicyEditor(
                 confirmWidening: () => new Promise<boolean>((resolve) => {
                     const pending: PendingWidening = {
                         anchor: wideningAnchor(intent),
-                        copy: homePolicyWideningCopy(intent, homeHost(context.scope.serverId, context.homeName)),
+                        copy: homePolicyWideningCopy(intent, context.homeName),
                         resolve,
                     };
                     wideningRef.current = pending;
@@ -438,6 +449,7 @@ export const SignInPolicyEditor = React.memo(function SignInPolicyEditor(
                             <Item
                                 testID={`home-policy-auth-method:${method.id}`}
                                 title={method.displayName ?? method.id}
+                                icon={homeSignInPlatformMark(setUp)}
                                 subtitle={setUp === 'github'
                                     ? t('homeGovernance.signInPolicy.needsGithubApp')
                                     : t('homeGovernance.signInPolicy.needsWorkos')}
@@ -461,6 +473,7 @@ export const SignInPolicyEditor = React.memo(function SignInPolicyEditor(
                         <Item
                             testID={`home-policy-auth-method:${method.id}`}
                             title={method.displayName ?? method.id}
+                            icon={method.id === 'github' ? homeSignInPlatformMark('github') : undefined}
                             subtitle={subtitle}
                             subtitleAccessory={method.fixedBy
                                 ? <HomeDeploymentFixedNote keys={[method.fixedBy]} testID={`home-policy-auth-method:${method.id}`} />
@@ -512,7 +525,6 @@ export const SignInPolicyEditor = React.memo(function SignInPolicyEditor(
                     title={t('homeGovernance.signInProviders.companySignIn')}
                     subtitle={companyProviderNames || t('homeGovernance.signInProviders.companySignInDescription')}
                     subtitleLines={0}
-                    detail={t('homeGovernance.signInProviders.title')}
                     onPress={() => router.push(homeCompanySignInHref(context.scope.serverId) as never)}
                 />
             </ItemGroup></SettingAnchor>
@@ -521,23 +533,43 @@ export const SignInPolicyEditor = React.memo(function SignInPolicyEditor(
                 title={t('homeGovernance.signInPolicy.admissionTitle')}
                 description={editable ? undefined : readOnlyDescription}
             >
-                <SettingAnchor setting={HOME_AUTHENTICATION_SETTINGS.settings.admission}><SegmentedChoiceItem<HomeAdmissionModeV1 | 'inherited'>
+                <SettingAnchor setting={HOME_AUTHENTICATION_SETTINGS.settings.admission}>{selected.admission === null ? (
+                    <DropdownMenu
+                        testID="home-policy-auth-admission"
+                        open={admissionOpen}
+                        onOpenChange={setAdmissionOpen}
+                        selectedId="inherited"
+                        items={[
+                            { id: 'inherited', title: t('homeGovernance.authInherited') },
+                            ...ADMISSION_CHOICES.map((admission) => ({
+                                id: admission,
+                                testID: `home-policy-auth-admission:${admission}`,
+                                title: homeAdmissionModeLabel(admission),
+                                subtitle: admissionDescription(admission),
+                            })),
+                        ]}
+                        itemTrigger={{ title: t('homeGovernance.signInPolicy.newAccounts'), itemProps: { testID: 'home-policy-auth-admission-trigger' } }}
+                        onSelect={(id) => {
+                            setAdmissionOpen(false);
+                            const admission = ADMISSION_CHOICES.find((choice) => choice === id);
+                            if (admission) patch({ admission });
+                        }}
+                        disabled={!interactive}
+                    />
+                ) : <SegmentedChoiceItem<HomeAdmissionModeV1>
                     testID="home-policy-auth-admission"
                     testIDPrefix="home-policy-auth-admission"
                     title={t('homeGovernance.signInPolicy.newAccounts')}
-                    // An inherited admission matches no segment; the line says what applies.
                     subtitle={admissionDescription(selected.admission)}
                     options={ADMISSION_CHOICES.map((admission) => ({
                         id: admission,
                         label: homeAdmissionModeLabel(admission),
                         description: admissionDescription(admission),
                     }))}
-                    value={selected.admission ?? 'inherited'}
-                    onChange={(admission) => {
-                        if (admission !== 'inherited') patch({ admission });
-                    }}
+                    value={selected.admission}
+                    onChange={(admission) => patch({ admission })}
                     disabled={!interactive}
-                /></SettingAnchor>
+                />}</SettingAnchor>
                 {wideningCard('admission')}
                 {anonymous ? (
                     <SettingAnchor setting={HOME_AUTHENTICATION_SETTINGS.settings.anonymousSignup}><Item
@@ -589,32 +621,19 @@ export const SignInPolicyEditor = React.memo(function SignInPolicyEditor(
                         disabled={!interactive || storage.fixedBy !== null}
                     /></SettingAnchor>
                 ) : null}
-                {ACCOUNT_MODES.map((mode, index) => {
-                    const on = modes.includes(mode);
-                    const canToggle = interactive && !(on && modes.length === 1);
-                    const row = (
-                        <Item
-                            key={mode}
-                            testID={`home-policy-auth-mode:${mode}`}
-                            title={accountModeTitle(mode)}
-                            disabled={!canToggle}
-                            onPress={canToggle ? () => toggleMode(mode) : undefined}
-                            rightElement={(
-                                <Switch
-                                    testID={`home-policy-auth-mode:${mode}-switch`}
-                                    value={on}
-                                    disabled={!canToggle}
-                                    onValueChange={() => toggleMode(mode)}
-                                />
-                            )}
-                            showChevron={false}
-                        />
-                    );
-                    // The section's search anchor is its first row.
-                    return index === 0
-                        ? <SettingAnchor key={mode} setting={HOME_AUTHENTICATION_SETTINGS.settings.permittedAccountModes}>{row}</SettingAnchor>
-                        : row;
-                })}
+                {/* One decision: which account types this Home allows. "None" is not a choice, so the last
+                    type can never be switched off (lab `hcPolicies-A`, "Account modes allowed"). */}
+                <SettingAnchor setting={HOME_AUTHENTICATION_SETTINGS.settings.permittedAccountModes}><SegmentedChoiceItem<AccountModeSet>
+                    testID="home-policy-auth-modes"
+                    testIDPrefix="home-policy-auth-modes"
+                    title={t('homeGovernance.signInPolicy.accountTypes')}
+                    subtitle={accountModeSetDescription(accountModeSetOf(modes))}
+                    subtitleLines={0}
+                    options={ACCOUNT_MODE_SETS.map((set) => ({ id: set, label: accountModeSetLabel(set) }))}
+                    value={accountModeSetOf(modes)}
+                    onChange={(set) => patch({ permittedAccountModes: [...ACCOUNT_MODE_SET_MODES[set]] })}
+                    disabled={!interactive}
+                /></SettingAnchor>
                 <SettingAnchor setting={HOME_AUTHENTICATION_SETTINGS.settings.recommendedProvisioningMode}><SegmentedChoiceItem<AccountMode | 'inherited'>
                     testID="home-policy-auth-recommended"
                     testIDPrefix="home-policy-auth-recommended"
@@ -635,30 +654,30 @@ export const SignInPolicyEditor = React.memo(function SignInPolicyEditor(
                 {wideningCard('encryption')}
             </ItemGroup>
 
-            {editable ? (
+            {/* Save appears with an edit and leaves with it, as on Sign-in providers; a widening
+                question or a pending approval keeps this closing group while it is asked. */}
+            {editable && (dirty || saving || widening?.anchor === 'form' || context.approvalPending) ? (
                 <ItemGroup surface="none">
                     {wideningCard('form')}
-                    <SectionContentRow>
-                        <View style={styles.formActions}>
-                            <RoundButton
-                                testID="home-policy-auth-cancel"
-                                size="small"
-                                display="inverted"
-                                title={t('common.cancel')}
-                                disabled={!dirty || saving}
-                                onPress={() => setDraft(null)}
-                            />
-                            <SettingAnchor setting={HOME_AUTHENTICATION_SETTINGS.settings.saveAuthentication}><RoundButton
-                                testID="home-policy-auth-save"
-                                size="small"
-                                title={t('common.save')}
-                                // Waiting on the owner's answer to the widening card is not a spinner.
-                                loading={saving && widening === null}
-                                disabled={!dirty || !valid || saving}
-                                onPress={() => { void save(); }}
-                            /></SettingAnchor>
-                        </View>
-                    </SectionContentRow>
+                    {dirty || saving ? <SectionButtonRow>
+                        <RoundButton
+                            testID="home-policy-auth-cancel"
+                            size="small"
+                            display="inverted"
+                            title={t('common.discard')}
+                            disabled={!dirty || saving}
+                            onPress={() => setDraft(null)}
+                        />
+                        <SettingAnchor setting={HOME_AUTHENTICATION_SETTINGS.settings.saveAuthentication}><RoundButton
+                            testID="home-policy-auth-save"
+                            size="small"
+                            title={t('common.save')}
+                            // Waiting on the owner's answer to the widening card is not a spinner.
+                            loading={saving && widening === null}
+                            disabled={!dirty || !valid || saving}
+                            onPress={() => { void save(); }}
+                        /></SettingAnchor>
+                    </SectionButtonRow> : null}
                     {context.approvalPending ? (
                         <Item testID="home-policy-auth-approval-pending" title={t('connect.waitingForApproval')} showChevron={false} />
                     ) : null}

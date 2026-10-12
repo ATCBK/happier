@@ -70,7 +70,7 @@ export const ContextMemorySection = React.memo(function ContextMemorySection(pro
     const maxChars = entry?.maxChars;
     const budgetItems = React.useMemo(() => promptStackBudgetChoices(maxChars, {
         everything: t('contextPages.load.everything'), words: count => t('contextPages.load.words', { count: count.toLocaleString() }),
-    }), [maxChars]);
+    }).map(choice => ({ ...choice, disabled: props.disabled })), [maxChars, props.disabled]);
     const selectedBudget = budgetItems.find(choice => choice.maxChars === (maxChars ?? null))?.id ?? 'all';
     return (
         <ItemGroup
@@ -139,11 +139,11 @@ export const ContextMemorySection = React.memo(function ContextMemorySection(pro
                     onOpenChange={setBudgetOpen}
                     items={budgetItems}
                     selectedId={selectedBudget}
-                    onSelect={(id) => { const choice = budgetItems.find(candidate => candidate.id === id); if (choice) onBudgetChange(choice.maxChars); }}
+                    onSelect={(id) => { if (props.disabled) return; const choice = budgetItems.find(candidate => candidate.id === id); if (choice) onBudgetChange(choice.maxChars); }}
                     itemTrigger={{
                         title: t('contextPages.load.title'),
                         subtitle: t('contextPages.load.description'),
-                        itemProps: { accessoryLayout: 'adaptive' },
+                        itemProps: { accessoryLayout: 'adaptive', disabled: props.disabled },
                     }}
                 />
             ) : null}

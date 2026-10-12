@@ -5,7 +5,9 @@ import { indexedDB, IDBKeyRange } from 'fake-indexeddb';
 
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import {
     installDisconnectedServerSocketBoundary,
     restoreServerAccountForTest,
@@ -16,7 +18,8 @@ import { storage } from '@/sync/domains/state/storageStore';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { adoptHomeProfile } from '@/sync/domains/server/serverProfiles';
 import { getActiveServerAccountScope, captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
-import { installConnectedAccountDescriptorProjection } from '@/sync/domains/connectedServices/connectedServiceRegistry';
+import { installConnectedAccountDescriptorProjection, retireConnectedAccountDescriptorProjection,
+    getAccountConnectedServiceConfigurationMode } from '@/sync/domains/connectedServices/connectedServiceRegistry';
 import { apiSocket } from '@/sync/api/session/apiSocket';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
@@ -26,9 +29,9 @@ import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fi
 import { createManagedResourceDependencyFixture } from '@/dev/testkit/fixtures/managedResourceDependencyFixtures';
 import { StoredApprovalRequestSchema } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { AccountSettingsV2UpdateRequestSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
-import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { decodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import type { ApprovalRequestV2 } from '@happier-dev/protocol';
 import type { ArtifactCreateRequest } from '@/sync/domains/artifacts/artifactTypes';
@@ -74,6 +77,10 @@ const platform = vi.hoisted(() => ({
 }));
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+// The controller imports the scoped socket owner eagerly; replace its external
+// SDK factory before those imports, then configure each real cold socket below.
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('react-native-reanimated', async () => (await import('@/dev/testkit/mocks/reanimated')).createReanimatedModuleMock());
 // Keep the real machine picker beneath a deterministic portal/window measurement boundary.
@@ -117,7 +124,7 @@ function deferredReply() {
     return { promise, resolve };
 }
 const configuredMode: PluginConnectedAccountAuthenticationModeV2 = {
-    id: 'oauth', kind: 'oauthAuthorizationCode', pkce: 'required', outcomeReconciliation: 'providerCheck',
+    id: 'oauth', kind: 'oauthAuthorizationCode', callbackUrl: 'http://127.0.0.1:4000/auth/callback', pkce: 'required', outcomeReconciliation: 'providerCheck',
     configuration: {
         scope: 'account', changeBehavior: 'reconnect', fields: [
             { id: 'endpoint', title: 'Endpoint', secret: false, required: true, schema: { type: 'string', minLength: 1 } },
@@ -146,9 +153,26 @@ describe('ConnectedAccountSetupController real ownership', () => {
     let handleControl: WireHandler<ControlCommand>;
     let handleHttp: NonNullable<Parameters<typeof restoreServerAccountForTest>[0]['request']>;
     let purposeBoundary: ReturnType<typeof installPurposeBoundary> | null;
+    let machineRows: ReturnType<typeof createPlainMachineRowFixture>[];
+    let handleMachineRead: (() => Promise<Response>) | undefined;
     const httpRequests: URL[] = [];
     const onConnected = vi.fn();
     const onCancel = vi.fn();
+
+    async function answerConnectedCommand(machineId: string, method: string, payload: unknown): Promise<unknown> {
+        const control = ConnectedAccountControlCommandRequestSchema.safeParse(payload);
+        if (control.success) {
+            expect(method).toBe(CONNECTED_ACCOUNT_CONTROL_COMMAND_RPC_METHOD);
+            expect(control.data.machineId).toBe(machineId);
+            controlCommands.push(control.data.command);
+            return await handleControl(control.data.command);
+        }
+        expect(method).toBe(CONNECTED_ACCOUNT_AUTHENTICATION_COMMAND_RPC_METHOD);
+        const request = ConnectedAccountAuthenticationCommandRequestSchema.parse(payload);
+        expect(request.machineId).toBe(machineId);
+        authenticationCommands.push(request.command);
+        return await handleAuthentication(request.command);
+    }
 
     const element = (selected = selection, requestedService = service) => <InjectedAuthProvider credentials={null}>
         <ConnectedAccountSetupController service={requestedService} targetSelection={selected}
@@ -171,13 +195,27 @@ describe('ConnectedAccountSetupController real ownership', () => {
 
     async function manualScreen() {
         const screen = await renderScreen(element());
-        await vi.waitFor(() => expect(screen.findHostByTestId('connected-account-manual:token')).not.toBeNull());
+        await vi.waitFor(() => expect(screen.findHostByTestId('connected-account-manual:token'), JSON.stringify({
+            rendered: screen.getTextContent(),
+            controlCommands,
+            authenticationCommands,
+            httpPaths: httpRequests.map(request => request.pathname),
+        })).not.toBeNull());
         return screen;
     }
 
     async function focusedScreen(withAccountCredentials = false) {
         platform.params = { ...description.service, accountId: 'account-1' };
         return renderScreen(<InjectedAuthProvider credentials={withAccountCredentials ? account.credentials : null}><ConnectedAccountServiceView /></InjectedAuthProvider>);
+    }
+
+    function waiveConfigurationConfirmation() {
+        // These cases exercise native configuration settlement/recovery. The
+        // real policy owner must admit their effect; no caller bypass is used.
+        storage.getState().applySettings({ ...storage.getState().settings,
+            actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1,
+                approvalWaivedSurfaces: { 'connectedServices.configuration.replace': ['ui'] } }),
+        }, 2);
     }
 
     function installAccountLabelBoundary(targetAccount: QualifiedConnectedAccountProfileV4, beforeWrite?: () => Promise<void>) {
@@ -262,9 +300,10 @@ describe('ConnectedAccountSetupController real ownership', () => {
             { purpose: { consumer: { pluginId: 'custom.agent', localId: 'other' }, purpose: 'model' },
                 target: { kind: 'account' as const, account: { service, accountId: 'account-2' } } },
         ];
-        storage.getState().applySettings({ ...storage.getState().settings,
+        const predecessorSettings = { ...storage.getState().settings,
             connectedAccountPurposeBindingsV1: { v: 1, bindings },
-        }, 2);
+        };
+        storage.getState().applySettings(predecessorSettings, 2);
         purposeBoundary = installPurposeBoundary(bindings);
         return bindings;
     }
@@ -289,6 +328,8 @@ describe('ConnectedAccountSetupController real ownership', () => {
         controlCommands.length = 0;
         httpRequests.length = 0;
         purposeBoundary = null;
+        machineRows = [createPlainMachineRowFixture({ id: 'machine-1', accountId: 'account-a' })];
+        handleMachineRead = undefined;
         handleHttp = async () => new Response('{}', { status: 404 });
         handleAuthentication = (command) => command.operation === 'submitManual'
             ? { status: 'connected', attemptId: 'attempt-1', account: { service, accountId: 'new-account' } }
@@ -298,6 +339,18 @@ describe('ConnectedAccountSetupController real ownership', () => {
         handleControl = (command) => command.operation === 'listPendingAttempts'
             ? { status: 'pendingAttempts', attempts: [] }
             : description;
+        // Captured Account authentication uses the exact scoped socket, while diagnostic
+        // controls may use the active socket. Both are genuine transport boundaries.
+        installDisconnectedServerSocketBoundary(socket => {
+            socket.connected = true;
+            vi.spyOn(socket, 'timeout').mockReturnValue(socket);
+            vi.spyOn(socket, 'emitWithAck').mockImplementation(async (_event: string, payload: SocketRpcRequestPayload) => {
+                const separator = payload.method.indexOf(':');
+                if (separator < 0) throw new Error('Expected exact machine RPC address');
+                return { ok: true, result: await answerConnectedCommand(payload.method.slice(0, separator),
+                    payload.method.slice(separator + 1), payload.params) };
+            });
+        });
         await adoptHomeProfile({ descriptor: { serverUrl: 'https://connected-account-setup.example.test',
             homeServerIdentityId: 'srv_connected_account_setup' }, source: 'manual' });
         account = await restoreServerAccountForTest({
@@ -305,6 +358,11 @@ describe('ConnectedAccountSetupController real ownership', () => {
             request: async (url, init) => {
                 const parsed = new URL(String(url));
                 httpRequests.push(parsed);
+                if (parsed.pathname === '/v1/machines/machine-1') {
+                    if (handleMachineRead) return handleMachineRead();
+                    return machineRows[0] ? Response.json({ machine: machineRows[0] }) : new Response('{}', { status: 404 });
+                }
+                if (parsed.pathname === '/v1/machines') return Response.json({ machines: machineRows });
                 return purposeBoundary?.request(parsed.pathname, init) ?? handleHttp(url, init);
             },
         });
@@ -340,25 +398,18 @@ describe('ConnectedAccountSetupController real ownership', () => {
             options?: Parameters<typeof apiSocket.machineRPC>[3],
         ): Promise<R> => {
             options?.onIssued?.();
-            const control = ConnectedAccountControlCommandRequestSchema.safeParse(payload);
-            if (control.success) {
-                expect(method).toBe(CONNECTED_ACCOUNT_CONTROL_COMMAND_RPC_METHOD);
-                expect(control.data.machineId).toBe(machineId);
-                controlCommands.push(control.data.command);
-                const response = await handleControl(control.data.command);
-                // RPC bytes are unknown at this genuine transport boundary; the real caller parses them.
-                return response as R;
-            }
-            expect(method).toBe(CONNECTED_ACCOUNT_AUTHENTICATION_COMMAND_RPC_METHOD);
-            const request = ConnectedAccountAuthenticationCommandRequestSchema.parse(payload);
-            expect(request.machineId).toBe(machineId);
-            const { command } = request;
-            authenticationCommands.push(command);
-            return await handleAuthentication(command) as R;
+            // RPC bytes are unknown at this genuine transport boundary; the real caller parses them.
+            return await answerConnectedCommand(machineId, method, payload) as R;
         });
     });
 
     afterEach(async () => {
+        const [{ serverScopedRpcSocketPool }, { resetScopedMachineTransportCacheForTests }] = await Promise.all([
+            import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool'),
+            import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool'),
+        ]);
+        serverScopedRpcSocketPool.resetForTests();
+        resetScopedMachineTransportCacheForTests();
         installDisconnectedServerSocketBoundary();
         standardCleanup();
         resetServerFeaturesClientForTests();
@@ -368,6 +419,27 @@ describe('ConnectedAccountSetupController real ownership', () => {
         storage.getState().clearProfileScope();
     });
 
+    it('admits pending authentication through the captured portable Home front door', async () => {
+        const machineId = selection.selectedTarget?.machineId;
+        if (!machineId) throw new Error('missing_selected_machine');
+        const scope = getActiveServerAccountScope();
+        if (!scope) throw new Error('missing_account_scope');
+        expect(await createDefaultActionExecutor().execute('connectedServices.authentication.pending.list', { machineId, service },
+            { surface: 'ui', authority: 'present_user', serverId: scope.serverId, expectedAccountId: scope.accountId }))
+            .toEqual({ ok: true, result: { status: 'pendingAttempts', attempts: [] } });
+        let execution: ReturnType<typeof useMountedActionExecution> | undefined;
+        function Probe() { execution = useMountedActionExecution(scope); return null; }
+        const screen = await renderScreen(<Probe />);
+        try {
+            await vi.waitFor(() => expect(execution?.ready, JSON.stringify({
+                capturedScope: scope,
+                credentialScope: execution?.binding?.scope,
+                current: execution?.binding?.isCurrent(),
+            })).toBe(true));
+            expect(await execution!.execute('connectedServices.authentication.pending.list', { machineId, service }))
+                .toEqual({ ok: true, result: { status: 'pendingAttempts', attempts: [] } });
+        } finally { await screen.unmount(); }
+    });
     it('starts and completes the recommended authentication through the exact daemon owner', async () => {
         const screen = await manualScreen();
         await act(async () => screen.findHostByTestId('connected-account-manual:token')!.props.onChangeText('secret-token'));
@@ -378,6 +450,46 @@ describe('ConnectedAccountSetupController real ownership', () => {
             { operation: 'submitManual', attemptId: 'attempt-1', fields: { token: 'secret-token' } },
             { operation: 'cancel', attemptId: 'attempt-1' },
         ]);
+    });
+
+    it('submits a declared native import source choice through the qualified selected-machine attempt', async () => {
+        installDescription({ ...described, descriptor: { ...described.descriptor, authentication: {
+            defaultModeId: 'native-import',
+            modes: [{ id: 'native-import', title: 'Import native login', kind: 'manual', outcomeReconciliation: 'none', fields: [{
+                id: 'source', title: 'Source', secret: false,
+                schema: { type: 'string', enum: ['acp', 'cli'] }, default: 'acp',
+                presentation: { control: 'select', options: [
+                    { value: 'acp', title: 'ACP login' }, { value: 'cli', title: 'CLI login' },
+                ] },
+            }] }],
+        } } });
+        const screen = await renderScreen(element());
+        try {
+            await vi.waitFor(() => expect(screen.findHostByTestId('connected-account-manual:source')).not.toBeNull());
+            const choice = screen.findAllByType(DropdownMenu).find(node => node.props.testID === 'connected-account-manual:source');
+            expect(choice).toBeDefined();
+            expect(choice!.props.selectedId).toBe('acp');
+            await act(async () => choice!.props.onSelect('cli'));
+            await screen.pressByTestIdAsync('connected-account-manual:submit');
+            await vi.waitFor(() => expect(onConnected).toHaveBeenCalledWith({ service, accountId: 'new-account' }));
+            expect(authenticationCommands).toContainEqual({ operation: 'beginConnect', service, modeId: 'native-import' });
+            expect(authenticationCommands).toContainEqual({ operation: 'submitManual', attemptId: 'attempt-1', fields: { source: 'cli' } });
+        } finally { await screen.unmount(); }
+    });
+
+    it('offers no authentication method without a captured Account', async () => {
+        installDescription({ ...described, descriptor: { ...described.descriptor, authentication: {
+            ...authentication,
+            modes: [...authentication.modes, { ...authentication.modes[0]!, id: 'other-manual' }],
+        } } });
+        await account.dispose();
+        storage.getState().clearProfileScope();
+        expect(getActiveServerAccountScope()).toBeNull();
+        const screen = await renderScreen(element());
+        expect(screen.findHostByTestId('connected-service-setup:method:other-manual')).toBeNull();
+        expect(screen.findByTestId('connected-account:error')).toBeNull();
+        expect(authenticationCommands).toEqual([]);
+        expect(onConnected).not.toHaveBeenCalled();
     });
 
     it('names a guided key through the existing Account label preference only after connection succeeds', async () => {
@@ -562,10 +674,9 @@ describe('ConnectedAccountSetupController real ownership', () => {
         // A warm row remains cached while this Home has not returned its current inventory.
         storage.setState({ isDataReady: false });
         const screen = await focusedScreen();
-        expect(screen.findHostByTestId('connected-account-choose-machine'), JSON.stringify(screen.tree.toJSON())).not.toBeNull();
-        expect(screen.findHostByTestId('connected-account-choose-machine:action') !== null).toBe(true);
-        await screen.pressByTestIdAsync('connected-account-choose-machine:action');
-        expect(screen.findByTestId('connected-account-target.chip')?.props.accessibilityState?.expanded).toBe(true);
+        // One quiet machine line (the canonical machine section) and no second chooser in the header.
+        expect(screen.findHostByTestId('connected-account-target.state'), JSON.stringify(screen.tree.toJSON())).not.toBeNull();
+        expect(screen.findHostByTestId('connected-account-target.chip')).toBeNull();
         expect(controlCommands).toEqual([]);
         expect(authenticationCommands).toEqual([]);
     });
@@ -668,7 +779,11 @@ describe('ConnectedAccountSetupController real ownership', () => {
         platform.params = { ...compatibility.service, accountId: 'account-1' };
         const screen = await renderScreen(<InjectedAuthProvider credentials={account.credentials}><ConnectedAccountServiceView /></InjectedAuthProvider>);
         await vi.waitFor(() => expect(screen.findHostByTestId('connected-account:error')).not.toBeNull());
-        expect(controlCommands).toEqual([{ operation: 'describeService', service: compatibility.service, requiredOperation: 'account_list' }]);
+        expect(controlCommands.length).toBeGreaterThan(0);
+        expect(controlCommands.every(command => command.operation === 'describeService'
+            && command.service.pluginId === compatibility.service.pluginId
+            && command.service.localId === compatibility.service.localId
+            && command.requiredOperation === 'account_list')).toBe(true);
         expect(authenticationCommands).toEqual([]);
         expect(httpRequests.filter((url) => url.pathname.startsWith('/v4/connect/qualified/'))).toEqual([]);
         expect(screen.findHostByTestId('qualified-account-detail')).toBeNull();
@@ -764,7 +879,7 @@ describe('ConnectedAccountSetupController real ownership', () => {
         installDescription({ ...described, descriptor: { ...described.descriptor,
             authentication: { defaultModeId: kind, modes: [kind === 'device'
                 ? { id: kind, kind: 'oauthDeviceCode', outcomeReconciliation: 'none' }
-                : { id: kind, kind: 'oauthAuthorizationCode', pkce: 'required', outcomeReconciliation: 'none' }] },
+                : { id: kind, kind: 'oauthAuthorizationCode', callbackUrl: 'http://127.0.0.1:4000/auth/callback', pkce: 'required', outcomeReconciliation: 'none' }] },
         } });
         handleControl = (command) => command.operation === 'listPendingAttempts'
             ? { status: 'pendingAttempts', attempts: [{ attemptId: 'persisted-attempt', kind, modeId: kind,
@@ -843,7 +958,7 @@ describe('ConnectedAccountSetupController real ownership', () => {
         installDescription({ ...described, descriptor: { ...described.descriptor,
             authentication: { defaultModeId: kind, modes: [kind === 'device'
                 ? { id: kind, kind: 'oauthDeviceCode', outcomeReconciliation: 'providerCheck' }
-                : { id: kind, kind: 'oauthAuthorizationCode', pkce: 'required', outcomeReconciliation: 'providerCheck' }] },
+                : { id: kind, kind: 'oauthAuthorizationCode', callbackUrl: 'http://127.0.0.1:4000/auth/callback', pkce: 'required', outcomeReconciliation: 'providerCheck' }] },
         } });
         handleAuthentication = (command) => command.operation === 'reconcile'
             ? { status: 'pending', attemptId: 'attempt-1', retryAfterMs: 250 }
@@ -865,6 +980,7 @@ describe('ConnectedAccountSetupController real ownership', () => {
     });
 
     it.each(['readConfiguration', 'replaceConfiguration', 'continueConnect'] as const)('ignores a late %s reply after the enclosing setup panel unmounts', async (operation) => {
+        if (operation !== 'readConfiguration') waiveConfigurationConfirmation();
         installDescription({ ...described, descriptor: { ...described.descriptor, authentication: { defaultModeId: 'oauth', modes: [configuredMode] } } });
         const pending = deferredReply();
         const committed = { ...configurationReply, status: 'configurationCommitted', configuration: { ...configurationReply.configuration, status: 'ready', revision: 'config-2' } };
@@ -880,7 +996,9 @@ describe('ConnectedAccountSetupController real ownership', () => {
             await act(async () => screen.changeTextByTestId('connected-account-configuration:endpoint', 'https://new.example'));
             await screen.pressByTestIdAsync('connected-account-configuration:save');
         }
-        await vi.waitFor(() => expect([...controlCommands, ...authenticationCommands].some((command) => command.operation === operation)).toBe(true));
+        await vi.waitFor(() => expect([...controlCommands, ...authenticationCommands].some((command) => command.operation === operation),
+            JSON.stringify({ rendered: screen.getTextContent(), controlCommands, authenticationCommands,
+                httpPaths: httpRequests.map(request => request.pathname) })).toBe(true));
         await act(async () => screen.tree.unmount());
         await act(async () => pending.resolve(operation === 'readConfiguration' ? configurationReply
             : operation === 'replaceConfiguration' ? committed
@@ -890,6 +1008,7 @@ describe('ConnectedAccountSetupController real ownership', () => {
     });
 
     it('reads, saves and continues configuration with exact managed targets and no disclosed secret', async () => {
+        waiveConfigurationConfirmation();
         installDescription({ ...described, descriptor: { ...described.descriptor, authentication: { defaultModeId: 'oauth', modes: [configuredMode] } } });
         handleControl = (command) => command.operation === 'listPendingAttempts'
             ? { status: 'pendingAttempts', attempts: [] }
@@ -905,7 +1024,8 @@ describe('ConnectedAccountSetupController real ownership', () => {
         expect(screen.findHostByTestId('connected-account-configuration:secret')!.props.value).toBe('');
         await act(async () => screen.changeTextByTestId('connected-account-configuration:endpoint', 'https://new.example'));
         await screen.pressByTestIdAsync('connected-account-configuration:save');
-        await vi.waitFor(() => expect(onConnected).toHaveBeenCalledWith({ service, accountId: 'new-account' }));
+        await vi.waitFor(() => expect(onConnected, JSON.stringify({ rendered: screen.getTextContent(), controlCommands, authenticationCommands,
+            httpPaths: httpRequests.map(request => request.pathname) })).toHaveBeenCalledWith({ service, accountId: 'new-account' }));
         expect(controlCommands).toContainEqual({ operation: 'readConfiguration', target: { kind: 'attempt', attemptId: 'attempt-1' } });
         expect(controlCommands).toContainEqual({ operation: 'replaceConfiguration', target: { kind: 'attempt', attemptId: 'attempt-1' },
             expectedRevision: 'config-1', values: { endpoint: 'https://new.example' }, secretValues: {} });
@@ -913,6 +1033,7 @@ describe('ConnectedAccountSetupController real ownership', () => {
     });
 
     it('reconnects and continues only the requested qualified account after its configuration commit', async () => {
+        waiveConfigurationConfirmation();
         const ref = { service, accountId: 'account-1' };
         const target = { kind: 'account' as const, account: ref, modeId: 'oauth' };
         installDescription({ ...described, accounts: [{ ref, status: 'needs_reauth', authenticationModeId: 'oauth',
@@ -947,6 +1068,7 @@ describe('ConnectedAccountSetupController real ownership', () => {
     });
 
     it.each(['account'] as const)('edits established %s configuration without inferring reconnect or revealing configured secrets', async (scope) => {
+        waiveConfigurationConfirmation();
         const ref = { service, accountId: 'account-1' };
         const mode: PluginConnectedAccountAuthenticationModeV2 = { ...configuredMode, configuration: { ...configuredMode.configuration!, scope, changeBehavior: 'refresh' } };
         const target = scope === 'account' ? { kind: 'account' as const, account: ref, modeId: 'oauth' }
@@ -1011,6 +1133,7 @@ describe('ConnectedAccountSetupController real ownership', () => {
             return new Response('{}', { status: 404 });
         };
         storage.getState().applyMachines([], true, { sourceServerId: getActiveServerSnapshot().serverId });
+        machineRows = [];
         storage.getState().applyProfile({ ...profileDefaults, id: 'account-a', connectedAccountsV4: [
             QualifiedConnectedAccountProfileV4Schema.parse({ ref: { service, accountId: 'account-1' }, status: 'connected',
                 authenticationModeId: mode.id, revisionSemantics: 'revisioned', credentialRevision,
@@ -1022,7 +1145,8 @@ describe('ConnectedAccountSetupController real ownership', () => {
         }, 2);
         platform.params = { ...service, accountId: 'account-1' };
         const screen = await renderScreen(<InjectedAuthProvider credentials={account.credentials}><ConnectedAccountServiceView /></InjectedAuthProvider>);
-        await vi.waitFor(() => expect(screen.findHostByTestId('connected-service-configuration-settings:oauth')).not.toBeNull());
+        await vi.waitFor(() => expect(screen.findHostByTestId('connected-service-configuration-settings:oauth'),
+            JSON.stringify({ rendered: screen.getTextContent(), httpPaths: httpRequests.map(request => request.pathname) })).not.toBeNull());
         await screen.pressByTestIdAsync('connected-service-configuration-settings:oauth');
         await vi.waitFor(() => expect(screen.findHostByTestId('connected-account-configuration:endpoint')).not.toBeNull());
         await act(async () => screen.changeTextByTestId('connected-account-configuration:endpoint', 'https://new.example'));
@@ -1034,6 +1158,7 @@ describe('ConnectedAccountSetupController real ownership', () => {
     });
 
     it('preserves an invalid configuration draft without claiming a successful reconnect', async () => {
+        waiveConfigurationConfirmation();
         installDescription({ ...described, descriptor: { ...described.descriptor, authentication: { defaultModeId: 'oauth', modes: [configuredMode] } } });
         handleControl = (command) => command.operation === 'listPendingAttempts'
             ? { status: 'pendingAttempts', attempts: [] }
@@ -1046,17 +1171,35 @@ describe('ConnectedAccountSetupController real ownership', () => {
         await screen.pressByTestIdAsync('connected-account-configuration:save');
         await vi.waitFor(() => expect(screen.findHostByTestId('connected-account:error')).not.toBeNull());
         expect(screen.findHostByTestId('connected-account-configuration:endpoint')!.props.value).toBe('https://unsaved.example');
+        expect(controlCommands).toContainEqual({ operation: 'replaceConfiguration', target: { kind: 'attempt', attemptId: 'attempt-1' },
+            expectedRevision: 'config-1', values: { endpoint: 'https://unsaved.example' }, secretValues: {} });
         expect(authenticationCommands.some((command) => command.operation === 'continueConnect')).toBe(false);
         expect(onConnected).not.toHaveBeenCalled();
     });
 
-    it('does not treat service configuration from a retired occurrence as ready even with the same managed custody', async () => {
+    it('does not authorize service configuration through a retired descriptor lifetime', async () => {
         const mode: PluginConnectedAccountAuthenticationModeV2 = { ...configuredMode, configuration: { ...configuredMode.configuration!, scope: 'service' } };
         const target = { kind: 'service' as const, service, modeId: 'oauth' };
         installDescription({ ...described, descriptor: { ...described.descriptor, authentication: { defaultModeId: 'oauth', modes: [mode] } },
             accounts: [{ ref: { service, accountId: 'account-1' }, status: 'connected', authenticationModeId: 'oauth',
                 revisionSemantics: 'revisioned', credentialRevision, configurationReady: true, configurationRevision: null, scopes: [] }],
         });
+        const lifetime = captureActiveServerAccountScopeLifetime();
+        if (!lifetime) throw new Error('Missing descriptor Account lifetime');
+        const projection = { scopeKey: lifetime.scope.serverId, status: 'ready' as const, conflicts: [], errorReason: null,
+            descriptors: [{ id: service.localId, serviceId: 'acme-work', pluginId: service.pluginId, title: 'Acme Work',
+                provenance: 'external' as const, sourceKind: 'installed' as const, authentication: description.descriptor.authentication,
+                capabilities: [], availability: { state: 'available' as const, reason: 'resolved' }, diagnostics: [] }] };
+        installConnectedAccountDescriptorProjection(projection, lifetime);
+        expect(getAccountConnectedServiceConfigurationMode(target, lifetime.scope)).toEqual(mode);
+        retireConnectedAccountDescriptorProjection(lifetime);
+        // The AppShell may retain presentation facts, but it has not admitted them
+        // under the new descriptor lifecycle. They are not configuration authority.
+        installConnectedAccountDescriptorProjection(projection);
+        storage.getState().applySettings({ ...storage.getState().settings,
+            actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1,
+                approvalWaivedSurfaces: { 'connectedServices.configuration.replace': ['ui'] } }),
+        }, 2);
         handleControl = (command) => command.operation === 'readConfiguration'
             ? { ...configurationReply, target, mode, occurrenceId: 'retired-occurrence', configuration: { ...configurationReply.configuration, status: 'ready' } }
             : command.operation === 'listPendingAttempts' ? { status: 'pendingAttempts', attempts: [] } : description;
@@ -1064,7 +1207,21 @@ describe('ConnectedAccountSetupController real ownership', () => {
         await vi.waitFor(() => expect(screen.findHostByTestId('connected-service-configuration-settings:oauth')).not.toBeNull());
         // Canonical text boundary emits keys: this is the displayed blocked state, not copy wording.
         expect(JSON.stringify(screen.tree.toJSON())).toContain('common.blocked');
-        expect(controlCommands).toContainEqual({ operation: 'readConfiguration', target });
+        // Service configuration belongs to the Account catalog. A descriptor without
+        // its current Account lifetime cannot authorize a native read as a fallback.
+        expect(controlCommands.filter(command => command.operation === 'readConfiguration')).toEqual([]);
+        const context = { surface: 'ui' as const, authority: 'present_user' as const,
+            serverId: lifetime.scope.serverId, expectedAccountId: lifetime.scope.accountId };
+        for (const [actionId, input] of [
+            ['connectedServices.configuration.get', { service, modeId: mode.id }],
+            ['connectedServices.configuration.replace', { service, modeId: mode.id, expectedRevision: 'config-1',
+                values: { endpoint: 'https://unadmitted.example' }, secretValues: {} }],
+        ] as const) {
+            expect(await createDefaultActionExecutor().execute(actionId, input, context))
+                .toMatchObject({ ok: false, errorCode: 'connected_account_configuration_target_unavailable' });
+        }
+        expect(httpRequests.filter(request => request.pathname === `${CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1}/configurations`)).toEqual([]);
+        expect(controlCommands.filter(command => command.operation === 'replaceConfiguration')).toEqual([]);
         expect(authenticationCommands).toEqual([]);
     });
 
@@ -1074,7 +1231,7 @@ describe('ConnectedAccountSetupController real ownership', () => {
         const credentialKind = peerClass === 'exact_v0_2_1' ? 'oauth' : 'token';
         const modeId = compatibility.authenticationModeByCredentialKind[credentialKind]!;
         const mode: PluginConnectedAccountAuthenticationModeV2 = credentialKind === 'oauth'
-            ? { id: modeId, kind: 'oauthAuthorizationCode', pkce: 'required', outcomeReconciliation: 'providerCheck' }
+            ? { id: modeId, kind: 'oauthAuthorizationCode', callbackUrl: 'http://127.0.0.1:4000/auth/callback', pkce: 'required', outcomeReconciliation: 'providerCheck' }
             : { id: modeId, kind: 'manual', outcomeReconciliation: 'none', fields: authentication.modes[0].fields };
         installDescription({ ...described, service: compatibility.service,
             descriptor: { id: compatibility.service.localId, title: 'Legacy service', authentication: {
@@ -1227,14 +1384,13 @@ describe('ConnectedAccountSetupController real ownership', () => {
             });
             socket.timeout = vi.fn(() => socket);
         });
+        handleMachineRead = async () => {
+            transportAwaiting = true;
+            await machineResponse;
+            return Response.json({ machine: createPlainMachineRowFixture({ id: machineId, accountId: 'account-a' }) });
+        };
         handleHttp = async rawUrl => {
             const url = new URL(String(rawUrl));
-            if (url.pathname === `/v1/machines/${machineId}`) {
-                transportAwaiting = true;
-                await machineResponse;
-                return Response.json({ machine: { id: machineId, kind: 'persistent', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
-                    metadataVersion: 1, daemonStateVersion: 1 } });
-            }
             if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
             if (url.pathname === '/v1/features' || url.pathname === '/v1/features/authenticated') return Response.json(createRootLayoutFeaturesResponse());
             return Response.json({ error: 'not_found' }, { status: 404 });
@@ -1300,10 +1456,13 @@ describe('ConnectedAccountSetupController real ownership', () => {
         const changedReferenceWrites = purposeBoundary!.rowWrites.filter(record =>
             JSON.stringify(record.value.bindings) !== JSON.stringify(bindings));
         if (outcome === 'revoked') {
-            expect(changedReferenceWrites).not.toEqual([]);
+            await vi.waitFor(() => expect(purposeBoundary!.readBindings()).toEqual(bindings.slice(2)));
+            const settledReferenceWrites = purposeBoundary!.rowWrites.filter(record =>
+                JSON.stringify(record.value.bindings) !== JSON.stringify(bindings));
+            expect(settledReferenceWrites).not.toEqual([]);
             // A later normalization can acknowledge the same projection again;
             // every changed projection must preserve the unrelated credential.
-            for (const write of changedReferenceWrites) {
+            for (const write of settledReferenceWrites) {
                 expect(write.value.bindings).toEqual(bindings.slice(2));
             }
         } else {
@@ -1319,6 +1478,31 @@ describe('ConnectedAccountSetupController real ownership', () => {
             .toEqual(outcome === 'revoked' ? bindings.slice(2) : bindings));
     });
 
+    it('opens Account pool detail without choosing a machine', async () => {
+        const group = QualifiedConnectedAccountGroupV4Schema.parse({ v: 1,
+            ref: { service, groupId: 'work-pool' }, incarnation: 'pool-life', displayName: 'Work pool',
+            policy: {}, activeConnectedAccountId: null, generation: 1, runtimeStateRevision: 0,
+            state: {}, createdAt: 0, updatedAt: 0, members: [] });
+        resetServerFeaturesClientForTests();
+        primeServerFeaturesSnapshot({ snapshot: { status: 'ready', features: createRootLayoutFeaturesResponse({
+            features: { connectedServices: { enabled: true, accountGroups: { enabled: true } } },
+            capabilities: { connectedServices: { qualifiedAccounts: { protocolVersion: 4 }, credentialDelete: { revisionGuard: false } } },
+        }) } });
+        handleHttp = async (url) => {
+            const path = new URL(String(url)).pathname;
+            if (path === '/v4/connect/qualified/groups') return Response.json({ groups: [group] });
+            if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+            return new Response('{}', { status: 404 });
+        };
+        storage.getState().applyMachines([], true, { sourceServerId: getActiveServerSnapshot().serverId });
+        machineRows = [];
+        platform.params = { ...service, groupId: group.ref.groupId };
+        const screen = await renderScreen(<InjectedAuthProvider credentials={account.credentials}><ConnectedAccountServiceView /></InjectedAuthProvider>);
+        await vi.waitFor(() => expect(screen.findHostByTestId('connected-services-pool-detail:delete')).not.toBeNull());
+        expect(authenticationCommands).toEqual([]);
+        expect(controlCommands).toEqual([]);
+    });
+
     it.each(['cancelled', 'deleted', 'failed'] as const)('clears exact pool purpose defaults only after confirmed successful deletion (%s)', async (outcome) => {
         const group = QualifiedConnectedAccountGroupV4Schema.parse({ v: 1,
             ref: { service, groupId: 'work-pool' }, incarnation: 'pool-life', displayName: 'Work pool',
@@ -1330,6 +1514,7 @@ describe('ConnectedAccountSetupController real ownership', () => {
         resetServerFeaturesClientForTests();
         primeServerFeaturesSnapshot({ snapshot: { status: 'ready', features: createRootLayoutFeaturesResponse({
             features: { connectedServices: { enabled: true, accountGroups: { enabled: true } } },
+            capabilities: { connectedServices: { qualifiedAccounts: { protocolVersion: 4 }, credentialDelete: { revisionGuard: false } } },
         }) } });
         const deletedRequests: URL[] = [];
         let groupDeleted = false;

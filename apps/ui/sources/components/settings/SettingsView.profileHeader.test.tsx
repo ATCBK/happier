@@ -1,9 +1,8 @@
 import * as React from 'react';
-import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { act } from 'react-test-renderer';
-import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { flushHookEffects, renderSettingsView } from '@/dev/testkit';
+import { renderSettingsView } from '@/dev/testkit';
 import { installSettingsViewCommonModuleMocks } from './settingsViewTestHelpers';
 import { profileDefaults, type Profile } from '@/sync/domains/profiles/profile';
 
@@ -11,6 +10,10 @@ const tauriDesktopState = vi.hoisted(() => ({ value: true }));
 const profileState = vi.hoisted(() => ({ value: null as Profile | null }));
 const machinesState = vi.hoisted(() => ({ value: [] as unknown[] }));
 const routerPush = vi.hoisted(() => ({ spy: null as null | ((route: unknown) => void) }));
+const navigationState = vi.hoisted(() => ({
+    focused: true,
+    headerRight: null as null | (() => React.ReactNode),
+}));
 // The chosen account service and this device's stored sign-in for it (secure storage).
 const accountServiceState = vi.hoisted(() => ({
     mutationListeners: new Set<() => void>(),
@@ -39,6 +42,11 @@ installSettingsViewCommonModuleMocks({
     router: async () => {
         const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
         return createExpoRouterMock({
+            navigation: {
+                setOptions: (options: { headerRight?: () => React.ReactNode }) => {
+                    if ('headerRight' in options) navigationState.headerRight = options.headerRight ?? null;
+                },
+            },
             router: {
                 push: (route: unknown) => routerPush.spy?.(route),
                 replace: vi.fn(),
@@ -95,22 +103,14 @@ vi.mock('@/hooks/session/useConnectTerminal', () => ({
 vi.mock('expo-image', () => ({
     Image: 'Image',
 }));
+vi.mock('@/components/ui/popover', async (importOriginal) =>
+    (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(importOriginal));
 
-// Navigation focus: the test decides when the Settings home regains focus.
-const focusState = vi.hoisted(() => ({ callbacks: new Set<() => void>() }));
 vi.mock('@react-navigation/native', async () => {
-    const React = await import('react');
     const { createReactNavigationNativeMock } = await import('@/dev/testkit/mocks/reactNavigation');
     return {
         ...createReactNavigationNativeMock(),
-        useFocusEffect: (callback: () => void | (() => void)) => {
-            React.useEffect(() => {
-                const run = () => { callback(); };
-                focusState.callbacks.add(run);
-                run();
-                return () => { focusState.callbacks.delete(run); };
-            }, [callback]);
-        },
+        useIsFocused: () => navigationState.focused,
     };
 });
 
@@ -195,14 +195,22 @@ vi.mock('@/auth/accountDirectory/accountDirectoryCredentialStorage', () => ({
     },
 }));
 
-describe('SettingsView profile header', () => {
-    // Load the module graph once, outside any single test's time budget.
-    beforeAll(async () => {
-        await import('./SettingsView');
-    }, 180_000);
+const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+await import('./SettingsView');
+const { NavigationContext } = await import('@react-navigation/native');
+// The canonical navigator boundary supplies a method bag instead of the native SDK's full route state.
+const NavigationFixtureContext = NavigationContext as unknown as React.Context<Readonly<Record<string, unknown>>>;
+function NavigationFixture({ children }: React.PropsWithChildren) {
+    const focused = navigationState.focused;
+    const fixtureNavigation = React.useMemo(() => ({ focused }), [focused]);
+    return <NavigationFixtureContext.Provider value={fixtureNavigation}>{children}</NavigationFixtureContext.Provider>;
+}
 
+describe('SettingsView profile header', () => {
     beforeEach(() => {
-        profileState.value = { ...profileDefaults, id: 'prof_1', firstName: 'Lee' };
+        navigationState.focused = true;
+        navigationState.headerRight = null;
+        profileState.value = { ...profileDefaults, id: 'prof_1', name: 'Lee' };
     });
 
     it('renders when the profile has a display name', async () => {
@@ -215,12 +223,13 @@ describe('SettingsView profile header', () => {
 
     it.each([
         { username: 'lee', expectedName: 'lee' },
-        { lastName: 'Lee', expectedName: 'Lee' },
+        { name: 'Lee', expectedName: 'Lee' },
         {
             linkedProviders: [{ id: 'github', login: 'lee-code', displayName: 'Lee Code', avatarUrl: 'https://example.test/lee.png', profileUrl: null, showOnProfile: true }],
+            name: 'Lee Code',
             expectedName: 'Lee Code',
         },
-    ])('shows the resolved profile identity without a first name: $expectedName', async ({ expectedName, ...profile }) => {
+    ])('shows the canonical Account name or username: $expectedName', async ({ expectedName, ...profile }) => {
         profileState.value = { ...profileDefaults, id: 'prof_1', ...profile };
         const { SettingsView } = await import('./SettingsView');
         const screen = await renderSettingsView(<InjectedAuthProvider credentials={null}><SettingsView /></InjectedAuthProvider>);
@@ -242,16 +251,6 @@ describe('SettingsView profile header', () => {
         machinesState.value = [];
     });
 
-    it('composes the lighter hub on a wide window: each machine as its own row, not summary rows', async () => {
-        machinesState.value = [{ id: 'm1', active: true, activeAt: Date.now(), metadata: { host: 'devbox', displayName: 'devbox' } }];
-        const { SettingsView } = await import('./SettingsView');
-        const screen = await renderSettingsView(<InjectedAuthProvider credentials={null}><SettingsView /></InjectedAuthProvider>);
-
-        expect(screen.findByTestId('hub-machines.m1')).toBeTruthy();
-        expect(screen.findByTestId('hub-summary.machines')).toBeNull();
-        machinesState.value = [];
-    });
-
     it('names an Account without a name "Your account", with its avatar, on a phone too', async () => {
         profileState.value = { ...profileDefaults, id: 'prof_1' };
         const [{ SettingsView }, { NavigationTitleChromeProvider }] = await Promise.all([
@@ -264,7 +263,10 @@ describe('SettingsView profile header', () => {
 
         expect(phone.findAllByType('Avatar')).toHaveLength(1);
         expect(phone.findAllByType('Text').some((node) => node.props.children === 'accountDisplay.yours')).toBe(true);
-        expect(phone.findByTestId('settings-overview-account')).toBeTruthy();
+        expect(navigationState.headerRight).toEqual(expect.any(Function));
+        const header = await renderSettingsView(<>{navigationState.headerRight?.()}</>);
+        await header.pressByTestIdAsync('page-header-actions.trigger');
+        await vi.waitFor(() => expect(header.findByTestId('settings-overview-account')).toBeTruthy());
     });
 
     it('says where the person stands with the Home\'s account service, as the account popover does', async () => {
@@ -283,7 +285,7 @@ describe('SettingsView profile header', () => {
     it('follows a sign-out while mounted, and re-reads the sign-in on focus', async () => {
         accountServiceState.storedCredential = { token: 't' };
         const { SettingsView } = await import('./SettingsView');
-        const screen = await renderSettingsView(<InjectedAuthProvider credentials={null}><SettingsView /></InjectedAuthProvider>);
+        const screen = await renderSettingsView(<InjectedAuthProvider credentials={null}><SettingsView /></InjectedAuthProvider>, { wrapper: NavigationFixture });
         await vi.waitFor(() => expect(screen.getTextContent()).toContain('settingsOverview.accountServiceSignedIn'));
 
         // Signed out from the Account page while the Settings home stayed mounted beneath it.
@@ -293,7 +295,10 @@ describe('SettingsView profile header', () => {
 
         // Signed in elsewhere (no write this device observed): coming back to the page re-reads.
         accountServiceState.storedCredential = { token: 't2' };
-        await act(async () => { for (const callback of focusState.callbacks) callback(); });
+        navigationState.focused = false;
+        await screen.update(<InjectedAuthProvider credentials={null}><SettingsView /></InjectedAuthProvider>);
+        navigationState.focused = true;
+        await screen.update(<InjectedAuthProvider credentials={null}><SettingsView /></InjectedAuthProvider>);
         await vi.waitFor(() => expect(screen.getTextContent()).toContain('settingsOverview.accountServiceSignedIn'));
     });
     it('says sign-in status is unavailable, as the popover does, while the Home does not answer', async () => {

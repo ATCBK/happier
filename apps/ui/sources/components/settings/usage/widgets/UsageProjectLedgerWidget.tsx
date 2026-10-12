@@ -31,10 +31,10 @@ import {
   UsageWorkSectionTitle,
   UsageWorkSessionRows,
   usageWorkBranchName,
-  usageWorkProviderUnknownLine,
   usageWorkPullRequestState,
   usageWorkPullRequestTitle,
   usageWorkShortCommit,
+  usageWorkRetainedChangeLine,
   useUsageWorkDisclosures,
 } from './UsageWorkParts';
 
@@ -54,7 +54,7 @@ export function UsageProjectLedgerWidget(props: UsageBodyProps) {
   const { theme: appTheme } = useUnistyles();
   const presentation = useWidgetPresentation();
   const rowMetrics = usePageRowMetrics('list');
-  const { summary, format, projectLabel, sessionLabel, openSession } = useUsageWork(
+  const { summary, format, cell, projectLabel, sessionLabel, openSession } = useUsageWork(
     props.slice,
     props.query,
     props.serverId,
@@ -109,11 +109,13 @@ export function UsageProjectLedgerWidget(props: UsageBodyProps) {
     (reason) =>
       summary.unallocatedByReason[reason] === null || (summary.unallocatedByReason[reason] ?? 0) > 0,
   );
+  const noneLinked = summary.allocated === 0 && summary.total !== null && summary.total > 0;
   const sessionRows = (parts: UsageWorkProjectRow['sessions'], testID: string) => (
     <UsageWorkSessionRows
       parts={parts}
       summary={summary}
       format={format}
+      cell={cell}
       sessionLabel={sessionLabel}
       openSession={openSession}
       serverId={props.serverId}
@@ -122,14 +124,15 @@ export function UsageProjectLedgerWidget(props: UsageBodyProps) {
   );
   const branchCells = (row: UsageWorkBranchRow, withProject: boolean) => [
     usageWorkBranchName(row.branch.branch.ref),
-    row.amount ?? format(null),
+    cell(row.amount, row.moneyBasis),
     withProject ? row.projectKeys.map(projectLabel).join(', ') : '',
     sessionsLine(row.sessions.length),
     row.perSession === null || row.sessions.length < 2
       ? ''
-      : t('usage.board.work.perSession', { amount: format(row.perSession) }),
+      : t('usage.board.work.perSession', { amount: format(row.perSession, row.moneyBasis) }),
     `${t('usage.board.work.commit')} ${usageWorkShortCommit(row.branch.branch.headSha)}`,
-    usageWorkProviderUnknownLine(row),
+    usageWorkRetainedChangeLine(row.retainedChanges),
+    row.linkedPullRequests.map(usageWorkPullRequestTitle).join(' · ') || t('usage.board.work.noOutcome'),
   ];
   const branchColumns = [
     { label: t('usage.board.work.branches') },
@@ -138,7 +141,8 @@ export function UsageProjectLedgerWidget(props: UsageBodyProps) {
     { label: t('usage.board.work.funnelSessions') },
     { label: metricLabel },
     { label: t('usage.board.work.commit') },
-    { label: t('usage.board.work.provider') },
+    { label: t('usage.board.work.linesKept') },
+    { label: t('usage.board.work.linkedPrs') },
   ];
   const projectDetail = (row: UsageWorkProjectRow, testID: string) => (
     <>
@@ -195,7 +199,7 @@ export function UsageProjectLedgerWidget(props: UsageBodyProps) {
             ]}
             rows={row.outcomes.map((outcome) => [
               usageWorkPullRequestTitle(outcome.outcome.pullRequest),
-              outcome.amount ?? format(null),
+              cell(outcome.amount, outcome.moneyBasis),
               t('usage.board.work.prLine', {
                 sessions: outcome.sessions.length,
                 state: usageWorkPullRequestState(outcome.outcome.pullRequest),
@@ -206,7 +210,8 @@ export function UsageProjectLedgerWidget(props: UsageBodyProps) {
       ) : null}
       {row.branches.length > 0 ? (
         <View style={styles.group}>
-          <UsageWorkSectionTitle quiet>{t('usage.board.work.branches')}</UsageWorkSectionTitle>
+          <UsageWorkSectionTitle quiet caption={row.branches.some(branch => branch.retainedChanges.length > 0)
+            ? t('usage.board.work.linesKeptMethod') : undefined}>{t('usage.board.work.branches')}</UsageWorkSectionTitle>
           <HappierDataRows
             theme={theme}
             label={t('usage.board.work.branches')}
@@ -268,21 +273,19 @@ export function UsageProjectLedgerWidget(props: UsageBodyProps) {
           { label: metricLabel, proportion: true },
           { label: t('usage.board.work.funnelSessions') },
           { label: t('usage.board.work.notLinked') },
-          { label: t('usage.board.work.provider') },
         ]}
         rows={summary.projects.map((row) => [
           projectLabel(row.projectKey),
-          row.amount ?? format(null),
+          cell(row.amount, row.moneyBasis),
           t('usage.board.work.ledgerRowLine', {
             sessions: row.sessionIds.length,
             prs: row.outcomes.length,
           }),
           row.unallocated === null || row.unallocated > 0
             ? t('usage.board.work.notLinkedPart', {
-                amount: format(row.unallocated),
+                amount: format(row.unallocated, row.unallocatedBasis),
               })
             : '',
-          usageWorkProviderUnknownLine(row),
         ])}
         renderRow={(_cells, visual, index) => {
           const row = summary.projects[index]!;
@@ -303,7 +306,8 @@ export function UsageProjectLedgerWidget(props: UsageBodyProps) {
       />
       {summary.branches.length > 0 ? (
         <View style={styles.section}>
-          <UsageWorkSectionTitle>{t('usage.board.work.branches')}</UsageWorkSectionTitle>
+          <UsageWorkSectionTitle caption={summary.branches.some(branch => branch.retainedChanges.length > 0)
+            ? t('usage.board.work.linesKeptMethod') : undefined}>{t('usage.board.work.branches')}</UsageWorkSectionTitle>
           <HappierDataRows
             theme={theme}
             label={t('usage.board.work.branches')}
@@ -377,37 +381,55 @@ export function UsageProjectLedgerWidget(props: UsageBodyProps) {
         accessibilityLabel={[
           `${t('usage.board.work.allProjects')}: ${format(summary.total)}`,
           t('usage.board.work.conservation', {
-            allocated: format(summary.allocated),
-            unallocated: format(summary.unallocated),
+            allocated: format(summary.allocated, summary.allocatedBasis),
+            unallocated: format(summary.unallocated, summary.unallocatedBasis),
           }),
           ...reasons.map(
             (reason) =>
-              `${format(summary.unallocatedByReason[reason])} ${t(`usage.board.work.reason_${reason}`)}`,
+              `${format(summary.unallocatedByReason[reason], summary.unallocatedReasonBases[reason])} ${t(`usage.board.work.reason_${reason}`)}`,
           ),
         ].join(', ')}
       >
-        <View style={styles.line}>
-          <Text style={[styles.totalLabel, title]}>{t('usage.board.work.allProjects')}</Text>
-          <Text style={[styles.totalValue, title]}>{format(summary.total)}</Text>
-        </View>
-        <View style={styles.line}>
-          <Text style={[styles.partLabel, caption]}>{t('usage.board.work.linkedToPrs')}</Text>
-          <Text style={[styles.partValue, caption]}>{format(summary.allocated)}</Text>
-        </View>
-        <View style={styles.line}>
-          <Text style={[styles.partLabel, caption]}>{t('usage.board.work.notLinked')}</Text>
-          <Text style={[styles.partValue, caption]}>{format(summary.unallocated)}</Text>
-        </View>
-        {reasons.map((reason) => (
-          <View key={reason} style={[styles.line, styles.reason]}>
+        {/* Nothing linked: every part would repeat the total, so the total is said once with one
+            sentence (and its single reason, when there is one). A single project row already shows it. */}
+        {noneLinked ? (
+          <>
+            {summary.projects.length > 1 ? (
+              <View style={styles.line}>
+                <Text style={[styles.totalLabel, title]}>{t('usage.board.work.allProjects')}</Text>
+                <Text style={[styles.totalValue, title]}>{format(summary.total)}</Text>
+              </View>
+            ) : null}
             <Text style={[styles.reasonLabel, caption]}>
-              {t(`usage.board.work.reason_${reason}`)}
+              {[t('usage.board.work.noneLinked'), ...(reasons.length === 1 ? [t(`usage.board.work.reason_${reasons[0]}`)] : [])].join(' · ')}
             </Text>
-            <Text style={[styles.reasonValue, caption]}>
-              {format(summary.unallocatedByReason[reason])}
-            </Text>
-          </View>
-        ))}
+          </>
+        ) : (
+          <>
+            <View style={styles.line}>
+              <Text style={[styles.totalLabel, title]}>{t('usage.board.work.allProjects')}</Text>
+              <Text style={[styles.totalValue, title]}>{format(summary.total)}</Text>
+            </View>
+            <View style={styles.line}>
+              <Text style={[styles.partLabel, caption]}>{t('usage.board.work.linkedToPrs')}</Text>
+              <Text style={[styles.partValue, caption]}>{format(summary.allocated, summary.allocatedBasis)}</Text>
+            </View>
+            <View style={styles.line}>
+              <Text style={[styles.partLabel, caption]}>{t('usage.board.work.notLinked')}</Text>
+              <Text style={[styles.partValue, caption]}>{format(summary.unallocated, summary.unallocatedBasis)}</Text>
+            </View>
+            {reasons.map((reason) => (
+              <View key={reason} style={[styles.line, styles.reason]}>
+                <Text style={[styles.reasonLabel, caption]}>
+                  {t(`usage.board.work.reason_${reason}`)}
+                </Text>
+                <Text style={[styles.reasonValue, caption]}>
+                  {format(summary.unallocatedByReason[reason], summary.unallocatedReasonBases[reason])}
+                </Text>
+              </View>
+            ))}
+          </>
+        )}
       </View>
       {summary.missingMoneyCount > 0 ? (
         <Text style={[styles.reasonLabel, caption]} testID={`${props.testID}.unpriced`}>
@@ -428,21 +450,21 @@ export function UsageProjectLedgerWidget(props: UsageBodyProps) {
 const styles = StyleSheet.create((theme) => ({
   body: { gap: 14, minWidth: 0 },
   section: {
-    gap: 10,
+    gap: theme.space.s10,
     paddingTop: 14,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: theme.colors.border.default,
   },
-  group: { gap: 6, minWidth: 0 },
-  filter: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', gap: 6, minHeight: 32 },
+  group: { gap: theme.space.s6, minWidth: 0 },
+  filter: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', gap: theme.space.s6, minHeight: 32 },
   filterLabel: { ...Typography.default('semiBold'), color: theme.colors.text.secondary },
   commits: {
     ...Typography.mono(),
     color: theme.colors.text.secondary,
   },
   conservation: {
-    gap: 4,
-    paddingTop: 12,
+    gap: theme.space.s4,
+    paddingTop: theme.space.s12,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: theme.colors.border.default,
   },
@@ -450,9 +472,9 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: 'row',
     alignItems: 'baseline',
     justifyContent: 'space-between',
-    gap: 12,
+    gap: theme.space.s12,
   },
-  reason: { paddingLeft: 12 },
+  reason: { paddingLeft: theme.space.s12 },
   totalLabel: { ...Typography.default('semiBold'), color: theme.colors.text.primary },
   totalValue: {
     ...Typography.default('semiBold'),

@@ -1,4 +1,6 @@
 import * as React from 'react';
+import { SettingAnchor } from '@/components/settings/shell/SettingRow';
+import { AGENT_SETTINGS } from '../agentsSettings';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
@@ -78,7 +80,7 @@ export const AgentDetailHeader = React.memo(function AgentDetailHeader(props: Re
             actions={enabled || (props.menuActions?.length ?? 0) > 0 ? (
                 <View style={styles.actions}>
                     {enabled ? (
-                        <PageHeaderStateSwitch
+                        <SettingAnchor setting={AGENT_SETTINGS.settings.enabled}><PageHeaderStateSwitch
                             testID="settings.agents.detail.enabled"
                             label={t('settingsAgents.enabledTitle')}
                             value={enabled.value ?? undefined}
@@ -87,7 +89,7 @@ export const AgentDetailHeader = React.memo(function AgentDetailHeader(props: Re
                             accessibilityHint={enabled.disabled
                                 ? t('connectedServices.accountScopeMismatchDescription')
                                 : t('settingsAgents.enabledSubtitle')}
-                        />
+                        /></SettingAnchor>
                     ) : null}
                     {props.menuActions && props.menuActions.length > 0 ? (
                         <PageHeaderMenu actions={props.menuActions} triggerTestID="settings.agents.detail.menu" />

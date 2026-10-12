@@ -34,6 +34,7 @@ import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 import { ApprovalRequestV2Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { readApprovalExecutionFailure } from '@happier-dev/protocol/approvals/approvalExecutionFailure';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelpers';
 
@@ -59,7 +60,7 @@ vi.mock('@/components/ui/accessibility/announceAccessibilityMessage', () => ({
 }));
 
 installSettingsViewCommonModuleMocks({
-    storage: async importOriginal => await importOriginal(),
+    storage: 'real',
     router: async () => {
         const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
         return createExpoRouterMock({ router: { push: vi.fn(), back: routerBack }, navigation: { setOptions: vi.fn() } }).module;
@@ -81,6 +82,14 @@ installSettingsViewCommonModuleMocks({
 
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
+
+// Load the real owner after transport setup, outside an individual test's deadline.
+await loadSyncSingletonForTests();
+const [{ HomeAdministrationAccountScreen }, { resetHomeGovernanceEngineForTests }, { ConcurrentSessionCacheRuntime }] = await Promise.all([
+    import('./HomeAdministrationAccountScreen'),
+    import('@/sync/engine/home/governance/homeGovernanceEngine'),
+    import('@/auth/context/AuthContext'),
+]);
 
 const GOVERNANCE_PATH = '/v1/home/governance/get';
 const LIST_PATH = '/v1/home/accounts/list';
@@ -113,12 +122,9 @@ function disabledAccountRow() {
 }
 
 async function renderAccount(serverId: string, accountId = 'ada', observeHomes = false) {
-    const { HomeAdministrationAccountScreen } = await import('./HomeAdministrationAccountScreen');
-    const { resetHomeGovernanceEngineForTests } = await import('@/sync/engine/home/governance/homeGovernanceEngine');
     resetHomeGovernanceEngineForTests();
     let content = <HomeAdministrationAccountScreen serverId={serverId} accountId={accountId} />;
     if (observeHomes) {
-        const { ConcurrentSessionCacheRuntime } = await import('@/auth/context/AuthContext');
         content = <ConcurrentSessionCacheRuntime>{content}</ConcurrentSessionCacheRuntime>;
     }
     const screen = await renderScreen(content);
@@ -129,8 +135,6 @@ async function renderAccount(serverId: string, accountId = 'ada', observeHomes =
 }
 
 async function renderAccountLookup(serverId: string, accountId = 'ada') {
-    const { HomeAdministrationAccountScreen } = await import('./HomeAdministrationAccountScreen');
-    const { resetHomeGovernanceEngineForTests } = await import('@/sync/engine/home/governance/homeGovernanceEngine');
     resetHomeGovernanceEngineForTests();
     return renderScreen(
         <HomeAdministrationAccountScreen serverId={serverId} accountId={accountId} />,

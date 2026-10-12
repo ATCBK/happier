@@ -1,4 +1,5 @@
 import type { AccountDirectoryCapabilities } from '@happier-dev/protocol';
+import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
 import { accountDirectoryCredentialStorage } from '@/auth/accountDirectory/accountDirectoryCredentialStorage';
 import { probeServerFeaturesAtUrl } from '@/sync/api/capabilities/serverFeaturesClient';
 import { createAccountDirectorySession, parseAccountDirectoryCapability } from '@/sync/domains/accountDirectory/accountDirectorySession';
@@ -40,21 +41,24 @@ export async function createPersonalHomeRelocationTaskContinuation(input: Readon
         ? await resolveRelocationDirectoryPublication(getAccountServiceEndpointSnapshot()) : input.directoryPublication;
     const respond = publication
         ? createPersonalHomeRelocationPromptResponder({
-            operationId: input.operationId, homeServerIdentityId: input.profile.serverIdentityId, homeLabel: input.profile.name,
+            operationId: input.operationId, homeServerIdentityId: input.profile.serverIdentityId, homeLabel: resolveHomeDisplayLabel(input.profile, input.profile.id),
             session: createAccountDirectorySession({ endpoint: publication.endpoint, serverIdentityId: publication.serverIdentityId },
                 { capability: publication.capability }),
         })
         : createPersonalHomeRelocationPromptResponderWithPublication({
-            operationId: input.operationId, homeServerIdentityId: input.profile.serverIdentityId, homeLabel: input.profile.name,
+            operationId: input.operationId, homeServerIdentityId: input.profile.serverIdentityId, homeLabel: resolveHomeDisplayLabel(input.profile, input.profile.id),
             publication: createPersonalHomeRelocationProfilePublication(input.profile),
         });
     return bindPersonalHomeRelocationTaskContinuation(respond);
 }
 
-export function bindPersonalHomeRelocationTaskContinuation(respond: SystemTaskPromptContinuation): SystemTaskPromptContinuation {
+export function bindPersonalHomeRelocationTaskContinuation(
+    respond: SystemTaskPromptContinuation,
+    fallback?: SystemTaskPromptContinuation,
+): SystemTaskPromptContinuation {
     return async prompt => {
         if (prompt.kind !== 'personal_home.publish_relocation_descriptor.v1'
-            && prompt.kind !== 'personal_home.read_relocation_descriptor.v1') return undefined;
+            && prompt.kind !== 'personal_home.read_relocation_descriptor.v1') return fallback?.(prompt);
         try {
             return await respond(prompt);
         } catch {

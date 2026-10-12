@@ -57,7 +57,7 @@ import {
 } from '../governance/useHomeSettingsWrite';
 import {
   homeSignInPlatformFieldTitle,
-  homeSignInPlatformIcon,
+  homeSignInPlatformMark,
   homeSignInPlatformKeyNeed,
   homeSignInPlatformSummary,
   homeSignInPlatformTitle,
@@ -487,7 +487,7 @@ const SignInPlatformRow = React.memo(function SignInPlatformRow(
           <Item
             testID={`${testID}.header`}
             {...headerState.headerProps}
-            icon={<Icon name={homeSignInPlatformIcon(platform.id)} />}
+            icon={homeSignInPlatformMark(platform.id)}
             title={homeSignInPlatformTitle(platform.id)}
             subtitle={summary}
             subtitleLeading={leading}

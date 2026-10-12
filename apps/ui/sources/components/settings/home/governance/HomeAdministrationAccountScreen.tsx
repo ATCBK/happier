@@ -13,11 +13,13 @@ import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { PageHeader } from '@/components/ui/layout/PageHeader';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { ItemLoadStateRows } from '@/components/ui/lists/ItemLoadStateRows';
 import { SectionActionButton } from '@/components/ui/lists/SectionActionButton';
 import { SectionButtonRow } from '@/components/ui/lists/SectionButtonRow';
-import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
+import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import { formatRelativeTimeShort } from '@/utils/time/formatShortRelativeTime';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { useHomeAccountDetail } from '@/hooks/home/useHomeAccountDetail';
 import { Modal } from '@/modal';
 import { resolveAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
@@ -296,32 +298,22 @@ const PersonDetail = React.memo(function PersonDetail(props: Readonly<{
 
             {actions.setRole.state === 'available' ? (
                 <ItemGroup title={t('homeGovernance.roleSheetTitle')}>
-                    <Item
+                    <SegmentedChoiceItem<HomeRoleV1>
                         testID="home-account-role"
                         title={t('homeGovernance.roleSheetTitle')}
                         subtitle={t('homeGovernance.person.roleDescription')}
                         subtitleLines={0}
-                        showChevron={false}
                         mode="info"
-                        accessoryLayout="adaptive"
-                        rightElement={(
-                            <SegmentedTabBar<HomeRoleV1>
-                                role="radiogroup"
-                                tabs={actions.assignableRoles.map((role) => ({
-                                    id: role,
-                                    label: homeRoleLabel(role),
-                                    disabled: busy || (role !== detail.homeRole
-                                        && detail.mutationCapabilities.setRole[role].status !== 'available'),
-                                }))}
-                                activeTabId={pendingAction?.kind === 'role' ? pendingAction.role : detail.homeRole}
-                                onSelectTab={changeRole}
-                                slidingThumb
-                                segmentSizing="content"
-                                disabled={busy}
-                                accessibilityLabel={t('homeGovernance.changeRole')}
-                                testIDPrefix="home-account-role"
-                            />
-                        )}
+                        options={actions.assignableRoles.map((role) => ({
+                            id: role,
+                            label: homeRoleLabel(role),
+                            disabled: busy || (role !== detail.homeRole
+                                && detail.mutationCapabilities.setRole[role].status !== 'available'),
+                        }))}
+                        value={pendingAction?.kind === 'role' ? pendingAction.role : detail.homeRole}
+                        onChange={changeRole}
+                        disabled={busy}
+                        testIDPrefix="home-account-role"
                     />
                 </ItemGroup>
             ) : actions.setRole.state === 'unavailable' ? (
@@ -365,7 +357,7 @@ const PersonDetail = React.memo(function PersonDetail(props: Readonly<{
 
             <ItemGroup title={t('homeGovernance.person.teams')}>
                 {detail.teams.length === 0 ? (
-                    <Item testID="home-account-teams-empty" title={t('homeGovernance.person.noTeams')} mode="info" showChevron={false} />
+                    <SurfaceStateCard testID="home-account-teams-empty" kind="empty" size="line" title={t('homeGovernance.person.noTeams')} />
                 ) : detail.teams.map((team) => (
                     <Item
                         key={team.teamId}
@@ -441,7 +433,7 @@ const PersonDetail = React.memo(function PersonDetail(props: Readonly<{
                 ) : undefined}
             >
                 {detail.recentEvents.length === 0 ? (
-                    <Item testID="home-account-activity-empty" title={t('homeGovernance.person.noRecentActivity')} mode="info" showChevron={false} />
+                    <SurfaceStateCard testID="home-account-activity-empty" kind="empty" size="line" title={t('homeGovernance.person.noRecentActivity')} />
                 ) : detail.recentEvents.map((event) => <HomeActivityRow key={event.id} event={event} now={now} viewerAccountId={context.scope.accountId} />)}
             </ItemGroup>
 
@@ -457,10 +449,13 @@ const PersonDetail = React.memo(function PersonDetail(props: Readonly<{
                     />
                 </ItemGroup>
             ) : (
-                <ItemGroup surface="none" description={t('homeGovernance.person.dangerFootnote')}>
+                <ItemGroup surface="none">
+                    {/* The consequence reads under the buttons it explains (lab `hcPeople-D`); a reason an
+                        action can't run replaces it. */}
                     <SectionButtonRow
                         footnote={accessActions.map(unavailableReason)
-                            .find((reason): reason is string => reason !== undefined) ?? null}
+                            .find((reason): reason is string => reason !== undefined)
+                            ?? t('homeGovernance.person.dangerFootnote')}
                         trailing={actions.delete.state === 'available' ? (
                             <RoundButton
                                 testID="home-account-delete"
@@ -541,46 +536,53 @@ const PersonLookup = React.memo(function PersonLookup(props: Readonly<{
 
     if (!canView) {
         return withHeader(
-            <ItemGroup description={t('homeGovernance.forbiddenBody')}>
-                <Item testID="home-admin-viewer-forbidden" title={t('homeGovernance.forbiddenTitle')} mode="info" showChevron={false} />
+            <ItemGroup>
+                <SurfaceStateCard testID="home-admin-viewer-forbidden" kind="denied" size="line"
+                    title={t('homeGovernance.forbiddenTitle')} reason={t('homeGovernance.forbiddenBody')} />
             </ItemGroup>,
         );
     }
 
     if (person.error) {
-        if (person.error.kind === 'forbidden' || person.error.kind === 'unauthorized') {
+        // The Home's resource-specific refusal is more precise than the
+        // transport's deliberately existence-concealing access classification.
+        if (person.error.code === 'home_account_not_found') {
             return withHeader(
-                <ItemGroup description={t('homeGovernance.forbiddenBody')}>
-                    <Item testID="home-account-forbidden" title={t('homeGovernance.forbiddenTitle')} mode="info" showChevron={false} />
+                <ItemGroup>
+                    <SurfaceStateCard testID="home-account-unavailable" kind="unavailable" size="line"
+                        title={t('homeGovernance.errorAccountNotFound')} reason={t('homeGovernance.accountUnavailableBody')} />
                 </ItemGroup>,
             );
         }
-        if (person.error.code === 'home_account_not_found') {
+        if (person.error.kind === 'forbidden' || person.error.kind === 'unauthorized') {
             return withHeader(
-                <ItemGroup description={t('homeGovernance.accountUnavailableBody')}>
-                    <Item testID="home-account-unavailable" title={t('homeGovernance.errorAccountNotFound')} mode="info" showChevron={false} />
+                <ItemGroup>
+                    <SurfaceStateCard testID="home-account-forbidden" kind="denied" size="line"
+                        title={t('homeGovernance.forbiddenTitle')} reason={t('homeGovernance.forbiddenBody')} />
                 </ItemGroup>,
             );
         }
         const unsupported = person.error.kind === 'unsupported';
         return withHeader(
-            <ItemGroup description={unsupported ? t('homeGovernance.rosterUnavailableBody') : t('homeGovernance.unavailableBody')}>
-                <Item
+            <ItemGroup>
+                <SurfaceStateCard
                     testID={unsupported ? 'home-account-unsupported' : 'home-account-error'}
+                    kind={unsupported ? 'unavailable' : 'error'}
+                    size="line"
                     title={unsupported ? t('homeGovernance.rosterUnavailableTitle') : t('homeGovernance.unavailableTitle')}
-                    mode="info"
-                    showChevron={false}
+                    reason={unsupported ? t('homeGovernance.rosterUnavailableBody') : t('homeGovernance.unavailableBody')}
+                    action={person.error.retryable
+                        ? { testID: 'home-account-retry', label: t('homeGovernance.retry'), onPress: person.reload }
+                        : undefined}
                 />
-                {person.error.retryable ? (
-                    <Item testID="home-account-retry" title={t('homeGovernance.retry')} onPress={person.reload} showChevron={false} />
-                ) : null}
             </ItemGroup>,
         );
     }
 
     return withHeader(
         <ItemGroup>
-            <Item testID="home-account-loading" title={t('homeGovernance.loading')} loading mode="info" showChevron={false} />
+            <ItemLoadStateRows testID="home-account-loading" state={{ kind: 'loading' }} rows={3}
+                accessibilityLabel={t('homeGovernance.loading')} />
         </ItemGroup>,
     );
 });

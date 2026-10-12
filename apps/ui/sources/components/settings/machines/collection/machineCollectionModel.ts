@@ -2,14 +2,16 @@ import type { ActiveSelectionMachineGroup } from '../hooks/useActiveSelectionMac
 import { describeMachinePresenceLine } from '@/utils/sessions/machinePresenceLine';
 import { describeMachineLockedReason, getMachineDisplayName, resolveMachineDisplayNameParts } from '@/utils/sessions/machineDisplayNames';
 import { formatOSPlatform } from '@/utils/sessions/sessionUtils';
-import { resolveHappierCollectionInitialKey } from '@happier-dev/plugin-ui/presentation';
 import { buildMachineOwnershipGroups, describeMachineSharedOwnership, describeMachineSharedGroupTitle } from '@/sync/domains/machines/machineOwnershipGroups';
 import { t } from '@/text';
 import type { ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
 import type { ManagedMachinePresetV1 } from '@happier-dev/protocol/machines/managed/managedMachinePresetV1';
 import { describeManagedCreation } from '../managed/managedCreationPresentation';
+import type { MachinesDoor } from '@/components/machines/page/machinesDoor';
+import { isMachineSubPageId } from '@/components/machines/page/machineSubPages';
+import { MACHINES_COLLECTION_ROOT, MACHINES_RAIL_ROOT, machinesIndexHref, machinePageHref } from '@/components/machines/page/machinePageHref';
+export { MACHINES_COLLECTION_ROOT, MACHINES_RAIL_ROOT, machinesIndexHref, machinePageHref, type MachinePageTarget } from '@/components/machines/page/machinePageHref';
 
-export const MACHINES_COLLECTION_ROOT = '/settings/machines';
 export const MACHINES_THIS_COMPUTER_ROUTE = '/settings/machines/this-computer';
 export const MACHINES_ADD_ROUTE = '/settings/machines/add';
 export const MACHINE_PRESETS_ROUTE = `${MACHINES_COLLECTION_ROOT}/presets`;
@@ -43,6 +45,8 @@ type MachineCollectionRowPresentation = Readonly<{
     /** Why this device cannot read the machine, when it is locked. */
     reason: string | null;
     ownership: string | null;
+    /** Whose machine it is, when someone shared it with you (their display name). */
+    ownerName: string | null;
 }>;
 
 export type MachineCollectionRow = MachineCollectionRowPresentation & (
@@ -86,6 +90,16 @@ export type MachineCollection = Readonly<{
     presetSections: readonly MachinePresetCollectionSection[];
 }>;
 
+/** Long rails fold offline rows within each ownership/Home section; short rails keep them inline. */
+export function partitionMachineCollectionRailRows(rows: readonly MachineCollectionRow[], foldOffline: boolean): Readonly<{
+    inline: readonly MachineCollectionRow[];
+    offline: readonly MachineCollectionRow[];
+}> {
+    const offline = foldOffline ? rows.filter(row => !row.online) : [];
+    if (offline.length === 0) return { inline: rows, offline: [] };
+    return { inline: rows.filter(row => row.online), offline };
+}
+
 /**
  * The machines of the Homes the app shows, as the collection lists them: one list for a single
  * Home, one section per Home otherwise (a Home without machines keeps its section and its status),
@@ -110,17 +124,23 @@ export function buildMachineCollection(input: Readonly<{
             .flatMap(machine => machine.archivedAt === undefined && machine.enrolledMachineId ? [[machine.enrolledMachineId, machine] as const] : []));
         const managedMachines = (input.managedByServerId?.[group.serverId] ?? [])
             .filter(machine => machine.archivedAt !== undefined || !machine.enrolledMachineId || !enrolledIds.has(machine.enrolledMachineId));
+        // Your machines, then the ones Happier created for you, then each Home member's shared machines (lab `R`);
+        // retired created machines close the list.
+        const ownership = buildMachineOwnershipGroups(group.machines).filter(ownershipGroup => managedMachines.length === 0 || ownershipGroup.machines.length > 0);
+        const created = (key: 'managed' | 'managedArchived') => managedMachines.some(machine =>
+            (machine.archivedAt !== undefined) === (key === 'managedArchived')) ? [{ key, custodian: null, machines: [] }] : [];
         const ownershipGroups = [
-            ...buildMachineOwnershipGroups(group.machines).filter(ownershipGroup => managedMachines.length === 0 || ownershipGroup.machines.length > 0),
-            ...(['managed', 'managedArchived'] as const).flatMap(key => managedMachines.some(machine =>
-                (machine.archivedAt !== undefined) === (key === 'managedArchived')) ? [{ key, custodian: null, machines: [] }] : []),
+            ...ownership.filter(ownershipGroup => !ownershipGroup.key.startsWith('shared:')),
+            ...created('managed'),
+            ...ownership.filter(ownershipGroup => ownershipGroup.key.startsWith('shared:')),
+            ...created('managedArchived'),
         ];
         return ownershipGroups.map((ownershipGroup) => {
             const rows = ownershipGroup.machines
                 .map((machine): MachineCollectionRow => {
                 const host = machine.metadata?.host?.trim() || null;
                 const name = getMachineDisplayName(machine) ?? machine.id;
-                const presence = describeMachinePresenceLine(machine, nowMs, managedByMachineId.get(machine.id));
+                const presence = describeMachinePresenceLine(machine, nowMs, managedByMachineId.get(machine.id), group.accountScope);
                 const titleParts = names.get(machine.id) ?? { name, hint: null };
                 return {
                     kind: 'machine',
@@ -134,6 +154,7 @@ export function buildMachineCollection(input: Readonly<{
                     presence: presence.label,
                     reason: describeMachineLockedReason(machine),
                     ownership: describeMachineSharedOwnership(machine),
+                    ownerName: machine.isShared ? machine.access?.custodian?.displayName ?? null : null,
                 };
                 })
                 .filter((row) => !query
@@ -145,7 +166,7 @@ export function buildMachineCollection(input: Readonly<{
                     .filter(machine => (machine.archivedAt !== undefined) === (ownershipGroup.key === 'managedArchived'))
                     .map((machine): MachineCollectionRow => ({ kind: 'managed', managedId: machine.id,
                         serverId: group.serverId, title: machine.launch.name, titleParts: { name: machine.launch.name, hint: null }, host: null, platformLabel: '', online: false,
-                        presence: describeManagedCreation(machine).line, reason: null, ownership: null,
+                        presence: describeManagedCreation(machine).line, reason: null, ownership: null, ownerName: null,
                         ...(machine.enrolledMachineId && machine.archivedAt === undefined ? { enrolledMachineId: machine.enrolledMachineId } : {}) }))
                     .filter(row => !query || row.title.toLocaleLowerCase().includes(query));
                 rows.push(...managedRows);
@@ -154,7 +175,12 @@ export function buildMachineCollection(input: Readonly<{
             count += rows.length;
             const ownershipTitle = ownershipGroup.key.startsWith('shared:')
                 ? describeMachineSharedGroupTitle(ownershipGroup.custodian)
-                : ownershipGroup.key === 'owned' && ownershipGroups.some(group => group.key.startsWith('shared:')) ? t('machines.destinations.yours') : null;
+                : ownershipGroup.key === 'managed' ? t('machines.destinations.created')
+                // Labelled even alone (lab R): the list opens under Defaults, so its machines say whose they are.
+                // Grouped by Home, a Home's own machines are already named by the Home.
+                : ownershipGroup.key === 'owned' && (!input.groupedByHome
+                    || ownershipGroups.some(group => group.key.startsWith('shared:') || group.key === 'managed'))
+                    ? t('machines.destinations.yours') : null;
             return {
                 key: JSON.stringify([group.serverId, ownershipGroup.key]),
                 serverId: group.serverId,
@@ -194,15 +220,18 @@ function compareMachineCollectionRows(a: MachineCollectionRow, b: MachineCollect
         || machineCollectionRowKey(a).localeCompare(machineCollectionRowKey(b));
 }
 
-/** A machine's detail inside the collection, scoped to the Home it belongs to. */
-export function machineCollectionHref(row: MachineCollectionTarget): string {
+/**
+ * A collection row's page, scoped to the Home it belongs to, in `door`. Rows outside Settings pass
+ * `'rail'`; recipes are configuration and always open in Settings.
+ */
+export function machineCollectionHref(row: MachineCollectionTarget, door: MachinesDoor = 'settings'): string {
     if (row.kind === 'preset') return machinePresetCollectionHref(row);
     if (row.kind === 'managed') {
         return row.enrolledMachineId
-            ? `${MACHINES_COLLECTION_ROOT}/${encodeURIComponent(row.enrolledMachineId)}?serverId=${encodeURIComponent(row.serverId)}`
-            : `${MACHINES_COLLECTION_ROOT}/managed/${encodeURIComponent(row.managedId)}?serverId=${encodeURIComponent(row.serverId)}`;
+            ? machinePageHref({ door, target: { machineId: row.enrolledMachineId, serverId: row.serverId } })
+            : `${machinesIndexHref(door)}/managed/${encodeURIComponent(row.managedId)}?serverId=${encodeURIComponent(row.serverId)}`;
     }
-    return `${MACHINES_COLLECTION_ROOT}/${encodeURIComponent(row.machineId)}?serverId=${encodeURIComponent(row.serverId)}`;
+    return machinePageHref({ door, target: { machineId: row.machineId, serverId: row.serverId } });
 }
 
 export function machinePresetCollectionHref(row: Readonly<{ serverId: string; presetId: string }>): string {
@@ -219,31 +248,8 @@ export function machinePoolCollectionHref(pool: Readonly<{ poolId: string; serve
 }
 
 /**
- * Where a wide collection lands when its route names nothing: the machine last opened, the first
- * machine, this computer (desktop), or adding a machine.
- */
-export function resolveMachineCollectionLandingHref(input: Readonly<{
-    collection: MachineCollection;
-    lastVisited: MachineCollectionTarget | null;
-    isDesktop: boolean;
-}>): string {
-    const lastVisitedKey = input.lastVisited ? machineCollectionRowKey(input.lastVisited) : null;
-    const rows = [...input.collection.sections.flatMap((section) => section.archived
-        ? section.rows.filter(row => machineCollectionRowKey(row) === lastVisitedKey)
-        : section.rows),
-        ...input.collection.presetSections.flatMap(section => section.rows)];
-    const keyOf = machineCollectionRowKey;
-    const landingKey = resolveHappierCollectionInitialKey({
-        keys: rows.map(keyOf),
-        lastVisited: lastVisitedKey,
-    });
-    const landing = rows.find((row) => keyOf(row) === landingKey);
-    if (landing) return machineCollectionHref(landing);
-    return input.isDesktop ? MACHINES_THIS_COMPUTER_ROUTE : MACHINES_ADD_ROUTE;
-}
-
-/**
- * The collection row the route selects: `machine:<serverId>:<id>` (the Home may be absent),
+ * The collection row the route selects, in either door: `allMachines` on the index,
+ * `machine:<serverId>:<id>` (the Home may be absent) on a machine's page or sub-page,
  * `thisComputer`, `defaults` (Machine defaults), `pool:<serverId>:<poolId>`, `poolDraft:<serverId>` for a pool being added, or
  * `machineDraft` for the machine being added.
  */
@@ -252,8 +258,10 @@ export function resolveSelectedMachineCollectionKey(
     params: Readonly<{ serverId?: string | null }>,
 ): string | null {
     const normalized = pathname.replace(/\/+$/, '');
-    if (!normalized.startsWith(`${MACHINES_COLLECTION_ROOT}/`)) return null;
-    const segments = normalized.slice(MACHINES_COLLECTION_ROOT.length + 1).split('/').map(decodeSegment);
+    const root = [MACHINES_COLLECTION_ROOT, MACHINES_RAIL_ROOT].find(candidate => normalized === candidate || normalized.startsWith(`${candidate}/`));
+    if (!root) return null;
+    if (normalized === root) return 'allMachines';
+    const segments = normalized.slice(root.length + 1).split('/').map(decodeSegment);
     const serverId = params.serverId?.trim() ?? '';
     if (segments[0] === 'presets') {
         if (segments[1] === 'new') return `presetDraft:${serverId}`;
@@ -264,6 +272,7 @@ export function resolveSelectedMachineCollectionKey(
         return segments[1] ? `pool:${serverId}:${segments[1]}` : null;
     }
     if (segments[0] === 'managed') return segments.length === 2 && segments[1] ? `managed:${serverId}:${segments[1]}` : null;
+    if (segments.length === 2 && segments[0] && isMachineSubPageId(segments[1])) return `machine:${serverId}:${segments[0]}`;
     if (segments.length !== 1 || !segments[0]) return null;
     if (segments[0] === 'this-computer') return 'thisComputer';
     if (segments[0] === 'defaults') return 'defaults';

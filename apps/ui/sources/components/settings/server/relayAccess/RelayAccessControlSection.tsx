@@ -39,6 +39,8 @@ import {
 } from './relayAccessUiCatalog';
 import { useRelayAccessControl, type RelayAccessControlOptions } from './useRelayAccessControl';
 import { Icon } from '@/components/ui/icons/Icon';
+import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprovalPendingNotice';
+import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 
 function resolveStatusSubtitle(state: string | null | undefined): string {
     switch (state) {
@@ -68,6 +70,7 @@ export type RelayAccessControlSectionProps = Readonly<{
     serverProfileId?: string | null;
     upstreamUrl?: string | null;
     remoteHost?: RelayAccessControlOptions['remoteHost'];
+    actionScope?: RelayAccessControlOptions['actionScope'];
     target?: RelayAccessTaskTarget;
     runWithTarget?: <T>(run: (target: RelayAccessTaskTarget, startSpec?: (spec: SystemTaskSpec) => Promise<string>, admittedUpstreamUrl?: string | null) => Promise<T>) => Promise<T>;
     presentation?: 'settings' | 'wizard';
@@ -86,6 +89,7 @@ export type RelayAccessControlSectionProps = Readonly<{
 }>;
 
 export const RelayAccessControlSection = React.memo(function RelayAccessControlSection(props: RelayAccessControlSectionProps) {
+    const router = useRouter();
     const runner = props.runner ?? getDefaultSystemTaskRunner();
     const presentation = props.presentation ?? 'settings';
     const showProviderChoices = props.showProviderChoices ?? true;
@@ -101,6 +105,9 @@ export const RelayAccessControlSection = React.memo(function RelayAccessControlS
     }, [props.upstreamUrl]);
     const {
         activeTaskSnapshot,
+        actionServerId,
+        approval,
+        cancelTask,
         actionSnapshot,
         configure,
         disable,
@@ -109,7 +116,7 @@ export const RelayAccessControlSection = React.memo(function RelayAccessControlS
         lastErrorMessage,
         refreshStatus,
         snapshot,
-    } = useRelayAccessControl({ runner, upstreamUrl: normalizedUpstreamUrl, target, runWithTarget: props.runWithTarget, remoteHost: props.remoteHost });
+    } = useRelayAccessControl({ runner, upstreamUrl: normalizedUpstreamUrl, target, runWithTarget: props.runWithTarget, remoteHost: props.remoteHost, actionScope: props.actionScope });
 
     const resolvedProviderId = snapshot?.providerId ?? null;
     const resolvedShareUrl = snapshot?.status?.shareUrl ?? null;
@@ -276,8 +283,8 @@ export const RelayAccessControlSection = React.memo(function RelayAccessControlS
         if (!activeTaskSnapshot) {
             return;
         }
-        void runner.cancel(activeTaskSnapshot.taskId);
-    }, [activeTaskSnapshot, runner]);
+        fireAndForget(cancelTask(activeTaskSnapshot.taskId), { tag: 'RelayAccessControlSection.cancel' });
+    }, [activeTaskSnapshot, cancelTask]);
 
     const disableAction = React.useCallback(async () => {
         if (isUnavailable) return;
@@ -524,10 +531,10 @@ export const RelayAccessControlSection = React.memo(function RelayAccessControlS
         const overlayScrimColor = theme.colors.overlay?.scrimWizard ?? theme.colors.surface.base;
         const showBusyOverlay = isBusy && activeTaskSnapshot != null;
         return (
-            <View testID={props.testID} style={{ width: '100%', gap: 12, position: 'relative' }}>
-                <View style={{ width: '100%', gap: 12 }}>
+            <View testID={props.testID} style={{ width: '100%', gap: theme.space.s12, position: 'relative' }}>
+                <View style={{ width: '100%', gap: theme.space.s12 }}>
                     {showProviderChoices ? (
-                        <View style={{ width: '100%', gap: 8 }}>
+                        <View style={{ width: '100%', gap: theme.space.s8 }}>
                             {providerChoiceRows}
                         </View>
                     ) : null}
@@ -548,7 +555,7 @@ export const RelayAccessControlSection = React.memo(function RelayAccessControlS
                                 position: 'absolute',
                                 alignItems: 'center',
                                 justifyContent: 'center',
-                                padding: 12,
+                                padding: theme.space.s12,
                                 borderRadius: 12,
                                 overflow: 'hidden',
                             },
@@ -605,7 +612,7 @@ export const RelayAccessControlSection = React.memo(function RelayAccessControlS
                         )}
 
                         <View style={{ width: '100%', maxWidth: 420 }}>
-                            <View style={{ width: '100%', gap: 12 }}>
+                            <View style={{ width: '100%', gap: theme.space.s12 }}>
                                 <SystemTaskProgressCard
                                     snapshot={activeTaskSnapshot}
                                     variant="checklistOnly"
@@ -649,6 +656,11 @@ export const RelayAccessControlSection = React.memo(function RelayAccessControlS
                     />
                 )}
             >
+                {approval.approvalPending && approval.approvalId && actionServerId ? <ActionApprovalPendingNotice
+                    testID="home-reach-relay-approval"
+                    message={t('secrets.catalog.approvalPending')}
+                    onOpenApproval={() => router.pushRetainingCurrent(`/inbox/approvals/${encodeURIComponent(approval.approvalId!)}?serverId=${encodeURIComponent(actionServerId)}`)}
+                /> : null}
                 <Item
                     testID="settings.server.relayAccess.status"
                     title={t('settings.relayAccess.statusTitle')}
@@ -681,7 +693,7 @@ export const RelayAccessControlSection = React.memo(function RelayAccessControlS
                 {showProviderChoices ? (
                     <SettingAnchor setting={SERVERS_SETTINGS.settings.accessMethod}>
                         <SectionContentRow>
-                            <View style={{ gap: 8 }}>
+                            <View style={{ gap: theme.space.s8 }}>
                                 {providerChoiceRows}
                             </View>
                         </SectionContentRow>
@@ -701,7 +713,7 @@ export const RelayAccessControlSection = React.memo(function RelayAccessControlS
                 ) : null}
 
                 <SectionContentRow>
-                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12 }}>
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: theme.space.s12 }}>
                         <RoundButton
                             testID="settings.server.relayAccess.save"
                             size="small"

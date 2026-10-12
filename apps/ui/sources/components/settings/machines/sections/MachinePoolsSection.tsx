@@ -1,6 +1,8 @@
 import * as React from 'react';
+import { useMachinesDoor } from '@/components/machines/page/machinesDoor';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import type { MachinePoolViewV1 } from '@happier-dev/protocol';
+import { EmptyState } from '@/components/ui/empty/EmptyState';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { t } from '@/text';
@@ -62,8 +64,11 @@ export const MachinePoolsSection = React.memo(function MachinePoolsSection(props
     variant?: 'page' | 'rail';
     /** The collection row the route selects (`pool:<serverId>:<poolId>`), rail only. */
     selectedKey?: string | null;
+    /** Opens a pool's page from outside the collection (the rail popover closes, then navigates). */
+    onOpen?: (href: string) => void;
 }>) {
     const router = useRouter();
+    const door = useMachinesDoor();
     const rail = props.variant === 'rail';
     const projections = useMachinePoolProjections(props.groups);
     const focusReturnReady = projections.every((projection) => Boolean(
@@ -97,17 +102,19 @@ export const MachinePoolsSection = React.memo(function MachinePoolsSection(props
             const retry = () => { void invalidateMachinePoolProjection(group.serverId, { forceFeatures: true }).catch(() => {}); };
             const openPool = (poolId: string, rowTestId: string) => {
                 const href = machinePoolCollectionHref({ poolId, serverId: group.serverId });
+                if (props.onOpen) { props.onOpen(href); return; }
                 // Beside the rail, choosing another pool replaces the open detail instead of stacking it.
-                if (rail) router.replace(href as never);
+                // In the rail door a pool opens in Settings (its one home), so it is pushed, not replaced.
+                if (rail && door === 'settings') router.replace(href as never);
                 else navigateWithFocusReturn.navigateFrom(rowTestId, () => router.push(href as never));
             };
             const statusRows = <>
-                {featurePending ? <Item
+                {featurePending ? <EmptyState
                     testID={`settings.machinePools.featureLoading.${group.serverId}`}
-                    pressableStyle={rail ? collectionListStyles.row : undefined}
+                    layout="line" lineLoading
                     title={t('common.loading')}
-                    density={rail ? 'compact' : undefined}
-                    mode="info"
+                    lineRowStyle={rail ? collectionListStyles.row : undefined}
+                    lineDensity={rail ? 'compact' : undefined}
                 /> : null}
                 {featureError ? <Item
                     testID={`settings.machinePools.featureFailed.${group.serverId}`}
@@ -187,7 +194,8 @@ export const MachinePoolsSection = React.memo(function MachinePoolsSection(props
                 />;
             });
             const loadingRow = rows.length === 0 && featureEnabled && projection.status === 'loading'
-                ? <Item title={t('common.loading')} density={rail ? 'compact' : undefined} pressableStyle={rail ? collectionListStyles.row : undefined} mode="info" />
+                ? <EmptyState layout="line" lineLoading title={t('common.loading')}
+                    lineDensity={rail ? 'compact' : undefined} lineRowStyle={rail ? collectionListStyles.row : undefined} />
                 : null;
             if (rail) {
                 // Adding goes through the rail's "+": a Home with nothing to list shows no heading.

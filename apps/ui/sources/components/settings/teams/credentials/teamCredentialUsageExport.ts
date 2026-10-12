@@ -1,149 +1,29 @@
-import type {
-    TeamCredentialUsageBreakdownDimensionV1,
-    TeamCredentialUsageQueryResultV1,
-} from '@happier-dev/protocol/teams';
+import type { TeamCredentialUsageExportInputV1 } from '@happier-dev/protocol/teams';
+import { UsageFileResultSchema } from '@happier-dev/protocol/usage/usageExport';
+import { decodeBase64 } from '@happier-dev/protocol/crypto/base64';
+import { runTeamAction } from '@/sync/ops/teams/teamActionClient';
+import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
+import { exportUsageTextDocument } from '@/components/settings/usage/usageExportFile';
 
-import {
-    buildUsageCsvDocument,
-    exportUsageCsvDocument,
-    formatUsageExportFileTimestamp,
-} from '@/components/settings/usage/usageExportFile';
-import { resolveDisplayCost, type UsageCostMode } from '@/sync/api/account/usageAnalytics';
+export { buildTeamCredentialUsageCsv, type TeamCredentialUsageExportInput } from '@happier-dev/protocol/teams';
 
-/**
- * One shared credential's recorded usage, as a file.
- *
- * The export carries the same measurement provenance the screen shows, because
- * a spreadsheet outlives the screen: a reader who only has the file must still
- * be able to tell a brokered request count from a partial one, and an unpriced
- * period from a free one. Nothing here recomputes a total — every number is the
- * Home's own answer, resolved through the same cost owner the screen uses.
- */
-export type TeamCredentialUsageExportInput = Readonly<{
-    resourceName: string;
-    result: TeamCredentialUsageQueryResultV1;
-    startMs: number;
-    endMs: number;
-    /** The dimension whose ranked slices are in `result.breakdown`, if any. */
-    breakdown: TeamCredentialUsageBreakdownDimensionV1 | null;
-    /**
-     * Whether `result.breakdown` is every slice of the query, or only the pages
-     * loaded so far.
-     *
-     * The total row is always the whole query's total, so a file whose ranked
-     * slices stop at the loaded pages would otherwise read as a complete
-     * breakdown that simply does not add up. The reader is told which it is
-     * instead of being refused the file.
-     */
-    breakdownComplete: boolean;
-    /**
-     * The cost mode the Home resolved `cost` under. With the reported and
-     * estimated components beside it, an estimate and a Provider-reported
-     * amount of the same size stay distinguishable in the file.
-     */
-    costMode: UsageCostMode;
-}>;
-
-function requestCell(result: TeamCredentialUsageQueryResultV1, requestCount: number): string {
-    return result.coverage.requestCountCoverage === 'brokered_only' && requestCount === 0
-        ? ''
-        : String(requestCount);
-}
-
-function tokenCell(result: TeamCredentialUsageQueryResultV1, tokenCount: number): string {
-    return result.coverage.tokenCoverage === 'unavailable'
-        || (result.coverage.tokenCoverage === 'partial' && tokenCount === 0)
-        ? ''
-        : String(tokenCount);
-}
-
-function costCell(
-    result: TeamCredentialUsageQueryResultV1,
-    cost: TeamCredentialUsageQueryResultV1['totals']['cost'],
-): string {
-    const resolved = resolveDisplayCost(cost);
-    // A period the Home could not price has no cost, which is not the same
-    // number as zero; an empty cell keeps that distinction in the file.
-    return result.coverage.costCoverage === 'unavailable'
-        || (result.coverage.costCoverage === 'partial' && resolved === 0)
-        ? ''
-        : String(resolved);
-}
-
-/** One cost component; blank, never zero, when the Home could not price the period. */
-function costComponentCell(result: TeamCredentialUsageQueryResultV1, amountUsd: number): string {
-    return result.coverage.costCoverage === 'unavailable' ? '' : String(amountUsd);
-}
-
-export function buildTeamCredentialUsageCsv(input: TeamCredentialUsageExportInput): string {
-    const { result } = input;
-    const breakdownScope = input.breakdown === null
-        ? ''
-        : input.breakdownComplete ? 'complete' : 'loaded_pages';
-    const deliveryProvenance = result.coverage.directRecordedUseOnly
-        ? 'historical_direct'
-        : 'recorded_by_happier';
-    const common = [
-        deliveryProvenance,
-        result.coverage.requestCountCoverage,
-        result.coverage.tokenCoverage,
-        result.coverage.costCoverage,
-        String(result.coverage.requestAdmissionCount),
-        String(result.coverage.agentObservationCount),
-        String(result.coverage.externalTerminalObservationCount),
-        String(result.coverage.unobservedExternalRequestCount),
-        breakdownScope,
-    ];
-    return buildUsageCsvDocument([
-        [
-            'resource', 'range_start_utc', 'range_end_utc', 'scope', 'dimension', 'key', 'label',
-            'requests', 'tokens', 'cost', 'currency', 'cost_mode', 'reported_cost', 'estimated_cost',
-            'delivery_provenance', 'request_count_coverage', 'token_coverage', 'cost_coverage',
-            'request_admission_count', 'agent_observation_count', 'external_terminal_observation_count',
-            'unobserved_external_request_count', 'breakdown_scope',
-        ],
-        [
-            input.resourceName,
-            new Date(input.startMs).toISOString(),
-            new Date(input.endMs).toISOString(),
-            'total',
-            '',
-            '',
-            '',
-            requestCell(result, result.coverage.requestAdmissionCount),
-            tokenCell(result, result.totals.tokens.total),
-            costCell(result, result.totals.cost),
-            result.totals.cost.currency,
-            input.costMode,
-            costComponentCell(result, result.totals.cost.reportedUsd),
-            costComponentCell(result, result.totals.cost.estimatedUsd),
-            ...common,
-        ],
-        ...(input.breakdown === null ? [] : (result.breakdown ?? []).map((entry) => [
-            input.resourceName,
-            new Date(input.startMs).toISOString(),
-            new Date(input.endMs).toISOString(),
-            'breakdown',
-            input.breakdown ?? '',
-            entry.key,
-            entry.label ?? '',
-            requestCell(result, entry.totals.requestCount),
-            tokenCell(result, entry.totals.tokens.total),
-            costCell(result, entry.totals.cost),
-            entry.totals.cost.currency,
-            input.costMode,
-            costComponentCell(result, entry.totals.cost.reportedUsd),
-            costComponentCell(result, entry.totals.cost.estimatedUsd),
-            ...common,
-        ])),
-    ]);
-}
-
-export async function exportTeamCredentialUsageCsv(
-    input: TeamCredentialUsageExportInput,
-): Promise<boolean> {
-    return await exportUsageCsvDocument({
-        csv: buildTeamCredentialUsageCsv(input),
-        fileName: `team-credential-usage-${formatUsageExportFileTimestamp(new Date())}.csv`,
-    });
+/** The UI requests the same file as an Agent, then explicitly delivers it on this client. */
+export async function exportTeamCredentialUsageCsv(input: TeamCredentialUsageExportInputV1 & Readonly<{
+    scope: ServerAccountScope;
+}>): Promise<boolean> {
+    const account = await captureLazyActionAccountContext(input.scope.serverId);
+    try {
+        if (account.accountId !== input.scope.accountId) return false;
+        const { scope, ...request } = input;
+        const outcome = await runTeamAction({ scope, actionId: 'teams.credentials.usage.export',
+            input: request, parse: value => UsageFileResultSchema.parse(value) });
+        account.assertCurrent();
+        if (outcome.kind !== 'succeeded') return false;
+        const file = outcome.value;
+        return await exportUsageTextDocument({ content: new TextDecoder().decode(decodeBase64(file.base64)),
+            fileName: file.fileName, mimeType: file.mediaType, isCurrent: account.accountLifetime.isCurrent });
+    } finally {
+        account.dispose();
+    }
 }

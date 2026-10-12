@@ -99,7 +99,7 @@ describe('ConnectedServicesRailView (lab csvc C1 rail)', () => {
 
     it('lists gateways after the pools they compose and opens the pressed one; without any the group is absent', async () => {
         const onOpenGateway = vi.fn();
-        const gateway = { connectionId: 'pc_gateway', title: 'Main gateway', detailRoute: '/(app)/settings/providers/pc_gateway', revision: 3 };
+        const gateway = { connectionId: 'pc_gateway', title: 'Main gateway', detailRoute: '/(app)/settings/providers/pc_gateway', revision: 3, slotServices: [], summary: 'Not set' };
         const screen = await render({ gateways: [gateway], onOpenGateway });
 
         screen.pressByTestId('connected-services-rail:gateway:pc_gateway');
@@ -107,6 +107,16 @@ describe('ConnectedServicesRailView (lab csvc C1 rail)', () => {
 
         const none = await render({ gateways: [] });
         expect(none.findByTestId('connected-services-rail:gateway:pc_gateway')).toBeNull();
+    });
+
+    it('says under each gateway what it draws on, and keeps the group in place while its catalog loads', async () => {
+        const gateway = { connectionId: 'pc_gateway', title: 'Main gateway', detailRoute: '/(app)/settings/providers/pc_gateway', revision: 3, slotServices: [CLAUDE], summary: 'Claude · ChatGPT' };
+        const listed = await render({ gateways: [gateway] });
+        expect(listed.getTextContent()).toContain('Claude · ChatGPT');
+
+        const loading = await render({ gateways: undefined, gatewaysLoading: true });
+        expect(loading.findByTestId('connected-services-rail:gateways-loading')).toBeTruthy();
+        expect(loading.findByTestId('connected-services-rail:add-gateway')).toBeNull();
     });
 
     it('names accounts through the privacy presenter: an address used as a name is masked when identities are hidden', async () => {

@@ -68,7 +68,7 @@ describe('managed creation presentation', () => {
     it('reopens an enrolled managed URL through the ordinary Machine owner in its original Home', () => {
         expect(managedMachineDestination(machine, 'srv/a')).toBeNull();
         expect(managedMachineDestination({ ...machine, enrolledMachineId: 'joined machine' }, 'srv/a'))
-            .toBe('/machine/joined%20machine?serverId=srv%2Fa');
+            .toBe('/machines/joined%20machine?serverId=srv%2Fa');
     });
     it('keeps submitted Stop pending until observed stopped, and never treats lost storage as offline', () => {
         const pending = { ...machine, desired: 'stop' as const,

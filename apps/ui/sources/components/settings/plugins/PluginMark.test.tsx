@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PluginMark } from './PluginMark';
 import { createValidPluginBrandPngFixture } from '@/dev/testkit';
@@ -15,6 +15,17 @@ vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/ico
 vi.mock('react-native-svg', () => ({
     SvgXml: (props: Record<string, unknown>) => React.createElement('SvgXml', props),
 }));
+const bundledBrands = vi.hoisted(() => [] as { pluginId: string; resourceId: string; releaseVersion: string; displayName: string; digest: string; bytes: Uint8Array }[]);
+vi.mock('@/sync/domains/plugins/availability/generatedBundledPluginUiArtifacts', () => ({
+    BUNDLED_PLUGIN_UI_APP_ARTIFACTS: [],
+    BUNDLED_PLUGIN_BRAND_MARKS: bundledBrands,
+}));
+beforeEach(() => {
+    bundledBrands.splice(0, bundledBrands.length, {
+        pluginId: 'happier.inspector', resourceId: 'brand-icon', releaseVersion: '0.0.0',
+        displayName: 'Inspector', digest: `sha256:${'b'.repeat(64)}`, bytes: createValidPluginBrandPngFixture(),
+    });
+});
 
 function render(element: React.ReactElement): ReactTestRenderer {
     let tree!: ReactTestRenderer;
@@ -31,6 +42,11 @@ const letters = (tree: ReactTestRenderer, letter: string) => tree.root.findAll((
 ));
 
 describe('PluginMark', () => {
+    it('renders the packaged non-Agent mark in chrome without a connected machine', () => {
+        const tree = render(<PluginMark title="Inspector" pluginId="happier.inspector" />);
+        expect(tree.root.findAll((node) => (node.type as unknown) === 'Image')).toHaveLength(1);
+        expect(letters(tree, 'I')).toHaveLength(0);
+    });
     it('uses the canonical packaged brand renderer rather than a puzzle when a package declares artwork', () => {
         const bytes = createValidPluginBrandPngFixture();
         materializeHappierRenderableImage(bytes);

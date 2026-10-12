@@ -2,8 +2,8 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
-import type { McpServerBindingV1, McpServerCatalogEntryV1 } from '@happier-dev/protocol';
-import { McpServerBindingV1Schema, McpServerCatalogEntryV1Schema } from '@happier-dev/protocol/mcp/servers/settingsV1';
+import type { McpServerRuleV1, McpServerCatalogEntryV1 } from '@happier-dev/protocol';
+import { McpServerRuleV1Schema, McpServerCatalogEntryV1Schema } from '@happier-dev/protocol/mcp/servers/settingsV1';
 import { MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/mcp/servers/serverActionsV1';
 
 import type { Machine } from '@/sync/domains/state/storageTypes';
@@ -41,7 +41,7 @@ const styles = StyleSheet.create(() => ({
 
 export const McpServerTestPanel = React.memo(function McpServerTestPanel(props: Readonly<{
     server: McpServerCatalogEntryV1;
-    bindings: ReadonlyArray<McpServerBindingV1>;
+    bindings: ReadonlyArray<McpServerRuleV1>;
     machines: readonly Machine[];
     targetSelection: Pick<MachineAdministrationTargetSelectionV1, 'selectedTarget' | 'resolveExecutionTarget'>;
 }>) {
@@ -54,7 +54,7 @@ export const McpServerTestPanel = React.memo(function McpServerTestPanel(props: 
         resolveExactExecutionTarget,
         isExecutionTargetCurrent,
     } = useMachineAdministrationExecutionTargetBinding(administrationTargetSelection);
-    const executionTarget = resolveExactExecutionTarget(selectedTarget);
+    const executionTarget = resolveExactExecutionTarget(selectedTarget, { intent: 'retry' });
     const testExecution = useMountedActionExecution(executionTarget?.serverId);
 
     const [bindingId, setBindingId] = React.useState<string | null>(null);
@@ -107,19 +107,19 @@ export const McpServerTestPanel = React.memo(function McpServerTestPanel(props: 
     const canTestServer = React.useMemo(() => McpServerCatalogEntryV1Schema.safeParse(props.server).success, [props.server]);
     const canTestBinding = React.useMemo(() => {
         if (!selectedBinding) return true;
-        return McpServerBindingV1Schema.safeParse(selectedBinding).success;
+        return McpServerRuleV1Schema.safeParse(selectedBinding).success;
     }, [selectedBinding]);
 
     const [isTesting, runTest] = useHappyAction(async () => {
         const requestedSelection = selectionKey;
-        const executionTarget = resolveExactExecutionTarget(selectedTarget);
+        const executionTarget = resolveExactExecutionTarget(selectedTarget, { intent: 'retry' });
         if (!executionTarget || !testExecution.ready) return;
         const parsed = McpServerCatalogEntryV1Schema.safeParse(props.server);
         if (!parsed.success) {
             Modal.alert(t('common.error'), t('settings.mcpServersValidationFailed'));
             return;
         }
-        const binding = selectedBinding ? McpServerBindingV1Schema.parse(selectedBinding) : null;
+        const binding = selectedBinding ? McpServerRuleV1Schema.parse(selectedBinding) : null;
         const receipt = await testExecution.execute('mcp.servers.test', {
             machineId: executionTarget.machine.id,
             t: 'draft',
@@ -127,7 +127,7 @@ export const McpServerTestPanel = React.memo(function McpServerTestPanel(props: 
             server: parsed.data,
             binding,
         });
-        if (!isExecutionTargetCurrent(requestedSelection, executionTarget)) return;
+        if (!isExecutionTargetCurrent(requestedSelection, executionTarget, { intent: 'retry' })) return;
         if (!receipt.ok) {
             Modal.alert(t('common.error'), receipt.errorCode ?? receipt.error);
             return;
@@ -143,7 +143,7 @@ export const McpServerTestPanel = React.memo(function McpServerTestPanel(props: 
 
     const handleBrowseDirectory = React.useCallback(async () => {
         const requestedSelection = selectionKey;
-        const executionTarget = resolveExactExecutionTarget(selectedTarget);
+        const executionTarget = resolveExactExecutionTarget(selectedTarget, { intent: 'retry' });
         if (!executionTarget) return;
         const selected = await openMachinePathBrowserModal({
             machineId: executionTarget.machine.id,
@@ -151,7 +151,7 @@ export const McpServerTestPanel = React.memo(function McpServerTestPanel(props: 
             initialPath: directory.trim(),
             title: t('settings.mcpServersTestDirectoryTitle'),
         });
-        if (typeof selected === 'string' && isExecutionTargetCurrent(requestedSelection, executionTarget)) {
+        if (typeof selected === 'string' && isExecutionTargetCurrent(requestedSelection, executionTarget, { intent: 'retry' })) {
             setDirectory(selected);
         }
     }, [directory, isExecutionTargetCurrent, resolveExactExecutionTarget, selectedTarget, selectionKey]);

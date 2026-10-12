@@ -1,18 +1,17 @@
 import * as React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
-import { renderInCollectionLayout, renderScreen, type CollectionLayoutHarnessMode } from '@/dev/testkit';
+import { renderInCollectionLayout, type CollectionLayoutHarnessMode } from '@/dev/testkit';
 import {
     installPromptTemplatesCommonModuleMocks,
     promptTemplatesRouterPushSpy,
 } from '../templates/promptTemplatesScreenTestHelpers';
 
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 const routerReplaceSpy = vi.hoisted(() => vi.fn());
 const pathnameState = vi.hoisted(() => ({ value: '/settings/prompts/templates' }));
-const modalConfirmMock = vi.hoisted(() => vi.fn(async () => true));
 
 installPromptTemplatesCommonModuleMocks({
     reactNative: async () => {
@@ -47,15 +46,8 @@ installPromptTemplatesCommonModuleMocks({
         });
         return routerMock.module;
     },
-    modal: async () => {
-        const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-        return createModalModuleMock({
-            spies: {
-                confirm: modalConfirmMock,
-                alert: vi.fn(),
-            },
-        }).module;
-    },
+    modal: async () => vi.importActual('@/modal'),
+    text: async () => vi.importActual('@/text'),
     storage: importOriginal => importOriginal(),
 });
 
@@ -70,11 +62,6 @@ vi.mock('@expo/vector-icons', () => ({
     Ionicons: 'Ionicons',
 }));
 
-vi.mock('@/components/ui/layout/layout', () => ({
-    layout: { maxWidth: 1000 },
-    useLayoutMaxWidth: () => 1000,
-    useLayoutMaxWidthStyle: () => ({ maxWidth: 1000 }),
-}));
 
 async function renderIndex(mode: CollectionLayoutHarnessMode) {
     const { PromptCollectionIndex } = await import('./PromptCollectionList');
@@ -85,7 +72,7 @@ describe('PromptCollectionIndex', () => {
     beforeEach(() => {
         resetPromptLibraryCatalogEngineForTests();
         resetPromptLibraryCatalogSnapshotsForTests();
-        storage.setState({ settings: settingsDefaults, settingsVersion: 7, settingsScope: scope, profileScope: scope, isDataReady: true });
+        storage.setState({ settings: settingsDefaults, settingsVersion: 7, settingsScope: scope, profileScope: scope, isDataReady: true, artifactsLoaded: true, artifacts: {} });
         publishAppliedActiveServerSnapshot({ serverId: scope.serverId, serverUrl: 'https://prompt-collection.invalid', generation: 1 });
         applyPromptLibraryCatalogSnapshot(scope, { catalog: { status: 'ready', rows: [{ revision: 4,
             record: { key: 'invocations', value: { v: 1, entries: [{ id: 'template-1', token: '/daily', title: 'Daily',
@@ -114,5 +101,60 @@ describe('PromptCollectionIndex', () => {
             screen.findByTestId('promptLibrary.collection.template.add')?.props.onPress();
         });
         expect(promptTemplatesRouterPushSpy).toHaveBeenCalledWith('/settings/prompts/templates/new');
+    });
+
+    it.each(['stacked', 'split'] as const)('does not report an empty %s collection before the authoritative catalog arrives', async (mode) => {
+        resetPromptLibraryCatalogSnapshotsForTests();
+        const screen = await renderIndex(mode);
+        expect(screen.findByTestId('promptLibrary.collection.template.empty') !== null).toBe(false);
+        expect(screen.findByTestId('promptLibrary.collection.template.readState-loading-spinner')).not.toBeNull();
+        expect(screen.findAllByType('Redirect' as never)).toHaveLength(0);
+
+        await act(async () => {
+            applyPromptLibraryCatalogSnapshot(scope, { catalog: { status: 'ready', rows: [{ revision: 5,
+                record: { key: 'invocations', value: { v: 1, entries: [{ id: 'template-1', token: '/daily', title: 'Daily',
+                    target: { kind: 'doc', artifactId: 'doc-1' }, behavior: 'insert', allowArgs: false, availableIn: 'global' }] } } }],
+                tombstones: [], diagnostics: [] }, rawSettings: {}, sourceSettingsVersion: 7 }, true);
+        });
+        if (mode === 'stacked') {
+            expect(screen.findByTestId('promptLibrary.collection.template.row.template-1')).not.toBeNull();
+        } else {
+            const redirect = screen.findAllByType('Redirect' as never)[0] as unknown as { props: { href: string } } | undefined;
+            expect(redirect?.props.href).toBe('/settings/prompts/templates/template-1');
+        }
+
+        await act(async () => {
+            applyPromptLibraryCatalogSnapshot(scope, { catalog: { status: 'ready', rows: [{ revision: 6,
+                record: { key: 'invocations', value: { v: 1, entries: [] } } }], tombstones: [], diagnostics: [] },
+                rawSettings: {}, sourceSettingsVersion: 7 }, true);
+        });
+        expect(screen.findByTestId('promptLibrary.collection.template.empty')).not.toBeNull();
+    });
+
+    it('does not report an empty authored collection before its artifact read completes', async () => {
+        storage.setState({ artifactsLoaded: false });
+        const { PromptCollectionIndex } = await import('./PromptCollectionList');
+        const screen = await renderInCollectionLayout(<PromptCollectionIndex kind="doc" />, 'stacked');
+        expect(screen.findByTestId('promptLibrary.collection.doc.empty') !== null).toBe(false);
+        expect(screen.findByTestId('promptLibrary.collection.doc.readState-loading-spinner')).not.toBeNull();
+        await act(async () => { storage.setState({ artifactsLoaded: true }); });
+        expect(screen.findByTestId('promptLibrary.collection.doc.empty')).not.toBeNull();
+    });
+
+    it('retains known templates during revalidation but withdraws them when access is refused', async () => {
+        const screen = await renderIndex('stacked');
+        await act(async () => {
+            applyPromptLibraryCatalogSnapshot(scope, { catalog: { status: 'loading' }, rawSettings: {}, sourceSettingsVersion: 7 }, true);
+        });
+        expect(screen.findByTestId('promptLibrary.collection.template.row.template-1')).not.toBeNull();
+        expect(screen.findByTestId('promptLibrary.collection.template.freshness')).not.toBeNull();
+        await act(async () => {
+            applyPromptLibraryCatalogSnapshot(scope, { catalog: { status: 'unavailable', reason: 'forbidden' }, rawSettings: {}, sourceSettingsVersion: 7 }, true);
+        });
+        expect(screen.findByTestId('promptLibrary.collection.template.row.template-1') !== null).toBe(false);
+        expect(screen.findByTestId('promptLibrary.collection.template.empty') !== null).toBe(false);
+        expect(screen.findByTestId('promptLibrary.collection.template.readState')).not.toBeNull();
+        expect(screen.findByTestId('promptLibrary.collection.template.readState-loading-spinner') !== null).toBe(false);
+        expect(screen.findByTestId('promptLibrary.collection.template.readState-action')).not.toBeNull();
     });
 });

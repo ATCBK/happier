@@ -23,6 +23,12 @@ function finishLabel(finish: ThemeSurfaceFinish): string {
     return t(finish === 'flat' ? 'settingsAppearance.surfaceFinish.flat' : 'settingsAppearance.surfaceFinish.soft');
 }
 
+/** The surface finish in a word, for the row that opens this page. */
+export function useSurfaceFinishLabel(): string {
+    const [finish] = useLocalSettingMutable('uiSurfaceFinish');
+    return finishLabel(finish ?? 'soft');
+}
+
 const roleSettings = {
     card: APPEARANCE_SETTINGS.settings.surfaceFinishCard,
     floating: APPEARANCE_SETTINGS.settings.surfaceFinishFloating,
@@ -75,7 +81,7 @@ export function SurfaceFinishAppearanceSection() {
 }
 
 const styles = StyleSheet.create(theme => ({
-    previewContent: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: theme.margins.md },
+    previewContent: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: theme.space.s12 },
     previewTitle: { ...Typography.default('semiBold'), color: theme.colors.text.primary },
     previewValue: { ...Typography.default(), color: theme.colors.text.secondary },
 }));

@@ -156,8 +156,13 @@ const maxProfiles = (): ThemeProfileV1[] => (
     Array.from({ length: THEME_PROFILE_MAX_PROFILES }, (_, index) => baseProfile(`theme_${index}`))
 );
 
+const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
+const { ThemeProfilesSettingsScreen } = await import('./ThemeProfilesSettingsScreen');
+const { ThemeProfileEditorScreen } = await import('./ThemeProfileEditorScreen');
+const { ThemeProfileImportScreen } = await import('./ThemeProfileImportScreen');
+const { ThemeProfileExportScreen } = await import('./ThemeProfileExportScreen');
+
 const findPresetDropdown = async (screen: Awaited<ReturnType<typeof renderSettingsView>>) => {
-    const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
     return screen.findAllByType(DropdownMenu as any)
         .find((node: any) => node.props?.itemTrigger?.title === 'settingsAppearance.themeProfiles.startFrom');
 };
@@ -171,7 +176,6 @@ const tileIds = (screen: Awaited<ReturnType<typeof renderSettingsView>>, prefix:
 );
 
 const findAddThemeMenu = async (screen: Awaited<ReturnType<typeof renderSettingsView>>) => {
-    const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
     return screen.findAllByType(DropdownMenu as any)
         .find((node: any) => node.props?.testID === 'settings-theme-profile-add-menu');
 };
@@ -183,29 +187,24 @@ const findHeaderMenuAction = async (screen: Awaited<ReturnType<typeof renderSett
 );
 
 async function renderProfilesScreen() {
-    const mod = await import('./ThemeProfilesSettingsScreen');
-    return renderSettingsView(React.createElement(mod.ThemeProfilesSettingsScreen), { flushOptions: { cycles: 0 } });
+    return renderSettingsView(React.createElement(ThemeProfilesSettingsScreen), { flushOptions: { cycles: 0 } });
 }
 
 async function renderEditorScreen(profileId: string) {
     shared.params = { profileId };
-    const mod = await import('./ThemeProfileEditorScreen');
-    return renderSettingsView(React.createElement(mod.ThemeProfileEditorScreen), { flushOptions: { cycles: 0 } });
+    return renderSettingsView(React.createElement(ThemeProfileEditorScreen), { flushOptions: { cycles: 0 } });
 }
 
 async function renderImportScreen() {
-    const mod = await import('./ThemeProfileImportScreen');
-    return renderSettingsView(React.createElement(mod.ThemeProfileImportScreen), { flushOptions: { cycles: 0 } });
+    return renderSettingsView(React.createElement(ThemeProfileImportScreen), { flushOptions: { cycles: 0 } });
 }
 
 async function renderExportScreen() {
-    const mod = await import('./ThemeProfileExportScreen');
-    return renderSettingsView(React.createElement(mod.ThemeProfileExportScreen), { flushOptions: { cycles: 0 } });
+    return renderSettingsView(React.createElement(ThemeProfileExportScreen), { flushOptions: { cycles: 0 } });
 }
 
 afterEach(() => {
     standardCleanup();
-    vi.resetModules();
     shared.routerPush.mockClear();
     shared.routerBack.mockClear();
     shared.clipboardSetStringAsync.mockReset();

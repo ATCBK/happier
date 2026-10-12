@@ -300,15 +300,15 @@ describe('PluginDetailScreen execution-origin ownership', () => {
         expect(mutateAccountSettingsOnceMock).not.toHaveBeenCalled();
         expect(fixture.accountSettings).toMatchObject({ machineAdministrationSelectionsV1: { pluginExecutionOriginsByPluginId: {} } });
         await act(async () => {
-            screen.tree.update(<RerenderablePluginDetailScreen pluginId="acme.plugin" revision={2} />);
+            await screen.update(<RerenderablePluginDetailScreen pluginId="acme.plugin" revision={2} />);
             await flushAsync();
         });
         // The current-origin row names the server and, on its own line, the
         // materialized version running there.
         expect(screen.findByTestId('settings.plugins.detail.executionOrigin.current')?.props)
-            .toMatchObject({ title: 'machine-a', subtitle: 'srv_a\ncommon.version 1.0.0', selected: true });
+            .toMatchObject({ title: 'machine-a', subtitle: 'settingsAccount.thisHomeTitle\ncommon.version 1.0.0', selected: true });
         expect(screen.findByTestId('settings.plugins.detail.acme.plugin.invocationLogs.target')?.props)
-            .toMatchObject({ title: 'machine-a', subtitle: 'srv_a', selected: true });
+            .toMatchObject({ title: 'machine-a', subtitle: 'settingsAccount.thisHomeTitle', selected: true });
         expect(screen.findByTestId('settings.plugins.detail.acme.plugin.accountRelease')?.props)
             .toMatchObject({
                 pluginId: 'acme.plugin',
@@ -332,7 +332,7 @@ describe('PluginDetailScreen execution-origin ownership', () => {
         fixture.materializationAdmission = availableAdmission(2, [materializationFor(ORIGIN_B)]);
         fixture.snapshots = snapshotsFor(ORIGIN_B);
         await act(async () => {
-            screen.tree.update(<RerenderablePluginDetailScreen pluginId="acme.plugin" revision={3} />);
+            await screen.update(<RerenderablePluginDetailScreen pluginId="acme.plugin" revision={3} />);
             await flushAsync();
         });
 
@@ -340,9 +340,9 @@ describe('PluginDetailScreen execution-origin ownership', () => {
         // The current-origin row names the server and, on its own line, the
         // materialized version running there.
         expect(screen.findByTestId('settings.plugins.detail.executionOrigin.current')?.props)
-            .toMatchObject({ title: 'machine-b', subtitle: 'srv_b\ncommon.version 1.0.0', selected: true });
+            .toMatchObject({ title: 'machine-b', subtitle: 'settingsAccount.thisHomeTitle\ncommon.version 1.0.0', selected: true });
         expect(screen.findByTestId('settings.plugins.detail.acme.plugin.invocationLogs.target')?.props)
-            .toMatchObject({ title: 'machine-b', subtitle: 'srv_b', selected: true });
+            .toMatchObject({ title: 'machine-b', subtitle: 'settingsAccount.thisHomeTitle', selected: true });
         await act(async () => {
             screen.pressByTestId('settings.plugins.detail.acme.plugin.invocationLogs.refresh');
             await flushAsync();

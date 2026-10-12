@@ -2,7 +2,7 @@ import { Platform } from 'react-native';
 import { log } from '@/log';
 import { createNativeCacheFileSink, shareNativeCacheFile } from '@/sync/runtime/files/nativeCacheFileSink';
 
-export { escapeUsageCsvField, buildUsageCsvDocument } from '@happier-dev/protocol/usage/usageExport';
+export { escapeUsageCsvField, buildUsageCsvDocument, formatUsageExportFileTimestamp } from '@happier-dev/protocol/usage/usageExport';
 
 /**
  * The one place usage exports become a file.
@@ -13,10 +13,6 @@ export { escapeUsageCsvField, buildUsageCsvDocument } from '@happier-dev/protoco
  * growing its own. Nothing here knows what a usage row means: callers hand it
  * finished text and a name.
  */
-
-export function formatUsageExportFileTimestamp(date: Date): string {
-    return date.toISOString().replace(/[:.]/g, '-');
-}
 
 /** Shares a written cache file, reporting whether the platform actually took it. */
 export async function shareUsageExportCacheFile(input: Readonly<{

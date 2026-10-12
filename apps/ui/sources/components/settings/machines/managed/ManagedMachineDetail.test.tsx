@@ -192,7 +192,7 @@ describe('managed Machine detail', () => {
                 recipe: { execution: { machineId: 'guest', directory: { kind: 'managed' } }, organization: { folderId: null, tagIds: [] },
                     agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } }, modelSelection: null,
                     profileId: null, requestedPermissionMode: null, agentModeId: null, configuration: null, connectedServices: null,
-                    mcpSelection: null, transcriptStorage: null, terminal: null, agentSessionStartupInstructionsMarkerV1: null, checkout: null,
+                    capabilitySelection: null, transcriptStorage: null, terminal: null, agentSessionStartupInstructionsMarkerV1: null, checkout: null,
                     managedCreation: { homeId: ownership === 'different-home' ? 'unrelated-home' : machine.homeId,
                         managedId: machine.id, controller: { machineId: 'controller', installationId: 'installation' } } } } } });
         let triggerReads = 0;
@@ -1960,6 +1960,7 @@ describe('managed Machine detail', () => {
         await act(async () => publishHomeAccountChange(target.id));
         await flushHookEffects({ cycles: 20 });
         const redirect = screen.tree.findByType('Redirect' as never);
-        expect(resolveHref(redirect.props.href)).toBe(`/machine/machine-joined?serverId=${encodeURIComponent(target.id)}`);
+        // Rendered inside Settings (no door set), the enrolled machine opens in the Settings door.
+        expect(resolveHref(redirect.props.href)).toBe(`/settings/machines/machine-joined?serverId=${encodeURIComponent(target.id)}`);
     });
 });

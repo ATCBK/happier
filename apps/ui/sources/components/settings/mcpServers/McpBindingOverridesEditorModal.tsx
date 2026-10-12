@@ -3,8 +3,7 @@ import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 
 import type {
-    McpServerBindingOverridesV1,
-    McpServerBindingV1,
+    McpServerConfigOverrideFieldsV1,
     McpServerCatalogEntryTransportV1,
     McpValueRefV1,
 } from '@happier-dev/protocol';
@@ -34,12 +33,12 @@ const stylesheet = StyleSheet.create(() => ({
     },
 }));
 
-function pruneEmptyOverrides(overrides: McpServerBindingOverridesV1): McpServerBindingOverridesV1 | undefined {
+function pruneEmptyOverrides(overrides: McpServerConfigOverrideFieldsV1): McpServerConfigOverrideFieldsV1 | undefined {
     const hasStdio = overrides.stdio && (overrides.stdio.command !== undefined || overrides.stdio.args !== undefined);
     const hasRemote = overrides.remote && (overrides.remote.url !== undefined || overrides.remote.headersPatch !== undefined);
     const hasEnv = overrides.envPatch && Object.keys(overrides.envPatch).length > 0;
 
-    const next: McpServerBindingOverridesV1 = {};
+    const next: McpServerConfigOverrideFieldsV1 = {};
     if (hasStdio) next.stdio = overrides.stdio;
     if (hasRemote) next.remote = overrides.remote;
     if (hasEnv) next.envPatch = overrides.envPatch;
@@ -56,11 +55,11 @@ function parseArgsText(text: string): string[] {
 }
 
 export type McpBindingOverridesEditorModalProps = CustomModalInjectedProps & Readonly<{
-    binding: McpServerBindingV1;
+    overrides?: McpServerConfigOverrideFieldsV1;
     serverTransport: McpServerCatalogEntryTransportV1;
     secrets: SavedSecret[];
     scope?: AccountSettingsScope | null;
-    onSubmit: (next: McpServerBindingV1) => void;
+    onSubmit: (next: McpServerConfigOverrideFieldsV1 | undefined) => void;
 }>;
 
 export function getBindingOverridesValueRefEditorChrome(kind: 'env' | 'header') {
@@ -75,7 +74,7 @@ export function McpBindingOverridesEditorModal(props: McpBindingOverridesEditorM
 
     const styles = stylesheet;
 
-    const initialOverrides = props.binding.overrides ?? {};
+    const initialOverrides = props.overrides ?? {};
 
     const [commandOverrideEnabled, setCommandOverrideEnabled] = React.useState(() => initialOverrides.stdio?.command !== undefined);
     const [commandOverride, setCommandOverride] = React.useState(() => initialOverrides.stdio?.command ?? '');
@@ -179,14 +178,14 @@ export function McpBindingOverridesEditorModal(props: McpBindingOverridesEditorM
         })();
         if (remoteOverride === null) return;
 
-        const overrides: McpServerBindingOverridesV1 = {
+        const overrides: McpServerConfigOverrideFieldsV1 = {
             ...(stdioOverride ? { stdio: stdioOverride } : {}),
             ...(remoteOverride ? { remote: remoteOverride } : {}),
             ...(Object.keys(envPatch).length > 0 ? { envPatch } : {}),
         };
 
         const pruned = pruneEmptyOverrides(overrides);
-        props.onSubmit({ ...props.binding, overrides: pruned, updatedAt: Date.now() });
+        props.onSubmit(pruned);
         props.onClose();
     }, [
         argsOverrideEnabled,

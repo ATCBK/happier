@@ -1,6 +1,7 @@
 import * as React from 'react';
 
 import { useConnectedAccountPurposeDefaults } from '@/hooks/server/connectedServices/useConnectedAccountPurposeDefaults';
+import type { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import type { QualifiedConnectedAccountPurposeBindingTargetV1 } from '@happier-dev/protocol';
 import { t } from '@/text';
 
@@ -23,9 +24,10 @@ export function useAgentDefaultChoices(target: QualifiedConnectedAccountPurposeB
     choices: readonly AgentDefaultChoice[];
     setDefault: (agentId: string, makeDefault: boolean) => Promise<void>;
     disabledReason: string | undefined;
+    execution: ReturnType<typeof useMountedActionExecution>;
 }> {
     const { agentEntries, agentsKnown, appShellProjection } = useConnectedServicesIndex({ agents: 'cached' });
-    const { catalog, legacySettings, mutateDefaults } = useConnectedAccountPurposeDefaults();
+    const { catalog, legacySettings, mutateDefaults, execution } = useConnectedAccountPurposeDefaults();
     const agents = agentsKnown ? agentEntries : NO_AGENTS;
     const choices = React.useMemo(
         () => catalog.value ? buildAgentDefaultChoices({ agents, settings: legacySettings, purposeBindings: catalog.value, target }) : NO_CHOICES,
@@ -38,5 +40,5 @@ export function useAgentDefaultChoices(target: QualifiedConnectedAccountPurposeB
     }, [agentsKnown, appShellProjection.machineId, mutateDefaults, target]);
     const disabledReason = !agentsKnown || catalog.status === 'loading' ? t('common.loading')
         : catalog.status !== 'ready' || catalog.stale ? t('common.unavailable') : undefined;
-    return React.useMemo(() => ({ choices, setDefault, disabledReason }), [choices, setDefault, disabledReason]);
+    return React.useMemo(() => ({ choices, setDefault, disabledReason, execution }), [choices, setDefault, disabledReason, execution]);
 }

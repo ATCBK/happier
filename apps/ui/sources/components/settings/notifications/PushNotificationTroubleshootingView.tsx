@@ -8,19 +8,23 @@ import { ItemRowActions } from '@/components/ui/lists/ItemRowActions';
 import { Modal } from '@/modal';
 import { t } from '@/text';
 import { useAuth } from '@/auth/context/AuthContext';
-import { useSettingsSelector } from '@/sync/domains/state/storage';
+import { useActiveServerAccountScope, useSettingsSelector } from '@/sync/domains/state/storage';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
+import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
 import { isExpoPushNotificationChannelEnabled } from '@happier-dev/protocol/account/settings/accountSettings';
-import { deletePushToken, fetchPushTokens, type PushToken } from '@/sync/api/session/apiPush';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprovalPendingNotice';
+import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { NotificationConfigurationActionOutputSchemas, type PushTokenRegistrationDiagnostics } from '@happier-dev/protocol/actions/notificationConfigurationActionFamily';
 import {
     formatPushTimestamp,
     formatPushTokenFingerprint,
     resolvePermissionDetail,
     resolvePermissionSubtitle,
     resolveTokenSubtitle,
+    resolveTroubleshootingDeviceToken,
 } from './pushNotificationTroubleshootingRuntime';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
-import { loadLastRegisteredExpoPushToken } from '@/sync/domains/state/pushTokenRegistration';
 import {
     isPushNotificationRuntimeSupported,
     readExpoPushToken,
@@ -28,7 +32,6 @@ import {
     type ExpoPushTokenOutcome,
     type PushPermissionOutcome,
 } from '@/activity/notifications/permission/pushNotificationAccess';
-import { runPushNotificationPermissionPriming } from '@/activity/notifications/permission/pushNotificationPermissionPriming';
 import { Icon } from '@/components/ui/icons/Icon';
 import { SettingsPageHeader } from '@/components/settings/shell/SettingsPageHeader';
 import { SettingAnchor } from '@/components/settings/shell/SettingRow';
@@ -36,8 +39,11 @@ import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { NOTIFICATIONS_PUSH_SETTINGS } from '@/components/settings/notifications/notificationsPushSettings';
 
 export const PushNotificationTroubleshootingView = React.memo(function PushNotificationTroubleshootingView() {
+    const router = useRouter();
     const { theme } = useUnistyles();
     const auth = useAuth();
+    const scope = useActiveServerAccountScope();
+    const execution = useMountedActionExecution(scope);
     const settings = useSettingsSelector((settings) => ({
         attentionDeliveryPolicyV1: settings.attentionDeliveryPolicyV1,
         notificationsSettingsV1: settings.notificationsSettingsV1,
@@ -48,7 +54,7 @@ export const PushNotificationTroubleshootingView = React.memo(function PushNotif
     const [permission, setPermission] = React.useState<PushPermissionOutcome | null>(null);
     const [tokenOutcome, setTokenOutcome] = React.useState<ExpoPushTokenOutcome | null>(null);
     const [currentToken, setCurrentToken] = React.useState<string | null>(null);
-    const [tokens, setTokens] = React.useState<PushToken[]>([]);
+    const [tokens, setTokens] = React.useState<PushTokenRegistrationDiagnostics[]>([]);
     const [loading, setLoading] = React.useState(false);
     const [deletingToken, setDeletingToken] = React.useState<string | null>(null);
 
@@ -66,51 +72,61 @@ export const PushNotificationTroubleshootingView = React.memo(function PushNotif
 
     const loadTroubleshootingState = React.useCallback(async (opts?: { showErrors?: boolean }) => {
         const showErrors = opts?.showErrors === true;
-        const credentials = auth.credentials;
         if (isMountedRef.current) {
             setLoading(true);
         }
         try {
             // Each of these is individually bounded, so this screen always reaches a terminal,
             // actionable state even when the notification runtime never answers.
-            const nextPermission = await readPushPermission();
-            const nextTokenOutcome = await readExpoPushToken();
-            if (!isMountedRef.current) return;
+            // Observe failures immediately even if Home retirement makes this result irrelevant;
+            // native diagnostics still appear without waiting for the Home's HTTP response.
+            const tokenList = auth.credentials ? execution.execute('notifications.push.tokens.list', {}).then(
+                response => ({ response }), (error: unknown) => ({ error }),
+            ) : null;
+            const [nextPermission, nextTokenOutcome] = await Promise.all([readPushPermission(), readExpoPushToken()]);
+            if (!isMountedRef.current || !execution.isCurrent()) return;
             setPermission(nextPermission);
             setTokenOutcome(nextTokenOutcome);
             // Fall back to the last registered token so the caller can still identify this device
             // in the registered list while reporting why a live read failed.
-            const cachedToken = loadLastRegisteredExpoPushToken()?.trim() ?? '';
-            setCurrentToken(nextTokenOutcome.ok ? nextTokenOutcome.token : (cachedToken || null));
+            setCurrentToken(resolveTroubleshootingDeviceToken(nextTokenOutcome));
 
-            if (credentials?.token) {
-                const nextTokens = await fetchPushTokens(credentials);
-                if (!isMountedRef.current) return;
-                setTokens(nextTokens);
+            if (tokenList) {
+                const outcome = await tokenList;
+                if (!isMountedRef.current || !execution.isCurrent()) return;
+                if ('error' in outcome) throw outcome.error;
+                if (!outcome.response.ok) throw new Error(outcome.response.error);
+                setTokens(NotificationConfigurationActionOutputSchemas['notifications.push.tokens.list'].parse(outcome.response.result).tokens);
             } else {
                 setTokens([]);
             }
         } catch {
-            if (showErrors && isMountedRef.current) {
+            if (showErrors && isMountedRef.current && execution.isCurrent()) {
                 await Modal.alert(t('common.error'), t('settingsNotifications.pushTroubleshooting.loadError'));
             }
         } finally {
-            if (isMountedRef.current) {
+            if (isMountedRef.current && execution.isCurrent()) {
                 setLoading(false);
             }
         }
-    }, [auth.credentials]);
+    }, [auth.credentials, execution.execute, execution.isCurrent]);
+
+    React.useEffect(() => { setTokens([]); setDeletingToken(null); }, [scope?.serverId, scope?.accountId]);
 
     React.useEffect(() => {
         void loadTroubleshootingState();
     }, [loadTroubleshootingState]);
 
     const requestPermission = React.useCallback(async () => {
-        // Explicit user intent, so the primed flow may ask again even after an earlier decline and
-        // may route to system settings when the OS refuses further prompts.
-        await runPushNotificationPermissionPriming({ pushEnabled, trigger: 'user_action' });
-        await loadTroubleshootingState({ showErrors: true });
-    }, [loadTroubleshootingState, pushEnabled]);
+        try {
+            const result = await execution.execute('notifications.push.permission.request', {});
+            if (!result.ok) throw new Error(result.error);
+            NotificationConfigurationActionOutputSchemas['notifications.push.permission.request'].parse(result.result);
+            if (execution.isCurrent()) await loadTroubleshootingState({ showErrors: true });
+        } catch {
+            if (execution.isCurrent()) await Modal.alert(t('common.error'), t('settingsNotifications.pushTroubleshooting.loadError'));
+        }
+    }, [execution.execute, execution.isCurrent, loadTroubleshootingState]);
 
     const reregister = React.useCallback(async () => {
         if (!auth.credentials) {
@@ -118,47 +134,36 @@ export const PushNotificationTroubleshootingView = React.memo(function PushNotif
             return;
         }
         try {
-            const { registerPushTokenIfAvailable } = await import('@/sync/engine/account/syncAccount');
-            await registerPushTokenIfAvailable({
-                log: { log: () => {} },
-            });
+            const result = await execution.execute('notifications.push.register', {});
+            if (!result.ok) throw new Error(result.error);
+            NotificationConfigurationActionOutputSchemas['notifications.push.register'].parse(result.result);
         } catch {
-            await Modal.alert(t('common.error'), t('settingsNotifications.pushTroubleshooting.loadError'));
+            if (execution.isCurrent()) await Modal.alert(t('common.error'), t('settingsNotifications.pushTroubleshooting.loadError'));
             return;
         }
-        await loadTroubleshootingState({ showErrors: true });
-    }, [auth.credentials, loadTroubleshootingState]);
+        if (execution.isCurrent()) await loadTroubleshootingState({ showErrors: true });
+    }, [auth.credentials, execution.execute, execution.isCurrent, loadTroubleshootingState]);
 
-    const handleDeleteToken = React.useCallback(async (token: PushToken) => {
+    const handleDeleteToken = React.useCallback(async (token: PushTokenRegistrationDiagnostics) => {
         if (!auth.credentials) {
             await Modal.alert(t('common.error'), t('settingsNotifications.pushTroubleshooting.authRequired'));
             return;
         }
-        const fingerprint = formatPushTokenFingerprint(token.token);
-        const confirmed = await Modal.confirm(
-            t('settingsNotifications.pushTroubleshooting.remove.confirmTitle'),
-            t('settingsNotifications.pushTroubleshooting.remove.confirmBody', { fingerprint }),
-            {
-                cancelText: t('common.cancel'),
-                confirmText: t('common.delete'),
-                destructive: true,
-            },
-        );
-        if (!confirmed) return;
-
-        setDeletingToken(token.token);
+        setDeletingToken(token.tokenId);
         try {
-            await deletePushToken(auth.credentials, token.token);
-            await loadTroubleshootingState();
+            const result = await execution.execute('notifications.push.tokens.remove', { tokenId: token.tokenId });
+            if (!result.ok) throw new Error(result.error);
+            NotificationConfigurationActionOutputSchemas['notifications.push.tokens.remove'].parse(result.result);
+            if (execution.isCurrent()) await loadTroubleshootingState();
         } catch {
-            await Modal.alert(t('common.error'), t('settingsNotifications.pushTroubleshooting.remove.error'));
+            if (execution.isCurrent()) await Modal.alert(t('common.error'), t('settingsNotifications.pushTroubleshooting.remove.error'));
         } finally {
-            setDeletingToken(null);
+            if (execution.isCurrent()) setDeletingToken(null);
         }
-    }, [auth.credentials, loadTroubleshootingState]);
+    }, [auth.credentials, execution.execute, execution.isCurrent, loadTroubleshootingState]);
 
     const tokenFingerprint = currentToken ? formatPushTokenFingerprint(currentToken) : null;
-    const currentTokenPresentOnServer = Boolean(currentToken && tokens.some((row) => row.token === currentToken));
+    const currentTokenPresentOnServer = tokens.some(row => row.isCurrentDevice);
     const permissionDetail = resolvePermissionDetail(permission);
     const permissionSubtitle = resolvePermissionSubtitle(permission);
     const permissionState = permission?.ok ? permission.permission : null;
@@ -168,12 +173,14 @@ export const PushNotificationTroubleshootingView = React.memo(function PushNotif
 
     const devicesFooter = t('settingsNotifications.pushTroubleshooting.devices.footer', {
         count: String(tokens.length),
-        serverUrl: activeServer.serverUrl,
+        serverUrl: scope ? (getServerProfileById(scope.serverId)?.serverUrl ?? '') : activeServer.serverUrl,
     });
 
     return (
         <ItemList testID="settings-notifications-push-troubleshooting">
             <SettingsPageHeader description={t('settingsNotifications.pushTroubleshooting.pageDescription')} />
+            {execution.approval.approvalPending && execution.approval.approvalId && scope ? <ActionApprovalPendingNotice
+                message={t('approvals.title')} onOpenApproval={() => router.pushRetainingCurrent(`/inbox/approvals/${encodeURIComponent(execution.approval.approvalId!)}?serverId=${encodeURIComponent(scope.serverId)}`)} /> : null}
             <ItemGroup
                 title={t('settingsNotifications.pushTroubleshooting.status.title')}
                 description={t('settingsNotifications.pushTroubleshooting.status.footer')}
@@ -259,8 +266,8 @@ export const PushNotificationTroubleshootingView = React.memo(function PushNotif
                     />
                 ) : (
                     tokens.map((row) => {
-                        const isCurrent = Boolean(currentToken && row.token === currentToken);
-                        const fingerprint = formatPushTokenFingerprint(row.token);
+                        const isCurrent = row.isCurrentDevice;
+                        const fingerprint = row.fingerprint;
                         const subtitle = [
                             row.clientServerUrl ? t('settingsNotifications.pushTroubleshooting.devices.clientServerUrl', { url: row.clientServerUrl }) : null,
                             t('settingsNotifications.pushTroubleshooting.devices.registeredAt', { at: formatPushTimestamp(row.createdAt) }),
@@ -276,7 +283,7 @@ export const PushNotificationTroubleshootingView = React.memo(function PushNotif
                                         actions={[
                                             {
                                                 id: 'remove',
-                                                inlineTestID: `settings-notifications-push-troubleshooting-device-${row.id}-remove`,
+                                                inlineTestID: `settings-notifications-push-troubleshooting-device-${row.tokenId}-remove`,
                                                 title: t('common.delete'),
                                                 icon: 'trash',
                                                 destructive: true,
@@ -289,15 +296,15 @@ export const PushNotificationTroubleshootingView = React.memo(function PushNotif
                                 : null;
                         return (
                             <Item
-                                key={row.id}
-                                testID={`settings-notifications-push-troubleshooting-device-${row.id}`}
+                                key={row.tokenId}
+                                testID={`settings-notifications-push-troubleshooting-device-${row.tokenId}`}
                                 title={fingerprint}
                                 subtitle={subtitle}
                                 subtitleLines={0}
                                 detail={isCurrent ? t('settingsNotifications.pushTroubleshooting.devices.thisDevice') : undefined}
                                 icon={<Icon name="device-mobile" size={29} color={theme.colors.text.secondary} />}
                                 rightElement={removeAction}
-                                loading={deletingToken === row.token}
+                                loading={deletingToken === row.tokenId}
                                 disabled={deletingToken != null}
                                 showChevron={false}
                             />

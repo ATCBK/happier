@@ -81,15 +81,13 @@ const styles = StyleSheet.create((theme) => ({
     slideBody: {
         flex: 1,
         paddingHorizontal: 28,
-        paddingTop: 48,
-        paddingBottom: 24,
+        paddingTop: theme.space.s48,
+        paddingBottom: theme.space.s24,
         justifyContent: 'center',
         gap: 14,
     },
     label: {
-        fontSize: 12,
-        lineHeight: 16,
-        fontWeight: '600',
+        ...Typography.variant('meta', 'semiBold'),
         letterSpacing: 0.8,
         textTransform: 'uppercase',
         color: theme.colors.text.secondary,
@@ -108,7 +106,7 @@ const styles = StyleSheet.create((theme) => ({
         maxWidth: 420,
     },
     visualWrap: {
-        marginTop: 16,
+        marginTop: theme.space.s16,
         maxWidth: 340,
     },
     controls: {
@@ -116,7 +114,7 @@ const styles = StyleSheet.create((theme) => ({
         top: 12,
         right: 12,
         flexDirection: 'row',
-        gap: 10,
+        gap: theme.space.s10,
         zIndex: 2,
     },
     controlButton: {

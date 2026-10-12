@@ -13,6 +13,13 @@ import {
 import { readRelayRuntimeStatusData, type RelayRuntimeStatusData } from './relayRuntimeStatus';
 import { withPersonalHomeEraseDisconnect } from './personalHomeEraseTaskContinuation';
 import { completePersonalHomeErase, type PersonalHomeEraseOutcome } from './personalHomeEraseCompletion';
+import { bindPersonalHomeRelocationTaskContinuation } from './personalHomeRelocationTaskContinuation';
+import { createSshSystemTaskPromptContinuation } from '@/components/systemTasks/ssh/answerSshSystemTaskPrompt';
+import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { useLocalRuntimeActionExecution } from '@/components/approvals/useLocalRuntimeActionExecution';
+import type { ActionApprovalContinuation } from '@/components/approvals/actionApprovalContinuation';
+import { createUiHomeRuntimeActionClient } from '@/sync/ops/actions/homeRuntimeActionClient';
+import { LOCAL_RELAY_RUNTIME_ACTION_IDS } from '@/sync/ops/actions/homeRuntimeTaskActions';
 
 type RelayRuntimeActionKind =
     | 'relay.runtime.installOrUpdate.v1'
@@ -173,8 +180,9 @@ function readPersonalHomeRelocationRecovery(value: unknown): PersonalHomeInspect
     };
 }
 
-export async function runRelayRuntimeUninstallTask(runner: SystemTaskRunner): Promise<boolean> {
-    const taskId = await runner.start(buildLocalRelayRuntimeSystemTaskSpec('relay.runtime.uninstall.v1'));
+export async function runRelayRuntimeUninstallTask(runner: SystemTaskRunner, startSpec?: (spec: SystemTaskSpec) => Promise<string>): Promise<boolean> {
+    const spec = buildLocalRelayRuntimeSystemTaskSpec('relay.runtime.uninstall.v1');
+    const taskId = await (startSpec ? startSpec(spec) : runner.start(spec));
     const result = await waitForSystemTaskResult(runner, taskId);
     if (!result.ok) {
         const message = readErrorMessage(result);
@@ -196,8 +204,13 @@ function readErrorMessage(result: SystemTaskResult | null): string | null {
 
 export function useLocalRelayRuntimeControl(options: Readonly<{
     runner?: SystemTaskRunner;
+    /** Addressed controls capture their Home; device controls resolve the active credential owner. */
+    actionScope?: ServerAccountScope;
+    onApprovalPending?: (registration: ActionApprovalContinuation) => void;
 }> = {}) {
     const runner = options.runner ?? getDefaultSystemTaskRunner();
+    const mountedAction = useLocalRuntimeActionExecution(options.actionScope, { runner, onApprovalPending: options.onApprovalPending });
+    const runtimeAction = React.useMemo(() => createUiHomeRuntimeActionClient(runner, mountedAction.execute), [runner, mountedAction.execute]);
     const [bridgeUnavailable, setBridgeUnavailable] = React.useState(false);
     const isUnavailable = runner.mode === 'unavailable' || bridgeUnavailable;
     const [statusTaskId, setStatusTaskId] = React.useState<string | null>(null);
@@ -224,11 +237,24 @@ export function useLocalRelayRuntimeControl(options: Readonly<{
     ): Promise<SystemTaskStartOutcome> => {
         try {
             const currentStatus = lastStatusRef.current;
-            const spec = buildLocalRelayRuntimeSystemTaskSpec(kind, {
+            const input = {
                 ...(currentStatus ? { runtimeTarget: { channel: currentStatus.channel, mode: currentStatus.mode } } : {}),
                 ...taskOptions,
-            });
-            const taskId = await runner.start(spec);
+            };
+            const spec = buildLocalRelayRuntimeSystemTaskSpec(kind, input);
+            const recover = kind === 'relay.runtime.personal_home.restore.v1' && input.personalHomeOperation?.action === 'recover';
+            let taskId: string;
+            if (mountedAction.requiresAction) {
+                const outcome = await runtimeAction(recover
+                    ? 'relay.runtime.personal_home.recover_restore' : LOCAL_RELAY_RUNTIME_ACTION_IDS[kind],
+                    recover ? { runtimeTarget: input.runtimeTarget, purpose: input.purpose } : input);
+                if (!('status' in outcome) || outcome.status !== 'task_started') {
+                    throw new Error('reason' in outcome ? outcome.reason : t('settings.systemTaskStartFailed'));
+                }
+                taskId = outcome.taskId;
+            } else {
+                taskId = await mountedAction.runSignedOutDraft(() => runner.start(spec));
+            }
             setBridgeUnavailable(false);
             setLastErrorMessage(null);
             return { status: 'started', taskId, spec };
@@ -242,7 +268,7 @@ export function useLocalRelayRuntimeControl(options: Readonly<{
             setLastErrorMessage(failure);
             return { status: 'failed', message: failure };
         }
-    }, [runner]);
+    }, [mountedAction.requiresAction, mountedAction.runSignedOutDraft, runner, runtimeAction]);
 
     const refreshStatus = React.useCallback(async () => {
         if (isUnavailable) {
@@ -303,6 +329,7 @@ export function useLocalRelayRuntimeControl(options: Readonly<{
     }, [runTaskAndWait]);
 
     React.useEffect(() => {
+        if (!mountedAction.ready) return;
         if (isUnavailable) {
             return;
         }
@@ -311,7 +338,7 @@ export function useLocalRelayRuntimeControl(options: Readonly<{
         }
         autoRefreshRequestedRef.current = true;
         void refreshStatus().catch(() => {});
-    }, [isUnavailable, refreshStatus]);
+    }, [isUnavailable, mountedAction.ready, refreshStatus]);
 
     // An operation whose prompts are still being answered by the shared runner
     // outlives this surface. Rediscover it on mount so a remount reattaches to
@@ -372,7 +399,7 @@ export function useLocalRelayRuntimeControl(options: Readonly<{
         return snapshot ?? null;
     }, [actionSnapshot, statusSnapshot]);
 
-    const isBusy = activeTaskSnapshot != null && activeTaskSnapshot.result == null;
+    const isBusy = !mountedAction.ready || mountedAction.approval.approvalPending || (activeTaskSnapshot != null && activeTaskSnapshot.result == null);
 
     const runPersonalHomeTask = React.useCallback(async (
         kind: PersonalHomeTaskKind,
@@ -481,6 +508,7 @@ export function useLocalRelayRuntimeControl(options: Readonly<{
     }, [refreshInspection, refreshStatus]);
 
     return {
+        approval: mountedAction.approval,
         activeTaskSnapshot,
         /**
          * Makes an Account the first owner of this computer's ownerless Personal Home, through
@@ -605,8 +633,16 @@ export function useLocalRelayRuntimeControl(options: Readonly<{
         ): Promise<string | null> => {
             if (isUnavailable) return null;
             try {
-                const taskId = await (options.startSpec ? options.startSpec(spec) : runner.start(spec));
-                if (options.promptContinuation) runner.registerPromptContinuation?.(taskId, options.promptContinuation);
+                if (!options.startSpec && mountedAction.requiresAction) throw new Error('runtime_action_admission_required');
+                const taskId = await (options.startSpec ? options.startSpec(spec) : mountedAction.runSignedOutDraft(() => runner.start(spec)));
+                if (options.promptContinuation) {
+                    const continuation = spec.kind === 'remote.ssh.manageHost.v1'
+                        && spec.params?.action === 'personalHome.relocate'
+                        ? bindPersonalHomeRelocationTaskContinuation(options.promptContinuation,
+                            createSshSystemTaskPromptContinuation(runner, taskId))
+                        : options.promptContinuation;
+                    runner.registerPromptContinuation?.(taskId, continuation);
+                }
                 setBridgeUnavailable(false);
                 setLastErrorMessage(null);
                 handledActionTaskIdRef.current = null;
@@ -623,7 +659,7 @@ export function useLocalRelayRuntimeControl(options: Readonly<{
                     : (message ?? t('settings.systemTaskStartFailed')));
                 return null;
             }
-        }, [isUnavailable, runner]),
+        }, [isUnavailable, mountedAction.requiresAction, mountedAction.runSignedOutDraft, runner]),
         inspection,
         lastOperation,
         lastVerification,
@@ -635,9 +671,19 @@ export function useLocalRelayRuntimeControl(options: Readonly<{
             setActiveOperationSpec(null);
             setLastOperation(null);
         }, []),
+        actionServerId: mountedAction.binding?.serverId ?? '',
         cancelTask: React.useCallback(async (taskId: string) => {
-            await runner.cancel(taskId);
-        }, [runner]),
+            try {
+                if (!mountedAction.requiresAction) return await mountedAction.runSignedOutDraft(() => runner.cancel(taskId));
+                const outcome = await runtimeAction('relay.runtime.task.cancel', { taskId });
+                if (!('status' in outcome) || outcome.status === 'unavailable' || outcome.status === 'outcome_unknown') {
+                    throw new Error('reason' in outcome ? outcome.reason : t('errors.operationFailed'));
+                }
+            } catch (error) {
+                setLastErrorMessage(readSystemTaskStartErrorMessage(error) ?? t('errors.operationFailed'));
+                throw error;
+            }
+        }, [mountedAction.requiresAction, mountedAction.runSignedOutDraft, runner, runtimeAction]),
         respondToTaskPrompt: React.useCallback(async (taskId: string, answer: unknown) => {
             await runner.respond(taskId, answer);
         }, [runner]),

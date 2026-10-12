@@ -5,7 +5,13 @@ import {
   HAPPIER_PRESS_FEEDBACK_V1,
   HappierPressable,
 } from '@happier-dev/plugin-ui/presentation';
-import type { ConnectedServicePoolSelectionV1 } from '@happier-dev/protocol/connect/connectedServicePoolSelection';
+import { ConnectedServicePoolSelectionGetResponseV1Schema, type ConnectedServicePoolSelectionV1 } from '@happier-dev/protocol/connect/connectedServicePoolSelection';
+import type { PluginUiResourceSnapshot } from '@happier-dev/plugin-ui/hostApi';
+import { isPluginUiResourceReadAuthorityLost } from '@happier-dev/plugin-ui/advanced';
+import { useAuth } from '@/auth/context/AuthContext';
+import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { captureUiUsageQueryAccountContext, getUsageQueryResourceStore } from '@/sync/api/account/usageQueryResource';
+import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { MeterBar } from '@/components/ui/lists/MeterBar';
 import { FloatingOverlay } from '@/components/ui/overlays/FloatingOverlay';
 import { Popover } from '@/components/ui/popover';
@@ -167,6 +173,7 @@ function unreadText(
 }
 
 type PoolOrderProps = Readonly<{
+  serverId: string;
   pools: readonly UsagePlanPool[];
   accounts: readonly UsagePlanAccount[];
   selections: ReadonlyMap<string, UsagePoolSelectionState>;
@@ -219,6 +226,8 @@ function PoolQueue(props: PoolOrderProps & Readonly<{ pool: UsagePlanPool }>) {
         meta={strategy.label}
         action={
           <PoolWhy
+            serverId={props.serverId}
+            accounts={props.accounts}
             pool={props.pool}
             label={label}
             members={members}
@@ -383,6 +392,9 @@ export function UsagePoolSteps(props: PoolOrderProps) {
           >
             <UsagePlanSectionHead
               title={label}
+              action={<PoolWhy serverId={props.serverId} accounts={props.accounts} pool={pool} label={label}
+                members={members} selection={state.selection} observedAtMs={state.observedAtMs}
+                nameOf={props.nameOf} nowMs={props.nowMs} testID={`${props.testID}.${pool.groupId}.why`} />}
               meta={
                 getPoolStrategyPresentation(
                   state.selection.decisionTrace.strategy,
@@ -451,6 +463,8 @@ export function UsagePoolSteps(props: PoolOrderProps) {
 }
 
 type WhyProps = Readonly<{
+  serverId: string;
+  accounts: readonly UsagePlanAccount[];
   pool: UsagePlanPool;
   label: string;
   members: readonly UsagePoolMember[];
@@ -573,11 +587,68 @@ function PoolWhyPopover(
             <Text style={[styles.quiet, text.detail]}>
               {`${t('usage.board.plans.whyRule')}: ${strategy.label}. ${strategy.description}`}
             </Text>
+            <PoolComparison {...props} />
           </View>
         </FloatingOverlay>
       )}
     </Popover>
   );
+}
+
+const EMPTY_COMPARISON: PluginUiResourceSnapshot = Object.freeze({ freshness: 'unknown', pending: 'idle', subscription: 'ended' });
+const COMPARISON_STRATEGIES = ['manual', 'priority', 'least_limited', 'expiry_first'] as const;
+
+/** The open detail owns only the question. The shared Resource and selector own its answer. */
+function PoolComparison(props: WhyProps) {
+  const text = usePlanText();
+  const { credentials } = useAuth();
+  const lifetime = captureActiveServerAccountScopeLifetime();
+  const [strategy, setStrategy] = React.useState(props.selection.decisionTrace.strategy);
+  const [atMs, setAtMs] = React.useState<number | null>(null);
+  const [asked, setAsked] = React.useState(false);
+  const [strategyOpen, setStrategyOpen] = React.useState(false);
+  const [momentOpen, setMomentOpen] = React.useState(false);
+  const context = React.useMemo(() => asked && credentials && lifetime?.isCurrent()
+    && lifetime.scope.serverId === props.serverId ? captureUiUsageQueryAccountContext(credentials) : null,
+  [asked, credentials, lifetime, props.serverId]);
+  const moment = atMs ?? props.nowMs;
+  const machineId = props.pool.selectorMachineId;
+  const entry = React.useMemo(() => context && machineId ? getUsageQueryResourceStore(context).getEntry({
+    hostRead: 'connectedServices.pools.selection.get', input: { machineId,
+      group: { service: props.pool.service, groupId: props.pool.groupId }, hypothetical: { strategy, atMs: moment } },
+  }) : null, [context, machineId, props.pool.service, props.pool.groupId, strategy, moment]);
+  const subscribe = React.useCallback((listener: () => void) => entry?.subscribe(listener, true) ?? (() => {}), [entry]);
+  const getSnapshot = React.useCallback(() => entry?.getSnapshot() ?? EMPTY_COMPARISON, [entry]);
+  const snapshot = React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const result = React.useMemo(() => lifetime?.isCurrent() && !isPluginUiResourceReadAuthorityLost(snapshot) && snapshot.value
+    ? ConnectedServicePoolSelectionGetResponseV1Schema.safeParse(JSON.parse(new TextDecoder().decode(snapshot.value.bytes))) : null,
+  [lifetime, snapshot]);
+  const response = result?.success ? result.data : null;
+  // Only witnessed future clocks are offered; selecting one does not assert that a vendor quota refills then.
+  const moments = [...new Set([
+    ...props.accounts.filter(account => props.pool.accountKeys.includes(account.key)).flatMap(account => account.windows.map(window => window.resetAtMs)),
+    ...props.selection.decisionTrace.orderedEligibleCandidates.map(candidate => candidate.preferenceDeadlineMs),
+    ...props.selection.excluded.map(excluded => excluded.retryAtMs),
+  ].filter((time): time is number => time != null && time > props.nowMs))].sort((left, right) => left - right);
+  const id = `${props.testID}.comparison`;
+  return <View style={styles.pool} testID={id}>
+    <Text accessibilityRole="header" style={[styles.strong, text.title]}>{t('usage.board.plans.comparisonTitle')}</Text>
+    <DropdownMenu testID={`${id}.strategy`} open={strategyOpen} onOpenChange={setStrategyOpen}
+      selectedId={strategy} items={COMPARISON_STRATEGIES.map(value => ({ id: value, title: getPoolStrategyPresentation(value).label }))}
+      itemTrigger={{ title: t('usage.board.plans.whyRule') }}
+      onSelect={value => { const next = COMPARISON_STRATEGIES.find(option => option === value); if (next) { setStrategy(next); setAsked(true); } }} />
+    <DropdownMenu testID={`${id}.moment`} open={momentOpen} onOpenChange={setMomentOpen}
+      selectedId={atMs === null ? 'now' : String(atMs)}
+      items={[{ id: 'now', title: t('usage.board.plans.stepNow') }, ...moments.map(time => ({ id: String(time), title: formatPlanMoment(time, props.nowMs) }))]}
+      itemTrigger={{ title: t('usage.board.plans.comparisonMoment') }}
+      onSelect={value => { if (value === 'now' || moments.includes(Number(value))) { setAtMs(value === 'now' ? null : Number(value)); setAsked(true); } }} />
+    <Text style={[styles.quiet, text.detail]}>{t('usage.board.plans.comparisonNote')}</Text>
+    {asked ? !entry ? <Text style={[styles.quiet, text.detail]}>{t('usage.board.plans.usedFirstNoMachine')}</Text>
+      : snapshot.error || response && 'status' in response ? <Text style={[styles.quiet, text.detail]}>{t('usage.board.plans.usedFirstReadFailed')}</Text>
+      : response && 'group' in response ? <View accessibilityRole="list">{readUsagePoolMembers(props.pool, props.accounts, response.selection).map((member, index) =>
+        <WhyRow key={member.accountId} member={member} first={index === 0} nameOf={props.nameOf} nowMs={moment} testID={`${id}.candidate.${member.accountId}`} />)}</View>
+      : <Text style={[styles.quiet, text.detail]}>{t('usage.board.plans.hintLoading')}</Text> : null}
+  </View>;
 }
 
 const BASIS_SENTENCE_KEYS = {
@@ -686,7 +757,7 @@ function WhyRow(
 
 const styles = StyleSheet.create((theme) => ({
   pools: { gap: 18 },
-  pool: { gap: 6 },
+  pool: { gap: theme.space.s6 },
   quiet: {
     ...Typography.default(),
     color: theme.colors.text.tertiary,
@@ -701,22 +772,22 @@ const styles = StyleSheet.create((theme) => ({
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    paddingVertical: 9,
+    gap: theme.space.s10,
+    paddingVertical: theme.space.s8,
   },
   rowDivider: {
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: theme.colors.border.default,
   },
-  rowText: { flex: 1, minWidth: 0, gap: 2 },
+  rowText: { flex: 1, minWidth: 0, gap: theme.space.s2 },
   rowTitle: {
     flexDirection: 'row',
     alignItems: 'center',
     flexWrap: 'wrap',
-    columnGap: 8,
-    rowGap: 2,
+    columnGap: theme.space.s8,
+    rowGap: theme.space.s2,
   },
-  rowMeter: { width: QUEUE_METER_WIDTH_PX, gap: 5 },
+  rowMeter: { width: QUEUE_METER_WIDTH_PX, gap: theme.space.s4 },
   rowValue: {
     ...Typography.default('semiBold'),
     color: theme.colors.text.primary,
@@ -724,22 +795,22 @@ const styles = StyleSheet.create((theme) => ({
     textAlign: 'right',
   },
   steps: { flexDirection: 'row', alignItems: 'stretch' },
-  step: { flex: 1, minWidth: 0, gap: 5, paddingRight: 10 },
+  step: { flex: 1, minWidth: 0, gap: theme.space.s4, paddingRight: theme.space.s10 },
   stepDivider: {
-    paddingLeft: 10,
+    paddingLeft: theme.space.s10,
     borderLeftWidth: StyleSheet.hairlineWidth,
     borderLeftColor: theme.colors.border.default,
   },
   whyTrigger: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
+    gap: theme.space.s4,
     borderRadius: theme.borderRadius.sm,
   },
   whyTriggerText: {
     ...Typography.default('medium'),
     color: theme.colors.text.secondary,
   },
-  why: { paddingHorizontal: 14, paddingVertical: 12, gap: 10 },
-  whyHead: { gap: 2 },
+  why: { paddingHorizontal: 14, paddingVertical: theme.space.s12, gap: theme.space.s10 },
+  whyHead: { gap: theme.space.s2 },
 }));

@@ -642,11 +642,7 @@ describe('PluginSettingsPageScreen', () => {
         })).toBe(false);
     });
 
-    // A deep link lands on this page with no plugin-home context, so the machine
-    // its fields, secrets and lifecycle operations address has to be named here
-    // — by the SAME selection that produced the daemon target above, not a
-    // second copy of the decision.
-    it('names the administration machine it writes to, from the one selection its target came from', async () => {
+    it('does not imply machine-scoped fields on an Account page, while retaining its canonical daemon settings target', async () => {
         const page = settingsPage();
         appShellState.projection = {
             ...EMPTY_PLUGIN_UI_PROJECTION,
@@ -656,9 +652,7 @@ describe('PluginSettingsPageScreen', () => {
 
         await renderScreen(<PluginSettingsPageScreen pluginId="examples.descriptor-only" pageId="settings" />);
 
-        expect(administrationTargetSelectorSpy).toHaveBeenCalledWith(expect.objectContaining({
-            selection: administrationSelectionFixture,
-        }));
+        expect(administrationTargetSelectorSpy).not.toHaveBeenCalled();
         expect(latestHostProps().daemonSettingsTarget).toEqual({
             kind: 'daemon',
             serverIdentityId: administrationSelectionFixture.selectedTarget.serverIdentityId,
@@ -741,9 +735,9 @@ describe('PluginSettingsPageScreen', () => {
             pathname: '/(app)/settings/plugins/[pluginId]',
             params: { pluginId: 'examples.descriptor-only' },
         });
-        expect(stackScreenSpy).toHaveBeenCalledWith({
-            options: { title: page.page.title },
-        });
+        expect(stackScreenSpy).toHaveBeenCalledWith(expect.objectContaining({
+            options: expect.objectContaining({ title: page.page.title }),
+        }));
     });
 });
 

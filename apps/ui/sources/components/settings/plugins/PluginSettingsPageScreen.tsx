@@ -13,7 +13,9 @@ import { RouteRemovalStepConsumer } from '@/utils/navigation/RouteRemovalStepCon
 import { ESCAPE_LAYER_PRIORITIES, useEscapeLayer } from '@/keyboard/escape';
 import { PluginSurfaceFallback } from '@/components/sessions/panes/PluginSurfaceFallback';
 import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
-import { MachineAdministrationContextBar } from '@/components/settings/machines/MachineAdministrationContextBar';
+import { PluginMachineExecutionOriginSelectorView } from '@/components/settings/machines/PluginMachineExecutionOriginSelector';
+import { isPluginSurfaceMachineBound, usePluginSurfaceExecutionOrigin } from '@/components/plugins/surfaces/pluginSurfaceExecutionOrigin';
+import { PageNavigationContextActionsProvider } from '@/components/ui/layout/NavigationHeaderActions';
 import { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } from '@/sync/domains/machines/administration/selectionPreferences';
 import {
     useScopedPluginSettingsDaemonTargetBinding,
@@ -39,10 +41,8 @@ export const PluginSettingsPageScreen = React.memo(function PluginSettingsPageSc
     const isFocused = useIsFocused();
     const router = useRouter();
     const appShell = useAppShellPluginUiProjection();
-    // One administration-target owner for every plugin Settings surface. A
-    // deep-linked page addresses the same machine the plugin home and detail
-    // screens administer, through the same currentness fence, and the selector
-    // below names it so the reader can see which machine they are editing.
+    // Settings writes retain the canonical administration target independently
+    // of the page's execution origin; Account fields do not imply machine administration.
     const administration = useScopedPluginSettingsDaemonTargetBinding(
         MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.plugins,
     );
@@ -59,6 +59,24 @@ export const PluginSettingsPageScreen = React.memo(function PluginSettingsPageSc
             })
             : null
     ), [appShell.pluginUiProjection, locale, props.pageId, props.pluginId]);
+    const needsMachineExecution = destination !== null && isPluginSurfaceMachineBound({
+        pluginId: destination.page.pluginId, renderer: destination.page.renderer, projection: appShell.pluginUiProjection,
+    });
+    const pageExecution = usePluginSurfaceExecutionOrigin({
+        pluginId: props.pluginId ?? '',
+        projection: appShell.pluginUiProjection,
+        entry: destination?.page,
+        enabled: needsMachineExecution,
+    });
+    const executionChip = React.useMemo(() => needsMachineExecution ? <PluginMachineExecutionOriginSelectorView
+        selection={pageExecution.selection} presentation="chip"
+        groupTitle={t('settingsPlugins.executionOriginTitle')} testIDPrefix="plugin-page-execution" /> : null,
+    [needsMachineExecution, pageExecution.selection]);
+    const headerOptions = React.useMemo(() => ({ title: destination?.title ?? t('pluginSurfaces.appPage.title'),
+        headerRight: () => executionChip }), [destination?.title, executionChip]);
+    const renderPage = (body: React.ReactNode) => <PageNavigationContextActionsProvider actions={executionChip}>
+        <Stack.Screen options={headerOptions} />{body}
+    </PageNavigationContextActionsProvider>;
     const recoveryAction = React.useMemo(() => {
         const pluginId = props.pluginId;
         return pluginId
@@ -143,18 +161,13 @@ export const PluginSettingsPageScreen = React.memo(function PluginSettingsPageSc
         && !destination
         && (appShell.phase === 'establishing' || appShell.hasEstablishingMembers)
     ) {
-        return (
-            <>
-                <Stack.Screen options={{}} />
-                <PluginSurfaceFallback testID="plugin-settings-page-loading" state="loading" />
-            </>
-        );
+        return renderPage(<PluginSurfaceFallback testID="plugin-settings-page-loading" state="loading" />);
     }
 
     if (subPath === null) {
         // An illegal location is not the page root: fail closed at this same
         // unavailable route instead of silently opening the page root.
-        return (
+        return renderPage(
             <PluginSurfaceFallback
                 testID="plugin-settings-page-unavailable"
                 reasonCode="plugin_surface_open_sub_path_invalid"
@@ -166,36 +179,23 @@ export const PluginSettingsPageScreen = React.memo(function PluginSettingsPageSc
     if (!destination) {
         // A removed, malformed, or stale page remains at its own
         // generic route. It is never redirected to a different plugin/page.
-        return <PluginSurfaceFallback testID="plugin-settings-page-unavailable" action={recoveryAction} />;
+        return renderPage(<PluginSurfaceFallback testID="plugin-settings-page-unavailable" action={recoveryAction} />);
     }
 
-    if (destination.page.availability.state !== 'available') {
-        return (
-            <>
-                <Stack.Screen options={{ title: destination.title }} />
-                <PluginSurfaceFallback
-                    testID="plugin-settings-page-unavailable"
-                    reasonCode={destination.page.availability.reason}
-                    action={recoveryAction}
-                />
-            </>
+    // The shared host evaluates policy before projecting resolving selection as
+    // loading. Do not let a route-local loader swallow a real policy denial.
+    if (destination.page.availability.state !== 'available' && destination.page.availability.state !== 'resolving') {
+        return renderPage(
+            <PluginSurfaceFallback
+                testID="plugin-settings-page-unavailable"
+                reasonCode={destination.page.availability.reason}
+                action={recoveryAction}
+            />
         );
     }
 
-    return (
+    return renderPage(
         <>
-            <Stack.Screen options={{ title: destination.title }} />
-            {/*
-              * The administration target is a different fact from the plugin's
-              * execution origin, and a deep link arrives with neither on
-              * screen. Name the machine this page's fields, secrets and
-              * lifecycle operations address before the fields themselves.
-              */}
-            <MachineAdministrationContextBar
-                label={t('settingsPlugins.administrationMachineTitle')}
-                selection={administration.selection}
-                testIDPrefix="settings.plugins.page.administration.target"
-            />
             {/*
               * A focused Settings route is this subtree's one semantic current
               * owner, exactly as the App Page route is for its own. Without the

@@ -15,9 +15,11 @@ import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { presentProviderError } from '@/providers/connection/errorPresentation';
 import { t } from '@/text';
+import { ConnectedAccountActionApprovalNotice } from '../ConnectedAccountActionApprovalNotice';
 
 import type { PoolGatewayChoice } from './poolGatewayChoices';
 import type { usePoolGatewayChoices } from './usePoolGatewayChoices';
+import { joinList } from '@/utils/text/joinList';
 
 export type PoolGatewaySectionProps = Readonly<{
   testID: string;
@@ -56,9 +58,16 @@ export const PoolGatewaySection = React.memo(function PoolGatewaySection(
     [setEnabled],
   );
 
-  if (usage.choices.length === 0) return null;
+  const createFirstGateway = usage.createFirstGateway;
+  const first = React.useCallback(() => {
+    // Refusals are reported by the mutation owner below; the switch reads saved state.
+    void createFirstGateway().catch(() => undefined);
+  }, [createFirstGateway]);
 
-  const native = props.nativeAgentTitles.join(', ');
+  if (usage.choices.length === 0 && !usage.firstGateway) return null;
+  const firstGatewayTitle = t('settingsProvidersCollection.gateway.mainGatewayName');
+
+  const native = joinList(props.nativeAgentTitles);
   const errorDescription = usage.error
     ? t(presentProviderError(usage.error).descriptionKey)
     : null;
@@ -70,12 +79,50 @@ export const PoolGatewaySection = React.memo(function PoolGatewaySection(
         native
           ? t('settingsProvidersCollection.gateway.poolSectionDescription', {
               agents: native,
+              count: props.nativeAgentTitles.length,
             })
           : t(
               'settingsProvidersCollection.gateway.poolSectionDescriptionGeneric',
             )
       }
     >
+      <ConnectedAccountActionApprovalNotice pendingApproval={usage.pendingApproval} testID={`${props.testID}:approval-pending`} />
+      {usage.choices.length === 0 && usage.firstGateway ? (
+        <Item
+          testID={`${props.testID}:first`}
+          title={t('settingsProvidersCollection.gateway.poolSectionTitle')}
+          titleAccessory={
+            <Text style={styles.via}>
+              {t('settingsProvidersCollection.gateway.poolSwitchVia', {
+                gateway: firstGatewayTitle,
+              })}
+            </Text>
+          }
+          // Until the Account catalog is current the switch only waits; no machine is involved (D11).
+          subtitle={t('settingsProvidersCollection.gateway.poolSwitchCreates', {
+            gateway: firstGatewayTitle,
+          })}
+          subtitleLines={0}
+          showChevron={false}
+          rightElement={
+            <Switch
+              testID={`${props.testID}:first:toggle`}
+              accessibilityLabel={[
+                t('settingsProvidersCollection.gateway.poolSectionTitle'),
+                t('settingsProvidersCollection.gateway.poolSwitchVia', {
+                  gateway: firstGatewayTitle,
+                }),
+              ].join(' ')}
+              value={usage.pending}
+              disabled={!usage.ready || usage.pending}
+              onValueChange={(next) => {
+                if (next) first();
+              }}
+            />
+          }
+          rightElementOutsidePressable
+        />
+      ) : null}
       {usage.choices.map((choice) => {
         const rowTestID = `${props.testID}:${choice.connectionId}`;
         const held = choice.replacementTarget
@@ -96,11 +143,7 @@ export const PoolGatewaySection = React.memo(function PoolGatewaySection(
                 </Text>
               }
               subtitle={
-                !usage.ready
-                  ? t(
-                      'settingsProvidersCollection.gateway.poolSwitchNeedsComputer',
-                    )
-                  : held !== null
+                held !== null
                     ? t(
                         'settingsProvidersCollection.gateway.poolSwitchHeldBy',
                         {
@@ -306,8 +349,8 @@ const styles = StyleSheet.create((theme) => ({
   comparisonRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    gap: 12,
-    paddingVertical: 8,
+    gap: theme.space.s12,
+    paddingVertical: theme.space.s8,
   },
   comparisonDivider: {
     borderTopWidth: StyleSheet.hairlineWidth,

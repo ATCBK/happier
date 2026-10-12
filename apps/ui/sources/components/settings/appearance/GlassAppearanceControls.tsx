@@ -1,12 +1,11 @@
 import * as React from 'react';
 import { Linking, Platform, View, type StyleProp, type ViewStyle } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { GradientSurface } from '@/components/ui/surfaces/GradientSurface';
-import { Icon } from '@/components/ui/icons/Icon';
-import { Text } from '@/components/ui/text/Text';
-import { RoundButton } from '@/components/ui/buttons/RoundButton';
-import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
-import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
+import { AtmospherePreview } from '@/components/atmosphere/look/AtmospherePreview';
+import { TextLinkButton } from '@/components/ui/buttons/TextLinkButton';
+import { LookPanelBlock, LookSegments } from '@/components/atmosphere/look/LookControls';
+import { Typography } from '@/constants/Typography';
+import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 import { HAPPIER_DESKTOP_DOWNLOAD_URL } from '@/constants/downloadUrls';
 import { openExternalUrl } from '@/utils/url/openExternalUrl';
 import { resolveGlassCapability } from '@/components/ui/glass/resolveGlassCapability';
@@ -14,16 +13,17 @@ import { useLiquidGlassAvailable } from '@/components/ui/glass/liquidGlass';
 
 import { useGlassAppearance } from '@/components/ui/glass/useGlassAppearance';
 import { useGlassRuntimeEnvironment } from '@/components/ui/glass/glassRuntimeEnvironment';
-import { GLASS_PRESETS, GLASS_BLUR_STEPS, GLASS_SURFACE_GROUPS, readGlassMaterials, readGlassPreset, resolveGlassSurfaceMaterial, resolveGlassPresetSettingsDelta, type GlassMaterialChoice, type GlassMaterialSettings } from '@/components/ui/glass/glassMaterial';
+import { GLASS_PRESETS, readGlassMaterials, readGlassPreset, resolveGlassSurfaceMaterial, resolveGlassPresetSettingsDelta, type GlassMaterialChoice, type GlassMaterialSettings } from '@/components/ui/glass/glassMaterial';
+import { readGlassSurfaceMode } from '@happier-dev/protocol/actions/settings/glassPreferenceMutations';
 import { resolveGlassPresentationVariables } from '@/components/ui/glass/glassDocumentPresentation';
 import { GlassMaterialSettingsProvider } from '@/components/ui/glass/useGlassMaterialSettings';
 import { useReduceTransparency } from '@/hooks/ui/useReduceTransparency';
 import { Item } from '@/components/ui/lists/Item';
+import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
+import { GlassSurface } from '@/components/ui/glass/GlassSurface';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
-import { ExpandableItem } from '@/components/ui/lists/ExpandableItem';
 import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import { SelectionTiles } from '@/components/ui/forms/SelectionTiles';
-import { Slider } from '@/components/ui/forms/Slider';
 import { SettingAnchor, SettingRow, SettingSection } from '@/components/settings/shell/SettingRow';
 import { openDesktopReduceTransparencySettings } from '@/utils/platform/desktopGlassMaterial';
 import { Modal } from '@/modal';
@@ -31,6 +31,9 @@ import { t } from '@/text';
 import { lightTheme } from '@/theme';
 import { ThemePalettePreview } from './ThemeModePreview';
 import { APPEARANCE_SETTINGS } from './appearanceSettings';
+import { AtmosphereAppearanceRows, AtmosphereWhereItShows } from './AtmosphereAppearanceRows';
+import { useHomeAtmosphereEditor } from '@/components/atmosphere/look/atmosphereEditor';
+import { lookCopy } from '@/components/atmosphere/look/LookControls';
 
 type GlassPresetPreviewProps = Readonly<{
     preset: GlassMaterialChoice;
@@ -45,11 +48,6 @@ export function GlassPresetPreview(props: GlassPresetPreviewProps) {
     return <GlassStagePreview {...props} />;
 }
 
-function SampleWallpaper() {
-    const { theme } = useUnistyles();
-    const colors = [theme.colors.surface.inset, theme.colors.surface.elevated, theme.colors.background.canvas] as const;
-    return <GradientSurface fallbackColor={colors[0]} gradient={{ colors, start: { x: 0, y: 0 }, end: { x: 1, y: 1 } }} borderRadius={0} style={StyleSheet.absoluteFillObject} />;
-}
 
 function GlassStagePreview(props: GlassPresetPreviewProps) {
     const environment = useGlassRuntimeEnvironment();
@@ -62,35 +60,74 @@ function GlassStagePreview(props: GlassPresetPreviewProps) {
     });
     return <GlassMaterialSettingsProvider value={settings}>
         <View style={[{ flex: 1, minWidth: 0, overflow: 'hidden' }, Platform.OS === 'web' ? variables as unknown as ViewStyle : null, props.style]}>
-            <SampleWallpaper />
-            {props.children ?? <ThemePalettePreview palette={props.palette ?? lightTheme} materials={readGlassMaterials(settings)} materialSettings={settings} materialEnvironment={{ ...environment, reduceTransparency: reduceTransparency || environment.reduceTransparency === true }} floatingOnly={!environment.desktopWindow} backdrop={<SampleWallpaper />} />}
+            <AtmospherePreview />
+            {props.children ?? <ThemePalettePreview palette={props.palette ?? lightTheme} materials={readGlassMaterials(settings)} materialSettings={settings} materialEnvironment={{ ...environment, reduceTransparency: reduceTransparency || environment.reduceTransparency === true }} floatingOnly={!environment.desktopWindow} backdrop={<AtmospherePreview />} />}
         </View>
     </GlassMaterialSettingsProvider>;
 }
 
 const presetOptions = GLASS_PRESETS;
-const surfaceSettings = {
-    chrome: { blur: APPEARANCE_SETTINGS.settings.glassChromeBlur, opacity: APPEARANCE_SETTINGS.settings.glassChromeOpacity },
-    sidebar: { blur: APPEARANCE_SETTINGS.settings.glassSidebarBlur, opacity: APPEARANCE_SETTINGS.settings.glassSidebarOpacity },
-    content: { blur: APPEARANCE_SETTINGS.settings.glassContentBlur, opacity: APPEARANCE_SETTINGS.settings.glassContentOpacity },
-    floating: { blur: APPEARANCE_SETTINGS.settings.glassFloatingBlur, opacity: APPEARANCE_SETTINGS.settings.glassFloatingOpacity },
-} as const;
-const customizeSettings = [
-    APPEARANCE_SETTINGS.settings.glassCustomize,
-    ...GLASS_SURFACE_GROUPS.flatMap(group => [surfaceSettings[group].blur, surfaceSettings[group].opacity]),
-];
+const surfaceSettings = [
+    { group: 'content', setting: APPEARANCE_SETTINGS.settings.glassWindow },
+    { group: 'chrome', setting: APPEARANCE_SETTINGS.settings.glassChrome },
+    { group: 'sidebar', setting: APPEARANCE_SETTINGS.settings.glassSidebar },
+    { group: 'card', setting: APPEARANCE_SETTINGS.settings.glassElements },
+    { group: 'floating', setting: APPEARANCE_SETTINGS.settings.glassFloating },
+] as const;
 
-/** The page and popover share this live control owner; only the page's preview/disclosure differ. */
-export function GlassAppearanceControls(props: Readonly<{ presentation: 'tiles' | 'compact' }>) {
+/**
+ * The page, the Appearance popover and the Look panel share this live control owner. `tiles` is the
+ * Settings page (visual tiles, preview, layers); `compact` the toolbar popover's rows; `panel` the
+ * Look panel's blocks, which say only what constrains the choice and leave the desktop app to Settings.
+ */
+export function GlassAppearanceControls(props: Readonly<{ presentation: 'tiles' | 'compact' | 'panel' }>) {
     const { theme } = useUnistyles();
     const appearance = useGlassAppearance();
-    const [expanded, setExpanded] = React.useState(false);
+    const environment = useGlassRuntimeEnvironment();
     const compact = props.presentation === 'compact';
     const options = presetOptions.map(id => ({ id, title: t(`settingsAppearance.glassControls.${id}`), preview: <GlassPresetPreview preset={id} settings={appearance.settings} palette={theme} /> }));
     const blurOptions = (['light', 'regular', 'strong'] as const).map(id => ({
         id,
         label: t(id === 'light' ? 'settingsAppearance.glass.intensityLight' : id === 'regular' ? 'settingsAppearance.glass.intensityRegular' : 'settingsAppearance.glass.intensityStrong'),
     }));
+    const tintOptions = (['subtle', 'medium', 'strong'] as const).map(id => ({
+        id,
+        label: t(id === 'subtle' ? 'settingsAppearance.glassControls.tintSubtle' : id === 'medium' ? 'settingsAppearance.glassControls.tintMedium' : 'settingsAppearance.glassControls.tintStrong'),
+    }));
+    if (props.presentation === 'panel') {
+        return <>
+            <LookPanelBlock title={t('settingsAppearance.glassControls.title')}>
+                <LookSegments<GlassMaterialChoice>
+                    label={t('settingsAppearance.glassControls.material')}
+                    testIDPrefix="appearance-material"
+                    options={options.map(option => ({ id: option.id, label: option.title }))}
+                    value={appearance.preset}
+                    onChange={value => { if (value !== 'custom') appearance.selectPreset(value); }}
+                />
+            </LookPanelBlock>
+            <GlassEffectiveStateLine settings={appearance.settings} constraintsOnly />
+            <LookPanelBlock title={t(APPEARANCE_SETTINGS.settings.glassIntensity.titleKey)}>
+                <LookSegments
+                    label={t(APPEARANCE_SETTINGS.settings.glassIntensity.titleKey)}
+                    testIDPrefix="appearance-blur"
+                    options={blurOptions}
+                    value={appearance.intensity}
+                    onChange={appearance.setIntensity}
+                    disabled={appearance.preset === 'solid'}
+                />
+            </LookPanelBlock>
+            <LookPanelBlock title={t(APPEARANCE_SETTINGS.settings.glassTint.titleKey)}>
+                <LookSegments
+                    label={t(APPEARANCE_SETTINGS.settings.glassTint.titleKey)}
+                    testIDPrefix="appearance-tint"
+                    options={tintOptions}
+                    value={appearance.tint}
+                    onChange={appearance.setTint}
+                    disabled={appearance.preset === 'solid' || appearance.preset === 'custom'}
+                />
+            </LookPanelBlock>
+        </>;
+    }
     const material = compact ? (
         <SegmentedChoiceItem
             title={t('settingsAppearance.glassControls.material')}
@@ -115,50 +152,90 @@ export function GlassAppearanceControls(props: Readonly<{ presentation: 'tiles' 
         onChange={appearance.setIntensity}
         disabled={appearance.preset === 'solid'}
     />;
+    // Tint scales the named presets' Elements and menu coats; authored (custom) coats apply as set.
+    const tint = <SegmentedChoiceItem
+        title={t(APPEARANCE_SETTINGS.settings.glassTint.titleKey)}
+        testIDPrefix="appearance-tint"
+        options={tintOptions}
+        value={appearance.tint}
+        onChange={appearance.setTint}
+        disabled={appearance.preset === 'solid' || appearance.preset === 'custom'}
+    />;
     return <>
         {material}
         <GlassEffectiveStateLine settings={appearance.settings} />
         {compact ? blur : <SettingAnchor setting={APPEARANCE_SETTINGS.settings.glassIntensity}>{blur}</SettingAnchor>}
+        {compact ? tint : <SettingAnchor setting={APPEARANCE_SETTINGS.settings.glassTint}>{tint}</SettingAnchor>}
         {!compact ? <SettingSection section={APPEARANCE_SETTINGS.sectionRefs.glass}>
-            <SettingAnchor settings={customizeSettings}>
-                <ExpandableItem
-                    expanded={expanded}
-                    onExpandedChange={setExpanded}
-                    header={({ headerProps, expanded: isExpanded }) => <SettingAnchor setting={APPEARANCE_SETTINGS.settings.glassCustomize}>
-                        <Item {...headerProps} showChevron={false} rightElement={<Icon name={isExpanded ? 'caret-up' : 'caret-down'} color={theme.colors.text.secondary} size={theme.iconSize.medium} />} testID="appearance-customize" title={t('settingsAppearance.glassControls.customize')} detail={expanded ? undefined : t(`settingsAppearance.glassControls.${appearance.preset}`)} />
-                    </SettingAnchor>}
-                >
-                    {GLASS_SURFACE_GROUPS.map(group => {
-                        const row = <Item title={t(surfaceSettings[group].blur.titleKey)} subtitle={t(`settingsAppearance.glassControls.${group}Description`)} subtitleLines={0} showChevron={false} accessoryLayout="stacked" rightElement={<View style={styles.groupControls}>
-                            <SegmentedTabBar role="radiogroup" segmentSizing="equal" targetSize="platform" testIDPrefix={`appearance-${group}-blur`} accessibilityLabel={`${t(surfaceSettings[group].blur.titleKey)} · ${t('settingsAppearance.glassControls.blur')}`} tabs={GLASS_BLUR_STEPS.map(id => ({ id, label: id === 'off' ? t('settingsAppearance.glassControls.off') : blurOptions.find(option => option.id === id)?.label ?? id }))} activeTabId={appearance.materials[group].blur} onSelectTab={blur => appearance.updateSurface(group, { blur })} />
-                            {Platform.OS === 'web' ? <View>
-                                <View style={styles.opacityLabels}>
-                                    <Text style={styles.caption}>{t('settingsAppearance.glassControls.clear')}</Text>
-                                    <Text style={styles.caption}>{t('settingsAppearance.glassControls.solid')}</Text>
-                                    <Text testID={`appearance-${group}-opacity-value`} style={styles.value}>{formatOpacity(appearance.materials[group].opacity)}</Text>
-                                </View>
-                                <Slider testID={`appearance-${group}-opacity`} accessibilityLabel={`${t(surfaceSettings[group].opacity.titleKey)} · ${t('settingsAppearance.glassControls.opacity')}`} min={0} max={1} step={0.01} value={appearance.materials[group].opacity} onValueChange={opacity => appearance.updateSurface(group, { opacity })} formatValueText={formatOpacity} />
-                            </View> : null}
-                        </View>} />;
-                        return <SettingAnchor key={group} setting={surfaceSettings[group].blur}>
-                            {Platform.OS === 'web' ? <SettingAnchor setting={surfaceSettings[group].opacity}>{row}</SettingAnchor> : row}
-                        </SettingAnchor>;
-                    })}
-                </ExpandableItem>
-            </SettingAnchor>
+            {surfaceSettings.filter(({ group }) => group !== 'content' || environment.desktopWindow === true).map(({ group, setting }) => <SettingAnchor key={group} setting={setting}>
+                <SegmentedChoiceItem<'glass' | 'solid'>
+                    title={t(setting.titleKey)}
+                    subtitle={setting.descriptionKey ? t(setting.descriptionKey) : undefined}
+                    subtitleLines={0}
+                    testIDPrefix={`appearance-${group}`}
+                    options={[{ id: 'glass', label: t('settingsAppearance.glassControls.glass') }, { id: 'solid', label: t('settingsAppearance.glassControls.solid') }]}
+                    value={readGlassSurfaceMode(appearance.settings, group)}
+                    onChange={mode => appearance.setSurfaceMode(group, mode)}
+                />
+            </SettingAnchor>)}
         </SettingSection> : null}
     </>;
 }
 
-export function GlassAppearanceSection() {
+/**
+ * Your Home in miniature under your current glass: the greeting, the composer and the first cards over
+ * the atmosphere Home shows on this device (lab Settings "Preview"). Glass and backdrop changes show here.
+ */
+function HomeAtmospherePreview() {
+    const appearance = useGlassAppearance();
+    return <GlassPresetPreview preset={appearance.preset} settings={appearance.settings} style={styles.homePreview}>
+        <View style={styles.homePreviewPage} pointerEvents="none" aria-hidden>
+            <View style={styles.homePreviewHeadline} />
+            <GlassSurface surfaceGroup="card" finishRole="composer" style={styles.homePreviewComposer}>{null}</GlassSurface>
+            <View style={styles.homePreviewCards}>
+                {[0, 1, 2].map(index => <GlassSurface key={index} surfaceGroup="card" finishRole="card" style={styles.homePreviewCard}>{null}</GlassSurface>)}
+            </View>
+        </View>
+    </GlassPresetPreview>;
+}
+
+/** What the Glass and backdrop page is for on this host; it heads that page. */
+export function useGlassAppearancePurpose(): string {
     const environment = useGlassRuntimeEnvironment();
-    return <ItemGroup title={t('settingsAppearance.glassControls.title')} description={t(environment.desktopWindow ? 'settingsAppearance.glassControls.description' : Platform.OS === 'web' ? 'settingsAppearance.glassControls.descriptionBrowser' : 'settingsAppearance.glassControls.descriptionPhone')}>
-        <GlassAppearanceControls presentation="tiles" />
-    </ItemGroup>;
+    return t(environment.desktopWindow ? 'settingsAppearance.glassControls.description' : Platform.OS === 'web' ? 'settingsAppearance.glassControls.descriptionBrowser' : 'settingsAppearance.glassControls.descriptionPhone');
+}
+
+/** The current material and backdrop in a few words, for the row that opens the page. */
+export function useGlassAppearanceSummary(): string {
+    const appearance = useGlassAppearance();
+    const { value } = useHomeAtmosphereEditor();
+    const backdrop = lookCopy(value.source === 'planet' ? 'sourcePlanet' : value.source === 'picture' ? 'sourcePicture' : 'sourceNone');
+    return `${t(`settingsAppearance.glassControls.${appearance.preset}`)} · ${backdrop}`;
+}
+
+/** Glass and backdrop: the glass over the app, the atmosphere behind Home, and where it shows. */
+export function GlassAppearanceSection() {
+    return <>
+        <ItemGroup title={t('settingsAppearance.glassControls.title')}>
+            <SectionContentRow testID="appearance-home-preview">
+                <HomeAtmospherePreview />
+            </SectionContentRow>
+            <GlassAppearanceControls presentation="tiles" />
+        </ItemGroup>
+        <ItemGroup title={t(APPEARANCE_SETTINGS.settings.homeAtmosphere.titleKey)}>
+            <AtmosphereAppearanceRows />
+        </ItemGroup>
+        <AtmosphereWhereItShows />
+    </>;
 }
 
 /** One effective-state owner for Settings, the popover and draft Personalize choices. */
-export function GlassEffectiveStateLine(props: Readonly<{ settings: GlassMaterialSettings; inset?: 'sheet' | 'none' }>) {
+export function GlassEffectiveStateLine(props: Readonly<{
+    settings: GlassMaterialSettings;
+    inset?: 'sheet' | 'none';
+    /** Only a state that constrains the choice (reduce transparency, Solid in a browser), and no desktop download. */
+    constraintsOnly?: boolean;
+}>) {
     const environment = useGlassRuntimeEnvironment();
     const reduced = useReduceTransparency();
     const liquidGlassAvailable = useLiquidGlassAvailable();
@@ -172,7 +249,8 @@ export function GlassEffectiveStateLine(props: Readonly<{ settings: GlassMateria
         : environment.desktopWindow && windowReason === 'unavailable' ? 'effectiveUnavailable'
         : environment.desktopWindow ? preset === 'auto' ? 'effectiveLayered' : preset === 'everywhere' ? 'effectiveUniform' : 'effectiveCustom'
         : Platform.OS === 'web' ? preset === 'custom' && floating === 'solid' ? 'effectiveBrowserCustom' : 'effectiveBrowser'
-        : floating === 'solid' ? hasAndroidTint ? 'effectiveTint' : 'effectiveFloatingSolid' : 'effectivePhone';
+        : floating === 'tint' || (floating === 'solid' && hasAndroidTint) ? 'effectiveTint' : floating === 'solid' ? 'effectiveFloatingSolid' : 'effectivePhone';
+    if (props.constraintsOnly && state !== 'reduceTransparency' && state !== 'effectiveBrowserSolid') return null;
     const openSettings = !reduceTransparency ? undefined : environment.desktopWindow ? () => openDesktopReduceTransparencySettings()
         : Platform.OS === 'android' ? () => Linking.sendIntent('android.settings.ACCESSIBILITY_SETTINGS')
             : undefined;
@@ -195,17 +273,19 @@ export function GlassEffectiveStateLine(props: Readonly<{ settings: GlassMateria
         showChevron={false}
         titleStyle={styles.effectiveState}
         style={props.inset === 'none' ? styles.effectiveStateRow : undefined}
-        bottomElement={Platform.OS === 'web' && !environment.desktopWindow ? <View style={styles.downloadAction}><RoundButton size="small" display="inverted" testID="appearance-desktop-download" title={t('setupOnboarding.webDesktopOnlyDesktopAppButton')} onPress={() => { void openExternalUrl(HAPPIER_DESKTOP_DOWNLOAD_URL); }} /></View> : undefined}
+        bottomElement={Platform.OS === 'web' && !environment.desktopWindow && !props.constraintsOnly ? <View style={styles.downloadAction}><TextLinkButton tone="strong" testID="appearance-desktop-download" label={t('setupOnboarding.webDesktopOnlyDesktopAppButton')} onPress={() => { void openExternalUrl(HAPPIER_DESKTOP_DOWNLOAD_URL); }} /></View> : undefined}
     />;
 }
 
-const formatOpacity = (value: number) => `${Math.round(value * 100)}%`;
 const styles = StyleSheet.create(theme => ({
+    // The lab preview's proportions: a short Home pane, its hero centred a little above the middle.
+    homePreview: { aspectRatio: 2.8, borderRadius: theme.borderRadius.lg, borderWidth: StyleSheet.hairlineWidth, borderColor: theme.colors.border.default },
+    homePreviewPage: { ...StyleSheet.absoluteFillObject, alignItems: 'center', paddingTop: '13%', gap: theme.space.s12 },
+    homePreviewHeadline: { width: '22%', height: 6, borderRadius: 3, backgroundColor: theme.colors.text.primary, opacity: 0.7 },
+    homePreviewComposer: { width: '46%', height: '15%', borderRadius: theme.borderRadius.md },
+    homePreviewCards: { position: 'absolute', left: '8%', right: '8%', bottom: 0, height: '22%', flexDirection: 'row', gap: '3%' },
+    homePreviewCard: { flex: 1, borderTopLeftRadius: theme.borderRadius.md, borderTopRightRadius: theme.borderRadius.md },
     effectiveStateRow: { paddingHorizontal: 0 },
-    effectiveState: { color: theme.colors.text.secondary, fontSize: 13, lineHeight: 18 },
+    effectiveState: { ...Typography.default(), ...happierPageTextMetrics('meta'), color: theme.colors.text.secondary },
     downloadAction: { flexDirection: 'row', alignSelf: 'flex-start' },
-    groupControls: { alignSelf: 'stretch', gap: PAGE_LIST_METRICS.rowPaddingVerticalPx },
-    opacityLabels: { flexDirection: 'row', alignItems: 'center', gap: PAGE_LIST_METRICS.rowPaddingHorizontalPx },
-    caption: { color: theme.colors.text.secondary, fontSize: 13, lineHeight: 18 },
-    value: { marginLeft: 'auto', color: theme.colors.text.primary, fontSize: 13, lineHeight: 18, fontVariant: ['tabular-nums'] },
 }));

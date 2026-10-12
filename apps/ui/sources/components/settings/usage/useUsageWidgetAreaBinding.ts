@@ -1,26 +1,26 @@
 import * as React from 'react';
-import { USAGE_QUERY_INPUT_FIELDS, type UsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
+import type { UsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import type { WidgetBindingResolutionInputV1 } from '@happier-dev/protocol/widgets';
 import { useCorePageWidgetAreaBinding } from '@/components/widgets/area/useCorePageWidgetAreaBinding';
-import type { WidgetSurfaceContext } from '@/components/widgets/surface/widgetSurfaceSetup';
+import type { UsagePeriod } from '@/sync/api/account/usagePeriods';
 import { createUsageWidgetPresets, type UsageWidgetPresetId } from './usageWidgetPresets';
+import { usageWidgetSurfaceContext } from './usageWidgetPageContext';
 
 /** Thin host composition; named views, revisions, Reset/Undo and Artifact custody remain platform-owned. */
 export function useUsageWidgetAreaBinding(input: Readonly<{
     serverId: string;
     providedContext: WidgetBindingResolutionInputV1['context'];
+    /** Only the admitted Session route declares a Session editor slot. */
+    sessionId?: string;
+    /** The page's period by name; the provided context carries only its resolved start. */
+    period: UsagePeriod;
     names: Readonly<Record<UsageWidgetPresetId, string>>;
     initialMetric?: UsageQuery['metric'];
-    labelForSlot?: (path: string) => string;
+    initialLayoutId?: string | null;
+    onLayoutChange?: (layoutId: string) => void;
 }>) {
     const presets = React.useMemo(() => createUsageWidgetPresets(input.names, { initialMetric: input.initialMetric }), [input.names, input.initialMetric]);
-    const context = React.useMemo((): WidgetSurfaceContext => ({ slots: Object.fromEntries(
-        USAGE_QUERY_INPUT_FIELDS.filter(field => field.contextMode === 'follow').map(field => {
-            const values = input.providedContext[field.path];
-            const label = input.labelForSlot?.(field.path) ?? field.title;
-            return [field.path, { label, value: values?.length === 1 ? { value: values[0]!, label } : null }];
-        }),
-    ) }), [input.providedContext, input.labelForSlot]);
-    const binding = useCorePageWidgetAreaBinding({ serverId: input.serverId, pageId: 'usage', area: 'main', presets, context });
+    const context = React.useMemo(() => usageWidgetSurfaceContext(input.providedContext, input.period, input.sessionId), [input.providedContext, input.period, input.sessionId]);
+    const binding = useCorePageWidgetAreaBinding({ serverId: input.serverId, pageId: 'usage', area: 'main', presets, context, initialLayoutId: input.initialLayoutId, onSelectLayout: input.onLayoutChange });
     return React.useMemo(() => ({ ...binding, presets }), [binding, presets]);
 }

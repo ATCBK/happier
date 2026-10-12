@@ -4,8 +4,6 @@ import type { RelayAccessTaskTarget } from '@happier-dev/cli-common/systemTasks'
 import type { RemoteHostActionIdV1 } from '@happier-dev/protocol/remoteHosts/remoteHostActionIdsV1';
 
 import type { SystemTaskRunner } from '@/components/systemTasks/types';
-import type { SystemTaskSpec } from '@happier-dev/protocol/system/tasks/spec';
-import { startAdmittedRemoteHostSystemTask } from './remoteHostTaskOperations';
 import { buildSshHostKeyPromptBody } from '@/components/ssh/buildSshHostKeyPromptBody';
 import { useSystemTaskSnapshot } from '@/components/systemTasks/useSystemTaskSnapshot';
 import { readLatestSystemTaskPrompt } from '@/components/systemTasks/prompts/readLatestSystemTaskPrompt';
@@ -20,7 +18,6 @@ import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/ac
 import type { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
 import { getRemoteHostLocalOverrides } from '@/sync/domains/remoteHosts/remoteHostLocalOverrides';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
-import { runRemoteHostRelayAccessTask } from '@/sync/ops/remoteHosts/remoteHostOperations';
 import {
     buildRelayAccessSshTargetFromRemoteHostConfig,
 } from './remoteHostOutcomeActions';
@@ -209,15 +206,6 @@ export function useRemoteHostOutcomeActions(options: Readonly<{
     const configureRelayAccess = React.useCallback(async (remoteHost: RemoteHost) => {
         await executeHostAction('remote_hosts.relay.use', remoteHost);
     }, [executeHostAction]);
-    const runRelayAccessTask = React.useCallback(async <T,>(run: (target: RelayAccessTaskTarget,
-        startSpec?: (spec: SystemTaskSpec) => Promise<string>, admittedUpstreamUrl?: string | null) => Promise<T>): Promise<T> => {
-        if (!relayAccessSelection) throw new Error('remote_host_unavailable');
-        return runRemoteHostRelayAccessTask({ scope: relayAccessSelection.scope, hostId: relayAccessSelection.host.id,
-            expectedRevision: relayAccessSelection.revision,
-            run: (target, admittedUpstreamUrl, assertCurrent) => run(target,
-                async spec => (await startAdmittedRemoteHostSystemTask({ runner: options.runner, assertCurrent }, spec)).taskId,
-                admittedUpstreamUrl) });
-    }, [options.runner, relayAccessSelection]);
 
     const connectFromThisDevice = React.useCallback(async (remoteHost: RemoteHost) => {
         const result = await executeHostAction('remote_hosts.connect', remoteHost);
@@ -272,6 +260,5 @@ export function useRemoteHostOutcomeActions(options: Readonly<{
         openRelayAccess,
         configureRelayAccess,
         selectRelayAccess,
-        runRelayAccessTask,
     };
 }

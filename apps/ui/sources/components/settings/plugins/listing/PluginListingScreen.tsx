@@ -27,7 +27,7 @@ import { openExternalUrl } from '@/utils/url/openExternalUrl';
 
 import { catalogReviewStatusLabel, formatCatalogEntryVersion } from '../model/pluginMarketplaceModel';
 import { usePluginSettingsScreenState, type PluginSettingsScreenState } from '../model/usePluginSettingsScreenState';
-import { buildPluginDetailRoute, buildPluginsHomeRoute, pluginsHomeTitleKey, usePluginsSurfaceHost } from '../model/pluginsSurfaceRoutes';
+import { buildPluginDetailRoute, buildPluginsHomeRoute, PLUGINS_HOME_TITLE_KEY, usePluginsSurfaceHost } from '../model/pluginsSurfaceRoutes';
 import { PluginMark } from '../PluginMark';
 import { PluginReadOnlySnapshotNotice } from '../PluginReadOnlySnapshotNotice';
 import type { PluginMarketplaceCatalogEntry } from '../readPluginMarketplaceCatalog';
@@ -136,7 +136,7 @@ export const PluginListingView = React.memo(function PluginListingView(props: Re
                 separator={<Icon name="caret-right" size={12} color={styles.crumbSeparator.color} />}
                 colors={{ focus: theme.colors.border.focus, hover: theme.colors.surface.pressed }}
                 items={[
-                    { key: 'plugins', label: t(pluginsHomeTitleKey(host)), onPress: () => router.dismissTo(buildPluginsHomeRoute(host)), testID: 'settings.plugins.listing.crumb.plugins' },
+                    { key: 'plugins', label: t(PLUGINS_HOME_TITLE_KEY), onPress: () => router.dismissTo(buildPluginsHomeRoute(host)), testID: 'settings.plugins.listing.crumb.plugins' },
                     { key: 'browse', label: t('settingsPlugins.catalog.browse'), onPress: () => router.dismissTo(buildPluginsHomeRoute(host, { view: 'browse' })), testID: 'settings.plugins.listing.crumb.browse' },
                 ]}
                 renderLabel={(item) => <Text style={styles.crumb}>{item.label}</Text>}
@@ -320,41 +320,35 @@ const stylesheet = StyleSheet.create((theme) => ({
         alignSelf: 'center',
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
         paddingHorizontal: PAGE_LIST_METRICS.pageTextInsetPx,
-        paddingTop: 20,
+        paddingTop: theme.space.s20,
         marginBottom: -16,
         // The header below is pulled up under this row; keep the crumbs above it so they stay pressable.
         zIndex: 1,
     },
     crumb: {
-        ...Typography.default(),
-        fontSize: 13,
-        lineHeight: 18,
+        ...Typography.variant('body'),
         color: theme.colors.text.secondary,
     },
     crumbSeparator: {
         color: theme.colors.text.tertiary,
     },
     description: {
-        ...Typography.default(),
-        fontSize: 14.5,
-        lineHeight: 22,
+        ...Typography.variant('reading'),
         color: theme.colors.text.primary,
         paddingHorizontal: 18,
-        paddingTop: 8,
-        paddingBottom: 4,
+        paddingTop: theme.space.s8,
+        paddingBottom: theme.space.s4,
     },
     actionCard: {
-        marginTop: 8,
+        marginTop: theme.space.s8,
         width: 'auto',
-        marginHorizontal: 16,
-        gap: 10,
+        marginHorizontal: theme.space.s16,
+        gap: theme.space.s10,
     },
     actionNote: {
-        ...Typography.default(),
-        fontSize: 12.5,
-        lineHeight: 18,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
 }));

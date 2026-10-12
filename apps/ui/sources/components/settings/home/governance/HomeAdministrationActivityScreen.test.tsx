@@ -20,7 +20,6 @@ import {
 } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { collectRenderedTestIds } from '@/dev/testkit/render/collectRenderedTestIds';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
-import { resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 
 import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelpers';
 
@@ -36,6 +35,7 @@ installSettingsViewCommonModuleMocks({
 
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
+const { resetServerFeaturesClientForTests } = await import("@/sync/api/capabilities/serverFeaturesClient");
 
 const GOVERNANCE_PATH = '/v1/home/governance/get';
 const AUDIT_PATH = '/v1/home/audit/list';
@@ -120,9 +120,11 @@ describe('HomeAdministrationActivityScreen', () => {
         });
 
         const password = textUnder(screen.findByTestId('home-activity-row:evt-password'));
-        expect(password).toContain('Ada homeGovernance.activity.changedEmailSetting');
+        // One statement per fact: the sentence names the setting, the quiet line its area, then the values.
+        expect(password).toContain('Ada homeGovernance.activity.changedSetting(setting=homeGovernance.email.password)');
         expect(password).toContain('homeGovernance.activity.areaEmail');
-        expect(password).toContain('homeGovernance.email.password  homeGovernance.activity.secretUnset → homeGovernance.activity.secretSet');
+        expect(password).toContain('homeGovernance.activity.secretUnset → homeGovernance.activity.secretSet');
+        expect(password).not.toContain('homeGovernance.email.password  ');
         expect(textUnder(screen.findByTestId('home-activity-row:evt-role')))
             .toContain('Ada homeGovernance.activity.changedRole(target=Ben)');
         expect(textUnder(screen.findByTestId('home-activity-row:evt-left')))
@@ -196,6 +198,8 @@ describe('HomeAdministrationActivityScreen', () => {
         expect(first).toContain('homeGovernance.signInMethods  homeGovernance.signInPolicy.recommendedInherited → Device key');
         expect(first).toContain('homeGovernance.signInPolicy.storagePolicy  homeGovernance.signInPolicy.recommendedInherited → homeGovernance.signInPolicy.storageRequired');
         expect(first).not.toContain('homeGovernance.signInPolicy.newAccounts');
+        // "changed policies" already names the area: no second line saying it again.
+        expect(first).not.toContain('homeGovernance.activity.areaPolicies');
     });
 
     it('pages older events with the Home cursor and keeps the ones already read', async () => {

@@ -13,13 +13,15 @@ import { useUnistyles } from 'react-native-unistyles';
 import { SettingAnchor } from '@/components/settings/shell/SettingRow';
 import { Avatar } from '@/components/ui/avatar/Avatar';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
+import { SectionButtonRow } from '@/components/ui/lists/SectionButtonRow';
+import { SCHEMA_FIELD_INPUT_STYLE } from '@/components/settings/schemaFields/SchemaFieldRow';
 import { Icon, type IconName } from '@/components/ui/icons/Icon';
 import { PageHeader } from '@/components/ui/layout/PageHeader';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemLoadStateRows } from '@/components/ui/lists/ItemLoadStateRows';
 import { useHomeAccountRoster } from '@/hooks/home/useHomeAccountRoster';
-import { Modal } from '@/modal';
 import { useHomeSettingsWithCompanion, type HomeSettingsWithCompanion } from '@/hooks/home/useHomeSettingsWithCompanion';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { resolveAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
@@ -57,7 +59,7 @@ import { useHomeSettingsWrite } from './useHomeSettingsWrite';
 import {
     homeSignInPlatformForKeys,
     homeSignInPlatformHref,
-    homeSignInPlatformIcon,
+    homeSignInPlatformMark,
     selectHomeSignInPlatforms,
     type HomeSignInPlatformId,
     type HomeSignInPlatformNeed,
@@ -86,7 +88,7 @@ type AttentionTone = 'danger' | 'warning' | 'neutral';
 /** One thing that needs the owner, with where it is fixed. Healthy facts produce none. */
 type AttentionItem = Readonly<{
     id: string;
-    icon: IconName;
+    icon: IconName | React.ReactElement;
     tone: AttentionTone;
     title: string;
     body: string;
@@ -147,7 +149,7 @@ export function resolveHomeOverviewAttention(input: Readonly<{
         if (platform.state.kind !== 'partly_set') continue;
         items.push({
             id: `platform:${platform.id}`,
-            icon: homeSignInPlatformIcon(platform.id),
+            icon: homeSignInPlatformMark(platform.id),
             tone: 'warning',
             title: platform.id === 'github'
                 ? t('homeGovernance.overviewPage.githubPartlySetUp')
@@ -283,7 +285,7 @@ const HomeOverviewAttention = React.memo(function HomeOverviewAttention(props: R
                 <Item
                     key={item.id}
                     testID={`home-overview-attention:${item.id}`}
-                    icon={<Icon name={item.icon} color={toneColor(item.tone)} />}
+                    icon={typeof item.icon === 'string' ? <Icon name={item.icon} color={toneColor(item.tone)} /> : item.icon}
                     title={item.title}
                     titleLines={0}
                     subtitle={item.body}
@@ -347,6 +349,8 @@ function isActiveOwner(row: HomeAccountRowV1): boolean {
     return row.homeRole === 'owner' && row.status === 'active';
 }
 
+const OWNER_AVATAR_SIZE = 28;
+
 /** Who owns the Home, and how many people it has (lab `hcOverview-A` Ownership). */
 const HomeOverviewOwnership = React.memo(function HomeOverviewOwnership(props: Readonly<{ context: HomeAdministrationContext }>) {
     const { context } = props;
@@ -400,7 +404,7 @@ const HomeOverviewOwnership = React.memo(function HomeOverviewOwnership(props: R
                                 subtitle={person.viewer && person.named
                                     ? t('homeGovernance.overviewPage.ownerYou')
                                     : homeRoleLabel('owner')}
-                                leftElement={<Avatar id={row.accountId} size={28} imageUrl={row.profile.avatarUrl ?? null} />}
+                                leftElement={<Avatar id={row.accountId} size={OWNER_AVATAR_SIZE} imageUrl={row.profile.avatarUrl ?? null} />}
                                 mode="info"
                                 showChevron={false}
                             />
@@ -409,6 +413,10 @@ const HomeOverviewOwnership = React.memo(function HomeOverviewOwnership(props: R
                     <Item
                         testID="home-overview-people"
                         title={t('homeGovernance.people')}
+                        // A navigation row carries its glyph; centred in the owners' avatar box, its title
+                        // starts on the same edge as theirs.
+                        icon={<Icon name="user-circle" />}
+                        iconBoxSize={OWNER_AVATAR_SIZE}
                         subtitle={t('homeGovernance.overviewPage.peopleSummary', {
                             people: roster.rows.length,
                             more: roster.hasMore,
@@ -446,21 +454,22 @@ const HomeOverviewNameRow = React.memo(function HomeOverviewNameRow(props: Reado
 }>) {
     const { context, reads } = props;
     const entry = reads.settings?.entries.find((candidate) => candidate.key === HOME_NAME_SETTING_KEY);
-    // The prompt has closed by the time the Home refuses a name, so the refusal is said in a dialog.
+    const [draft, setDraft] = React.useState<string | null>(null);
+    const [error, setError] = React.useState<string | null>(null);
     const onFieldError = React.useCallback((_key: string, message: string | null) => {
-        if (message) void Modal.alertAsync(t('server.renameServer'), message);
+        setError(message);
     }, []);
-    const { writing, write } = useHomeSettingsWrite({ context, home: reads, onFieldError });
+    const { writing, write } = useHomeSettingsWrite({ context, home: reads, onFieldError, onFailure: setError });
     const current = typeof entry?.value === 'string' && entry.value.trim() ? entry.value : context.homeName;
     const rename = React.useCallback(async () => {
-        const next = await Modal.prompt(t('server.renameServer'), t('server.renameServerPrompt'), {
-            defaultValue: current,
-            confirmText: t('common.save'),
-        });
-        const trimmed = next?.trim();
-        if (!trimmed || trimmed === current) return;
-        if (await write({ key: HOME_NAME_SETTING_KEY, values: { [HOME_NAME_SETTING_KEY]: trimmed } })) context.refresh();
-    }, [context, current, write]);
+        const trimmed = draft?.trim();
+        if (!trimmed || trimmed === current || writing) return;
+        if (await write({ key: HOME_NAME_SETTING_KEY, values: { [HOME_NAME_SETTING_KEY]: trimmed } })) {
+            setDraft(null);
+            setError(null);
+            context.refresh();
+        }
+    }, [context, current, draft, write, writing]);
     if (!entry) return null;
     const canRename = context.projection.capabilities.manageHomeSettings && !entry.fixed && entry.editable === 'home';
     return (
@@ -470,10 +479,28 @@ const HomeOverviewNameRow = React.memo(function HomeOverviewNameRow(props: Reado
                 title={homeServerSettingTitle(HOME_NAME_SETTING_KEY)}
                 subtitle={entry.fixed ? undefined : t('homeGovernance.overviewPage.nameDescription')}
                 subtitleAccessory={entry.fixed ? <HomeDeploymentFixedNote keys={[entry.key]} testID="home-overview-name" /> : undefined}
-                detail={current}
+                // The page header is the Home's name; the row says where it shows and offers Rename.
+                // A name the Home cannot rename keeps its value here, beside the deployment note.
+                detail={draft === null && !canRename ? current : undefined}
+                accessoryLayout={draft === null ? undefined : 'adaptive'}
                 mode="info"
                 showChevron={false}
-                rightElement={canRename ? (
+                rightElement={canRename && draft !== null ? (
+                    <SectionButtonRow>
+                        <FieldTextInput
+                            testID="home-overview-name.input"
+                            accessibilityLabel={homeServerSettingTitle(HOME_NAME_SETTING_KEY)}
+                            value={draft}
+                            onChangeText={(value) => { setDraft(value); setError(null); }}
+                            editable={context.mutationsAvailable && !writing}
+                            autoFocus
+                            error={error}
+                            style={SCHEMA_FIELD_INPUT_STYLE}
+                        />
+                        <RoundButton testID="home-overview-name.cancel" size="small" display="inverted" title={t('common.cancel')} disabled={writing} onPress={() => { setDraft(null); setError(null); }} />
+                        <RoundButton testID="home-overview-name.save" size="small" title={t('common.save')} loading={writing} disabled={!context.mutationsAvailable || !draft.trim() || draft.trim() === current} onPress={() => void rename()} />
+                    </SectionButtonRow>
+                ) : canRename ? (
                     <RoundButton
                         testID="home-overview-name.rename"
                         size="small"
@@ -481,7 +508,7 @@ const HomeOverviewNameRow = React.memo(function HomeOverviewNameRow(props: Reado
                         title={t('common.rename')}
                         loading={writing}
                         disabled={!context.mutationsAvailable}
-                        onPress={() => { void rename(); }}
+                        onPress={() => { setDraft(current); setError(null); }}
                     />
                 ) : undefined}
             />
@@ -504,7 +531,7 @@ const HomeOverviewFacts = React.memo(function HomeOverviewFacts(props: Readonly<
         ? t('homeGovernance.runtime.flavorFull')
         : release.flavor === 'light' ? t('homeGovernance.runtime.flavorLight') : null;
     const version = release.version
-        ? [t('homeGovernance.runtime.versionValue', { version: release.version }), flavor].filter(Boolean).join(' · ')
+        ? t('homeGovernance.runtime.versionValue', { version: release.version })
         : t('homeGovernance.runtime.versionUnknown');
     return (
         <ItemGroup title={t('homeGovernance.overviewPage.thisHome')}>
@@ -512,6 +539,7 @@ const HomeOverviewFacts = React.memo(function HomeOverviewFacts(props: Readonly<
             <Item
                 testID="home-overview-version"
                 title={t('homeGovernance.overviewPage.version')}
+                subtitle={release.version ? flavor ?? undefined : undefined}
                 detail={version}
                 mode="info"
                 showChevron={false}
@@ -521,11 +549,12 @@ const HomeOverviewFacts = React.memo(function HomeOverviewFacts(props: Readonly<
                     <Item
                         testID="home-overview-address"
                         title={t('homeGovernance.reach.publicAddress')}
-                        subtitle={publicAddressCaption(reach)}
+                        subtitle={[reachAddressHost(reach.publicAddress.url), publicAddressCaption(reach)]
+                            .filter((part): part is string => Boolean(part)).join(' · ') || undefined}
+                        subtitleLines={0}
                         subtitleAccessory={reach.publicAddress.source === 'deployment'
                             ? <HomeDeploymentFixedNote keys={[PUBLIC_ADDRESS_KEY]} testID="home-overview-address" />
                             : undefined}
-                        detail={reachAddressHost(reach.publicAddress.url) ?? undefined}
                         onPress={() => router.push(homeAdministrationReachPath(serverId) as never)}
                     />
                 ) : reads.companion?.reach.kind === 'failed' ? null : (
@@ -564,10 +593,11 @@ const HomeConsoleIndex = React.memo(function HomeConsoleIndex(props: Readonly<{
                     testID={`home-admin-${destination.id}-link`}
                     icon={<Icon name={destination.icon} />}
                     title={t(destination.titleKey)}
-                    // A Home with Teams turned off still opens Teams, which says so and why.
+                    // One line per page, as the sidebar it stands in for; a Home with Teams turned
+                    // off still opens Teams, and only that row says why.
                     subtitle={destination.id === 'teams' && !props.projection.teamsEnabled
                         ? t('homeGovernance.teamsDisabled')
-                        : t(destination.subtitleKey)}
+                        : undefined}
                     onPress={() => router.push(destination.path(props.serverId) as never)}
                 />
             ))}

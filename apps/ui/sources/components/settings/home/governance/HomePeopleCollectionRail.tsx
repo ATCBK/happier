@@ -5,6 +5,7 @@ import { HappierCollectionListMark } from '@happier-dev/plugin-ui/presentation';
 import { Avatar } from '@/components/ui/avatar/Avatar';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemLoadStateRows } from '@/components/ui/lists/ItemLoadStateRows';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { CollectionList, collectionListStyles } from '@/components/ui/lists/collection/CollectionList';
 import { VirtualizedList } from '@/components/ui/lists/virtualized';
 import { useHomeAccountRoster } from '@/hooks/home/useHomeAccountRoster';
@@ -58,16 +59,22 @@ export const HomePeopleCollectionRail = React.memo(function HomePeopleCollection
     const add = (key: string, render: () => React.ReactElement) => rows.push({ key, render });
     if (searching) {
         if (search.rows.length === 0) {
-            add('search-state', () => (
-                <Item
-                    testID={search.searching ? 'home-people-rail-search-loading' : search.failure ? 'home-people-rail-search-failed' : 'home-people-rail-search-empty'}
-                    title={search.searching
-                        ? t('homeGovernance.loading')
-                        : search.failure ? t('homeGovernance.searchFailed') : t('homeGovernance.searchEmpty')}
-                    loading={search.searching}
-                    mode="info"
-                    density="compact"
+            // Searching holds the result rows' place; a failed or empty answer is one quiet line.
+            add('search-state', () => search.searching ? (
+                <ItemLoadStateRows testID="home-people-rail-search-loading" state={{ kind: 'loading' }} rows={3}
+                    accessibilityLabel={t('homeGovernance.loading')} />
+            ) : search.failure ? (
+                <ItemLoadStateRows
+                    testID="home-people-rail-search-failed"
+                    state={{
+                        kind: 'failed',
+                        reason: t('homeGovernance.searchFailed'),
+                        onRetry: search.failure.retryable ? search.retry : undefined,
+                        homeServerIds: [props.serverId],
+                    }}
                 />
+            ) : (
+                <SurfaceStateCard testID="home-people-rail-search-empty" kind="empty" size="line" title={t('homeGovernance.searchEmpty')} />
             ));
         }
         for (const row of search.rows) {
@@ -119,8 +126,15 @@ export const HomePeopleCollectionRail = React.memo(function HomePeopleCollection
         }
         if (roster.error) {
             add('retry', () => (
-                <Item testID="home-people-rail-retry" title={t('homeGovernance.retry')} density="compact"
-                    showChevron={false} pressableStyle={collectionListStyles.row} onPress={roster.reload} />
+                <ItemLoadStateRows
+                    testID="home-people-rail"
+                    state={{
+                        kind: 'failed',
+                        reason: t('homeGovernance.overviewPage.peopleFailed'),
+                        onRetry: roster.reload,
+                        homeServerIds: [props.serverId],
+                    }}
+                />
             ));
         } else if (roster.hasMore) {
             add('load-more', () => (

@@ -22,6 +22,7 @@ import { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } from '@/sync/domains/machine
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed } from '@/sync/domains/machines/reachability/machineReachability';
 
 vi.mock('socket.io-client', async original =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
@@ -30,6 +31,8 @@ installApprovalCommonModuleMocks({ storage: original => original(), reactNavigat
 
 const modal = await import('@/modal');
 const { storage } = await import('@/sync/domains/state/storageStore');
+const { serverScopedRpcSocketPool } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool');
+const { resetServerReachabilitySupervisors } = await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
 const { McpServerTestPanel } = await import('./McpServerTestPanel');
 const { McpDetectedServersScreen } = await import('./McpDetectedServersScreen');
 const initialState = storage.getState();
@@ -38,9 +41,13 @@ let disposeActionExecutorModuleLoader: (() => void) | undefined;
 beforeEach(async () => { disposeActionExecutorModuleLoader = await installRealActionExecutorModuleLoader(); });
 
 afterEach(async () => {
+    clearMachineRequestReachabilityForTest();
     await standardCleanup();
     await connection?.dispose();
     connection = null;
+    // A foreign Home's pooled socket retains its original network boundary closure.
+    await serverScopedRpcSocketPool.stopAll();
+    await resetServerReachabilitySupervisors();
     resetRuntimeFetch();
     storage.setState(initialState, true);
     vi.restoreAllMocks();
@@ -50,10 +57,12 @@ afterEach(async () => {
 
 describe('offered MCP Machine Actions through their selected Home', () => {
     it.each([
-        { operation: 'test', disabled: true },
-        { operation: 'probe', disabled: true },
-        { operation: 'test', disabled: false },
-    ] as const)('honors the selected Home $operation Action policy (disabled=$disabled)', async ({ operation, disabled }) => {
+        { operation: 'test', disabled: true, retry: false },
+        { operation: 'probe', disabled: true, retry: false },
+        { operation: 'test', disabled: false, retry: false },
+        { operation: 'test', disabled: false, retry: true },
+        { operation: 'probe', disabled: false, retry: true },
+    ] as const)('honors the selected Home $operation Action policy (disabled=$disabled, retry=$retry)', async ({ operation, disabled, retry }) => {
         const actionId = operation === 'test' ? 'mcp.servers.test' : 'mcp.servers.probe';
         const rpcMethod = operation === 'test' ? RPC_METHODS.DAEMON_MCP_SERVERS_TEST : RPC_METHODS.DAEMON_MCP_SERVERS_DETECT;
         const active = await upsertServerProfileOnly({ serverUrl: 'https://mcp-policy-focus.test', name: 'Focused Home' });
@@ -67,6 +76,7 @@ describe('offered MCP Machine Actions through their selected Home', () => {
         await TokenStorage.setCredentialsForServerUrl(target.serverUrl, { serverId: target.id }, targetCredentials);
         const machine = createMachineFixture({ id: 'policy-machine', active: true, activeAt: Date.now() });
         const targetSelection = { serverIdentityId: 'srv_mcp-policy-machine', machineId: machine.id };
+        const targetAccountScope = { serverId: target.id, accountId: 'machine-owner' };
         const rpcRequests: Array<Readonly<{ home: string | undefined; method: string }>> = [];
         installDisconnectedServerSocketBoundary((socket, home) => {
             // Socket.IO is the external network boundary. The real scoped RPC
@@ -125,18 +135,19 @@ describe('offered MCP Machine Actions through their selected Home', () => {
         vi.mocked(TokenStorage.getCredentialsForServerUrl).mockRestore();
         setRuntimeFetch(request);
         storage.getState().applyMachines([machine], true, { sourceServerId: target.id });
-        expect(resolveFreshMachineAdministrationExecutionTarget(targetSelection)?.serverId).toBe(target.id);
+        expect(resolveFreshMachineAdministrationExecutionTarget(targetSelection, { accountScope: targetAccountScope })?.serverId).toBe(target.id);
         const selection = await renderHook(() => useMachineAdministrationTargetSelection(MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.mcpServers));
         await act(async () => { selection.getCurrent().selectTarget(targetSelection); });
         await vi.waitFor(() => expect(selection.getCurrent().selectedTarget).toEqual(targetSelection));
         await selection.unmount();
+        if (retry) recordMachineRequestFailed({ serverId: target.id, accountId: 'machine-owner', machineId: machine.id, observedAtMs: Date.now() });
         const alert = vi.spyOn(modal.Modal, 'alert');
         const screen = await renderScreen(operation === 'probe' ? React.createElement(McpDetectedServersScreen)
             : React.createElement(ItemList, null, React.createElement(McpServerTestPanel, {
             server: { id: 'policy-server', name: 'policy_server', transport: 'stdio', stdio: { command: 'mcp-tool', args: [] },
                 env: {}, createdAt: 1, updatedAt: 1 }, bindings: [], machines: [machine], targetSelection: {
                     selectedTarget: targetSelection,
-                    resolveExecutionTarget: () => resolveFreshMachineAdministrationExecutionTarget(targetSelection),
+                    resolveExecutionTarget: (options) => resolveFreshMachineAdministrationExecutionTarget(targetSelection, { ...options, accountScope: targetAccountScope }),
                 },
         })));
         const buttonId = operation === 'probe' ? 'settings.mcpServers.detect.refresh' : 'mcp.server.test.run';
@@ -154,11 +165,11 @@ describe('offered MCP Machine Actions through their selected Home', () => {
                 if (!item.home) throw new Error('Expected the selected RPC Home');
                 return { home: new URL(item.home).origin, method: item.method };
             })).toEqual([{ home: target.serverUrl, method: `${machine.id}:${rpcMethod}` }]);
-            await vi.waitFor(() => expect(screen.findByTestId('mcp.server.test.result.ok')).not.toBeNull());
+            if (operation === 'test') await vi.waitFor(() => expect(screen.findByTestId('mcp.server.test.result.ok')).not.toBeNull());
             // The actual Machine publication withdraws this exact target.
             // A stale button must not dispatch on the focused Home instead.
             await act(async () => { storage.getState().applyMachines([], true, { sourceServerId: target.id }); });
-            expect(resolveFreshMachineAdministrationExecutionTarget(targetSelection)).toBeNull();
+            expect(resolveFreshMachineAdministrationExecutionTarget(targetSelection, { accountScope: targetAccountScope })).toBeNull();
             act(() => { screen.pressByTestId(buttonId); });
             await act(async () => {});
             expect(rpcRequests.filter(item => item.method.includes(rpcMethod))).toHaveLength(1);

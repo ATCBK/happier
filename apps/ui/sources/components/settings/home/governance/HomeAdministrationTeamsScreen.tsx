@@ -3,10 +3,11 @@ import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { Platform } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 
-import { Item } from '@/components/ui/lists/Item';
+import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemLoadStateRows } from '@/components/ui/lists/ItemLoadStateRows';
 import { SectionActionButton } from '@/components/ui/lists/SectionActionButton';
+import { SectionButtonRow } from '@/components/ui/lists/SectionButtonRow';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { VirtualizedList } from '@/components/ui/lists/virtualized';
 import { TeamRow } from '@/components/settings/teams/TeamRow';
@@ -19,6 +20,7 @@ import { canInvitePeople, presentHomeInvitePeople } from './HomeInvitePeopleDial
 import type { HomeAdministrationContext } from './homeAdministrationContext';
 import { segmentHomeAdministrationRows } from './homeAdministrationVirtualizedSegments';
 import { TeamCreationPolicyEditor, TeamsVisibilityPolicyEditor } from './HomeTeamsPolicySections';
+import { homeAdministrationFeaturesPath } from './homeAdministrationRoutes';
 
 type HomeTeamsVirtualizedRow = Readonly<{
     key: string;
@@ -79,8 +81,19 @@ const HomeTeams = React.memo(function HomeTeams(
 
         if (!teamsEnabled) {
             add('disabled', () => (
-                <ItemGroup description={t('homeGovernance.teamsDisabled')}>
-                    <Item testID="home-teams-disabled" title={t('homeGovernance.teams')} subtitle={t('homeGovernance.teamsDisabled')} mode="info" showChevron={false} />
+                // One message, and the way to change it (lab `hcPolicies-*` teams off).
+                <ItemGroup>
+                    <SurfaceStateCard
+                        testID="home-teams-disabled"
+                        kind="unavailable"
+                        size="line"
+                        title={t('homeGovernance.teamsDisabled')}
+                        action={context.projection.capabilities.viewAdministration ? {
+                            label: t('homeGovernance.teamsDisabledAction'),
+                            onPress: () => router.push(homeAdministrationFeaturesPath(context.scope.serverId) as never),
+                            testID: 'home-teams-disabled-features',
+                        } : undefined}
+                    />
                 </ItemGroup>
             ));
             return result;
@@ -94,8 +107,14 @@ const HomeTeams = React.memo(function HomeTeams(
         ));
         if (!mayGovern) {
             add('forbidden', () => (
-                <ItemGroup description={t('homeGovernance.forbiddenBody')}>
-                    <Item testID="home-teams-forbidden" title={t('homeGovernance.forbiddenTitle')} mode="info" showChevron={false} />
+                <ItemGroup>
+                    <SurfaceStateCard
+                        testID="home-teams-forbidden"
+                        kind="denied"
+                        size="line"
+                        title={t('homeGovernance.forbiddenTitle')}
+                        reason={t('homeGovernance.forbiddenBody')}
+                    />
                 </ItemGroup>
             ));
             return result;
@@ -149,11 +168,7 @@ const HomeTeams = React.memo(function HomeTeams(
             ));
         } else if (directory.rows.length === 0) {
             add('empty', () => (
-                <ItemGroup
-                    title={t('homeGovernance.teams')}
-                    description={t('homeGovernance.manageTeamsSubtitle')}
-                    action={createAction}
-                >
+                <ItemGroup title={t('homeGovernance.teams')} action={createAction}>
                     <SurfaceStateCard testID="home-teams-empty" kind="empty" size="line" title={t('homeGovernance.teamsEmpty')} />
                 </ItemGroup>
             ));
@@ -164,7 +179,6 @@ const HomeTeams = React.memo(function HomeTeams(
                 add(`active:${chunk[0]!.address.teamId}`, () => (
                     <ItemGroup
                         title={first ? t('homeGovernance.teams') : undefined}
-                        description={last ? t('homeGovernance.manageTeamsSubtitle') : undefined}
                         action={first ? createAction : undefined}
                         virtualizedSegment={{ first, last }}
                     >
@@ -183,14 +197,18 @@ const HomeTeams = React.memo(function HomeTeams(
 
         if (offerArchived) {
             add('toggle-archived', () => (
-                <ItemGroup>
-                    <Item
-                        testID="home-teams-toggle-archived"
-                        title={showArchived ? t('teams.directory.hideArchived') : t('teams.directory.showArchived')}
-                        accessibilityExpanded={showArchived}
-                        onPress={() => setShowArchived((current) => !current)}
-                        showChevron={false}
-                    />
+                // A quiet button under the list, as on a Team's Groups (lab `tsGroups-A`), not a row.
+                <ItemGroup surface="none">
+                    <SectionButtonRow>
+                        <RoundButton
+                            testID="home-teams-toggle-archived"
+                            size="small"
+                            display="inverted"
+                            title={showArchived ? t('teams.directory.hideArchived') : t('teams.directory.showArchived')}
+                            expanded={showArchived}
+                            onPress={() => setShowArchived((current) => !current)}
+                        />
+                    </SectionButtonRow>
                 </ItemGroup>
             ));
         }
@@ -199,7 +217,7 @@ const HomeTeams = React.memo(function HomeTeams(
             if (archivedLoading && archived.archivedRows.length === 0) {
                 add('archived-loading', () => (
                     <ItemGroup title={t('teams.directory.archivedSection')}>
-                        <Item testID="home-teams-archived-loading" title={t('homeGovernance.loading')} loading accessibilityLiveRegion="polite" showChevron={false} />
+                        <ItemLoadStateRows testID="home-teams-archived-loading" state={{ kind: 'loading' }} rows={2} accessibilityLabel={t('teams.directory.archivedSection')} />
                     </ItemGroup>
                 ));
             }
@@ -225,14 +243,14 @@ const HomeTeams = React.memo(function HomeTeams(
             if (archived.partial && !archivedLoading) {
                 add('archived-failure', () => (
                     <ItemGroup title={archived.archivedRows.length === 0 ? t('teams.directory.archivedSection') : undefined}>
-                        <Item
-                            testID={archivedRetryable ? 'home-teams-archived-retry' : 'home-teams-archived-unavailable'}
-                            title={archivedRetryable ? t('homeGovernance.retry') : t('homeGovernance.unavailableTitle')}
-                            subtitle={t('homeGovernance.unavailableBody')}
-                            mode={archivedRetryable ? 'interactive' : 'info'}
-                            onPress={archivedRetryable ? archived.refresh : undefined}
-                            accessibilityLiveRegion="assertive"
-                            showChevron={false}
+                        <ItemLoadStateRows
+                            testID="home-teams-archived"
+                            state={{
+                                kind: 'failed',
+                                reason: t('homeGovernance.unavailableBody'),
+                                onRetry: archivedRetryable ? archived.refresh : undefined,
+                                homeServerIds: [serverId],
+                            }}
                         />
                     </ItemGroup>
                 ));
@@ -253,8 +271,10 @@ const HomeTeams = React.memo(function HomeTeams(
             ));
         } else if (directory.hasMore) {
             add('load-more', () => (
-                <ItemGroup>
-                    <Item testID="home-teams-load-more" title={t('homeGovernance.loadMore')} onPress={directory.loadMore} showChevron={false} />
+                <ItemGroup surface="none">
+                    <SectionButtonRow>
+                        <RoundButton testID="home-teams-load-more" size="small" display="inverted" title={t('homeGovernance.loadMore')} onPress={directory.loadMore} />
+                    </SectionButtonRow>
                 </ItemGroup>
             ));
         }

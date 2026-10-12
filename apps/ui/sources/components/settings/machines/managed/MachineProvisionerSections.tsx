@@ -107,7 +107,7 @@ function ProvisionerGroup(
               )
             }
             icon={card.mark(MANAGED_PROVISIONER_MARK_SIZE.row)}
-            onPress={card.action.onPress}
+            onPress={card.action.disabled ? undefined : card.action.onPress}
           />
         ))}
       </ItemGroup>
@@ -161,7 +161,7 @@ function ProvisionerFooter(
         {card.status.tone === 'none' ? null : (
           <StatusDot color={toneColor(theme, card.status.tone)} />
         )}
-        <Text style={styles.status}>{card.status.label}</Text>
+        {card.status.label ? <Text style={styles.status}>{card.status.label}</Text> : null}
       </View>
       <RoundButton
         testID={`${props.testID}.action`}
@@ -170,6 +170,7 @@ function ProvisionerFooter(
         display={card.action.kind === 'choose' ? 'secondary' : 'inverted'}
         title={card.action.label}
         accessibilityLabel={`${card.action.label}, ${card.title}`}
+        disabled={card.action.disabled}
         onPress={card.action.onPress}
       />
     </View>
@@ -205,12 +206,12 @@ const styles = StyleSheet.create((theme) => ({
     flexWrap: 'wrap',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 6,
+    gap: theme.space.s6,
   },
   statusGroup: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: theme.space.s6,
     flexGrow: 1,
     flexShrink: 0,
     maxWidth: '100%',
@@ -224,7 +225,7 @@ const styles = StyleSheet.create((theme) => ({
   note: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    gap: 8,
+    gap: theme.space.s8,
   },
   noteText: {
     ...Typography.default(),

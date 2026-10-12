@@ -1,5 +1,5 @@
 import type { HeatmapProps, IntervalTimelineInterval } from '@happier-dev/plugin-ui/presentation';
-import { isUsageNightHour } from '@happier-dev/protocol';
+import { isUsageNightHour } from '@happier-dev/protocol/usage/usageWorkIntervals';
 import { withUsageAccentAlpha } from '../usageAccent';
 import type { UsageHowYouWork } from '@happier-dev/protocol/usage/resolveUsageHowYouWork';
 import { t } from '@/text';
@@ -249,7 +249,8 @@ export function usageNightGridPresentation(input: Readonly<{
     const peak = Math.max(1, ...counts.values());
     return {
         label: t('usage.board.howYouWork.nightGrid'),
-        rows: Array.from({ length: 7 }, (_, weekday) => ({ id: String(weekday), label: input.weekdayLabel(weekday) })),
+        // Monday-first, as the Rhythm punch card reads.
+        rows: [1, 2, 3, 4, 5, 6, 0].map((weekday) => ({ id: String(weekday), label: input.weekdayLabel(weekday) })),
         columns: hours.map((hour) => ({ id: String(hour), label: hour === hours[0] || hour % 3 === 0 ? String(hour).padStart(2, '0') : '' })),
         cells: Array.from({ length: 7 }, (_, weekday) => hours.map((hour) => {
             const value = counts.get(`${weekday}:${hour}`) ?? 0;

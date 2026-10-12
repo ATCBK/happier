@@ -187,7 +187,6 @@ const RemoteHostEditorPage = React.memo(function RemoteHostEditorPage(props: Rea
                             expectedRevision: relayAccessSelection.revision }}
                         target={relayAccessSelection.target}
                         upstreamUrl={relayAccessSelection.upstreamUrl}
-                        runWithTarget={collection.remoteHostOutcomeActions.runRelayAccessTask}
                         runner={collection.runner}
                         accessChannels={collection.accessChannels}
                         accessEndpointRemediationActions={collection.accessEndpointProjection.remediationActions}

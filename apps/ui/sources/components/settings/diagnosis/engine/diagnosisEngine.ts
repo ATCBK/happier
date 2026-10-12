@@ -1,31 +1,13 @@
 import { sanitizeBugReportUrl } from '@happier-dev/protocol/bugs/reports/sanitize';
 import { sanitizeDoctorSnapshotUrls, type DoctorSnapshot } from '@happier-dev/protocol/diagnostics/doctorSnapshot';
+import type { DiagnosisReportV1 } from '@happier-dev/protocol/actions/diagnosticsActionFamily';
 
 import { createServerUrlComparableKey } from '@/sync/domains/server/url/serverUrlCanonical';
 import { isDaemonOfAnotherAccount } from '@/sync/domains/server/relayDrift/relayDriftModel';
 
-export type DiagnosisFindingSeverity = 'info' | 'warning' | 'error';
-
-export type DiagnosisFindingCode =
-  | 'server.mismatch.ui_vs_machine'
-  | 'server.mismatch.ui_vs_pasted'
-  | 'server.mismatch.settings_vs_resolved'
-  | 'server.multiple_machines_multiple_servers'
-  | 'server.profile_missing_for_active_url'
-  | 'auth.mismatch.ui_vs_machine_account'
-  | 'auth.machine_missing_account'
-  | 'machine.none_online'
-  | 'server.diagnostics_disabled'
-  | 'auth.server_401'
-  | 'server.unreachable'
-  | 'server.http_error';
-
-export type DiagnosisFinding = Readonly<{
-  code: DiagnosisFindingCode;
-  severity: DiagnosisFindingSeverity;
-  machineIds?: string[];
-  details?: Record<string, unknown>;
-}>;
+export type DiagnosisFinding = Readonly<DiagnosisReportV1['findings'][number]>;
+export type DiagnosisFindingSeverity = DiagnosisFinding['severity'];
+export type DiagnosisFindingCode = DiagnosisFinding['code'];
 
 export type ServerDiagnosticsStatus =
   | { state: 'ok' }
@@ -49,10 +31,7 @@ export type DiagnosisInput = Readonly<{
   nowMs: number;
 }>;
 
-export type DiagnosisReport = Readonly<{
-  capturedAt: string;
-  findings: DiagnosisFinding[];
-}>;
+export type DiagnosisReport = Readonly<DiagnosisReportV1>;
 
 function normalizeUrl(raw: string): string {
   const sanitized = sanitizeBugReportUrl(raw) ?? raw;
@@ -124,7 +103,7 @@ export function buildDiagnosisReport(input: DiagnosisInput): DiagnosisReport {
         code: 'auth.mismatch.ui_vs_machine_account',
         severity: 'error',
         machineIds: [entry.machineId],
-        details: { uiProfileId, machineAccountId: snapshot.accountId },
+        details: { uiProfileId, machineAccountId: snapshot.accountId ?? undefined },
       });
     } else if (!snapshot.accountId) {
       pushFinding(findings, {

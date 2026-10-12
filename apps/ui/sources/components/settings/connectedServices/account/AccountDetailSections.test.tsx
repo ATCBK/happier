@@ -4,7 +4,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { ItemList } from '@/components/ui/lists/ItemList';
 
-import { AccountDetailUsageSectionView, AccountDetailSubscriptionSectionView, type AccountDetailUsageFacts } from './AccountDetailSections';
+import { AccountDetailFactsSectionsView, AccountDetailUsageSectionView, AccountDetailSubscriptionSectionView, AccountDetailResetsSectionView, projectAccountDetailMachines, type AccountDetailUsageFacts } from './AccountDetailSections';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed } from '@/sync/domains/machines/reachability/machineReachability';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
@@ -110,5 +112,65 @@ describe('AccountDetailUsageSectionView', () => {
         const screen = await renderScreen(<AccountDetailUsageSectionView facts={FACTS} signedOut={false} now={2_000} />);
         expect(screen.findByTestId('account-detail-usage:pin:five_hour')).toBeNull();
         expect(screen.findByTestId('account-detail-usage:meter:five_hour')).toBeTruthy();
+    });
+});
+
+describe('AccountDetailResetsSectionView', () => {
+    it('shows saved grant facts and provider metadata with an inert Use action', async () => {
+        const use = vi.fn();
+        const screen = await renderScreen(<AccountDetailResetsSectionView
+            recoveryCredits={{ availableCount: 0, credits: [
+                { id: 'saved', kind: 'usage_limit_reset', status: 'unknown', title: 'Provider grant', description: 'Provider metadata', expiresAtMs: 86_402_000 },
+            ] }}
+            recoveryCreditDetails={{ saved: { remainingCount: 2, appliesToProviderLimitIds: ['five_hour', 'seven_day', 'provider-special'], unavailableReason: 'paused' } }}
+            now={2_000} pending={false} onUse={use}
+        />);
+        expect(screen.getTextContent()).toContain('Provider grant');
+        expect(screen.getTextContent()).toContain('Provider metadata');
+        expect(screen.getTextContent()).toContain('Saved resets: 2');
+        expect(screen.getTextContent()).toContain('5-hour limit');
+        expect(screen.getTextContent()).toContain('Weekly limit');
+        expect(screen.getTextContent()).toContain('provider-special');
+        expect(screen.getTextContent()).toContain('Paused');
+        const action = screen.findByTestId('account-detail-resets:saved:use');
+        expect(action?.props.disabled).toBe(true);
+        await screen.pressByTestIdAsync('account-detail-resets:saved:use');
+        expect(use).not.toHaveBeenCalled();
+    });
+});
+
+it('retains saved-reset facts when the detail has no live reset action', async () => {
+    const screen = await renderScreen(<AccountDetailFactsSectionsView
+        facts={{ ...FACTS, recoveryCredits: { availableCount: 0, credits: [{ id: 'saved', kind: 'usage_limit_reset', status: 'unknown', title: 'Saved provider grant' }] } }}
+        serviceLabel="Service" signedOut={false} now={2_000} resetsSection={null}
+    />);
+    expect(screen.getTextContent()).toContain('Saved provider grant');
+    expect(screen.findByTestId('account-detail-resets:saved:use')).toBeNull();
+});
+
+describe('projectAccountDetailMachines', () => {
+    it('retains unavailable inventory while showing executable supply first', () => {
+        const now = Date.now();
+        const failed = createMachineFixture({ id: 'failed', activeAt: now });
+        const replaced = createMachineFixture({ id: 'replaced', activeAt: now, replacedByMachineId: 'replacement' });
+        const ready = createMachineFixture({ id: 'ready', activeAt: now });
+        const scope = { serverId: 'home-a', accountId: 'detail-account' };
+        recordMachineRequestFailed({ ...scope, machineId: failed.id });
+        try {
+            expect(projectAccountDetailMachines([failed, replaced, ready], now, scope).map(row => ({ id: row.id, online: row.online })))
+                .toEqual([{ id: 'ready', online: true }, { id: 'failed', online: false }, { id: 'replaced', online: false }]);
+        } finally { clearMachineRequestReachabilityForTest(); }
+    });
+    it('tells same-named machines apart and lists the online ones first', () => {
+        const now = 10_000_000;
+        const rows = projectAccountDetailMachines([
+            createMachineFixture({ id: 'aaaa1111', active: false, activeAt: 0, metadata: { ...createMachineFixture().metadata!, host: 'devbox', displayName: undefined } }),
+            createMachineFixture({ id: 'bbbb2222', active: true, activeAt: now, metadata: { ...createMachineFixture().metadata!, host: 'devbox', displayName: undefined } }),
+            createMachineFixture({ id: 'cccc3333', active: true, activeAt: now, metadata: { ...createMachineFixture().metadata!, host: 'studio', displayName: undefined } }),
+        ], now, { serverId: 'home-a', accountId: 'detail-account' });
+        expect(rows.map((row) => row.id)).toEqual(['bbbb2222', 'cccc3333', 'aaaa1111']);
+        const devboxNames = rows.filter((row) => row.id !== 'cccc3333').map((row) => row.name);
+        expect(new Set(devboxNames).size).toBe(2);
+        expect(rows.find((row) => row.id === 'cccc3333')?.name).toBe('studio');
     });
 });

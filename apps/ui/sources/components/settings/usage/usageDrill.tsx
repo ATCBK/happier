@@ -17,7 +17,7 @@ export type UsageDrill = Readonly<{
   /** Whether the one filter row already holds this value. */
   selected(field: UsageDrillField, id: string): boolean;
   /** Adds the value to the one filter row, or takes it back out. False when it is not offered. */
-  toggle(field: UsageDrillField, id: string): boolean;
+  toggle(field: UsageDrillField, id: string): boolean | Promise<boolean>;
 }>;
 
 /**

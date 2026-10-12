@@ -3,10 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen, withPopoverWebGlobals } from '@/dev/testkit';
 import type { MachineDisplayRenderable } from '@/sync/domains/machines/machineDisplayRenderable';
-import {
-    resolveMachineAdministrationTargetState,
-    type MachineAdministrationCandidateV1,
-} from '@/sync/domains/machines/administration/targetSelection';
+import type { MachineAdministrationCandidateV1 } from '@/sync/domains/machines/administration/targetSelection';
 import type { MachineAdministrationTargetSelectionV1 } from '@/sync/domains/machines/administration/useTargetSelection';
 import { clearActiveUnsavedChangesGuard, setActiveUnsavedChangesGuard } from '@/utils/navigation/runGuardedNavigation';
 
@@ -19,6 +16,12 @@ installNewSessionComponentsCommonModuleMocks({
         return createTextModuleMock({ translate: (key) => key });
     },
 });
+
+// Keep cold production-module loading outside the behavioral test's runner deadline.
+// The target owner reaches Machine naming and text; install its boundaries before importing it.
+const { resolveMachineAdministrationTargetState } = await import('@/sync/domains/machines/administration/targetSelection');
+const { MachineAdministrationTargetSelector: DraftMachineTargetSelector } = await import('./MachineAdministrationTargetSelector');
+const { buildTeamCredentialBrokerMachineSelection } = await import('../teams/credentials/teamCredentialBrokerMachineSelection');
 
 function createSelection(availability: MachineAdministrationCandidateV1['availability'] = 'online', observation: 'live' | 'stale' = 'live') {
     const target = { serverIdentityId: 'portable-server-b', machineId: 'machine-b' };
@@ -122,9 +125,35 @@ describe('MachineAdministrationTargetSelector', () => {
         const option = 'header.target.picker-option:machine-b';
         const row = screen.findHostByTestId(option);
         expect(row?.props.disabled ?? row?.props.accessibilityState?.disabled ?? row?.props['aria-disabled']).toBe(true);
-        expect(screen.getTextContent()).toContain('settingsProviders.detail.machineOffline');
+        expect(screen.getTextContent()).toContain('settingsOverview.machineOffline');
+        expect(screen.getTextContent()).not.toContain('settingsProviders.detail.machineOffline');
         await screen.pressByTestIdAsync(option).catch(() => undefined);
         expect(offline.selectTarget).not.toHaveBeenCalled();
+    }));
+
+    it('keeps the same-name distinguishing suffix in the selected chip and its machine choices', () => withPopoverWebGlobals(async () => {
+        const { MachineAdministrationTargetSelector } = await import('./MachineAdministrationTargetSelector');
+        const { selection } = createSelection();
+        const hostname = 'NLDW4-5-40-40';
+        const pickerRows = ['2cd4-machine', 'ae13-machine'].map((id) => ({
+            ...selection.pickerRows[0]!,
+            machine: { ...selection.pickerRows[0]!.machine, id, metadata: { displayName: hostname, host: hostname } },
+            candidate: { ...selection.candidates[0]!, displayName: hostname, target: { serverIdentityId: 'portable-server-b', machineId: id } },
+        }));
+        const selectedTarget = pickerRows[0]!.candidate.target;
+        const candidates = pickerRows.map((row) => row.candidate);
+        const screen = await renderScreen(<MachineAdministrationTargetSelector
+            selection={{ ...selection, candidates, pickerRows, selectedTarget,
+                state: resolveMachineAdministrationTargetState({ storedTarget: selectedTarget, candidates }) }}
+            presentation="chip" testIDPrefix="identity.target"
+        />);
+        const chip = screen.findHostByTestId('identity.target.chip');
+        expect(chip?.props.accessibilityLabel ?? chip?.props['aria-label']).toContain(`${hostname} · 2cd4`);
+        await screen.pressByTestIdAsync('identity.target.chip');
+        for (const id of ['2cd4-machine', 'ae13-machine']) {
+            const row = screen.findHostByTestId(`identity.target.picker-option:${id}`);
+            expect(row?.props.accessibilityLabel ?? row?.props['aria-label']).toContain(`${hostname} · ${id.slice(0, 4)}`);
+        }
     }));
 
     it('keeps the compact context readable and reveals clearing beside the machine choices', async () => {
@@ -198,6 +227,43 @@ describe('MachineAdministrationTargetSelector', () => {
         expect(selectTarget).not.toHaveBeenCalled();
         expect(screen.findHostByTestId('administration.target.picker-option:machine-b')).not.toBeNull();
     });
+
+    it.each(['section', 'chip'] as const)('edits a draft broker through the %s picker without discarding that draft', (presentation) => withPopoverWebGlobals(async () => {
+        const { selection } = createSelection();
+        const isDirtyRef = { current: true };
+        setActiveUnsavedChangesGuard({
+            isDirtyRef, requestDecision: async () => 'keepEditing', tag: 'broker-draft',
+        });
+        function DraftBroker() {
+            const [target, setTarget] = React.useState<typeof selection.selectedTarget>(null);
+            const broker = buildTeamCredentialBrokerMachineSelection({
+                serverId: 'local-profile-b',
+                eligibleTargets: [{ machineId: 'machine-b', displayName: null, availability: 'available' }],
+                selectedMachineId: target?.machineId ?? null,
+                pickerRows: selection.pickerRows,
+                onSelectMachineId: () => setTarget(selection.candidates[0]!.target),
+                onClear: () => setTarget(null),
+            });
+            return <DraftMachineTargetSelector
+                selection={broker.selection}
+                presentation={presentation}
+                testIDPrefix="broker.target"
+            />;
+        }
+        const screen = await renderScreen(<DraftBroker />);
+        const trigger = `broker.target.${presentation === 'chip' ? 'chip' : 'current'}`;
+        await screen.pressByTestIdAsync(trigger);
+        await screen.pressByTestIdAsync('broker.target.picker-option:machine-b');
+        const current = screen.findHostByTestId(trigger);
+        expect(current?.props.accessibilityLabel ?? current?.props['aria-label']).toContain('Machine B');
+        expect(isDirtyRef.current).toBe(true);
+        if (presentation === 'section') {
+            await screen.pressByTestIdAsync('broker.target.clear');
+            const cleared = screen.findHostByTestId(trigger);
+            expect(cleared?.props.accessibilityLabel ?? cleared?.props['aria-label']).not.toContain('Machine B');
+            expect(isDirtyRef.current).toBe(true);
+        }
+    }));
 
     it.each(['offline', 'locked', 'missing', 'replaced', 'revoked'] as const)('keeps the %s target visible and unavailable in the real picker', async (availability) => {
         const { MachineAdministrationTargetSelector } = await import('./MachineAdministrationTargetSelector');

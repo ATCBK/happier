@@ -7,6 +7,7 @@ import { t } from '@/text';
 export async function reviewManagedResourceRemoval(
     resources: readonly ManagedResourceDependencyV1[],
     modal: Pick<IModal, 'confirm'> = Modal,
+    options?: Readonly<{ confirmationRequired: boolean }>,
 ): Promise<ManagedResourceDispositionV1[] | null> {
     const dispositions = resources.map((resource): ManagedResourceDispositionV1 => ({
         managedId: resource.managedId,
@@ -17,7 +18,7 @@ export async function reviewManagedResourceRemoval(
         ...(resource.recovery ? { expectedRecovery: resource.recovery } : {}),
         responsibility: 'manual',
     }));
-    const confirmed = await modal.confirm(
+    const confirmed = options?.confirmationRequired === false || await modal.confirm(
         t('managedCleanup.reviewTitle'),
         `${t('managedCleanup.removalReview')}\n\n${resources.map(resource => JSON.stringify(resource, null, 2)).join('\n\n')}`,
         {

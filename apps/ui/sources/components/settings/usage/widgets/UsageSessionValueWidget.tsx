@@ -21,15 +21,16 @@ import {
   usageAgentTitle,
   useUsagePluginTheme,
   type UsageBodyProps,
+  leadingUsageRows,
+  UsageShowAllRows,
 } from './usageBodyKit';
 import { useUsageWork } from './useUsageWork';
-import type { UsageWorkSessionRow } from './usageWorkPresentation';
+import { partitionUsageWorkMoneyRows, projectUsageSessionValuePlots, type UsageWorkSessionRow } from './usageWorkPresentation';
 import { UsageOutsideSessions } from './UsageExternalSessionCandidates';
 import { UsageWorkAutopsy } from './UsageWorkAutopsy';
 import {
   UsageWorkMarks,
   UsageWorkSectionTitle,
-  usageWorkProviderUnknownLine,
   usageWorkSessionOutcomeLine,
 } from './UsageWorkParts';
 
@@ -44,11 +45,12 @@ const SCATTER_AGENT_SLOTS = 3;
  */
 export function UsageSessionValueWidget(props: UsageBodyProps) {
   const theme = useUsagePluginTheme();
+  const [expandedGroups, setExpandedGroups] = React.useState<readonly string[]>([]);
   const { theme: appTheme } = useUnistyles();
   const presentation = useWidgetPresentation();
   const rowMetrics = usePageRowMetrics('list');
   const outside = <UsageOutsideSessions serverId={props.serverId} query={props.query} testID={`${props.testID}.outside`} />;
-  const { summary, format, sessionLabel, openSession } = useUsageWork(
+  const { summary, format, basisLabel, sessionLabel, openSession } = useUsageWork(
     props.slice,
     props.query,
     props.serverId,
@@ -63,6 +65,7 @@ export function UsageSessionValueWidget(props: UsageBodyProps) {
       <View style={styles.body}>
         <UsageBodyInsufficient
           testID={`${props.testID}.workUnavailable`}
+          replacesContent={false}
           title={t('usage.board.work.workUnavailableTitle')}
           reason={t('usage.board.work.workUnavailableReason')}
         />
@@ -73,13 +76,15 @@ export function UsageSessionValueWidget(props: UsageBodyProps) {
           testID={`${props.testID}.coverage`}
         />
         {outside}
-        <UsageWorkAutopsy {...props} testID={`${props.testID}.autopsy`} />
+        {/* The body has already said Work is unavailable; the autopsy keeps only its phases. */}
+        <UsageWorkAutopsy {...props} unavailableSaid testID={`${props.testID}.autopsy`} />
       </View>
     );
   if (summary.sessions.length === 0)
     return (
       <View><UsageBodyInsufficient
         testID={`${props.testID}.empty`}
+        replacesContent={false}
         title={t('usage.board.work.emptyTitle')}
         reason={t('usage.board.work.emptyReason')}
       />{outside}<UsageWorkAutopsy {...props} testID={`${props.testID}.autopsy`} /></View>
@@ -105,7 +110,8 @@ export function UsageSessionValueWidget(props: UsageBodyProps) {
       title: t('usage.board.work.unlinkedTitle'),
       rows: summary.sessions.filter((row) => row.outcomes.length === 0),
     },
-  ].filter((group) => group.rows.length > 0);
+  ].flatMap(group => partitionUsageWorkMoneyRows(group.rows, props.query.metric)
+    .map(part => ({ ...group, ...part, key: `${group.id}:${part.key}` })));
   const width = presentation?.geometry?.width ?? 0;
   const showScatter =
     width >= SCATTER_MIN_WIDTH_PX &&
@@ -116,30 +122,26 @@ export function UsageSessionValueWidget(props: UsageBodyProps) {
     fontSize: rowMetrics.subtitle.fontSize,
     lineHeight: rowMetrics.subtitle.lineHeight,
   };
-  const plotted = summary.sessions.filter(
-    (row): row is UsageWorkSessionRow & { amount: number } => row.amount !== null,
-  );
   const slots = summary.agents.slice(0, SCATTER_AGENT_SLOTS).map((row) => row.agentId);
   const other = usageOtherColor(appTheme);
   // A Session several Agents worked on belongs to none of them alone.
   const slotOf = (row: UsageWorkSessionRow) =>
     row.agentIds.length === 1 && slots.includes(row.agentIds[0]!) ? row.agentIds[0]! : null;
-  const usedSlots = slots.filter((agentId) => plotted.some((row) => slotOf(row) === agentId));
-  // Named on the plot: the costliest Session and the one linked to the most merged work.
-  const costliest = plotted[0];
-  const mostMerged = plotted.reduce<(typeof plotted)[number] | undefined>(
-    (best, row) => (merged(row) > (best ? merged(best) : 0) ? row : best),
-    undefined,
-  );
-  // The lower median is one of the plotted amounts themselves, not a computed blend.
-  const ordered = plotted.map((row) => row.amount).sort((left, right) => left - right);
-  const median = ordered.length > 1 ? ordered[Math.floor((ordered.length - 1) / 2)]! : null;
+  const plots = projectUsageSessionValuePlots(summary.sessions, props.query.metric);
   return (
     <View style={styles.body} testID={`${props.testID}.value`}>
       {outside}
       <UsageWorkAutopsy {...props} testID={`${props.testID}.autopsy`} />
-      {showScatter ? (
+      {showScatter ? plots.map(plot => {
+        const usedSlots = slots.filter(agentId => plot.rows.some(row => slotOf(row) === agentId));
+        const costliest = plot.rows[0];
+        const mostMerged = plot.rows.reduce<(typeof plot.rows)[number] | undefined>(
+          (best, row) => merged(row) > (best ? merged(best) : 0) ? row : best, undefined);
+        const ordered = plot.rows.map(row => row.amount).sort((left, right) => left - right);
+        const median = ordered.length > 1 ? ordered[Math.floor((ordered.length - 1) / 2)]! : null;
+        return (
         <OutcomeScatter
+          key={plot.key}
           theme={theme}
           testID={`${props.testID}.scatter`}
           label={t('usage.board.work.valueLabel')}
@@ -151,14 +153,15 @@ export function UsageSessionValueWidget(props: UsageBodyProps) {
           yLabel={t('usage.board.work.yMerged')}
           unknownLabel={t('usage.board.work.noOutcome')}
           size="full"
-          formatX={format}
+          formatX={value => format(value, plot.moneyBasis)}
+          basis={basisLabel(plot.moneyBasis)}
           legend={[
             ...usedSlots.map((agentId) => ({
               id: agentId,
               label: usageAgentTitle(agentId),
               color: getAgentIdentityColor(appTheme, agentId),
             })),
-            ...(plotted.some((row) => slotOf(row) === null)
+            ...(plot.rows.some((row) => slotOf(row) === null)
               ? [{ id: 'other', label: t('usage.board.work.otherAgents'), color: other }]
               : []),
           ]}
@@ -167,29 +170,38 @@ export function UsageSessionValueWidget(props: UsageBodyProps) {
               ? undefined
               : [{ id: 'median', value: median, label: t('usage.board.work.medianSession') }]
           }
-          points={plotted.map((row) => {
+          points={plot.rows.map((row) => {
             const slot = slotOf(row);
             return {
               id: row.sessionId,
               label: sessionLabel(row.sessionId),
               x: row.amount,
-              // Only witnessed outcomes have a y: an unlinked session is unknown, not zero.
-              y: row.outcomes.length > 0 ? merged(row) : null,
+              // Unlinked Sessions stay in the ledger; an open witnessed outcome is zero merged.
+              y: merged(row),
               color: slot === null ? other : getAgentIdentityColor(appTheme, slot),
               annotation: usageWorkSessionOutcomeLine(row),
               labelled: row === costliest || row === mostMerged,
             };
           })}
         />
-      ) : null}
-      {groups.map((group) => (
-        <View key={group.id} style={styles.group}>
+      ); }) : null}
+      {groups.map((group) => {
+        // A caveat every row shares is said once under the group title, never repeated per row.
+        const notes = group.rows.map(row => [usageWorkSessionOutcomeLine(row)].filter(Boolean) as string[]);
+        const shared = (notes[0] ?? []).filter(note => notes.every(rowNotes => rowNotes.includes(note)));
+        // The group title may already be that caveat ("No linked outcome yet"); it is not said twice.
+        const said = shared.filter(note => note.toLocaleLowerCase() !== group.title.toLocaleLowerCase());
+        const lead = leadingUsageRows(group.rows, expandedGroups.includes(group.id));
+        return (
+        <View key={group.key} style={styles.group}>
           <UsageWorkSectionTitle quiet>{group.title}</UsageWorkSectionTitle>
+          {said.length ? <Text style={[styles.note, sectionStyle]}>{said.join(' · ')}</Text> : null}
           <RankedRows
             theme={theme}
             label={group.title}
             size="tile"
-            valueFormatter={format}
+            valueFormatter={value => format(value, group.moneyBasis)}
+            basis={basisLabel(group.moneyBasis)}
             unknownLabel={format(null)}
             testID={`${props.testID}.${group.id}`}
             leads={Object.fromEntries(
@@ -206,15 +218,15 @@ export function UsageSessionValueWidget(props: UsageBodyProps) {
             barAppearance={{
               fillOpacity: group.id === 'unlinked' ? 0.35 : undefined,
             }}
-            rows={group.rows
+            rows={lead.rows
               .map((row) => ({
                 id: row.sessionId,
                 label: sessionLabel(row.sessionId),
                 value: row.amount,
                 color: group.id === 'unlinked' ? quiet : accent,
-                annotation: [usageWorkSessionOutcomeLine(row), usageWorkProviderUnknownLine(row)]
-                  .filter(Boolean)
-                  .join(' · '),
+                annotation: [usageWorkSessionOutcomeLine(row)]
+                  .filter((note): note is string => Boolean(note) && !shared.includes(note!))
+                  .join(' · ') || undefined,
               }))}
             renderRow={(row, visual) => (
               <HappierPressable
@@ -229,8 +241,13 @@ export function UsageSessionValueWidget(props: UsageBodyProps) {
               </HappierPressable>
             )}
           />
+          {group.rows.length > lead.rows.length || expandedGroups.includes(group.id) ? <UsageShowAllRows total={group.rows.length}
+            expanded={lead.hidden === 0} testID={`${props.testID}.${group.id}.more`}
+            onToggle={() => setExpandedGroups(current => current.includes(group.id)
+              ? current.filter(id => id !== group.id) : [...current, group.id])} /> : null}
         </View>
-      ))}
+        );
+      })}
       <Text style={[styles.note, sectionStyle]}>
         {t('usage.board.work.judgement')}
       </Text>
@@ -246,6 +263,6 @@ export function UsageSessionValueWidget(props: UsageBodyProps) {
 
 const styles = StyleSheet.create((theme) => ({
   body: { gap: 14, minWidth: 0 },
-  group: { gap: 6 },
+  group: { gap: theme.space.s6 },
   note: { ...Typography.default(), color: theme.colors.text.tertiary },
 }));

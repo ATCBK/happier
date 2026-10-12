@@ -176,7 +176,8 @@ export const HomeConsoleSidebar = React.memo(function HomeConsoleSidebar(props: 
             <View style={styles.header}>
                 <HomeMark serverUrl={identity.serverUrl} />
                 <View style={styles.identity}>
-                    <Text style={styles.homeName} numberOfLines={1}>{identity.homeName}</Text>
+                    {/* A long Home name wraps once rather than losing the words that tell Homes apart. */}
+                    <Text style={styles.homeName} numberOfLines={2}>{identity.homeName}</Text>
                     {identity.role ? (
                         <Text testID="home-console-rail-role" style={styles.role} numberOfLines={1}>{identity.role}</Text>
                     ) : null}
@@ -308,18 +309,18 @@ const stylesheet = StyleSheet.create((theme) => ({
         minHeight: 0,
         borderLeftWidth: StyleSheet.hairlineWidth,
         borderLeftColor: theme.colors.border.default,
-        paddingTop: theme.margins.md,
+        paddingTop: theme.space.s12,
     },
     header: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 10,
-        paddingTop: 4,
-        paddingBottom: theme.margins.md,
+        gap: theme.space.s10,
+        paddingTop: theme.space.s4,
+        paddingBottom: theme.space.s12,
         paddingHorizontal: HAPPIER_COLLECTION_LIST_METRICS.contentInset - 4,
     },
     groupGap: {
-        height: theme.margins.md,
+        height: theme.space.s12,
     },
     identity: {
         flex: 1,

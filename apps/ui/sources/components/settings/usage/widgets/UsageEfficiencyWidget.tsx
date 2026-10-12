@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { projectUsagePageCost } from '@happier-dev/protocol/usage/usageCostFacts';
 import { useWidgetPresentation } from '@happier-dev/plugin-ui';
 import {
   CompositionStrip,
@@ -16,6 +17,7 @@ import {
 } from '@/utils/format/usageNumbers';
 import { t } from '@/text';
 import { usageSeriesColor } from '../usageAccent';
+import { usageCostKindPhrase } from '../usageCostPresentation';
 import {
   usageCompositionSegments,
   usageCompositionShareLabel,
@@ -27,6 +29,7 @@ import {
   useUsageAnalyticsView,
   useUsagePluginTheme,
   type UsageBodyProps,
+  UsageBodyNoUsage,
 } from './usageBodyKit';
 
 /** Below this width the mix is the dot waffle (lab `kitcharts`: "waffle on tile and phone"). */
@@ -50,18 +53,19 @@ export function UsageEfficiencyWidget(props: UsageBodyProps) {
     (presentation?.geometry?.width ?? Number.POSITIVE_INFINITY) <
       WAFFLE_BELOW_PX;
   if (!view)
-    return (
-      <UsageBodyInsufficient
-        testID={`${props.testID}.empty`}
-        title={t('usage.board.page.noUsageTitle')}
-        reason={t('usage.board.page.noUsageReason')}
-      />
-    );
-  const { efficiency, composition } = view;
+    return <UsageBodyNoUsage slice={props.slice} testID={props.testID} />;
+  const { composition } = view;
+  const totalTokens = props.slice.accounting?.totals.tokens.total ?? 0;
+  const efficiency = { ...view.efficiency,
+    costPerMtokUsd: totalTokens > 0 && view.pageCost.amountUsd !== null
+      ? view.pageCost.amountUsd / totalTokens * 1e6 : null,
+    currency: view.pageCost.selection?.currency ?? 'USD' };
   const previous = props.slice.comparison?.accounting;
+  const previousCost = previous
+    ? projectUsagePageCost(previous, props.query.costBasis, view.pageCost.selection).amountUsd : null;
   const previousPerMtok =
-    previous && previous.totals.tokens.total > 0 && previous.costPresentation
-      ? (previous.costPresentation.effectiveUsd /
+    previous && previous.totals.tokens.total > 0 && previousCost !== null
+      ? (previousCost /
           previous.totals.tokens.total) *
         1e6
       : null;
@@ -103,7 +107,7 @@ export function UsageEfficiencyWidget(props: UsageBodyProps) {
                     ? t('usage.board.page.cacheListPriceDifference', {
                         amount: formatUsageCost(
                           view.cacheSavings.cacheSavingsUsd,
-                          efficiency.currency,
+                          'USD',
                         ),
                       })
                     : t('usage.board.page.cacheReadTokens', {
@@ -122,6 +126,7 @@ export function UsageEfficiencyWidget(props: UsageBodyProps) {
                 showLabel
                 label={t('usage.board.page.perMillionTokens')}
                 value={efficiency.costPerMtokUsd}
+                caption={view.pageCost.selection ? usageCostKindPhrase(view.pageCost.selection.kind) : undefined}
                 valueFormatter={(value) =>
                   formatUsageCost(value, efficiency.currency)
                 }
@@ -156,7 +161,7 @@ export function UsageEfficiencyWidget(props: UsageBodyProps) {
           segmentGap={2}
           valueFormatter={formatTokenCount}
           shareFormatter={usageCompositionShareLabel}
-          unknownLabel={t('common.unavailable')}
+          unknownLabel="—"
           testID={`${props.testID}.mix`}
           renderBarSegment={(segment, visual, share) => (
             <ChartTooltip
@@ -167,7 +172,7 @@ export function UsageEfficiencyWidget(props: UsageBodyProps) {
               }
               value={
                 segment.value === null
-                  ? t('common.unavailable')
+                  ? '—'
                   : formatTokenCountLong(segment.value)
               }
               accentColor={segment.color ?? chartTheme.colors.accent}

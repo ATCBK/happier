@@ -4,7 +4,7 @@ import {
   type UsageWorkContribution,
   type UsageWorkEvidence,
 } from '@happier-dev/protocol/usage/usageOutcomeAllocation';
-import { summarizeUsageWork, summarizeUsageWorkSession } from './usageWorkPresentation';
+import { projectUsageSessionValuePlots, summarizeUsageWork, summarizeUsageWorkSession } from './usageWorkPresentation';
 
 const tokens = {
   input: 10,
@@ -73,6 +73,19 @@ function evidence(
 }
 
 describe('Work display grouping of the canonical allocation', () => {
+  it('plots only monetary partitions with witnessed outcome coordinates, including open outcomes at zero merged', () => {
+    const unlinkedEuro = { ...contribution('unlinked', 'unlinked', 'u'),
+      cost: { reportedUsd: 3, estimatedUsd: 4, currency: 'EUR' } };
+    const summary = summarizeUsageWork(allocateUsageOutcomes({
+      contributions: [contribution('linked', 'linked', 'l'), contribution('unlinked-dollar', 'unlinked-dollar', 'u2'), unlinkedEuro],
+      evidence: [evidence('linked', 'l', 1, 'open')],
+    }), { metric: 'cost', costBasis: 'reported' });
+    expect(projectUsageSessionValuePlots(summary.sessions, 'cost').map(plot => plot.rows.map(row => row.sessionId)))
+      .toEqual([['linked']]);
+    expect(projectUsageSessionValuePlots(summarizeUsageWork(allocateUsageOutcomes({
+      contributions: [unlinkedEuro], evidence: [],
+    }), { metric: 'tokens', costBasis: 'auto' }).sessions, 'tokens')).toEqual([]);
+  });
   it('expands a project, a PR and a branch into exact per-Session parts that add back to the row', () => {
     const bound = (id: string, sessionId: string, turnId: string, projectKey: string) => ({ ...contribution(id, sessionId, turnId, projectKey),
       providerId: 'provider.openrouter', providerConnectionId: 'connection' });
@@ -85,20 +98,20 @@ describe('Work display grouping of the canonical allocation', () => {
       branchEvidence: [branchWitness('s1', 't1', 'd'.repeat(40)), branchWitness('s1', 't2', 'e'.repeat(40)), branchWitness('s2', 't4', 'd'.repeat(40))],
     }), { metric: 'cost', costBasis: 'reported' });
     const project = summary.projects.find(row => row.projectKey === 'p1')!;
-    expect(project.sessions).toEqual([{ sessionId: 's1', amount: 6 }, { sessionId: 's2', amount: 3 }]);
+    expect(project.sessions).toMatchObject([{ sessionId: 's1', amount: 6 }, { sessionId: 's2', amount: 3 }]);
     expect(project.sessions.reduce((sum, row) => sum + known(row.amount), 0)).toBe(project.amount);
     // The branch part of a project counts only that project's witnessed contributions.
-    expect(project.branches).toEqual([expect.objectContaining({ amount: 6, sessions: [{ sessionId: 's1', amount: 6 }],
-      commits: ['d'.repeat(40), 'e'.repeat(40)] })]);
+    expect(project.branches).toMatchObject([{ amount: 6, sessions: [{ sessionId: 's1', amount: 6 }],
+      commits: ['d'.repeat(40), 'e'.repeat(40)] }]);
     const branch = summary.branches[0]!;
-    expect(summary.agents).toEqual([{ agentId: 'claude', amount: 12 }]);
-    expect(branch).toMatchObject({ amount: 9, perSession: 4.5, projectKeys: ['p1', 'p2'], agentIds: ['claude'], providerUnknown: true,
+    expect(summary.agents).toMatchObject([{ agentId: 'claude', amount: 12 }]);
+    expect(branch).toMatchObject({ amount: 9, perSession: 4.5, projectKeys: ['p1', 'p2'], agentIds: ['claude'],
       providers: [{ providerId: 'provider.openrouter', machineId: 'machine' }] });
-    expect(branch.sessions).toEqual([{ sessionId: 's1', amount: 6 }, { sessionId: 's2', amount: 3 }]);
+    expect(branch.sessions).toMatchObject([{ sessionId: 's1', amount: 6 }, { sessionId: 's2', amount: 3 }]);
     const outcome = summary.outcomes[0]!;
-    expect(outcome.sessions).toEqual([{ sessionId: 's1', amount: 3 }, { sessionId: 's2', amount: 3 }]);
+    expect(outcome.sessions).toMatchObject([{ sessionId: 's1', amount: 3 }, { sessionId: 's2', amount: 3 }]);
     expect(outcome.sessions.reduce((sum, row) => sum + known(row.amount), 0)).toBe(outcome.amount);
-    expect(outcome).toMatchObject({ providers: [{ providerId: 'provider.openrouter', machineId: 'machine' }], providerUnknown: true });
+    expect(outcome).toMatchObject({ providers: [{ providerId: 'provider.openrouter', machineId: 'machine' }] });
   });
   it('reads one Session as its turns in witnessed order, each with its own exact amount and evidence', () => {
     const at = (row: UsageWorkContribution, observedAtMs: number) => ({ ...row, observedAtMs });
@@ -116,8 +129,85 @@ describe('Work display grouping of the canonical allocation', () => {
       outcome: expect.objectContaining({ pullRequest: expect.objectContaining({ number: 7 }) }) });
     expect(autopsy.turns[2]).toMatchObject({ checkpoints: ['checkpoint/s1/t2'], commits: ['f'.repeat(40)], branches: ['refs/heads/glass'], outcome: null });
     expect(autopsy.amount).toBe(9);
+    expect(autopsy.costTimelineBasis).toEqual({ kind: 'reported', currency: 'USD' });
+    expect(autopsy.costTimeline).toEqual([
+      { id: 'early', observedAtMs: 10, amount: 3 },
+      { id: 'loose', observedAtMs: 20, amount: 6 },
+      { id: 'late', observedAtMs: 30, amount: 9 },
+    ]);
     expect(autopsy.outcomes.map(row => row.pullRequest.number)).toEqual([7]);
     expect(summarizeUsageWorkSession(work, { metric: 'cost', costBasis: 'reported' }, 'missing').turns).toEqual([]);
+  });
+  it('leaves cumulative cost unknown after an unpriced contribution and preserves witnessed zero', () => {
+    const zero = { ...contribution('zero', 's1', 't1'), observedAtMs: 10, cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD', costSource: 'provider_reported' as const } };
+    const unknown = { ...contribution('unknown', 's1', 't2'), observedAtMs: 20, cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD', costSource: 'none' as const } };
+    const later = { ...contribution('later', 's1', 't3'), observedAtMs: 30 };
+    const work = allocateUsageOutcomes({ contributions: [later, zero, unknown], evidence: [] });
+    expect(summarizeUsageWorkSession(work, { metric: 'tokens', costBasis: 'reported' }, 's1').costTimeline)
+      .toEqual([{ id: 'zero', observedAtMs: 10, amount: 0 }, { id: 'unknown', observedAtMs: 20, amount: null },
+        { id: 'later', observedAtMs: 30, amount: null }]);
+  });
+  it('labels best available mixed kinds and never combines different currencies in a cost curve', () => {
+    const first = { ...contribution('first', 's1', 't1'), observedAtMs: 10 };
+    for (const cost of [{ reportedUsd: 0, estimatedUsd: 4, currency: 'USD', costSource: 'pricing_estimate' as const },
+      { reportedUsd: 3, estimatedUsd: 4, currency: 'EUR' }]) {
+      const work = allocateUsageOutcomes({ contributions: [first, { ...contribution('other', 's1', 't2'), observedAtMs: 20, cost }], evidence: [] });
+      const expected = cost.currency === 'USD' ? 7 : null;
+      expect(summarizeUsageWorkSession(work, { metric: 'cost', costBasis: 'auto' }, 's1').costTimeline)
+        .toEqual([{ id: 'first', observedAtMs: 10, amount: 3 }, { id: 'other', observedAtMs: 20, amount: expected }]);
+      const summary = summarizeUsageWork(work, { metric: 'cost', costBasis: 'auto' });
+      expect([summary.total, summary.unallocated, summary.projects[0]?.amount, summary.sessions[0]?.amount,
+        summary.agents[0]?.amount, summary.unallocatedByReason.missing_evidence]).toEqual(Array(6).fill(expected));
+      expect(summarizeUsageWorkSession(work, { metric: 'cost', costBasis: 'auto' }, 's1').amount).toBe(expected);
+      if (expected !== null) {
+        expect(summary.moneyBasis).toEqual({ kind: 'mixed', currency: 'USD' });
+        expect(summarizeUsageWorkSession(work, { metric: 'cost', costBasis: 'auto' }, 's1').costTimelineBasis).toEqual(summary.moneyBasis);
+      }
+      expect(summarizeUsageWork(work, { metric: 'tokens', costBasis: 'auto' }).total).toBe(28);
+    }
+  });
+  it('retains each independently known group monetary basis when the whole is mixed', () => {
+    const euro = { ...contribution('euro', 'eur-session', 'eur-turn', 'eur-project'),
+      cost: { reportedUsd: 3, estimatedUsd: 4, currency: 'EUR' } };
+    const dollars = { ...contribution('dollars', 'usd-session', 'usd-turn', 'usd-project'),
+      cost: { reportedUsd: 0, estimatedUsd: 4, currency: 'USD', costSource: 'pricing_estimate' as const } };
+    const summary = summarizeUsageWork(allocateUsageOutcomes({ contributions: [euro, dollars], evidence: [] }),
+      { metric: 'cost', costBasis: 'auto' });
+    expect(summary.total).toBeNull();
+    expect(summary.sessions.find(row => row.sessionId === 'eur-session')).toMatchObject({ amount: 3,
+      moneyBasis: { kind: 'reported', currency: 'EUR' } });
+    expect(summary.projects.find(row => row.projectKey === 'usd-project')).toMatchObject({ amount: 4,
+      moneyBasis: { kind: 'estimated', currency: 'USD' } });
+    expect(summary.projects.find(row => row.projectKey === 'eur-project')?.sessions[0]).toMatchObject({
+      amount: 3, moneyBasis: { kind: 'reported', currency: 'EUR' } });
+  });
+  it('carries named retained comparisons once and uses Git times without substituting accounting time', () => {
+    const branch = { ref: 'refs/heads/proof', headSha: 'c'.repeat(40) };
+    const comparison = { targetSha: branch.headSha, method: 'changed_file_tree_comparison' as const,
+      status: 'partial' as const, addedLines: 7, removedLines: 2 };
+    const witness = { ...evidence('s1', 't1', 9), repositoryKey: 'hosted-repo', branchRepositoryKey: 'repo',
+      branches: [branch], committedAtMs: 600, checkpointCommittedAtMs: 500,
+      retainedChange: comparison };
+    const branchWitness = { ...witness, repositoryKey: 'repo', branch };
+    const work = allocateUsageOutcomes({ contributions: [contribution('a', 's1', 't1'), contribution('b', 's1', 't1')],
+      evidence: [witness], branchEvidence: [branchWitness] });
+    const autopsy = summarizeUsageWorkSession(work, { metric: 'cost', costBasis: 'reported' }, 's1');
+    expect(autopsy.turns[0]).toMatchObject({ modelId: 'model', machineId: 'machine',
+      moments: [{ kind: 'checkpoint', sha: 'a'.repeat(40), atMs: 500 }, { kind: 'commit', sha: 'b'.repeat(40), atMs: 600 }],
+      retainedChanges: [{ commitSha: 'b'.repeat(40), ...comparison }] });
+    const summary = summarizeUsageWork(work, { metric: 'cost', costBasis: 'reported' });
+    expect(summary.branches[0]).toMatchObject({ retainedChanges: [{ commitSha: 'b'.repeat(40), ...comparison }],
+      linkedPullRequests: [expect.objectContaining({ number: 9 })] });
+    const old = summarizeUsageWorkSession(allocateUsageOutcomes({ contributions: [contribution('old', 's1', 't1')],
+      evidence: [evidence('s1', 't1', 9)] }), { metric: 'cost', costBasis: 'reported' }, 's1');
+    expect(old.turns[0]?.moments).toEqual([]);
+    for (const mismatch of [{ ...branch, headSha: 'd'.repeat(40) }, branch]) {
+      const mismatchWitness = { ...witness, branches: [mismatch],
+        branchRepositoryKey: mismatch.headSha === branch.headSha ? 'another-repo' : witness.branchRepositoryKey };
+      const unrelated = allocateUsageOutcomes({ contributions: [contribution('a', 's1', 't1')],
+        evidence: [mismatchWitness], branchEvidence: [branchWitness] });
+      expect(summarizeUsageWork(unrelated, { metric: 'cost', costBasis: 'reported' }).branches[0]?.linkedPullRequests).toEqual([]);
+    }
   });
   it('groups a standalone branch only from canonical branch allocations and retains the actual Provider binding', () => {
     const bound = { ...contribution('branch', 's1', 't1'), providerId: 'provider.openrouter', providerConnectionId: 'connection', agentId: 'claude' };

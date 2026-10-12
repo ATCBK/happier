@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useUsageModelPricesAction } from './UsageModelPrices';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import type { JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
@@ -93,7 +94,7 @@ function UsageQueryWidgetBody(
   props: UsageWidgetBodyInput &
     Readonly<{ id: Exclude<UsageBuiltinWidgetIdV1, 'usage_sources'> }>,
 ) {
-  const { model, query } = useUsageWidgetModel(props.input);
+  const { model, query } = useUsageWidgetModel(props.input, props.id);
   const slice = model.slice;
   // Dim only facts that are being replaced: a previous period held while the new one arrives. A
   // re-read of the shown facts keeps them at full strength and says "Refreshing" in the frame's meta
@@ -101,7 +102,8 @@ function UsageQueryWidgetBody(
   const replacing = slice !== null && model.updatingPreviousPeriod;
   useWidgetFrameResourceActivity(replacing || model.refreshing);
   // Ask and Copy act on the query the body is showing (the held one while a new period arrives).
-  useUsageQueryActions(props.id, slice?.shownQuery ?? query);
+  const pricesAction = useUsageModelPricesAction(props.id === 'usage_cost_facts' ? slice : null, props.serverId, props.testID);
+  useUsageQueryActions(props.id, slice?.shownQuery ?? query, pricesAction);
   const Body = USAGE_QUERY_BODIES[props.id];
   if (!query)
     return (

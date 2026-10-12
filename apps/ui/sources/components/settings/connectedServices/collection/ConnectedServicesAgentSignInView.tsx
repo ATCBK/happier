@@ -14,10 +14,11 @@ import { useHomeTeamCredentialModelCatalog } from '@/hooks/teams/useHomeTeamCred
 import { Modal } from '@/modal';
 import { buildConnectedAccountSettingsRoute } from '@/sync/domains/connectedServices/connectedAccountSettingsRoute';
 import { canExecuteConnectedServiceAction, getLegacyConnectedServiceRegistryEntry } from '@/sync/domains/connectedServices/connectedServiceRegistry';
-import { useActiveServerAccountScope, useSettingMutable, useSettingsSelector } from '@/sync/store/hooks';
+import { useActiveServerAccountScope, useSetting, useSettingsSelector } from '@/sync/store/hooks';
 import { useConnectedAccountPurposeDefaults } from '@/hooks/server/connectedServices/useConnectedAccountPurposeDefaults';
 import { selectConnectedMetadataAcknowledgements, selectConnectedMetadataLabels, useConnectedMetadataCatalog } from '@/hooks/server/connectedServices/useConnectedMetadataCatalog';
-import { setConnectedAcknowledgement } from '@/sync/api/account/apiConnectedMetadataCatalog';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { ConnectedAccountActionApprovalNotice } from '../ConnectedAccountActionApprovalNotice';
 import type { QualifiedAcknowledgementSubject } from '@happier-dev/protocol/connect/connectedAccountPresentationRowsV1';
 import { t } from '@/text';
 
@@ -37,6 +38,7 @@ export const ConnectedServicesAgentSignInView = React.memo(function ConnectedSer
     const router = useRouter();
     const activeServer = useActiveServerSnapshot();
     const activeAccountScope = useActiveServerAccountScope(activeServer.serverId);
+    const acknowledgementExecution = useMountedActionExecution(activeAccountScope);
     const index = useConnectedServicesIndex({ agents: 'load' });
     const { agentEntries, qualifiedAccounts, qualifiedGroups } = index;
     const settings = useSettingsSelector((settings) => ({
@@ -44,18 +46,20 @@ export const ConnectedServicesAgentSignInView = React.memo(function ConnectedSer
     }));
     const labelsByKey = useConnectedMetadataCatalog(activeAccountScope, selectConnectedMetadataLabels);
     const poolAdoptionDismissedByKey = useConnectedMetadataCatalog(activeAccountScope, selectConnectedMetadataAcknowledgements);
-    const { catalog: purposeCatalog, legacySettings, mutateDefaults } = useConnectedAccountPurposeDefaults();
-    const [providerStateSharingSettings, setProviderStateSharingSettings] =
-        useSettingMutable('connectedServicesProviderStateSharingSettingsV1');
+    const { catalog: purposeCatalog, legacySettings, mutateDefaults, execution: purposeExecution } = useConnectedAccountPurposeDefaults();
+    const providerStateSharingSettings = useSetting('connectedServicesProviderStateSharingSettingsV1');
     const normalizedProviderStateSharingSettings = React.useMemo(
         () => ConnectedServicesProviderStateSharingSettingsV1Schema.parse(providerStateSharingSettings),
         [providerStateSharingSettings],
     );
     const dismissPoolAdoptionSuggestion = React.useCallback(async (subject: Extract<QualifiedAcknowledgementSubject, { kind: 'adoption' }>) => {
         if (!activeAccountScope) return false;
-        try { await setConnectedAcknowledgement({ subject, acknowledged: true }, activeAccountScope); return true; }
+        try {
+            const result = await acknowledgementExecution.execute('connectedServices.acknowledgements.set', { subject, acknowledged: true });
+            return result.ok;
+        }
         catch { return false; }
-    }, [activeAccountScope]);
+    }, [acknowledgementExecution.execute, activeAccountScope]);
     const accountGroupsEnabled = useFeatureEnabled('connectedServices.accountGroups');
     const teamCredentialResourcesEnabled = useFeatureEnabled('teams.credentialResources', {
         scopeKind: 'spawn',
@@ -78,6 +82,8 @@ export const ConnectedServicesAgentSignInView = React.memo(function ConnectedSer
 
     return (
         <ItemList>
+            <ConnectedAccountActionApprovalNotice execution={acknowledgementExecution} testID="connected-services-acknowledgement-approval-pending" />
+            <ConnectedAccountActionApprovalNotice execution={purposeExecution} testID="connected-services-purpose-approval-pending" />
             <SettingsPageHeader
                 title={t('connectedServicesCollection.agentSignInTitle')}
                 description={t('connectedServicesSettings.usageDescription')}
@@ -129,7 +135,6 @@ export const ConnectedServicesAgentSignInView = React.memo(function ConnectedSer
                 <ItemGroup title={t('connectedServicesSettings.sharingTitle')}>
                     <ConnectedServicesProviderStateSharingDisclosure
                         settings={normalizedProviderStateSharingSettings}
-                        setSettings={setProviderStateSharingSettings}
                         onOpenBackendOverrides={() => router.push('/(app)/settings/connected-services/provider-state-sharing')}
                     />
                 </ItemGroup>

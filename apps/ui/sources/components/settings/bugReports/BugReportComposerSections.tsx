@@ -4,6 +4,7 @@ import { parseDoctorSnapshotSafe } from '@happier-dev/protocol/diagnostics/docto
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
 import { Switch } from '@/components/ui/forms/Switch';
+import { CountedDisclosureItem } from '@/components/ui/lists/CountedDisclosureItem';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
@@ -136,7 +137,14 @@ export function BugReportDiagnosticsSection(props: Readonly<{
                     />
                 )}
             />
-            {props.includeDiagnostics ? DIAGNOSTICS_KIND_OPTIONS.map((option) => {
+            {props.includeDiagnostics ? (
+                <CountedDisclosureItem
+                    testID="bug-report-diagnostics-sources"
+                    title={t('bugReports.composer.diagnostics.chooseIncluded')}
+                    count={DIAGNOSTICS_KIND_OPTIONS.filter((option) => acceptedSet.has(option.kind) && selectedSet.has(option.kind)).length}
+                    showDivider={false}
+                >
+            {DIAGNOSTICS_KIND_OPTIONS.map((option) => {
                 const allowed = acceptedSet.has(option.kind);
                 const selected = selectedSet.has(option.kind);
                 return (
@@ -156,8 +164,8 @@ export function BugReportDiagnosticsSection(props: Readonly<{
                         )}
                     />
                 );
-            }) : null}
-            {props.includeDiagnostics && acceptedSet.has('daemon') ? (
+            })}
+            {acceptedSet.has('daemon') ? (
                 <Item
                     title={t('bugReports.composer.diagnostics.pasteDoctorJson.title')}
                     // The field shows its own refusal; the row says what the paste is for, or that it is accepted.
@@ -183,6 +191,8 @@ export function BugReportDiagnosticsSection(props: Readonly<{
                     )}
                 />
             ) : null}
+                </CountedDisclosureItem>
+            ) : null}
         </ItemGroup>
     );
 }
@@ -190,18 +200,8 @@ export function BugReportDiagnosticsSection(props: Readonly<{
 export function BugReportIssueDetailsSection(props: Readonly<{
     title: string;
     onTitleChange: (value: string) => void;
-    reporterGithubUsername: string;
-    onReporterGithubUsernameChange: (value: string) => void;
     summary: string;
     onSummaryChange: (value: string) => void;
-    currentBehavior: string;
-    onCurrentBehaviorChange: (value: string) => void;
-    expectedBehavior: string;
-    onExpectedBehaviorChange: (value: string) => void;
-    reproductionStepsText: string;
-    onReproductionStepsTextChange: (value: string) => void;
-    whatChangedRecently: string;
-    onWhatChangedRecentlyChange: (value: string) => void;
     fieldErrors?: Partial<Record<'title' | 'summary', string>>;
     disabled: boolean;
 }>): React.JSX.Element {
@@ -234,7 +234,38 @@ export function BugReportIssueDetailsSection(props: Readonly<{
                 maxLength={800}
                 error={summaryError}
                 disabled={props.disabled}
+                showDivider={false}
             />
+        </ItemGroup>
+    );
+}
+
+/** The optional fields, together under one heading that says they are optional, instead of a "(optional)" on each label. */
+export function BugReportMoreDetailSection(props: Readonly<{
+    reporterGithubUsername: string;
+    onReporterGithubUsernameChange: (value: string) => void;
+    currentBehavior: string;
+    onCurrentBehaviorChange: (value: string) => void;
+    expectedBehavior: string;
+    onExpectedBehaviorChange: (value: string) => void;
+    reproductionStepsText: string;
+    onReproductionStepsTextChange: (value: string) => void;
+    whatChangedRecently: string;
+    onWhatChangedRecentlyChange: (value: string) => void;
+    disabled: boolean;
+}>): React.JSX.Element {
+    const filledCount = [props.currentBehavior, props.expectedBehavior, props.reproductionStepsText,
+        props.whatChangedRecently, props.reporterGithubUsername].filter((value) => value.trim().length > 0).length;
+    return (
+        <ItemGroup
+            title={t('bugReports.composer.issueDetails.moreDetailTitle')}
+            description={t('bugReports.composer.issueDetails.moreDetailDescription')}
+        >
+            <CountedDisclosureItem
+                testID="bug-report-more-detail"
+                title={t('bugReports.composer.issueDetails.addMoreDetail')}
+                subtitle={filledCount > 0 ? t('bugReports.composer.issueDetails.filledCount', { count: filledCount }) : undefined}
+            >
             <BugReportFieldRow
                 label={t('bugReports.composer.issueDetails.currentBehaviorLabel')}
                 value={props.currentBehavior}
@@ -280,7 +311,9 @@ export function BugReportIssueDetailsSection(props: Readonly<{
                 maxLength={80}
                 autoCapitalize="none"
                 disabled={props.disabled}
+                showDivider={false}
             />
+            </CountedDisclosureItem>
         </ItemGroup>
     );
 }
@@ -343,6 +376,22 @@ export function BugReportEnvironmentSection(props: Readonly<{
             title={t('bugReports.composer.environment.title')}
             description={t('bugReports.composer.environment.description')}
         >
+            <CountedDisclosureItem
+                testID="bug-report-environment"
+                // What is sent, at a glance; the fields open in place to correct it.
+                title={[
+                    props.appVersion,
+                    props.platformValue,
+                    props.osVersion,
+                    props.deviceModel,
+                    props.deploymentType === 'cloud'
+                        ? t('bugReports.composer.environment.deploymentType.cloud')
+                        : props.deploymentType === 'enterprise'
+                            ? t('bugReports.composer.environment.deploymentType.enterprise')
+                            : t('bugReports.composer.environment.deploymentType.selfHosted'),
+                ].map((value) => value.trim()).filter((value) => value.length > 0).join(' · ')}
+                subtitle={props.serverUrl.trim() || undefined}
+            >
             <BugReportFieldRow label={t('bugReports.composer.environment.appVersionLabel')} value={props.appVersion} onChange={props.onAppVersionChange} disabled={props.disabled} autoCapitalize="none" />
             <BugReportFieldRow label={t('bugReports.composer.environment.platformLabel')} value={props.platformValue} onChange={props.onPlatformValueChange} disabled={props.disabled} autoCapitalize="none" />
             <BugReportFieldRow label={t('bugReports.composer.environment.osVersionLabel')} value={props.osVersion} onChange={props.onOsVersionChange} disabled={props.disabled} autoCapitalize="none" />
@@ -360,6 +409,7 @@ export function BugReportEnvironmentSection(props: Readonly<{
                     { id: 'enterprise', label: t('bugReports.composer.environment.deploymentType.enterprise') },
                 ]}
             />
+            </CountedDisclosureItem>
         </ItemGroup>
     );
 }

@@ -12,10 +12,29 @@ import { publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration
 import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { getServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
-import { useUsagePlans } from './useUsagePlans';
+import { useUsagePlans, useUsageSelectorMachineId } from './useUsagePlans';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed, recordMachineRequestSucceeded } from '@/sync/domains/machines/reachability/machineReachability';
+import { act } from 'react-test-renderer';
+import { upsertAndActivateServer } from '@/sync/domains/server/serverRuntime';
 
 let home: Awaited<ReturnType<typeof serveAccountHomes>> | undefined;
-afterEach(() => { standardCleanup(); retireActiveServerAccountScopeLifetime(); home?.dispose(); home = undefined; });
+afterEach(() => { standardCleanup(); clearMachineRequestReachabilityForTest(); retireActiveServerAccountScopeLifetime(); home?.dispose(); home = undefined; });
+
+it('changes the Usage selector when request reachability changes without a machine heartbeat', async () => {
+  const { id: serverId } = await upsertAndActivateServer({ serverUrl: 'https://usage-selector.test', name: 'Usage Home' });
+  publishAppliedActiveServerSnapshot({ serverId, serverUrl: 'https://usage-selector.test', generation: 0 });
+  const machines = ['first', 'second'].map(id => createMachineFixture({ id, activeAt: Date.now() }));
+  const scope = { serverId, accountId: 'selector-account' };
+  storage.setState({ profileScope: scope, profile: AccountProfileSchema.parse({ id: scope.accountId }), machines: Object.fromEntries(machines.map(machine => [machine.id, machine])),
+    machineListByServerId: { [serverId]: machines } });
+  const hook = await renderHook(() => useUsageSelectorMachineId());
+  expect(hook.getCurrent()).toBe('first');
+  await act(async () => recordMachineRequestFailed({ ...scope, machineId: 'first' }));
+  expect(hook.getCurrent()).toBe('second');
+  await act(async () => recordMachineRequestSucceeded({ ...scope, machineId: 'first' }));
+  expect(hook.getCurrent()).toBe('first');
+});
 
 it('refreshes the displayed Usage Resource and creates no independent quota polling demand', async () => {
   home = await serveAccountHomes({ homes: [{ key: 'plans', serverUrl: 'https://usage-plans.test', accountId: 'plans-account' }],

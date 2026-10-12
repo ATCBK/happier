@@ -25,7 +25,6 @@ import {
 } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { collectRenderedTestIds } from '@/dev/testkit/render/collectRenderedTestIds';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
-import { resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 
 import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelpers';
@@ -62,6 +61,7 @@ installSettingsViewCommonModuleMocks({
 
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
+const { resetServerFeaturesClientForTests } = await import("@/sync/api/capabilities/serverFeaturesClient");
 
 const GOVERNANCE_PATH = '/v1/home/governance/get';
 const LIST_PATH = '/v1/home/accounts/list';
@@ -148,7 +148,7 @@ describe('HomeAdministrationPeopleScreen', () => {
 
     it('never shows a raw account id: an unnamed account is named once and told apart by its hint', async () => {
         const home = await addAdministeredHome();
-        const unnamed = { firstName: null, lastName: null, username: null, avatarUrl: null };
+        const unnamed = { name: null, firstName: null, lastName: null, username: null, avatarUrl: null };
         harness.answer(home, LIST_PATH, {
             body: {
                 items: [
@@ -263,7 +263,7 @@ describe('HomeAdministrationPeopleScreen', () => {
         harness.answer(home, SEARCH_PATH, {
             body: { accounts: [homeAccountPickerRowFixture('grace', 'Grace')] },
         });
-        await screen.pressByTestIdAsync('home-people-search-retry');
+        await screen.pressByTestIdAsync('home-people-search-failed-retry');
 
         await waitForHomeGovernance(() => {
             expect(collectRenderedTestIds(screen.tree.toJSON())).toContain('home-people-search-row:grace');

@@ -5,14 +5,24 @@ import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue'
 
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { getServerProfileById, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
-import { useServerCredentialAccountScopeStates } from '@/sync/domains/scope/useServerCredentialAccountScopes';
-import { subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
+import { useServerCredentialAccountScopeStates, type ServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
+import { isArtifactOnlyHomeAccountChange, subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { awaitActionApprovalResult, createActionApprovalContinuation, type ActionApprovalRegistration } from '@/components/approvals/actionApprovalContinuation';
 import { classifyHomeActionOutcome } from '@/sync/ops/home/homeActionOutcome';
 import { homeDomainFailureCode } from '@/sync/api/home/homeDomainActions';
 
 const execute = createFrontDoorActionExecute();
 const EMPTY_ROWS: readonly ManagedMachineV1[] = [];
+type InventoryRead = {
+    binding: ServerCredentialAccountScopeBinding;
+    homeId: string;
+    managedId: string | undefined;
+    includeArchived: boolean;
+    executeAction: ReturnType<typeof createFrontDoorActionExecute>;
+    controller: AbortController;
+    retirement: { dispose(): void };
+    awaitingApproval: boolean;
+};
 
 export type ManagedMachineInventoryEntry = Readonly<{
     accountId: string;
@@ -35,22 +45,46 @@ export function useManagedMachineInventory(serverIds: readonly string[], managed
     const bindings = React.useMemo(() => new Map([...accountScopes].flatMap(([serverId, state]) => state.binding ? [[serverId, state.binding] as const] : [])), [accountScopes]);
     const [entries, setEntries] = React.useState<Readonly<Record<string, ManagedMachineInventoryEntry>>>({});
     const [refreshRevision, refresh] = React.useReducer(value => value + 1, 0);
+    const reads = React.useRef(new Map<string, InventoryRead>());
+    const refreshTargets = React.useRef(new Set<string>());
+    const refreshAll = React.useCallback(() => {
+        for (const serverId of ids) refreshTargets.current.add(serverId);
+        refresh();
+    }, [ids]);
 
     React.useEffect(() => subscribeHomeAccountChange(event => {
-        if (ids.includes(resolveServerProfileScopeIdForIdentifier(event.serverId) || event.serverId)) refresh();
+        if (isArtifactOnlyHomeAccountChange(event)) return;
+        const serverId = resolveServerProfileScopeIdForIdentifier(event.serverId) || event.serverId;
+        if (!ids.includes(serverId) || reads.current.get(serverId)?.awaitingApproval) return;
+        refreshTargets.current.add(serverId);
+        refresh();
     }), [ids]);
+    React.useEffect(() => () => {
+        for (const read of reads.current.values()) { read.controller.abort(); read.retirement.dispose(); }
+        reads.current.clear();
+    }, []);
 
     React.useEffect(() => {
-        const requests: AbortController[] = [];
-        const retirements: Array<{ dispose(): void }> = [];
+        for (const [serverId, read] of reads.current) {
+            const binding = bindings.get(serverId);
+            if (ids.includes(serverId) && binding?.accountId === read.binding.accountId && binding.revision === read.binding.revision
+                && binding.isCurrent() && read.binding.isCurrent()
+                && read.homeId === getServerProfileById(serverId)?.serverIdentityId && read.managedId === managedId
+                && read.includeArchived === includeArchived && read.executeAction === executeAction
+                && !refreshTargets.current.has(serverId)) continue;
+            read.controller.abort(); read.retirement.dispose(); reads.current.delete(serverId);
+        }
         for (const serverId of ids) {
             const binding = bindings.get(serverId);
             if (!binding?.isCurrent()) continue;
             const homeId = getServerProfileById(serverId)?.serverIdentityId;
             if (!homeId) continue;
+            if (reads.current.has(serverId)) continue;
             const cancellation = new AbortController();
-            requests.push(cancellation);
-            retirements.push(binding.onRetire(() => cancellation.abort()));
+            const retirement = binding.onRetire(() => cancellation.abort());
+            const pendingRead: InventoryRead = { binding, homeId, managedId, includeArchived, executeAction,
+                controller: cancellation, retirement, awaitingApproval: false };
+            reads.current.set(serverId, pendingRead);
             setEntries(previous => {
                 const current = previous[serverId];
                 const sameTarget = current?.accountId === binding.accountId && current.managedId === managedId
@@ -70,6 +104,7 @@ export function useManagedMachineInventory(serverIds: readonly string[], managed
                                 expectedAccountId: binding.accountId, signal: cancellation.signal }));
                             if (outcome.kind === 'failed') return { kind: 'failed', code: homeDomainFailureCode(outcome.failure) };
                             if (outcome.kind === 'approval_pending') {
+                                pendingRead.awaitingApproval = true;
                                 const approval = createActionApprovalContinuation<ManagedMachineV1 | { machines: ManagedMachineV1[] }, typeof actionId>({
                                     artifactId: outcome.artifactId, actionId, scope: binding.scope, expectedInput: input,
                                     signal: cancellation.signal,
@@ -89,6 +124,7 @@ export function useManagedMachineInventory(serverIds: readonly string[], managed
                         aborted: () => ({ kind: 'failed', code: 'aborted' }),
                     });
                     let result = await read(managedId ? { homeId, managedId } : { homeId });
+                    pendingRead.awaitingApproval = false;
                     if (!managedId && includeArchived && result.kind === 'succeeded' && binding.isCurrent() && !cancellation.signal.aborted) {
                         // Archive availability must not discard a successfully read active list. Keep
                         // previous recovery rows visibly stale until the second ordinary read settles.
@@ -98,6 +134,7 @@ export function useManagedMachineInventory(serverIds: readonly string[], managed
                             [...new Map([...active, ...previous[serverId]!.machines.filter(machine => machine.archivedAt !== undefined)]
                                 .map(machine => [machine.id, machine])).values()] } }));
                         const archived = await read({ homeId, archived: true });
+                        pendingRead.awaitingApproval = false;
                         result = archived.kind === 'failed' ? archived : { kind: 'succeeded', machines:
                             [...new Map([...result.machines, ...archived.machines].map(machine => [machine.id, machine])).values()] };
                     }
@@ -126,10 +163,13 @@ export function useManagedMachineInventory(serverIds: readonly string[], managed
                         const { approval: _approval, ...entry } = previous[serverId]!;
                         return { ...previous, [serverId]: { ...entry, status: 'error', errorCode: 'managed_request_failed' } };
                     });
+                } finally {
+                    pendingRead.awaitingApproval = false;
+                    retirement.dispose();
                 }
             })();
         }
-        return () => { requests.forEach(request => request.abort()); retirements.forEach(retirement => retirement.dispose()); };
+        refreshTargets.current.clear();
     }, [bindings, ids, managedId, includeArchived, refreshRevision, executeAction]);
 
     const currentEntries = React.useMemo(() => {
@@ -155,5 +195,5 @@ export function useManagedMachineInventory(serverIds: readonly string[], managed
     const loading = ids.some(serverId => getServerProfileById(serverId)?.serverIdentityId
         && ((!accountScopes.has(serverId) || accountScopes.get(serverId)?.resolution.kind === 'resolving')
             || (bindings.has(serverId) && (!currentEntries[serverId] || currentEntries[serverId]?.status === 'loading'))));
-    return { entries: currentEntries, machinesByServerId, machinesByEnrolledMachineIdByServerId, refresh, bindings, accountScopes, loading };
+    return { entries: currentEntries, machinesByServerId, machinesByEnrolledMachineIdByServerId, refresh: refreshAll, bindings, accountScopes, loading };
 }

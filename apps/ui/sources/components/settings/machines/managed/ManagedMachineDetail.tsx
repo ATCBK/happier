@@ -14,6 +14,8 @@ import { ManagedReceiptPageLayout } from './ManagedReceiptPageLayout';
 import { ManagedMachineSections, useManagedMachineHeaderIdentity } from './ManagedMachineSections';
 import { useManagedMachineInventory } from './useManagedMachineInventory';
 import { ManagedMachineReadApprovalNotice } from './ManagedMachineReadApprovalNotice';
+import { useMachinesDoor } from '@/components/machines/page/machinesDoor';
+import { machinePageHref } from '@/components/machines/page/machinePageHref';
 
 const execute = createFrontDoorActionExecute();
 type ManagedMachineDetailProps = Readonly<{ managedId: string; serverId: string;
@@ -27,7 +29,7 @@ export function ManagedMachineDetailScreen() {
     return <ManagedMachineDetail managedId={parameter(params.id)} serverId={parameter(params.serverId)} />;
 }
 
-/** The saved managed destination resolves the server row, then uses the existing enrolled Machine page. */
+/** The saved managed destination resolves the server row, then opens the enrolled Machine page in the same door. */
 export function ManagedMachineDetail(props: ManagedMachineDetailProps) {
     return <ManagedMachineDetailBody key={JSON.stringify([props.serverId, props.managedId])} {...props} />;
 }
@@ -35,6 +37,7 @@ export function ManagedMachineDetail(props: ManagedMachineDetailProps) {
 function ManagedMachineDetailBody(props: ManagedMachineDetailProps) {
     const { theme } = useUnistyles();
     const layout = useHappierCollectionLayout();
+    const door = useMachinesDoor();
     const serverId = resolveServerProfileScopeIdForIdentifier(props.serverId) || props.serverId;
     const serverIds = React.useMemo(() => serverId && props.managedId ? [serverId] : [], [serverId, props.managedId]);
     const executeAction = props.executeAction ?? execute;
@@ -49,8 +52,8 @@ function ManagedMachineDetailBody(props: ManagedMachineDetailProps) {
     const forbidden = entry?.status === 'denied' || actionError === 'permission_denied'
         || actionError === 'not_authenticated' || actionError === 'action_account_scope_changed';
     const enrolledMachineId = forbidden || machine?.archivedAt !== undefined ? undefined : machine?.enrolledMachineId;
-    if (enrolledMachineId) return <Redirect href={{ pathname: '/machine/[id]',
-        params: { id: enrolledMachineId, serverId: props.serverId } }} />;
+    if (enrolledMachineId) return <Redirect href={machinePageHref({ door,
+        target: { machineId: enrolledMachineId, serverId: props.serverId } }) as never} />;
 
     const mark = (machine && !forbidden ? identity?.mark : undefined) ?? <Icon name="desktop" color={theme.colors.text.secondary} />;
 

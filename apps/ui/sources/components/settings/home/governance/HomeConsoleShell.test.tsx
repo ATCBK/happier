@@ -15,7 +15,6 @@ import {
 import { collectRenderedTestIds } from '@/dev/testkit/render/collectRenderedTestIds';
 import { renderInCollectionLayout } from '@/dev/testkit/render/renderInCollectionLayout';
 import { renderScreen, type RenderScreenResult } from '@/dev/testkit/render/renderScreen';
-import { resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 
 import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelpers';
 
@@ -58,6 +57,7 @@ installSettingsViewCommonModuleMocks({
 // the collection's split geometry below them are the production ones.
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
+const { resetServerFeaturesClientForTests } = await import("@/sync/api/capabilities/serverFeaturesClient");
 
 const GOVERNANCE_PATH = '/v1/home/governance/get';
 const LIST_PATH = '/v1/home/accounts/list';
@@ -192,6 +192,9 @@ describe('Home console shell', () => {
         const person = await renderConsole(`/settings/home/${home}/people/account-ada`);
         await measure(person, MID_PANE_PX);
         await waitForHomeGovernance(() => expect(ids(person)).toContain('home-people-rail'));
+        // People's rail takes the console sidebar's place (lab `hcPeople-D`), as a Team's Members
+        // rail takes the Teams rail's: never four columns.
+        expect(ids(person)).not.toContain('home-console-sidebar');
     });
 
     it('stands the console sidebar beside the page from 1280px and folds it into a header menu below', async () => {

@@ -1,10 +1,12 @@
 import * as React from 'react';
-import { ScrollView, View } from 'react-native';
+import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import type { UsageQueryResultSlice } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
+import { collectionListStyles } from '@/components/ui/lists/collection/CollectionList';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 import { SelectionListFilterChip } from '@/components/ui/selectionList/SelectionListFilterChips';
-import type { SelectionListFilter } from '@/components/ui/selectionList/_types';
+import { SelectionList } from '@/components/ui/selectionList/SelectionList';
+import type { SelectionListFilter, SelectionListStep } from '@/components/ui/selectionList/_types';
 import {
   USAGE_PERIODS,
   getUsagePeriodDefinition,
@@ -16,10 +18,10 @@ import type { UsageWidgetPageContextState } from './useUsageWidgetPageContext';
 import type { UsageWidgetPageScope } from './usageWidgetPageContext';
 import { USAGE_SCOPE_FILTER_ALL, type UsageWidgetPageFilter } from './useUsageWidgetPageFilters';
 import { getAgentIdentityColor } from '@/agents/catalog/catalog';
-import { UsageAgentMark } from './widgets/usageBodyKit';
+import { UsageAgentMark, readUsageCoverageGaps } from './widgets/usageBodyKit';
 
 const COST_BASIS_TITLE = { auto: 'usage.board.page.costBasisAuto', reported: 'usage.board.page.costBasisReported',
-    estimated: 'usage.board.page.costBasisEstimated' } as const;
+    estimated: 'usage.board.page.costBasisEstimated', api_equivalent: 'usage.board.page.factApiEquivalent' } as const;
 
 /**
  * The page's one filter bar (lab `d2filter`): period, then each scope slot the widgets follow, then
@@ -32,14 +34,20 @@ export function UsageFilterBar(
     slices: readonly UsageQueryResultSlice[];
     scopeFilters: readonly UsageWidgetPageFilter[];
     costBasisOptions: readonly UsageWidgetPageScope['costBasis'][];
+    onPeriodChange(period: UsagePeriod): Promise<boolean>;
+    onCostBasisChange(costBasis: UsageWidgetPageScope['costBasis']): Promise<boolean>;
     /** The displayed widgets' shared metric; `null` when they differ or none is shown. */
     metric: 'tokens' | 'cost' | null;
     onMetricChange: ((metric: 'tokens' | 'cost') => void) | null;
+    metricPending?: boolean;
     testID: string;
   }>,
 ) {
   const { page } = props;
   const phone = useDeviceType() === 'phone';
+  // Scopes fold into the one Filters chooser only on a phone; a desktop keeps one chip per scope and wraps
+  // Tokens/Cost and the cost basis onto the trailing edge of a second row when the column is narrow (lab d2filter).
+  const condensed = phone;
   const periodTabs = React.useMemo(
     () =>
       USAGE_PERIODS.map((period) => ({
@@ -52,16 +60,7 @@ export function UsageFilterBar(
   // Coverage is said once, as a dot in Sources, while a source the page reads is incomplete.
   const coverageIncomplete = React.useMemo(
     () =>
-      props.slices.some((slice) =>
-        slice.sources.some(
-          (source) =>
-            source.source === 'accounting' &&
-            source.status !== 'available' &&
-            source.status !== 'unsupported',
-        ) || (slice.accounting?.coverage?.sources ?? []).some(
-          (source) => source.status === 'partial' || source.status === 'pending' || source.status === 'error',
-        ),
-      ),
+      props.slices.some(slice => readUsageCoverageGaps(slice, ['accounting']).length > 0),
     [props.slices],
   );
   const filters = React.useMemo(
@@ -96,8 +95,11 @@ export function UsageFilterBar(
                 ),
               }
             : {}),
-          options: options.map(option => ({
+          options: options.map(({ agentId, partial, ...option }) => ({
               ...option,
+              // A source reads by its Agent's mark; one amber dot flags a gap (lab d2filter-SRC).
+              ...(field === 'sources' && agentId ? { icon: <UsageAgentMark agentId={agentId} serverId={null} size={16} /> } : {}),
+              ...(field === 'sources' && partial ? { accessory: <View style={collectionListStyles.troubleDot} /> } : {}),
               ...(field === 'agents' && option.id !== USAGE_SCOPE_FILTER_ALL
                 ? {
                     icon: (
@@ -130,24 +132,45 @@ export function UsageFilterBar(
             })),
             selectedId: page.scope.costBasis,
             onChange: (id: string) => {
-              page.setScope({
-                costBasis: id as UsageWidgetPageScope['costBasis'],
-              });
+              void props.onCostBasisChange(id as UsageWidgetPageScope['costBasis']);
             },
             testID: `${props.testID}.costBasis`,
           },
-    [page, props.costBasisOptions, props.testID],
+    [page.scope.costBasis, props.costBasisOptions, props.onCostBasisChange, props.testID],
   );
   const metricTabs = React.useMemo(
     () => [
-      { id: 'tokens' as const, label: t('usage.tokens') },
-      { id: 'cost' as const, label: t('usage.cost') },
+      { id: 'tokens' as const, label: t('usage.tokens'), disabled: props.metricPending },
+      { id: 'cost' as const, label: t('usage.cost'), disabled: props.metricPending },
     ],
-    [],
+    [props.metricPending],
+  );
+  // A phone keeps the period visible and folds every scope into one Filters chooser with the
+  // narrowed count and the coverage dot (lab d2filter P); each scope is a section of the same choices.
+  const scopeChooser = React.useMemo(
+    (): SelectionListFilter | null =>
+      condensed && filters.length > 0
+        ? {
+            id: 'scope',
+            label: t('usage.board.page.filtersLabel'),
+            valueLabel: t('usage.board.page.filtersLabel'),
+            active: filters.some(filter => filter.active),
+            ...(filters.some(filter => filter.active)
+              ? { count: String(filters.filter(filter => filter.active).length) }
+              : {}),
+            ...(coverageIncomplete ? { presence: 'attention' as const } : {}),
+            renderPopoverContent: ({ close, maxHeight }) => (
+              <UsageScopeSections filters={filters} onRequestClose={close} maxHeight={maxHeight}
+                testID={`${props.testID}.scope`} />
+            ),
+            testID: `${props.testID}.scope`,
+          }
+        : null,
+    [condensed, filters, coverageIncomplete, props.testID],
   );
   const chips = (
     <>
-      {filters.map((filter) => (
+      {scopeChooser ? <SelectionListFilterChip filter={scopeChooser} /> : filters.map((filter) => (
         <SelectionListFilterChip key={filter.id} filter={filter} />
       ))}
     </>
@@ -161,8 +184,6 @@ export function UsageFilterBar(
             tabs={metricTabs}
             activeTabId={props.metric ?? 'tokens'}
             onSelectTab={props.onMetricChange}
-            compact
-            slidingThumb
             segmentSizing="content"
             accessibilityLabel={t('usage.board.page.metricLabel')}
           />
@@ -178,10 +199,11 @@ export function UsageFilterBar(
         tabs={periodTabs}
         activeTabId={page.period}
         onSelectTab={(period: UsagePeriod) => {
-          page.setPeriod(period);
+          void props.onPeriodChange(period);
         }}
-        compact
-        slidingThumb
+        // The standard segmented size (lab wgsaved R); each segment hugs its label, so a longer
+        // translation ("Aujourd’hui") is never cut, and the bar wraps whole controls instead.
+        segmentSizing="content"
         accessibilityLabel={t('usage.board.page.periodLabel')}
       />
     </View>
@@ -190,14 +212,12 @@ export function UsageFilterBar(
     return (
       <View testID={props.testID} style={styles.phone}>
         {period}
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.phoneChips}
-        >
+        {/* One Filters chip, then Tokens/Cost and the cost basis: the row wraps rather than hiding the
+            basis select past the screen edge (a scroller clipped it mid-word at 390). */}
+        <View style={styles.phoneChips}>
           {chips}
           {trailing}
-        </ScrollView>
+        </View>
       </View>
     );
   return (
@@ -206,8 +226,53 @@ export function UsageFilterBar(
       <View style={styles.rule} />
       <View style={styles.chips}>{chips}</View>
       <View style={styles.grow} />
-      {trailing}
+      {/* What the widgets show and in which money stay together on the trailing edge, even when the bar wraps. */}
+      <View style={styles.trailing}>{trailing}</View>
     </View>
+  );
+}
+
+const SECTION_KEY = '\u0001';
+
+/** Every scope as one section of the phone chooser; a row toggles exactly what its own chip would. */
+function UsageScopeSections(props: Readonly<{
+  filters: readonly SelectionListFilter[];
+  onRequestClose: () => void;
+  maxHeight: number;
+  testID: string;
+}>) {
+  const step = React.useMemo((): SelectionListStep => ({
+    id: 'usage-scope',
+    sections: props.filters.map(filter => ({
+      kind: 'static' as const,
+      id: filter.id,
+      title: filter.label,
+      options: (filter.options ?? []).map(option => ({
+        id: `${filter.id}${SECTION_KEY}${option.id}`,
+        label: option.label,
+        ...(option.subtitle ? { subtitle: option.subtitle } : {}),
+        ...(option.icon ? { icon: option.icon } : {}),
+        ...(option.accessory ? { rightAccessory: option.accessory } : {}),
+        testID: `${props.testID}:${filter.id}:${option.id}`,
+      })),
+    })),
+  }), [props.filters, props.testID]);
+  const selectedIds = React.useMemo(() => new Set(props.filters.flatMap(filter =>
+    [...(filter.selectedIds ?? [])].map(id => `${filter.id}${SECTION_KEY}${id}`))), [props.filters]);
+  return (
+    <SelectionList
+      testID={`${props.testID}.list`}
+      rootStep={step}
+      selection={{ kind: 'multiple', selectedIds }}
+      onSelect={(id: string) => {
+        const [field, option] = id.split(SECTION_KEY);
+        props.filters.find(filter => filter.id === field)?.onChange?.(option ?? '');
+      }}
+      onRequestClose={props.onRequestClose}
+      listAccessibilityLabel={t('usage.board.page.filtersLabel')}
+      maxHeight={props.maxHeight}
+      disableTransitions
+    />
   );
 }
 
@@ -216,9 +281,9 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: 'row',
     alignItems: 'center',
     flexWrap: 'wrap',
-    gap: 10,
-    rowGap: 8,
-    paddingVertical: 4,
+    gap: theme.space.s10,
+    rowGap: theme.space.s8,
+    paddingVertical: theme.space.s4,
   },
   period: { flexShrink: 0 },
   periodPhone: { alignSelf: 'stretch' },
@@ -231,16 +296,17 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: 'row',
     alignItems: 'center',
     flexWrap: 'wrap',
-    gap: 6,
+    gap: theme.space.s6,
   },
   grow: { flexGrow: 1 },
   segment: { flexShrink: 0 },
+  trailing: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s10, marginLeft: 'auto' },
   swatch: { width: 8, height: 8, borderRadius: 2 },
-  phone: { gap: 10 },
+  phone: { gap: theme.space.s10 },
   phoneChips: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
-    gap: 6,
-    paddingRight: 16,
+    gap: theme.space.s6,
   },
 }));

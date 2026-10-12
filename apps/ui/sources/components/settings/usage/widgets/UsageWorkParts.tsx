@@ -15,6 +15,8 @@ import type {
   UsageWorkSessionPart,
   UsageWorkSessionRow,
   UsageWorkSummary,
+  UsageWorkRetainedChange,
+  UsageWorkMoneyBasis,
 } from './usageWorkPresentation';
 
 /** The parts the Work bodies share: identity marks, an in-place disclosure and a Session's rows. */
@@ -22,6 +24,14 @@ import type {
 /** A commit as people say it. The witnessed object id is unchanged; only its display is short. */
 export function usageWorkShortCommit(sha: string): string {
   return sha.slice(0, 7);
+}
+
+/** Each count names its immutable comparison target; never sum snapshots into authorship. */
+export function usageWorkRetainedChangeLine(changes: readonly UsageWorkRetainedChange[]): string {
+  // Nothing witnessed kept is not information: the cell stays empty rather than saying "Not recorded".
+  return changes.length === 0 ? '' : changes.map(change =>
+    `${usageWorkShortCommit(change.commitSha)} → ${usageWorkShortCommit(change.targetSha)}: +${change.addedLines} / −${change.removedLines}`
+    + (change.status === 'partial' ? ` · ${t('usage.board.work.linesKeptPartial')}` : '')).join(' · ');
 }
 
 export function usageWorkBranchName(ref: string): string {
@@ -74,12 +84,6 @@ export function UsageWorkMarks(
       ))}
     </View>
   );
-}
-
-export function usageWorkProviderUnknownLine(row: Pick<UsageWorkIdentities, 'providerUnknown'>): string {
-  return row.providerUnknown
-    ? `${t('usage.board.work.provider')}: ${t('usage.board.howYouWork.notRecorded')}`
-    : '';
 }
 
 /** A row's leading glyphs: the disclosure caret, then what the row is. */
@@ -187,7 +191,8 @@ export function UsageWorkSessionRows(
   props: Readonly<{
     parts: readonly UsageWorkSessionPart[];
     summary: UsageWorkSummary;
-    format: (value: number | null) => string;
+    format: (value: number | null, moneyBasis?: UsageWorkMoneyBasis | null) => string;
+    cell: (value: number | null, moneyBasis: UsageWorkMoneyBasis | null) => number | string;
     sessionLabel: (sessionId: string) => string;
     openSession: (sessionId: string) => void;
     serverId: string;
@@ -221,7 +226,7 @@ export function UsageWorkSessionRows(
       ]}
       rows={props.parts.map((part) => [
         props.sessionLabel(part.sessionId),
-        part.amount ?? props.format(null),
+        props.cell(part.amount, part.moneyBasis),
         usageWorkSessionOutcomeLine(bySession.get(part.sessionId)),
       ])}
       renderRow={(_row, visual, index) => {
@@ -244,12 +249,12 @@ export function UsageWorkSessionRows(
 }
 
 const styles = StyleSheet.create((theme) => ({
-  marks: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 4 },
-  lead: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  sectionTitle: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'baseline', columnGap: 8 },
+  marks: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: theme.space.s4 },
+  lead: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s4 },
+  sectionTitle: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'baseline', columnGap: theme.space.s8 },
   sectionName: { ...Typography.default('semiBold'), color: theme.colors.text.primary },
   sectionQuiet: { ...Typography.default('semiBold'), color: theme.colors.text.secondary },
   sectionCaption: { ...Typography.default(), color: theme.colors.text.tertiary },
   // Indented by the caret column, so what a row holds reads as inside it without a box.
-  detail: { gap: 10, paddingTop: 10, paddingBottom: 6, paddingLeft: ICON_SIZE.xs + 4, minWidth: 0 },
+  detail: { gap: theme.space.s10, paddingTop: theme.space.s10, paddingBottom: theme.space.s6, paddingLeft: ICON_SIZE.xs + 4, minWidth: 0 },
 }));

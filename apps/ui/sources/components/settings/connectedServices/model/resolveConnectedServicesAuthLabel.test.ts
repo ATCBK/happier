@@ -63,7 +63,7 @@ describe('resolveConnectedServicesAuthLabel', () => {
             nativeLabel: 'Native',
             formatConnectedCountLabel: (count) => `${count} connected`,
         })).toEqual({
-            label: 'Anthropic: Work',
+            label: 'Anthropic · Work',
             connectedCount: 1,
             serviceStatesById: {
                 anthropic: {

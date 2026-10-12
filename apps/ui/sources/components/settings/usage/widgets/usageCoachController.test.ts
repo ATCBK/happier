@@ -21,8 +21,9 @@ const query = normalizeUsageQuery({
 });
 const key = getUsageQueryKey(query);
 const compactions = [
-  { evidenceId: 'c1', observedAtMs: 10, sessionId: 's', turnId: 't' },
-  { evidenceId: 'c2', observedAtMs: 20, sessionId: 's', turnId: 't' },
+  { evidenceId: 'c1', observedAtMs: 10, sessionId: 's', turnId: 't', immediateRefillToLimit: true },
+  { evidenceId: 'c2', observedAtMs: 20, sessionId: 's', turnId: 't', immediateRefillToLimit: true },
+  { evidenceId: 'c3', observedAtMs: 30, sessionId: 's', turnId: 't', immediateRefillToLimit: true },
 ];
 const evaluation = evaluateUsageCoach({
   queryKey: key,
@@ -33,7 +34,7 @@ const evaluation = evaluateUsageCoach({
   admittedRemedies: [
     {
       detectorId: 'compaction_storms',
-      evidenceIds: ['c1', 'c2'],
+      evidenceIds: ['c1', 'c2', 'c3'],
       remedy: { kind: 'setting', anchor: ANCHOR, value: true },
     },
   ],
@@ -258,6 +259,12 @@ describe('Usage Coach widget controller', () => {
         { kind: 'snoozed', evidenceKey: finding.evidenceKey, untilMs: 5000 },
       ],
     });
+    expect((await controller.snooze(query, finding.evidenceKey, null)).ok).toBe(true);
+    expect(store.get(PREFERENCES)).toMatchObject({ suppressions: [] });
+    await controller.dismiss(query, finding.evidenceKey);
+    expect((await controller.dismiss(query, finding.evidenceKey, false)).ok).toBe(true);
+    expect(store.get(PREFERENCES)).toMatchObject({ suppressions: [] });
+    expect(controller.getSnapshot().hiddenEvidenceKeys).toEqual([]);
   });
 
   it('drops a late result once the captured Account retires', async () => {

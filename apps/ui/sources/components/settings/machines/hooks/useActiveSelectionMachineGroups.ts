@@ -1,7 +1,7 @@
 import * as React from 'react';
 
 import type { ActiveServerSnapshot, ServerProfile } from '@/sync/domains/server/serverProfiles';
-import { resolveServerProfileScopeId } from '@/sync/domains/server/serverProfiles';
+import { resolveServerProfileScopeId, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { filterVisibleMachines, resolveServerScopedMachines } from '@/sync/domains/machines/resolveServerScopedMachines';
 import { getEffectiveServerSelectionFromRawSettings } from '@/sync/domains/server/selection/serverSelectionResolution';
 import {
@@ -10,11 +10,14 @@ import {
 } from '@/sync/domains/server/selection/serverSelectionProfileScopeIds';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
+import type { MachineReachabilityScope } from '@/sync/domains/machines/reachability/machineReachability';
+import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 
 type MachineListStatus = 'idle' | 'loading' | 'signedOut' | 'error';
 
 export type ActiveSelectionMachineGroup = Readonly<{
     serverId: string;
+    accountScope?: MachineReachabilityScope | null;
     serverName: string;
     machines: ReadonlyArray<Machine>;
     status: MachineListStatus;
@@ -55,16 +58,18 @@ export function useActiveSelectionMachineGroups(params: Readonly<{
     ]);
 
     const showMachinesGroupedByServer = visibleMachineServerIds.length > 1;
+    const bindings = useServerCredentialAccountScopeBindings(visibleMachineServerIds);
 
     const visibleMachineGroups = React.useMemo(() => {
         const serverNameById = new Map<string, string>();
         for (const server of params.serverProfiles) {
-            // The Home label owner: its name, "Personal Home", else the address only to tell Homes apart.
+            // Every group uses the Home label owner, including unnamed Homes.
             const label = resolveHomeDisplayLabel(server, server.id);
             serverNameById.set(server.id, label);
             serverNameById.set(resolveServerProfileScopeId(server), label);
         }
         return visibleMachineServerIds.map((serverId) => {
+            const binding = bindings.get(resolveServerProfileScopeIdForIdentifier(serverId));
             const machines = resolveServerScopedMachines({
                 serverId,
                 activeServerId: params.activeServerSnapshot.serverId,
@@ -76,7 +81,8 @@ export function useActiveSelectionMachineGroups(params: Readonly<{
             const visibleMachines = filterVisibleMachines(machines);
             return {
                 serverId,
-                serverName: serverNameById.get(serverId) ?? serverId,
+                accountScope: binding?.isCurrent() ? binding.scope : null,
+                serverName: serverNameById.get(serverId) ?? resolveHomeDisplayLabel(null, serverId),
                 machines: visibleMachines,
                 status,
             };
@@ -88,6 +94,7 @@ export function useActiveSelectionMachineGroups(params: Readonly<{
         params.machineListStatusByServerId,
         params.serverProfiles,
         visibleMachineServerIds,
+        bindings,
     ]);
 
     const hasAnyVisibleMachines = visibleMachineGroups.some((group) => group.machines.length > 0);

@@ -118,7 +118,8 @@ async function renderScreen(element: React.ReactElement) {
         },
     });
     const { clearCachedMachineDoctorSnapshot, writeCachedMachineDoctorSnapshot } = await import('@/components/machines/doctorSnapshot/machineDoctorSnapshotCache');
-    const cacheScope = { serverId: 'srv_identity_a', machineId: selected?.machine.id ?? 'machine-1' };
+    // The administration target resolves the portable identity to its saved profile.
+    const cacheScope = { serverId: profile.id, machineId: selected?.machine.id ?? 'machine-1' };
     clearCachedMachineDoctorSnapshot(cacheScope);
     if (state.cachedDoctorSnapshot) {
         const snapshot = state.cachedDoctorSnapshot.snapshot;
@@ -836,7 +837,7 @@ describe('useRelayDriftBanner', () => {
         }));
     });
 
-    it('passes the daemon local relay url to repair when the active relay matches the daemon public relay', async () => {
+    it('keeps a cached Doctor local address out of the canonical repair transport', async () => {
         const { useRelayDriftBanner } = await import('./useRelayDriftBanner');
         const { createSystemTaskRunner } = await import('@/components/systemTasks/createSystemTaskRunner');
         const { SystemTaskSpecSchema } = await import('@happier-dev/protocol');
@@ -897,7 +898,7 @@ describe('useRelayDriftBanner', () => {
         expect(startMock).toHaveBeenCalledWith(buildRelayDriftRepairSystemTaskSpec({
             activeRelayUrl: 'https://relay.example.test',
             activeWebappUrl: 'https://relay.example.test',
-            activeLocalRelayUrl: 'http://127.0.0.1:3000',
+            activeLocalRelayUrl: null,
         }));
     });
 

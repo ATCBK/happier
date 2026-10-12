@@ -5,11 +5,18 @@ import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import type { ServerProfile } from '@/sync/domains/server/serverProfiles';
+import { act } from 'react-test-renderer';
+import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+
+const home = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(home);
 
 const host = vi.hoisted(() => ({
     nextTask: 0,
     commands: [] as Array<{ command: string; args?: Record<string, unknown> }>,
     purpose: { kind: 'generic' } as { kind: 'generic' } | { kind: 'personal-home'; canonicalServerUrl: string },
+    picker: null as Promise<string | null> | null,
 }));
 // Only the real OS command bridge is replaced. Runner, runtime purpose,
 // profile provenance and production operations remain their actual owners.
@@ -18,6 +25,7 @@ vi.mock('@/utils/platform/desktopHost', () => ({
     isDesktopHost: () => true,
     invokeDesktopHost: async (command: string, args?: Record<string, unknown>) => {
         host.commands.push({ command, args });
+        if (command === 'desktop_pick_personal_home_backup_archive') return host.picker;
         if (command === 'start_system_task') {
             const spec = JSON.parse(String(args?.specJson)) as { kind: string };
             return { taskId: `device-runtime:${spec.kind}:${++host.nextTask}` };
@@ -56,17 +64,50 @@ vi.mock('@/modal', async () => {
     return createModalModuleMock().module;
 });
 
-beforeEach(() => {
+beforeEach(async () => {
+    await home.reset();
     host.commands = [];
     host.purpose = { kind: 'generic' };
+    host.picker = null;
+    vi.stubEnv('EXPO_PUBLIC_SYSTEM_TASKS_RUNNER_MODE', 'tauri');
     vi.stubEnv('EXPO_PUBLIC_HAPPY_STORAGE_SCOPE', `device-runtime-${crypto.randomUUID()}`);
 });
-afterEach(() => {
-    standardCleanup();
+afterEach(async () => {
+    await standardCleanup();
+    await home.reset();
     vi.unstubAllEnvs();
 });
 
 describe('device runtime ownership', () => {
+    it('refuses a signed-out archive picker continuation after this Home signs in', async () => {
+        const url = 'http://127.0.0.1:43123';
+        const serverId = await home.addHome({ name: 'Draft Home', serverUrl: url, accountId: null });
+        host.purpose = { kind: 'personal-home', canonicalServerUrl: url };
+        const [{ useLocalRelayRuntimeControl }, { usePersonalHomeRuntimeOperations }] = await Promise.all([
+            import('../localControl/useLocalRelayRuntimeControl'), import('../localControl/usePersonalHomeRuntimeOperations'),
+        ]);
+        const hook = await renderHook(() => ({ control: useLocalRelayRuntimeControl(), operations: usePersonalHomeRuntimeOperations({ profiles: [] }).operations }));
+        await waitForHomeGovernance(() => expect(hook.getCurrent().control.status?.purpose?.kind).toBe('personal-home'));
+        const draft = hook.getCurrent();
+        const picker = createDeferred<string | null>();
+        host.picker = picker.promise;
+        let continuation!: Promise<unknown>;
+        await act(async () => {
+            continuation = (async () => {
+                const archivePath = await draft.operations.selectBackupArchive?.();
+                return archivePath ? draft.control.verifyPersonalHomeBackup({ archivePath }) : null;
+            })();
+        });
+        await waitForHomeGovernance(() => expect(host.commands.some(entry => entry.command === 'desktop_pick_personal_home_backup_archive')).toBe(true));
+        await act(async () => { await home.switchAccount(serverId, 'new-account'); });
+        await waitForHomeGovernance(() => expect(hook.getCurrent().control.actionServerId).toBe(serverId));
+        await act(async () => { picker.resolve('/fixture/archive.tar'); await Promise.resolve(); });
+        const startedKinds = host.commands.filter(entry => entry.command === 'start_system_task')
+            .map(entry => JSON.parse(String(entry.args?.specJson)).kind);
+        expect(startedKinds).not.toContain('relay.runtime.personal_home.verify_backup.v1');
+        await expect(continuation).resolves.toBeNull();
+    });
+
     it('uses fresh generic runtime purpose rather than a stale Personal Home label', async () => {
         const { ServerLocalRuntimeControlSection } = await import('./HomesDeviceScreen');
         const screen = await renderScreen(<ServerLocalRuntimeControlSection homeLabel="Stale Personal Home" />);

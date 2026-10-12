@@ -1,5 +1,6 @@
 import * as React from 'react';
 import type { JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
+import type { UsageBuiltinWidgetIdV1 } from '@happier-dev/protocol/widgets';
 import {
   getUsageQueryKey,
   normalizeUsageQuery,
@@ -24,10 +25,36 @@ import {
 } from '../useUsageWidgetResource';
 
 type Registration = Readonly<{ query: UsageQuery; key: string }>;
+type UsageQueryWidgetId = Exclude<UsageBuiltinWidgetIdV1, 'usage_sources'>;
+// The bodies consume two independent projections: native SCM outcomes and
+// opened Session inputs/metadata. Keep their demand policy at this query owner.
+const USAGE_WIDGET_EVIDENCE_DEMAND = {
+  usage_daily: { includeSessionEvidence: false, includeWorkEvidence: false },
+  usage_period_summary: { includeSessionEvidence: true, includeWorkEvidence: true },
+  usage_cost_facts: { includeSessionEvidence: false, includeWorkEvidence: false },
+  usage_flow: { includeSessionEvidence: false, includeWorkEvidence: false },
+  usage_efficiency: { includeSessionEvidence: false, includeWorkEvidence: false },
+  usage_breakdowns: { includeSessionEvidence: false, includeWorkEvidence: false },
+  usage_capacity: { includeSessionEvidence: false, includeWorkEvidence: false },
+  usage_projections: { includeSessionEvidence: false, includeWorkEvidence: false },
+  usage_resets: { includeSessionEvidence: false, includeWorkEvidence: false },
+  usage_plan_fit: { includeSessionEvidence: false, includeWorkEvidence: false },
+  usage_project_ledger: { includeSessionEvidence: false, includeWorkEvidence: true },
+  usage_session_value: { includeSessionEvidence: true, includeWorkEvidence: true },
+  usage_outcomes: { includeSessionEvidence: false, includeWorkEvidence: true },
+  usage_coach: { includeSessionEvidence: true, includeWorkEvidence: false },
+  usage_rhythm: { includeSessionEvidence: false, includeWorkEvidence: false },
+  usage_parallel: { includeSessionEvidence: true, includeWorkEvidence: false },
+  usage_human_loop: { includeSessionEvidence: true, includeWorkEvidence: false },
+  usage_night_shift: { includeSessionEvidence: true, includeWorkEvidence: false },
+  usage_recap: { includeSessionEvidence: true, includeWorkEvidence: true },
+  usage_footprint: { includeSessionEvidence: false, includeWorkEvidence: false },
+} satisfies Record<UsageQueryWidgetId, Readonly<{ includeSessionEvidence: boolean; includeWorkEvidence: boolean }>>;
 type UsageWidgetBatch = Readonly<{
   clauses: UsageWidgetQueryOverrides;
   register(id: string, registration: Registration): () => void;
   resource: UsageWidgetResource;
+  inventoryKey: string | null;
 }>;
 
 const UsageWidgetBatchContext = React.createContext<UsageWidgetBatch | null>(
@@ -41,6 +68,7 @@ const UsageWidgetBatchContext = React.createContext<UsageWidgetBatch | null>(
 export function buildUsageWidgetQueryPlan(
   scope: ServerAccountScope | null,
   rows: ReadonlyMap<string, Registration>,
+  inventoryQuery?: UsageQuery,
 ): UsageWidgetQueryPlan {
   const widgets = new Map(
     [...rows].map(([id, row]) => [
@@ -53,6 +81,7 @@ export function buildUsageWidgetQueryPlan(
     ]),
   );
   const queries = [...rows.values()].map((row) => row.query);
+  if (inventoryQuery) queries.push(inventoryQuery);
   return {
     scope: scope ?? { serverId: '', accountId: '' },
     input:
@@ -67,6 +96,7 @@ export function buildUsageWidgetQueryPlan(
 export function UsageWidgetBatchProvider(
   props: Readonly<{
     clauses: UsageWidgetQueryOverrides;
+    inventoryQuery?: UsageQuery;
     children: React.ReactNode;
   }>,
 ) {
@@ -99,9 +129,12 @@ export function UsageWidgetBatchProvider(
         : null,
     [viewer?.serverId, viewer?.accountId],
   );
+  // Filter choices consume accounting membership, never private work detail.
+  const inventoryQuery = React.useMemo(() => props.inventoryQuery
+    ? normalizeUsageQuery({ ...props.inventoryQuery, includeSessionEvidence: false, includeWorkEvidence: false }) : undefined, [props.inventoryQuery]);
   const plan = React.useMemo(
-    () => buildUsageWidgetQueryPlan(scope, rows),
-    [scope, rows],
+    () => buildUsageWidgetQueryPlan(scope, rows, inventoryQuery),
+    [scope, rows, inventoryQuery],
   );
   const resource = useUsageWidgetResource({
     credentials: auth.credentials,
@@ -109,8 +142,8 @@ export function UsageWidgetBatchProvider(
     plan,
   });
   const value = React.useMemo(
-    () => ({ clauses: props.clauses, register, resource }),
-    [props.clauses, register, resource],
+    () => ({ clauses: props.clauses, register, resource, inventoryKey: inventoryQuery ? getUsageQueryKey(inventoryQuery) : null }),
+    [props.clauses, inventoryQuery, register, resource],
   );
   return (
     <UsageWidgetBatchContext.Provider value={value}>
@@ -142,9 +175,13 @@ function readStandaloneClauses(): UsageWidgetQueryOverrides {
 function resolveQuery(
   clauses: UsageWidgetQueryOverrides,
   input: Readonly<Record<string, JsonValue>>,
+  widgetId: UsageQueryWidgetId,
 ): Registration | null {
   try {
-    const query = normalizeUsageQuery({ ...clauses, ...input });
+    // This widget bundle consumes both the calendar and weekday/hour facts, irrespective of partial route read clauses.
+    // Direct usage.query callers retain their explicit includeActivity/activityResolution semantics.
+    const query = normalizeUsageQuery({ ...clauses, ...input, includeActivity: true, activityResolution: 'both',
+      ...USAGE_WIDGET_EVIDENCE_DEMAND[widgetId] });
     return { query, key: getUsageQueryKey(query) };
   } catch {
     return null;
@@ -157,6 +194,7 @@ function resolveQuery(
  */
 export function useUsageWidgetModel(
   input: Readonly<Record<string, JsonValue>>,
+  widgetId: UsageQueryWidgetId,
 ): Readonly<{
   model: UsageWidgetBodyModel;
   query: UsageQuery | null;
@@ -169,8 +207,8 @@ export function useUsageWidgetModel(
   const clauses = batch?.clauses ?? standaloneClauses;
   const inputKey = JSON.stringify(input);
   const registration = React.useMemo(
-    () => resolveQuery(clauses, input),
-    [clauses, inputKey],
+    () => resolveQuery(clauses, input, widgetId),
+    [clauses, inputKey, widgetId],
   );
   const register = batch?.register;
   React.useLayoutEffect(
@@ -207,14 +245,32 @@ const EMPTY_RESULTS: readonly UsageQueryResultSlice[] = Object.freeze([]);
  * The page batch's decoded slices for page chrome (filter options, freshness line). It reads the same
  * Resource entry the widgets read and adds no request of its own; outside a page it is empty.
  */
-export function useUsageWidgetBatchSlices(): readonly UsageQueryResultSlice[] {
+function useDecodedUsageWidgetBatchSlices(demand = false): readonly UsageQueryResultSlice[] {
     const batch = React.useContext(UsageWidgetBatchContext);
     const entry = batch?.resource.entry ?? null;
-    const subscribe = React.useCallback((listener: () => void) => entry?.subscribe(listener, false) ?? (() => {}), [entry]);
+    const subscribe = React.useCallback((listener: () => void) => entry?.subscribe(listener, demand) ?? (() => {}), [entry, demand]);
     const getSnapshot = React.useCallback(() => entry?.getSnapshot().value, [entry]);
     const value = React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
     return React.useMemo(() => {
         if (!value || batch?.resource.lifetime?.isCurrent() !== true) return EMPTY_RESULTS;
         try { return decodeUsageQueryResource(value).results; } catch { return EMPTY_RESULTS; }
     }, [value, batch?.resource.lifetime]);
+}
+
+/** Only mounted widget results feed page totals and freshness; inventory is not a displayed total. */
+export function useUsageWidgetBatchSlices(): readonly UsageQueryResultSlice[] {
+    const batch = React.useContext(UsageWidgetBatchContext);
+    const slices = useDecodedUsageWidgetBatchSlices();
+    return React.useMemo(() => slices.filter(slice => [...(batch?.resource.plan.widgets.values() ?? [])].some(widget => widget.key === slice.key)), [slices, batch?.resource.plan]);
+}
+
+/** Unnarrowed choices share the page's canonical request, lifetime, decode and Resource owner. */
+export function useUsageWidgetBatchInventorySlice(): UsageQueryResultSlice | undefined {
+    const batch = React.useContext(UsageWidgetBatchContext);
+    return useDecodedUsageWidgetBatchSlices(true).find(slice => slice.key === batch?.inventoryKey);
+}
+
+export function useUsageWidgetPageHasCoverageDetail(): boolean {
+    const batch = React.useContext(UsageWidgetBatchContext);
+    return useDecodedUsageWidgetBatchSlices().some(slice => slice.key === batch?.inventoryKey && slice.accounting !== undefined);
 }

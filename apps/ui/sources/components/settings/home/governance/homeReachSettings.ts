@@ -22,6 +22,9 @@ export const HOME_REACH_SETTINGS = defineSettingsPage({
             webAppAddress: {},
             accessMethod: {},
         } },
+        publicLinks: { titleKey: 'homeGovernance.reach.publicLinks', settings: {
+            allowPublicSubpath: {},
+        } },
         directConnections: { titleKey: 'homeGovernance.reach.directConnections', settings: {
             directConnections: {},
             relay: {},
@@ -36,6 +39,7 @@ export const HOME_REACH_SETTINGS = defineSettingsPage({
 export const HOME_REACH_PAGE_SETTING_KEYS: ReadonlySet<string> = new Set([
     SERVER_CONFIG.HAPPIER_PUBLIC_SERVER_URL.key,
     SERVER_CONFIG.HAPPIER_WEBAPP_URL.key,
+    SERVER_CONFIG.HAPPIER_PUBLIC_SHARES_ALLOW_SUBPATH.key,
     SERVER_CONFIG.HAPPIER_HOME_IROH_MODE.key,
     SERVER_CONFIG.HAPPIER_IROH_RELAY_POLICY.key,
     SERVER_CONFIG.HAPPIER_IROH_RELAY_URLS.key,

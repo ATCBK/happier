@@ -9,6 +9,7 @@ import { Switch } from '@/components/ui/forms/Switch';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { t } from '@/text';
 
 import { openProfileCollectionHref } from './ProfileCollectionList';
@@ -26,6 +27,12 @@ export const ProfileSettingsIndex = React.memo(function ProfileSettingsIndex() {
     const collection = useProfilesCollection();
     if (!collection.useProfiles) return <ProfilesOffPage collection={collection} />;
     if (view === 'pending') return null;
+    if (collection.isInitialLoading) return (
+        <ItemList style={{ paddingTop: 0 }}>
+            <SettingsPageHeader description={t('settingsProfilesPage.pageDescription')} />
+            <SurfaceStateCard testID="settings.profiles.collection.loading" kind="loading" size="line" title={t('common.loading')} />
+        </ItemList>
+    );
     if (view === 'land') return <ProfileCollectionLanding collection={collection} />;
     return <ProfileCollectionPage collection={collection} />;
 });

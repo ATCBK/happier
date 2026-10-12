@@ -2,8 +2,6 @@ import type { ConnectedServiceRegistryEntry } from '@/sync/domains/connectedServ
 import type { ConnectedAccountDescriptorProjectionErrorReason } from '@/sync/domains/connectedServices/connectedAccountDescriptorProjection';
 import { t } from '@/text';
 
-import { resolveConnectedServiceSettingsErrorMessage } from '../connectedServiceSettingsErrors';
-
 type IndexDiagnosticsPresentation = Readonly<{
   primary: string | null;
   supportDetails: string | null;
@@ -26,11 +24,10 @@ export function presentConnectedServiceRegistryReadFailure(reason: ConnectedAcco
 }
 
 export function presentConnectedServiceIndexDiagnosticCopy(code: string): string {
-  // `missing_runtime` is a bounded projection diagnostic, not free-form
-  // provider text. Keep it product-facing while all unknown strings use the
-  // canonical typed-error presenter below.
-  if (code === 'missing_runtime') return t('common.unavailable');
-  return resolveConnectedServiceSettingsErrorMessage({ code });
+  if (code === 'missing_runtime') return t('connectedServicesSettings.runtimeNotLoaded');
+  // Registry diagnostics are read facts, including unknown boundary codes.
+  // Never reinterpret them as an attempted Account mutation or display raw text.
+  return presentConnectedServiceRegistryReadFailure(null);
 }
 
 function appendSafeSupportDetail(values: Set<string>, code: string | null | undefined): void {
@@ -44,22 +41,22 @@ function appendSafeSupportDetail(values: Set<string>, code: string | null | unde
  * Projects service-specific conflicts, availability and descriptor diagnostics.
  * Registry read failures belong to the page notice, never to each service.
  *
- * The primary row consumes only bounded state copy or the existing typed-code
- * presenter. The support disclosure contains the same bounded product-copy
+ * The primary row consumes only bounded state and read-diagnostic copy.
+ * The support disclosure contains the same bounded product-copy
  * projection, never boundary text.
  */
 export function presentConnectedServiceIndexDiagnostics(params: Readonly<{
   entry: ConnectedServiceRegistryEntry;
 }>): IndexDiagnosticsPresentation {
-  if (!params.entry.projectedDescriptor) {
-    return { primary: null, supportDetails: null };
-  }
-
   const primary = new Set<string>();
   const details = new Set<string>();
   const entry = params.entry;
 
-  if (entry.projectionStatus === 'conflict') primary.add(t('common.blocked'));
+  if (entry.projectionConflicts?.some(conflict => conflict.kind === 'identity_divergence')) {
+    const conflict = t('connectedServicesSettings.identityConflict');
+    primary.add(conflict);
+    details.add(conflict);
+  } else if (entry.projectionStatus === 'conflict') primary.add(t('common.blocked'));
   if (entry.availability?.state === 'blocked') primary.add(t('common.blocked'));
   if (entry.availability?.state === 'disabled') primary.add(t('common.disabled'));
 

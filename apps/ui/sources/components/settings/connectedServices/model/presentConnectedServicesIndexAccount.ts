@@ -29,12 +29,18 @@ export function presentConnectedServicesIndexAccount(
     labelsByKey: Readonly<Record<string, string | undefined>>,
     present: ConnectedAccountIdentityPresenter,
 ): ConnectedServicesIndexAccountPresentation {
-    const legacyLabel = account.kind === 'legacy'
-        ? resolveConnectedServiceProfileLabel({
+    const accountLabelsByAccountId: Record<string, string> = {};
+    // Naming considers all accounts together; adapt every released profile's
+    // personal label so a named sibling is not counted as an unnamed account.
+    for (const candidate of sheet.accounts) {
+        if (candidate.kind !== 'legacy') continue;
+        const label = resolveConnectedServiceProfileLabel({
             labelsByKey,
-            serviceId: account.legacyServiceId,
-            profileId: account.accountId,
-        }) : null;
+            serviceId: candidate.legacyServiceId,
+            profileId: candidate.accountId,
+        });
+        if (label) accountLabelsByAccountId[candidate.accountId] = label;
+    }
     // Released V2 is an input adapter to the same identity owner, not a second
     // rule for whether provider/internal ids may become a name.
     const profile: QualifiedConnectedAccountPresentationAccount = account.kind === 'qualified' ? account.profile : {
@@ -55,7 +61,7 @@ export function presentConnectedServicesIndexAccount(
         }),
         groups: [],
         labelsByKey,
-        accountLabel: legacyLabel,
+        accountLabelsByAccountId,
         serviceTitle: sheet.label,
         presentIdentity: present,
     });

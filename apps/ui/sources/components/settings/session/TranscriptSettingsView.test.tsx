@@ -158,4 +158,19 @@ describe('TranscriptSettingsView', () => {
         expect(setSessionThinkingDisplayMode).not.toHaveBeenCalled();
         expect(setSessionThinkingInlinePresentation).not.toHaveBeenCalled();
     });
+
+    it('renders the Network for agent HTML choices in the agent visuals group', async () => {
+        const screen = await renderSettingsView(React.createElement(TranscriptSettingsView));
+
+        const row = screen.findAll((node) => node.props?.testID === 'settings-session-transcript-agent-html-network'
+            && (node.type as unknown) === 'Item')[0];
+        expect(row?.props?.title).toBe('settingsSession.transcript.agentHtmlNetworkPolicy');
+        // It governs what agent pages may do, so it is not listed among the UI-only tool call preferences.
+        let group = row?.parent;
+        while (group && (group.type as unknown) !== 'ItemGroup') group = group.parent;
+        expect(group?.props?.title).toBe('settingsSessionPages.transcript.agentVisualsSection');
+        const control = row?.props?.rightElement as React.ReactElement<any> | undefined;
+        expect(control?.props?.activeTabId).toBe('allowed');
+        expect(control?.props?.tabs.map((tab: { id: string }) => tab.id)).toEqual(['allowed', 'ask', 'off']);
+    });
 });

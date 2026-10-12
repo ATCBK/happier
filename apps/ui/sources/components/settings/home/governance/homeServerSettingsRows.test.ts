@@ -19,6 +19,40 @@ it('resolves registry declarations from their canonical Home storage binding aft
 });
 
 describe('selectHomeServerSettings', () => {
+    it('places registry Sentry tuning in More and keeps the DSNs in Monitoring', () => {
+        const keys = ['SENTRY_DSN', 'HAPPIER_SENTRY_CENTRAL_DSN', 'SENTRY_SEND_DEFAULT_PII', 'SENTRY_TRACES_SAMPLE_RATE'];
+        const layout = selectHomeServerSettings(homeSettingsProjectionFixture({
+            entries: keys.map((key) => {
+                const setting = homeRegistrySettingDeclaration(key);
+                if (!setting) throw new Error(`Missing registry setting: ${key}`);
+                return setting.entry;
+            }),
+        }));
+        expect(layout.primary.map((group) => [group.id, group.entries.map((row) => row.key)])).toEqual([
+            ['monitoring', ['SENTRY_DSN', 'HAPPIER_SENTRY_CENTRAL_DSN']],
+        ]);
+        expect(layout.more.map((group) => [group.id, group.entries.map((row) => row.key)])).toEqual([
+            ['errorReporting', ['SENTRY_SEND_DEFAULT_PII', 'SENTRY_TRACES_SAMPLE_RATE']],
+        ]);
+    });
+
+    it('hides inapplicable unset entries but retains configured plain and secret values', () => {
+        const appliesWhen = { key: 'HAPPIER_FILES_BACKEND', values: ['s3'] };
+        const rows = [
+            entry('HAPPIER_FILES_BACKEND', { type: 'enum', section: 'server', group: 'storage' }, { value: 'local' }),
+            entry('S3_REGION', { type: 'string', section: 'server', group: 'storage', appliesWhen }, { value: 'us-east-1' }),
+            entry('S3_BUCKET', { type: 'string', section: 'server', group: 'storage', appliesWhen }, { value: 'configured', source: 'home' }),
+            entry('S3_ACCESS_KEY', { type: 'string', section: 'server', group: 'storage', appliesWhen }, { value: null, secretSet: true }),
+            entry('S3_SECRET_KEY', { type: 'string', section: 'server', group: 'storage', appliesWhen }, { value: null, secretSet: false }),
+        ];
+        const keys = (entries: typeof rows) => selectHomeServerSettings(homeSettingsProjectionFixture({ entries }))
+            .primary.flatMap((group) => group.entries.map((row) => row.key));
+        expect(keys(rows)).toEqual(['HAPPIER_FILES_BACKEND', 'S3_BUCKET', 'S3_ACCESS_KEY']);
+        expect(keys([{ ...rows[0]!, value: 's3' }, ...rows.slice(1)])).toEqual(rows.map((row) => row.key));
+        // Unknown applicability from an older projection retains rows rather than guessing a backend.
+        expect(keys(rows.slice(1))).toEqual(rows.slice(1).map((row) => row.key));
+    });
+
     it('takes every key no bespoke page edits, and leaves the rest to their pages', () => {
         const layout = selectHomeServerSettings(homeSettingsProjectionFixture({
             entries: [
@@ -36,7 +70,13 @@ describe('selectHomeServerSettings', () => {
                 entry('HAPPIER_AUTH_EMAIL_SMTP_HOST', { type: 'string', section: 'email' }),
                 entry('HAPPIER_FEATURE_VOICE__ENABLED', { type: 'boolean', section: 'features', featureId: 'voice' }),
                 // Read-only, wherever it is declared.
-                entry('HAPPIER_CANONICAL_SERVER_URL', { type: 'url', section: 'reach', group: 'addresses' }, { editable: 'bootstrap' }),
+                entry('HAPPIER_CANONICAL_SERVER_URL', { type: 'url', section: 'reach', group: 'addresses' }, {
+                    editable: 'bootstrap', source: 'deployment', value: 'https://home.example',
+                }),
+                // A startup key the deployment left unset folds away with the others like it.
+                entry('HAPPIER_SERVER_LOG_DIR', { type: 'string', section: 'server', group: 'logging' }, {
+                    editable: 'bootstrap', source: 'default', value: null,
+                }),
             ],
         }));
         const keysOf = (groups: typeof layout.primary) => Object.fromEntries(groups.map((group) => [group.id, group.entries.map((row) => row.key)]));
@@ -50,6 +90,7 @@ describe('selectHomeServerSettings', () => {
             addresses: ['HAPPIER_WEBAPP_OAUTH_RETURN_URL_BASE'],
         });
         expect(layout.readOnly.map((row) => row.key)).toEqual(['HAPPIER_CANONICAL_SERVER_URL']);
+        expect(layout.readOnlyUnset.map((row) => row.key)).toEqual(['HAPPIER_SERVER_LOG_DIR']);
     });
 
     it('counts pending and ignored from the projection, across every page, and filters to changed rows', () => {

@@ -1,35 +1,15 @@
 import { appendBugReportReporterToSummary } from '@happier-dev/protocol/bugs/reports/reporter';
 import type { BugReportFormPayload } from '@happier-dev/protocol/bugs/reports/types';
+import type { BugReportDraftInput } from '@happier-dev/protocol/actions/specs/bugReport';
 
 import type { Machine } from '@/sync/domains/state/storageTypes';
+import { t } from '@/text';
 
-import { normalizeReproductionSteps, type BugReportDeploymentType, type BugReportFrequency, type BugReportSeverity } from './bugReportFallback';
+import { normalizeReproductionSteps } from './bugReportFallback';
 import type { BugReportsFeature } from './bugReportFeatureDefaults';
 import type { BugReportDiagnosticsArtifact } from './bugReportDiagnostics';
 
-export type BugReportComposerSubmissionInput = {
-    title: string;
-    summary: string;
-    reporterGithubUsername?: string;
-    currentBehavior?: string;
-    expectedBehavior?: string;
-    reproductionStepsText: string;
-    whatChangedRecently: string;
-    frequency?: BugReportFrequency;
-    severity?: BugReportSeverity;
-    environment: {
-        appVersion: string;
-        platform: string;
-        osVersion?: string;
-        deviceModel?: string;
-        serverUrl?: string;
-        serverVersion?: string;
-        deploymentType: BugReportDeploymentType;
-    };
-    includeDiagnostics: boolean;
-    diagnosticsKinds?: string[];
-    acceptedPrivacyNotice: boolean;
-};
+export type BugReportComposerSubmissionInput = BugReportDraftInput;
 
 export type BugReportDraftValidation =
     | { code: 'ok' }
@@ -90,15 +70,11 @@ export function getBugReportDraftFieldErrors(input: BugReportComposerSubmissionI
     const errors: BugReportDraftFieldErrors = {};
 
     if (input.title.trim().length < BUG_REPORT_TITLE_MIN_CHARS) {
-        errors.title = `Title must be at least ${BUG_REPORT_TITLE_MIN_CHARS} characters.`;
+        errors.title = t('bugReports.composer.validation.titleTooShort', { min: BUG_REPORT_TITLE_MIN_CHARS });
     }
     if (input.summary.trim().length < BUG_REPORT_SUMMARY_MIN_CHARS) {
-        errors.summary = `Summary must be at least ${BUG_REPORT_SUMMARY_MIN_CHARS} characters.`;
+        errors.summary = t('bugReports.composer.validation.summaryTooShort', { min: BUG_REPORT_SUMMARY_MIN_CHARS });
     }
-    if (input.includeDiagnostics && !input.acceptedPrivacyNotice) {
-        errors.privacy = 'Privacy consent is required when including diagnostics.';
-    }
-
     return errors;
 }
 
@@ -108,25 +84,29 @@ export function validateBugReportDraft(input: BugReportComposerSubmissionInput):
     if (errors.title) {
         return {
             code: 'title',
-            title: 'Missing title',
+            title: t('bugReports.composer.validation.missingTitle'),
             message: errors.title,
         };
     }
     if (errors.summary) {
         return {
             code: 'details',
-            title: 'Incomplete report',
-            message: `Summary must be at least ${BUG_REPORT_SUMMARY_MIN_CHARS} characters.`,
-        };
-    }
-    if (errors.privacy) {
-        return {
-            code: 'privacy',
-            title: 'Privacy consent required',
-            message: 'Please confirm the privacy notice to include diagnostics and logs.',
+            title: t('bugReports.composer.validation.incompleteReport'),
+            message: errors.summary,
         };
     }
     return { code: 'ok' };
+}
+
+/**
+ * What the line beside Submit says: nothing when the report can be sent; a neutral "complete the
+ * required fields" while the person has not started (diagnostics are on by default, so only the text
+ * counts); the first concrete problem once they have.
+ */
+export function resolveBugReportSubmitHint(input: BugReportComposerSubmissionInput): 'required' | 'problem' | null {
+    if (validateBugReportDraft(input).code === 'ok') return null;
+    const started = input.title.trim().length > 0 || input.summary.trim().length > 0;
+    return started ? 'problem' : 'required';
 }
 
 export async function submitBugReportFromDraft(input: {

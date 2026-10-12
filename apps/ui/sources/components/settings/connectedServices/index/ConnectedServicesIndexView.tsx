@@ -7,6 +7,7 @@ import type { QualifiedConnectedAccountPurposeBindingTargetV1 } from '@happier-d
 import { CardGrid } from '@/components/ui/cardGrid/CardGrid';
 import { Icon } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
+import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
 import { ExpandableItem, type ExpandableItemHeaderState } from '@/components/ui/lists/ExpandableItem';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
@@ -30,6 +31,7 @@ import type {
 import { presentConnectedServicesIndexAccount, presentConnectedServicesIndexPool } from '../model/presentConnectedServicesIndexAccount';
 import { ConnectedAccountCardView } from './ConnectedAccountCard';
 import {
+    CONNECTED_SERVICE_ACCOUNT_LEADING_INSET_PX,
     ConnectedAccountIndexRowView,
     type ConnectedAccountIndexEntry,
     type ConnectedAccountIndexFacts,
@@ -37,6 +39,11 @@ import {
 } from './ConnectedAccountIndexRow';
 import { ConnectedServicesSummaryLine } from './ConnectedServicesSummaryLine';
 import type { ConnectedServicePoolIndexEntry } from './ConnectedServicePoolIndexItem';
+
+/** Leading box that puts a sheet row's title on the account rows' edge: their inset less the row padding and leading gap. */
+const SUPPORT_DETAILS_LEADING_BOX_PX = CONNECTED_SERVICE_ACCOUNT_LEADING_INSET_PX
+    - PAGE_LIST_METRICS.rowPaddingHorizontalPx
+    - PAGE_LIST_METRICS.rowLeadingGapPx;
 
 export type ConnectedServicesIndexPresentation = 'list' | 'grid';
 
@@ -121,7 +128,6 @@ export const ConnectedServicesIndexView = React.memo(function ConnectedServicesI
             testIDPrefix="connected-services-index.view"
             accessibilityLabel={t('connectedServicesCollection.viewLabel')}
             segmentSizing={props.compact ? 'equal' : 'content'}
-            slidingThumb
             targetSize="platform"
         />
     );
@@ -216,6 +222,9 @@ export const ConnectedServicesIndexView = React.memo(function ConnectedServicesI
                     testID={`connected-services-index:${sheet.serviceKey}:support-details`}
                     title={t('common.details')}
                     subtitle={t('common.unavailable')}
+                    // The sheet's leading column, widened so this title starts on the account names' edge
+                    // (measured live: 48 vs 58 px), not on the generic row's.
+                    iconBoxSize={props.compact ? undefined : SUPPORT_DETAILS_LEADING_BOX_PX}
                     onPress={() => void Modal.alert(t('common.details'), sheet.supportDetails ?? '')}
                 />
             ) : null}
@@ -413,9 +422,7 @@ const styles = StyleSheet.create((theme) => ({
         borderLeftColor: theme.colors.state.success.foreground,
     },
     gridLabelCount: {
-        ...Typography.default(),
-        fontSize: 13,
-        lineHeight: 18,
+        ...Typography.variant('body'),
         color: theme.colors.text.tertiary,
     },
     cardCell: {
@@ -424,6 +431,6 @@ const styles = StyleSheet.create((theme) => ({
         justifyContent: 'flex-start',
     },
     gridSettle: {
-        marginTop: 10,
+        marginTop: theme.space.s10,
     },
 }));

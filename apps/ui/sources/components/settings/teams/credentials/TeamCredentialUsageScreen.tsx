@@ -11,6 +11,13 @@ import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThem
 import { usageSeriesFrame, usageSeriesTooltip, usageSeriesValueFormatter, useUsageSeriesMotion, usageVolumeLens } from '@/components/settings/usage/usageSeriesPresentation';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { ItemLoadStateRows } from '@/components/ui/lists/ItemLoadStateRows';
+import { SectionActionButton } from '@/components/ui/lists/SectionActionButton';
+import { SectionButtonRow } from '@/components/ui/lists/SectionButtonRow';
+import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
+import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { useTeamCredentialUsage, useTeamCredentialUsageWriteRefresh } from '@/hooks/teams/useTeamCredentialResources';
 import { useTeamGroups } from '@/hooks/teams/useTeamGroups';
 import { useTeamMembersRoster } from '@/hooks/teams/useTeamMembersRoster';
@@ -42,6 +49,7 @@ import {
     offeredTeamCredentialUsageBreakdowns,
     orderTeamCredentialLimitsByRemaining,
     usageBreakdownLabel,
+    usageBreakdownPresentation,
     usageRequestMetricLabel,
 } from './teamCredentialPresentation';
 import { exportTeamCredentialUsageCsv } from './teamCredentialUsageExport';
@@ -124,6 +132,7 @@ const CredentialUsage = React.memo(function CredentialUsage(props: Readonly<{
     const [period, setPeriod] = React.useState<UsagePeriod>('30days');
     const [metric, setMetric] = React.useState<UsageVolumeMetric>('tokens');
     const [breakdown, setBreakdown] = React.useState<TeamCredentialUsageBreakdownDimensionV1 | null>(null);
+    const [breakdownOpen, setBreakdownOpen] = React.useState(false);
     // The same cost modes the personal usage dashboard offers. The Home resolves
     // the effective cost under the chosen mode, so the request, its cursor and
     // any export all carry it.
@@ -208,38 +217,39 @@ const CredentialUsage = React.memo(function CredentialUsage(props: Readonly<{
 
     if (!view.featureEnabled || (view.resolved && resource === null && catalogResource === null)) {
         return (
-            <ItemGroup description={view.featureEnabled
-                ? t('teams.credentials.detail.notFound')
-                : t('teams.credentials.unavailable')}>
-                <Item
-                    testID="team-credential-usage-unavailable"
-                    title={t('teams.errors.notFound')}
-                    showChevron={false}
-                />
-            </ItemGroup>
+            <SurfaceStateCard
+                testID="team-credential-usage-unavailable"
+                kind={view.featureEnabled ? 'empty' : 'unavailable'}
+                size="pane"
+                iconName="key"
+                title={view.featureEnabled ? t('teams.errors.notFound') : t('teams.credentials.unavailable')}
+                reason={view.featureEnabled ? t('teams.credentials.detail.notFound') : undefined}
+            />
         );
     }
 
     if (resource === null && catalogResource === null) {
         if (view.error) {
             return (
-                <ItemGroup description={credentialFailureMessage(view.error)}>
-                    <Item
-                        testID="team-credential-usage-resource-retry"
-                        title={t('teams.unavailable.retry')}
-                        onPress={() => void view.reload()}
-                        showChevron={false}
+                <ItemGroup>
+                    <SurfaceStateCard
+                        testID="team-credential-usage-resource-error"
+                        kind="error"
+                        size="line"
+                        title={credentialFailureMessage(view.error)}
+                        action={{ label: t('common.retry'), onPress: () => void view.reload(), testID: 'team-credential-usage-resource-retry' }}
+                        accessibilitySemantics="alert"
                     />
                 </ItemGroup>
             );
         }
         return (
             <ItemGroup>
-                <Item
+                <ItemLoadStateRows
                     testID="team-credential-usage-loading"
-                    title={t('teams.credentials.usage.title')}
-                    loading
-                    showChevron={false}
+                    state={{ kind: 'loading' }}
+                    rows={3}
+                    accessibilityLabel={t('common.loading')}
                 />
             </ItemGroup>
         );
@@ -332,72 +342,65 @@ const CredentialUsage = React.memo(function CredentialUsage(props: Readonly<{
 
     return (
         <>
-            <ItemGroup
-                title={t('teams.credentials.usage.rangeLabel')}
-                accessibilityRole="radiogroup"
-                accessibilityLabel={t('teams.credentials.usage.rangeLabel')}
-            >
-                {USAGE_PERIODS.map((candidate) => (
-                    <Item
-                        key={candidate}
-                        testID={`team-credential-usage-period:${candidate}`}
-                        title={t(getUsagePeriodDefinition(candidate).translationKey)}
-                        selected={period === candidate}
-                        onPress={() => setPeriod(candidate)}
-                        showChevron={false}
+            {/* What the page shows: one sheet of short choices, each beside its label (beneath it on a phone). */}
+            <ItemGroup>
+                <SegmentedChoiceItem<UsagePeriod>
+                    testIDPrefix="team-credential-usage-period"
+                    title={t('teams.credentials.usage.rangeLabel')}
+                    options={USAGE_PERIODS.map((candidate) => ({
+                        id: candidate,
+                        label: t(getUsagePeriodDefinition(candidate).shortTranslationKey),
+                    }))}
+                    value={period}
+                    onChange={setPeriod}
+                />
+                {chartMetrics.length > 1 ? (
+                    <SegmentedChoiceItem<UsageVolumeMetric>
+                        testIDPrefix="team-credential-usage-metric"
+                        title={t('usage.summary.export.metric')}
+                        options={chartMetrics.map((candidate) => ({ id: candidate, label: metricLabel(candidate) }))}
+                        value={selectedMetric}
+                        onChange={setMetric}
                     />
-                ))}
-            </ItemGroup>
-
-            <ItemGroup
-                title={t('usage.summary.export.metric')}
-                accessibilityRole="radiogroup"
-                accessibilityLabel={t('usage.summary.export.metric')}
-            >
-                {chartMetrics.map((candidate) => (
-                    <Item
-                        key={candidate}
-                        testID={`team-credential-usage-metric:${candidate}`}
-                        title={metricLabel(candidate)}
-                        selected={selectedMetric === candidate}
-                        onPress={() => setMetric(candidate)}
-                        showChevron={false}
-                    />
-                ))}
-                {chartMetrics.length === 0 ? (
-                    <Item
-                        testID="team-credential-usage-metrics-unavailable"
-                        title={t('common.unavailable')}
-                        showChevron={false}
+                ) : null}
+                {costModes.length > 1 ? (
+                    <SegmentedChoiceItem<UsageCostMode>
+                        testIDPrefix="team-credential-usage-cost-mode"
+                        title={t('usage.costMode')}
+                        options={costModes.map((candidate) => ({ id: candidate, label: t(COST_MODE_LABEL_KEYS[candidate]) }))}
+                        value={costMode}
+                        onChange={setCostMode}
                     />
                 ) : null}
             </ItemGroup>
 
-            <ItemGroup>
-                <Item
-                    testID="team-credential-usage-refresh"
-                    title={t('common.refresh')}
-                    loading={usage.status === 'loading' && result !== null}
-                    accessibilityLiveRegion={usage.status === 'loading' ? 'polite' : undefined}
-                    onPress={refreshToNow}
-                    showChevron={false}
-                />
-            </ItemGroup>
-
             {/* Totals already read stay on screen while the next range loads. */}
             {result === null && usage.status === 'loading' ? (
-                <ItemGroup>
-                    <Item
+                <ItemGroup title={t('teams.credentials.usage.title')}>
+                    <ItemLoadStateRows
                         testID="team-credential-usage-totals-loading"
-                        title={t('teams.credentials.usage.title')}
-                        loading
-                        showChevron={false}
+                        state={{ kind: 'loading' }}
+                        rows={3}
+                        accessibilityLabel={t('common.loading')}
                     />
                 </ItemGroup>
             ) : null}
 
             {result !== null ? (
-                <ItemGroup title={t('teams.credentials.usage.title')} description={completeness || undefined}>
+                <ItemGroup
+                    title={t('teams.credentials.usage.title')}
+                    description={completeness || undefined}
+                    // Usage follows new writes by itself; this brings the period's end up to now.
+                    action={(
+                        <SectionActionButton
+                            testID="team-credential-usage-refresh"
+                            icon="arrow-clockwise"
+                            title={t('common.refresh')}
+                            loading={usage.status === 'loading'}
+                            onPress={refreshToNow}
+                        />
+                    )}
+                >
                     {!showRequests || coverage === null ? null : (
                         <Item
                             testID="team-credential-usage-requests"
@@ -430,25 +433,6 @@ const CredentialUsage = React.memo(function CredentialUsage(props: Readonly<{
                         subtitle={costUsd === null ? undefined : costProvenanceLabel(result.totals.cost, costMode)}
                         showChevron={false}
                     />
-                </ItemGroup>
-            ) : null}
-
-            {costModes.length > 1 ? (
-                <ItemGroup
-                    title={t('usage.costMode')}
-                    accessibilityRole="radiogroup"
-                    accessibilityLabel={t('usage.costMode')}
-                >
-                    {costModes.map((candidate) => (
-                        <Item
-                            key={candidate}
-                            testID={`team-credential-usage-cost-mode:${candidate}`}
-                            title={t(COST_MODE_LABEL_KEYS[candidate])}
-                            selected={costMode === candidate}
-                            onPress={() => setCostMode(candidate)}
-                            showChevron={false}
-                        />
-                    ))}
                 </ItemGroup>
             ) : null}
 
@@ -493,63 +477,43 @@ const CredentialUsage = React.memo(function CredentialUsage(props: Readonly<{
                 </ItemGroup>
             ) : null}
 
-            <ItemGroup
-                title={t('teams.credentials.usage.breakdownLabel')}
-                description={administers ? undefined : t('teams.credentials.usage.breakdownRestricted')}
-                accessibilityRole="radiogroup"
-                accessibilityLabel={t('teams.credentials.usage.breakdownLabel')}
-            >
-                <Item
-                    testID="team-credential-usage-breakdown:none"
-                    title={t('teams.credentials.usage.breakdownNone')}
-                    selected={breakdown === null}
-                    onPress={() => setBreakdown(null)}
-                    showChevron={false}
-                />
-                {dimensions.map((dimension) => (
-                    <Item
-                        key={dimension}
-                        testID={`team-credential-usage-breakdown:${dimension}`}
-                        title={usageBreakdownLabel(dimension)}
-                        selected={breakdown === dimension}
-                        onPress={() => setBreakdown(dimension)}
-                        showChevron={false}
-                    />
-                ))}
-            </ItemGroup>
+            <ItemGroup><DropdownMenu open={breakdownOpen} onOpenChange={setBreakdownOpen} selectedId={breakdown ?? 'none'} items={[{ id: 'none', testID: 'team-credential-usage-breakdown:none', title: t('teams.credentials.usage.breakdownNone') }, ...dimensions.map((id) => ({ id, testID: `team-credential-usage-breakdown:${id}`, title: usageBreakdownLabel(id) }))]} onSelect={(id) => setBreakdown(id === 'none' ? null : dimensions.find((dimension) => dimension === id) ?? breakdown)} itemTrigger={{ title: t('teams.credentials.usage.breakdownLabel'), subtitle: administers ? undefined : t('teams.credentials.usage.breakdownRestricted'), itemProps: { testID: 'team-credential-usage-breakdown-trigger' } }} /></ItemGroup>
 
             {breakdown !== null && result !== null ? (
                 (result.breakdown ?? []).length === 0 ? (
-                    <ItemGroup description={t('teams.credentials.usage.empty')}>
-                        <Item
+                    <ItemGroup title={usageBreakdownLabel(breakdown)}>
+                        <SurfaceStateCard
                             testID="team-credential-usage-breakdown-empty"
-                            title={usageBreakdownLabel(breakdown)}
-                            showChevron={false}
+                            kind="empty"
+                            size="line"
+                            title={t('teams.credentials.usage.empty')}
                         />
                     </ItemGroup>
                 ) : (
                     <ItemGroup title={usageBreakdownLabel(breakdown)}>
-                        {(result.breakdown ?? []).map((entry) => (
-                            <Item
-                                key={entry.key}
-                                testID={`team-credential-usage-slice:${entry.key}`}
-                                // The Home names its own slices. A key without a
-                                // label is shown as the Home sent it rather than
-                                // being decorated with a guess about what it is.
-                                title={entry.label ?? entry.key}
-                                subtitle={t('teams.credentials.usage.sliceSummary', {
-                                    requests: result.coverage.requestCountCoverage === 'brokered_only'
-                                        && entry.totals.requestCount === 0
-                                        ? t('common.unavailable')
-                                        : formatTokenCountLong(entry.totals.requestCount),
-                                    tokens: result.coverage.tokenCoverage === 'unavailable'
-                                        || (result.coverage.tokenCoverage === 'partial' && entry.totals.tokens.total === 0)
-                                        ? t('common.unavailable')
-                                        : formatTokenCountLong(entry.totals.tokens.total),
-                                })}
-                                showChevron={false}
-                            />
-                        ))}
+                        {(result.breakdown ?? []).map((entry) => {
+                            const presentation = usageBreakdownPresentation(breakdown, entry, context.scope.accountId);
+                            return (
+                                <Item
+                                    key={entry.key}
+                                    testID={`team-credential-usage-slice:${entry.key}`}
+                                    title={presentation.name}
+                                    subtitle={[presentation.hint, t('teams.credentials.usage.sliceSummary', {
+                                        requestCount: entry.totals.requestCount,
+                                        tokenCount: entry.totals.tokens.total,
+                                        requests: result.coverage.requestCountCoverage === 'brokered_only'
+                                            && entry.totals.requestCount === 0
+                                            ? t('common.unavailable')
+                                            : formatTokenCountLong(entry.totals.requestCount),
+                                        tokens: result.coverage.tokenCoverage === 'unavailable'
+                                            || (result.coverage.tokenCoverage === 'partial' && entry.totals.tokens.total === 0)
+                                            ? t('common.unavailable')
+                                            : formatTokenCountLong(entry.totals.tokens.total),
+                                    })].filter(Boolean).join(' · ')}
+                                    showChevron={false}
+                                />
+                            );
+                        })}
                     </ItemGroup>
                 )
             ) : null}
@@ -569,51 +533,14 @@ const CredentialUsage = React.memo(function CredentialUsage(props: Readonly<{
             ) : null}
 
             {usage.partial && usage.error ? (
-                <ItemGroup description={credentialFailureMessage(usage.error)}>
-                    <Item
-                        testID="team-credential-usage-load-more-retry"
-                        title={t('teams.unavailable.retry')}
-                        loading={usage.loadingMore}
-                        disabled={usage.loadingMore}
-                        accessibilityLiveRegion="polite"
-                        onPress={() => void usage.loadMore()}
-                        showChevron={false}
-                    />
-                </ItemGroup>
-            ) : null}
-
-            {result !== null ? (
-                <ItemGroup description={exportNotice ?? undefined}>
-                    <Item
-                        testID="team-credential-usage-export"
-                        title={t('teams.credentials.usage.export')}
-                        loading={exportBusy}
-                        disabled={exportUnavailable}
-                        showChevron={false}
-                        onPress={async () => {
-                            if (exportUnavailable) return;
-                            setExportBusy(true);
-                            setExportNotice(null);
-                            try {
-                                const exported = await exportTeamCredentialUsageCsv({
-                                    resourceName,
-                                    result,
-                                    startMs: range.startMs,
-                                    endMs: range.endMs,
-                                    breakdown,
-                                    // 52 ranked slices must not leave as 50
-                                    // rows under a whole-query total with
-                                    // nothing in the file saying so.
-                                    breakdownComplete: !usage.hasMore && !usage.partial,
-                                    costMode,
-                                });
-                                if (!exported) setExportNotice(t('teams.credentials.usage.exportFailed'));
-                            } catch {
-                                setExportNotice(t('teams.credentials.usage.exportFailed'));
-                            } finally {
-                                setExportBusy(false);
-                            }
-                        }}
+                <ItemGroup>
+                    <SurfaceStateCard
+                        testID="team-credential-usage-load-more-error"
+                        kind="error"
+                        size="line"
+                        title={credentialFailureMessage(usage.error)}
+                        action={{ label: t('common.retry'), disabled: usage.loadingMore, onPress: () => void usage.loadMore(), testID: 'team-credential-usage-load-more-retry' }}
+                        accessibilitySemantics="alert"
                     />
                 </ItemGroup>
             ) : null}
@@ -668,24 +595,64 @@ const CredentialUsage = React.memo(function CredentialUsage(props: Readonly<{
                 </ItemGroup>
             ) : null}
 
+            {result !== null ? (
+                // Saving the period as a file closes the page: one quiet button, its failure beneath it.
+                <ItemGroup surface="none">
+                    <SectionButtonRow footnote={exportNotice ?? undefined}>
+                        <RoundButton
+                            testID="team-credential-usage-export"
+                            size="small"
+                            display="secondary"
+                            title={t('teams.credentials.usage.export')}
+                            loading={exportBusy}
+                            disabled={exportUnavailable}
+                            onPress={async () => {
+                                if (exportUnavailable) return;
+                                setExportBusy(true);
+                                setExportNotice(null);
+                                try {
+                                    const exported = await exportTeamCredentialUsageCsv({
+                                        scope: context.scope,
+                                        resourceName,
+                                        query: input,
+                                        // Retain the displayed ranked-row scope; the export
+                                        // never silently opens every remaining page.
+                                        ...(breakdown === null ? {} : { breakdownRowCount: result.breakdown?.length ?? 0 }),
+                                    });
+                                    if (!exported) setExportNotice(t('teams.credentials.usage.exportFailed'));
+                                } catch {
+                                    setExportNotice(t('teams.credentials.usage.exportFailed'));
+                                } finally {
+                                    setExportBusy(false);
+                                }
+                            }}
+                        />
+                    </SectionButtonRow>
+                </ItemGroup>
+            ) : null}
+
             {usage.error && !usage.partial ? (
-                <ItemGroup description={credentialFailureMessage(usage.error)}>
-                    <Item
-                        testID="team-credential-usage-retry"
-                        title={t('teams.unavailable.retry')}
-                        onPress={() => void usage.reload()}
-                        showChevron={false}
+                <ItemGroup>
+                    <SurfaceStateCard
+                        testID="team-credential-usage-error"
+                        kind="error"
+                        size="line"
+                        title={credentialFailureMessage(usage.error)}
+                        action={{ label: t('common.retry'), onPress: () => void usage.reload(), testID: 'team-credential-usage-retry' }}
+                        accessibilitySemantics="alert"
                     />
                 </ItemGroup>
             ) : null}
 
             {view.error ? (
-                <ItemGroup description={credentialFailureMessage(view.error)}>
-                    <Item
-                        testID="team-credential-usage-resource-retry"
-                        title={t('teams.unavailable.retry')}
-                        onPress={() => void view.reload()}
-                        showChevron={false}
+                <ItemGroup>
+                    <SurfaceStateCard
+                        testID="team-credential-usage-resource-error"
+                        kind="error"
+                        size="line"
+                        title={credentialFailureMessage(view.error)}
+                        action={{ label: t('common.retry'), onPress: () => void view.reload(), testID: 'team-credential-usage-resource-retry' }}
+                        accessibilitySemantics="alert"
                     />
                 </ItemGroup>
             ) : null}

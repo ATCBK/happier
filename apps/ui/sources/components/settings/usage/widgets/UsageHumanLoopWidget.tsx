@@ -54,9 +54,8 @@ export function UsageHumanLoopWidget(props: UsageBodyProps) {
   const howYouWork = props.slice.howYouWork;
   const permissions = howYouWork?.permissions ?? null;
   const inputs = howYouWork?.inputs ?? null;
-  useWidgetFrameBodyCaption(
-    permissions || inputs ? usagePeriodPhrase(props.query) : null,
-  );
+  // The period names the cell even before anything is readable; the frame's follow label ("This page") says nothing here.
+  useWidgetFrameBodyCaption(usagePeriodPhrase(props.query));
   const tools = React.useMemo(
     () =>
       permissions
@@ -201,27 +200,23 @@ export function UsageHumanLoopWidget(props: UsageBodyProps) {
 }
 
 const styles = StyleSheet.create((theme) => ({
-  body: { gap: 20, minWidth: 0 },
+  body: { gap: theme.space.s20, minWidth: 0 },
   metrics: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    columnGap: 32,
-    rowGap: 12,
+    columnGap: theme.space.s32,
+    rowGap: theme.space.s12,
   },
-  columns: { gap: 24 },
+  columns: { gap: theme.space.s24 },
   row: { flexDirection: 'row', alignItems: 'flex-start' },
-  block: { gap: 8, minWidth: 0 },
+  block: { gap: theme.space.s8, minWidth: 0 },
   half: { flex: 1 },
   label: {
-    ...Typography.default('semiBold'),
-    fontSize: 13,
-    lineHeight: 18,
+    ...Typography.variant('body', 'semiBold'),
     color: theme.colors.text.secondary,
   },
   note: {
-    ...Typography.default(),
-    fontSize: 12,
-    lineHeight: 16,
+    ...Typography.variant('meta'),
     color: theme.colors.text.tertiary,
   },
 }));

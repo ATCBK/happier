@@ -524,11 +524,10 @@ export const HomeTeamSignInRulesSection = React.memo(function HomeTeamSignInRule
             <SettingAnchor setting={HOME_SIGN_IN_PROVIDERS_SETTINGS.settings.allowedTeamProviderKinds}><ItemGroup
                 title={t('homeGovernance.signInProviders.teamRules')}
                 description={editable
-                    ? (providerRead.status === 'inherited'
-                        ? t('homeGovernance.authInheritedDescription')
-                        : providerRead.status === 'unreadable'
-                            ? t('homeGovernance.authUnreadableDescription')
-                            : t('homeGovernance.signInProviders.teamRulesDescription'))
+                    // Defaults in force (nothing narrowed yet) still read as what the section is for.
+                    ? (providerRead.status === 'unreadable'
+                        ? t('homeGovernance.authUnreadableDescription')
+                        : t('homeGovernance.signInProviders.teamRulesDescription'))
                     : (
                         context.mutationsAvailable
                             ? t('homeGovernance.policyReadOnly')
@@ -544,6 +543,8 @@ export const HomeTeamSignInRulesSection = React.memo(function HomeTeamSignInRule
                             key={kind}
                             testID={`home-policy-team-provider:${kind}`}
                             title={teamProviderKindLabel(kind)}
+                            // A switch that cannot be turned on says why.
+                            subtitle={addable ? undefined : t('homeGovernance.signInPolicy.methodUnavailable')}
                             loading={pending === kind}
                             disabled={!editable || pending !== null || !addable}
                             onPress={editable && addable ? () => toggleProvider(kind) : undefined}
@@ -598,7 +599,8 @@ export const HomeTeamSignInRulesSection = React.memo(function HomeTeamSignInRule
                         />
                     )}
                 /></SettingAnchor>
-                {editable ? (
+                {/* Save appears with an edit to the hosts; the sheet stays quiet otherwise. */}
+                {editable && originsDraft !== null ? (
                     <SectionContentRow>
                         <SectionButtonRow
                             trailing={(

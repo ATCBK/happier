@@ -2,16 +2,8 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import {
-    collectRenderedTestIds,
-    createHomeGovernanceHarness,
-    installHomeGovernanceBoundaries,
-    renderScreen,
-    standardCleanup,
-    teamCapabilitiesFixture,
-    teamInvitationRowFixture,
-    teamSummaryFixture,
-} from '@/dev/testkit';
+import { collectRenderedTestIds, renderScreen, standardCleanup, teamCapabilitiesFixture, teamInvitationRowFixture, teamSummaryFixture } from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 
 import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelpers';
 
@@ -109,6 +101,50 @@ afterEach(() => {
 });
 
 describe('TeamInvitationCreateScreen', () => {
+    it('starts a fresh invitation and finishes through the fixed-Team dialog close callback', async () => {
+        const serverId = await addManagedHome();
+        harness.answer(serverId, INVITATION_CREATE_PATH, {
+            body: { invitation: teamInvitationRowFixture(), joinUrl: 'https://home-a.example/join/first-bearer' },
+        });
+        const { HomeInvitePeopleDialog } = await import('../../home/governance/HomeInvitePeopleDialog');
+        const onClose = vi.fn();
+        const screen = await renderScreen(<HomeInvitePeopleDialog serverId={serverId} teamId="team-1" onClose={onClose} />);
+        await waitForTestId(screen, 'team-invite-submit');
+        screen.pressByTestId('team-invite-role:guest');
+        await screen.pressByTestIdAsync('team-invite-submit');
+        await waitForTestId(screen, 'team-invite-copy-link');
+        await screen.pressByTestIdAsync('team-invite-another');
+        expect(screen.getTextContent()).not.toContain('first-bearer');
+        expect(collectRenderedTestIds(screen.tree.toJSON())).not.toContain('team-invite-copy-link');
+        await waitForTestId(screen, 'team-invite-submit');
+        await screen.pressByTestIdAsync('team-invite-submit');
+        await waitForTestId(screen, 'team-invite-copy-link');
+        const requests = harness.requestsFor(INVITATION_CREATE_PATH);
+        expect(requests.at(-1)?.input).toMatchObject({ role: 'member', recipientEmail: null });
+        expect(requests.at(-1)?.input).not.toMatchObject({ requestKey: (requests[0]?.input as { requestKey: string }).requestKey });
+        await screen.pressByTestIdAsync('team-invite-done');
+        expect(onClose).toHaveBeenCalledOnce();
+        expect(collectRenderedTestIds(screen.tree.toJSON())).not.toContain('team-invite-copy-link');
+    });
+
+    it('titles the dialog by its Team, then as the ready invitation once the link exists', async () => {
+        const serverId = await addManagedHome();
+        harness.answer(serverId, INVITATION_CREATE_PATH, {
+            body: { invitation: teamInvitationRowFixture(), joinUrl: 'https://home-a.example/join/ready-bearer' },
+        });
+        const { HomeInvitePeopleDialog } = await import('../../home/governance/HomeInvitePeopleDialog');
+        const titles: unknown[] = [];
+        const screen = await renderScreen(<HomeInvitePeopleDialog serverId={serverId} teamId="team-1" onClose={vi.fn()} setChrome={(chrome) => { titles.push(chrome?.title); }} />);
+        await waitForTestId(screen, 'team-invite-submit');
+        expect(titles.at(-1)).toBe('teams.invitations.inviteTitle(team=Platform)');
+        await screen.pressByTestIdAsync('team-invite-submit');
+        await waitForTestId(screen, 'team-invite-copy-link');
+        expect(titles.at(-1)).toBe('teams.invitations.readyTitle');
+        await screen.pressByTestIdAsync('team-invite-another');
+        await waitForTestId(screen, 'team-invite-submit');
+        expect(titles.at(-1)).toBe('teams.invitations.inviteTitle(team=Platform)');
+    });
+
     it('starts only one invitation creation when activated twice before the busy state renders', async () => {
         let releaseCreate = (): void => {};
         const respondAfter = new Promise<void>((resolve) => { releaseCreate = resolve; });
@@ -139,7 +175,7 @@ describe('TeamInvitationCreateScreen', () => {
         await waitForTestId(screen, 'team-invite-delivery:link');
 
         const selectedChoices = [
-            ['team-invite-delivery:link', 'teams.invitations.inviteTitle(team=Platform)'],
+            ['team-invite-delivery:link', 'teams.invitations.sendAs'],
             ['team-invite-role:member', 'teams.members.roleLabel'],
         ] as const;
 

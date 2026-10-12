@@ -17,6 +17,7 @@ import { useServerProfilesGeneration } from '@/hooks/server/useServerProfilesGen
 import { randomUUID } from '@/platform/randomUUID';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { useLocalRuntimeActionExecution } from '@/components/approvals/useLocalRuntimeActionExecution';
 import { useRemoteHostCatalogSnapshot } from '@/sync/store/settings/remoteHostCatalogSnapshot';
 import { withRemoteHostSshConfig } from '@/sync/ops/remoteHosts/remoteHostOperations';
 import { createUiHomeRuntimeActionClient } from '@/sync/ops/actions/homeRuntimeActionClient';
@@ -33,6 +34,8 @@ import {
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { resolvePreferredPublicReleaseRingLabelForCurrentApp } from '@/sync/runtime/resolvePublicReleaseRing';
 import { t } from '@/text';
+import { isDesktopHost, invokeDesktopHost } from '@/utils/platform/desktopHost';
+import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 
 
 function useRelocationDirectoryPublication(enabled: boolean): RelocationDirectoryPublication | null {
@@ -67,6 +70,7 @@ export type PersonalHomeRuntimeOperations = Readonly<{
     personalHomeProfile: ServerProfile | null;
     operations: PersonalHomeRuntimeControlOperations;
     searchApproval: ReturnType<typeof useMountedActionExecution>['approval'];
+    approvalServerId: string;
 }>;
 
 /**
@@ -81,6 +85,7 @@ export function usePersonalHomeRuntimeOperations(params: Readonly<{
     removeProfile?: (profile: ServerProfile) => Promise<void>;
     /** The saved profiles the surface already holds; defaults to the profile store. */
     profiles?: readonly ServerProfile[];
+    actionScope?: ServerAccountScope;
 }> = {}): PersonalHomeRuntimeOperations {
     const { removeProfile, profiles } = params;
     const profilesGeneration = useServerProfilesGeneration();
@@ -88,8 +93,12 @@ export function usePersonalHomeRuntimeOperations(params: Readonly<{
         () => findPersonalHomeBootstrapCompletedProfile(profiles ?? listServerProfiles()),
         [profiles, profilesGeneration],
     );
-    const searchAction = useMountedActionExecution(personalHomeProfile ? resolveServerProfileScopeId(personalHomeProfile) : null);
-    const runtimeAction = React.useMemo(() => createUiHomeRuntimeActionClient(), []);
+    const searchAction = useMountedActionExecution(params.actionScope ?? (personalHomeProfile ? resolveServerProfileScopeId(personalHomeProfile) : null));
+    const runtimeExecution = useLocalRuntimeActionExecution(params.actionScope);
+    const runtimeAction = React.useMemo(() => createUiHomeRuntimeActionClient(undefined, runtimeExecution.execute),
+        [runtimeExecution.execute]);
+    // Relocation already admits the saved-host catalog's explicit captured scope.
+    const relocationAction = React.useMemo(() => createUiHomeRuntimeActionClient(), []);
     const hostScope = useActiveServerAccountScope();
     const hostCatalog = useRemoteHostCatalogSnapshot(hostScope);
     const remoteHostsManagementEnabled = useFeatureEnabled('remoteHosts.management');
@@ -163,7 +172,7 @@ export function usePersonalHomeRuntimeOperations(params: Readonly<{
                             },
                         }), async () => {
                             assertCurrent();
-                            const outcome = await runtimeAction('relay.runtime.personal_home.relocate', {
+                            const outcome = await relocationAction('relay.runtime.personal_home.relocate', {
                                 hostId: destination.id, expectedRevision: revision,
                                 sourceServerId: resolveServerProfileScopeId(personalHomeProfile),
                                 operationId, sourceDescriptorRevision,
@@ -177,7 +186,7 @@ export function usePersonalHomeRuntimeOperations(params: Readonly<{
             },
             respondToPrompt,
         };
-    }, [eligibleRelocationHosts, hostCatalog, hostScope, personalHomeProfile, relocationDirectoryPublication, runtimeAction]);
+    }, [eligibleRelocationHosts, hostCatalog, hostScope, personalHomeProfile, relocationDirectoryPublication, relocationAction]);
     const prepareRelocationRecovery = React.useCallback(async (recovery: PersonalHomeRelocationRecovery) => {
         return await prepareRelocation(recovery.destinationMachineId, recovery);
     }, [prepareRelocation]);
@@ -189,9 +198,13 @@ export function usePersonalHomeRuntimeOperations(params: Readonly<{
     const personalHomeOperations = React.useMemo<PersonalHomeRuntimeControlOperations>(() => {
         const openPath = async (path: string) => {
             const normalizedPath = path.trim();
-            if (!normalizedPath) throw new Error(t('settings.systemTaskOpenLogsFailed'));
-            const outcome = await runtimeAction('relay.runtime.open_path', { path: normalizedPath });
-            if (!('status' in outcome) || outcome.status !== 'completed') throw new Error('reason' in outcome ? outcome.reason : t('settings.systemTaskOpenLogsFailed'));
+            if (!normalizedPath || !isDesktopHost()) throw new Error(t('settings.systemTaskOpenLogsFailed'));
+            if (runtimeExecution.requiresAction) {
+                const outcome = await runtimeAction('relay.runtime.open_path', { path: normalizedPath });
+                if (!('status' in outcome) || outcome.status !== 'completed') throw new Error('reason' in outcome ? outcome.reason : t('settings.systemTaskOpenLogsFailed'));
+                return;
+            }
+            await runtimeExecution.runSignedOutDraft(() => invokeDesktopHost('system_tasks_open_log_path', { path: normalizedPath }));
         };
         return {
             ...(personalHomeProfile ? {
@@ -207,25 +220,41 @@ export function usePersonalHomeRuntimeOperations(params: Readonly<{
                 ...(removeProfile ? { removeProfile: async () => await removeProfile(personalHomeProfile) } : {}),
             } : {}),
             uninstallRuntime: async () => {
-                await runRelayRuntimeUninstallTask(getDefaultSystemTaskRunner());
+                await runRelayRuntimeUninstallTask(getDefaultSystemTaskRunner(), runtimeExecution.requiresAction ? async () => {
+                    const outcome = await runtimeAction('relay.runtime.uninstall', {});
+                    if (!('status' in outcome) || outcome.status !== 'task_started') throw new Error('reason' in outcome ? outcome.reason : t('settings.systemTaskStartFailed'));
+                    return outcome.taskId;
+                } : spec => runtimeExecution.runSignedOutDraft(() => getDefaultSystemTaskRunner().start(spec)));
             },
             openDataLocation: openPath,
             openLogs: openPath,
             revealBackupOutput: async (path: string) => {
                 const normalizedPath = path.trim();
-                if (!normalizedPath) throw new Error(t('settings.systemTaskOpenLogsFailed'));
-                const outcome = await runtimeAction('relay.runtime.reveal_output', { path: normalizedPath });
-                if (!('status' in outcome) || outcome.status !== 'completed') throw new Error('reason' in outcome ? outcome.reason : t('settings.systemTaskOpenLogsFailed'));
+                if (!normalizedPath || !isDesktopHost()) throw new Error(t('settings.systemTaskOpenLogsFailed'));
+                if (runtimeExecution.requiresAction) {
+                    const outcome = await runtimeAction('relay.runtime.reveal_output', { path: normalizedPath });
+                    if (!('status' in outcome) || outcome.status !== 'completed') throw new Error('reason' in outcome ? outcome.reason : t('settings.systemTaskOpenLogsFailed'));
+                    return;
+                }
+                await runtimeExecution.runSignedOutDraft(() => invokeDesktopHost('system_tasks_reveal_output_path', { path: normalizedPath }));
             },
             selectBackupArchive: async () => {
-                const outcome = await runtimeAction('relay.runtime.personal_home.choose_archive', {});
-                if (!('path' in outcome)) throw new Error('reason' in outcome ? outcome.reason : t('errors.operationFailed'));
-                return outcome.path;
+                if (!isDesktopHost()) return null;
+                if (runtimeExecution.requiresAction) {
+                    const outcome = await runtimeAction('relay.runtime.personal_home.choose_archive', {});
+                    if (!('path' in outcome)) throw new Error('reason' in outcome ? outcome.reason : t('errors.operationFailed'));
+                    return outcome.path;
+                }
+                return await runtimeExecution.runSignedOutDraft(() => invokeDesktopHost<string | null>('desktop_pick_personal_home_backup_archive'));
             },
             selectBackupExportDestination: async () => {
-                const outcome = await runtimeAction('relay.runtime.personal_home.choose_backup_destination', {});
-                if (!('path' in outcome)) throw new Error('reason' in outcome ? outcome.reason : t('errors.operationFailed'));
-                return outcome.path;
+                if (!isDesktopHost()) return null;
+                if (runtimeExecution.requiresAction) {
+                    const outcome = await runtimeAction('relay.runtime.personal_home.choose_backup_destination', {});
+                    if (!('path' in outcome)) throw new Error('reason' in outcome ? outcome.reason : t('errors.operationFailed'));
+                    return outcome.path;
+                }
+                return await runtimeExecution.runSignedOutDraft(() => invokeDesktopHost<string | null>('desktop_save_personal_home_backup_archive'));
             },
             // Relocation needs the adopted profile's stable Home identity and descriptor revision,
             // so it stays profile-scoped alongside search repair and profile removal.
@@ -239,7 +268,9 @@ export function usePersonalHomeRuntimeOperations(params: Readonly<{
                 }
                 : {}),
         };
-    }, [removeProfile, personalHomeProfile, prepareRelocation, prepareRelocationRecovery, relocationDestinations, runtimeAction, searchAction.execute]);
+    }, [runtimeExecution.requiresAction, runtimeExecution.runSignedOutDraft, removeProfile, personalHomeProfile, prepareRelocation, prepareRelocationRecovery, relocationDestinations, runtimeAction, searchAction.execute]);
 
-    return React.useMemo(() => ({ personalHomeProfile, operations: personalHomeOperations, searchApproval: searchAction.approval }), [personalHomeProfile, personalHomeOperations, searchAction.approval]);
+    const approval = runtimeExecution.approval.approvalPending ? runtimeExecution.approval : searchAction.approval;
+    const approvalServerId = runtimeExecution.approval.approvalPending ? runtimeExecution.binding?.serverId ?? '' : searchAction.binding?.serverId ?? '';
+    return React.useMemo(() => ({ personalHomeProfile, operations: personalHomeOperations, searchApproval: approval, approvalServerId }), [personalHomeProfile, personalHomeOperations, approval, approvalServerId]);
 }

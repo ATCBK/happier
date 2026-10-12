@@ -1,3 +1,5 @@
+import { Typography } from '@/constants/Typography';
+import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
 import React from 'react';
 import { ScrollView, View, Pressable } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -22,9 +24,9 @@ const styles = StyleSheet.create((theme) => ({
     minHeight: 0,
   },
   body: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    gap: 10,
+    paddingHorizontal: theme.space.s16,
+    paddingVertical: theme.space.s12,
+    gap: theme.space.s10,
   },
   helper: {
     color: theme.colors.text.secondary,
@@ -32,21 +34,20 @@ const styles = StyleSheet.create((theme) => ({
     lineHeight: 18,
   },
   list: {
-    gap: 10,
+    gap: theme.space.s10,
   },
   row: {
-    paddingVertical: 10,
-    paddingHorizontal: 12,
+    paddingVertical: theme.space.s10,
+    paddingHorizontal: theme.space.s12,
     borderRadius: 12,
     backgroundColor: theme.colors.surface.inset,
     borderWidth: 1,
     borderColor: theme.colors.border.default,
-    gap: 4,
+    gap: theme.space.s4,
   },
   filename: {
     color: theme.colors.text.primary,
-    fontSize: 14,
-    fontWeight: '600',
+    ...Typography.variant('label', 'semiBold'),
   },
   meta: {
     color: theme.colors.text.secondary,
@@ -59,13 +60,6 @@ const styles = StyleSheet.create((theme) => ({
     lineHeight: 16,
   },
 }));
-
-function formatBytes(bytes: number): string {
-  const value = Number.isFinite(bytes) ? Math.max(0, Math.floor(bytes)) : 0;
-  if (value < 1024) return `${value} B`;
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
-  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
-}
 
 export function BugReportDiagnosticsPreviewModal(props: Readonly<{
   artifacts: BugReportDiagnosticsPreviewArtifact[];
@@ -91,7 +85,7 @@ export function BugReportDiagnosticsPreviewModal(props: Readonly<{
 
   const chromeTitle = selected ? selected.filename : t('bugReports.composer.diagnostics.preview.title');
   const chromeSubtitle = selected
-    ? `${selected.sourceKind} · ${selected.contentType} · ${formatBytes(selected.sizeBytes)}`
+    ? `${selected.sourceKind} · ${selected.contentType} · ${formatHappierDataBytes(selected.sizeBytes, { kind: 'storage' })}`
     : undefined;
   const chrome = React.useMemo(() => ({
     kind: 'card' as const,
@@ -143,7 +137,7 @@ export function BugReportDiagnosticsPreviewModal(props: Readonly<{
                   >
                     <Text style={s.filename}>{artifact.filename}</Text>
                     <Text style={s.meta}>
-                      {artifact.sourceKind} · {artifact.contentType} · {formatBytes(artifact.sizeBytes)}
+                      {artifact.sourceKind} · {artifact.contentType} · {formatHappierDataBytes(artifact.sizeBytes, { kind: 'storage' })}
                     </Text>
                   </Pressable>
                 ))

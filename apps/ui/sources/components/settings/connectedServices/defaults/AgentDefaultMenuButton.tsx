@@ -42,7 +42,8 @@ export const AgentDefaultMenuButton = React.memo(function AgentDefaultMenuButton
     if (choices.length === 0 && !props.disabledReason) return null;
     const disabledReason = props.disabledReason ?? (pending ? t('common.loading') : undefined);
     const disabled = Boolean(disabledReason) || pending;
-    const title = defaults.length === 0 && props.disabledReason ? props.disabledReason : defaults.length === 0
+    // The label always says what the control does; why it is waiting is its hint, so a reload never reshapes the header.
+    const title = defaults.length === 0
         ? t('connectedServicesPool.makeDefault')
         : defaults.length === 1
             ? t('connectedServicesPool.defaultFor', { agent: defaults[0].title })
@@ -82,7 +83,7 @@ export const AgentDefaultMenuButton = React.memo(function AgentDefaultMenuButton
                     )}
                     size={28}
                     variant="plain"
-                    accessibilityLabel={defaults.length === 0 && !props.disabledReason ? t('connectedServicesPool.makeDefaultA11y') : title}
+                    accessibilityLabel={defaults.length === 0 ? t('connectedServicesPool.makeDefaultA11y') : title}
                     disabled={disabled}
                     disabledReason={disabledReason}
                     tooltip={title}
@@ -94,7 +95,7 @@ export const AgentDefaultMenuButton = React.memo(function AgentDefaultMenuButton
                     size="small"
                     display={props.presentation === 'text' ? 'inverted' : 'secondary'}
                     title={title}
-                    accessibilityLabel={defaults.length === 0 && !props.disabledReason ? t('connectedServicesPool.makeDefaultA11y') : title}
+                    accessibilityLabel={defaults.length === 0 ? t('connectedServicesPool.makeDefaultA11y') : title}
                     accessibilityHint={disabledReason}
                     disabled={disabled}
                     loading={pending}

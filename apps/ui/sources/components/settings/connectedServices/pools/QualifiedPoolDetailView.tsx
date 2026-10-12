@@ -15,7 +15,7 @@ import { Switch } from '@/components/ui/forms/Switch';
 import { Icon } from '@/components/ui/icons/Icon';
 import { PageHeaderMarkSlot } from '@/components/ui/layout/PageHeaderMarkSlot';
 import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
-import { ExpandableItem } from '@/components/ui/lists/ExpandableItem';
+import { ExpandableItem, ExpandableItemCaret } from '@/components/ui/lists/ExpandableItem';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
@@ -336,7 +336,7 @@ export const QualifiedPoolDetailView = React.memo(function QualifiedPoolDetailVi
             accounts,
             groups: [group],
             labelsByKey,
-            accountLabel: accountLabels[accountId],
+            accountLabelsByAccountId: accountLabels,
             serviceTitle: props.serviceLabel,
         });
         const account = accounts.find((candidate) => candidate.ref.accountId === accountId);
@@ -650,7 +650,7 @@ export const QualifiedPoolDetailView = React.memo(function QualifiedPoolDetailVi
                         onPress={() => { void rename(); }}
                     />
                 ) : undefined}
-                details={<View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: compact ? 'center' : 'flex-start', gap: 6 }}>
+                details={<View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: compact ? 'center' : 'flex-start', gap: theme.space.s6 }}>
                     <ConnectedServiceMark legacyServiceId={props.legacyServiceId} size="inline" />
                     <Text style={styles.headerMeta}>{compact ? props.serviceLabel : memberCount > 0
                         ? t('connectedServicesPool.membersOn', { service: props.serviceLabel, on: enabledCount, total: memberCount })
@@ -991,7 +991,7 @@ export const QualifiedPoolDetailView = React.memo(function QualifiedPoolDetailVi
                             // A leading caret would indent every row of the section (the group aligns titles
                             // to its leading column), so the disclosure glyph trails the count.
                             detail={t('connectedServicesPool.advancedCount', { count: ADVANCED_SETTING_COUNT })}
-                            rightElement={<Icon name={state.expanded ? 'caret-down' : 'caret-right'} size={14} color={theme.colors.text.secondary} />}
+                            rightElement={<ExpandableItemCaret expanded={state.expanded} />}
                             showChevron={false}
                         />
                     )}
@@ -1169,26 +1169,24 @@ const stylesheet = StyleSheet.create((theme) => ({
     headerActions: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
     },
     roomLine: {
-        ...Typography.default(),
-        fontSize: 12.5,
-        lineHeight: 17,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
-        marginTop: 8,
+        marginTop: theme.space.s8,
     },
     checks: {
         flexDirection: 'row',
         flexWrap: 'wrap',
-        columnGap: 16,
-        rowGap: 8,
-        marginTop: 10,
+        columnGap: theme.space.s16,
+        rowGap: theme.space.s8,
+        marginTop: theme.space.s10,
     },
     check: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
     },
     checkLabel: {
         ...Typography.default(),
@@ -1197,12 +1195,10 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     exit: {
         alignItems: 'flex-start',
-        gap: 8,
+        gap: theme.space.s8,
     },
     exitNote: {
-        ...Typography.default(),
-        fontSize: 13,
-        lineHeight: 18,
+        ...Typography.variant('body'),
         color: theme.colors.text.secondary,
     },
 }));

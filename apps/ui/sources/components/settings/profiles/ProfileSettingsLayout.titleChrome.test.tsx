@@ -1,26 +1,23 @@
 import * as React from 'react';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { renderScreen } from '@/dev/testkit';
-import { installSettingsViewCommonModuleMocks } from '@/components/settings/settingsViewTestHelpers';
+import { renderScreen } from '@/dev/testkit/render/renderScreen';
+import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-installSettingsViewCommonModuleMocks({
-    reactNative: async () => {
-        const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-        return createReactNativeWebMock({
-            useWindowDimensions: () => ({ width: 390, height: 844, scale: 1, fontScale: 1 }),
-        });
-    },
-    router: async () => {
-        const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
-        return createExpoRouterMock({ pathname: '/settings/profiles/default-environment' }).module;
-    },
-    // The settings read, collection and child-route resolver stay real. Only their
-    // platform/locale/navigation boundaries use the shared harness above.
-    storage: (importOriginal) => importOriginal(),
-});
+// Install platform and navigation boundaries before any live Settings owner is
+// evaluated; the collection and child-route resolver retain the real store.
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({
+    useWindowDimensions: () => ({ width: 390, height: 844, scale: 1, fontScale: 1 }),
+}));
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({
+    pathname: '/settings/profiles/default-environment',
+}).module);
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
+vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: key => key }));
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
 
 const { getStorage } = await import('@/sync/domains/state/storage');
 const { ProfileSettingsLayout } = await import('./ProfileSettingsLayout');
@@ -29,10 +26,26 @@ const { ProfileCollectionRail } = await import('./ProfileCollectionList');
 const { CollectionList } = await import('@/components/ui/lists/collection/CollectionList');
 const { Item } = await import('@/components/ui/lists/Item');
 const { NavigationTitleChromeProvider } = await import('@/components/ui/layout/PageHeader');
+const { applyProfileCatalogSnapshot, resetProfileCatalogSnapshotsForTests } = await import('@/sync/store/settings/profileCatalogSnapshot');
+const { resetProfileCatalogEngineForTests } = await import('@/sync/engine/settings/profileCatalogEngine');
+const { getActiveServerId } = await import('@/sync/domains/server/serverProfiles');
 
 describe('Profiles phone title ownership', () => {
+    const initialScope = getStorage().getState().settingsScope;
     beforeEach(() => {
+        resetProfileCatalogEngineForTests();
+        resetProfileCatalogSnapshotsForTests();
+        const scope = { serverId: getActiveServerId(), accountId: 'profile-title-fixture' };
+        getStorage().setState({ settingsScope: scope });
+        applyProfileCatalogSnapshot(scope, { status: 'ready', source: 'destination', authority: 'active', records: [], control: null,
+            controlRevision: 'absent', referenceGuardRevision: 'absent', diagnostics: [] }, true);
         getStorage().getState().applySettingsLocal({ useProfiles: false });
+    });
+    afterEach(() => {
+        standardCleanup();
+        resetProfileCatalogEngineForTests();
+        resetProfileCatalogSnapshotsForTests();
+        getStorage().setState({ settingsScope: initialScope });
     });
 
     it('counts the default environment among the choices rendered in the collection', async () => {

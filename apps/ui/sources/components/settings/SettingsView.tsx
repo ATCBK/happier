@@ -25,10 +25,10 @@ import { runAfterInteractionsWithFallback } from '@/utils/timing/runAfterInterac
 import { HubIdentityHeader } from '@/components/hub/HubIdentityHeader';
 import { HubAttentionSection } from '@/components/hub/HubAttentionSection';
 import { HubSetupSection } from '@/components/hub/HubSetupSection';
-import { HubMachinesSection } from '@/components/hub/HubMachinesSection';
-import { UsageCapacitySection } from '@/components/settings/usage/UsageCapacitySection';
 import { HubSecuritySection } from '@/components/hub/HubSecuritySection';
 import { HubQuickSettingsSection } from '@/components/hub/HubQuickSettingsSection';
+import { HubBuiltinWidgetSection } from '@/components/hub/HubBuiltinWidgetSection';
+import { OverviewMachinesSection } from '@/components/settings/overview/OverviewMachinesSection';
 import { useSettingsRailVisible } from '@/components/settings/shell/settingsRailVisibility';
 import { SettingsPageSearch } from '@/components/settings/shell/SettingsPageSearch';
 
@@ -181,12 +181,13 @@ export const SettingsView = React.memo(function SettingsView() {
         <>
             {/* The lighter hub (lab H1): the same hub sections as the app home, in one column, without
                 the greeting and start box, setup as a checklist with its progress. Every section drops
-                out when it has nothing to say, and none of them asks a machine anything. */}
+                out when it has nothing to say. */}
             <HubIdentityHeader />
             <HubAttentionSection />
             <HubSetupSection presentation="checklist" />
-            <HubMachinesSection />
-            <UsageCapacitySection />
+            {/* Machines and Usage: Home's own widgets at their defaults, so both hubs show one thing. */}
+            <OverviewMachinesSection testID="settings-overview-machines-section" />
+            <HubBuiltinWidgetSection id="usage_capacity" testID="settings-overview-usage-widget" />
             <HubSecuritySection />
             <HubQuickSettingsSection />
 

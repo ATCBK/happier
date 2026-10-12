@@ -7,6 +7,9 @@ import { createSystemTaskRunner } from '@/components/systemTasks/createSystemTas
 import type { SystemTaskRunner } from '@/components/systemTasks/types';
 
 import { useLocalRelayRuntimeControl, runRelayRuntimeUninstallTask } from './useLocalRelayRuntimeControl';
+import { bindPersonalHomeRelocationTaskContinuation } from './personalHomeRelocationTaskContinuation';
+import { buildRemoteSshManageHostSystemTaskSpec } from '@/components/systemTasks/specs/remoteSsh/buildRemoteSshManageHostSystemTaskSpec';
+import { Modal } from '@/modal';
 
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
@@ -23,6 +26,7 @@ function createScriptedRunnerHarness() {
     const startedSpecs: ScriptedSpec[] = [];
     const startedTaskIds: string[] = [];
     const subscribedTaskIds: string[] = [];
+    const responses: { taskId: string; answer: unknown }[] = [];
     const startMock = vi.fn(async (spec: unknown) => {
         const parsed = spec as ScriptedSpec;
         startedSpecs.push(parsed);
@@ -44,7 +48,7 @@ function createScriptedRunnerHarness() {
                 };
             },
             async cancel() {},
-            async respond() {},
+            async respond(taskId, answer) { responses.push({ taskId, answer }); },
         },
     });
     function resolveResult(taskId: string, ok: boolean, payload: ResolvePayload = {}): void {
@@ -78,8 +82,41 @@ function createScriptedRunnerHarness() {
         });
         return result;
     }
-    return { runner, listeners, startedSpecs, startedTaskIds, subscribedTaskIds, startMock, start, settle, emitEvent };
+    return { runner, listeners, startedSpecs, startedTaskIds, subscribedTaskIds, responses, startMock, start, settle, emitEvent };
 }
+
+it('a native UI relocation answers SSH trust without displacing its descriptor publication continuation', async () => {
+    const harness = createScriptedRunnerHarness();
+    const { getCurrent } = await renderHook(() => useLocalRelayRuntimeControl({ runner: harness.runner }));
+    const descriptor = { v: 1, operationId: 'native-ui-relocation' };
+    const continuation = bindPersonalHomeRelocationTaskContinuation(async () => ({ descriptor }));
+    const confirm = vi.spyOn(Modal, 'confirm').mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    const spec = buildRemoteSshManageHostSystemTaskSpec({ action: 'personalHome.relocate', channel: 'preview',
+        sshTarget: 'dev@private.example', sshPort: '', sshAuth: 'agent', knownHostsMode: 'app', serviceMode: 'user',
+        relayRuntime: { channel: 'preview', mode: 'user' },
+        personalHomeRelocation: { operationId: 'native-ui-relocation', destinationMachineId: 'saved-host', sourceDescriptorRevision: 1 },
+    });
+    let taskId: string | null = null;
+    await act(async () => { taskId = await getCurrent().startExternalOperation(spec, { promptContinuation: continuation }); });
+    expect(taskId).not.toBeNull();
+    const issuedTaskId = taskId!;
+    try {
+        await act(async () => {
+            harness.emitEvent(issuedTaskId, { protocolVersion: 1, taskId: issuedTaskId, type: 'prompt', tsMs: 1,
+                data: { kind: 'ssh.trustHost', host: 'private.example', fingerprint: 'SHA256:native-key' } });
+        });
+        expect(confirm).toHaveBeenCalled();
+        expect(harness.responses).toContainEqual({ taskId: issuedTaskId, answer: { trusted: true } });
+        await act(async () => {
+            harness.emitEvent(issuedTaskId, { protocolVersion: 1, taskId: issuedTaskId, type: 'prompt', tsMs: 2,
+                data: { kind: 'personal_home.publish_relocation_descriptor.v1' } });
+        });
+        expect(harness.responses).toContainEqual({ taskId: issuedTaskId, answer: { descriptor } });
+    } finally {
+        confirm.mockRestore();
+        await standardCleanup();
+    }
+});
 
 const BASE_PARAMS = {
     target: { kind: 'local' },

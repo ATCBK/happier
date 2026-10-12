@@ -761,7 +761,7 @@ describe('ExternalSessionsIntegrationSection', () => {
             installationId: 'installation-1',
         });
         await act(async () => {
-            screen.tree.update(
+            await screen.update(
                 <ExternalSessionsIntegrationSection
                     integrations={[disabledRow]}
                     machineId="machine-1"
@@ -809,7 +809,7 @@ describe('ExternalSessionsIntegrationSection', () => {
             )!.props.onPress();
         });
         await act(async () => {
-            screen.tree.update(
+            await screen.update(
                 <ExternalSessionsIntegrationSection
                     integrations={[integration('installation-1', 'installed_enabled', {
                         installationId: 'installation-1',

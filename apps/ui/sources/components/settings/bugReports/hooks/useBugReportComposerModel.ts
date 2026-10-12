@@ -22,7 +22,8 @@ import { useBugReportComposerDraftState } from './useBugReportComposerDraftState
 import { useBugReportComposerSubmit } from './useBugReportComposerSubmit';
 import { useBugReportFallbackIssue } from './useBugReportFallbackIssue';
 import { useBugReportSimilarIssues } from './useBugReportSimilarIssues';
-import { getBugReportDraftFieldErrors, validateBugReportDraft, type BugReportDraftFieldErrors, type BugReportDraftValidation } from '../bugReportSubmissionFlow';
+import { getBugReportDraftFieldErrors,
+  resolveBugReportSubmitHint, validateBugReportDraft, type BugReportDraftFieldErrors, type BugReportDraftValidation } from '../bugReportSubmissionFlow';
 
 export function useBugReportComposerModel(input: Readonly<{
   feature: BugReportsFeature;
@@ -79,6 +80,7 @@ export function useBugReportComposerModel(input: Readonly<{
   handlePreviewDiagnostics: () => Promise<void>;
   similarIssues: ReturnType<typeof useBugReportSimilarIssues>;
   validation: BugReportDraftValidation;
+  submitHint: 'required' | 'problem' | null;
   fieldErrors: BugReportDraftFieldErrors;
   handleSubmit: () => Promise<void>;
 } {
@@ -128,7 +130,6 @@ export function useBugReportComposerModel(input: Readonly<{
 
   const { submitting, handleSubmit } = useBugReportComposerSubmit({
     feature: input.feature,
-    machines: input.machines,
     route: input.route,
     includeDiagnostics,
     diagnosticsKinds,
@@ -136,7 +137,7 @@ export function useBugReportComposerModel(input: Readonly<{
     issueRepo: BUG_REPORT_DEFAULT_ISSUE_REPO,
     existingIssueNumber,
     openFallbackIssue,
-    collectDiagnosticsArtifacts,
+    pastedCliDoctorSnapshotJson,
     buildDraftInput,
   });
 
@@ -146,6 +147,7 @@ export function useBugReportComposerModel(input: Readonly<{
   );
   const validation = React.useMemo(() => validateBugReportDraft(draftInput), [draftInput]);
   const fieldErrors = React.useMemo(() => getBugReportDraftFieldErrors(draftInput), [draftInput]);
+  const submitHint = React.useMemo(() => resolveBugReportSubmitHint(draftInput), [draftInput]);
 
   const diagnosticsPreview = useBugReportDiagnosticsPreview({
     disabled: submitting,
@@ -188,6 +190,7 @@ export function useBugReportComposerModel(input: Readonly<{
     handlePreviewDiagnostics: diagnosticsPreview.handlePreview,
     similarIssues,
     validation,
+    submitHint,
     fieldErrors,
     handleSubmit,
   };

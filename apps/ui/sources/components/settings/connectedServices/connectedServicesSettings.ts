@@ -1,7 +1,7 @@
-import { sharingConfigStorage, sharingStateStorage } from '@happier-dev/protocol/actions/settings/accountSettingBindings';
+import { sharingConfigStorage, sharingStateStorage, sharingPerAgentStorage } from '@happier-dev/protocol/actions/settings/accountSettingBindings';
 import { PROVIDER_USAGE_GAUGE_SETTINGS_SECTION } from './providerUsageGaugeSettings';
 import { defineSettingsPage } from '@/components/settings/catalog/settingDeclarations';
-import { prepareDefaultProviderStateSharingChange } from './providerStateSharingSettings';
+import { prepareDefaultProviderStateSharingChange, prepareAgentProviderStateSharingChange } from './providerStateSharingSettings';
 
 /**
  * The searchable settings of Connected services. Services and accounts are a collection (they come
@@ -36,7 +36,17 @@ export const CONNECTED_SERVICES_SETTINGS = defineSettingsPage({
                     },
 
                 },
-                sharingPerAgent: {},
+                sharingPerAgent: { storage: { ...sharingPerAgentStorage,
+                    prepare: async (settings, value, _services, context) => {
+                        const apply = await prepareAgentProviderStateSharingChange(settings.connectedServicesProviderStateSharingSettingsV1, value);
+                        if (!apply || context?.isCurrent() === false) return null;
+                        return current => {
+                            if (context?.isCurrent() === false) return null;
+                            const next = apply(current.connectedServicesProviderStateSharingSettingsV1);
+                            return next ? { connectedServicesProviderStateSharingSettingsV1: next } : null;
+                        };
+                    },
+                } },
             },
         },
     },

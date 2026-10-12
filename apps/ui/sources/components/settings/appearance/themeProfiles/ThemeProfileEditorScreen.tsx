@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { useLocalSearchParams, useRouter } from '@/components/appShell/workspace/destinationRoute';
-import { Appearance, View } from 'react-native';
+import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 
 import { Item } from '@/components/ui/lists/Item';
@@ -24,7 +24,7 @@ import { createThemeProfileDraft, resetThemeProfileDraftMode, resetThemeProfileD
 import { THEME_PROFILE_MAX_PROFILES } from '@/theme/profiles/themeProfileConstants';
 import { sanitizeThemeProfileName } from '@/theme/profiles/themeProfileImportExport';
 import { isThemeProfileAssetAppearance, resolveThemeProfileAssetAppearance } from '@/theme/profiles/themeProfileAssetAppearance';
-import { applyThemeRuntimeSelection } from '@/theme/profiles/themeProfileRuntime';
+import { applyThemeRuntimeSelection, readSystemTheme } from '@/theme/profiles/themeProfileRuntime';
 import {
     clearActiveThemeProfileReferences,
     findActiveThemeProfileForMode,
@@ -76,7 +76,7 @@ const getProfileIdParam = (value: string | string[] | undefined): string | null 
 
 const resolveInitialEditorMode = (themePreference: 'adaptive' | 'light' | 'dark'): ThemeProfileMode => {
     if (themePreference === 'adaptive') {
-        return Appearance.getColorScheme() === 'dark' ? 'dark' : 'light';
+        return readSystemTheme();
     }
     return themePreference;
 };
@@ -304,7 +304,7 @@ export const ThemeProfileEditorScreen = React.memo(function ThemeProfileEditorSc
             applyThemeRuntimeSelection({
                 themePreference: assetAppearance,
                 themeProfiles: setActiveThemeProfileForMode(upsertThemeProfile(themeProfiles, draft), assetAppearance, draft.id),
-                systemTheme: Appearance.getColorScheme() === 'dark' ? 'dark' : 'light',
+                systemTheme: readSystemTheme(),
             });
         }, 150);
 
@@ -317,7 +317,7 @@ export const ThemeProfileEditorScreen = React.memo(function ThemeProfileEditorSc
         applyThemeRuntimeSelection({
             themePreference: stableSelection.themePreference,
             themeProfiles: stableSelection.themeProfiles,
-            systemTheme: Appearance.getColorScheme() === 'dark' ? 'dark' : 'light',
+            systemTheme: readSystemTheme(),
         });
     }, []);
 
@@ -477,7 +477,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     headerActions: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
     },
     headerError: {
         color: theme.colors.state.danger.foreground,

@@ -68,9 +68,14 @@ export function installMcpServersCommonModuleMocks(
     };
 
     vi.mock('react-native', async () => {
-    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-    return createReactNativeWebMock();
-});
+        const activeOptions = mcpServersModuleState.options;
+        if (activeOptions.reactNative) {
+            return await activeOptions.reactNative();
+        }
+
+        const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+        return createReactNativeWebMock();
+    });
 
     vi.mock('@expo/vector-icons', () => ({
         Ionicons: 'Ionicons',

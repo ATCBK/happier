@@ -1,5 +1,8 @@
-import { resolveUsageCostBasis } from '@happier-dev/protocol';
+import { addUsageCostForMode, createEmptyUsageCost } from '@happier-dev/protocol/usage/usageAggregation';
+import { resolveUsageCostBasis } from '@happier-dev/protocol/usage/usageCostFacts';
+import { type RepositoryCheckpointCommitEvidence, type UsageObservationCost } from '@happier-dev/protocol';
 import type { UsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
+import type { ScmPullRequestSummary } from '@happier-dev/protocol/scm';
 import type {
   UsageWorkAllocation,
   UsageWorkOutcome,
@@ -32,17 +35,18 @@ export function usageWorkContributionAmount(
 }
 
 export type UsageWorkProvider = Readonly<{ providerId: string; machineId: string | null }>;
+export type UsageWorkMoneyBasis = Pick<NonNullable<ReturnType<typeof resolveUsageCostBasis>>, 'kind' | 'currency'>;
+type MoneyDisplay = Readonly<{ moneyBasis: UsageWorkMoneyBasis | null }>;
 /** One Session's exact part of a row: the sum of only the contributions that row counts. */
-export type UsageWorkSessionPart = Readonly<{ sessionId: string; amount: number | null }>;
+export type UsageWorkSessionPart = MoneyDisplay & Readonly<{ sessionId: string; amount: number | null }>;
 /** Who a row's contributions were witnessed with. An Agent never implies a Provider. */
 export type UsageWorkIdentities = Readonly<{
   agentIds: readonly string[];
   providers: readonly UsageWorkProvider[];
   /** At least one contribution carries no admitted Provider binding. */
-  providerUnknown: boolean;
 }>;
 
-export type UsageWorkOutcomeRow = UsageWorkIdentities & Readonly<{
+export type UsageWorkOutcomeRow = UsageWorkIdentities & MoneyDisplay & Readonly<{
   key: string;
   outcome: UsageWorkOutcome;
   amount: number | null;
@@ -51,7 +55,7 @@ export type UsageWorkOutcomeRow = UsageWorkIdentities & Readonly<{
   projectKeys: readonly (string | null)[];
 }>;
 
-export type UsageWorkBranchRow = UsageWorkIdentities & Readonly<{
+export type UsageWorkBranchRow = UsageWorkIdentities & MoneyDisplay & Readonly<{
   branch: UsageWorkBranch;
   amount: number | null;
   sessionIds: readonly string[];
@@ -61,17 +65,20 @@ export type UsageWorkBranchRow = UsageWorkIdentities & Readonly<{
   commits: readonly string[];
   /** The plain mean of this row's exact amount over its Sessions; unknown stays unknown. */
   perSession: number | null;
+  retainedChanges: readonly UsageWorkRetainedChange[];
+  linkedPullRequests: readonly ScmPullRequestSummary[];
 }>;
 
-export type UsageWorkProjectRow = Readonly<{
+export type UsageWorkProjectRow = MoneyDisplay & Readonly<{
   projectKey: string | null;
   amount: number | null;
   allocated: number | null;
   unallocated: number | null;
+  allocatedBasis: UsageWorkMoneyBasis | null;
+  unallocatedBasis: UsageWorkMoneyBasis | null;
   sessionIds: readonly string[];
   agentIds: readonly string[];
   providers: readonly UsageWorkProvider[];
-  providerUnknown: boolean;
   outcomes: readonly UsageWorkOutcomeRow[];
   /** Each Session's part of this project, largest first. */
   sessions: readonly UsageWorkSessionPart[];
@@ -79,12 +86,11 @@ export type UsageWorkProjectRow = Readonly<{
   branches: readonly UsageWorkBranchRow[];
 }>;
 
-export type UsageWorkSessionRow = Readonly<{
+export type UsageWorkSessionRow = MoneyDisplay & Readonly<{
   sessionId: string;
   amount: number | null;
   agentIds: readonly string[];
   providers: readonly UsageWorkProvider[];
-  providerUnknown: boolean;
   /** Distinct exactly-allocated outcomes; ambiguous or missing links are not counted as outcomes. */
   outcomes: readonly UsageWorkOutcome[];
   /** Any witnessed PR evidence, even when the amount stayed unallocated. */
@@ -92,18 +98,21 @@ export type UsageWorkSessionRow = Readonly<{
   unallocatedReasons: readonly UsageWorkUnallocatedReason[];
 }>;
 
-export type UsageWorkSummary = Readonly<{
+export type UsageWorkSummary = MoneyDisplay & Readonly<{
   total: number | null;
   allocated: number | null;
   missingMoneyCount: number;
   unallocated: number | null;
+  allocatedBasis: UsageWorkMoneyBasis | null;
+  unallocatedBasis: UsageWorkMoneyBasis | null;
+  unallocatedReasonBases: Readonly<Record<UsageWorkUnallocatedReason, UsageWorkMoneyBasis | null>>;
   unallocatedByReason: Readonly<Record<UsageWorkUnallocatedReason, number | null>>;
   outcomes: readonly UsageWorkOutcomeRow[];
   branches: readonly UsageWorkBranchRow[];
   projects: readonly UsageWorkProjectRow[];
   sessions: readonly UsageWorkSessionRow[];
   /** Agents by their exact amount, largest first (the scatter's identity slots). */
-  agents: readonly Readonly<{ agentId: string; amount: number | null }>[];
+  agents: readonly (MoneyDisplay & Readonly<{ agentId: string; amount: number | null }>)[];
   funnel: Readonly<{
     sessions: number;
     witnessed: number;
@@ -117,46 +126,90 @@ const byAmount = <T extends { amount: number | null }>(left: T, right: T) =>
   (right.amount ?? -1) - (left.amount ?? -1);
 const addAmount = (left: number | null, right: number | null) =>
   left === null || right === null ? null : left + right;
+type AmountAccumulator = { amount: number | null; cost?: UsageObservationCost; moneyBasis: UsageWorkMoneyBasis | null };
+const newAmount = (): AmountAccumulator => ({ amount: 0, moneyBasis: null });
+function accumulate(target: AmountAccumulator, allocation: Pick<UsageWorkAllocation, 'contribution'>, basis: UsageWorkAmount): void {
+  if (basis.metric !== 'cost') { target.amount = addAmount(target.amount, allocation.contribution.tokens.total); return; }
+  target.cost = addUsageCostForMode(target.cost ?? createEmptyUsageCost(), allocation.contribution.cost, basis.costBasis);
+  const selected = resolveUsageCostBasis(target.cost, basis.costBasis);
+  target.amount = selected?.amountUsd ?? null;
+  target.moneyBasis = selected ? { kind: selected.kind, currency: selected.currency } : null;
+}
 
-type Marks = { agents: Set<string>; providers: Map<string, UsageWorkProvider>; providerUnknown: boolean };
-const newMarks = (): Marks => ({ agents: new Set(), providers: new Map(), providerUnknown: false });
+type Marks = { agents: Set<string>; providers: Map<string, UsageWorkProvider> };
+const newMarks = (): Marks => ({ agents: new Set(), providers: new Map() });
 function witness(marks: Marks, contribution: UsageWorkAllocation['contribution']): void {
   if (contribution.agentId) marks.agents.add(contribution.agentId);
   if (contribution.providerId) {
     const provider = { providerId: contribution.providerId, machineId: contribution.machineId };
     marks.providers.set(JSON.stringify(provider), provider);
-  } else marks.providerUnknown = true;
+  }
 }
 const identities = (marks: Marks): UsageWorkIdentities => ({
   agentIds: sorted(marks.agents),
   providers: [...marks.providers.values()].sort((a, b) => a.providerId.localeCompare(b.providerId)),
-  providerUnknown: marks.providerUnknown,
 });
-function addPart(parts: Map<string, number | null>, sessionId: string | null, amount: number | null): void {
-  if (sessionId) parts.set(sessionId, addAmount(parts.get(sessionId) ?? 0, amount));
+function addPart(parts: Map<string, AmountAccumulator>, sessionId: string | null,
+  allocation: Pick<UsageWorkAllocation, 'contribution'>, basis: UsageWorkAmount): void {
+  if (!sessionId) return;
+  const part = parts.get(sessionId) ?? newAmount();
+  accumulate(part, allocation, basis);
+  parts.set(sessionId, part);
 }
-const sessionParts = (parts: Map<string, number | null>): UsageWorkSessionPart[] =>
-  [...parts.entries()].map(([sessionId, amount]) => ({ sessionId, amount })).sort(byAmount);
+const sessionParts = (parts: Map<string, AmountAccumulator>): UsageWorkSessionPart[] =>
+  [...parts.entries()].map(([sessionId, amount]) => ({ sessionId, amount: amount.amount, moneyBasis: amount.moneyBasis })).sort(byAmount);
 
-type BranchGroup = Marks & { branch: UsageWorkBranch; amount: number | null; parts: Map<string, number | null>;
-  projects: Set<string | null>; commits: Set<string> };
-function groupBranches(allocations: UsageWorkProjection['branchAllocations'], basis: UsageWorkAmount): UsageWorkBranchRow[] {
+/** Only like monetary kinds/currencies share a comparative chart; tokens remain one domain. */
+export function partitionUsageWorkMoneyRows<Row extends MoneyDisplay>(rows: readonly Row[], metric: UsageWorkAmount['metric']) {
+  const groups = new Map<string, { key: string; moneyBasis: UsageWorkMoneyBasis | null; rows: Row[] }>();
+  for (const row of rows) {
+    const moneyBasis = metric === 'cost' ? row.moneyBasis : null;
+    const key = JSON.stringify(moneyBasis);
+    const group = groups.get(key) ?? { key, moneyBasis, rows: [] };
+    group.rows.push(row);
+    groups.set(key, group);
+  }
+  return [...groups.values()];
+}
+
+/** Scatter fallback rows belong to the ledger; a plot needs a witnessed outcome axis. */
+export function projectUsageSessionValuePlots(rows: readonly UsageWorkSessionRow[], metric: UsageWorkAmount['metric']) {
+  return partitionUsageWorkMoneyRows(rows.filter((row): row is UsageWorkSessionRow & { amount: number } =>
+    row.amount !== null && row.outcomes.length > 0), metric);
+}
+
+type BranchGroup = Marks & { branch: UsageWorkBranch; amount: AmountAccumulator; parts: Map<string, AmountAccumulator>;
+  projects: Set<string | null>; commits: Set<string>; evidence: RepositoryCheckpointCommitEvidence[];
+  linkedPullRequests: Map<string, ScmPullRequestSummary> };
+function groupBranches(allocations: UsageWorkProjection['branchAllocations'], basis: UsageWorkAmount,
+  outcomeAllocations: UsageWorkProjection['allocations']): UsageWorkBranchRow[] {
   const rows = new Map<string, BranchGroup>();
+  const outcomeByContribution = new Map(outcomeAllocations.map(row => [row.contribution.id, row]));
   for (const allocation of allocations) {
     if (!allocation.branch) continue;
-    const row: BranchGroup = rows.get(allocation.branch.key) ?? { ...newMarks(), branch: allocation.branch, amount: 0, parts: new Map(),
-      projects: new Set(), commits: new Set() };
-    const amount = usageWorkContributionAmount(allocation, basis);
-    row.amount = addAmount(row.amount, amount);
-    addPart(row.parts, allocation.contribution.sessionId, amount);
+    const row: BranchGroup = rows.get(allocation.branch.key) ?? { ...newMarks(), branch: allocation.branch, amount: newAmount(), parts: new Map(),
+      projects: new Set(), commits: new Set(), evidence: [], linkedPullRequests: new Map() };
+    accumulate(row.amount, allocation, basis);
+    addPart(row.parts, allocation.contribution.sessionId, allocation, basis);
     witness(row, allocation.contribution);
     row.projects.add(allocation.contribution.projectKey);
     for (const evidence of allocation.evidence) row.commits.add(evidence.commitSha);
+    row.evidence.push(...allocation.evidence);
+    for (const witness of outcomeByContribution.get(allocation.contribution.id)?.evidence ?? []) {
+      // The SCM producer supplied this graph edge. Display it without assigning any PR cost here.
+      if (witness.branches?.some(branch => branch.ref === row.branch.branch.ref && branch.headSha === row.branch.branch.headSha)
+        && allocation.evidence.some(branchWitness => branchWitness.commitSha === witness.commitSha
+          && branchWitness.checkpointCommitSha === witness.checkpointCommitSha
+          && branchWitness.repositoryKey === witness.branchRepositoryKey)) {
+        row.linkedPullRequests.set(JSON.stringify(witness.pullRequest), witness.pullRequest);
+      }
+    }
     rows.set(allocation.branch.key, row);
   }
-  return [...rows.values()].map((row): UsageWorkBranchRow => ({ branch: row.branch, amount: row.amount, ...identities(row),
+  return [...rows.values()].map((row): UsageWorkBranchRow => ({ branch: row.branch, amount: row.amount.amount, moneyBasis: row.amount.moneyBasis, ...identities(row),
     sessionIds: sorted(row.parts.keys()), sessions: sessionParts(row.parts), commits: [...row.commits],
-    perSession: row.amount === null || row.parts.size === 0 ? null : row.amount / row.parts.size,
+    perSession: row.amount.amount === null || row.parts.size === 0 ? null : row.amount.amount / row.parts.size,
+    retainedChanges: retainedChanges(row.evidence), linkedPullRequests: [...row.linkedPullRequests.values()],
     projectKeys: [...row.projects].sort((a, b) => (a ?? '').localeCompare(b ?? '')) })).sort(byAmount);
 }
 
@@ -164,21 +217,22 @@ export function summarizeUsageWork(
   work: UsageWorkProjection,
   basis: UsageWorkAmount,
 ): UsageWorkSummary {
-  const unallocatedByReason: Record<UsageWorkUnallocatedReason, number | null> = {
-    missing_turn: 0,
-    missing_evidence: 0,
-    ambiguous_outcome: 0,
-    uncertain_writers: 0,
+  const unallocatedAmounts: Record<UsageWorkUnallocatedReason, AmountAccumulator> = {
+    missing_turn: newAmount(),
+    missing_evidence: newAmount(),
+    ambiguous_outcome: newAmount(),
+    uncertain_writers: newAmount(),
   };
-  let total: number | null = 0;
-  let allocated: number | null = 0;
+  const total = newAmount();
+  const allocated = newAmount();
+  const unallocated = newAmount();
   let missingMoneyCount = 0;
   const outcomeRows = new Map<
     string,
     {
       outcome: UsageWorkOutcome;
-      amount: number | null;
-      parts: Map<string, number | null>;
+      amount: AmountAccumulator;
+      parts: Map<string, AmountAccumulator>;
       marks: Marks;
       projects: Set<string | null>;
     }
@@ -186,91 +240,86 @@ export function summarizeUsageWork(
   const projectRows = new Map<
     string | null,
     {
-      amount: number | null;
-      allocated: number | null;
-      unallocated: number | null;
+      amount: AmountAccumulator;
+      allocated: AmountAccumulator;
+      unallocated: AmountAccumulator;
       sessions: Set<string>;
       agents: Set<string>;
       providers: Map<string, UsageWorkProvider>;
-      providerUnknown: boolean;
       outcomes: Set<string>;
-      parts: Map<string, number | null>;
+      parts: Map<string, AmountAccumulator>;
     }
   >();
   const sessionRows = new Map<
     string,
     {
-      amount: number | null;
+      amount: AmountAccumulator;
       agents: Set<string>;
       providers: Map<string, UsageWorkProvider>;
-      providerUnknown: boolean;
       outcomes: Map<string, UsageWorkOutcome>;
       witnessed: boolean;
       reasons: Set<UsageWorkUnallocatedReason>;
     }
   >();
-  const agentAmounts = new Map<string, number | null>();
+  const agentAmounts = new Map<string, AmountAccumulator>();
   for (const row of work.allocations) {
     const amount = usageWorkContributionAmount(row, basis);
     const { contribution } = row;
-    total = addAmount(total, amount);
-    addPart(agentAmounts, contribution.agentId, amount);
+    accumulate(total, row, basis);
+    addPart(agentAmounts, contribution.agentId, row, basis);
     if (amount === null) missingMoneyCount += 1;
     const project = projectRows.get(contribution.projectKey) ?? {
-      amount: 0,
-      allocated: 0,
-      unallocated: 0,
+      amount: newAmount(),
+      allocated: newAmount(),
+      unallocated: newAmount(),
       sessions: new Set(),
       agents: new Set(),
       providers: new Map(),
-      providerUnknown: false,
       outcomes: new Set(),
       parts: new Map(),
     };
-    project.amount = addAmount(project.amount, amount);
-    addPart(project.parts, contribution.sessionId, amount);
+    accumulate(project.amount, row, basis);
+    addPart(project.parts, contribution.sessionId, row, basis);
     if (contribution.sessionId) project.sessions.add(contribution.sessionId);
     if (contribution.agentId) project.agents.add(contribution.agentId);
     const provider = contribution.providerId ? { providerId: contribution.providerId, machineId: contribution.machineId } : null;
     if (provider) project.providers.set(JSON.stringify(provider), provider);
-    else project.providerUnknown = true;
     projectRows.set(contribution.projectKey, project);
     if (contribution.sessionId) {
       const session = sessionRows.get(contribution.sessionId) ?? {
-        amount: 0,
+        amount: newAmount(),
         agents: new Set(),
         providers: new Map(),
-        providerUnknown: false,
         outcomes: new Map(),
         witnessed: false,
         reasons: new Set(),
       };
-      session.amount = addAmount(session.amount, amount);
+      accumulate(session.amount, row, basis);
       if (contribution.agentId) session.agents.add(contribution.agentId);
       if (provider) session.providers.set(JSON.stringify(provider), provider);
-      else session.providerUnknown = true;
       session.witnessed ||= row.evidence.length > 0;
       if (row.outcome) session.outcomes.set(row.outcome.key, row.outcome);
       if (row.reason !== 'allocated') session.reasons.add(row.reason);
       sessionRows.set(contribution.sessionId, session);
     }
     if (row.reason !== 'allocated' || !row.outcome) {
-      if (row.reason !== 'allocated') unallocatedByReason[row.reason] = addAmount(unallocatedByReason[row.reason], amount);
-      project.unallocated = addAmount(project.unallocated, amount);
+      if (row.reason !== 'allocated') accumulate(unallocatedAmounts[row.reason], row, basis);
+      accumulate(unallocated, row, basis);
+      accumulate(project.unallocated, row, basis);
       continue;
     }
-    allocated = addAmount(allocated, amount);
-    project.allocated = addAmount(project.allocated, amount);
+    accumulate(allocated, row, basis);
+    accumulate(project.allocated, row, basis);
     project.outcomes.add(row.outcome.key);
     const outcome = outcomeRows.get(row.outcome.key) ?? {
       outcome: row.outcome,
-      amount: 0,
+      amount: newAmount(),
       parts: new Map(),
       marks: newMarks(),
       projects: new Set(),
     };
-    outcome.amount = addAmount(outcome.amount, amount);
-    addPart(outcome.parts, contribution.sessionId, amount);
+    accumulate(outcome.amount, row, basis);
+    addPart(outcome.parts, contribution.sessionId, row, basis);
     witness(outcome.marks, contribution);
     outcome.projects.add(contribution.projectKey);
     outcomeRows.set(row.outcome.key, outcome);
@@ -279,7 +328,8 @@ export function summarizeUsageWork(
     .map(([key, row]): UsageWorkOutcomeRow => ({
       key,
       outcome: row.outcome,
-      amount: row.amount,
+      amount: row.amount.amount,
+      moneyBasis: row.amount.moneyBasis,
       sessionIds: sorted(row.parts.keys()),
       sessions: sessionParts(row.parts),
       ...identities(row.marks),
@@ -290,43 +340,51 @@ export function summarizeUsageWork(
   const projects = [...projectRows.entries()]
     .map(([projectKey, row]): UsageWorkProjectRow => ({
       projectKey,
-      amount: row.amount,
-      allocated: row.allocated,
-      unallocated: row.unallocated,
+      amount: row.amount.amount,
+      moneyBasis: row.amount.moneyBasis,
+      allocated: row.allocated.amount,
+      unallocated: row.unallocated.amount,
+      allocatedBasis: row.allocated.moneyBasis,
+      unallocatedBasis: row.unallocated.moneyBasis,
       sessionIds: sorted(row.sessions),
       agentIds: sorted(row.agents),
       providers: [...row.providers.values()].sort((a, b) => a.providerId.localeCompare(b.providerId)),
-      providerUnknown: row.providerUnknown,
       outcomes: [...row.outcomes]
         .flatMap((key) => outcomeByKey.get(key) ?? [])
         .sort(byAmount),
       sessions: sessionParts(row.parts),
-      branches: groupBranches(work.branchAllocations.filter((allocation) => allocation.contribution.projectKey === projectKey), basis),
+      branches: groupBranches(work.branchAllocations.filter((allocation) => allocation.contribution.projectKey === projectKey), basis, work.allocations),
     }))
     .sort(byAmount);
   const sessions = [...sessionRows.entries()]
     .map(([sessionId, row]): UsageWorkSessionRow => ({
       sessionId,
-      amount: row.amount,
+      amount: row.amount.amount,
+      moneyBasis: row.amount.moneyBasis,
       agentIds: sorted(row.agents),
       providers: [...row.providers.values()].sort((a, b) => a.providerId.localeCompare(b.providerId)),
-      providerUnknown: row.providerUnknown,
       outcomes: [...row.outcomes.values()],
       witnessed: row.witnessed,
       unallocatedReasons: [...row.reasons].sort(),
     }))
     .sort(byAmount);
   return {
-    total,
-    allocated,
+    total: total.amount,
+    moneyBasis: total.moneyBasis,
+    allocated: allocated.amount,
+    allocatedBasis: allocated.moneyBasis,
     missingMoneyCount,
-    unallocated: Object.values(unallocatedByReason).reduce<number | null>(addAmount, 0),
-    unallocatedByReason,
+    unallocated: unallocated.amount,
+    unallocatedBasis: unallocated.moneyBasis,
+    unallocatedReasonBases: { missing_turn: unallocatedAmounts.missing_turn.moneyBasis, missing_evidence: unallocatedAmounts.missing_evidence.moneyBasis,
+      ambiguous_outcome: unallocatedAmounts.ambiguous_outcome.moneyBasis, uncertain_writers: unallocatedAmounts.uncertain_writers.moneyBasis },
+    unallocatedByReason: { missing_turn: unallocatedAmounts.missing_turn.amount, missing_evidence: unallocatedAmounts.missing_evidence.amount,
+      ambiguous_outcome: unallocatedAmounts.ambiguous_outcome.amount, uncertain_writers: unallocatedAmounts.uncertain_writers.amount },
     outcomes,
-    branches: groupBranches(work.branchAllocations, basis),
+    branches: groupBranches(work.branchAllocations, basis, work.allocations),
     projects,
     sessions,
-    agents: sessionParts(agentAmounts).map((row) => ({ agentId: row.sessionId, amount: row.amount })),
+    agents: sessionParts(agentAmounts).map((row) => ({ agentId: row.sessionId, amount: row.amount, moneyBasis: row.moneyBasis })),
     funnel: {
       sessions: sessions.length,
       witnessed: sessions.filter((row) => row.witnessed).length,
@@ -338,11 +396,13 @@ export function summarizeUsageWork(
   };
 }
 
-export type UsageWorkTurnRow = Readonly<{
+export type UsageWorkTurnRow = MoneyDisplay & Readonly<{
   contributionId: string;
   /** Null when the contribution carries no turn: it is still counted, and never guessed. */
   turnId: string | null;
   observedAtMs: number;
+  modelId: string | null;
+  machineId: string | null;
   amount: number | null;
   outcome: UsageWorkOutcome | null;
   reason: UsageWorkAllocation['reason'];
@@ -350,11 +410,23 @@ export type UsageWorkTurnRow = Readonly<{
   commits: readonly string[];
   /** Branch refs witnessed for this turn's commits. */
   branches: readonly string[];
+  moments: readonly Readonly<{ kind: 'checkpoint' | 'commit'; sha: string; atMs: number }>[];
+  retainedChanges: readonly UsageWorkRetainedChange[];
 }>;
-export type UsageWorkSessionAutopsy = UsageWorkIdentities & Readonly<{
+export type UsageWorkRetainedChange = NonNullable<RepositoryCheckpointCommitEvidence['retainedChange']> & Readonly<{ commitSha: string }>;
+
+function retainedChanges(evidence: readonly RepositoryCheckpointCommitEvidence[]): UsageWorkRetainedChange[] {
+  return [...new Map(evidence.flatMap(row => row.retainedChange ? [[JSON.stringify([row.commitSha, row.retainedChange]),
+    { commitSha: row.commitSha, ...row.retainedChange }] as const] : [])).values()];
+}
+export type UsageWorkSessionAutopsy = UsageWorkIdentities & MoneyDisplay & Readonly<{
   amount: number | null;
   turns: readonly UsageWorkTurnRow[];
   outcomes: readonly UsageWorkOutcome[];
+  /** Cumulative selected cost kind at the accounting observation times; an unpriced part stays unknown. */
+  costTimeline: readonly Readonly<{ id: string; observedAtMs: number; amount: number | null }>[];
+  /** The known prefix's one monetary basis; unavailable later values are gaps, never another kind. */
+  costTimelineBasis: UsageWorkMoneyBasis | null;
 }>;
 
 /** One Session's contributions in witnessed order, each with its own exact amount and evidence. */
@@ -373,6 +445,7 @@ export function summarizeUsageWorkSession(
       const branch = branchByContribution.get(row.contribution.id);
       const evidence = [...row.evidence, ...(branch?.evidence ?? [])];
       const turnAmount = usageWorkContributionAmount(row, basis);
+      const turnBasis = basis.metric === 'cost' ? resolveUsageCostBasis(row.contribution.cost, basis.costBasis) : null;
       amount = addAmount(amount, turnAmount);
       witness(marks, row.contribution);
       if (row.outcome) outcomes.set(row.outcome.key, row.outcome);
@@ -380,14 +453,36 @@ export function summarizeUsageWorkSession(
         contributionId: row.contribution.id,
         turnId: row.contribution.turnId,
         observedAtMs: row.contribution.observedAtMs,
+        modelId: row.contribution.modelId,
+        machineId: row.contribution.machineId,
         amount: turnAmount,
+        moneyBasis: turnBasis ? { kind: turnBasis.kind, currency: turnBasis.currency } : null,
         outcome: row.outcome,
         reason: row.reason,
         checkpoints: [...new Set(evidence.map((item) => item.checkpointRef))],
         commits: [...new Set(evidence.map((item) => item.commitSha))],
         branches: [...new Set((branch?.evidence ?? []).map((item) => item.branch.ref))],
+        moments: [...new Map(evidence.flatMap(item => [
+          ...(item.checkpointCommittedAtMs === undefined ? [] : [{ kind: 'checkpoint' as const,
+            sha: item.checkpointCommitSha, atMs: item.checkpointCommittedAtMs }]),
+          ...(item.committedAtMs === undefined ? [] : [{ kind: 'commit' as const, sha: item.commitSha, atMs: item.committedAtMs }]),
+        ]).map(moment => [JSON.stringify(moment), moment])).values()],
+        retainedChanges: retainedChanges(evidence),
       };
     })
-    .sort((left, right) => left.observedAtMs - right.observedAtMs);
-  return { amount, turns, outcomes: [...outcomes.values()], ...identities(marks) };
+    .sort((left, right) => left.observedAtMs - right.observedAtMs || left.contributionId.localeCompare(right.contributionId));
+  const allocations = new Map(work.allocations.map(row => [row.contribution.id, row]));
+  let cumulativeCost = createEmptyUsageCost();
+  let costTimelineBasis: UsageWorkSessionAutopsy['costTimelineBasis'] = null;
+  const costTimeline = turns.map(turn => {
+    cumulativeCost = addUsageCostForMode(cumulativeCost, allocations.get(turn.contributionId)!.contribution.cost, basis.costBasis);
+    const selected = resolveUsageCostBasis(cumulativeCost, basis.costBasis);
+    if (selected) costTimelineBasis = { kind: selected.kind, currency: selected.currency };
+    return { id: turn.contributionId, observedAtMs: turn.observedAtMs,
+      amount: selected?.amountUsd ?? null };
+  });
+  if (basis.metric === 'cost' && turns.length > 0) amount = resolveUsageCostBasis(cumulativeCost, basis.costBasis)?.amountUsd ?? null;
+  const selected = basis.metric === 'cost' ? resolveUsageCostBasis(cumulativeCost, basis.costBasis) : null;
+  return { amount, moneyBasis: selected ? { kind: selected.kind, currency: selected.currency } : null,
+    turns, costTimeline, costTimelineBasis, outcomes: [...outcomes.values()], ...identities(marks) };
 }

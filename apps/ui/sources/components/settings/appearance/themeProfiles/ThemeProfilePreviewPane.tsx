@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
@@ -77,7 +78,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     previewCard: {
         borderRadius: 14,
         padding: 14,
-        gap: 10,
+        gap: theme.space.s10,
     },
     previewSubtitle: {
         fontSize: 13,
@@ -85,21 +86,20 @@ const stylesheet = StyleSheet.create((theme) => ({
     previewRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 10,
+        gap: theme.space.s10,
         flexWrap: 'wrap',
     },
     primaryButton: {
         borderRadius: 999,
         paddingHorizontal: 14,
-        paddingVertical: 8,
+        paddingVertical: theme.space.s8,
     },
     primaryButtonText: {
-        fontSize: 13,
-        fontWeight: '700',
+        ...Typography.variant('body', 'semiBold'),
     },
     codeSample: {
         borderRadius: 10,
-        padding: 10,
+        padding: theme.space.s10,
         fontSize: 12,
     },
 }));

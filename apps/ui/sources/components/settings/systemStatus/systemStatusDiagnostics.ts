@@ -2,6 +2,9 @@ import { sanitizeBugReportUrl } from '@happier-dev/protocol/bugs/reports/sanitiz
 
 import type { ActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 
+/** What a diagnostics row shows for a value that is not known: a dash, never a status word. */
+export const UNKNOWN_VALUE = '—';
+
 function sanitizeDiagnosticUrl(value: string | null | undefined): string | null | undefined {
   return typeof value === 'string' ? sanitizeBugReportUrl(value) ?? value : value;
 }

@@ -1,9 +1,13 @@
-import { UsageQuerySchema, usageAnalyticsRequestToQuery, type UsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
+import { USAGE_QUERY_INPUT_FIELDS, UsageQuerySchema, usageAnalyticsRequestToQuery, type UsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
+import { projectNativeJsonValueForTransport, type JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import type { WidgetBindingResolutionInputV1 } from '@happier-dev/protocol/widgets';
+import type { WidgetSurfaceContext } from '@/components/widgets/surface/widgetSurfaceSetup';
+import { t } from '@/text';
 import { buildUsageFocusFilters } from '@/sync/api/account/usageFocusFilters';
 import type { UsageFilterState } from '@/sync/api/account/usageAnalytics';
-import { getUsagePeriodDefinition, resolveUsagePeriodStartTimeSeconds, type UsagePeriod } from '@/sync/api/account/usagePeriods';
+import { getUsagePeriodDefinition, type UsagePeriod } from '@/sync/api/account/usagePeriods';
 import { UsageWidgetPageScopeSchema } from './usageRouteParams';
+import { formatUsageCalendarPeriod } from '@/sync/domains/usage/usageCalendarPresentation';
 
 export type UsageWidgetPageScope = Pick<UsageQuery, 'period' | 'agents' | 'machines' | 'projects' | 'sources' | 'session' | 'costBasis'>;
 export type UsageWidgetPageInitialFilters = UsageFilterState & Readonly<{ scope?: UsageWidgetPageScope; layoutId?: string; queryOverrides?: UsageWidgetQueryOverrides }>;
@@ -23,14 +27,64 @@ export function readUsageWidgetQueryOverrides(query: UsageQuery): UsageWidgetQue
     return overrides;
 }
 
-/** Empty arrays and absent Session are offered values, rather than missing slots. */
+/** Empty scopes remain runtime binding values; editor slot availability is projected separately. */
 export function readUsageWidgetPageContext(scope: UsageWidgetPageScope): WidgetBindingResolutionInputV1['context'] {
-    return { period: [scope.period], agents: [scope.agents], machines: [scope.machines], projects: [scope.projects],
+    return { period: [projectNativeJsonValueForTransport(scope.period)], agents: [scope.agents], machines: [scope.machines], projects: [scope.projects],
         sources: [scope.sources], session: [scope.session], costBasis: [scope.costBasis] };
 }
 
-export function resolveUsageWidgetPeriod(period: UsagePeriod, nowMs: number, timeZoneOffsetMinutes: number): Pick<UsageQuery, 'period' | 'granularity'> {
-    return { period: { startMs: resolveUsagePeriodStartTimeSeconds(period, nowMs, timeZoneOffsetMinutes) * 1000 },
+const SCOPE_NOUN_KEYS = {
+    agents: 'usage.board.page.filterAgents',
+    machines: 'usage.board.page.filterMachines',
+    projects: 'usage.board.page.filterProjects',
+    sources: 'usage.board.page.filterSources',
+} as const;
+const COST_BASIS_KEYS = {
+    auto: 'usage.board.page.costBasisAuto',
+    reported: 'usage.board.page.costBasisReported',
+    estimated: 'usage.board.page.costBasisEstimated',
+    api_equivalent: 'widgetAdd.inputLabels.apiEquivalent',
+} as const;
+
+/** What the page shows after a follow chip's source: its value, never a field noun or id. */
+export function describeUsageWidgetSlotValue(path: string, value: JsonValue | undefined, _period: UsagePeriod): string {
+    if (path === 'period' && value !== undefined) {
+        const period = UsageQuerySchema.shape.period.safeParse(value);
+        if (period.success) return formatUsageCalendarPeriod(period.data);
+    }
+    if (path === 'costBasis' && typeof value === 'string' && Object.hasOwn(COST_BASIS_KEYS, value)) {
+        return t(COST_BASIS_KEYS[value as keyof typeof COST_BASIS_KEYS]);
+    }
+    if (path === 'session') {
+        return typeof value === 'string' ? t('usage.board.page.slotSession')
+            : t('usage.board.page.filterAllOf', { what: t('usage.board.page.dimensionSession').toLocaleLowerCase() });
+    }
+    if (Object.hasOwn(SCOPE_NOUN_KEYS, path) && Array.isArray(value)) {
+        return value.length === 0
+            ? t('usage.board.page.filterAllOf', { what: t(SCOPE_NOUN_KEYS[path as keyof typeof SCOPE_NOUN_KEYS]).toLocaleLowerCase() })
+            : t('usage.board.page.filterCount', { count: value.length });
+    }
+    return t('widgetAdd.thisPage');
+}
+
+/** The binder re-resolves page-follow values on every read; this only names their source and value. */
+export function usageWidgetSurfaceContext(providedContext: WidgetBindingResolutionInputV1['context'], period: UsagePeriod, sessionId?: string): WidgetSurfaceContext {
+    return { slots: Object.fromEntries(
+        USAGE_QUERY_INPUT_FIELDS.filter(field => field.contextMode === 'follow'
+            && Object.hasOwn(providedContext, field.path)).map(field => {
+            const values = providedContext[field.path];
+            const value = values?.length === 1 ? values[0] : undefined;
+            const label = field.path === 'session' && typeof value === 'string' ? t('usage.board.page.slotSession') : t('widgetAdd.thisPage');
+            return [field.path, { label, value: values?.length === 1 ? { value: values[0]!, label: describeUsageWidgetSlotValue(field.path, value, period) } : null,
+                // Saved page presets retain the admitted unfiltered Session scope for reads,
+                // while the Account page offers no Session picker.
+                ...(field.path === 'session' && sessionId === undefined ? { offered: false as const } : {}) }];
+        }),
+    ) };
+}
+
+export function resolveUsageWidgetPeriod(period: UsagePeriod, _nowMs: number, _timeZoneOffsetMinutes: number): Pick<UsageQuery, 'period' | 'granularity'> {
+    return { period: { relative: period },
         granularity: getUsagePeriodDefinition(period).granularity };
 }
 
@@ -43,7 +97,6 @@ export function resolveUsageWidgetPageInitialQuery(input: Readonly<{
 }>): UsageQuery {
     const filters = input.initialFilters;
     const query = usageAnalyticsRequestToQuery({
-        dateRange: resolveUsageWidgetPeriod(filters?.period ?? '7days', input.nowMs, input.timeZoneOffsetMinutes).period,
         granularity: getUsagePeriodDefinition(filters?.period ?? '7days').granularity,
         timeZoneOffsetMinutes: input.timeZoneOffsetMinutes,
         costMode: filters?.costMode ?? 'auto',
@@ -56,7 +109,8 @@ export function resolveUsageWidgetPageInitialQuery(input: Readonly<{
         includeMessageStats: true,
         activityResolution: 'both',
     }, { metric: filters?.metric ?? 'tokens' });
-    return UsageQuerySchema.parse({ ...query, ...filters?.queryOverrides, ...filters?.scope,
+    return UsageQuerySchema.parse({ ...query, ...resolveUsageWidgetPeriod(filters?.period ?? '7days', input.nowMs, input.timeZoneOffsetMinutes),
+        ...filters?.queryOverrides, ...filters?.scope,
         ...(input.sessionId === undefined ? {} : { session: input.sessionId }) });
 }
 

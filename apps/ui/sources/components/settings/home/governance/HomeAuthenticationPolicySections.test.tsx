@@ -428,9 +428,12 @@ describe('HomeAuthenticationPolicySections', () => {
             'home-policy-team-provider-origins',
             'https://github.first.example\n\nhttps://github.second.example:8443\n',
         );
-        await waitForHomeGovernance(() => expect(
-            renderedControlIsDisabled(screen.findByTestId('home-policy-team-provider-origins-save')),
-        ).toBe(false));
+        // Save appears with the edit, enabled once the hosts are valid.
+        await waitForHomeGovernance(() => {
+            const save = screen.findByTestId('home-policy-team-provider-origins-save');
+            expect(save).not.toBeNull();
+            expect(renderedControlIsDisabled(save)).toBe(false);
+        });
         await screen.pressByTestIdAsync('home-policy-team-provider-origins-save');
 
         await waitForHomeGovernance(() => expect(harness.requestsFor('/v1/home/policy/set')).toHaveLength(1));
@@ -529,9 +532,12 @@ describe('HomeAuthenticationPolicySections', () => {
 
         const screen = await renderScreen(<HomeTeamSignInRulesSection context={context} />);
         screen.changeTextByTestId('home-policy-team-provider-origins', 'https://github.mine.example');
-        await waitForHomeGovernance(() => expect(
-            renderedControlIsDisabled(screen.findByTestId('home-policy-team-provider-origins-save')),
-        ).toBe(false));
+        // Save appears with the edit, enabled once the hosts are valid.
+        await waitForHomeGovernance(() => {
+            const save = screen.findByTestId('home-policy-team-provider-origins-save');
+            expect(save).not.toBeNull();
+            expect(renderedControlIsDisabled(save)).toBe(false);
+        });
         await screen.pressByTestIdAsync('home-policy-team-provider-origins-save');
         await waitForHomeGovernance(() => expect(refresh).toHaveBeenCalledTimes(1));
 

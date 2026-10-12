@@ -41,8 +41,9 @@ export function resolveSelectedHomePerson(pathname: string, peoplePath: string):
  * The Home owner console (plan §3.10, R16): one collection of pages. Its navigation is a second
  * sidebar beside the settings navigation from a 1280px window (`HomeConsoleSidebar`), a header menu
  * above the page when narrower, and on phones Overview's list, which pushes each page. While a person
- * is open, People's own rail stands beside them (list + detail). The page stack stays mounted across
- * every change: the sidebar comes and goes beside it.
+ * is open, People's own rail takes the sidebar's place beside them (list + detail, lab `hcPeople-D`),
+ * as a Team's Members rail takes the Teams rail's. The page stack stays mounted across every change:
+ * the sidebar comes and goes beside it.
  */
 export const HomeConsoleLayout = React.memo(function HomeConsoleLayout() {
     const params = useLocalSearchParams<{ serverId?: string | string[] }>();
@@ -52,7 +53,7 @@ export const HomeConsoleLayout = React.memo(function HomeConsoleLayout() {
     const peopleRail = selectedAccountId !== null;
     return (
         <HomeConsoleShell serverId={serverId} rail={peopleRail ? 'people' : 'console'}>
-            <HomeConsoleFrame serverId={serverId}>
+            <HomeConsoleFrame serverId={serverId} sidebar={!peopleRail}>
             <SettingsCollectionLayout
                 navigator={CONSOLE_NAVIGATOR}
                 rootPathname={homeAdministrationOverviewPath(serverId)}
@@ -69,10 +70,13 @@ export const HomeConsoleLayout = React.memo(function HomeConsoleLayout() {
     );
 });
 
-/** The console sidebar beside the pages where it fits; the pages keep their place either way. */
-function HomeConsoleFrame(props: Readonly<{ serverId: string; children: React.ReactNode }>) {
+/**
+ * The console sidebar beside the pages where it fits and no other rail stands there; the pages keep
+ * their place either way.
+ */
+function HomeConsoleFrame(props: Readonly<{ serverId: string; sidebar: boolean; children: React.ReactNode }>) {
     const styles = stylesheet;
-    const sidebar = useHomeConsoleNavigation() === 'sidebar';
+    const sidebar = useHomeConsoleNavigation() === 'sidebar' && props.sidebar;
     return (
         <View style={styles.frame}>
             {sidebar ? <HomeConsoleSidebar serverId={props.serverId} /> : null}

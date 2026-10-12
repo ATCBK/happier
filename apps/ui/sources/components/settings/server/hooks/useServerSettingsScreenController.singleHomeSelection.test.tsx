@@ -41,9 +41,10 @@ afterEach(standardCleanup);
 afterAll(() => vi.unstubAllEnvs());
 
 describe('useServerSettingsScreenController single-Home selection', () => {
-    it('selecting a Home leaves group mode through the canonical HomeView owner and keeps its page open', async () => {
-        const a = await harness.addHome({ name: 'A', serverUrl: 'https://a.example.test', accountId: null });
-        const b = await harness.addHome({ name: 'B', serverUrl: 'https://b.example.test', accountId: null });
+    it.each([true, false])('selecting a Home leaves group mode through the canonical HomeView owner (signed in: %s)', async (signedIn) => {
+        const accountId = signedIn ? 'owner' : null;
+        const a = await harness.addHome({ name: 'A', serverUrl: 'https://a.example.test', accountId });
+        const b = await harness.addHome({ name: 'B', serverUrl: 'https://b.example.test', accountId });
         const { updateEffectiveHomeViewState, loadEffectiveHomeViewState } = await import('@/sync/domains/server/selection/homeViewSelectionState');
         await updateEffectiveHomeViewState(() => ({
             version: 1,
@@ -61,7 +62,7 @@ describe('useServerSettingsScreenController single-Home selection', () => {
             wrapper: ({ children }) => <InjectedAuthProvider credentials={null}>{children}</InjectedAuthProvider>,
         });
 
-        await act(async () => { await hook.getCurrent().onSwitchServer(profile); });
+        await act(async () => { await hook.getCurrent().onSwitchServer(profile, 'device'); });
 
         expect(loadEffectiveHomeViewState()).toMatchObject({
             activeTargetKind: 'server', activeTargetId: a,
@@ -69,6 +70,10 @@ describe('useServerSettingsScreenController single-Home selection', () => {
         });
         expect(getActiveServerSnapshot().serverId).toBe(a);
         expect(hook.getCurrent().activeTargetKey).toBe(`server:${a}`);
-        expect(routerReplace).not.toHaveBeenCalled();
+        if (signedIn) {
+            expect(routerReplace).not.toHaveBeenCalled();
+        } else {
+            expect(routerReplace).toHaveBeenCalledExactlyOnceWith('/');
+        }
     });
 });

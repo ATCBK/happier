@@ -2,7 +2,9 @@ import * as React from 'react';
 import { useNavigation, useRouter } from '@/components/appShell/workspace/destinationRoute';
 
 import { useActionApprovalContinuation } from '@/components/approvals/useActionApprovalContinuation';
-import { PageHeader, type PageHeaderProps } from '@/components/ui/layout/PageHeader';
+import { View } from 'react-native';
+
+import { PageHeader, renderPageHeaderText, type PageHeaderProps } from '@/components/ui/layout/PageHeader';
 import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { ListPresentationProvider } from '@/components/ui/lists/listPresentation';
@@ -16,7 +18,7 @@ import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
 
 import type { HomeAdministrationContext } from './homeAdministrationContext';
 import { HomeClaimSetup } from './HomeClaimSetup';
-import { HomeConsoleMenu } from './HomeConsoleNavigation';
+import { HomeConsoleMenu, useHomeConsoleNavigation } from './HomeConsoleNavigation';
 
 /**
  * A condition that occupies the page because there is genuinely nothing else
@@ -76,6 +78,8 @@ export const HomeAdministrationSection = React.memo(function HomeAdministrationS
     const navigation = useNavigation();
     const router = useRouter();
     const binding = useHomeAdministration(props.serverId);
+    // The console sidebar beside the page already names the Home; elsewhere the header does.
+    const namesHome = useHomeConsoleNavigation() !== 'sidebar';
     const scope = binding.kind === 'bound' ? binding.scope : null;
     const scopeServerId = scope?.serverId ?? '';
     const scopeAccountId = scope?.accountId ?? '';
@@ -112,6 +116,10 @@ export const HomeAdministrationSection = React.memo(function HomeAdministrationS
         void refreshHomeGovernanceSnapshot({ serverId: scopeServerId, accountId: scopeAccountId });
     }, [scopeServerId, scopeAccountId]);
 
+    // Catching up after a good answer is routine: a quiet note, never a warning. It joins the meta
+    // line where the header names the Home, and otherwise sits after the title, so the header never
+    // grows a line for it (nor keeps an empty one waiting for it).
+    const updating = 'state' in binding && binding.state.kind === 'ready' && binding.state.updating;
     const renderPlainHeader = (actions?: Pick<PageHeaderProps, 'actions' | 'primaryAction'>) => (
         <PageHeader
             testID="home-admin-page-header"
@@ -119,13 +127,16 @@ export const HomeAdministrationSection = React.memo(function HomeAdministrationS
             description={props.description}
             actions={actions?.actions}
             primaryAction={actions?.primaryAction}
-            meta={[
+            titleAccessory={updating && !namesHome ? (
+                <View testID="home-admin-updating">
+                    {renderPageHeaderText({ role: 'meta', text: t('homeGovernance.updating'), header: false })}
+                </View>
+            ) : undefined}
+            meta={namesHome ? [
+                // An empty line keeps its place until the Home's name is known.
                 ...('homeName' in binding ? [{ key: 'home', icon: 'house' as const, text: binding.homeName }] : []),
-                // Catching up after a good answer is routine: a quiet note, never a warning.
-                ...('state' in binding && binding.state.kind === 'ready' && binding.state.updating
-                    ? [{ key: 'updating', text: t('homeGovernance.updating'), testID: 'home-admin-updating' }]
-                    : []),
-            ]}
+                ...(updating ? [{ key: 'updating', text: t('homeGovernance.updating'), testID: 'home-admin-updating' }] : []),
+            ] : undefined}
         />
     );
     const plainHeader = renderPlainHeader();

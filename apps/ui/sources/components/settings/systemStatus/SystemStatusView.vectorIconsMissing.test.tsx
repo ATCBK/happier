@@ -53,29 +53,7 @@ vi.mock('react-native', async () => {
 
 vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
-    return createUnistylesMock({
-        theme: {
-            colors: {
-                text: '#000000',
-                textSecondary: '#777777',
-                success: '#00aa55',
-                warningCritical: '#cc5500',
-                divider: '#dddddd',
-                surface: '#ffffff',
-                accent: {
-                    blue: '#0055ff',
-                    indigo: '#2255ff',
-                    orange: '#ff8800',
-                    purple: '#9955ff',
-                },
-                groupped: {
-                    background: '#ffffff',
-                    sectionTitle: '#666666',
-                    chevron: '#666666',
-                },
-            },
-        },
-    });
+    return createUnistylesMock();
 });
 
 vi.mock('@expo/vector-icons', () => ({
@@ -162,7 +140,8 @@ vi.mock('@/sync/domains/state/storage', async () => {
     });
 });
 
-vi.mock('@/utils/sessions/machineUtils', () => ({
+vi.mock('@/utils/sessions/machineUtils', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@/utils/sessions/machineUtils')>(),
     isMachineOnline: () => false,
 }));
 

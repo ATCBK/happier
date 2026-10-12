@@ -1,18 +1,16 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { renderScreen } from '@/dev/testkit';
+import { renderScreen } from '@/dev/testkit/render/renderScreen';
+import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 
-const state = vi.hoisted(() => ({
-    machines: [] as Array<{
-        id: string;
-        active: boolean;
-        metadata: { displayName: string; host: string };
-    }>,
-}));
-const fetchMachineDoctorSnapshotMock = vi.hoisted(() => vi.fn());
-const serverFetchMock = vi.hoisted(() => vi.fn());
+const home = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(home);
+const machineRpc = vi.hoisted(() => vi.fn());
+let serverId = '';
+const probePath = '/v1/diagnostics/bug-report-snapshot?lines=50';
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -39,94 +37,29 @@ vi.mock('@/modal', async () => {
     return createModalModuleMock().module;
 });
 
-vi.mock('@/components/ui/lists/ItemList', () => ({
-    ItemList: ({ children, ...props }: any) => React.createElement('ItemList', props, children),
-}));
-
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-    ItemGroup: ({ children, ...props }: any) => React.createElement('ItemGroup', props, children),
-}));
-
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: any) => React.createElement('Item', props),
-}));
-
-vi.mock('@/components/ui/text/Text', () => ({
-    Text: (props: any) => React.createElement('Text', props, props.children),
-    TextInput: (props: any) => React.createElement('TextInput', props),
-}));
-
-vi.mock('@/components/ui/icons/Icon', () => ({
-    Icon: (props: any) => React.createElement('Icon', props),
-    ICON_SIZE: {
-        xs: 12,
-        sm: 14,
-        md: 18,
-        lg: 20,
-        xl: 24,
-        xxl: 32,
-    },
-}));
-
-vi.mock('@/components/ui/copy/CopiedPill', () => ({
-    CopiedPill: (props: any) => React.createElement('CopiedPill', props),
-}));
-
-vi.mock('@/components/ui/copy/useTemporaryCopyFeedback', () => ({
-    useTemporaryCopyFeedback: () => ({
-        isCopied: () => false,
-        markCopied: vi.fn(),
-    }),
-}));
-
 vi.mock('@/utils/ui/clipboard', () => ({
     setClipboardStringSafe: vi.fn(async () => true),
 }));
 
-vi.mock('@/sync/domains/server/serverRuntime', () => ({
-    getActiveServerSnapshot: () => ({
-        serverId: 'home-1',
-        serverUrl: 'https://home.example',
-        generation: 1,
-    }),
-}));
-
-vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/sync/domains/server/serverProfiles')>(),
-    listServerProfiles: () => [{ id: 'home-1', serverUrl: 'https://home.example' }],
-}));
-
-vi.mock('@/sync/domains/state/storage', async () => {
-    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleStub({
-        useMachineListByServerId: () => ({ 'home-1': state.machines }),
-        useProfile: () => ({ id: 'account-1' }),
-    });
-});
-
-vi.mock('@/sync/http/client', () => ({
-    serverFetch: serverFetchMock,
-}));
-
-vi.mock('@/components/machines/doctorSnapshot/useMachineDoctorSnapshot', () => ({
-    useMachineDoctorSnapshot: () => ({
-        fetchMachineDoctorSnapshot: fetchMachineDoctorSnapshotMock,
-        readMachineDoctorSnapshot: () => null,
-    }),
-}));
+// The daemon RPC and Home HTTP/credential boundaries leave real admission, state and doctor logic underneath.
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () =>
+    (await import('@/dev/testkit/mocks/serverScopedRpc')).createServerScopedMachineRpcBoundaryMock(machineRpc));
+const { DiagnosisView } = await import('./DiagnosisView');
+const { Item } = await import('@/components/ui/lists/Item');
+const { ItemGroup } = await import('@/components/ui/lists/ItemGroup');
 
 function snapshotFor(machineId: string, serverUrl = 'https://home.example') {
     return {
         capturedAt: '2026-09-15T00:00:00.000Z',
         server: {
-            activeServerId: 'home-1',
+            activeServerId: serverId,
             serverUrl,
             publicServerUrl: serverUrl,
             webappUrl: 'https://app.example',
         },
         accountId: 'account-1',
         settings: {
-            activeServerId: 'home-1',
+            activeServerId: serverId,
             servers: [],
             knownAccountIds: ['account-1'],
         },
@@ -140,44 +73,40 @@ async function settle(): Promise<void> {
     }
 }
 
-beforeEach(() => {
-    state.machines = Array.from({ length: 4 }, (_, index) => ({
-        id: `machine-${index + 1}`,
-        active: true,
-        metadata: {
-            displayName: `Machine ${index + 1}`,
-            host: `machine-${index + 1}`,
-        },
-    }));
-    fetchMachineDoctorSnapshotMock.mockReset();
-    fetchMachineDoctorSnapshotMock.mockImplementation(async ({ machineId }: { machineId: string }) => ({
-        status: 'ready',
-        snapshot: snapshotFor(machineId),
-    }));
-    serverFetchMock.mockReset();
-    serverFetchMock.mockResolvedValue({ ok: true, status: 200 });
+beforeEach(async () => {
+    serverId = await home.addHome({ name: 'Diagnosis', serverUrl: 'https://home.example', accountId: 'account-1' });
+    home.answer(serverId, probePath, { status: 200 });
+    const { getStorage } = await import('@/sync/domains/state/storage');
+    const { createMachineFixture } = await import('@/dev/testkit/fixtures/machineFixtures');
+    const { clearCachedMachineDoctorSnapshot } = await import('@/components/machines/doctorSnapshot/machineDoctorSnapshotCache');
+    const machines = Array.from({ length: 4 }, (_, index) => {
+        const machine = createMachineFixture({ id: `machine-${index + 1}`, activeAt: Date.now() });
+        clearCachedMachineDoctorSnapshot({ serverId, machineId: machine.id });
+        return { ...machine, metadata: { ...machine.metadata!, displayName: `Machine ${index + 1}`, host: `machine-${index + 1}` } };
+    });
+    getStorage().getState().applyMachines(machines, true, { sourceServerId: serverId });
+    getStorage().setState({ profile: { ...getStorage().getState().profile, id: 'account-1' } });
+    machineRpc.mockReset();
+    machineRpc.mockImplementation(async ({ machineId }: { machineId: string }) => ({ doctorSnapshot: snapshotFor(machineId) }));
 });
+afterEach(async () => { await standardCleanup(); await home.reset(); });
+
+async function runDiagnosis(screen: Awaited<ReturnType<typeof renderScreen>>) {
+    const previous = home.requestsFor(probePath).length;
+    await act(async () => {
+        screen.pressByTestId('diagnosis-run-button');
+        await waitForHomeGovernance(() => expect(home.requestsFor(probePath)).toHaveLength(previous + 1));
+        await settle();
+    });
+}
 
 describe('DiagnosisView', () => {
     it('renders and checks every online machine before announcing whole-system success', async () => {
-        const { DiagnosisView } = await import('./DiagnosisView');
         const screen = await renderScreen(<DiagnosisView />);
 
-        const machineRows = screen.findAllByType('Item' as any)
-            .filter((node) => typeof node.props.title === 'string' && node.props.title.startsWith('Machine '));
-        expect(machineRows.map((node) => node.props.title)).toEqual([
-            'Machine 1',
-            'Machine 2',
-            'Machine 3',
-            'Machine 4',
-        ]);
+        await runDiagnosis(screen);
 
-        await act(async () => {
-            screen.pressByTestId('diagnosis-run-button');
-            await settle();
-        });
-
-        expect(fetchMachineDoctorSnapshotMock.mock.calls.map(([input]) => input.machineId)).toEqual([
+        expect(machineRpc.mock.calls.map(([input]) => input.machineId)).toEqual([
             'machine-1',
             'machine-2',
             'machine-3',
@@ -190,10 +119,26 @@ describe('DiagnosisView', () => {
     });
 
     it('labels the diagnostics JSON input and announces the bounded running state', async () => {
-        fetchMachineDoctorSnapshotMock.mockImplementationOnce(() => new Promise(() => {}));
+        let release!: () => void;
+        machineRpc.mockImplementationOnce(({ machineId }: { machineId: string }) => new Promise(resolve => {
+            release = () => resolve({ doctorSnapshot: snapshotFor(machineId) });
+        }));
 
-        const { DiagnosisView } = await import('./DiagnosisView');
         const screen = await renderScreen(<DiagnosisView />);
+
+        const findings = () => screen.findAllByType(ItemGroup)
+            .find((node) => node.props.title === 'diagnosis.sections.findings')!;
+        const findingTitles = () => {
+            const group = findings();
+            return screen.findAllByType(Item).filter((node) => {
+                for (let parent = node.parent; parent; parent = parent.parent) {
+                    if (parent === group) return true;
+                }
+                return false;
+            }).map((node) => node.props.title);
+        };
+        expect(findingTitles())
+            .toEqual(['diagnosis.findings.notRun']);
 
         expect(screen.findByTestId('diagnosis-paste-input')?.props.accessibilityLabel)
             .toBe('diagnosis.sections.pasteDoctorJson');
@@ -210,33 +155,37 @@ describe('DiagnosisView', () => {
         expect(parseError?.props.accessibilityLiveRegion).toBe('polite');
         expect(parseError?.props['aria-live']).toBe('polite');
 
-        act(() => {
+        await act(async () => {
             screen.pressByTestId('diagnosis-run-button');
+            await waitForHomeGovernance(() => expect(machineRpc).toHaveBeenCalled());
         });
         expect(screen.findByTestId('diagnosis-accessibility-status')?.props.children)
             .toBe('diagnosis.machineRuns.loading');
-
-        await screen.unmount();
+        // Assert the Findings section itself; a separate live status must not mask a blank section.
+        expect(findingTitles())
+            .toEqual(['diagnosis.machineRuns.loading']);
+        await act(async () => { release(); await settle(); });
+        await waitForHomeGovernance(() => {
+            expect(findingTitles())
+                .toEqual(['diagnosis.findings.none']);
+        });
+        expect(screen.findByTestId('diagnosis-accessibility-status')?.props.children)
+            .toBe('diagnosis.findings.none');
     });
 
     it('announces terminal findings instead of claiming success', async () => {
-        fetchMachineDoctorSnapshotMock.mockImplementation(async ({ machineId }: { machineId: string }) => {
+        machineRpc.mockImplementation(async ({ machineId }: { machineId: string }) => {
             return {
-                status: 'ready',
-                snapshot: snapshotFor(
+                doctorSnapshot: snapshotFor(
                     machineId,
                     machineId === 'machine-3' ? 'https://other-home.example' : 'https://home.example',
                 ),
             };
         });
 
-        const { DiagnosisView } = await import('./DiagnosisView');
         const screen = await renderScreen(<DiagnosisView />);
 
-        await act(async () => {
-            screen.pressByTestId('diagnosis-run-button');
-            await settle();
-        });
+        await runDiagnosis(screen);
 
         const status = screen.findByTestId('diagnosis-accessibility-status');
         expect(status?.props.children).toContain('diagnosis.findings.serverMismatch.title');
@@ -244,28 +193,79 @@ describe('DiagnosisView', () => {
     });
 
     it('announces partial machine failures and does not render whole-system success', async () => {
-        fetchMachineDoctorSnapshotMock.mockImplementation(async ({ machineId }: { machineId: string }) => {
+        machineRpc.mockImplementation(async ({ machineId }: { machineId: string }) => {
             if (machineId === 'machine-2') {
-                return { status: 'error', detail: 'unavailable' };
+                return null;
             }
-            return { status: 'ready', snapshot: snapshotFor(machineId) };
+            return { doctorSnapshot: snapshotFor(machineId) };
         });
 
-        const { DiagnosisView } = await import('./DiagnosisView');
         const screen = await renderScreen(<DiagnosisView />);
 
-        await act(async () => {
-            screen.pressByTestId('diagnosis-run-button');
-            await settle();
-        });
+        await runDiagnosis(screen);
 
         const status = screen.findByTestId('diagnosis-accessibility-status');
         expect(status?.props.children).toContain('diagnosis.machineRuns.error');
         expect(status?.props.children).not.toContain('diagnosis.findings.none');
-        expect(screen.findByTestId('diagnosis-machine-run-summary')?.props.title)
+        expect(screen.findAllByType(Item).find((node) => node.props.testID === 'diagnosis-machine-run-summary')?.props.title)
             .toBe('diagnosis.machineRuns.error');
-        const failedMachine = screen.findAllByType('Item' as any)
+        const failedMachine = screen.findAllByType(Item)
             .find((node) => node.props.title === 'Machine 2');
         expect(failedMachine?.props.detail).toBe('diagnosis.machineRuns.error');
+    });
+    it('shows run results only once a run has started, and names the server probe outcome in words', async () => {
+        const screen = await renderScreen(<DiagnosisView />);
+        const probeRow = () => screen.findAllByType(Item)
+            .find((node) => node.props.title === 'diagnosis.serverProbe.title');
+        const machineRow = () => screen.findAllByType(Item)
+            .find((node) => node.props.title === 'Machine 1');
+
+        // Before a run there is nothing to report on: no idle machine rows, no probe row.
+        expect(machineRow()).toBeUndefined();
+        expect(probeRow()).toBeUndefined();
+
+        await runDiagnosis(screen);
+        expect(probeRow()?.props.detail).toBe('diagnosis.machineRuns.ready');
+        expect(machineRow()?.props.detail).toBe('diagnosis.machineRuns.ready');
+
+        home.answer(serverId, probePath, { status: 401 });
+        await runDiagnosis(screen);
+        expect(probeRow()?.props.detail).toBe('diagnosis.machineRuns.error');
+        expect(probeRow()?.props.subtitle).toBe('diagnosis.findings.serverAuthError.title');
+    });
+    it('folds machines that all failed the same way into one counted row', async () => {
+        machineRpc.mockResolvedValue(null);
+        const screen = await renderScreen(<DiagnosisView />);
+        await runDiagnosis(screen);
+        const group = screen.findAllByType(Item)
+            .find((node) => node.props.title === 'diagnosis.machine.invalidDoctorSnapshot');
+        expect(group?.props.detail).toBe('4');
+        // The machines are inside the closed group, not four loose "Error" rows.
+        const looseErrors = screen.findAllByType(Item)
+            .filter((node) => typeof node.props.title === 'string' && node.props.title.startsWith('Machine ') && node.props.detail === 'diagnosis.machineRuns.error');
+        expect(looseErrors.length).toBeLessThanOrEqual(4);
+    });
+    it('reads a normal "diagnostics disabled" server as information, not a warning', async () => {
+        home.answer(serverId, probePath, { status: 404 });
+        const screen = await renderScreen(<DiagnosisView />);
+        await runDiagnosis(screen);
+        const finding = screen.findAllByType(Item).find((node) => node.props.testID === 'diagnosis-finding-server_diagnostics_disabled');
+        expect(finding?.props.icon.props.name).toBe('info');
+    });
+    it('checks the online machines together, so one slow machine does not hold the others back', async () => {
+        const started: string[] = [];
+        const releases: Array<() => void> = [];
+        machineRpc.mockImplementation(({ machineId }: { machineId: string }) => {
+            started.push(machineId);
+            return new Promise(resolve => { releases.push(() => resolve({ doctorSnapshot: snapshotFor(machineId) })); });
+        });
+        const screen = await renderScreen(<DiagnosisView />);
+        await act(async () => {
+            screen.pressByTestId('diagnosis-run-button');
+            await waitForHomeGovernance(() => expect(started).toEqual(['machine-1', 'machine-2', 'machine-3', 'machine-4']));
+        });
+        expect(started).toEqual(['machine-1', 'machine-2', 'machine-3', 'machine-4']);
+        await screen.unmount();
+        await act(async () => { for (const release of releases) release(); await settle(); });
     });
 });

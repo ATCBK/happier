@@ -8,6 +8,9 @@ import {
     type ServerProfile,
 } from '@/sync/domains/server/serverProfiles';
 
+export type HomeDisplayProfile = Pick<ServerProfile,
+    'id' | 'name' | 'serverUrl' | 'serverIdentityId' | 'canonicalServerUrl' | 'publicServerUrl' | 'personalHomeBootstrapCompleted'>;
+
 /**
  * How the app names a Home to a person: the name the Home itself publishes (`homePresentation`, set
  * in its Home settings, so every device says the same), else the name this device gave it, else
@@ -15,7 +18,7 @@ import {
  * its name; a caller with no name says "this Home" in a sentence, or shows the address only where it
  * must tell Homes apart. The published name is read from the Home's last features answer.
  */
-export function resolveHomeDisplayName(profile: ServerProfile | null | undefined): string | null {
+export function resolveHomeDisplayName(profile: HomeDisplayProfile | null | undefined): string | null {
     if (!profile) return null;
     const published = getCachedServerFeaturesSnapshot({ serverId: resolveServerProfileScopeId(profile) });
     const publishedName = published?.status === 'ready' ? published.features.homePresentation?.displayName.trim() : '';
@@ -40,7 +43,7 @@ export function resolveHomeDisplayNameForServerIdentity(serverIdentityId: string
  * belong in the consumer's distinguishing metadata, never in the title. Keep the actual-name
  * resolver nullable so naming and rename affordances still know when a Home is unnamed.
  */
-export function resolveHomeDisplayLabel(profile: ServerProfile | null | undefined, _fallbackId: string): string {
+export function resolveHomeDisplayLabel(profile: HomeDisplayProfile | null | undefined, _fallbackId: string): string {
     return resolveHomeDisplayName(profile) ?? t('settingsAccount.thisHomeTitle');
 }
 

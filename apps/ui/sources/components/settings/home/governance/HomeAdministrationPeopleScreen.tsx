@@ -8,7 +8,11 @@ import { Avatar } from '@/components/ui/avatar/Avatar';
 import { CompactSearchField } from '@/components/ui/forms/CompactSearchField';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { SectionButtonRow } from '@/components/ui/lists/SectionButtonRow';
+import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { ItemLoadStateRows } from '@/components/ui/lists/ItemLoadStateRows';
 import { VirtualizedList } from '@/components/ui/lists/virtualized';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { useHomeAccountRoster } from '@/hooks/home/useHomeAccountRoster';
 import {
     useHomeAccountSearch,
@@ -68,12 +72,13 @@ const PeopleRoster = React.memo(function PeopleRoster(
             return [{
                 key: 'forbidden',
                 render: () => (
-                    <ItemGroup description={t('homeGovernance.forbiddenBody')}>
-                        <Item
+                    <ItemGroup>
+                        <SurfaceStateCard
                             testID="home-admin-viewer-forbidden"
+                            kind="denied"
+                            size="line"
                             title={t('homeGovernance.forbiddenTitle')}
-                            mode="info"
-                            showChevron={false}
+                            reason={t('homeGovernance.forbiddenBody')}
                         />
                     </ItemGroup>
                 ),
@@ -84,14 +89,13 @@ const PeopleRoster = React.memo(function PeopleRoster(
             return [{
                 key: 'unsupported',
                 render: () => (
-                    <ItemGroup
-                        title={t('homeGovernance.rosterUnavailableTitle')}
-                        description={t('homeGovernance.rosterUnavailableBody')}
-                    >
-                        <Item
+                    <ItemGroup>
+                        <SurfaceStateCard
                             testID="home-people-unsupported"
+                            kind="unavailable"
+                            size="line"
                             title={t('homeGovernance.rosterUnavailableTitle')}
-                            showChevron={false}
+                            reason={t('homeGovernance.rosterUnavailableBody')}
                         />
                     </ItemGroup>
                 ),
@@ -107,33 +111,43 @@ const PeopleRoster = React.memo(function PeopleRoster(
                         key: 'search-loading',
                         render: () => (
                             <ItemGroup>
-                                <Item testID="home-people-search-loading" title={t('homeGovernance.loading')} loading mode="info" showChevron={false} />
+                                <ItemLoadStateRows
+                                    testID="home-people-search-loading"
+                                    state={{ kind: 'loading' }}
+                                    rows={3}
+                                    accessibilityLabel={t('homeGovernance.loading')}
+                                />
                             </ItemGroup>
                         ),
                     }];
                 }
                 if (search.failure) {
-                    const unsupported = search.failure.kind === 'unsupported';
                     // Read now: the row renders later, where the narrowing no longer holds.
-                    const retryable = search.failure.retryable;
+                    const unsupported = search.failure.kind === 'unsupported';
+                    const retry = search.failure.retryable ? search.retry : undefined;
                     return [{
                         key: 'search-failure',
                         render: () => (
-                            <ItemGroup description={unsupported ? t('homeGovernance.searchUnsupportedBody') : t('homeGovernance.searchFailedBody')}>
-                                <Item
-                                    testID={unsupported ? 'home-people-search-unsupported' : 'home-people-search-failed'}
-                                    title={unsupported ? t('homeGovernance.searchUnsupported') : t('homeGovernance.searchFailed')}
-                                    mode="info"
-                                    showChevron={false}
-                                />
-                                {retryable ? (
-                                    <Item
-                                        testID="home-people-search-retry"
-                                        title={t('homeGovernance.retry')}
-                                        onPress={search.retry}
-                                        showChevron={false}
+                            <ItemGroup>
+                                {unsupported ? (
+                                    <SurfaceStateCard
+                                        testID="home-people-search-unsupported"
+                                        kind="unavailable"
+                                        size="line"
+                                        title={t('homeGovernance.searchUnsupported')}
+                                        reason={t('homeGovernance.searchUnsupportedBody')}
                                     />
-                                ) : null}
+                                ) : (
+                                    <ItemLoadStateRows
+                                        testID="home-people-search-failed"
+                                        state={{
+                                            kind: 'failed',
+                                            reason: t('homeGovernance.searchFailed'),
+                                            onRetry: retry,
+                                            homeServerIds: [context.scope.serverId],
+                                        }}
+                                    />
+                                )}
                             </ItemGroup>
                         ),
                     }];
@@ -142,7 +156,12 @@ const PeopleRoster = React.memo(function PeopleRoster(
                     key: 'search-empty',
                     render: () => (
                         <ItemGroup>
-                            <Item testID="home-people-search-empty" title={t('homeGovernance.searchEmpty')} mode="info" showChevron={false} />
+                            <SurfaceStateCard
+                                testID="home-people-search-empty"
+                                kind="empty"
+                                size="line"
+                                title={t('homeGovernance.searchEmpty')}
+                            />
                         </ItemGroup>
                     ),
                 }];
@@ -155,11 +174,7 @@ const PeopleRoster = React.memo(function PeopleRoster(
                 result.push({
                     key: `search:${chunk[0]!.accountId}`,
                     render: () => (
-                        <ItemGroup
-                            title={first ? t('homeGovernance.searchResults') : undefined}
-                            description={last ? t('homeGovernance.searchResultsFooter') : undefined}
-                            virtualizedSegment={{ first, last }}
-                        >
+                        <ItemGroup virtualizedSegment={{ first, last }}>
                             {chunk.map((row) => {
                                 const person = resolveAccountDisplayName({ profile: row.profile, accountId: row.accountId, viewerAccountId: context.scope.accountId });
                                 return (
@@ -179,12 +194,18 @@ const PeopleRoster = React.memo(function PeopleRoster(
             return result;
         }
 
+        // The roster's rows hold their place while the first page is read.
         if (roster.status === 'loading' && roster.rows.length === 0) {
             return [{
                 key: 'loading',
                 render: () => (
                     <ItemGroup>
-                        <Item testID="home-people-loading" title={t('homeGovernance.loading')} loading showChevron={false} />
+                        <ItemLoadStateRows
+                            testID="home-people-loading"
+                            state={{ kind: 'loading' }}
+                            rows={4}
+                            accessibilityLabel={t('homeGovernance.loading')}
+                        />
                     </ItemGroup>
                 ),
             }];
@@ -195,7 +216,7 @@ const PeopleRoster = React.memo(function PeopleRoster(
                 key: 'empty',
                 render: () => (
                     <ItemGroup>
-                        <Item testID="home-people-empty" title={t('homeGovernance.peopleEmpty')} showChevron={false} />
+                        <SurfaceStateCard testID="home-people-empty" kind="empty" size="line" title={t('homeGovernance.peopleEmpty')} />
                     </ItemGroup>
                 ),
             }];
@@ -208,10 +229,7 @@ const PeopleRoster = React.memo(function PeopleRoster(
             result.push({
                 key: `roster:${chunk[0]!.accountId}`,
                 render: () => (
-                    <ItemGroup
-                        title={first ? t('homeGovernance.people') : undefined}
-                        virtualizedSegment={{ first, last }}
-                    >
+                    <ItemGroup virtualizedSegment={{ first, last }}>
                         {chunk.map((row) => {
                             const person = resolveAccountDisplayName({
                                 profile: row.profile,
@@ -231,6 +249,8 @@ const PeopleRoster = React.memo(function PeopleRoster(
                                         person.hint,
                                     ].filter((part): part is string => part !== null).join(' · ')}
                                     rightElement={<HomeAccountStatusPill row={row} testID={`home-people-status:${row.accountId}`} />}
+                                    // A person opens their detail: the chevron stays beside a status marker (lab `hcPeople-A`).
+                                    keepChevronWithRightElement
                                     onPress={() => router.push(homeAdministrationAccountPath(context.scope.serverId, row.accountId))}
                                 />
                             );
@@ -241,15 +261,19 @@ const PeopleRoster = React.memo(function PeopleRoster(
         }
 
         if (roster.error) {
+            // The pages already read stay; what could not be read is said once, with its Retry.
             result.push({
                 key: 'retry',
                 render: () => (
-                    <ItemGroup description={t('homeGovernance.unavailableBody')}>
-                        <Item
-                            testID="home-people-retry"
-                            title={t('homeGovernance.retry')}
-                            onPress={roster.reload}
-                            showChevron={false}
+                    <ItemGroup>
+                        <ItemLoadStateRows
+                            testID="home-people"
+                            state={{
+                                kind: 'failed',
+                                reason: t('homeGovernance.overviewPage.peopleFailed'),
+                                onRetry: roster.reload,
+                                homeServerIds: [context.scope.serverId],
+                            }}
                         />
                     </ItemGroup>
                 ),
@@ -258,15 +282,19 @@ const PeopleRoster = React.memo(function PeopleRoster(
             result.push({
                 key: 'load-more',
                 render: () => (
-                    <ItemGroup>
-                        <Item
-                            testID="home-people-load-more"
-                            title={t('homeGovernance.loadMore')}
-                            loading={roster.status === 'loading_more'}
-                            disabled={roster.status === 'loading_more'}
-                            onPress={roster.loadMore}
-                            showChevron={false}
-                        />
+                    // The console's one paging control: a quiet button under the list, not a row in it.
+                    <ItemGroup surface="none">
+                        <SectionButtonRow>
+                            <RoundButton
+                                testID="home-people-load-more"
+                                size="small"
+                                display="inverted"
+                                title={t('homeGovernance.loadMore')}
+                                loading={roster.status === 'loading_more'}
+                                disabled={roster.status === 'loading_more'}
+                                onPress={roster.loadMore}
+                            />
+                        </SectionButtonRow>
                     </ItemGroup>
                 ),
             });

@@ -23,7 +23,7 @@ import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelp
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const clipboardSet = vi.hoisted(() => vi.fn(async () => undefined));
+const clipboardSet = vi.hoisted(() => vi.fn(async () => true));
 const modalConfirm = vi.hoisted(() => vi.fn(async () => true));
 const routerReplace = vi.hoisted(() => vi.fn());
 const shownModals = vi.hoisted(() => [] as { chrome?: { testID?: string }; props?: Record<string, unknown> }[]);
@@ -196,7 +196,7 @@ beforeEach(async () => {
     resetTeamsDirectoryEngineForTests();
     resetTeamActionClientForTests();
     clipboardSet.mockReset();
-    clipboardSet.mockResolvedValue(undefined);
+    clipboardSet.mockResolvedValue(true);
     await harness.reset();
     await harness.selectHomes([]);
     clipboardSet.mockClear();

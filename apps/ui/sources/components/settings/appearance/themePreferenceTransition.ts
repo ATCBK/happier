@@ -11,7 +11,7 @@ import {
 export type ThemeTransitionPlatform = PlatformOSType | 'web';
 
 export type NativeThemePreferenceTransitionController = {
-    run: (mutation: () => void) => Promise<void> | void;
+    run: (mutation: () => void, direction?: 'sunrise' | 'night') => Promise<void> | void;
 };
 
 export type ThemePreferenceChangeInput = {
@@ -27,7 +27,27 @@ export type ThemePreferenceChangeInput = {
     webMutationCommit?: (mutation: () => void) => Promise<void> | void;
 };
 
+/**
+ * A web reveal other than the default wipe (the atmosphere's Horizon theme switch). `prepare` runs before
+ * the old view is captured, so anything it adds to the page exists in both captures; the returned
+ * `play` receives the transition at once and owns its reveal from `ready` (and its cleanup, even when
+ * the transition is skipped). Returning null keeps the wipe.
+ */
+export type WebThemePreferenceChoreography = {
+    prepare: (document: Document, direction: 'sunrise' | 'night') => ((transition: ViewTransition) => void) | null;
+};
+
 let registeredNativeController: NativeThemePreferenceTransitionController | null = null;
+let registeredWebChoreography: WebThemePreferenceChoreography | null = null;
+
+export function registerWebThemePreferenceChoreography(choreography: WebThemePreferenceChoreography): () => void {
+    registeredWebChoreography = choreography;
+    return () => {
+        if (registeredWebChoreography === choreography) {
+            registeredWebChoreography = null;
+        }
+    };
+}
 
 function resolveVisualTheme(preference: ThemePreference, systemTheme: ColorSchemeName): 'dark' | 'light' {
     if (preference === 'adaptive') {
@@ -72,7 +92,14 @@ export async function runThemePreferenceChange(input: ThemePreferenceChangeInput
         }
 
         const commitMutation = input.webMutationCommit ?? commitWebThemeMutation;
+        const direction = resolveVisualTheme(input.nextPreference, input.systemTheme) === 'light' ? 'sunrise' : 'night';
+        const play = registeredWebChoreography?.prepare(documentLike, direction) ?? null;
         const transition = startViewTransition.call(documentLike, () => commitMutation(input.mutation));
+        if (play) {
+            play(transition);
+            await transition.ready;
+            return;
+        }
         await transition.ready;
         animate.call(
             documentLike.documentElement,
@@ -106,7 +133,7 @@ export async function runThemePreferenceChange(input: ThemePreferenceChangeInput
                 mutationError = error;
                 throw error;
             }
-        });
+        }, resolveVisualTheme(input.nextPreference, input.systemTheme) === 'light' ? 'sunrise' : 'night');
     } catch {
         if (mutationFailed) throw mutationError;
         if (!didMutate) {

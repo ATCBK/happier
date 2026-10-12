@@ -1,4 +1,6 @@
 import * as React from 'react';
+import { useSettingActionWriter } from '@/components/settings/catalog/useSettingActionWriter';
+import { CONNECTED_SERVICES_SETTINGS } from './connectedServicesSettings';
 
 import { Switch } from '@/components/ui/forms/Switch';
 import { Item } from '@/components/ui/lists/Item';
@@ -13,7 +15,6 @@ import type {
     ConnectedServicesProviderStateSharingSettingsV1,
 } from '@happier-dev/protocol';
 import { resolveConnectedServicesProviderStateSharingPolicyV1 } from '@happier-dev/protocol/account/settings/connected-services';
-import type { ProviderStateSharingSettingsWriter } from './providerStateSharingSettings';
 
 const UNSUPPORTED_PROVIDER_STATE_SHARING_CAPABILITY: ConnectedServicesProviderStateSharingCapability = {
     config: {
@@ -41,7 +42,6 @@ type ProviderStateSharingRowsProps = Readonly<{
     agentTitle: string;
     capability?: ConnectedServicesProviderStateSharingCapability | null;
     settings: ConnectedServicesProviderStateSharingSettingsV1;
-    setSettings: ProviderStateSharingSettingsWriter;
 }>;
 
 function resolveUnavailableReasonLabel(
@@ -79,43 +79,24 @@ export function ProviderStateSharingRows({
     agentTitle,
     capability,
     settings,
-    setSettings,
 }: ProviderStateSharingRowsProps) {
+    const writeSetting = useSettingActionWriter();
     const locale = getPreferredLanguage();
     const resolvedCapability = capability ?? UNSUPPORTED_PROVIDER_STATE_SHARING_CAPABILITY;
     const policy = resolveConnectedServicesProviderStateSharingPolicyV1(settings, agentId);
     const configDisabled = !resolvedCapability.config.supported;
     const stateDisabled = !resolvedCapability.state.supported || !resolvedCapability.state.modes.includes('shared');
     const stateShared = policy.stateMode === 'shared' && !stateDisabled;
-    const acknowledgedSharedStatePrivacy =
-        settings.acknowledgedRisksByAgentId[agentId]?.sharedStatePrivacy === true;
 
-    const writeOverride = React.useCallback((override: Readonly<{
+    const writeOverride = React.useCallback(async (override: Readonly<{
         configMode?: ConnectedServicesProviderConfigSharingModeV1;
         stateMode?: ConnectedServicesProviderStateSharingModeV1;
-        acknowledgeSharedStatePrivacy?: boolean;
     }>) => {
-        setSettings(current => ({
-            ...current,
-            byAgentId: {
-                ...current.byAgentId,
-                [agentId]: {
-                    ...(current.byAgentId[agentId] ?? {}),
-                    ...(override.configMode ? { configMode: override.configMode } : {}),
-                    ...(override.stateMode ? { stateMode: override.stateMode } : {}),
-                },
-            },
-            acknowledgedRisksByAgentId: override.acknowledgeSharedStatePrivacy
-                ? {
-                    ...current.acknowledgedRisksByAgentId,
-                    [agentId]: {
-                        ...(current.acknowledgedRisksByAgentId[agentId] ?? {}),
-                        sharedStatePrivacy: true,
-                    },
-                }
-                : current.acknowledgedRisksByAgentId,
-        }));
-    }, [agentId, setSettings]);
+        try {
+            const result = await writeSetting(CONNECTED_SERVICES_SETTINGS.settings.sharingPerAgent, { agentId, ...override });
+            if (!result.ok) await Modal.alert(t('common.error'), t('common.unavailable'));
+        } catch { await Modal.alert(t('common.error'), t('common.unavailable')); }
+    }, [agentId, writeSetting]);
 
     const configModeOptions = React.useMemo(
         () => buildProviderConfigModeChoices()
@@ -127,30 +108,15 @@ export function ProviderStateSharingRows({
         if (configDisabled) return;
         if (itemId !== 'linked' && itemId !== 'copied' && itemId !== 'isolated') return;
         if (!resolvedCapability.config.modes.includes(itemId)) return;
-        writeOverride({ configMode: itemId });
+        void writeOverride({ configMode: itemId });
     }, [configDisabled, resolvedCapability.config.modes, writeOverride]);
 
     const setStateShared = React.useCallback(async (shared: boolean) => {
         if (stateDisabled) return;
-        if (
-            shared
-            && resolvedCapability.state.sharedStatePrivacyRiskAcknowledgementRequired === true
-            && !acknowledgedSharedStatePrivacy
-        ) {
-            const confirmed = await Modal.confirm(
-                t('connectedServices.providerStateSharing.sharedStatePrivacyTitle'),
-                t('connectedServices.providerStateSharing.sharedStatePrivacyBody', { agent: agentTitle }),
-            );
-            if (!confirmed) return;
-        }
-        writeOverride({
+        await writeOverride({
             stateMode: shared ? 'shared' : 'isolated',
-            acknowledgeSharedStatePrivacy:
-                shared && resolvedCapability.state.sharedStatePrivacyRiskAcknowledgementRequired === true,
         });
     }, [
-        acknowledgedSharedStatePrivacy,
-        agentTitle,
         locale,
         resolvedCapability.state.sharedStatePrivacyRiskAcknowledgementRequired,
         stateDisabled,

@@ -29,6 +29,12 @@ function styleLabel(style: WidgetFrameStyle): string {
     return style === 'card' ? t('widgetFrame.styleCard') : t('widgetFrame.stylePlain');
 }
 
+/** Home's widget frame in a word, for the row that opens this page. */
+export function useHomeWidgetFrameLabel(): string {
+    const [home] = useLocalSettingMutable('widgetFrameStyleHome');
+    return styleLabel(home);
+}
+
 /** What each surface's preview shows: the frame around a familiar widget of that surface. */
 const PREVIEW_CONTENT: Readonly<Record<WidgetFramePlacement, () => Readonly<{ mark: 'timer' | 'list-checks' | 'git-branch'; title: string; source: string }>>> = {
     home: () => ({ mark: 'timer', title: t('homeWidgets.latestRunsTitle'), source: t('navigation.automations') }),
@@ -132,12 +138,12 @@ export function WidgetFrameAppearanceSection() {
 const styles = StyleSheet.create((theme) => ({
     minis: {
         flexDirection: 'row',
-        gap: 12,
+        gap: theme.space.s12,
     },
     mini: {
         flex: 1,
         minWidth: 0,
-        gap: 6,
+        gap: theme.space.s6,
     },
     miniStage: {
         height: PREVIEW_HEIGHT_PX,
@@ -146,7 +152,7 @@ const styles = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.background.canvas,
         borderWidth: StyleSheet.hairlineWidth,
         borderColor: theme.colors.border.default,
-        padding: 10,
+        padding: theme.space.s10,
     },
     miniScale: {
         width: `${100 / PREVIEW_SCALE}%`,
@@ -154,14 +160,13 @@ const styles = StyleSheet.create((theme) => ({
         transformOrigin: 'top left',
     },
     miniLabel: {
-        ...Typography.default(),
-        fontSize: 12,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
         textAlign: 'center',
     },
     lines: {
-        gap: 8,
-        paddingVertical: 4,
+        gap: theme.space.s8,
+        paddingVertical: theme.space.s4,
     },
     line: {
         height: 8,

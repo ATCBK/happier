@@ -1,6 +1,6 @@
 import type { SystemTaskSpec } from '@happier-dev/protocol';
 import type { RemoteHostRecordV1 } from '@happier-dev/protocol/remoteHosts/remoteHostRecordV1';
-import type { SystemTaskRunner } from '@/components/systemTasks/types';
+import type { SystemTaskRunner, SystemTaskAccountScope } from '@/components/systemTasks/types';
 import { buildRemoteSshManageHostSystemTaskSpec } from '@/components/systemTasks/specs/remoteSsh/buildRemoteSshManageHostSystemTaskSpec';
 import { buildSshTunnelEnsureSystemTaskSpec } from '@/components/systemTasks/specs/localControl/buildSshTunnelSystemTaskSpec';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
@@ -18,17 +18,18 @@ import { buildRemoteHostBootstrapSystemTaskSpec, buildSshTunnelEnsureRequestFrom
 
 export type RemoteHostMaintenanceTaskAction = Parameters<typeof buildRemoteSshManageHostSystemTaskSpec>[0]['action'];
 type TaskAdmission = Readonly<{ runner: SystemTaskRunner; config: RemoteHostEffectiveSshConfig;
-    assertCurrent(): void; signal?: AbortSignal }>;
+    assertCurrent(): void; assertAccountCurrent?: () => void; signal?: AbortSignal; accountScope?: SystemTaskAccountScope }>;
 type TaskStarted = Readonly<{ status: 'task_started'; taskId: string }>;
 type Unavailable = Readonly<{ status: 'unavailable'; reason: string }>;
 
-export async function startAdmittedRemoteHostSystemTask(input: Pick<TaskAdmission, 'runner' | 'assertCurrent' | 'signal'>, spec: SystemTaskSpec): Promise<TaskStarted> {
+export async function startAdmittedRemoteHostSystemTask(input: Pick<TaskAdmission, 'runner' | 'assertCurrent' | 'assertAccountCurrent' | 'signal' | 'accountScope'>, spec: SystemTaskSpec): Promise<TaskStarted> {
     input.signal?.throwIfAborted();
     input.assertCurrent();
-    const taskId = await input.runner.start(spec);
+    const taskId = await input.runner.start(spec, undefined, input.accountScope ? { accountScope: input.accountScope } : undefined);
     try {
-        input.signal?.throwIfAborted();
-        input.assertCurrent();
+        // Caller cancellation stops observation, not the task already accepted
+        // by the native owner. Captured Account retirement still cancels it.
+        (input.assertAccountCurrent ?? input.assertCurrent)();
     } catch (error) {
         await input.runner.cancel(taskId);
         throw error;

@@ -1,20 +1,24 @@
 import * as React from 'react';
-import { useUnistyles } from 'react-native-unistyles';
 
 import type { DaemonMcpServersPreviewResponse } from '@happier-dev/protocol';
 
 import { getAgentCore, type AgentId } from '@/agents/catalog/catalog';
+import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprovalPendingNotice';
 import { MachineAdministrationTargetSelector } from '@/components/settings/machines/MachineAdministrationTargetSelector';
 import { getAgentDropdownMenuItems } from '@/components/settings/pickers/agentDropdownItems';
 import { SettingAnchor } from '@/components/settings/shell/SettingRow';
 import { SettingsPageHeader } from '@/components/settings/shell/SettingsPageHeader';
+import { useDeclaredSettingsWrite } from '@/components/settings/shell/useDeclaredSettingsWrite';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import { useHappyAction } from '@/hooks/ui/useHappyAction';
 import { Modal } from '@/modal';
 import { machineMcpServersPreview } from '@/sync/ops/machineMcpServers';
-import { useSettingMutable } from '@/sync/domains/state/storage';
+import { useSetting } from '@/sync/domains/state/storage';
+import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } from '@/sync/domains/machines/administration/selectionPreferences';
 import { useMachineAdministrationExecutionTargetBinding } from '@/sync/domains/machines/administration/useExecutionTargetBinding';
 import { useMachineAdministrationTargetSelection } from '@/sync/domains/machines/administration/useTargetSelection';
@@ -32,8 +36,11 @@ type FailurePolicy = 'skip' | 'stop';
  * Account setting, so it renders and saves without a machine; only the preview waits on the chip.
  */
 export const McpSessionPreviewScreen = React.memo(function McpSessionPreviewScreen() {
-    const { theme } = useUnistyles();
-    const [strictMode, setStrictMode] = useSettingMutable('mcpServersStrictMode');
+    const router = useRouter();
+    const strictMode = useSetting('mcpServersStrictMode');
+    const scope = useAccountSettingsScope();
+    const execution = useMountedActionExecution(scope);
+    const writeSetting = useDeclaredSettingsWrite(execution);
     const targetSelection = useMachineAdministrationTargetSelection(MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.mcpServers);
     const selectedTarget = targetSelection.selectedTarget;
     const { selectionKey, resolveExactExecutionTarget, isExecutionTargetCurrent } = useMachineAdministrationExecutionTargetBinding(targetSelection);
@@ -58,15 +65,12 @@ export const McpSessionPreviewScreen = React.memo(function McpSessionPreviewScre
         setSelectedAgentId(getPreferredMcpPreviewAgentId(previewAgentIds, selectedAgentId));
     }, [previewAgentIds, selectedAgentId]);
 
-    const agentItems = React.useMemo(() => getAgentDropdownMenuItems({
-        agentIds: previewAgentIds,
-        iconColor: theme.colors.text.secondary,
-    }), [previewAgentIds, theme.colors.text.secondary]);
+    const agentItems = React.useMemo(() => getAgentDropdownMenuItems({ agentIds: previewAgentIds }), [previewAgentIds]);
     const selectedAgentTools = React.useMemo(() => getAgentCore(selectedAgentId)?.tools ?? null, [selectedAgentId]);
 
     const previewAction = React.useCallback(async () => {
         const requestedSelection = selectionKey;
-        const executionTarget = resolveExactExecutionTarget(selectedTarget);
+        const executionTarget = resolveExactExecutionTarget(selectedTarget, { intent: 'retry' });
         if (!executionTarget) return;
         if (!directory.trim()) {
             Modal.alert(t('common.error'), t('settings.mcpServersPreviewDirectoryRequired'));
@@ -76,7 +80,7 @@ export const McpSessionPreviewScreen = React.memo(function McpSessionPreviewScre
             agentId: selectedAgentId,
             directory: directory.trim(),
         }, { serverId: executionTarget.serverId });
-        if (!isExecutionTargetCurrent(requestedSelection, executionTarget)) return;
+        if (!isExecutionTargetCurrent(requestedSelection, executionTarget, { intent: 'retry' })) return;
         if (!response.ok) {
             setPreview(null);
             Modal.alert(t('common.error'), response.error);
@@ -89,10 +93,10 @@ export const McpSessionPreviewScreen = React.memo(function McpSessionPreviewScre
     const setFailurePolicy = React.useCallback((policy: FailurePolicy) => {
         const next = policy === 'stop';
         if (strictMode === next) return;
-        setStrictMode(next);
-    }, [setStrictMode, strictMode]);
+        void writeSetting(MCP_PREVIEW_SETTINGS.settings.mcpServersStrictMode, next);
+    }, [writeSetting, strictMode]);
 
-    const executionTarget = resolveExactExecutionTarget(selectedTarget);
+    const executionTarget = resolveExactExecutionTarget(selectedTarget, { intent: 'retry' });
     return (
         <ItemList keyboardShouldPersistTaps="handled">
             <SettingsPageHeader
@@ -105,6 +109,11 @@ export const McpSessionPreviewScreen = React.memo(function McpSessionPreviewScre
                     />
                 )}
             />
+            {execution.approval.approvalId && scope ? (
+                <ActionApprovalPendingNotice testID="settings-mcp-preview-approval-pending"
+                    message={t('secrets.catalog.approvalPending')}
+                    onOpenApproval={() => router.pushRetainingCurrent(`/inbox/approvals/${encodeURIComponent(execution.approval.approvalId!)}?serverId=${encodeURIComponent(scope.serverId)}`)} />
+            ) : null}
             <McpPreviewServersTab
                 agentItems={agentItems}
                 selectedAgentTools={selectedAgentTools}

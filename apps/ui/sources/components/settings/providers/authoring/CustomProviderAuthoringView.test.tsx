@@ -8,7 +8,7 @@ import { buildCustomProviderTemplate, createCustomProviderDraft, type CustomProv
 import { DestinationInstanceHost } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { CustomProviderAuthoringView } from './CustomProviderAuthoringView';
 
-installSettingsViewCommonModuleMocks({ storage: importOriginal => importOriginal() });
+installSettingsViewCommonModuleMocks({ storage: 'real' });
 
 function Editor(props: Readonly<{
     initial: CustomProviderDraft;
@@ -22,7 +22,7 @@ function Editor(props: Readonly<{
         presets: [], presetOpen: false, credentialStyles: [], credentialOpen: false,
         invalidField: null, localEndpoint: null, enableAfterSaving: false,
         draftRequiresApiKey: draft.advanced ? draft.endpoints.some(endpoint => endpoint.enabled && endpoint.requiresApiKey) : draft.requiresApiKey,
-        secretSelected: false, savedSecretSelectionEnabled: true,
+        secretSelected: false, savedSecretSelectionEnabled: true, pastedKey: '',
         manualModelsError: null, draftHasProbe: true, probeState: 'idle', savePending: false,
         error: null, probeError: null, secondaryTextColor: '#777',
         nameFieldRef: fieldRef, baseUrlFieldRef: fieldRef, manualModelsFieldRef: fieldRef,
@@ -32,7 +32,7 @@ function Editor(props: Readonly<{
         onNameChange: name => setDraft(current => ({ ...current, name })),
         onBaseUrlChange: baseUrl => setDraft(current => ({ ...current, baseUrl })),
         onManualModelsChange: manualModelsText => setDraft(current => ({ ...current, manualModelsText })),
-        onEnableAfterSavingChange: () => {}, onPickSecret: () => {}, onReviewConnection: () => {},
+        onEnableAfterSavingChange: () => {}, onPickSecret: () => {}, onPastedKeyChange: () => {}, onReviewConnection: () => {},
         onTest: () => {}, onSave: () => props.onSave(draft), onDiscard: props.onDiscard ?? (() => {}),
     }} />;
 }

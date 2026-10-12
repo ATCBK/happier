@@ -2,9 +2,17 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
     registerNativeThemePreferenceTransitionController,
+    registerWebThemePreferenceChoreography,
     runThemePreferenceChange,
     shouldAnimateThemePreferenceChange,
 } from './themePreferenceTransition';
+
+it('passes the resolved theme direction to the native choreography owner', async () => {
+    let direction: unknown;
+    await runThemePreferenceChange({ currentPreference: 'light', nextPreference: 'adaptive', systemTheme: 'dark', platform: 'ios', reduceMotion: false,
+        mutation: () => {}, nativeController: { run: (mutation, next?: unknown) => { direction = next; mutation(); } } });
+    expect(direction).toBe('night');
+});
 
 describe('theme preference transitions', () => {
     it('does not animate when adaptive resolves to the current visual theme', () => {
@@ -78,6 +86,40 @@ describe('theme preference transitions', () => {
                 pseudoElement: '::view-transition-new(root)',
             }),
         );
+    });
+
+    it('hands the web reveal to a registered choreography, prepared before the old view is captured', async () => {
+        const events: string[] = [];
+        const animate = vi.fn();
+        const transition = { ready: Promise.resolve() };
+        const startViewTransition = vi.fn((update: () => void) => {
+            events.push('start');
+            update();
+            return transition;
+        });
+        const documentLike = { documentElement: { animate }, startViewTransition } as unknown as Document;
+        const play = vi.fn(() => { events.push('play'); });
+        const prepare = vi.fn(() => { events.push('prepare'); return play; });
+        const unregister = registerWebThemePreferenceChoreography({ prepare });
+        try {
+            await runThemePreferenceChange({
+                currentPreference: 'dark', document: documentLike, mutation: () => events.push('mutation'),
+                nextPreference: 'light', platform: 'web', reduceMotion: false, systemTheme: 'dark',
+            });
+        } finally {
+            unregister();
+        }
+        expect(prepare).toHaveBeenCalledWith(documentLike, 'sunrise');
+        expect(play).toHaveBeenCalledWith(transition);
+        expect(events).toEqual(['prepare', 'start', 'mutation', 'play']);
+        expect(animate).not.toHaveBeenCalled();
+
+        await runThemePreferenceChange({
+            currentPreference: 'light', document: documentLike, mutation: () => {},
+            nextPreference: 'dark', platform: 'web', reduceMotion: false, systemTheme: 'dark',
+        });
+        expect(prepare).toHaveBeenCalledOnce();
+        expect(animate).toHaveBeenCalledOnce();
     });
 
     it('waits for the web theme mutation to commit before starting the reveal animation', async () => {

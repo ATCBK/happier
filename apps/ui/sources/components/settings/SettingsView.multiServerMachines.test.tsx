@@ -1,8 +1,7 @@
 import * as React from 'react';
-import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import renderer, { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
+import { pressTestInstanceAsync, renderSettingsView } from '@/dev/testkit';
 import { installSettingsViewCommonModuleMocks } from './settingsViewTestHelpers';
 
 
@@ -209,12 +208,16 @@ afterEach(() => {
     routerPushSpy.mockClear();
 });
 
+const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+await import('@/sync/syncEngine');
+await import('./SettingsView');
+
 describe('SettingsView (multi-server machines)', () => {
     it('replaces the inline machines list with a dedicated machines settings entry', async () => {
         const { SettingsView } = await import('./SettingsView');
 
         let tree: renderer.ReactTestRenderer | null = null;
-        tree = (await renderScreen(<InjectedAuthProvider credentials={null}><SettingsView /></InjectedAuthProvider>)).tree;
+        tree = (await renderSettingsView(<InjectedAuthProvider credentials={null}><SettingsView /></InjectedAuthProvider>)).tree;
 
         const items = tree!.findAllByType('Item' as any);
         const itemTitles = items.map((item: any) => String(item.props.title ?? ''));

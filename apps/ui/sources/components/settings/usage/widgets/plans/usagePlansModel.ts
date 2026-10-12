@@ -6,8 +6,10 @@ import {
 } from '@happier-dev/protocol/connect/deriveProviderAccountUsagePace';
 import type { ConnectedServiceQuotaMeterV1 } from '@happier-dev/protocol';
 import { projectUsageScheduledEvents } from '@happier-dev/protocol/usage/usageCalendarExport';
-import type { UsageQueryPoolSnapshot } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
+import type { UsageQueryPoolSnapshot, UsageQuerySourceState } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
+import { QualifiedConnectedServiceUsageSourceV4Schema } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
 import type { PendingResetStartBindingV1 } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
+import { evaluatePendingResetStartAdmissionV1 } from '@happier-dev/protocol/sessions/pending/pendingResetStartReadinessV1';
 import type { MeterTone } from '@/components/ui/lists/MeterBar';
 import { deriveQuotaUtilizationPct } from '@/sync/domains/connectedServices/deriveQuotaUtilizationPct';
 import { resolveQuotaMeterTone } from '@/sync/domains/connectedServices/resolveQuotaTone';
@@ -56,7 +58,9 @@ export type UsagePlanWindow = Readonly<{
 
 export type UsagePlanAccount = Readonly<{
   key: string;
-  read: QuotaRead;
+  source: QuotaRead['source'];
+  state: UsageQuerySourceState;
+  read: QuotaRead | null;
   service: QuotaRead['source']['ref']['service'];
   accountId: string;
   groupId: string | null;
@@ -77,6 +81,8 @@ export type UsagePlanPool = Readonly<{
   service: UsagePlanAccount['service'];
   groupId: string;
   accountKeys: readonly string[];
+  /** The machine that supplied this pool's selector read; no consumer chooses a substitute. */
+  selectorMachineId?: string;
 }>;
 
 export type UsagePlanEvent = Readonly<{
@@ -179,6 +185,7 @@ export function projectUsagePlans(
   quota: readonly QuotaRead[] | undefined,
   nowMs: number,
   memberships?: readonly UsageQueryPoolSnapshot[],
+  sourceStates?: readonly UsageQuerySourceState[],
 ): UsagePlansProjection {
   const accounts: UsagePlanAccount[] = [];
   const pools = new Map<
@@ -191,21 +198,39 @@ export function projectUsagePlans(
     }
   >();
   const events: UsagePlanEvent[] = [];
-  for (const read of quota ?? []) {
-    const ref = read.source.ref;
+  const accountKey = (source: QuotaRead['source']) => `${serviceKey(source.ref.service)}:${source.ref.accountId}`;
+  const reads = new Map((quota ?? []).map(read => [accountKey(read.source), read]));
+  const states = new Map<string, Readonly<{ source: QuotaRead['source']; state: UsageQuerySourceState }>>();
+  // The Resource already publishes the complete qualified source as canonical JSON in this key.
+  // Decode only that admitted identity; there is no second inventory or allowance read here.
+  for (const state of sourceStates ?? []) {
+    if (!state.source.startsWith('quota:')) continue;
+    try {
+      const parsed = QualifiedConnectedServiceUsageSourceV4Schema.safeParse(JSON.parse(state.source.slice('quota:'.length)));
+      if (parsed.success) states.set(accountKey(parsed.data), { source: parsed.data, state });
+    } catch { /* An unrecognized source key cannot establish an account identity. */ }
+  }
+  const sources = new Map([...states].map(([key, entry]) => [key, entry.source]));
+  for (const [key, read] of reads) if (!sources.has(key)) sources.set(key, read.source);
+  for (const [key, source] of sources) {
+    const read = reads.get(key) ?? null;
+    const ref = source.ref;
     const groupId =
-      read.source.bindingKind === 'group_member' ? read.source.groupId : null;
-    const key = `${serviceKey(ref.service)}:${ref.accountId}`;
+      source.bindingKind === 'group_member' ? source.groupId : null;
     if (accounts.some((account) => account.key === key)) continue;
-    const snapshot = read.current;
+    const snapshot = read?.current;
     const paceByMeter = new Map(
-      read.pace.map((entry) => [entry.meterId, entry.value]),
+      (read?.pace ?? []).map((entry) => [entry.meterId, entry.value]),
     );
+    const stale = !snapshot || snapshot.state !== 'loaded_data' || nowMs >= snapshot.observedAtMs + snapshot.staleAfterMs;
+    const state: UsageQuerySourceState = states.get(key)?.state ?? { source: 'quota', status: !snapshot ? 'not_loaded' : stale ? 'stale' : 'available' };
     const windows = (snapshot?.meters ?? []).map((meter) =>
       projectWindow(key, meter, paceByMeter.get(meter.meterId)),
     );
     const account: UsagePlanAccount = {
       key,
+      source,
+      state,
       read,
       service: ref.service,
       accountId: ref.accountId,
@@ -214,10 +239,7 @@ export function projectUsagePlans(
       accountLabel: snapshot?.accountLabel ?? null,
       windows,
       headline: pickHeadline(windows),
-      stale:
-        !snapshot ||
-        snapshot.state !== 'loaded_data' ||
-        nowMs >= snapshot.observedAtMs + snapshot.staleAfterMs,
+      stale: stale || state.status === 'stale' || state.status === 'error',
       observedAtMs: snapshot?.observedAtMs ?? null,
       subscription: snapshot?.subscription ?? null,
       prices: projectProviderAccountSubscriptionMonetaryFacts({ subscription: snapshot?.subscription, nowMs, tier: snapshot?.planLabel }),
@@ -235,7 +257,7 @@ export function projectUsagePlans(
       pool.accountKeys.push(key);
       pools.set(poolKey, pool);
     }
-    for (const event of projectUsageScheduledEvents([read])) {
+    for (const event of projectUsageScheduledEvents(read ? [read] : [])) {
       if (event.atMs <= nowMs) continue;
       const window = event.kind === 'reset' ? windows.find(window => window.meterId === event.meterId) : undefined;
       events.push({ key: event.key, accountKey: key, atMs: event.atMs,
@@ -260,6 +282,7 @@ export function projectUsagePlans(
   const qualifiedPools = memberships?.map(pool => ({
     key: `${serviceKey(pool.group.service)}:${pool.group.groupId}`,
     service: pool.group.service, groupId: pool.group.groupId,
+    ...(pool.selection.machineId ? { selectorMachineId: pool.selection.machineId } : {}),
     accountKeys: pool.memberAccountIds.map(accountId => `${serviceKey(pool.group.service)}:${accountId}`)
       .filter(key => accounts.some(account => account.key === key)),
   }));
@@ -306,7 +329,7 @@ export type UsagePlanPastCycles = Readonly<{
 
 /** The B owner's ended windows for one account (optionally one meter), newest first. Rows only; nothing is averaged. */
 export function projectUsagePastCycles(account: UsagePlanAccount, meterId?: string): UsagePlanPastCycles {
-  const history = account.read.unusedCapacity;
+  const history = account.read?.unusedCapacity;
   if (!history || history.historyStatus === 'not_loaded') return { cycles: [], reason: 'not_loaded', partial: false };
   if (history.historyStatus === 'unavailable') return { cycles: [], reason: 'unavailable', partial: false };
   const cycles = history.windows
@@ -370,18 +393,24 @@ export type UsageResetStartBinding =
  * The pending owner's reset binding for one window: the read's own source and record, witnessed by the
  * latest accepted history entry of that record. Without such an entry there is nothing to bind to.
  */
-export function resolveUsageResetStartBinding(account: UsagePlanAccount, meterId: string): UsageResetStartBinding {
-  const current = account.read.current;
-  if (!current) return { status: 'unavailable', reason: 'no_reading' };
+export function resolveUsageResetStartBinding(account: UsagePlanAccount, meterId: string, nowMs = Date.now()): UsageResetStartBinding {
+  const read = account.read;
+  const current = read?.current;
+  if (!read || !current) return { status: 'unavailable', reason: 'no_reading' };
   const window = account.windows.find((candidate) => candidate.meterId === meterId);
   if (!window || window.resetAtMs === null) return { status: 'unavailable', reason: 'no_reset' };
   let witness: Readonly<{ id: string; observedAtMs: number }> | null = null;
-  for (const entry of account.read.history?.entries ?? []) {
+  for (const entry of read.history?.entries ?? []) {
     if (entry.snapshot.recordId !== current.recordId) continue;
     if (!witness || entry.observedAtMs > witness.observedAtMs) witness = { id: entry.id, observedAtMs: entry.observedAtMs };
   }
   if (!witness) return { status: 'unavailable', reason: 'no_witness' };
-  return { status: 'available', reset: { source: account.read.source, recordId: current.recordId, meterId, witness } };
+  const reset = { source: account.source, recordId: current.recordId, meterId, witness };
+  const snapshot = read.history?.entries.find(entry => entry.id === witness.id && entry.observedAtMs === witness.observedAtMs)?.snapshot ?? null;
+  const admission = evaluatePendingResetStartAdmissionV1({ reset, witness: snapshot, current, nowMs, authorityCurrent: true });
+  if (admission.status !== 'available') return { status: 'unavailable', reason: admission.reason === 'witness_unavailable'
+    ? 'no_witness' : admission.reason === 'unknown_window' || admission.reason === 'window_changed' ? 'no_reset' : 'no_reading' };
+  return { status: 'available', reset };
 }
 
 export type UsageBankedResetAdvice = Readonly<{
@@ -401,7 +430,7 @@ export function adviseUsageBankedReset(account: UsagePlanAccount): UsageBankedRe
   if (!credits || credits.availableCount === 0 || expiresAtMs === null) return null;
   const limitId = credits.credits.find((credit) => credit.status === 'available' && credit.expiresAtMs === expiresAtMs)
     ?.appliesToProviderLimitId ?? null;
-  const namedMeterIds = limitId === null ? [] : (account.read.current?.meters ?? [])
+  const namedMeterIds = limitId === null ? [] : (account.read?.current?.meters ?? [])
     .filter((meter) => meter.providerLimitId === limitId).map((meter) => meter.meterId);
   const window = account.windows.find((candidate) => namedMeterIds.includes(candidate.meterId) && candidate.resetAtMs !== null)
     ?? account.headline;
@@ -414,8 +443,8 @@ export function adviseUsageBankedReset(account: UsagePlanAccount): UsageBankedRe
  * decides which earlier windows are comparable; this only hands it the read's snapshots.
  */
 export function projectUsageEarlierCurves(account: UsagePlanAccount, meterId: string): ProviderAccountUsageEarlierWindowCurvesV1 {
-  const current = account.read.current;
+  const current = account.read?.current;
   if (!current) return { status: 'unavailable', reason: 'unknown_window' };
-  const history = account.read.history?.entries.map((entry) => entry.snapshot);
+  const history = account.read?.history?.entries.map((entry) => entry.snapshot);
   return deriveProviderAccountUsageEarlierWindowCurves({ current, meterId, ...(history ? { history } : {}) });
 }

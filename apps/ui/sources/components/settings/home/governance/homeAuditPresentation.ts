@@ -26,15 +26,18 @@ import { homeServerSettingTitle } from './homeServerSettingLabels';
  * How one administration event reads on the Activity page (lab `hcActivity-A`): "**Actor** did
  * what", the area it touched, and the strict `{field, from, to}` lines its summary carries. A secret
  * reads only `not set → set`; the summary never holds its value, so this never could show one.
+ *
+ * Each fact is said once: a sentence that already names the area carries no area line, and a change
+ * line whose setting the sentence names carries no label.
  */
-export type HomeAuditChangeLine = Readonly<{ label: string; from: string; to: string }>;
+export type HomeAuditChangeLine = Readonly<{ label: string | null; from: string; to: string }>;
 
 export type HomeAuditEventPresentation = Readonly<{
     actor: string;
     /** The Account behind the actor, for its avatar; `null` for a deployment actor. */
     actorAccount: Readonly<{ id: string; avatarUrl: string | null }> | null;
     verb: string;
-    area: string;
+    area: string | null;
     changes: readonly HomeAuditChangeLine[];
 }>;
 
@@ -187,8 +190,9 @@ function describe(event: HomeAdministrationEventV1, viewer: string | null, names
         }
         case 'home.policy.set':
             return {
+                // "changed policies" names the area; the lines name each field.
                 verb: t('homeGovernance.activity.changedPolicies'),
-                area: t('homeGovernance.activity.areaPolicies'),
+                area: null,
                 changes: event.summary.changes.flatMap((change) => (change.field === 'authenticationPolicy'
                     ? authenticationPolicyLines(change.from, change.to, names.methodName)
                     : [{
@@ -199,28 +203,25 @@ function describe(event: HomeAdministrationEventV1, viewer: string | null, names
             };
         case 'home.settings.set':
         case 'home.settings.discard': {
+            // One setting per event: the sentence names it, the line under it says where it lives.
             const summary = event.summary;
             const email = summary.key.startsWith(EMAIL_KEY_PREFIX);
+            const setting = settingLabel(summary.key);
             const change: HomeAuditChangeLine = summary.secret
                 ? {
-                    label: settingLabel(summary.key),
+                    label: null,
                     from: summary.from === 'set' ? t('homeGovernance.activity.secretSet') : t('homeGovernance.activity.secretUnset'),
                     to: summary.to === 'set' ? t('homeGovernance.activity.secretSet') : t('homeGovernance.activity.secretUnset'),
                 }
                 : {
-                    label: settingLabel(summary.key),
+                    label: null,
                     from: settingValue(summary.key, summary.from),
                     to: settingValue(summary.key, summary.to),
                 };
-            if (event.action === 'home.settings.discard') {
-                return {
-                    verb: t('homeSettings.activity.discarded'),
-                    area: t('homeGovernance.activity.areaServerSettings'),
-                    changes: [change],
-                };
-            }
             return {
-                verb: email ? t('homeGovernance.activity.changedEmailSetting') : t('homeGovernance.activity.changedServerSetting'),
+                verb: event.action === 'home.settings.discard'
+                    ? t('homeGovernance.activity.discardedSetting', { setting })
+                    : t('homeGovernance.activity.changedSetting', { setting }),
                 area: email ? t('homeGovernance.activity.areaEmail') : t('homeGovernance.activity.areaServerSettings'),
                 changes: [change],
             };

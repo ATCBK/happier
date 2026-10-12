@@ -1,5 +1,4 @@
 import * as React from 'react';
-import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderSettingsView } from '@/dev/testkit/harness/settingsViewHarness';
@@ -140,6 +139,9 @@ vi.mock('@/components/ui/text/Text', () => ({
     Text: (props: Record<string, unknown>) => React.createElement('Text', props),
     TextInput: (props: Record<string, unknown>) => React.createElement('TextInput', props),
 }));
+
+const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+await import('./SettingsView');
 
 describe('SettingsView (vector icons missing)', () => {
     beforeEach(() => {

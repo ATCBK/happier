@@ -21,20 +21,7 @@ installServerSettingsHooksCommonModuleMocks({
 
 vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
-    return createUnistylesMock({
-        theme: {
-            colors: {
-                warningCritical: 'warning',
-                accent: {
-                    blue: 'blue',
-                },
-                divider: 'divider',
-                surface: 'surface',
-                text: 'text',
-                textSecondary: 'textSecondary',
-            },
-        },
-    });
+    return createUnistylesMock();
 });
 
 vi.mock('@expo/vector-icons', () => ({

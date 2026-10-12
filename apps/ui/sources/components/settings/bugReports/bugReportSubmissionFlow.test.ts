@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { BugReportsFeature } from './bugReportFeatureDefaults';
-import { getBugReportDraftFieldErrors, submitBugReportFromDraft, validateBugReportDraft } from './bugReportSubmissionFlow';
+import { getBugReportDraftFieldErrors, resolveBugReportSubmitHint, submitBugReportFromDraft, validateBugReportDraft } from './bugReportSubmissionFlow';
 
 const baseFeature: BugReportsFeature = {
   enabled: true,
@@ -33,21 +33,31 @@ const baseInput = {
 };
 
 describe('validateBugReportDraft', () => {
-  it('returns structured validation errors for required fields and privacy consent', () => {
+  it('validates report fields without overriding the diagnostic Action approval policy', () => {
     expect(validateBugReportDraft({ ...baseInput, title: 'x' }).code).toBe('title');
     expect(validateBugReportDraft({ ...baseInput, summary: 'x' }).code).toBe('details');
-    expect(validateBugReportDraft({ ...baseInput, acceptedPrivacyNotice: false, includeDiagnostics: true }).code).toBe('privacy');
+    expect(validateBugReportDraft({ ...baseInput, acceptedPrivacyNotice: false, includeDiagnostics: true }).code).toBe('ok');
     expect(validateBugReportDraft({ ...baseInput, acceptedPrivacyNotice: false, includeDiagnostics: false }).code).toBe('ok');
   });
 });
 
+describe('resolveBugReportSubmitHint', () => {
+  it('asks for the required fields on a fresh report instead of showing an error before anything was typed', () => {
+    const fresh = { ...baseInput, title: '', summary: '', currentBehavior: '', expectedBehavior: '', reproductionStepsText: '', acceptedPrivacyNotice: false };
+    // Diagnostics are on by default, so a fresh report is not "untouched" by that measure; it is by its text.
+    expect(resolveBugReportSubmitHint({ ...fresh, includeDiagnostics: true })).toBe('required');
+    expect(resolveBugReportSubmitHint({ ...fresh, title: 'ab' })).toBe('problem');
+    expect(resolveBugReportSubmitHint(baseInput)).toBeNull();
+  });
+});
+
 describe('getBugReportDraftFieldErrors', () => {
-  it('returns per-field min-length errors and privacy requirement', () => {
+  it('returns per-field min-length errors without a second privacy confirmation floor', () => {
     expect(getBugReportDraftFieldErrors(baseInput)).toEqual({});
 
     expect(getBugReportDraftFieldErrors({ ...baseInput, title: 'x' }).title).toMatch(/at least 3/i);
     expect(getBugReportDraftFieldErrors({ ...baseInput, summary: 'x' }).summary).toMatch(/at least 3/i);
-    expect(getBugReportDraftFieldErrors({ ...baseInput, includeDiagnostics: true, acceptedPrivacyNotice: false }).privacy).toBeTruthy();
+    expect(getBugReportDraftFieldErrors({ ...baseInput, includeDiagnostics: true, acceptedPrivacyNotice: false })).toEqual({});
   });
 });
 

@@ -1,14 +1,11 @@
 import * as React from 'react';
 import { ScrollView, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import {
-  UsageRecapComposeResultSchema,
-  UsageRecapExportResultSchema,
-  USAGE_RECAP_FIELDS,
-  type UsageRecapField,
-} from '@happier-dev/protocol';
+import { UsageRecapComposeResultSchema, UsageRecapExportResultSchema, USAGE_RECAP_FIELDS } from '@happier-dev/protocol/usage/usageRecap';
+import { type UsageRecapField } from '@happier-dev/protocol';
 import {
   UsageQuerySchema,
+  getUsageQueryKey,
   type UsageQuery,
 } from '@happier-dev/protocol/inputs/usageQuery';
 import type { CustomModalInjectedProps } from '@/modal';
@@ -101,18 +98,29 @@ export function UsageRecapComposer(
   const [fields, setFields] =
     React.useState<readonly UsageRecapField[]>(DEFAULT_FIELDS);
   const [state, setState] = React.useState<ComposeState>({ kind: 'composing' });
+  const [composeAttempt, retryCompose] = React.useReducer((attempt: number) => attempt + 1, 0);
   const [delivery, setDelivery] = React.useState<
     'copy' | 'save' | 'share' | null
   >(null);
   const [notice, setNotice] = React.useState<string | null>(null);
   const cardRef = React.useRef<React.ElementRef<typeof View>>(null);
   const deliveryController = React.useRef<AbortController | null>(null);
-  React.useEffect(() => () => deliveryController.current?.abort(), [style, format, fields, period, props.query, props.serverId]);
+  // The composer owns its period. Equivalent parent scopes and field selections
+  // must retain the admitted read rather than cancel it during live page updates.
+  const queryKey = getUsageQueryKey({ ...props.query, period: {}, granularity: getUsagePeriodDefinition(period).granularity });
+  const compositionQuery = React.useMemo(() => UsageQuerySchema.parse(JSON.parse(queryKey)), [queryKey]);
+  const fieldsKey = USAGE_RECAP_FIELDS.filter(field => fields.includes(field)).join(',');
+  const selectedFields = React.useMemo(() => USAGE_RECAP_FIELDS.filter(field => fields.includes(field)), [fieldsKey]);
+  React.useEffect(() => () => deliveryController.current?.abort(), [style, format, selectedFields, period, compositionQuery, props.serverId]);
 
-  // Facts are composed for the period and fields; style and format only change how they are drawn.
+  // Every selected presentation is admitted with its period and fields by the same compose Action.
   React.useEffect(() => {
     const controller = new AbortController();
     const lifetime = captureActiveServerAccountScopeLifetime();
+    const retirement = lifetime?.onRetire(() => {
+      controller.abort();
+      setState({ kind: 'failed', code: 'usage_scope_unavailable' });
+    });
     setState({ kind: 'composing' });
     void (async () => {
       if (
@@ -123,9 +131,9 @@ export function UsageRecapComposer(
         return;
       }
       const nowMs = Date.now();
-      const offset = props.query.timeZoneOffsetMinutes ?? 0;
+      const offset = compositionQuery.timeZoneOffsetMinutes ?? 0;
       const query = UsageQuerySchema.parse({
-        ...props.query,
+        ...compositionQuery,
         granularity: getUsagePeriodDefinition(period).granularity,
         period: {
           startMs:
@@ -140,9 +148,9 @@ export function UsageRecapComposer(
         'usage.recap.compose',
         {
           query,
-          style: 'daybreak',
-          format: 'square',
-          selectedFields: [...fields],
+          style,
+          format,
+          selectedFields: [...selectedFields],
         },
         {
           surface: 'ui',
@@ -167,21 +175,27 @@ export function UsageRecapComposer(
           ? { kind: 'ready', result: parsed.data, query }
           : { kind: 'unavailable' },
       );
-    })();
-    return () => controller.abort();
-  }, [period, fields, props.query, props.serverId]);
+    })().catch(() => {
+      if (!controller.signal.aborted && lifetime?.isCurrent()) {
+        setState({ kind: 'failed', code: 'usage_recap_compose_failed' });
+      }
+    });
+    return () => { retirement?.dispose(); controller.abort(); };
+  }, [style, format, period, selectedFields, compositionQuery, props.serverId, composeAttempt]);
 
   const composed =
-    state.kind === 'ready' ? { ...state.result, style, format } : null;
+    state.kind === 'ready' ? state.result : null;
   const model = React.useMemo(
     () => (composed ? buildUsageStatCardModel(composed) : null),
-    [state, style, format],
+    [composed],
   );
   const size = USAGE_STAT_CARD_SIZES[format];
-  const previewWidth = phone ? 300 : 460;
+  // The card takes the stage it is given (lab s2card C: the left two-thirds), at true proportions.
+  const [stageWidth, setStageWidth] = React.useState<number | null>(null);
+  const previewWidth = phone ? 300 : Math.max(240, (stageWidth ?? 520) - STAGE_INSET_PX * 2);
   const scale = Math.min(
     previewWidth / size.width,
-    (phone ? 420 : 460) / size.height,
+    (phone ? 420 : 520) / size.height,
   );
 
   const deliver = React.useCallback(
@@ -263,11 +277,29 @@ export function UsageRecapComposer(
     [model, tone],
   );
 
+  const formats = (
+    <SegmentedTabBar
+      testIDPrefix="usage-recap-format"
+      compact
+      segmentSizing="content"
+      activeTabId={format}
+      onSelectTab={setFormat}
+      tabs={FORMATS.map((id) => ({
+        id,
+        label: t(
+          `usage.board.recap.format_${id === 'link-preview' ? 'linkPreview' : id}`,
+        ),
+      }))}
+    />
+  );
   const preview = (
     <View
-      style={[styles.stage, { minHeight: size.height * scale + 48 }]}
+      style={[styles.stage, phone ? styles.stagePhone : null]}
+      onLayout={phone ? undefined : (event) => setStageWidth(Math.round(event.nativeEvent.layout.width))}
       testID="usage-recap-composer.stage"
     >
+      {formats}
+      <View style={[styles.stageCard, { minHeight: size.height * scale }]}>
       {state.kind === 'composing' && !model ? (
         <ItemLoadStateRows
           state={{ kind: 'loading' }}
@@ -290,7 +322,7 @@ export function UsageRecapComposer(
           diagnosticCode={state.code}
           action={{
             label: t('common.retry'),
-            onPress: () => setFields((current) => [...current]),
+            onPress: retryCompose,
           }}
         />
       ) : model ? (
@@ -319,19 +351,7 @@ export function UsageRecapComposer(
           </View>
         </View>
       ) : null}
-      <SegmentedTabBar
-        testIDPrefix="usage-recap-format"
-        compact
-        segmentSizing="content"
-        activeTabId={format}
-        onSelectTab={setFormat}
-        tabs={FORMATS.map((id) => ({
-          id,
-          label: t(
-            `usage.board.recap.format_${id === 'link-preview' ? 'linkPreview' : id}`,
-          ),
-        }))}
-      />
+      </View>
     </View>
   );
 
@@ -394,62 +414,78 @@ export function UsageRecapComposer(
     </View>
   );
 
-  return (
-    <View
-      style={[styles.root, phone ? styles.rootPhone : null]}
-      testID="usage-recap-composer"
-    >
-      <View style={[styles.body, phone ? styles.bodyPhone : null]}>
-        {preview}
-        <ScrollView
-          style={phone ? undefined : styles.controlsScroll}
-          contentContainerStyle={styles.controlsContent}
-        >
+  const footer = (
+    <View style={styles.footer}>
+      <Text style={styles.note} numberOfLines={2}>
+        {notice ?? t('usage.board.recap.madeLocally')}
+      </Text>
+      <View style={styles.actions}>
+        <RoundButton
+          size="small"
+          display="secondary"
+          title={t('usage.board.recap.copy')}
+          disabled={!model || delivery !== null}
+          loading={delivery === 'copy'}
+          onPress={() => {
+            void deliver('copy');
+          }}
+          testID="usage-recap-composer.copy"
+        />
+        <RoundButton
+          size="small"
+          display="secondary"
+          title={t('usage.board.recap.save')}
+          disabled={!model || delivery !== null}
+          loading={delivery === 'save'}
+          onPress={() => {
+            void deliver('save');
+          }}
+          testID="usage-recap-composer.save"
+        />
+        <View style={styles.actionsGrow} />
+        <RoundButton
+          size="small"
+          title={t('usage.board.recap.share')}
+          disabled={!model || delivery !== null}
+          loading={delivery === 'share'}
+          onPress={() => {
+            void deliver('share');
+          }}
+          testID="usage-recap-composer.share"
+        />
+      </View>
+    </View>
+  );
+
+  // A phone keeps its actions in view: the preview and the controls scroll above them.
+  if (phone) {
+    return (
+      <View style={[styles.root, styles.rootPhone]} testID="usage-recap-composer">
+        <ScrollView style={styles.phoneScroll} contentContainerStyle={styles.phoneContent}>
+          {preview}
           {controls}
         </ScrollView>
+        {footer}
       </View>
-      <View style={styles.footer}>
-        <Text style={styles.note} numberOfLines={2}>
-          {notice ?? t('usage.board.recap.madeLocally')}
-        </Text>
-        <View style={styles.actions}>
-          <RoundButton
-            size="small"
-            display="secondary"
-            title={t('usage.board.recap.copy')}
-            disabled={!model || delivery !== null}
-            loading={delivery === 'copy'}
-            onPress={() => {
-              void deliver('copy');
-            }}
-            testID="usage-recap-composer.copy"
-          />
-          <RoundButton
-            size="small"
-            display="secondary"
-            title={t('usage.board.recap.save')}
-            disabled={!model || delivery !== null}
-            loading={delivery === 'save'}
-            onPress={() => {
-              void deliver('save');
-            }}
-            testID="usage-recap-composer.save"
-          />
-          <RoundButton
-            size="small"
-            title={t('usage.board.recap.share')}
-            disabled={!model || delivery !== null}
-            loading={delivery === 'share'}
-            onPress={() => {
-              void deliver('share');
-            }}
-            testID="usage-recap-composer.share"
-          />
+    );
+  }
+  return (
+    <View style={styles.root} testID="usage-recap-composer">
+      <View style={[styles.body, styles.bodyWide]}>
+        {preview}
+        <View style={styles.side}>
+          <ScrollView style={styles.controlsScroll} contentContainerStyle={styles.controlsContent}>
+            {controls}
+          </ScrollView>
+          {footer}
         </View>
       </View>
     </View>
   );
 }
+
+/** The stage's breathing room around the card on every side. */
+const STAGE_INSET_PX = 32;
 
 /** A style tile draws the real card at static props, scaled (visual picker rule). */
 const StylePreview = React.memo(function StylePreview(
@@ -485,54 +521,66 @@ const StylePreview = React.memo(function StylePreview(
 });
 
 const styles = StyleSheet.create((theme) => ({
+  // The card is held to the window (scrollHost 'body'): the controls scroll and the actions stay put.
   root: {
+    flex: 1,
     gap: 0,
     minWidth: 0,
+    minHeight: 0,
   },
   rootPhone: {
     flex: 1,
   },
   body: {
     flexDirection: 'row',
-    gap: 24,
+    alignItems: 'stretch',
+    gap: theme.space.s24,
     minHeight: 0,
   },
-  bodyPhone: {
-    flexDirection: 'column',
-    gap: 16,
-  },
-  stage: {
+  // Controls keep one readable column beside the stage (lab s2card C: about a third).
+  side: {
+    width: 340,
     flexShrink: 0,
+    minHeight: 0,
+  },
+  bodyWide: { flex: 1 },
+  phoneScroll: { flex: 1, minHeight: 0 },
+  phoneContent: { gap: theme.space.s16, paddingBottom: theme.space.s8 },
+  stage: {
+    flexGrow: 1,
+    flexBasis: 0,
+    minWidth: 0,
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 16,
-    paddingVertical: 20,
-    paddingHorizontal: 20,
-    borderRadius: 16,
+    gap: theme.space.s20,
+    paddingVertical: theme.space.s20,
+    paddingHorizontal: STAGE_INSET_PX,
+    borderRadius: theme.borderRadius.lg,
     backgroundColor: theme.colors.surface.inset,
   },
+  stagePhone: { flexGrow: 0, flexBasis: 'auto' },
+  // The card hangs under the formats: the stage stretches with the controls column beside it, and a
+  // centred card would drift out of view as that column grows.
+  stageCard: { alignItems: 'center', justifyContent: 'flex-start', paddingTop: theme.space.s8 },
   card: {
     borderRadius: 18,
   },
   controlsScroll: {
     flex: 1,
-    maxHeight: 560,
   },
   controlsContent: {
-    paddingBottom: 8,
+    paddingBottom: theme.space.s8,
   },
   controls: {
-    gap: 4,
+    gap: theme.space.s4,
     minWidth: 280,
   },
+  // Inset like the sheet's own header, so Share never meets the card's edge.
   footer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 12,
-    paddingTop: 16,
-    marginTop: 16,
+    gap: theme.space.s12,
+    paddingTop: theme.space.s16,
+    paddingHorizontal: theme.space.s16,
+    paddingBottom: theme.space.s16,
+    marginTop: theme.space.s8,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: theme.colors.border.default,
   },
@@ -544,6 +592,7 @@ const styles = StyleSheet.create((theme) => ({
   actions: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: theme.space.s8,
   },
+  actionsGrow: { flexGrow: 1 },
 }));

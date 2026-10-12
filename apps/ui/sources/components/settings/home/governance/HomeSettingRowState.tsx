@@ -45,6 +45,19 @@ export function homeSettingValueWords(
   return String(value);
 }
 
+/**
+ * The value a row shows when it cannot be edited (a fixed, read-only or viewer row): the stored value,
+ * else the declared default, in words — On/Off, a choice by its label, a number in its unit.
+ */
+export function homeSettingShownValue(entry: HomeSettingEntryV1): string | undefined {
+  const raw = entry.value ?? entry.declaration?.default;
+  const type = entry.declaration?.type;
+  if ((type === 'int' || type === 'float') && (typeof raw === 'string' || typeof raw === 'number') && String(raw).trim() !== '') {
+    return homeServerSettingNumberWords(entry.key, type, raw);
+  }
+  return homeSettingValueWords(entry, raw) ?? undefined;
+}
+
 /** What the running server does with a restart key, when it differs from the stored value. */
 export function homeSettingRunningState(
   entry: HomeSettingEntryV1,

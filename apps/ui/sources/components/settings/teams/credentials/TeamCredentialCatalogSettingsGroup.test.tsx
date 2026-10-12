@@ -115,7 +115,7 @@ describe('TeamCredentialCatalogSettingsGroup', () => {
         expect(screen.getTextContent()).toContain('Showing the last known data for this Home.');
         expect(screen.findAllByType(CollectionListGroupLabel)[0]?.props.count).toBe(1);
         expect(screen.findByTestId('team-credential-catalog-resource:team-1:resource-provider')?.props.onPress).toBeUndefined();
-        screen.pressByTestId('team-credential-catalog-stale:provider-action');
+        screen.pressByTestId('team-credential-catalog-retry:provider');
         expect(onRetry).toHaveBeenCalledTimes(1);
     });
 

@@ -5,8 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PromptRegistryListAdaptersResponseV1, PromptRegistryScanSourceResponseV1 } from '@happier-dev/protocol';
 import type { PromptRegistrySkillImportResult } from '@/sync/ops/promptLibrary/promptRegistrySkillImports';
 import { createModalModuleMock } from '@/dev/testkit/mocks/modal';
-import { createPlainPromptLibraryCatalogHomeFixture } from '@/dev/testkit/harness/promptLibraryCatalogBoundary';
-import { changeTextTestInstance, pressTestInstanceAsync, renderScreen, standardCleanup } from '@/dev/testkit';
+import { changeTextTestInstance, pressTestInstanceAsync, renderScreen } from '@/dev/testkit/render/renderScreen';
+import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import {
     installPromptRegistriesCommonModuleMocks,
     promptRegistriesRouterPushSpy,
@@ -144,6 +144,7 @@ vi.mock('@/sync/ops/promptLibrary/promptRegistrySkillImports', () => ({
 
 // Load the real store after the existing boundary mocks are configured, during collection.
 const { createMachineAdministrationFixture } = await import('@/dev/testkit/fixtures/machineAdministrationFixture');
+const { createPlainPromptLibraryCatalogHomeFixture } = await import('@/dev/testkit/harness/promptLibraryCatalogBoundary');
 const { storage } = await import('@/sync/domains/state/storage');
 const { applyPromptLibraryCatalogSnapshot, resetPromptLibraryCatalogSnapshotsForTests } = await import('@/sync/store/settings/promptLibraryCatalogSnapshot');
 const { resetPromptLibraryCatalogEngineForTests } = await import('@/sync/engine/settings/promptLibraryCatalogEngine');
@@ -322,8 +323,11 @@ describe('PromptRegistriesScreen', () => {
             serverId: administration.serverIds[0],
             sourceId: 'git:local-skills',
             itemId: 'git:local-skills:reviewer',
+        }), expect.objectContaining({
+            organization: expect.objectContaining({ serverId: catalog.home.id }),
+            create: expect.any(Function),
         }));
-        expect(promptRegistriesRouterPushSpy).toHaveBeenCalledWith('/settings/prompts/skills/bundle-1');
+        expect(promptRegistriesRouterPushSpy).toHaveBeenCalledWith(`/settings/prompts/skills/bundle-1?serverId=${catalog.home.id}`);
     });
 
     it('passes the search query through when rescanning the selected source', async () => {

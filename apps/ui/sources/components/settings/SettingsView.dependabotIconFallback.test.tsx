@@ -1,5 +1,4 @@
 import * as React from 'react';
-import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderSettingsView } from '@/dev/testkit/harness/settingsViewHarness';
@@ -137,7 +136,8 @@ vi.mock('@/utils/system/bugReportActionTrail', () => ({
     recordBugReportUserAction: vi.fn(),
 }));
 
-vi.mock('react-native-svg', () => ({
+vi.mock('react-native-svg', async () => ({
+    ...await import('@/dev/testkit/mocks/reactNativeSvg'),
     __esModule: true,
     default: undefined,
     Svg: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
@@ -149,6 +149,9 @@ vi.mock('react-native-svg', () => ({
     SvgXml: (props: Record<string, unknown>) => React.createElement('SvgXml', props),
 }));
 
+const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+await import('./SettingsView');
+
 describe('SettingsView (Dependabot icon fallback)', () => {
     beforeEach(() => {
         tauriDesktopState.value = true;
@@ -159,7 +162,7 @@ describe('SettingsView (Dependabot icon fallback)', () => {
         const { SettingsView } = await import('./SettingsView');
         const screen = await renderSettingsView(<InjectedAuthProvider credentials={null}><SettingsView /></InjectedAuthProvider>);
 
-        expect(screen.findRowByTitle('subAgentGuidance.settings.groupTitle')).toBeTruthy();
+        await vi.waitFor(() => expect(screen.findRowByTitle('subAgentGuidance.settings.groupTitle')).toBeTruthy());
         // The System section arrives in a deferred stage after the first paint.
         await vi.waitFor(() => expect(screen.findRow('settings-desktop-entry')).toBeTruthy());
     });

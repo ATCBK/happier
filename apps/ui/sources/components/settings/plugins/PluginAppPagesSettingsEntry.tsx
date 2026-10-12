@@ -32,6 +32,17 @@ export function PluginAppPagesSettingsEntry(): React.ReactElement | null {
         ),
     ), [compactDestinations]);
 
+    // One cause is said once: when every unavailable page is unavailable for the same reason, the section
+    // says it and the rows stay dimmed; different reasons stay on their own rows.
+    const reasonOf = (page: CompactAppPluginDestination) => resolveReasonCopy({
+        reasonCode: page.unavailableReason,
+        kind: 'pluginRuntime',
+    }).message;
+    const unavailableReasons = [...new Set(pages.filter((page) => page.availability === 'unavailable').map(reasonOf))];
+    const sharedReason = pages.filter((page) => page.availability === 'unavailable').length > 1 && unavailableReasons.length === 1
+        ? unavailableReasons[0]!
+        : null;
+
     if (pages.length === 0) {
         return null;
     }
@@ -39,19 +50,17 @@ export function PluginAppPagesSettingsEntry(): React.ReactElement | null {
     return (
         <ItemGroup
             title={t('pluginSurfaces.appPage.title')}
-            description={t('pluginSurfaces.appPage.subtitle')}
+            description={sharedReason
+                ? `${t('pluginSurfaces.appPage.subtitle')} ${sharedReason}`
+                : t('pluginSurfaces.appPage.subtitle')}
         >
             {pages.map((page) => (
                 <Item
                     key={page.id}
                     testID={`settings.plugins.appPages.${page.id}`}
                     title={page.title}
-                    subtitle={page.availability === 'unavailable'
-                        ? resolveReasonCopy({
-                            reasonCode: page.unavailableReason,
-                            kind: 'pluginRuntime',
-                        }).message
-                        : page.destination.pluginId}
+                    // An available page is named by its title; only an unavailable one says why.
+                    subtitle={page.availability === 'unavailable' && sharedReason === null ? reasonOf(page) : undefined}
                     disabled={page.availability !== 'available'}
                     icon={(
                         <Icon

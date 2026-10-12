@@ -10,7 +10,8 @@ import Svg, {
   Rect,
   Stop,
 } from 'react-native-svg';
-import { createPlanetDots, createPlanetFrame } from '@happier-dev/brand/planet';
+import { createPlanetFrame } from '@happier-dev/brand/planet';
+import { PlanetCanvas } from '@/components/atmosphere/PlanetCanvas';
 import { CompositionStrip, formatHappierDataShare } from '@happier-dev/plugin-ui/presentation';
 import { useUnistyles } from 'react-native-unistyles';
 import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
@@ -101,6 +102,7 @@ export const UsageStatCard = React.memo(
             height={size.height}
           />
         </Svg>
+        <CardPlanetArt model={model} palette={palette} tone={props.tone} width={size.width} height={size.height} />
         {palette.art === 'terminal' ? (
           <TerminalPlanet
             tone={props.tone}
@@ -360,7 +362,7 @@ type ArtProps = Readonly<{
 function CardArt(props: ArtProps) {
   switch (props.palette.art) {
     case 'planet':
-      return <DaybreakArt {...props} />;
+      return null;
     case 'sigil':
       return <SigilArt {...props} />;
     case 'rules':
@@ -376,7 +378,7 @@ function CardArt(props: ArtProps) {
   }
 }
 
-/** Brand planet dots in a box (the one planet source); `rows` sets the lattice fineness. */
+/** Existing stat-card calibration, projected through the canonical drawing layer. */
 function PlanetDots(
   props: Readonly<{
     x: number;
@@ -388,31 +390,34 @@ function PlanetDots(
     halo?: number;
   }>,
 ) {
-  const dots = React.useMemo(
-    () =>
-      createPlanetDots({
+  const mark = React.useMemo(
+    () => ({
         size: props.size,
         rows: props.rows,
         theme: props.tone,
         halo: props.halo ?? 1,
         warmth: props.warmth ?? 0,
-      }).filter((dot) => dot.opacity > 0),
+        radiusScale: 1.3,
+      }),
     [props.size, props.rows, props.tone, props.halo, props.warmth],
   );
   return (
-    <G x={props.x} y={props.y}>
-      {dots.map((dot) => (
-        <Circle
-          key={dot.id}
-          cx={dot.x}
-          cy={dot.y}
-          r={dot.radius * 1.3}
-          fill={`rgb(${dot.rgb[0]},${dot.rgb[1]},${dot.rgb[2]})`}
-          opacity={dot.opacity}
-        />
-      ))}
-    </G>
+    <PlanetCanvas width={props.size} height={props.size} mark={mark} style={{ position: 'absolute', left: props.x, top: props.y }} />
   );
+}
+
+function CardPlanetArt(props: ArtProps) {
+  const wide = props.model.format === 'link-preview';
+  switch (props.palette.art) {
+    case 'planet': return <DaybreakArt {...props} />;
+    case 'sigil': {
+      const { radius, cx, cy } = sigilArtLayout(props);
+      return <PlanetDots x={cx - radius * 0.42} y={cy - radius * 0.42} size={radius * 0.84} rows={18} tone={props.tone} />;
+    }
+    case 'rules': return <PlanetDots x={props.width - 120} y={52} size={72} rows={14} tone={props.tone} />;
+    case 'holo': return <PlanetDots x={props.width - (wide ? 230 : 210)} y={36} size={170} rows={30} tone="dark" warmth={0.2} />;
+    default: return null;
+  }
 }
 
 function DaybreakArt(props: ArtProps) {
@@ -439,7 +444,7 @@ function DaybreakArt(props: ArtProps) {
   );
 }
 
-function SigilArt(props: ArtProps) {
+function sigilArtLayout(props: ArtProps) {
   const wide = props.model.format === 'link-preview';
   const story = props.model.format === 'story';
   const radius = wide
@@ -453,6 +458,11 @@ function SigilArt(props: ArtProps) {
       ? props.width / 2
       : props.width - radius - 40;
   const cy = wide ? props.height / 2 : story ? props.height * 0.3 : radius + 40;
+  return { radius, cx, cy };
+}
+
+function SigilArt(props: ArtProps) {
+  const { radius, cx, cy } = sigilArtLayout(props);
   const rows = props.model.mix;
   const ringGap = Math.min(9, radius / (rows.length + 2));
   return (
@@ -486,13 +496,6 @@ function SigilArt(props: ArtProps) {
           );
         },
       )}
-      <PlanetDots
-        x={cx - radius * 0.42}
-        y={cy - radius * 0.42}
-        size={radius * 0.84}
-        rows={18}
-        tone={props.tone}
-      />
     </G>
   );
 }
@@ -513,13 +516,6 @@ function EditorialArt(props: ArtProps) {
         width={props.width - 80}
         height={0.75}
         fill={props.palette.ink}
-      />
-      <PlanetDots
-        x={props.width - 120}
-        y={52}
-        size={72}
-        rows={14}
-        tone={props.tone}
       />
     </G>
   );
@@ -608,14 +604,6 @@ function HoloArt(props: ArtProps) {
         points={`${props.width * 0.15},${inset} ${props.width * 0.45},${inset} ${props.width * 0.05},${props.height - inset} ${inset},${props.height - inset}`}
         fill={`url(#${id})`}
         opacity={0.08}
-      />
-      <PlanetDots
-        x={props.width - (props.model.format === 'link-preview' ? 230 : 210)}
-        y={36}
-        size={170}
-        rows={30}
-        tone="dark"
-        warmth={0.2}
       />
     </G>
   );

@@ -20,17 +20,18 @@ import { selectConnectedMetadataLabels, useConnectedMetadataCatalog } from '@/ho
 import { t } from '@/text';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { fireAndForget } from '@/utils/system/fireAndForget';
+import { presentProviderError } from '@/providers/connection/errorPresentation';
 
 import { ConnectedServiceMark } from '../ConnectedServiceMark';
 import { ConnectedAccountPrivacyToggle } from '../usage/ConnectedAccountPrivacyToggle';
+import { ConnectedAccountActionApprovalNotice } from '../ConnectedAccountActionApprovalNotice';
 import type {
     ConnectedServicesIndexAccount,
     ConnectedServicesIndexModel,
     ConnectedServicesIndexSheet,
 } from '../model/buildConnectedServicesIndexModel';
 import { presentConnectedServicesIndexAccount, presentConnectedServicesIndexPool } from '../model/presentConnectedServicesIndexAccount';
-import { useConnectedServicesIndex } from '../model/useConnectedServicesIndex';
-import type { ProviderGatewayCollectionRow } from '../../providers/collection/providerCollectionModel';
+import { useConnectedServicesIndex, type ConnectedServicesGatewayRow } from '../model/useConnectedServicesIndex';
 import {
     CONNECTED_SERVICES_AGENT_SIGN_IN_ROUTE,
     CONNECTED_SERVICES_COLLECTION_ROUTE,
@@ -68,8 +69,17 @@ export type ConnectedServicesRailViewProps = Readonly<{
     renderNewPool?: ((renderTrigger: (onPress: () => void) => React.ReactElement) => React.ReactNode) | null;
     onOpenAgentSignIn: () => void;
     /** Gateways that draw on these subscriptions; each opens its one page (shared with Providers). */
-    gateways?: readonly ProviderGatewayCollectionRow[];
-    onOpenGateway?: (gateway: ProviderGatewayCollectionRow) => void;
+    gateways?: readonly ConnectedServicesGatewayRow[];
+    /** The Account catalog is still loading: the group holds one quiet row in its place. */
+    gatewaysLoading?: boolean;
+    onOpenGateway?: (gateway: ConnectedServicesGatewayRow) => void;
+    /** With no gateway yet, the group offers one quiet row that creates it and opens it. */
+    onAddGateway?: () => void;
+    addingGateway?: boolean;
+    /** Why the last attempt did not finish, told on the row itself. */
+    addGatewayError?: string | null;
+    /** An approval the first gateway waits on; it takes the add row's place. */
+    gatewayApproval?: React.ReactNode;
     /** Live rows read their own usage; a fixture preview passes it. */
     renderAccountMeta?: (sheet: ConnectedServicesIndexSheet, account: ConnectedServicesIndexAccount) => React.ReactNode;
 }>;
@@ -271,14 +281,44 @@ export const ConnectedServicesRailView = React.memo(function ConnectedServicesRa
                     })}
                 </>
             ) : null}
-            {props.gateways && props.gateways.length > 0 ? (
+            {(props.gateways && (props.gateways.length > 0 || props.onAddGateway || props.gatewayApproval)) || props.gatewaysLoading ? (
                 <>
                     <CollectionListGroupLabel title={t('settingsProvidersCollection.gateway.railGroup')} />
-                    {props.gateways.filter((gateway) => !needle || gateway.title.toLowerCase().includes(needle)).map((gateway) => (
+                    {props.gatewayApproval ?? null}
+                    {props.gatewaysLoading && !props.gatewayApproval && !props.gateways?.length ? (
+                        <Item
+                            testID="connected-services-rail:gateways-loading"
+                            title={t('common.loading')}
+                            titleStyle={{ color: theme.colors.text.tertiary }}
+                            icon={<Icon name="path" size={16} color={theme.colors.text.tertiary} />}
+                            density="compact"
+                            showChevron={false}
+                            disabled
+                            pressableStyle={collectionListStyles.row}
+                        />
+                    ) : null}
+                    {props.onAddGateway && !props.gateways?.length && !needle && !props.gatewayApproval ? (
+                        <Item
+                            testID="connected-services-rail:add-gateway"
+                            title={t('settingsProvidersCollection.gateway.addGateway')}
+                            titleStyle={{ color: theme.colors.text.secondary }}
+                            subtitle={props.addGatewayError ?? undefined}
+                            subtitleStyle={props.addGatewayError ? { color: theme.colors.state.danger.foreground } : undefined}
+                            icon={<Icon name="plus" size={16} color={theme.colors.text.secondary} />}
+                            density="compact"
+                            showChevron={false}
+                            loading={props.addingGateway}
+                            disabled={props.addingGateway}
+                            pressableStyle={collectionListStyles.row}
+                            onPress={props.onAddGateway}
+                        />
+                    ) : null}
+                    {(props.gateways ?? []).filter((gateway) => !needle || gateway.title.toLowerCase().includes(needle)).map((gateway) => (
                         <Item
                             key={gateway.connectionId}
                             testID={`connected-services-rail:gateway:${gateway.connectionId}`}
                             title={gateway.title}
+                            subtitle={gateway.summary}
                             icon={<Icon name="path" size={16} color={theme.colors.text.secondary} />}
                             density="compact"
                             showChevron={false}
@@ -354,10 +394,11 @@ export const ConnectedServicesRail = React.memo(function ConnectedServicesRail()
     const router = useRouter();
     const pathname = usePathname();
     const params = useGlobalSearchParams();
+    const { theme } = useUnistyles();
     const providersEnabled = useFeatureEnabled('providers');
-    const { indexModel, gateways } = useConnectedServicesIndex({ agents: 'cached', gateways: providersEnabled });
+    const { indexModel, gateways, gatewaysLoading, addGateway, addingGateway, addGatewayError, gatewayApproval } = useConnectedServicesIndex({ agents: 'cached', gateways: providersEnabled });
     const labelsByKey = useConnectedMetadataCatalog(undefined, selectConnectedMetadataLabels);
-    const privacy = useConnectedAccountIdentityPrivacy();
+    const privacy = useConnectedAccountIdentityPrivacy({ mutation: true });
     const selection = resolveConnectedServicesSelection(pathname, params);
     const onDetail = selection.kind !== 'index';
     const accountGroupsEnabled = useFeatureEnabled('connectedServices.accountGroups');
@@ -370,6 +411,8 @@ export const ConnectedServicesRail = React.memo(function ConnectedServicesRail()
     }, [onDetail, router]);
 
     return (
+        <>
+        <ConnectedAccountActionApprovalNotice execution={privacy.execution} testID="connected-services-rail-privacy-approval-pending" />
         <ConnectedServicesRailView
             model={indexModel}
             labelsByKey={labelsByKey}
@@ -384,11 +427,36 @@ export const ConnectedServicesRail = React.memo(function ConnectedServicesRail()
             onOpenPool={(sheet, groupId) => open(buildConnectedAccountSettingsRoute(sheet.service, { kind: 'group', groupId }), 'ConnectedServicesRail.pool')}
             onOpenAgentSignIn={() => open(CONNECTED_SERVICES_AGENT_SIGN_IN_ROUTE, 'ConnectedServicesRail.agentSignIn')}
             gateways={gateways ?? undefined}
+            gatewaysLoading={gatewaysLoading}
             onOpenGateway={(gateway) => {
                 // The gateway's page lives with Providers; it is entered, not swapped into this pane.
                 const result = runGuardedNavigation(() => router.push(gateway.detailRoute as never));
                 if (result !== true) fireAndForget(result, { tag: 'ConnectedServicesRail.gateway' });
             }}
+            addingGateway={addingGateway}
+            gatewayApproval={gatewayApproval ? (
+                // The rail's own compact row for the page notice: the sentence and its button cannot share a rail row.
+                <Item
+                    testID="connected-services-rail-gateway-approval-pending"
+                    title={t('settingsProvidersCollection.approvalPendingTitle')}
+                    subtitle={t('settingsProvidersCollection.openApproval')}
+                    icon={<Icon name="path" size={16} color={theme.colors.text.secondary} />}
+                    density="compact"
+                    showChevron={false}
+                    pressableStyle={collectionListStyles.row}
+                    // Keeps this rail, and the create waiting on the approval, mounted (as the page notice does).
+                    onPress={() => router.pushRetainingCurrent(gatewayApproval.href)}
+                />
+            ) : null}
+            addGatewayError={addGatewayError ? t(presentProviderError(addGatewayError).descriptionKey) : null}
+            onAddGateway={addGateway ? () => {
+                // Creates the gateway, then opens its page like any other gateway row.
+                fireAndForget(addGateway().then((route) => {
+                    if (!route) return;
+                    const result = runGuardedNavigation(() => router.push(route as never));
+                    if (result !== true) fireAndForget(result, { tag: 'ConnectedServicesRail.addGateway.open' });
+                }), { tag: 'ConnectedServicesRail.addGateway' });
+            } : undefined}
             renderNewPool={accountGroupsEnabled && newPoolServices.length > 0 ? (renderTrigger) => (
                 <NewPoolMenu
                     testID="connected-services-rail:new-pool-menu"
@@ -398,6 +466,7 @@ export const ConnectedServicesRail = React.memo(function ConnectedServicesRail()
                 />
             ) : null}
         />
+        </>
     );
 });
 
@@ -405,12 +474,12 @@ const styles = StyleSheet.create((theme) => ({
     headerActions: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 2,
+        gap: theme.space.s2,
     },
     serviceLead: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
     },
     caretSpace: {
         width: 12,
@@ -418,7 +487,7 @@ const styles = StyleSheet.create((theme) => ({
     meta: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
     },
     dot: {
         width: 6,
@@ -426,18 +495,14 @@ const styles = StyleSheet.create((theme) => ({
         borderRadius: 3,
     },
     count: {
-        ...Typography.default(),
-        fontSize: 12.5,
-        lineHeight: 16,
+        ...Typography.variant('meta'),
         color: theme.colors.text.tertiary,
         fontVariant: ['tabular-nums'],
     },
     quiet: {
-        ...Typography.default(),
-        fontSize: 13,
-        lineHeight: 18,
+        ...Typography.variant('body'),
         color: theme.colors.text.tertiary,
         paddingHorizontal: 22,
-        paddingVertical: 6,
+        paddingVertical: theme.space.s6,
     },
 }));

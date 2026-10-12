@@ -7,15 +7,19 @@ import {
   type HappierSeries,
 } from '@happier-dev/plugin-ui/presentation';
 import { useWidgetFrameBodyCaption } from '@/components/widgets/frame/widgetFrameBodyCaption';
-import { formatTokenCount } from '@/utils/format/usageNumbers';
-import { USAGE_MODEL_MIX_OTHER_KEY } from '@/sync/api/account/usageAnalytics';
+import { agentIdFromEngineKey, USAGE_MODEL_MIX_OTHER_KEY } from '@/sync/api/account/usageAnalytics';
 import { t } from '@/text';
 import { getAgentIdentityColor } from '@/agents/catalog/catalog';
 import { usageOtherColor, usageSeriesColor } from '../usageAccent';
-import { resolveUsageShownCalendarRange } from '@/sync/domains/usage/usageCalendarPresentation';
+import { formatUsageCalendarDate, resolveUsageShownCalendarRange } from '@/sync/domains/usage/usageCalendarPresentation';
+import { usageCostKindPhrase, usagePageCostTrend } from '../usageCostPresentation';
 import { useUsageDrill } from '../usageDrill';
 import {
   usageMixSeries,
+  usageVolumeSeries,
+  usageSeriesValueFormatter,
+  fillUsageTrendCalendar,
+  usageSourceTimelineSeries,
   fillUsageMixCalendar,
   useUsageSeriesAreaInk,
   useUsageSeriesLens,
@@ -26,17 +30,20 @@ import {
   UsageBodyInsufficient,
   UsageCoverageLine,
   usageAgentTitle,
+  usageDimensionLabel,
   usagePeriodPhrase,
   useUsageAnalyticsView,
   useUsagePluginTheme,
   type UsageBodyProps,
+  isUsageReadOutstanding,
+  UsageBodyReading,
 } from './usageBodyKit';
 
 const CHROME_PX = 72;
 
 /**
  * "Tokens over time": the period's flow stacked by Agent, or by model when the widget's own
- * breakdown asks for models. Token counts only — no per-bucket money is produced per series.
+ * breakdown asks for models. Money uses the same selected kind as the period and daily bars.
  */
 export function UsageFlowWidget(props: UsageBodyProps) {
   const { theme } = useUnistyles();
@@ -45,18 +52,38 @@ export function UsageFlowWidget(props: UsageBodyProps) {
   const presentation = useWidgetPresentation();
   const areaInk = useUsageSeriesAreaInk();
   const byModel = props.query.breakdown.includes('model');
+  const cost = props.query.metric === 'cost';
+  const format = usageSeriesValueFormatter(props.query.metric, view?.pageCost.selection?.currency ?? 'USD');
+  const accounting = cost ? view?.pageCost.accounting : props.slice.accounting;
+  const range = React.useMemo(() => resolveUsageShownCalendarRange(props.query, props.slice.accounting?.coverage, props.slice.accounting),
+    [props.query, props.slice.accounting]);
+  const sourceSeries = React.useMemo(() => usageSourceTimelineSeries({
+    timeline: byModel ? accounting?.modelTimeline : accounting?.engineTimeline,
+    range, coverage: props.slice.accounting?.coverage,
+    metric: props.query.metric, costMode: props.query.costBasis, costSelection: view?.pageCost.selection ?? null,
+    dimensionKey: byModel ? key => key : agentIdFromEngineKey,
+    label: byModel ? (key, fallback) => usageDimensionLabel('model', key, fallback) : usageAgentTitle,
+    color: (index, key) => byModel ? usageSeriesColor(theme, index) : getAgentIdentityColor(theme, key),
+    bucketLabel: startMs => formatUsageCalendarDate(startMs, props.query.timeZoneOffsetMinutes, { month: 'short', day: 'numeric' }),
+  }), [byModel, accounting, range, props.slice.accounting?.coverage, view?.pageCost.selection, props.query, theme]);
+  const agentForSeries = React.useCallback((id: string) => sourceSeries.find(entry => entry.id === id)?.dimensionKey ?? id, [sourceSeries]);
   const mix = React.useMemo(() => {
     if (!view) return null;
     const source = byModel ? view.modelMix : view.agentMix;
-    const range = resolveUsageShownCalendarRange(props.query, props.slice.accounting?.coverage);
     return range ? fillUsageMixCalendar(source, range, props.slice.accounting?.coverage) : source;
-  }, [view, byModel, props.query, props.slice.accounting?.coverage]);
+  }, [view, byModel, range, props.slice.accounting?.coverage]);
   useWidgetFrameBodyCaption(
     `${byModel ? t('usage.board.page.byModel') : t('usage.board.page.byAgent')} · ${usagePeriodPhrase(props.query)}`,
   );
   const series = React.useMemo(
-    () =>
-      mix
+    () => {
+      if (sourceSeries.length > 0) return sourceSeries;
+      if (cost && view) {
+        const trend = usagePageCostTrend(view.pageCost);
+        return usageVolumeSeries(range ? fillUsageTrendCalendar(trend, range, props.slice.accounting?.coverage) : trend,
+          'cost', t('usage.cost'), usageSeriesColor(theme, 0), props.query.timeZoneOffsetMinutes);
+      }
+      return mix
         ? usageMixSeries(
             mix,
             (label) => label,
@@ -74,40 +101,46 @@ export function UsageFlowWidget(props: UsageBodyProps) {
               mix.keys[index]!.key === USAGE_MODEL_MIX_OTHER_KEY
                 ? t('usage.modelMix.other')
                 : byModel
-                  ? entry.label || mix.keys[index]!.key
+                  ? usageDimensionLabel('model', mix.keys[index]!.key, entry.label)
                   : usageAgentTitle(mix.keys[index]!.key, entry.label),
           }))
-        : [],
-    [mix, theme, byModel, props.query.timeZoneOffsetMinutes],
+        : [];
+    },
+    [mix, sourceSeries, cost, view, range, theme, byModel, props.query, props.slice.accounting?.coverage],
   );
   // Choosing an Agent in the lens or the legend narrows the page's one filter row to it.
   const drill = useUsageDrill(props.query);
-  const drillable = !byModel && drill.available('agents');
+  const byAgent = !byModel && (!cost || sourceSeries.length > 0);
+  const drillable = byAgent && drill.available('agents');
   const choice = React.useCallback(
     (seriesId: string): UsageSeriesChoice | null => {
       if (!drillable || seriesId === USAGE_MODEL_MIX_OTHER_KEY) return null;
-      const selected = drill.selected('agents', seriesId);
-      const name = usageAgentTitle(seriesId);
+      const agentId = agentForSeries(seriesId);
+      const selected = drill.selected('agents', agentId);
+      const name = usageAgentTitle(agentId);
       return {
         selected,
         pressLabel: selected
           ? t('usage.board.page.drillRemove', { name })
           : t('usage.board.page.drillFilterTo', { name }),
         onPress: () => {
-          drill.toggle('agents', seriesId);
+          drill.toggle('agents', agentId);
         },
       };
     },
-    [drill, drillable],
+    [drill, drillable, agentForSeries],
   );
   const lens = useUsageSeriesLens({
     series,
-    format: formatTokenCount,
+    format,
+    ...(cost ? { footer: view?.pageCost.selection ? usageCostKindPhrase(view.pageCost.selection.kind) : t('common.unavailable') } : {}),
     accentColor: theme.colors.text.primary,
     ...(drillable ? { choice } : {}),
     testID: `${props.testID}.lens`,
   });
-  if (!mix?.hasData)
+  if ((series.length === 0 || (!cost && !sourceSeries.length && !mix?.hasData)) && isUsageReadOutstanding(props.slice, ['accounting']))
+    return <UsageBodyReading testID={`${props.testID}.loading`} />;
+  if (series.length === 0 || (!cost && !sourceSeries.length && !mix?.hasData))
     return (
       <UsageBodyInsufficient
         testID={`${props.testID}.empty`}
@@ -120,11 +153,11 @@ export function UsageFlowWidget(props: UsageBodyProps) {
     Math.min(260, (presentation?.geometry?.height ?? 220) - CHROME_PX),
   );
   return (
-    <View style={{ gap: 10 }} testID={`${props.testID}.flow`}>
+    <View style={{ gap: theme.space.s10 }} testID={`${props.testID}.flow`}>
       <StackedSeriesChart
         testID={`${props.testID}.chart`}
         theme={chartTheme}
-        label={t('usage.tokens')}
+        label={cost ? t('usage.cost') : t('usage.tokens')}
         series={series}
         variant="area"
         size="full"
@@ -135,20 +168,20 @@ export function UsageFlowWidget(props: UsageBodyProps) {
         showGrid
         showScaleValues
         showLegend
-        {...(byModel
+        {...(!byAgent
           ? {}
           : {
               leads: Object.fromEntries(
-                mix.keys
-                  .filter((key) => key.key !== USAGE_MODEL_MIX_OTHER_KEY)
-                  .map((key): [string, React.ReactNode] => [
-                    key.key,
-                    <UsageAgentMark key={key.key} agentId={key.key} serverId={props.serverId} size={12} />,
+                series
+                  .filter((entry) => entry.id !== USAGE_MODEL_MIX_OTHER_KEY)
+                  .map((entry): [string, React.ReactNode] => [
+                    entry.id,
+                    <UsageAgentMark key={entry.id} agentId={agentForSeries(entry.id)} serverId={props.serverId} size={12} />,
                   ]),
               ),
             })}
-        valueFormatter={formatTokenCount}
-        unknownLabel={t('common.unavailable')}
+        valueFormatter={format}
+        unknownLabel="—"
         showReadout={false}
         valuesLabel={t('usage.showAll')}
         valuesCollapseLabel={t('usage.showLess')}
@@ -161,7 +194,7 @@ export function UsageFlowWidget(props: UsageBodyProps) {
               seriesPressLabel: (entry: HappierSeries) =>
                 choice(entry.id)?.pressLabel ?? null,
               selectedSeriesIds: series
-                .filter((entry) => drill.selected('agents', entry.id))
+                .filter((entry) => drill.selected('agents', agentForSeries(entry.id)))
                 .map((entry) => entry.id),
             }
           : {})}

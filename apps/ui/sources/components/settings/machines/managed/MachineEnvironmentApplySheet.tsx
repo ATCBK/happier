@@ -161,28 +161,10 @@ export function MachineEnvironmentApplySheet(
           }}
         />
       ) : null}
-      <ItemGroup
-        description={t('machinePresets.environment.applyDescription', {
-          machine: props.machineName,
-        })}
-      >
-        {presets.map((preset) => (
-          <Item
-            key={preset.id}
-            testID={`machine-environment-apply.preset:${preset.id}`}
-            title={preset.name}
-            // Labelled facts; the chosen preset opens them one per line, so its row says what will run.
-            subtitle={describeMachineEnvironment(preset.environment)
-              .map((fact) => t('machinePresets.environment.fact', { label: fact.label, value: fact.value }))
-              .join(chosen?.id === preset.id ? '\n' : ' · ')}
-            subtitleLines={chosen?.id === preset.id ? 0 : undefined}
-            selected={chosen?.id === preset.id}
-            disabled={busy}
-            showChevron={false}
-            onPress={() => setChosenId(preset.id)}
-          />
-        ))}
-        {presets.length === 0 ? (
+      {presets.length === 0 ? (
+        // Nothing to apply: one flat state line on the sheet (no card against its edges) and no
+        // consequence sentence for a run that cannot happen yet.
+        <ItemGroup surface="none">
           <SurfaceStateCard
             testID="machine-environment-apply.state"
             size="line"
@@ -209,8 +191,31 @@ export function MachineEnvironmentApplySheet(
                     }
             }
           />
-        ) : null}
-      </ItemGroup>
+        </ItemGroup>
+      ) : (
+        <ItemGroup
+          description={t('machinePresets.environment.applyDescription', {
+            machine: props.machineName,
+          })}
+        >
+          {presets.map((preset) => (
+            <Item
+              key={preset.id}
+              testID={`machine-environment-apply.preset:${preset.id}`}
+              title={preset.name}
+              // Labelled facts; the chosen preset opens them one per line, so its row says what will run.
+              subtitle={describeMachineEnvironment(preset.environment)
+                .map((fact) => t('machinePresets.environment.fact', { label: fact.label, value: fact.value }))
+                .join(chosen?.id === preset.id ? '\n' : ' · ')}
+              subtitleLines={chosen?.id === preset.id ? 0 : undefined}
+              selected={chosen?.id === preset.id}
+              disabled={busy}
+              showChevron={false}
+              onPress={() => setChosenId(preset.id)}
+            />
+          ))}
+        </ItemGroup>
+      )}
       {presets.length > 0 ? (
         <ItemGroup surface="none">
           <SectionButtonRow>

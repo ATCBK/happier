@@ -105,10 +105,12 @@ describe('SavedServersSection: the Home this device uses', () => {
     });
 
     it('gives an unnamed Home a human title rather than its raw address', async () => {
-        const { screen } = await render();
+        const { screen, servers } = await render();
         const row = homeRow(screen, 'devbox');
-        // This suite's text mock returns bare keys; the label owner's own test covers the fallback.
-        expect(row?.props.title).toBe('settingsAccount.thisHomeTitle');
+        const { resolveHomeDisplayLabel } = await import('../homeDisplayName');
+        expect(row?.props.title).toBe(resolveHomeDisplayLabel(servers[3], 'devbox'));
+        expect(row?.props.title).not.toContain('devbox');
+        expect(row?.props.title).not.toContain('https://');
     });
 
     it('keeps only the ⋯ menu beside each Home on a phone', async () => {

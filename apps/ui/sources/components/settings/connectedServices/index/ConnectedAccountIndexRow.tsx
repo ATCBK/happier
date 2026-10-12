@@ -111,7 +111,7 @@ export function projectIndexMeters(
             && isConnectedServiceQuotaMeterVisible(selected.meter, nowMs, pinnedMeterIds) ? [{
             meterId: selected.meterId,
             label: selected.label,
-            remainingPct: selected.meter.status === 'unavailable' ? null : selected.remainingPct,
+            remainingPct: selected.remainingPct,
             resetsAt: selected.meter.resetAtMs ?? selected.meter.resetsAt ?? null,
             status: selected.meter.status,
         }] : []);
@@ -470,23 +470,29 @@ export const ConnectedAccountIndexLiveFacts = React.memo(function ConnectedAccou
         : <LegacyFacts {...props} serviceId={props.identity.serviceId} profileId={props.identity.profileId} />;
 });
 
+/**
+ * Where a service sheet's rows start their text in the list: under the service's name (sheet inset +
+ * mark box + gap). Account rows and the sheet's other rows (support details) share this one edge.
+ */
+export const CONNECTED_SERVICE_ACCOUNT_LEADING_INSET_PX = 58;
+
 const styles = StyleSheet.create((theme) => ({
     row: {
         flexDirection: 'row',
         alignItems: 'flex-start',
         gap: 18,
-        paddingTop: 13,
-        paddingBottom: 13,
-        paddingRight: 10,
+        paddingTop: theme.space.s12,
+        paddingBottom: theme.space.s12,
+        paddingRight: theme.space.s10,
         // Accounts align under their service's name (mark box + gap + sheet inset).
-        paddingLeft: 58,
+        paddingLeft: CONNECTED_SERVICE_ACCOUNT_LEADING_INSET_PX,
     },
     rowCompact: {
         flexDirection: 'column',
         alignItems: 'stretch',
-        gap: 12,
+        gap: theme.space.s12,
         paddingLeft: 14,
-        paddingRight: 8,
+        paddingRight: theme.space.s8,
     },
     divider: {
         borderBottomWidth: StyleSheet.hairlineWidth,
@@ -502,39 +508,33 @@ const styles = StyleSheet.create((theme) => ({
     compactHead: {
         flexDirection: 'row',
         alignItems: 'flex-start',
-        gap: 8,
+        gap: theme.space.s8,
     },
     identityText: {
         flex: 1,
         minWidth: 0,
     },
     title: {
-        ...Typography.default('semiBold'),
-        fontSize: 13.5,
-        lineHeight: 19,
+        ...Typography.variant('body', 'semiBold'),
         color: theme.colors.text.primary,
     },
     subtitle: {
-        ...Typography.default(),
-        fontSize: 12.5,
-        lineHeight: 17,
+        ...Typography.variant('meta'),
         marginTop: 1,
         color: theme.colors.text.secondary,
     },
     statusLines: {
-        marginTop: 2,
-        gap: 2,
+        marginTop: theme.space.s2,
+        gap: theme.space.s2,
     },
     statusLine: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
     },
     statusText: {
-        ...Typography.default(),
         flexShrink: 1,
-        fontSize: 12.5,
-        lineHeight: 17,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     warning: {
@@ -543,22 +543,20 @@ const styles = StyleSheet.create((theme) => ({
     roles: {
         flexDirection: 'row',
         flexWrap: 'wrap',
-        gap: 5,
-        marginTop: 8,
+        gap: theme.space.s4,
+        marginTop: theme.space.s8,
     },
     role: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 5,
+        gap: theme.space.s4,
         height: 20,
-        paddingHorizontal: 7,
+        paddingHorizontal: theme.space.s6,
         borderRadius: 6,
         backgroundColor: theme.colors.surface.inset,
     },
     roleLabel: {
-        ...Typography.default('medium'),
-        fontSize: 11.5,
-        lineHeight: 15,
+        ...Typography.variant('micro', 'medium'),
         color: theme.colors.text.secondary,
     },
     roleLabelActive: {
@@ -568,11 +566,11 @@ const styles = StyleSheet.create((theme) => ({
         width: 364,
         flexShrink: 1,
         minWidth: 0,
-        paddingTop: 2,
-        gap: 9,
+        paddingTop: theme.space.s2,
+        gap: theme.space.s8,
     },
     useCompact: {
-        gap: 9,
+        gap: theme.space.s8,
     },
     actions: {
         flexDirection: 'row',
@@ -582,7 +580,7 @@ const styles = StyleSheet.create((theme) => ({
     fix: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
         minHeight: 30,
     },
     fixCompact: {
@@ -592,12 +590,10 @@ const styles = StyleSheet.create((theme) => ({
     usageLine: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
     },
     quiet: {
-        ...Typography.default(),
-        fontSize: 12.5,
-        lineHeight: 17,
+        ...Typography.variant('meta'),
         color: theme.colors.text.tertiary,
     },
     alignEnd: {

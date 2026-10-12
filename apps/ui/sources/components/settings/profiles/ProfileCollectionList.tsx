@@ -85,7 +85,7 @@ export const ProfileCollectionRail = React.memo(function ProfileCollectionRail()
             testID="settings.profiles.rail"
             title={t('settingsFeatures.profiles')}
             // The machine environment and an open draft are collection choices too.
-            count={total + 1 + (selection.kind === 'draft' ? 1 : 0)}
+            count={collection.isInitialLoading ? undefined : total + 1 + (selection.kind === 'draft' ? 1 : 0)}
             headerAction={(
                 <IconButton
                     testID="settings.profiles.rail.add"
@@ -104,7 +104,15 @@ export const ProfileCollectionRail = React.memo(function ProfileCollectionRail()
             } : null}
         >
             {selection.kind === 'draft' ? <ProfileDraftRow /> : null}
-            {sections.length === 0 ? (
+            {collection.isInitialLoading ? (
+                <Item
+                    testID="settings.profiles.rail.loading"
+                    title={t('common.loading')}
+                    density="compact"
+                    showChevron={false}
+                    mode="info"
+                />
+            ) : sections.length === 0 ? (
                 <Item
                     testID="settings.profiles.rail.empty"
                     title={searchable && query.trim() ? t('common.noMatches') : t('profilesPage.emptyTitle')}

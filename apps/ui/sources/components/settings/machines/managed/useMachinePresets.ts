@@ -5,7 +5,7 @@ import type { MachineProvisionersListResultV1 } from '@happier-dev/protocol/plug
 
 import { getServerProfileById, areServerProfileIdentifiersEquivalent, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { useServerCredentialAccountScopeStates, useServerCredentialAccountScopeBinding, type ServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
-import { publishHomeAccountChange, subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
+import { isArtifactOnlyHomeAccountChange, publishHomeAccountChange, subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import type { ActionApprovalRegistration } from '@/components/approvals/actionApprovalContinuation';
 import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
 import { createMachinePresetCollectionClient, type MachinePresetHistoryData, type MachinePresetCollectionResult, type MachinePresetCollectionSettledResult, type MachinePresetCollectionOptions } from './machinePresetCollectionClient';
@@ -22,6 +22,13 @@ export type MachinePresetQueryState<T> = Readonly<{
     approval?: ActionApprovalRegistration;
 }>;
 type ScopedQueryState<T> = MachinePresetQueryState<T> & Readonly<{ accountId: string }>;
+type PresetCollectionRead = {
+    binding: ServerCredentialAccountScopeBinding;
+    homeId: string;
+    controller: AbortController;
+    retirement: { dispose(): void };
+    awaitingApproval: boolean;
+};
 
 export function isMachinePresetAccessLost(code: string): boolean {
     return code === 'permission_denied' || code === 'preset_not_found' || code === 'action_account_scope_changed';
@@ -44,6 +51,7 @@ export function useMachinePresetQuery<T>(input: Readonly<{
     const callbacks = React.useRef(input);
     callbacks.current = input;
     const pendingRead = React.useRef<AbortController | null>(null);
+    const approvalRead = React.useRef<{ controller: AbortController; pending: number } | null>(null);
     const withdraw = React.useCallback((code: string) => {
         pendingRead.current?.abort();
         setState({ queryKey, value: null, loading: false, error: code });
@@ -56,7 +64,15 @@ export function useMachinePresetQuery<T>(input: Readonly<{
         const retirement = binding.onRetire(() => withdraw('action_account_scope_changed'));
         setState(current => ({ queryKey, value: current.queryKey === queryKey ? current.value : null, loading: true, error: null }));
         void read({ signal: controller.signal, onApprovalPending: approval => {
-            if (!controller.signal.aborted && binding.isCurrent()) callbacks.current.onApprovalPending?.(approval);
+            if (!controller.signal.aborted && binding.isCurrent()) {
+                approvalRead.current = { controller, pending: approvalRead.current?.controller === controller ? approvalRead.current.pending + 1 : 1 };
+                callbacks.current.onApprovalPending?.(approval);
+            }
+        }, onApprovalSettled: () => {
+            const current = approvalRead.current;
+            if (current?.controller !== controller) return;
+            current.pending -= 1;
+            if (current.pending === 0) approvalRead.current = null;
         } }).then(result => {
             if (controller.signal.aborted || !binding.isCurrent()) return;
             if (result.kind === 'failed' && isMachinePresetAccessLost(result.code)) { withdraw(result.code); return; }
@@ -64,11 +80,16 @@ export function useMachinePresetQuery<T>(input: Readonly<{
                 value: result.kind === 'succeeded' ? result.value : current.queryKey === queryKey ? current.value : null }));
         }).catch(() => {
             if (!controller.signal.aborted && binding.isCurrent()) setState(current => ({ ...current, loading: false, error: 'request_failed' }));
+        }).finally(() => {
+            if (approvalRead.current?.controller === controller) approvalRead.current = null;
         });
-        return () => { controller.abort(); retirement.dispose(); };
+        return () => { controller.abort(); retirement.dispose(); if (approvalRead.current?.controller === controller) approvalRead.current = null; };
     }, [binding, read, presetId, queryKey, withdraw, revision, refreshRevision]);
     React.useEffect(() => subscribeHomeAccountChange(event => {
+        if (isArtifactOnlyHomeAccountChange(event)) return;
         if (!presetId || !areServerProfileIdentifiersEquivalent(serverId, event.serverId)) return;
+        // This read has not executed yet: its post-decision result satisfies preceding wakes.
+        if (approvalRead.current?.controller === pendingRead.current && approvalRead.current && !approvalRead.current.controller.signal.aborted) return;
         pendingRead.current?.abort();
         callbacks.current.onInvalidated?.();
         refresh();
@@ -173,13 +194,34 @@ export function useMachinePresets(serverIds: readonly string[], onApprovalPendin
     const approvalRef = React.useRef(onApprovalPending);
     approvalRef.current = onApprovalPending;
     const refresh = React.useCallback(() => setRefreshRevision(value => value + 1), []);
+    const reads = React.useRef(new Map<string, PresetCollectionRead>());
+    const refreshTargets = React.useRef(new Set<string>());
+    const refreshAll = React.useCallback(() => {
+        for (const serverId of bindings.keys()) refreshTargets.current.add(serverId);
+        refresh();
+    }, [bindings, refresh]);
+    React.useEffect(() => () => {
+        for (const read of reads.current.values()) { read.controller.abort(); read.retirement.dispose(); }
+        reads.current.clear();
+    }, []);
     React.useEffect(() => {
-        const aborters: AbortController[] = [];
-        const retirements: Readonly<{ dispose(): void }>[] = [];
+        for (const [serverId, read] of reads.current) {
+            const binding = bindings.get(serverId);
+            if (binding?.accountId === read.binding.accountId && binding.revision === read.binding.revision
+                && binding.isCurrent() && read.binding.isCurrent()
+                && getServerProfileById(serverId)?.serverIdentityId === read.homeId && !refreshTargets.current.has(serverId)) continue;
+            read.controller.abort(); read.retirement.dispose(); reads.current.delete(serverId);
+        }
         for (const [serverId, binding] of bindings) {
+            if (reads.current.has(serverId)) continue;
+            const homeId = getServerProfileById(serverId)?.serverIdentityId;
+            if (!homeId) {
+                setState(current => ({ ...current, [serverId]: { accountId: binding.accountId,
+                    value: null, loading: false, error: 'server_identity_unavailable' } }));
+                continue;
+            }
             const controller = new AbortController();
-            aborters.push(controller);
-            retirements.push(binding.onRetire(() => {
+            const retirement = binding.onRetire(() => {
                 controller.abort();
                 setState(current => {
                     if (!(serverId in current)) return current;
@@ -187,17 +229,20 @@ export function useMachinePresets(serverIds: readonly string[], onApprovalPendin
                     delete next[serverId];
                     return next;
                 });
-            }));
-            const homeId = getServerProfileById(serverId)?.serverIdentityId;
+            });
+            const pendingRead: PresetCollectionRead = { binding, homeId, controller, retirement, awaitingApproval: false };
+            reads.current.set(serverId, pendingRead);
             setState(current => ({ ...current, [serverId]: { accountId: binding.accountId,
                 value: current[serverId]?.accountId === binding.accountId ? current[serverId]!.value : null,
                 loading: Boolean(homeId), error: homeId ? null : 'server_identity_unavailable' } }));
-            if (!homeId) continue;
             const client = createMachinePresetCollectionClient(binding.scope, homeId);
             void client.list({ signal: controller.signal, onApprovalPending: approval => {
                 if (!binding.isCurrent() || controller.signal.aborted) return;
+                pendingRead.awaitingApproval = true;
                 setState(current => ({ ...current, [serverId]: { ...current[serverId]!, approval } }));
                 approvalRef.current?.(approval, serverId);
+            }, onApprovalSettled: () => {
+                pendingRead.awaitingApproval = false;
             } }).then(result => {
                 if (controller.signal.aborted || !binding.isCurrent()) return;
                 setState(current => ({ ...current, [serverId]: { accountId: binding.accountId, loading: false,
@@ -208,12 +253,19 @@ export function useMachinePresets(serverIds: readonly string[], onApprovalPendin
                 if (controller.signal.aborted || !binding.isCurrent()) return;
                 setState(current => ({ ...current, [serverId]: { accountId: binding.accountId,
                     value: current[serverId]?.value ?? null, loading: false, error: 'request_failed' } }));
+            }).finally(() => {
+                pendingRead.awaitingApproval = false;
+                retirement.dispose();
             });
         }
-        return () => { aborters.forEach(controller => controller.abort()); retirements.forEach(retirement => retirement.dispose()); };
+        refreshTargets.current.clear();
     }, [bindings, refreshRevision]);
     React.useEffect(() => subscribeHomeAccountChange(event => {
-        if ([...bindings.keys()].some(serverId => areServerProfileIdentifiersEquivalent(serverId, event.serverId))) refresh();
+        if (isArtifactOnlyHomeAccountChange(event)) return;
+        const serverId = [...bindings.keys()].find(id => areServerProfileIdentifiersEquivalent(id, event.serverId));
+        if (!serverId || reads.current.get(serverId)?.awaitingApproval) return;
+        refreshTargets.current.add(serverId);
+        refresh();
     }), [bindings, refresh]);
     return React.useMemo(() => {
         const presetsByServerId: Record<string, readonly ManagedMachinePresetV1[]> = {};
@@ -237,8 +289,8 @@ export function useMachinePresets(serverIds: readonly string[], onApprovalPendin
         const unchanged = Object.keys(previous).length === Object.keys(presetsByServerId).length
             && Object.entries(presetsByServerId).every(([serverId, presets]) => previous[serverId] === presets);
         if (!unchanged) presetsProjectionRef.current = presetsByServerId;
-        return { presetsByServerId: presetsProjectionRef.current, statesByServerId, refresh };
-    }, [state, accountScopes, requestedIdsKey, refresh]);
+        return { presetsByServerId: presetsProjectionRef.current, statesByServerId, refresh: refreshAll };
+    }, [state, accountScopes, requestedIdsKey, refreshAll]);
 }
 
 type PresetDetailMutation =

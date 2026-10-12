@@ -23,6 +23,8 @@ export type MachinePresetCollectionSettledResult<T> = Exclude<MachinePresetColle
 export type MachinePresetCollectionOptions<T> = Readonly<{
     signal?: AbortSignal;
     onApprovalPending?: (approval: ActionApprovalRegistration) => void;
+    /** A deferred read has finished; subsequent ordinary reads are refreshable again. */
+    onApprovalSettled?: () => void;
     onApprovalSucceeded?: (value: T) => void | Promise<void>;
     onApprovalFailed?: (code: string) => void;
 }>;
@@ -79,14 +81,18 @@ export function createMachinePresetCollectionClient(scope: ServerAccountScope, h
 
     function read<T extends MachinePresetActionIdV1>(actionId: T, input: MachinePresetActionInputV1<T>,
         options?: MachinePresetCollectionOptions<MachinePresetActionOutputV1<T>>) {
+        let awaitingApproval = false;
         return awaitActionApprovalResult<MachinePresetActionOutputV1<T>, MachinePresetCollectionSettledResult<MachinePresetActionOutputV1<T>>>({
             execute: async callbacks => {
-                const result = await execute(actionId, input, { ...options, ...callbacks });
+                const result = await execute(actionId, input, { ...options, ...callbacks, onApprovalPending: approval => {
+                    awaitingApproval = true;
+                    options?.onApprovalPending?.(approval);
+                } });
                 return result.kind === 'approval_pending' ? { approvalPending: true } : result;
             },
             succeeded: value => ({ kind: 'succeeded', value }), failed: code => ({ kind: 'failed', code }),
             aborted: () => ({ kind: 'failed', code: 'aborted' }), ...(options?.signal ? { signal: options.signal } : {}),
-        });
+        }).finally(() => { if (awaitingApproval) options?.onApprovalSettled?.(); });
     }
 
     async function list(options?: MachinePresetCollectionOptions<readonly ManagedMachinePresetV1[]>): Promise<MachinePresetCollectionSettledResult<readonly ManagedMachinePresetV1[]>> {
@@ -94,7 +100,7 @@ export function createMachinePresetCollectionClient(scope: ServerAccountScope, h
         let cursor: string | undefined;
         do {
             const result = await read('machines.presets.list', { homeId, includeArchived: true, ...(cursor ? { cursor } : {}) },
-                { signal: options?.signal, onApprovalPending: options?.onApprovalPending });
+                { signal: options?.signal, onApprovalPending: options?.onApprovalPending, onApprovalSettled: options?.onApprovalSettled });
             if (result.kind === 'failed') return result;
             if (result.value.kind === 'refused') return { kind: 'failed', code: result.value.code };
             presets.push(...result.value.presets);
@@ -104,13 +110,15 @@ export function createMachinePresetCollectionClient(scope: ServerAccountScope, h
     }
 
     async function detail(id: string, options?: MachinePresetCollectionOptions<MachinePresetHistoryData>): Promise<MachinePresetCollectionSettledResult<MachinePresetHistoryData>> {
-        const result = await read('machines.presets.get', { homeId, id }, { signal: options?.signal, onApprovalPending: options?.onApprovalPending });
+        const result = await read('machines.presets.get', { homeId, id }, { signal: options?.signal,
+            onApprovalPending: options?.onApprovalPending, onApprovalSettled: options?.onApprovalSettled });
         if (result.kind === 'failed') return result;
         if (result.value.kind === 'refused') return { kind: 'failed', code: result.value.code };
         // Archived managed rows are not part of the ordinary inventory response. Both reads
         // are required for history; neither modifies a resource or counts client-side capacity.
         const results = await Promise.all([false, true].map(async archived => {
             const input = { homeId, ...(archived ? { archived: true } : {}) };
+            let awaitingApproval = false;
             return awaitActionApprovalResult<ManagedMachineV1[], MachinePresetCollectionSettledResult<ManagedMachineV1[]>>({
                 execute: async callbacks => {
                     const outcome = classifyHomeActionOutcome(await executeAction('machines.managed.list', input, context(options?.signal)));
@@ -121,6 +129,7 @@ export function createMachinePresetCollectionClient(scope: ServerAccountScope, h
                             ...(options?.signal ? { signal: options.signal } : {}),
                             onSucceeded: value => callbacks.onApprovalSucceeded(value.machines), onFailed: callbacks.onApprovalFailed,
                         });
+                        awaitingApproval = true;
                         options?.onApprovalPending?.(approval);
                         return { approvalPending: true };
                     }
@@ -130,7 +139,7 @@ export function createMachinePresetCollectionClient(scope: ServerAccountScope, h
                 },
                 succeeded: value => ({ kind: 'succeeded', value }), failed: code => ({ kind: 'failed', code }),
                 aborted: () => ({ kind: 'failed', code: 'aborted' }), ...(options?.signal ? { signal: options.signal } : {}),
-            });
+            }).finally(() => { if (awaitingApproval) options?.onApprovalSettled?.(); });
         }));
         const failed = results.find(item => item.kind === 'failed');
         if (failed?.kind === 'failed') return failed;
