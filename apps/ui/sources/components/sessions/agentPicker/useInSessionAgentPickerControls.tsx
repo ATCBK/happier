@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import { buildAcpConfigOptionOverridesV1FromConfigOptions } from '@happier-dev/protocol/actions/sessionSpawnConfigOptions';
 import { isNativeAutomaticModelSelectionInputV1, type SessionModelSelectionV1 } from '@happier-dev/protocol/providers/model-selection';
@@ -69,7 +70,7 @@ function readPersistedArmedContinuation(
     if (!scope) return undefined;
     const snapshot = getSessionDraftSnapshot(scope, { kind: 'session', sessionId });
     if (!snapshot || snapshot.document.target.kind !== 'session') return undefined;
-    const parsed = SessionArmedAgentContinuationSchema.safeParse(
+    const parsed = createStoredReadSchema(SessionArmedAgentContinuationSchema).safeParse(
         snapshot.document.target.routing.agentContinuation.value,
     );
     return parsed.success ? parsed.data : undefined;
@@ -199,6 +200,12 @@ function isNativeAutomaticSelection(selection: SessionAgentPickerSelection): boo
     });
 }
 
+function resolveContinuationAgentId(entry: ResolvedBackendCatalogEntry): string {
+    return entry.backendTarget.kind === 'agent' && entry.backendTarget.definitionId
+        ? `acp:${entry.backendTarget.definitionId}`
+        : entry.agentId;
+}
+
 function buildTargetSelection(
     entry: ResolvedBackendCatalogEntry,
     selection: SessionAgentPickerSelection,
@@ -210,7 +217,7 @@ function buildTargetSelection(
     });
     return {
         v: 1,
-        agentId: entry.agentId,
+        agentId: resolveContinuationAgentId(entry),
         ...(isNativeAutomaticSelection(selection) ? {} : { modelId: selection.modelId }),
         ...(selection.modelSelection?.ref.providerConnectionId
             ? { providerConnectionId: selection.modelSelection.ref.providerConnectionId }
@@ -768,7 +775,7 @@ export function useInSessionAgentPickerControls(
         const row = targetRows.find(({ entry }) => entry.backendTargetKey === persisted.backendTargetKey);
         const stillHonourable = row !== undefined
             && row.eligibility.status === 'eligible'
-            && row.entry.agentId === persisted.intent.selection.agentId
+            && resolveContinuationAgentId(row.entry) === persisted.intent.selection.agentId
             && persisted.intent.sourceAgentId === currentAgentId;
         if (stillHonourable) {
             if (persisted.submission) {

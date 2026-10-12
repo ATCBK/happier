@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { ResolvedBackendCatalogEntry } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
+import { getResolvedBackendCatalogEntries, type ResolvedBackendCatalogEntry } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
 import { createResolvedAgentCatalogEntryFixture } from '@/dev/testkit/fixtures/agentCatalogFixtures';
 
 import { readRuntimeCapabilitiesForSession } from '@happier-dev/agents';
@@ -54,9 +54,14 @@ const SUPPORTED: SessionAgentContinuationInspectionState = {
 
 describe('resolveSessionAgentContinuationEligibility', () => {
     it('keeps the running Agent selectable without treating it as a switch', () => {
+        const currentEntry = getResolvedBackendCatalogEntries({
+            enabledAgentIds: ['claude'],
+            acpCatalogSnapshot: { status: 'ready', revision: 1, record: { v: 1, definitions: [] } },
+        })[0];
+        expect(currentEntry).toBeDefined();
         expect(resolveSessionAgentContinuationEligibility({
-            entry: builtInEntry('claude'),
-            source: eligibleSource,
+            entry: currentEntry!,
+            source: { ...eligibleSource, currentBackendTargetKey: currentEntry!.backendTargetKey },
             inspection: SUPPORTED,
         })).toEqual({ status: 'current' });
     });
