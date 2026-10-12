@@ -67,8 +67,7 @@ export async function generateScmCommitMessage(params: Readonly<{
     }
 
     const include = (params.scopePaths ?? [])
-        .map((v) => (typeof v === 'string' ? v.trim() : ''))
-        .filter((v) => v.length > 0);
+        .filter((v) => typeof v === 'string' && v.length > 0);
 
     const context = commitMessageActionContext(params.host);
     const sessionId = params.host.kind === 'session' ? params.host.sessionId : null;

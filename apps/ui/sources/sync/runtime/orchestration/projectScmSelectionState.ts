@@ -129,7 +129,7 @@ export function upsertWorkspaceScmCommitSelectionPatch(
     patchSelection: ScmCommitSelectionPatch,
     selectedAt: number = Date.now(),
 ): void {
-    const path = patchSelection.path.trim();
+    const path = patchSelection.path;
     const patch = patchSelection.patch;
     if (!path || !patch.trim()) return;
 
@@ -156,13 +156,12 @@ export function removeWorkspaceScmCommitSelectionPatch(
     workspace: ScmSelectionWorkspaceState,
     path: string,
 ): void {
-    const normalizedPath = path.trim();
-    if (!normalizedPath) return;
+    if (!path) return;
 
     const patches = workspace.scmCommitSelectionPatches;
     if (!patches) return;
 
-    delete patches[normalizedPath];
+    delete patches[path];
     if (Object.keys(patches).length === 0) {
         delete workspace.scmCommitSelectionPatches;
     }

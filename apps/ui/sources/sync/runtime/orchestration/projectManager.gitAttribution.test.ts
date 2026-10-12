@@ -80,4 +80,17 @@ describe('projectManager git attribution', () => {
         expect(projectManager.getSessionProjectScmCommitSelectionPaths('s1')).toEqual([]);
         expect(projectManager.getSessionProjectScmCommitSelectionPaths('s2')).toEqual([]);
     });
+
+    it('stores and removes patch selection by literal filename identity', () => {
+        projectManager.clear();
+        projectManager.addSession(createSession('literal', 'm1', '/repo') as Parameters<typeof projectManager.addSession>[0]);
+        for (const path of ['file', 'file ', ' ', '']) {
+            projectManager.upsertSessionProjectScmCommitSelectionPatch('literal', { path, patch: 'non-empty patch' });
+        }
+        expect(new Set(projectManager.getSessionProjectScmCommitSelectionPatches('literal').map(({ path }) => path)))
+            .toEqual(new Set(['file', 'file ', ' ']));
+        projectManager.removeSessionProjectScmCommitSelectionPatch('literal', 'file ');
+        expect(new Set(projectManager.getSessionProjectScmCommitSelectionPatches('literal').map(({ path }) => path)))
+            .toEqual(new Set(['file', ' ']));
+    });
 });

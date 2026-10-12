@@ -8,12 +8,10 @@ export function buildCommitSelectionPathHints(input: Readonly<{
 }>): string[] {
     const selected = new Set<string>();
     for (const path of input.commitSelectionPaths) {
-        const normalized = path.trim();
-        if (normalized) selected.add(normalized);
+        if (path.length > 0) selected.add(path);
     }
     for (const patch of input.commitSelectionPatches) {
-        const normalized = patch.path.trim();
-        if (normalized) selected.add(normalized);
+        if (patch.path.length > 0) selected.add(patch.path);
     }
     return Array.from(selected).sort((a, b) => a.localeCompare(b));
 }

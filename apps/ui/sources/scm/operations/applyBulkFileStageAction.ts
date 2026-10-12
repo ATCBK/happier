@@ -16,16 +16,7 @@ import { withSessionProjectScmOperationLock } from '@/scm/operations/withOperati
 import { reportSessionScmOperation, trackBlockedScmOperation } from '@/scm/operations/reporting';
 import { tracking } from '@/track';
 import { tryShowDaemonUnavailableAlertForScmOperationFailure } from '@/scm/operations/scmDaemonUnavailableAlert';
-
-function normalizePaths(paths: readonly string[]): string[] {
-    const unique = new Set<string>();
-    for (const raw of paths) {
-        const normalized = typeof raw === 'string' ? raw.trim() : '';
-        if (!normalized) continue;
-        unique.add(normalized);
-    }
-    return Array.from(unique).sort((a, b) => a.localeCompare(b));
-}
+import { buildCommitSelectionPathHints } from './commitSelectionHints';
 
 export async function applyBulkFileStageAction(input: Readonly<{
     sessionId: string;
@@ -40,7 +31,7 @@ export async function applyBulkFileStageAction(input: Readonly<{
     refreshAll?: () => Promise<void>;
     shouldContinue?: () => boolean;
 }>): Promise<void> {
-    const paths = normalizePaths(input.paths);
+    const paths = buildCommitSelectionPathHints({ commitSelectionPaths: input.paths, commitSelectionPatches: [] });
     if (paths.length === 0) return;
 
     const {

@@ -88,11 +88,11 @@ describe('applyBulkFileStageAction', () => {
             scmWriteEnabled: true,
             commitStrategy: 'atomic',
             stage: true,
-            paths: ['a.txt', 'b.txt'],
+            paths: ['file', 'file ', ' ', '', 'file '],
             surface: 'files',
         });
 
-        expect(storage.getState().getSessionProjectScmCommitSelectionPaths('s1').sort()).toEqual(['a.txt', 'b.txt']);
+        expect(new Set(storage.getState().getSessionProjectScmCommitSelectionPaths('s1'))).toEqual(new Set(['file', 'file ', ' ']));
         expect(sessionScmChangeInclude).not.toHaveBeenCalled();
         expect(sessionScmChangeExclude).not.toHaveBeenCalled();
     });

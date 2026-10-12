@@ -217,7 +217,6 @@ function hasSelectedPendingChanges(
     }
 
     const selectedScopes = selectedPaths
-        .map((value) => value.trim())
         .filter((value) => value.length > 0);
     if (selectedScopes.length === 0) {
         return null;

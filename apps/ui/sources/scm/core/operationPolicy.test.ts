@@ -348,14 +348,19 @@ describe('evaluateScmOperationPreflight', () => {
         }
     });
 
-    it('allows atomic commit when selected scope path matches pending nested file paths', () => {
+    it.each([
+        { changedPath: 'src/a.ts', selectedPath: 'src', allowed: true },
+        { changedPath: 'file ', selectedPath: 'file ', allowed: true },
+        { changedPath: 'file ', selectedPath: 'file', allowed: false },
+        { changedPath: ' ', selectedPath: ' ', allowed: true },
+    ])('checks atomic selection against literal paths: %j', ({ changedPath, selectedPath, allowed }) => {
         const result = evaluateScmOperationPreflight({
             intent: 'commit',
             scmWriteEnabled: true,
             sessionPath: '/repo',
             snapshot: makeSnapshot({
                 entries: [{
-                    path: 'src/a.ts',
+                    path: changedPath,
                     previousPath: null,
                     kind: 'modified',
                     includeStatus: '.',
@@ -372,10 +377,10 @@ describe('evaluateScmOperationPreflight', () => {
                 }],
             }, { pendingFiles: 1 }),
             commitStrategy: 'atomic',
-            commitSelectionPaths: ['src'],
-        } as any);
+            commitSelectionPaths: [selectedPath],
+        });
 
-        expect(result.allowed).toBe(true);
+        expect(result.allowed).toBe(allowed);
     });
 
     it('blocks stage/unstage intents when backend does not support include/exclude', () => {

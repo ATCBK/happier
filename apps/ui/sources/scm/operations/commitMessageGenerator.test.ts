@@ -87,12 +87,13 @@ describe('commitMessageGenerator', () => {
 
         expect(await generateScmCommitMessage({
             host: { kind: 'workspace', workspace: { serverId: 'home_a', workspaceId: 'workspace_a', machineId: 'machine_a', rootPath: '/repo' } },
-            backendId: 'claude', scopePaths: ['a.txt'],
+            backendId: 'claude', scopePaths: ['file ', ' ', ''],
         })).toMatchObject({ ok: true, message: 'feat: update stuff' });
         expect(executionRunStart).toHaveBeenCalledWith(null, expect.objectContaining({
-            cwd: '/repo', kind: 'scm_commit_message.v1', intent: 'scm_commit_message', permissionMode: 'no_tools',
+            // sessionPermissionModes owns the retained wire alias; the native profile enforces no_tools.
+            cwd: '/repo', kind: 'scm_commit_message.v1', intent: 'scm_commit_message', permissionMode: 'read_only',
             retentionPolicy: 'ephemeral', runClass: 'bounded', ioMode: 'request_response',
-            intentInput: { scope: { kind: 'paths', include: ['a.txt'] } },
+            intentInput: { scope: { kind: 'paths', include: ['file ', ' '] } },
         }), expect.objectContaining({ serverId: 'home_a', targetMachineId: 'machine_a', exactMachineId: 'machine_a' }));
         expect(executionRunGet).toHaveBeenCalledWith(null, { runId: 'run_1', includeStructured: true },
             expect.objectContaining({ serverId: 'home_a', targetMachineId: 'machine_a' }));
