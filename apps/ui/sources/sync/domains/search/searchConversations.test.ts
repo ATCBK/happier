@@ -30,6 +30,70 @@ beforeEach(() => {
             : { v: 1, ok: true, hits: [hit(call.machineId, call.machineId === 'one' ? 10 : 30, call.machineId === 'one' ? 1 : 0.1)] });
 });
 describe('conversation search fan-out', () => {
+    it('issues an explicit retry to an unreachable machine and returns its recovered results', async () => {
+        const result = await searchConversations({ ...input, machines: [{ id: 'one', online: false }],
+            retryUnreachableMachines: true });
+        expect(result.machines).toMatchObject([{ machineId: 'one', status: 'ok' }]);
+        expect(result.hits).toMatchObject([{ machineId: 'one', hit: { sessionId: 'one' } }]);
+    });
+    it('orders asynchronous authorization so an older page cannot overwrite newer progress', async () => {
+        let startSecond!: () => void;
+        let finishAuthorization!: () => void;
+        let authorizationStarted!: () => void;
+        const second = new Promise<void>(resolve => { startSecond = resolve; });
+        const authorization = new Promise<void>(resolve => { finishAuthorization = resolve; });
+        const started = new Promise<void>(resolve => { authorizationStarted = resolve; });
+        let secondAnswered = false;
+        let firstAuthorization = true;
+        const published: number[] = [];
+        rpc.mockImplementation(async call => {
+            if (call.method === RPC_METHODS.DAEMON_MEMORY_SETTINGS_GET) return { ...DEFAULT_MEMORY_SETTINGS, enabled: true };
+            if (call.method === RPC_METHODS.DAEMON_MEMORY_STATUS) return status;
+            if (call.machineId === 'two') { await second; secondAnswered = true; }
+            return { v: 1, ok: true, hits: [hit(call.machineId, 10)] };
+        });
+        const pending = searchConversations({ ...input, machines: input.machines.slice(0, 2),
+            authorize: async rows => {
+                if (firstAuthorization) { firstAuthorization = false; authorizationStarted(); await authorization; }
+                return rows;
+            }, onProgress: page => published.push(page.hits.length) });
+        try {
+            await started;
+            startSecond();
+            await vi.waitFor(() => expect(secondAnswered).toBe(true));
+            expect(published).toEqual([]);
+            finishAuthorization();
+            await pending;
+            expect(published[0]).toBe(1);
+            expect(published.at(-1)).toBe(2);
+            expect(published).toEqual([...published].sort());
+        } finally { startSecond(); finishAuthorization(); await pending; }
+    });
+    it('publishes authorized results without waiting for a slower machine and fences cancellation', async () => {
+        let releaseSlow!: () => void;
+        const slow = new Promise<void>(resolve => { releaseSlow = resolve; });
+        const controller = new AbortController();
+        rpc.mockImplementation(async call => {
+            if (call.method === RPC_METHODS.DAEMON_MEMORY_SETTINGS_GET) return { ...DEFAULT_MEMORY_SETTINGS, enabled: true };
+            if (call.method === RPC_METHODS.DAEMON_MEMORY_STATUS) return status;
+            if (call.machineId === 'two') await slow;
+            return { v: 1, ok: true, hits: [hit(call.machineId, 10), hit('denied', 50)] };
+        });
+        const onProgress = vi.fn();
+        const pending = searchConversations({ ...input, signal: controller.signal, onProgress,
+            authorize: async rows => rows.filter(row => row.mode !== 'indexed' || !('sessionId' in row.hit) || row.hit.sessionId !== 'denied') });
+        // Attach the rejection handler before cancelling the still-pending operation.
+        const cancelled = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+        try {
+            await vi.waitFor(() => expect(onProgress).toHaveBeenCalled());
+            expect(onProgress.mock.calls.at(-1)?.[0].hits).toEqual([{ machineId: 'one', mode: 'indexed', hit: hit('one', 10) }]);
+            controller.abort();
+            const publications = onProgress.mock.calls.length;
+            releaseSlow();
+            await cancelled;
+            expect(onProgress).toHaveBeenCalledTimes(publications);
+        } finally { controller.abort(); releaseSlow(); await cancelled; }
+    });
     it('keeps an empty partial scan pageable and preserves the literal phrase at the source boundary', async () => {
         rpc.mockResolvedValue({ ...DEFAULT_MEMORY_SETTINGS, enabled: false });
         list.mockResolvedValueOnce({ ok: true, candidates: [], contentCoverage: 'partial', nextCursor: 'remaining-file' })

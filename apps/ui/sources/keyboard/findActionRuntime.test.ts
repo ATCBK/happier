@@ -12,7 +12,7 @@ describe('mounted ui.find Action', () => {
         let closed = false;
         const controller: FindController = {
             query: 'needle', options: { matchCase: false, regex: false }, capabilities: { regex: true, stop: true },
-            get status() { return { kind: 'results', current: selected, total: 3, coverage: 'complete' }; },
+            get status(): FindStatus { return { kind: 'results', current: selected, total: 3, coverage: 'complete' }; },
             setQuery() {}, setOptions() {}, step(direction) { selected += direction; },
             stop() { stopped = true; }, close() { closed = true; },
         };

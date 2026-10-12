@@ -10,7 +10,7 @@ import { isMachineVisibleForSelection } from '@/sync/domains/machines/identity/f
 import { ensureSessionMetadataInventoryForServerAccountScope } from '@/sync/domains/session/fetchSessionMetadataInventoryForServerAccountScope';
 import { readSessionListRowsForServerId } from '@/sync/domains/session/listing/sessionListRowStateLookup';
 import { resolveVisibleMachinesForActiveServerFromState } from '@/sync/store/domains/machines/resolveMachinesForActiveServerFromState';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
 import { loadDaemonMergedProjectionInputs } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
 import { listExternalSessionBrowseProviderIds, resolveExternalSessionBrowseSourceOptions,
     resolveExternalSessionBrowseContentSearchSupported } from '@/components/sessions/external/browse/resolveExternalSessionBrowseSourceOptions';
@@ -65,6 +65,7 @@ export async function searchConversationsForAccount(input: Readonly<{
     query: MemorySearchQueryV1;
     machineIds?: readonly string[];
     mode?: 'auto' | 'indexed' | 'standard';
+    retryUnreachableMachines?: boolean;
     accountLifetime: ServerAccountScopeLifetime;
     providers: Readonly<{ homeSessions: boolean; daemonEnabled: boolean }>;
     source?: ConversationSearchSource;
@@ -72,6 +73,7 @@ export async function searchConversationsForAccount(input: Readonly<{
     signal?: AbortSignal;
     continuation?: NonNullable<ConversationSearchResult['continuations']>[number];
     onSources?: (sources: NonNullable<ConversationSearchResult['sources']>) => void;
+    onProgress?: (result: ConversationSearchResult) => void;
 }>): Promise<ConversationSearchResult> {
     const { serverId, accountId } = input.accountLifetime.scope;
     const controller = new AbortController();
@@ -110,12 +112,14 @@ export async function searchConversationsForAccount(input: Readonly<{
             query = { ...query, eligibleSessionIds };
         }
         const result = await searchConversations({ serverId, accountId, query,
-            machines: machines.map(machine => ({ id: machine.id, online: isMachineOnline(machine) })),
+            machines: machines.map(machine => ({ id: machine.id, online: isMachineReachable(input.accountLifetime.scope, machine) })),
+            retryUnreachableMachines: input.retryUnreachableMachines,
             concurrencyLimit: readMemorySearchSessionHydrationConcurrencyLimit(),
             mode: input.mode, ...input.providers, homeSessions, signal: controller.signal,
             continuation: input.continuation,
             includeThreads: input.includeThreads,
             onSources: input.onSources,
+            onProgress: input.onProgress,
             readSources: machineId => input.source ? Promise.resolve([input.source])
                 : readConversationSearchSources({ machineId, accountLifetime: input.accountLifetime, signal: controller.signal }),
             authorize: async rows => {

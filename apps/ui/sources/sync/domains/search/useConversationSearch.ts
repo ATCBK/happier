@@ -4,7 +4,6 @@ import { isMemoryExternalTranscriptSearchHitV1 } from '@happier-dev/protocol/mem
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { searchConversationsForAccount } from '@/sync/ops/searchConversations';
 import { useMachineListForServer } from '@/sync/domains/state/storage';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
 import { mergeConversationSearchHits, type ConversationSearchResult, type ConversationSearchSource } from './searchConversations';
 
 /** Data-only owner for explicit scans, coverage and producer-qualified Search more. */
@@ -15,8 +14,10 @@ export function useConversationSearch(input: Readonly<{
     source?: ConversationSearchSource; includeThreads?: boolean;
 }>) {
     const machines = useMachineListForServer(input.accountLifetime?.scope.serverId ?? '');
+    // Per-request admission belongs to the Account operation. A successful Retry
+    // must not invalidate its own still-running search as it restores reachability.
     const key = JSON.stringify([input.accountLifetime?.scope, input.query, input.machineIds, input.mode, input.providers, input.enabled, input.source, input.includeThreads,
-        machines?.map(machine => [machine.id, isMachineOnline(machine)])]);
+        machines?.map(machine => [machine.id, machine.active])]);
     const [revision, reload] = React.useReducer(value => value + 1, 0);
     const [state, setState] = React.useState<Readonly<{
         key: string; result: ConversationSearchResult | null; loading: boolean; error: unknown; cancelled?: boolean;
@@ -24,6 +25,7 @@ export function useConversationSearch(input: Readonly<{
     const request = React.useRef<AbortController | null>(null);
     const publishedLifetime = React.useRef<ServerAccountScopeLifetime | null>(null);
     const currentInput = React.useRef(input);
+    const explicitRetry = React.useRef(false);
     currentInput.current = input;
     React.useEffect(() => {
         const lifetime = input.accountLifetime;
@@ -36,12 +38,18 @@ export function useConversationSearch(input: Readonly<{
         }
         const retirement = lifetime.onRetire(() => { controller.abort(); setState({ key, result: null, loading: false, error: null }); });
         setState({ key, result: null, loading: true, error: null });
-        void searchConversationsForAccount({ ...currentInput.current, accountLifetime: lifetime, signal: controller.signal,
+        const retryUnreachableMachines = explicitRetry.current;
+        explicitRetry.current = false;
+        void searchConversationsForAccount({ ...currentInput.current, accountLifetime: lifetime, signal: controller.signal, retryUnreachableMachines,
             onSources: sources => {
                 if (controller.signal.aborted || !lifetime.isCurrent()) return;
                 // Source admission precedes the completed per-machine status.
                 // Do not fabricate standard-search permission during that gap.
-                setState(previous => ({ ...previous, result: { hits: [], sources, machines: [] } }));
+                setState(previous => ({ ...previous, result: { hits: [], machines: [], ...previous.result, sources } }));
+            },
+            onProgress: result => {
+                if (controller.signal.aborted || !lifetime.isCurrent()) return;
+                setState(previous => ({ ...previous, result }));
             },
         })
             .then(result => { if (!controller.signal.aborted && lifetime.isCurrent()) setState({ key, result, loading: false, error: null }); })
@@ -74,5 +82,5 @@ export function useConversationSearch(input: Readonly<{
         } catch (error) { if (!controller.signal.aborted) setState(previous => ({ ...previous, loading: false, error })); }
     }, [key]);
     return { ...(state.key === key && publishedLifetime.current === input.accountLifetime && input.accountLifetime?.isCurrent() ? state : { result: null, loading: false, error: null, cancelled: false }),
-        loadMore, reload, cancel: () => { request.current?.abort(); setState(previous => ({ ...previous, loading: false, cancelled: true })); } };
+        loadMore, reload: () => { explicitRetry.current = true; reload(); }, cancel: () => { request.current?.abort(); setState(previous => ({ ...previous, loading: false, cancelled: true })); } };
 }

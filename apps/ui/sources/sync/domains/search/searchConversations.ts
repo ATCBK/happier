@@ -94,6 +94,8 @@ export async function searchConversations(input: Readonly<{
     serverId: string;
     accountId: string;
     machines: readonly ConversationSearchMachine[];
+    /** A person's Retry must reach the daemon even after a failed admission observation. */
+    retryUnreachableMachines?: boolean;
     query: MemorySearchQueryV1;
     signal?: AbortSignal;
     concurrencyLimit: number;
@@ -107,6 +109,8 @@ export async function searchConversations(input: Readonly<{
     /** Account adapter authorizes before deduplication, so an invalid newer hit cannot hide a valid one. */
     authorize?: (rows: readonly ConversationSearchHit[]) => Promise<readonly ConversationSearchHit[]>;
     onSources?: (sources: NonNullable<ConversationSearchResult['sources']>) => void;
+    /** Completed pages are authorized before publication while other sources run. */
+    onProgress?: (result: ConversationSearchResult) => void;
 }>): Promise<ConversationSearchResult> {
     input.signal?.throwIfAborted();
     const mode = input.mode ?? 'indexed';
@@ -120,6 +124,39 @@ export async function searchConversations(input: Readonly<{
     const sourcesResult: NonNullable<ConversationSearchResult['sources']>[number][] = [];
     const resetSources: NonNullable<ConversationSearchResult['resetSources']>[number][] = [];
     const completedStandardSources: NonNullable<ConversationSearchResult['completedStandardSources']>[number][] = [];
+    const machineStatuses = new Map<string, ConversationSearchMachineStatus>();
+    let homeStatus: ConversationSearchResult['homeStatus'];
+    const readResult = async (machines: readonly ConversationSearchMachineStatus[]): Promise<ConversationSearchResult> => {
+        // A complete current scan supersedes only its own stale indexed projection.
+        const currentHits = hits.filter(row => {
+            if (row.mode !== 'indexed') return true;
+            const hit = row.hit;
+            return !isMemoryExternalTranscriptSearchHitV1(hit) || !completedStandardSources.some(source => source.machineId === row.machineId
+                && source.agentId === hit.source.agentId && source.sourceKey === hit.source.sourceKey);
+        });
+        const result = { machines,
+            ...(homeStatus ? { homeStatus } : {}), ...(sourcesResult.length ? { sources: [...sourcesResult] } : {}),
+            ...(continuations.length ? { continuations: [...continuations] } : {}), ...(resetSources.length ? { resetSources: [...resetSources] } : {}),
+            ...(completedStandardSources.length ? { completedStandardSources: [...completedStandardSources] } : {}) };
+        const authorized = input.authorize ? await input.authorize(currentHits) : currentHits;
+        input.signal?.throwIfAborted();
+        return { ...result, hits: mergeConversationSearchHits(authorized) };
+    };
+    // Authorization is asynchronous. Publish in order so a slower visibility
+    // read cannot replace a newer page with an older snapshot.
+    let publication = Promise.resolve();
+    const publish = () => {
+        if (!input.onProgress) return Promise.resolve();
+        publication = publication.then(async () => {
+            input.signal?.throwIfAborted();
+            const result = await readResult(input.machines.flatMap(machine => {
+                const status = machineStatuses.get(machine.id);
+                return status ? [status] : [];
+            }));
+            input.onProgress?.(result);
+        });
+        return publication;
+    };
     const { cursor: rawCursor, ...query } = input.query;
     const externalSource = query.externalSource;
     const continuation = input.continuation ?? readQualifiedCursor(rawCursor);
@@ -134,9 +171,9 @@ export async function searchConversations(input: Readonly<{
         && (!continuation || continuation.machineId === null)
         ? searchHomeMemory({ ...query, cursor: continuation?.cursor, serverId: input.serverId, accountId: input.accountId, signal: input.signal })
         : null;
-    const machineWork = runTasksWithLimit(input.machines.filter(machine => !continuation || continuation.machineId === machine.id).map(machine => async (): Promise<ConversationSearchMachineStatus> => {
+    const searchMachine = async (machine: ConversationSearchMachine): Promise<ConversationSearchMachineStatus> => {
         input.signal?.throwIfAborted();
-        if (!machine.online) return { machineId: machine.id, status: 'offline', standardSearchEnabled: false };
+        if (!machine.online && input.retryUnreachableMachines !== true) return { machineId: machine.id, status: 'offline', standardSearchEnabled: false };
         const target = { serverId: input.serverId, accountId: input.accountId, machineId: machine.id, signal: input.signal };
         let standardSearchEnabled = false;
         try {
@@ -208,6 +245,8 @@ export async function searchConversations(input: Readonly<{
             }));
             sourcesResult.push(...projectedSources);
             input.onSources?.([...sourcesResult]);
+            machineStatuses.set(machine.id, { machineId: machine.id, status: 'partial', standardSearchEnabled });
+            await publish();
             if (sourcesUnavailable || (nativeIndexedUsable && projectedSources.some(source => !source.indexReady))) machineStatus = 'partial';
             // Only an explicit caller (Action or activated scan surface) selects auto/standard.
             // Palette typing always selects indexed and cannot enter this branch.
@@ -247,6 +286,7 @@ export async function searchConversations(input: Readonly<{
                         .map(candidate => ({ machineId: machine.id, mode: 'standard' as const, agentId: source.agentId, sourceKey: source.sourceKey, source: source.source, candidate })));
                     if (result.nextCursor) continuations.push({ machineId: machine.id, sourceKey: source.sourceKey, cursor: result.nextCursor });
                     if (result.contentCoverage !== 'complete' || result.nextCursor || result.preparation || result.searchIncomplete) machineStatus = 'partial';
+                    await publish();
                 }
             }
             return { machineId: machine.id, status: machineStatus, standardSearchEnabled, ...(documents ? { documents } : {}) };
@@ -255,30 +295,22 @@ export async function searchConversations(input: Readonly<{
             return { machineId: machine.id,
                 status: isRpcMethodNotAvailableError(error) || isRpcMethodNotFoundError(error) ? 'outdated' : 'partial', standardSearchEnabled };
         }
+    };
+    const machineWork = runTasksWithLimit(input.machines.filter(machine => !continuation || continuation.machineId === machine.id).map(machine => async () => {
+        const status = await searchMachine(machine);
+        machineStatuses.set(machine.id, status);
+        await publish();
+        return status;
     }), input.concurrencyLimit);
-    const [machines, homeResult] = await Promise.all([machineWork, home]);
-    let homeStatus: ConversationSearchResult['homeStatus'];
-    if (homeResult) {
-        const result = homeResult;
+    const homeWork = home?.then(async result => {
         input.signal?.throwIfAborted();
         if (result.ok) {
             hits.push(...indexedRows(null, result.hits));
             if (result.nextCursor) continuations.push({ machineId: null, cursor: result.nextCursor });
             homeStatus = result.hasMore ? 'partial' : 'ok';
         } else homeStatus = 'unavailable';
-    }
-    // A fully consumed current scan supersedes that source's potentially stale
-    // indexed projection. Partial scans cannot prove an indexed item disappeared.
-    const currentHits = hits.filter(row => {
-        if (row.mode !== 'indexed') return true;
-        const hit = row.hit;
-        return !isMemoryExternalTranscriptSearchHitV1(hit) || !completedStandardSources.some(source => source.machineId === row.machineId
-            && source.agentId === hit.source.agentId && source.sourceKey === hit.source.sourceKey);
+        await publish();
     });
-    const authorized = input.authorize ? await input.authorize(currentHits) : currentHits;
-    input.signal?.throwIfAborted();
-    return { hits: mergeConversationSearchHits(authorized), machines,
-        ...(homeStatus ? { homeStatus } : {}), ...(sourcesResult.length ? { sources: sourcesResult } : {}),
-        ...(continuations.length ? { continuations } : {}), ...(resetSources.length ? { resetSources } : {}),
-        ...(completedStandardSources.length ? { completedStandardSources } : {}) };
+    const [machines] = await Promise.all([machineWork, homeWork]);
+    return readResult(machines);
 }

@@ -34,6 +34,8 @@ export type FindTranslations = Readonly<{
     loaded: string;
     note: Readonly<{
         searchingOlder: string;
+        /** Review Find while unopened changed files load to be searched. */
+        searchingChanges: string;
         offlineOlder: string;
         terminalKept: (params: Readonly<{ lines: string }>) => string;
     }>;
@@ -90,6 +92,7 @@ export const en: FindTranslations = {
     loaded: 'loaded',
     note: {
         searchingOlder: 'Looking through older messages, decrypted on this device',
+        searchingChanges: 'Looking through the changed files',
         offlineOlder: 'Older messages can be searched once you’re back online.',
         terminalKept: ({ lines }) => `Searched the last ${lines} lines this terminal keeps.`,
     },

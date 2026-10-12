@@ -263,6 +263,10 @@ export function KeyboardShortcutProvider(props: React.PropsWithChildren<Readonly
         keyboardShortcutDisabledCommandIdsV1: state.settings.keyboardShortcutDisabledCommandIdsV1,
     })));
     const singleKeyShortcutsEnabled = keyboardSingleKeyShortcutsEnabled === true;
+    // Find is a surface interaction, like browser Find, not an optional global shortcut.
+    const enabledWhenDisabledCommandIds = React.useMemo<readonly KeyboardCommandId[]>(() => [
+        ...(props.enabledWhenDisabledCommandIds ?? []), 'find.open', 'find.next', 'find.previous',
+    ], [props.enabledWhenDisabledCommandIds]);
     const disabledCommandIds = keyboardShortcutDisabledCommandIdsV1 ?? [];
     const overrides = keyboardShortcutOverridesV1 ?? {};
     const defaultLabelContext = React.useMemo(() => ({
@@ -306,7 +310,7 @@ export function KeyboardShortcutProvider(props: React.PropsWithChildren<Readonly
     const handlerKeySignature = buildHandlerKeySignature(handlers);
     const nativeKeyboardConfigurationKey = React.useMemo(() => [
         keyboardShortcutsV2Enabled === true ? 'enabled' : 'disabled',
-        buildSignatureListKey(props.enabledWhenDisabledCommandIds ?? []),
+        buildSignatureListKey(enabledWhenDisabledCommandIds),
         platform,
         surface,
         singleKeyShortcutsEnabled === true ? 'single-key-on' : 'single-key-off',
@@ -319,13 +323,13 @@ export function KeyboardShortcutProvider(props: React.PropsWithChildren<Readonly
         keyboardShortcutsV2Enabled,
         overrides,
         platform,
-        props.enabledWhenDisabledCommandIds,
+        enabledWhenDisabledCommandIds,
         singleKeyShortcutsEnabled,
         surface,
     ]);
     const dispatcherOptions = React.useMemo(() => ({
         enabled: keyboardShortcutsV2Enabled === true,
-        enabledWhenDisabledCommandIds: props.enabledWhenDisabledCommandIds,
+        enabledWhenDisabledCommandIds,
         platform,
         surface,
         webHost,
@@ -345,7 +349,7 @@ export function KeyboardShortcutProvider(props: React.PropsWithChildren<Readonly
         keyboardShortcutsV2Enabled,
         overrides,
         platform,
-        props.enabledWhenDisabledCommandIds,
+        enabledWhenDisabledCommandIds,
         singleKeyShortcutsEnabled,
         surface,
         webHost,

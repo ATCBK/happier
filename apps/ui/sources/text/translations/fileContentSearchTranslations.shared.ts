@@ -4,6 +4,8 @@
 export const fileContentSearchTranslationsEnglish = { "en": {
         allMatches: ({ matches, files }: { matches: number; files: number }) => `All ${matches} matches in ${files} files`,
         moreMatches: "All matches",
+        searchInFolder: ({ name }: { name: string }) => `Search in ${name}`,
+        matchesInFiles: ({ matches, files }: { matches: number; files: number }) => `${matches} matches in ${files} files`,
         textInFiles: "Text in files",
         everything: "Everything",
         refineSearch: "Refine your search",
