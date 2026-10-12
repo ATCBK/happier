@@ -110,6 +110,7 @@ export function SessionManagedWorkflowSection(props: Readonly<{
                             <WorkflowRunStateStatus
                                 testID={`${testIDPrefix}-run-${run.id}-state`}
                                 state={run.state}
+                                workflowCustodyState={run.workflowCustodyState}
                             />
                             <Text style={styles.rowMeta} numberOfLines={1}>
                                 {formatWorkflowRunOriginLabel(run.origin)}

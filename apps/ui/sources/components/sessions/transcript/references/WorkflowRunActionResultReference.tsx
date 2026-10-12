@@ -143,7 +143,7 @@ function MountedWorkflowRunReference(props: Readonly<{
             ? t('workflows.contentUnavailable')
             : t('workflows.run.untitled');
     const originLabel = formatWorkflowRunOriginLabel(origin);
-    const stateLabel = summary ? describeWorkflowRunState(summary.state).label : null;
+    const stateLabel = summary ? describeWorkflowRunState(summary.state, { workflowCustodyState: summary.workflowCustodyState }).label : null;
     const open = (): void => {
         navigateWithBlurOnWeb(() => {
             transcriptSource.navigate?.(createWorkflowRunRoute(runId));
@@ -168,6 +168,7 @@ function MountedWorkflowRunReference(props: Readonly<{
                         <WorkflowRunStateStatus
                             testID={`transcript-workflow-run-${runId}-state`}
                             state={summary.state}
+                            workflowCustodyState={summary.workflowCustodyState}
                         />
                     ) : null}
                 </View>
