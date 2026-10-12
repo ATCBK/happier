@@ -14,6 +14,7 @@ import { CapabilityError } from './errors';
 import type { DetectCliSnapshot } from './snapshots/cliSnapshot';
 
 export type CapabilitiesDetectContext = {
+    accountId?: string;
     cliSnapshot: DetectCliSnapshot | null;
 };
 
@@ -31,7 +32,7 @@ export type Capability = {
 
 export type CapabilitiesService = {
     describe: () => CapabilitiesDescribeResponse;
-    detect: (data: CapabilitiesDetectRequest) => Promise<CapabilitiesDetectResponse>;
+    detect: (data: CapabilitiesDetectRequest, custody?: Readonly<{ accountId?: string }>) => Promise<CapabilitiesDetectResponse>;
     invoke: (
         data: CapabilitiesInvokeRequest,
         context?: Readonly<{ signal?: AbortSignal }>,
@@ -89,7 +90,7 @@ export function createCapabilitiesService(opts: {
         checklists: opts.checklists,
     });
 
-    const detect = async (data: CapabilitiesDetectRequest): Promise<CapabilitiesDetectResponse> => {
+    const detect = async (data: CapabilitiesDetectRequest, custody?: Readonly<{ accountId?: string }>): Promise<CapabilitiesDetectResponse> => {
         const selectedChecklistId = data?.checklistId;
         const rawRequests = selectRequestsFromChecklist({
             checklistId: selectedChecklistId,
@@ -102,7 +103,7 @@ export function createCapabilitiesService(opts: {
             { bypassCache: data?.bypassCache === true },
         );
         const checkedAt = Date.now();
-        const context = await opts.buildContext(requests);
+        const context = { ...await opts.buildContext(requests), accountId: custody?.accountId };
 
         const results: Partial<Record<CapabilityId, CapabilityDetectResult>> = {};
         for (const req of requests) {

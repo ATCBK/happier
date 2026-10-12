@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { ExecFileTerminationError } from '@happier-dev/cli-common/process';
-import { installAgentCliForRuntime, resolvePlatformFromNodePlatform, type AgentInstallProgressCallback } from '@happier-dev/cli-common/agents';
+import { hasAgentCliManagedInstallForRuntime, installAgentCliForRuntime, removeAgentCliManagedInstallForRuntime, resolvePlatformFromNodePlatform, type AgentInstallProgressCallback } from '@happier-dev/cli-common/agents';
 import { DaemonAgentInstallStartRequestSchema, DaemonAgentInstallReadRequestSchema, DaemonAgentInstallCancelRequestSchema } from '@happier-dev/protocol/daemon/agent-install-jobs';
 import { PluginAgentCliInstallMetadataSchema } from '@happier-dev/protocol/plugins/contributions/agentCliMetadata';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
@@ -15,22 +15,38 @@ import { executeInstallCommand } from './executeInstallCommand';
 import { resolveAgentSetupPlatform } from '@happier-dev/protocol/agents/setup';
 import type { LiveWorkItemV1, LiveWorkProducerV1 } from '@/daemon/lifecycle/managedActivity';
 import type { DaemonAdmissionDrain } from '@/daemon/lifecycle/admissionDrain';
+import type { AcpBackendDefinitionV1 } from '@happier-dev/protocol/acp/catalog/settingsV1';
+import type { AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import { CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1, isCustomAcpAgentContributionIdentityV1 } from '@happier-dev/protocol/agents/executionTargetV1';
+import { indexAgentRoutingIdsByContributionIdentity, readAgentRoutingIdForContributionIdentity } from '@/plugins/projection/registry/agentRoutingIdentity';
+import { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { getAcpArchiveInstallableDescriptor, getAcpNpmRuntimeSpec, installAcpLaunch, resolveAcpLaunch, type AcpLaunchInstallResult } from '@/agent/acp/catalog/configured/resolveAcpLaunch';
+import { hasPinnedArchiveManagedInstall } from '@/packagedRuntime/installables/sourceAdapters/pinnedArchive';
+import { isAgentInstallTargetInUse, removeManagedAcpInstall } from '@/agent/acp/catalog/registry/managedAgentInstalls';
+import type { TrackedSession } from '@/daemon/types';
+import { buildMachineAgentInventoryKey } from '@happier-dev/protocol/capabilities/machineAgentInventory';
 
 export type AgentInstallJobRegistry = Readonly<{
-  agents: readonly Pick<ResolvedAgentContribution, 'id' | 'runtimeSpec' | 'pluginId' | 'richDefinition' | 'hostAccess' | 'cliMetadata'>[];
+  agents: readonly Pick<ResolvedAgentContribution, 'id' | 'identity' | 'runtimeSpec' | 'pluginId' | 'richDefinition' | 'hostAccess' | 'cliMetadata'>[];
   managedDependencies?: readonly ResolvedInstallableContribution[];
 }>;
 
 export type AgentInstallJobOwnerOptions = Readonly<{
+  accountId?: string;
   readRegistry?: () => AgentInstallJobRegistry;
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
   arch?: string;
   installerDeps?: Parameters<typeof installAgentCliForRuntime>[0]['deps'];
   admissionDrain?: Pick<DaemonAdmissionDrain, 'isQuiescing' | 'isFinalShutdown'>;
+  readAcpCatalog?: () => AcpCatalogSnapshotV1 | undefined;
+  readTrackedSessions?: () => Iterable<TrackedSession>;
 }>;
 
 type JobRecord = {
+  accountId?: string;
+  activeKey: string;
+  recentKey: string;
   snapshot: AgentInstallJob;
   events: AgentInstallJobEvent[];
   controller: AbortController;
@@ -40,6 +56,8 @@ type JobRecord = {
 
 function failureCode(code: string): AgentInstallJobFailureCode {
   switch (code) {
+    case 'in_use': return 'in_use';
+    case 'not_managed': return 'not_managed';
     case 'vendor-recipe-disallowed': return 'consent_required';
     case 'install-confirmation-required': return 'consent_required';
     case 'unsupported-platform': return 'unsupported_platform';
@@ -55,7 +73,10 @@ function failureCode(code: string): AgentInstallJobFailureCode {
 }
 
 export function createAgentInstallJobOwner(options: AgentInstallJobOwnerOptions = {}) {
+  let accountId = options.accountId;
   let admissionDrain = options.admissionDrain;
+  let readTrackedSessions = options.readTrackedSessions;
+  let readAcpCatalog = options.readAcpCatalog ?? (() => getActiveAccountSettingsSnapshot()?.acpCatalog);
   const readRegistry = options.readRegistry ?? readCurrentContributionRegistry;
   const env = options.env ?? process.env;
   const installerDeps = { execFileWithDeadline: executeInstallCommand, ...options.installerDeps };
@@ -63,7 +84,7 @@ export function createAgentInstallJobOwner(options: AgentInstallJobOwnerOptions 
   const jobs = new Map<string, JobRecord>();
   const activeByAgent = new Map<string, JobRecord>();
   // Reconnection needs the active job and the latest completed attempt, not an
-  // unbounded daemon-lifetime audit trail. Each agent retains one terminal job.
+  // unbounded daemon-lifetime audit trail. Each target retains one terminal job.
   const recentByAgent = new Map<string, JobRecord>();
   const activityListeners = new Set<() => void>();
   const notifyActivity = (): void => {
@@ -101,6 +122,84 @@ export function createAgentInstallJobOwner(options: AgentInstallJobOwnerOptions 
     emit(job, event.t === 'progress' ? { ...event, stepId } : event);
   };
 
+  const targetKey = (target: Pick<DaemonAgentInstallStartRequest, 'agentId' | 'definitionId'>, account?: string) =>
+    JSON.stringify([target.definitionId === undefined ? null : account, buildMachineAgentInventoryKey(target)]);
+  const inUse = (target: Pick<DaemonAgentInstallStartRequest, 'agentId' | 'definitionId'>): boolean => {
+    try { return !readTrackedSessions || isAgentInstallTargetInUse(target, readTrackedSessions()); }
+    catch { return true; }
+  };
+  const settle = (job: JobRecord, result: AgentInstallJobOutcome) => {
+    invalidateCliSnapshots();
+    job.snapshot.outcome = result;
+    job.snapshot.done = true;
+    const key = job.recentKey;
+    // A failed-containment writer remains excluded even after its public terminal outcome.
+    if (!job.cleanupError) activeByAgent.delete(job.activeKey);
+    const previous = recentByAgent.get(key);
+    if (previous && !previous.cleanupError) jobs.delete(previous.snapshot.jobId);
+    recentByAgent.set(key, job);
+    notifyActivity();
+  };
+  const runDefinition = async (job: JobRecord, input: DaemonAgentInstallStartRequest, definition: AcpBackendDefinitionV1 | undefined) => {
+    const signal = job.controller.signal;
+    const stepId = `cli.${input.agentId}.${input.definitionId}`;
+    const label = definition?.title ?? 'Remove managed Agent';
+    emit(job, { t: 'step', stepId, label, state: 'running' });
+    const fail = (code: AgentInstallJobFailureCode, message: string): AgentInstallJobOutcome => ({ kind: 'failed', code, stepId, message });
+    let result: AgentInstallJobOutcome;
+    try {
+      signal.throwIfAborted();
+      if ((input.intent === 'uninstall' || input.force) && inUse(input)) {
+        result = fail('in_use', 'Stop the sessions using this Agent before changing its managed installation.');
+      } else if (input.intent === 'uninstall') {
+        const removed = await removeManagedAcpInstall({ accountId: job.accountId, definitionId: input.definitionId!, env, signal,
+          isDefinitionInUse: () => inUse(input) });
+        result = removed.ok ? { kind: 'succeeded', version: null }
+          : fail(removed.code, removed.code === 'in_use' ? 'The Agent is in use.' : 'The Agent is not installed through Happier.');
+      } else if (!definition || definition.launch.kind === 'command') {
+        result = fail('install_not_available', 'This definition has no managed installation.');
+      } else {
+        const params = { accountId: job.accountId, definition, env, platform: host.platform, arch: host.architecture, signal,
+          onProgress: progressFor(job, stepId), intent: input.intent, force: input.force };
+        const archive = getAcpArchiveInstallableDescriptor(definition, job.accountId!);
+        const npm = getAcpNpmRuntimeSpec(definition, job.accountId!);
+        const resolutionBeforeInstall = await resolveAcpLaunch(params);
+        const retained = archive
+          ? await hasPinnedArchiveManagedInstall({ installId: archive.capabilityId, env })
+          : npm !== null && await hasAgentCliManagedInstallForRuntime({ runtimeSpec: npm, env });
+        // A pin change acquires another root. Repair/removal of this exact version still needs live-use evidence.
+        const needsRemoval = retained && (input.force || resolutionBeforeInstall.kind !== 'ready');
+        const replacingInUse = needsRemoval && inUse(input);
+        if (replacingInUse) {
+          result = fail('in_use', 'Stop the sessions using this Agent before replacing its managed installation.');
+        } else {
+          const removed = needsRemoval ? await removeManagedAcpInstall({ accountId: job.accountId,
+            definitionId: definition.id, version: definition.launch.version, env, signal, isDefinitionInUse: () => inUse(input) }) : { ok: true as const };
+          const installed: AcpLaunchInstallResult = removed.ok ? await installAcpLaunch(params, { installerDeps })
+            : { ok: false, errorCode: removed.code, errorMessage: 'The retained version cannot be removed for repair.', logPath: null };
+          if (!installed.ok) {
+            if (installed.errorCode === 'termination-failed') job.cleanupError = new ExecFileTerminationError(new Error(installed.errorMessage));
+            result = fail(failureCode(installed.errorCode ?? 'install-failed'), installed.errorMessage);
+          } else {
+            signal.throwIfAborted();
+            const resolution = await resolveAcpLaunch(params);
+            signal.throwIfAborted();
+            result = resolution.kind === 'ready' ? { kind: 'succeeded', version: definition.launch.version,
+              ...(installed.checksum ? { checksum: installed.checksum } : {}) }
+              : fail('verification_failed', 'The installed definition does not resolve to a ready launch.');
+          }
+        }
+      }
+    } catch (error) {
+      const terminationFailed = error instanceof ExecFileTerminationError;
+      if (terminationFailed) job.cleanupError = error;
+      const cancelled = signal.aborted && (error === signal.reason || error instanceof Error && error.name === 'AbortError');
+      result = fail(cancelled && !terminationFailed ? 'cancelled' : 'install_failed', error instanceof Error ? error.message : 'Agent installation failed.');
+    }
+    emit(job, { t: 'step', stepId, label, state: result.kind === 'succeeded' ? 'done' : 'failed' });
+    settle(job, result);
+  };
+
   const run = async (job: JobRecord, input: DaemonAgentInstallStartRequest, registry: AgentInstallJobRegistry, agent: AgentInstallJobRegistry['agents'][number]) => {
     const spec = agent.runtimeSpec;
     if (!spec) return;
@@ -122,6 +221,20 @@ export function createAgentInstallJobOwner(options: AgentInstallJobOwnerOptions 
     let result: AgentInstallJobOutcome;
     try {
       begin(stepId, label);
+      if ((input.intent === 'update' || input.intent === 'uninstall' || input.force) && inUse(input)) {
+        result = fail('in_use', 'Stop the sessions using this Agent before changing its managed installation.');
+        emit(job, { t: 'step', stepId, label, state: 'failed' });
+        settle(job, result);
+        return;
+      }
+      if (input.intent === 'uninstall') {
+        const removed = spec.managedInstall ? await removeAgentCliManagedInstallForRuntime({ runtimeSpec: spec, env, signal })
+          : { ok: false as const, code: 'not_managed' as const };
+        result = removed.ok ? { kind: 'succeeded', version: null } : fail(removed.code, 'The Agent is not installed through Happier.');
+        if (removed.ok) done();
+        settle(job, result);
+        return;
+      }
       const platform = resolvePlatformFromNodePlatform(host.platform);
       if (!platform) {
         result = fail('unsupported_platform', `Agent installation is not supported on ${host.platform}.`);
@@ -145,6 +258,22 @@ export function createAgentInstallJobOwner(options: AgentInstallJobOwnerOptions 
           result = fail('unsupported_platform', 'The agent or its required dependency does not support this host platform.');
         } else if (unresolved) {
           result = fail('install_not_available', `Required dependency ${unresolved} is not installable on this host.`);
+        } else if (input.intent === 'install' && inUse(input)
+          && (spec.managedInstall && await hasAgentCliManagedInstallForRuntime({ runtimeSpec: spec, env })
+            || await (async () => {
+              for (const dependency of dependencies) {
+                const descriptor = dependency.definition;
+                if (descriptor.source.kind === 'pinned_archive') {
+                  if (await hasPinnedArchiveManagedInstall({ installId: descriptor.capabilityId, env })) return true;
+                } else {
+                  const adapter = await getRuntimeInstallableAdapter(descriptor.key, { installablesRegistry: dependencyRegistry });
+                  const command = await adapter.resolveLaunchCommand?.({ env });
+                  if (command?.ok && command.source === 'managed') return true;
+                }
+              }
+              return false;
+            })())) {
+          result = fail('in_use', 'Stop the sessions using this Agent before replacing its managed installation.');
         } else {
           let cliFailure: AgentInstallJobOutcome | null = null;
           if (input.intent === 'update') {
@@ -221,76 +350,104 @@ export function createAgentInstallJobOwner(options: AgentInstallJobOwnerOptions 
       result = fail(cancelled && !terminationFailed ? 'cancelled' : 'install_failed', error instanceof Error ? error.message : 'Agent installation failed.');
     }
     if (result.kind === 'failed') emit(job, { t: 'step', stepId, label, state: 'failed' });
-    invalidateCliSnapshots();
-    job.snapshot.outcome = result;
-    job.snapshot.done = true;
-    // Failed containment is still an excluded writer: don't allow another
-    // install to race a command whose process cleanup could not be verified.
-    if (!job.cleanupError) activeByAgent.delete(agent.id);
-    const previous = recentByAgent.get(agent.id);
-    if (previous) jobs.delete(previous.snapshot.jobId);
-    recentByAgent.set(agent.id, job);
-    notifyActivity();
+    settle(job, result);
   };
 
   return {
     activity,
+    isDefinitionJob(jobId: string): boolean { return jobs.get(jobId)?.snapshot.definitionId !== undefined; },
+    bindAccountId(id: string): void { accountId = id; },
     bindAdmissionDrain(drain: NonNullable<AgentInstallJobOwnerOptions['admissionDrain']>): void {
       admissionDrain = drain;
     },
-    start(input: DaemonAgentInstallStartRequest): DaemonAgentInstallStartResponse {
+    bindTrackedSessions(reader: NonNullable<AgentInstallJobOwnerOptions['readTrackedSessions']>): void {
+      readTrackedSessions = reader;
+    },
+    bindAcpCatalog(reader: NonNullable<AgentInstallJobOwnerOptions['readAcpCatalog']>): void {
+      readAcpCatalog = reader;
+    },
+    start(input: DaemonAgentInstallStartRequest, account?: Readonly<{ accountId: string; catalog: AcpCatalogSnapshotV1 }>): DaemonAgentInstallStartResponse {
       const parsed = DaemonAgentInstallStartRequestSchema.safeParse(input);
       if (!parsed.success) return { ok: false, errorCode: 'invalid_request', error: 'Invalid install request.' };
       if (shuttingDown) return { ok: false, errorCode: 'install_unavailable', error: 'The daemon is shutting down.' };
-      const active = activeByAgent.get(input.agentId);
-      if (active?.cleanupError) return { ok: false, errorCode: 'install_unavailable', error: 'The previous install process cleanup could not be verified. Stop that process manually and restart the daemon before retrying.' };
+      const active = input.definitionId === undefined ? activeByAgent.get(targetKey(input)) : undefined;
+      if (active?.cleanupError) return { ok: false, errorCode: 'install_unavailable', error: 'The previous install process cleanup could not be verified.' };
       if (active) return { ok: true, jobId: active.snapshot.jobId };
-      if (admissionDrain?.isQuiescing()) return { ok: false, errorCode: 'install_unavailable',
-        error: admissionDrain.isFinalShutdown() ? 'The daemon is shutting down.' : 'The daemon is draining.' };
       let registry: AgentInstallJobRegistry;
       try { registry = readRegistry(); } catch {
         return { ok: false, errorCode: 'install_unavailable', error: 'The agent registry is unavailable.' };
       }
       const currentAgentIds = new Set(registry.agents.map((agent) => agent.id));
-      for (const [agentId, previous] of recentByAgent) {
-        if (!currentAgentIds.has(agentId) && !activeByAgent.has(agentId)) {
-          recentByAgent.delete(agentId);
+      for (const [key, previous] of recentByAgent) {
+        if (!currentAgentIds.has(previous.snapshot.agentId) && ![...activeByAgent.values()].some(active => active.recentKey === key)) {
+          recentByAgent.delete(key);
           jobs.delete(previous.snapshot.jobId);
         }
       }
-      const agent = registry.agents.find((candidate) => candidate.id === input.agentId);
-      if (!agent?.runtimeSpec) return { ok: false, errorCode: 'install_unavailable', error: 'The agent has no registered CLI runtime.' };
+      const customRoutingId = readAgentRoutingIdForContributionIdentity(indexAgentRoutingIdsByContributionIdentity(registry.agents), CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1);
+      const agent = registry.agents.find(candidate => candidate.id === input.agentId)
+        ?? (input.agentId === CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1.localId ? registry.agents.find(candidate => candidate.id === customRoutingId) : undefined);
+      if (!agent || input.definitionId !== undefined && !isCustomAcpAgentContributionIdentityV1(agent.identity)
+        || input.definitionId === undefined && !agent.runtimeSpec) return { ok: false, errorCode: 'install_unavailable', error: 'The agent has no registered CLI runtime.' };
+      const request = { ...parsed.data, agentId: agent.id };
+      if ((request.intent === 'uninstall' || request.force || request.definitionId === undefined && request.intent === 'update') && inUse(request)) {
+        return { ok: false, errorCode: 'in_use', error: 'Stop the sessions using this Agent before changing its managed installation. Session use must be known.' };
+      }
+      let definition: AcpBackendDefinitionV1 | undefined;
+      const requestedAccountId = request.definitionId === undefined ? undefined : account?.accountId ?? accountId;
+      if (request.definitionId !== undefined && !requestedAccountId) return { ok: false, errorCode: 'install_unavailable', error: 'The configured Agent Account is unavailable.' };
+      if (request.definitionId !== undefined && request.intent !== 'uninstall') {
+        const catalog = account?.catalog ?? readAcpCatalog();
+        if (catalog?.status !== 'ready') return { ok: false, errorCode: 'install_unavailable', error: 'The configured Agent catalog is unavailable.' };
+        const captured = catalog.record.definitions.find(entry => entry.id === request.definitionId);
+        definition = captured && structuredClone(captured);
+        if (!definition) return { ok: false, errorCode: 'install_unavailable', error: 'The configured Agent definition is unavailable.' };
+      }
+      const recentKey = targetKey(request, requestedAccountId);
+      const activeKey = request.definitionId === undefined ? recentKey : JSON.stringify([recentKey,
+        definition?.launch.kind !== 'command' ? definition?.launch.version ?? null : null]);
+      const canonicalActive = activeByAgent.get(activeKey) ?? [...activeByAgent.values()].find(active =>
+        active.recentKey === recentKey && (request.intent === 'uninstall' || active.snapshot.intent === 'uninstall'));
+      if (canonicalActive?.cleanupError) return { ok: false, errorCode: 'install_unavailable', error: 'The previous install process cleanup could not be verified.' };
+      if (canonicalActive) return { ok: true, jobId: canonicalActive.snapshot.jobId };
+      if (admissionDrain?.isQuiescing()) return { ok: false, errorCode: 'install_unavailable',
+        error: admissionDrain.isFinalShutdown() ? 'The daemon is shutting down.' : 'The daemon is draining.' };
       const job: JobRecord = {
-        snapshot: { jobId: randomUUID(), agentId: agent.id, intent: input.intent, startedAt: Date.now(), steps: [], progress: [], done: false, outcome: null },
+        accountId: requestedAccountId, activeKey, recentKey,
+        snapshot: { jobId: randomUUID(), agentId: agent.id, ...(request.definitionId === undefined ? {} : { definitionId: request.definitionId }),
+          intent: request.intent, startedAt: Date.now(), steps: [], progress: [], done: false, outcome: null },
         events: [], controller: new AbortController(), completion: Promise.resolve(), cleanupError: null,
       };
       jobs.set(job.snapshot.jobId, job);
-      activeByAgent.set(agent.id, job);
+      activeByAgent.set(activeKey, job);
       // Start on the next microtask so admission publishes the active record
       // before even a synchronously rejected install can settle.
-      job.completion = Promise.resolve().then(() => run(job, parsed.data, registry, agent));
+      job.completion = Promise.resolve().then(() => request.definitionId === undefined ? run(job, request, registry, agent)
+        : runDefinition(job, request, definition));
       notifyActivity();
       return { ok: true, jobId: job.snapshot.jobId };
     },
-    read(input: DaemonAgentInstallReadRequest): DaemonAgentInstallReadResponse {
+    read(input: DaemonAgentInstallReadRequest, requestedAccountId = accountId): DaemonAgentInstallReadResponse {
       if (!DaemonAgentInstallReadRequestSchema.safeParse(input).success) return { ok: false, errorCode: 'invalid_request', error: 'Invalid install read request.' };
       const job = jobs.get(input.jobId);
-      if (!job) return { ok: false, errorCode: 'job_not_found', error: 'Install job not found.' };
+      if (!job || job.accountId && requestedAccountId !== undefined && job.accountId !== requestedAccountId) return { ok: false, errorCode: 'job_not_found', error: 'Install job not found.' };
       if (input.cursor > job.events.length) return { ok: false, errorCode: 'invalid_request', error: 'Install cursor is beyond the available events.' };
       return { ok: true, events: structuredClone(job.events.slice(input.cursor)), nextCursor: job.events.length,
         steps: structuredClone(job.snapshot.steps), progress: structuredClone(job.snapshot.progress),
         done: job.snapshot.done, outcome: structuredClone(job.snapshot.outcome) };
     },
-    async cancel(input: DaemonAgentInstallCancelRequest): Promise<DaemonAgentInstallCancelResponse> {
+    async cancel(input: DaemonAgentInstallCancelRequest, requestedAccountId = accountId): Promise<DaemonAgentInstallCancelResponse> {
       if (!DaemonAgentInstallCancelRequestSchema.safeParse(input).success) return { ok: false, errorCode: 'invalid_request', error: 'Invalid install cancellation request.' };
       const job = jobs.get(input.jobId);
-      if (!job) return { ok: false, errorCode: 'job_not_found', error: 'Install job not found.' };
+      if (!job || job.accountId && requestedAccountId !== undefined && job.accountId !== requestedAccountId) return { ok: false, errorCode: 'job_not_found', error: 'Install job not found.' };
       if (!job.snapshot.done) job.controller.abort();
       await job.completion;
       if (job.cleanupError) return { ok: false, errorCode: 'install_unavailable', error: job.cleanupError.message };
       return { ok: true };
     },
-    list(): DaemonAgentInstallListResponse { return { ok: true, jobs: [...jobs.values()].map((job) => structuredClone(job.snapshot)) }; },
+    list(requestedAccountId = accountId): DaemonAgentInstallListResponse { return { ok: true, jobs: [...jobs.values()]
+      .filter(job => job.accountId === undefined || requestedAccountId === undefined || job.accountId === requestedAccountId)
+      .map((job) => structuredClone(job.snapshot)) }; },
     async shutdown(): Promise<void> {
       shuttingDown = true;
       const active = [...activeByAgent.values()];
@@ -304,8 +461,11 @@ export function createAgentInstallJobOwner(options: AgentInstallJobOwnerOptions 
 
 export type AgentInstallJobOwner = ReturnType<typeof createAgentInstallJobOwner>;
 let daemonOwner: AgentInstallJobOwner | null = null;
-export function getDaemonAgentInstallJobOwner(options?: Pick<AgentInstallJobOwnerOptions, 'admissionDrain'>): AgentInstallJobOwner {
+export function getDaemonAgentInstallJobOwner(options?: Pick<AgentInstallJobOwnerOptions, 'accountId' | 'admissionDrain' | 'readTrackedSessions' | 'readAcpCatalog'>): AgentInstallJobOwner {
   const owner = daemonOwner ??= createAgentInstallJobOwner(options);
+  if (options?.accountId) owner.bindAccountId(options.accountId);
   if (options?.admissionDrain) owner.bindAdmissionDrain(options.admissionDrain);
+  if (options?.readTrackedSessions) owner.bindTrackedSessions(options.readTrackedSessions);
+  if (options?.readAcpCatalog) owner.bindAcpCatalog(options.readAcpCatalog);
   return owner;
 }

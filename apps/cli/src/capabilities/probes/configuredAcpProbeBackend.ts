@@ -8,6 +8,7 @@ import { AcpCatalogUnavailableError, requireReadyAcpCatalog, resolveConfiguredAc
 import type { CatalogAgentLookupId } from '@/agent/catalog/ids';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import type { StoredCredentials } from '@/persistence';
+import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import {
@@ -132,6 +133,7 @@ export async function createConfiguredAcpProbeBackend(params: Readonly<{
   }
 
   return createConfiguredAcpBackend({
+    accountId: credentials ? readAccountIdFromToken(credentials.token) ?? undefined : undefined,
     cwd: params.cwd,
     env: params.processEnv,
     backend,

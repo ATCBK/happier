@@ -29,10 +29,13 @@ import { createStablePluginExecService } from '@/plugins/runtime/invocation/serv
 import { withTempDir } from '@/testkit/fs/tempDir';
 
 import { probeAcpCatalogs } from './probeAcpCatalogs';
+import { probeAgentModelsBestEffort } from './agentModelsProbe';
+import { probeAgentModesBestEffort } from './agentModesProbe';
+import { probeAgentConfigOptionsBestEffort } from './agentConfigOptionsProbe';
 
 const commands = [{ name: 'review', description: 'Review the project', input: { hint: 'target' } }];
 
-function writeFixture(dir: string, scenario: 'before' | 'after' | 'empty' | 'absent' | 'auth' | 'authMissing' | 'exit' | 'ohmypi' | 'cursor' | 'antigravity' | 'authRequired' | 'cursorModels') {
+function writeFixture(dir: string, scenario: 'before' | 'after' | 'empty' | 'absent' | 'auth' | 'authMissing' | 'exit' | 'ohmypi' | 'cursor' | 'antigravity' | 'authRequired' | 'cursorModels' | 'controlsWithoutCatalog' | 'configControls') {
   const evidencePath = join(dir, 'requests.jsonl');
   const script = writeAcpTestAgentScript({ dir, fileName: 'catalog-agent.mjs', source: `
     import { appendFileSync } from 'node:fs';
@@ -70,7 +73,16 @@ function writeFixture(dir: string, scenario: 'before' | 'after' | 'empty' | 'abs
             publish('native-session', scenario === 'empty' ? [] : ${JSON.stringify(commands)});
             publish('different-session', [{ name: 'wrong', description: 'Wrong session' }]);
           }
-          send({ id: request.id, result: { sessionId: 'native-session' } });
+          send({ id: request.id, result: { sessionId: 'native-session', ...(scenario === 'controlsWithoutCatalog' ? {
+            models: { currentModelId: 'selected-model', availableModels: [{ modelId: 'selected-model', name: 'Selected native model' }] },
+            modes: { currentModeId: 'plan', availableModes: [{ id: 'plan', name: 'Plan', description: 'Native planning mode' }] },
+          } : scenario === 'configControls' ? {
+            models: { availableModels: [] }, modes: { availableModes: [] },
+            configOptions: [
+              { id: 'model', name: 'Model', type: 'select', currentValue: 'config-model', options: [{ value: 'config-model', name: 'Config native model' }] },
+              { id: 'mode', name: 'Mode', type: 'select', currentValue: 'plan', options: [{ value: 'plan', name: 'Plan', description: 'Configuration planning mode' }] },
+            ],
+          } : {}) } });
           if (scenario === 'after') setTimeout(() => { publish('different-session', []); publish('native-session', ${JSON.stringify(commands)}); }, 100);
           if (scenario === 'exit') setTimeout(() => process.exit(7), 25);
         }
@@ -258,8 +270,50 @@ describe('Antigravity declared ready native ACP catalog', () => {
         const adapter = await project(true).getPreflightSessionControlsProbeAdapter?.();
         await expect(adapter?.probeCatalogsRaw?.({ cwd: dir, timeoutMs: 10_000 })).resolves.toEqual({ commands, skills: null });
         expect(readFileSync(fixture.evidencePath, 'utf8')).not.toContain('"method":"authenticate"');
+        writeFixture(dir, 'controlsWithoutCatalog');
+        expect(await adapter?.probeModelsRaw?.({ cwd: dir, timeoutMs: 10_000 })).toMatchObject([
+          { id: 'default' }, { id: 'selected-model', name: 'Selected native model' },
+        ]);
+        expect(await adapter?.probeModesRaw?.({ cwd: dir, timeoutMs: 10_000 })).toEqual([
+          { id: 'plan', name: 'Plan', description: 'Native planning mode' },
+        ]);
+        const catalogEntry = { id: 'antigravity', cliSubcommand: 'antigravity', ...project(true) } as const;
+        const modelDiscovery = await probeAgentModelsBestEffort({
+          agentId: 'antigravity', catalogEntry, cwd: dir, timeoutMs: 10_000, bypassCache: true,
+        });
+        expect(modelDiscovery).toMatchObject({ source: 'dynamic', availableModels: [
+          { id: 'default' }, { id: 'selected-model', name: 'Selected native model' },
+        ] });
+        const modeDiscovery = await probeAgentModesBestEffort({
+          agentId: 'antigravity', catalogEntry, cwd: dir, timeoutMs: 10_000,
+        });
+        expect.soft(modeDiscovery).toMatchObject({ source: 'dynamic', availableModes: [
+          { id: 'plan', name: 'Plan' },
+        ] });
+        writeFixture(dir, 'configControls');
+        expect(await adapter?.probeModelsRaw?.({ cwd: dir, timeoutMs: 10_000 })).toMatchObject([
+          { id: 'default' }, { id: 'config-model', name: 'Config native model' },
+        ]);
+        expect(await adapter?.probeModesRaw?.({ cwd: dir, timeoutMs: 10_000 })).toEqual([
+          { id: 'plan', name: 'Plan', description: 'Configuration planning mode' },
+        ]);
+        expect(await adapter?.probeConfigOptionsRaw?.({ cwd: dir, timeoutMs: 10_000 })).toMatchObject([
+          { id: 'model', currentValue: 'config-model' }, { id: 'mode', currentValue: 'plan' },
+        ]);
+        const configDiscovery = await probeAgentConfigOptionsBestEffort({
+          agentId: 'antigravity', catalogEntry, cwd: dir, timeoutMs: 10_000,
+        });
+        expect.soft(configDiscovery).toMatchObject({ source: 'dynamic', configOptions: [
+          { id: 'model', currentValue: 'config-model' }, { id: 'mode', currentValue: 'plan' },
+        ] });
+        const discoveryEvidence = readFileSync(fixture.evidencePath, 'utf8');
+        expect(discoveryEvidence).toContain('"method":"session/close"');
+        expect(discoveryEvidence).not.toContain('"method":"authenticate"');
+        expect(discoveryEvidence).not.toContain('session/prompt');
         const denied = await project(false).getPreflightSessionControlsProbeAdapter?.();
         await expect(denied?.probeCatalogsRaw?.({ cwd: dir, timeoutMs: 10_000 })).rejects.toThrow();
+        expect(await denied?.probeModelsRaw?.({ cwd: dir, timeoutMs: 10_000 })).toBeNull();
+        expect(await denied?.probeModesRaw?.({ cwd: dir, timeoutMs: 10_000 })).toBeNull();
         writeFixture(dir, 'authRequired');
         await expect(adapter?.probeCatalogsRaw?.({ cwd: dir, timeoutMs: 10_000 })).rejects.toThrow(/Authentication required/);
         expect(readFileSync(fixture.evidencePath, 'utf8')).not.toContain('"method":"authenticate"');

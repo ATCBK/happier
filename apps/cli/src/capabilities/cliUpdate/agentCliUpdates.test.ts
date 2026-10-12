@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentCliRuntimeDescriptor } from '@happier-dev/cli-common/agents';
 
-import type { Capability } from '@/capabilities/service';
+import { createCapabilitiesService, type Capability } from '@/capabilities/service';
+import { buildMachineAgentsDetectRequest } from '@happier-dev/protocol/capabilities/machineAgentInventory';
 import { createTempDirSync, removeTempDirSync } from '@/testkit/fs/tempDir';
 
 import { withAgentCliUpdates } from './agentCliUpdates';
@@ -105,6 +106,36 @@ describe.skipIf(process.platform === 'win32')('withAgentCliUpdates (K6)', () => 
 
     await cap.detect({ request: { id: 'cli.claude', params: { includeLatestVersion: true, bypassCache: true } }, context: { cliSnapshot: null } });
     expect(fetchLatestVersion).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns launch inventory before the vendor release registry responds', async () => {
+    let releaseVendor!: () => void;
+    const vendorReply = new Promise<void>((resolve) => { releaseVendor = resolve; });
+    const cap = withAgentCliUpdates(
+      createInstalledCliCapability({ resolvedPath: launcher, version: () => '2.1.0' }),
+      'claude',
+      deps({ fetchLatestVersion: async () => {
+        await vendorReply;
+        return { latestVersion: '2.2.0', heldVersion: null };
+      } }),
+    );
+    const service = createCapabilitiesService({
+      capabilities: [cap], checklists: { 'new-session': [], 'machine-details': [] },
+      buildContext: async () => ({ cliSnapshot: null }),
+    });
+    let inventory: Awaited<ReturnType<typeof service.detect>> | undefined;
+    const request = buildMachineAgentsDetectRequest({
+      agents: [{ agentId: 'claude', title: 'Claude' }], includeLatestVersion: false,
+    });
+    const pending = service.detect(request).then((response) => { inventory = response; });
+    try {
+      await vi.waitFor(() => expect(inventory?.results['cli.claude']).toMatchObject({
+        ok: true, data: { available: true, version: '2.1.0' },
+      }));
+      const result = inventory?.results['cli.claude'];
+      if (!result?.ok) throw new Error('Expected installed CLI inventory');
+      expect(result.data).not.toHaveProperty('latestVersion');
+    } finally { releaseVendor(); await pending; }
   });
 
   it('preserves detected CLI facts after a 403 latest-version failure without caching it', async () => {

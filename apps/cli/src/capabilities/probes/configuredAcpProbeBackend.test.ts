@@ -50,7 +50,7 @@ function probeSnapshot(command: string, args: string[], home: string) {
     loadedAtMs: 1, settingsSecretsReadKeys: [],
     scopeKey: runWithServerHttpBaseUrl(home, () => resolveAccountSettingsScopeKey(credentials)),
     acpCatalog: { status: 'ready' as const, revision: 1, record: AcpCatalogRecordV1Schema.parse({ v: 1, definitions: [{
-      id: 'review-bot', name: 'review-bot', title: 'Review bot', command, args,
+      id: 'review-bot', name: 'review-bot', title: 'Review bot', launch: { kind: 'command' as const, command: command, args: args },
       env: { TOKEN: { t: 'savedSecret', secretId: formatSharedSavedSecretRefV1('probe-resource') } },
       capabilities: {}, createdAt: 1, updatedAt: 1,
     }] }) }, savedSecretCatalogState: 'ready' as const,
@@ -68,7 +68,7 @@ describe('createConfiguredAcpProbeBackend', () => {
     setActiveAccountSettingsSnapshot({
       source: 'network', settings, settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey,
       acpCatalog: { status: 'ready', revision: 1, record: AcpCatalogRecordV1Schema.parse({ v: 1, definitions: [{
-        id: 'review-bot', name: 'review-bot', title: 'Review bot', command: process.execPath, args: [],
+        id: 'review-bot', name: 'review-bot', title: 'Review bot', launch: { kind: 'command' as const, command: process.execPath, args: [] },
         env: { REGION: { t: 'literal', v: 'eu' } }, capabilities: {}, createdAt: 1, updatedAt: 1,
       }] }) },
     });
@@ -83,7 +83,7 @@ describe('createConfiguredAcpProbeBackend', () => {
     setActiveAccountSettingsSnapshot({
       source: 'network', settings, settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey,
       acpCatalog: { status: 'ready', revision: 1, record: AcpCatalogRecordV1Schema.parse({ v: 1, definitions: [{
-        id: 'review-bot', name: 'review-bot', title: 'Review bot', command: process.execPath, args: [],
+        id: 'review-bot', name: 'review-bot', title: 'Review bot', launch: { kind: 'command' as const, command: process.execPath, args: [] },
         env: { TOKEN: { t: 'savedSecret', secretId: formatSharedSavedSecretRefV1('secret-1') } }, capabilities: {}, createdAt: 1, updatedAt: 1,
       }] }) },
     });
@@ -97,7 +97,7 @@ describe('createConfiguredAcpProbeBackend', () => {
     setActiveAccountSettingsSnapshot({
       source: 'network', settings, settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [],
       acpCatalog: { status: 'ready', revision: 1, record: AcpCatalogRecordV1Schema.parse({ v: 1, definitions: [{
-        id: 'review-bot', name: 'review-bot', title: 'Review bot', command: process.execPath, args: [],
+        id: 'review-bot', name: 'review-bot', title: 'Review bot', launch: { kind: 'command' as const, command: process.execPath, args: [] },
         env: {}, capabilities: {}, createdAt: 1, updatedAt: 1,
       }] }) },
     });

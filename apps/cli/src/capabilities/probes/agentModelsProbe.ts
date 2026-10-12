@@ -424,6 +424,10 @@ function normalizeModelsFromConfigOptions(configOptionsRaw: unknown): ProbedAgen
   });
 }
 
+export function normalizeAcpModelsSnapshot(modelsRaw: unknown, configOptionsRaw: unknown): ProbedAgentModel[] | null {
+  return normalizeDynamicModels(modelsRaw) ?? normalizeModelsFromConfigOptions(configOptionsRaw);
+}
+
 export async function probeModelsFromAcpBackend(params: {
   backend: AcpProbeBackend;
   timeoutMs: number;
@@ -441,20 +445,10 @@ export async function probeModelsFromAcpBackend(params: {
     }
   });
 
-  if (typeof backend.getSessionModelState === 'function') {
-    const state = backend.getSessionModelState();
-    const modelsRaw = state?.availableModels;
-    const models = normalizeDynamicModels(modelsRaw);
-    if (models) return models;
-  }
-
-  if (typeof backend.getSessionConfigOptionsState === 'function') {
-    const configOptions = backend.getSessionConfigOptionsState();
-    const models = normalizeModelsFromConfigOptions(configOptions);
-    if (models) return models;
-  }
-
-  return null;
+  return normalizeAcpModelsSnapshot(
+    backend.getSessionModelState?.()?.availableModels,
+    backend.getSessionConfigOptionsState?.(),
+  );
 }
 
 async function probeAgentModels(params: {

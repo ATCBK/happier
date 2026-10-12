@@ -2,24 +2,61 @@ import { createHash } from 'node:crypto';
 import type { ChildProcess } from 'node:child_process';
 import { createServer, type ServerResponse, type IncomingMessage } from 'node:http';
 import type { RequestOptions } from 'node:https';
-import { mkdtemp, readdir, rm, access, readFile, writeFile, mkdir } from 'node:fs/promises';
+import { mkdtemp, readdir, rm, access, readFile, writeFile, mkdir, chmod } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test, vi } from 'vitest';
-import type { AgentCliRuntimeDescriptor } from '@happier-dev/cli-common/agents';
+import { resolveAgentCliManagedCommandPathForRuntime, type AgentCliRuntimeDescriptor } from '@happier-dev/cli-common/agents';
 import { execFileWithDeadline, isPidPresent, ExecFileTerminationError } from '@happier-dev/cli-common/process';
 import { create as createTar } from 'tar';
 import type { AgentInstallJobOutcome } from '@happier-dev/protocol';
 import { PluginAgentContributionV2Schema, PluginManifestV2Schema } from '@happier-dev/protocol';
 import { PLUGIN_MANIFEST as antigravityManifest } from '@happier-dev/plugins-antigravity/manifest';
 import cliTestConfig from '../../../vitest.config';
-import { killProcessTree } from '@/agent/runtime/process/killProcessTree';
+import { terminateProcessTree } from '@/processes/terminate/terminateProcessTree';
 import type { ResolvedInstallableContribution } from '@/plugins/projection/registry/types';
-import { createAgentInstallJobOwner, type AgentInstallJobOwner } from './agentInstallJobOwner';
+import { createAgentInstallJobOwner as createProductionAgentInstallJobOwner, type AgentInstallJobOwner } from './agentInstallJobOwner';
 import { createDaemonAdmissionDrain } from '@/daemon/lifecycle/admissionDrain';
 
 const fixtureWaitTimeout = cliTestConfig.test?.testTimeout;
 if (typeof fixtureWaitTimeout !== 'number') throw new Error('CLI unit test timeout must be configured');
+
+function createAgentInstallJobOwner(options: Parameters<typeof createProductionAgentInstallJobOwner>[0]) {
+  // These fixtures own no live sessions; destructive operations require an observed runner set.
+  return createProductionAgentInstallJobOwner({ readTrackedSessions: () => [], ...options });
+}
+
+test.skipIf(process.platform === 'win32')('ordinary install refuses replacing existing managed bytes for a live Agent but permits its first acquisition', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'happier-live-agent-repair-'));
+  const binary = Buffer.from('#!/bin/sh\nprintf "fixture-live 1.2.3\\n"\n');
+  const server = createServer((_request, response) => { response.writeHead(200, { 'content-length': binary.length }); response.end(binary); });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  let owner: AgentInstallJobOwner | undefined;
+  try {
+    const address = server.address(); if (!address || typeof address === 'string') throw new Error('Missing fixture address');
+    const spec: AgentCliRuntimeDescriptor = { id: 'fixture-live', title: 'Fixture live', binaryName: 'fixture-live',
+      sourcePreferenceDefault: 'managed-first', manualInstallKind: 'none', manualInstallRecipes: {}, acceptsJavaScriptFileOverride: false,
+      managedInstall: { kind: 'github_release_binary', githubRepo: 'fixture/live', binaryName: 'fixture-live' } };
+    const env = { HAPPIER_HOME_DIR: root, HOME: root, PATH: '' };
+    owner = createAgentInstallJobOwner({ env, readRegistry: () => registryWith(spec), readTrackedSessions: () => [{
+      pid: process.pid, startedBy: 'daemon', spawnOptions: { directory: root,
+        runtimeDescriptorV1: { v: 1, agentId: spec.id, agent: {} } },
+    }], installerDeps: { fetchGitHubLatestRelease: async () => ({ assets: [{
+      name: `fixture-live-${process.platform}-${process.arch}`, browser_download_url: `http://127.0.0.1:${address.port}/binary`,
+      digest: `sha256:${createHash('sha256').update(binary).digest('hex')}`,
+    }] }) } });
+    const first = owner.start({ agentId: spec.id, intent: 'install', consent: { vendorRecipe: false } });
+    expect(first.ok).toBe(true); if (!first.ok) return;
+    expect(await outcome(owner, first.jobId)).toEqual({ kind: 'succeeded', version: '1.2.3' });
+    await chmod(resolveAgentCliManagedCommandPathForRuntime(spec, { processEnv: env }), 0o644);
+    const repair = owner.start({ agentId: spec.id, intent: 'install', consent: { vendorRecipe: false } });
+    expect(repair.ok).toBe(true); if (!repair.ok) return;
+    expect(await outcome(owner, repair.jobId)).toMatchObject({ kind: 'failed', code: 'in_use' });
+  } finally {
+    await owner?.shutdown(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 async function stopFixture(owner: AgentInstallJobOwner | undefined, allowTerminationFailure = false): Promise<void> {
   try {
@@ -527,7 +564,7 @@ test.skipIf(process.platform === 'win32')('failed process termination is visible
     const child = processBoundary.child;
     if (child && child.exitCode === null && child.signalCode === null) {
       const closed = new Promise<void>((resolve) => child.once('close', resolve));
-      await killProcessTree(child);
+      await terminateProcessTree(child);
       await closed;
     }
     await rm(root, { recursive: true, force: true });
@@ -579,7 +616,7 @@ test.skipIf(process.platform === 'win32').each([false, true])('version verificat
     const child = processBoundary.child;
     if (child && child.exitCode === null && child.signalCode === null) {
       const closed = new Promise<void>((resolve) => child.once('close', resolve));
-      await killProcessTree(child);
+      await terminateProcessTree(child);
       await closed;
     }
     if (descendantPid && isPidPresent(descendantPid)) {

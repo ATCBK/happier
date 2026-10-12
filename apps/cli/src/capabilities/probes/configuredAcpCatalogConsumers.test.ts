@@ -30,8 +30,8 @@ vi.mock('cross-spawn', async importOriginal => ({
 const credentials = { token: 'configured-catalog-consumers', encryption: null } as const;
 const backendTarget = { kind: 'configuredAcpBackend', backendId: 'review-bot' } as const;
 const record = AcpCatalogRecordV1Schema.parse({ v: 1, definitions: [{
-  id: 'review-bot', name: 'review-bot', title: 'Current review bot', command: process.execPath,
-  args: ['--version'], env: { REGION: { t: 'literal', v: 'row-region' } }, capabilities: {}, createdAt: 1, updatedAt: 1,
+  id: 'review-bot', name: 'review-bot', title: 'Current review bot', launch: { kind: 'command' as const, command: process.execPath, args: ['--version'] },
+   env: { REGION: { t: 'literal', v: 'row-region' } }, capabilities: {}, createdAt: 1, updatedAt: 1,
 }] });
 
 function publish(catalog: AcpCatalogSnapshotV1, includeRetainedBackend = false) {

@@ -144,6 +144,10 @@ function normalizeModesFromConfigOptions(configOptionsRaw: unknown): ProbedAgent
   });
 }
 
+export function normalizeAcpModesSnapshot(modesRaw: unknown, configOptionsRaw: unknown): ProbedAgentMode[] | null {
+  return normalizeDynamicModes(modesRaw) ?? normalizeModesFromConfigOptions(configOptionsRaw);
+}
+
 export async function probeModesFromAcpBackend(params: {
   backend: AcpProbeBackend;
   timeoutMs: number;
@@ -159,20 +163,10 @@ export async function probeModesFromAcpBackend(params: {
     if (timerId !== null) clearTimeout(timerId);
   });
 
-  if (typeof backend.getSessionModeState === 'function') {
-    const state = backend.getSessionModeState();
-    const modesRaw = state?.availableModes;
-    const modes = normalizeDynamicModes(modesRaw);
-    if (modes) return modes;
-  }
-
-  if (typeof backend.getSessionConfigOptionsState === 'function') {
-    const configOptions = backend.getSessionConfigOptionsState();
-    const modes = normalizeModesFromConfigOptions(configOptions);
-    if (modes) return modes;
-  }
-
-  return null;
+  return normalizeAcpModesSnapshot(
+    backend.getSessionModeState?.()?.availableModes,
+    backend.getSessionConfigOptionsState?.(),
+  );
 }
 
 export async function probeAgentModesBestEffort(params: {
@@ -228,7 +222,10 @@ export async function probeAgentModesBestEffort(params: {
     if (cached2?.kind === 'success' && agentModesProbeCache.isFresh(cached2, nowMs2)) return cached2.value;
 
     const fallback = buildStatic(params.agentId);
-    if (shouldFailClosedForMissingCli(params)) {
+    const preflightAdapter = await resolvePreflightSessionControlsProbeAdapter(params.agentId, params.catalogEntry);
+    // A declared preflight hook resolves and checks its own executable; its
+    // transport may differ from the Agent's interactive CLI.
+    if (!preflightAdapter?.probeModesRaw && shouldFailClosedForMissingCli(params)) {
       const unavailable = buildUnavailable(params.agentId);
       agentModesProbeCache.setError(cacheKey, { nowMs: nowMs2, ttlMs: PROBE_MODES_FAILURE_TTL_MS });
       return unavailable;
@@ -236,7 +233,6 @@ export async function probeAgentModesBestEffort(params: {
 
     const timeoutMs = typeof params.timeoutMs === 'number' ? params.timeoutMs : DEFAULT_PROBE_MODES_TIMEOUT_MS;
 
-    const preflightAdapter = await resolvePreflightSessionControlsProbeAdapter(params.agentId, params.catalogEntry);
     if (preflightAdapter?.probeModesRaw) {
       const probePreflightModesOnce = async (): Promise<ProbedAgentMode[] | null> => {
         const modesRaw = await withPreflightSessionControlsProbeEnvironment({

@@ -6,7 +6,8 @@ import {
   agentCliPathRequiresJavaScriptRuntime,
   resolveAgentCliJavaScriptRuntimeCommand,
 } from '@happier-dev/cli-common/agents/resolution';
-import { execFileWithDeadline, resolveWindowsCommandInvocation } from '@happier-dev/cli-common/process';
+import { ExecFileTerminationError, execFileWithDeadline, resolveWindowsCommandInvocation } from '@happier-dev/cli-common/process';
+import { terminateProcessTree } from '@/processes/terminate/terminateProcessTree';
 
 export function resolveCliAuthHomeDir(): string {
   const envHome =
@@ -25,15 +26,24 @@ export function resolveCliAuthHomeDir(): string {
 export async function runCliCommandBestEffort(params: Readonly<{
   resolvedPath: string;
   args: string[];
-  timeoutMs?: number;
+  /** Null keeps the probe pending under caller cancellation instead of the auth diagnostic default. */
+  timeoutMs?: number | null;
+  signal?: AbortSignal;
   env?: Readonly<Record<string, string>>;
   processEnv?: NodeJS.ProcessEnv;
 }>): Promise<Readonly<{ ok: boolean; stdout: string; stderr: string; exitCode: number | null }>> {
-  const timeoutMs = typeof params.timeoutMs === 'number' ? params.timeoutMs : 1_000;
+  const timeoutMs = params.timeoutMs === null ? undefined : typeof params.timeoutMs === 'number' ? params.timeoutMs : 1_000;
   const isWindows = process.platform === 'win32';
   const isCmdScript = isWindows && /\.(cmd|bat)$/i.test(params.resolvedPath);
   const processEnv = params.processEnv ?? process.env;
   const execEnv = params.env ? { ...processEnv, ...params.env } : processEnv;
+  const execOptions = {
+    timeout: timeoutMs,
+    signal: params.signal,
+    terminateOnAbort: params.signal ? terminateProcessTree : undefined,
+    env: execEnv,
+    windowsHide: true,
+  };
   const needsJavaScriptRuntime = agentCliPathRequiresJavaScriptRuntime(params.resolvedPath);
   const runtimeExecutable = resolveAgentCliJavaScriptRuntimeCommand(params.resolvedPath, execEnv, {
     isBunRuntime: typeof process.versions.bun === 'string',
@@ -52,11 +62,7 @@ export async function runCliCommandBestEffort(params: Readonly<{
     }
 
     if (runtimeExecutable) {
-      const { stdout, stderr } = await execFileWithDeadline(runtimeExecutable, [params.resolvedPath, ...params.args], {
-        timeout: timeoutMs,
-        env: execEnv,
-        windowsHide: true,
-      });
+      const { stdout, stderr } = await execFileWithDeadline(runtimeExecutable, [params.resolvedPath, ...params.args], execOptions);
       return { ok: true, stdout: asString(stdout), stderr: asString(stderr), exitCode: 0 };
     }
 
@@ -67,21 +73,16 @@ export async function runCliCommandBestEffort(params: Readonly<{
         resolveCommandOnPath: false,
       });
       const { stdout, stderr } = await execFileWithDeadline(invocation.command, invocation.args, {
-        timeout: timeoutMs,
-        env: execEnv,
-        windowsHide: true,
+        ...execOptions,
         windowsVerbatimArguments: invocation.windowsVerbatimArguments,
       });
       return { ok: true, stdout: asString(stdout), stderr: asString(stderr), exitCode: 0 };
     }
 
-    const { stdout, stderr } = await execFileWithDeadline(params.resolvedPath, params.args, {
-      timeout: timeoutMs,
-      env: execEnv,
-      windowsHide: true,
-    });
+    const { stdout, stderr } = await execFileWithDeadline(params.resolvedPath, params.args, execOptions);
     return { ok: true, stdout: asString(stdout), stderr: asString(stderr), exitCode: 0 };
   } catch (error) {
+    if (error instanceof ExecFileTerminationError) throw error;
     return {
       ok: false,
       stdout: asString((error as any)?.stdout),
