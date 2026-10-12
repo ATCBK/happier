@@ -2,6 +2,7 @@ import { getPublicUrl } from "@/storage/blob/files";
 import {
     AccountDisplayProfileV1Schema,
     ReleasedDirectSessionShareProfileV1Schema,
+    projectAccountNameToLegacyFieldsV1,
     type AccountDisplayProfileV1,
     type ReleasedDirectSessionShareProfileV1,
 } from "@happier-dev/protocol";
@@ -15,6 +16,7 @@ import {
  */
 export const ACCOUNT_DISPLAY_PROFILE_SELECT = {
     id: true,
+    name: true,
     firstName: true,
     lastName: true,
     username: true,
@@ -23,6 +25,7 @@ export const ACCOUNT_DISPLAY_PROFILE_SELECT = {
 
 export type AccountDisplayProfileRow = Readonly<{
     id: string;
+    name: string | null;
     firstName: string | null;
     lastName: string | null;
     username: string | null;
@@ -46,8 +49,8 @@ function resolveAccountAvatarUrl(avatar: unknown): string | null {
  */
 export function projectAccountDisplayProfileV1(row: AccountDisplayProfileRow): AccountDisplayProfileV1 {
     return AccountDisplayProfileV1Schema.parse({
-        firstName: row.firstName,
-        lastName: row.lastName,
+        name: row.name,
+        ...projectAccountNameToLegacyFieldsV1(row.name),
         username: row.username,
         avatarUrl: resolveAccountAvatarUrl(row.avatar),
     });
@@ -60,15 +63,7 @@ export function projectAccountDisplayProfileV1(row: AccountDisplayProfileRow): A
  * Callers that need a label must consume this rather than re-deriving the rule,
  * so a Home never names the same person two different ways.
  */
-export function resolveAccountDisplayLabelV1(
-    row: Readonly<{ firstName: string | null; lastName: string | null; username: string | null }>,
-): string | null {
-    const name = [row.firstName, row.lastName]
-        .map((part) => part?.trim())
-        .filter((part): part is string => Boolean(part))
-        .join(" ");
-    return name || row.username?.trim() || null;
-}
+export { resolveAccountDisplayLabelV1 } from "@happier-dev/protocol";
 
 /**
  * Released direct-share/public-owner wire shape. It is the same projection with

@@ -12,6 +12,7 @@ const {
 
 const BASE = {
     id: "acc_alice",
+    name: "Captain",
     firstName: "Alice",
     lastName: "Chen",
     username: "alice",
@@ -25,6 +26,7 @@ describe("accountDisplayProfile", () => {
             "firstName",
             "id",
             "lastName",
+            "name",
             "username",
         ]);
     });
@@ -32,8 +34,9 @@ describe("accountDisplayProfile", () => {
     it("projects the neutral display profile with a public avatar URL and no Account id", () => {
         const projected = projectAccountDisplayProfileV1(BASE);
         expect(projected).toEqual({
-            firstName: "Alice",
-            lastName: "Chen",
+            name: "Captain",
+            firstName: "Captain",
+            lastName: null,
             username: "alice",
             avatarUrl: "https://files.test/avatars/alice.png",
         });
@@ -49,18 +52,19 @@ describe("accountDisplayProfile", () => {
     it("keeps absent names null rather than substituting an identifier", () => {
         expect(projectAccountDisplayProfileV1({
             id: "acc_ghost",
+            name: null,
             firstName: null,
             lastName: null,
             username: null,
             avatar: null,
-        })).toEqual({ firstName: null, lastName: null, username: null, avatarUrl: null });
+        })).toEqual({ name: null, firstName: null, lastName: null, username: null, avatarUrl: null });
     });
 
     it("keeps the released direct-share wire shape, including its Account id field", () => {
         expect(toShareUserProfile(BASE)).toEqual({
             id: "acc_alice",
-            firstName: "Alice",
-            lastName: "Chen",
+            firstName: "Captain",
+            lastName: null,
             username: "alice",
             avatar: "https://files.test/avatars/alice.png",
         });
