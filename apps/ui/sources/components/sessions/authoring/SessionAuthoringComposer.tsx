@@ -60,17 +60,17 @@ function SessionAuthoringComposerDictationAccessory(props: Readonly<{
     transcriptionSessionId: string | null;
     inputRef: React.RefObject<MultiTextInputHandle | null>;
     stateRef: React.MutableRefObject<TextInputState>;
+    focusRef: React.MutableRefObject<TextInputDictation['onFocus'] | null>;
     render: NonNullable<SessionAuthoringComposerProps['renderDictationAccessory']>;
 }>): React.ReactElement {
     const dictation = useSessionAuthoringComposerDictation({
-        composerRef: props.composerRef,
-        enabled: true,
-        presented: props.presented,
-        editable: props.editable,
-        transcriptionSessionId: props.transcriptionSessionId,
-        inputRef: props.inputRef,
-        stateRef: props.stateRef,
+        composerRef: props.composerRef, enabled: true, presented: props.presented, editable: props.editable,
+        transcriptionSessionId: props.transcriptionSessionId, inputRef: props.inputRef, stateRef: props.stateRef,
     });
+    React.useLayoutEffect(() => {
+        props.focusRef.current = dictation.onFocus;
+        return () => { props.focusRef.current = null; };
+    }, [dictation.onFocus, props.focusRef]);
     return <>{props.render(dictation)}</>;
 }
 
@@ -95,7 +95,7 @@ const SessionAuthoringComposerSurface = React.forwardRef<
         ...inputProps
     } = props;
     const inputRef = React.useRef<MultiTextInputHandle>(null);
-    React.useImperativeHandle(forwardedRef, () => inputRef.current!, []);
+    React.useImperativeHandle(forwardedRef, () => inputRef.current!);
 
     const stateRef = React.useRef<TextInputState>({
         text: value,
@@ -118,6 +118,12 @@ const SessionAuthoringComposerSurface = React.forwardRef<
         onStateChange?.(state);
     }, [onStateChange]);
 
+    const dictationFocus = React.useRef<TextInputDictation['onFocus'] | null>(null);
+    const handleFocus = React.useCallback(() => {
+        void dictationFocus.current?.();
+        inputProps.onFocus?.();
+    }, [inputProps.onFocus]);
+
     return (
         <>
             <MultiTextInput
@@ -125,17 +131,12 @@ const SessionAuthoringComposerSurface = React.forwardRef<
                 ref={inputRef}
                 value={value}
                 onStateChange={handleStateChange}
+                onFocus={handleFocus}
             />
             {dictationEnabled && renderDictationAccessory
-                ? <SessionAuthoringComposerDictationAccessory
-                    composerRef={composerRef}
-                    presented={presented}
-                    editable={inputProps.editable !== false}
-                    transcriptionSessionId={transcriptionSessionId ?? null}
-                    inputRef={inputRef}
-                    stateRef={stateRef}
-                    render={renderDictationAccessory}
-                />
+                ? <SessionAuthoringComposerDictationAccessory composerRef={composerRef} presented={presented}
+                    editable={inputProps.editable !== false} transcriptionSessionId={transcriptionSessionId ?? null}
+                    inputRef={inputRef} stateRef={stateRef} focusRef={dictationFocus} render={renderDictationAccessory} />
                 : null}
         </>
     );

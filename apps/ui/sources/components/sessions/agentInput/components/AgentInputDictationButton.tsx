@@ -27,6 +27,7 @@ export function AgentInputDictationButton(props: Readonly<{
     disabled?: boolean;
     status: VoiceDictationSnapshot['status'];
     onPress: () => void;
+    onFocus?: () => void;
 }>) {
     const listening = props.status !== 'idle';
     const transcribing = props.status === 'transcribing';
@@ -54,6 +55,7 @@ export function AgentInputDictationButton(props: Readonly<{
                 interactiveTargetGapPx={minimumTargetSize}
                 disabled={props.disabled === true || transcribing}
                 onPress={props.onPress}
+                onFocusChange={(focused) => { if (focused) props.onFocus?.(); }}
             />
         </View>
     );
