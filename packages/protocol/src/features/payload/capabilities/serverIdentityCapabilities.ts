@@ -11,6 +11,24 @@ export function normalizeServerIdentityIdCapability(value: unknown): string | nu
   return SERVER_IDENTITY_ID_PATTERN.test(trimmed) ? trimmed : null;
 }
 
+/** Resolves an identifier using the host's established profile/portable Home binding. */
+export type ServerProfileScopeResolver = (identifier: string) => string | null | undefined;
+
+/** One equivalence rule for local profile ids and portable Home ids; unknown ids fail closed. */
+export function areServerProfileIdentifiersEquivalent(
+  leftRaw: string | null | undefined,
+  rightRaw: string | null | undefined,
+  resolveScopeId?: ServerProfileScopeResolver,
+): boolean {
+  const left = leftRaw?.trim();
+  const right = rightRaw?.trim();
+  if (!left || !right) return false;
+  if (left === right) return true;
+  const leftScope = resolveScopeId?.(left)?.trim();
+  const rightScope = resolveScopeId?.(right)?.trim();
+  return Boolean(leftScope && rightScope && leftScope === rightScope);
+}
+
 const ServerIdentityIdSchema = lazyZodSchema(() => z.preprocess(
   normalizeServerIdentityIdCapability,
   z.string().nullable().optional().default(null),
