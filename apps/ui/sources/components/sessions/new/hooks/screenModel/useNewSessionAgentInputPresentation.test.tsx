@@ -1,8 +1,9 @@
 import * as React from 'react';
 import { createNewSessionPromptStore } from '@/components/sessions/new/hooks/screenModel/newSessionPromptStore';
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderHook, renderScreen, flushHookEffects } from '@/dev/testkit';
+import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
 import type { Router } from 'expo-router';
 import type { Machine } from '@/sync/domains/state/storageTypes';
@@ -22,33 +23,16 @@ const sessionAgentInputTheme = {
     },
 } as const;
 
+const network = await installSessionOpsNetworkBoundary();
+const scope = { serverId: 'srv', accountId: 'presentation-account' };
+beforeAll(async () => { await network.addHome('https://srv', scope.accountId); });
+beforeEach(() => network.resetRequests());
+afterAll(() => network.dispose());
+
 // Load the real graph during collection, not inside the first hook's timeout.
-const presentationModule = await import('./useNewSessionAgentInputPresentation');
+await import('./useNewSessionAgentInputPresentation');
 
 describe('useNewSessionAgentInputPresentation', () => {
-    it('invalidates stabilized chips when their rendered content revision changes', async () => {
-        const buildSignature = presentationModule.buildExtraActionChipsSignature;
-        const base = {
-            agentType: 'claude',
-            backendTarget: { kind: 'backend', backendId: 'claude', sourceKind: 'built_in' },
-            checkoutPickerOpen: false,
-        };
-        const createChip = (stabilityKey: string, renderContent: () => string) => ({
-            key: 'new-session-mcp',
-            controlId: 'mcp' as const,
-            stabilityKey,
-            collapsedContentPopover: { title: 'MCP', label: 'MCP', renderContent },
-            render: () => null,
-        });
-
-        const first = buildSignature({ ...base, chips: [createChip('selection-a', () => 'first')] });
-        const handlerOnlyChange = buildSignature({ ...base, chips: [createChip('selection-a', () => 'second')] });
-        const contentChange = buildSignature({ ...base, chips: [createChip('selection-b', () => 'second')] });
-
-        expect(handlerOnlyChange).toBe(first);
-        expect(contentChange).not.toBe(first);
-    });
-
     function createRouter(): Router {
         const routerMock = createExpoRouterMock();
         return {
@@ -89,6 +73,7 @@ describe('useNewSessionAgentInputPresentation', () => {
             daemonStateVersion: 0,
         };
         let readiness: MachineSpawnReadiness = { status: 'unknown', machineId: 'm1' };
+        let selectedMachineId: string | null = 'm1';
 
         const hook = await renderHook(() => useNewSessionAgentInputPresentation({
             theme: {
@@ -124,7 +109,7 @@ describe('useNewSessionAgentInputPresentation', () => {
             checkoutPickerOpen: false,
             setCheckoutPickerOpen: vi.fn(),
             checkoutCreationDraft: null,
-            selectedMachineId: 'm1',
+            selectedMachineId,
             selectedPath: '/repo',
             setSelectedPath: vi.fn(),
             setCheckoutCreationDraft: vi.fn(),
@@ -160,21 +145,28 @@ describe('useNewSessionAgentInputPresentation', () => {
 
         // A ready machine is named by its chip; healthy state says nothing above the card.
         expect(hook.getCurrent().connectionStatus).toBeUndefined();
-        readiness = resolveMachineSpawnReadiness({ selectedMachineId: 'm1', machine, keyAvailable: false, rpcAvailable: true });
+        expect(canAttemptMachineSpawn({ scope, selectedMachineId, machine, spawnReadiness: readiness })).toBe(true);
+        readiness = resolveMachineSpawnReadiness({ scope, selectedMachineId: 'm1', machine, keyAvailable: false, rpcAvailable: true });
         await hook.rerender();
         expect(hook.getCurrent().connectionStatus).toMatchObject({
             text: 'machineRequester.keyPending(machine=host-1)', isPulsing: false, recovery: 'machine',
         });
-        expect(canAttemptMachineSpawn({ selectedMachineId: 'm1', machine, spawnReadiness: readiness })).toBe(false);
+        expect(canAttemptMachineSpawn({ scope, selectedMachineId: 'm1', machine, spawnReadiness: readiness })).toBe(false);
         machine = { ...machine, active: false, activeAt: 0 };
-        readiness = resolveMachineSpawnReadiness({ selectedMachineId: 'm1', machine, keyAvailable: false, rpcAvailable: true });
+        readiness = resolveMachineSpawnReadiness({ scope, selectedMachineId: 'm1', machine, keyAvailable: false, rpcAvailable: true });
         await hook.rerender();
         expect(hook.getCurrent().connectionStatus).toMatchObject({ text: 'newSession.machineOfflineInlineTitle', dotColor: 'danger' });
+        expect(canAttemptMachineSpawn({ scope, selectedMachineId, machine, spawnReadiness: readiness })).toBe(false);
         machine = null;
         await hook.rerender();
         expect(hook.getCurrent().connectionStatus).toMatchObject({
             text: 'newSession.machineUnavailableStatus', isPulsing: false, recovery: 'machine',
         });
+        selectedMachineId = null;
+        readiness = resolveMachineSpawnReadiness({ scope, selectedMachineId, machine });
+        await hook.rerender();
+        expect(hook.getCurrent().connectionStatus).toBeUndefined();
+        expect(canAttemptMachineSpawn({ scope, selectedMachineId, machine, spawnReadiness: readiness })).toBe(false);
         await hook.unmount();
     });
 
@@ -182,7 +174,14 @@ describe('useNewSessionAgentInputPresentation', () => {
         const { useNewSessionAgentInputPresentation } = await import('./useNewSessionAgentInputPresentation');
         const router = createRouter();
         let activeAt = Date.now();
-        const renderPresentation = () => useNewSessionAgentInputPresentation({
+        let contentLabel = 'First account';
+        const makeMcpChip = () => {
+            const capturedLabel = contentLabel;
+            return { key: 'new-session-mcp', render: () => null,
+                collapsedContentPopover: { title: 'MCP', renderContent: () => capturedLabel } };
+        };
+        let mcpChip = makeMcpChip();
+        const initialParams: Parameters<typeof useNewSessionAgentInputPresentation>[0] = {
             theme: {
                 colors: {
                     state: {
@@ -257,7 +256,7 @@ describe('useNewSessionAgentInputPresentation', () => {
             showServerPickerChip: false,
             targetServerId: 'srv',
             targetServerName: 'Server A',
-            mcpChip: null,
+            mcpChip,
             externalSessionsFeatureEnabled: false,
             supportsDirectTranscriptStorage: false,
             transcriptStorage: 'persisted',
@@ -267,18 +266,31 @@ describe('useNewSessionAgentInputPresentation', () => {
             effectiveWindowsRemoteSessionLaunchMode: null,
             windowsTerminalAvailable: false,
             setWindowsRemoteSessionLaunchModeOverride: vi.fn(),
-        });
+        };
+        const renderPresentation = () => useNewSessionAgentInputPresentation({ ...initialParams,
+            selectedMachine: initialParams.selectedMachine ? { ...initialParams.selectedMachine, activeAt, updatedAt: activeAt } : null,
+            mcpChip });
 
         const hook = await renderHook(renderPresentation, {
             flushOptions: { cycles: 1, turns: 4 },
         });
         const firstConnectionStatus = hook.getCurrent().connectionStatus;
+        const firstChips = hook.getCurrent().agentInputExtraActionChips;
 
         activeAt += 1000;
         await hook.rerender();
 
         expect(firstConnectionStatus).toBeDefined();
         expect(hook.getCurrent().connectionStatus).toBe(firstConnectionStatus);
+        expect(hook.getCurrent().agentInputExtraActionChips).toBe(firstChips);
+        contentLabel = 'Second account';
+        mcpChip = makeMcpChip();
+        await hook.rerender();
+        const updatedChip = hook.getCurrent().agentInputExtraActionChips.find(chip => chip.key === 'new-session-mcp');
+        const renderContent = updatedChip?.collapsedContentPopover?.renderContent;
+        if (typeof renderContent !== 'function') throw new Error('Expected current MCP popover content');
+        expect(renderContent({ requestClose: vi.fn(), maxHeight: 300 })).toBe('Second account');
+        expect(hook.getCurrent().agentInputExtraActionChips).not.toBe(firstChips);
     });
 
     it('exposes automation controls via an action chip (no inline automation section)', async () => {
@@ -547,7 +559,8 @@ describe('useNewSessionAgentInputPresentation', () => {
             promptStore.setPrompt(next);
         });
 
-        const renderPresentation = () => useNewSessionAgentInputPresentation({
+        // A prompt-only edit keeps the actual chip operands and callbacks stable.
+        const presentationParams: Parameters<typeof useNewSessionAgentInputPresentation>[0] = {
             theme: sessionAgentInputTheme,
             selectedMachine: null,
             automationFeatureEnabled: false,
@@ -605,7 +618,8 @@ describe('useNewSessionAgentInputPresentation', () => {
             effectiveWindowsRemoteSessionLaunchMode: null,
             windowsTerminalAvailable: false,
             setWindowsRemoteSessionLaunchModeOverride: vi.fn(),
-        });
+        };
+        const renderPresentation = () => useNewSessionAgentInputPresentation(presentationParams);
 
         const hook = await renderHook(renderPresentation, {
             flushOptions: { cycles: 1, turns: 4 },

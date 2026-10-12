@@ -22,6 +22,7 @@ import { createNewSessionLinkedFilesActionChip } from '@/components/sessions/age
 import type { MachineSpawnReadiness } from '@/sync/domains/machines/identity/resolveMachineSpawnReadiness';
 import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
+import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { getMachineDisplaySubtitle } from '@/sync/domains/machines/machineDisplayRenderable';
 import type { NewSessionPromptStore } from '@/components/sessions/new/hooks/screenModel/newSessionPromptStore';
 import { createTemporaryComputerTeamAccessActionChip } from '@/components/sessions/agentInput/definitions/createTemporaryComputerTeamAccessActionChip';
@@ -34,44 +35,6 @@ type ThemeLike = Readonly<{
         }>;
     }>;
 }>;
-
-export function buildExtraActionChipsSignature(params: Readonly<{
-    chips: ReadonlyArray<AgentInputExtraActionChip>;
-    agentType: string;
-    backendTarget: unknown;
-    checkoutPickerOpen: boolean;
-}>): string {
-    try {
-        return JSON.stringify({
-            agentType: params.agentType,
-            backendTarget: params.backendTarget,
-            checkoutPickerOpen: params.checkoutPickerOpen,
-            chips: params.chips.map((chip) => ({
-                key: chip.key,
-                stabilityKey: chip.stabilityKey ?? null,
-                controlId: chip.controlId ?? null,
-                labelPolicy: chip.labelPolicy ?? null,
-                collapsedOptionsTitle: chip.collapsedOptionsPopover?.title ?? null,
-                collapsedOptionsLabel: chip.collapsedOptionsPopover?.label ?? null,
-                collapsedContentTitle: chip.collapsedContentPopover?.title ?? null,
-                collapsedContentLabel: chip.collapsedContentPopover?.label ?? null,
-            })),
-        }) ?? 'null';
-    } catch {
-        return 'unserializable';
-    }
-}
-
-function useStableExtraActionChips(
-    chips: ReadonlyArray<AgentInputExtraActionChip>,
-    signature: string,
-): ReadonlyArray<AgentInputExtraActionChip> {
-    const ref = React.useRef<Readonly<{ signature: string; chips: ReadonlyArray<AgentInputExtraActionChip> }> | null>(null);
-    if (!ref.current || ref.current.signature !== signature) {
-        ref.current = { signature, chips };
-    }
-    return ref.current.chips;
-}
 
 export function useNewSessionAgentInputPresentation(params: Readonly<{
     theme: ThemeLike;
@@ -141,12 +104,14 @@ export function useNewSessionAgentInputPresentation(params: Readonly<{
     agentInputExtraActionChips: ReadonlyArray<AgentInputExtraActionChip>;
 }> {
     const reachabilityRevision = useMachineReachabilityRevision();
+    const { binding } = useServerCredentialAccountScopeBinding(params.targetServerId);
+    const scope = binding?.isCurrent() ? binding.scope : null;
     const selectedMachineActive = params.selectedMachine?.active;
     const selectedMachineActiveAt = params.selectedMachine?.activeAt;
     const selectedMachineRevokedAt = params.selectedMachine?.revokedAt;
     const selectedMachineReplacedByMachineId = params.selectedMachine?.replacedByMachineId;
     const selectedMachineOnline = React.useMemo(() => (
-        params.selectedMachine ? isMachineReachable(params.targetServerId, params.selectedMachine) : false
+        params.selectedMachine ? isMachineReachable(scope, params.selectedMachine) : false
     ), [
         params.selectedMachine?.id,
         selectedMachineActive,
@@ -155,6 +120,7 @@ export function useNewSessionAgentInputPresentation(params: Readonly<{
         selectedMachineRevokedAt,
         params.targetServerId,
         reachabilityRevision,
+        scope,
     ]);
     const selectedMachineReadinessStatus = params.selectedMachineSpawnReadiness?.status;
     const selectedMachineLabel = getMachineDisplaySubtitle(params.selectedMachine ?? undefined, params.selectedMachineId ?? '');
@@ -310,19 +276,8 @@ export function useNewSessionAgentInputPresentation(params: Readonly<{
         ],
         [agentInputExtraActionChips, linkFileChip, temporaryComputerTeamAccessChip],
     );
-    const combinedExtraActionChipsSignature = React.useMemo(() => buildExtraActionChipsSignature({
-        chips: combinedExtraActionChips,
-        agentType: params.agentType,
-        backendTarget: params.backendTarget,
-        checkoutPickerOpen: params.checkoutPickerOpen,
-    }), [combinedExtraActionChips, params.agentType, params.backendTarget, params.checkoutPickerOpen]);
-    const stableExtraActionChips = useStableExtraActionChips(
-        combinedExtraActionChips,
-        combinedExtraActionChipsSignature,
-    );
-
     return React.useMemo(() => ({
         connectionStatus,
-        agentInputExtraActionChips: stableExtraActionChips,
-    }), [connectionStatus, stableExtraActionChips]);
+        agentInputExtraActionChips: combinedExtraActionChips,
+    }), [connectionStatus, combinedExtraActionChips]);
 }
