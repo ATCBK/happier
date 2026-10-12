@@ -1,7 +1,11 @@
+/** @vitest-environment jsdom */
 import 'fake-indexeddb/auto';
 import * as React from 'react';
+import { act as domAct } from 'react';
+import { createRoot } from 'react-dom/client';
 import { act } from 'react-test-renderer';
 import { InjectedAuthProvider } from '@/auth/context/AuthContext';
+import { installWebLockManagerMock, type WebLockManagerMockHandle } from '@/auth/storage/tokenStorage.web.testHelpers';
 import {
   afterEach,
   beforeAll,
@@ -14,13 +18,14 @@ import {
 import {
   AccountSettingsV2GetResponseSchema,
   CurrentCursorResponseSchema,
+  V2SessionListResponseSchema,
 } from '@happier-dev/protocol';
 
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
-import { renderScreen } from '@/dev/testkit/render/renderScreen';
+import { renderScreen, type RenderScreenResult } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import {
   installDisconnectedServerSocketBoundary,
@@ -30,18 +35,34 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 import { primeServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
 import { storage } from '@/sync/domains/state/storage';
 import { ReorderSessionOrganizationRequestSchema } from '@happier-dev/protocol/sessions/organization/mutations';
+import { SESSION_ORGANIZATION_SNAPSHOT_VERSION } from '@happier-dev/protocol/sessions/organization/constants';
+import { SessionOrganizationSnapshotResponseSchema } from '@happier-dev/protocol/sessions/organization/snapshot';
+import { ApprovalRequestV2Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
+import { renderHook } from '@/dev/testkit/hooks/renderHook';
+import { PINNED_GROUP_KEY_V1 } from '@/sync/domains/session/listing/sessionListOrderingStateV1';
+import { sessionAddressKey } from '@/sync/domains/session/sessionAddress';
+import { treeRowId } from '@/components/sessions/shell/drop-resolution/treeRowId';
+import type { SessionListIndexItem } from '@/sync/domains/sessionList/sessionListIndex';
+import { writeSessionOrganizationGroupOrder } from '@/sync/ops/sessionOrganization/sessionOrganizationMutationOwner';
+import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import type { AppRailBotEntry } from '@/components/navigation/shell/appRail/appRailModel';
 
 // The Account, ordinary list/index, Bot classification, rows and actions stay real. Only
 // native/navigation adapters and the external transports are replaced.
 vi.mock('react-native', async () =>
-  (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock(),
+  (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock(await vi.importActual('react-native-web')),
 );
 vi.mock('react-native-unistyles', async () =>
   (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock(),
 );
 const navigate = vi.hoisted(() => vi.fn());
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({ router: { navigate } }).module);
+// Auth/storage imports reach Socket.IO before the harness can install a doMock.
+vi.mock('socket.io-client', async importOriginal =>
+  (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal),
+);
 // Metro's deferred require is the loader boundary; the real Action executor remains underneath it.
 vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async importOriginal => {
   const original = await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>();
@@ -49,7 +70,13 @@ vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async importOrigina
   return { ...original, createFrontDoorActionExecute: createFrontDoorActionExecuteForVitest(original) };
 });
 
-installDisconnectedServerSocketBoundary();
+installDisconnectedServerSocketBoundary(socket => {
+  socket.connect = vi.fn(() => {
+    socket.connected = true;
+    for (const listener of socket.listeners('connect')) listener();
+    return socket;
+  });
+});
 
 // No Home here answers a structural Session query: the roster reads the ordinary loaded rows.
 const features = createRootLayoutFeaturesResponse({
@@ -59,11 +86,29 @@ let connection:
   | Awaited<ReturnType<typeof restoreServerAccountForTest>>
   | undefined;
 let persistedOrder: string[] | null = null;
+let askFirst = false;
+let serveHealthyOrdinarySnapshot = false;
+let webLocks: WebLockManagerMockHandle | undefined;
+const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'account-a', encryptionMode: 'plain' });
+const actionApprovalSettings = () => askFirst ? {
+  actionsSettingsV1: { v: 1 as const, actions: { 'session.organization.move': { approvalRequiredSurfaces: ['ui' as const] } } },
+} : {};
+
+// Renderer rows drive RN's native press callback; the DOM keyboard case below dispatches real events.
+async function pressNativeBoundary(screen: RenderScreenResult, testID: string) {
+  const control = screen.findAllByTestId(testID).findLast(node => typeof node.type !== 'string' && typeof node.props.onPress === 'function');
+  if (!control) throw new Error(`missing_native_press_boundary:${testID}`);
+  await act(async () => { await control.props.onPress(); });
+}
 
 describe('Bots roster', () => {
   beforeAll(loadSyncSingletonForTests);
   beforeEach(async () => {
+    webLocks = installWebLockManagerMock();
     persistedOrder = null;
+    askFirst = false;
+    serveHealthyOrdinarySnapshot = false;
+    artifacts.clear();
     navigate.mockClear();
     connection = await restoreServerAccountForTest({
       serverUrl: 'https://bots-roster.example.test',
@@ -73,6 +118,13 @@ describe('Bots roster', () => {
         const path = new URL(String(url)).pathname;
         if (path === '/health') return Response.json({ status: 'ok' });
         if (path === '/v1/features') return Response.json(features);
+        if (serveHealthyOrdinarySnapshot && (path === '/v2/sessions' || path === '/v2/sessions/active')) return Response.json(V2SessionListResponseSchema.parse({
+          sessions: [], nextCursor: null, hasNext: false,
+        }));
+        if (serveHealthyOrdinarySnapshot && path === '/v2/session-organization') return Response.json(SessionOrganizationSnapshotResponseSchema.parse({
+          snapshot: { schemaVersion: SESSION_ORGANIZATION_SNAPSHOT_VERSION, version: 0,
+            pins: [], folders: [], folderAssignments: [], tags: [], tagAssignments: [], orderEntries: [], labels: [] },
+        }));
         if (path === '/v2/cursor')
           return Response.json(
             CurrentCursorResponseSchema.parse({ cursor: 0, changesFloor: 0 }),
@@ -86,7 +138,7 @@ describe('Bots roster', () => {
         if (path === '/v2/account/settings')
           return Response.json(
             AccountSettingsV2GetResponseSchema.parse({
-              content: { t: 'plain', v: { hideInactiveSessions: true } },
+              content: { t: 'plain', v: { hideInactiveSessions: true, ...actionApprovalSettings() } },
               version: 1,
             }),
           );
@@ -95,18 +147,54 @@ describe('Bots roster', () => {
           persistedOrder = input.entries.map(entry => entry.itemKey);
           return Response.json({ orderEntries: input.entries.map(entry => ({ ...entry, scopeKind: input.scopeKind, scopeKey: input.scopeKey })) });
         }
+        const artifactResponse = artifacts.handle(`${path}${new URL(String(url)).search}`, init);
+        if (artifactResponse) return artifactResponse;
         return new Response('{}', { status: 404 });
       },
     });
+    const { updateEffectiveHomeViewState } = await import('@/sync/domains/server/selection/homeViewSelectionState');
+    await updateEffectiveHomeViewState(current => ({
+      ...current,
+      activeTargetKind: 'server',
+      activeTargetId: resolveServerProfileScopeIdForIdentifier(connection!.home.id),
+    }), { scope: 'tab' });
     primeServerFeaturesSnapshot({
       serverId: connection.home.id,
       snapshot: { status: 'ready', features },
     });
+    storage.getState().clearSessionOrganizationForServer(resolveServerProfileScopeIdForIdentifier(connection.home.id));
   });
   afterEach(async () => {
     await standardCleanup();
     await connection?.dispose();
     connection = undefined;
+    webLocks?.restore();
+    webLocks = undefined;
+  });
+
+  it.each([false, true])('settles an unreachable Home without a first roster or feature response and names the Home (address-only: %s)', async addressOnly => {
+    const { adoptHomeProfile, getServerProfileById } = await import('@/sync/domains/server/serverProfiles');
+    await adoptHomeProfile({ source: 'manual', descriptor: {
+      serverUrl: connection!.home.serverUrl,
+      homeServerIdentityId: connection!.home.serverIdentityId ?? undefined,
+      displayName: addressOnly ? 'bots-roster.example.test' : 'Test Home',
+    } });
+    expect(getServerProfileById(connection!.home.id)?.name).toBe(addressOnly ? 'bots-roster.example.test' : 'Test Home');
+    storage.setState({ sessionsReady: false, socketStatus: 'disconnected' });
+    primeServerFeaturesSnapshot({
+      serverId: connection!.home.id,
+      snapshot: { status: 'error', reason: 'network' },
+    });
+    const { BotsPopoverContent } = await import('./BotsPopoverContent');
+    const screen = await renderScreen(<InjectedAuthProvider credentials={null}>
+      <BotsPopoverContent close={() => {}} maxHeight={520} />
+    </InjectedAuthProvider>);
+    await flushHookEffects({ cycles: 3 });
+    expect(screen.findByTestId('bots-roster.offline')).not.toBeNull();
+    expect(screen.findByTestId('bots-roster.loading')).toBeNull();
+    expect(screen.findByTestId('bots-roster.empty')).toBeNull();
+    expect(screen.getTextContent()).toContain(addressOnly ? 'This Home' : 'Test Home');
+    expect(screen.getTextContent()).not.toContain('bots-roster.example.test');
   });
 
   it('lists every Bot, inactive ones too, as ordinary Session rows with New bot and Ask Happier beneath', async () => {
@@ -157,13 +245,18 @@ describe('Bots roster', () => {
     expect(screen.findByTestId('bots-roster.ask-happier')).not.toBeNull();
 
     // Opening a Bot opens its Session and closes the roster that hosted it.
-    await screen.pressByTestIdAsync('session-list-item-active-bot');
+    await pressNativeBoundary(screen, 'session-list-item-active-bot');
     expect(close).toHaveBeenCalled();
     expect(JSON.stringify(navigate.mock.calls[0]?.[0])).toContain('active-bot');
   });
 
   it('invites a first Bot when there is none, without apologising', async () => {
     const serverId = connection!.home.id;
+    serveHealthyOrdinarySnapshot = true;
+    const { sync } = await import('@/sync/sync');
+    // Await the canonical page acquisition, not the invalidation queue's next
+    // retry cycle after this fixture's deliberately unavailable bootstrap.
+    await sync.refreshSessions({ awaitSessionListHydration: true });
     storage
       .getState()
       .applyServerScopedSessionListRows(
@@ -181,10 +274,44 @@ describe('Bots roster', () => {
     const screen = await renderScreen(
       <InjectedAuthProvider credentials={null}><BotsPopoverContent close={() => {}} maxHeight={520} /></InjectedAuthProvider>,
     );
-    await flushHookEffects({ cycles: 3 });
-    expect(screen.findByTestId('bots-roster.empty')).not.toBeNull();
+    const { readOrdinarySessionListHomeState, getSessionListQueryHomeAvailability } = await import('@/sync/domains/session/listing/sessionListQueryRuntime');
+    const scopeId = resolveServerProfileScopeIdForIdentifier(serverId);
+    await vi.waitFor(async () => {
+      await flushHookEffects();
+      const availability = getSessionListQueryHomeAvailability(scopeId);
+      expect(screen.findByTestId('bots-roster.empty'), JSON.stringify({
+        availability, socketStatus: storage.getState().socketStatus,
+        ordinary: readOrdinarySessionListHomeState({ serverId: scopeId, requestedQueryKey: 'empty-roster-diagnostic',
+          online: availability === 'pending' ? null : availability === 'online' }),
+        text: screen.getTextContent(),
+      })).not.toBeNull();
+    });
     expect(screen.findByTestId('bots-roster.empty.new-bot')).not.toBeNull();
     expect(screen.findByTestId('session-list-item-ordinary')).toBeNull();
+    expect(screen.findByTestId('bots-roster.partial')).toBeNull();
+    expect(screen.findByTestId('bots-roster.unreadable')).toBeNull();
+  });
+
+  it('explains unreadable candidates neutrally without offering an ineffective retry', async () => {
+    serveHealthyOrdinarySnapshot = true;
+    const { sync } = await import('@/sync/sync');
+    await sync.refreshSessions({ awaitSessionListHydration: true });
+    storage.getState().applyServerScopedSessionListRows(connection!.home.id, [
+      createSessionListRenderableSessionFixture({ id: 'known-bot', metadata: { path: '/project', bot: { kind: 'bot' } } }),
+      createSessionListRenderableSessionFixture({ id: 'locked-candidate', metadata: null,
+        encryptedContentAvailability: 'encrypted_content_unavailable' }),
+    ], { source: 'ordinary', mode: 'replace' });
+    const { BotsPopoverContent } = await import('./BotsPopoverContent');
+    const screen = await renderScreen(<InjectedAuthProvider credentials={null}>
+      <BotsPopoverContent close={() => {}} maxHeight={520} />
+    </InjectedAuthProvider>);
+    await vi.waitFor(async () => {
+      await flushHookEffects();
+      expect(screen.findByTestId('bots-roster.unreadable')).not.toBeNull();
+    });
+    expect(screen.findByTestId('session-list-item-known-bot')).not.toBeNull();
+    expect(screen.findByTestId('bots-roster.partial')).toBeNull();
+    expect(screen.findByTestId('bots-roster.unreadable-action')).toBeNull();
   });
 
   it('discloses ordinary child Sessions under a Bot using the server total and the shared local fold choice', async () => {
@@ -208,17 +335,17 @@ describe('Bots roster', () => {
     expect(screen.getTextContent()).toContain('9');
     expect(screen.findByTestId('session-list-item-child-session')).toBeNull();
     expect(screen.findByTestId('session-list-item-child-bot')).toBeNull();
-    await screen.pressByTestIdAsync('session-row-reports-disclosure:lead-bot');
+    await pressNativeBoundary(screen, 'session-row-reports-disclosure:lead-bot');
     await flushHookEffects({ cycles: 3 });
     expect(screen.findByTestId('session-list-item-child-session')).not.toBeNull();
     expect(screen.findByTestId('session-list-item-child-bot')).not.toBeNull();
     expect(screen.findByTestId('session-list-item-unrelated')).toBeNull();
-    await screen.pressByTestIdAsync('session-row-reports-disclosure:lead-bot');
+    await pressNativeBoundary(screen, 'session-row-reports-disclosure:lead-bot');
     expect(screen.findByTestId('session-list-item-child-session')).toBeNull();
   });
 
   it('moves a rail Bot with the keyboard through qualified Action admission and the mounted organization writer', async () => {
-    const serverId = connection!.home.id;
+    const serverId = resolveServerProfileScopeIdForIdentifier(connection!.home.id);
     const ids = ['first-bot', 'list-only', 'last-bot'];
     storage.getState().applyServerScopedSessionListRows(serverId, ids.map(id => createSessionListRenderableSessionFixture({
       id, metadata: { path: '/project', ...(id === 'list-only' ? {} : { bot: { kind: 'bot' as const } }) },
@@ -237,21 +364,202 @@ describe('Bots roster', () => {
         useSessionListRailOrganizationAction([serverId]);
         return <AppRailBotPin bot={bot} animateEntry={false} slotStyle={{}} nextBotSessionId="last-bot" />;
       }
-      const screen = await renderScreen(<InjectedAuthProvider credentials={null}>
-        <RailWithoutColumn />
-      </InjectedAuthProvider>);
-      await flushHookEffects({ cycles: 3 });
-      const button = screen.findHostByTestId('app-rail:bot-first');
-      expect(typeof button?.props.onKeyDown).toBe('function');
-      await act(async () => {
-        await button!.props.onKeyDown({ key: 'F10', shiftKey: true, preventDefault() {}, stopPropagation() {} });
+      const container = document.createElement('div');
+      document.body.appendChild(container);
+      const root = createRoot(container);
+      try {
+        await domAct(async () => root.render(<InjectedAuthProvider credentials={connection!.credentials}>
+          <RailWithoutColumn />
+        </InjectedAuthProvider>));
+        const button = container.querySelector<HTMLElement>('[data-testid="app-rail:bot-first"]');
+        expect(button).not.toBeNull();
+        await domAct(async () => {
+          button!.dispatchEvent(new KeyboardEvent('keydown', { key: 'F10', shiftKey: true, bubbles: true }));
+        });
+        await flushHookEffects({ frames: 1 });
+        expect(button!.getAttribute('aria-expanded')).toBe('true');
+        await domAct(async () => {
+          button!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', altKey: true, bubbles: true }));
+        });
+        await vi.waitFor(() => expect(persistedOrder).toEqual(['list-only', 'last-bot', 'first-bot']));
+        expect(navigate).not.toHaveBeenCalled();
+      } finally {
+        await domAct(async () => root.unmount());
+        container.remove();
+      }
+  });
+
+  it.each(['list', 'rail'] as const)('keeps an Ask-first %s move pending until the captured Home approval settles', async projection => {
+    const serverId = resolveServerProfileScopeIdForIdentifier(connection!.home.id);
+    const ids = ['first-bot', 'list-only', 'last-bot'];
+    askFirst = true;
+    storage.getState().applySettingsLocal(actionApprovalSettings());
+    storage.setState({ profileScope: { serverId, accountId: 'account-a' }, settingsScope: { serverId, accountId: 'account-a' } });
+    storage.getState().applyServerScopedSessionListRows(serverId, ids.map(id => createSessionListRenderableSessionFixture({
+      id, metadata: { path: '/project', ...(id === 'list-only' ? {} : { bot: { kind: 'bot' as const } }) },
+    })), { source: 'ordinary', mode: 'replace' });
+    ids.forEach((sessionId, index) => {
+      const record = storage.getState().setSessionPinOptimistic(serverId, sessionId, {
+        sessionId, sortKey: null, pinnedAt: index, listPinned: true, railPinned: sessionId !== 'list-only',
       });
+      storage.getState().commitSessionOrganizationOptimistic(record);
+    });
+    const { useAppRailBotReorder } = await import('@/components/navigation/shell/appRail/useAppRailBotReorder');
+    const { useSessionListRailOrganizationAction } = await import('@/components/sessions/shell/useSessionListRailOrganizationAction');
+    const { useSessionListEntityDragDrop } = await import('@/components/sessions/shell/useSessionListEntityDragDrop');
+    const items: SessionListIndexItem[] = [
+      { type: 'header', headerKind: 'pinned', title: 'Pinned', groupKey: PINNED_GROUP_KEY_V1, serverId },
+      ...ids.map(sessionId => ({ type: 'session' as const, serverId, sessionId, groupKind: 'pinned' as const,
+        groupKey: PINNED_GROUP_KEY_V1, pinned: true })),
+    ];
+    const bot: AppRailBotEntry = { id: 'bot-first', sessionId: 'first-bot', serverId, avatarId: 'first',
+      session: createSessionListRenderableSessionFixture({ id: 'first-bot', metadata: { path: '/project', bot: { kind: 'bot' } } }) };
+    const hook = await renderHook(() => {
+      // The two current mounted projections share the real Action and approval owners below HTTP.
+      if (projection === 'rail') {
+        useSessionListRailOrganizationAction([serverId]);
+        return { kind: 'rail' as const, ...useAppRailBotReorder(bot) };
+      }
+      return { kind: 'list' as const, ...useSessionListEntityDragDrop({
+        getListBounds: () => null,
+        resolvePointerGeometry: () => ({ result: { instruction: { kind: 'idle' }, visual: { kind: 'none' } }, geometry: { kind: 'none' } }),
+        getCommitContext: mutationScope => ({ latestItems: items, sessionFoldersV1: { v: 1, folders: [] },
+          sessionListGroupOrderV1: { [PINNED_GROUP_KEY_V1]: ids.map(sessionId => sessionAddressKey({ serverId, sessionId })) },
+          manualSessionOrderingEnabled: true, sessionListOrderingModeV1: 'custom', now: Date.now,
+          setSessionFoldersV1: async () => { throw new Error('unexpected_folder_write'); },
+          setSessionFolderAssignment: async () => { throw new Error('unexpected_assignment_write'); },
+          setSessionListGroupOrderV1: async next => {
+            if (!mutationScope) throw new Error('missing_captured_scope');
+            await writeSessionOrganizationGroupOrder({ scope: mutationScope, next,
+              orderItemAddressByItemKey: Object.fromEntries(ids.map(sessionId => [sessionAddressKey({ serverId, sessionId }), {
+                itemKind: 'session' as const, serverId, sessionId,
+              }])) });
+          },
+        }),
+      }) };
+    }, { wrapper: ({ children }) => <InjectedAuthProvider credentials={connection!.credentials}>{children}</InjectedAuthProvider> });
+    await flushHookEffects({ cycles: 3 });
+    if (projection === 'rail') await vi.waitFor(() => {
+      const mounted = hook.getCurrent();
+      expect(mounted.kind === 'rail' && mounted.available).toBe(true);
+    });
+    let settled = false;
+    let pending!: Promise<unknown>;
+    act(() => {
+      const mounted = hook.getCurrent();
+      if (mounted.kind === 'rail') pending = mounted.move('last-bot', 'bottom');
+      else {
+        const source = mounted.prepareSource({ sourceRowId: treeRowId.session(serverId, 'first-bot') });
+        if (!source || !mounted.targetId) throw new Error('missing_mounted_list');
+        pending = mounted.runtime.perform(source.sourceId, mounted.targetId, {
+          sourceRowId: treeRowId.session(serverId, 'first-bot'), sourceKind: 'leaf', instructionKind: 'reorder-after',
+          targetRowId: treeRowId.session(serverId, 'last-bot'), containerId: PINNED_GROUP_KEY_V1,
+          parentRowId: null, depth: 0, edge: 'bottom',
+        });
+      }
+      void pending.then(() => { settled = true; });
+    });
+    await vi.waitFor(() => expect(artifacts.list()).toHaveLength(1));
+    await flushHookEffects({ cycles: 3 });
+    const artifactId = artifacts.list()[0]!.id;
+    expect(ApprovalRequestV2Schema.parse(JSON.parse(artifacts.readPlainBody(artifactId)!))).toMatchObject({
+      status: 'open', actionId: 'session.organization.move',
+      actionArgs: { scope: { serverId, accountId: 'account-a' }, ...(projection === 'rail' ? { projection: 'rail' } : {}) },
+      executionOriginV1: { serverId },
+    });
+    expect(persistedOrder).toBeNull();
+    expect(settled).toBe(false);
+    await expect(decideApprovalAsInbox(serverId, artifactId, 'approve')).resolves.toMatchObject({ ok: true, result: { status: 'executed' } });
+    expect(ApprovalRequestV2Schema.parse(JSON.parse(artifacts.readPlainBody(artifactId)!))).toMatchObject({
+      status: 'executed', execution: { ok: true, result: { status: 'applied' } },
+    });
+    await vi.waitFor(() => expect(settled).toBe(true));
+    expect(persistedOrder).toEqual(['list-only', 'last-bot', 'first-bot']);
+    if (projection === 'list') await expect(pending).resolves.toEqual({ status: 'applied' });
+    await hook.unmount();
+  });
+
+  it('settles an overflow Bot move on its captured Home after More closes', async () => {
+    const serverId = resolveServerProfileScopeIdForIdentifier(connection!.home.id);
+    const ids = ['first-bot', 'last-bot'];
+    askFirst = true;
+    storage.getState().applySettingsLocal(actionApprovalSettings());
+    storage.setState({ profileScope: { serverId, accountId: 'account-a' }, settingsScope: { serverId, accountId: 'account-a' } });
+    const rows = ids.map(id => createSessionListRenderableSessionFixture({
+      id, metadata: { path: '/project', bot: { kind: 'bot' } },
+    }));
+    storage.getState().applyServerScopedSessionListRows(serverId, rows, { source: 'ordinary', mode: 'replace' });
+    ids.forEach((sessionId, index) => {
+      const record = storage.getState().setSessionPinOptimistic(serverId, sessionId, {
+        sessionId, sortKey: null, pinnedAt: index, listPinned: true, railPinned: true,
+      });
+      storage.getState().commitSessionOrganizationOptimistic(record);
+    });
+    const { AppRailSurface } = await import('@/components/navigation/shell/appRail/AppRail');
+    const { buildAppRailEntries } = await import('@/components/navigation/shell/appRail/appRailModel');
+    const { resolveCompactAppDestinations } = await import('@/components/appShell/destinations/compactAppDestinationCatalog');
+    const { useSessionListRailOrganizationAction } = await import('@/components/sessions/shell/useSessionListRailOrganizationAction');
+    const { Modal } = await import('@/modal');
+    const alert = vi.spyOn(Modal, 'alert');
+    const catalogEntries = buildAppRailEntries(resolveCompactAppDestinations({
+      builtins: { externalSessions: false, inbox: false, workflows: false, friends: false }, pages: [],
+    }));
+    const entries = { app: catalogEntries.app.filter(entry => entry.activation === 'botsRoster'), plugins: [], account: [],
+      bots: rows.map((session, index): AppRailBotEntry => ({ id: `overflow-${index}`, serverId, sessionId: session.id, avatarId: session.id, session })) };
+    // Layout is the browser boundary: notify real RNW's observer of the short rail, without replacing a UI owner.
+    let notifyLayout: ((entries: Array<{ target: Element }>) => void) | undefined;
+    const priorObserver = window.ResizeObserver;
+    class LayoutObserver {
+      constructor(callback: (entries: Array<{ target: Element }>) => void) { notifyLayout = callback; }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    Object.defineProperty(window, 'ResizeObserver', { configurable: true, writable: true, value: LayoutObserver });
+    const geometry = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function () {
+      return new DOMRect(56, 40, 240, 44);
+    });
+    function ShortRail() {
+      useSessionListRailOrganizationAction([serverId]);
+      return <AppRailSurface entries={entries} activeId={null} onOpen={() => {}}
+        preferences={{ orderedIds: [], placements: { 'app-rail-usage': 'hidden', 'app-rail-machines': 'hidden', 'app-rail-account': 'hidden' } }}
+        renderFooter={() => null} />;
+    }
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    const click = async (testID: string) => {
+      const control = document.querySelector<HTMLElement>(`[data-testid="${testID}"]`);
+      expect(control).not.toBeNull();
+      await domAct(async () => control!.click());
       await flushHookEffects({ frames: 1 });
-      expect(screen.findHostByTestId('app-rail:bot-first')?.props['aria-expanded']).toBe(true);
-      await act(async () => { await button!.props.onKeyDown({ key: 'ArrowDown', altKey: true,
-        preventDefault() {}, stopPropagation() {} }); });
-      await flushHookEffects({ cycles: 3 });
-      expect(persistedOrder).toEqual(['list-only', 'last-bot', 'first-bot']);
-      expect(navigate).not.toHaveBeenCalled();
+    };
+    try {
+      await domAct(async () => root.render(<InjectedAuthProvider credentials={connection!.credentials}><ShortRail /></InjectedAuthProvider>));
+      const rail = container.querySelector<HTMLElement>('[data-testid="app-rail"]')!;
+      Object.defineProperties(rail, { offsetHeight: { configurable: true, value: 48 }, offsetWidth: { configurable: true, value: 56 } });
+      await domAct(async () => { notifyLayout?.([{ target: rail }]); await new Promise(resolve => setTimeout(resolve, 0)); });
+      await click('app-rail-more.trigger');
+      await click('app-rail-more:overflow-0');
+      await click('dropdown-option-move-down_overflow-0');
+      await vi.waitFor(() => expect(artifacts.list()).toHaveLength(1));
+      const artifactId = artifacts.list()[0]!.id;
+      expect(ApprovalRequestV2Schema.parse(JSON.parse(artifacts.readPlainBody(artifactId)!))).toMatchObject({
+        status: 'open', actionArgs: { projection: 'rail', scope: { serverId, accountId: 'account-a' } },
+        executionOriginV1: { serverId, accountId: 'account-a' },
+      });
+      expect(persistedOrder).toBeNull();
+      expect(alert).not.toHaveBeenCalled();
+      await click('app-rail-more.trigger');
+      await expect(decideApprovalAsInbox(serverId, artifactId, 'approve')).resolves.toMatchObject({ ok: true, result: { status: 'executed' } });
+      await vi.waitFor(() => expect(persistedOrder).toEqual(['last-bot', 'first-bot']));
+      expect(alert).not.toHaveBeenCalled();
+    } finally {
+      await domAct(async () => root.unmount());
+      container.remove();
+      alert.mockRestore();
+      geometry.mockRestore();
+      Object.defineProperty(window, 'ResizeObserver', { configurable: true, writable: true, value: priorObserver });
+    }
   });
 });

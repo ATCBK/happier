@@ -12,6 +12,7 @@ import { captureActiveServerAccountScopeLifetime, retireActiveServerAccountScope
 import { decodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { openAskHappierDraft, openBlankAskHappierDraft } from './happierGuideDraft';
 import { openNewBotDraft } from './newBotDraft';
+import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 const navigation = vi.hoisted(() => ({ push: vi.fn() }));
 vi.mock('expo-router', async () => {
@@ -41,7 +42,9 @@ async function prepare(handleRequest?: (path: string, init?: RequestInit) => Pro
     await home.hydrateAccountSettings();
     const lifetime = captureActiveServerAccountScopeLifetime();
     if (!lifetime) throw new Error('Expected admitted Account');
-    return { home, lifetime };
+    const mounted = await renderHook(() => useMountedActionExecution(lifetime.scope));
+    await expect.poll(() => mounted.getCurrent().ready).toBe(true);
+    return { home, lifetime, mounted, executeAction: mounted.getCurrent().execute };
 }
 
 describe('Ask Happier ordinary authoring', () => {
@@ -55,13 +58,16 @@ describe('Ask Happier ordinary authoring', () => {
     });
 
     it('keeps the original guide invocation pending until its admitted approval creates the document, then opens the draft once', async () => {
-        const { home: f, lifetime } = await prepare(async path => path === '/v2/account/settings'
+        const { home: f, lifetime, mounted: hook } = await prepare(async path => path === '/v2/account/settings'
             ? Response.json({ version: 1, content: { t: 'plain', v: { actionsSettingsV1: { v: 1,
                 actions: { 'prompt_doc.create': { approvalRequiredSurfaces: ['ui'] } } } } } }) : null);
-        const hook = await renderHook(() => useMountedActionExecution(lifetime.scope));
-        await expect.poll(() => hook.getCurrent().ready).toBe(true);
         let settled = false;
-        const pending = openAskHappierDraft({ lifetime, executeAction: hook.getCurrent().execute })
+        let creationOutcome: ActionExecuteResult | undefined;
+        const pending = openAskHappierDraft({ lifetime, executeAction: async (actionId, input, options) => {
+            const outcome = await hook.getCurrent().execute(actionId, input, options);
+            if (actionId === 'prompt_doc.create') creationOutcome = outcome;
+            return outcome;
+        } })
             .then(result => { settled = true; return result; });
         await expect.poll(() => f.boundary.list().length).toBe(1);
         const approval = f.boundary.list()[0]!;
@@ -71,30 +77,29 @@ describe('Ask Happier ordinary authoring', () => {
         expect(await decideApprovalAsInbox(lifetime.scope.serverId, approval.id, 'approve')).toMatchObject({ ok: true });
         await act(async () => { await hook.getCurrent().approval.refresh(); });
         const result = await pending;
-        expect(result.kind).toBe('opened');
+        expect(creationOutcome).toEqual({ ok: true, result: { ok: true, artifactId: expect.any(String) } });
+        expect({ result, approval: JSON.parse(f.boundary.readPlainBody(approval.id)!) }).toMatchObject({ result: { kind: 'opened' } });
         expect(result.guideRef?.artifactId).not.toBe(approval.id);
         expect(f.boundary.list()).toHaveLength(2);
         expect(navigation.push).toHaveBeenCalledTimes(1);
     });
 
     it.each(['session.authoring.open', 'prompt_doc.create'] as const)('retains custody when %s is disabled in the UI', async actionId => {
-        const { home: f, lifetime } = await prepare(async path => path === '/v2/account/settings'
+        const { home: f, lifetime, executeAction } = await prepare(async path => path === '/v2/account/settings'
             ? Response.json({ version: 1, content: { t: 'plain', v: { actionsSettingsV1: { v: 1,
                 actions: { [actionId]: { disabledSurfaces: ['ui'] } } } } } }) : null);
-        const result = await openAskHappierDraft({ lifetime });
+        const result = await openAskHappierDraft({ lifetime, executeAction });
         expect(result.kind).not.toBe('opened');
         expect(navigation.push).not.toHaveBeenCalled();
         expect(f.boundary.list()).toHaveLength(actionId === 'prompt_doc.create' ? 0 : 1);
         if (actionId === 'session.authoring.open') expect(result.guideRef?.artifactId).toBe(f.boundary.list()[0]?.id);
-        expect((await openNewBotDraft(lifetime)).kind).toBe(actionId === 'session.authoring.open' ? 'unavailable' : 'opened');
+        expect((await openNewBotDraft(lifetime, executeAction)).kind).toBe(actionId === 'session.authoring.open' ? 'unavailable' : 'opened');
     });
 
     it('cancels mounted interest in a pending guide approval without creating a document or substituting a blank draft', async () => {
-        const { home: f, lifetime } = await prepare(async path => path === '/v2/account/settings'
+        const { home: f, lifetime, mounted: hook } = await prepare(async path => path === '/v2/account/settings'
             ? Response.json({ version: 1, content: { t: 'plain', v: { actionsSettingsV1: { v: 1,
                 actions: { 'prompt_doc.create': { approvalRequiredSurfaces: ['ui'] } } } } } }) : null);
-        const hook = await renderHook(() => useMountedActionExecution(lifetime.scope));
-        await expect.poll(() => hook.getCurrent().ready).toBe(true);
         const controller = new AbortController();
         const pending = openAskHappierDraft({ lifetime, signal: controller.signal, executeAction: hook.getCurrent().execute });
         await expect.poll(() => hook.getCurrent().approval.approvalPending).toBe(true);
@@ -106,7 +111,7 @@ describe('Ask Happier ordinary authoring', () => {
     });
 
     it('creates one editable built-in guide and binds captured update/context to a durable Bot draft before navigation', async () => {
-        const { home: f, lifetime } = await prepare();
+        const { home: f, lifetime, executeAction } = await prepare();
         const release = { id: 'selected', versionLabel: 'v1', date: '2026-10-09', markdown: 'Selected notes' };
         const currentUiContext = { navigation: { area: 'settings', screen: 'machines' }, commands: [] };
         expect(f.boundary.list()).toEqual([]);
@@ -114,7 +119,7 @@ describe('Ask Happier ordinary authoring', () => {
         navigation.push.mockImplementation((route: { params: { draftId: string } }) => {
             atNavigation = readNewSessionDraftFromRepository({ scope: lifetime.scope, draftId: route.params.draftId });
         });
-        const pending = openAskHappierDraft({ lifetime, context: { kind: 'release', release }, currentUiContext });
+        const pending = openAskHappierDraft({ lifetime, executeAction, context: { kind: 'release', release }, currentUiContext });
         release.markdown = 'Later notes';
         currentUiContext.navigation.screen = 'later';
         const result = await pending;
@@ -140,21 +145,21 @@ describe('Ask Happier ordinary authoring', () => {
     });
 
     it('keeps a successfully stored guide but cannot seed or navigate after its Account retires', async () => {
-        const { home: f, lifetime } = await prepare();
+        const { home: f, lifetime, executeAction } = await prepare();
         f.boundary.afterNextCreate(async () => retireActiveServerAccountScopeLifetime());
-        const result = await openAskHappierDraft({ lifetime });
+        const result = await openAskHappierDraft({ lifetime, executeAction });
         expect(result.kind).toBe('stale');
         expect(f.boundary.list()).toHaveLength(1);
         expect(navigation.push).not.toHaveBeenCalled();
     });
 
     it('reports a guide failure and opens a document-free ordinary Bot only after the explicit blank choice', async () => {
-        const { home: f, lifetime } = await prepare(async (path, init) => path === '/v1/artifacts' && init?.method === 'POST'
+        const { home: f, lifetime, executeAction } = await prepare(async (path, init) => path === '/v1/artifacts' && init?.method === 'POST'
             ? Response.json({ error: 'unavailable' }, { status: 503 }) : null);
-        expect(await openAskHappierDraft({ lifetime })).toMatchObject({ kind: 'documentUnavailable', guideRef: null });
+        expect(await openAskHappierDraft({ lifetime, executeAction })).toMatchObject({ kind: 'documentUnavailable', guideRef: null });
         expect(navigation.push).not.toHaveBeenCalled();
         expect(f.boundary.list()).toEqual([]);
-        const blank = await openBlankAskHappierDraft(lifetime);
+        const blank = await openBlankAskHappierDraft(lifetime, executeAction);
         if (blank.kind !== 'opened') throw new Error('Expected explicit blank draft');
         expect(readNewSessionDraftFromRepository({ scope: lifetime.scope, draftId: blank.draftId })).toMatchObject({ input: '', sessionName: 'Happier' });
         expect(readNewSessionDraftFromRepository({ scope: lifetime.scope, draftId: blank.draftId })?.promptStack ?? []).toEqual([]);
@@ -162,9 +167,9 @@ describe('Ask Happier ordinary authoring', () => {
     });
 
     it('retains the created reference and canonical draft after navigation fails', async () => {
-        const { home: f, lifetime } = await prepare();
+        const { home: f, lifetime, executeAction } = await prepare();
         navigation.push.mockImplementation(() => { throw new Error('Router unavailable'); });
-        const result = await openAskHappierDraft({ lifetime });
+        const result = await openAskHappierDraft({ lifetime, executeAction });
         expect(result).toMatchObject({ kind: 'unavailable', reason: 'navigation_unavailable', guideRef: { artifactId: f.boundary.list()[0]?.id } });
         const route = navigation.push.mock.calls[0]?.[0] as { params: { draftId: string } };
         expect(readNewSessionDraftFromRepository({ scope: lifetime.scope, draftId: route.params.draftId })).toMatchObject({ sessionName: 'Happier', promptStack: [{ ref: result.guideRef }] });
@@ -172,7 +177,7 @@ describe('Ask Happier ordinary authoring', () => {
         expect(navigation.push).toHaveBeenCalledTimes(1);
         if (!result.guideRef) throw new Error('Expected reusable acknowledged guide');
         navigation.push.mockReset();
-        const retried = await openAskHappierDraft({ lifetime, guideRef: result.guideRef });
+        const retried = await openAskHappierDraft({ lifetime, executeAction, guideRef: result.guideRef });
         expect(retried.kind).toBe('opened');
         expect(f.boundary.list()).toHaveLength(1);
         expect(navigation.push).toHaveBeenCalledTimes(1);
