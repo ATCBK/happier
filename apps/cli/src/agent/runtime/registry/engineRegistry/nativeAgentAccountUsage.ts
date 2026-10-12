@@ -135,6 +135,7 @@ export function createNativeAgentAccountUsageService(params: Readonly<{
         request: SnapshotRequest,
         automaticDeliveryAttempts = 0,
     ): void => {
+        if (disposed) return;
         const key = snapshotPendingKey(request);
         pendingSnapshots.delete(key);
         pendingSnapshots.set(key, { request, automaticDeliveryAttempts });
@@ -147,9 +148,13 @@ export function createNativeAgentAccountUsageService(params: Readonly<{
 
     async function deliverSnapshot(
         request: SnapshotRequest,
+        signal = params.signal,
     ): Promise<SnapshotDeliveryResult> {
         try {
-            const response = await notifyDaemonProviderAccountUsageSnapshot(request);
+            // Publication is background host work. Its lifetime already owns
+            // cancellation; the generic control cutoff must not manufacture
+            // daemon-unavailable evidence and retry a still-running intake.
+            const response = await notifyDaemonProviderAccountUsageSnapshot(request, { signal, timeoutMs: null });
             const responseRecord = isRecord(response) ? response : null;
             if (responseRecord?.ok === true) {
                 const resultRecord = isRecord(responseRecord.result)
@@ -201,7 +206,7 @@ export function createNativeAgentAccountUsageService(params: Readonly<{
 
     async function flushPendingSnapshots(
         observedKey?: string,
-        options: Readonly<{ automatic?: boolean }> = {},
+        options: Readonly<{ automatic?: boolean; signal?: AbortSignal }> = {},
     ): Promise<SnapshotDeliveryResult | null> {
         if (!options.automatic) clearAutomaticRetryTimer();
         if (pendingSnapshots.size === 0) return null;
@@ -214,7 +219,7 @@ export function createNativeAgentAccountUsageService(params: Readonly<{
             ) {
                 continue;
             }
-            const delivery = await deliverSnapshot(pending.request);
+            const delivery = await deliverSnapshot(pending.request, options.signal ?? params.signal);
             if (key === observedKey) observedDelivery = delivery;
             if (delivery.status === 'unavailable') {
                 if (pendingSnapshots.get(key) === pending) {
@@ -326,6 +331,7 @@ export function createNativeAgentAccountUsageService(params: Readonly<{
         ): Promise<Awaited<ReturnType<NativeAgentAccountUsageService['recordSnapshot']>>> {
             throwIfAborted(options?.signal, 'Provider account usage recording aborted');
             params.signal.throwIfAborted();
+            const signal = options?.signal ? AbortSignal.any([params.signal, options.signal]) : params.signal;
             const request: Readonly<Record<string, unknown>> = isRecord(input as unknown)
                 ? input as unknown as Readonly<Record<string, unknown>>
                 : {};
@@ -366,19 +372,19 @@ export function createNativeAgentAccountUsageService(params: Readonly<{
             const pendingKey = snapshotPendingKey(pendingSnapshot);
             if (pendingSnapshots.has(pendingKey)) {
                 enqueuePendingSnapshot(pendingSnapshot);
-                const flushedCurrent = await flushPendingSnapshots(pendingKey);
+                const flushedCurrent = await flushPendingSnapshots(pendingKey, { signal });
                 if (flushedCurrent?.status === 'recorded') {
-                    await flushPendingSnapshots();
+                    await flushPendingSnapshots(undefined, { signal });
                     return flushedCurrent.result;
                 }
                 return flushedCurrent?.status === 'rejected'
                     ? { status: 'rejected', reason: 'daemon_rejected' }
                     : { status: 'unavailable', reason: 'daemon_unavailable' };
             }
-            await flushPendingSnapshots();
-            const delivery = await deliverSnapshot(pendingSnapshot);
+            await flushPendingSnapshots(undefined, { signal });
+            const delivery = await deliverSnapshot(pendingSnapshot, signal);
             if (delivery.status === 'recorded') {
-                await flushPendingSnapshots();
+                await flushPendingSnapshots(undefined, { signal });
                 return delivery.result;
             }
             if (delivery.status === 'unavailable') {
@@ -409,7 +415,7 @@ export function createNativeAgentAccountUsageService(params: Readonly<{
                 const response = await notifyDaemonProviderAccountUsageAdoption({
                     sessionId: params.sessionId,
                     adoption: parsed.data,
-                });
+                }, { signal: options?.signal ? AbortSignal.any([params.signal, options.signal]) : params.signal, timeoutMs: null });
                 if (response?.ok === true) {
                     const result = response.result;
                     if (isRecord(result)) {

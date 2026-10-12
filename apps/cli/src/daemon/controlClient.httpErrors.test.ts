@@ -12,6 +12,7 @@ import type { SpawnDaemonSessionRequest } from '@/rpc/handlers/spawnSessionOptio
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
 import type { ProviderAccountUsageAdoptionV1 } from './connectedServices/accountUsage/adoption';
+import { createNativeAgentAccountUsageService } from '@/agent/runtime/registry/engineRegistry/nativeAgentAccountUsage';
 
 const LEGACY_SPAWN_ALLOWLIST_FIELDS = [
   'directory',
@@ -62,17 +63,58 @@ function listen(server: http.Server): Promise<{ port: number }> {
 }
 
 describe('daemon control client (HTTP error responses)', () => {
-  let envScope = createEnvKeyScope(['HAPPIER_HOME_DIR']);
+  let envScope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_DAEMON_HTTP_TIMEOUT']);
   let tmpHomeDir: string | null = null;
 
   afterEach(async () => {
     await clearDaemonStateForTestTeardown();
     envScope.restore();
-    envScope = createEnvKeyScope(['HAPPIER_HOME_DIR']);
+    envScope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_DAEMON_HTTP_TIMEOUT']);
     reloadConfiguration();
     if (tmpHomeDir) {
       await removeTempDir(tmpHomeDir);
       tmpHomeDir = null;
+    }
+  });
+
+  it.each([
+    { cancelled: false, httpTimeout: '100', expected: { status: 'recorded' } },
+    { cancelled: true, httpTimeout: '1000', expected: { status: 'unavailable', reason: 'daemon_unavailable' } },
+  ])('keeps optional usage delivery within its host lifetime (cancelled=$cancelled)', async ({ cancelled, httpTimeout, expected }) => {
+    const lifetime = new AbortController();
+    let responseTimer: ReturnType<typeof setTimeout> | null = null;
+    const server = http.createServer((_request, response) => {
+      if (cancelled) lifetime.abort();
+      // The generic control deadline is 100 ms in this fixture. The host still
+      // owns this valid publication when its daemon answers after that deadline.
+      responseTimer = setTimeout(() => {
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({ ok: true, result: { status: 'recorded' } }));
+      }, 200);
+    });
+    try {
+      const { port } = await listen(server);
+      tmpHomeDir = await createTempDir('happier-usage-lifetime-');
+      envScope.patch({ HAPPIER_HOME_DIR: tmpHomeDir, HAPPIER_DAEMON_HTTP_TIMEOUT: httpTimeout });
+      reloadConfiguration();
+      writeDaemonState({ pid: process.pid, httpPort: port, startedAt: Date.now(),
+        startedWithCliVersion: 'test', controlToken: 'test-token' });
+      const service = createNativeAgentAccountUsageService({ sessionId: 'sess_1',
+        session: { getMetadataSnapshot: () => null }, signal: lifetime.signal });
+      const recordKey = { providerId: 'claude', accountSubjectId: 'usr_123',
+        subjectKind: 'account', quotaScope: 'account' } as const;
+      const snapshot: ProviderAccountUsageSnapshotV1 = {
+        v: 1, recordId: buildProviderAccountUsageRecordId(recordKey), recordKey,
+        providerId: 'claude', accountSubject: { kind: 'providerSubject', id: 'usr_123' },
+        observedAtMs: 1, fetchedAtMs: 1, staleAfterMs: 2, source: 'runtimeSignal',
+        confidence: 'confirmed', state: 'loaded_data', planLabel: null, accountLabel: null, meters: [],
+      };
+      await expect(service.recordSnapshot({ sessionId: 'sess_1', snapshot })).resolves.toEqual(expected);
+    } finally {
+      lifetime.abort();
+      if (responseTimer) clearTimeout(responseTimer);
+      server.closeAllConnections();
+      await new Promise<void>(resolve => server.close(() => resolve()));
     }
   });
 

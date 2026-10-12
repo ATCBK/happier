@@ -231,7 +231,7 @@ describe('native Agent account-usage host owner', () => {
                 groupId: 'team',
                 groupGeneration: 7,
             }),
-        }));
+        }), expect.objectContaining({ timeoutMs: null }));
         expect(notifySnapshot).toHaveBeenNthCalledWith(2, expect.objectContaining({
             deriveCredentialFingerprintFromSource: true,
             source: expect.objectContaining({
@@ -305,12 +305,12 @@ describe('native Agent account-usage host owner', () => {
             source: expect.objectContaining({
                 profileId: 'profile-1',
             }),
-        }));
+        }), expect.objectContaining({ timeoutMs: null }));
         expect(notifySnapshot).toHaveBeenNthCalledWith(2, expect.objectContaining({
             source: expect.objectContaining({
                 profileId: 'profile-2',
             }),
-        }));
+        }), expect.objectContaining({ timeoutMs: null }));
     });
 
     it('delivers only the bound session snapshot and preserves the daemon result', async () => {
@@ -358,7 +358,7 @@ describe('native Agent account-usage host owner', () => {
             sessionId: 'session-1',
             snapshot: { ...snapshot, recordId },
             policyDisposition: 'evidence_only',
-        });
+        }, expect.objectContaining({ timeoutMs: null }));
     });
 
     it('reports a daemon credential-fingerprint mismatch as a semantic rejection', async () => {
