@@ -74,9 +74,9 @@ const styles = StyleSheet.create(() => ({
         flexGrow: 1,
     },
     virtualizedHost: {
-        // RV-9: provide a normal four-row measuring height without imposing a
-        // minimum that can overflow a short modal/keyboard/rotation viewport.
-        // The parent remains authoritative when less room is available.
+        // RV-9: a four-row fallback for a caller that declares no bound; a
+        // declared `maxHeight` replaces it (`viewportHeight`). No minimum, so a
+        // short modal/keyboard/rotation viewport remains authoritative.
         height: SELECTION_LIST_VIRTUALIZED_ROW_ESTIMATED_HEIGHT_PX * 4,
         maxHeight: '100%',
         minHeight: 0,
@@ -192,6 +192,8 @@ export function flattenRenderPlanForVirtualizedList(
         }
 
         const isStale = sectionPlan.isStale === true;
+        // Last-known rows being refreshed keep their ink; only rows a failed refresh left behind are dimmed.
+        const dimStale = isStale && sectionPlan.dynamicState === 'error';
 
         rows.push({
             kind: 'section-header',
@@ -201,12 +203,21 @@ export function flattenRenderPlanForVirtualizedList(
             rightAccessory: sectionPlan.rightAccessory,
             count: sectionPlan.count,
             action: sectionPlan.action,
-            isStale,
+            isStale: dimStale,
         });
 
         if (sectionPlan.dynamicState === 'loading') {
             const skeletonCount = sectionPlan.skeletonRowCount
                 ?? SELECTION_LIST_DEFAULT_LOADING_SKELETON_ROWS;
+            // A section that names its first load says so in one quiet line instead of skeletons.
+            if (skeletonCount === 0 && sectionPlan.hint && !isStale) {
+                rows.push({
+                    kind: 'empty-hint',
+                    rowKey: `${sectionPlan.id}::loadingHint`,
+                    sectionId: sectionPlan.id,
+                    hint: sectionPlan.hint,
+                });
+            }
             for (let i = 0; i < skeletonCount; i += 1) {
                 rows.push({
                     kind: 'loading-skeleton',
@@ -225,7 +236,7 @@ export function flattenRenderPlanForVirtualizedList(
                         rowKey: `${sectionPlan.id}::option::${option.id}`,
                         sectionId: sectionPlan.id,
                         option,
-                        isStale: true,
+                        isStale: false,
                     });
                 }
             }
@@ -657,6 +668,8 @@ type SelectionListBodyVirtualizedProps = Readonly<{
     bodyFooter?: React.ReactElement | null;
     /** The empty state shown between the slots when the plan has no rows. */
     emptyContent?: React.ReactElement | null;
+    /** See `SelectionListBodyProps.virtualizedViewportHeight`. */
+    viewportHeight?: number;
 }>;
 
 export function SelectionListBodyVirtualized(props: SelectionListBodyVirtualizedProps): React.ReactElement {
@@ -733,6 +746,7 @@ function SelectionListBodyFlattenedVirtualized(props: SelectionListBodyVirtualiz
     const { onViewportLayout } = useSelectionListVirtualizedFocusReveal({
         listRef: virtualizedListRef,
         focusedItemIndex,
+        focusedKey: focusedOptionId,
         reducedMotion,
     });
 
@@ -787,7 +801,7 @@ function SelectionListBodyFlattenedVirtualized(props: SelectionListBodyVirtualiz
     return (
         <View
             testID={measureMode ? undefined : selectionListTestId(props.rootTestID, 'body')}
-            style={[styles.body, styles.virtualizedHost]}
+            style={[styles.body, styles.virtualizedHost, props.viewportHeight === undefined ? null : { height: props.viewportHeight }]}
             {...(measureMode || props.listboxAria === null
                 ? {}
                 : (props.listboxAria as unknown as Record<string, never>))}
@@ -899,6 +913,7 @@ function SelectionListBodyDirectVirtualizedSource(props: SelectionListBodyVirtua
     const { onViewportLayout } = useSelectionListVirtualizedFocusReveal({
         listRef: virtualizedListRef,
         focusedItemIndex,
+        focusedKey: props.focusedOptionId ?? (focusedOptionIndex < 0 ? null : `index:${focusedOptionIndex}`),
         reducedMotion,
     });
 
@@ -946,7 +961,7 @@ function SelectionListBodyDirectVirtualizedSource(props: SelectionListBodyVirtua
     return (
         <View
             testID={measureMode ? undefined : selectionListTestId(props.rootTestID, 'body')}
-            style={[styles.body, styles.virtualizedHost]}
+            style={[styles.body, styles.virtualizedHost, props.viewportHeight === undefined ? null : { height: props.viewportHeight }]}
             {...(measureMode || props.listboxAria === null
                 ? {}
                 : (props.listboxAria as unknown as Record<string, never>))}

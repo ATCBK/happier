@@ -52,6 +52,18 @@ afterEach(() => {
  *
  * Reduced-motion: the pulse is skipped (static low opacity).
  */
+/** The pulsing title bar inside a loading row: the row's deepest node with a width style. */
+function barOf(row: any): any {
+    if (!row) return null;
+    const candidates = row.findAll((node: any) => {
+        const style = node.props?.style;
+        const flat = (Array.isArray(style) ? style.flat(Infinity) : [style]).filter(Boolean);
+        const merged = Object.assign({}, ...flat);
+        return typeof merged.width === 'string' && 'opacity' in merged;
+    });
+    return candidates.at(-1) ?? null;
+}
+
 describe('SelectionList skeleton shimmer (R6 Fix 5)', () => {
     it('renders skeleton rows with an animated opacity style entry', async () => {
         const { act } = await import('react-test-renderer');
@@ -71,7 +83,7 @@ describe('SelectionList skeleton shimmer (R6 Fix 5)', () => {
         });
         // R13 (Fix 5): outer wrapper reserves row geometry; inner ":bar" node
         // carries the animated shimmer style (opacity + width).
-        const row0 = screen.findByTestId('sl:section:dyn:loading:row-0:bar');
+        const row0 = barOf(screen.findByTestId('sl:section:dyn:loading:row-0'));
         expect(row0).not.toBeNull();
         const styles = Array.isArray(row0!.props.style)
             ? row0!.props.style.flat(Infinity)
@@ -102,7 +114,7 @@ describe('SelectionList skeleton shimmer (R6 Fix 5)', () => {
         });
         const widths: Array<string | number | undefined> = [];
         for (let i = 0; i < 3; i++) {
-            const row = screen.findByTestId(`sl:section:dyn:loading:row-${i}:bar`);
+            const row = barOf(screen.findByTestId(`sl:section:dyn:loading:row-${i}`));
             const styles = Array.isArray(row!.props.style)
                 ? row!.props.style.flat(Infinity)
                 : [row!.props.style];

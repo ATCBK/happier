@@ -127,3 +127,53 @@ describe('SelectionList virtualization wiring (Phase 1.12)', () => {
         expect(legendListState.props?.data?.length).toBe(2);
     });
 });
+
+/** Every virtualized viewport host: the bounded box the virtualized list scrolls inside. */
+function virtualizedViewportHeights(screen: Awaited<ReturnType<typeof renderScreen>>): ReadonlyArray<unknown> {
+    const flatten = (style: unknown): Record<string, unknown> => Object.assign(
+        {},
+        ...((Array.isArray(style) ? style.flat(Infinity) : [style]).filter(Boolean) as Array<Record<string, unknown>>),
+    );
+    return screen.tree.root
+        .findAll((node) => typeof node.type === 'string' && flatten(node.props.style).maxHeight === '100%'
+            && typeof flatten(node.props.style).height === 'number')
+        .map((node) => flatten(node.props.style).height);
+}
+
+describe('SelectionList virtualized viewport height', () => {
+    // A long list (the composer's machine picker with dozens of machines) must use the room its
+    // caller gives it. A virtualized list has no natural height of its own, so a declared
+    // `maxHeight` is its viewport; the four-row fallback is only for an unbounded caller.
+    const longSection = { kind: 'static' as const, id: 'all', title: 'All', options: makeOptions(80) };
+
+    it('sizes a lone virtualized section to the caller maxHeight', async () => {
+        const { SelectionList } = await import('../SelectionList');
+        const screen = await renderScreen(<SelectionList {...defaultProps(
+            { id: 'root', inputPlaceholder: 'Search', sections: [longSection] },
+            { maxHeight: 480 },
+        )} />);
+        expect(virtualizedViewportHeights(screen)).toEqual([480]);
+    });
+
+    it('sizes the flattened multi-section virtualized body to the caller maxHeight', async () => {
+        const { SelectionList } = await import('../SelectionList');
+        const screen = await renderScreen(<SelectionList {...defaultProps(
+            {
+                id: 'root',
+                inputPlaceholder: 'Search',
+                sections: [{ kind: 'static', id: 'recent', title: 'Recent', options: makeOptions(2, 'r') }, longSection],
+            },
+            { maxHeight: 480 },
+        )} />);
+        expect(virtualizedViewportHeights(screen).every((height) => height === 480)).toBe(true);
+        expect(virtualizedViewportHeights(screen).length).toBeGreaterThan(0);
+    });
+
+    it('keeps the four-row viewport when the caller gives no bound', async () => {
+        const { SelectionList } = await import('../SelectionList');
+        const screen = await renderScreen(<SelectionList {...defaultProps(
+            { id: 'root', inputPlaceholder: 'Search', sections: [longSection] },
+        )} />);
+        expect(virtualizedViewportHeights(screen)).toEqual([224]);
+    });
+});

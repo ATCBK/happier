@@ -260,7 +260,8 @@ export function synthesizeSelectionListRenderPlan(
                         options: [],
                         dynamicState: 'loading',
                         isStale: false,
-                        skeletonRowCount: descriptor.loadingSkeletonRows
+                        ...(descriptor.loadingHint ? { hint: descriptor.loadingHint } : {}),
+                        skeletonRowCount: descriptor.loadingHint ? 0 : descriptor.loadingSkeletonRows
                             ?? SELECTION_LIST_DEFAULT_LOADING_SKELETON_ROWS,
                     });
                     continue;
@@ -298,7 +299,8 @@ export function synthesizeSelectionListRenderPlan(
                     options: stale,
                     dynamicState: 'loading',
                     isStale: hasStale,
-                    skeletonRowCount: hasStale
+                    ...(!hasStale && descriptor.loadingHint ? { hint: descriptor.loadingHint } : {}),
+                    skeletonRowCount: hasStale || descriptor.loadingHint
                         ? 0
                         : (descriptor.loadingSkeletonRows ?? SELECTION_LIST_DEFAULT_LOADING_SKELETON_ROWS),
                 });
@@ -312,8 +314,8 @@ export function synthesizeSelectionListRenderPlan(
                     // Resolver errors can contain transport details, paths, or
                     // credentials. Keep the Error available to diagnostics in
                     // the dynamic-state owner, but present only the canonical
-                    // localized fallback at this user-visible boundary.
-                    hint: undefined,
+                    // localized fallback (or the section owner's own host copy) at this user-visible boundary.
+                    hint: descriptor.errorHint,
                     isStale: state.options.length > 0,
                 });
                 continue;

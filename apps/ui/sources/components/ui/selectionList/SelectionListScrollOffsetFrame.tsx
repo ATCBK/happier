@@ -17,7 +17,21 @@
 import * as React from 'react';
 import { View, type StyleProp, type ViewProps, type ViewStyle } from 'react-native';
 
-import { SelectionListScrollIntoViewContext } from './SelectionListScrollIntoViewContext';
+import {
+    SelectionListScrollIntoViewContext,
+    type SelectionListRegisterScrollItemLayout,
+} from './SelectionListScrollIntoViewContext';
+
+type ItemLayoutHandler = ReturnType<SelectionListRegisterScrollItemLayout>;
+type ItemLayoutEvent = Parameters<ItemLayoutHandler>[0];
+type ReportedItemLayout = Readonly<{ event: ItemLayoutEvent; forward: ItemLayoutHandler }>;
+
+/** The row's layout event with its `y` moved from this frame's space into the parent's. */
+function rebaseItemLayout(event: ItemLayoutEvent, offsetY: number): ItemLayoutEvent {
+    const layout = event.nativeEvent?.layout;
+    if (!layout || typeof layout.y !== 'number') return event;
+    return { ...event, nativeEvent: { ...event.nativeEvent, layout: { ...layout, y: offsetY + layout.y } } };
+}
 
 export function SelectionListScrollOffsetFrame(props: Readonly<{
     children: React.ReactNode;
@@ -38,6 +52,10 @@ export function SelectionListScrollOffsetFrame(props: Readonly<{
 }>): React.ReactElement {
     const parentRegisterItemLayout = React.useContext(SelectionListScrollIntoViewContext);
     const offsetYRef = React.useRef(0);
+    // What each option last reported, kept so a later move of this frame can forward it again:
+    // layout callbacks carry no parent-before-child order, and a row that reported first would
+    // otherwise stay registered at the frame's old offset and never be revealed.
+    const reportedRef = React.useRef(new Map<string, ReportedItemLayout>());
     const registerItemLayout = React.useCallback<NonNullable<typeof parentRegisterItemLayout>>((optionId) => {
         const parentHandler = parentRegisterItemLayout?.(optionId);
         return (event) => {
@@ -46,16 +64,9 @@ export function SelectionListScrollOffsetFrame(props: Readonly<{
                 parentHandler?.(event);
                 return;
             }
-            parentHandler?.({
-                ...event,
-                nativeEvent: {
-                    ...event.nativeEvent,
-                    layout: {
-                        ...layout,
-                        y: offsetYRef.current + layout.y,
-                    },
-                },
-            });
+            if (!parentHandler) return;
+            reportedRef.current.set(optionId, { event, forward: parentHandler });
+            parentHandler(rebaseItemLayout(event, offsetYRef.current));
         };
     }, [parentRegisterItemLayout]);
 
@@ -70,8 +81,10 @@ export function SelectionListScrollOffsetFrame(props: Readonly<{
                 role={props.role}
                 onLayout={(event) => {
                     const nextY = event.nativeEvent.layout.y;
-                    if (typeof nextY === 'number') {
-                        offsetYRef.current = nextY;
+                    if (typeof nextY !== 'number' || nextY === offsetYRef.current) return;
+                    offsetYRef.current = nextY;
+                    for (const reported of reportedRef.current.values()) {
+                        reported.forward(rebaseItemLayout(reported.event, nextY));
                     }
                 }}
             >

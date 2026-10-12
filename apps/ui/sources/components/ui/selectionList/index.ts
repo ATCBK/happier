@@ -35,8 +35,9 @@ export {
     type SelectionListVirtualizedOptionSourceItem,
 } from './_types';
 
-export { SELECTION_LIST_CARD_COLUMN_GAP_PX, SELECTION_LIST_LARGE_POPOVER_SIZE } from './_constants';
+export { SELECTION_LIST_CARD_COLUMN_GAP_PX, SELECTION_LIST_LARGE_POPOVER_SIZE, SELECTION_LIST_VIRTUALIZED_ROW_ESTIMATED_HEIGHT_PX } from './_constants';
 export { SelectionList } from './SelectionList';
+export { SelectionListDetailPaneContext } from './SelectionListDetailPaneContext';
 export { SelectionListFilterChip } from './SelectionListFilterChips';
 export { SelectionListScreen, type SelectionListScreenProps } from './SelectionListScreen';
 export {

@@ -358,9 +358,10 @@ describe('SelectionListSearchHeader web keydown bridge', () => {
             });
             expect(refinedExplicitTab.defaultPrevented).toBe(true);
             expect(onActivate).toHaveBeenCalledTimes(2);
-            // Replacing every identity preserves the nearest visual position
-            // (row B); the fresh ArrowDown then wraps to row A.
-            expect(onActivate).toHaveBeenLastCalledWith('refined-row-a');
+            // A refine that replaces every identity reseeds focus on the first new match (row A), since
+            // the user has not aimed at a row in these results (keyboard-nav owner, 192a9a83fd: "the initial
+            // match is the current first match, not an old index"); the fresh ArrowDown then moves to row B.
+            expect(onActivate).toHaveBeenLastCalledWith('refined-row-b');
         } finally {
             await act(async () => {
                 root.unmount();

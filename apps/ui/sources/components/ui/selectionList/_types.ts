@@ -118,14 +118,18 @@ type SelectionListOptionBase = Readonly<{
      */
     rightAccessoryOutsidePressable?: boolean;
     /**
-     * Extra body rendered directly BELOW the row, and only while the row is the
-     * selected option. It is mounted as a sibling of the row — outside every
+     * Extra body rendered directly BELOW the row, by default only while the row
+     * is selected. It is mounted as a sibling of the row — outside every
      * Pressable — so the controls it owns (segmented toggles, sliders, chips)
      * activate independently and never nest a button inside the row's button on
      * web. Use it for per-option controls that only make sense once the option
      * is chosen; the row itself stays the single activation target.
      */
     expandedContent?: SelectionListLazyVisual;
+    /** Informational previews may follow focus; per-option controls keep the selected default. */
+    expandedContentVisibility?: 'selected' | 'focused';
+    /** The active row's detail, shown beside the list when the list declares a `detailPane` and has room. */
+    detailContent?: SelectionListLazyVisual;
     /** Hide the compact subtitle while expanded content already shows it. */
     hideSubtitleWhenExpanded?: boolean;
     /** Opt free disclosure content into the row gutter; default/none keeps content-owned insets. */
@@ -155,6 +159,12 @@ type SelectionListOptionBase = Readonly<{
      * drill-down chevron on touch.
      */
     autocompleteValue?: string;
+    /**
+     * The row is its group's current choice. For lists with one choice per section (an account per
+     * connected service), where the list-level `selectedOptionId` can name only one of them. The row
+     * owner draws the same check and selected state as for the list's own selection.
+     */
+    selected?: boolean;
     /** Disable the row entirely. */
     disabled?: boolean;
     /** Show the canonical row-level pending affordance while retaining row identity. */
@@ -346,6 +356,16 @@ export type SelectionListDynamicSection = Readonly<{
     debounceMs?: number;
     /** Skeleton row count while loading; default 3. Pass 0 to collapse during load. */
     loadingSkeletonRows?: number;
+    /**
+     * A first load that says so in one quiet line ("Searching messages…") instead of skeleton rows, for a
+     * group whose results take noticeably long and whose row shape varies (Find lab ST: "one line").
+     */
+    loadingHint?: string;
+    /**
+     * Host copy for a failed resolve ("Couldn't search PRs & Issues"). The resolver's own message stays in
+     * diagnostics; without this the generic localized fallback shows.
+     */
+    errorHint?: string;
     /** Hide this section entirely when input doesn't satisfy this predicate. */
     visibleWhen?: (input: string) => boolean;
     /**
@@ -781,11 +801,8 @@ export type SelectionListProps = Readonly<{
      * relationship, one scroll owner — beneath the results, for keyboard-seated
      * surfaces where the field must stay directly above the software keyboard.
      * It never creates a second TextInput or a second query state.
-     *
-     * `'body'` seats the same input inside the body's scroll owner, after `bodyHeader`, so a pane
-     * whose title, status and search scroll with its rows reads as one surface (the engine picker).
      */
-    inputPlacement?: 'top' | 'bottom' | 'body';
+    inputPlacement?: 'top' | 'bottom';
     /**
      * `'check'` (default): the current choice of a single-choice list carries a trailing check (the
      * picker anatomy). `'none'`: the options draw their own selection state — a list of per-group
@@ -894,6 +911,12 @@ export type SelectionListProps = Readonly<{
      *   measurement exists, and later shrink updates are debounced.
      */
     heightBehavior?: SelectionListHeightBehavior;
+    /**
+     * A column beside the list for the active row's `detailContent` (Find lab G1s preview), shown only while
+     * the list is at least `minListWidthPx` wide; narrower, rows carry their own detail
+     * (`SelectionListDetailPaneContext` says which).
+     */
+    detailPane?: Readonly<{ minListWidthPx: number; widthPx: number }>;
     /** Fill the parent's flex viewport while keeping SelectionList as the sole scroll owner. */
     fillAvailableSpace?: boolean;
     /**

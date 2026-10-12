@@ -31,8 +31,9 @@ const stylesheet = StyleSheet.create(() => ({
         flexDirection: 'column',
     },
     virtualizedHost: {
-        // Keep the ordinary four-row measuring height, but let a shorter parent
-        // (keyboard, rotation, or compact modal viewport) remain authoritative.
+        // A four-row fallback for a caller that declares no bound (a declared
+        // `maxHeight` replaces it, `viewportHeight`); a shorter parent (keyboard,
+        // rotation, or compact modal viewport) remains authoritative.
         height: SELECTION_LIST_VIRTUALIZED_ROW_ESTIMATED_HEIGHT_PX * 4,
         maxHeight: '100%',
         minHeight: 0,
@@ -73,6 +74,8 @@ export type SelectionListVirtualizedSectionProps = Readonly<{
      */
     virtualization?: SelectionListVirtualizationMode;
     showsVerticalScrollIndicator?: boolean;
+    /** See `SelectionListBodyProps.virtualizedViewportHeight`. */
+    viewportHeight?: number;
     /** The body-owned popup pattern; only listbox sections become groups. */
     a11yPattern?: SelectionListA11yPattern;
     /**
@@ -213,6 +216,7 @@ export function SelectionListVirtualizedSection(
     const { onViewportLayout } = useSelectionListVirtualizedFocusReveal({
         listRef: virtualizedListRef,
         focusedItemIndex,
+        focusedKey: focusedOptionId,
         reducedMotion,
     });
 
@@ -220,7 +224,7 @@ export function SelectionListVirtualizedSection(
         return (
             <View
                 testID={sectionTestId}
-                style={[styles.container, styles.virtualizedHost]}
+                style={[styles.container, styles.virtualizedHost, props.viewportHeight === undefined ? null : { height: props.viewportHeight }]}
                 {...(sectionGroupA11y ?? {})}
                 {...(sectionGroupA11y === null ? {} : { role: 'group' as const })}
             >

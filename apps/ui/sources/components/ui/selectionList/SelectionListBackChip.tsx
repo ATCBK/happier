@@ -12,8 +12,8 @@ const stylesheet = StyleSheet.create((theme) => ({
     chip: {
         flexDirection: 'row',
         alignItems: 'center',
-        paddingHorizontal: 8,
-        paddingVertical: 4,
+        paddingHorizontal: theme.space.s8,
+        paddingVertical: theme.space.s4,
         borderRadius: 6,
         backgroundColor: theme.colors.surface.pressedOverlay,
     },
@@ -24,7 +24,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         fontSize: Platform.select({ ios: 13, default: 12 }),
         lineHeight: Platform.select({ ios: 16, default: 14 }),
         color: theme.colors.text.primary,
-        marginLeft: 4,
+        marginLeft: theme.space.s4,
     },
 }));
 

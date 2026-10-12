@@ -89,7 +89,7 @@ describe('SelectionList dynamic-section state rendering (Phase 2.2 mapping)', ()
         expect(loadingStatus?.props.role).toBe('status');
         expect(loadingStatus?.props['aria-live']).toBe('polite');
         expect(loadingStatus?.props.accessibilityLiveRegion).toBe('polite');
-        expect(screen.getTextContent()).toContain('MESSAGES · Loading...');
+        expect(screen.getTextContent()).toContain('MESSAGES · Loading…');
 
         await act(async () => {
             settle?.({
@@ -309,6 +309,25 @@ describe('SelectionList dynamic-section state rendering (Phase 2.2 mapping)', ()
         // expected to render either skeleton testIDs or visible placeholder rows.
         const loadingMarker = screen.findByTestId('sl:section:dyn:loading');
         expect(loadingMarker).not.toBeNull();
+    });
+
+    it('says it is still looking in one quiet line, instead of skeleton bars, when the section names its loading state', async () => {
+        const { act } = await import('react-test-renderer');
+        const root = makeStep({
+            id: 'dyn',
+            title: 'DYN',
+            debounceMs: 0,
+            showSkeletonsOnFirstLoad: true,
+            loadingHint: 'Searching messages…',
+            resolve: () => new Promise(() => {}),
+        });
+        const { SelectionList } = await import('../SelectionList');
+        const screen = await renderScreen(<SelectionList {...defaultProps(root)} inputValue="x" />);
+        await act(async () => {
+            vi.advanceTimersByTime(1);
+        });
+        expect(screen.getTextContent()).toContain('Searching messages…');
+        expect(screen.findByTestId('sl:section:dyn:loading:row-0')).toBeNull();
     });
 
     it('renders a localized inline error without exposing the resolver message', async () => {

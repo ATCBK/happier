@@ -73,4 +73,23 @@ describe('SelectionListFooter hint cross-fade (R6 Fix 4)', () => {
         const after = screen.findByTestId('footer:hints-animator');
         expect(after).not.toBeNull();
     });
+
+    it('finishes the swap when the same hints arrive again with a new identity mid-fade', async () => {
+        vi.useFakeTimers();
+        try {
+            const { SelectionListFooter } = await import('../SelectionListFooter');
+            const next = () => [{ id: 'open', label: '↵', description: 'Open at the line' }];
+            const screen = await renderScreen(
+                <SelectionListFooter hints={[{ id: 'move', label: '↑↓', description: 'Move' }]} hardwareKeyboardAvailable testID="footer" />,
+            );
+            await screen.update(<SelectionListFooter hints={next()} hardwareKeyboardAvailable testID="footer" />);
+            // A parent re-render rebuilds the same hints (same ids) before the fade-out ends.
+            await screen.update(<SelectionListFooter hints={next()} hardwareKeyboardAvailable testID="footer" />);
+            await vi.advanceTimersByTimeAsync(2000);
+            expect(screen.getTextContent()).toContain('Open at the line');
+            expect(screen.getTextContent()).not.toContain('Move');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
 });

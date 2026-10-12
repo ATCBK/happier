@@ -25,6 +25,12 @@ const rootStep: SelectionListStep = {
     }],
 };
 
+/** A fine pointer with no touch points is how the web platform reports a hardware keyboard. */
+function stubHardwareKeyboard() {
+    vi.stubGlobal('window', { ...(globalThis as { window?: object }).window, matchMedia: () => ({ matches: true }) });
+    vi.stubGlobal('navigator', { ...(globalThis as { navigator?: object }).navigator, maxTouchPoints: 0 });
+}
+
 // K1 picker anatomy: the current choice of a single-choice picker carries a check, drawn once by the
 // row owner so every picker (machine, path, profile, resume, server, …) marks it the same way.
 describe('SelectionList current-choice mark', () => {
@@ -42,6 +48,37 @@ describe('SelectionList current-choice mark', () => {
 
         expect(screen.findByTestId('sl:root:option-selected-mark:macbook')).toBeTruthy();
         expect(screen.findByTestId('sl:root:option-selected-mark:devbox')).toBeFalsy();
+    });
+
+    // One choice per group (an account per connected service): every group's current row is current,
+    // so each carries the same check and selected state the list draws for a single choice.
+    it('marks every row its owner reports as current, one per group', async () => {
+        const grouped: SelectionListStep = {
+            id: 'root',
+            sections: [
+                { kind: 'static', id: 'claude', title: 'Claude subscription', options: [
+                    { id: 'work', label: 'Work', selected: true },
+                    { id: 'bot', label: 'Bot' },
+                ] },
+                { kind: 'static', id: 'api', title: 'Anthropic API key', options: [
+                    { id: 'native', label: 'Its own sign-in', selected: true },
+                ] },
+            ],
+        };
+        const screen = await renderScreen(
+            <SelectionList
+                rootStep={grouped}
+                selectedOptionId="work"
+                onSelect={vi.fn()}
+                onRequestClose={vi.fn()}
+                disableTransitions
+                testID="sl"
+            />,
+        );
+
+        expect(screen.findByTestId('sl:root:option-selected-mark:work')).toBeTruthy();
+        expect(screen.findByTestId('sl:root:option-selected-mark:native')).toBeTruthy();
+        expect(screen.findByTestId('sl:root:option-selected-mark:bot')).toBeFalsy();
     });
 
     it('leaves multiple-choice lists to their own checkbox semantics', async () => {
@@ -105,6 +142,7 @@ describe('SelectionList current-choice mark', () => {
                 testID="sl"
             />,
         );
+        stubHardwareKeyboard();
         const withKeyboard = await render(true);
         expect(withKeyboard.findByTestId('sl:root:option-enter-mark:macbook')).toBeTruthy();
         expect(withKeyboard.findByTestId('sl:root:option-enter-mark:devbox')).toBeFalsy();
@@ -112,5 +150,27 @@ describe('SelectionList current-choice mark', () => {
 
         const touch = await render(false);
         expect(touch.findByTestId('sl:root:option-enter-mark:macbook')).toBeFalsy();
+        vi.unstubAllGlobals();
+    });
+
+    // The ⌘K palette draws its commands as menu rows (inset, rounded); the row the keyboard is on
+    // still shows the ↵ that runs it (Find lab G1).
+    it('keeps the ↵ mark on menu-presentation rows', async () => {
+        stubHardwareKeyboard();
+        const screen = await renderScreen(
+            <SelectionList
+                rootStep={rootStep}
+                selectionMark="enter"
+                optionPresentation="menu"
+                keyboardHintsEnabled
+                onSelect={vi.fn()}
+                onRequestClose={vi.fn()}
+                disableTransitions
+                testID="sl"
+            />,
+        );
+        expect(screen.findByTestId('sl:root:option-enter-mark:macbook')).toBeTruthy();
+        expect(screen.findByTestId('sl:root:option-enter-mark:devbox')).toBeFalsy();
+        vi.unstubAllGlobals();
     });
 });

@@ -61,14 +61,14 @@ const stylesheet = StyleSheet.create((theme) => ({
     container: {
         flexDirection: 'row',
         alignItems: 'center',
-        paddingHorizontal: 12,
-        paddingVertical: 8,
+        paddingHorizontal: theme.space.s12,
+        paddingVertical: theme.space.s8,
         borderBottomWidth: 1,
         borderBottomColor: theme.colors.border.default,
         backgroundColor: theme.colors.surface.base,
     },
     leadingSlot: {
-        marginRight: 8,
+        marginRight: theme.space.s8,
         alignItems: 'center',
         justifyContent: 'center',
     },
@@ -132,6 +132,9 @@ const stylesheet = StyleSheet.create((theme) => ({
      */
     inputStandardInline: {
         flex: 1,
+        // A browser input's intrinsic width must not push trailing controls
+        // outside a narrow header; the native editor owns scrolling its text.
+        minWidth: 0,
     },
     /**
      * RUX-10: web overlay — the editable TextInput floats above the mirror
@@ -149,7 +152,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         caretColor: theme.colors.input.text,
     } satisfies WebOverlayInputStyle,
     inputSuffixSlot: {
-        marginLeft: 8,
+        marginLeft: theme.space.s8,
         alignItems: 'center',
         justifyContent: 'center',
     },

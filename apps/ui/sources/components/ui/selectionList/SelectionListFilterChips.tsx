@@ -43,6 +43,7 @@ export const SelectionListFilterChip = React.memo(function SelectionListFilterCh
     const hasChooser = filter.renderPopoverContent !== undefined
         || (filter.options !== undefined && filter.options.length > 0 && filter.onChange !== undefined);
     const canOpen = hasChooser && filter.disabled !== true;
+    const phoneSheet = filter.renderPopoverContent !== undefined || filter.selectedIds !== undefined;
     const clearable = !hasChooser && filter.onClear !== undefined && filter.disabled !== true;
     const testID = filter.testID ?? `selection-list-filter:${filter.id}`;
 
@@ -121,10 +122,15 @@ export const SelectionListFilterChip = React.memo(function SelectionListFilterCh
                 placement="bottom"
                 gap={6}
                 maxHeightCap={SELECTION_LIST_LARGE_POPOVER_SIZE.maxHeightCap}
-                // A compact chooser: as wide as its rows need, hanging from the chip's right edge.
-                portal={{ ...MODAL_AWARE_FLOATING_POPOVER_PORTAL_OPTIONS, anchorAlign: 'end', sizeToContent: true }}
+                // A compact chooser: as wide as its rows need, opening from the chip's leading edge like
+                // every anchored menu. The portal clamps it inside the window, so a chip on the trailing
+                // edge still opens in view and a chip beside the navigation never covers it.
+                portal={{ ...MODAL_AWARE_FLOATING_POPOVER_PORTAL_OPTIONS, sizeToContent: true }}
                 containerStyle={{ paddingHorizontal: 0 }}
                 onRequestClose={close}
+                // A chooser that lays out its own content, or keeps several choices open, is the app's bottom
+                // sheet on a phone; a plain one-tap list stays the anchored menu beside its chip.
+                {...(phoneSheet ? { phonePresentation: 'sheet' as const, accessibilityLabel: filter.label } : {})}
             >
                 {({ maxHeight }) => (
                     <FloatingOverlay maxHeight={maxHeight} surfaceChrome="theme" scrollEnabled={false}>
@@ -181,18 +187,20 @@ export function SelectionListFilterChips(props: Readonly<{
 }
 
 const stylesheet = StyleSheet.create((theme) => ({
+    // A chip is as wide as what it says, up to the room its row offers: a value is never cut to a
+    // fixed width (a long machine name keeps its whole name), it ellipsizes only when the row itself is narrower.
     anchor: {
-        maxWidth: 260,
+        maxWidth: '100%',
         flexShrink: 1,
     },
     chip: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 7,
+        gap: theme.space.s6,
         minHeight: 32,
-        maxWidth: 260,
+        maxWidth: '100%',
         flexShrink: 1,
-        paddingHorizontal: 11,
+        paddingHorizontal: theme.space.s10,
         borderRadius: 16,
         borderWidth: 1,
         borderColor: theme.colors.border.strong,
@@ -202,10 +210,10 @@ const stylesheet = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.surface.pressed,
     },
     label: {
-        ...Typography.default('medium'),
+
         flexShrink: 1,
-        fontSize: 13,
-        lineHeight: 18,
+        ...Typography.variant('body', 'medium'),
+
         color: theme.colors.text.primary,
     },
     labelMuted: {
@@ -227,7 +235,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     inline: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
         flexShrink: 1,
     },
     row: {
@@ -237,9 +245,9 @@ const stylesheet = StyleSheet.create((theme) => ({
     rowContent: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
-        paddingHorizontal: 8,
-        paddingTop: 2,
-        paddingBottom: 8,
+        gap: theme.space.s8,
+        paddingHorizontal: theme.space.s8,
+        paddingTop: theme.space.s2,
+        paddingBottom: theme.space.s8,
     },
 }));

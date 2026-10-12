@@ -131,8 +131,10 @@ describe('SelectionListBody stale dynamic virtualization (FR4-3)', () => {
         // option-bearing dynamic section. Pre-fix this falls through to a
         // plain mapped ScrollView (no virtualized list captured).
         expect(legendListState.props).not.toBeNull();
+        // While the same rows are refreshed they keep their ink: last-known results never read as disabled
+        // (the section's loading line says it is still looking).
         const staleOptionWrapper = screen.findByTestId('sl:root:option-wrapper:opt-0');
-        expect(staleOptionWrapper?.parent?.parent?.props.style).toEqual(expect.objectContaining({
+        expect(staleOptionWrapper?.parent?.parent?.props.style).not.toEqual(expect.objectContaining({
             opacity: SELECTION_LIST_STALE_OPTIONS_OPACITY,
         }));
     });

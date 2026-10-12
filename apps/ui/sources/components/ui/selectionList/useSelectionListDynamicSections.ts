@@ -408,8 +408,10 @@ export function useSelectionListDynamicSections(params: {
 
             const seed = deriveSeed(section, inputBehavior, inputValue);
             const debounceMs = section.debounceMs ?? SELECTION_LIST_DEFAULT_DYNAMIC_DEBOUNCE_MS;
-            const skeletonCount =
-                section.loadingSkeletonRows ?? SELECTION_LIST_DEFAULT_LOADING_SKELETON_ROWS;
+            // A section that names its first load (`loadingHint`) shows that line, never placeholder rows.
+            const skeletonCount = section.loadingHint
+                ? 0
+                : section.loadingSkeletonRows ?? SELECTION_LIST_DEFAULT_LOADING_SKELETON_ROWS;
 
             const dispatch = () => {
                 debounceTimers.current.delete(id);

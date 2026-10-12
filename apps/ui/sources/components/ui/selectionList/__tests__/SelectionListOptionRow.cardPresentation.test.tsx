@@ -7,7 +7,8 @@
  *     SelectionList consumer, so it asserts the absence of each card artifact
  *     individually rather than trusting a single flag.
  *  2. The card OWNS the fill, from theme tokens, in whichever theme is live —
- *     `surface.base` unselected (invisible on a base pane, by design) and
+ *     nothing unselected (quiet on any pane, base or glass: a filled idle card
+ *     reads as a grey slab on a floating material) and
  *     `surface.selected` when selected. Run against the REAL light and dark
  *     themes rather than the flat test palette, so "reads a token" and "reads
  *     the right token" are distinguishable.
@@ -169,10 +170,10 @@ describe('optionPresentation card — fill ownership', () => {
     it.each([
         ['light', lightTheme],
         ['dark', darkTheme],
-    ] as const)('paints base unselected and selected when selected (%s theme)', async (_name, theme) => {
+    ] as const)('paints nothing unselected and selected when selected (%s theme)', async (_name, theme) => {
         const idle = await renderRow({ presentation: 'card', isSelected: false, theme });
         expect(flattenStyle(idle.findByTestId(WRAPPER_TEST_ID)!.props.style).backgroundColor)
-            .toBe(theme.colors.surface.base);
+            .toBe('transparent');
 
         const selected = await renderRow({ presentation: 'card', isSelected: true, theme });
         expect(flattenStyle(selected.findByTestId(WRAPPER_TEST_ID)!.props.style).backgroundColor)

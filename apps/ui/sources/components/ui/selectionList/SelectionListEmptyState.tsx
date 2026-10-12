@@ -7,8 +7,8 @@ import { t } from '@/text';
 
 const stylesheet = StyleSheet.create((theme) => ({
     container: {
-        paddingHorizontal: 24,
-        paddingVertical: 36,
+        paddingHorizontal: theme.space.s24,
+        paddingVertical: theme.space.s32,
         alignItems: 'center',
         justifyContent: 'center',
     },

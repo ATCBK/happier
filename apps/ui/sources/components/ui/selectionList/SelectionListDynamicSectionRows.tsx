@@ -17,14 +17,14 @@
 
 import * as React from 'react';
 import { View } from 'react-native';
-import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
+import { StyleSheet } from 'react-native-unistyles';
 
 import { Text } from '@/components/ui/text/Text';
 import { t } from '@/text';
 
 import {
     SELECTION_LIST_DEFAULT_LOADING_SKELETON_ROWS,
+    SELECTION_LIST_SKELETON_ROW_SHAPE,
     SELECTION_LIST_VIRTUALIZATION_THRESHOLD,
 } from './_constants';
 import {
@@ -40,7 +40,7 @@ import type { SelectionListGridRowPlacement } from './selectionListGridRowModel'
 import type { SectionRenderPlan } from './SelectionListRenderPlan';
 import { SelectionListSectionHeader } from './SelectionListSectionHeader';
 import { renderSelectionListAccessory } from './renderSelectionListAccessory';
-import { SelectionListSkeletonRow } from './SelectionListSkeletonRow';
+import { SkeletonRows } from '@/components/ui/lists/SkeletonRows';
 import { SelectionListVirtualizedSection } from './SelectionListVirtualizedSection';
 import { SelectionListScrollOffsetFrame } from './SelectionListScrollOffsetFrame';
 import { selectionListTestId } from './_shared';
@@ -54,20 +54,18 @@ import type {
 export const SELECTION_LIST_STALE_OPTIONS_OPACITY = 0.6;
 
 const dynamicRowStyles = StyleSheet.create((theme) => ({
+    // A failed group says so in one quiet line on the group's text edge (Find lab ST "one line, no red"),
+    // never a filled band that reads as a selected row.
     errorRow: {
-        paddingHorizontal: 16,
-        paddingVertical: 12,
-        backgroundColor: theme.colors.surface.pressedOverlay,
-        borderRadius: 6,
-        marginHorizontal: 12,
-        marginVertical: 4,
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s10,
     },
     errorText: {
         color: theme.colors.text.secondary,
     },
     emptyHintRow: {
-        paddingHorizontal: 16,
-        paddingVertical: 10,
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s10,
     },
     emptyHintText: {
         color: theme.colors.text.secondary,
@@ -92,9 +90,11 @@ export function SelectionListLoadingSkeletonRow(props: Readonly<{
     testID: string | undefined;
 }>): React.ReactElement {
     return (
-        <SelectionListSkeletonRow
-            index={props.index}
-            testID={props.testID}
+        <SkeletonRows
+            rows={1}
+            firstIndex={props.index}
+            {...SELECTION_LIST_SKELETON_ROW_SHAPE}
+            {...(props.testID === undefined ? {} : { rowTestID: props.testID })}
         />
     );
 }
@@ -118,13 +118,7 @@ export function SelectionListLoadingSkeletonGroup(props: Readonly<{
         : ({ accessibilityHidden: true, 'aria-hidden': true } as Record<string, unknown>);
     return (
         <View testID={props.containerTestId} {...a11yHide}>
-            {Array.from({ length: props.count }, (_, i) => (
-                <SelectionListSkeletonRow
-                    key={`skeleton-${i}`}
-                    index={i}
-                    testID={props.rowTestIdBase(i)}
-                />
-            ))}
+            <SkeletonRows rows={props.count} {...SELECTION_LIST_SKELETON_ROW_SHAPE} rowTestID={props.rowTestIdBase} />
         </View>
     );
 }
@@ -139,14 +133,12 @@ export function SelectionListErrorRow(props: Readonly<{
     testID: string | undefined;
     measureMode: boolean;
 }>): React.ReactElement {
-    const { theme } = useUnistyles();
-    const paintColor = useHappierMaterialColorResolver();
     const styles = dynamicRowStyles;
     const aria = props.measureMode
         ? {}
         : ({ role: 'alert', 'aria-live': 'polite' } as Record<string, unknown>);
     return (
-        <View testID={props.testID} style={[styles.errorRow, { backgroundColor: paintColor(theme.colors.surface.pressedOverlay) }]} {...aria}>
+        <View testID={props.testID} style={styles.errorRow} {...aria}>
             <Text style={styles.errorText}>{props.label}</Text>
         </View>
     );
@@ -231,6 +223,8 @@ export type SelectionListSectionRenderContext = Readonly<{
     optionPositionById: ReadonlyMap<string, number>;
     optionSetSize: number;
     showsVerticalScrollIndicator: boolean;
+    /** See `SelectionListBodyProps.virtualizedViewportHeight`. */
+    virtualizedViewportHeight?: number;
     /** FR3-1 / FR3-8 — identity-free measure rendering. */
     measureMode: boolean;
     /** The body-owned popup pattern, shared with every section renderer. */
@@ -298,7 +292,8 @@ function renderSelectionListSectionElement(
         sectionPlan.id,
     );
     const headerTestId = selectionListTestId(sectionTestId, 'header');
-    const wrapperStyle = sectionPlan.isStale === true
+    // Last-known rows being refreshed keep their ink; only rows a failed refresh left behind are dimmed.
+    const wrapperStyle = sectionPlan.isStale === true && sectionPlan.dynamicState === 'error'
         ? [wrapStyles.sectionWrap, dynStyles.staleSection]
         : wrapStyles.sectionWrap;
     const sectionGroupA11y = measureMode
@@ -343,6 +338,12 @@ function renderSelectionListSectionElement(
                 {...sectionGroupFrameProps}
             >
                 {header}
+                {skeletonCount === 0 && sectionPlan.hint && sectionPlan.isStale !== true ? (
+                    <SelectionListEmptyHintRow
+                        hint={sectionPlan.hint}
+                        testID={measureMode ? undefined : selectionListTestId(sectionTestId, 'loading', 'hint')}
+                    />
+                ) : null}
                 <SelectionListLoadingSkeletonGroup
                     count={skeletonCount}
                     sectionTestId={sectionTestId}
@@ -500,6 +501,7 @@ function renderSelectionListSectionElement(
                 optionSetSize={ctx.optionSetSize}
                 virtualization={sectionPlan.virtualization}
                 showsVerticalScrollIndicator={ctx.showsVerticalScrollIndicator}
+                viewportHeight={ctx.virtualizedViewportHeight}
                 a11yPattern={ctx.a11yPattern}
                 gridColumnCount={ctx.columnCount ?? 1}
                 headerRowIndex={headerRowIndex}

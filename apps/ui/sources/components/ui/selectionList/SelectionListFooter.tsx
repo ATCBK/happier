@@ -25,8 +25,8 @@ const HINT_CROSSFADE_DURATION_MS = 120;
 
 const stylesheet = StyleSheet.create((theme) => ({
     container: {
-        paddingHorizontal: 12,
-        paddingVertical: 8,
+        paddingHorizontal: theme.space.s12,
+        paddingVertical: theme.space.s8,
         borderTopWidth: 1,
         borderTopColor: theme.colors.border.default,
         backgroundColor: theme.colors.surface.base,
@@ -35,12 +35,12 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         flexWrap: 'wrap',
         alignItems: 'center',
-        gap: 12,
+        gap: theme.space.s12,
     },
     hint: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
     },
     description: {
         fontSize: Platform.select({ ios: 11, default: 10 }),
@@ -83,29 +83,35 @@ export function SelectionListFooter(props: SelectionListFooterProps): React.Reac
     // identity (joined ids) changes, fade out → swap children → fade in.
     const [renderedHints, setRenderedHints] = React.useState(props.hints);
     const opacity = useSharedValue(1);
-    const lastHintsKeyRef = React.useRef(buildHintsKey(props.hints));
+    // The fade follows the hint SET (ids), not the array identity: a parent that rebuilds the same hints
+    // mid-fade must not cancel the swap and leave the footer faded out on the old set.
+    const hintsKey = buildHintsKey(props.hints);
+    const latestHintsRef = React.useRef(props.hints);
+    latestHintsRef.current = props.hints;
+    const lastHintsKeyRef = React.useRef(hintsKey);
 
     React.useEffect(() => {
-        const nextKey = buildHintsKey(props.hints);
-        if (lastHintsKeyRef.current === nextKey) return;
-        lastHintsKeyRef.current = nextKey;
+        if (lastHintsKeyRef.current === hintsKey) return;
+        lastHintsKeyRef.current = hintsKey;
         if (reducedMotion) {
             // Snap: no opacity dip, just swap the rendered hints.
-            setRenderedHints(props.hints);
+            setRenderedHints(latestHintsRef.current);
             opacity.value = 1;
             return;
         }
-        opacity.value = withTiming(0, { duration: HINT_CROSSFADE_DURATION_MS }, (finished) => {
-            if (!finished) return;
-        });
+        opacity.value = withTiming(0, { duration: HINT_CROSSFADE_DURATION_MS });
         const fadeOutTimer = setTimeout(() => {
-            setRenderedHints(props.hints);
+            setRenderedHints(latestHintsRef.current);
             opacity.value = withTiming(1, { duration: HINT_CROSSFADE_DURATION_MS });
         }, HINT_CROSSFADE_DURATION_MS);
         return () => {
             clearTimeout(fadeOutTimer);
         };
-    }, [props.hints, reducedMotion, opacity]);
+    }, [hintsKey, reducedMotion, opacity]);
+    // Same set, new text (a relabelled hint): show it without a fade.
+    React.useEffect(() => {
+        if (lastHintsKeyRef.current === buildHintsKey(renderedHints) && renderedHints !== props.hints) setRenderedHints(props.hints);
+    }, [props.hints, renderedHints]);
 
     const animatedStyle = useAnimatedStyle(() => ({
         opacity: opacity.value,

@@ -16,23 +16,23 @@ import {
 const styles = StyleSheet.create((theme) => ({
     status: {
         minHeight: 52,
-        paddingHorizontal: 16,
-        paddingVertical: 12,
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s12,
         alignItems: 'center',
         justifyContent: 'center',
         flexDirection: 'row',
-        gap: 8,
+        gap: theme.space.s8,
     },
     statusText: {
         color: theme.colors.text.secondary,
     },
     error: {
-        paddingTop: 8,
+        paddingTop: theme.space.s8,
     },
     errorText: {
         color: theme.colors.text.secondary,
-        paddingHorizontal: 16,
-        paddingBottom: 4,
+        paddingHorizontal: theme.space.s16,
+        paddingBottom: theme.space.s4,
     },
 }));
 

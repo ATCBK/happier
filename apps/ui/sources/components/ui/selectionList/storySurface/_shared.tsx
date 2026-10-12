@@ -44,9 +44,9 @@ export const storyStylesheet = StyleSheet.create((theme) => ({
         flexGrow: 1,
     },
     variantBlock: {
-        paddingHorizontal: 16,
-        paddingVertical: 12,
-        gap: 8,
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s12,
+        gap: theme.space.s8,
     },
     variantTitle: {
         fontSize: Platform.select({ ios: 13, default: 14 }),

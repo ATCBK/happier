@@ -6,6 +6,8 @@ import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 
 import { buildSelectionListSectionHeaderGridA11yProps } from './buildSelectionListOptionA11yProps';
+import { SELECTION_LIST_CARD_CONTENT_INSET_PX } from './_constants';
+import { SelectionListOptionPresentationContext } from './SelectionListOptionPresentationContext';
 import type { SelectionListSectionAction } from './_types';
 
 /**
@@ -68,12 +70,12 @@ const stylesheet = StyleSheet.create((theme) => ({
         // divider — section grouping comes from typography + vertical rhythm.
         ...(Platform.select({
             web: {
-                paddingHorizontal: 16,
-                paddingTop: 10,
-                paddingBottom: 4,
+                paddingHorizontal: theme.space.s16,
+                paddingTop: theme.space.s10,
+                paddingBottom: theme.space.s4,
             },
             default: {
-                paddingHorizontal: 16,
+                paddingHorizontal: theme.space.s16,
                 paddingTop: Platform.select({ ios: 16, default: 14 }),
                 paddingBottom: Platform.select({ ios: 6, default: 6 }),
             },
@@ -83,22 +85,26 @@ const stylesheet = StyleSheet.create((theme) => ({
         flex: 1,
         // U8.5 craft S1: a sentence-case group label in the secondary text colour, medium weight —
         // the group reads by weight and rhythm, not by an uppercase eyebrow.
-        ...Typography.default('medium'),
+
         color: theme.colors.text.secondary,
-        fontSize: Platform.select({ ios: 13, default: 12 }),
-        lineHeight: Platform.select({ ios: 18, default: 16 }),
+        ...Typography.variant('meta', 'medium'),
+
     },
     action: {
-        ...Typography.default('medium'),
+
         color: theme.colors.text.secondary,
-        fontSize: Platform.select({ ios: 13, default: 12 }),
-        lineHeight: Platform.select({ ios: 18, default: 16 }),
+        ...Typography.variant('meta', 'medium'),
+
+    },
+    // Over a card grid the heading starts where the cards' text does, not at the list-row inset.
+    cardContainer: {
+        paddingHorizontal: SELECTION_LIST_CARD_CONTENT_INSET_PX,
     },
     count: {
         color: theme.colors.text.tertiary,
         fontSize: Platform.select({ ios: 13, default: 12 }),
         lineHeight: Platform.select({ ios: 18, default: 16 }),
-        marginLeft: 8,
+        marginLeft: theme.space.s8,
     },
 }));
 
@@ -110,6 +116,7 @@ export function SelectionListSectionHeader(
     props: SelectionListSectionHeaderProps,
 ): React.ReactElement | null {
     const styles = stylesheet;
+    const isCard = React.useContext(SelectionListOptionPresentationContext) === 'card';
     if (props.title === undefined || props.title.length === 0) return null;
     const title = props.title;
     // In `grid` mode the header's own box becomes the row's single cell, so the
@@ -126,7 +133,7 @@ export function SelectionListSectionHeader(
     const header = (
         <View
             testID={props.testID}
-            style={[styles.container, props.containerStyle]}
+            style={[styles.container, isCard ? styles.cardContainer : null, props.containerStyle]}
             {...(gridAria === null ? {} : (gridAria.cell as unknown as Record<string, never>))}
         >
             <Text style={styles.label}>{title}</Text>

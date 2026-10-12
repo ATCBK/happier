@@ -120,6 +120,13 @@ export type SelectionListBodyProps = Readonly<{
     showsVerticalScrollIndicator?: boolean;
     pagination?: SelectionListPagination;
     /**
+     * The viewport of a virtualized body: the caller's declared `maxHeight`. A
+     * virtualized list has no natural height, so without this it falls back to
+     * four rows; with it, a long list fills the room it was given (the parent
+     * flex chain still shrinks it around the search header and footer).
+     */
+    virtualizedViewportHeight?: number;
+    /**
      * FR3-1 / FR3-8 — when `'measure'`, the body is rendered as an
      * identity-free mirror used by `SelectionListAnimatedHeight` for height
      * measurement. In measure mode every host-element id / testID / role /
@@ -207,7 +214,8 @@ export function SelectionListBody(props: SelectionListBodyProps): React.ReactEle
                 <SelectionListSelectedMarkContext.Provider
                     value={props.selectionMark === 'none'
                         || props.multiselectable === true
-                        || (props.optionPresentation ?? 'row') !== 'row'
+                        // A card marks itself with its corner overlay; menu rows keep the row marks.
+                        || props.optionPresentation === 'card'
                         ? null
                         : props.selectionMark === 'enter' ? 'enter' : 'check'}
                 >
@@ -414,6 +422,7 @@ function SelectionListBodyPlannedContent(props: SelectionListBodyProps & Readonl
                 bodyHeader={bodyHeaderSlot}
                 bodyFooter={bodyFooterSlot}
                 emptyContent={plan.length === 0 ? emptyNode : null}
+                viewportHeight={props.virtualizedViewportHeight}
             />
         );
     }
@@ -443,6 +452,7 @@ function SelectionListBodyPlannedContent(props: SelectionListBodyProps & Readonl
         optionRowOffsetBySectionId: gridRowModel?.optionRowOffsetBySectionId,
         headerRowIndexBySectionId: gridRowModel?.headerRowIndexBySectionId,
         showsVerticalScrollIndicator: props.showsVerticalScrollIndicator === true,
+        virtualizedViewportHeight: props.virtualizedViewportHeight,
     };
     const sectionNodes = renderSelectionListSectionNodes(
         latchedPlan,
@@ -571,6 +581,7 @@ function SelectionListBodyDirectVirtualizedSource(props: SelectionListBodyProps 
             measureMode={isMeasure}
             showsVerticalScrollIndicator={props.showsVerticalScrollIndicator === true}
             pagination={props.pagination}
+            viewportHeight={props.virtualizedViewportHeight}
         />
     );
 }

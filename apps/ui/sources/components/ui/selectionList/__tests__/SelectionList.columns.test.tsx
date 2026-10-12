@@ -93,12 +93,17 @@ function countColumnRows(screen: { root: { findAll: (p: (n: TestNode) => boolean
 }
 
 describe('SelectionList — columns variant', () => {
-    it('does not measure its own width at all when no columns are requested', async () => {
+    it('keeps a single column across layout changes when no columns are requested', async () => {
         const { SelectionList } = await import('../SelectionList');
         const screen = await renderScreen(<SelectionList {...defaultProps()} />);
         const root = screen.findByTestId('sl') as unknown as TestNode;
-        expect(root.props.onLayout).toBeUndefined();
+        await fireContainerLayout(root, 900);
         expect(countColumnRows(screen as never)).toBe(0);
+        await fireContainerLayout(root, 390);
+        expect(countColumnRows(screen as never)).toBe(0);
+        for (const id of ['m-0', 'm-1', 'm-2', 'm-3']) {
+            expect(screen.findByTestId(`sl:root:option:${id}`)).not.toBeNull();
+        }
     });
 
     it('attaches a layout listener as soon as columns are requested', async () => {

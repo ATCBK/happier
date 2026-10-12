@@ -338,4 +338,33 @@ describe('SelectionList non-virtualized body scroll wrapper (R9 blocker 1)', () 
 
         expect(scrollToSpy).toHaveBeenCalledWith({ y: 512, animated: false });
     });
+
+    it('reveals a selected row that reports its layout before its section does', async () => {
+        // Web gives no parent-before-child order for layout callbacks: a card in a later row of the
+        // engine popover's grid reported y=0 first and was never revealed once its frame moved.
+        const root: SelectionListStep = {
+            id: 'root',
+            sections: [
+                { kind: 'static', id: 'quick-actions', title: 'ACTIONS', options: makeOptions(2, 'action') },
+                { kind: 'static', id: 'existing-worktrees', title: 'EXISTING', options: makeOptions(20, 'worktree') },
+            ],
+        };
+        const { SelectionList } = await import('../SelectionList');
+        const screen = await renderScreen(
+            <SelectionList {...defaultProps(root, { maxHeight: 200, selectedOptionId: 'worktree-12' })} />,
+        );
+        const bodyScroll = screen.findByTestId('sl:bodyScroll');
+        const existingSection = screen.findByTestId('sl:section:existing-worktrees');
+        const selectedRow = screen.findByTestId('sl:root:option-wrapper:worktree-12');
+
+        await act(async () => {
+            bodyScroll?.props?.onLayout?.({ nativeEvent: { layout: { height: 120 } } });
+            bodyScroll?.props?.onContentSizeChange?.(320, 1200);
+            selectedRow?.props?.onLayout?.({ nativeEvent: { layout: { y: 300, height: 40 } } });
+            existingSection?.props?.onLayout?.({ nativeEvent: { layout: { y: 260, height: 840 } } });
+        });
+        await act(async () => {});
+
+        expect(scrollToSpy).toHaveBeenLastCalledWith({ y: 512, animated: false });
+    });
 });

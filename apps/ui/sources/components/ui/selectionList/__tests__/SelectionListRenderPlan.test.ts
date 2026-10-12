@@ -87,6 +87,18 @@ describe('SelectionListRenderPlan (R14 extracted)', () => {
         })]);
     });
 
+    it('names a failed group with the host copy its owner declared, never the resolver message', async () => {
+        const { synthesizeSelectionListRenderPlan } = await import('../SelectionListRenderPlan');
+        const states = new Map<string, DynamicSectionState>([['remote', {
+            status: 'error', options: [], error: new Error('plugin internal: 500 at /api'), lastSuccessOptions: undefined,
+        }]]);
+        const plan = synthesizeSelectionListRenderPlan({
+            sections: [{ kind: 'dynamic', id: 'remote', errorHint: 'Couldn\'t search PRs & Issues', resolve: async () => ({ options: [] }) }],
+            inputValue: 'query', filterQuery: 'query', dynamicSectionStates: states,
+        });
+        expect(plan[0]).toEqual(expect.objectContaining({ dynamicState: 'error', hint: 'Couldn\'t search PRs & Issues' }));
+    });
+
     it('does not expose a resolver Error message in the user-visible error plan', async () => {
         const { synthesizeSelectionListRenderPlan } = await import('../SelectionListRenderPlan');
         const states = new Map<string, DynamicSectionState>();

@@ -170,6 +170,47 @@ describe('SelectionListVirtualizedSection focus parity (F4)', () => {
         expect(call.animated).toBe(true);
     });
 
+    it('keeps the reader where they are when options update under an unchanged focus (no jump back to the focused row)', async () => {
+        legendListState.reset();
+        const { SelectionListVirtualizedSection } = await import('../SelectionListVirtualizedSection');
+        const render = (section: SelectionListSection) => (
+            <SelectionListVirtualizedSection
+                section={section}
+                stepId="root"
+                rootTestID="sl"
+                selectedOptionIds={new Set<string>()}
+                focusedOptionId="opt-30"
+                onSelect={() => {}}
+                onPushStep={() => {}}
+            />
+        );
+        const section = makeSection(60);
+        const screen = await renderScreen(render(section));
+        expect(scrollToIndex).toHaveBeenCalledTimes(1);
+        scrollToIndex.mockClear();
+
+        // A live update re-sorts the rows (a machine changes state): the focused row moves to index 0.
+        const options = section.options;
+        const resorted: SelectionListSection = { ...section, options: [options[30]!, ...options.filter((o) => o.id !== 'opt-30')] };
+        await screen.update(render(resorted));
+        expect(scrollToIndex).not.toHaveBeenCalled();
+
+        // A real focus change still reveals its row.
+        await screen.update(
+            <SelectionListVirtualizedSection
+                section={resorted}
+                stepId="root"
+                rootTestID="sl"
+                selectedOptionIds={new Set<string>()}
+                focusedOptionId="opt-40"
+                onSelect={() => {}}
+                onPushStep={() => {}}
+            />,
+        );
+        expect(scrollToIndex).toHaveBeenCalledTimes(1);
+        expect(scrollToIndex.mock.calls[0][0].index).toBe(40);
+    });
+
     it('reveals the focused row again when the virtualized viewport height changes', async () => {
         legendListState.reset();
         const { SelectionListVirtualizedSection } = await import('../SelectionListVirtualizedSection');

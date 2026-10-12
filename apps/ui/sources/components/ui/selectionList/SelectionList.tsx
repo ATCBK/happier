@@ -58,8 +58,10 @@ import { useSelectionListMeasuredPopoverHeight } from './useSelectionListMeasure
 import { useSelectionListStepStack } from './useSelectionListStepStack';
 import { useHardwareKeyboard } from './useHardwareKeyboard';
 import { ListPresentationProvider } from '@/components/ui/lists/listPresentation';
-import { isHappierPageRowNarrow } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_PAGE_METRICS, isHappierPageRowNarrow } from '@happier-dev/plugin-ui/presentation';
 import { SelectionListFilterChips } from './SelectionListFilterChips';
+import { SelectionListDetailPaneContext } from './SelectionListDetailPaneContext';
+import { renderSelectionListAccessory } from './renderSelectionListAccessory';
 import { useContainingGlassSurfaceGroup } from '@/components/ui/glass/GlassSurface';
 
 const stylesheet = StyleSheet.create((theme) => ({
@@ -67,14 +69,25 @@ const stylesheet = StyleSheet.create((theme) => ({
     inputSuffixWithFilters: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
-        flexShrink: 1,
+        gap: theme.space.s8,
+        // Measured at its natural width: the field gives way, and when it would drop under its
+        // minimum the chips move to their own row instead of clipping the controls.
+        flexShrink: 0,
     },
     container: {
         backgroundColor: theme.colors.surface.base,
         flexDirection: 'column',
     },
     bareSurface: { backgroundColor: 'transparent' },
+    contentWithDetail: { flexDirection: 'row', flex: 1, minHeight: 0 },
+    contentBesideDetail: { flex: 1, minWidth: 0, minHeight: 0 },
+    // The detail column reads as part of the same surface: a hairline, never a second card.
+    detailPane: {
+        flexShrink: 0,
+        minHeight: 0,
+        borderLeftWidth: StyleSheet.hairlineWidth,
+        borderLeftColor: theme.colors.border.default,
+    },
     containerFill: {
         flex: 1,
         minHeight: 0,
@@ -278,12 +291,11 @@ function sectionPlanRendersOptions(sectionPlan: SectionRenderPlan): boolean {
  * own unit tests.
  */
 export function SelectionList(props: SelectionListProps): React.ReactElement {
-    const containingSurface = useContainingGlassSurfaceGroup();
-    const surface = props.surface ?? (containingSurface === 'floating' ? 'none' : 'base');
     const selection = props.selection ?? {
         kind: 'single' as const,
         selectedId: props.selectedOptionId ?? null,
     };
+    // An invalid configuration fails before any hook runs, so the contract error is the one reported.
     if (
         selection.kind === 'multiple'
         && (
@@ -293,6 +305,8 @@ export function SelectionList(props: SelectionListProps): React.ReactElement {
     ) {
         throw new Error('SelectionList multiple selection cannot be combined with expandedContent');
     }
+    const containingSurface = useContainingGlassSurfaceGroup();
+    const surface = props.surface ?? (containingSurface === 'floating' ? 'none' : 'base');
     const selectedOptionId = selection.kind === 'single' ? selection.selectedId : null;
     const multipleSelectedIds = selection.kind === 'multiple' ? selection.selectedIds : null;
     const selectedOptionIds = React.useMemo<ReadonlySet<string>>(
@@ -892,17 +906,41 @@ export function SelectionList(props: SelectionListProps): React.ReactElement {
         );
     }, [clearStabilizedHeightTimer, releaseStabilizedHeight]);
     // The container is the only element that knows how much room the list
-    // actually got, so it measures for BOTH consumers: the columns variant
-    // (width) and stabilized height (height). Each half is independently
-    // guarded — the callback is attached whenever either one wants it.
+    // actually got. It owns narrow filters, columns (width), and stabilized
+    // height; the latter two only update while their consumer is active.
     // Filters sit beside the field until the list is too narrow for both (the page row owner's stack
-    // width); then they take a row of their own beneath it. Wide until the first measurement.
+    // width); then they take a row of their own beneath it. Measure from mount, including before
+    // filters arrive: React Native Web only starts observing a host's layout at mount.
+    // They also move beneath when the chips plus the consumer's band controls would leave the field
+    // under its inline minimum. That width is measured while the chips are inline and kept while they
+    // sit beneath, so a wider list brings them back without oscillating.
     const hasFilters = (props.filters?.length ?? 0) > 0;
     const [filtersNarrow, setFiltersNarrow] = React.useState(false);
+    const [detailPaneFits, setDetailPaneFits] = React.useState(false);
+    const detailPaneMinWidth = props.detailPane?.minListWidthPx;
+    const containerWidthRef = React.useRef<number | null>(null);
+    const inlineControlsWidthRef = React.useRef<number | null>(null);
+    const updateFiltersNarrow = React.useCallback(() => {
+        const width = containerWidthRef.current;
+        const controls = inlineControlsWidthRef.current;
+        const squeezed = typeof width === 'number' && width > 0 && typeof controls === 'number' && controls > 0
+            && width - controls - 2 * HAPPIER_PAGE_METRICS.rowPaddingHorizontalPx - HAPPIER_PAGE_METRICS.rowLeadingGapPx
+                < HAPPIER_PAGE_METRICS.fieldInlineMinWidthPx;
+        const narrow = isHappierPageRowNarrow(width) || squeezed;
+        setFiltersNarrow((current) => (current === narrow ? current : narrow));
+    }, []);
+    const handleInlineControlsLayout = React.useCallback((event: LayoutChangeEvent) => {
+        const width = event.nativeEvent.layout.width;
+        if (!Number.isFinite(width) || width <= 0) return;
+        inlineControlsWidthRef.current = width;
+        updateFiltersNarrow();
+    }, [updateFiltersNarrow]);
     const handleContainerLayout = React.useCallback((event: LayoutChangeEvent) => {
-        if (hasFilters) {
-            const narrow = isHappierPageRowNarrow(event.nativeEvent.layout.width);
-            setFiltersNarrow((current) => (current === narrow ? current : narrow));
+        containerWidthRef.current = event.nativeEvent.layout.width;
+        updateFiltersNarrow();
+        if (detailPaneMinWidth !== undefined) {
+            const fits = event.nativeEvent.layout.width >= detailPaneMinWidth;
+            setDetailPaneFits((current) => (current === fits ? current : fits));
         }
         if (columns !== undefined) {
             const measuredWidth = event.nativeEvent.layout.width;
@@ -931,7 +969,8 @@ export function SelectionList(props: SelectionListProps): React.ReactElement {
     }, [
         clearStabilizedHeightTimer,
         columns,
-        hasFilters,
+        detailPaneMinWidth,
+        updateFiltersNarrow,
         props.maxHeight,
         resolveColumnCountForWidth,
         scheduleStabilizedHeightRelease,
@@ -969,10 +1008,6 @@ export function SelectionList(props: SelectionListProps): React.ReactElement {
         clearStabilizedHeightTimer();
     }, [clearStabilizedHeightTimer]);
     const measureNativeHeight = props.heightBehavior === 'measuredToMaxHeight';
-    // `inputPlacement="body"`: the canonical input scrolls with the rows, after the body header (the
-    // 0.2 engine pane, where title, notice, search and models are one scrolling pane). Same node, same
-    // query, ref and combobox wiring; only its position moves.
-    const inputInBody = props.inputPlacement === 'body' && props.contentState === undefined;
     // The body slots render only in the live body, so their heights are added to the measured one.
     const [bodySlotHeights, setBodySlotHeights] = React.useState({ header: 0, footer: 0 });
     const handleBodySlotLayout = React.useCallback((slot: 'header' | 'footer', height: number) => {
@@ -981,14 +1016,13 @@ export function SelectionList(props: SelectionListProps): React.ReactElement {
             Math.abs(current[slot] - height) <= 1 ? current : { ...current, [slot]: height }
         ));
     }, []);
-    const bodySlotsHeight = (props.bodyHeader != null || inputInBody ? bodySlotHeights.header : 0)
+    const bodySlotsHeight = (props.bodyHeader != null ? bodySlotHeights.header : 0)
         + (props.bodyFooter != null ? bodySlotHeights.footer : 0);
     const measuredPopoverHeight = useSelectionListMeasuredPopoverHeight({
         enabled: measureNativeHeight,
         maxHeight: props.maxHeight,
         bodyExtraHeight: bodySlotsHeight,
-        // An input seated in the body is measured as part of the body header slot.
-        headerExpected: showSearchHeader && !inputInBody,
+        headerExpected: showSearchHeader,
         footerExpected: keyboardHintsEnabled,
         shrinkDelayMs: STABILIZED_HEIGHT_SHRINK_DELAY_MS,
     });
@@ -1045,6 +1079,13 @@ export function SelectionList(props: SelectionListProps): React.ReactElement {
         : undefined;
     const fixedHeight = fixedMaxHeight ?? measuredPopoverHeight.height;
     const useContentSizedFrame = fixedHeight === undefined && props.fillAvailableSpace !== true;
+    // A declared cap is a virtualized body's viewport: past the virtualization threshold the
+    // content always exceeds it, so "content height capped by maxHeight" is the cap itself.
+    const virtualizedViewportHeight = typeof props.maxHeight === 'number'
+        && Number.isFinite(props.maxHeight)
+        && props.maxHeight > 0
+        ? props.maxHeight
+        : undefined;
     const containerStyle: StyleProp<ViewStyle> = [
         styles.container,
         surface === 'none' ? styles.bareSurface : null,
@@ -1112,6 +1153,7 @@ export function SelectionList(props: SelectionListProps): React.ReactElement {
             onPushStep={handlePushStep}
             showsVerticalScrollIndicator={props.showsVerticalScrollIndicator === true}
             pagination={props.pagination}
+            virtualizedViewportHeight={virtualizedViewportHeight}
             columnCount={columnCount}
             columnGapPx={columns?.columnGapPx}
             declaresColumns={columns !== undefined}
@@ -1185,7 +1227,11 @@ export function SelectionList(props: SelectionListProps): React.ReactElement {
                 inputValueEllipsizeMode={props.inputValueEllipsizeMode}
                 inputPrefix={props.inputPrefix}
                 inputSuffix={hasFilters && !filtersNarrow ? (
-                    <View style={styles.inputSuffixWithFilters}>
+                    <View
+                        style={styles.inputSuffixWithFilters}
+                        testID={selectionListTestId(resolvedTestId, 'inline-controls')}
+                        onLayout={handleInlineControlsLayout}
+                    >
                         <SelectionListFilterChips filters={props.filters!} placement="inline" />
                         {props.inputSuffix ?? null}
                     </View>
@@ -1227,13 +1273,14 @@ export function SelectionList(props: SelectionListProps): React.ReactElement {
             onPushStep={handlePushStep}
             showsVerticalScrollIndicator={props.showsVerticalScrollIndicator === true}
             pagination={props.pagination}
+            virtualizedViewportHeight={virtualizedViewportHeight}
             columnCount={columnCount}
             columnGapPx={columns?.columnGapPx}
             declaresColumns={columns !== undefined}
             optionPresentation={props.optionPresentation}
             selectionMark={rowSelectionMark}
             a11yPattern={popupA11yPattern}
-            bodyHeader={inputInBody ? <>{props.bodyHeader}{searchHeaderZone}</> : props.bodyHeader}
+            bodyHeader={props.bodyHeader}
             bodyFooter={props.bodyFooter}
             onBodySlotLayout={handleBodySlotLayout}
         />
@@ -1301,10 +1348,13 @@ export function SelectionList(props: SelectionListProps): React.ReactElement {
     // software keyboard; the results region above it remains the single scroll
     // owner in both placements.
     const seatInputAtBottom = props.inputPlacement === 'bottom';
+    // The column exists only while the active row has a detail to show: never an empty half-card.
+    const detailPaneActive = props.detailPane !== undefined && detailPaneFits && focusedOption?.detailContent !== undefined;
 
     return (
         // A picker keeps its own look wherever it is placed: inline under a page list it resets to the
         // grouped anatomy exactly as `FloatingOverlay` does for popovers (I1).
+        <SelectionListDetailPaneContext.Provider value={detailPaneActive}>
         <ListPresentationProvider value="grouped">
         <SelectionListInputAttentionContext.Provider value={requestInputAttention}>
         <SelectionListOptionTabBehaviorContext.Provider value={showSearchHeader ? 'input-owned' : 'roving'}>
@@ -1312,7 +1362,7 @@ export function SelectionList(props: SelectionListProps): React.ReactElement {
             testID={resolvedTestId}
             style={containerStyle}
             pointerEvents={measuredPopoverHeight.hidden ? 'none' : undefined}
-            onLayout={stabilizeHeight || columns !== undefined || hasFilters ? handleContainerLayout : undefined}
+            onLayout={handleContainerLayout}
             {...headerlessKeyHandler}
         >
             {renderMeasureHost ? (
@@ -1329,13 +1379,24 @@ export function SelectionList(props: SelectionListProps): React.ReactElement {
                 transitionKey={String(statusAnnouncement?.eventId ?? 'idle')}
                 statusTestID={selectionListTestId(resolvedTestId, 'status')}
             />
-            {seatInputAtBottom || inputInBody ? null : searchHeaderZone}
-            {contentZone}
+            {seatInputAtBottom ? null : searchHeaderZone}
+            {detailPaneActive ? (
+                <View style={styles.contentWithDetail}>
+                    <View style={styles.contentBesideDetail}>{contentZone}</View>
+                    <View
+                        testID={selectionListTestId(resolvedTestId, 'detail')}
+                        style={[styles.detailPane, { width: props.detailPane!.widthPx }]}
+                    >
+                        {renderSelectionListAccessory(focusedOption?.detailContent) ?? null}
+                    </View>
+                </View>
+            ) : contentZone}
             {footerZone}
             {seatInputAtBottom ? searchHeaderZone : null}
         </View>
         </SelectionListOptionTabBehaviorContext.Provider>
         </SelectionListInputAttentionContext.Provider>
         </ListPresentationProvider>
+        </SelectionListDetailPaneContext.Provider>
     );
 }

@@ -19,6 +19,7 @@ import { useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presenta
 
 import { Item } from '@/components/ui/lists/Item';
 import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
+import { MENU_ROW_METRICS } from '@/components/ui/lists/itemDensityMetrics';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { SlideTransitionSwitch } from '@/components/ui/motion/SlideTransitionSwitch';
 
@@ -60,6 +61,7 @@ import { SelectionListScrollIntoViewContext } from './SelectionListScrollIntoVie
 import { selectionListTestId } from './_shared';
 import type { SectionRenderPlan } from './SelectionListRenderPlan';
 import type { SelectionListOption, SelectionListStep } from './_types';
+import { SelectionListOptionStateContext } from './SelectionListOptionStateContext';
 
 const selectedMarkStyles = StyleSheet.create(() => ({
   mark: {
@@ -119,6 +121,19 @@ const cardStyles = StyleSheet.create((theme) => ({
   itemInset: {
     paddingHorizontal: SELECTION_LIST_CARD_CONTENT_INSET_PX,
     paddingVertical: SELECTION_LIST_CARD_CONTENT_INSET_PX,
+  },
+}));
+
+/**
+ * Menu geometry (`optionPresentation: 'menu'`, the ⌘K palette and command menus): each option is a
+ * rounded row inset from the surface edge, so the highlight reads as the row the keyboard is on
+ * rather than a full-bleed band (the shared menu row metrics, as `SelectableRow presentation="menu"`).
+ */
+const menuStyles = StyleSheet.create(() => ({
+  container: {
+    marginHorizontal: MENU_ROW_METRICS.insetPx,
+    borderRadius: MENU_ROW_METRICS.radiusPx,
+    overflow: 'hidden',
   },
 }));
 
@@ -191,6 +206,8 @@ export function PlanOptionRow(
     columnCellStyle?: ViewProps['style'];
   }>,
 ): React.ReactElement {
+  // Current by the list's selection, or because the option's owner says so (one choice per group).
+  const isSelected = props.isSelected || props.option.selected === true;
   const { theme } = useUnistyles();
   const paintColor = useHappierMaterialColorResolver();
   const optionLabel = props.option.renderLabel?.() ?? props.option.label;
@@ -213,9 +230,17 @@ export function PlanOptionRow(
   const rightAccessory = renderSelectionListAccessory(
     props.option.rightAccessory,
   );
-  // Per-option controls belong to the SELECTED row only, and are resolved
-  // lazily so a virtualized list never constructs them for the other rows.
-  const expandedVisual = props.isSelected
+  // What the row's accessories may react to: the pointer over the row, or the keyboard's focus on it.
+  const [hovered, setHovered] = React.useState(false);
+  const optionState = React.useMemo(
+    () => ({ hovered, focused: props.isFocused }),
+    [hovered, props.isFocused],
+  );
+  // Controls follow selection; informational previews may follow the active
+  // row. Resolve either lazily so inactive rows never construct the body.
+  const isExpanded = props.option.expandedContentVisibility === 'focused'
+    ? props.isFocused : isSelected;
+  const expandedVisual = isExpanded
     ? renderSelectionListAccessory(props.option.expandedContent)
     : undefined;
   const displayedSubtitle = expandedVisual != null && props.option.hideSubtitleWhenExpanded === true
@@ -260,7 +285,7 @@ export function PlanOptionRow(
   const a11yPattern = React.useContext(SelectionListA11yPatternContext);
   const optionAria = buildSelectionListOptionA11yProps({
     optionTestId,
-    isSelected: props.isSelected,
+    isSelected,
     disabled: props.option.disabled === true,
     positionInSet: props.positionInSet ?? 1,
     setSize: props.setSize ?? 1,
@@ -291,7 +316,7 @@ export function PlanOptionRow(
     pattern: a11yPattern,
     placement: cellPlacement,
     optionDomId: optionTestId,
-    isSelected: props.isSelected,
+    isSelected,
     disabled: props.option.disabled === true,
   });
   const rowAria =
@@ -308,7 +333,7 @@ export function PlanOptionRow(
           pattern: a11yPattern,
           placement: SELECTION_LIST_SINGLE_COLUMN_CELL_PLACEMENT,
           optionDomId: optionTestId,
-          isSelected: props.isSelected,
+          isSelected,
           disabled: props.option.disabled === true,
         });
   // True wherever the activatable control sits inside a cell — it is then a
@@ -322,15 +347,15 @@ export function PlanOptionRow(
   const isCard = optionPresentation === 'card';
   const rowRole = optionPresentation === 'menu' ? 'menu' : 'item';
   // The card is the SINGLE owner of the option's fill: an unselected card
-  // paints the base surface (invisible on a base pane, by design) and a
-  // selected one paints the selected surface over both the row and its
-  // expanded controls. Resolved per render so the card follows a live theme
-  // swap; the geometry above is theme-independent and stays in the sheet.
+  // paints nothing, so it stays quiet on any pane (a base fill reads as a grey
+  // slab on a floating glass material), and a selected one paints the selected
+  // surface over both the row and its expanded controls. Resolved per render so
+  // the card follows a live theme swap; the geometry above is theme-independent.
   const cardFillStyle = isCard
     ? {
-        backgroundColor: paintColor(props.isSelected
-          ? theme.colors.surface.selected
-          : theme.colors.surface.base),
+        backgroundColor: isSelected
+          ? paintColor(theme.colors.surface.selected)
+          : 'transparent',
       }
     : null;
   // At one column there is no `SelectionListColumnRow`, so this envelope IS
@@ -350,8 +375,10 @@ export function PlanOptionRow(
         ? props.positionInSet
         : undefined,
   });
+  const isMenu = optionPresentation === 'menu';
   const wrapperStyle = [
     props.columnCellStyle,
+    isMenu ? menuStyles.container : null,
     ...(isCard
       ? [
           cardStyles.container,
@@ -361,7 +388,7 @@ export function PlanOptionRow(
       : []),
   ];
   const cardWrapperProps =
-    props.columnCellStyle !== undefined || isCard
+    props.columnCellStyle !== undefined || isCard || isMenu
       ? { style: wrapperStyle }
       : {};
   // In card mode the trailing accessory leaves the row's flow entirely and
@@ -378,7 +405,7 @@ export function PlanOptionRow(
     !isCard &&
     props.option.content === undefined &&
     (rowMark === 'check'
-      ? props.isSelected
+      ? isSelected
       : rowMark === 'enter'
         ? props.isFocused
         : false);
@@ -509,7 +536,7 @@ export function PlanOptionRow(
           rightElementOutsidePressable={
             !isCard && props.option.rightAccessoryOutsidePressable === true
           }
-          selected={props.isSelected}
+          selected={isSelected}
           focused={props.isFocused}
           disabled={props.option.disabled === true}
           loading={props.option.loading === true}
@@ -525,7 +552,7 @@ export function PlanOptionRow(
       </View>
     );
   }
-  const selectedOrFocused = props.isSelected || props.isFocused;
+  const selectedOrFocused = isSelected || props.isFocused;
   // A disabled custom body with nothing of its own to open or select is a static note (a trust
   // disclosure at the head of a sheet), not an unavailable choice: it reads at full strength and
   // takes no hover. A disabled choice still dims.
@@ -594,9 +621,13 @@ export function PlanOptionRow(
           !isCard && props.option.rightAccessoryOutsidePressable === true
         }
         onPressIn={props.option.onPressIn}
-        onHoverIn={props.option.disabled === true ? undefined : props.option.onHighlight}
+        onHoverIn={props.option.disabled === true ? undefined : () => {
+          setHovered(true);
+          props.option.onHighlight?.();
+        }}
+        onHoverOut={() => setHovered(false)}
         onPress={handlePress}
-        selected={props.isSelected}
+        selected={isSelected}
         focused={props.isFocused}
         disabled={props.option.disabled === true}
         loading={props.option.loading === true}
@@ -624,11 +655,11 @@ export function PlanOptionRow(
   // the wrapper's direct children exactly as they have always been; in `grid`
   // mode they are the contents of the option's one cell.
   const optionOwnedContent = (
-    <>
+    <SelectionListOptionStateContext.Provider value={optionState}>
       {row}
       {renderCardAccessoryOverlay(true)}
       {expandedContent}
-    </>
+    </SelectionListOptionStateContext.Provider>
   );
   return (
     <View

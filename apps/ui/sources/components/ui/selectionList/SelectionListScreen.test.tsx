@@ -3,7 +3,10 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { flattenTestStyle, renderScreen } from '@/dev/testkit';
 import { HappierMaterialRoleProvider } from '@happier-dev/plugin-ui/presentation';
-vi.mock('react-native-safe-area-context', () => ({
+// The device insets are a platform boundary; the rest of the module (initialWindowMetrics, providers) stays
+// real, since navigation elements read it at import.
+vi.mock('react-native-safe-area-context', async (importOriginal) => ({
+    ...await importOriginal<typeof import('react-native-safe-area-context')>(),
     useSafeAreaInsets: () => ({ top: 12, right: 0, bottom: 20, left: 0 }),
 }));
 
