@@ -232,6 +232,33 @@ async function ensureDevTargetSyncProjectUnlocked(
     ownerId: INDEPENDENT_DEV_TARGET_SYNC_OWNER,
   });
 
+  // Mutagen selects projects by the id in .lock, not by their session names.
+  // A lost/replaced lock leaves the previous project's writers in the daemon.
+  // Reconcile exact repository-owned sessions before resuming or starting it.
+  // Public model/label contract: Mutagen 0.18.1 project/start.go.
+  const projectId = (await readFile(`${mutagenRuntime.projectFile}.lock`, 'utf8').catch(error => {
+    if (error.code === 'ENOENT') return '';
+    throw error;
+  })).trim();
+  const listed = await runProcess({ label: 'sync', command: 'mutagen',
+    args: ['sync', 'list', '--template', MUTAGEN_SYNC_LIST_JSON_TEMPLATE], env: mutagenRuntime.env });
+  requireSuccessful(listed, 'Mutagen repository session inventory');
+  const sessions = JSON.parse(listed.out || '[]');
+  if (!Array.isArray(sessions)) throw new Error('[dev-targets] invalid Mutagen repository session inventory');
+  const sessionPrefix = resolveMutagenSessionName('', sourceDir);
+  const terminated = new Set();
+  for (const session of sessions) {
+    if (!session.name?.startsWith(sessionPrefix) || session.alpha?.protocol !== 'local'
+      || resolve(session.alpha.path ?? '') !== resolve(sourceDir)
+      || session.mode !== 'one-way-replica' || !session.labels?.['io.mutagen.project']
+      || session.labels['io.mutagen.project'] === projectId) continue;
+    if (!session.identifier) throw new Error('[dev-targets] orphan Mutagen session has no identifier');
+    requireSuccessful(await runProcess({ label: 'sync', command: 'mutagen',
+      args: ['sync', 'terminate', session.identifier], env: mutagenRuntime.env }), 'orphan Mutagen session termination');
+    terminated.add(session.identifier);
+  }
+  const currentSessions = JSON.stringify(sessions.filter(session => !terminated.has(session.identifier)));
+
   await mkdir(dirname(mutagenRuntime.projectFile), { recursive: true });
   const canResumeProject = isEquivalentMutagenProject(existingProject, desiredProject);
   let resumed = false;
@@ -243,22 +270,9 @@ async function ensureDevTargetSyncProjectUnlocked(
       env: mutagenRuntime.env,
     });
     resumed = result?.code === 0;
-    if (ownerId === INDEPENDENT_DEV_TARGET_SYNC_OWNER) {
-      const sessionResult = await runProcess({
-        label: 'sync',
-        command: 'mutagen',
-        args: ['sync', 'list', '--template', MUTAGEN_SYNC_LIST_JSON_TEMPLATE],
-        env: mutagenRuntime.env,
-      });
-      if (sessionResult?.code === 0) {
-        resumed = targets.every((target) => (
-          parseMutagenSyncList(
-            sessionResult.out,
-            resolveMutagenSessionName(target.name, sourceDir),
-          ).state !== 'missing'
-        ));
-      }
-    }
+    resumed = targets.every(target => (
+      parseMutagenSyncList(currentSessions, resolveMutagenSessionName(target.name, sourceDir)).state !== 'missing'
+    ));
   }
   let projectCreated = false;
   if (!resumed) {
@@ -266,23 +280,21 @@ async function ensureDevTargetSyncProjectUnlocked(
       // Flush the old membership before replacing its project file. Otherwise
       // terminate would select the new names and strand the old sessions.
       const names = [...existingProject.matchAll(/^  (happier-[A-Za-z0-9-]+):$/gm)].map(match => match[1]);
-      const listed = await runProcess({ label: 'sync', command: 'mutagen',
-        args: ['sync', 'list', '--template', MUTAGEN_SYNC_LIST_JSON_TEMPLATE], env: mutagenRuntime.env });
-      requireSuccessful(listed, 'existing Mutagen sessions before replacement');
       for (const name of names) {
-        if (parseMutagenSyncList(listed.out, name).state === 'missing') continue;
+        if (parseMutagenSyncList(currentSessions, name).state === 'missing') continue;
         requireSuccessful(await runProcess({ label: 'sync', command: 'mutagen',
           args: ['sync', 'resume', name], env: mutagenRuntime.env }), 'existing Mutagen session resume');
         requireSuccessful(await runProcess({ label: 'sync', command: 'mutagen',
           args: ['sync', 'flush', name], syncFlushSession: name, env: mutagenRuntime.env }), 'existing Mutagen session flush');
       }
     }
-    await runProcess({
+    const termination = await runProcess({
       label: 'mutagen',
       command: 'mutagen',
       args: buildMutagenProjectArgs('terminate', mutagenRuntime.projectFile),
       env: mutagenRuntime.env,
     });
+    if (projectId) requireSuccessful(termination, 'Mutagen project termination');
     await writeFile(mutagenRuntime.projectFile, desiredProject, 'utf8');
     requireSuccessful(await runProcess({
       label: 'mutagen',

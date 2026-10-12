@@ -143,8 +143,8 @@ test('detached sync start recreates requested sessions missing from its canonica
   ]);
   assert.deepEqual(mutagenCalls, [
     ['version'],
-    ['project', 'resume'],
     ['sync', 'list'],
+    ['project', 'resume'],
     ['project', 'terminate'],
     ['project', 'start'],
     ['project', 'list'],

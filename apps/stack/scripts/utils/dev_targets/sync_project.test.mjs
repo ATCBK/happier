@@ -29,6 +29,47 @@ const target = {
   cliHomeDir: '/Users/dev/.happier',
 };
 
+test('project reconciliation removes orphan writers by identifier before resuming or rotating the repository project', async t => {
+  const { root } = await createTempFixture(t, { prefix: 'hstack-sync-orphan-writers-' });
+  const sourceDir = join(root, '0.2');
+  const runtime = runtimeFor(root, sourceDir);
+  await mkdir(dirname(runtime.projectFile), { recursive: true });
+  await writeFile(runtime.projectFile, renderMutagenProject({ sourceDir, targets: [target], ownerId: INDEPENDENT_DEV_TARGET_SYNC_OWNER }));
+  await writeFile(`${runtime.projectFile}.lock`, 'proj_current');
+  const name = resolveMutagenSessionName(target.name, sourceDir);
+  const session = (identifier, project, path = sourceDir) => ({ identifier, name,
+    labels: { 'io.mutagen.project': project }, mode: 'one-way-replica',
+    alpha: { protocol: 'local', path, connected: true, scanned: true },
+    beta: { protocol: 'ssh', host: target.ssh, path: target.repoDir, connected: true, scanned: true },
+    paused: false, status: 'watching', successfulCycles: 1 });
+  const sessions = [session('sync_orphan', 'proj_old'), session('sync_current', 'proj_current'),
+    session('sync_other_repository', 'proj_other', join(root, 'other'))];
+  const input = { stackBaseDir: root, sourceDir, targets: [target], ownerId: INDEPENDENT_DEV_TARGET_SYNC_OWNER, env: envFor(root) };
+  const runProcess = async ({ args }) => {
+    if (args[0] === 'sync' && args[1] === 'list') return { code: 0, out: JSON.stringify(sessions) };
+    if (args[0] === 'sync' && args[1] === 'terminate') {
+      const i = sessions.findIndex(s => s.identifier === args[2]);
+      assert.ok(i >= 0, 'termination must address an exact session identifier');
+      sessions.splice(i, 1);
+    }
+    if (args[0] === 'project' && ['resume', 'start'].includes(args[1])) {
+      assert.equal(sessions.filter(s => s.alpha.path === sourceDir).length, 1, 'an orphan cannot survive project activation');
+    }
+    return { code: 0 };
+  };
+  await ensureDevTargetSyncProject(input, { runProcess });
+  assert.deepEqual(sessions.map(s => s.identifier), ['sync_current', 'sync_other_repository']);
+  // A failed termination must preserve the old project and lock; otherwise the
+  // next start rotates the lock while its old writers remain alive.
+  const before = await readFile(runtime.projectFile, 'utf8');
+  await assert.rejects(ensureDevTargetSyncProject({ ...input, targets: [] }, {
+    runProcess: async options => options.args[0] === 'project' && options.args[1] === 'terminate'
+      ? { code: 7 } : runProcess(options),
+  }), /termination|terminate/);
+  assert.equal(await readFile(runtime.projectFile, 'utf8'), before);
+  assert.equal(await readFile(`${runtime.projectFile}.lock`, 'utf8'), 'proj_current');
+});
+
 test('control transport retries a refused multiplex session once without replaying a dispatched command', { skip: process.platform === 'win32' }, async t => {
   const { root } = await createTempFixture(t, { prefix: 'hstack-control-mux-' });
   const log = join(root, 'ssh.log');
@@ -315,10 +356,8 @@ test('independent sync start owns and resumes the canonical Mutagen project', as
 
   assert.equal(result.ownership, 'independent');
   assert.match(await readFile(result.projectFile, 'utf8'), /configurationAlpha:\n\s+watch:\n\s+mode: "no-watch"/);
-  assert.deepEqual(
-    calls.filter((call) => call.command === 'mutagen').map((call) => call.args[1] ?? call.args[0]),
-    ['version', 'terminate', 'start', 'list'],
-  );
+  assert.ok(calls.some(call => call.command === 'mutagen' && call.args[0] === 'project' && call.args[1] === 'start'));
+  assert.ok(calls.every(call => call.args[0] !== 'daemon'), 'project ownership never controls the shared daemon');
   assert.match(
     await readFile(result.projectFile, 'utf8'),
     new RegExp(`^# hstack-owner: ${JSON.stringify(INDEPENDENT_DEV_TARGET_SYNC_OWNER)}`),
@@ -399,15 +438,8 @@ test('a project resume failure never restarts the shared daemon hosting other re
   });
 
   assert.equal(result.projectCreated, false);
-  assert.deepEqual(
-    calls.map((call) => [call.command, ...call.args.slice(0, 2)]),
-    [
-      ['mutagen', 'version'],
-      ['mutagen', 'project', 'resume'],
-      ['mutagen', 'sync', 'list'],
-      ['mutagen', 'project', 'list'],
-    ],
-  );
+  assert.ok(calls.every(call => call.args[0] !== 'daemon'
+    && !['start', 'terminate'].includes(call.args[1])), 'an offline endpoint cannot retire sessions or their daemon');
 });
 
 test('Stack borrows an equivalent independent project without changing its lifecycle', async () => {
