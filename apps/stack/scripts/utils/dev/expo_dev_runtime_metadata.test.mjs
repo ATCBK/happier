@@ -162,7 +162,7 @@ test('ensureDevExpoServer rejects an initial spawn without a finite pid before p
       children: [],
       quiet: true,
     }),
-    /ENOENT|failed to spawn/i,
+    { code: 'ENOENT' },
   );
 
   const runtime = await readStackRuntimeStateFile(runtimeStatePath);
