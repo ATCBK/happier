@@ -3,6 +3,7 @@ import { ReviewFollowUpV1Schema, type ReviewFollowUpV1 } from '@happier-dev/prot
 import type { ExecutionRunStructuredRunRef } from '@happier-dev/protocol/messages/structured/executionRunStructuredRunRef';
 import type { ReviewFinding } from '@happier-dev/protocol/reviews/ReviewFinding';
 import type { Message } from '@happier-dev/session-core/messages';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { parseHappierMetaEnvelope } from '@/components/sessions/transcript/structured/happierMetaEnvelope';
 
 export type { EffectiveReviewFindings, ReviewFindingThreadEntry } from '@happier-dev/protocol';
@@ -17,7 +18,7 @@ export function resolveEffectiveReviewFindings(params: Readonly<{
     for (const message of params.messages) {
         const envelope = parseHappierMetaEnvelope(message.meta);
         if (envelope?.kind !== 'review_follow_up.v1') continue;
-        const parsed = ReviewFollowUpV1Schema.safeParse(envelope.payload);
+        const parsed = createStoredReadSchema(ReviewFollowUpV1Schema).safeParse(envelope.payload);
         if (parsed.success) followUps.push(parsed.data);
     }
     return resolveEffectiveReviewFindingFollowUps({ ...params, followUps });

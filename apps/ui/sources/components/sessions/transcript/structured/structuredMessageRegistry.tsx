@@ -1,5 +1,7 @@
 import React from 'react';
+import type { z } from 'zod';
 import { t } from '@/text';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import { ReviewCommentsV1Schema } from '@/sync/domains/input/reviewComments/reviewCommentMeta';
 import { ReviewCommentsMessageCard, projectReviewCommentsFindText } from '@/components/sessions/reviews/messages/ReviewCommentsMessageCard';
@@ -98,7 +100,7 @@ function legacyCompletionUpdate(payload: ExecutionRunCompletionV1, sessionId: st
     };
 }
 
-const structuredMessageRegistryEntries: readonly StructuredMessageRegistryEntry<any>[] = [
+const structuredMessageRegistryEntries: readonly (StructuredMessageRegistryEntry<any> & Readonly<{ schema: z.ZodType }>)[] = [
     {
         kind: 'voice_note.v1',
         schema: VoiceTranscriptNotePayloadSchema,
@@ -236,7 +238,9 @@ const structuredMessageRegistryEntries: readonly StructuredMessageRegistryEntry<
 
 // Avoid freezing an inline literal: it forces TS to infer a huge union of anonymous object types.
 export const STRUCTURED_MESSAGE_REGISTRY: readonly StructuredMessageRegistryEntry<any>[] =
-    Object.freeze(structuredMessageRegistryEntries);
+    // This registry only reads retained transcript metadata. Authored schemas
+    // remain strict; all card/Find consumers share their canonical read projection.
+    Object.freeze(structuredMessageRegistryEntries.map((entry) => ({ ...entry, schema: createStoredReadSchema(entry.schema) })));
 
 export function findStructuredMessageRenderer(kind: string): StructuredMessageRegistryEntry<any> | null {
     for (const entry of STRUCTURED_MESSAGE_REGISTRY) {

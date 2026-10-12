@@ -1,4 +1,5 @@
 import React from 'react';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import { DelegateOutputV1Schema } from '@happier-dev/protocol/messages/structured/delegateOutputV1';
 import { PlanOutputV1Schema } from '@happier-dev/protocol/messages/structured/planOutputV1';
@@ -39,7 +40,7 @@ export function renderExecutionRunStructuredMeta(params: Readonly<{
     const payload = params.meta.payload;
 
     if (kind === 'review_findings.v1') {
-        const parsed = ReviewFindingsV1Schema.safeParse(payload);
+        const parsed = createStoredReadSchema(ReviewFindingsV1Schema).safeParse(payload);
         if (!parsed.success) return null;
         return (
             <ReviewFindingsMessageCard
@@ -55,7 +56,7 @@ export function renderExecutionRunStructuredMeta(params: Readonly<{
     }
 
     if (kind === 'review_findings.v2') {
-        const parsed = ReviewFindingsV2Schema.safeParse(payload);
+        const parsed = createStoredReadSchema(ReviewFindingsV2Schema).safeParse(payload);
         if (!parsed.success) return null;
         return (
             <ReviewFindingsMessageCard
@@ -71,7 +72,7 @@ export function renderExecutionRunStructuredMeta(params: Readonly<{
     }
 
     if (kind === 'review_follow_up.v1') {
-        const parsed = ReviewFollowUpV1Schema.safeParse(payload);
+        const parsed = createStoredReadSchema(ReviewFollowUpV1Schema).safeParse(payload);
         if (!parsed.success) return null;
         return presentation === 'page' ? (
             <ExecutionRunResultLayout presentation="page" after={params.after}>
@@ -81,7 +82,7 @@ export function renderExecutionRunStructuredMeta(params: Readonly<{
     }
 
     if (kind === 'plan_output.v1') {
-        const parsed = PlanOutputV1Schema.safeParse(payload);
+        const parsed = createStoredReadSchema(PlanOutputV1Schema).safeParse(payload);
         if (!parsed.success) return null;
         return (
             <PlanOutputMessageCard
@@ -95,7 +96,7 @@ export function renderExecutionRunStructuredMeta(params: Readonly<{
     }
 
     if (kind === 'delegate_output.v1') {
-        const parsed = DelegateOutputV1Schema.safeParse(payload);
+        const parsed = createStoredReadSchema(DelegateOutputV1Schema).safeParse(payload);
         if (!parsed.success) return null;
         return <DelegateOutputMessageCard payload={parsed.data} presentation={presentation} after={params.after} />;
     }

@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import type { ExecutionRunPublicState } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import { ReviewFindingsV1Schema, type ReviewFindingsV1 } from '@happier-dev/protocol/messages/structured/reviewFindingsV1';
@@ -21,15 +22,21 @@ export type ReviewGroupSibling = Readonly<{
 const NO_SIBLINGS: readonly ReviewGroupSibling[] = Object.freeze([]);
 
 /** A review Run's structured result (findings v1 or v2), or null while it has none. */
-export function readReviewPayload(meta: unknown): ReviewFindingsV1 | ReviewFindingsV2 | null {
+export function readReviewPayload(meta: unknown, retainedFindings?: unknown): ReviewFindingsV1 | ReviewFindingsV2 | null {
+    if (retainedFindings !== undefined) {
+        const v2 = createStoredReadSchema(ReviewFindingsV2Schema).safeParse(retainedFindings);
+        if (v2.success) return v2.data;
+        const v1 = createStoredReadSchema(ReviewFindingsV1Schema).safeParse(retainedFindings);
+        if (v1.success) return v1.data;
+    }
     if (!meta || typeof meta !== 'object') return null;
     const { kind, payload } = meta as { kind?: unknown; payload?: unknown };
     if (kind === 'review_findings.v2') {
-        const parsed = ReviewFindingsV2Schema.safeParse(payload);
+        const parsed = createStoredReadSchema(ReviewFindingsV2Schema).safeParse(payload);
         return parsed.success ? parsed.data : null;
     }
     if (kind === 'review_findings.v1') {
-        const parsed = ReviewFindingsV1Schema.safeParse(payload);
+        const parsed = createStoredReadSchema(ReviewFindingsV1Schema).safeParse(payload);
         return parsed.success ? parsed.data : null;
     }
     return null;
@@ -69,7 +76,7 @@ export function useReviewGroupSiblings(params: Readonly<{
                 runId: run.runId,
                 backendTarget: run.backendTarget,
                 status: 'run' in got ? got.run.status : run.status,
-                payload: 'run' in got ? readReviewPayload(got.structuredMeta) : null,
+                payload: 'run' in got ? readReviewPayload(got.structuredMeta, got.reviewFindings) : null,
             };
         }));
         if (!isCurrent()) return;

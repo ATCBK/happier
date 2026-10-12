@@ -47,4 +47,18 @@ describe('parseHappierMetaEnvelope', () => {
             happier: { kind: 'acme.preview/v1', payload: { ok: true } },
         })).toEqual({ kind: 'acme.preview/v1', payload: { ok: true } });
     });
+
+    it('projects retained envelope identity fields without erasing its opaque payload', () => {
+        const payload = { native: { arbitraryField: { retired: true } } };
+        const resource = { pluginId: 'acme.shared', localId: 'logo' };
+        const origin = { v: 1, channel: 'agent_thread', modality: 'text', source: { pluginId: 'acme.shared', contributionId: 'review' } };
+        const happier = { kind: 'review_comments.v1', payload, resources: [{ ...resource, retired: true }],
+            conversationTurnOriginV1: { ...origin, retired: true, source: { ...origin.source, retired: true } } };
+        expect(parseHappierMetaEnvelope({ happier })).toEqual({
+            kind: happier.kind, payload, resources: [resource], conversationTurnOriginV1: origin,
+        });
+        expect(parseHappierMetaEnvelope({ happier: { ...happier, conversationTurnOriginV1: {
+            ...happier.conversationTurnOriginV1, modality: 'voice',
+        } } })).toBeNull();
+    });
 });

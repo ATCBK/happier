@@ -1,11 +1,12 @@
 import { HappierMetaEnvelopeSchema, type HappierMetaEnvelope } from '@happier-dev/protocol/messages/structured/HappierMetaEnvelope';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 export type { HappierMetaEnvelope };
 
 export function parseHappierMetaEnvelope(meta: unknown, key = 'happier'): HappierMetaEnvelope | null {
     if (!meta || typeof meta !== 'object') return null;
     const record = meta as Record<string, unknown>;
-    const parsed = HappierMetaEnvelopeSchema.safeParse(record[key]);
+    const parsed = createStoredReadSchema(HappierMetaEnvelopeSchema).safeParse(record[key]);
     if (parsed.success) return parsed.data;
     if (Object.prototype.hasOwnProperty.call(record, key)) return null;
 

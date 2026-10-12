@@ -38,7 +38,8 @@ async function mountTranscript(messages: Message[], kind: SessionTranscriptSourc
 function messagesFor(runId: string, count: number): Message[] {
     return Array.from({ length: count }, (_, n) => ({ kind: 'user-text', id: `${runId}-${n}`, localId: null,
         createdAt: n, text: 'Visible injected text', meta: { happierProvenanceV1: { v: 2,
-            kind: 'workflow_invocation', runId, invocationRecordId: `step-${runId}`, ...(n === 0 ? {} : { stepOrdinal: '3' }) } } }));
+            kind: 'workflow_invocation', runId, invocationRecordId: `step-${runId}`, retired: true,
+            ...(n === 0 ? {} : { stepOrdinal: '3' }) } } }));
 }
 
 describe('first-display workflow provenance', () => {

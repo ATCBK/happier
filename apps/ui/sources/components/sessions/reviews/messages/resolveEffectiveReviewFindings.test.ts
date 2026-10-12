@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Message } from '@happier-dev/session-core/messages';
 import type { ReviewFinding, ReviewFollowUpV1 } from '@happier-dev/protocol';
 import { resolveEffectiveReviewFindings } from './resolveEffectiveReviewFindings';
+import { readReviewPayload } from '../findings/useReviewGroupSiblings';
 
 const runRef = { runId: 'run-1', callId: 'call-1', backendId: 'codex' };
 const finding: ReviewFinding = { id: 'f1', title: 'Issue', severity: 'high', category: 'correctness', summary: 'Issue' };
@@ -15,6 +16,20 @@ function answer(overrides: Partial<ReviewFollowUpV1> = {}): ReviewFollowUpV1 {
 }
 
 describe('resolveEffectiveReviewFindings', () => {
+    it.each(['review_findings.v1', 'review_findings.v2'])('retains grouped review payload %s while rejecting malformed known scope', (kind) => {
+        const canonical = { runRef, summary: 'Review summary', overviewMarkdown: 'Review overview', generatedAtMs: 1,
+            findings: [{ ...finding, comment: { id: 'comment', state: 'proposed', serverRevision: 1,
+                workspace: { machineId: 'm', path: '/repo' } } }] };
+        const retainedFinding = { ...canonical.findings[0], comment: { ...canonical.findings[0]!.comment,
+            retiredCommentField: true, workspace: { ...canonical.findings[0]!.comment.workspace, retiredWorkspaceField: true } } };
+        expect(readReviewPayload({ kind, payload: { ...canonical, findings: [retainedFinding], retiredPayloadField: true } }))
+            .toEqual(kind === 'review_findings.v2' ? { ...canonical, questions: [], assumptions: [] }
+                : { runRef, summary: canonical.summary, generatedAtMs: 1, findings: canonical.findings });
+        expect(readReviewPayload({ kind, payload: { ...canonical, findings: [{ ...retainedFinding, comment: {
+            ...retainedFinding.comment, workspace: { ...retainedFinding.comment.workspace, machineId: '' },
+        } }] } })).toBeNull();
+    });
+
     it('retains question references even when the answer leaves a finding unchanged', () => {
         const result = resolveEffectiveReviewFindings({ runRef, initialFindings: [finding], messages: [message(answer())] });
         expect(result.findings).toEqual([finding]);
@@ -39,5 +54,20 @@ describe('resolveEffectiveReviewFindings', () => {
         const result = resolveEffectiveReviewFindings({ runRef, initialFindings: [persisted],
             messages: [message(answer({ updatedFindings: [{ ...finding, summary: 'Clarified' }] }))] });
         expect(result.findings).toEqual([{ ...persisted, summary: 'Clarified' }]);
+    });
+
+    it('applies retained follow-ups with retired nested comment fields without accepting a malformed scope', () => {
+        const updated = { ...finding, summary: 'Resolved', comment: { id: 'comment', state: 'resolved' as const,
+            serverRevision: 2, workspace: { machineId: 'm', path: '/repo' } } };
+        const retained = { ...answer(), updatedFindings: [{ ...updated, comment: { ...updated.comment, retiredCommentField: true,
+            workspace: { ...updated.comment.workspace, retiredWorkspaceField: true } } }] };
+        const result = resolveEffectiveReviewFindings({ runRef, initialFindings: [finding], messages: [message(retained)] });
+        expect(result.findings).toEqual([updated]);
+        expect(result.threadRefsByFindingId.f1).toEqual(['question']);
+
+        const malformed = answer({ updatedFindings: [{ ...updated, comment: { ...updated.comment,
+            workspace: { ...updated.comment.workspace, machineId: '' } } }] });
+        expect(resolveEffectiveReviewFindings({ runRef, initialFindings: [finding], messages: [message(malformed)] }).findings)
+            .toEqual([finding]);
     });
 });

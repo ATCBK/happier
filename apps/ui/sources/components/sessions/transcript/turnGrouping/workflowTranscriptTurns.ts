@@ -12,7 +12,7 @@ export type WorkflowTranscriptTurnItem = {
 };
 
 export function readWorkflowTurnProvenance(message: Message | null | undefined) {
-    const provenance = message?.kind === 'user-text' ? readSessionMessageProvenance(message.meta) : null;
+    const provenance = message?.kind === 'user-text' ? readSessionMessageProvenance(message.meta, 'stored') : null;
     return provenance?.kind === 'workflow_invocation' ? provenance : null;
 }
 

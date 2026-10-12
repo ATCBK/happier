@@ -2,6 +2,7 @@ import React from 'react';
 import { describe, expect, it } from 'vitest';
 import { createTestSessionTranscriptSource, renderScreen, wrapWithSessionTranscriptSource } from '@/dev/testkit';
 import { createMessageStructuredPresentationV1 } from '@happier-dev/protocol';
+import { ReviewCommentsV1Schema } from '@happier-dev/protocol/messages/structured/reviewCommentsV1';
 import { installToolShellCommonModuleMocks } from '@/components/tools/shell/views/ToolView.testHelpers';
 import { createTranscriptFindRowStore } from '../find/transcriptFindRowStore';
 import { TranscriptFindProvider } from '../find/TranscriptFindContext';
@@ -9,6 +10,7 @@ import { projectStructuredMessageFindText, renderStructuredMessage } from './Str
 import type { Message } from '@happier-dev/session-core/messages';
 import { findBuiltInStructuredMessageEntry } from './descriptorRegistry';
 import { TranscriptRowLayoutMutationProvider, type TranscriptRowLayoutMutation } from '../measurement/TranscriptRowLayoutMutationContext';
+import { renderExecutionRunStructuredMeta } from '@/components/sessions/runs/renderExecutionRunStructuredMeta';
 
 installToolShellCommonModuleMocks();
 
@@ -18,8 +20,8 @@ describe('Structured transcript Find', () => {
             kind: 'user-text', id: 'participant', localId: null, createdAt: 1,
             text: 'needle body',
             meta: { happier: { kind: 'participant_message.v1', payload: { recipient: {
-                kind: 'execution_run', runId: 'hidden-run-id', label: 'Recipient',
-            } } } },
+                kind: 'execution_run', runId: 'hidden-run-id', label: 'Recipient', retiredRecipientField: true,
+            }, retiredPayloadField: true } } },
         };
         const element = renderStructuredMessage({ message, sessionId: 's1', interaction: { canSendMessages: false, canApprovePermissions: false }, onJumpToAnchor: undefined });
         expect(element).not.toBeNull();
@@ -36,6 +38,68 @@ describe('Structured transcript Find', () => {
         store.publish(new Map([[message.id, { blocks: [{ id: 'structured-participant-body', sourceRanges: [{ start: 0, end: 6, current: true }] }] }]]));
         const screen = await renderScreen(<TranscriptFindProvider store={store}>{element}</TranscriptFindProvider>);
         expect(screen.findAllHostsByTestId('find-match-current').map((node) => node.children.join(''))).toEqual(['needle']);
+    });
+
+    it('renders and searches retained review comments while rejecting malformed known anchors', async () => {
+        const comment = {
+            id: 'comment-1', filePath: 'src/a.ts', source: 'file',
+            anchor: { kind: 'fileLine', startLine: 1, lineHash: 'lh1:1234567890abcdef', retiredAnchorField: true },
+            snapshot: { selectedLines: ['selected code'], beforeContext: [], afterContext: [], retiredSnapshotField: true },
+            body: 'retained review body', createdAt: 1, retiredCommentField: true,
+        };
+        const payload = { sessionId: 's1', comments: [comment], retiredPayloadField: true };
+        const message: Message = { kind: 'user-text', id: 'review-comments', localId: null, createdAt: 1, text: 'hidden raw body',
+            meta: { happier: { kind: 'review_comments.v1', payload } } };
+        expect(ReviewCommentsV1Schema.safeParse(payload).success).toBe(false);
+        expect(projectStructuredMessageFindText(message)?.find((block) => block.id === 'structured-review-comment:comment-1:body')?.text)
+            .toBe('retained review body');
+        const element = renderStructuredMessage({ message, sessionId: 's1', interaction: { canSendMessages: false, canApprovePermissions: false }, onJumpToAnchor: undefined });
+        const screen = await renderScreen(element!);
+        expect(screen.getTextContent()).toContain('retained review body');
+        expect(screen.getTextContent()).not.toContain('hidden raw body');
+
+        const malformed: Message = { ...message, meta: { happier: { kind: 'review_comments.v1', payload: {
+            ...payload, comments: [{ ...comment, anchor: { ...comment.anchor, lineHash: 'invalid' } }],
+        } } } };
+        expect(projectStructuredMessageFindText(malformed)?.some((block) => block.text === 'retained review body')).toBe(false);
+        const unavailable = renderStructuredMessage({ message: malformed, sessionId: 's1', interaction: { canSendMessages: false, canApprovePermissions: false }, onJumpToAnchor: undefined });
+        const unavailableScreen = await renderScreen(unavailable!);
+        expect(unavailableScreen.findByTestId('structured-message-unavailable')).not.toBeNull();
+    });
+
+    it('keeps the retained continuation note presentation instead of its hidden raw message text', () => {
+        const payload = { v: 1, continuation: { v: 1, deviceId: 'other-device', deviceDisplayName: 'Alice’s phone',
+            conversation: { serverId: 'home', sessionId: 'conversation' } } };
+        const message: Message = { kind: 'agent-text', id: 'continuation', localId: null, createdAt: 1, text: 'hidden raw continuation',
+            meta: { happier: { kind: 'voice_note.v1', payload } } };
+        const retained: Message = { ...message, meta: { happier: { kind: 'voice_note.v1', payload: {
+            ...payload, retiredPayloadField: true, continuation: { ...payload.continuation, lease: 'retired',
+                conversation: { ...payload.continuation.conversation, remoteEnd: true } },
+        } } } };
+        expect(projectStructuredMessageFindText(retained)).toEqual(projectStructuredMessageFindText(message));
+        expect(projectStructuredMessageFindText(retained)?.[0]?.text).not.toBe('hidden raw continuation');
+    });
+
+    it.each(['review_findings.v1', 'review_findings.v2', 'review_follow_up.v1'])('renders retained Run review content for %s without accepting a malformed comment', async (kind) => {
+        const runRef = { runId: 'run-1', callId: 'call-1', backendId: 'codex' };
+        const finding = { id: 'finding-1', title: 'Retained finding title', severity: 'high', category: 'correctness', summary: 'Retained finding summary',
+            comment: { id: 'comment-1', state: 'proposed', serverRevision: 1, retiredCommentField: true,
+                workspace: { machineId: 'machine-1', path: '/repo', retiredWorkspaceField: true } } };
+        const payload = kind === 'review_follow_up.v1'
+            ? { parentRunRef: runRef, threadId: 'thread-1', requestMarkdown: 'Why?', answerMarkdown: 'Because.', updatedFindings: [finding], generatedAtMs: 1 }
+            : { runRef, summary: 'Retained review summary', overviewMarkdown: 'Retained review overview', findings: [finding], generatedAtMs: 1 };
+        const params = { meta: { kind, payload }, sessionId: 's1', interaction: { canSendMessages: false, canApprovePermissions: false } };
+        const element = renderExecutionRunStructuredMeta(params);
+        expect(element).not.toBeNull();
+        const source = createTestSessionTranscriptSource({ sessionId: 's1' });
+        const screen = await renderScreen(wrapWithSessionTranscriptSource(element!, source));
+        expect(screen.getTextContent()).toContain('Retained finding title');
+
+        const malformedFinding = { ...finding, comment: { ...finding.comment, workspace: { ...finding.comment.workspace, machineId: '' } } };
+        const malformedPayload = kind === 'review_follow_up.v1'
+            ? { ...payload, updatedFindings: [malformedFinding] }
+            : { ...payload, findings: [malformedFinding] };
+        expect(renderExecutionRunStructuredMeta({ ...params, meta: { kind, payload: malformedPayload } })).toBeNull();
     });
 
     it('preserves ordinary Markdown fallback for a valid null card descriptor', () => {

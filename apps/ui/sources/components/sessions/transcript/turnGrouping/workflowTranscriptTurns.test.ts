@@ -12,7 +12,7 @@ describe('workflow turn membership in linear transcripts', () => {
                 createdAt, startedAt: createdAt, completedAt: createdAt + 1 }, children: [] });
         const messages: Message[] = [
             { kind: 'user-text', id: 'workflow', localId: null, text: 'Daily summary', createdAt: 1,
-                meta: { happierProvenanceV1: { v: 2, kind: 'workflow_invocation', runId: 'daily', invocationRecordId: 'step' } } },
+                meta: { happierProvenanceV1: { v: 2, kind: 'workflow_invocation', runId: 'daily', invocationRecordId: 'step', retired: true } } },
             tool('t1', 2), tool('t1b', 3),
             { kind: 'agent-text', id: 'a1', localId: null, text: 'First reply', createdAt: 4 },
             tool('t2', 5),

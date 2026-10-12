@@ -65,7 +65,7 @@ export function useTranscriptRootMessages(sessionId: string) {
         const references = new Map<string, Set<string>>();
         for (const id of messageIdsOldestFirst) {
             const message = messagesById[id];
-            const provenance = message && readSessionMessageProvenance(message.meta);
+            const provenance = message && readSessionMessageProvenance(message.meta, 'stored');
             if (provenance?.kind !== 'workflow_invocation') continue;
             const needsTitle = !state.workflowRunsById[provenance.runId]?.summary;
             const fact = state.workflowRunInvocationsByRunId[provenance.runId]?.factsById[provenance.invocationRecordId];
