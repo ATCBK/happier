@@ -128,7 +128,7 @@ export async function listCurrentExternalSessionPassivePolicies(params: Readonly
             const persisted = readNonAuthoritativeLinkedExternalSessionV1FromMetadata(metadata);
             if (!persisted || persisted.machineId !== params.machineId) continue;
             if (
-                readExternalSessionFollowPolicyV1(persisted.followPolicyV1)?.policy
+                readExternalSessionFollowPolicyV1(persisted.followPolicyV1, 'stored')?.policy
                 !== 'background_follow'
             ) {
                 continue;
@@ -267,6 +267,7 @@ export function startExternalSessionPassiveObservation(params: Readonly<{
             const backgroundFollow =
                 readExternalSessionFollowPolicyV1(
                     persistedLink?.followPolicyV1,
+                    'stored',
                 )?.policy === 'background_follow';
             const archived =
                 typeof persistedLoad.session.rawSession.archivedAt === 'number'

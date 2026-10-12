@@ -17,6 +17,7 @@ import { type PluginOperationAvailability } from '@happier-dev/plugin-sdk';
 import type {
   ExternalSessionTranscriptItem,
 } from '@happier-dev/plugin-sdk/sessions/external';
+import { isAgentExternalSessionsFailureCode } from '@happier-dev/plugin-sdk/sessions/external';
 
 import type { ResolvedAgentRichDefinition } from '@/plugins/projection/registry/types';
 import { logger } from '@/ui/logger';
@@ -41,13 +42,14 @@ import {
   type PluginExternalSessionsProviderOps,
 } from './pluginExternalSessionsAdapter';
 import { invokeBoundedExternalSessionsOperation } from './agentExternalSessionsInvocation';
-import type { ExternalSessionFollowProviderOps } from './providerOps';
+import { ExternalSessionProviderFailureError, type ExternalSessionFollowProviderOps } from './providerOps';
 import { resolveExternalSessionLinkIdentityFromSurface } from './resolveExternalSessionLinkIdentity';
 import { preservesExternalSessionSourceIdentity } from './sourceIdentity';
 import {
   createExternalSessionsUnavailableCapabilities,
   type ExternalSessionsCompositionPort,
   type HostExternalSessionFollowTargetResolution,
+  type HostExternalSessionFollowDiagnostic,
   type HostExternalSessionsAuthorService,
   type HostExternalSessionsAuthorTranscriptFollowEvent,
   type HostExternalTranscriptItem,
@@ -59,6 +61,7 @@ import type {
 } from './contextualTakeoverAdmission';
 import {
   buildConfiguredExternalSessionSourceSnapshot,
+  ConfiguredExternalSessionSourceRegistryError,
   type ConfiguredExternalSessionSourceRefusal,
   type ConfiguredExternalSessionSourceCandidate,
   type ConfiguredExternalSessionSourceSnapshotBasis,
@@ -294,6 +297,7 @@ export async function resolveConfiguredExternalSessionFollowTarget(params: Reado
 }>): Promise<HostExternalSessionFollowTargetResolution> {
   const signal = params.signal ?? new AbortController().signal;
   const retirementSignal = params.retirementSignal ?? new AbortController().signal;
+  let materializationDiagnostic: HostExternalSessionFollowDiagnostic = { reason: 'source_materialization_failed' };
   const isCurrent = (): boolean => {
     try {
       return params.isCurrent() === true;
@@ -309,91 +313,106 @@ export async function resolveConfiguredExternalSessionFollowTarget(params: Reado
       ? {}
       : { deadlineAtMs: params.admissionDeadlineAtMs }),
     operation: async (operationSignal, deadlineAtMs) => {
-      const checkCurrent = (): void => {
-        if (!isCurrent() || retirementSignal.aborted) {
-          throw new Error('Configured external-session follow target belongs to a retired generation');
-        }
-        if (signal.aborted || operationSignal.aborted) {
-          throw signal.reason ?? operationSignal.reason ?? new Error(
-            'Configured external-session follow target admission was cancelled',
-          );
-        }
-      };
-      const providerOpsByAgentId = new Map<
-        string,
-        ExternalSessionFollowProviderOps
-      >();
-      const resolveProviderOps = async (
-        agentId: string,
-      ): Promise<ExternalSessionFollowProviderOps | null> => {
+      try {
+        const checkCurrent = (): void => {
+          if (!isCurrent() || retirementSignal.aborted) {
+            throw new Error('Configured external-session follow target belongs to a retired generation');
+          }
+          if (signal.aborted || operationSignal.aborted) {
+            throw signal.reason ?? operationSignal.reason ?? new Error(
+              'Configured external-session follow target admission was cancelled',
+            );
+          }
+        };
+        const providerOpsByAgentId = new Map<
+          string,
+          ExternalSessionFollowProviderOps
+        >();
+        const resolveProviderOps = async (
+          agentId: string,
+        ): Promise<ExternalSessionFollowProviderOps | null> => {
+          checkCurrent();
+          const cached = providerOpsByAgentId.get(agentId);
+          if (cached) return cached;
+          const resolved = await params.resolveProviderOps(agentId);
+          checkCurrent();
+          if (resolved) providerOpsByAgentId.set(agentId, resolved);
+          return resolved;
+        };
         checkCurrent();
-        const cached = providerOpsByAgentId.get(agentId);
-        if (cached) return cached;
-        const resolved = await params.resolveProviderOps(agentId);
+        const snapshot = await buildConfiguredExternalSessionSourceSnapshot({
+          basis: params.basis,
+          readCurrentBasis: params.readCurrentBasis,
+          resolveAgentOccurrence: () => Object.freeze({
+            occurrenceId: 'captured-follow-target',
+            isCurrent,
+          }),
+          candidates: materializeConfiguredExternalSessionSourceCandidates({
+            agents: params.agents,
+            account: params.account,
+            agentSettings: params.agentSettings,
+            activeServerId: params.activeServerId ?? null,
+          }),
+          resolveSource: (agentId, source) => resolveConfiguredExternalSessionSourceAtAdmission({
+            agents: params.agents,
+            ...(params.activeServerDir ? { activeServerDir: params.activeServerDir } : {}),
+            agentId,
+            source,
+          }),
+          resolveProviderOps,
+          signal: operationSignal,
+        });
         checkCurrent();
-        if (resolved) providerOpsByAgentId.set(agentId, resolved);
-        return resolved;
-      };
-      checkCurrent();
-      const snapshot = await buildConfiguredExternalSessionSourceSnapshot({
-        basis: params.basis,
-        readCurrentBasis: params.readCurrentBasis,
-        resolveAgentOccurrence: () => Object.freeze({
-          occurrenceId: 'captured-follow-target',
+        const sources = await Promise.all(
+          snapshot.list(params.readCurrentBasis()).map(async (entry) => {
+            checkCurrent();
+            const ops = await resolveProviderOps(entry.agentId);
+            checkCurrent();
+            return Object.freeze({
+              agentId: entry.agentId,
+              sourceId: entry.sourceKey,
+              source: entry.source,
+              validatedAtAdmission: true as const,
+              supportsFollow:
+                declaresExplicitTerminalFollow({
+                  agents: params.agents,
+                  agentId: entry.agentId,
+                  source: entry.source,
+                })
+                && typeof ops?.resolveLinkIdentity === 'function'
+                && typeof ops.pageTranscript === 'function'
+                && typeof ops.readAfterTranscript === 'function',
+            });
+          }),
+        );
+        checkCurrent();
+        return await resolvePluginExternalSessionFollowTarget({
+          agentId: params.agentId,
+          remoteSessionId: params.remoteSessionId,
+          ...(params.boundSource === undefined
+            ? {}
+            : { boundSource: params.boundSource }),
+          admissionDeadlineAtMs: deadlineAtMs,
+          sources: Object.freeze(sources),
+          sourceRefusals: snapshot.refusals,
+          resolveProviderOps,
           isCurrent,
-        }),
-        candidates: materializeConfiguredExternalSessionSourceCandidates({
-          agents: params.agents,
-          account: params.account,
-          agentSettings: params.agentSettings,
-          activeServerId: params.activeServerId ?? null,
-        }),
-        resolveSource: (agentId, source) => resolveConfiguredExternalSessionSourceAtAdmission({
-          agents: params.agents,
-          ...(params.activeServerDir ? { activeServerDir: params.activeServerDir } : {}),
-          agentId,
-          source,
-        }),
-        resolveProviderOps,
-        signal: operationSignal,
-      });
-      checkCurrent();
-      const sources = await Promise.all(
-        snapshot.list(params.readCurrentBasis()).map(async (entry) => {
-          checkCurrent();
-          const ops = await resolveProviderOps(entry.agentId);
-          checkCurrent();
-          return Object.freeze({
-            agentId: entry.agentId,
-            sourceId: entry.sourceKey,
-            source: entry.source,
-            validatedAtAdmission: true as const,
-            supportsFollow:
-              declaresExplicitTerminalFollow({
-                agents: params.agents,
-                agentId: entry.agentId,
-                source: entry.source,
-              })
-              && typeof ops?.resolveLinkIdentity === 'function'
-              && typeof ops.pageTranscript === 'function'
-              && typeof ops.readAfterTranscript === 'function',
-          });
-        }),
-      );
-      checkCurrent();
-      return await resolvePluginExternalSessionFollowTarget({
-        agentId: params.agentId,
-        remoteSessionId: params.remoteSessionId,
-        ...(params.boundSource === undefined
-          ? {}
-          : { boundSource: params.boundSource }),
-        admissionDeadlineAtMs: deadlineAtMs,
-        sources: Object.freeze(sources),
-        resolveProviderOps,
-        isCurrent,
-        signal: operationSignal,
-        retirementSignal,
-      });
+          signal: operationSignal,
+          retirementSignal,
+        });
+      } catch (error) {
+        materializationDiagnostic = {
+          reason: 'source_materialization_failed',
+          ...(error instanceof ConfiguredExternalSessionSourceRegistryError
+            ? { sourceRegistryCode: error.code, ...(error.providerCode ? { providerCode: error.providerCode } : {}) }
+            : {}),
+          ...(error instanceof ConfiguredExternalSessionSourceMaterializationError
+            ? { sourceMaterializationCode: error.code } : {}),
+          ...(error instanceof ExternalSessionProviderFailureError && isAgentExternalSessionsFailureCode(error.code)
+            ? { providerCode: error.code } : {}),
+        };
+        throw error;
+      }
     },
   });
   if (outcome.status === 'fulfilled') return outcome.value;
@@ -415,10 +434,15 @@ export async function resolveConfiguredExternalSessionFollowTarget(params: Reado
       code: 'plugin_operation_deadline_exceeded',
     });
   }
-  return Object.freeze({
+  const result = Object.freeze({
     status: 'unavailable',
     code: 'plugin_external_follow_identity_unavailable',
+    diagnostic: Object.freeze(materializationDiagnostic),
+  } as const);
+  logger.warnLocalFile('[External Session] Follow target resolution failed', {
+    code: result.code, ...result.diagnostic,
   });
+  return result;
 }
 
 /**
@@ -939,6 +963,7 @@ export async function createConfiguredPluginExternalSessionsAdapter(params: Read
   const domain = createPluginExternalSessionsAdapter({
     isCurrent,
     sources: Object.freeze(sources),
+    sourceRefusals: snapshot.refusals,
     resolveProviderOps: async (agentId) => await resolveProviderOps(agentId),
     ...(queryCandidates ? { queryCandidates } : {}),
     parseAuthorListQuery: readAuthorListQueryWithAdapterContinuation,

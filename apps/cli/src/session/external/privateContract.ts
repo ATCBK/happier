@@ -102,7 +102,24 @@ export type HostExternalSessionFollowTargetResolution =
   | Readonly<{
       status: 'unavailable';
       code: string;
+      diagnostic?: HostExternalSessionFollowDiagnostic;
     }>;
+
+/** Host-private, content-free explanation of a failed identity admission. */
+export type HostExternalSessionFollowDiagnostic = Readonly<{
+  reason: 'invalid_identity' | 'no_eligible_source' | 'retained_provider_ops_unavailable'
+    | 'retained_source_validation_failed' | 'retained_source_identity_mismatch'
+    | 'retained_source_not_matched' | 'source_capacity_exceeded' | 'source_retired'
+    | 'provider_ops_unavailable' | 'source_validation_failed' | 'source_identity_mismatch'
+    | 'provider_operation_failed' | 'candidate_not_found' | 'identity_ambiguous'
+    | 'operation_failed' | 'source_materialization_failed';
+  providerCode?: import('@happier-dev/plugin-sdk/sessions/external').AgentExternalSessionsFailureCode;
+  sourceRegistryCode?: import('./configuredSourceRegistry').ConfiguredExternalSessionSourceRegistryError['code'];
+  sourceMaterializationCode?: import('./configuredSourceMaterializer').ConfiguredExternalSessionSourceMaterializationError['code'];
+  matchingSources?: number;
+  currentSources?: number;
+  followCapableSources?: number;
+}>;
 
 export type HostExternalTranscriptReadQuery =
   | Readonly<{

@@ -5,7 +5,7 @@ import type {
 } from '@happier-dev/protocol';
 import { PluginAgentContributionV2Schema } from '@happier-dev/protocol';
 
-import type { ExternalSessionProviderOps } from './providerOps';
+import { ExternalSessionProviderFailureError, type ExternalSessionProviderOps } from './providerOps';
 import {
   buildConfiguredExternalSessionSourceSnapshot as buildConfiguredExternalSessionSourceSnapshotWithProjection,
   type ConfiguredExternalSessionSourceSnapshotBasis,
@@ -218,11 +218,13 @@ describe('configured external-session source registry', () => {
       basis,
       candidates: [
         { agentId: 'codex', source },
+        { agentId: 'codex', source: { ...source, homePath: '/second' } },
         { agentId: 'antigravity', source },
       ],
       resolveProviderOps: (agentId) => (agentId === 'codex'
-        ? providerOps(async () => {
-            throw new Error('codex home probe failed');
+        ? providerOps(async ({ source: candidate }) => {
+            throw new ExternalSessionProviderFailureError({ code: candidate.homePath ? 'source_invalid' : 'source_unreachable',
+              operation: 'validateSource', message: 'private credential' });
           })
         : healthy),
     });
@@ -237,6 +239,12 @@ describe('configured external-session source registry', () => {
     expect(snapshot.refusals).toEqual([{
       agentId: 'codex',
       code: 'provider_source_invalid',
+      providerCode: 'source_unreachable',
+      message: expect.stringMatching(/agent 'codex'/i),
+    }, {
+      agentId: 'codex',
+      code: 'provider_source_invalid',
+      providerCode: 'source_invalid',
       message: expect.stringMatching(/agent 'codex'/i),
     }]);
     expect(Object.isFrozen(snapshot.refusals)).toBe(true);

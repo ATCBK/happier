@@ -135,6 +135,7 @@ function resolveRefreshedExternalSessionMetadata(params: Readonly<{
 }>): Record<string, unknown> | null {
   const currentLinkResolution = resolveLinkedExternalSessionMetadataV1(
     params.currentMetadata,
+    'stored',
   );
   if (!currentLinkResolution.ok) {
     throw new ExternalSessionProviderFailureError({
@@ -304,7 +305,7 @@ function resolveRefreshedExternalSessionMetadata(params: Readonly<{
     }
   }
 
-  const compatibilityNormalized = normalizeLinkedExternalSessionMetadataV1(nextMetadata) ?? nextMetadata;
+  const compatibilityNormalized = normalizeLinkedExternalSessionMetadataV1(nextMetadata, 'stored') ?? nextMetadata;
   if (!deepEqual(nextMetadata, compatibilityNormalized)) {
     didChange = true;
   }
@@ -481,7 +482,7 @@ async function findExistingSessionIdByTag(params: Readonly<{
         const rowTagRaw = meta?.['tag'];
         const rowTag = typeof rowTagRaw === 'string' ? rowTagRaw.trim() : '';
         if (meta !== null && rowTag === params.tag) {
-          const linked = resolveLinkedExternalSessionMetadataV1(meta);
+          const linked = resolveLinkedExternalSessionMetadataV1(meta, 'stored');
           if (!linked.ok && linked.error !== 'linked_session_not_found') {
             throw new ExternalSessionProviderFailureError({
               code: 'conflict',
@@ -549,7 +550,7 @@ function metadataProvesExternalHistoryImportIdentity(
     resolveSourceKey(source: ExternalSessionsSource): string | null;
   }>,
 ): boolean {
-  const resolution = resolveExternalHistoryImportV1FromMetadata(metadata);
+  const resolution = resolveExternalHistoryImportV1FromMetadata(metadata, 'stored');
   if (resolution.state === 'invalid') {
     throw new ExternalSessionProviderFailureError({
       code: 'conflict',
@@ -679,6 +680,7 @@ export async function resolveExternalSessionIndexedTagLookup(params: Readonly<{
     : sharedOrLegacyMetadata;
   const linkedMetadataResolution = resolveLinkedExternalSessionMetadataV1(
     metadata,
+    'stored',
   );
   if (
     !linkedMetadataResolution.ok
@@ -1210,7 +1212,7 @@ export async function ensureExternalSessionLink(params: Readonly<{
 
   if (existingSession) {
     const expectedCurrentLinkResolution =
-      resolveLinkedExternalSessionMetadataV1(existingSession.metadata);
+      resolveLinkedExternalSessionMetadataV1(existingSession.metadata, 'stored');
     if (!expectedCurrentLinkResolution.ok) {
       throw new ExternalSessionProviderFailureError({
         code: 'conflict',

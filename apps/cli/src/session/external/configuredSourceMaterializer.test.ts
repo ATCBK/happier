@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import { describe, expect, it, vi } from 'vitest';
+import { logger } from '@/ui/logger';
 
 import {
   resolveExternalSessionsSourceKeyForDeclaration,
@@ -13,6 +14,21 @@ import {
   type PluginAgentContributionV2,
 } from '@happier-dev/protocol';
 import type { AgentExternalSessionsContribution } from '@happier-dev/plugin-sdk/sessions/external';
+import type { AgentSessionHostServices, AgentSessionRuntime, AgentSessionRuntimeContext } from '@happier-dev/plugin-sdk/agents/runtime';
+import { SessionRuntimeActivitySnapshotSchema } from '@happier-dev/protocol/sessions/runtime/activity/sessionRuntimeActivity';
+import type { RuntimeActivitySnapshotTail } from '@/api/session/sessionClientPort';
+import { createHostRuntimeActivityProjection } from '@/agent/runtime/session/activity/createHostRuntimeActivityProjection';
+import { createHostTerminalTranscriptFollowService } from '@/agent/runtime/session/terminal/transcriptFollow';
+import { createSessionProviderInputConsumer } from '@/agent/runtime/session/input/sessionProviderInputConsumer';
+import { registerSessionProviderInputAdmissionRpc, requestSessionInputLiveWork } from '@/agent/runtime/session/input/sessionProviderInputAdmissionRpc';
+import type { RpcHandler } from '@/api/rpc/types';
+import type { TrackedSession } from '@/daemon/types';
+import { createSessionLiveWorkProducer } from '@/daemon/lifecycle/sessionLiveWorkProducer';
+import { readSessionActivityEligibility } from '@/daemon/guard/sessionEligibility';
+import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
+import { createExternalSessionTerminalFollowProjector } from './terminalFollowProjection';
+import { projectRuntimeTranscriptEvent } from '@/agent/runtime/session/transcripts/projectRuntimeTranscriptEvent';
+import { mapPluginExternalTerminalSourceItem } from './pluginExternalSessionsAdapter';
 import { PLUGIN_MANIFEST as CLAUDE_PLUGIN_MANIFEST } from '@happier-dev/plugins-claude/manifest';
 import { PLUGIN_MANIFEST as CODEX_PLUGIN_MANIFEST } from '@happier-dev/plugins-codex/manifest';
 import { PLUGIN_MANIFEST as OPENCODE_PLUGIN_MANIFEST } from '@happier-dev/plugins-opencode/manifest';
@@ -456,7 +472,7 @@ describe('configured external-session source materializer', () => {
         'utf8',
       );
       const contribution = await loadCodexExternalSessionsContribution({
-        env: { CODEX_HOME: join(root, 'empty-user-codex-home') },
+        env: { ...process.env, CODEX_HOME: join(root, 'empty-user-codex-home') },
       });
       const ops = providerOpsFromRealContribution(contribution);
       await expect(ops.listCandidates({
@@ -648,6 +664,31 @@ describe('configured external-session source materializer', () => {
     });
   });
 
+  it('retains a materialization failure reason in one privacy-safe follow record', async () => {
+    const basis = { accountSettingsRevision: 'captured' };
+    let currentBasis = basis;
+    const log = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => {});
+    try {
+      const result = await resolveConfiguredExternalSessionFollowTarget({
+        agents: [agent()], account: { connectedServicesV2: [] }, basis,
+        readCurrentBasis: () => currentBasis, isCurrent: () => true,
+        agentId: 'codex', remoteSessionId: 'remote-1',
+        resolveProviderOps: async () => {
+          currentBasis = { accountSettingsRevision: 'private-account-revision' };
+          return null;
+        },
+      });
+      expect(result).toMatchObject({ status: 'unavailable',
+        diagnostic: { reason: 'source_materialization_failed', sourceRegistryCode: 'account_settings_drift' } });
+      const records = log.mock.calls.filter(([message]) => message === '[External Session] Follow target resolution failed');
+      expect(records).toEqual([['[External Session] Follow target resolution failed', {
+        code: 'plugin_external_follow_identity_unavailable', reason: 'source_materialization_failed',
+        sourceRegistryCode: 'account_settings_drift',
+      }]]);
+      expect(JSON.stringify(records)).not.toContain('private-account-revision');
+    } finally { log.mockRestore(); }
+  });
+
   it('resolves retained Pi Session source inputs through the current pinned root and refuses a foreign retained file', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-pi-retained-source-'));
     const previousHome = process.env.HOME;
@@ -694,8 +735,10 @@ describe('configured external-session source materializer', () => {
         } finally { composition.dispose(); }
       };
       const expectedSource = { kind: 'piAgentDir', agentDir, sessionsRoot: rootA };
+      const sourceDeclaration = declaration.surfaces?.externalSession.sources[0];
+      if (!sourceDeclaration) throw new Error('Pi source declaration unavailable');
       const expectedRef = { agentId: 'pi', remoteSessionId: 'retained-session',
-        sourceId: resolveExternalSessionsSourceKeyForDeclaration(declaration.surfaces.externalSession.sources[0], expectedSource) };
+        sourceId: resolveExternalSessionsSourceKeyForDeclaration(sourceDeclaration, expectedSource) };
       expect(await resolveAt(rootA)).toMatchObject({
         // Pi does not declare terminal Follow; normalizing retained inputs must
         // not grant that separate capability to the accounting consumer.
@@ -971,6 +1014,7 @@ describe('configured external-session source materializer', () => {
     expect(target).toEqual({
       status: 'unavailable',
       code: 'plugin_external_follow_identity_unavailable',
+      diagnostic: { reason: 'no_eligible_source', matchingSources: 1, currentSources: 1, followCapableSources: 0 },
     });
   });
 
@@ -1006,6 +1050,7 @@ describe('configured external-session source materializer', () => {
     })).resolves.toEqual({
       status: 'unavailable',
       code: 'plugin_external_follow_identity_unavailable',
+      diagnostic: { reason: 'no_eligible_source', matchingSources: 1, currentSources: 1, followCapableSources: 0 },
     });
   });
 
@@ -1049,6 +1094,7 @@ describe('configured external-session source materializer', () => {
     })).resolves.toEqual({
       status: 'unavailable',
       code: 'plugin_external_follow_identity_unavailable',
+      diagnostic: { reason: 'no_eligible_source', matchingSources: 1, currentSources: 1, followCapableSources: 0 },
     });
 
     const composition = await createConfiguredPluginExternalSessionsAdapter({
@@ -1076,7 +1122,6 @@ describe('configured external-session source materializer', () => {
   });
 
   it.each([
-    ['claude', CLAUDE_PLUGIN_MANIFEST],
     ['codex', CODEX_PLUGIN_MANIFEST],
     ['opencode', OPENCODE_PLUGIN_MANIFEST],
   ] as const)('keeps the shipped %s Agent terminal follow unavailable until its writer proves the strict classification contract', async (agentId, manifest) => {
@@ -1122,8 +1167,164 @@ describe('configured external-session source materializer', () => {
     })).resolves.toEqual({
       status: 'unavailable',
       code: 'plugin_external_follow_identity_unavailable',
+      diagnostic: { reason: 'no_eligible_source', matchingSources: 1, currentSources: 1, followCapableSources: 0 },
     });
     expect(resolveProviderOps).toHaveBeenCalledOnce();
+  });
+
+  it('admits the shipped claude Agent terminal follow and publishes known idle and active Activity', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-claude-configured-follow-'));
+    const remoteSessionId = '33333333-3333-3333-3333-333333333333';
+    await mkdir(join(root, 'projects', '-test'), { recursive: true });
+    await writeFile(join(root, 'projects', '-test', `${remoteSessionId}.jsonl`),
+      JSON.stringify({ type: 'user', uuid: 'history', timestamp: new Date(0).toISOString(), message: { content: 'history' } }) + '\n');
+    const contributionPath = '../../../../../packages/plugins/claude/src/agent/surfaces/sessions/external/contribution.js';
+    const { createClaudeExternalSessionsContribution } = await import(contributionPath);
+    const contribution: AgentExternalSessionsContribution = createClaudeExternalSessionsContribution({ env: { CLAUDE_CONFIG_DIR: root } });
+    const ops = providerOpsFromRealContribution(contribution, { pluginId: CLAUDE_PLUGIN_MANIFEST.id, agentId: 'claude' });
+    if (!ops.resolveLinkIdentity) throw new Error('Claude follow identity operation unavailable');
+    const followOps = { ...ops, resolveLinkIdentity: ops.resolveLinkIdentity };
+    const basis = { accountSettingsRevision: 'account:claude' };
+    const resolveTarget = () => resolveConfiguredExternalSessionFollowTarget({
+        agents: [{ id: 'claude', identity: { pluginId: CLAUDE_PLUGIN_MANIFEST.id, localId: 'claude' },
+          richDefinition: { provenance: 'first_party', definition: readManifestAgentContribution(CLAUDE_PLUGIN_MANIFEST, 'claude') } }],
+        account: { connectedServicesV2: [] }, basis, readCurrentBasis: () => basis, isCurrent: () => true,
+        agentId: 'claude', remoteSessionId, resolveProviderOps: async () => followOps,
+    });
+    // Runtime imports keep plugin compilation ownership, matching the existing Claude projector harness.
+    const fixturesPath = '../../../../../packages/plugins/claude/src/agent/runtime/engine.testkit.js';
+    const sdkPath = '../../../../../packages/plugins/claude/src/agent/runtime/remote/sdk/session.js';
+    const nativePath = '../../../../../packages/plugins/claude/src/agent/runtime/nativeRuntime.js';
+    const fixtures = await import(fixturesPath) as {
+      createTerminalHostFixture(): { service: unknown };
+      createEventsFixture(): { service: unknown };
+      createSdkExecFixture(): { service: unknown; emit(row: unknown): Promise<void> };
+      createSessionHooksFixture(): { service: { startServer: ReturnType<typeof vi.fn> } };
+      createPluginContextFixture(terminal: unknown, events: unknown, overrides?: unknown): {
+        agentRuntime: Pick<AgentSessionHostServices, 'transcripts'>;
+      };
+    };
+    const sdk = await import(sdkPath) as { createClaudeAgentSdkTurnOperations(input: unknown): {
+      beginProviderTurn(turnId: string): void;
+      sendProviderTurnPrompt(text: string): Promise<unknown>;
+      waitForProviderTurnCompletion(): Promise<void>;
+    } };
+    const native = await import(nativePath) as { createClaudeNativeSessionRuntimeFromOperations(
+      operations: unknown, request: unknown, context: AgentSessionRuntimeContext,
+    ): AgentSessionRuntime };
+    const exec = fixtures.createSdkExecFixture();
+    const hooks = fixtures.createSessionHooksFixture();
+    const terminal = fixtures.createTerminalHostFixture();
+    const baseCtx = fixtures.createPluginContextFixture(terminal.service, fixtures.createEventsFixture().service);
+    const signal = new AbortController().signal;
+    let runtime: AgentSessionRuntime;
+    // The durable Home write is the system boundary. Real publication and live-work owners consume its committed result.
+    let tail: RuntimeActivitySnapshotTail = { sequence: 0, custody: null, settlement: null };
+    const activity = createHostRuntimeActivityProjection({ sessionId: 'claude-activity', agentRuntimeApplicability: 'supported',
+      enqueueRegisteredSessionStateFieldMutation: async mutation => {
+        if (mutation.op.kind !== 'set') throw new Error('Expected an Activity snapshot');
+        const value = SessionRuntimeActivitySnapshotSchema.parse(mutation.op.value);
+        const revision = tail.sequence + 1;
+        tail = { sequence: revision, custody: null, settlement: {
+          identity: { mutationKey: mutation.mutationId, admissionOrder: revision }, desiredValue: value,
+          result: 'applied', committedProjection: { ...value, observedAt: Date.now(), revision }, committedRevision: revision,
+        } };
+      },
+    });
+    const binding = activity.bindAgentRuntime({ applicability: 'supported' });
+    const follow = createHostTerminalTranscriptFollowService({ signal,
+      loadCommittedLocalIdBaseline: async () => ({ complete: true, localIds: new Set<string>() }),
+      followProviderSession: async (request, listener) => {
+        const target = await resolveTarget();
+        if (target.status === 'unavailable') return target;
+        const page = await ops.pageTranscript!({ source: target.source, remoteSessionId,
+          direction: request.replay === 'fresh' ? 'newer' : 'older', projection: 'terminal', maxItems: 200, maxBytes: 524_288 });
+        if (!page.tailCursor) throw new Error('Expected an ordered source baseline');
+        await listener({ kind: 'data', phase: 'initial_replay', providerSessionId: remoteSessionId,
+          items: page.items.map(mapPluginExternalTerminalSourceItem), fromCursor: null, nextCursor: page.tailCursor });
+        return { status: 'following', startingCursor: page.tailCursor, subscription: { dispose() {} } };
+      },
+      publish: createExternalSessionTerminalFollowProjector({ sessionId: 'claude-activity', agentId: 'claude',
+        observeSourceTranscript: input => runtime.observeSourceTranscript!(input),
+        // Transcript outbox delivery is another genuine Home transport boundary.
+        projectRuntimeEvent: async (event, admission) => await projectRuntimeTranscriptEvent({
+          session: { sessionId: 'claude-activity', enqueueUserTextMessageCommitted: async () => ({ persisted: true, delivered: true }),
+            enqueueAgentMessageCommitted: async () => ({ persisted: true, delivered: true }) },
+          provider: 'claude', event, admission,
+        }),
+      }),
+    });
+    const ctx = fixtures.createPluginContextFixture(terminal.service, fixtures.createEventsFixture().service, {
+      exec: exec.service, sessionHooks: hooks.service,
+      transcripts: { ...baseCtx.agentRuntime.transcripts, followSource: async (request: Parameters<NonNullable<AgentSessionHostServices['transcripts']['followSource']>>[0]) => {
+        const result = await follow.bindProviderSession({ agentId: 'claude', ...request });
+        if (result.status === 'unavailable') throw new Error(result.code);
+        return result.binding;
+      } },
+    });
+    const operations = sdk.createClaudeAgentSdkTurnOperations({ ctx, directory: root, launchEnv: { CLAUDE_CONFIG_DIR: root },
+      happierSessionId: 'claude-activity', permissionMode: 'default', enableSessionWorkState: true, enableSessionResumability: true });
+    // Only host registration is substituted; native operations, source correlation and Activity publication remain real.
+    const context = { session: { services: { activeInput: { bind: () => ({ dispose() {} }) }, models: { bind: () => ({ dispose() {} }) } } } } as unknown as AgentSessionRuntimeContext;
+    runtime = native.createClaudeNativeSessionRuntimeFromOperations(operations, { kind: 'create', sessionId: 'claude-activity', cwd: root }, context);
+    const subscription = runtime.watch(event => { void binding.observeEvent(event); });
+    const queue = new MessageQueue2<string>(() => 'mode');
+    const consumer = createSessionProviderInputConsumer({ messageQueue: queue, session: {
+      waitForMetadataUpdate: () => new Promise<boolean>(() => {}), getMetadataSnapshot: () => ({}), getAgentStateSnapshot: () => ({}),
+      readSubagentLiveWork: () => ({ state: 'settled', activeCount: 0 }), readRuntimeActivitySnapshotTail: () => tail,
+      readPendingQueueStateForLiveWork: async () => ({ known: true, pendingCount: 0, pendingBlockedCount: 0, pendingVersion: 1 }),
+    } });
+    const baselineErrors: unknown[] = [];
+    const handlers = new Map<string, RpcHandler>();
+    registerSessionProviderInputAdmissionRpc({ consumer, rpcHandlerRegistrar: {
+      registerHandler: (method, handler) => { handlers.set(method, handler); },
+    } });
+    const tracked: TrackedSession = { pid: 42, startedBy: 'daemon', happySessionId: 'claude-activity' };
+    const liveWork = createSessionLiveWorkProducer({ readSessions: () => [tracked],
+      readActivity: () => requestSessionInputLiveWork({ callRpc: async (method, request) => handlers.get(method)!(request) }),
+    });
+    try {
+      queue.pushImmediate('work', 'mode');
+      await consumer.waitForNextInput({ abortSignal: signal });
+      operations.beginProviderTurn('turn-1');
+      await operations.sendProviderTurnPrompt('work');
+      const hookRequest = hooks.service.startServer.mock.calls[0]?.[0] as { onSessionHook(id: string, row: unknown): Promise<void> };
+      await hookRequest.onSessionHook(remoteSessionId, { hook_event_name: 'SessionStart', source: 'startup',
+        session_id: remoteSessionId, transcript_path: join(root, 'projects', '-test', `${remoteSessionId}.jsonl`) }).catch(error => baselineErrors.push(error));
+      // Foreground input custody must stay active even though the background inventory can be idle.
+      expect(await consumer.readLiveWork()).toMatchObject({ input: 'active' });
+      expect(readSessionActivityEligibility(tracked, await liveWork.read())).toMatchObject({
+        eligible: false, reasons: expect.arrayContaining([{ kind: 'working' }]),
+      });
+      await exec.emit({ type: 'result', subtype: 'success', is_error: false, session_id: remoteSessionId,
+        num_turns: 1, total_cost_usd: 0, duration_ms: 10, duration_api_ms: 8 });
+      await operations.waitForProviderTurnCompletion();
+      consumer.releaseInputBatch();
+      expect(baselineErrors).toEqual([]);
+      await vi.waitFor(async () => expect(await consumer.readLiveWork()).toMatchObject({ session: 'settled', input: 'settled', agents: 'settled', attention: 'settled' }));
+      expect(tail.settlement?.committedProjection).toMatchObject({ state: 'idle', activeCount: 0 });
+      const idle = readSessionActivityEligibility(tracked, await liveWork.read());
+      expect(idle).toMatchObject({ eligible: true, settledAt: expect.any(Number) });
+      expect(readSessionActivityEligibility(tracked, await liveWork.read())).toEqual(idle);
+      expect(await resolveTarget()).toMatchObject({ status: 'resolved', ref: { agentId: 'claude', remoteSessionId } });
+      operations.beginProviderTurn('turn-2');
+      await operations.sendProviderTurnPrompt('background work');
+      await exec.emit({ type: 'system', subtype: 'task_started', session_id: remoteSessionId,
+        task_id: 'child', task_type: 'local_agent', is_backgrounded: true });
+      await vi.waitFor(async () => expect(await consumer.readLiveWork()).toMatchObject({ session: 'active' }));
+      expect(tail.settlement?.committedProjection).toMatchObject({ state: 'active', activeCount: 1 });
+      expect(readSessionActivityEligibility(tracked, await liveWork.read())).toMatchObject({
+        eligible: false, reasons: expect.arrayContaining([{ kind: 'working' }]),
+      });
+      await exec.emit({ type: 'system', subtype: 'task_notification', session_id: remoteSessionId, task_id: 'child', status: 'completed' });
+      await exec.emit({ type: 'result', subtype: 'success', is_error: false, session_id: remoteSessionId,
+        num_turns: 1, total_cost_usd: 0, duration_ms: 10, duration_api_ms: 8 });
+      await operations.waitForProviderTurnCompletion();
+      await vi.waitFor(async () => expect(await consumer.readLiveWork()).toMatchObject({ session: 'settled', input: 'settled' }));
+    } finally {
+      subscription.dispose(); await runtime.dispose(); await follow.releaseActiveBindings(); activity.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('preserves portable list cursors, successful single use, cancellation and retirement', async () => {

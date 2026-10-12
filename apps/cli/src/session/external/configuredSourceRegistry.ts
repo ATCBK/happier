@@ -3,7 +3,8 @@ import type { ExternalSessionAgentId, ExternalSessionSourceId, ExternalSessionsS
 
 import { clonePluginPlainData } from '../../plugins/runtime/plainData';
 import type { ResolvedExternalSessionSourceProjection } from '../../plugins/projection/registry/externalSessionSources';
-import type { ExternalSessionProviderOps } from './providerOps';
+import { ExternalSessionProviderFailureError, type ExternalSessionProviderOps } from './providerOps';
+import { isAgentExternalSessionsFailureCode, type AgentExternalSessionsFailureCode } from '@happier-dev/plugin-sdk/sessions/external';
 
 export type ConfiguredExternalSessionSourceCandidate = Readonly<{ agentId: string }> & (
   | Readonly<{ source: unknown; refusal?: never }>
@@ -51,6 +52,7 @@ export type ConfiguredExternalSessionSourceRefusal = Readonly<{
   agentId: string;
   code: ConfiguredExternalSessionSourceRefusalCode;
   message: string;
+  providerCode?: AgentExternalSessionsFailureCode;
 }>;
 
 export type ConfiguredExternalSessionSourceSnapshot = Readonly<{
@@ -66,6 +68,7 @@ export type ConfiguredExternalSessionSourceSnapshot = Readonly<{
 }>;
 
 export class ConfiguredExternalSessionSourceRegistryError extends Error {
+  readonly providerCode?: AgentExternalSessionsFailureCode;
   readonly code:
     | 'invalid_basis'
     | 'malformed_source'
@@ -82,10 +85,12 @@ export class ConfiguredExternalSessionSourceRegistryError extends Error {
   constructor(
     code: ConfiguredExternalSessionSourceRegistryError['code'],
     message: string,
+    providerCode?: AgentExternalSessionsFailureCode,
   ) {
     super(message);
     this.name = 'ConfiguredExternalSessionSourceRegistryError';
     this.code = code;
+    if (providerCode) this.providerCode = providerCode;
   }
 }
 
@@ -186,6 +191,7 @@ function readParticipantRefusal(
     agentId,
     code: error.code as ConfiguredExternalSessionSourceRefusalCode,
     message: error.message,
+    ...(error.providerCode ? { providerCode: error.providerCode } : {}),
   });
 }
 
@@ -224,6 +230,7 @@ export async function buildConfiguredExternalSessionSourceSnapshot(params: Reado
     if (!refusals.some((existing) => (
       existing.agentId === refusal.agentId
       && existing.code === refusal.code
+      && existing.providerCode === refusal.providerCode
       && existing.message === refusal.message
     ))) refusals.push(Object.freeze(refusal));
   };
@@ -280,7 +287,7 @@ export async function buildConfiguredExternalSessionSourceSnapshot(params: Reado
         source: parsed.source,
         ...(params.signal ? { signal: params.signal } : {}),
       });
-    } catch {
+    } catch (error) {
       assertBuildCurrent();
       if (!occurrence.isCurrent()) {
         throw new ConfiguredExternalSessionSourceRegistryError(
@@ -291,6 +298,7 @@ export async function buildConfiguredExternalSessionSourceSnapshot(params: Reado
       throw new ConfiguredExternalSessionSourceRegistryError(
         'provider_source_invalid',
         `Configured external-session source for agent '${agentId}' was rejected by its provider`,
+        error instanceof ExternalSessionProviderFailureError && isAgentExternalSessionsFailureCode(error.code) ? error.code : undefined,
       );
     }
     assertBuildCurrent();

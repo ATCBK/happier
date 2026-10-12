@@ -47,6 +47,7 @@ const CLAIM_ID = 'released-start-claim';
 const publisherPrecondition = Object.freeze({
   machineId: 'machine-1',
   committedFenceMs: 1,
+  publisherGeneration: '1',
 });
 
 function precommitAdmittingRecord(): ExternalSessionOperationRecordV1 {

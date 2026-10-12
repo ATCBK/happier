@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, opendir, readFile, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import { decideExternalSessionOperationUpdateV1, externalSessionOperationRetainsDiscardRecoveryV1, isExternalSessionOperationTerminalStatusV1, ExternalSessionOperationAuthorIntentV1Schema, ExternalSessionOperationRecordV1Schema, ExternalSessionOperationSharedPresentationV1Schema, projectExternalSessionOperationProgressV1, projectExternalSessionOperationSharedPresentationV1 } from '@happier-dev/protocol/sessions/external/operationV1';
 import { ExternalSessionOperationReferenceV1Schema } from '@happier-dev/protocol/sessions/external/operationActionSchemasV1';
@@ -554,7 +555,7 @@ function parseExternalSessionOperationStoredEntry(
     }
   }
 
-  const receipt = ExternalSessionOperationTerminalReceiptV1Schema.safeParse(
+  const receipt = createStoredReadSchema(ExternalSessionOperationTerminalReceiptV1Schema).safeParse(
     decoded,
   );
   if (receipt.success) {
@@ -570,7 +571,7 @@ function parseExternalSessionOperationStoredEntry(
     return { kind: 'terminal_receipt', receipt: receipt.data };
   }
 
-  const parsed = ExternalSessionOperationRecordV1Schema.safeParse(decoded);
+  const parsed = createStoredReadSchema(ExternalSessionOperationRecordV1Schema).safeParse(decoded);
   if (!parsed.success) {
     throw new ExternalSessionOperationRecordReadError(
       'invalid_record',

@@ -27,7 +27,7 @@ export function updateMetadataWithExternalSessionFollowPolicy(
         expectedLinkGeneration: string;
     }>,
 ): Metadata {
-    const resolved = resolveLinkedExternalSessionMetadataV1(metadata);
+    const resolved = resolveLinkedExternalSessionMetadataV1(metadata, 'stored');
     if (
         !resolved.ok
         && resolved.error === 'linked_session_reconciliation_required'
@@ -70,7 +70,7 @@ export function updateMetadataWithExternalSessionFollowStatus(
         expectedLinkGeneration: string;
     }>,
 ): Metadata {
-    const resolved = resolveLinkedExternalSessionMetadataV1(metadata);
+    const resolved = resolveLinkedExternalSessionMetadataV1(metadata, 'stored');
     if (
         !resolved.ok
         || String(resolved.linkedSession.linkedAtMs)

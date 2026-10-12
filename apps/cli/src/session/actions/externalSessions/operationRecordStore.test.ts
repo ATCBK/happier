@@ -667,7 +667,8 @@ describe('external session operation record store integrity', () => {
         sessionId: 'session-deleted-receipt',
       },
     });
-    await writeRawRecord(activeServerDir, terminal.operationId, JSON.stringify(terminal));
+    await writeRawRecord(activeServerDir, terminal.operationId, JSON.stringify({ ...terminal, retiredField: true,
+      request: { ...terminal.request, retiredField: true } }));
     const compacted = await compactExternalSessionOperationRecordToTerminalReceipt({
       activeServerDir,
       operationId: terminal.operationId,
@@ -679,6 +680,9 @@ describe('external session operation record store integrity', () => {
         `expected terminal receipt compaction to succeed, received ${compacted.status} (${('reason' in compacted) ? compacted.reason : 'n/a'})`,
       );
     }
+    await writeRawRecord(activeServerDir, terminal.operationId, JSON.stringify({ ...compacted.receipt, retiredField: true,
+      reference: { ...compacted.receipt.reference, retiredField: true },
+      presentation: { ...compacted.receipt.presentation, retiredField: true } }));
     const cleanupPrivateOperation = vi.fn(async () => undefined);
 
     await expect(abandonExternalSessionOperationsForDeletedSession({
@@ -1830,7 +1834,7 @@ describe('external session operation record store integrity', () => {
     const activeServerDir = await createRoot();
     const completed = completedExternalLinkedOperationRecord();
     const poisonedReceipt = {
-      v: 1,
+      v: 2,
       recordKind: 'terminal_receipt',
       reference: {
         sessionId: completed.request.sessionId,
@@ -1887,6 +1891,7 @@ describe('external session operation record store integrity', () => {
     } = poisonedReceipt;
     const silentlyNormalizableReceipt = {
       ...receiptWithoutBindings,
+      v: 1,
       durableIdempotencyKey: ` ${completed.request.idempotencyKey}`,
     };
     await writeRawRecord(
@@ -1904,6 +1909,7 @@ describe('external session operation record store integrity', () => {
 
     const silentlyNormalizableIdentityReceipt = {
       ...receiptWithoutBindings,
+      v: 1,
       reference: {
         ...poisonedReceipt.reference,
         sessionId: ` ${poisonedReceipt.reference.sessionId}`,

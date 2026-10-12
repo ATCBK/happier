@@ -27,6 +27,7 @@ export function resolveHostedExternalSessionIdentityProof(params: Readonly<{
 }>): HostedExternalSessionIdentityProof {
   const historyImport = resolveExternalHistoryImportV1FromMetadata(
     params.metadata,
+    'stored',
   );
   if (historyImport.state === 'invalid') {
     return { state: 'conflict', error: historyImport.error };
@@ -54,7 +55,7 @@ export function resolveHostedExternalSessionIdentityProof(params: Readonly<{
     return { state: 'not_matched' };
   }
 
-  const linked = resolveLinkedExternalSessionMetadataV1(params.metadata);
+  const linked = resolveLinkedExternalSessionMetadataV1(params.metadata, 'stored');
   if (linked.ok) return { state: 'not_matched' };
   if (linked.error === 'linked_session_not_found') return { state: 'matched' };
   return { state: 'conflict', error: linked.error };

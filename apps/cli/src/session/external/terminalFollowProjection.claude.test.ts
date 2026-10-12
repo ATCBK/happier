@@ -53,11 +53,9 @@ async function loadClaudeContribution(
 }
 
 /**
- * Pins the producer half of the `terminalFollow` contract for the real Claude
- * External Sessions contribution — the Agent the terminal-follow projector was
- * written against. Terminal follow is declaration-gated
- * (`surfaces.externalSession.sources[].terminalFollow.userRowClassification`),
- * and these two cases are what that declaration would have to be true about.
+ * Generic browse projection deliberately remains historical-only for user
+ * source facts. These cases must not be mistaken for the explicit terminal
+ * projection, which preserves native observations for the runtime to classify.
  */
 describe('Claude terminal follow projection', () => {
     const roots: string[] = [];
@@ -103,7 +101,7 @@ describe('Claude terminal follow projection', () => {
         ].join(''), 'utf8');
 
         const contribution = await loadClaudeContribution(
-            { CLAUDE_CONFIG_DIR: configDir } as NodeJS.ProcessEnv,
+            { ...process.env, CLAUDE_CONFIG_DIR: configDir },
         );
         const identity = await contribution.resolveLinkIdentity({
             ...invocation(),

@@ -583,6 +583,7 @@ describe('external-linked durable takeover continuation', () => {
         publisherPrecondition: {
           machineId: record.request.source.machineId,
           committedFenceMs: 1,
+          publisherGeneration: '1',
         },
       }).catch((error: unknown) => { admitError = error; });
       return {
@@ -857,6 +858,7 @@ describe('external-linked durable takeover continuation', () => {
         publisherPrecondition: {
           machineId: record.request.source.machineId,
           committedFenceMs: 1,
+          publisherGeneration: '1',
         },
       });
       await expect(retry).resolves.toMatchObject({
@@ -1635,6 +1637,7 @@ describe('external-linked durable takeover continuation', () => {
             publisherPrecondition: {
               machineId: record.request.source.machineId,
               committedFenceMs: 1,
+              publisherGeneration: '1',
             },
           });
         } catch (error) {

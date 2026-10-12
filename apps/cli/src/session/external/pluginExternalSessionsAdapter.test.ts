@@ -9,6 +9,7 @@ import {
 
 import {
   createPluginExternalSessionsAdapter,
+  resolvePluginExternalSessionFollowTarget,
   mapPluginExternalTranscriptItem,
   type PluginExternalSessionsProviderOps,
 } from './pluginExternalSessionsAdapter';
@@ -66,6 +67,31 @@ const target = {
 } as const;
 
 describe('createPluginExternalSessionsAdapter', () => {
+  it('retains privacy-safe follow identity failure reasons and nested provider codes', async () => {
+    const source = { agentId: 'claude' as const, sourceId: 'source-1',
+      source: { kind: 'claudeConfig' }, supportsFollow: true };
+    const params = { agentId: 'claude', remoteSessionId: 'remote-1', sources: [source], isCurrent: () => true,
+      resolveProviderOps: async () => ({ validateSource: async ({ source }: { source: ExternalSessionsSource }) => ({ ok: true as const, source }),
+        resolveLinkIdentity: async () => { throw new ExternalSessionProviderFailureError({ code: 'source_unreachable',
+          operation: 'resolveLinkIdentity', message: 'secret transcript and credential' }); } }) };
+    await expect(resolvePluginExternalSessionFollowTarget({ ...params, remoteSessionId: '' })).resolves.toMatchObject({
+      status: 'unavailable', diagnostic: { reason: 'invalid_identity' } });
+    await expect(resolvePluginExternalSessionFollowTarget({ ...params, sources: [{ ...source, isCurrent: () => false }] })).resolves.toMatchObject({
+      status: 'unavailable', diagnostic: { reason: 'no_eligible_source', matchingSources: 1, currentSources: 0, followCapableSources: 0 } });
+    const failure = await resolvePluginExternalSessionFollowTarget(params);
+    expect(failure).toMatchObject({ status: 'unavailable', code: 'plugin_external_follow_identity_unavailable',
+      diagnostic: { reason: 'provider_operation_failed', providerCode: 'source_unreachable' } });
+    expect(JSON.stringify(failure)).not.toContain('secret');
+    await expect(resolvePluginExternalSessionFollowTarget({ ...params, boundSource: { kind: 'claudeConfig', configDir: '/retained' },
+      resolveProviderOps: async () => ({ validateSource: async () => ({ ok: true as const, source: { kind: 'claudeConfig' } }) }) })).resolves.toMatchObject({
+      status: 'unavailable', diagnostic: { reason: 'retained_source_identity_mismatch' } });
+    await expect(resolvePluginExternalSessionFollowTarget({ ...params, boundSource: source.source,
+      resolveProviderOps: async () => ({ validateSource: async () => {
+        throw new ExternalSessionProviderFailureError({ code: 'source_unreachable', operation: 'validateSource',
+          message: 'secret retained source credential' });
+      } }) })).resolves.toMatchObject({ status: 'unavailable',
+        diagnostic: { reason: 'retained_source_validation_failed', providerCode: 'source_unreachable' } });
+  });
   it('returns separate domain-author and source-bearing composition authorities', () => {
     const composition = createPluginExternalSessionsAdapter({
       isCurrent: () => true,
@@ -799,6 +825,7 @@ describe('createPluginExternalSessionsAdapter', () => {
     })).resolves.toEqual({
       status: 'unavailable',
       code: 'plugin_external_follow_identity_unavailable',
+      diagnostic: { reason: 'source_identity_mismatch' },
     });
   });
 
@@ -845,6 +872,7 @@ describe('createPluginExternalSessionsAdapter', () => {
     })).resolves.toEqual({
       status: 'unavailable',
       code: 'plugin_external_follow_identity_ambiguous',
+      diagnostic: { reason: 'identity_ambiguous' },
     });
     const resolveWithLegacyExtra = adapter.compositionPort.resolveFollowTarget as (
       input: Readonly<{
@@ -860,6 +888,7 @@ describe('createPluginExternalSessionsAdapter', () => {
     })).resolves.toEqual({
       status: 'unavailable',
       code: 'plugin_external_follow_identity_ambiguous',
+      diagnostic: { reason: 'identity_ambiguous' },
     });
   });
 
@@ -913,6 +942,7 @@ describe('createPluginExternalSessionsAdapter', () => {
     })).resolves.toEqual({
       status: 'unavailable',
       code: 'plugin_external_follow_identity_unavailable',
+      diagnostic: { reason: 'provider_operation_failed', providerCode: 'agent_unavailable' },
     });
   });
 
@@ -2990,6 +3020,7 @@ describe('createPluginExternalSessionsAdapter', () => {
       followOutcome: {
         status: 'unavailable',
         code: 'plugin_external_follow_identity_unavailable',
+        diagnostic: { reason: 'source_validation_failed' },
       },
       providerEffectCalls: { list: 0, read: 0, follow: 0 },
     });

@@ -1327,11 +1327,12 @@ export function reconstructPersistedTakeoverTargetFromRetiredMetadata(
 ): LoadedLinkedExternalSession | null {
   const historyImport = resolveExternalHistoryImportV1FromMetadata(
     input.metadata,
+    'stored',
   );
   if (historyImport.state !== 'valid') return null;
   const imported = historyImport.historyImport;
   const source = input.record.request.source;
-  const linkedSession = resolveLinkedExternalSessionMetadataV1(input.metadata);
+  const linkedSession = resolveLinkedExternalSessionMetadataV1(input.metadata, 'stored');
   if (
     input.rawSession.currentStorageState !== 'hosted'
     || linkedSession.ok

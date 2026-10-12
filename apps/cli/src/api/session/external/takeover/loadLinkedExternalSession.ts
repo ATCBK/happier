@@ -58,7 +58,7 @@ function canonicalizeExternalSessionRuntimeDescriptorIngress(value: unknown): un
     return value;
   }
 
-  const metadata = normalizeLinkedExternalSessionMetadataV1(value) ?? value as Record<string, unknown>;
+  const metadata = normalizeLinkedExternalSessionMetadataV1(value, 'stored') ?? value as Record<string, unknown>;
   const externalSession = readNonAuthoritativeLinkedExternalSessionV1FromMetadata(metadata);
   const runtimeDescriptor = readExternalAgentSurfaceRuntimeDescriptorV1(metadata);
   const canonicalMetadata = applyRuntimeDescriptorSessionStateBinding(
@@ -189,9 +189,9 @@ function inspectPersistedLinkedExternalSessionFromRaw(params: Readonly<{
     };
   }
   const linkedMetadataResolution =
-    resolveLinkedExternalSessionMetadataV1(metadata);
+    resolveLinkedExternalSessionMetadataV1(metadata, 'stored');
   const historyImportResolution =
-    resolveExternalHistoryImportV1FromMetadata(metadata);
+    resolveExternalHistoryImportV1FromMetadata(metadata, 'stored');
   if (historyImportResolution.state === 'invalid') {
     return {
       ok: false,
