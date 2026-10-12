@@ -184,7 +184,7 @@ const HomeClaimWithCode = React.memo(function HomeClaimWithCode(props: HomeClaim
  */
 const HostedPersonalHomeClaim = React.memo(function HostedPersonalHomeClaim(props: HomeClaimSetupProps) {
     const { scope } = props;
-    const control = useLocalRelayRuntimeControl(props.runner ? { runner: props.runner } : {});
+    const control = useLocalRelayRuntimeControl({ runner: props.runner, actionScope: scope, onApprovalPending: props.requestApproval });
     const [claiming, setClaiming] = React.useState(false);
     const [failed, setFailed] = React.useState(false);
     const profile = getServerProfileById(scope.serverId);

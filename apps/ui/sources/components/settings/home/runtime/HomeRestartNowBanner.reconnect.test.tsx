@@ -35,8 +35,8 @@ vi.mock('@/components/systemTasks/createTauriSystemTaskBridge', () => ({ createT
             protocolVersion: 1, taskId, ok: true,
             data: taskId.endsWith('relay.runtime.status.v1') ? {
                 channel: 'stable', mode: 'user', installed: true, dataPresent: true, version: '0.3',
-                relayUrl: 'https://restart-home.test', healthy: true,
-                purpose: { kind: 'personal-home', canonicalServerUrl: 'https://restart-home.test' },
+                relayUrl: 'http://127.0.0.1:3005', healthy: true,
+                purpose: { kind: 'personal-home', canonicalServerUrl: 'http://127.0.0.1:3005' },
                 anonymousSignupEnabled: false, service: { active: true, enabled: true },
             } : {},
         }));
@@ -64,7 +64,8 @@ const loadModules = async () => {
     const modal = await import('@/modal');
     const runtime = await import('../governance/HomeAdministrationRuntimeScreen');
     const profiles = await import('@/sync/domains/server/serverProfiles');
-    return { store, applied, server, settings, wakes, sections, buttons, modal, runtime, profiles };
+    const items = await import('@/components/ui/lists/Item');
+    return { store, applied, server, settings, wakes, sections, buttons, modal, runtime, profiles, items };
 };
 let modules: Awaited<ReturnType<typeof loadModules>>;
 beforeAll(async () => {
@@ -79,23 +80,42 @@ afterEach(async () => {
     desktop.starts.length = 0;
     desktop.listeners.clear();
     desktop.loseRestartAdmission = false;
+    vi.mocked(modules.modal.Modal.alert).mockClear();
+    vi.mocked(modules.modal.Modal.alertAsync).mockClear();
     vi.unstubAllGlobals();
     await home.reset();
 });
 
 async function hostingHome() {
     vi.stubGlobal('isTauri', true);
-    const serverId = await home.addHome({ name: 'Restart Home', serverUrl: 'https://restart-home.test', accountId: 'account', serverIdentityId: 'srv_restart-home' });
+    const serverId = await home.addHome({ name: 'Restart Home', serverUrl: 'http://127.0.0.1:3005', accountId: 'account', serverIdentityId: 'srv_restart-home' });
     await modules.profiles.adoptPersonalHomeProfileAndComplete({
         source: 'desktop-personal-home',
-        descriptor: { homeServerIdentityId: 'srv_restart-home', canonicalServerUrl: 'https://restart-home.test' },
+        descriptor: { homeServerIdentityId: 'srv_restart-home', canonicalServerUrl: 'http://127.0.0.1:3005' },
     });
     home.answer(serverId, '/v1/home/governance/get', { body: homeGovernanceProjectionFixture({ viewer: { accountId: 'account', homeRole: 'owner', status: 'active' } }) });
     modules.applied.publishAppliedActiveServerSnapshot(modules.server.getActiveServerSnapshot(), true);
-    modules.store.storage.setState({ profileScope: { serverId, accountId: 'account' }, settingsScope: { serverId, accountId: 'account' } });
+    const scope = { serverId: modules.profiles.resolveServerProfileScopeIdForIdentifier(serverId), accountId: 'account' };
+    modules.store.storage.setState({ profileScope: scope, settingsScope: scope });
     modules.store.storage.getState().setSocketStatus('connected');
     waiveRestartApproval(serverId);
     return serverId;
+}
+
+async function renderRuntime(serverId: string) {
+    const screen = await renderScreen(<modules.runtime.HomeAdministrationRuntimeScreen serverId={serverId} />);
+    await waitForHomeGovernance(() => {
+        const ids = collectRenderedTestIds(screen.tree.toJSON());
+        expect(ids.some(id => ['home-runtime-version', 'home-admin-unavailable', 'home-admin-signed-out', 'home-admin-unknown-home'].includes(id))).toBe(true);
+    });
+    expect(collectRenderedTestIds(screen.tree.toJSON())).toContain('home-runtime-version');
+    return screen;
+}
+
+function runtimeItem(screen: Awaited<ReturnType<typeof renderRuntime>>, testID: string) {
+    const item = screen.tree.findAllByType(modules.items.Item).find(row => row.props.testID === testID);
+    expect(item, testID).toBeDefined();
+    return item!;
 }
 
 function waiveRestartApproval(serverId: string) {
@@ -111,13 +131,16 @@ function waiveRestartApproval(serverId: string) {
 it.each(['home-runtime-pending-restart.action', 'settings.personalHomeRuntime.restart'])('hosting control %s shares busy completion and reconciles pending settings', async (controlId) => {
     const serverId = await hostingHome();
     home.answer(serverId, SETTINGS_GET, { body: projection(true) });
-    const screen = await renderScreen(<modules.runtime.HomeAdministrationRuntimeScreen serverId={serverId} />);
-    await waitForHomeGovernance(() => expect(collectRenderedTestIds(screen.tree.toJSON())).toContain(controlId));
+    const screen = await renderRuntime(serverId);
+    await waitForHomeGovernance(() => {
+        expect(collectRenderedTestIds(screen.tree.toJSON())).toContain(controlId);
+        expect(runtimeItem(screen, 'settings.personalHomeRuntime.restart').props.disabled).toBe(false);
+    });
     await screen.tree.pressByTestIdAsync(controlId);
-    await waitForHomeGovernance(() => expect(desktop.listeners.size > 0).toBe(true));
+    await waitForHomeGovernance(() => expect([...desktop.listeners.keys()].some(id => id.endsWith('relay.runtime.restart.v1'))).toBe(true));
     const restartTask = [...desktop.listeners.keys()].find(id => id.endsWith('relay.runtime.restart.v1'));
     expect(restartTask).toBeDefined();
-    expect(screen.tree.findByTestId('settings.personalHomeRuntime.restart').props.disabled).toBe(true);
+    expect(runtimeItem(screen, 'settings.personalHomeRuntime.restart').props.disabled).toBe(true);
     expect(screen.tree.findByTestId('home-runtime-pending-restart.action').props.disabled).toBe(true);
     expect(home.requestsFor(SETTINGS_GET)).toHaveLength(1);
     const otherControl = controlId === 'settings.personalHomeRuntime.restart' ? 'home-runtime-pending-restart.action' : 'settings.personalHomeRuntime.restart';
@@ -129,19 +152,21 @@ it.each(['home-runtime-pending-restart.action', 'settings.personalHomeRuntime.re
     home.answer(serverId, SETTINGS_GET, { body: projection(false), respondAfter: readGate });
     await act(async () => desktop.listeners.get(restartTask!)!.onResult({ protocolVersion: 1, taskId: restartTask, ok: true, data: { healthy: true } }));
     await waitForHomeGovernance(() => expect(home.requestsFor(SETTINGS_GET)).toHaveLength(2));
-    expect(screen.tree.findByTestId('settings.personalHomeRuntime.restart').props.disabled).toBe(true);
+    expect(runtimeItem(screen, 'settings.personalHomeRuntime.restart').props.disabled).toBe(true);
     expect(collectRenderedTestIds(screen.tree.toJSON())).toContain('home-runtime-settings-unknown');
     expect(JSON.stringify(screen.tree.toJSON())).not.toContain('homeGovernance.runtime.pendingRestart');
     await act(async () => releaseRead());
     await waitForHomeGovernance(() => expect(collectRenderedTestIds(screen.tree.toJSON())).not.toContain('home-runtime-pending-restart'));
-    expect(screen.tree.findByTestId('settings.personalHomeRuntime.restart').props.disabled).toBe(false);
+    expect(runtimeItem(screen, 'settings.personalHomeRuntime.restart').props.disabled).toBe(false);
 });
 
 it('Runtime shows initial settings failure with Retry rather than interpreting it as no pending changes', async () => {
     const serverId = await hostingHome();
     home.answer(serverId, SETTINGS_GET, { status: 503, body: { error: 'home_unavailable' } });
-    const screen = await renderScreen(<modules.runtime.HomeAdministrationRuntimeScreen serverId={serverId} />);
-    await waitForHomeGovernance(() => expect(collectRenderedTestIds(screen.tree.toJSON())).toContain('home-runtime-settings-retry'));
+    const screen = await renderRuntime(serverId);
+    await waitForHomeGovernance(() => expect(home.requestsFor(SETTINGS_GET)).toHaveLength(1));
+    await act(async () => {});
+    expect(collectRenderedTestIds(screen.tree.toJSON())).toContain('home-runtime-settings-retry');
     expect(collectRenderedTestIds(screen.tree.toJSON())).toContain('home-runtime-settings-unknown');
     home.answer(serverId, SETTINGS_GET, { body: projection(true) });
     await screen.tree.pressByTestIdAsync('home-runtime-settings-retry');
@@ -153,24 +178,27 @@ it('keeps a Home search approval reachable on Runtime without claiming completio
     const serverId = await hostingHome();
     home.answer(serverId, SETTINGS_GET, { body: projection(false) });
     await home.requireUiApproval(serverId, 'home.search.rebuild');
-    const screen = await renderScreen(<modules.runtime.HomeAdministrationRuntimeScreen serverId={serverId} />);
-    await waitForHomeGovernance(() => expect(screen.tree.findByTestId('settings.personalHomeRuntime.repairSearch').props.disabled).toBe(false));
+    const screen = await renderRuntime(serverId);
+    await waitForHomeGovernance(() => expect(runtimeItem(screen, 'settings.personalHomeRuntime.repairSearch').props.disabled).toBe(false));
     await screen.tree.pressByTestIdAsync('settings.personalHomeRuntime.repairSearch');
-    await waitForHomeGovernance(() => expect(collectRenderedTestIds(screen.tree.toJSON())).toContain('home-runtime-search-approval'));
+    await waitForHomeGovernance(() => expect(home.requestsFor('/v1/artifacts').length).toBeGreaterThan(0));
+    await act(async () => {});
+    expect(collectRenderedTestIds(screen.tree.toJSON())).toContain('home-runtime-search-approval');
     expect(modules.modal.Modal.alert).not.toHaveBeenCalled();
 });
 
 it('Runtime marks post-reconnect settings unknown after a typed read failure and Retry adopts the fresh projection', async () => {
     const serverId = await hostingHome();
     home.answer(serverId, SETTINGS_GET, { body: projection(true) });
-    const screen = await renderScreen(<modules.runtime.HomeAdministrationRuntimeScreen serverId={serverId} />);
+    const screen = await renderRuntime(serverId);
     await waitForHomeGovernance(() => expect(collectRenderedTestIds(screen.tree.toJSON())).toContain('home-runtime-pending-restart.action'));
     desktop.loseRestartAdmission = true;
     await screen.tree.pressByTestIdAsync('home-runtime-pending-restart.action');
     expect(JSON.stringify(screen.tree.toJSON())).toContain('homeGovernance.runtime.waitingForHome');
     home.answer(serverId, SETTINGS_GET, { status: 503, body: { error: 'home_unavailable' } });
-    await act(async () => modules.wakes.publishHomeAccountChange(serverId, undefined, { source: 'connected' }));
-    await waitForHomeGovernance(() => expect(collectRenderedTestIds(screen.tree.toJSON())).toContain('home-runtime-settings-unknown'));
+    await act(async () => modules.wakes.publishHomeAccountChange(modules.profiles.resolveServerProfileScopeIdForIdentifier(serverId), undefined, { source: 'connected' }));
+    await waitForHomeGovernance(() => expect(JSON.stringify(screen.tree.toJSON())).not.toContain('homeGovernance.runtime.waitingForHome'));
+    expect(collectRenderedTestIds(screen.tree.toJSON())).toContain('home-runtime-settings-unknown');
     expect(collectRenderedTestIds(screen.tree.toJSON())).not.toContain('home-runtime-pending-restart');
     expect(JSON.stringify(screen.tree.toJSON())).not.toContain('homeGovernance.runtime.waitingForHome');
     home.answer(serverId, SETTINGS_GET, { body: projection(false) });

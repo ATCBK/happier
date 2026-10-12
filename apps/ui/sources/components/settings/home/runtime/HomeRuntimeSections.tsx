@@ -2,11 +2,13 @@ import * as React from 'react';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { useUnistyles } from 'react-native-unistyles';
 import type { HomeSettingsProjectionV1 } from '@happier-dev/protocol/home/governance';
+import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprovalPendingNotice';
 
 import type { HomeAdministrationContext } from '@/components/settings/home/governance/homeAdministrationContext';
 import { homeAdministrationRuntimePath } from '@/components/settings/home/governance/homeAdministrationRoutes';
 import { PersonalHomeRuntimeControlSection } from '@/components/settings/server/localControl/PersonalHomeRuntimeControlSection';
 import { usePersonalHomeRuntimeOperations } from '@/components/settings/server/localControl/usePersonalHomeRuntimeOperations';
+import { useLocalRelayRuntimeControl } from '@/components/settings/server/localControl/useLocalRelayRuntimeControl';
 import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Icon } from '@/components/ui/icons/Icon';
@@ -193,7 +195,7 @@ export function restartNowAction(
 type HomeRestartNowBannerProps = Readonly<{
     context: HomeAdministrationContext;
     executor: HomeRuntimeExecutor;
-    pendingCount: number;
+    pendingCount: number | null;
     /** The pending settings by name, said before where the restart happens (Server settings). */
     pendingSummary?: string;
     /**
@@ -214,7 +216,7 @@ function HomeRestartNowBannerContent(props: HomeRestartNowBannerProps & Readonly
 }>) {
     const { context, executor, pendingCount, discard } = props;
     const { restarting, waitingForHome } = props.restartState;
-    if (pendingCount === 0 && !restarting) return null;
+    if ((pendingCount === null || pendingCount === 0) && !restarting) return null;
     const where = executor.kind === 'deployment'
         ? t('homeGovernance.runtime.restartFromDeployment')
         : executor.kind === 'hosting_desktop' || executor.kind === 'remote_host' || executor.kind === 'connected_machine'
@@ -238,7 +240,7 @@ function HomeRestartNowBannerContent(props: HomeRestartNowBannerProps & Readonly
     return (
         <AttentionBanner
             testID="home-runtime-pending-restart"
-            title={t('homeGovernance.runtime.pendingRestart', { count: pendingCount })}
+            title={pendingCount === null ? t('homeGovernance.runtime.waitingForHome') : t('homeGovernance.runtime.pendingRestart', { count: pendingCount })}
             description={waitingForHome ? t('homeGovernance.runtime.waitingForHome') : props.pendingSummary ? `${props.pendingSummary} ${where}` : where}
             tone={restarting ? 'neutral' : 'warning'}
             accessibilityLiveRegion="polite"
@@ -354,31 +356,75 @@ function HomeRuntimeSectionContent(props: HomeRuntimeSectionProps & Readonly<{
     );
 }
 
-/** The Runtime page's two controls share one restart operation and reconnect observation. */
+type RuntimeRestartSectionsProps = HomeRuntimeSectionProps & Readonly<{ pendingCount: number | null }>;
+
+/** Every Runtime restart control shares one operation and its completion refresh. */
 export const HomeRuntimeRestartSections = React.memo(function HomeRuntimeRestartSections(
-    props: HomeRuntimeSectionProps & Readonly<{ pendingCount: number }>,
+    props: RuntimeRestartSectionsProps,
 ) {
+    return props.executor.kind === 'hosting_desktop' && props.context.projection.capabilities.manageHomeSettings
+        ? <HostingRuntimeRestartSections {...props} />
+        : <RuntimeRestartSections {...props} />;
+});
+
+function HostingRuntimeRestartSections(props: RuntimeRestartSectionsProps) {
+    const controller = useLocalRelayRuntimeControl({ actionScope: props.context.scope });
+    const refreshStatus = controller.refreshStatus;
+    const onRestarted = React.useCallback(async () => {
+        await props.onRestarted?.();
+        await refreshStatus();
+    }, [props.onRestarted, refreshStatus]);
+    return <RuntimeRestartSections {...props} onRestarted={onRestarted} localController={controller} />;
+}
+
+function RuntimeRestartSections(props: RuntimeRestartSectionsProps & Readonly<{
+    localController?: ReturnType<typeof useLocalRelayRuntimeControl>;
+}>) {
     const restartState = useHomeRuntimeRestart(props.context, props.executor, props.onRestarted);
     return (
         <>
             <HomeRestartNowBannerContent {...props} restartState={restartState} />
             <HomeRuntimeSectionContent {...props} restartState={restartState} />
+            {props.localController ? <HostedPersonalHomeRuntimeSection
+                context={props.context}
+                executor={props.executor}
+                restartState={restartState}
+                controller={props.localController}
+            /> : null}
         </>
     );
-});
+}
 
 /**
  * The hosting desktop's own controls for its Personal Home — status, backups, restore, move,
  * search repair, logs, uninstall and erase — rendered once, with the same hook and operations the
  * Homes page used to host (Lane 07 §15.3 placement, AM-3).
  */
-export const HostedPersonalHomeRuntimeSection = React.memo(function HostedPersonalHomeRuntimeSection() {
-    const { personalHomeProfile, operations } = usePersonalHomeRuntimeOperations();
+export const HostedPersonalHomeRuntimeSection = React.memo(function HostedPersonalHomeRuntimeSection(props: Readonly<{
+    context: HomeAdministrationContext;
+    executor: HomeRuntimeExecutor;
+    restartState: HomeRuntimeRestartState;
+    controller: ReturnType<typeof useLocalRelayRuntimeControl>;
+}>) {
+    const router = useRouter();
+    const { personalHomeProfile, operations, searchApproval } = usePersonalHomeRuntimeOperations({ actionScope: props.context.scope });
+    const approval = props.controller.approval.approvalPending ? props.controller.approval : searchApproval;
+    const restartAction = restartNowAction(props.context, props.executor, props.restartState);
     return (
-        <PersonalHomeRuntimeControlSection
-            operations={operations}
-            {...(personalHomeProfile ? { homeLabel: resolveHomeDisplayLabel(personalHomeProfile, personalHomeProfile.id) } : {})}
-        />
+        <>
+            {approval.approvalPending && approval.approvalId ? <ActionApprovalPendingNotice
+                testID="home-runtime-search-approval"
+                message={t('secrets.catalog.approvalPending')}
+                onOpenApproval={() => router.pushRetainingCurrent(`/inbox/approvals/${encodeURIComponent(approval.approvalId!)}?serverId=${encodeURIComponent(props.context.scope.serverId)}`)}
+            /> : null}
+            <PersonalHomeRuntimeControlSection
+                controller={props.controller}
+                {...(restartAction ? { restartAction } : {})}
+                operations={operations}
+                repairSearchPending={searchApproval.approvalPending}
+                {...(personalHomeProfile ? { homeLabel: resolveHomeDisplayLabel(personalHomeProfile, personalHomeProfile.id) } : {})}
+            />
+        </>
     );
 });
 
@@ -399,8 +445,9 @@ export const HomeBackupsSection = React.memo(function HomeBackupsSection(props: 
             : executor.hostName
                 ? t('homeGovernance.runtime.backupsFromHost', { host: executor.hostName })
                 : t('homeGovernance.runtime.backupsFromHostingComputer');
+    // One label: the row already says "Backups", so its section carries no second title of the same word.
     return (
-        <ItemGroup title={t('homeGovernance.runtime.backups')}>
+        <ItemGroup>
             <Item
                 testID={`home-data-backups:${executor.kind}`}
                 icon={executor.kind === 'hosting_desktop' ? <Icon name="hard-drives" /> : undefined}

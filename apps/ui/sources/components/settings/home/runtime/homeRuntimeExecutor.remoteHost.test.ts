@@ -92,7 +92,7 @@ it.each([true, false, 'reject', 'cancel', 'observation_failed'] as const)('joins
         return;
     }
     await approval!.onExecuted(artifact!);
-    expect(manual.runner.listActiveTasks!()).toHaveLength(1);
+    expect(manual.runner.listActiveTasks!(), JSON.stringify({ decision, observed })).toHaveLength(1);
     const taskId = manual.runner.listActiveTasks!()[0].taskId;
     expect(manual.bridge.start.mock.calls[0][0].params).toMatchObject({ action: 'relayRuntime.restart' });
     expect(settled).toBe(false);
