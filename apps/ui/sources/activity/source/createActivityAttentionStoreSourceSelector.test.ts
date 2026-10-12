@@ -32,6 +32,32 @@ function expectNoObjectKeysOrValuesOnRecords(action: () => void, guardedRecords:
 }
 
 describe('createActivityAttentionStoreSourceSelector', () => {
+    it.each(['hydrated', 'list'] as const)('updates pending-navigation eligibility when %s content availability changes', async (kind) => {
+        const { buildPendingNavigationFromSource } = await import('./buildPendingNavigationFromSource');
+        const session = createSessionFixture({ id: 'waiting', serverId: 'home-a', active: true,
+            encryptionMode: 'e2ee', encryptedContentAvailability: 'ready', viewer: {
+                readState: { state: 'not_started' }, relevance: { relevant: true, reasons: ['owned_by_me'] },
+                follow: { follows: false, notificationLevel: null }, notification: { level: 'important', source: 'owner' },
+                attention: { needsAttention: true, reasons: ['permission_required'], primary: 'permission_required', presentation: 'full' },
+            },
+        });
+        const state = storage.getState();
+        const selector = createActivityAttentionStoreSourceSelector({}, { includeSessionMessages: false });
+        const sourceFor = (availability: typeof session.encryptedContentAvailability) => {
+            const next = { ...session, encryptedContentAvailability: availability };
+            return { ...selector({ ...state, isDataReady: true, sessions: kind === 'hydrated' ? { waiting: next } : {},
+                sessionListRowsByServerId: kind === 'list' ? { 'home-a': { waiting: buildSessionListRenderableFromSession(next) } } : {},
+                ordinarySessionListMembershipByServerId: { 'home-a': ['waiting'] },
+                sessionListIndexByServerId: {}, concurrentSessionListCacheByServerId: {},
+            }), activeServerId: 'home-a', personalSessionListMembershipByServerId: { 'home-a': ['waiting'] } };
+        };
+        const ready = sourceFor('ready');
+        expect(buildPendingNavigationFromSource({ source: ready, nowMs: 20 })).toHaveLength(1);
+        const unavailable = sourceFor('encrypted_content_unavailable');
+        expect(buildPendingNavigationFromSource({ source: unavailable, nowMs: 20 })).toEqual([]);
+        const recovered = sourceFor('ready');
+        expect(buildPendingNavigationFromSource({ source: recovered, nowMs: 20 })).toHaveLength(1);
+    });
     it('does no collection work on unrelated store ticks and refreshes a changed attention row', () => {
         let visits = 0;
         const watch = <T extends object>(value: T): T => new Proxy(value, {

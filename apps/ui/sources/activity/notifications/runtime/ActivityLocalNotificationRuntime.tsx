@@ -40,6 +40,7 @@ import {
 import { buildActivityLocalNotificationContent } from '../buildActivityLocalNotificationContent';
 import { sendExpoLocalNotification } from '../channels/sendExpoLocalNotification';
 import { sendTauriLocalNotification } from '../channels/sendTauriLocalNotification';
+import { GuardStopWarningDesktopBanners } from './GuardStopWarningDesktopBanners';
 import { isActivityLocalNotificationMutedForWake, subscribeActivityLocalNotifications, type ActivityLocalNotificationEvent } from './activityLocalNotificationBus';
 
 function resolveLocalNotificationEventKind(event: ActivityLocalNotificationEvent): ActivityAttentionDeliveryEventKind {
@@ -296,5 +297,6 @@ export function ActivityLocalNotificationRuntime(): React.ReactElement | null {
         audienceSource.sessionListHomeObservationByServerId,
     ]);
 
-    return null;
+    // Phones get the guard's stop warning as a push; a desktop host announces it locally.
+    return isDesktopHost() ? <GuardStopWarningDesktopBanners /> : null;
 }

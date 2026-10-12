@@ -15,6 +15,8 @@ import {
     resolveSavedServerProfileByUrl,
 } from '@/sync/domains/server/serverProfiles';
 import { createServerUrlComparableKey } from '@/sync/domains/server/url/serverUrlCanonical';
+import { machinePageHref } from '@/components/machines/page/machinePageHref';
+import { beginMachinePageTabIntent } from '@/components/machines/page/machinePageIntent';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { clearPendingNotificationNav, getPendingNotificationNav, setPendingNotificationNav } from '@/sync/domains/pending/pendingNotificationNav';
 import {
@@ -73,6 +75,7 @@ function resolveNotificationCommandRoute(command: ActivityInteractionCommand): s
         case 'focusComposer':
         case 'openSettings':
         case 'openWorkflowRun':
+        case 'openMachine':
             return command.route;
         case 'executeAction':
             return createActivitySurfaceSessionRoute(command.defaultSessionId, command.target.serverId);
@@ -84,6 +87,8 @@ function resolveNotificationCommandRoute(command: ActivityInteractionCommand): s
 
 function resolveNotificationCommandRouteForVerifiedHome(command: ActivityInteractionCommand, serverId: string): string | null {
     switch (command.kind) {
+        case 'openMachine':
+            return machinePageHref({ door: 'rail', target: { machineId: command.machineId, serverId }, tab: command.tab });
         case 'openSession':
         case 'focusComposer':
             return createActivitySurfaceSessionRoute(command.sessionId, serverId);
@@ -99,6 +104,7 @@ function resolveNotificationCommandServerUrl(command: ActivityInteractionCommand
         case 'openSession':
         case 'focusComposer':
         case 'openWorkflowRun':
+        case 'openMachine':
             return command.serverUrl;
         case 'executeAction':
             return command.target.serverUrl ?? null;
@@ -115,6 +121,7 @@ function resolveNotificationCommandServerId(command: ActivityInteractionCommand)
         case 'openSession':
         case 'focusComposer':
         case 'openWorkflowRun':
+        case 'openMachine':
             return command.serverId;
         case 'executeAction':
             return command.target.serverId;
@@ -310,6 +317,10 @@ export function useNotificationResponseRouting(params: Readonly<{
 
             const serverUrl = resolveNotificationCommandServerUrl(command);
             const serverId = resolveNotificationCommandServerId(command);
+            // Opening a disk alert is the person's intent to prepare the low-disk pile on that exact Home (STO-23).
+            if (command.kind === 'openMachine' && command.serverId) {
+                beginMachinePageTabIntent({ serverId: command.serverId, machineId: command.machineId }, command.tab);
+            }
             const routeToServerSettingsForUrl = (url: string) => {
                 router.push(`/settings/server/add?address=${encodeURIComponent(url)}&source=notification`);
             };
@@ -442,6 +453,7 @@ export function useNotificationResponseRouting(params: Readonly<{
                 || command.kind === 'focusComposer'
                 || command.kind === 'openSettings'
                 || command.kind === 'openWorkflowRun'
+                || command.kind === 'openMachine'
             ) {
                 router.push(route);
             }

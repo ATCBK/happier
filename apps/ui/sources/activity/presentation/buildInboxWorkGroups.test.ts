@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { ApprovalRequestV2Schema, buildApprovalRequestArtifactHeaderV1 } from '@happier-dev/protocol';
 
-import { createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
+import { createAutomationRunFixture, createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
+import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
 import type { Session } from '@/sync/domains/state/storageTypes';
-import { workflowRunRowFromSummary } from '@/sync/store/domains/workflowRuns';
+import { workflowRunRowFromAutomationRun, workflowRunRowFromSummary } from '@/sync/store/domains/workflowRuns';
 
 import type { InboxSessionAttentionEntry } from './buildInboxSessionPresentation';
 import { buildInboxWorkGroups, resolveInboxWorkRoot, type InboxWorkGroup } from './buildInboxWorkGroups';
@@ -43,7 +45,8 @@ function run(id: string, originSessionId?: string) {
 function shape(groups: readonly InboxWorkGroup[]) {
     return groups.map((group) => ({
         root: group.root.kind === 'lead' ? `lead:${group.root.sessionId}`
-            : group.root.kind === 'run' ? `run:${group.root.runId}` : 'other',
+            : group.root.kind === 'run' ? `run:${group.root.runId}`
+                : group.root.kind === 'automation' ? `automation:${group.root.automationId}` : 'other',
         items: group.items.map((item) => item.key),
     }));
 }
@@ -55,13 +58,59 @@ const loose = session('loose');
 const step = session('step');
 const sessions = new Map([lead, worker, grandchild, loose, step].map((value) => [value.id, value]));
 
-const EMPTY = { stalledSessions: [], landings: [], snoozed: [] } as const;
+const EMPTY = { stalledSessions: [], landings: [], snoozed: [], automationRuns: [], openApprovals: [], automationServerId: 'home-a' } as const;
 const resolveSession = (id: string) => sessions.get(id);
 const readOrigin = (value: InboxSessionAttentionEntry) => (
     (value.candidate.awareness as { origin?: { runId?: string } }).origin?.runId ?? null
 );
 
 describe('buildInboxWorkGroups (ORC R-10)', () => {
+    it('provides the held step label from the existing Run summary and clears it when no hold remains', () => {
+        const row = run('held-run');
+        const heldRow = { ...row, summary: { ...row.summary!, heldStep: {
+            invocationId: 'held-review', label: 'Review the changelog', laneLabel: 'Changelog',
+        } } };
+        const input = { ...EMPTY, sessionEntries: [], workflowRuns: [heldRow], resolveSession, resolveOriginRunId: readOrigin };
+        const first = buildInboxWorkGroups(input);
+        expect(first[0]?.items[0]).toMatchObject({ heldStepLabel: 'Review the changelog', heldStepLaneLabel: 'Changelog' });
+        expect(buildInboxWorkGroups(input, first)[0]?.items[0]).toBe(first[0]?.items[0]);
+        const settled = buildInboxWorkGroups({ ...input, workflowRuns: [row] }, first);
+        expect(settled[0]?.items[0]).toMatchObject({ heldStepLabel: null, heldStepLaneLabel: null });
+    });
+    it('puts decisions and approvals before passive attention in Other sessions', () => {
+        const base = entry(session('passive'));
+        const passive = { ...base, candidate: { ...base.candidate, personalAttention: { ...base.candidate.personalAttention, reasons: ['manual' as const] } }, pendingPermissions: [], pendingUserActions: [] };
+        const decision = entry(loose);
+        const approval: DecryptedArtifact = { id: 'approval', title: 'Review', sessions: [], header: '', body: '',
+            headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1, isDecrypted: true };
+        const groups = buildInboxWorkGroups({ ...EMPTY, sessionEntries: [passive, decision], workflowRuns: [],
+            openApprovals: [approval], resolveSession, resolveOriginRunId: readOrigin });
+        expect(shape(groups)).toEqual([{ root: 'other', items: ['session:home-a:loose', 'approval:approval', 'session:home-a:passive'] }]);
+    });
+    it('folds an automation-run approval under its Automation and leaves an unrelated approval in Other', () => {
+        const request = ApprovalRequestV2Schema.parse({
+            v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+            createdBy: { surface: 'agent', sessionId: 'step' }, requestedSurface: 'agent',
+            actionId: 'session.title.set', actionArgs: { sessionId: 'step', title: 'New title' }, summary: 'Set session title',
+            executionOriginV1: { v: 1, authority: 'account_automation', surface: 'agent', serverId: 'home-a',
+                caller: { kind: 'automationRun', automationId: 'automation-1', runId: 'weekly-run',
+                    cause: { kind: 'manual', invokedAt: 1 } }, runId: 'weekly-run', sessionId: 'step',
+                actionId: 'session.title.set', requestId: 'request-1' },
+        });
+        const approval: DecryptedArtifact = { id: 'weekly-approval', header: buildApprovalRequestArtifactHeaderV1(request),
+            body: JSON.stringify(request), title: 'Set session title', sessions: ['step'],
+            headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1, isDecrypted: true };
+        const unrelated: DecryptedArtifact = { ...approval, id: 'other-approval', body: JSON.stringify({
+            ...request, executionOriginV1: { ...request.executionOriginV1, caller: { kind: 'host' }, runId: undefined },
+        }) };
+        const groups = buildInboxWorkGroups({ ...EMPTY, sessionEntries: [], workflowRuns: [],
+            automationRuns: [workflowRunRowFromAutomationRun(createAutomationRunFixture({ id: 'weekly-run' }))],
+            openApprovals: [approval, unrelated], resolveSession, resolveOriginRunId: readOrigin });
+        expect(shape(groups)).toEqual([
+            { root: 'automation:automation-1', items: ['automation-run:weekly-run', 'approval:weekly-approval'] },
+            { root: 'other', items: ['approval:other-approval'] },
+        ]);
+    });
     it('retains an unchanged row when another Inbox item updates', () => {
         const stable = entry(worker);
         const changing = entry(grandchild);
@@ -141,10 +190,11 @@ describe('buildInboxWorkGroups (ORC R-10)', () => {
 
     it('lists stalled, Landing and snoozed rows under their work root once, after what needs the person', () => {
         const groups = buildInboxWorkGroups({
+            ...EMPTY,
             sessionEntries: [entry(worker)],
             workflowRuns: [],
             stalledSessions: [grandchild, worker],
-            landings: [{ session: lead, link: { sessionId: 'lead', number: 2490, state: 'open', title: 'Retries' } }],
+            landings: [{ session: lead, link: { sessionId: 'lead', number: 2490, url: 'https://github.com/acme/widgets/pull/2490', state: 'open', title: 'Retries' } }],
             snoozed: [{ session: loose, remindAt: 5_000 }],
             resolveSession,
             resolveOriginRunId: readOrigin,

@@ -16,6 +16,15 @@ function createMetadata(overrides: Partial<NonNullable<Session['metadata']>> = {
 }
 
 describe('buildSessionActivityAttention', () => {
+    it('classifies a working Session for summaries without reading private display details', () => {
+        const session = createSessionFixture({ active: true, presence: 'online', thinking: true, thinkingAt: 950,
+            encryptionMode: 'plain', metadata: createMetadata() });
+        if (!session.metadata) throw new Error('Missing fixture metadata');
+        Object.defineProperty(session.metadata, 'name', { get: () => { throw new Error('Summary read private display details'); } });
+        const input = { session, nowMs: 1_000, presentation: 'summary' as const };
+        expect(buildSessionActivityAttention(input)).toMatchObject({ reasons: { isThinking: true }, title: '', subtitle: '' });
+    });
+
     it('does not expose retained metadata when E2EE availability is unknown', () => {
         const session = createSessionFixture({
             encryptionMode: 'e2ee',
@@ -37,6 +46,28 @@ describe('buildSessionActivityAttention', () => {
 
         expect(attention.title).not.toContain('Private retained title');
         expect(attention.subtitle).not.toContain('/private/retained/path');
+    });
+
+    it('names a Session this device opened even when its Home cannot vouch for notification content', () => {
+        // `status_only` is the Home's notification-preview ceiling (it sees no recipient envelope,
+        // e.g. a Session the owner opens through the historical owner key). This device opened the
+        // content, so in-app rows name it; off-app surfaces keep the ceiling.
+        const session = createSessionFixture({
+            encryptionMode: 'e2ee',
+            encryptedContentAvailability: 'ready',
+            metadata: createMetadata({ name: 'Readable owner session' }),
+            viewer: {
+                readState: { state: 'tracking', lastViewedSessionSeq: 0, unreadSince: 1 },
+                relevance: { relevant: true, reasons: ['owned_by_me'] },
+                follow: { follows: false, notificationLevel: null },
+                notification: { level: 'important', source: 'owner' },
+                attention: { needsAttention: true, reasons: ['unread'], primary: 'unread', presentation: 'status_only' },
+            },
+        });
+
+        const attention = buildSessionActivityAttention({ session, nowMs: 1_000 });
+
+        expect(attention.title).toBe('Readable owner session');
     });
 
     it('preserves linked external progress unread only for a tracked owner', () => {

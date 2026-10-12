@@ -1,7 +1,7 @@
 import { readSessionViewerAttentionSignature } from '@/sync/domains/session/readState/sessionViewerAttention';
 import type { AccountSettings } from '@happier-dev/protocol';
 
-import { buildActivityOverviewFromSource } from '@/activity/source/buildActivityOverviewFromSource';
+import { buildActivityOverviewSummaryFromSource } from '@/activity/source/buildActivityOverviewFromSource';
 import type { ActivityAttentionSource } from '@/activity/source/activityAttentionSourceTypes';
 import type { LocalSettings } from '@/sync/domains/settings/localSettings';
 import { localSettingsParse } from '@/sync/domains/settings/localSettings';
@@ -32,7 +32,7 @@ import { AttentionDeviceOverridesV1Schema } from '@/sync/domains/settings/attent
 import type { StorageState } from '@/sync/store/types';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 
-import { buildActivityBadgeStateFromOverview, type ActivityBadgeSessionOptions } from './buildActivityBadgeState';
+import { buildActivityBadgeStateFromAttentionCount, type ActivityBadgeSessionOptions } from './buildActivityBadgeState';
 import {
     collectRecordIds,
     forEachRecordValue,
@@ -285,12 +285,14 @@ function buildOrdinaryRowsSignature(
     buildValueSignature: (row: SessionListRenderableSession) => string,
 ): string {
     const addresses = Object.entries(state.ordinarySessionListMembershipByServerId ?? {})
-        .flatMap(([serverId, membership]) => (membership ?? []).map((sessionId) => ({ serverId, sessionId })))
-        .sort((left, right) => sessionAddressKey(left).localeCompare(sessionAddressKey(right)));
-    const liveKeys = new Set(addresses.map(sessionAddressKey));
+        .flatMap(([serverId, membership]) => (membership ?? []).map((sessionId) => {
+            const address = { serverId, sessionId };
+            return [sessionAddressKey(address), address] as const;
+        }))
+        .sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey));
+    const liveKeys = new Set(addresses.map(([key]) => key));
     for (const key of cache.keys()) if (!liveKeys.has(key)) cache.delete(key);
-    return joinSignatureParts(addresses.map(({ serverId, sessionId }) => {
-        const key = sessionAddressKey({ serverId, sessionId });
+    return joinSignatureParts(addresses.map(([key, { serverId, sessionId }]) => {
         const row = state.sessionListRowsByServerId?.[serverId]?.[sessionId];
         if (!row) return joinSignatureParts([serverId, sessionId, '']);
         const cached = cache.get(key);
@@ -696,7 +698,7 @@ export function createLocalActivityBadgeSnapshotSelector(
             return previousSnapshot;
         }
 
-        const overview = buildActivityOverviewFromSource({
+        const summary = buildActivityOverviewSummaryFromSource({
             source: buildActivitySourceFromState(state, {
                 personalSessionListCoverageComplete: params.personalSessionListCoverageComplete,
                 personalSessionListMembershipByServerId,
@@ -704,6 +706,7 @@ export function createLocalActivityBadgeSnapshotSelector(
             }),
             nowMs,
             resolveSessionOptionsForServerId: badgeModel.resolveSessionOptionsForServerId,
+            includeHydratedMessages: true,
             includeWarmSourceWhenNotReady: true,
         });
 
@@ -712,8 +715,8 @@ export function createLocalActivityBadgeSnapshotSelector(
             policyReady: true,
             hasLocalActivitySource: localSourceAvailable,
             isDataReady: state.isDataReady,
-            localBadgeState: buildActivityBadgeStateFromOverview({
-                overview,
+            localBadgeState: buildActivityBadgeStateFromAttentionCount({
+                attentionCount: summary.totalAttentionCount,
                 numericInboxCount:
                     !badgeModel.includeInboxCounts
                     || !badgeModel.deviceOverrides.badge.includeFriendRequestsInboxCount
@@ -723,7 +726,6 @@ export function createLocalActivityBadgeSnapshotSelector(
                     badgeModel.includeInboxCounts
                     && badgeModel.deviceOverrides.badge.includeDesktopNonNumericDot
                     && params.hasNonNumericInboxAttention,
-                sessionOptions: badgeModel.sessionOptions,
             }),
             sessionOptions: badgeModel.sessionOptions,
         };

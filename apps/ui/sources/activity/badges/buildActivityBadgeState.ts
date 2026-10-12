@@ -44,8 +44,20 @@ export function buildActivityBadgeStateFromOverview(params: Readonly<{
     // preserving every other canonical attention reason. Reinterpreting the
     // reason booleans here made a mixed failure+unread candidate disappear when
     // unread presentation was disabled, creating a second badge authority.
-    const selectedSessionCount = params.overview.candidates.filter((candidate) => candidate.hasAttention).length;
-    const count = Math.max(0, selectedSessionCount + Math.max(0, Math.trunc(params.numericInboxCount)));
+    return buildActivityBadgeStateFromAttentionCount({
+        attentionCount: params.overview.counts.totalAttention,
+        numericInboxCount: params.numericInboxCount,
+        hasNonNumericInboxAttention: params.hasNonNumericInboxAttention,
+    });
+}
+
+/** Both detail and summary callers supply the attention owner's count; badge arithmetic stays here. */
+export function buildActivityBadgeStateFromAttentionCount(params: Readonly<{
+    attentionCount: number;
+    numericInboxCount: number;
+    hasNonNumericInboxAttention: boolean;
+}>): ActivityBadgeState {
+    const count = Math.max(0, params.attentionCount + Math.max(0, Math.trunc(params.numericInboxCount)));
     return {
         count,
         showNonNumericDot: count === 0 && params.hasNonNumericInboxAttention,

@@ -60,7 +60,8 @@ export function deriveDeviceRemoteAlertPolicyV1(params: Readonly<{
     nativeSupport: DeviceRemoteAlertNativeSupport | null;
 }>): DeviceRemoteAlertPolicyV1 | null {
     if (!params.nativeSupport) return null;
-    if (accountSettingsParse(params.accountSettings ?? {}).sessionRemoteAlertsEnabled !== true) return null;
+    const account = accountSettingsParse(params.accountSettings ?? {});
+    if (account.sessionRemoteAlertsEnabled !== true && account.machineOfflineAlertsV1.machineIds.length === 0) return null;
 
     const local = localSettingsParse(params.localSettings ?? {});
     const overrides = AttentionDeviceOverridesV1Schema.parse(local.attentionDeviceOverridesV1);
@@ -68,8 +69,7 @@ export function deriveDeviceRemoteAlertPolicyV1(params: Readonly<{
     // and inherits the Account policy. It is not a remote mute, so the inherited
     // arm carries the canonical defaults rather than the retained override values.
     const inherits = !overrides.enabled;
-    const accountSoundVolume = accountSettingsParse(params.accountSettings ?? {})
-        .attentionDeliveryPolicyV1.sounds.volume;
+    const accountSoundVolume = account.attentionDeliveryPolicyV1.sounds.volume;
 
     const parsed = DeviceRemoteAlertPolicyV1Schema.safeParse({
         v: 1,

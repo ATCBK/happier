@@ -96,6 +96,20 @@ describe('activity remote alert taps', () => {
             defaultActionIdentifier: DEFAULT_ACTION_IDENTIFIER,
         })?.command).toMatchObject({ kind: 'openSession', sessionId: 'session-9', serverId: acme.id });
     });
+
+    it('routes a private machine offline alert to its saved Home overview and never the active Home', async () => {
+        const acme = await serverProfiles.upsertServerProfile({ serverUrl: 'https://acme.example.test', name: 'Acme' });
+        const personal = await serverProfiles.upsertServerProfile({ serverUrl: 'https://personal.example.test', name: 'Personal' });
+        await serverProfiles.setServerProfileIdentityForUrl(acme.serverUrl, 'srv_acme');
+        await serverProfiles.setServerProfileIdentityForUrl(personal.serverUrl, 'srv_personal');
+        await serverProfiles.setActiveServerId(personal.id, { scope: 'device' });
+        const data = { type: 'machine_alert', v: 1, serverId: 'srv_acme', accountId: 'account-1', machineId: 'machine/a', phase: 'offline', previewBehavior: 'status_only' };
+        expect(parseNotificationTap({ response: tapResponse(data), defaultActionIdentifier: DEFAULT_ACTION_IDENTIFIER })?.command)
+            .toMatchObject({ kind: 'openMachine', machineId: 'machine/a', serverId: acme.id, serverUrl: acme.serverUrl,
+                route: `/machines/machine%2Fa?serverId=${encodeURIComponent(acme.id)}` });
+        expect(parseNotificationTap({ response: tapResponse({ ...data, serverId: 'unknown' }), defaultActionIdentifier: DEFAULT_ACTION_IDENTIFIER })?.command)
+            .toEqual({ kind: 'ignore', reason: 'unknown_server' });
+    });
 });
 
 describe('notification server URL safety', () => {
@@ -103,5 +117,20 @@ describe('notification server URL safety', () => {
         expect(isUnsafeNotificationServerUrl('http://127.0.0.2:3005')).toBe(true);
         expect(isUnsafeNotificationServerUrl('http://relay.localhost:3005')).toBe(true);
         expect(isUnsafeNotificationServerUrl('https://machine.tailnet.ts.net')).toBe(false);
+    });
+});
+
+describe('machine vitals notification taps', () => {
+    it.each([{ kind: 'memory_pressure', tab: 'processes', sort: 'memory' }, { kind: 'cpu_busy', tab: 'processes', sort: 'cpu' },
+        { kind: 'disk_nearly_full', tab: 'storage', sort: undefined }] as const)('opens $kind on its exact Home without a Session', ({ kind, tab, sort }) => {
+        const command = parseNotificationTap({ response: tapResponse({ topic: 'resource_limit', machineId: 'machine/a', kind, phase: 'started',
+            notificationId: 'notice', nextSteps: kind === 'disk_nearly_full' ? ['free_up_space'] : ['review_processes'],
+            serverId: 'home-a', serverUrl: 'https://home-a.test' }), defaultActionIdentifier: DEFAULT_ACTION_IDENTIFIER })?.command;
+        expect(command).toMatchObject({ kind: 'openMachine', machineId: 'machine/a', serverId: 'home-a', serverUrl: 'https://home-a.test' });
+        expect(command && 'route' in command ? command.route : null).toBe(`/machines/machine%2Fa?serverId=home-a&tab=${tab}${sort ? `&sort=${sort}` : ''}`);
+    });
+    it('refuses malformed resource routing rather than interpreting it as an unrelated Session tap', () => {
+        expect(parseNotificationTap({ response: tapResponse({ topic: 'resource_limit', kind: 'cpu_busy', sessionId: 'session' }),
+            defaultActionIdentifier: DEFAULT_ACTION_IDENTIFIER })?.command).toMatchObject({ kind: 'ignore' });
     });
 });

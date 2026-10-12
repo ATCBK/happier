@@ -7,6 +7,8 @@ import { isLoopbackHostname } from '@happier-dev/protocol/server/urls/loopbackHo
 import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerScope';
 
 import { resolveIncomingActivityRemoteAlert } from './remoteAlerts/activityRemoteAlertRouting';
+import { resolveIncomingMachineRemoteAlert } from './remoteAlerts/machineRemoteAlertRouting';
+import { machinePageHref } from '@/components/machines/page/machinePageHref';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -68,6 +70,15 @@ export function parseNotificationTap(params: Readonly<{
     const data = readNotificationData({ response: params.response });
     const notificationId = readNotificationId({ response: params.response });
     const dedupeKey = notificationId ? `${notificationId}:${actionIdentifier}` : null;
+
+    const machineAlert = resolveIncomingMachineRemoteAlert(data);
+    if (machineAlert.kind !== 'not_machine_alert') {
+        if (machineAlert.kind === 'unroutable') return { command: { kind: 'ignore', reason: 'unknown_server' }, dedupeKey };
+        if (actionIdentifier !== params.defaultActionIdentifier) return { command: { kind: 'ignore', reason: 'unknown_action' }, dedupeKey };
+        const tab = { id: 'overview' } as const;
+        return { command: { kind: 'openMachine', machineId: machineAlert.alert.machineId, serverId: machineAlert.serverId, serverUrl: machineAlert.serverUrl,
+            tab, route: machinePageHref({ door: 'rail', target: { machineId: machineAlert.alert.machineId, serverId: machineAlert.serverId }, tab }) }, dedupeKey };
+    }
 
     // A Home-submitted collaborator alert names its Home by portable identity.
     // Qualify it through the existing profile owner first, then reuse the one

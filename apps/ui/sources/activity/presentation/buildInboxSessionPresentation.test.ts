@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionPersonalAttentionReasonV1 } from '@happier-dev/protocol';
+import type { Message } from '@happier-dev/session-core/messages';
+import { createReducer } from '@happier-dev/session-core/reducer';
 
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { buildSessionActivityAttention } from '@/activity/attention/buildSessionActivityAttention';
 import { buildActivityOverviewFromCandidates } from '@/activity/attention/buildActivityOverviewSnapshot';
 import { sessionAddressKey } from '@/sync/domains/session/sessionAddress';
+import { storage } from '@/sync/domains/state/storageStore';
 
 import { buildInboxSessionPresentation } from './buildInboxSessionPresentation';
 
@@ -35,6 +38,66 @@ function candidate(
 }
 
 describe('buildInboxSessionPresentation', () => {
+    it('does not recover a missing exact-Home transcript from the ambient same-id session', () => {
+        const previous = storage.getState();
+        const foreignMessage: Message = { id: 'foreign', kind: 'tool-call', localId: null, createdAt: 950,
+            tool: { id: 'foreign-tool', name: 'Bash', state: 'running', input: { command: 'foreign command' }, createdAt: 950,
+                startedAt: null, completedAt: null, description: null, permission: { id: 'foreign-request', status: 'pending' } }, children: [] };
+        const permission = candidate('same-id', ['permission_required'], 'home-a', { active: true, activeAt: 1_000 });
+        storage.setState({ sessions: { 'same-id': createSessionFixture({ id: 'same-id', serverId: 'home-b' }) },
+            sessionMessages: { 'same-id': { messageIdsOldestFirst: ['foreign'], messagesById: { foreign: foreignMessage },
+                messagesMap: { foreign: foreignMessage }, reducerState: createReducer(), latestThinkingMessageId: null,
+                latestThinkingMessageActivityAtMs: null, messagesVersion: 1, isLoaded: true } } });
+        try {
+            const result = buildInboxSessionPresentation({ overview: buildActivityOverviewFromCandidates([permission]), resolveMessages: () => undefined });
+            expect(result.sessionsNeedingAttention[0]?.pendingPermissions).toEqual([]);
+            expect(result.pendingRequestHydrationTargets).toEqual([{ serverId: 'home-a', sessionId: 'same-id' }]);
+        } finally {
+            storage.setState({ sessions: previous.sessions, sessionMessages: previous.sessionMessages });
+        }
+    });
+
+    it('requests exact-Home hydration for summary-only decisions, not quiet or unreadable rows', () => {
+        const permission = candidate('permission', ['permission_required']);
+        const question = candidate('question', ['user_action_required'], 'server-b');
+        const locked = { ...candidate('locked', ['permission_required']), awareness: { ...permission.awareness, encryption: 'locked' as const } };
+        const result = buildInboxSessionPresentation({ overview: buildActivityOverviewFromCandidates([
+            permission, question, locked, candidate('quiet', []),
+        ]) });
+        expect(result.pendingRequestHydrationTargets).toEqual([
+            { serverId: 'server-a', sessionId: 'permission' },
+            { serverId: 'server-b', sessionId: 'question' },
+        ]);
+    });
+
+    it('carries a hydrated request without scheduling another load', () => {
+        const permission = candidate('permission', ['permission_required'], 'server-a', {
+            active: true, activeAt: 1_000,
+            agentState: { controlledByUser: false, requests: { request: { tool: 'Bash', arguments: { command: 'mkdir work' }, createdAt: 950 } } },
+        });
+        const result = buildInboxSessionPresentation({ overview: buildActivityOverviewFromCandidates([permission]) });
+        expect(result.sessionsNeedingAttention[0]?.pendingPermissions).toMatchObject([{ id: 'request', tool: 'Bash' }]);
+        expect(result.pendingRequestHydrationTargets).toEqual([]);
+    });
+
+    it('reads transcript-only decisions for readable content with status-only notifications', () => {
+        const base = candidate('permission', ['permission_required'], 'server-a', { active: true, activeAt: 1_000 });
+        const permission = { ...base, personalAttention: { ...base.personalAttention, presentation: 'status_only' as const } };
+        const messages: Message[] = [{ id: 'message', kind: 'tool-call', localId: null, createdAt: 950,
+            tool: { id: 'tool', name: 'Bash', state: 'running', input: { command: 'mkdir work' }, createdAt: 950,
+                startedAt: null, completedAt: null, description: null, permission: { id: 'request', status: 'pending' } }, children: [] }];
+        const result = buildInboxSessionPresentation({ overview: buildActivityOverviewFromCandidates([permission]), resolveMessages: () => messages });
+        expect(result.sessionsNeedingAttention[0]?.pendingPermissions).toMatchObject([{ id: 'request', tool: 'Bash' }]);
+        expect(result.pendingRequestHydrationTargets).toEqual([]);
+    });
+
+    it('does not admit quiet offline sessions or discard explicit viewer attention for being offline', () => {
+        const quiet = candidate('quiet', [], 'server-a', { active: false, presence: 1 });
+        const manual = candidate('manual', ['manual'], 'server-a', { active: false, presence: 1 });
+        const result = buildInboxSessionPresentation({ overview: buildActivityOverviewFromCandidates([quiet, manual]) });
+        expect(result.sessionsNeedingAttention.map(entry => entry.candidate.sessionId)).toEqual(['manual']);
+    });
+
     it('keeps every personal reason in its truthful section and only marks transcript progress as read', () => {
         const failed = candidate('failed', ['failed']);
         const permissionAndUnread = candidate('permission', ['permission_required', 'unread']);

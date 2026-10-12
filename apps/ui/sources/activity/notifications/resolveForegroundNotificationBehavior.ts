@@ -13,6 +13,8 @@ import { consumeOtherLegActivityAlertPresentation, noteActivityAlertPresented } 
 import { REMOTE_ALERT_EVENT_KIND, type ActivityAlertEventKind } from './remoteAlerts/activityRemoteAlertRouting';
 import { resolveRemoteAlertForegroundPresentation } from './remoteAlerts/resolveRemoteAlertForegroundPresentation';
 import { resolveNotificationSavedHome } from './resolveNotificationSavedHome';
+import { resolveIncomingMachineRemoteAlert } from './remoteAlerts/machineRemoteAlertRouting';
+import { readMachineOfflineAlertSetting } from '@happier-dev/protocol/actions/settings/machineOfflineAlertSetting';
 
 export type ForegroundNotificationBehavior = 'full' | 'silent' | 'off';
 
@@ -94,6 +96,17 @@ export async function resolveForegroundNotificationBehavior(params: Readonly<{
     now: Date;
     isSessionVisible: (address: SessionAddress) => boolean;
 }>): Promise<ForegroundNotificationBehavior> {
+    const machine = resolveIncomingMachineRemoteAlert(params.content.data);
+    if (machine.kind !== 'not_machine_alert') {
+        if (machine.kind !== 'routable' || machine.alert.phase !== 'offline') return 'off';
+        const scope = await resolveServerCredentialAccountScope(machine.serverId);
+        if (scope.kind !== 'bound' || scope.scope.accountId !== machine.alert.accountId) return 'off';
+        const accountSettings = readExactHomeAccountSettings(scope.scope);
+        if (!accountSettings?.machineOfflineAlertsV1 || !readMachineOfflineAlertSetting({ machineOfflineAlertsV1: accountSettings.machineOfflineAlertsV1 }, machine.alert.machineId)) return 'off';
+        const plan = resolveActivityAttentionDeliveryPlan({ localSettings: localSettingsParse(params.localSettings ?? {}), accountSettings,
+            event: 'machine_offline', channel: 'expo_push', foregroundState: 'foreground', now: params.now });
+        return plan.delivery === 'suppress' ? 'off' : plan.delivery === 'silent' && plan.foregroundBehavior === 'full' ? 'silent' : plan.foregroundBehavior;
+    }
     const remoteAlert = resolveRemoteAlertForegroundPresentation({
         data: params.content.data,
         isSessionVisible: params.isSessionVisible,

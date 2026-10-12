@@ -1,38 +1,45 @@
 import type { InboxSessionAttentionEntry } from '@/activity/presentation/buildInboxSessionPresentation';
 import type { Session } from '@/sync/domains/state/storageTypes';
+import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
 import type { WorkflowRunRow } from '@/sync/store/domains/workflowRuns';
+import { approvalArtifactBodyMatchesHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
 import { comparePendingRequestsByAge, selectOldestPendingRequest } from '@happier-dev/session-core/pending';
 import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
 import { shallow } from 'zustand/shallow';
 
 /**
  * FIN's session↔PR link read projection (`sessionPullRequestLink`, FIN PLAN U10 / 08 §5A), as this
- * Inbox consumes it. A retained Channel binding proves a relation, not remote PR state.
+ * Inbox consumes it. State and observation time come from the qualified Channel binding.
  */
 export type InboxPullRequestLink = Readonly<{
     sessionId: string;
     serverId?: string | null;
     number: number;
     title?: string | null;
-    url?: string | null;
-    state?: 'open' | 'merged' | 'closed';
+    url: string;
+    state?: 'open' | 'merged' | 'closed' | 'unknown';
+    observedAt?: number;
 }>;
 
 export type InboxWorkItem =
     /** A session that needs the person (permission, question, failure, …); `foldedUnderRunId` for a step session. */
     | Readonly<{ kind: 'session'; key: string; entry: InboxSessionAttentionEntry; foldedUnderRunId: string | null }>
     /** A workflow run in 03's attention window (a hold, an approval, an interrupted run). */
-    | Readonly<{ kind: 'workflow_run'; key: string; runId: string; row: WorkflowRunRow }>
+    | Readonly<{ kind: 'workflow_run'; key: string; runId: string; row: WorkflowRunRow;
+        heldStepLabel: string | null; heldStepLaneLabel: string | null }>
     /** A worker whose machine went offline while its turn was in flight. */
     | Readonly<{ kind: 'stalled'; key: string; session: Session }>
     /** A session with a retained PR link, waiting for the person to land and settle it. */
     | Readonly<{ kind: 'landing'; key: string; session: Session; link: InboxPullRequestLink }>
     /** A session the person snoozed until `remindAt`; it stays in place, quietly. */
-    | Readonly<{ kind: 'snoozed'; key: string; session: Session; remindAt: number }>;
+    | Readonly<{ kind: 'snoozed'; key: string; session: Session; remindAt: number }>
+    | Readonly<{ kind: 'automation_run'; key: string; row: WorkflowRunRow }>
+    | Readonly<{ kind: 'approval'; key: string; artifact: DecryptedArtifact }>;
 
 export type InboxWorkGroupRoot =
     | Readonly<{ kind: 'lead'; sessionId: string; session: Session | null }>
     | Readonly<{ kind: 'run'; runId: string; row: WorkflowRunRow }>
+    | Readonly<{ kind: 'automation'; automationId: string; serverId: string; runId: string }>
     | Readonly<{ kind: 'other' }>;
 
 export type InboxWorkGroup = Readonly<{
@@ -46,6 +53,10 @@ export type InboxWorkGroupsInput = Readonly<{
     sessionEntries: readonly InboxSessionAttentionEntry[];
     /** 03's attention window, in server order. */
     workflowRuns: readonly WorkflowRunRow[];
+    /** Automation attention-window rows and open approval Artifacts from this Account. */
+    automationRuns: readonly WorkflowRunRow[];
+    automationServerId: string | null;
+    openApprovals: readonly DecryptedArtifact[];
     stalledSessions: readonly Session[];
     landings: readonly Readonly<{ session: Session; link: InboxPullRequestLink }>[];
     snoozed: readonly Readonly<{ session: Session; remindAt: number }>[];
@@ -59,11 +70,13 @@ export type InboxWorkGroupsInput = Readonly<{
 }>;
 
 const ITEM_RANK: Readonly<Record<InboxWorkItem['kind'], number>> = {
-    session: 0,
+    session: 1,
     workflow_run: 0,
-    stalled: 1,
-    landing: 2,
-    snoozed: 3,
+    automation_run: 0,
+    approval: 0,
+    stalled: 2,
+    landing: 3,
+    snoozed: 4,
 };
 
 function normalizeId(value: string | null | undefined): string | null {
@@ -104,7 +117,8 @@ export function resolveInboxWorkRoot(
  * - A workflow run groups under the work root of its origin session, else under itself.
  * - A step session's request folds once under its run when 03's window lists that run, and is
  *   never also listed on its own (FIN 03 §6.4 "Grouping").
- * - Everything else is "Other sessions", always last.
+ * - Automation runs and their V2-origin approvals share an Automation root; other approvals go
+ *   to "Other sessions", always last.
  *
  * It decides no attention: every item arrives already classified by its owner.
  */
@@ -130,6 +144,15 @@ export function buildInboxWorkGroups(input: InboxWorkGroupsInput, previous?: rea
         const root = resolveInboxWorkRoot(sessionId, input.resolveSession);
         (root ? leadGroup(root) : other).push(item);
     };
+    const automationGroup = (serverId: string, automationId: string, runId: string) => {
+        const key = `automation:${serverId}:${automationId}`;
+        let group = groups.get(key);
+        if (!group) {
+            group = { root: { kind: 'automation', automationId, serverId, runId }, items: [] };
+            groups.set(key, group);
+        }
+        return group.items;
+    };
 
     for (const entry of input.sessionEntries) {
         listedSessionIds.add(entry.candidate.sessionId);
@@ -146,7 +169,9 @@ export function buildInboxWorkGroups(input: InboxWorkGroupsInput, previous?: rea
 
     for (const row of input.workflowRuns) {
         const runItems: InboxWorkItem[] = [
-            { kind: 'workflow_run', key: `run:${row.id}`, runId: row.id, row },
+            { kind: 'workflow_run', key: `run:${row.id}`, runId: row.id, row,
+                heldStepLabel: row.summary?.heldStep?.label ?? null,
+                heldStepLaneLabel: row.summary?.heldStep?.laneLabel ?? null },
             ...(stepsByRunId.get(row.id) ?? []),
         ];
         const origin = row.summary?.origin;
@@ -157,6 +182,27 @@ export function buildInboxWorkGroups(input: InboxWorkGroupsInput, previous?: rea
             continue;
         }
         groups.set(`run:${row.id}`, { root: { kind: 'run', runId: row.id, row }, items: runItems });
+    }
+
+    for (const row of input.automationRuns) {
+        const run = row.automation;
+        if (!run || !input.automationServerId) continue;
+        automationGroup(input.automationServerId, run.automationId, run.id).push({
+            kind: 'automation_run', key: `automation-run:${run.id}`, row,
+        });
+    }
+
+    for (const artifact of input.openApprovals) {
+        const item: InboxWorkItem = { kind: 'approval', key: `approval:${artifact.id}`, artifact };
+        const matched = artifact.header && typeof artifact.body === 'string'
+            ? approvalArtifactBodyMatchesHeaderV1(artifact.header, artifact.body) : null;
+        const origin = matched?.family === 'built_in' && matched.request.v === 2 && matched.request.status === 'open'
+            ? matched.request.executionOriginV1 : null;
+        if (origin?.caller.kind === 'automationRun') {
+            automationGroup(origin.serverId, origin.caller.automationId, origin.caller.runId).push(item);
+        } else {
+            other.push(item);
+        }
     }
 
     const placeOnce = (session: Session, item: InboxWorkItem) => {
@@ -208,9 +254,13 @@ function areInboxWorkItemsEqual(a: InboxWorkItem, b: InboxWorkItem): boolean {
 }
 
 function sortByRank(items: InboxWorkItem[]): readonly InboxWorkItem[] {
+    const rank = (item: InboxWorkItem) => item.kind === 'session' && (
+        item.entry.candidate.personalAttention.reasons.some(reason => reason === 'permission_required' || reason === 'user_action_required')
+        || item.entry.pendingPermissions.length > 0 || item.entry.pendingUserActions.length > 0
+    ) ? 0 : ITEM_RANK[item.kind];
     const ranked = items
         .map((item, index) => ({ item, index }))
-        .sort((a, b) => (ITEM_RANK[a.item.kind] - ITEM_RANK[b.item.kind]) || (a.index - b.index))
+        .sort((a, b) => (rank(a.item) - rank(b.item)) || (a.index - b.index))
         .map(({ item }) => item);
     // Sort only pending-session slots with the same classification and run parent.
     // Failures, workflow rows and the broader work-group order retain their positions.

@@ -1,11 +1,9 @@
-import { buildMessageRouteId } from '@happier-dev/session-core/messages';
 import { resolvePendingRequestAttentionReasonV1 } from '@happier-dev/protocol/sessions/personal/attention';
 import { isSessionPersonallyTrackedForViewer } from '@/sync/domains/session/readState/sessionViewer';
 import { resolveSessionPersonalAttentionForViewer } from '@/sync/domains/session/readState/sessionViewerAttention';
 import { areSessionAddressesEqual, normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
 import { readPendingNavigationDetails, type PendingNavigationDetailsResult } from '@/sync/ops/sessionPendingNavigationDetails';
-import { resolvePermissionToolCallLocations } from '@/utils/sessions/permissions/resolvePermissionToolCallLocations';
-import { buildPermissionToolCallRoute, canOpenPermissionToolCallRoute } from '@/utils/sessions/permissions/buildPermissionToolCallRoute';
+import { buildPermissionToolCallRoute } from '@/utils/sessions/permissions/buildPermissionToolCallRoute';
 import { isPendingNavigationRequestAnswerable, type PendingNavigationTarget } from './buildPendingNavigationFromSource';
 import { collectSourceSessions } from './buildActivityOverviewFromSource';
 import type { ActivityAttentionSource } from './activityAttentionSourceTypes';
@@ -40,17 +38,11 @@ export function planPendingNavigationRoute(params: Readonly<{
     if (attention.presentation === 'status_only' || !attention.reasons.includes(reason)
         || !isPendingNavigationRequestAnswerable(session, request)) return { kind: 'unavailable' };
 
-    const messagesById = Object.fromEntries(details.messages.map(message => [message.id, message]));
-    const location = resolvePermissionToolCallLocations({
-        permissionIds: [request.id],
-        messageIdsOldestFirst: details.messages.map(message => message.id),
-        messagesById,
-        resolveRouteMessageId: (_id, message) => message ? buildMessageRouteId(message) : null,
-    }).get(request.id) ?? null;
-    if (location && !canOpenPermissionToolCallRoute(location)) return { kind: 'unavailable' };
+    // The mounted Session owns transcript hydration and reveal. Next always
+    // opens its full context, including requests without a transcript sequence.
     return {
-        kind: 'route', state: 'pending', focusTarget: location ? 'transcript' : 'prompt',
-        route: buildPermissionToolCallRoute({ ...target.address, location }),
+        kind: 'route', state: 'pending', focusTarget: 'prompt',
+        route: buildPermissionToolCallRoute({ ...target.address, location: null }),
     };
 }
 
@@ -67,12 +59,12 @@ export async function navigateToPendingRequest(params: Readonly<{
     const scope = params.source.audienceScopes?.get(params.target.address.serverId);
     if (params.source.audienceScopes && !scope) return { status: 'unavailable' };
     const details = await readPendingNavigationDetails(params.target.address, scope, {
-        signal: params.signal, reuse: params.details, locateRequestId: params.target.requestId,
+        signal: params.signal, reuse: params.details,
     });
     if (params.signal?.aborted) return { status: 'unavailable' };
     const plan = planPendingNavigationRoute({ ...params, details });
     if (plan.kind === 'unavailable') return { status: 'unavailable' };
     params.openRoute(plan.route);
-    setPendingNavigationLanding(params.target.address, params.target.requestId, plan.state, plan.focusTarget);
+    setPendingNavigationLanding(params.target.address, params.target.requestId, plan.state, plan.focusTarget, params.target.requestSource);
     return { status: 'opened' };
 }

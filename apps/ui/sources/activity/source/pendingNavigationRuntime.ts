@@ -11,6 +11,7 @@ export type PendingNavigationInvocation = Readonly<{
 export type PendingNavigationLanding = Readonly<{
     address: SessionAddress;
     requestId: string;
+    requestSource?: string;
     state: 'pending' | 'settled';
     focusTarget: 'transcript' | 'prompt';
     token: number;
@@ -43,14 +44,22 @@ export async function invokeNextPendingRequest(options: PendingNavigationInvocat
 }
 
 /** Ephemeral landing intent; never a pending-request authority or a saved cursor. */
-export function setPendingNavigationLanding(address: SessionAddress, requestId: string, state: 'pending' | 'settled' = 'pending', focusTarget: 'transcript' | 'prompt' = 'prompt'): void {
-    landing = { address, requestId, state, focusTarget, token: nextToken++ };
+export function setPendingNavigationLanding(address: SessionAddress, requestId: string, state: 'pending' | 'settled' = 'pending', focusTarget: 'transcript' | 'prompt' = 'prompt', requestSource?: string): void {
+    landing = { address, requestId, state, focusTarget, ...(requestSource ? { requestSource } : {}), token: nextToken++ };
     emit();
 }
 
 export function markPendingNavigationSettled(address: SessionAddress, requestId: string): void {
     if (!landing || landing.state === 'settled' || landing.requestId !== requestId || !areSessionAddressesEqual(address, landing.address)) return;
     landing = { ...landing, state: 'settled' };
+    emit();
+}
+
+/** An async reveal cannot resurrect an answered or superseded landing. */
+export function markPendingNavigationTranscriptReady(expected: PendingNavigationLanding): void {
+    if (!landing || landing.token !== expected.token || landing.state !== 'pending'
+        || landing.focusTarget === 'transcript') return;
+    landing = { ...landing, focusTarget: 'transcript' };
     emit();
 }
 

@@ -8,6 +8,18 @@ import {
 const IOS = { platform: 'ios' } as const;
 
 describe('deriveDeviceRemoteAlertPolicyV1', () => {
+    it('enrolls opted-in machines independently of remote session consent while retaining the device opt-out', () => {
+        const inputs = {
+            accountSettings: { sessionRemoteAlertsEnabled: false, machineOfflineAlertsV1: { machineIds: ['machine-one'] } },
+            nativeSupport: IOS,
+        };
+        expect(deriveDeviceRemoteAlertPolicyV1({ ...inputs, localSettings: { deviceRemoteAlertsEnabled: true } }))
+            .toMatchObject({ enabled: true, nativeConsumer: 'ios_service_extension_v1' });
+        expect(deriveDeviceRemoteAlertPolicyV1({ ...inputs, localSettings: { deviceRemoteAlertsEnabled: false } }))
+            .toMatchObject({ enabled: false });
+        expect(deriveDeviceRemoteAlertPolicyV1({ ...inputs, localSettings: { deviceRemoteAlertsEnabled: true }, nativeSupport: null }))
+            .toBeNull();
+    });
     it('publishes nothing until the Account explicitly opts into policy disclosure', () => {
         expect(deriveDeviceRemoteAlertPolicyV1({
             accountSettings: {},

@@ -1,4 +1,6 @@
 import type { SessionPersonalAttentionReasonV1 } from '@happier-dev/protocol';
+import { isSessionAwarenessContentReadableV1 } from '@happier-dev/protocol/sessions/awareness/availability';
+import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 import type { Message } from "@happier-dev/session-core/messages";
 import { comparePendingRequestsByAge } from '@happier-dev/session-core/pending';
 import type {
@@ -23,6 +25,7 @@ export type InboxSessionPresentation = Readonly<{
     sessionsNeedingAttention: readonly InboxSessionAttentionEntry[];
     readySessions: readonly SessionActivityAttention[];
     markAllReadTargets: readonly SessionBulkActionTarget[];
+    pendingRequestHydrationTargets: readonly SessionAddress[];
 }>;
 
 export type InboxSessionCandidateClassification = 'needs_attention' | 'ready' | null;
@@ -89,6 +92,7 @@ export function buildInboxSessionPresentation(params: Readonly<{
     const sessionsNeedingAttention: InboxSessionAttentionEntry[] = [];
     const readySessions: SessionActivityAttention[] = [];
     const markAllReadTargets: SessionBulkActionTarget[] = [];
+    const pendingRequestHydrationTargets: SessionAddress[] = [];
 
     for (const candidate of params.overview.candidates) {
         const classification = classifyInboxSessionCandidate(candidate);
@@ -102,17 +106,24 @@ export function buildInboxSessionPresentation(params: Readonly<{
         // Inbox work until the existing awareness projection says the turn is
         // ready for review. Concurrent actionable reasons still render below.
         if (classification === 'needs_attention') {
-            const mayShowDetails = candidate.personalAttention.presentation === 'full';
-            const messages = mayShowDetails ? params.resolveMessages?.(candidate) : undefined;
-            sessionsNeedingAttention.push({
+            // Notification privacy is not the in-app content-readability authority.
+            const mayShowDetails = isSessionAwarenessContentReadableV1(candidate.awareness.encryption);
+            // Missing exact-Home data must not fall back to the ambient same-id transcript.
+            const messages = mayShowDetails ? params.resolveMessages?.(candidate) ?? [] : [];
+            const entry: InboxSessionAttentionEntry = {
                 candidate,
-                pendingPermissions: reasons.includes('permission_required')
+                pendingPermissions: mayShowDetails && reasons.includes('permission_required')
                     ? listPendingPermissionRequests(candidate.session, messages).sort(comparePendingRequestsByAge)
                     : [],
-                pendingUserActions: reasons.includes('user_action_required')
+                pendingUserActions: mayShowDetails && reasons.includes('user_action_required')
                     ? listPendingUserActionRequests(candidate.session, messages).sort(comparePendingRequestsByAge)
                     : [],
-            });
+            };
+            sessionsNeedingAttention.push(entry);
+            if (mayShowDetails && candidate.address && (
+                (reasons.includes('permission_required') && entry.pendingPermissions.length === 0)
+                || (reasons.includes('user_action_required') && entry.pendingUserActions.length === 0)
+            )) pendingRequestHydrationTargets.push(candidate.address);
             continue;
         }
 
@@ -131,5 +142,6 @@ export function buildInboxSessionPresentation(params: Readonly<{
         sessionsNeedingAttention,
         readySessions,
         markAllReadTargets,
+        pendingRequestHydrationTargets,
     };
 }

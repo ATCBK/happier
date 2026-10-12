@@ -13,7 +13,6 @@ import { readStoredSessionMessagesFromStateLike } from "@happier-dev/session-cor
 import {
     listSessionListLookupServerSessions,
     findSessionListLookupSession,
-    resolveSessionListLookupSessionServerScopeFromState,
     type SessionServerLookupStateLike,
 } from '@/sync/domains/session/listing/sessionListLookupState';
 import { isSessionListQueryHomeCoverageComplete } from '@/sync/domains/session/listing/sessionListHomeObservation';
@@ -42,12 +41,14 @@ import {
     projectSessionContextPresentation,
 } from '@/sync/domains/session/presentation/sessionContextPresentation';
 import { resolveSessionWorkspaceDisplayPresentation } from '@/sync/domains/session/listing/sessionWorkspaceDisplayPresentation';
+import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
 
 import type { ActivityAttentionSource } from './activityAttentionSourceTypes';
 
 const NO_SOURCE_ATTENTION_MESSAGES: readonly Message[] = [];
 
 export type ActivityOverviewSummary = Readonly<{
+    isDataReady: boolean;
     totalAttentionCount: number;
     inboxContentCount: number;
     nextAttentionBoundaryMs: number | null;
@@ -204,7 +205,7 @@ function collectLookupSessionAddresses(
     return addresses;
 }
 
-type ActivitySourceSessionEntry = Readonly<{
+export type ActivitySourceSessionEntry = Readonly<{
     address: SessionAddress;
     session: Session;
     hasHydratedMessages: boolean;
@@ -368,13 +369,12 @@ function enrichCandidateWithSourceFacts(params: Readonly<{
     nowMs: number;
 }>): SessionActivityAttention {
     const sessionId = params.address.sessionId;
-    const scope = resolveSessionListLookupSessionServerScopeFromState(params.lookupState, params.address);
     const serverId = params.address.serverId;
     const profile = resolveServerProfile(params.source, serverId);
     const serverUrl = profile?.serverUrl ?? (
         serverId && (params.source.activeServer?.serverId ?? params.source.activeServerId) === serverId ? params.source.activeServer?.serverUrl ?? null : null
     );
-    const serverName = scope?.serverName ?? profile?.name ?? null;
+    const serverName = resolveHomeDisplayLabel(profile, serverId);
     const route = createActivitySurfaceSessionRoute(sessionId, serverId);
     const target = createActivitySurfaceSessionTarget(sessionId, serverId);
     const isKnown = Boolean(serverId);
@@ -510,37 +510,48 @@ export function buildActivityOverviewFromSource(params: Readonly<{
     return buildActivityOverviewFromCandidates(candidates);
 }
 
+/** One personal, user-facing session as the summary owner classified it. */
+export type ActivitySummaryCandidate = Readonly<{
+    entry: ActivitySourceSessionEntry;
+    candidate: ReturnType<typeof buildSessionActivityAttention>;
+    messages: readonly Message[];
+}>;
+
 /**
- * Minimal always-mounted Activity projection. It reuses the canonical source,
- * per-session attention owner, and Inbox classifier while avoiding candidate
- * enrichment, presentation strings, sorting, fingerprints, and detail arrays.
+ * The summary owner's one walk over the canonical source: every session admitted to personal
+ * Activity, classified by the per-session attention owner, kept only when it is user-facing (or a
+ * voice conversation that has attention). Each summary projection (the fleet totals below, the
+ * per-machine working counts) reads this same walk, so none decides "working" a second way.
  */
-export function buildActivityOverviewSummaryFromSource(params: Readonly<{
+export function forEachActivitySummaryCandidate(params: Readonly<{
     source: ActivityAttentionSource;
     nowMs: number;
     sessionOptions?: SessionAttentionOptions;
+    /** Same exact-Home policy and null exclusion as the detail owner. */
+    resolveSessionOptionsForServerId?: (serverId: string) => SessionAttentionOptions | null;
+    /** Badges retain opened-transcript pending evidence; list-only summaries omit that detail. */
+    includeHydratedMessages?: boolean;
     includeWarmSourceWhenNotReady?: boolean;
-}>): ActivityOverviewSummary {
-    let totalAttentionCount = 0;
-    let inboxContentCount = 0;
-    let workingCount = 0;
-    let needsYouCount = 0;
-    let nextAttentionBoundaryMs: number | null = null;
-
+}>, visit: (candidate: ActivitySummaryCandidate) => void): void {
     for (const entry of collectSourceSessions(
         params.source,
         params.includeWarmSourceWhenNotReady === true,
-        true,
+        params.includeHydratedMessages !== true,
     )) {
         if (!isSessionAdmittedToPersonalActivity(entry.session)) continue;
+        const sessionOptions = params.resolveSessionOptionsForServerId
+            ? params.resolveSessionOptionsForServerId(entry.address.serverId)
+            : params.sessionOptions;
+        if (sessionOptions === null) continue;
         const messages = entry.hasHydratedMessages
             ? readSourceSessionMessages(params.source, entry.address.sessionId) ?? NO_SOURCE_ATTENTION_MESSAGES
             : NO_SOURCE_ATTENTION_MESSAGES;
         const candidate = buildSessionActivityAttention({
             session: entry.session,
             sessionMessages: messages,
-            sessionOptions: params.sessionOptions,
+            sessionOptions,
             nowMs: params.nowMs,
+            presentation: 'summary',
         });
         if (
             !isHydratedSessionUserFacing(candidate.session)
@@ -551,16 +562,41 @@ export function buildActivityOverviewSummaryFromSource(params: Readonly<{
         ) {
             continue;
         }
+        visit({ entry, candidate, messages });
+    }
+}
+
+/** "Needs you": a permission, an action, or a blocked delivery waits on the person. */
+export function isActivityCandidateAwaitingPerson(candidate: Readonly<{ reasons: SessionActivityAttention['reasons'] }>): boolean {
+    return candidate.reasons.hasPendingPermissionRequests
+        || candidate.reasons.hasPendingUserActionRequests
+        || candidate.reasons.hasBlockedPendingDelivery;
+}
+
+/**
+ * Minimal always-mounted Activity projection. It reuses the canonical source,
+ * per-session attention owner, and Inbox classifier while avoiding candidate
+ * enrichment, presentation strings, sorting, fingerprints, and detail arrays.
+ */
+export function buildActivityOverviewSummaryFromSource(params: Readonly<{
+    source: ActivityAttentionSource;
+    nowMs: number;
+    sessionOptions?: SessionAttentionOptions;
+    resolveSessionOptionsForServerId?: (serverId: string) => SessionAttentionOptions | null;
+    includeHydratedMessages?: boolean;
+    includeWarmSourceWhenNotReady?: boolean;
+}>): ActivityOverviewSummary {
+    let totalAttentionCount = 0;
+    let inboxContentCount = 0;
+    let workingCount = 0;
+    let needsYouCount = 0;
+    let nextAttentionBoundaryMs: number | null = null;
+
+    forEachActivitySummaryCandidate(params, ({ entry, candidate, messages }) => {
         if (candidate.hasAttention) totalAttentionCount += 1;
         if (classifyInboxSessionCandidate(candidate) !== null) inboxContentCount += 1;
         if (candidate.reasons.isThinking) workingCount += 1;
-        if (
-            candidate.reasons.hasPendingPermissionRequests
-            || candidate.reasons.hasPendingUserActionRequests
-            || candidate.reasons.hasBlockedPendingDelivery
-        ) {
-            needsYouCount += 1;
-        }
+        if (isActivityCandidateAwaitingPerson(candidate)) needsYouCount += 1;
         for (const expiresAtMs of readSessionPersonalAttentionExpirationsForViewer(
             entry.session,
             params.nowMs,
@@ -571,7 +607,7 @@ export function buildActivityOverviewSummaryFromSource(params: Readonly<{
                 nextAttentionBoundaryMs = expiresAtMs;
             }
         }
-    }
+    });
 
-    return { totalAttentionCount, inboxContentCount, nextAttentionBoundaryMs, workingCount, needsYouCount };
+    return { isDataReady: params.source.isDataReady, totalAttentionCount, inboxContentCount, nextAttentionBoundaryMs, workingCount, needsYouCount };
 }

@@ -20,7 +20,7 @@ export async function nextPendingRequest(params: Readonly<{
 }>): Promise<NextPendingRequestResult> {
     if (params.signal?.aborted) return { kind: 'unavailable', reason: 'cancelled' };
     if (!params.source.isDataReady) return { kind: 'unavailable', reason: 'not_ready' };
-    const candidates = buildPendingNavigationFromSource({ ...params, includeUnavailable: true });
+    const candidates = buildPendingNavigationFromSource(params);
     const details = await Promise.all(candidates.map(async candidate => {
         const scope = params.source.audienceScopes?.get(candidate.address.serverId);
         // A mounted Home binding may still be resolving or already retired. It

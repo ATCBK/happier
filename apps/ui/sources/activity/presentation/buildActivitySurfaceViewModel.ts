@@ -13,14 +13,21 @@ import {
 import type { ActivitySurfaceSessionViewModel } from '@/activity/presentation/activitySurfaceViewModels';
 import { resolveSessionContextLine } from '@/sync/domains/session/presentation/sessionContextPresentation';
 import { readSessionDisplayTitleField } from '@/sync/state/selectors';
+import { t } from '@/text';
 
 function resolveViewModelTitle(params: Readonly<{
     candidate: SessionActivityAttention;
     mayShowPrivateContent: boolean;
+    /** The device opened the content, so the candidate's title is the real in-app name. */
+    candidateNamesContent: boolean;
     statusText: string;
     privacyMode: ActivitySurfacePolicy['privacyMode'];
 }>): string {
-    if (!params.mayShowPrivateContent) return params.candidate.title;
+    // An off-app surface also honours the Home's notification ceiling, so it never falls back to
+    // the in-app name of content this device opened; an unread candidate's title is already safe.
+    if (!params.mayShowPrivateContent) {
+        return params.candidateNamesContent ? t('sessionBoard.item.locked.title') : params.candidate.title;
+    }
     if (params.privacyMode === 'status_only') {
         return params.statusText;
     }
@@ -120,6 +127,7 @@ export function buildActivitySurfaceViewModel(params: Readonly<{
         title: resolveViewModelTitle({
             candidate: params.candidate,
             mayShowPrivateContent,
+            candidateNamesContent: contentReadable,
             statusText: status.statusText,
             privacyMode,
         }),

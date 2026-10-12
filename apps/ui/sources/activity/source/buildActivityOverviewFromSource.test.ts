@@ -17,6 +17,7 @@ import {
     readActivitySourceAttentionMessages,
 } from './buildActivityOverviewFromSource';
 import type { ActivityAttentionSource } from './activityAttentionSourceTypes';
+import { buildMachineWorkingCounts, machineWorkingKey } from '@/components/machines/work/machineWorkingCounts';
 
 function pendingAgentState(kind: 'permission' | 'user_action', createdAt = 950) {
     return {
@@ -128,6 +129,19 @@ function personalQueryState(
 }
 
 describe('buildActivityOverviewFromSource', () => {
+    it('names a Home through its display-name owner instead of the saved relay host', () => {
+        const source = createSource({ sessions: [createSessionFixture({ id: 'permission', serverId: 'server-a',
+            agentState: pendingAgentState('permission') })] });
+        const profile = source.serverProfilesById?.['server-a'];
+        if (!profile) throw new Error('missing fixture Home');
+        const rawHost = 'happier-agent-qa-orc.localhost:3017';
+        const overview = buildActivityOverviewFromSource({ source: { ...source,
+            serverProfilesById: { 'server-a': { ...profile, name: rawHost, serverUrl: `http://${rawHost}` } },
+        }, nowMs: 1_000 });
+        const home = overview.candidates[0]?.context?.segments.find(segment => segment.kind === 'home');
+        expect(home?.label).toBe('This Home');
+        expect(overview.candidates[0]?.context?.contextLine).not.toContain(rawHost);
+    });
     it.each([
         { privacyMode: 'status_only', candidatePrivacyMode: undefined, showsWorkspace: false },
         { privacyMode: 'title_only', candidatePrivacyMode: undefined, showsWorkspace: false },
@@ -199,12 +213,29 @@ describe('buildActivityOverviewFromSource', () => {
             },
             nowMs: 1_000,
         })).toEqual({
+            isDataReady: true,
             totalAttentionCount: 1,
             inboxContentCount: 1,
             nextAttentionBoundaryMs: null,
             workingCount: 0,
             needsYouCount: 0,
         });
+    });
+
+    it.each([false, true])('keeps exact-Home exclusion and unread policy in summary counts (unread %s)', (showUnread) => {
+        const sessions = ['server-a', 'server-b'].map(serverId => createSessionFixture({
+            id: `unread-${serverId}`, serverId, seq: 4, latestReadyEventSeq: 4, lastViewedSessionSeq: 1,
+        }));
+        const input = {
+            source: createSource({ sessions }), nowMs: 1_000,
+            resolveSessionOptionsForServerId: (serverId: string) => serverId === 'server-a' ? null : { showUnread },
+        };
+        const detail = buildActivityOverviewFromSource(input);
+        const summary = buildActivityOverviewSummaryFromSource(input);
+
+        expect(detail.candidates.map(candidate => candidate.serverId)).toEqual(['server-b']);
+        expect(summary.totalAttentionCount).toBe(showUnread ? 1 : 0);
+        expect(summary.totalAttentionCount).toBe(detail.counts.totalAttention);
     });
 
     it('keeps equal-version unread-only summary state out of Inbox when no ready evidence exists', () => {
@@ -234,6 +265,7 @@ describe('buildActivityOverviewFromSource', () => {
             },
             nowMs: 1_000,
         })).toEqual({
+            isDataReady: true,
             totalAttentionCount: 0,
             inboxContentCount: 0,
             nextAttentionBoundaryMs: null,
@@ -763,6 +795,14 @@ describe('buildActivityOverviewFromSource', () => {
         ]);
     });
 
+    it('distinguishes unknown sessions from an observed empty Home in the summary', () => {
+        expect(buildActivityOverviewSummaryFromSource({ source: createSource({ sessions: [], isDataReady: false }), nowMs: 1_000 }))
+            .toMatchObject({ isDataReady: false, workingCount: 0, needsYouCount: 0 });
+        expect(buildActivityOverviewSummaryFromSource({ source: createSource({ sessions: [], isDataReady: true }), nowMs: 1_000 }))
+            .toMatchObject({ isDataReady: true, workingCount: 0, needsYouCount: 0 });
+    });
+
+
     it('counts the working sessions and the ones that need the person in the mounted summary (Home status line)', () => {
         const permission = createSessionFixture({
             id: 'permission', active: true, presence: 'online', seq: 1, lastViewedSessionSeq: 1,
@@ -784,6 +824,28 @@ describe('buildActivityOverviewFromSource', () => {
             needsYouCount: overview.counts.permissionRequired + overview.counts.actionRequired,
         });
         expect(buildActivityOverviewSummaryFromSource({ source, nowMs: 1_000 })).toMatchObject({ workingCount: 1, needsYouCount: 1 });
+    });
+
+    it('counts working sessions per machine with the same classifier as the summary (Machines popover, All machines)', () => {
+        const onA = (id: string, overrides: Parameters<typeof createSessionFixture>[0] = {}) => createSessionFixture({
+            id, seq: 2, lastViewedSessionSeq: 2, active: true, presence: 'online', thinking: true, thinkingAt: 950, updatedAt: 30,
+            metadata: { ...createSessionFixture().metadata!, machineId: 'machine-a' }, ...overrides,
+        });
+        const workingA1 = onA('working-a1');
+        const workingA2 = onA('working-a2');
+        const workingB = onA('working-b', { metadata: { ...createSessionFixture().metadata!, machineId: 'machine-b' } });
+        // An unread reply and a pending permission are not "working": the summary does not count them either.
+        const idleA = onA('idle-a', { thinking: false, thinkingAt: 0, seq: 12, latestReadyEventSeq: 12, lastViewedSessionSeq: 1 });
+        const otherHome = onA('working-other-home', { serverId: 'server-b' });
+        const source = createSource({ sessions: [workingA1, workingA2, workingB, idleA, otherHome] });
+        const counts = buildMachineWorkingCounts({ source, nowMs: 1_000, state: {} as never });
+        expect(Object.fromEntries(counts.byMachine)).toEqual({
+            [machineWorkingKey({ serverId: 'server-a', machineId: 'machine-a' })]: 2,
+            [machineWorkingKey({ serverId: 'server-a', machineId: 'machine-b' })]: 1,
+            // The same machine id on another Home is another machine.
+            [machineWorkingKey({ serverId: 'server-b', machineId: 'machine-a' })]: 1,
+        });
+        expect(counts.total).toBe(buildActivityOverviewSummaryFromSource({ source, nowMs: 1_000 }).workingCount);
     });
 
     it('carries target, server profile, direct-action, stale, dwell, and stable fingerprint facts on source candidates', () => {
@@ -809,7 +871,7 @@ describe('buildActivityOverviewFromSource', () => {
             sessionId: 'permission',
             serverId: 'server-b',
             serverUrl: null,
-            serverName: 'Server B',
+            serverName: 'This Home',
             route: '/session/permission?serverId=server-b',
             target: 'open-session:permission?serverId=server-b',
             activityName: 'HappierFocusLiveActivity',
@@ -905,7 +967,7 @@ describe('buildActivityOverviewFromSource', () => {
         expect(overview.candidates[0]).toMatchObject({
             sessionId: 'concurrent-unread',
             serverId: 'server-b',
-            serverName: 'Server B',
+            serverName: 'This Home',
             route: '/session/concurrent-unread?serverId=server-b',
             target: 'open-session:concurrent-unread?serverId=server-b',
         });

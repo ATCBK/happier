@@ -22,6 +22,8 @@ export function buildSessionActivityAttention(params: Readonly<{
     sessionMessages?: readonly Message[];
     sessionOptions?: SessionAttentionOptions;
     nowMs?: number;
+    /** Count/status consumers use the same facts without private display details. */
+    presentation?: 'detail' | 'summary';
 }>): SessionActivityAttention {
     const nowMs = params.nowMs ?? Date.now();
     const personal = resolveSessionPersonalAttentionForViewer(params.session, nowMs, params.sessionMessages);
@@ -31,9 +33,15 @@ export function buildSessionActivityAttention(params: Readonly<{
         if (reason === 'user_action_required') return params.sessionOptions?.showPendingUserActionRequests !== false;
         return true;
     });
-    const awareness = projectUiSessionAwareness(params.session, nowMs);
-    const mayShowPrivateContent = personal.presentation !== 'status_only'
-        && isSessionAwarenessContentReadableV1(awareness.encryption);
+    const includeDisplayDetails = params.presentation !== 'summary';
+    const awareness = projectUiSessionAwareness(params.session, nowMs, {
+        includeTitle: includeDisplayDetails,
+        includeWorkspace: includeDisplayDetails,
+    });
+    // In-app rows name what this device opened. The viewer's `status_only` is the Home's
+    // notification-preview ceiling (it sees no recipient envelope, so it cannot vouch); off-app
+    // surfaces apply it themselves (`buildActivitySurfaceViewModel`).
+    const mayShowPrivateContent = isSessionAwarenessContentReadableV1(awareness.encryption);
     const admitted = isSessionAdmittedToPersonalActivity(params.session);
     const operational = admitted ? awareness.operational.primary : 'none';
     const operationalAttentionState = resolveSessionListAttentionState({
@@ -59,8 +67,8 @@ export function buildSessionActivityAttention(params: Readonly<{
         awareness,
         sessionId: params.session.id,
         ...(address ? { address, serverId: address.serverId } : null),
-        title: mayShowPrivateContent ? getSessionName(params.session) : t('sessionBoard.item.locked.title'),
-        subtitle: mayShowPrivateContent ? getSessionSubtitle(params.session) : '',
+        title: !includeDisplayDetails ? '' : mayShowPrivateContent ? getSessionName(params.session) : t('sessionBoard.item.locked.title'),
+        subtitle: includeDisplayDetails && mayShowPrivateContent ? getSessionSubtitle(params.session) : '',
         attentionState,
         personalAttention: {
             ...personal,

@@ -201,6 +201,21 @@ describe('useNotificationResponseRouting exact-Home permission dispatch', () => 
         expect(rpc.calls[0]!.serverId).toBe(homeA.id);
     });
 
+    it('opens a machine vitals notice on its verified saved Home without inventing a Session action', async () => {
+        const { homeA, homeB, setActiveServerId } = await setupHomes();
+        await setActiveServerId(homeB.id);
+        await mountRouting();
+        await waitFor(() => notifications.listener !== null);
+        notifications.listener!({ actionIdentifier: 'expo.modules.notifications.actions.DEFAULT', notification: { request: {
+            identifier: 'machine-saved', content: { data: { topic: 'resource_limit', kind: 'cpu_busy', phase: 'started', machineId: 'machine/a',
+                notificationId: 'notice', nextSteps: ['review_processes'], serverId: homeA.id, serverUrl: homeA.serverUrl } },
+        } } });
+        await waitFor(() => pushSpy.mock.calls.length === 1);
+        expect(switching.calls).toEqual([homeA.id]);
+        expect(pushSpy).toHaveBeenCalledWith(`/machines/machine%2Fa?serverId=${encodeURIComponent(homeA.id)}&tab=processes&sort=cpu`);
+        expect(rpc.calls).toEqual([]);
+    });
+
     it('replays a pending Allow against the Home it was recorded for', async () => {
         const { homeA, setActiveServerId } = await setupHomes();
         const { setPendingNotificationAction } = await import('@/sync/domains/pending/pendingNotificationAction');

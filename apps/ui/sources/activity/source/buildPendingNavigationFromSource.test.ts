@@ -55,7 +55,7 @@ describe('pending navigation projection', () => {
         expect(selectPendingNavigationTarget([])).toBeNull();
     });
 
-    it('keeps locked pending summaries available for an explicit unavailable result without counting them as answerable', () => {
+    it('excludes status-only locked attention from both counting and navigation', () => {
         const locked = createSessionFixture({ id: 'locked', serverId: 'a', active: true,
             encryptionMode: 'e2ee', encryptedContentAvailability: 'encrypted_access_pending',
             viewer: {
@@ -70,7 +70,21 @@ describe('pending navigation projection', () => {
             sessionListRowsByServerId: { a: { locked: buildSessionListRenderableFromSession(locked) } }, ordinarySessionListMembershipByServerId: { a: ['locked'] },
             sessionListIndexByServerId: {}, concurrentSessionListCacheByServerId: {}, activeServerId: 'a' };
         expect(buildPendingNavigationFromSource({ source, nowMs: 20 })).toEqual([]);
-        expect(buildPendingNavigationFromSource({ source, nowMs: 20, includeUnavailable: true })
-            .map(candidate => candidate.address)).toEqual([{ serverId: 'a', sessionId: 'locked' }]);
+    });
+
+    it('does not count content-unavailable rows as destinations even when retained viewer attention says full', () => {
+        const session = createSessionFixture({ id: 'locked', serverId: 'a', active: true,
+            encryptionMode: 'e2ee', encryptedContentAvailability: 'encrypted_content_unavailable',
+            viewer: {
+                readState: { state: 'tracking', lastViewedSessionSeq: 0, unreadSince: 1 },
+                relevance: { relevant: true, reasons: ['owned_by_me'] }, follow: { follows: false, notificationLevel: null },
+                notification: { level: 'important', source: 'owner' },
+                attention: { needsAttention: true, reasons: ['user_action_required'], primary: 'user_action_required', presentation: 'full' },
+            },
+        });
+        const source: ActivityAttentionSource = { isDataReady: true, sessionsById: { locked: session },
+            sessionListRowsByServerId: { a: { locked: buildSessionListRenderableFromSession(session) } }, ordinarySessionListMembershipByServerId: { a: ['locked'] },
+            sessionListIndexByServerId: {}, concurrentSessionListCacheByServerId: {}, activeServerId: 'a' };
+        expect(buildPendingNavigationFromSource({ source, nowMs: 20 })).toEqual([]);
     });
 });

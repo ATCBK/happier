@@ -110,6 +110,7 @@ export function DesktopActivityOverlayMotionFrame(props: Readonly<{
         };
     }, [openProgress, props.expanded, reduceMotion, setRenderOpenProgress]);
 
+    const expanded = props.expanded;
     const animatedStyle = useAnimatedStyle(() => {
         if (edgeAnchored) {
             return {
@@ -117,8 +118,8 @@ export function DesktopActivityOverlayMotionFrame(props: Readonly<{
             };
         }
 
-        const translateYOffset = props.expanded ? 5 : 4;
-        const initialScale = props.expanded ? 0.992 : 0.994;
+        const translateYOffset = expanded ? 5 : 4;
+        const initialScale = expanded ? 0.992 : 0.994;
 
         return {
             opacity: visibilityProgress.value,

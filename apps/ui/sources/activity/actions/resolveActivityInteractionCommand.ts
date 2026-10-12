@@ -1,4 +1,8 @@
 import type { ActionId } from '@happier-dev/protocol';
+import { MachineVitalsPushRoutingDataV1Schema } from '@happier-dev/protocol/activity/webhookPayload';
+import { machinePageHref, machineResourceAlertTab } from '@/components/machines/page/machinePageHref';
+import { beginMachinePageTabIntent } from '@/components/machines/page/machinePageIntent';
+import type { MachinePageTabParams } from '@/components/machines/page/machinePageTabQuery';
 
 import { createWorkflowRunRoute } from '@/sync/domains/workflows/workflowRunRoute';
 
@@ -40,6 +44,7 @@ export type ActivityInteractionIgnoreReason =
     | 'disabled';
 
 export type ActivityInteractionCommand =
+    | Readonly<{ kind: 'openMachine'; machineId: string; serverId: string | null; serverUrl: string | null; tab: MachinePageTabParams; route: string }>
     | Readonly<{
         kind: 'openSession';
         sessionId: string;
@@ -263,6 +268,16 @@ export function resolveActivityInteractionCommand(params: Readonly<{
     surfaceName?: string | null;
 }>): ActivityInteractionCommand {
     const actionIdentifier = params.actionIdentifier.trim() || params.defaultActionIdentifier;
+    if (isRecord(params.data) && params.data.topic === 'resource_limit') {
+        const parsed = MachineVitalsPushRoutingDataV1Schema.safeParse(params.data);
+        if (!parsed.success) return { kind: 'ignore', reason: 'malformed' };
+        if (actionIdentifier !== params.defaultActionIdentifier) return { kind: 'ignore', reason: 'unknown_action' };
+        const data = parsed.data;
+        if (!data.serverId && !data.serverUrl) return { kind: 'ignore', reason: 'missing_identity' };
+        const tab = machineResourceAlertTab(data.kind, data.machineVitals?.kind === 'disk_nearly_full' ? data.machineVitals.volumeId : null);
+        return { kind: 'openMachine', machineId: data.machineId, serverId: data.serverId ?? null, serverUrl: data.serverUrl ?? null, tab,
+            route: machinePageHref({ door: 'rail', target: { machineId: data.machineId, serverId: data.serverId }, tab }) };
+    }
     const targetIdentity =
         parseActivitySurfaceSessionTarget(actionIdentifier)
         ?? readPrefixedSessionTarget(actionIdentifier, 'focus-composer:');

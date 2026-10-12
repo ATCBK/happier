@@ -21,6 +21,7 @@ import {
 } from '@/sync/domains/session/pending/listPendingSessionRequests';
 import { isVoiceConversationCustodySessionMetadata } from '@/voice/persistence/voiceConversationSystemSessionLookup';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
+import { readSessionContentAvailability, type SessionContentAvailabilitySubject } from '@/sync/domains/session/encryptedContentAvailability';
 
 import type { ActivityAttentionSource } from './activityAttentionSourceTypes';
 import { collectRecordIds, forEachRecordValue } from './recordIteration';
@@ -156,9 +157,10 @@ function buildHiddenSessionSignature(session: Readonly<{
     serverId?: string | null;
     viewer?: Session['viewer'];
     archivedAt?: number | null;
-}>): string {
+}> & SessionContentAvailabilitySubject): string {
     return joinSignatureParts([
         session.id,
+        readSessionContentAvailability(session),
         session.metadataUnavailable === true ? 1 : 0,
         isUserFacingSession(session) ? 1 : 0,
         session.serverId ?? '',
@@ -174,6 +176,8 @@ function buildSessionActivitySignature(session: Session): string {
     const ownerMetadata = readSessionOwnerMetadataView(session);
     const visibilitySession = {
         id: session.id,
+        encryptionMode: session.encryptionMode,
+        encryptedContentAvailability: session.encryptedContentAvailability,
         serverId: session.serverId,
         viewer: session.viewer,
         archivedAt: session.archivedAt,
@@ -189,6 +193,7 @@ function buildSessionActivitySignature(session: Session): string {
     const agentState = session.agentState;
     return joinSignatureParts([
         session.id,
+        readSessionContentAvailability(session),
         readSessionViewerAttentionSignature(session),
         JSON.stringify(session.access?.audienceContext ?? null),
         session.access?.capabilities.submitAgentInput === true ? 1 : 0,
@@ -227,6 +232,7 @@ function buildSessionActivitySignature(session: Session): string {
 function buildHiddenRenderableSignature(renderable: SessionListRenderableSession): string {
     return joinSignatureParts([
         renderable.id,
+        readSessionContentAvailability(renderable),
         readSessionViewerAttentionSignature(renderable),
         JSON.stringify(renderable.access?.audienceContext ?? null),
         renderable.metadataUnavailable === true ? 1 : 0,
@@ -244,6 +250,7 @@ function buildRenderableActivitySignature(renderable: SessionListRenderableSessi
 
     return joinSignatureParts([
         renderable.id,
+        readSessionContentAvailability(renderable),
         readSessionViewerAttentionSignature(renderable),
         JSON.stringify(renderable.access?.audienceContext ?? null),
         renderable.access?.capabilities.submitAgentInput === true ? 1 : 0,

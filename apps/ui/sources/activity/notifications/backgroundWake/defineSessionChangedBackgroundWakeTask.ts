@@ -6,6 +6,10 @@ import { parseSessionChangedWakeV1, type SessionChangedWakeV1 } from '@happier-d
 import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverProfiles';
 import { withMutedActivityLocalNotifications } from '../runtime/activityLocalNotificationBus';
+import { resolveIncomingMachineRemoteAlert } from '../remoteAlerts/machineRemoteAlertRouting';
+import { resolveServerCredentialAccountScope } from '@/sync/domains/scope/serverCredentialAccountScope';
+import { readExactHomeAccountSettings } from '@/activity/delivery/useExactHomeAccountSettings';
+import { loadExpoNotifications, type ExpoNotificationsModule } from '@/utils/platform/loadExpoNotifications';
 
 declare const require: (id: string) => unknown;
 
@@ -67,7 +71,8 @@ export type SessionChangedWakeReconciler = (wake: SessionChangedWakeV1) => Promi
 
 export type SessionChangedBackgroundWakeResult =
     | Readonly<{ action: 'reconciled'; sessionId: string; serverId?: string }>
-    | Readonly<{ action: 'ignore'; reason: 'not_a_session_changed_wake' | 'session_unavailable' }>;
+    | Readonly<{ action: 'dismissed'; machineId: string; serverId: string }>
+    | Readonly<{ action: 'ignore'; reason: 'not_a_session_changed_wake' | 'session_unavailable' | 'machine_unavailable' }>;
 
 export type SessionChangedBackgroundWakeTaskRegistrationResult =
     | Readonly<{ status: 'registered' }>
@@ -93,20 +98,24 @@ function getTaskManagerDefinitionApi(): TaskManagerDefinitionApi {
  * the strict wake payload is rejected rather than partially trusted.
  */
 export function readSessionChangedBackgroundWakePayload(raw: unknown): SessionChangedWakeV1 | null {
-    const direct = parseSessionChangedWakeV1(raw);
+    return readBackgroundPayload(raw, parseSessionChangedWakeV1);
+}
+
+function readBackgroundPayload<T>(raw: unknown, parse: (raw: unknown) => T | null): T | null {
+    const direct = parse(raw);
     if (direct) return direct;
     if (!raw || typeof raw !== 'object') return null;
     const record = raw as Readonly<Record<string, unknown>>;
     if (typeof record.dataString === 'string') {
         try {
-            return readSessionChangedBackgroundWakePayload(JSON.parse(record.dataString));
+            return readBackgroundPayload(JSON.parse(record.dataString), parse);
         } catch {
             return null;
         }
     }
     const nested = record.data ?? record.body ?? record.notification;
     if (nested && typeof nested === 'object') {
-        return readSessionChangedBackgroundWakePayload(nested);
+        return readBackgroundPayload(nested, parse);
     }
     return null;
 }
@@ -124,7 +133,38 @@ async function reconcileExactHomeSession(wake: SessionChangedWakeV1): Promise<bo
 export async function applySessionChangedBackgroundWakePayload(params: Readonly<{
     payload: unknown;
     reconcile?: SessionChangedWakeReconciler;
+    /** Native dismissal boundary; the same Expo task owns receipt of data-only recovery. */
+    notifications?: Pick<ExpoNotificationsModule, 'dismissNotificationAsync' | 'getPresentedNotificationsAsync'>;
 }>): Promise<SessionChangedBackgroundWakeResult> {
+    const machine = readBackgroundPayload(params.payload, raw => {
+        const incoming = resolveIncomingMachineRemoteAlert(raw);
+        return incoming.kind === 'not_machine_alert' ? null : incoming;
+    });
+    if (machine) {
+        if (machine.kind !== 'routable' || machine.alert.phase !== 'recovered') return { action: 'ignore', reason: 'machine_unavailable' };
+        const notifications = params.notifications ?? await loadExpoNotifications();
+        const scope = await resolveServerCredentialAccountScope(machine.serverId);
+        if (scope.kind !== 'bound' || scope.scope.accountId !== machine.alert.accountId || !readExactHomeAccountSettings(scope.scope)) {
+            return { action: 'ignore', reason: 'machine_unavailable' };
+        }
+        const presented = await notifications.getPresentedNotificationsAsync();
+        for (const notification of presented) {
+            const notice = resolveIncomingMachineRemoteAlert(notification.request.content.data);
+            if (notice.kind !== 'routable' || notice.alert.phase !== 'offline'
+                || notice.alert.serverId !== machine.alert.serverId || notice.alert.accountId !== machine.alert.accountId
+                || notice.alert.machineId !== machine.alert.machineId) continue;
+            // Listing notices and each earlier dismissal can await native work. Re-admit the exact Account/Home before every outward dismissal.
+            const currentScope = await resolveServerCredentialAccountScope(machine.serverId);
+            const current = resolveIncomingMachineRemoteAlert(machine.alert);
+            if (currentScope.kind !== 'bound' || currentScope.scope.accountId !== machine.alert.accountId
+                || !readExactHomeAccountSettings(currentScope.scope) || current.kind !== 'routable' || current.serverId !== machine.serverId) {
+                return { action: 'ignore', reason: 'machine_unavailable' };
+            }
+            // iOS's OS request id is not the payload's stable thread/tag identity.
+            await notifications.dismissNotificationAsync(notification.request.identifier);
+        }
+        return { action: 'dismissed', serverId: machine.serverId, machineId: machine.alert.machineId };
+    }
     const wake = readSessionChangedBackgroundWakePayload(params.payload);
     if (!wake) return { action: 'ignore', reason: 'not_a_session_changed_wake' };
     const reconcile = params.reconcile ?? reconcileExactHomeSession;
@@ -182,7 +222,7 @@ export function defineSessionChangedBackgroundWakeTask(params: Readonly<{
         async ({ data, error }) => {
             if (error) return notifications.BackgroundNotificationTaskResult.Failed;
             const result = await applySessionChangedBackgroundWakePayload({ payload: data });
-            return result.action === 'reconciled'
+            return result.action === 'reconciled' || result.action === 'dismissed'
                 ? notifications.BackgroundNotificationTaskResult.NewData
                 : notifications.BackgroundNotificationTaskResult.NoData;
         },

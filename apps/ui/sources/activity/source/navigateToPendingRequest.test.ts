@@ -41,10 +41,15 @@ describe('pending navigation landing revalidation', () => {
             details: { kind: 'available', session: approvalOnly, messages: [], requests: [confirmation] } }))
             .toEqual({ kind: 'route', route: '/session/same?serverId=home-b', state: 'pending', focusTarget: 'prompt' });
     });
-    it('routes a still-answerable request to its real sequence in the exact Home', () => {
+    it('opens a still-answerable request in its session on the exact Home', () => {
         expect(planPendingNavigationRoute({ target, nowMs: 20,
             details: { kind: 'available', session, messages: [tool], requests: [request] } }))
-            .toEqual({ kind: 'route', route: '/session/same?jumpSeq=5&serverId=home-b', state: 'pending', focusTarget: 'transcript' });
+            .toEqual({ kind: 'route', route: '/session/same?serverId=home-b', state: 'pending', focusTarget: 'prompt' });
+    });
+    it('keeps a sequence-less tool call in the session transcript instead of opening the standalone tool page', () => {
+        expect(planPendingNavigationRoute({ target, nowMs: 20,
+            details: { kind: 'available', session, messages: [{ ...tool, seq: undefined }], requests: [request] } }))
+            .toEqual({ kind: 'route', route: '/session/same?serverId=home-b', state: 'pending', focusTarget: 'prompt' });
     });
     it('shows a settled session instead of choosing a different request when answered elsewhere', () => {
         expect(planPendingNavigationRoute({ target, nowMs: 20,

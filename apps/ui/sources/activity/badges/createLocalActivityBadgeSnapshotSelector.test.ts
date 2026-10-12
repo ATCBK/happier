@@ -163,6 +163,35 @@ describe('createLocalActivityBadgeSnapshotSelector', () => {
         registerStorageStateReader(() => currentState);
     });
 
+    it('builds large membership signatures with linear address-key allocation', () => {
+        const ids = Array.from({ length: 2_000 }, (_, index) => `key-cost-session-${(index * 997) % 2_000}`);
+        const state = createStorageState({ ordinarySessionListMembershipByServerId: { server1: ids } });
+        // Call-through allocation instrumentation, not a replacement key or classifier.
+        const stringify = vi.spyOn(JSON, 'stringify');
+        const start = performance.now();
+        try {
+            createSelector()(state);
+            const allocations = stringify.mock.calls.filter(([value]) => Array.isArray(value)
+                && value[0] === 'server1' && typeof value[1] === 'string' && value[1].startsWith('key-cost-session-')).length;
+            console.info('[PERF-3 badge keys]', JSON.stringify({ addresses: ids.length, allocations, ms: performance.now() - start }));
+            // The attention/runtime signatures each walk the same membership once.
+            expect(allocations).toBe(ids.length * 2);
+        } finally { stringify.mockRestore(); }
+    });
+
+    it('counts attention without constructing private display details for closed chrome', () => {
+        const metadata = { path: '/repo', host: 'local' };
+        Object.defineProperty(metadata, 'name', { get: () => { throw new Error('Badge read private display details'); } });
+        const state = createStorageState({
+            sessionListRowsByServerId: {
+                server1: { session1: createRenderable({ id: 'session1', hasUnreadMessages: true, metadata }) },
+            },
+            ordinarySessionListMembershipByServerId: { server1: ['session1'] },
+        });
+
+        expect(createSelector()(state).localBadgeState).toEqual({ count: 1, showNonNumericDot: false });
+    });
+
     it('reuses the previous badge snapshot when only unrelated renderable fields change', () => {
         const selector = createSelector();
         const first = selector(createStorageState({
