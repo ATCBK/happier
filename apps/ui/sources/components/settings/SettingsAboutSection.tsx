@@ -10,6 +10,7 @@ import { Icon } from '@/components/ui/icons/Icon';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { t } from '@/text';
 import { trackWhatsNewClicked } from '@/track';
+import { useReleaseNotesLauncher } from '@/changelog/releaseNotes';
 import { requestReview } from '@/utils/system/requestReview';
 
 type SettingsAboutSectionProps = Readonly<Pick<SettingsBelowFoldSectionsProps,
@@ -35,11 +36,11 @@ export const SettingsAboutSection = React.memo(function SettingsAboutSection({
     appVersion,
     handleGitHub,
     handleVersionClick,
-    router,
     showChangelog,
     showRateUs,
     supportUs,
 }: SettingsAboutSectionProps) {
+    const { openWhatsNew } = useReleaseNotesLauncher();
     // What's new, Rate us and Support us are page state (build, store, developer mode): the section answers.
     return (
         <SettingSection section={OVERVIEW_SETTINGS.sectionRefs.about}>
@@ -50,7 +51,7 @@ export const SettingsAboutSection = React.memo(function SettingsAboutSection({
                     icon={<Icon name="sparkle" />}
                     onPress={() => {
                         trackWhatsNewClicked();
-                        router.push('/(app)/changelog');
+                        openWhatsNew();
                     }}
                 />
             ) : null}
