@@ -11,6 +11,7 @@ import { encodeBase64 } from '../crypto/base64.js';
 import { createCanonicalJsonSigningInput } from '../crypto/canonicalJson.js';
 import { verifyEd25519Signature } from '../crypto/ed25519.js';
 import { decodeCanonicalBase64UrlFixedLength } from '../machines/peer/mediation/strictBase64Url.js';
+import { createStoredReadSchema } from '../json/storedReadSchema.js';
 import {
   RUNNER_MACHINE_CONTENT_KEY_FINGERPRINT_PREFIX,
   RunnerMachineContentKeyBindingPayloadV1Schema,
@@ -77,7 +78,7 @@ export function openRunnerMachineContentKeyVerifierFactV1(params: Readonly<{
     ciphertext: params.ciphertext,
   });
   if (!opened || opened.format !== 'account_scoped_v1') return null;
-  const fact = RunnerMachineContentKeyVerifierFactPayloadV1Schema.safeParse(opened.value);
+  const fact = createStoredReadSchema(RunnerMachineContentKeyVerifierFactPayloadV1Schema).safeParse(opened.value);
   if (!fact.success
     || fact.data.activationId !== params.expectedActivationId
     || fact.data.machineId !== params.expectedMachineId) return null;

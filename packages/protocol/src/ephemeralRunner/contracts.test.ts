@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import tweetnacl from 'tweetnacl';
 
 import { encodeBase64 } from '../crypto/base64.js';
+import { sealAccountScopedBlobCiphertext } from '../crypto/accountScopedCipher.js';
 import { RunnerRuntimeBootstrapV1Schema } from './bootstrap.js';
 import { RunnerServerErrorV1Schema } from './errors.js';
 import {
@@ -20,6 +21,17 @@ import {
 } from '../machines/machineStoredContent.js';
 
 describe('Runner authority contracts', () => {
+  it('reads retained unsigned verifier facts while preserving their activation and Machine binding', () => {
+    const payload = { v: 1, activationId: '00000000-0000-4000-8000-000000000001', machineId: 'machine',
+      activationSigningPublicKey: encodeBase64(tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(3)).publicKey, 'base64url'), retired: true };
+    const material = { type: 'legacy' as const, secret: new Uint8Array(32).fill(7) };
+    const ciphertext = sealAccountScopedBlobCiphertext({ kind: 'runner_machine_content_key_verifier', material, payload,
+      randomBytes: length => new Uint8Array(length).fill(5) });
+    expect(openRunnerMachineContentKeyVerifierFactV1({ ciphertext, material,
+      expectedActivationId: payload.activationId, expectedMachineId: payload.machineId })).toBe(payload.activationSigningPublicKey);
+    expect(openRunnerMachineContentKeyVerifierFactV1({ ciphertext, material,
+      expectedActivationId: payload.activationId, expectedMachineId: 'another-machine' })).toBeNull();
+  });
   it('admits the server error for a declared but invalid Runner publication', () => {
     expect(RunnerServerErrorV1Schema.safeParse({
       error: 'runner_artifact_publication_invalid',

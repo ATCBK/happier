@@ -4,6 +4,16 @@ import { McpServersSettingsV1Schema } from '../mcp/servers/settingsV1.js';
 import { resolveRunnerMcpMaterialV1, RunnerMcpMaterialV1Schema } from './runnerMcpMaterial.js';
 
 describe('resolveRunnerMcpMaterialV1', () => {
+  it('retains symbolic Session headers until the runtime has its actual Session identity', () => {
+    const headers = { 'X-Happier-Session': { t: 'sessionAttested', field: 'sessionId' },
+      'X-Sender': { t: 'sessionAttested', field: 'externalPrincipalId' } } as const;
+    const settings = McpServersSettingsV1Schema.parse({ servers: [{ id: 'wilson', name: 'wilson', transport: 'http',
+      remote: { url: 'https://wilson.example.test/mcp', headers }, env: {}, createdAt: 1, updatedAt: 2 }],
+      bindings: [{ id: 'all', serverId: 'wilson', enabled: true, target: { t: 'allMachines' }, createdAt: 1, updatedAt: 2 }] });
+    const result = resolveRunnerMcpMaterialV1({ settings, selection: null, resolveSavedSecret: () => null });
+    expect(result).toMatchObject({ ok: true, material: { servers: [{ config: { remote: { headers } } }] } });
+  });
+
   it('freezes the exact portable selection revisions and resolved secret material', () => {
     const settings = McpServersSettingsV1Schema.parse({
       v: 1,

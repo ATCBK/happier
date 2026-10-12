@@ -26,8 +26,8 @@ const RunnerReviewedMcpServerV1Schema = z.object({
     ...Object.values(value.config.env),
     ...Object.values(value.config.remote?.headers ?? {}),
   ];
-  if (refs.some((ref) => ref.t !== 'literal')) {
-    context.addIssue({ code: 'custom', path: ['config'], message: 'Reviewed MCP material must contain only resolved literal values' });
+  if (refs.some((ref) => ref.t === 'savedSecret')) {
+    context.addIssue({ code: 'custom', path: ['config'], message: 'Reviewed MCP material must resolve Saved Secret values before handoff' });
   }
 });
 
@@ -84,6 +84,11 @@ function resolvePortableValueRef(input: Readonly<{
           value: { t: 'literal', v: resolved.value },
           savedSecretRevision: { secretId: input.ref.secretId, revision: resolved.revision },
         };
+  }
+  // Portable preparation has no Session identity to assert. Retain the
+  // symbolic reference for the ordinary runtime materializer to resolve/omit.
+  if (input.ref.t === 'sessionAttested') {
+    return { ok: true, value: input.ref, savedSecretRevision: null };
   }
   // Environment expansion is Machine-owned in the ordinary runtime. A creator
   // cannot truthfully freeze an endpoint value it has never observed.
