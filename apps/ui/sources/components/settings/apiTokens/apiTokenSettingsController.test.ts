@@ -178,6 +178,37 @@ describe('createApiTokenSettingsController', () => {
         });
     });
 
+    it('reopens a collection with the last-known rows of the same Account and keeps them when that refresh fails', async () => {
+        const lifetime = createLifetime();
+        const failure: ActionExecuteResult = { ok: false, errorCode: 'network_error', error: 'network_error' };
+        const first = createApiTokenSettingsController({
+            execute: vi.fn<ApiTokenSettingsExecute>(async () => ok({ tokens: [TOKEN_A, TOKEN_B] })),
+            captureActiveAccountScopeLifetime: () => lifetime,
+            now: () => NOW,
+        });
+        await first.refresh();
+        first.retire();
+
+        const reopened = createApiTokenSettingsController({
+            execute: vi.fn<ApiTokenSettingsExecute>(async () => failure),
+            captureActiveAccountScopeLifetime: () => lifetime,
+            now: () => NOW,
+        });
+        await reopened.refresh();
+        expect(reopened.getState()).toMatchObject({
+            phase: 'ready', tokens: [TOKEN_A, TOKEN_B], isRefreshing: false, listError: 'network_error',
+        });
+
+        // Another Account never inherits those rows.
+        const otherAccount = createApiTokenSettingsController({
+            execute: vi.fn<ApiTokenSettingsExecute>(async () => failure),
+            captureActiveAccountScopeLifetime: () => createLifetime('account-b'),
+            now: () => NOW,
+        });
+        await otherAccount.refresh();
+        expect(otherAccount.getState()).toMatchObject({ phase: 'error', tokens: [], listError: 'network_error' });
+    });
+
     it('normalizes unsupported executor failures instead of inventing UI states', async () => {
         const harness = createHarness([
             { ok: false, errorCode: 'account_mismatch', error: 'account_mismatch' },

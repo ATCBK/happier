@@ -225,6 +225,14 @@ export function resolveApiTokenExpiryInstant(preset: ApiTokenExpiryPreset, now: 
     return new Date(now + durationDays * 24 * 60 * 60 * 1000).toISOString();
 }
 
+/**
+ * The last list each Account and Home showed. Reopening a token collection (API tokens or Embeds)
+ * starts from it, and a failed refresh keeps it under a freshness line rather than a full-page error
+ * (surface states: retained content). Keyed by the scope lifetime, so it is dropped with the Account
+ * and never read by another one.
+ */
+const lastKnownTokensByScope = new WeakMap<ActiveServerAccountScopeLifetime, readonly AccountApiTokenSummaryV1[]>();
+
 export function createApiTokenSettingsController(
     dependencies: ApiTokenSettingsControllerDependencies = defaultDependencies,
 ): ApiTokenSettingsController {
@@ -243,6 +251,7 @@ export function createApiTokenSettingsController(
     const publish = (next: ApiTokenSettingsState): void => {
         if (retired) return;
         state = Object.freeze(next);
+        if (state.phase === 'ready' && activeLifetime?.isCurrent()) lastKnownTokensByScope.set(activeLifetime, state.tokens);
         for (const listener of [...listeners]) listener();
     };
 
@@ -403,6 +412,11 @@ export function createApiTokenSettingsController(
         },
         async refresh() {
             if (retired || activeRequest || creation) return;
+            if (state.phase !== 'ready') {
+                const lifetime = captureLifetime();
+                const retained = lifetime ? lastKnownTokensByScope.get(lifetime) : undefined;
+                if (retained) publish({ ...state, phase: 'ready', tokens: retained });
+            }
             const hadContent = state.phase === 'ready';
             publish({
                 ...state,
