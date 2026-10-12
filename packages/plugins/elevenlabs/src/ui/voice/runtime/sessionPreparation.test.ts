@@ -218,8 +218,14 @@ describe('createElevenLabsSessionPreparationService', () => {
     expect(mocks.requestAccountOperation).not.toHaveBeenCalled();
   });
 
-  it('uses short-lived provider auth minted from the account credential and builds the SDK configuration', async () => {
+  it('captures the selected voice with short-lived BYO auth without later settings or inherited model changes', async () => {
     const projected = settings({ billingMode: 'byo', agentId: 'agent-1' });
+    projected.providerConfig = ElevenLabsVoiceProviderSettingsSchema.parse({
+      ...projected.providerConfig,
+      tts: { voiceId: 'selected-voice', modelId: 'inherited-model', voiceSettings: {
+        stability: 0.4, similarityBoost: 0.8, speed: 1.1,
+      } },
+    });
     const service = createService(vi.fn(() => projected));
     const prepared = await service.prepare({
       controlSessionId: 'control-byo', initialContext: 'context', requestedTargetSessionId: null,
@@ -228,40 +234,23 @@ describe('createElevenLabsSessionPreparationService', () => {
     });
     expect(prepared).toMatchObject({ kind: 'prepared', session: { sessionConfig: { token: 'ephemeral-token' } } });
     if (prepared.kind !== 'prepared') throw new Error('expected prepared');
-    expect(service.buildStartConfig({ prepared: prepared.session, settings: {} })).toMatchObject({
-      connectionType: 'webrtc', conversationToken: 'ephemeral-token',
-      dynamicVariables: { sessionId: 'control-byo', initialConversationContext: 'context' },
-      overrides: { tts: { voiceId: projected.providerConfig.tts.voiceId } },
-    });
-    expect(mocks.requestAccountOperation).toHaveBeenCalledWith(expect.objectContaining({
-      operationId: 'conversation-token',
-      parameters: { agentId: 'agent-1' },
-    }));
-  });
-
-  it('captures the effective selected voice at preparation without overriding inherited speed or model', async () => {
-    const projected = settings({ billingMode: 'byo', agentId: 'agent-1' });
-    projected.providerConfig = ElevenLabsVoiceProviderSettingsSchema.parse({
-      ...projected.providerConfig,
-      tts: { voiceId: 'selected-voice', modelId: 'inherited-model', voiceSettings: {
-        stability: 0.4, similarityBoost: 0.8, speed: 1.1,
-      } },
-    });
-    const service = createService(() => projected);
-    const prepared = await service.prepare({
-      controlSessionId: 'selected', requestedTargetSessionId: null,
-      settings: {}, credentials: credentials(), hostedConversation: null,
-      signal: new AbortController().signal, platform: 'web', textOnly: false,
-    });
-    if (prepared.kind !== 'prepared') throw new Error('expected prepared');
     projected.providerConfig = ElevenLabsVoiceProviderSettingsSchema.parse({
       ...projected.providerConfig, tts: { ...projected.providerConfig.tts, voiceId: 'later-voice' },
     });
     const config = service.buildStartConfig({ prepared: prepared.session, settings: {} });
-    expect(config).toMatchObject({ conversationToken: 'ephemeral-token', overrides: { tts: { voiceId: 'selected-voice' } } });
+    expect(config).toMatchObject({
+      connectionType: 'webrtc', conversationToken: 'ephemeral-token',
+      dynamicVariables: { sessionId: 'control-byo', initialConversationContext: 'context' },
+      overrides: { tts: { voiceId: 'selected-voice' } },
+    });
     expect(config).not.toHaveProperty('overrides.tts.speed');
     expect(config).not.toHaveProperty('overrides.tts.modelId');
-    expect(mocks.requestAccountOperation.mock.calls.map(([request]) => request.operationId)).toEqual(['agent', 'conversation-token']);
+    expect(mocks.requestAccountOperation.mock.calls.map(([request]) => request.operationId))
+      .toEqual(['agent', 'conversation-token']);
+    expect(mocks.requestAccountOperation).toHaveBeenCalledWith(expect.objectContaining({
+      operationId: 'conversation-token',
+      parameters: { agentId: 'agent-1' },
+    }));
   });
 
   it.each(['agent', 'conversation-token'])('retires BYO preparation cancelled during %s instead of claiming an applied voice', async (operationId) => {

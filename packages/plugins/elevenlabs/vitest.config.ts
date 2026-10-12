@@ -10,6 +10,9 @@ const packageRoot = fileURLToPath(new URL('.', import.meta.url));
 
 export default defineConfig({
   root: packageRoot,
+  resolve: {
+    alias: { '@': resolve(packageRoot, '../../../apps/ui/sources') },
+  },
   plugins: [createWorkspacePackageSourcesPlugin([
     { packageName: '@happier-dev/plugin-sdk', packageSourceRoot: resolve(packageRoot, '../../plugin-sdk/src') },
     { packageName: '@happier-dev/protocol', packageSourceRoot: resolve(packageRoot, '../../protocol/src') },

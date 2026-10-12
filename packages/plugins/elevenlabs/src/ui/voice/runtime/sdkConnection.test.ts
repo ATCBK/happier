@@ -7,76 +7,22 @@ import type { ElevenLabsConversationHandleEvent } from './conversationHandle.js'
 import { createElevenLabsSdkConnection } from './sdkConnection.js';
 import { createElevenLabsConversationHandle } from './conversationHandle.js';
 import { createElevenLabsSessionPreparationService } from './sessionPreparation.js';
-import { ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS } from '../../../protocol/voice/index.js';
-import type { VoiceRealtimeConnection } from '@happier-dev/plugin-sdk/voice/client';
-
-function createTestConnection(input: Readonly<{ driver: Readonly<{
-  open(input: Readonly<{
-    signal: AbortSignal;
-    onControl: (event: unknown) => void;
-    onTransport: (event: Readonly<{ type: 'session_identity'; sessionId: string }>) => void;
-    onRemoteClose: (reason: string) => void;
-  }>): Promise<void>;
-  sendControl(event: never): Promise<void>;
-  setOutputFocusState?(state: 'active' | 'ducked' | 'suspended'): void;
-  close(): Promise<void>;
-}> }>): VoiceRealtimeConnection {
-  let state: 'idle' | 'connecting' | 'open' | 'closed' = 'idle';
-  let sessionId: string | null = null;
-  const controls: unknown[] = [];
-  const transports: unknown[] = [];
-  let closePromise: Promise<void> | null = null;
-  const close = async () => {
-    if (!closePromise) {
-      state = 'closed';
-      closePromise = input.driver.close();
-    }
-    await closePromise;
-  };
-  return {
-    kind: 'sdk_handle',
-    async connect(signal) {
-      state = 'connecting';
-      const abort = new Promise<never>((_resolve, reject) => {
-        signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })), { once: true });
-      });
-      try {
-        await Promise.race([input.driver.open({
-          signal,
-          onControl: (event) => controls.push(event),
-          onTransport: (event) => { transports.push(event); sessionId = event.sessionId; },
-          onRemoteClose: () => { void close(); },
-        }), abort]);
-        if (state === 'closed' || signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
-        state = 'open';
-      } catch (error) {
-        await close();
-        throw error;
-      }
-    },
-    sendControl: async (event) => await input.driver.sendControl(event as never),
-    controlEvents: () => ({ async *[Symbol.asyncIterator]() { for (const event of controls) yield event as never; } }),
-    transportEvents: () => ({ async *[Symbol.asyncIterator]() { for (const event of transports) yield event as never; } }),
-    close: async () => await close(),
-    state: () => state,
-    currentProviderSessionId: () => sessionId,
-    playbackCursorMs: () => null,
-    beginOutputInterruptionCandidate: () => 'unsupported' as const,
-    resolveOutputInterruptionCandidate: () => {},
-    setOutputFocusState(state) {
-      if (!input.driver.setOutputFocusState) return 'unsupported';
-      try {
-        input.driver.setOutputFocusState(state);
-        return 'applied';
-      } catch {
-        return 'unsupported';
-      }
-    },
-  };
-}
+import {
+  ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS,
+  ElevenLabsVoiceProviderSettingsSchema,
+} from '../../../protocol/voice/index.js';
+// Exercise the same host connection lifecycle injected into the plugin in production.
+// Dynamic import keeps the plugin's TypeScript build rooted at its public SDK seam.
+const hostConnectionUrl = new URL(
+  '../../../../../../../apps/ui/sources/voice/runtime/connection/VoiceRealtimeConnection.ts',
+  import.meta.url,
+);
+const { createSdkHandleConnection } = await import(/* @vite-ignore */ hostConnectionUrl.href) as Readonly<{
+  createSdkHandleConnection: Parameters<typeof createElevenLabsSdkConnection>[0]['createSdkHandleConnection'];
+}>;
 
 describe('createElevenLabsSdkConnection', () => {
-  it.each(['inherited-voice', 'selected-voice'])('sends the effective %s through the real SDK native override encoder', async (voiceId) => {
+  it.each(['inherited-voice', 'selected-voice'])('sends the prepared %s through the real SDK encoder after settings change', async (voiceId) => {
     const sent: unknown[] = [];
     class ProviderSocket extends EventTarget {
       constructor() { super(); queueMicrotask(() => this.dispatchEvent(new Event('open'))); }
@@ -95,11 +41,11 @@ describe('createElevenLabsSdkConnection', () => {
     }
     // Only the vendor WebSocket is replaced. Preparation, handle lifecycle,
     // SDK startup and the vendor's camelCase → native wire encoder remain real.
-    const settings = {
+    let settings = ElevenLabsVoiceProviderSettingsSchema.parse({
       ...ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS,
       tts: { ...ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS.tts, voiceId, modelId: 'inherited-model',
         voiceSettings: { stability: 0.4, similarityBoost: 0.8, speed: 1.1 } },
-    };
+    });
     const preparation = createElevenLabsSessionPreparationService({
       providerId: 'elevenlabs', alert() {},
       projectVoiceSettings: (providerConfig) => ({ providerId: 'elevenlabs', assistantLanguage: null, providerConfig }),
@@ -114,9 +60,13 @@ describe('createElevenLabsSdkConnection', () => {
       signal: new AbortController().signal, platform: 'web', textOnly: true,
     });
     if (prepared.kind !== 'prepared') throw new Error('expected prepared');
+    settings = ElevenLabsVoiceProviderSettingsSchema.parse({
+      ...settings, tts: { ...settings.tts, voiceId: 'later-voice' },
+    });
     const config = preparation.buildStartConfig({ prepared: prepared.session, settings });
+    expect(config).toMatchObject({ conversationToken: 'hosted-token' });
     const connection = createElevenLabsSdkConnection({
-      createSdkHandleConnection: createTestConnection, handle: createElevenLabsConversationHandle({ tools: [], loadConversationSdk: () => import('@elevenlabs/client') }),
+      createSdkHandleConnection, handle: createElevenLabsConversationHandle({ tools: [], loadConversationSdk: () => import('@elevenlabs/client') }),
       startConfig: { ...(config as Record<string, unknown>), connectionType: 'websocket', signedUrl: 'wss://provider.test/voice' },
       duckGain: 0.18,
     });
@@ -146,7 +96,7 @@ describe('createElevenLabsSdkConnection', () => {
       subscribe(listener: typeof publish) { publish = listener; return () => {}; },
     };
     const connection = createElevenLabsSdkConnection({
-      createSdkHandleConnection: createTestConnection, handle, startConfig: {}, duckGain: 0.18,
+      createSdkHandleConnection, handle, startConfig: {}, duckGain: 0.18,
     });
     await connection.connect(new AbortController().signal);
     publish({ type: 'error', error: 'tool failed', context: { clientToolName: 'readSession' } } as ElevenLabsConversationHandleEvent);
@@ -176,7 +126,7 @@ describe('createElevenLabsSdkConnection', () => {
       },
     };
     const connection = createElevenLabsSdkConnection({
-      createSdkHandleConnection: createTestConnection,
+      createSdkHandleConnection,
       handle,
       startConfig: { signedUrl: 'wss://example.test/session' },
       duckGain: 0.18,
@@ -251,7 +201,7 @@ describe('createElevenLabsSdkConnection', () => {
       subscribe: vi.fn(() => () => {}),
     };
     const connection = createElevenLabsSdkConnection({
-      createSdkHandleConnection: createTestConnection,
+      createSdkHandleConnection,
       handle,
       startConfig: { textOnly: true },
       initialMuted: false,
@@ -279,7 +229,7 @@ describe('createElevenLabsSdkConnection', () => {
       subscribe: vi.fn(() => () => {}),
     };
     const connection = createElevenLabsSdkConnection({
-      createSdkHandleConnection: createTestConnection,
+      createSdkHandleConnection,
       handle,
       startConfig: {},
       duckGain: 0.18,
@@ -310,7 +260,7 @@ describe('createElevenLabsSdkConnection', () => {
       },
     };
     const connection = createElevenLabsSdkConnection({
-      createSdkHandleConnection: createTestConnection,
+      createSdkHandleConnection,
       handle,
       startConfig: {},
       duckGain: 0.18,
@@ -352,7 +302,7 @@ describe('createElevenLabsSdkConnection', () => {
       },
     };
     const connection = createElevenLabsSdkConnection({
-      createSdkHandleConnection: createTestConnection,
+      createSdkHandleConnection,
       handle,
       startConfig: {},
       duckGain: 0.18,
@@ -378,7 +328,7 @@ describe('createElevenLabsSdkConnection', () => {
       subscribe: vi.fn(() => () => undefined),
     };
     const connection = createElevenLabsSdkConnection({
-      createSdkHandleConnection: createTestConnection,
+      createSdkHandleConnection,
       handle,
       startConfig: {},
       duckGain: 0.18,
@@ -409,7 +359,7 @@ describe('createElevenLabsSdkConnection', () => {
       subscribe: vi.fn(() => () => undefined),
     };
     const connection = createElevenLabsSdkConnection({
-      createSdkHandleConnection: createTestConnection,
+      createSdkHandleConnection,
       handle,
       startConfig: {},
       duckGain: 0.18,
@@ -443,7 +393,7 @@ describe('createElevenLabsSdkConnection', () => {
       subscribe: vi.fn(() => () => undefined),
     };
     const connection = createElevenLabsSdkConnection({
-      createSdkHandleConnection: createTestConnection,
+      createSdkHandleConnection,
       handle,
       startConfig: {},
       duckGain: 0.18,
@@ -477,7 +427,7 @@ describe('createElevenLabsSdkConnection', () => {
       subscribe: vi.fn(() => () => undefined),
     };
     const connection = createElevenLabsSdkConnection({
-      createSdkHandleConnection: createTestConnection,
+      createSdkHandleConnection,
       handle,
       startConfig: {},
       duckGain: 0.18,
