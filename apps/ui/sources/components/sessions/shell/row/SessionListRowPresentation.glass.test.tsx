@@ -30,21 +30,4 @@ describe('session row sidebar material', () => {
             standardCleanup();
         }
     });
-
-    it('preserves authored attention and error tint within the sidebar material', async () => {
-        const { SessionListRowPresentation } = await import('./SessionListRowPresentation');
-        const { useUnistyles } = await import('react-native-unistyles');
-        const { theme } = useUnistyles();
-        for (const statusTone of ['attention', 'danger'] as const) {
-            const screen = await renderScreen(<HappierMaterialRoleProvider role="sidebar" translucentColor={theme.colors.surface.selected}>
-                <SessionListRowPresentation density="minimal" statusTone={statusTone} title={<>sample</>} />
-            </HappierMaterialRoleProvider>);
-            const row = screen.findAllByType('View').map(node => StyleSheet.flatten(node.props.style)).find(style => style?.borderLeftWidth === 2)!;
-            const color = statusTone === 'danger' ? theme.colors.state.danger.background : theme.colors.state.warning.background;
-            expect(row.backgroundColor).toBe(happierMaterialInnerBackgroundColor(color, color, 'sidebar', true));
-            expect(row.borderColor).not.toContain('--happier-glass-sidebar-nested-opacity');
-            expect(row.opacity).toBeUndefined();
-            standardCleanup();
-        }
-    });
 });

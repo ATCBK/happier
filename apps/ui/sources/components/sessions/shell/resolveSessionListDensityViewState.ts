@@ -20,7 +20,8 @@ export const SESSION_LIST_ROW_TITLE_TEXT_METRICS = {
     default: { fontSize: 14, lineHeight: 18 },
     compact: { fontSize: 14, lineHeight: 18 },
     minimal: { fontSize: 12, lineHeight: 16 },
-    minimalNativePhone: { fontSize: 17, lineHeight: 22 },
+    // One rhythm with the phone launcher rows above it (lab xrail P1: 15 px); the row keeps the 44 pt touch floor.
+    minimalNativePhone: { fontSize: 15, lineHeight: 20 },
 } as const;
 
 export const SESSION_LIST_ROW_STATUS_TEXT_METRICS = {
@@ -35,6 +36,11 @@ export const SESSION_LIST_ROW_IDENTITY_METRICS = {
     minimal: { slotSize: 18, agentLogoSize: 14 },
     minimalNativePhone: { slotSize: 20, agentLogoSize: 16 },
 } as const;
+
+/** The shared list `Item` density a session-list row of this density uses (Drafts, Scheduled). */
+export function resolveSessionListItemDensity(density: SessionListRowDensity): 'comfortable' | 'compact' | 'tight' {
+    return density === 'default' ? 'comfortable' : density === 'minimal' ? 'tight' : 'compact';
+}
 
 export function resolveSessionListRowTitleTextMetrics(params: Readonly<{
     density: SessionListRowDensity;

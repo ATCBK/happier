@@ -1,18 +1,18 @@
 import * as React from 'react';
-import { View, type LayoutChangeEvent, type StyleProp, type ViewProps, type ViewStyle } from 'react-native';
+import { Platform, useWindowDimensions, View, type LayoutChangeEvent, type StyleProp, type ViewProps, type ViewStyle } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { resolveHappierWorkStatusSurfaceStyle, useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
+import { useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
 
 import { Text, type AppTextProps } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
-import type { WorkStatusTone } from '@/components/work/status/resolveWorkStatusTone';
-import { projectWorkColors } from '@/components/work/status/workStatusTreatment';
+import { useIsTablet } from '@/utils/platform/responsive';
 
 import {
     SESSION_LIST_ROW_CORNER_RADIUS,
     SESSION_LIST_ROW_IDENTITY_METRICS,
     SESSION_LIST_ROW_SELECTION_RADIUS,
     SESSION_LIST_ROW_TITLE_TEXT_METRICS,
+    shouldUseReadablePhoneMinimalSessionRow,
     type SessionListRowDensity,
 } from '../resolveSessionListDensityViewState';
 import {
@@ -60,14 +60,6 @@ const styles = StyleSheet.create((theme) => ({
         borderColor: theme.colors.surface.base,
         borderRadius: SESSION_LIST_ROW_SELECTION_RADIUS,
     },
-    attention: {
-        ...resolveHappierWorkStatusSurfaceStyle('attention', projectWorkColors(theme)),
-        backgroundColor: theme.colors.state.warning.background,
-    },
-    danger: {
-        ...resolveHappierWorkStatusSurfaceStyle('danger', projectWorkColors(theme)),
-        backgroundColor: theme.colors.state.danger.background,
-    },
     identity: {
         position: 'relative',
         width: SESSION_LIST_ROW_IDENTITY_METRICS.default.slotSize,
@@ -110,14 +102,22 @@ const styles = StyleSheet.create((theme) => ({
     pressTarget: { flex: 1, minWidth: 0, alignSelf: 'stretch', flexDirection: 'row', alignItems: 'center' },
 }));
 
+/** A minimal row on a phone-width window is drawn at the readable phone size, whichever kind of row it is. */
+export function useReadableNativePhoneMinimalRow(minimal: boolean): boolean {
+    const isTablet = useIsTablet();
+    const { width: windowWidth } = useWindowDimensions();
+    return minimal && shouldUseReadablePhoneMinimalSessionRow({ isTablet, platform: Platform.OS, windowWidth });
+}
+
 /** The real row's geometry, with no session, settings, activity or action subscriptions. */
 export function SessionListRowPresentation(props: RowDensityProps & Readonly<{
     first?: boolean;
     last?: boolean;
     selected?: boolean;
     separator?: boolean;
-    statusTone?: WorkStatusTone;
     identity?: React.ReactNode;
+    /** Independent leading controls, such as the reports disclosure, stay outside navigation. */
+    leading?: React.ReactNode;
     title: React.ReactNode;
     children?: React.ReactNode;
     trailing?: React.ReactNode;
@@ -134,9 +134,9 @@ export function SessionListRowPresentation(props: RowDensityProps & Readonly<{
     const { theme } = useUnistyles();
     const materialColor = useHappierMaterialColorResolver();
     const selected = props.selected === true;
-    const danger = props.statusTone === 'danger';
-    const attention = props.statusTone === 'attention';
-    const baseColor = danger ? theme.colors.state.danger.background : attention ? theme.colors.state.warning.background : selected ? theme.colors.surface.selected : theme.colors.surface.base;
+    // A row's state is its word and glyph in the trailing slot (lab `convo-N4`): Session and Run rows
+    // alike, never a tinted or ringed row. Only the open row takes a fill.
+    const baseColor = selected ? theme.colors.surface.selected : theme.colors.surface.base;
     const compact = props.density !== 'default';
     const minimal = props.density === 'minimal';
     const textScale = typeof props.textScale === 'number' && Number.isFinite(props.textScale)
@@ -162,10 +162,9 @@ export function SessionListRowPresentation(props: RowDensityProps & Readonly<{
         // Keep the incumbent geometry at normal scale. Large text may grow so the
         // title and context remain readable instead of being clipped by a fixed height.
         largeText ? { minHeight: scaledRowHeight, height: undefined } : null,
-        props.statusTone === 'attention' ? styles.attention : props.statusTone === 'danger' ? styles.danger : null,
         {
-            backgroundColor: materialColor(baseColor, danger || attention || selected ? baseColor : 'transparent'),
-            ...(!danger && !attention ? { borderColor: materialColor(theme.colors.surface.base, 'transparent') } : null),
+            backgroundColor: materialColor(baseColor, selected ? baseColor : 'transparent'),
+            borderColor: materialColor(theme.colors.surface.base, 'transparent'),
         },
     ];
     const pressContent = <>
@@ -188,6 +187,7 @@ export function SessionListRowPresentation(props: RowDensityProps & Readonly<{
     const trailing = <View {...props.trailingProps} style={styles.trailing}>{props.trailing}</View>;
     return (
         <View style={rowStyle} onLayout={props.onLayout}>
+            {props.leading}
             {props.renderContainer ? props.renderContainer(pressContent, styles.pressTarget) : pressContent}
             {trailing}
         </View>
@@ -207,12 +207,12 @@ export function SessionListRowTitle({ density, readableNativePhoneMinimal, textS
     ]} />;
 }
 
-export function SessionListRowSubtitle({ density, textScale, style, ...props }:
+export function SessionListRowSubtitle({ density, readableNativePhoneMinimal, textScale, style, ...props }:
     RowDensityProps & AppTextProps): React.ReactElement {
     return <Text {...props} numberOfLines={textScale && textScale > 1.1 ? 2 : 1} style={[
         styles.subtitle,
-        density !== 'default' ? styles.subtitleCompact : null,
-        density === 'minimal' ? styles.subtitleMinimal : null,
+        density !== 'default' && !readableNativePhoneMinimal ? styles.subtitleCompact : null,
+        density === 'minimal' && !readableNativePhoneMinimal ? styles.subtitleMinimal : null,
         style,
     ]} />;
 }
