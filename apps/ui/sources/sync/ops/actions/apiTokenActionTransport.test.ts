@@ -3,6 +3,12 @@ import type { ServerFetch } from '@/sync/http/client';
 import { executeApiTokenAction } from './apiTokenActionTransport';
 
 describe('API-token Action transport', () => {
+    it('refuses next-prompt mode with Send guidance before requesting the Home', async () => {
+        const request: ServerFetch = async () => { throw new Error('Refused timing must not reach the Home'); };
+        expect(await executeApiTokenAction({ request }, 'session.permission_mode.set', {
+            sessionId: 'session-1', permissionMode: 'read_only', applyTiming: 'next_prompt',
+        }, { surface: 'ui' })).toMatchObject({ ok: false, errorCode: 'invalid_parameters', error: expect.stringContaining('session.message.send') });
+    });
     it('uses the canonical spawn public projection without adding a CORS authority header', async () => {
         let body: unknown;
         let ceiling: string | null = null;

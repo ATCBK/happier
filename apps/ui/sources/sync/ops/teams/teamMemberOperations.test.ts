@@ -1,12 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import {
-    createHomeGovernanceHarness,
-    installHomeGovernanceBoundaries,
-    standardCleanup,
-    teamGroupFixture,
-    teamMembershipFixture,
-} from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createDeferred, standardCleanup, teamGroupFixture, teamMembershipFixture, teamSummaryFixture } from '@/dev/testkit';
 
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
@@ -44,6 +39,47 @@ afterEach(() => {
 });
 
 describe('teamMemberOperations', () => {
+    it.each(['add', 'role', 'remove', 'leave'] as const)(
+        'settles an acknowledged %s while the Team revalidation is pending',
+        async (operation) => {
+            const serverId = await addHome();
+            const { scope, address } = await scopeAndAddress(serverId);
+            const snapshots = await import('@/sync/store/teams/teamsSnapshots');
+            const { resolveTeamViewState } = await import('@/components/settings/teams/teamViewState');
+            snapshots.applyTeamProjection({ scope, address, team: teamSummaryFixture(), observedAt: 1 });
+            const refresh = createDeferred<void>();
+            harness.answer(serverId, '/v1/teams/get', { body: teamSummaryFixture(), respondAfter: refresh.promise });
+            harness.answer(serverId, '/v1/teams/list', { body: { items: [], nextCursor: null }, respondAfter: refresh.promise });
+            harness.answer(serverId, MEMBER_ADD_PATH, { body: teamMembershipFixture() });
+            harness.answer(serverId, '/v1/teams/members/role/set', { body: teamMembershipFixture({ role: 'admin' }) });
+            harness.answer(serverId, '/v1/teams/members/remove', { body: { status: 'removed', membershipId: 'membership-1' } });
+            harness.answer(serverId, '/v1/teams/members/leave', { body: { status: 'removed', membershipId: 'membership-1' } });
+            const owner = await operations();
+            let continued = false;
+            const receipt = operation === 'add'
+                ? owner.addTeamMember({ scope, address, accountId: 'account-ada', role: 'member', historyAccess: 'from_membership' })
+                : operation === 'role'
+                    ? owner.setTeamMemberRole({ scope, address, membershipId: 'membership-1', role: 'admin' })
+                    : operation === 'remove'
+                        ? owner.removeTeamMember({ scope, address, membershipId: 'membership-1' })
+                        : owner.leaveTeam({ scope, address, onSucceeded: () => { continued = true; } });
+            let settled: unknown;
+            void receipt.then(value => { settled = value; });
+            try {
+                await vi.waitFor(() => expect(settled).toMatchObject({ kind: 'succeeded' }));
+                expect(harness.requestsFor('/v1/teams/get').length).toBeGreaterThan(0);
+                expect(snapshots.getTeamSnapshot(scope, address)?.stale).toBe(true);
+                expect(resolveTeamViewState(snapshots.getTeamSnapshot(scope, address))).toMatchObject({
+                    kind: 'ready', mutationsAvailable: false,
+                });
+                if (operation === 'leave') expect(continued).toBe(true);
+            } finally {
+                refresh.resolve();
+                await receipt;
+            }
+        },
+    );
+
     it('lists the effective Groups for one membership through the canonical Action', async () => {
         const serverId = await addHome();
         harness.answer(serverId, MEMBER_GROUPS_LIST_PATH, {
@@ -80,6 +116,7 @@ describe('teamMemberOperations', () => {
                 id: 'membership-new',
                 accountId: 'account-grace',
                 account: {
+                    name: 'Grace Hopper',
                     firstName: 'Grace',
                     lastName: 'Hopper',
                     username: 'grace',
@@ -136,7 +173,8 @@ describe('teamMemberOperations', () => {
 
         expect(outcome).toEqual({
             kind: 'failed',
-            failure: { kind: 'invalid', retryable: false, code: null },
+            failure: { kind: 'invalid', retryable: false, code: null, httpStatus: 200 },
         });
+        expect(harness.requestsFor('/v1/teams/get')).toHaveLength(0);
     });
 });

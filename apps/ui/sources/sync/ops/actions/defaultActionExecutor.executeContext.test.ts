@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createScmCapabilities } from '@happier-dev/protocol/scm';
 import { ApprovalRequestSchema, buildApprovalRequestArtifactHeaderV1, encodePlainArtifactStoredContent, projectLegacySessionAccessCapabilitiesV1 } from '@happier-dev/protocol';
-import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 // Imported from their owning testkit modules, never the `@/dev/testkit` barrel:
 // the harness installs its network boundaries with `vi.doMock`, which only
@@ -181,6 +181,147 @@ describe('withDefaultActionExecuteContext', () => {
                 installHomeGovernanceBoundaries(harness);
             }
         }
+    });
+
+    it('admits mounted Session panel navigation through its Action and refuses disabled or mismatched targets', async () => {
+        const serverId = await addHome();
+        let disabled = true;
+        harness.answer(serverId, '/v2/account/settings', { select: () => ({ body: { version: 1,
+            content: { t: 'plain', v: { actionsSettingsV1: { v: 1, actions: {
+                'session.presentation.apply': { disabledSurfaces: disabled ? ['ui'] : [] },
+            } } } } } }) });
+        let panel: string | null = null;
+        let mounted = true;
+        // The mounted navigation destination is the UI platform boundary; Account admission stays real.
+        const executor = executorModule.createDefaultActionExecutor({
+            currentSessionPresentationApply: { serverId, accountId: ACCOUNT_ID, sessionId: 'session-a',
+                isCurrent: () => mounted,
+                apply: async ({ input }) => {
+                    if (input.intent.kind !== 'board.item.reveal') throw new Error('unexpected presentation intent');
+                    panel = input.intent.widgetId;
+                    return { status: 'applied', revision: 'mounted-revision' };
+                },
+            },
+        });
+        const context = { surface: 'ui', authority: 'present_user', serverId,
+            expectedAccountId: ACCOUNT_ID, defaultSessionId: 'session-a' } as const;
+        const input = { intent: { kind: 'board.item.reveal', widgetId: 'visual-a' } } as const;
+        expect(await executor.execute('session.presentation.apply', input, context)).toMatchObject({ ok: false });
+        expect(panel).toBeNull();
+        disabled = false;
+        expect(await executor.execute('session.presentation.apply', input, context))
+            .toEqual({ ok: true, result: { status: 'applied', revision: 'mounted-revision' } });
+        expect(panel).toBe('visual-a');
+        panel = null;
+        expect(await executor.execute('session.presentation.apply', input, { ...context, defaultSessionId: 'session-b' }))
+            .toMatchObject({ ok: false, errorCode: 'session_not_selected' });
+        expect(panel).toBeNull();
+        expect(await executor.execute('session.presentation.apply', input, { ...context, expectedAccountId: 'foreign-account' }))
+            .toMatchObject({ ok: false, errorCode: 'action_account_scope_changed' });
+        expect(panel).toBeNull();
+        const otherHome = await harness.addHome({ name: 'Other Home', serverUrl: 'https://other-home.example', accountId: ACCOUNT_ID });
+        harness.answer(otherHome, '/v2/account/settings', { body: { version: 1, content: { t: 'plain', v: {} } } });
+        expect(await executor.execute('session.presentation.apply', input, { ...context, serverId: otherHome }))
+            .toMatchObject({ ok: false, errorCode: 'target_unavailable' });
+        expect(panel).toBeNull();
+        mounted = false;
+        expect(await executor.execute('session.presentation.apply', input, context))
+            .toMatchObject({ ok: false, errorCode: 'target_unavailable' });
+        expect(panel).toBeNull();
+    });
+
+    it.each(['execute', 'prepare'] as const)('reports a Home that cannot answer admission settings before %s dispatch', async (entry) => {
+        const serverId = await addHome();
+        harness.answer(serverId, '/v2/account/settings', { dispatchThenFail: true });
+        const executor = executorModule.createDefaultActionExecutor();
+        const input = { intent: { kind: 'reorder' as const, sectionIds: ['attention', 'sessions'] } };
+        const context = { surface: 'ui' as const, serverId, expectedAccountId: ACCOUNT_ID };
+        const result = entry === 'execute'
+            ? await executor.execute('home.hub.layout.update', input, context)
+            : await executor.prepare('home.hub.layout.update', input, context);
+        expect(result).toMatchObject(entry === 'execute'
+            ? { ok: false, errorCode: 'server_unreachable', error: 'server_unreachable' }
+            : { kind: 'settled', result: { ok: false, errorCode: 'server_unreachable', error: 'server_unreachable' } });
+        expect(harness.requestsFor('/v1/artifacts')).toHaveLength(0);
+    });
+
+    it('executes storage reads and sizing through the captured Home and Account family', async () => {
+        const serverId = await addHome();
+        const { resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
+        const capturedServerId = resolveServerProfileScopeIdForIdentifier(serverId);
+        const summary = { revision: 1, sizedAt: 100, volumes: [], categories: [], suggestionsTop: [],
+            pile: { count: 0, freesBytes: 0, droppedSinceLastView: [] }, trash: { count: 0, allocatedBytes: 0 },
+            wholeDisk: { enabled: false, scans: [] } };
+        const category = { revision: 1, sizedAt: 100, categoryId: 'logs', items: [] };
+        rpc.machine.mockImplementation(async ({ method }) => method === RPC_METHODS.DAEMON_STORAGE_CATEGORY_LIST ? category : summary);
+        for (const [actionId, input, expected, method] of [
+            ['machines.storage.summary.get', { serverId, machineId: 'one' }, summary, RPC_METHODS.DAEMON_STORAGE_SUMMARY_GET],
+            ['machines.storage.category.list', { serverId, machineId: 'one', categoryId: 'logs' }, category, RPC_METHODS.DAEMON_STORAGE_CATEGORY_LIST],
+            ['machines.storage.size.refresh', { serverId, machineId: 'one' }, summary, RPC_METHODS.DAEMON_STORAGE_SIZE_REFRESH],
+        ] as const) {
+            expect(await executorModule.createDefaultActionExecutor().execute(actionId, input, { surface: 'ui', expectedAccountId: ACCOUNT_ID }))
+                .toEqual({ ok: true, result: expected });
+            expect(rpc.machine).toHaveBeenLastCalledWith(expect.objectContaining({ serverId: capturedServerId,
+                accountId: ACCOUNT_ID, machineId: 'one', method, payload: { ...input, serverId: capturedServerId }, preferScoped: true }));
+        }
+    });
+
+    it('reads the machine guard and its Activity through the captured Home and Account family', async () => {
+        const serverId = await addHome();
+        const { resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
+        const { createMachineGuardViewFixture } = await import('@/sync/domains/machines/guard/guardViewFixtures');
+        const capturedServerId = resolveServerProfileScopeIdForIdentifier(serverId);
+        const view = createMachineGuardViewFixture();
+        const activity = { entries: [], counts: { stopped: 0, cleanedUp: 0, needsLook: 0, others: 0 }, asOf: 100 };
+        rpc.machine.mockImplementation(async ({ method }) => method === 'machines.guard.activity.list' ? activity : view);
+        for (const [actionId, input, expected, method] of [
+            ['machines.guard.get', { serverId, machineId: 'one' }, view, RPC_METHODS.MACHINES_GUARD_GET],
+            ['machines.guard.activity.list', { serverId, machineId: 'one', range: '7d', filter: 'all' }, activity, RPC_METHODS.MACHINES_GUARD_ACTIVITY_LIST],
+        ] as const) {
+            expect(await executorModule.createDefaultActionExecutor().execute(actionId, input, { surface: 'ui', expectedAccountId: ACCOUNT_ID }))
+                .toEqual({ ok: true, result: expected });
+            expect(rpc.machine).toHaveBeenLastCalledWith(expect.objectContaining({ serverId: capturedServerId,
+                accountId: ACCOUNT_ID, machineId: 'one', method, payload: { ...input, serverId: capturedServerId }, preferScoped: true }));
+        }
+    });
+
+    it('reads machine resources through the captured Home and Account without a Session', async () => {
+        const serverId = await addHome();
+        const { resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
+        const capturedServerId = resolveServerProfileScopeIdForIdentifier(serverId);
+        const { createDefaultActionExecutor } = await loadExecutor();
+        const snapshot = { state: 'reporting', sample: null, series5m: { cpu: [], memory: [], networkRx: [], networkTx: [] } };
+        const history = { range: '24h', bucketMs: 300_000, points: [], today: { rxBytes: 0, txBytes: 0 } };
+        rpc.machine.mockImplementation(async ({ method }) => method === RPC_METHODS.MACHINES_VITALS_GET ? snapshot : history);
+        for (const [actionId, input, result] of [
+            ['machines.vitals.get', { serverId, machineId: 'one', view: 'overview' }, snapshot],
+            ['machines.vitals.history.get', { serverId, machineId: 'one', range: '24h' }, history],
+        ] as const) {
+            expect(await createDefaultActionExecutor().execute(actionId, input, { surface: 'ui' })).toEqual({ ok: true, result });
+            expect(rpc.machine).toHaveBeenLastCalledWith(expect.objectContaining({
+                serverId: capturedServerId, accountId: ACCOUNT_ID, machineId: 'one', method: actionId,
+                payload: { ...input, serverId: capturedServerId }, preferScoped: true,
+            }));
+        }
+        const { storage } = await import('@/sync/domains/state/storage');
+        // The published-content producer is VU3; this boundary fixture carries its narrow share-safe read projection.
+        const daemonState = { status: 'running', resources: { vitals: { state: 'reporting' }, attention: { level: 'look', reasons: [] } } };
+        storage.getState().applyMachines([
+            createMachineFixture({ id: 'one', activeAt: Date.now(), daemonState }),
+            createMachineFixture({ id: 'older', activeAt: Date.now() }),
+            createMachineFixture({ id: 'offline', active: false, activeAt: 0, daemonState }),
+        ], true, { sourceServerId: serverId });
+        rpc.machine.mockClear();
+        expect(await createDefaultActionExecutor().execute('machines.vitals.summaries.list', { serverId }, { surface: 'ui' }))
+            .toMatchObject({ ok: true, result: expect.arrayContaining([
+                expect.objectContaining({ machineId: 'one', state: 'reporting', attention: { level: 'look', reasons: [] } }),
+                expect.objectContaining({ machineId: 'older', state: 'not_reporting' }),
+                expect.objectContaining({ machineId: 'offline', state: 'offline' }),
+            ]) });
+        expect(rpc.machine).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+            serverId: capturedServerId, accountId: ACCOUNT_ID, machineId: 'one', method: RPC_METHODS.MACHINES_VITALS_GET,
+            payload: { serverId: capturedServerId, machineId: 'one', view: 'summary' },
+        }));
     });
 
     it('returns merged conversation JSON through the mounted client Action', async () => {

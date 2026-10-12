@@ -36,6 +36,8 @@ function workItem(item: WorkItem) {
 
 function inboxItem(item: InboxWorkItem, scope: ServerAccountScope) {
     if (item.kind === 'workflow_run') return { kind: item.kind, key: item.key, runId: item.runId };
+    if (item.kind === 'automation_run') return { kind: item.kind, key: item.key, runId: item.row.id };
+    if (item.kind === 'approval') return { kind: item.kind, key: item.key, artifactId: item.artifact.id };
     const serverId = item.kind === 'session'
         ? item.entry.candidate.address?.serverId ?? item.entry.candidate.serverId : item.session.serverId;
     if (!serverId || !areServerProfileIdentifiersEquivalent(serverId, scope.serverId)) return null;
@@ -46,7 +48,9 @@ function inboxItem(item: InboxWorkItem, scope: ServerAccountScope) {
             pendingQuestionCount: item.entry.pendingUserActions.length, foldedUnderRunId: item.foldedUnderRunId };
     }
     const address = { key: item.key, serverId, sessionId: item.session.id };
-    if (item.kind === 'landing') return { kind: item.kind, ...address, pullRequestNumber: item.link.number };
+    if (item.kind === 'landing') return { kind: item.kind, ...address, pullRequestNumber: item.link.number, pullRequestUrl: item.link.url,
+        ...(item.link.state === undefined ? {} : { pullRequestState: item.link.state }),
+        ...(item.link.observedAt === undefined ? {} : { pullRequestObservedAt: item.link.observedAt }) };
     if (item.kind === 'snoozed') return { kind: item.kind, ...address, remindAt: item.remindAt };
     return { kind: item.kind, ...address };
 }
@@ -104,10 +108,14 @@ export const invokeMountedWorkRead: NonNullable<ActionExecutorDeps['appShellActi
     const groups = model.workGroups.map(group => {
         if (group.root.kind === 'lead' && group.root.session?.serverId
             && !areServerProfileIdentifiersEquivalent(group.root.session.serverId, scope.serverId)) return null;
+        if (group.root.kind === 'automation'
+            && !areServerProfileIdentifiersEquivalent(group.root.serverId, scope.serverId)) return null;
         const items = group.items.map(item => inboxItem(item, scope));
         if (items.some(value => value === null)) return null;
         const root = group.root.kind === 'lead' ? { kind: group.root.kind, sessionId: group.root.sessionId }
-            : group.root.kind === 'run' ? { kind: group.root.kind, runId: group.root.runId } : { kind: group.root.kind };
+            : group.root.kind === 'run' ? { kind: group.root.kind, runId: group.root.runId }
+            : group.root.kind === 'automation' ? { kind: group.root.kind, automationId: group.root.automationId,
+                serverId: group.root.serverId, runId: group.root.runId } : { kind: group.root.kind };
         return { key: group.key, root, items };
     });
     if (groups.some(value => value === null)) return { status: 'unavailable' };

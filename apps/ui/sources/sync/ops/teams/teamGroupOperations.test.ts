@@ -6,11 +6,8 @@ import {
     type TeamGroupV1,
 } from '@happier-dev/protocol/teams';
 
-import {
-    createHomeGovernanceHarness,
-    installHomeGovernanceBoundaries,
-    standardCleanup,
-} from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { standardCleanup } from '@/dev/testkit';
 
 /**
  * The Group wrappers, through the path they actually take.
@@ -63,7 +60,7 @@ function member(overrides?: Partial<TeamGroupMemberV1>): TeamGroupMemberV1 {
     return {
         accountId: 'account-2',
         membershipId: 'membership-2',
-        account: { firstName: 'Ada', lastName: null, username: null, avatarUrl: null },
+        account: { name: 'Ada', firstName: 'Ada', lastName: null, username: null, avatarUrl: null },
         historyAccess: 'from_membership',
         contributions: { native: true, external: [] },
         ...overrides,

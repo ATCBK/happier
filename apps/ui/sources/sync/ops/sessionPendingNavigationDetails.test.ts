@@ -158,7 +158,7 @@ describe('exact-Home pending navigation details', () => {
         expect(await readPendingNavigationDetails(address, undefined, { signal: controller.signal }))
             .toEqual({ kind: 'unavailable', reason: 'cancelled' });
     });
-    it('hydrates transcript location only for the selected native request, stopping at its matching page', async () => {
+    it('opens the selected never-opened session without waiting for its transcript location', async () => {
         const { nextPendingRequest } = await import('@/activity/source/nextPendingRequest');
         const { navigateToPendingRequest } = await import('@/activity/source/navigateToPendingRequest');
         installNetwork({ agentState: { requests: {
@@ -172,8 +172,8 @@ describe('exact-Home pending navigation details', () => {
         const routes: string[] = [];
         expect(await navigateToPendingRequest({ target: selected, details: selected.details, source, nowMs: 1_000,
             openRoute: route => routes.push(route) })).toEqual({ status: 'opened' });
-        expect(routes).toEqual(['/session/never-opened?jumpSeq=5&serverId=home-b']);
-        expect(boundary.fetch.mock.calls.filter(([url]) => String(url).includes('/messages'))).toHaveLength(1);
+        expect(routes).toEqual(['/session/never-opened?serverId=home-b']);
+        expect(boundary.fetch.mock.calls.filter(([url]) => String(url).includes('/messages'))).toHaveLength(0);
     });
     it('hydrates a never-opened session and finds the oldest transcript-only request beyond the first page', async () => {
         expect(storage.getState().sessions[address.sessionId]).toBeUndefined();
@@ -391,6 +391,23 @@ describe('exact-Home pending navigation details', () => {
         expect(await nextPendingRequest({ source: pendingSource([address.sessionId, 'newer-session', 'unavailable-session']), nowMs: 1_000 }))
             .toMatchObject({ kind: 'target', unavailableCount: 1, address,
                 requestId: 'old-question', requestKind: 'user_action', createdAt: 100 });
+    });
+    it('uses the pill candidate set and does not hydrate or report skipped status-only attention', async () => {
+        const { nextPendingRequest } = await import('@/activity/source/nextPendingRequest');
+        const source = pendingSource([address.sessionId]);
+        const locked = createSessionFixture({ id: 'locked', serverId: address.serverId, active: true,
+            encryptionMode: 'e2ee', encryptedContentAvailability: 'encrypted_access_pending', viewer: {
+                readState: { state: 'not_started' }, relevance: { relevant: true, reasons: ['owned_by_me'] },
+                follow: { follows: false, notificationLevel: null }, notification: { level: 'important', source: 'owner' },
+                attention: { needsAttention: true, reasons: ['permission_required'], primary: 'permission_required', presentation: 'status_only' },
+            },
+        });
+        const withLocked: ActivityAttentionSource = { ...source,
+            sessionListRowsByServerId: { 'home-b': { ...source.sessionListRowsByServerId['home-b'], locked: buildSessionListRenderableFromSession(locked) } },
+            ordinarySessionListMembershipByServerId: { 'home-b': [address.sessionId, 'locked'] },
+        };
+        expect(await nextPendingRequest({ source: withLocked, nowMs: 1_000 })).toMatchObject({ kind: 'target', unavailableCount: 0 });
+        expect(boundary.fetch.mock.calls.some(([url]) => String(url).includes('/sessions/locked'))).toBe(false);
     });
     it('reports unavailable rather than none when every candidate detail is unavailable', async () => {
         const { nextPendingRequest } = await import('@/activity/source/nextPendingRequest');

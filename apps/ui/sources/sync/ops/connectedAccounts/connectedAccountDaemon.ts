@@ -24,6 +24,11 @@ import {
     getActiveServerSnapshot,
     type ActiveServerSnapshot,
 } from '@/sync/domains/server/serverRuntime';
+import type { ActionId } from '@happier-dev/protocol/actions/actionIds';
+import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
+
+type MountedActionExecute = (actionId: ActionId, input: unknown,
+    operation?: Readonly<{ signal?: AbortSignal }>) => Promise<ActionExecuteResult>;
 
 export {
     CONNECTED_ACCOUNT_AUTHENTICATION_COMMAND_RPC_METHOD,
@@ -115,7 +120,7 @@ export async function runConnectedAccountAuthenticationCommand(
 /** UI ingress shares the admitted Actions; the transport above remains daemon-owned delivery. */
 export async function runConnectedAccountAuthenticationAction(
     input: Omit<Parameters<typeof runConnectedAccountAuthenticationCommand>[0], 'serverId' | 'accountId'>
-        & Readonly<{ serverId: string; expectedAccountId: string }>,
+        & Readonly<{ serverId: string; expectedAccountId: string; executeAction?: MountedActionExecute }>,
 ): Promise<ConnectedAccountAttemptResponse> {
     const assertExpected = createExpectedActiveServerAssertion(input.expectedActiveServer, input.serverId);
     input.signal?.throwIfAborted();
@@ -129,8 +134,11 @@ export async function runConnectedAccountAuthenticationAction(
     assertExpected?.();
     input.assertCurrent?.();
     const { operation, ...operands } = ConnectedAccountDaemonCommandSchema.parse(input.command);
-    const result = await createDefaultActionExecutor().execute(CONNECTED_ACCOUNT_AUTHENTICATION_ACTION_ID_BY_OPERATION[operation],
-        { machineId: input.machineId, ...operands }, { surface: 'ui', authority: 'present_user', serverId: input.serverId,
+    const actionId = CONNECTED_ACCOUNT_AUTHENTICATION_ACTION_ID_BY_OPERATION[operation];
+    const actionInput = { machineId: input.machineId, ...operands };
+    const result = input.executeAction
+        ? await input.executeAction(actionId, actionInput, { signal: input.signal })
+        : await createDefaultActionExecutor().execute(actionId, actionInput, { surface: 'ui', authority: 'present_user', serverId: input.serverId,
             expectedAccountId: input.expectedAccountId,
             ...(input.signal ? { signal: input.signal } : {}) });
     if (!result.ok) throw Object.assign(new Error(result.error), { code: result.errorCode });
@@ -141,18 +149,26 @@ export async function runConnectedAccountAuthenticationAction(
 
 export async function listPendingConnectedAccountAuthenticationActions(
     input: Readonly<{ serverId: string; machineId: string; expectedAccountId: string;
-        expectedActiveServer?: ExpectedActiveServer; service: Extract<ConnectedAccountDaemonControlCommand, { operation: 'listPendingAttempts' }>['service']; signal?: AbortSignal }>,
+        expectedActiveServer?: ExpectedActiveServer; assertCurrent?: () => void;
+        service: Extract<ConnectedAccountDaemonControlCommand, { operation: 'listPendingAttempts' }>['service']; signal?: AbortSignal;
+        executeAction?: MountedActionExecute }>,
 ): Promise<ConnectedAccountDaemonControlResponse> {
     const assertExpected = createExpectedActiveServerAssertion(input.expectedActiveServer, input.serverId);
     input.signal?.throwIfAborted();
     assertExpected?.();
+    input.assertCurrent?.();
     const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+    input.signal?.throwIfAborted();
     assertExpected?.();
-    const result = await createDefaultActionExecutor().execute('connectedServices.authentication.pending.list',
-        { machineId: input.machineId, service: input.service }, { surface: 'ui', authority: 'present_user', serverId: input.serverId,
+    input.assertCurrent?.();
+    const actionInput = { machineId: input.machineId, service: input.service };
+    const result = input.executeAction
+        ? await input.executeAction('connectedServices.authentication.pending.list', actionInput, { signal: input.signal })
+        : await createDefaultActionExecutor().execute('connectedServices.authentication.pending.list', actionInput, { surface: 'ui', authority: 'present_user', serverId: input.serverId,
             expectedAccountId: input.expectedAccountId, ...(input.signal ? { signal: input.signal } : {}) });
     if (!result.ok) throw Object.assign(new Error(result.error), { code: result.errorCode });
     assertExpected?.();
+    input.assertCurrent?.();
     return ConnectedAccountDaemonControlResponseSchema.parse(result.result);
 }
 

@@ -1,3 +1,5 @@
+import { t } from '@/text';
+
 function asRecord(value: unknown): Record<string, unknown> | null {
     return value !== null && typeof value === 'object' ? (value as Record<string, unknown>) : null;
 }
@@ -5,11 +7,19 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 function readFailureMessage(value: unknown): string | null {
     const record = asRecord(value);
     if (!record) return null;
+    const code = record.errorCode ?? record.code;
+    if (code === 'server_unreachable' || code === 'home_unreachable') return t('settingsPlugins.targetSelection.unreachableThisHome');
+    if (code === 'outcome_unknown' || code === 'approval_execution_outcome_unknown') return t('entityDragDrop.preview.unknownDetail');
     const error = typeof record.error === 'string' ? record.error.trim() : '';
     if (error.length > 0) return error;
     const errorMessage = typeof record.errorMessage === 'string' ? record.errorMessage.trim() : '';
     if (errorMessage.length > 0) return errorMessage;
     return null;
+}
+
+/** Thrown adapters retain the same typed failure copy as Action result envelopes. */
+export function resolveActionExecutionErrorMessage(error: unknown, fallbackMessage: string): string {
+    return readFailureMessage(error) ?? fallbackMessage;
 }
 
 function isFailedResult(value: unknown): boolean {

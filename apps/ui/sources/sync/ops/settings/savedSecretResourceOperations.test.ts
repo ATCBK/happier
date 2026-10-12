@@ -38,14 +38,15 @@ import { createSavedSecretResource, promotePersonalSavedSecretResource, updateSa
 import { withProfileAccount } from '@/sync/api/account/apiProfileCatalog';
 import { prepareConnectedAccountCatalogMutationInContext, readConnectedAccountCatalogInContext } from '@/sync/api/account/apiConnectedAccountCatalog';
 import { ConnectedAccountCatalogRowMutationV1Schema, type ConnectedAccountCatalogRecordV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
-import { renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
+import { renderHook, renderScreen, standardCleanup, createDeferred } from '@/dev/testkit';
 import { useSavedSecretCatalog } from '@/components/secrets/useSavedSecretCatalog';
 import { AccountSettingsV2UpdateRequestSchema, AccountSettingsV2HistoryListResponseSchema,
     AccountSettingsV2HistoryDetailResponseSchema, AccountSettingsV2HistoryMutationRequestSchema,
     AccountSettingsV2HistoryMutationResponseSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 import { deriveSavedSecretImportResourceIdV1, promotePersonalSavedSecretReference, qualifyPluginAccountSecretBindingKey, readSavedSecretTransferSourceV1 } from '@happier-dev/protocol/account/settings/savedSecretMutationOwner';
 import { observeSavedSecretCatalog, refreshSavedSecretCatalog } from '@/sync/engine/settings/savedSecretCatalogEngine';
-import { getSavedSecretCatalogSnapshot } from '@/sync/store/settings/savedSecretCatalogSnapshot';
+import { applySavedSecretCatalogPage, getSavedSecretCatalogSnapshot } from '@/sync/store/settings/savedSecretCatalogSnapshot';
+import { getMcpServerCatalogSnapshot } from '@/sync/store/settings/mcpServerCatalogSnapshot';
 import { readSavedSecretReferenceInContext } from '@/sync/api/account/apiSavedSecretCatalog';
 import { REMOTE_HOST_ROWS_ROUTE_V1, RemoteHostCatalogRecordV1Schema, RemoteHostCatalogRowMutationV1Schema,
     openRemoteHostCatalogContentV1, sealRemoteHostCatalogContentV1 } from '@happier-dev/protocol/remoteHosts/remoteHostRecordV1';
@@ -76,6 +77,12 @@ import { prepareLegacyNotificationChannelCatalogV1 } from '@happier-dev/protocol
 import { readNotificationChannelCatalogProjectionInContext } from '@/sync/api/account/apiNotificationChannelCatalog';
 import { resolveSettingsSecretsKeySet } from '@/sync/encryption/resolveSettingsSecretsKeySet';
 import { sealSecretsDeep } from '@/sync/encryption/secretSettings';
+
+// Refresh settles foreground material demand; legacy import/history finishes separately.
+async function refreshCatalogAndWaitForLegacyImport(scope: ServerAccountScope) {
+    await refreshSavedSecretCatalog(scope);
+    await vi.waitFor(() => expect(getSavedSecretCatalogSnapshot(scope)?.legacyImport).toBeTruthy());
+}
 
 function PrivateSavedSecretCreateHarness(props: Readonly<{ scope: ServerAccountScope; onCreated: (ref: string) => void }>) {
     const catalog = useSavedSecretCatalog({ scope: props.scope });
@@ -151,6 +158,7 @@ async function openAccount(mode: 'plain' | 'e2ee' = 'plain', options: { ask?: bo
     const artifacts: Artifact[] = [];
     let materialReadStatus = 200;
     let beforeMaterialRead: (() => void | Promise<void>) | undefined;
+    let beforeCatalogRead: ((path: string) => void | Promise<void>) | undefined;
     let beforeProfileRead: (() => void) | undefined;
     let beforeHistoryRead: (() => void | Promise<void>) | undefined;
     let historyContent = options.historySnapshot ? AccountSettingsV2HistoryDetailResponseSchema.parse({ version: 4,
@@ -223,6 +231,7 @@ async function openAccount(mode: 'plain' | 'e2ee' = 'plain', options: { ask?: bo
                     return effect(path, body);
                 }
                 catalogReadPaths.push(path);
+                await beforeCatalogRead?.(path);
                 return Response.json(catalogRows.get(path) ?? { status: 'absent' });
             }
             if (path === '/v1/artifacts' && init?.method === 'POST') {
@@ -298,6 +307,7 @@ async function openAccount(mode: 'plain' | 'e2ee' = 'plain', options: { ask?: bo
         setProfileReadStatus(value: number) { profileReadStatus = value; },
         setMaterialReadStatus(value: number) { materialReadStatus = value; },
         setBeforeMaterialRead(value: (() => void | Promise<void>) | undefined) { beforeMaterialRead = value; },
+        setBeforeCatalogRead(value: ((path: string) => void | Promise<void>) | undefined) { beforeCatalogRead = value; },
         setBeforeProfileRead(value: (() => void) | undefined) { beforeProfileRead = value; },
         setBeforeHistoryRead(value: (() => void | Promise<void>) | undefined) { beforeHistoryRead = value; },
         readHistoryContent: () => historyContent,
@@ -379,9 +389,16 @@ describe('Saved Secret operations through their real Account and Action owners',
         expect(account.artifacts).toHaveLength(1);
         expect(account.writes).toEqual([]);
     });
-    it('compound catalog save creates every draft credential in one transaction despite unrelated Settings drift', async () => {
-        const account = await openAccount('plain', { raw: { userNote: 'initial' } });
+    it.each(['with-revisions', 'without-revisions'] as const)('compound catalog save creates every draft credential in one transaction despite unrelated Settings drift (%s)', async receiptShape => {
+        const account = await openAccount('plain', { home: `-compound-${receiptShape}`, raw: { userNote: 'initial' } });
+        expect(getMcpServerCatalogSnapshot(account.scope).revision).not.toBe(11);
         const destination = '/v1/account/entity-rows/mcp';
+        const reread = createDeferred<void>();
+        let committed = false;
+        let rereadStarted = false;
+        account.setBeforeCatalogRead(async path => {
+            if (committed && path === destination) { rereadStarted = true; await reread.promise; }
+        });
         account.catalogRows.set(destination, { status: 'present', revision: 10, content: { t: 'plain', v: { v: 1, servers: [], bindings: [] } } });
         // An unrelated locked/invalid domain is not part of this destination-only save.
         account.catalogRows.set('/v1/account/entity-rows/acp', { status: 'present', revision: 12,
@@ -403,9 +420,12 @@ describe('Saved Secret operations through their real Account and Action owners',
                 account.materialRow(resource.resourceId, 'plain', resource.storedContent, 1);
             }
             account.catalogRows.set(destination, { status: 'present', revision: 11, content: mutation.content });
-            return Response.json({ resourceId: input.resourceId, settingsVersion: account.settingsVersion });
+            committed = true;
+            return Response.json({ resourceId: input.resourceId, settingsVersion: account.settingsVersion,
+                ...(receiptShape === 'with-revisions' ? { catalogRevisions: { mcp: 11 } } : {}) });
         });
         const { createSavedSecretResourcesWithCatalogMutation } = await import('./savedSecretResourceOperations');
+        try {
         const result = await createSavedSecretResourcesWithCatalogMutation({ scope: account.scope, resources: drafts,
             catalogKeys: ['mcp'], mutateCatalogs: ({ resourceRefs, catalogRevisions }: Readonly<{
                 resourceRefs: ReadonlyMap<string, string>; catalogRevisions: Partial<SavedSecretCatalogRevisionsV1>;
@@ -427,6 +447,17 @@ describe('Saved Secret operations through their real Account and Action owners',
         expect(account.resources.size).toBe(2);
         expect(account.raw.userNote).toBe('changed elsewhere');
         expect(account.raw.secrets ?? []).toEqual([]);
+        await expect.poll(() => rereadStarted).toBe(true);
+        if (receiptShape === 'with-revisions') expect(getMcpServerCatalogSnapshot(account.scope)).toMatchObject({ revision: 11, stale: true,
+            value: { servers: [{ env: { KEY_A: { secretId: 'happier:shared-secret:v1:draft-a' },
+                KEY_B: { secretId: 'happier:shared-secret:v1:draft-b' } } }] } });
+        else expect(getMcpServerCatalogSnapshot(account.scope).revision).not.toBe(11);
+        reread.resolve();
+        await expect.poll(() => getMcpServerCatalogSnapshot(account.scope).revision).toBe(11);
+        expect(getMcpServerCatalogSnapshot(account.scope).value).toMatchObject({ servers: [{ env: {
+            KEY_A: { secretId: 'happier:shared-secret:v1:draft-a' }, KEY_B: { secretId: 'happier:shared-secret:v1:draft-b' },
+        } }] });
+        } finally { reread.resolve(); }
     });
     it.each([{ conflict: false, previousShared: false, throughVoice: false, activeShared: false }, { conflict: true, previousShared: false, throughVoice: false, activeShared: false },
         { conflict: false, previousShared: true, throughVoice: false, activeShared: false },
@@ -842,7 +873,7 @@ describe('Saved Secret operations through their real Account and Action owners',
         account.setEffect(() => { throw new Error('Existing Resource proof must not create or overwrite material'); });
         const context = await captureLazyActionAccountContext(account.scope.serverId);
         try {
-            const projection = await readNotificationChannelCatalogProjectionInContext(context);
+            const projection = await readNotificationChannelCatalogProjectionInContext(context, undefined, { onReady: () => {} });
             expect(projection.catalog).toMatchObject({ status: 'ready', revision: 12, channels: prepared.record.channels,
                 cleanup: { status: exact ? 'complete' : 'cleanup-pending' } });
             expect(account.raw.futurePreference).toEqual({ preserve: 'opaque sibling' });
@@ -884,12 +915,12 @@ describe('Saved Secret operations through their real Account and Action owners',
         account.setEffect(() => { throw new Error('History retries must not create or overwrite Resources'); });
         const context = await captureLazyActionAccountContext(account.scope.serverId);
         try {
-            const initial = await readNotificationChannelCatalogProjectionInContext(context);
+            const initial = await readNotificationChannelCatalogProjectionInContext(context, undefined, { onReady: () => {} });
             expect(initial.catalog).toMatchObject({ status: 'ready', cleanup: { status: 'cleanup-pending' } });
             expect(account.raw).not.toHaveProperty('notificationChannelsV1');
             expect(account.settingsVersion).toBe(8);
             expect(account.readHistoryContent()).toMatchObject({ t: 'plain', v: { notificationChannelsV1: [signedChannel] } });
-            const retry = await readNotificationChannelCatalogProjectionInContext(context);
+            const retry = await readNotificationChannelCatalogProjectionInContext(context, undefined, { onReady: () => {} });
             expect(retry.catalog).toMatchObject({ status: 'ready', cleanup: { status: 'complete' } });
             expect(account.readHistoryContent()).toEqual({ t: 'plain', v: { preferredLanguage: 'de' } });
             expect(account.raw.futurePreference).toEqual({ preserve: 'current sibling' });
@@ -1626,13 +1657,15 @@ describe('Saved Secret operations through their real Account and Action owners',
         const account = await openAccount('plain', { ask: true, raw: { secrets: [legacy] } });
         const release = observeSavedSecretCatalog(account.scope);
         try {
-            await vi.waitFor(() => expect(['ready', 'error']).toContain(getSavedSecretCatalogSnapshot(account.scope)?.status));
+            await vi.waitFor(() => expect(getSavedSecretCatalogSnapshot(account.scope)?.legacyImport).toEqual({
+                status: 'pending', reason: 'source-unavailable',
+            }));
             expect(account.artifacts).toHaveLength(1);
             expect(account.resources.size).toBe(0);
             expect(account.writes).toEqual([]);
             expect(account.raw.secrets).toEqual([legacy]);
-            expect(getSavedSecretCatalogSnapshot(account.scope)).toMatchObject({ status: 'error', stale: true,
-                error: { kind: 'unreachable', retryable: true } });
+            expect(getSavedSecretCatalogSnapshot(account.scope)).toMatchObject({ status: 'ready', stale: false,
+                error: null });
         } finally { release(); }
     });
     it.each([false, true])('catalog importer transfers a predecessor ElevenLabs inline credential and Voice binding through one source transaction (bound personal source: %s)', async boundPersonal => {
@@ -1658,7 +1691,7 @@ describe('Saved Secret operations through their real Account and Action owners',
             account.settingsVersion += 1;
             return Response.json({ resourceId: input.resourceId, settingsVersion: account.settingsVersion });
         });
-        await refreshSavedSecretCatalog(account.scope);
+        await refreshCatalogAndWaitForLegacyImport(account.scope);
         const input = SharedSavedSecretPromoteInputV1Schema.parse(account.writes.find(write =>
             write.path === SHARED_SAVED_SECRET_ACTION_PATHS_V1['secrets.shared.promote'])?.body);
         if (input.nextSettings?.t !== 'plain') throw new Error('Expected the original Plain source transaction');
@@ -1697,14 +1730,18 @@ describe('Saved Secret operations through their real Account and Action owners',
         expect(receipt?.source).toEqual({ kind: 'existing-resource-reference', resourceRef });
         account.materialRow(resourceId, 'plain', sealSavedSecretResourceStoredContentV1({ resourceId, mode: 'plain',
             content: { v: 1, name: 'Existing ElevenLabs credential', kind: 'apiKey', value: encryptedValue.value } }), 4);
+        // Foreground now reads materials first. Drift during maintenance must
+        // occur after its source capture, not during that initial UI read.
+        let foregroundRead = true;
         if (sourceDrift) account.setBeforeMaterialRead(() => {
+            if (foregroundRead) { foregroundRead = false; return; }
             account.raw = { ...account.raw, voice: { ...voice, adapters: { realtime_elevenlabs: {
                 byo: { apiKey: { _isSecretValue: true, value: 'changed-elevenlabs-value' } },
             } } } };
             account.settingsVersion += 1;
             account.setBeforeMaterialRead(undefined);
         });
-        await refreshSavedSecretCatalog(account.scope);
+        await refreshCatalogAndWaitForLegacyImport(account.scope);
         expect(account.writes, JSON.stringify({ paths: account.writes.map(write => write.path), sourceReads: account.sourceReads })).toEqual([]);
         expect(getSavedSecretCatalogSnapshot(account.scope)?.legacyImport).toMatchObject(sourceDrift
             ? { status: 'pending', reason: 'changed' }
@@ -1752,7 +1789,7 @@ describe('Saved Secret operations through their real Account and Action owners',
             }
             return Response.json({ resourceId: input.resourceId, settingsVersion: acknowledgedVersion });
         });
-        await refreshSavedSecretCatalog(account.scope);
+        await refreshCatalogAndWaitForLegacyImport(account.scope);
         expect(account.writes.map(write => write.path)).toEqual([SHARED_SAVED_SECRET_ACTION_PATHS_V1['secrets.shared.promote']]);
         expect(account.resources.size).toBe(observation === 'resource-use-withdrawal' ? 1 : 2);
         expect(account.raw.voice).toEqual(voice);
@@ -1787,7 +1824,7 @@ describe('Saved Secret operations through their real Account and Action owners',
             account.settingsVersion += 1;
             return Response.json({ resourceId: input.resourceId, settingsVersion: account.settingsVersion });
         });
-        await refreshSavedSecretCatalog(account.scope);
+        await refreshCatalogAndWaitForLegacyImport(account.scope);
         const snapshot = getSavedSecretCatalogSnapshot(account.scope);
         expect(snapshot?.materializedSecrets).toEqual(expect.arrayContaining([
             expect.objectContaining({ encryptedValue: chatApiKey }),
@@ -1833,7 +1870,7 @@ describe('Saved Secret operations through their real Account and Action owners',
                 account.settingsVersion += 1;
                 account.setBeforeMaterialRead(undefined);
             });
-            await refreshSavedSecretCatalog(account.scope);
+            await refreshCatalogAndWaitForLegacyImport(account.scope);
             const imported = getSavedSecretCatalogSnapshot(account.scope)?.legacyImport;
             expect(account.writes.filter(write => write.path === '/v2/account/settings'), JSON.stringify({
                 sourceReads: account.sourceReads, settingsWriteStacks: account.settingsWriteStacks,
@@ -1933,7 +1970,7 @@ describe('Saved Secret operations through their real Account and Action owners',
             });
             return Response.json({ resourceId: input.resourceId, settingsVersion: account.settingsVersion });
         });
-        await refreshSavedSecretCatalog(account.scope);
+        await refreshCatalogAndWaitForLegacyImport(account.scope);
         expect(resourceId, JSON.stringify({ legacyImport: getSavedSecretCatalogSnapshot(account.scope)?.legacyImport,
             writes: account.writes.map(write => write.path) })).toBe(deriveSavedSecretImportResourceIdV1({ accountId: account.scope.accountId,
             source: { kind: 'personal-saved-secret', secretId: source.id } }));
@@ -1951,7 +1988,7 @@ describe('Saved Secret operations through their real Account and Action owners',
         expect(getSavedSecretCatalogSnapshot(account.scope)?.legacyImport).toMatchObject({ status: 'complete', verifiedReferences: [
             { source: retained?.source, resourceRef: `happier:shared-secret:v1:${resourceId}`, revision: 1 },
         ] });
-        await refreshSavedSecretCatalog(account.scope);
+        await refreshCatalogAndWaitForLegacyImport(account.scope);
         expect(getSavedSecretCatalogSnapshot(account.scope)?.legacyImport).toMatchObject({ status: 'complete', verifiedReferences: [
             { source: retained?.source, resourceRef: `happier:shared-secret:v1:${resourceId}`, revision: 1 },
         ] });
@@ -1986,7 +2023,7 @@ describe('Saved Secret operations through their real Account and Action owners',
             });
             return Response.json({ resourceId: input.resourceId, settingsVersion: account.settingsVersion });
         });
-        await refreshSavedSecretCatalog(account.scope);
+        await refreshCatalogAndWaitForLegacyImport(account.scope);
         const importedId = deriveSavedSecretImportResourceIdV1({ accountId: account.scope.accountId,
             source: { kind: 'personal-saved-secret', secretId: legacy.id } });
         const snapshot = getSavedSecretCatalogSnapshot(account.scope);
@@ -2027,7 +2064,7 @@ describe('Saved Secret operations through their real Account and Action owners',
             content: { v: 1, name: 'Current resource', kind: 'token', value: 'resource-value' },
         }), 5);
         const before = account.raw;
-        await refreshSavedSecretCatalog(account.scope);
+        await refreshCatalogAndWaitForLegacyImport(account.scope);
         expect(getSavedSecretCatalogSnapshot(account.scope)).toMatchObject({ legacyImport: { status: 'pending' },
             materializedSecrets: [expect.objectContaining({ id: ref, encryptedValue: { _isSecretValue: true, value: 'resource-value' } })] });
         expect(account.raw).toEqual(before);
@@ -2150,6 +2187,44 @@ describe('Saved Secret operations through their real Account and Action owners',
             expect(getSavedSecretCatalogSnapshot(account.scope)?.data).toEqual([]);
             expect(getSavedSecretCatalogSnapshot(account.scope)?.materializedSecrets).toEqual([]);
         } finally { release(); }
+    });
+    it('rejects a delayed committed update receipt after deletion when the displayed inventory never contained its revision', async () => {
+        const account = await openAccount();
+        await vi.waitFor(() => expect(storage.getState().settingsVersion).toBe(7));
+        applySavedSecretCatalogPage({ scope: account.scope, entries: [], observedAt: 1 });
+        account.materialRow('resource-a', 'plain', { t: 'plain', v: { v: 1, name: 'Key', kind: 'token', value: 'private-value' } });
+        const committed = createDeferred<void>();
+        const delivery = createDeferred<void>();
+        account.setEffect(async (path, body) => {
+            if (path === SHARED_SAVED_SECRET_ACTION_PATHS_V1['secrets.shared.update']) {
+                const input = SharedSavedSecretUpdateInputV1Schema.parse(body);
+                account.materialRow(input.resourceId, 'plain', input.storedContent, 4);
+                committed.resolve();
+                await delivery.promise;
+                return Response.json({ resourceId: input.resourceId, revision: 4 });
+            }
+            if (path === SHARED_SAVED_SECRET_ACTION_PATHS_V1['secrets.shared.delete']) {
+                account.resources.delete('resource-a');
+                account.setMaterialReadStatus(503);
+                return Response.json({ resourceId: 'resource-a' });
+            }
+            throw new Error(`Unexpected mutation: ${path}`);
+        });
+        const update = updateSavedSecretResource({ scope: account.scope, resourceId: 'resource-a', expectedRevision: 3,
+            nextName: 'Delayed update', decryptDataKeyEnvelope: async () => null });
+        try {
+            await committed.promise;
+            expect(await deleteSavedSecretResource({ scope: account.scope, resourceId: 'resource-a', expectedRevision: 4,
+                expectedSettingsVersion: 7, confirmedByPresentUser: true })).toEqual({ ok: true });
+            expect(getSavedSecretCatalogSnapshot(account.scope)?.data).toEqual([]);
+            delivery.resolve();
+            expect(await update).toEqual({ ok: true });
+            expect(getSavedSecretCatalogSnapshot(account.scope)?.data).toEqual([]);
+            expect(getSavedSecretCatalogSnapshot(account.scope)?.materializedSecrets).toEqual([]);
+        } finally {
+            delivery.resolve();
+            await update;
+        }
     });
     it.each([true, false])('current picker creates private resource material without recreating Settings secrets (Teams: %s)', async teams => {
         const account = await openAccount('plain', { teams });
@@ -2565,6 +2640,35 @@ describe('Saved Secret operations through their real Account and Action owners',
         expect(account.writes.some(write => write.path === '/v2/account/settings')).toBe(false);
     });
 
+    it.each(['create', 'update'] as const)('publishes acknowledged %s metadata without authorizing stale secret material', async operation => {
+        const account = await openAccount('plain');
+        if (operation === 'update') account.materialRow('resource-a', 'plain', {
+            t: 'plain', v: { v: 1, name: 'Previous name', kind: 'token', value: 'private-value' },
+        }, 3);
+        await refreshCatalogAndWaitForLegacyImport(account.scope);
+        let committed = false;
+        const revalidation = createDeferred<void>();
+        account.setBeforeMaterialRead(async () => { if (committed) await revalidation.promise; });
+        account.setEffect((_path, body) => {
+            const input = operation === 'create' ? SharedSavedSecretCreateInputV1Schema.parse(body)
+                : SharedSavedSecretUpdateInputV1Schema.parse(body);
+            account.materialRow(input.resourceId, 'plain', input.storedContent, operation === 'create' ? 1 : 4);
+            committed = true;
+            return Response.json({ resourceId: input.resourceId, revision: operation === 'create' ? 1 : 4 });
+        });
+        try {
+        const result = operation === 'create' ? await createSavedSecretResource({ scope: account.scope,
+            name: 'Acknowledged name', kind: 'token', value: 'private-value', accountGrants: [], teamGrants: [], groupGrants: [] })
+            : await updateSavedSecretResource({ scope: account.scope, resourceId: 'resource-a', expectedRevision: 3,
+                nextName: 'Acknowledged name', decryptDataKeyEnvelope: async () => null });
+        expect(result.ok).toBe(true);
+        const snapshot = getSavedSecretCatalogSnapshot(account.scope);
+        expect(snapshot?.data?.some(entry => entry.name === 'Acknowledged name')).toBe(true);
+        expect(snapshot?.stale).toBe(true);
+        expect(snapshot?.materializedSecrets).toEqual([]);
+        } finally { revalidation.resolve(); }
+    });
+
     it.each(['rename', 'to-plain', 'to-e2ee'] as const)('reopens and reseals resource content for %s without retaining the opened key', async transition => {
         const account = await openAccount('e2ee');
         const resourceMode = transition === 'to-e2ee' ? 'plain' : 'e2ee';
@@ -2702,3 +2806,6 @@ describe('Saved Secret operations through their real Account and Action owners',
         expect(account.writes).toEqual([]);
     });
 });
+// Native filesystem classes are an OS boundary, not part of this source-driven UI journey.
+vi.mock('expo-file-system', async () =>
+    (await import('@/dev/testkit/mocks/expoFileSystem')).createExpoFileSystemFileMock().module);

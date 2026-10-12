@@ -1,0 +1,84 @@
+import type { ActionExecutorDeps } from '@happier-dev/protocol';
+import { PluginExecutionOriginActionInputSchemas as inputs } from '@happier-dev/protocol/actions/pluginExecutionOriginActionFamily';
+import { readCurrentAppShellPluginUiProjection } from '@/components/appShell/plugins/committedPluginUiProjection';
+import { readPluginUiExecutionOriginCandidates } from '@/sync/domains/plugins/ui/projectionUnion';
+import { readPluginAccountAvailability } from '@/sync/domains/plugins/availability/projection';
+import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
+import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { storage } from '@/sync/domains/state/storageStore';
+import { readFreshPluginMachineExecutionOriginCandidates, resolveFreshPluginMachineExecutionOrigin } from '@/sync/domains/machines/administration/usePluginExecutionOriginSelection';
+import { getPluginExecutionOriginCandidateOrigin, getPluginExecutionOriginCandidateVersion,
+    isPluginMachineExecutionOriginCandidateSelectable, resolvePluginMachineExecutionOriginState } from '@/sync/domains/machines/administration/pluginExecutionOrigin';
+import { persistPluginMachineExecutionOriginSelection } from '@/sync/domains/machines/administration/selectionPreferences';
+import type { LazyActionAccountContext } from './actionAccountContext';
+import { readCurrentUiContextActionReader } from '@/components/appShell/currentUiContext/currentUiContextActionRuntime';
+
+/** The answering client's Account-bound projection supplies candidates. Neither
+ * the caller nor a daemon inventory can elect another plugin execution origin. */
+export function createPluginExecutionOriginActionDeps(account: Pick<LazyActionAccountContext,
+    'serverId' | 'accountId' | 'accountLifetime' | 'assertCurrent'>): Pick<ActionExecutorDeps, 'pluginExecutionOriginAction'> {
+    return { pluginExecutionOriginAction: async ({ actionId, input, context }) => {
+        account.assertCurrent();
+        context.signal?.throwIfAborted();
+        const scope = getActiveServerAccountScope();
+        const current = () => account.accountLifetime.isCurrent() && scope !== null
+            && scope.accountId === account.accountId && areServerProfileIdentifiersEquivalent(scope.serverId, account.serverId)
+            && areServerAccountScopesEqual(scope, getActiveServerAccountScope())
+            && areServerAccountScopesEqual(scope, storage.getState().settingsScope);
+        if (!scope || !current()) return { status: 'unavailable' };
+        const parsed = inputs[actionId].parse(input);
+        if (parsed.contextualTarget || (actionId === 'plugins.execution_origin.list'
+            && inputs[actionId].parse(input).contextual === true)) {
+            const mounted = readCurrentUiContextActionReader(context);
+            const resolve = (commandId: string) => {
+                const record = mounted?.resolveCurrentUiCommand(commandId);
+                const command = record?.command;
+                return record && !record.retirementSignal.aborted && command?.kind === 'pluginExecutionOrigin'
+                    && command.pluginId === parsed.pluginId && areServerAccountScopesEqual(command.account.scope, account.accountLifetime.scope)
+                    && command.account.isCurrent() && current() ? command : null;
+            };
+            if (!mounted) return { status: 'unavailable' };
+            if (!parsed.contextualTarget) return { status: 'available', contextualTargets:
+                mounted.readCurrentUiContext()?.commands.flatMap(descriptor => {
+                    const command = resolve(descriptor.id);
+                    return command ? [{ commandId: descriptor.id, ...command.target }] : [];
+                }) ?? [] };
+            const command = resolve(parsed.contextualTarget.commandId);
+            if (!command) return { status: 'unavailable' };
+            if (actionId === 'plugins.execution_origin.list') return command.read();
+            context.signal?.throwIfAborted();
+            const mutation = actionId === 'plugins.execution_origin.set' ? inputs[actionId].parse(input)
+                : inputs['plugins.execution_origin.clear'].parse(input);
+            return resolve(parsed.contextualTarget.commandId) === command
+                ? command.apply('origin' in mutation ? mutation.origin : null) : { status: 'unavailable' };
+        }
+        const readFacts = () => {
+            const reader = readPluginAccountAvailability(scope);
+            return { pluginId: parsed.pluginId, origin: null, reader, classifyRelease: reader.classifyRelease,
+                ...readPluginUiExecutionOriginCandidates({ projection: readCurrentAppShellPluginUiProjection(), pluginId: parsed.pluginId }) };
+        };
+        if (actionId === 'plugins.execution_origin.list') {
+            const settingsVersion = storage.getState().settingsVersion;
+            if (settingsVersion === null) return { status: 'unavailable' };
+            const facts = readFacts();
+            const candidates = readFreshPluginMachineExecutionOriginCandidates(facts);
+            const storedOrigin = storage.getState().settings.machineAdministrationSelectionsV1.pluginExecutionOriginsByPluginId[parsed.pluginId] ?? null;
+            const selection = resolvePluginMachineExecutionOriginState({ ...facts, storedOrigin, candidates });
+            return { status: 'available', settingsVersion, storedOrigin,
+                selectedOrigin: selection.kind === 'selected' ? selection.origin : null,
+                candidates: candidates.map(candidate => ({ origin: getPluginExecutionOriginCandidateOrigin(candidate),
+                    version: getPluginExecutionOriginCandidateVersion(candidate), selectable: isPluginMachineExecutionOriginCandidateSelectable(candidate) })) };
+        }
+        const mutation = actionId === 'plugins.execution_origin.set' ? inputs[actionId].parse(input)
+            : inputs['plugins.execution_origin.clear'].parse(input);
+        if (mutation.expectedSettingsVersion === undefined) return { status: 'unavailable' };
+        const result = await persistPluginMachineExecutionOriginSelection({ pluginId: mutation.pluginId,
+            origin: 'origin' in mutation ? mutation.origin : null,
+            expectedSettingsScope: scope, expectedSettingsVersion: mutation.expectedSettingsVersion,
+            isInvocationCurrent: () => { context.signal?.throwIfAborted(); return current(); },
+            isOriginCurrent: origin => current() && resolveFreshPluginMachineExecutionOrigin({ ...readFacts(), origin }) !== null });
+        if (result.status === 'applied') return { status: 'applied', settingsVersion: result.settingsVersion };
+        return result;
+    } };
+}

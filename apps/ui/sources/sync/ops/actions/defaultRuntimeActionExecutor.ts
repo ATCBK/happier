@@ -1,5 +1,4 @@
 import { createUnavailableRuntimeActionExecutor } from '@happier-dev/protocol/actions/executor/dispatch';
-import type { BrowserCommandV1 } from '@happier-dev/protocol/browser/control/v1';
 import type { RuntimeActionExecute, RuntimeActionExecuteArgs } from '@happier-dev/protocol/actions/executor/types';
 
 import {
@@ -64,19 +63,10 @@ function resolveSessionMachineId(args: RuntimeActionExecuteArgs): string | null 
     return normalizeNonEmptyString(readMachineControlTargetForSession(sessionId)?.machineId);
 }
 
-type BrowserCommandWithSessionId = Extract<BrowserCommandV1, Readonly<{ browserSessionId: string }>>;
-
-function isBrowserCommandWithSessionId(command: BrowserCommandV1): command is BrowserCommandWithSessionId {
-    return 'browserSessionId' in command && typeof command.browserSessionId === 'string';
-}
-
-function resolveBrowserCommandSessionId(command: BrowserCommandV1): string | null {
-    return isBrowserCommandWithSessionId(command) ? normalizeNonEmptyString(command.browserSessionId) : null;
-}
-
 export function createDefaultRuntimeActionExecutor(
     input: CreateDefaultRuntimeActionExecutorInput = {},
     accountLifetime?: ServerAccountScopeLifetime,
+    executeBrowserOnMachine?: RuntimeActionExecute,
 ): RuntimeActionExecute {
     const fallback = createUnavailableRuntimeActionExecutor();
     const simulator = createSimulatorPreviewRuntimeActionExecutor({
@@ -108,11 +98,12 @@ export function createDefaultRuntimeActionExecutor(
         fallback: computer,
     });
     return createBrowserRuntimeActionExecutor({
+        executeOnMachine: executeBrowserOnMachine,
         ...(input.browserControl ? { control: input.browserControl } : {}),
         ...(!input.browserControl
             ? {
                 resolveControl: (command) => {
-                    const browserSessionId = resolveBrowserCommandSessionId(command);
+                    const browserSessionId = normalizeNonEmptyString(command.browserSessionId);
                     return browserSessionId ? readRegisteredBrowserRuntimeControlAdapter(browserSessionId,
                         command.kind === 'openView' ? undefined : command.viewId) : null;
                 },

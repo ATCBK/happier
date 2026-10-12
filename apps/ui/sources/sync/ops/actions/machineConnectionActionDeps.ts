@@ -13,9 +13,77 @@ import { canUsePrivateProjectAccountAction } from '@/sync/api/projects/projectAc
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import type { SystemTaskRunner } from '@/components/systemTasks/types';
 import { createMachineAddSshTaskAction } from '@/components/machines/add/machineAddSshTaskAction';
+import { MachineCapabilityInstallInputSchema, MachineMetadataUpdateInputSchema, MachineReplacementSetInputSchema } from '@happier-dev/protocol/actions/specs/machineConnection';
+import { machineCapabilitiesInvoke } from '@/sync/ops/capabilities';
+import { readCurrentMachineUpdateItem } from '@/updates/updatesActionRuntime';
+import { runMachineItemUpdate } from '@/updates/machineUpdateRuns';
+import { machineStopDaemon, machineUpdateMetadata } from '@/sync/ops/machines';
+import { machineRevokeWithProviderCleanup, machineReplaceInAccount, machineClearReplacementFromAccount } from '@/sync/ops/machineAccount';
+import { storage } from '@/sync/domains/state/storage';
+import { getActiveServerId } from '@/sync/domains/server/serverProfiles';
+import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 
-export function createMachineConnectionActionDeps(options: Readonly<{ runner?: SystemTaskRunner; account?: LazyActionAccountContext }> = {}): Pick<ActionExecutorDeps, 'homeConnect' | 'machineAddCommand' | 'machinePairingCreate' | 'machineTerminalAction' | 'machineAddSshTaskAction'> {
+export function createMachineConnectionActionDeps(options: Readonly<{ runner?: SystemTaskRunner; account?: LazyActionAccountContext }> = {}): Pick<ActionExecutorDeps, 'homeConnect' | 'machineAddCommand' | 'machinePairingCreate' | 'machineTerminalAction' | 'machineAddSshTaskAction' | 'machinePageAction'> {
     return {
+        machinePageAction: async ({ actionId, input, context }) => {
+            const serverId = input.serverId ?? context.serverId ?? getActiveServerId();
+            if (!serverId || !areServerProfileIdentifiersEquivalent(serverId, getActiveServerId())) {
+                return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
+            }
+            const scope = getActiveServerAccountScope();
+            if (!scope || !areServerProfileIdentifiersEquivalent(scope.serverId, serverId)
+                || context.expectedAccountId && context.expectedAccountId !== scope.accountId
+                || context.runtimeAccountId && context.runtimeAccountId !== scope.accountId) {
+                return { ok: false, errorCode: 'account_settings_scope_changed', error: 'account_settings_scope_changed' };
+            }
+            if (actionId === 'machines.daemon.stop') {
+                return machineStopDaemon(input.machineId, { serverId });
+            }
+            if (actionId === 'machines.capabilities.install') {
+                const request = MachineCapabilityInstallInputSchema.parse(input);
+                const item = request.method === 'upgrade' ? readCurrentMachineUpdateItem(scope, request.machineId,
+                    { kind: 'installable', capabilityId: request.capabilityId }) : null;
+                if (item) {
+                    if (item.action.kind !== 'run') return { ok: false, errorCode: 'update_target_unavailable', error: 'update_target_unavailable' };
+                    return await runMachineItemUpdate(item, { scope }) ?? { ok: false, errorCode: 'update_target_unavailable', error: 'update_target_unavailable' };
+                }
+                return machineCapabilitiesInvoke(request.machineId, { id: request.capabilityId, method: request.method },
+                    { serverId, accountId: scope.accountId, timeoutMs: 5 * 60_000, signal: context.signal });
+            }
+            if (actionId === 'machines.remove') return machineRevokeWithProviderCleanup(input.machineId, scope);
+            if (actionId === 'machines.replacement.set' || actionId === 'machines.replacement.clear') {
+                const account = await captureLazyActionAccountContext(serverId, context.signal);
+                try {
+                    account.assertCurrent();
+                    if (account.accountId !== scope.accountId) {
+                        return { ok: false, errorCode: 'account_settings_scope_changed', error: 'account_settings_scope_changed' };
+                    }
+                    if (actionId === 'machines.replacement.clear') return await machineClearReplacementFromAccount(input.machineId, account.request);
+                    const request = MachineReplacementSetInputSchema.parse(input);
+                    return await machineReplaceInAccount({ oldMachineId: request.machineId,
+                        replacementMachineId: request.replacementMachineId,
+                        ...(request.confirmActiveOldMachine === undefined ? {} : { confirmActiveOldMachine: request.confirmActiveOldMachine }),
+                    }, account.request);
+                } finally { account.dispose(); }
+            }
+            const request = MachineMetadataUpdateInputSchema.parse(input);
+            const machine = storage.getState().machines[request.machineId];
+            if (!machine?.metadata || machine.availability?.kind === 'locked') {
+                return { ok: false, errorCode: 'machine_metadata_unavailable', error: 'machine_metadata_unavailable' };
+            }
+            const { displayName, windowsRemoteSessionLaunchMode } = request.patch;
+            if (windowsRemoteSessionLaunchMode !== undefined && machine.metadata.platform !== 'win32') {
+                return { ok: false, errorCode: 'machine_platform_mismatch', error: 'machine_platform_mismatch' };
+            }
+            const { windowsRemoteSessionLaunchMode: _priorMode, windowsRemoteSessionConsole: _legacy, ...metadataWithoutMode } = machine.metadata;
+            const metadata = windowsRemoteSessionLaunchMode === undefined ? machine.metadata : metadataWithoutMode;
+            const result = await machineUpdateMetadata(request.machineId, {
+                ...metadata,
+                ...(displayName !== undefined ? { displayName: displayName?.trim() || undefined } : {}),
+                ...(windowsRemoteSessionLaunchMode ? { windowsRemoteSessionLaunchMode } : {}),
+            }, request.expectedVersion ?? machine.metadataVersion);
+            return { version: result.version };
+        },
         machineAddSshTaskAction: createMachineAddSshTaskAction(options.runner),
         homeConnect: async (input, context) => {
             const outcome = await connectHomeAtAddress({ serverUrl: input.address, displayName: input.displayName,

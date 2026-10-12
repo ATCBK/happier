@@ -1,12 +1,8 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApprovalRequestV2Schema } from '@happier-dev/protocol';
 
-import {
-    createHomeGovernanceHarness,
-    installHomeGovernanceBoundaries,
-    standardCleanup,
-    teamInvitationRowFixture,
-} from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { standardCleanup, teamInvitationRowFixture } from '@/dev/testkit';
 import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 
 /**

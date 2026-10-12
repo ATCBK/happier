@@ -26,6 +26,7 @@ import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverSc
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { resolveReplacementAwareMachineRpcTarget, type ReplacementAwareMachineRpcTarget } from '@/sync/domains/machines/identity/resolveReplacementAwareMachineRpcTarget';
+import { resolveServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachine';
 import { areAccountSettingsScopesEqual } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { resolveTerminalSpawnOptions } from '@/sync/domains/settings/terminalSettings';
 import { readAccountSettingsForScope } from '@/sync/domains/state/accountSettingsPersistence';
@@ -637,9 +638,18 @@ async function machineExternalSessionOperationAction(
     opts?: MachineExternalSessionsOpts,
 ): Promise<ExternalSessionOperationActionResponseV1> {
     const { machineId, ...reference } = input;
+    const machine = resolveServerScopedMachine(storage.getState(), opts?.serverId, machineId);
+    // An operation belongs to its original Machine's ledger. Supply only that
+    // exact record to the identity owner so it cannot choose a successor host.
+    const routeTarget = machine?.availability?.kind === 'locked' ? null : resolveReplacementAwareMachineRpcTarget({
+        machineId,
+        machines: machine ? { [machine.id]: machine } : {},
+    });
+    if (!routeTarget) throw new Error(`Machine RPC target is unavailable (${params.method})`);
     try {
         return await callExternalSessionMachineRpc({
             machineId,
+            routeTarget,
             method: params.method,
             input: reference,
             requestSchema: params.requestSchema,

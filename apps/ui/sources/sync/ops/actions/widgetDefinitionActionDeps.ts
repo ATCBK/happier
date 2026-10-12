@@ -5,6 +5,7 @@ import { createWidgetDefinitionArtifactPortV1, createWidgetLayoutFragmentArtifac
 import type { LazyActionAccountContext } from './actionAccountContext';
 import { readWidgetActionCandidatesV1 } from './widgetCatalogActionDeps';
 import { storage } from '@/sync/domains/state/storage';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 
 export function createWidgetDefinitionActionDepsV1(account: LazyActionAccountContext | null | undefined,
     deps: ActionExecutorDeps): Pick<ActionExecutorDeps, 'widgetDefinitionArtifacts' | 'widgetLayoutFragmentArtifacts' | 'readSessionWidgetDefinitionSource' | 'describeWidgetDefinitionPlacements'> {
@@ -48,7 +49,7 @@ export function createWidgetDefinitionActionDepsV1(account: LazyActionAccountCon
                 for (const placement of board.widgets ?? []) {
                     const reference = placement.instance.definition;
                     if (reference.kind === 'artifact' && reference.artifactId === artifactId
-                        && placement.ref.surface.serverId === account.serverId && placement.ref.surface.accountId === account.accountId)
+                        && areServerProfileIdentifiersEquivalent(placement.ref.surface.serverId, account.serverId) && placement.ref.surface.accountId === account.accountId)
                         placements.push(placement.ref);
                 }
             }

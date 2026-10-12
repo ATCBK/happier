@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { AutomationTriggerIdSchema, deriveAccountMachineKeyFromRecoverySecret, openAutomationTemplateStoredForMigrationV1,
-    sealAccountScopedBlobCiphertext, serializeAutomationStoredDefinitionExecutionRecipeV1,
-    serializeAutomationStoredWorkflowDefinitionRecipeV2, type AccountEncryptionMigrateAutomationsInventoryResponse,
-    type AccountScopedCryptoMaterial } from '@happier-dev/protocol';
+import { AutomationTriggerIdSchema } from '@happier-dev/protocol/automations/automationTriggerIdentity';
+import { deriveAccountMachineKeyFromRecoverySecret, openAccountScopedBlobCiphertext, sealAccountScopedBlobCiphertext,
+    deriveAutomationTriggerEvidenceEqualityKeyV1, type AccountScopedCryptoMaterial } from '@happier-dev/protocol/crypto/accountScopedCipher';
+import { deriveAutomationOccurrenceKeyV1, deriveAutomationOccurrenceEvidenceEqualityTagV1 } from '@happier-dev/protocol/automations/automationOccurrenceV1';
+import { openAutomationTemplateStoredForMigrationV1 } from '@happier-dev/protocol/automations/automationTemplateStoredV1';
+import { serializeAutomationStoredDefinitionExecutionRecipeV1 } from '@happier-dev/protocol/automations/automationRunExecutionRecipeV1';
+import { serializeAutomationStoredWorkflowDefinitionRecipeV2 } from '@happier-dev/protocol/automations/automationWorkflowRecipeV2';
+import type { AccountEncryptionMigrateAutomationsInventoryResponse } from '@happier-dev/protocol/account/encryptionMigrate';
 import {
     AUTOMATION_TEMPLATE_V02_ENCRYPTED,
     AUTOMATION_TEMPLATE_V02_EXISTING_ENCRYPTED,
@@ -10,6 +14,7 @@ import {
     AUTOMATION_TEMPLATE_V02_RAW_ENCRYPTED,
 } from '../../../../../../packages/protocol/src/automations/automationTemplateV02.testFixtures';
 import {
+    buildAccountEncryptionMigrationAutomations,
     convertAccountEncryptionMigrationTemplate,
     isAccountEncryptionMigrationAutomationContentPlain,
     recoverAccountEncryptionMigrationAutomations,
@@ -21,6 +26,36 @@ const retainedSession = async (sessionId: string) => ({ sessionId, encryptionMod
 const row = (templateCiphertext: string) => ({ automationId: 'automation-old', expectedTemplateVersion: 4, templateCiphertext });
 
 describe('Account transition Automation recovery', () => {
+    it('normalizes retained occurrence evidence before deriving transition equality', async () => {
+        const targetCredentials = { token: 'target', secret: Buffer.from(new Uint8Array(32).fill(7)).toString('base64url') };
+        const knownEvidence = { v: 1 as const, kind: 'schedule' as const, scheduledFor: 1234 };
+        const evidence = { ...knownEvidence, retired: true };
+        const triggerId = AutomationTriggerIdSchema.parse('trigger-a');
+        const occurrenceKey = deriveAutomationOccurrenceKeyV1({ triggerId, evidence: knownEvidence });
+        const inventory: AccountEncryptionMigrateAutomationsInventoryResponse = { templates: [], runs: [{
+            runId: 'run-a', expectedRunRevision: 1, automationId: 'automation-a',
+            occurrenceKey, triggerId,
+            summaryCiphertext: null, triggerEvidenceEnvelope: JSON.stringify({ t: 'plain', v: evidence }),
+            occurrenceEvidenceEqualityTag: null, executionInputEnvelope: null, resultEnvelope: null,
+            replyContextEnvelope: null, failureDetailEnvelope: null,
+        }] };
+        const result = await buildAccountEncryptionMigrationAutomations({ accountId: 'account-a', fromMode: 'plain', toMode: 'e2ee',
+            inventory, sourceCredentials: { token: 'source' }, targetCredentials,
+            sourceEncryption: null, targetEncryption: null });
+        expect(result.action).toBe('migrate');
+        if (result.action !== 'migrate') throw new Error('Expected transition');
+        expect(result.runs[0]?.occurrenceEvidenceEqualityTag).toBe(deriveAutomationOccurrenceEvidenceEqualityTagV1({
+            accountId: 'account-a', automationId: 'automation-a', triggerId, occurrenceKey, evidence: knownEvidence,
+            purposeSeparatedAccountKey: deriveAutomationTriggerEvidenceEqualityKeyV1({ material: historicalMaterial }),
+        }));
+        const opened = openAccountScopedBlobCiphertext({ kind: 'automation_trigger_evidence', material: historicalMaterial,
+            ciphertext: JSON.parse(result.runs[0]!.triggerEvidenceEnvelope!).c });
+        expect(opened?.value).toEqual(evidence);
+        await expect(buildAccountEncryptionMigrationAutomations({ accountId: 'account-a', fromMode: 'plain', toMode: 'e2ee',
+            inventory: { ...inventory, runs: [{ ...inventory.runs[0]!, triggerEvidenceEnvelope: JSON.stringify({ t: 'plain',
+                v: { ...evidence, scheduledFor: -1 } }) }] }, sourceCredentials: { token: 'source' }, targetCredentials,
+            sourceEncryption: null, targetEncryption: null })).rejects.toThrow();
+    });
     it('does not declare historical material dispensable while trigger or retained Run content still needs it', () => {
         const plain = JSON.stringify({ t: 'plain', v: { retained: 'content' } });
         const inventory: AccountEncryptionMigrateAutomationsInventoryResponse = { templates: [], runs: [{

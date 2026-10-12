@@ -19,6 +19,7 @@ import {
     ExecutionRunGetResponseSchema,
     ExecutionRunListResponseSchema,
     ExecutionRunStartResponseSchema,
+    ExecutionRunStartFailureDetailsV1Schema,
     withExecutionRunStartFailureDetails,
 } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import { requiresProviderSafeExecutionRunStartRpc } from '@happier-dev/protocol/execution/runs/startRequest';
@@ -76,6 +77,7 @@ function executionRunSessionRpc<R, A>(params: Readonly<{
     payload: A;
     timeoutMs?: number | null;
     signal?: AbortSignal;
+    onIssued?: () => void;
 }>): Promise<R> {
     return params.scope
         ? sessionRpcWithServerAccountScope<R, A>({ ...params, scope: params.scope })
@@ -207,10 +209,13 @@ export async function sessionExecutionRunStart(
         notifyExecutionRunActivity({ serverId, sessionId });
         return parsed.data;
     } catch (error) {
+        const details = ExecutionRunStartFailureDetailsV1Schema.safeParse(error && typeof error === 'object'
+            && 'details' in error ? error.details : undefined);
         return {
             ok: false,
             error: error instanceof Error ? error.message : 'Unknown error',
             errorCode: readRpcErrorCode(error),
+            ...(details.success ? { details: details.data } : {}),
         };
     }
 }
@@ -218,7 +223,7 @@ export async function sessionExecutionRunStart(
 export async function sessionExecutionRunStop(
     sessionId: string,
     request: ExecutionRunStopRequest,
-    opts?: Readonly<{ serverId?: string | null; scope?: ServerAccountScope }>,
+    opts?: Readonly<{ serverId?: string | null; scope?: ServerAccountScope; onIssued?: () => void; signal?: AbortSignal }>,
 ): Promise<SessionExecutionRunStopResult> {
     try {
         const serverId = opts?.scope?.serverId ?? resolveExecutionRunSessionServerId(sessionId, opts?.serverId);
@@ -229,6 +234,8 @@ export async function sessionExecutionRunStop(
             scope: opts?.scope,
             method: SESSION_RPC_METHODS.EXECUTION_RUN_STOP,
             payload: request,
+            ...(opts?.onIssued ? { onIssued: opts.onIssued } : {}),
+            ...(opts?.signal ? { signal: opts.signal } : {}),
         });
         const errorResponse = readErrorResponseShape(response);
         if (errorResponse) return errorResponse;

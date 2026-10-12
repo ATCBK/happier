@@ -24,6 +24,13 @@ import { UsageQueryBatchResultSchema } from '@happier-dev/protocol/usage/resolve
 import { UsageCoachApplyResultSchema } from '@happier-dev/protocol/usage/coach/coachActions';
 import { UsageAnalyticsQueryResponseSchema } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
 import { UsagePromptCompositionSchema } from '@happier-dev/protocol/usage/coach/usagePromptComposition';
+import { buildSessionMessagesPath } from '@happier-dev/protocol/sessions/messages/sessionMessagesPageV1';
+import {
+    createSessionOwnerMetadataV1, createPlainSessionOwnerMetadataEnvelopeV1, projectSessionSharedMetadataV1,
+    projectSessionOwnerCompatibilityViewV1, SessionOwnerMetadataEnvelopeV1Schema,
+    SessionMetadataInactiveModelIntentOwnerPatchV1Schema, SessionMetadataTuplePatchSuccessV1Schema,
+} from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import { MetadataSchema } from '@happier-dev/session-core/state';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -110,7 +117,7 @@ const binding = {
 } as const;
 function seedSession(active: boolean, overrides: Partial<NonNullable<Session['metadata']>> = {}) {
     const session = createSessionFixture({ id: 'session_1', serverId, active,
-        metadataLayoutVersion: 0, metadata: { path: '/repo', host: 'host', homeDir: '/home', machineId: 'machine_1', agent: 'claude', ...overrides } });
+        metadataLayoutVersion: 0, metadata: { path: '/repo', host: 'host', homeDir: '/home', machineId: 'machine_1', flavor: 'claude', ...overrides } });
     storage.getState().applySessions([session]);
     serveSession(session);
     return session;
@@ -135,23 +142,47 @@ async function admitBrowserAutomation() {
 
 /** Stateful Home Session HTTP boundary. The real Sync tuple owner handles retries/currentness. */
 function serveSession(session: Session, beforeWrite?: (input: unknown) => void, beforeRead?: () => Promise<void>) {
+    const encodeCurrent = (metadata: NonNullable<Session['metadata']>) => {
+        const owner = createSessionOwnerMetadataV1({ metadata });
+        if (!owner.ok) throw new Error(`Invalid current Session fixture: ${owner.unsupportedFields.join(', ')}`);
+        return { metadata: JSON.stringify(projectSessionSharedMetadataV1({ metadata, agentState: null })),
+            ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1(owner.ownerMetadata) };
+    };
     let row = V2SessionRecordSchema.parse({
         id: session.id, createdAt: 1, updatedAt: 1, seq: 1, active: session.active, activeAt: 1,
-        encryptionMode: 'plain', dataEncryptionKey: null, metadataLayoutVersion: 0,
+        encryptionMode: 'plain', dataEncryptionKey: null, metadataLayoutVersion: session.metadataLayoutVersion ?? 0,
         metadata: JSON.stringify(session.metadata), metadataVersion: session.metadataVersion,
+        ...(session.metadataLayoutVersion === 1 && session.ownerMetadataView ? encodeCurrent(session.ownerMetadataView) : {}),
         agentState: null, agentStateVersion: 1, share: null,
         responsibleAccountId: null, responsibleAccount: null,
         effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }], capabilities: session.access?.capabilities },
     });
     const writes: unknown[] = [];
-    homes.answer(serverId, `GET /v2/sessions/${session.id}`, { select: async () => {
+    const read = { select: async () => {
         await beforeRead?.();
         return { body: { session: row } };
-    } });
+    } };
+    homes.answer(serverId, `GET /v2/sessions/${session.id}`, read);
+    homes.answer(serverId, `GET /v2/sessions/${session.id}?accessProjectionVersion=1`, read);
     homes.answer(serverId, `PATCH /v2/sessions/${session.id}`, { select: (input) => {
         writes.push(input);
         beforeWrite?.(input);
         if (row.active) return { status: 409, body: { code: 'session_active' } };
+        const current = SessionMetadataInactiveModelIntentOwnerPatchV1Schema.safeParse(input);
+        if (current.success) {
+            const patch = current.data;
+            if (patch.sharedMetadata.expectedVersion !== row.metadataVersion
+                || patch.agentState.expectedVersion !== row.agentStateVersion
+                || JSON.stringify(patch.expectedOwnerMetadata) !== JSON.stringify(row.ownerMetadata)) {
+                return { status: 409, body: { code: 'session_metadata_version_conflict', metadataLayoutVersion: 1,
+                    sharedMetadata: { version: row.metadataVersion }, agentState: { version: row.agentStateVersion } } };
+            }
+            row = { ...row, metadata: patch.sharedMetadata.ciphertext, ownerMetadata: patch.ownerMetadata,
+                metadataVersion: row.metadataVersion + 1, agentState: patch.agentState.ciphertext,
+                agentStateVersion: (row.agentStateVersion ?? 0) + 1, updatedAt: row.updatedAt + 1, seq: row.seq + 1 };
+            return { body: SessionMetadataTuplePatchSuccessV1Schema.parse({ success: true, metadataLayoutVersion: 1,
+                sharedMetadata: { version: row.metadataVersion }, agentState: { version: row.agentStateVersion } }) };
+        }
         const patch = SessionMetadataInactiveModelIntentPatchV1Schema.parse(input).inactiveModelIntent.metadata;
         if (patch.expectedVersion !== row.metadataVersion) {
             return { body: { success: false, error: 'version-mismatch', metadata: { version: row.metadataVersion, value: row.metadata } } };
@@ -161,12 +192,18 @@ function serveSession(session: Session, beforeWrite?: (input: unknown) => void, 
     } });
     return {
         writes,
-        readMetadata: () => JSON.parse(row.metadata) as NonNullable<Session['metadata']>,
+        readMetadata: () => {
+            if (row.metadataLayoutVersion !== 1) return MetadataSchema.parse(JSON.parse(row.metadata));
+            const owner = SessionOwnerMetadataEnvelopeV1Schema.parse(row.ownerMetadata);
+            if (owner.t !== 'plain') throw new Error('Current fixture requires plain owner metadata');
+            return MetadataSchema.parse(projectSessionOwnerCompatibilityViewV1({ sharedMetadata: JSON.parse(row.metadata), ownerMetadata: owner.v }));
+        },
         activate(metadata = session.metadata) {
             row = { ...row, active: true, metadata: JSON.stringify(metadata), metadataVersion: row.metadataVersion + 1, seq: row.seq + 1, updatedAt: row.updatedAt + 1 };
         },
         replaceMetadata(metadata: NonNullable<Session['metadata']>) {
-            row = { ...row, metadata: JSON.stringify(metadata), metadataVersion: row.metadataVersion + 1, seq: row.seq + 1, updatedAt: row.updatedAt + 1 };
+            row = { ...row, ...(row.metadataLayoutVersion === 1 ? encodeCurrent(metadata) : { metadata: JSON.stringify(metadata) }),
+                metadataVersion: row.metadataVersion + 1, seq: row.seq + 1, updatedAt: row.updatedAt + 1 };
         },
     };
 }
@@ -507,7 +544,8 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
     it('records inactive-session model intent through the existing structured metadata-CAS owner', async () => {
         const remote = serveSession(seedSession(false));
         for (const [modelId, providerConnectionId] of [['provider-model', 'pc_work'], ['default', null]] as const) {
-            expect(await executeModel(modelInput(modelId, providerConnectionId))).toMatchObject({ ok: true, result: {
+            const result = await executeModel(modelInput(modelId, providerConnectionId));
+            expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: {
                 status: 'intent_updated', sessionId: 'session_1', modelId, updatedAt: expect.any(Number) } });
             expect(remote.readMetadata().modelSelectionIntentV1).toMatchObject({ v: 1, updatedAt: expect.any(Number), selection: selection(modelId, providerConnectionId) });
         }
@@ -518,8 +556,24 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
 
     it('composes retained completed-model evidence through usage query, exact Apply/Undo and intervening-edit refusal', async () => {
         vi.stubGlobal('fetch', homes.request);
+        const { resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
+        const { loadAccountSettings } = await import('@/sync/domains/state/accountSettingsPersistence');
+        const accountScope = { serverId: resolveServerProfileScopeIdForIdentifier(serverId), accountId: 'account-a' };
+        let settingsVersion = (loadAccountSettings(accountScope).version ?? 0) + 1;
+        const accountSettings = { ...storage.getState().settings, actionsSettingsV1: { v: 1 as const, approvalWaivedSurfaces: {
+            'usage.coach.apply': ['ui' as const],
+            'usage.coach.undo': ['ui' as const],
+        } } };
+        // An explicit Account policy waiver reaches the real owner; this journey
+        // tests conditional mutation rather than the separate approval workflow.
+        homes.answer(serverId, 'GET /v2/account/settings', { body: { content: { t: 'plain', v: accountSettings }, version: settingsVersion } });
+        storage.getState().applySettingsForScope(accountScope, accountSettings, settingsVersion);
         const heavy = selection('heavy-model');
-        const session = seedSession(false, { modelSelectionIntentV1: { v: 1, updatedAt: 250, selection: heavy } });
+        const ownerMetadataView = MetadataSchema.parse({ path: '/repo', host: 'host', homeDir: '/home', machineId: 'machine_1',
+            flavor: 'claude', modelSelectionIntentV1: { v: 1, updatedAt: 250, selection: heavy } });
+        const session = createSessionFixture({ id: 'session_1', serverId, active: false, metadataLayoutVersion: 1,
+            ownerMetadataView, metadata: MetadataSchema.parse(projectSessionSharedMetadataV1({ metadata: ownerMetadataView, agentState: null })) });
+        storage.getState().applySessions([session]);
         let race = false;
         let reads = 0;
         const remote = serveSession(session, undefined, async () => {
@@ -537,13 +591,13 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
             contributions: [{ id: 'light-cost', observedAtMs: 90, turnId: 'light-turn', modelId: 'light-model', amount: 1 },
                 { id: 'heavy-cost', observedAtMs: 190, turnId: 'heavy-turn', modelId: 'heavy-model', amount: 4 }].map(row => ({
                     id: row.id, observedAtMs: row.observedAtMs, turnId: row.turnId, modelId: row.modelId,
-                    sessionId: 'session_1', agentId: 'claude', providerConnectionId: null, providerAttribution: 'known', machineId: 'machine_1',
+                    sessionId: 'session_1', agentId: 'claude', machineId: 'machine_1',
                     projectKey: null, workspaceId: null, source: 'native', tokens,
                     cost: { reportedUsd: row.amount, estimatedUsd: 0, currency: 'USD', costSource: 'provider_reported' },
                 })),
-            coverage: { status: 'complete', reasons: [], sources: [{ source: 'native', path: 'native', status: 'available',
-                eventCount: 2, historyComplete: true, asOfMs: 200 }], missingDimensions: [], ranked: [],
-                range: { startMs: 0, endMs: 1000, complete: true } },
+            coverage: { status: 'partial', reasons: [], sources: [{ source: 'native', path: 'native', status: 'partial',
+                eventCount: 2, historyComplete: false, asOfMs: 200 }], missingDimensions: [], ranked: [],
+                range: { startMs: 0, endMs: 1000, complete: false } },
         });
         homes.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
         homes.answer(serverId, '/v2/usage/query', { body: accounting });
@@ -564,7 +618,8 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
                 content: { t: 'plain', v: { role: 'agent', content: { type: 'event', id: `${kind}-event`,
                     data: { type: 'prompt-composition', composition } } } } }];
         });
-        homes.answer(serverId, '/v1/sessions/session_1/messages', { body: { messages, hasMore: false } });
+        homes.answer(serverId, buildSessionMessagesPath({ sessionId: 'session_1', scope: 'all', roles: ['user', 'event'] }),
+            { body: { messages, hasMore: false } });
         const query = normalizeUsageQuery({ session: 'session_1', period: { startMs: 0, endMs: 1000 } });
         const executor = createDefaultActionExecutor();
         const read = async () => {
@@ -579,17 +634,27 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
             return finding;
         };
         const finding = await read();
-        expect(finding).toMatchObject({ remedy: { kind: 'model', modelId: 'light-model', expected: { owner: 'inactive', updatedAt: 250 } } });
+        expect(finding).toMatchObject({ coverage: 'partial', modelComparison: { costCoverage: 'partial', providerAttribution: 'unknown' },
+            remedy: { kind: 'model', modelId: 'light-model', expected: { owner: 'inactive', updatedAt: 250 } } });
         if (!finding) throw new Error('Expected witnessed model proposal');
         const apply = () => executor.execute('usage.coach.apply', { query, evidenceKey: finding.evidenceKey }, { serverId, surface: 'ui' });
         const applied = await apply();
-        expect(applied, JSON.stringify(applied)).toMatchObject({ ok: true });
+        expect(applied, JSON.stringify(applied)).toMatchObject({ ok: true, result: { kind: 'applied' } });
         const receipt = UsageCoachApplyResultSchema.parse(applied.ok ? applied.result : null);
         expect(receipt.reversal).toMatchObject({ kind: 'model', owner: { before: heavy, applied: selection('light-model') } });
         expect(remote.readMetadata().modelSelectionIntentV1?.selection).toEqual(selection('light-model'));
         const undo = () => executor.execute('usage.coach.undo', { query, evidenceKey: finding.evidenceKey, reversal: receipt.reversal }, { serverId, surface: 'ui' });
         expect(await undo()).toMatchObject({ ok: true, result: { kind: 'undone' } });
         expect(remote.readMetadata().modelSelectionIntentV1?.selection).toEqual(heavy);
+        const modelOff = { ...accountSettings, usageCoachPreferencesV1: { ...accountSettings.usageCoachPreferencesV1, modelSuggestion: 'off' as const } };
+        homes.answer(serverId, 'GET /v2/account/settings', { body: { content: { t: 'plain', v: modelOff }, version: ++settingsVersion } });
+        storage.getState().applySettingsForScope(accountScope, modelOff, settingsVersion);
+        expect(loadAccountSettings(accountScope).settings.usageCoachPreferencesV1).toMatchObject({ modelSuggestion: 'off' });
+        const beforeDisabledApply = remote.writes.length;
+        expect(await apply()).toMatchObject({ ok: false, errorCode: 'coach_evidence_not_current' });
+        expect(remote.writes).toHaveLength(beforeDisabledApply);
+        homes.answer(serverId, 'GET /v2/account/settings', { body: { content: { t: 'plain', v: accountSettings }, version: ++settingsVersion } });
+        storage.getState().applySettingsForScope(accountScope, accountSettings, settingsVersion);
         const second = await apply();
         expect(second).toMatchObject({ ok: true });
         const secondReceipt = UsageCoachApplyResultSchema.parse(second.ok ? second.result : null);
@@ -822,7 +887,8 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
             .toEqual([expect.objectContaining({ serverId })]);
         expect(storage.getState().settingsScope).toEqual(displayedScope);
         expect(storage.getState().settings).toEqual(displayedPreferences);
-        expect(storage.getState().settings.promptExternalLinksV1?.links ?? []).toEqual([]);
+        const { getPromptLibraryCatalogValue } = await import('@/sync/store/settings/promptLibraryCatalogSnapshot');
+        expect(getPromptLibraryCatalogValue(displayedScope, 'external-links').value?.links ?? []).toEqual([]);
         expect(homes.requestsFor('/v2/account/settings').filter(request => request.input !== null)).toEqual([]);
         expect(homes.requestsFor(`${PROMPT_LIBRARY_ROWS_ROUTE_V1}/external-links`).filter(request => request.serverId === displayedServerId)).toEqual([]);
     });

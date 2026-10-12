@@ -18,6 +18,7 @@ import { StoredApprovalRequestSchema } from '@happier-dev/protocol/approvals/app
 import { buildApprovalRequestArtifactHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
 import { captureLazyActionAccountContext } from './actionAccountContext';
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { AUTHORITY_CEILING_HEADER_V1 } from '@happier-dev/protocol/actions/invocationAuthority';
 
 installApprovalCommonModuleMocks();
 beforeAll(loadSyncSingletonForTests);
@@ -28,7 +29,7 @@ describe('managed native UI Action frontdoor', () => {
         ['ui', 'machines.provisioners.options'], ['voice', 'machines.provisioners.options'],
         ['ui', 'machines.environment.apply'], ['voice', 'machines.environment.apply'],
     ] as const)(
-        'invokes %s %s through the captured present-user Account ingress', async (surface, actionId) => {
+        'retains %s %s authority through the captured Account ingress', async (surface, actionId) => {
         const target = await upsertServerProfile({ serverUrl: `https://native-${surface}-${actionId.replaceAll('.', '-')}.test` });
         await setServerProfileIdentityForUrl(target.serverUrl, 'srv_native_options');
         await resetPendingQueueState({ serverId: 'server-b', accountId: 'account-b' });
@@ -52,14 +53,17 @@ describe('managed native UI Action frontdoor', () => {
                 { ...createPlainMachineRowFixture({ id: 'controller', accountId: 'account-a' }), runnerContentKeyBinding: null },
             ]);
             expect(url.pathname).toBe(`/v1/actions/${actionId}`);
+            expect(new Headers(init?.headers).get(AUTHORITY_CEILING_HEADER_V1)).toBe(surface === 'voice' ? 'account_automation' : null);
             const envelope = JSON.parse(String(init?.body)) as Readonly<{ requestId: string }>;
             requests.push(envelope);
             return Response.json({ v: 1, actionId, requestId: envelope.requestId,
-                execution: { ok: true, result: output } });
+                execution: { ok: true, result: surface === 'voice' && actionId === 'machines.environment.apply'
+                    ? { kind: 'approval_request_created', actionId, artifactId: 'native-ask' } : output } });
         });
         expect(await createDefaultActionExecutor().execute(actionId, input, {
-            serverId: target.id, expectedAccountId: 'account-a', surface,
-        })).toEqual({ ok: true, result: output });
+            serverId: target.id, expectedAccountId: 'account-a', surface, authority: 'present_user',
+        })).toEqual({ ok: true, result: surface === 'voice' && actionId === 'machines.environment.apply'
+            ? { kind: 'approval_request_created', actionId, artifactId: 'native-ask' } : output });
         expect(requests).toEqual([expect.objectContaining({ target: { kind: 'machine', machineId: 'controller' }, input })]);
     });
 

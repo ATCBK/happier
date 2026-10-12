@@ -1,6 +1,6 @@
 import type { ActionExecuteFailure, ActionExecutorDeps } from '@happier-dev/protocol';
 import { readWidgetActionSurfacePortV1, widgetCandidateDefinitionV1, isSameWidgetDefinitionV1, type WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
-import { readCurrentAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
+import { readCurrentAppShellPluginUiProjection } from '@/components/appShell/plugins/committedPluginUiProjection';
 import { selectWidgetCandidates, selectBuiltinWidgetCandidates, describeWidgetDefinitionSummaryV1, type WidgetCandidate } from '@/components/widgets/widgetCatalog';
 import { createSessionPluginPolicyEvaluationContext } from '@/components/sessions/model/usePluginUiSessionPolicyEvaluationContext';
 import { loadDaemonMergedProjectionInputs } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
@@ -49,7 +49,7 @@ export async function readWidgetActionRuntimeV1(
     if (deps) {
         const refusal = await admitWidgetActionSurfaceV1(deps, surface, { surface: 'ui', ...(signal ? { signal } : {}) });
         if (refusal) return refusal;
-    } else if (surface.serverId !== account.serverId || surface.accountId !== account.accountId) return unavailable('widget_scope_mismatch');
+    } else if (!areServerProfileIdentifiersEquivalent(surface.serverId, account.serverId) || surface.accountId !== account.accountId) return unavailable('widget_scope_mismatch');
     const owner = surface.owner;
     const selectedSession = sessionTarget ?? (owner.kind === 'sessionBoard' || owner.kind === 'companion' ? { serverId: surface.serverId, sessionId: owner.sessionId } : undefined);
     const accountIsCurrent = () => account.accountLifetime?.isCurrent() === true && canReadActiveWidgetCatalogV1(account);
@@ -59,9 +59,9 @@ export async function readWidgetActionRuntimeV1(
         return { candidates: selectWidgetCandidates(projection), projection, machineId: null,
             isCurrent: () => accountIsCurrent() && readCurrentAppShellPluginUiProjection() === projection };
     }
-    if (selectedSession.serverId !== account.serverId) return unavailable('widget_scope_mismatch');
+    if (!areServerProfileIdentifiersEquivalent(selectedSession.serverId, account.serverId)) return unavailable('widget_scope_mismatch');
     const outcome = await sync.withSessionSystemRecordRuntime(selectedSession, async runtime => {
-        if (runtime.scope.accountId !== account.accountId || runtime.scope.serverId !== account.serverId) return unavailable('widget_scope_mismatch');
+        if (runtime.scope.accountId !== account.accountId || !areServerProfileIdentifiersEquivalent(runtime.scope.serverId, account.serverId)) return unavailable('widget_scope_mismatch');
         if (!runtime.session.access?.capabilities.readTranscript) return unavailable('widget_read_denied');
         const target = readMachineControlTargetForSession({ ...selectedSession, accountId: runtime.scope.accountId });
         if (!target) return { candidates: selectBuiltinWidgetCandidates(), projection: null, machineId: null, isCurrent: accountIsCurrent };
@@ -110,7 +110,8 @@ export function createWidgetCatalogActionDepsV1(account: LazyActionAccountContex
     if (!account) return {};
     const widgetAccountScope: NonNullable<ActionExecutorDeps['widgetAccountScope']> = () => {
         account.assertCurrent();
-        return { serverId: account.serverId, accountId: account.accountId };
+        return { serverId: account.serverId, accountId: account.accountId,
+            isSameServerId: serverId => areServerProfileIdentifiersEquivalent(serverId, account.serverId) };
     };
     const catalogDeps = { ...deps, widgetAccountScope };
     return {

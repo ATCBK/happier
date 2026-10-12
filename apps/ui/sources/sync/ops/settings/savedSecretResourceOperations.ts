@@ -1,5 +1,5 @@
 import { computeContentPublicKeyFingerprint } from '@happier-dev/protocol/machines/identity/contentPublicKeyFingerprint';
-import { formatSavedSecretCatalogReferenceV1, formatSavedSecretCatalogFingerprintV1, SavedSecretResourceEnvelopeCensusRequestV1Schema, SavedSecretResourceEnvelopeCensusResponseV1Schema, type SavedSecretResourceEnvelopeCensusRecipientV1, type SavedSecretResourceMaterialV1 } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
+import { formatSavedSecretCatalogReferenceV1, formatSavedSecretCatalogFingerprintV1, SavedSecretCatalogEntryV1Schema, SavedSecretResourceEnvelopeCensusRequestV1Schema, SavedSecretResourceEnvelopeCensusResponseV1Schema, type SavedSecretResourceEnvelopeCensusRecipientV1, type SavedSecretResourceMaterialV1 } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
 import { listAccountSettingsSavedSecretReferences, listSavedSecretPersonalImportSourceReferencesV1, listSavedSecretReferenceCatalogRefsV1, type AccountSettingsSavedSecretReference, promotePersonalSavedSecretReference,
     promoteLegacyInferenceSavedSecretReferenceV1, promoteLegacyVoiceSavedSecretReferenceV1,
     type SavedSecretLegacyInferenceCredentialV1, type SavedSecretLegacyChatCredentialV1, type SavedSecretLegacyVoiceCredentialV1,
@@ -27,7 +27,7 @@ import { openAccountSettingsStoredContent } from '@/sync/domains/settings/accoun
 import { normalizeAccountSettingsHistoryAfterTransfer } from '@/sync/engine/settings/accountSettingsHistoryRestore';
 import type { AccountSettingsHistorySavedSecretRecoveryV1 } from '@happier-dev/protocol/account/settings/accountSettingsHistoryClientV1';
 import { materializeSavedSecretResources } from '@/sync/engine/settings/materializeSavedSecretResources';
-import { applySavedSecretCatalogDeletion } from '@/sync/engine/settings/savedSecretCatalogEngine';
+import { applySavedSecretCatalogDeletion, applySavedSecretCatalogEntryAcknowledgement } from '@/sync/engine/settings/savedSecretCatalogEngine';
 import { decryptSecretValueWithKeys, deriveSettingsSecretsKeySet } from '@/sync/encryption/secretSettings';
 import { resolveSettingsSecretsKeySet } from '@/sync/encryption/resolveSettingsSecretsKeySet';
 import { resolveAccountStorageContext } from '@/sync/encryption/accountStorageContext';
@@ -43,6 +43,7 @@ import { getRandomBytes } from '@/platform/cryptoRandom';
 import { randomUUID } from '@/platform/randomUUID';
 import { isTeamActionApprovalPendingError, runTeamAction, type HomeDomainFailure } from '@/sync/ops/teams/teamActionClient';
 import { captureSavedSecretReferenceCatalogsInContext, captureSavedSecretNotificationChannelsInContext, prepareSavedSecretReferenceCatalogMutationsInContext,
+    publishAcknowledgedSavedSecretReferenceCatalogsInContext,
     type SavedSecretReferenceCatalogFacets, type SavedSecretReferenceCatalogKey } from './savedSecretReferenceCatalogs';
 import type { SavedSecretCatalogRevisionsV1, SavedSecretReferenceCensusV1 } from '@happier-dev/protocol/account/settings/savedSecretResourceActionsV1';
 import { resolveAuthCredentialsScopeKey } from '@/auth/storage/resolveAuthCredentialsScopeKey';
@@ -788,13 +789,17 @@ export async function createSavedSecretResourcesWithCatalogMutationInContext(
                                         params.onApprovalFailed?.('outcome_unknown');
                                         return;
                                     }
+                                    publishAcknowledgedSavedSecretReferenceCatalogsInContext(context, { catalogs: nextCatalogs, accountMode, receipt, mutation: input });
                                     await params.onApprovalSucceeded?.({ ...success, settingsVersion: receipt.settingsVersion });
                                 },
                                 ...(params.onApprovalFailed ? { onApprovalFailed: params.onApprovalFailed } : {}),
                             });
                             context.assertResultCurrent('write');
-                            if (outcome.kind === 'succeeded') return outcome.value.resourceId === first.input.resourceId
-                                ? { status: 'applied', settingsVersion: outcome.value.settingsVersion } : { status: 'outcomeUnknown' };
+                            if (outcome.kind === 'succeeded') {
+                                if (outcome.value.resourceId !== first.input.resourceId) return { status: 'outcomeUnknown' };
+                                publishAcknowledgedSavedSecretReferenceCatalogsInContext(context, { catalogs: nextCatalogs, accountMode, receipt: outcome.value, mutation: input });
+                                return { status: 'applied', settingsVersion: outcome.value.settingsVersion };
+                            }
                             if (outcome.failure.kind === 'conflict') return { status: 'conflict' };
                             if (outcome.failure.kind === 'outcome_unknown') return { status: 'outcomeUnknown' };
                             return { status: 'rejected', error: new Error(`saved_secret_catalog_creation_${outcome.failure.kind}`) };
@@ -849,7 +854,10 @@ export async function createSavedSecretResourcesWithCatalogMutationInContext(
             const success = { ok: true as const, resourceRefs, resourceFingerprints };
             const outcome = await runTeamAction({ scope: params.scope, actionId: 'secrets.shared.promote', input,
                 parse: value => SharedSavedSecretPromoteOutputV1Schema.parse(value),
-                onApprovalSucceeded: async () => { await params.onApprovalSucceeded?.(success); },
+                onApprovalSucceeded: async receipt => {
+                    publishAcknowledgedSavedSecretReferenceCatalogsInContext(context, { catalogs: candidate.catalogs, accountMode, receipt, mutation: input });
+                    await params.onApprovalSucceeded?.(success);
+                },
                 ...(params.onApprovalFailed ? { onApprovalFailed: params.onApprovalFailed } : {}),
             });
             context.assertResultCurrent('write');
@@ -859,7 +867,11 @@ export async function createSavedSecretResourcesWithCatalogMutationInContext(
                     scope: params.scope, originalContext: context, input, success,
                 }) };
             }
-            return outcome.kind === 'succeeded' ? success : { ok: false, reason: operationFailureReason(outcome.failure.kind) };
+            if (outcome.kind === 'succeeded') {
+                publishAcknowledgedSavedSecretReferenceCatalogsInContext(context, { catalogs: candidate.catalogs, accountMode, receipt: outcome.value, mutation: input });
+                return success;
+            }
+            return { ok: false, reason: operationFailureReason(outcome.failure.kind) };
         });
     } catch (error) {
         if (isTeamActionApprovalPendingError(error)) throw error;
@@ -893,8 +905,15 @@ export async function createSavedSecretResource(params: Readonly<{
                 accountGrants: params.accountGrants, teamGrants: params.teamGrants, groupGrants: params.groupGrants,
             });
             const resourceDataKey = prepared.resourceDataKey;
+            const publishReceipt = (revision: number) => applySavedSecretCatalogEntryAcknowledgement(params.scope,
+                SavedSecretCatalogEntryV1Schema.parse({ ref: resourceRef, source: 'shared_resource', relationship: 'owner',
+                    ownerAccountId: params.scope.accountId, name: prepared.input.displayName, kind: prepared.input.kind,
+                    encryptionMode: prepared.input.encryptionMode, revision, materialStatus: 'ready',
+                    capabilities: { use: true, rename: true, rotate: true, manageAccess: true, delete: true } }),
+                context.accountLifetime.isCurrent());
             try {
                 const finishApproved = async (value: { resourceId: string; revision: number }) => {
+                    publishReceipt(value.revision);
                     if (mode === 'e2ee') {
                         await repairApprovedSavedSecretResourceEnvelopesBestEffort({
                             scope: params.scope,
@@ -929,6 +948,7 @@ export async function createSavedSecretResource(params: Readonly<{
                             ))
                             : null;
                         if (created?.entry.revision !== null && created?.entry.revision !== undefined) {
+                            publishReceipt(created.entry.revision);
                             if (resourceDataKey) {
                                 await repairSavedSecretResourceEnvelopesBestEffort({
                                     scope: params.scope,
@@ -942,6 +962,7 @@ export async function createSavedSecretResource(params: Readonly<{
                     }
                     return { ok: false, reason: operationFailureReason(outcome.failure.kind) };
                 }
+                publishReceipt(outcome.value.revision);
                 if (resourceDataKey) {
                     await repairSavedSecretResourceEnvelopesBestEffort({
                         scope: params.scope,
@@ -1672,16 +1693,20 @@ export async function updateSavedSecretResource(params: Readonly<{
                 : [];
             // An approved-later conversion re-derives its data key from the
             // committed resource, since this call's copy is zeroed on return.
-            const onApprovalSucceeded = convertedResourceDataKey && encryption
-                ? async (value: SavedSecretMutationOutput) => {
+            const publishReceipt = (value: SavedSecretMutationOutput) => applySavedSecretCatalogEntryAcknowledgement(params.scope,
+                { ...resource.entry, name: content.name, kind: content.kind, encryptionMode: nextMode, revision: value.revision },
+                context!.accountLifetime.isCurrent());
+            const onApprovalSucceeded = async (value: SavedSecretMutationOutput) => {
+                publishReceipt(value);
+                if (convertedResourceDataKey && encryption) {
                     await repairApprovedSavedSecretResourceEnvelopesBestEffort({
                         scope: params.scope,
                         resourceId: resource.resourceId,
                         expectedRevision: value.revision,
                     }).catch(() => undefined);
-                    await params.onApprovalSucceeded?.(value);
                 }
-                : params.onApprovalSucceeded;
+                await params.onApprovalSucceeded?.(value);
+            };
             const currentMode = (await fetchAccountEncryptionMode(context.credentials, { request: context.request })).mode;
             context.assertCurrent();
             if (currentMode !== accountMode) return { ok: false, reason: 'changed' };
@@ -1705,6 +1730,7 @@ export async function updateSavedSecretResource(params: Readonly<{
             if (outcome.kind !== 'succeeded') {
                 return { ok: false, reason: operationFailureReason(outcome.failure.kind) };
             }
+            publishReceipt(outcome.value);
             if (convertedResourceDataKey) {
                 await repairSavedSecretResourceEnvelopesBestEffort({
                     scope: params.scope,
@@ -1776,7 +1802,8 @@ export async function deleteSavedSecretResource(params: Readonly<{
                 parse: value => SharedSavedSecretDeleteOutputV1Schema.parse(value),
                 ...(params.confirmedByPresentUser ? { approval: 'surface_confirmed' } : {}),
                 onApprovalSucceeded: async receipt => {
-                    await applySavedSecretCatalogDeletion(params.scope, receipt.resourceId);
+                    await applySavedSecretCatalogDeletion(params.scope, receipt.resourceId, params.expectedRevision,
+                        context.accountLifetime.isCurrent());
                     await params.onApprovalSucceeded?.(receipt);
                 },
                 ...(params.onApprovalFailed ? { onApprovalFailed: (code, failure) => params.onApprovalFailed?.(
@@ -1784,7 +1811,8 @@ export async function deleteSavedSecretResource(params: Readonly<{
                 ) } : {}),
             });
             if (outcome.kind === 'succeeded') {
-                await applySavedSecretCatalogDeletion(params.scope, outcome.value.resourceId);
+                await applySavedSecretCatalogDeletion(params.scope, outcome.value.resourceId, params.expectedRevision,
+                    context.accountLifetime.isCurrent());
                 return { ok: true };
             }
             const failure = savedSecretDeleteFailure(outcome.failure);

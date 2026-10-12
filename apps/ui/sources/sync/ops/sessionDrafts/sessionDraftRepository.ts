@@ -1,6 +1,9 @@
 import { z } from 'zod';
-import { canonicalSessionDraftAddressV2, isAccountOwnedDraftAddressV2, NewSessionDraftDocumentV2Schema, SessionDraftAddressV2Schema, type AccountOwnedDraftAddressV2, type SessionDraftAddressV2, type SessionDraftDocumentV2, type SessionDraftListResponseV2, type SessionDraftListRequestV2, type SessionDraftMutateRequestV2, type SessionDraftMutateResponseV2, type SessionDraftReadResponseV2, type SessionDraftRecordV2, type SessionDraftStoredContentEnvelopeV2 } from '@happier-dev/protocol/drafts/sessionDraftsV2';
+import { canonicalSessionDraftAddressV2, isAccountOwnedDraftAddressV2, NewSessionDraftDocumentV2Schema, SessionDraftAddressV2Schema, SessionDraftDocumentV2Schema, type AccountOwnedDraftAddressV2, type SessionDraftAddressV2, type SessionDraftDocumentV2, type SessionDraftListResponseV2, type SessionDraftListRequestV2, type SessionDraftMutateRequestV2, type SessionDraftMutateResponseV2, type SessionDraftReadResponseV2, type SessionDraftRecordV2, type SessionDraftStoredContentEnvelopeV2 } from '@happier-dev/protocol/drafts/sessionDraftsV2';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { pluginJsonValuesEqual as areJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
+import { parsePermissionIntentAlias } from '@happier-dev/agents';
+import type { PermissionMode } from '@/sync/domains/permissions/permissionTypes';
 import { SessionDraftDocumentV1Schema, isMeaningfulSessionDraftRecipientValueV1, type SessionDraftDocumentV1, type SessionDraftExpectedRevisionV1, type StrictJsonValue } from '@happier-dev/protocol/drafts/sessionDrafts';
 import { SessionDiscussionSelectionSourceV1Schema, type SessionDiscussionSelectionSourceV1 } from '@happier-dev/protocol/sessions/discussions/content';
 import { SYNCED_SESSION_AUTHORING_FIELD_IDS_V2, SyncedSessionAuthoringValueV2Schema, type SyncedSessionAuthoringValueV2 } from '@happier-dev/protocol/sessions/authoring/index';
@@ -15,7 +18,7 @@ import { getSessionDraftPersistenceStorage } from './sessionDraftPersistenceStor
 import { isSessionDraftContextUnavailableError } from './sessionDraftCipherError';
 import { isSessionDraftEpochUnavailableError } from './sessionDraftEpochError';
 import type { NewSessionDraftLocalState } from './newSessionDraftLocalState';
-import { readSessionInstructionsAuthoringDraft } from '@/sync/ops/promptLibrary/sessionInstructions';
+import { readSessionInstructionsAuthoringDraft } from '@/sync/domains/state/sessionInstructionsDraft';
 import { getSessionDraftDocumentField as getField, type DraftFieldPathV1 } from './sessionDraftDocumentFields';
 import { parseSerializedSessionDraftScope, serializeSessionDraftReplica } from './sessionDraftSerializedScope';
 import { clearNewSessionAttachmentDrafts } from '@/components/sessions/new/attachments/newSessionAttachmentDraftStore';
@@ -110,6 +113,8 @@ export type SessionDraftSnapshot = Readonly<{
 }>;
 
 export type ExistingSessionDraftPatch = Readonly<{
+    /** Permission intent for this draft's next Send; never applies a current-turn mode. */
+    nextPromptPermissionMode?: PermissionMode | null;
     text?: string;
     mentions?: readonly StrictJsonValue[];
     attachments?: readonly StrictJsonValue[];
@@ -133,6 +138,11 @@ export type SessionScmPullRequestDraftV1 = Readonly<{
     /** The branch it merges into; `null` means the provider's default. */
     base: string | null;
 }>;
+
+export function readSessionNextPromptPermissionModeFromDraft(document: SessionDraftDocumentV2 | null | undefined): PermissionMode | null {
+    const value = document?.extensions.happier?.nextPromptPermissionModeV1?.value;
+    return typeof value === 'string' ? parsePermissionIntentAlias(value) : null;
+}
 
 export type SessionScmDraft = Readonly<{
     commitMessage: string;
@@ -166,7 +176,7 @@ const EMPTY_SESSION_SCM_DRAFT: SessionScmDraft = Object.freeze({ commitMessage: 
 
 export function readSessionScmDraftFromDraft(document: SessionDraftDocumentV2 | null | undefined): SessionScmDraft {
     const commitMessage = getField(document ?? null, SESSION_SCM_COMMIT_MESSAGE_DRAFT_PATH)?.value;
-    const pullRequest = SessionScmPullRequestDraftV1Schema.safeParse(getField(document ?? null, SESSION_SCM_PULL_REQUEST_DRAFT_PATH)?.value);
+    const pullRequest = createStoredReadSchema(SessionScmPullRequestDraftV1Schema).safeParse(getField(document ?? null, SESSION_SCM_PULL_REQUEST_DRAFT_PATH)?.value);
     if (typeof commitMessage !== 'string' && !pullRequest.success) return EMPTY_SESSION_SCM_DRAFT;
     return {
         commitMessage: typeof commitMessage === 'string' ? commitMessage : '',
@@ -184,8 +194,8 @@ export function readSessionDiscussionSelectionSourceFromDraft(
     document: SessionDraftDocumentV2 | null | undefined,
 ): Omit<SessionDiscussionSelectionSourceV1, 'draftCorrelationId'> | null {
     const field = getField(document ?? null, SESSION_DISCUSSION_SELECTION_SOURCE_DRAFT_PATH);
-    const parsed = SessionDiscussionSelectionSourceV1Schema
-        .omit({ draftCorrelationId: true })
+    const parsed = createStoredReadSchema(SessionDiscussionSelectionSourceV1Schema
+        .omit({ draftCorrelationId: true }))
         .safeParse(field?.value);
     return parsed.success ? parsed.data : null;
 }
@@ -370,6 +380,13 @@ function areDraftFieldsSemanticallyEqual(
 
 function cloneDocument(document: SessionDraftDocumentV2): SessionDraftDocumentV2 {
     return JSON.parse(JSON.stringify(document)) as SessionDraftDocumentV2;
+}
+
+function readStoredDraftDocument(document: SessionDraftDocumentV2 | null): SessionDraftDocumentV2 | null {
+    if (document === null) return null;
+    const parsed = createStoredReadSchema(SessionDraftDocumentV2Schema).safeParse(document);
+    // Keep known-invalid or unsupported custody available to its existing recovery readers.
+    return parsed.success ? parsed.data : document;
 }
 
 function isProjectOpenDocument(document: SessionDraftDocumentV2): document is ProjectOpenDraftDocumentV2 {
@@ -613,7 +630,7 @@ function normalizeLocalSupplement(value: unknown, expectedAddress: SessionDraftA
         const currentnessCandidate = captureCandidate.currentness;
         if (capturedAttemptId === launchUserAttemptId && currentnessCandidate && typeof currentnessCandidate === 'object' && !Array.isArray(currentnessCandidate)) {
             const currentness = currentnessCandidate as Readonly<Record<string, unknown>>;
-            const parsedAddress = SessionDraftAddressV2Schema.safeParse(currentness.address);
+            const parsedAddress = createStoredReadSchema(SessionDraftAddressV2Schema).safeParse(currentness.address);
             const mutationIds = currentness.mutationIds;
             if (
                 parsedAddress.success
@@ -640,7 +657,7 @@ function normalizeLocalSupplement(value: unknown, expectedAddress: SessionDraftA
         const currentnessValue = value.currentness;
         if (currentnessValue && typeof currentnessValue === 'object' && !Array.isArray(currentnessValue)) {
             const currentnessCandidate = currentnessValue as Readonly<Record<string, unknown>>;
-            const parsedAddress = SessionDraftAddressV2Schema.safeParse(currentnessCandidate.address);
+            const parsedAddress = createStoredReadSchema(SessionDraftAddressV2Schema).safeParse(currentnessCandidate.address);
             const mutationIds = currentnessCandidate.mutationIds;
             const currentness = parsedAddress.success
                 && addressesEqual(parsedAddress.data, expectedAddress)
@@ -691,10 +708,17 @@ export class SessionDraftRepository {
     private readonly listeners = new Map<string, Set<Listener>>();
     private readonly listListeners = new Map<string, Set<Listener>>();
     private readonly flushInFlight = new Map<string, Promise<SessionDraftFlushResult>>();
+    private readonly exactReadInFlight = new Map<string, Readonly<{ runtime: RepositoryRuntime; invalidationRevision?: number; promise: Promise<void> }>>();
+    private readonly observedTombstoneRevisions = new Map<string, number>();
     private readonly draftRemovalCleanups = new Map<string, Promise<void>>();
     private readonly mutationBatches = new Map<string, ScopeMutationBatch>();
     private readonly snapshotCache = new WeakMap<PersistedReplica, SessionDraftSnapshot>();
     private readonly existingProjectionCache = new WeakMap<PersistedReplica, ExistingSessionDraftProjection | null>();
+    /** Reuse validated Account documents only within the cipher that admitted their exact bytes. */
+    private readonly openedAccountDocuments = new WeakMap<SessionDraftDocumentV2, Readonly<{
+        cipher: SessionDraftRepositoryCipher;
+        content: SessionDraftStoredContentEnvelopeV2;
+    }>>();
     private readonly newListProjectionCache = new Map<string, readonly NewSessionDraftProjection[]>();
     /**
      * The last projection of each new-session draft replica. A replica is replaced on every write,
@@ -761,6 +785,8 @@ export class SessionDraftRepository {
         this.listeners.clear();
         this.listListeners.clear();
         this.flushInFlight.clear();
+        this.exactReadInFlight.clear();
+        this.observedTombstoneRevisions.clear();
         this.mutationBatches.clear();
         this.draftRemovalCleanups.clear();
         this.newListProjectionCache.clear();
@@ -793,12 +819,17 @@ export class SessionDraftRepository {
                     state.envelopeFields = envelopeFields;
                     for (const [key, replica] of Object.entries(parsed.replicas)) {
                         if (isPersistedReplica(replica)) {
+                            const localRawDocument = readStoredDraftDocument(replica.localRawDocument);
+                            const storedAddress = createStoredReadSchema(SessionDraftAddressV2Schema).safeParse(replica.address);
+                            const address = storedAddress.success ? storedAddress.data : replica.address;
                             state.replicas.set(key, {
                                 ...replica,
+                                address,
+                                localRawDocument,
                                 // V2 omits only exact duplicates; v1 remains readable for existing installs.
                                 baseRawDocument: parsed.v === 2 && !Object.prototype.hasOwnProperty.call(replica, 'baseRawDocument')
-                                    ? replica.localRawDocument
-                                    : replica.baseRawDocument,
+                                    ? localRawDocument
+                                    : readStoredDraftDocument(replica.baseRawDocument),
                                 pendingFieldMutations: replica.pendingFieldMutations.map((mutation) => ({
                                     ...mutation,
                                     field: parsed.v === 2 && !Object.prototype.hasOwnProperty.call(mutation, 'field')
@@ -815,7 +846,7 @@ export class SessionDraftRepository {
                                     && replica.documentRevision >= 0
                                     ? replica.documentRevision
                                     : 0,
-                                localSupplement: normalizeLocalSupplement(replica.localSupplement, replica.address),
+                                localSupplement: normalizeLocalSupplement(replica.localSupplement, address),
                             });
                         } else state.unreadableRetainedContent = true;
                     }
@@ -1187,6 +1218,13 @@ export class SessionDraftRepository {
         materializationIntent?: SessionDraftMaterializationIntent;
     }>): void {
         const writes: Array<{ path: DraftFieldPathV1; value: StrictJsonValue | undefined }> = [];
+        if (params.patch.nextPromptPermissionMode !== undefined) {
+            const mode = params.patch.nextPromptPermissionMode === null
+                ? undefined
+                : parsePermissionIntentAlias(params.patch.nextPromptPermissionMode);
+            if (mode === null) throw new Error('Invalid next-prompt permission mode');
+            writes.push({ path: { kind: 'extension', pluginId: 'happier', fieldId: 'nextPromptPermissionModeV1' }, value: mode });
+        }
         if (params.patch.text !== undefined) writes.push({ path: { kind: 'composer', field: 'text' }, value: params.patch.text });
         if (params.patch.mentions !== undefined) writes.push({ path: { kind: 'composer', field: 'mentions' }, value: params.patch.mentions });
         if (params.patch.attachments !== undefined) writes.push({ path: { kind: 'composer', field: 'attachments' }, value: params.patch.attachments });
@@ -1515,6 +1553,7 @@ export class SessionDraftRepository {
         }
         if (!params.isCurrent()) return false;
         if (result.status === 'updated') {
+            this.updateObservedTombstoneRevision(params.scope, result.record);
             this.deleteReplica(params.scope, params.address, { authoritativeRemoval: true });
         } else {
             await this.materializeExactWithScopedRuntime({
@@ -1566,7 +1605,7 @@ export class SessionDraftRepository {
         const targetRead = await params.target.transport.read(address);
         const targetRecord = targetRead.status === 'absent' ? null : targetRead.record;
         const targetDocument = targetRead.status === 'present'
-            ? await this.openRequiredDocument(params.target, targetRead.record)
+            ? await this.openRequiredDocument(params.target, targetRead.record, params.targetScope)
             : null;
         const targetIsOwnedRetry = Boolean(
             adoptedTarget
@@ -1747,6 +1786,7 @@ export class SessionDraftRepository {
             }
             if (!isCurrent()) return { status: 'pending' };
             if (response.status === 'updated') {
+                this.updateObservedTombstoneRevision(params.scope, response.record);
                 if (response.record.content === null) {
                     const latest = this.readReplica(params.scope, params.address) ?? replica;
                     const acknowledged = new Map(submittedMutations.map((mutation) => [pathKey(mutation.path), mutation.mutationId]));
@@ -1835,6 +1875,7 @@ export class SessionDraftRepository {
         remoteRecord: SessionDraftRecordV2 | null,
         remoteDocument: SessionDraftDocumentV2 | null,
     ): 'rebased' | 'conflict' {
+        if (remoteRecord) this.updateObservedTombstoneRevision(scope, remoteRecord);
         let localDocument = remoteDocument ?? createEmptyDocument(address, this.randomUUID);
         const remaining: DraftFieldMutationV1[] = [];
         const conflicts: SessionDraftConflictField[] = [];
@@ -1942,16 +1983,39 @@ export class SessionDraftRepository {
         if (this.storage.flush) await this.flushStorage(params.scope);
     }
 
-    async materializeExact(scope: SessionDraftRepositoryScope, address: SessionDraftAddressV2): Promise<void> {
+    materializeExact(scope: SessionDraftRepositoryScope, address: SessionDraftAddressV2, invalidationRevision?: number): Promise<void> {
         const runtime = this.syncRuntime(scope);
-        if (!runtime) return;
-        await this.materializeExactWithScopedRuntime({
+        if (!runtime) return this.storage.prepare?.() ?? Promise.resolve();
+        const key = this.replicaListenerKey(scope, address);
+        const current = this.exactReadInFlight.get(key);
+        const sameRuntime = current?.runtime === runtime;
+        if (sameRuntime && (invalidationRevision === undefined || invalidationRevision <= (current.invalidationRevision ?? -1))) {
+            return current.promise;
+        }
+        const read = () => this.materializeExactWithScopedRuntime({
             scope,
             address,
             runtime,
             isCurrent: () => this.isCurrentRuntime(runtime),
             flushRebasedLocalMutations: () => this.flushSessionDraft({ scope, address }).then(() => undefined),
         });
+        // A newer socket revision requires a read captured after the earlier
+        // demand settles. Serialize it so an older present response cannot land
+        // after a fresh tombstone; duplicate wakes share this same follow-up.
+        const promise = (sameRuntime ? current.promise.then(read, read) : read()).finally(() => {
+            if (this.exactReadInFlight.get(key)?.promise === promise) this.exactReadInFlight.delete(key);
+        });
+        this.exactReadInFlight.set(key, { runtime, invalidationRevision, promise });
+        return promise;
+    }
+
+    /** Foreground addresses share the exact owner; no Account list is needed for admission. */
+    async ensureSessionDraftAddressesHydrated(scope: SessionDraftRepositoryScope, addresses: readonly SessionDraftAddressV2[]): Promise<boolean> {
+        if (this.storage.prepare) await this.storage.prepare();
+        const runtime = this.runtime;
+        if (runtime.scopeKey !== null && runtime.scopeKey !== this.scopeKey(scope)) return false;
+        await Promise.all(addresses.map(address => this.materializeExact(scope, address)));
+        return this.isCurrentRuntime(runtime);
     }
 
     /** Uses an invocation-owned exact Home transport without reconfiguring the singleton runtime. */
@@ -1966,6 +2030,7 @@ export class SessionDraftRepository {
         const activeFlush = this.flushInFlight.get(this.replicaListenerKey(params.scope, params.address));
         if (activeFlush) await activeFlush;
         if (!params.isCurrent()) return;
+        const requestedBaseRevision = this.readReplica(params.scope, params.address)?.baseRevision ?? 'absent';
         let response: SessionDraftReadResponseV2;
         try {
             response = await params.runtime.transport.read(params.address);
@@ -1978,7 +2043,7 @@ export class SessionDraftRepository {
         let remoteDocument: SessionDraftDocumentV2 | null = null;
         if (response.status === 'present') {
             try {
-                remoteDocument = await this.openRequiredDocument(params.runtime, response.record);
+                remoteDocument = await this.openRequiredDocument(params.runtime, response.record, params.scope);
             } catch (error) {
                 if (!params.isCurrent()) return;
                 if (isSessionDraftContextUnavailableError(error)) throw error;
@@ -1987,7 +2052,7 @@ export class SessionDraftRepository {
             }
             if (!params.isCurrent()) return;
         }
-        const shouldFlush = this.reconcileStagedRead(params.scope, params.address, response, remoteDocument);
+        const shouldFlush = this.reconcileStagedRead(params.scope, params.address, response, remoteDocument, requestedBaseRevision);
         await this.awaitDraftRemovalCleanup(params.scope, params.address);
         if (shouldFlush) await params.flushRebasedLocalMutations?.();
         if (!params.isCurrent()) return;
@@ -1997,10 +2062,22 @@ export class SessionDraftRepository {
     private async openRequiredDocument(
         runtime: Readonly<{ cipher: SessionDraftRepositoryCipher }>,
         record: SessionDraftRecordV2,
+        scope: SessionDraftRepositoryScope,
     ): Promise<SessionDraftDocumentV2> {
         if (!record.content) throw new Error(`Session draft ${canonicalSessionDraftAddressV2(record.address)} has no active content`);
+        // The replica already owns the parsed base. Refreshes still read/reconcile the collection,
+        // but unchanged Account bytes need neither decryption nor schema traversal. Session drafts
+        // must always recheck their independently changing Session encryption context.
+        if (isAccountOwnedDraftAddressV2(record.address)) {
+            const base = this.readReplica(scope, record.address)?.baseRawDocument;
+            const opened = base ? this.openedAccountDocuments.get(base) : undefined;
+            if (base && opened?.cipher === runtime.cipher && areJsonValuesEqual(opened.content, record.content)) return base;
+        }
         const document = await runtime.cipher.open(record.address, record.content);
         if (!document) throw new Error(`Unable to open session draft ${canonicalSessionDraftAddressV2(record.address)}`);
+        if (isAccountOwnedDraftAddressV2(record.address)) {
+            this.openedAccountDocuments.set(document, { cipher: runtime.cipher, content: record.content });
+        }
         return document;
     }
 
@@ -2009,8 +2086,17 @@ export class SessionDraftRepository {
         address: SessionDraftAddressV2,
         response: SessionDraftReadResponseV2,
         remoteDocument: SessionDraftDocumentV2 | null,
+        requestedBaseRevision: SessionDraftExpectedRevisionV1,
     ): boolean {
         const local = this.readReplica(scope, address);
+        const key = this.replicaListenerKey(scope, address);
+        const tombstoneRevision = this.observedTombstoneRevisions.get(key);
+        // Clean removal drops the replica. Keep its observed server revision
+        // with its scope so an older overlapping collection/scoped read
+        // cannot recreate it after that replica's revision guard disappears.
+        if (response.status !== 'absent' && tombstoneRevision !== undefined && response.record.revision < tombstoneRevision) {
+            return false;
+        }
         if (
             local
             && local.baseRevision !== 'absent'
@@ -2021,6 +2107,10 @@ export class SessionDraftRepository {
         }
         if (response.status === 'absent') {
             if (!local) return false;
+            // Absence has no server revision to order against a completed local
+            // save. An acknowledgement since this read/snapshot was requested
+            // makes that absence stale; a subsequent fresh read can still delete.
+            if (local.baseRevision !== 'absent' && local.baseRevision !== requestedBaseRevision) return false;
             if (address.kind === 'newSession' && hasLocalInstructionsAuthoring(local.localSupplement)
                 && local.pendingFieldMutations.length === 0) {
                 this.rebaseConflictWithDocument(scope, address, local, null, null);
@@ -2050,6 +2140,7 @@ export class SessionDraftRepository {
             return false;
         }
         if (response.status === 'deleted') {
+            this.updateObservedTombstoneRevision(scope, response.record);
             if (local && address.kind === 'newSession' && hasLocalInstructionsAuthoring(local.localSupplement)) {
                 this.rebaseConflictWithDocument(scope, address, local, response.record, null);
             } else if (!local?.pendingFieldMutations.length) {
@@ -2063,6 +2154,7 @@ export class SessionDraftRepository {
             if (local) this.writeReplica(scope, { ...local, status: 'error' });
             throw new Error(`Unable to open session draft ${canonicalSessionDraftAddressV2(address)}`);
         }
+        this.updateObservedTombstoneRevision(scope, response.record);
         if (!local) {
             this.adoptRemote(scope, response.record, remoteDocument);
             return false;
@@ -2074,6 +2166,14 @@ export class SessionDraftRepository {
         }
         this.adoptRemote(scope, response.record, remoteDocument, local.localSupplement);
         return false;
+    }
+
+    private updateObservedTombstoneRevision(scope: SessionDraftRepositoryScope, record: SessionDraftRecordV2): void {
+        const key = this.replicaListenerKey(scope, record.address);
+        const observedRevision = this.observedTombstoneRevisions.get(key);
+        if (observedRevision !== undefined && record.revision < observedRevision) return;
+        if (record.content === null) this.observedTombstoneRevisions.set(key, record.revision);
+        else this.observedTombstoneRevisions.delete(key);
     }
 
     private adoptRemote(
@@ -2138,6 +2238,8 @@ export class SessionDraftRepository {
         if (this.storage.prepare) await this.storage.prepare();
         if (!params.isCurrent()) return;
         const { scope } = params;
+        const requestedBaseRevisions = new Map([...this.getScopeState(scope).replicas.entries()]
+            .map(([key, replica]) => [key, replica.baseRevision] as const));
         const staged = new Map<string, Readonly<{
             address: SessionDraftAddressV2;
             response: SessionDraftReadResponseV2;
@@ -2149,17 +2251,20 @@ export class SessionDraftRepository {
         do {
             const response = await params.runtime.transport.list({ ...(after ? { after } : {}), limit: 100 });
             if (!params.isCurrent()) return;
-            for (const record of response.items) {
+            // The list page is the existing allocation boundary. Independent
+            // record opens share no mutable replica state; reconcile only once
+            // every page has staged successfully below.
+            await Promise.all(response.items.map(async (record) => {
                 const addressKey = canonicalSessionDraftAddressV2(record.address);
                 listedAddresses.add(addressKey);
                 let document: SessionDraftDocumentV2;
                 try {
-                    document = await this.openRequiredDocument(params.runtime, record);
+                    document = await this.openRequiredDocument(params.runtime, record, scope);
                 } catch (error) {
                     if (!params.isCurrent()) return;
                     if (!isSessionDraftContextUnavailableError(error)) throw error;
                     unavailableSessionContextCount += 1;
-                    continue;
+                    return;
                 }
                 if (!params.isCurrent()) return;
                 staged.set(addressKey, {
@@ -2167,29 +2272,30 @@ export class SessionDraftRepository {
                     response: { status: 'present', record },
                     document,
                 });
-            }
+            }));
+            if (!params.isCurrent()) return;
             after = response.nextAfter;
         } while (after);
         const localAddressesMissingFromActiveList = [...this.getScopeState(scope).replicas.values()]
             .map((replica) => replica.address)
             .filter((address) => !listedAddresses.has(canonicalSessionDraftAddressV2(address)));
-        for (const address of localAddressesMissingFromActiveList) {
+        await Promise.all(localAddressesMissingFromActiveList.map(async (address) => {
             const response = await params.runtime.transport.read(address);
             if (!params.isCurrent()) return;
             let document: SessionDraftDocumentV2 | null = null;
             if (response.status === 'present') {
                 try {
-                    document = await this.openRequiredDocument(params.runtime, response.record);
+                    document = await this.openRequiredDocument(params.runtime, response.record, scope);
                 } catch (error) {
                     if (!params.isCurrent()) return;
                     if (!isSessionDraftContextUnavailableError(error)) throw error;
                     unavailableSessionContextCount += 1;
-                    continue;
+                    return;
                 }
             }
             if (!params.isCurrent()) return;
             staged.set(canonicalSessionDraftAddressV2(address), { address, response, document });
-        }
+        }));
         if (!params.isCurrent()) return;
         const addressesToFlush: SessionDraftAddressV2[] = [];
         const addressesToRematerialize: SessionDraftAddressV2[] = [];
@@ -2199,7 +2305,8 @@ export class SessionDraftRepository {
                     addressesToRematerialize.push(address);
                     continue;
                 }
-                if (this.reconcileStagedRead(scope, address, response, document)) addressesToFlush.push(address);
+                if (this.reconcileStagedRead(scope, address, response, document,
+                    requestedBaseRevisions.get(canonicalSessionDraftAddressV2(address)) ?? 'absent')) addressesToFlush.push(address);
             }
         });
         for (const { address } of staged.values()) {
@@ -2434,6 +2541,7 @@ export const flushSessionDraft = singleton.flushSessionDraft.bind(singleton);
 export const resolveSessionDraftConflict = singleton.resolveSessionDraftConflict.bind(singleton);
 export const materializeExactSessionDraft = singleton.materializeExact.bind(singleton);
 export const materializeExactSessionDraftWithScopedRuntime = singleton.materializeExactWithScopedRuntime.bind(singleton);
+export const ensureSessionDraftAddressesHydrated = singleton.ensureSessionDraftAddressesHydrated.bind(singleton);
 export const ensureSessionDraftRepositoryHydrated = singleton.ensureSessionDraftRepositoryHydrated.bind(singleton);
 export const ensureSessionDraftRepositoryHydratedWithScopedRuntime = singleton.ensureSessionDraftRepositoryHydratedWithScopedRuntime.bind(singleton);
 export const getExistingSessionDraftProjection = singleton.getExistingSessionDraftProjection.bind(singleton);

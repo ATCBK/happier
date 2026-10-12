@@ -304,9 +304,27 @@ export function createScmDiffSummaryOperations(deps: ScmDiffSummaryOperationsDep
                 ...(request.turnId ? { turnId: request.turnId } : {}),
                 ...(request.checkpointReceiptId ? { checkpointReceiptId: request.checkpointReceiptId } : {}),
                 ...(request.turnEvidenceMode ? { evidenceMode: request.turnEvidenceMode } : {}) } : request.source;
+            const capture = parsed.data.success ? parsed.data : null;
+            const capturedSource = capture?.comparison.source;
+            const metadata = capture?.metadata;
+            // The capture owner retains top-level turn selectors in metadata;
+            // source kind/Session and inline selectors must still agree with it.
+            const metadataMatches = !capturedSource || !metadata ? true
+                : JSON.stringify(capturedSource) === JSON.stringify(metadata.source)
+                    && (capturedSource.kind !== 'turnCheckpoint'
+                        || ((!capturedSource.turnId || !metadata.turnId || capturedSource.turnId === metadata.turnId)
+                            && (!capturedSource.checkpointReceiptId || !metadata.checkpointReceiptId || capturedSource.checkpointReceiptId === metadata.checkpointReceiptId)
+                            && (!capturedSource.evidenceMode || !metadata.turnEvidenceMode || capturedSource.evidenceMode === metadata.turnEvidenceMode)));
+            const observedSource = capturedSource?.kind === 'turnCheckpoint' ? { ...capturedSource,
+                ...(metadata?.turnId ? { turnId: metadata.turnId } : {}),
+                ...(metadata?.checkpointReceiptId ? { checkpointReceiptId: metadata.checkpointReceiptId } : {}),
+                ...(metadata?.turnEvidenceMode ? { evidenceMode: metadata.turnEvidenceMode } : {}) } : capturedSource;
             if (parsed.data.success && (parsed.data.comparison.repository.rootPath !== request.cwd
                 || (request.comparisonId && parsed.data.comparison.id !== request.comparisonId)
-                || !scmReviewComparisonMatchesSource(requestedSource, parsed.data.comparison.source, parsed.data.comparison))) {
+                || !metadataMatches || !observedSource
+                || (requestedSource.kind === 'turnCheckpoint' && observedSource.kind === 'turnCheckpoint'
+                    && requestedSource.sessionId && requestedSource.sessionId !== observedSource.sessionId)
+                || !scmReviewComparisonMatchesSource(requestedSource, observedSource, parsed.data.comparison))) {
                 return { success: false, error: 'Captured comparison evidence does not match the requested checkout or source.', errorCode: 'DIFF_UNAVAILABLE' };
             }
             return parsed.data;
@@ -357,9 +375,16 @@ export function createScmDiffSummaryOperations(deps: ScmDiffSummaryOperationsDep
         const generated = await invokeUiScmAction({ actionId: 'scm.diffSummary.generate', input: buildGenerateRequest(params),
             schema: ScmDiffSummaryGenerateOutputSchema, context: actionContext(params), executor: deps.actionExecutor,
             shouldContinue: current });
-        if (!current()) return retired();
         const parsed = ScmDiffSummaryGenerateOutputSchema.safeParse(generated);
         const output = parsed.success ? parsed.data : null;
+        if (!current()) {
+            // The generator may have admitted a real Run before retirement. Its
+            // receipt stays truthful; this retired binding publishes no state/cache.
+            if (output?.success) return { ok: true, key, runId: output.runId ?? null, state, viewModel: selectScmDiffSummaryViewModel(state, key) };
+            const error = readOperationError(generated) ?? { ok: false, error: 'Unsupported diff-summary generate response' };
+            return { ok: false, key, error: error.error, ...(error.errorCode ? { errorCode: error.errorCode } : {}), state,
+                viewModel: selectScmDiffSummaryViewModel(state, key) };
+        }
         if (!output) {
             const error = readOperationError(generated) ?? { ok: false, error: 'Unsupported diff-summary generate response' };
             setState(applyScmDiffSummaryEvent(state, {

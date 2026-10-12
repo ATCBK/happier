@@ -1,5 +1,6 @@
 import { ExternalSessionCandidateDeleteRequestSchema, ExternalSessionLinkEnsureRequestSchema, ExternalSessionsCandidatesListRequestSchema } from '@happier-dev/protocol/sessions/external/daemonRpcV1';
 import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
+import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 import {
     ExternalSessionMaterializeActionInputV1Schema,
     ExternalSessionOperationReferenceV1Schema,
@@ -38,10 +39,21 @@ function readExternalActionOwnerMetadata(sessionId: string, serverId?: string | 
 
 /** Host-side Browse controls retain the exact existing Machine RPC/compatibility owner. */
 export const executeExternalSessionBrowseAction: NonNullable<ActionExecutorDeps['hostExternalSessionAction']> = async ({ actionId, input, context, signal }) => {
-    const options = { serverId: context.serverId, ...(signal ? { signal } : {}) };
+    const options = { serverId: context.serverId,
+        ...(context.expectedAccountId ? { accountId: context.expectedAccountId } : {}),
+        ...(signal ? { signal } : {}) };
     switch (actionId) {
-        case 'sessions.external.candidates.list':
-            return { ok: true, result: await machineExternalSessionsCandidatesList(ExternalSessionsCandidatesListRequestSchema.parse(input), options) };
+        case 'sessions.external.candidates.list': {
+            try {
+                return { ok: true, result: await machineExternalSessionsCandidatesList(ExternalSessionsCandidatesListRequestSchema.parse(input), options) };
+            } catch (error) {
+                // Preserve transport classification through the Action envelope without vendor text.
+                const code = readRpcErrorCode(error) ?? (error && typeof error === 'object' && 'code' in error
+                    && error.code === 'MACHINE_RPC_TIMEOUT' ? error.code : null);
+                if (code) return { ok: false, errorCode: code, error: code };
+                throw error;
+            }
+        }
         case 'sessions.external.candidate.delete':
             return { ok: true, result: await machineExternalSessionCandidateDelete(ExternalSessionCandidateDeleteRequestSchema.parse(input), options) };
         case 'sessions.external.link.ensure':

@@ -1,6 +1,6 @@
 import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
 import { SessionCreationKeyV1Schema } from '@happier-dev/protocol/sessions/creation/sessionCreationIdentityV1';
-import { SessionSpawnNewResultV1Schema, type SessionSpawnNewResultV1 } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
+import { SessionSpawnNewResultV1Schema, type SessionSpawnNewInitialInputDispositionV1, type SessionSpawnNewResultV1 } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
 import { projectSessionFollowSourceKeyPreparationAfterSetV1, type SessionFollowSourceKeyPreparationResultV1, SessionFollowSourceKeyPreparationResultV1Schema, SESSION_FOLLOW_SOURCE_KEY_PREPARATION_WAITING_ACTION_ERROR_V1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceKeyPreparationV1';
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { UiActionExecutorContext } from './defaultActionExecutor';
@@ -166,6 +166,14 @@ export function resolveSessionSpawnNewResultFailureMessage(
     return result.type !== 'pending' && key === 'newSession.failedToStart'
         ? t('errors.errorWithCode', { message, code: result.code })
         : message;
+}
+
+/** First-input admission is separate from creation; retain its diagnostic without claiming rejection. */
+export function resolveSessionSpawnNewInitialInputFailureMessage(
+    initialInput: Extract<SessionSpawnNewInitialInputDispositionV1, { status: 'rejected' | 'outcomeUnknown' }>,
+    message: string,
+): string {
+    return t('errors.errorWithCode', { message, code: initialInput.code });
 }
 
 /**

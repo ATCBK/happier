@@ -1,8 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { MACHINE_PLAIN_DATA_KEY_MARKER, type ConnectedAccountDaemonControlResponse } from '@happier-dev/protocol';
+import * as React from 'react';
+import { act } from 'react-test-renderer';
+import { MACHINE_PLAIN_DATA_KEY_MARKER, CONNECTED_ACCOUNT_AUTHENTICATION_COMMAND_RPC_METHOD,
+    CONNECTED_ACCOUNT_CONTROL_COMMAND_RPC_METHOD, type ConnectedAccountDaemonControlResponse } from '@happier-dev/protocol';
 import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { renderScreen } from '@/dev/testkit/render/renderScreen';
 
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
@@ -21,13 +25,18 @@ const service = { pluginId: 'acme.accounts', localId: 'work' } as const;
 const beginConnect = { operation: 'beginConnect', service, modeId: 'manual' } as const;
 const machineRow = { machine: { id: 'machine-1', kind: 'persistent', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } };
 let serverId: string;
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>>;
+let syncBridge: Awaited<ReturnType<typeof import('@/dev/testkit/harness/syncSingletonLoader')['loadSyncSingletonForTests']>>;
 
 describe('connected-account daemon machine RPC', () => {
     beforeEach(async () => {
+        // restoreAllMocks retires the credential-store boundary after each case.
+        installHomeGovernanceBoundaries(homes);
         const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
-        await loadSyncSingletonForTests();
+        syncBridge = await loadSyncSingletonForTests();
         serverId = await homes.addHome({ name: 'Accounts Home', serverUrl: 'https://connected-accounts.test', accountId: 'account-a' });
         homes.answer(serverId, '/v1/machines/machine-1', { body: machineRow });
+        connection = await restoreServerAccountForTest({ serverUrl: 'https://connected-accounts.test', accountId: 'account-a', request: homes.request });
         outgoing.length = 0;
         answers.length = 0;
     });
@@ -36,6 +45,8 @@ describe('connected-account daemon machine RPC', () => {
         const { resetScopedMachineTransportCacheForTests } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool');
         serverScopedRpcSocketPool.resetForTests();
         resetScopedMachineTransportCacheForTests();
+        await connection?.dispose();
+        syncBridge?.dispose();
         await homes.reset();
         vi.restoreAllMocks();
     });
@@ -47,6 +58,54 @@ describe('connected-account daemon machine RPC', () => {
             verificationUri: 'https://example.com/' + 'x'.repeat(8192), pollIntervalMs: 0 }).success).toBe(false);
         expect(ConnectedAccountAttemptResponseSchema.safeParse({ status: 'pending', attemptId: 'attempt-1', retryAfterMs: 1.5 }).success).toBe(false);
     });
+    it('refuses retired controller custody before recapturing an authentication Action', async () => {
+        const { captureActiveServerAccountScopeCurrentness } = await import('@/sync/domains/scope/activeServerAccountScope');
+        const captured = captureActiveServerAccountScopeCurrentness();
+        expect(captured.isCurrent()).toBe(true);
+        const { storage } = await import('@/sync/domains/state/storage');
+        storage.setState({ profileScope: { serverId, accountId: 'successor' } });
+        expect(captured.isCurrent()).toBe(false);
+        const { runConnectedAccountAuthenticationAction } = await import('./connectedAccountDaemon');
+        await expect(runConnectedAccountAuthenticationAction({ serverId, machineId: 'machine-1', expectedAccountId: 'account-a',
+            assertCurrent: () => {
+                if (!captured.isCurrent()) throw Object.assign(new Error('scope-retired'), { code: 'scope-retired' });
+            }, command: { operation: 'cancel', attemptId: 'discarded-attempt' } })).rejects.toMatchObject({ code: 'scope-retired' });
+        expect(outgoing).toEqual([]);
+    });
+    it('keeps approved pending discovery on its mounted exact Home continuation instead of treating the Artifact as a daemon reply', async () => {
+        const { useMountedActionExecution } = await import('@/components/approvals/useMountedActionExecution');
+        const { listPendingConnectedAccountAuthenticationActions } = await import('./connectedAccountDaemon');
+        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+        const scope = { serverId, accountId: 'account-a' };
+        let execution: ReturnType<typeof useMountedActionExecution> | undefined;
+        function Probe() { execution = useMountedActionExecution(scope); return null; }
+        const issuedConnectedCommands = () => outgoing.filter(request => request.method
+            === `machine-1:${CONNECTED_ACCOUNT_AUTHENTICATION_COMMAND_RPC_METHOD}`
+            || request.method === `machine-1:${CONNECTED_ACCOUNT_CONTROL_COMMAND_RPC_METHOD}`);
+        await homes.requireUiApproval(serverId, 'connectedServices.authentication.pending.list');
+        const screen = await renderScreen(React.createElement(Probe));
+        let operation: Promise<unknown> | undefined;
+        try {
+            await vi.waitFor(() => expect(execution?.ready).toBe(true));
+            const mounted = execution;
+            if (!mounted) throw new Error('missing_mounted_execution');
+            operation = listPendingConnectedAccountAuthenticationActions({ serverId, machineId: 'machine-1',
+                expectedAccountId: scope.accountId, service, executeAction: mounted.execute });
+            const outcome = operation.then(result => ({ result }), error => ({ error }));
+            await vi.waitFor(() => expect(execution?.approval.approvalId).toEqual(expect.any(String)));
+            expect(issuedConnectedCommands()).toEqual([]);
+            const artifactId = execution?.approval.approvalId;
+            if (!artifactId) throw new Error('missing_pending_approval');
+            expect(homes.artifacts(serverId).readPlainBody(artifactId)).toContain('"machineId":"machine-1"');
+            await act(async () => {
+                expect(await createDefaultActionExecutor().execute('approval.request.decide', { artifactId, decision: 'reject' },
+                    { surface: 'ui', authority: 'present_user', serverId, expectedAccountId: scope.accountId }))
+                    .toMatchObject({ ok: true });
+            });
+            expect(await outcome).toMatchObject({ error: { code: 'approval_rejected' } });
+            expect(issuedConnectedCommands()).toEqual([]);
+        } finally { await screen.unmount(); await operation?.catch(() => {}); }
+    });
     it('routes authentication through the exact server and machine owner', async () => {
         answers.push({ status: 'awaitingManual', attemptId: 'attempt-1' });
         const { runConnectedAccountAuthenticationCommand } = await import('./connectedAccountDaemon');
@@ -55,6 +114,39 @@ describe('connected-account daemon machine RPC', () => {
         expect(outgoing).toMatchObject([{ method: 'machine-1:daemon.connectedAccounts.authentication.command',
             params: { v: 1, machineId: 'machine-1', command: beginConnect } }]);
         expect(homes.requestsFor('/v1/machines/machine-1')[0]?.serverId).toBe(serverId);
+    });
+    it('approves live manual custody through the canonical human decision and sends the original private fields only to the daemon', async () => {
+        const { runConnectedAccountAuthenticationAction } = await import('./connectedAccountDaemon');
+        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+        const { StoredApprovalRequestSchema } = await import('@happier-dev/protocol/approvals/approvalRequestV1');
+        const { waitForHomeGovernance } = await import('@/dev/testkit/harness/homeGovernanceHarness');
+        const actionId = 'connectedServices.authentication.submitManual';
+        await homes.requireUiApproval(serverId, actionId);
+        const command = { operation: 'submitManual' as const, attemptId: 'attempt-1', fields: { token: 'private-live-token' } };
+        const response = { status: 'connected', attemptId: 'attempt-1', account: { service, accountId: 'personal' } };
+        answers.push(response);
+        const controller = new AbortController();
+        const operation = runConnectedAccountAuthenticationAction({ serverId, machineId: 'machine-1',
+            expectedAccountId: 'account-a', command, signal: controller.signal });
+        const outcome = operation.then(result => ({ result }), error => ({ error }));
+        try {
+            await waitForHomeGovernance(() => expect(homes.artifacts(serverId).list()).toHaveLength(1));
+            const artifact = homes.artifacts(serverId).list()[0]!;
+            const body = homes.artifacts(serverId).readPlainBody(artifact.id);
+            const request = StoredApprovalRequestSchema.parse(JSON.parse(body ?? 'null'));
+            expect(request).toMatchObject({ actionId, actionArgs: { machineId: 'machine-1', attemptId: 'attempt-1' },
+                executionOriginV1: { machineId: 'machine-1', accountId: 'account-a' } });
+            expect(body).not.toContain('private-live-token');
+            expect(outgoing.filter(value => value.method === `machine-1:${CONNECTED_ACCOUNT_AUTHENTICATION_COMMAND_RPC_METHOD}`)).toEqual([]);
+            await act(async () => {
+                expect(await createDefaultActionExecutor().execute('approval.request.decide', { artifactId: artifact.id, decision: 'approve' },
+                    { surface: 'ui', authority: 'present_user', serverId, expectedAccountId: 'account-a' })).toMatchObject({ ok: true });
+            });
+            expect(await outcome).toEqual({ result: response });
+            expect(outgoing).toContainEqual(expect.objectContaining({ method: `machine-1:${CONNECTED_ACCOUNT_AUTHENTICATION_COMMAND_RPC_METHOD}`,
+                params: { v: 1, machineId: 'machine-1', command } }));
+            expect(homes.artifacts(serverId).readPlainBody(artifact.id)).not.toContain('private-live-token');
+        } finally { controller.abort(); await outcome; }
     });
     it('rejects an expected active-server basis that does not match the routed server', async () => {
         const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
@@ -78,6 +170,8 @@ describe('connected-account daemon machine RPC', () => {
         try {
             await vi.waitFor(() => expect(homes.requestsFor('/v1/machines/machine-1')).toHaveLength(1));
             await homes.addHome({ name: 'New focused Home', serverUrl: 'https://new-connected-account-home.test', accountId: 'account-b' });
+            const successor = await restoreServerAccountForTest({ serverUrl: 'https://new-connected-account-home.test', accountId: 'account-b', request: homes.request });
+            await successor.dispose();
         } finally { release(); }
         await rejected;
         expect(outgoing).toEqual([]);

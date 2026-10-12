@@ -4,7 +4,7 @@ import { storage } from '@/sync/domains/state/storage';
 import { resolveVisibleMachinesForActiveServerFromState } from '@/sync/store/domains/machines/resolveMachinesForActiveServerFromState';
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 import type { ActionAccountContext } from './actionAccountContext';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
 import {
     createUiAccountActionTransport,
     type AccountActionTransport,
@@ -12,9 +12,9 @@ import {
 } from './accountActionTransport';
 
 /** The existing Account relay's serving machine; shared by its cold projection readers. */
-export function resolveUiAccountActionFallbackMachineId(account: Pick<ActionAccountContext, 'serverId'>): string | null {
+export function resolveUiAccountActionFallbackMachineId(account: Pick<ActionAccountContext, 'serverId' | 'accountId'>): string | null {
     return areServerProfileIdentifiersEquivalent(getActiveServerSnapshot().serverId, account.serverId)
-        ? resolveVisibleMachinesForActiveServerFromState(storage.getState()).find((machine) => isMachineOnline(machine))?.id ?? null
+        ? resolveVisibleMachinesForActiveServerFromState(storage.getState()).find((machine) => isMachineReachable(account, machine))?.id ?? null
         : null;
 }
 

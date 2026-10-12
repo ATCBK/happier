@@ -1,15 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ScmDiffSummaryGenerateInputSchema, ScmDiffSummaryGenerateOutputSchema, type TurnChangeSet } from '@happier-dev/protocol';
-import { createSessionFixture, createToolCallMessageFixture } from '@/dev/testkit';
+import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRowReadResponseV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
-import { serverAccountScopeKeySuffix } from '@/sync/domains/scope/serverAccountScope';
-import { selectSessionScmWalkthroughKey } from '@/sync/domains/scm/diffSummary/selection';
 import { buildTurnChangeSetDiffInput } from '../../../../../cli/src/agent/tools/diff/buildTurnChangeSetDiffInput';
-import { prefetchCompletedCheckpointMessages } from './checkpointPrefetch';
-import { getScmDiffSummaryState, retireScmDiffSummaryScope } from './generate';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { storage } from '@/sync/domains/state/storage';
 
 // Authenticated SCM RPC and execution-run RPC are transport boundaries.
 const network = vi.hoisted(() => ({ generate: vi.fn() }));
@@ -17,6 +12,13 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', (
 vi.mock('@/sync/ops/sessionExecutionRuns', () => ({ sessionExecutionRunGet: vi.fn() }));
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
+const { createSessionFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
+const { createToolCallMessageFixture } = await import('@/dev/testkit/fixtures/transcriptFixtures');
+const { serverAccountScopeKeySuffix } = await import('@/sync/domains/scope/serverAccountScope');
+const { selectSessionScmWalkthroughKey } = await import('@/sync/domains/scm/diffSummary/selection');
+const { prefetchCompletedCheckpointMessages } = await import('./checkpointPrefetch');
+const { getScmDiffSummaryState, retireScmDiffSummaryScope } = await import('./generate');
+const { storage } = await import('@/sync/domains/state/storage');
 await import('@/sync/ops/actions/defaultActionExecutor');
 
 let scope = { serverId: 'checkpoint-home', accountId: 'checkpoint-account' };
@@ -49,8 +51,9 @@ let session: ReturnType<typeof createSessionFixture>;
 beforeEach(async () => {
     await harness.reset();
     const serverId = await harness.addHome({ name: 'Checkpoint Home', serverUrl: 'https://checkpoint-home.example',
-        accountId: 'checkpoint-account', serverIdentityId: 'srv-checkpoint-home' });
+        accountId: 'checkpoint-account', serverIdentityId: 'srv-checkpoint-home', currentAccount: true });
     scope = { serverId, accountId: 'checkpoint-account' };
+    harness.answer(serverId, ACP_CATALOG_ROWS_ROUTE_V1, { body: AcpCatalogRowReadResponseV1Schema.parse({ status: 'absent' }) });
     harness.answer(serverId, '/v1/account/encryption/currentness', { body: {
         mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
     } });
@@ -77,7 +80,9 @@ describe('completed checkpoint transcript prefetch', () => {
         const params = { session, messages: [message()], settings: { 'scm.diffSummary.prefetch': true }, lifetime };
         await Promise.all([prefetchCompletedCheckpointMessages(params), prefetchCompletedCheckpointMessages(params)]);
         await prefetchCompletedCheckpointMessages(params);
-        expect(network.generate).toHaveBeenCalledTimes(1);
+        expect(network.generate, JSON.stringify({ http: harness.requests.map(({ serverUrl, path }) => ({ serverUrl, path })),
+            state: getScmDiffSummaryState(),
+        })).toHaveBeenCalledTimes(1);
         expect(network.generate.mock.calls[0]?.[0]?.payload).toMatchObject({ cwd: '/repo', sessionId: session.id,
             source: { kind: 'turnCheckpoint', sessionId: session.id, turnId: turn.turnId,
                 checkpointReceiptId: 'checkpoint.finalized', evidenceMode: 'checkpoint' },

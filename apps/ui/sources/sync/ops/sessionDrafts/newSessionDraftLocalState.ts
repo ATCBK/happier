@@ -5,7 +5,7 @@ import type {
 import { PluginUiNewSessionSeedOriginV1Schema } from '@happier-dev/protocol/plugins/ui';
 import { SessionIdentityAdditionsV1Schema } from '@happier-dev/protocol/sessions/identity/sessionBotV1';
 import { SessionPromptStackV1Schema } from '@happier-dev/protocol/sessions/context/sessionContextV1';
-import { readSessionInstructionsAuthoringDraft } from '@/sync/ops/promptLibrary/sessionInstructions';
+import { readSessionInstructionsAuthoringDraft } from '@/sync/domains/state/sessionInstructionsDraft';
 import { nullable } from 'zod/mini';
 import { ManagedMachineAcquisitionDraftSchema, ManagedMachineSelectionDraftSchema } from '@/sync/domains/state/newSessionManagedMachineDraft';
 

@@ -6,6 +6,7 @@ import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntim
 import type { MountedAuthoringActionExecute } from '@/sync/ops/actions/sessionAuthoringActions';
 import type { ActionId } from '@happier-dev/protocol/actions/actionIds';
 import { PromptDocArtifactRefV1Schema, type PromptDocArtifactRefV1 } from '@happier-dev/protocol/prompts/library/promptArtifactRefsV1';
+import type { SessionInstructionsAuthoringDraft } from '@/sync/domains/state/sessionInstructionsDraft';
 
 export type SessionInstructionsTarget = Readonly<{
     sessionId: string;
@@ -13,22 +14,12 @@ export type SessionInstructionsTarget = Readonly<{
     expectedMetadataRevision: number;
 }>;
 
-export type SessionInstructionsAuthoringDraft = Readonly<{ title: string; markdown: string }>;
 export type SessionInstructionsAuthoringResult = Readonly<{
     result: ActionExecuteResult;
     createdRef: PromptDocArtifactRefV1 | null;
     /** The caller retains its draft until the attachment result is accepted. */
     draft: SessionInstructionsAuthoringDraft;
 }>;
-
-/** Device-local unsaved authoring recovers only the two known editor fields. */
-export function readSessionInstructionsAuthoringDraft(value: unknown): SessionInstructionsAuthoringDraft | null | undefined {
-    if (value === null) return null;
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
-    const title: unknown = Reflect.get(value, 'title');
-    const markdown: unknown = Reflect.get(value, 'markdown');
-    return typeof title === 'string' && typeof markdown === 'string' ? { title, markdown } : undefined;
-}
 
 function execute(
     actionId: ActionId,

@@ -142,11 +142,13 @@ describe('SCM diff summary operations', () => {
         expect(ops.getState()).toEqual({ entriesByKey: {} });
     });
     it('captures Files evidence independently of disabled narration without admitting a model run', async () => {
-        const capture = vi.fn(async () => ({ success: true as const, comparison, metadata: pending.metadata }));
+        // The capture producer keeps top-level turn selectors in metadata, not in source.
+        const metadata = { ...pending.metadata, turnId: input.turnId, checkpointReceiptId: input.checkpointReceiptId, turnEvidenceMode: 'reconciled' as const };
+        const capture = vi.fn(async () => ({ success: true as const, comparison, metadata }));
         const generate = vi.fn<ScmDiffSummaryGenerateRpc>(async () => pending);
         const ops = createScmDiffSummaryOperations({ captureComparison: capture, generateSummary: generate });
         const result = await ops.captureComparison({ sessionId: 'session_1', input, serverId: ' server_1 ' });
-        expect(result).toEqual({ success: true, comparison, metadata: pending.metadata });
+        expect(result).toEqual({ success: true, comparison, metadata });
         expect(capture).toHaveBeenCalledWith('session_1', { ...input, sessionId: 'session_1' }, { serverId: 'server_1' });
         expect(generate).not.toHaveBeenCalled();
         expect(ops.getState()).toEqual({ entriesByKey: {} });

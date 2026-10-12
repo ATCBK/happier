@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { StoredApprovalRequestSchema } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { getSharedBlockingApprovalCoordinator } from '@happier-dev/protocol/actions/blockingApprovalCoordinator';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 
 const rpc = vi.hoisted(() => vi.fn());
 // Remote Machine RPC is the process/network boundary. Action admission and task codecs remain real.
@@ -19,13 +22,40 @@ describe('UI connected Machine Home restart Action', () => {
   beforeEach(async () => { await harness.reset(); rpc.mockReset(); });
   afterEach(() => standardCleanup());
 
+  it.each([
+    [{ enabled: true }, 'ready'],
+    [{ enabled: false, reason: 'indexing' }, 'indexing'],
+    [{ enabled: false, reason: 'index_unavailable' }, 'unavailable'],
+    [undefined, 'unknown'],
+  ] as const)('reads search readiness from the addressed Home feature owner (%s)', async (homeSearch, searchReadiness) => {
+    const serverId = await harness.addHome({ name: 'Search Home', serverUrl: 'https://readiness.test', accountId: 'alice' });
+    harness.answer(serverId, '/v1/features', { body: createRootLayoutFeaturesResponse({ capabilities: {
+      ...(homeSearch ? { homeSearch } : {}),
+    } }) });
+    expect(await createDefaultActionExecutor().execute('home.runtime.get', { force: true }, {
+      surface: 'ui', serverId, expectedAccountId: 'alice',
+    })).toMatchObject({ ok: true, result: { status: 'ready', searchReadiness } });
+  });
+
   it('keeps an Agent restart request in canonical approval before dispatching a system task', async () => {
     const serverId = await harness.addHome({ name: 'Approval Home', serverUrl: 'https://approval-restart.test', accountId: 'alice' });
-    const result = await createDefaultActionExecutor().execute('home.runtime.restart', { machineId: 'machine' }, {
+    let settled = false;
+    const result = createDefaultActionExecutor().execute('home.runtime.restart', { machineId: 'machine' }, {
       surface: 'agent', authority: 'account_automation', serverId, expectedAccountId: 'alice', actionRequestId: 'restart-approval',
-    });
-    expect(result.ok ? null : result).toBeNull();
-    expect(result).toMatchObject({ ok: true, result: { kind: 'approval_request_created', actionId: 'home.runtime.restart' } });
+    }).then(outcome => { settled = true; return outcome; });
+    const artifacts = harness.artifacts(serverId);
+    await waitForHomeGovernance(() => expect(artifacts.list()).toHaveLength(1));
+    const artifactId = artifacts.list()[0]!.id;
+    const request = StoredApprovalRequestSchema.parse(JSON.parse(artifacts.readPlainBody(artifactId)!));
+    expect(request).toMatchObject({ status: 'open', actionId: 'home.runtime.restart',
+      actionArgs: { machineId: 'machine' }, approval: { flow: 'blocking', result: 'required' } });
+    await waitForHomeGovernance(() => expect(getSharedBlockingApprovalCoordinator().getLiveWaiterCount(artifactId)).toBe(1));
+    expect(settled).toBe(false);
+    expect(rpc).not.toHaveBeenCalled();
+    expect(await createDefaultActionExecutor().execute('approval.request.decide', { artifactId, decision: 'reject' }, {
+      surface: 'ui', authority: 'present_user', serverId, expectedAccountId: 'alice',
+    })).toMatchObject({ ok: true });
+    expect(await result).toMatchObject({ ok: false, errorCode: 'approval_rejected' });
     expect(rpc).not.toHaveBeenCalled();
   });
 

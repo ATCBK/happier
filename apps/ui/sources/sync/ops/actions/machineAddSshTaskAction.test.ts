@@ -3,9 +3,9 @@ import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/prot
 import { createManualSystemTaskRunner } from '@/dev/testkit/harness/manualSystemTaskRunner';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { storage } from '@/sync/domains/state/storageStore';
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
+const { storage } = await import('@/sync/domains/state/storageStore');
 vi.mock('expo-router/build/link/href', () => ({ resolveHref: vi.fn() }));
 vi.mock('@/config', () => ({ config: { variant: 'production', identityVariant: 'stable' } }));
 // This native rendering package is outside the task process and never renders here.

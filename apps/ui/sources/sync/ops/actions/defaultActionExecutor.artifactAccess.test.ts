@@ -81,7 +81,7 @@ async function fixture(mode: 'plain' | 'e2ee', document?: Readonly<{ header: Rec
         if (target.pathname === '/v1/public-shares') {
             if (init?.method === 'POST') {
                 publicLinkBody = JSON.parse(String(init.body));
-                return Response.json({ publicShare, isolatedOrigin: 'https://public.example.test' });
+                return Response.json({ publicShare, viewerOrigin: 'https://public.example.test' });
             }
             expect(target.searchParams.get('subjectKind')).toBe('artifact');
             expect(target.searchParams.get('subjectId')).toBe('document');

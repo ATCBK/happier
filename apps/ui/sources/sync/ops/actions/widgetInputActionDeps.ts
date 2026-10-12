@@ -11,16 +11,20 @@ import { createWidgetActionInputResolverV1, composeWidgetGroupContextV1, findWid
 import { readInputPath } from '@happier-dev/protocol/inputs';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { storage } from '@/sync/domains/state/storage';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { workspaceRefResolutionContextV1 } from '@/sync/domains/workspaces/workspaceRefs';
 import { sync } from '@/sync/sync';
 import { admitWidgetViewerSelectionMetadataV1 } from '@/sync/domains/widgets/widgetViewerSelectionAdmission';
 import { readWidgetDescriptor, describeAuthoredWidgetDefinitionV1, type WidgetCandidate } from '@/components/widgets/widgetCatalog';
-import { readCurrentAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
+import { readCurrentAppShellPluginUiProjection } from '@/components/appShell/plugins/committedPluginUiProjection';
 import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
 import { readWidgetActionRuntimeV1, readWidgetActionCandidatesV1 } from './widgetCatalogActionDeps';
 import type { LazyActionAccountContext } from './actionAccountContext';
 import { admitWidgetActionSurfaceV1 } from '@happier-dev/protocol/widgets';
 import { readWidgetInputTargetV1, validateWidgetWorkspaceInputV1 } from '@happier-dev/protocol/widgets/widgetInputAdmissionV1';
+import { readSessionWidgetProvidedContext } from '@/components/widgets/surface/sessionWidgetContext';
+import { MachineTargetV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
 
 const NO_PURPOSE_BINDINGS: QualifiedConnectedAccountPurposeBindingsV1 = { v: 1, bindings: [] };
 
@@ -54,7 +58,7 @@ export function createWidgetInputActionDepsV1(account: LazyActionAccountContext 
         const authored = reference.kind === 'inline' ? reference.definition
             : reference.kind === 'artifact' ? await deps.widgetDefinitionArtifacts?.get(reference.artifactId, context.signal) : null;
         if ((reference.kind === 'artifact' || reference.kind === 'inline') && !authored) return unavailable;
-        const definition = authored?.body.kind === 'installed' ? authored.body : reference;
+        const definition = authored?.body.kind === 'installed' || authored?.body.kind === 'builtin' ? authored.body : reference;
         const candidate = runtime.candidates.find(candidate => isSameWidgetDefinitionV1(widgetCandidateDefinitionV1(candidate), definition));
         const descriptor = authored && (reference.kind === 'inline' || reference.kind === 'artifact')
             ? describeAuthoredWidgetDefinitionV1(authored, reference, candidate) : candidate;
@@ -93,7 +97,8 @@ export function createWidgetInputActionDepsV1(account: LazyActionAccountContext 
         const owner = request.ref.surface.owner;
         if (request.context.widgetAreaContext && sameStrictJsonValue(request.context.widgetAreaContext.surface, request.ref.surface)) return request.context.widgetAreaContext.values;
         return owner.kind === 'sessionBoard' || owner.kind === 'companion'
-            ? { session: [{ serverId: request.ref.surface.serverId, sessionId: owner.sessionId }] } : {};
+            ? readSessionWidgetProvidedContext({ serverId: request.ref.surface.serverId, sessionId: owner.sessionId,
+                session: storage.getState().sessions[owner.sessionId] }) : {};
     };
     const readProvidedContext = async (request: Request) => composeWidgetGroupContextV1({ providedContext: readContext(request), groupBindings: await readGroupBindings(request) });
     const purposeCatalogs = new WeakMap<Request, ReturnType<typeof readConnectedAccountCatalogInContext>>();
@@ -139,7 +144,15 @@ export function createWidgetInputActionDepsV1(account: LazyActionAccountContext 
                 : reference.kind === 'artifact' ? await deps.widgetDefinitionArtifacts?.get(reference.artifactId, request.signal) : null;
             account.assertCurrent();
             if ((reference.kind === 'artifact' || reference.kind === 'inline') && !authored) return null;
-            if (authored?.body.kind === 'declarative' && (reference.kind === 'artifact' || reference.kind === 'inline')) {
+            if (authored?.body.kind === 'builtin' && (reference.kind === 'artifact' || reference.kind === 'inline')) {
+                const native = readWidgetDescriptor(null, authored.body);
+                if (!native) return null;
+                const descriptor = describeAuthoredWidgetDefinitionV1(authored, reference, native);
+                if (readWidgetInputTargetV1(descriptor).kind === 'invalid') return null;
+                descriptors.set(request, descriptor);
+                return descriptor;
+            }
+            if (authored && authored.body.kind !== 'installed' && (reference.kind === 'artifact' || reference.kind === 'inline')) {
                 const descriptor = describeAuthoredWidgetDefinitionV1(authored, reference);
                 const targetDeclaration = readWidgetInputTargetV1(descriptor);
                 if (targetDeclaration.kind === 'invalid') return null;
@@ -147,7 +160,7 @@ export function createWidgetInputActionDepsV1(account: LazyActionAccountContext 
                     providedContext: await readProvidedContext(request), viewerValues: {} });
                 const selected = targetDeclaration.kind === 'session' && targetInput.status === 'ready'
                     ? VoiceTrackedSessionAddressV1Schema.safeParse(readInputPath(targetInput.input, targetDeclaration.path)) : null;
-                if (targetDeclaration.kind === 'session' && (!selected?.success || selected.data.serverId !== account.serverId)) return descriptor;
+                if (targetDeclaration.kind === 'session' && (!selected?.success || !areServerProfileIdentifiersEquivalent(selected.data.serverId, account.serverId))) return descriptor;
                 const runtime = await readWidgetActionRuntimeV1(request.ref.surface, account, request.signal, selected?.success ? selected.data : undefined, deps);
                 account.assertCurrent();
                 if ('ok' in runtime || !runtime.isCurrent()) return null;
@@ -174,7 +187,7 @@ export function createWidgetInputActionDepsV1(account: LazyActionAccountContext 
                 const bound = resolveConfiguredWidgetTargetInputV1({ instance: request.instance, descriptor: candidate,
                     providedContext: await readProvidedContext(request), viewerValues: (await readViewerValues(request, candidate)).values });
                 const target = bound.status === 'ready' ? VoiceTrackedSessionAddressV1Schema.safeParse(readInputPath(bound.input, targetDeclaration.path)) : null;
-                if (target?.success && target.data.serverId === account.serverId) {
+                if (target?.success && areServerProfileIdentifiersEquivalent(target.data.serverId, account.serverId)) {
                     const current = await readWidgetActionCandidatesV1(request.ref.surface, account, request.signal, target.data, deps);
                     const currentCandidate = 'ok' in current ? undefined : current.find(matches);
                     candidate = currentCandidate && sameStrictJsonValue(readWidgetInputTargetV1(currentCandidate), targetDeclaration) ? currentCandidate : undefined;
@@ -210,6 +223,12 @@ export function createWidgetInputActionDepsV1(account: LazyActionAccountContext 
         readViewerValues: async request => readViewerValues(request),
         validateValue: async (field, value, request) => {
             account.assertCurrent();
+            if (field.inputType && 'hostType' in field.inputType && field.inputType.hostType === 'machine') {
+                const target = MachineTargetV1Schema.safeParse(value);
+                if (!target.success) return { status: 'invalid', reasonCode: 'widget_machine_selection_invalid' };
+                return areServerProfileIdentifiersEquivalent(target.data.serverId, account.serverId)
+                    ? { status: 'valid' } : { status: 'denied', reasonCode: 'widget_target_scope_mismatch' };
+            }
             if (request.instance.bindings[field.path]?.kind === 'viewer' || field.connectedAccountOptions) {
                 const authority = await admitWidgetActionSurfaceV1(deps, request.ref.surface, { ...request.context, signal: request.signal });
                 if (authority) return { status: 'denied', reasonCode: authority.errorCode };
@@ -232,12 +251,12 @@ export function createWidgetInputActionDepsV1(account: LazyActionAccountContext 
             if (targetDeclaration?.kind === 'invalid') return { status: 'unavailable', reasonCode: targetDeclaration.reasonCode };
             if (targetDeclaration?.kind === 'workspace' && targetDeclaration.path === field.path) {
                 return validateWidgetWorkspaceInputV1({ value, serverId: account.serverId,
-                    contextValues: readContext(request)[targetDeclaration.path] ?? [] });
+                    contextValues: readContext(request)[targetDeclaration.path] ?? [] }, workspaceRefResolutionContextV1);
             }
             if (targetDeclaration?.kind !== 'session' || targetDeclaration.path !== field.path) return { status: 'valid' };
             const address = VoiceTrackedSessionAddressV1Schema.safeParse(value);
             if (!address.success) return { status: 'invalid', reasonCode: 'widget_session_selection_invalid' };
-            if (address.data.serverId !== account.serverId) return { status: 'denied', reasonCode: 'widget_target_scope_mismatch' };
+            if (!areServerProfileIdentifiersEquivalent(address.data.serverId, account.serverId)) return { status: 'denied', reasonCode: 'widget_target_scope_mismatch' };
             const read = await sync.withSessionSystemRecordRuntime(address.data, async runtime => {
                 account.assertCurrent();
                 request.signal?.throwIfAborted();

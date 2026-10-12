@@ -1,0 +1,76 @@
+import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
+import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
+import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
+import { getCurrentAuth } from '@/auth/context/currentAuth';
+import { presentFirstKeyCredentialLifecycle } from '@/components/account/presentFirstKeyCredentialLifecycle';
+import { AccountDeletedLocalCleanupError, completeAccountDeletion } from '@/components/settings/account/accountDeletionLifecycle';
+import { Modal } from '@/modal';
+import { deleteCurrentAccount } from '@/sync/api/account/deleteCurrentAccount';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { t } from '@/text';
+import type { LazyActionAccountContext } from './actionAccountContext';
+
+/** Admission supplies the original Account; Auth still owns credential custody and teardown. */
+export function createUiAccountLifecycleAction(account: LazyActionAccountContext,
+    openRoute: (path: string) => void | Promise<void>): NonNullable<ActionExecutorDeps['accountLifecycleAction']> {
+    return async ({ actionId, input, context }) => {
+        account.assertCurrent();
+        if (input.accountId !== account.accountId || !areServerProfileIdentifiersEquivalent(input.serverId, account.serverId)) {
+            return { ok: false, errorCode: 'action_account_scope_changed', error: 'action_account_scope_changed' };
+        }
+        const auth = getCurrentAuth();
+        if (!auth) return { ok: false, errorCode: 'target_unavailable', error: 'target_unavailable' };
+        const target = { serverId: account.serverId, serverUrl: account.endpointUrl };
+        const leave = async () => {
+            if (areServerProfileIdentifiersEquivalent(getActiveServerSnapshot().serverId, account.serverId)) await openRoute('/');
+        };
+        const beforeCredentialRemoval = async () => {
+            account.assertCurrent();
+            context.signal?.throwIfAborted();
+        };
+        let completed = false;
+        if (actionId !== 'account.delete') {
+            await presentFirstKeyCredentialLifecycle({
+                run: () => actionId === 'account.credentials.forgetAll'
+                    ? auth.logout({ scope: 'all-credentials', beforeMutation: beforeCredentialRemoval })
+                    : auth.logout({ target, expectedCredentials: account.credentials, beforeMutation: beforeCredentialRemoval }),
+                onCompleted: async () => {
+                    completed = true;
+                    try { await leave(); }
+                    catch (error) {
+                        // Credential custody already settled; navigation cannot retract that receipt.
+                        console.warn('[accountLifecycle] Navigation failed after credential removal', error);
+                    }
+                },
+            });
+            return { ok: true, result: { status: completed
+                ? actionId === 'account.signOut' ? 'signed_out' : 'forgotten' : 'cancelled' } };
+        }
+        // The Action front door already confirmed or waived this exact deletion.
+        // Newly discovered resource responsibility uses that same user's policy.
+        const confirmManagedResourceRemoval = isApprovalRequiredByActionsSettings('account.delete',
+            normalizeActionsSettingsV1(context.actionsSettings), { surface: context.surface });
+        account.assertCurrent();
+        context.signal?.throwIfAborted();
+        let run = () => completeAccountDeletion({ target: account.accountLifetime, confirmManagedResourceRemoval,
+            deleteCurrentAccount: options => deleteCurrentAccount(account.credentials, { ...options, request: account.request }),
+            logout: options => auth.logout({ ...options, target, expectedCredentials: account.credentials }),
+            replace: () => leave(),
+        });
+        while (true) {
+            try {
+                await presentFirstKeyCredentialLifecycle({ run, onCompleted: () => { completed = true; } });
+                return { ok: true, result: { status: completed ? 'deleted' : 'cancelled' } };
+            } catch (error) {
+                if (!(error instanceof AccountDeletedLocalCleanupError)) throw error;
+                let retry = false;
+                await Modal.alertAsync(t('settingsAccount.deleteAccountCleanupFailedTitle'), t('settingsAccount.deleteAccountCleanupFailed'), [
+                    { text: t('common.cancel'), style: 'cancel' }, { text: t('common.retry'), onPress: () => { retry = true; } },
+                ]);
+                if (!retry) return { ok: true, result: { status: 'deleted_cleanup_pending' } };
+                run = error.retryLocalCleanup;
+            }
+        }
+    };
+}

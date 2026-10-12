@@ -24,15 +24,16 @@ describe('UI retained command output Actions', () => {
     it('lets the admitted open Action delegate presentation to its mounted client host', async () => {
         const home = await harness.addHome({ name: 'Home', serverUrl: 'https://home.test', accountId: 'alice' });
         const operation = { version: 1, operationId: 'command', revision: 1, actionId: 'projects.script.run', state: 'succeeded',
-            scope: { accountId: 'alice', machineId: 'worker' }, title: 'Command', createdAt: 1, settledAt: 2,
+            scope: { accountId: 'alice', machineId: 'worker' }, title: 'Command', createdAt: 1, startedAt: 1, settledAt: 2,
             cancellation: 'unsupported', domainRef: { kind: 'projectCommand', purpose: 'script', serverId: home,
                 machineId: 'worker', workspaceRefId: 'workspace', cwd: '/project', terminalId: 'terminal' } };
         boundary.machine.mockResolvedValueOnce({ kind: 'found', operation });
         const present = vi.fn(async () => {});
-        expect(await createDefaultActionExecutor({ actionOperationOpenOutput: present }).execute(
+        const result = await createDefaultActionExecutor({ actionOperationOpenOutput: present }).execute(
             'projects.execution.output.open', { serverId: home, machineId: 'worker', operationId: 'command' },
             { surface: 'ui', authority: 'present_user', serverId: home },
-        )).toMatchObject({ ok: true });
+        );
+        expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
         expect(present).toHaveBeenCalledWith(expect.objectContaining({ serverId: home, machineId: 'worker', operationId: 'command' }));
     });
 
@@ -50,7 +51,7 @@ describe('UI retained command output Actions', () => {
             { t: 'bytes', terminalId: 'terminal', seq: 2, byteOffset: 2, byteLength: 2, encoding: 'base64', data: encodeTerminalStreamBytes(new Uint8Array([0x98, 0x80])) },
         ], nextByteOffset: 4, availableByteOffset: 4, droppedBeforeByteOffset: 0, done: true };
         boundary.machine.mockResolvedValueOnce({ kind: 'found', operation }).mockResolvedValueOnce(output);
-        boundary.clipboard.mockResolvedValueOnce(undefined);
+        boundary.clipboard.mockResolvedValueOnce(true);
         const input = { serverId: custodyHome, machineId: 'custodian', operationId: 'command', byteOffset: 0 };
         const context = { surface: 'ui' } as const;
         expect(await createDefaultActionExecutor().execute('projects.execution.output.copy', input, context))
@@ -70,7 +71,7 @@ describe('UI retained command output Actions', () => {
             ], nextByteOffset: 9, availableByteOffset: 9, droppedBeforeByteOffset: 2, done: true,
         });
         boundary.machine.mockResolvedValueOnce({ kind: 'found', operation }).mockResolvedValueOnce(gapOutput);
-        boundary.clipboard.mockResolvedValueOnce(undefined);
+        boundary.clipboard.mockResolvedValueOnce(true);
         expect(await createDefaultActionExecutor().execute('projects.execution.output.copy', input, context))
             .toEqual({ ok: true, result: { kind: 'copied', output: gapOutput } });
         expect(boundary.clipboard).toHaveBeenLastCalledWith('\r\n[Output truncated]\r\n�� 😀');

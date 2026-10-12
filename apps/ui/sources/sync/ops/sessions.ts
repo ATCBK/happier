@@ -980,12 +980,19 @@ async function sendSessionPermissionResponse(
         answeringClientCategory: readAnsweringClientCategory(),
         turnId: resolveSessionPermissionTurnId(sessionId, params.id, params.turnId, options?.serverId),
     };
-    await sessionRpcWithPreferredSessionScope<void, SessionPermissionRespondRpcParamsV1>({
+    const result = await sessionRpcWithPreferredSessionScope<unknown, SessionPermissionRespondRpcParamsV1>({
         sessionId,
         ...(options?.serverId !== undefined ? { serverId: options.serverId } : {}),
         method: RPC_METHODS.SESSION_PERMISSION_RESPOND,
         payload: request,
     });
+    if (result && typeof result === 'object' && 'ok' in result && result.ok === false) {
+        const errorCode = 'errorCode' in result && typeof result.errorCode === 'string'
+            ? result.errorCode : 'permission_response_failed';
+        const error = 'errorMessage' in result && typeof result.errorMessage === 'string'
+            ? result.errorMessage : errorCode;
+        throw createRpcCallError({ error, errorCode });
+    }
     if (params.approved) return;
     // Keep deny's existing best-effort thinking recovery on the applied Home.
     if (options?.serverId !== undefined && !areServerProfileIdentifiersEquivalent(options.serverId, getActiveServerSnapshot().serverId)) return;

@@ -4,7 +4,7 @@ import { openExternalSessionCandidate, type ExternalSessionCandidateOpenState,
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { storage } from '@/sync/domains/state/storage';
 import { resolveVisibleMachinesForActiveServerFromState } from '@/sync/store/domains/machines/resolveMachinesForActiveServerFromState';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
 import { readConversationSearchSources } from './searchConversations';
 
 /** Native item identity remains native until the historical-import/Find owner resolves it. */
@@ -28,7 +28,7 @@ export async function openConversationSearchResult(input: Readonly<{
         const machine = resolveVisibleMachinesForActiveServerFromState(storage.getState(), { serverId: target.serverId })
             .find(value => value.id === target.machineId);
         return await openExternalSessionCandidate({ candidate: target.candidate, agentId: target.agentId, source,
-            actionsAllowed: true, offline: !machine || !isMachineOnline(machine), isSelectionCurrent: () => accountLifetime.isCurrent(),
+            actionsAllowed: true, offline: !machine || !isMachineReachable(accountLifetime.scope, machine), isSelectionCurrent: () => accountLifetime.isCurrent(),
             accountCurrentness: accountLifetime, state: input.state, onLinkingChange: input.onLinkingChange ?? (() => {}),
             resolveCurrentTarget: () => accountLifetime.isCurrent() ? target : null,
             find: { query: target.query, sourceItemId: target.sourceItemId }, openSession: input.openSession,

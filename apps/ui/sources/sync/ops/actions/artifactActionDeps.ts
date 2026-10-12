@@ -27,8 +27,8 @@ export function createUiArtifactAction(account: LazyActionAccountContext, option
 }>): NonNullable<ActionExecutorDeps['artifactAction']> {
     // Internal consumers retain exact acknowledged content; the public Action keeps its existing receipt shape.
     const createDocument = async (input: Parameters<LazyActionAccountContext['createArtifactDocument']>[0]) => {
-        const { artifactId, revision, previewUrl, previewError } = await account.createArtifactDocument(input);
-        return { artifactId, revision, ...(previewUrl ? { previewUrl } : {}), ...(previewError ? { previewError } : {}) };
+        const { artifactId, revision } = await account.createArtifactDocument(input);
+        return { artifactId, revision };
     };
     const readWorkspaceFile = async (context: ActionExecutorContext, path: string, signal?: AbortSignal) => {
         account.assertCurrent();
@@ -129,8 +129,7 @@ export function createUiArtifactAction(account: LazyActionAccountContext, option
                     const args = ArtifactActionInputSchemasV1[actionId].parse(input);
                     const result = await account.updateArtifactDocument({ ...args,
                         body: 'uploadPath' in args ? await readUpload(context, args, signal) : args.body, savedBy, signal });
-                    return result.ok ? { artifactId: args.artifactId, revision: result.revision,
-                        ...(result.previewUrl ? { previewUrl: result.previewUrl } : {}), ...(result.previewError ? { previewError: result.previewError } : {}) } : result;
+                    return result.ok ? { artifactId: args.artifactId, revision: result.revision } : result;
                 }
                 case 'artifact.delete': {
                     const args = ArtifactActionInputSchemasV1[actionId].parse(input);

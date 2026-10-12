@@ -10,12 +10,13 @@ export type MachineExecutionRunsListResult =
 
 export async function machineExecutionRunsList(
     machineId: string,
-    opts?: Readonly<{ serverId?: string | null }>,
+    opts?: Readonly<{ serverId?: string | null; accountId?: string | null }>,
 ): Promise<MachineExecutionRunsListResult> {
     try {
         const response = await machineRpcWithServerScope<unknown, {}>({
             machineId,
             serverId: opts?.serverId,
+            accountId: opts?.accountId,
             method: RPC_METHODS.DAEMON_EXECUTION_RUNS_LIST,
             payload: {},
         });

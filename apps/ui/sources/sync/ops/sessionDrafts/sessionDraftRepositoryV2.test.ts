@@ -17,6 +17,7 @@ import { SessionDraftEpochUnavailableError } from './sessionDraftEpochError';
 import { readNewSessionAttachmentDrafts, writeNewSessionAttachmentDrafts, clearAllNewSessionAttachmentDrafts } from '@/components/sessions/new/attachments/newSessionAttachmentDraftStore';
 import { resolveNewSessionDraftAttachmentFlowId } from '@/components/sessions/new/attachments/newSessionDraftAttachmentFlowId';
 import { deleteNewSessionDraftAfterConfirmation } from '@/components/sessions/drafts/deleteNewSessionDraftAfterConfirmation';
+import { materializeSessionDraftSocketWake } from '@/sync/runtime/orchestration/sessionDraftSyncRuntime';
 
 const scope = { serverId: 'server-a', accountId: 'account-a' } as const;
 const runAddress = { kind: 'run', sessionId: 'session-a', runId: 'run-a' } as const;
@@ -78,6 +79,234 @@ function createRemote(address: SessionDraftAddressV2) {
 }
 
 describe('session draft repository V2 addresses', () => {
+    it.each(['plain', 'e2ee'] as const)('opens only changed records when refreshing a 95-draft collection in the same cipher lifetime (%s)', async (accountMode) => {
+        const cipher = createSessionDraftCipher({
+            accountMode, accountCryptoMaterial: accountMode === 'plain' ? null : { type: 'dataKey', machineKey: new Uint8Array(32).fill(42) },
+            getSessionContext: () => null, randomBytes: length => new Uint8Array(length),
+        });
+        const author = createSessionDraftRepository({ storage: createMemoryStorage(), scope, cipher, syncEnabled: false });
+        const records = await Promise.all(Array.from({ length: 95 }, async (_, index) => {
+            const draftId = `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`;
+            author.writeNewSessionDraft({ scope, draftId, materializationIntent: 'userEdit', patch: { text: `Draft ${index}` } });
+            const snapshot = author.getSessionDraftSnapshot(scope, { kind: 'newSession', draftId })!;
+            return { address: snapshot.address, revision: 1, createdAt: index, updatedAt: index,
+                content: await cipher.seal(snapshot.address, snapshot.document) };
+        }));
+        let opens = 0;
+        const measuredCipher: SessionDraftRepositoryCipher = { ...cipher, open: async (...args) => { opens += 1; return cipher.open(...args); } };
+        const transport: SessionDraftRepositoryTransport = {
+            list: async () => ({ items: records, nextAfter: undefined }),
+            read: async () => ({ status: 'absent' }), mutate: async () => { throw new Error('Unexpected mutation'); },
+        };
+        const repository = createSessionDraftRepository({ storage: createMemoryStorage(), scope, cipher: measuredCipher, transport, syncEnabled: true });
+        const start = performance.now();
+        await repository.ensureSessionDraftRepositoryHydrated(scope);
+        const firstMs = performance.now() - start;
+        const before = repository.listNewSessionDraftProjections(scope);
+        const refreshStart = performance.now();
+        for (let index = 0; index < 10; index += 1) await repository.ensureSessionDraftRepositoryHydrated(scope);
+        const refreshMs = performance.now() - refreshStart;
+        expect(repository.listNewSessionDraftProjections(scope)).toBe(before);
+        console.info('[PERF-RENDER drafts]', JSON.stringify({ accountMode, drafts: records.length, refreshes: 10, opens, firstMs, refreshMs }));
+        expect(opens).toBe(95);
+        const record = records[0]!;
+        const document = author.getSessionDraftSnapshot(scope, record.address)!.document;
+        if (!('composer' in document)) throw new Error('Expected a New Session document');
+        author.writeNewSessionDraft({ scope, draftId: record.address.kind === 'newSession' ? record.address.draftId : '',
+            materializationIntent: 'userEdit', patch: { text: 'Remote edit' } });
+        record.revision += 1;
+        record.updatedAt += 1;
+        record.content = await cipher.seal(record.address, author.getSessionDraftSnapshot(scope, record.address)!.document);
+        await repository.ensureSessionDraftRepositoryHydrated(scope);
+        const refreshed = repository.getSessionDraftSnapshot(scope, record.address);
+        expect(refreshed && 'composer' in refreshed.document ? refreshed.document.composer.text.value : null).toBe('Remote edit');
+        expect(opens).toBe(96);
+        expect(repository.listNewSessionDraftProjections(scope)[1]).toBe(before[1]);
+        // A replacement cipher must revalidate even an unchanged server revision.
+        const replacement = createSessionDraftCipher({ accountMode: 'e2ee', accountCryptoMaterial: null,
+            getSessionContext: () => null, randomBytes: length => new Uint8Array(length) });
+        repository.configure({ scope, cipher: replacement, transport, syncEnabled: true });
+        await expect(repository.ensureSessionDraftRepositoryHydrated(scope)).rejects.toThrow('Unable to open');
+        expect(document.composer.text.value).toBe('Draft 0');
+    });
+    it.each(['present', 'deleted'] as const)('refreshes a newer socket invalidation after an older exact read settles (%s)', async (status) => {
+        const address = { kind: 'newSession' as const, draftId: '00000000-0000-4000-8000-000000000991' };
+        const remote = createRemote(address);
+        const cipher = createSessionDraftCipher({
+            accountMode: 'plain', accountCryptoMaterial: null,
+            getSessionContext: () => null, randomBytes: length => new Uint8Array(length),
+        });
+        const author = createSessionDraftRepository({ storage: createMemoryStorage(), scope, transport: remote.transport, cipher, syncEnabled: true });
+        author.writeNewSessionDraft({ scope, draftId: address.draftId, materializationIntent: 'userEdit', patch: { text: 'before remote change' } });
+        expect(await author.flushSessionDraft({ scope, address })).toEqual({ status: 'clean' });
+        const observer = createSessionDraftRepository({ storage: createMemoryStorage(), scope, transport: remote.transport, cipher, syncEnabled: true });
+        const readStarted = createDeferred<void>();
+        const readHeld = createDeferred<void>();
+        const originalRead = remote.transport.read;
+        let first = true;
+        remote.transport.read = async target => {
+            const snapshot = await originalRead(target);
+            if (first) { first = false; readStarted.resolve(); await readHeld.promise; }
+            return snapshot;
+        };
+        const admission = observer.materializeExact(scope, address);
+        await readStarted.promise;
+        if (status === 'present') {
+            author.writeNewSessionDraft({ scope, draftId: address.draftId, materializationIntent: 'userEdit', patch: { text: 'newer remote change' } });
+            expect(await author.flushSessionDraft({ scope, address })).toEqual({ status: 'clean' });
+        } else {
+            expect(await author.deleteSessionDraft({ scope, address })).toBe(true);
+        }
+        const revision = remote.readCurrent()!.revision;
+        const wake = materializeSessionDraftSocketWake({
+            payload: { type: 'session-draft-v2-updated', v: 2, sessionDraftV2: true, address, revision, status },
+            capturedScope: scope, readActiveScope: () => scope,
+            materializeExact: observer.materializeExact.bind(observer),
+        });
+        // Equivalent duplicate delivery and foreground demand share the same fresh follow-up.
+        const duplicateWake = materializeSessionDraftSocketWake({
+            payload: { type: 'session-draft-v2-updated', v: 2, sessionDraftV2: true, address, revision, status },
+            capturedScope: scope, readActiveScope: () => scope,
+            materializeExact: observer.materializeExact.bind(observer),
+        });
+        const foreground = observer.materializeExact(scope, address);
+        readHeld.resolve();
+        expect(await wake).toBe(true);
+        expect(await duplicateWake).toBe(true);
+        await Promise.all([admission, foreground]);
+        const afterWake = observer.getSessionDraftSnapshot(scope, address);
+        if (status === 'present') {
+            expect(afterWake?.document.composer.text.value).toBe('newer remote change');
+        } else {
+            expect(afterWake).toBeNull();
+        }
+        expect(originalRead).toHaveBeenCalledTimes(2);
+    });
+
+    it.each([
+        ['collection', 'socket wake'], ['scoped exact read', 'socket wake'],
+        ['collection', 'local delete'], ['scoped exact read', 'local delete'],
+    ] as const)('does not resurrect a tombstoned draft from a %s captured before its %s', async (path, deletion) => {
+        const address = { kind: 'newSession' as const, draftId: '00000000-0000-4000-8000-000000000992' };
+        const remote = createRemote(address);
+        const cipher = plainCipher();
+        const author = createSessionDraftRepository({ storage: createMemoryStorage(), scope, transport: remote.transport, cipher, syncEnabled: true });
+        author.writeNewSessionDraft({ scope, draftId: address.draftId, materializationIntent: 'userEdit', patch: { text: 'deleted remotely' } });
+        await author.flushSessionDraft({ scope, address });
+        const observer = createSessionDraftRepository({ storage: createMemoryStorage(), scope, transport: remote.transport, cipher, syncEnabled: true });
+        await observer.materializeExact(scope, address);
+        const listed = createDeferred<void>();
+        const release = createDeferred<void>();
+        const current = remote.readCurrent()!;
+        if (!current.content) throw new Error('Expected present captured record');
+        const capturedRecord = { ...current, content: current.content, address };
+        if (path === 'collection') {
+            vi.mocked(remote.transport.list).mockImplementationOnce(async () => {
+                listed.resolve();
+                await release.promise;
+                return { items: [capturedRecord], nextAfter: undefined };
+            });
+        } else {
+            vi.mocked(remote.transport.read).mockImplementationOnce(async () => {
+                listed.resolve();
+                await release.promise;
+                return { status: 'present', record: capturedRecord };
+            });
+        }
+        const staleRead = path === 'collection'
+            ? observer.ensureSessionDraftRepositoryHydrated(scope)
+            : observer.materializeExactWithScopedRuntime({ scope, address, runtime: { cipher, transport: remote.transport }, isCurrent: () => true });
+        await listed.promise;
+        if (deletion === 'local delete') {
+            expect(await observer.deleteSessionDraft({ scope, address })).toBe(true);
+        } else {
+            expect(await author.deleteSessionDraft({ scope, address })).toBe(true);
+            expect(await materializeSessionDraftSocketWake({
+                payload: { type: 'session-draft-v2-updated', v: 2, sessionDraftV2: true, address,
+                    revision: remote.readCurrent()!.revision, status: 'deleted' },
+                capturedScope: scope, readActiveScope: () => scope,
+                materializeExact: observer.materializeExact.bind(observer),
+            })).toBe(true);
+        }
+        expect(observer.getSessionDraftSnapshot(scope, address)).toBeNull();
+        if (path === 'scoped exact read') {
+            // A configured active-Home switch does not retire the captured Home
+            // authority of this independently current scoped operation.
+            observer.configure({ scope: { serverId: 'other-server', accountId: 'other-account' },
+                cipher, syncEnabled: true, transport: createRemote(address).transport });
+        }
+        release.resolve();
+        await staleRead;
+        expect(observer.getSessionDraftSnapshot(scope, address)).toBeNull();
+        // A real later revision is still adoptable; the tombstone is an ordering
+        // guard, not a permanent prohibition on re-creating this draft.
+        const deletedRecord = remote.readCurrent()!;
+        remote.replaceCurrent({ ...deletedRecord, revision: deletedRecord.revision + 1, content: capturedRecord.content });
+        await observer.materializeExactWithScopedRuntime({ scope, address, runtime: { cipher, transport: remote.transport }, isCurrent: () => true });
+        expect(observer.getSessionDraftSnapshot(scope, address)?.document.composer.text.value).toBe('deleted remotely');
+    });
+
+    it('shares an in-flight exact read between foreground surfaces and reads fresh again afterward', async () => {
+        const address = { kind: 'newSession' as const, draftId: '00000000-0000-4000-8000-000000000904' };
+        const readStarted = createDeferred<void>();
+        const readHeld = createDeferred<void>();
+        const remote = createRemote(address);
+        vi.mocked(remote.transport.read).mockImplementation(async () => {
+            readStarted.resolve();
+            await readHeld.promise;
+            return { status: 'absent' };
+        });
+        const repository = createSessionDraftRepository({
+            storage: createMemoryStorage(), scope, cipher: plainCipher(), syncEnabled: true, transport: remote.transport,
+        });
+        const first = repository.materializeExact(scope, address);
+        await readStarted.promise;
+        const second = repository.materializeExact(scope, address);
+        readHeld.resolve();
+        await Promise.all([first, second]);
+        expect(remote.transport.read).toHaveBeenCalledTimes(1);
+        await repository.materializeExact(scope, address);
+        expect(remote.transport.read).toHaveBeenCalledTimes(2);
+        vi.mocked(remote.transport.read).mockRejectedValueOnce(new Error('offline'));
+        const failed = await Promise.allSettled([
+            repository.materializeExact(scope, address), repository.materializeExact(scope, address),
+        ]);
+        expect(failed.map(result => result.status)).toEqual(['rejected', 'rejected']);
+        expect(remote.transport.read).toHaveBeenCalledTimes(3);
+        await repository.materializeExact(scope, address);
+        expect(remote.transport.read).toHaveBeenCalledTimes(4);
+    });
+
+    it('does not share foreground reads across a replaced Account runtime or let its late read publish', async () => {
+        const address = { kind: 'newSession' as const, draftId: '00000000-0000-4000-8000-000000000905' };
+        const scopeB = { serverId: 'server-a', accountId: 'account-b' };
+        const remoteA = createRemote(address);
+        const remoteB = createRemote(address);
+        const cipher = plainCipher();
+        const writer = createSessionDraftRepository({ storage: createMemoryStorage(), scope, cipher, syncEnabled: true, transport: remoteA.transport });
+        writer.writeNewSessionDraft({ scope, draftId: address.draftId, patch: { text: 'Account A private text' }, materializationIntent: 'userEdit' });
+        await writer.flushSessionDraft({ scope, address });
+        const readStarted = createDeferred<void>();
+        const readHeld = createDeferred<void>();
+        const originalRead = remoteA.transport.read;
+        remoteA.transport.read = async target => {
+            const result = await originalRead(target);
+            readStarted.resolve();
+            await readHeld.promise;
+            return result;
+        };
+        const repository = createSessionDraftRepository({ storage: createMemoryStorage(), scope, cipher, syncEnabled: true, transport: remoteA.transport });
+        const oldRead = repository.ensureSessionDraftAddressesHydrated(scope, [address]);
+        await readStarted.promise;
+        repository.configure({ scope: scopeB, cipher, syncEnabled: true, transport: remoteB.transport });
+        await expect(repository.ensureSessionDraftAddressesHydrated(scopeB, [address])).resolves.toBe(true);
+        await expect(repository.ensureSessionDraftAddressesHydrated(scope, [address])).resolves.toBe(false);
+        readHeld.resolve();
+        await expect(oldRead).resolves.toBe(false);
+        expect(repository.getSessionDraftSnapshot(scope, address)).toBeNull();
+        expect(repository.getSessionDraftSnapshot(scopeB, address)).toBeNull();
+    });
+
     it.each(['local', 'scoped', 'synchronized'] as const)('reclaims only authoritatively removed New Session attachment sources (%s)', async (mode) => {
         clearAllNewSessionAttachmentDrafts();
         const address = { kind: 'newSession' as const, draftId: '00000000-0000-4000-8000-000000000801' };

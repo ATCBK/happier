@@ -63,13 +63,12 @@ describe('Usage model prices through captured UI Account Actions', () => {
                 result: { provenance: { revision: 'refreshed' } } });
             await expect.poll(() => read().costFactTotals?.find(fact => fact.kind === 'api_equivalent')?.amountUsd).toBe(8);
             expect(read().accounting?.totals.cost).toMatchObject(cost);
+            denied = true;
+            expect(await executor.execute('usage.prices.get', {}, caller)).toMatchObject({ ok: false, errorCode: 'denied' });
+            denied = false; retireOnRead = true;
+            await expect(executor.execute('usage.prices.get', {}, caller))
+                .rejects.toMatchObject({ code: 'action_account_scope_changed' });
+            expect(home.requests.every(request => !String(JSON.stringify(request.body)).includes('usageModelPriceOverridesV1'))).toBe(true);
         } finally { release(); actionAccount.dispose(); }
-        denied = true;
-        expect(await executor.execute('usage.prices.get', {}, caller)).toMatchObject({ ok: false, errorCode: 'denied' });
-        denied = false; retireOnRead = true;
-        const retired = await executor.execute('usage.prices.get', {}, caller);
-        expect(retired.ok).toBe(false);
-        expect(retired).not.toHaveProperty('result');
-        expect(home.requests.every(request => !String(JSON.stringify(request.body)).includes('usageModelPriceOverridesV1'))).toBe(true);
     });
 });

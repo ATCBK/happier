@@ -104,6 +104,38 @@ function uuid(value: number): string {
 }
 
 describe('sessionDraftRepository', () => {
+    it('edits a retained project-open draft after added stored document fields', () => {
+        const storage = createMemoryStorage();
+        const draftId = uuid(991);
+        const repository = createSessionDraftRepository({ storage, cipher: plainCipher(), syncEnabled: false, randomUUID: () => uuid(992) });
+        repository.writeProjectOpenDraft({ scope, draftId, patch: { selection: { serverId: scope.serverId } } });
+        const [key, raw] = [...storage.values.entries()][0]!;
+        const persisted = JSON.parse(raw);
+        const replica = Object.values(persisted.replicas)[0] as { localRawDocument: Record<string, unknown> };
+        replica.localRawDocument.retired = true;
+        storage.values.set(key, JSON.stringify(persisted));
+        const restored = createSessionDraftRepository({ storage, cipher: plainCipher(), syncEnabled: false, randomUUID: () => uuid(993) });
+        restored.writeProjectOpenDraft({ scope, draftId, patch: { result: { kind: 'outcomeUnknown' } } });
+        expect(restored.getSessionDraftSnapshot(scope, { kind: 'projectOpen', draftId })?.document)
+            .toMatchObject({ result: { value: { kind: 'outcomeUnknown' } } });
+    });
+    it('reads stored SCM draft fields after an added field without admitting it on new writes', () => {
+        const storage = createMemoryStorage();
+        const repository = createSessionDraftRepository({ storage, cipher: plainCipher(), syncEnabled: false, randomUUID: () => uuid(990) });
+        const pullRequest = { title: 'Keep draft', body: 'Review', draft: true, base: null };
+        repository.writeExistingSessionDraft({ scope, sessionId: 'session-a', patch: { scmPullRequestV1: pullRequest } });
+        const [key, raw] = [...storage.values.entries()][0]!;
+        const persisted = JSON.parse(raw);
+        const replica = Object.values(persisted.replicas)[0] as { localRawDocument: { extensions: { happier: { scmPullRequestV1: { value: Record<string, unknown> } } } } };
+        replica.localRawDocument.extensions.happier.scmPullRequestV1.value.retired = true;
+        storage.values.set(key, JSON.stringify(persisted));
+        const restored = createSessionDraftRepository({ storage, cipher: plainCipher(), syncEnabled: false });
+        expect(readSessionScmDraftFromDraft(restored.getSessionDraftSnapshot(scope, sessionAddress)?.document).pullRequest)
+            .toEqual(pullRequest);
+        const newPullRequestWithRetiredField = { ...pullRequest, retired: true };
+        expect(() => restored.writeExistingSessionDraft({ scope, sessionId: 'session-a',
+            patch: { scmPullRequestV1: newPullRequestWithRetiredField } })).toThrow();
+    });
     it('preserves unreadable retained Open custody instead of seeding over it', () => {
         const storage = createMemoryStorage();
         const repository = createSessionDraftRepository({ storage, cipher: plainCipher(), randomUUID: () => uuid(11), syncEnabled: false });
@@ -368,6 +400,27 @@ describe('sessionDraftRepository', () => {
         expect(readSessionDiscussionSelectionSourceFromDraft(
             repository.getSessionDraftSnapshot(scope, { kind: 'session', sessionId: 'session-a' })?.document,
         )).toBeNull();
+    });
+
+    it('retains next-prompt permission intent with the draft and clears only the admitted choice', () => {
+        const persisted = createMemoryStorage();
+        const repository = createSessionDraftRepository({ storage: persisted, cipher: plainCipher(), syncEnabled: false });
+        repository.writeExistingSessionDraft({ scope, sessionId: 'session-a', patch: { text: 'Hello', nextPromptPermissionMode: 'read-only' } });
+        const read = () => repository.getSessionDraftSnapshot(scope, sessionAddress)?.document.extensions.happier?.nextPromptPermissionModeV1?.value;
+        expect(read()).toBe('read-only');
+        const restored = createSessionDraftRepository({ storage: persisted, cipher: plainCipher(), syncEnabled: false });
+        expect(restored.getSessionDraftSnapshot(scope, sessionAddress)?.document.extensions.happier?.nextPromptPermissionModeV1?.value)
+            .toBe('read-only');
+        const accepted = repository.captureSessionDraftCurrentness({ scope, address: sessionAddress });
+        // Another mounted composer edits the same draft while this Send is in flight.
+        repository.writeExistingSessionDraft({ scope, sessionId: 'session-a', patch: { nextPromptPermissionMode: 'yolo' } });
+        repository.clearSessionDraftCurrentnessLocal({ scope, address: sessionAddress, currentness: accepted,
+            fieldIds: ['extensions.happier.nextPromptPermissionModeV1'] });
+        expect(read()).toBe('yolo');
+        const latest = repository.captureSessionDraftCurrentness({ scope, address: sessionAddress });
+        repository.clearSessionDraftCurrentnessLocal({ scope, address: sessionAddress, currentness: latest,
+            fieldIds: ['extensions.happier.nextPromptPermissionModeV1'] });
+        expect(read()).toBeUndefined();
     });
 
     it('keeps the Git pane drafts on the Session draft beside the composer, outside the composer lifecycle', () => {
@@ -1085,6 +1138,12 @@ describe('sessionDraftRepository', () => {
                 },
             },
         });
+
+        const [key, raw] = [...storage.values.entries()][0]!;
+        const persisted = JSON.parse(raw);
+        const replica = Object.values(persisted.replicas)[0] as { localSupplement: { discussionMutationAttempt: { currentness: { address: Record<string, unknown> } } } };
+        replica.localSupplement.discussionMutationAttempt.currentness.address.retired = true;
+        storage.values.set(key, JSON.stringify(persisted));
 
         const restored = createSessionDraftRepository({ storage, syncEnabled: false, cipher: plainCipher() });
         expect(restored.getSessionDraftSnapshot(scope, address)?.localSupplement.discussionMutationAttempt).toEqual({
@@ -2389,7 +2448,99 @@ describe('sessionDraftRepository', () => {
         expect(vi.mocked(remote.transport.mutate)).toHaveBeenCalledTimes(writesBeforeAbsence);
     });
 
-    it('publishes a hydrated remote snapshot atomically after every listed record is installed', async () => {
+    it.each(['first hydration', 'refresh'] as const)('retains a draft created and edited during %s while applying other-device deletion', async (phase) => {
+        const address = { kind: 'newSession', draftId: uuid(290) } as const;
+        const remote = createRemote(undefined, address);
+        const deletedRemote = createRemote();
+        const storage = createMemoryStorage();
+        const transport = { ...remote.transport, mutate: (request: Parameters<SessionDraftRepositoryTransport['mutate']>[0]) =>
+            (request.address.kind === 'session' ? deletedRemote : remote).transport.mutate(request) };
+        const repository = createSessionDraftRepository({ storage, scope, transport,
+            syncEnabled: true, cipher: plainCipher() });
+        if (phase === 'refresh') await repository.ensureSessionDraftRepositoryHydrated(scope);
+        // This previous synced row really disappeared on another device.
+        repository.writeExistingSessionDraft({ scope, sessionId: sessionAddress.sessionId, patch: { text: 'previous synced row' } });
+        await repository.flushSessionDraft({ scope, address: sessionAddress });
+        const listed = createDeferred<void>();
+        const release = createDeferred<void>();
+        vi.mocked(remote.transport.list).mockImplementation(async () => {
+            listed.resolve();
+            await release.promise;
+            return { items: [], nextAfter: undefined };
+        });
+        vi.mocked(remote.transport.read).mockResolvedValue({ status: 'absent' });
+        const hydration = repository.ensureSessionDraftRepositoryHydrated(scope);
+        await listed.promise;
+        repository.writeNewSessionDraft({ scope, draftId: address.draftId, patch: { text: 'handoff source' }, materializationIntent: 'userEdit' });
+        repository.writeNewSessionDraft({ scope, draftId: address.draftId, patch: { text: 'edit during hydration' }, materializationIntent: 'userEdit' });
+        release.resolve();
+        await hydration;
+        expect(repository.getSessionDraftSnapshot(scope, address)?.document.composer.text.value).toBe('edit during hydration');
+        expect(repository.getSessionDraftSnapshot(scope, sessionAddress)).toBeNull();
+        const reopened = createSessionDraftRepository({ storage, cipher: plainCipher(), syncEnabled: false });
+        expect(reopened.getSessionDraftSnapshot(scope, address)?.document.composer.text.value).toBe('edit during hydration');
+    });
+
+    it.each(['exact wake', 'first hydration', 'refresh'] as const)('ignores stale absence after a local save completed during %s', async (path) => {
+        const address = { kind: 'newSession', draftId: uuid(291) } as const;
+        const remote = createRemote(undefined, address);
+        const repository = createSessionDraftRepository({ storage: createMemoryStorage(), scope, transport: remote.transport,
+            syncEnabled: true, cipher: plainCipher() });
+        if (path === 'refresh') await repository.ensureSessionDraftRepositoryHydrated(scope);
+        repository.writeNewSessionDraft({ scope, draftId: address.draftId, patch: { text: 'first local text' }, materializationIntent: 'userEdit' });
+        const readStarted = createDeferred<void>();
+        const release = createDeferred<void>();
+        vi.mocked(remote.transport.read).mockImplementationOnce(async () => {
+            readStarted.resolve();
+            await release.promise;
+            return { status: 'absent' };
+        });
+        const hydration = path === 'exact wake'
+            ? repository.materializeExact(scope, address)
+            : repository.ensureSessionDraftRepositoryHydrated(scope);
+        await readStarted.promise;
+        repository.writeNewSessionDraft({ scope, draftId: address.draftId, patch: { text: 'saved during the read' }, materializationIntent: 'userEdit' });
+        await repository.flushSessionDraft({ scope, address });
+        expect(repository.getSessionDraftSnapshot(scope, address)?.status).toBe('clean');
+        release.resolve();
+        await hydration;
+        expect(repository.getSessionDraftSnapshot(scope, address)?.document.composer.text.value).toBe('saved during the read');
+        // A subsequent fresh absence must still remove the now-synced draft.
+        vi.mocked(remote.transport.read).mockResolvedValue({ status: 'absent' });
+        await repository.ensureSessionDraftRepositoryHydrated(scope);
+        expect(repository.getSessionDraftSnapshot(scope, address)).toBeNull();
+    });
+
+    it.each(['first hydration', 'refresh'] as const)('preserves a save acknowledged while the %s collection request is held', async (phase) => {
+        const address = { kind: 'newSession', draftId: uuid(294) } as const;
+        const remote = createRemote(undefined, address);
+        const repository = createSessionDraftRepository({ storage: createMemoryStorage(), scope, transport: remote.transport,
+            syncEnabled: true, cipher: plainCipher() });
+        if (phase === 'refresh') {
+            repository.writeNewSessionDraft({ scope, draftId: address.draftId, patch: { text: 'previously synced' }, materializationIntent: 'userEdit' });
+            await repository.flushSessionDraft({ scope, address });
+        }
+        const requested = createDeferred<void>();
+        const release = createDeferred<void>();
+        vi.mocked(remote.transport.list).mockImplementationOnce(async () => {
+            requested.resolve();
+            await release.promise;
+            return { items: [], nextAfter: undefined };
+        });
+        const hydration = repository.ensureSessionDraftRepositoryHydrated(scope);
+        await requested.promise;
+        repository.writeNewSessionDraft({ scope, draftId: address.draftId, patch: { text: 'acknowledged after snapshot request' }, materializationIntent: 'userEdit' });
+        await repository.flushSessionDraft({ scope, address });
+        // The snapshot/exact follow-up still lacks the newly acknowledged row.
+        vi.mocked(remote.transport.read).mockResolvedValue({ status: 'absent' });
+        release.resolve();
+        await hydration;
+        expect(repository.getSessionDraftSnapshot(scope, address)?.document.composer.text.value).toBe('acknowledged after snapshot request');
+        await repository.ensureSessionDraftRepositoryHydrated(scope);
+        expect(repository.getSessionDraftSnapshot(scope, address)).toBeNull();
+    });
+
+    it('opens listed drafts concurrently and publishes the hydrated snapshot atomically', async () => {
         const cipher = plainCipher();
         const otherAddress = { kind: 'session', sessionId: 'session-b' } as const;
         const firstDocument = createSessionDocument('first', uuid(230));
@@ -2421,7 +2572,22 @@ describe('sessionDraftRepository', () => {
             );
         });
 
-        await repository.ensureSessionDraftRepositoryHydrated(scope);
+        const firstOpen = createDeferred<void>();
+        const opened: SessionDraftAddressV2[] = [];
+        const originalOpen = cipher.open;
+        cipher.open = async (address, content) => {
+            opened.push(address);
+            if (address.kind === 'session' && address.sessionId === sessionAddress.sessionId) await firstOpen.promise;
+            return originalOpen(address, content);
+        };
+        const hydration = repository.ensureSessionDraftRepositoryHydrated(scope);
+        try {
+            await vi.waitFor(() => expect(opened).toEqual([sessionAddress, otherAddress]));
+            expect(observedSnapshots).toEqual([]);
+        } finally {
+            firstOpen.resolve();
+            await hydration;
+        }
 
         expect(observedSnapshots).toEqual([true]);
         expect(transport.read).not.toHaveBeenCalled();

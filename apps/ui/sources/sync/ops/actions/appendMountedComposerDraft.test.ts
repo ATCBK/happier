@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as React from 'react';
+import { act } from 'react-test-renderer';
 
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -25,6 +27,11 @@ const { registerSessionComposerPresentationTarget } = await import('@/components
 const { restoreConnectionToActiveServer, disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
 const { TokenStorage } = await import('@/auth/storage/tokenStorage');
 const { appendMountedComposerDraft } = await import('./appendMountedComposerDraft');
+const { renderScreen } = await import('@/dev/testkit');
+const { SessionAuthoringComposer } = await import('@/components/sessions/authoring/SessionAuthoringComposer');
+const { createComposerTextStore, useComposerTextValue } = await import('@/components/sessions/agentInput/composerTextStore');
+const { usePromptPickerController } = await import('@/components/sessions/agentInput/commandMenu/usePromptPickerController');
+const { useDraft } = await import('@/hooks/session/useDraft');
 
 let scope: { serverId: string; accountId: string };
 let unmount: (() => void) | undefined;
@@ -62,6 +69,48 @@ function mountComposer(text: string, editable = true) {
 }
 
 describe('appendMountedComposerDraft', () => {
+    it('preserves picker insertion when Make repeatable appends through the mounted draft transaction', async () => {
+        const { ref, owner } = mountComposer('');
+        const textStore = createComposerTextStore('');
+        const inputRef = React.createRef<import('@/components/ui/forms/MultiTextInput').MultiTextInputHandle>();
+        let picker!: ReturnType<typeof usePromptPickerController>;
+        const lifetime = { scope, isCurrent: () => true, onRetire: () => ({ dispose() {} }) };
+        const session = getStorage().getState().sessions[ref.sessionId];
+        function Composer(props: Readonly<{ bound: boolean }>) {
+            const draft = useDraft(ref.sessionId, textStore, {
+                accountLifetime: props.bound ? lifetime : null, session, active: false,
+            });
+            const value = useComposerTextValue(textStore);
+            const stateRef = React.useRef({ text: '', selection: { start: 0, end: 0 } });
+            picker = usePromptPickerController({
+                composerKey: ref.sessionId, editable: true, canSend: true, inputRef, stateRef, send: () => {},
+            });
+            return React.createElement(SessionAuthoringComposer, {
+                ref: inputRef, composerRef: ref, value, onChangeText: draft.setDraftValue,
+                onStateChange: (state) => { stateRef.current = state; },
+            });
+        }
+        const screen = await renderScreen(React.createElement(Composer, { bound: false }));
+        try {
+            // The composer remains mounted while its exact Account draft binding becomes available.
+            await screen.update(React.createElement(Composer, { bound: true }));
+            await act(async () => { expect(picker.open()).toBe(true); });
+            await act(async () => {
+                expect(await picker.apply(async () => ({ text: 'Picker inserted request' }), 'insert')).toBe(true);
+            });
+            expect(inputRef.current?.getText()).toBe('Picker inserted request');
+            await act(async () => {
+                expect(await appendMountedComposerDraft({ scope, ref, text: 'Assistant workflow seed' })).toBe(true);
+            });
+            const expected = 'Picker inserted request\nAssistant workflow seed';
+            expect(owner.read().document.text).toBe(expected);
+            expect(textStore.getPrompt()).toBe(expected);
+            expect(inputRef.current?.getText()).toBe(expected);
+        } finally {
+            await screen.unmount();
+        }
+    });
+
     it('preserves unsent text, appends again from the current revision, and focuses without sending', async () => {
         const { ref, owner, focus } = mountComposer('Keep my unsent text');
         expect(await appendMountedComposerDraft({ scope, ref, text: 'First request' })).toBe(true);

@@ -28,6 +28,7 @@ import { UsageQueryBatchResultSchema } from '@happier-dev/protocol/usage/resolve
 import { createUiMcpServerActionExecuteV1 } from './mcpServerActionDeps';
 import { MCP_SERVER_CATALOG_ROWS_ROUTE_V1, McpServerCatalogRowMutationV1Schema, McpServerCatalogV1Schema } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
 import { UsageCoachApplyResultSchema } from '@happier-dev/protocol/usage/coach/coachActions';
+import { decodeUsageQueryResource, getUsageQueryResourceStore } from '@/sync/api/account/usageQueryResource';
 
 // HTTP, device credential storage and the native theme runtime are substituted boundaries.
 const runtimeFetch = vi.hoisted(() => vi.fn());
@@ -44,13 +45,13 @@ const json = (value: unknown, status = 200) => new Response(JSON.stringify(value
 afterEach(() => { runtimeFetch.mockReset(); vi.restoreAllMocks(); });
 
 describe('scoped Account workflow Artifact operations', () => {
-    it('queries retained unused MCP evidence, conditionally applies, exactly undoes and refuses an intervening binding edit', async () => {
+    it('queries retained unused MCP evidence and applies and undoes rules through the canonical Action', async () => {
         const previous = storage.getState();
         const home = await upsertAndActivateServer({ serverUrl: 'https://coach-binding.test', scope: 'tab' });
         const token = `header.${encodeBase64(new TextEncoder().encode(JSON.stringify({ sub: 'coach-account' })), 'base64url')}.signature`;
         vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token });
         const actionsSettings = ActionsSettingsV1Schema.parse({ v: 1, approvalWaivedSurfaces: {
-            'usage.coach.apply': ['ui'], 'usage.coach.undo': ['ui'], 'mcp.bindings.disable': ['ui'], 'mcp.bindings.enable': ['ui'],
+            'usage.coach.apply': ['ui'], 'usage.coach.undo': ['ui'], 'mcp.rules.set': ['ui'],
         } });
         let catalog = McpServerCatalogV1Schema.parse({ v: 1,
             servers: [{ id: 'server', name: 'unused', transport: 'stdio', stdio: { command: 'fixture-mcp', args: [] }, env: {}, createdAt: 1, updatedAt: 10 }],
@@ -104,6 +105,7 @@ describe('scoped Account workflow Artifact operations', () => {
         });
         storage.setState({ settingsScope: { serverId: home.id, accountId: 'coach-account' }, settingsVersion: 1 });
         const account = await captureLazyActionAccountContext(home.id);
+        let releaseUsage: (() => void) | undefined;
         try {
             const executor = createActionExecutor(createActionExecutorBoundaryFixture({
                 usageActions: createUiUsageActionPorts(account), mcpServerAction: createUiMcpServerActionExecuteV1(account),
@@ -112,13 +114,21 @@ describe('scoped Account workflow Artifact operations', () => {
             }));
             const context = { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' }, actionsSettings } as const;
             const query = normalizeUsageQuery({ period: { startMs: 0, endMs: 1000 }, session: 'coach-session', timeZoneOffsetMinutes: 0 });
+            const entry = getUsageQueryResourceStore(account).getEntry({ hostRead: 'usage.query', input: { queries: [query] } });
+            releaseUsage = entry.subscribe(() => {}, true);
             const find = async () => {
+                // The page owner refreshes changed native/catalog evidence;
+                // the one-shot Action consumes that exact admitted snapshot.
+                await entry.refresh();
                 const result = await executor.execute('usage.query', { queries: [query] }, context);
                 const batch = UsageQueryBatchResultSchema.parse(result.ok ? result.result : undefined);
+                expect(batch).toEqual(decodeUsageQueryResource(entry.getSnapshot().value!));
+                expect(entry.getSnapshot().subscription).toBe('live');
                 return batch.results[0]!.coach!.findings.find(row => row.detectorId === 'mcp_overhead');
             };
             let finding = await find();
-            expect(finding).toMatchObject({ remedy: { kind: 'mcp_binding', bindingId: 'binding', enabled: false, expectedRevision: 3 } });
+            expect(finding).toMatchObject({ remedy: { kind: 'mcp_binding', bindingId: 'binding', serverId: 'server',
+                target: { t: 'machine', machineId: 'machine' }, enabled: false, expectedRevision: 3 } });
             if (!finding) throw new Error('Expected witnessed unused binding finding from retained HTTP evidence');
             const refused = await executor.execute('usage.coach.apply', { query, evidenceKey: finding.evidenceKey }, {
                 ...context, actionsSettings: ActionsSettingsV1Schema.parse({ v: 1 }),
@@ -134,7 +144,8 @@ describe('scoped Account workflow Artifact operations', () => {
             };
             const reversal = await apply(finding.evidenceKey);
             expect(catalog.bindings[0]!.enabled).toBe(false);
-            expect(reversal).toMatchObject({ kind: 'mcp_binding', owner: { bindingId: 'binding', before: true, applied: false, revision: 4 } });
+            expect(reversal).toMatchObject({ kind: 'mcp_binding', owner: { serverId: 'server',
+                rules: [{ id: 'binding', enabled: false }], previous: [{ id: 'binding', enabled: true }] } });
             // A successful remedy can remove its current proposal; its owner receipt still admits Undo.
             expect((await find())?.remedy ?? null).toBeNull();
             expect(await executor.execute('usage.coach.undo', { query, evidenceKey: finding.evidenceKey, reversal }, context))
@@ -146,11 +157,12 @@ describe('scoped Account workflow Artifact operations', () => {
             finding = await find();
             if (!finding) throw new Error('Expected fresh binding witness after Undo');
             const staleReversal = await apply(finding.evidenceKey);
-            expect(await executor.execute('mcp.bindings.enable', { bindingId: 'binding' }, context)).toMatchObject({ ok: true, result: { status: 'updated' } });
-            const edited = JSON.stringify(catalog);
+            const intervening = await executor.execute('mcp.rules.set', { items: [{ serverId: 'server' }],
+                change: { kind: 'write', write: { place: { t: 'machine', machineId: 'machine' }, state: 'on' } } }, context);
+            expect(intervening, JSON.stringify(intervening)).toMatchObject({ ok: true, result: { ok: true } });
             expect(await executor.execute('usage.coach.undo', { query, evidenceKey: finding.evidenceKey, reversal: staleReversal }, context))
-                .toMatchObject({ ok: false, errorCode: 'coach_owner_refused', details: { status: 'conflict' } });
-            expect(JSON.stringify(catalog)).toBe(edited);
+                .toMatchObject({ ok: true, result: { kind: 'undone' } });
+            expect(catalog.bindings[0]!.enabled).toBe(true);
             calls = 1;
             expect(await find()).toBeUndefined();
             calls = 0;
@@ -160,7 +172,7 @@ describe('scoped Account workflow Artifact operations', () => {
             catalog = { ...catalog, servers: catalog.servers.map(server => ({ ...server, updatedAt: 11 })) };
             revision += 1;
             expect((await find())?.remedy ?? null).toBeNull();
-        } finally { account.dispose(); storage.setState(previous); }
+        } finally { releaseUsage?.(); account.dispose(); storage.setState(previous); }
     });
     it.each([
         { scenario: 'owner', name: 'captures a setting at the committed CAS winner and restores its historical unset state, refusing intervening edits' },
@@ -241,6 +253,7 @@ describe('scoped Account workflow Artifact operations', () => {
         });
         storage.setState({ settingsScope: { serverId: home.id, accountId: 'settings-account' }, settingsVersion: 4 });
         const account = await captureLazyActionAccountContext(home.id);
+        let releaseUsage: (() => void) | undefined;
         const createAction = (captured: typeof account) => createSettingsDeclarationAction({ host: { os: 'web', desktop: false }, tauriDesktop: false,
             readPageGate: readSettingsPageGate, isFeatureEnabled: async () => true, isCurrent: captured.accountLifetime.isCurrent,
             readAccountSettings: captured.readSettings,
@@ -268,8 +281,9 @@ describe('scoped Account workflow Artifact operations', () => {
             }
             if (scenario === 'preferences') {
                 expect(await action({ actionId: 'settings.get', input: { anchor: 'usage.coachPreferences', includeVersion: true } }))
-                    .toEqual({ anchor: 'usage.coachPreferences', value: { v: 1, suppressions: [] }, settingsVersion: 4 });
-                const value = { v: 1, suppressions: [{ kind: 'dismissed', evidenceKey: 'finding' }] };
+                    .toEqual({ anchor: 'usage.coachPreferences', value: { v: 1, suppressions: [], disabledChecks: [], modelSuggestion: 'suggest_with_estimates' }, settingsVersion: 4 });
+                const value = { v: 1, suppressions: [{ kind: 'dismissed', evidenceKey: 'finding' }],
+                    disabledChecks: ['mcp_overhead'], modelSuggestion: 'complete_only' };
                 race = false;
                 expect(await action({ actionId: 'settings.set', input: { anchor: 'usage.coachPreferences', value, expectedSettingsVersion: 4 } }))
                     .toEqual({ anchor: 'usage.coachPreferences', value, settingsVersion: 5 });
@@ -356,7 +370,7 @@ describe('scoped Account workflow Artifact operations', () => {
                 .toMatchObject({ ok: false, errorCode: 'account_settings_mutation_conflict' });
             expect(raw).toEqual({ futureSibling: { retained: 'winner' }, showLineNumbers: true });
             expect.soft(await action({ actionId: 'settings.get', input: { anchor: 'usage.coachPreferences', includeVersion: true } }))
-                .toEqual({ anchor: 'usage.coachPreferences', value: { v: 1, suppressions: [] }, settingsVersion: 10 });
+                .toEqual({ anchor: 'usage.coachPreferences', value: { v: 1, suppressions: [], disabledChecks: [], modelSuggestion: 'suggest_with_estimates' }, settingsVersion: 10 });
                 return;
             }
             await action({ actionId: 'settings.set', input: { anchor: 'sourceControl.showLineNumbersInDiffs', value: true } });
@@ -376,8 +390,13 @@ describe('scoped Account workflow Artifact operations', () => {
             }));
             const context = { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' }, actionsSettings } as const;
             if (scenario === 'coachPreferences') {
+                const entry = getUsageQueryResourceStore(account).getEntry({ hostRead: 'usage.query', input: { queries: [query] } });
+                releaseUsage = entry.subscribe(() => {}, true);
+                await entry.refresh();
                 const queried = await executor.execute('usage.query', { queries: [query] }, context);
                 const batch = UsageQueryBatchResultSchema.parse(queried.ok ? queried.result : undefined);
+                expect(batch).toEqual(decodeUsageQueryResource(entry.getSnapshot().value!));
+                expect(entry.getSnapshot().subscription).toBe('live');
                 const finding = batch.results[0]?.coach?.findings.find(row => row.detectorId === 'duplicated_instructions');
                 expect(finding).toMatchObject({ remedy: { kind: 'prepared_session' } });
                 if (!finding) throw new Error('Expected actual retained-composition finding');
@@ -386,22 +405,28 @@ describe('scoped Account workflow Artifact operations', () => {
                 const otherSuppression = { kind: 'dismissed', evidenceKey: 'another-finding' };
                 expect(await executor.execute('usage.coach.dismiss', { query, evidenceKey, dismissed: true }, context))
                     .toMatchObject({ ok: true, result: { kind: 'preference_updated', evidenceKey, dismissed: true } });
-                expect(preferences()).toEqual({ v: 1, suppressions: [otherSuppression, { kind: 'dismissed', evidenceKey }] });
+                expect(preferences()).toEqual({ v: 1, suppressions: [otherSuppression, { kind: 'dismissed', evidenceKey }],
+                    disabledChecks: [], modelSuggestion: 'suggest_with_estimates' });
+                await entry.refresh();
                 const untilMs = Date.now() + 60_000;
                 expect(await executor.execute('usage.coach.snooze', { query, evidenceKey, untilMs }, context))
                     .toMatchObject({ ok: true, result: { kind: 'preference_updated', evidenceKey, untilMs } });
                 expect(preferences().suppressions).toEqual([otherSuppression, { kind: 'snoozed', evidenceKey, untilMs }]);
+                await entry.refresh();
                 expect(await executor.execute('usage.coach.snooze', { query, evidenceKey, untilMs: null }, context))
                     .toMatchObject({ ok: true, result: { kind: 'preference_updated', evidenceKey, untilMs: null } });
                 expect(preferences().suppressions).toEqual([otherSuppression]);
+                await entry.refresh();
                 await executor.execute('usage.coach.dismiss', { query, evidenceKey, dismissed: true }, context);
+                await entry.refresh();
                 race = true;
                 expect(await executor.execute('usage.coach.dismiss', { query, evidenceKey, dismissed: false }, context))
                     .toMatchObject({ ok: false, errorCode: 'account_settings_mutation_conflict' });
                 expect(preferences().suppressions).toEqual([otherSuppression, { kind: 'dismissed', evidenceKey }]);
+                await entry.refresh();
                 expect(await executor.execute('usage.coach.dismiss', { query, evidenceKey, dismissed: false }, context))
                     .toMatchObject({ ok: true, result: { kind: 'preference_updated', evidenceKey, dismissed: false } });
-                expect(preferences()).toEqual({ v: 1, suppressions: [otherSuppression] });
+                expect(preferences()).toEqual({ v: 1, suppressions: [otherSuppression], disabledChecks: [], modelSuggestion: 'suggest_with_estimates' });
                 return;
             }
             const capture = async () => {
@@ -427,7 +452,7 @@ describe('scoped Account workflow Artifact operations', () => {
             expect(await executor.execute('usage.coach.undo', { query, evidenceKey, reversal: staleReversal }, context))
                 .toMatchObject({ ok: false, errorCode: 'account_settings_mutation_conflict' });
             expect(raw.showLineNumbers).toBe(true);
-        } finally { account.dispose(); storage.setState(previous); }
+        } finally { releaseUsage?.(); account.dispose(); storage.setState(previous); }
     });
     it('admits a public-link-only WorkBoard audience for native reads without assuming unavailable publications are absent', async () => {
         const previous = storage.getState();
@@ -495,12 +520,14 @@ describe('scoped Account workflow Artifact operations', () => {
             if (path === `/v1/artifacts/${artifactId}`) return revoked ? json({ error: 'Artifact not found' }, 404) : json(row);
             throw new Error(`Unexpected route ${path}`);
         });
-        storage.setState({ settingsScope: { serverId: home.id, accountId: 'artifact-account' }, artifacts: {} });
+        storage.setState({ settingsScope: { serverId: home.id, accountId: 'artifact-account' }, artifacts: {}, artifactsLoaded: false });
         const account = await captureLazyActionAccountContext(home.id);
         try {
             expect(storage.getState().artifacts[artifactId]).toBeUndefined();
             await account.fetchArtifact(artifactId);
             const published = storage.getState().artifacts[artifactId];
+            // One admitted read is not the list: the Library must keep loading, not show its first-visit state.
+            expect(storage.getState().artifactsLoaded).toBe(false);
             expect(published).toMatchObject({ access: 'view', ownerAccountId: 'owner', isDecrypted: true, body: 'readable' });
             await account.fetchArtifact(artifactId);
             expect(storage.getState().artifacts[artifactId]).toBe(published);
@@ -825,7 +852,7 @@ describe('scoped Account workflow Artifact operations', () => {
             const published = stored;
             const publishedRead = await publication('artifact.get', { artifactId: published!.id }, caller);
             expect(publishedRead).toMatchObject({ ok: true, result: { artifact: { body: '<h1>Published</h1>', header: { kind: 'html' }, provenance: {
-                source: { sessionId: 'publication-session', machineId: 'publication-machine', path: 'result.html', sha: expect.any(String) } } } });
+                source: { sessionId: 'publication-session', machineId: 'publication-machine', path: 'result.html', sha: expect.any(String) } } } } });
             expect(publishedRead).not.toHaveProperty('result.previewUrl');
             const calls = download.mock.calls.length;
             expect(await publication('artifact.publish_from_file', { path: '../private.txt' }, sessionCaller))

@@ -1,10 +1,19 @@
 import type { ActionId, RuntimeActionExecute } from '@happier-dev/protocol';
+import { ActionApprovalRequestCreatedResultSchema, type ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { HappyError } from '@/utils/errors/errors';
 
-import type { createDefaultActionExecutor, UiActionExecutorContext } from './defaultActionExecutor';
+import { createDefaultActionExecutor, type UiActionExecutorContext } from './defaultActionExecutor';
 
 type ActionExecutorLike = Pick<ReturnType<typeof createDefaultActionExecutor>, 'execute'> &
   Partial<Pick<ReturnType<typeof createDefaultActionExecutor>, 'prepare'>>;
 export type FrontDoorActionExecute = ActionExecutorLike['execute'] & Pick<ReturnType<typeof createDefaultActionExecutor>, 'prepare'>;
+
+/** Retain typed refusal and pending-approval custody for callers with a void effect contract. */
+export function requireActionSuccess(result: ActionExecuteResult): void {
+  if (!result.ok) throw new HappyError(result.error, false, { code: result.errorCode, details: result.details });
+  const approval = ActionApprovalRequestCreatedResultSchema.safeParse(result.result);
+  if (approval.success) throw new HappyError(approval.data.kind, false, { code: approval.data.kind, details: approval.data });
+}
 
 /**
  * The canonical `ActionExecutor.execute` front door, lazily resolved.
@@ -22,12 +31,11 @@ export function createFrontDoorActionExecute(
   // Lazily resolve the default executor on first dispatch so that mounting a surface (which often
   // renders nothing) never eagerly builds the full executor dependency graph.
   let resolved: ActionExecutorLike | null = executor ?? null;
-  const resolve = (): ActionExecutorLike => resolved ?? (resolved = (require('./defaultActionExecutor') as typeof import('./defaultActionExecutor')).createDefaultActionExecutor(options));
+  const resolve = (): ActionExecutorLike => resolved ?? (resolved = createDefaultActionExecutor(options));
   const execute: ActionExecutorLike['execute'] = async (actionId, input, context) => {
-    // A call-time `require`, not `import()`: the executor is already part of the main bundle, and a
-    // dynamic import makes the dev bundler serve a duplicate lazy bundle that takes seconds to build
-    // (production cost is unchanged). Evaluation stays deferred to the first dispatch. A top-level
-    // import would form a cycle: the executor's dependencies import this front door.
+    // Static module resolution works in both native bundles and ESM hosts.
+    // Construction stays deferred; cyclic consumers only retain this function
+    // while evaluating their modules and dispatch after initialization.
     const target = resolve();
     return target.execute(actionId, input, context);
   };

@@ -1,6 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { isPromptLibraryReferenceInHome } from './promptLibraryReferences';
+
+// Home fixture startup transforms the real Sync graph; it is not reference behavior.
+beforeAll(async () => {
+    await import('@/sync/ops/actions/actionAccountContext');
+    await import('@/sync/domains/state/storage');
+    await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+}, 300_000);
 
 describe('prompt library qualified reference identity', () => {
     it('matches omitted and equivalent local Home references without matching another Home or document', async () => {

@@ -27,6 +27,11 @@ import { executeVoiceAttemptRecovery, resolveVoiceAttemptRecoveryAvailable, reso
 import type { VoiceAdapterSurfaceCapabilities } from '@/voice/session/types';
 import type { VoiceMachineRecoveryAction } from '@/voice/runtime/machine/voiceConversationRuntimeTypes';
 import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
+import { resolveVoiceConversationNavigationAddress } from '@/voice/binding/resolveVoiceConversationNavigationAddress';
+import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerScope';
+import { SETTINGS_ROUTES } from '@/components/settings/catalog/routes';
+import { hasVoiceTranscriptPresentation, revealVoiceCompanionSection, setVoiceGlanceOpen, setVoiceSetupOpen, setVoicePresencePosition } from '@/components/voice/presence/voiceCompanionSectionReveal';
+import { setVoiceActivityFeedExpanded } from '@/components/voice/surface/voiceActivityFeedExpansionStore';
 
 const registry = createDefaultVoiceProviderRegistry();
 
@@ -37,6 +42,7 @@ async function readConversation(target: VoiceStartIntent = { kind: 'default' }):
     recoveryAction: VoiceMachineRecoveryAction | null;
     setupIncomplete: boolean;
     capabilities: VoiceAdapterSurfaceCapabilities | null;
+    navigation: Readonly<{ href: unknown }> | null;
 }>> {
     let state = storage.getState();
     let voiceSettings = voiceSettingsParse(state.settings.voice);
@@ -120,13 +126,19 @@ async function readConversation(target: VoiceStartIntent = { kind: 'default' }):
         muted: control.muted, canDismissFailedAttempt: control.canDismissFailedAttempt === true,
         canDismissEnded: ended !== null, recoveryAction, availability: control.availability,
         inUseVoice: snapshot.status === 'connected' ? snapshot.inUseVoice ?? null : null };
-    return { voice, idleTarget, context, recoveryAction, setupIncomplete, capabilities };
+    const navigationBinding = ended ? visibleEnded : binding;
+    const navigationAddress = navigationBinding && navigationBinding.conversationSessionAddress
+        ? resolveVoiceConversationNavigationAddress({ ...navigationBinding, conversationSessionAddress: navigationBinding.conversationSessionAddress }) : null;
+    const navigation = navigationBinding ? { href: navigationAddress
+        ? buildScopedSessionRouteHref({ sessionId: navigationAddress.sessionId, serverId: navigationAddress.serverId })
+        : SETTINGS_ROUTES.voiceHistory } : null;
+    return { voice, idleTarget, context, recoveryAction, setupIncomplete, capabilities, navigation };
 }
 
 export async function executeVoiceConversationAction(
     actionId: VoiceConversationActionId,
     input: unknown,
-    deps: Readonly<{ navigate: (href: unknown) => void; isCurrent?: () => boolean }>,
+    deps: Readonly<{ navigate: (href: unknown) => void | Promise<void>; isCurrent?: () => boolean }>,
 ): Promise<Readonly<{ status: 'completed'; voice: VoiceConversationStatus }> | Readonly<{ status: 'unavailable'; code: string; voice: VoiceConversationStatus }>> {
     const parsed = VoiceConversationActionInputSchemas[actionId].safeParse(input);
     const current = await readConversation(parsed.success && 'target' in parsed.data ? parsed.data.target : undefined);
@@ -135,6 +147,24 @@ export async function executeVoiceConversationAction(
     if (!parsed.success) return unavailable('invalid_voice_action_input');
     const value = parsed.data;
     if (actionId === 'ui.voice_global.get') return { status: 'completed', voice: current.voice };
+    let presented: boolean | null = null;
+    switch (actionId) {
+        case 'ui.voice_global.glance.open': presented = setVoiceGlanceOpen(true); break;
+        case 'ui.voice_global.glance.close': presented = setVoiceGlanceOpen(false); break;
+        case 'ui.voice_global.companion.reveal': presented = revealVoiceCompanionSection(); break;
+        case 'ui.voice_global.setup.open': presented = setVoiceSetupOpen(true); break;
+        case 'ui.voice_global.setup.close': presented = setVoiceSetupOpen(false); break;
+        case 'ui.voice_global.position.set':
+            presented = 'x' in value && 'y' in value && setVoicePresencePosition({ x: value.x, y: value.y }); break;
+        case 'ui.voice_global.transcript.set_visible':
+            if (!('visible' in value)) return unavailable('invalid_voice_action_input');
+            if (!hasVoiceTranscriptPresentation()) return unavailable('voice_presentation_unavailable');
+            if (value.visible && !voiceSettingsParse(storage.getState().settings.voice).ui.activityFeedEnabled) return unavailable('voice_transcript_unavailable');
+            presented = !value.visible || revealVoiceCompanionSection() || setVoiceGlanceOpen(true);
+            if (presented) setVoiceActivityFeedExpanded(value.visible);
+            break;
+    }
+    if (presented !== null) return presented ? { status: 'completed', voice: current.voice } : unavailable('voice_presentation_unavailable');
     // Preparation can await feature availability. A start admitted at rest must never become
     // toggle's End command for an attempt another surface started while this caller was waiting.
     if (!voiceSessionManager.matchesAttempt(current.voice.attemptId)) return unavailable('stale_voice_attempt');
@@ -147,6 +177,9 @@ export async function executeVoiceConversationAction(
             || !voiceSessionManager.matchesAttempt(value.expectedAttempt)) return unavailable('stale_voice_attempt');
         const sessionId = current.voice.sessionId;
         switch (actionId) {
+            case 'ui.voice_global.open_conversation':
+                if (!current.navigation) return unavailable('voice_conversation_navigation_unavailable');
+                await deps.navigate(current.navigation.href); break;
             case 'ui.voice_global.end':
                 if (!current.voice.canStop || !sessionId) return unavailable('voice_end_unavailable');
                 await voiceSessionManager.stop(sessionId); break;

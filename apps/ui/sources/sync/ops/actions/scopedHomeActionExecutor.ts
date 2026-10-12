@@ -22,15 +22,17 @@ const executorsByScope = new Map<
 
 export function scopedHomeActionExecutor(
     scope: ServerAccountScope,
+    options?: Pick<NonNullable<Parameters<typeof createDefaultActionExecutor>[0]>, 'teamMembershipHistoryAction' | 'onBlockingApprovalPending'>,
 ): ReturnType<typeof createFrontDoorActionExecute> {
     const key = serverAccountScopeKeySuffix(scope);
     const existing = executorsByScope.get(key);
-    if (existing) return existing;
+    if (existing && !options) return existing;
 
     const execute = createFrontDoorActionExecute(createDefaultActionExecutor({
         homeDomainAction: createHomeDomainActionExecutorForScope(scope),
+        ...options,
     }));
-    executorsByScope.set(key, execute);
+    if (!options) executorsByScope.set(key, execute);
     return execute;
 }
 

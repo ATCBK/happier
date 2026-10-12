@@ -4,8 +4,42 @@ import { createLayoutArtifactHttpBoundary } from '@/dev/testkit/harness/homeHubA
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { captureLazyActionAccountContext } from './actionAccountContext';
 import { createWidgetAreaActionDepsV1 } from './widgetAreaActionDeps';
+import { createWidgetCatalogActionDepsV1 } from './widgetCatalogActionDeps';
+import { createActionExecutor } from '@happier-dev/protocol';
+import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 // Match the application entry before Account restoration; real owner initialization belongs to collection.
 import '@/sync/syncEngine';
+
+it('admits local and portable Home identities through the widget Action owner without admitting another Home', async () => {
+    const connection = await restoreServerAccountForTest({ serverUrl: 'http://widget-identity.test',
+        serverIdentityId: 'srv_0123456789abcdefghijklmnopqrstuv', accountId: 'actor' });
+    const account = await captureLazyActionAccountContext(connection.home.id);
+    const surface = { serverId: connection.home.id, accountId: 'actor',
+        owner: { kind: 'project' as const, projectId: 'identity-project' } };
+    const boundary = createLayoutArtifactHttpBoundary<WidgetAreaLayoutV1>('actor', {
+        artifactId: buildWidgetSurfaceArtifactIdV1(surface), kind: WIDGET_SURFACE_ARTIFACT_KIND_V1,
+        defaultLayout: { v: 1, surface, items: [] }, parseLayout: value => WidgetAreaLayoutV1Schema.parse(value),
+        buildHeader: value => buildWidgetSurfaceArtifactHeaderV1(value),
+    });
+    const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
+    setRuntimeFetch(boundary.request);
+    try {
+        const area = createWidgetAreaActionDepsV1(account);
+        const deps = createActionExecutorBoundaryFixture(area);
+        const executor = createActionExecutor({ ...deps, ...createWidgetCatalogActionDepsV1(account, deps) });
+        const context = { surface: 'ui' as const, serverId: connection.home.id, serverIdentityId: 'srv_0123456789abcdefghijklmnopqrstuv' };
+        expect(await executor.execute('widgets.item.list', { surface }, context))
+            .toMatchObject({ ok: true, result: { surface } });
+        const portableSurface = { ...surface, serverId: context.serverIdentityId };
+        expect(await executor.execute('widgets.item.list', { surface: portableSurface }, context))
+            .toMatchObject({ ok: true, result: { surface: portableSurface } });
+        expect(await executor.execute('widgets.item.list', { surface: { ...surface, serverId: 'srv-other' } }, context))
+            .toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });
+        expect(await executor.execute('widgets.item.list', { surface }, { ...context, serverIdentityId: 'srv-other' }))
+            .toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });
+        expect(boundary.writes).toHaveLength(0);
+    } finally { account.dispose(); await connection.dispose(); }
+});
 
 it('uses a stable Project key without a Source through the actual Account Artifact codec', async () => {
     const provisional = { serverId: 'home', accountId: 'actor', owner: { kind: 'project' as const, projectId: 'stable-project' } };

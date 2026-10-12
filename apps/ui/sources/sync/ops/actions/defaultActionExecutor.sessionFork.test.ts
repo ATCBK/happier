@@ -71,6 +71,14 @@ const context = () => ({ surface: 'ui' as const, authority: 'present_user' as co
 function installSession(overrides: Partial<Session> = {}) {
   return installSessionActionFixture({ homes, storage, serverId, session: { id: 'sess_parent', ...overrides } });
 }
+function installForkRequestIdentityMachine() {
+  const machine = storage.getState().machines.machine_1;
+  if (!machine) throw new Error('Expected installed machine');
+  const currentMachine = createMachineFixture({ ...machine, daemonState: { cliVersion: '0.3.0' } });
+  storage.setState({ machines: { ...storage.getState().machines, machine_1: currentMachine },
+    machineListByServerId: { ...storage.getState().machineListByServerId,
+      [serverId]: (storage.getState().machineListByServerId[serverId] ?? []).map(row => row.id === currentMachine.id ? currentMachine : row) } });
+}
 function setSettings(delta: SettingsWriteDelta) {
   storage.getState().applySettingsLocal(delta);
 }
@@ -255,11 +263,7 @@ describe('default Action executor Session lifecycle contracts', () => {
 
   it('keeps the daemon attempt identity stable for a safe retry and distinct for another route', async () => {
     installSession();
-    const machine = storage.getState().machines.machine_1;
-    if (!machine?.metadata) throw new Error('Expected installed machine metadata');
-    const currentMachine = { ...machine, metadata: { ...machine.metadata, happyCliVersion: '0.3.0' } };
-    storage.setState({ machines: { ...storage.getState().machines, machine_1: currentMachine },
-      machineListByServerId: { [serverId]: [currentMachine] } });
+    installForkRequestIdentityMachine();
     daemonAnswer = () => ({ ok: false, errorCode: 'SPAWN_FAILED', errorMessage: 'not created' });
     const { harness } = await mountForkFlow();
     await act(async () => { await harness.getCurrent().submit('native'); });
@@ -274,14 +278,18 @@ describe('default Action executor Session lifecycle contracts', () => {
 
   it('keeps an ambiguous fork pending and adopts a subsequently visible child without reissuing the mutation', async () => {
     installSession();
+    installForkRequestIdentityMachine();
     daemonAnswer = () => ({ ok: false, errorCode: 'SESSION_WEBHOOK_TIMEOUT', errorMessage: 'pending' });
     const { harness, navigate } = await mountForkFlow();
     await act(async () => { await harness.getCurrent().submit('replay'); });
     expect(harness.getCurrent().phase).toMatchObject({ type: 'unknown' });
     await act(async () => { await harness.getCurrent().submit('replay'); });
     expect(rpcRequests(RPC_METHODS.SESSION_FORK)).toHaveLength(1);
+    const attempt = SessionForkRpcParamsSchema.parse(rpcRequests(RPC_METHODS.SESSION_FORK)[0]?.params);
+    if (!attempt.requestId) throw new Error('Expected exact emitted fork attempt identity');
     installSession({ id: 'sess_child', metadata: { path: '/repo', host: 'tester.local', machineId: 'machine_1',
-      forkV1: { v: 1, parentSessionId: 'sess_parent', createdAtMs: 1, strategy: 'replay', parentCutoffSeqInclusive: 12 } } });
+      forkV1: { v: 1, parentSessionId: 'sess_parent', createdAtMs: 1, strategy: 'replay',
+        parentCutoffSeqInclusive: 11, requestId: attempt.requestId } } });
     await act(async () => { await harness.getCurrent().checkForFork(); });
     expect(navigate).toHaveBeenCalledExactlyOnceWith('sess_child', { serverId });
     expect(harness.getCurrent().phase).toEqual({ type: 'navigated' });
@@ -547,7 +555,7 @@ describe('default Action executor Session lifecycle contracts', () => {
           recipe: { execution: { machineId: 'machine_1', directory: { kind: 'path', path: '/repo' } },
             organization: { folderId: null, tagIds: [] }, agentTarget: { kind: 'agent', identity }, modelSelection: null,
             profileId: null, requestedPermissionMode: null, agentModeId: null, configuration: null, connectedServices: null,
-            mcpSelection: null, transcriptStorage: 'persisted', terminal: null, agentSessionStartupInstructionsMarkerV1: null, checkout: null } }),
+            capabilitySelection: null, transcriptStorage: 'persisted', terminal: null, agentSessionStartupInstructionsMarkerV1: null, checkout: null } }),
       } });
       daemonAnswer = (request) => request.method.endsWith(`:${SESSION_RPC_METHODS.SESSION_ROLLBACK}`)
         ? { ok: true, rolledBack: true, target: { type: 'before_user_message', userMessageSeq: 3 } }

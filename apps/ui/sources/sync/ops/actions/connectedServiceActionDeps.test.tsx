@@ -19,8 +19,105 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 import { captureLazyActionAccountContext } from './actionAccountContext';
 import { storage } from '@/sync/domains/state/storage';
 import { getConnectedAccountCatalogValue } from '@/sync/store/settings/connectedAccountCatalogSnapshot';
+import { apiSocket } from '@/sync/api/session/apiSocket';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
+import { serverScopedRpcSocketPool } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool';
+import { resetScopedMachineTransportCacheForTests } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool';
 
+// This suite imports scoped transport eagerly. The external SDK boundary must
+// be installed before that owner captures the factory, not after Account setup.
+vi.mock('socket.io-client', async importOriginal => (
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
 installDisconnectedServerSocketBoundary();
+
+it.each(['retired-before-issue', 'cancelled-before-issue', 'retired-after-ack', 'cancelled-after-ack'] as const)(
+    'keeps reset-credit custody at actual issuance while preserving an acknowledged receipt (%s)', async disposition => {
+        const bridge = await loadSyncSingletonForTests();
+        const previous = storage.getState();
+        let setupReady!: () => void;
+        const ready = new Promise<void>(resolve => { setupReady = resolve; });
+        let releaseSetup!: () => void;
+        const setup = new Promise<void>(resolve => { releaseSetup = resolve; });
+        const http = createHomeHubArtifactHttpBoundary('reset-custody');
+        const connection = await restoreServerAccountForTest({ serverUrl: 'https://reset-custody.test', accountId: 'reset-custody', request: async (input, init) => {
+            if (new URL(String(input)).pathname === '/v1/machines/controller') {
+                setupReady();
+                await setup;
+                return Response.json({ machine: createPlainMachineRowFixture({ id: 'controller', accountId: 'reset-custody' }) });
+            }
+            return http.request(input, init);
+        } });
+        const scope = { serverId: connection.home.id, accountId: 'reset-custody' };
+        storage.setState({ profileScope: scope, profile: AccountProfileSchema.parse({ id: scope.accountId }), isDataReady: true });
+        storage.getState().applyMachines([createMachineFixture({ id: 'controller', activeAt: Date.now() })], true, { sourceServerId: scope.serverId });
+        const controller = new AbortController();
+        const account = await captureLazyActionAccountContext(scope.serverId, controller.signal);
+        const retire = () => {
+            if (disposition.startsWith('cancelled')) controller.abort();
+            else storage.setState({ profileScope: { ...scope, accountId: 'successor' }, profile: AccountProfileSchema.parse({ id: 'successor' }) });
+        };
+        let issued = false;
+        const receipt = { ok: true, receipt: { idempotencyKey: 'acknowledged-reset', status: 'consumed' }, snapshot: null };
+        // Exact Account custody uses a scoped socket. Hold its HTTP machine admission;
+        // transport acquisition, issuance guards, the ACK codec and settlement stay real.
+        installDisconnectedServerSocketBoundary(socket => {
+            socket.connected = true;
+            vi.spyOn(socket, 'emitWithAck').mockImplementation(async (event, payload: unknown) => {
+                if (event !== SOCKET_RPC_EVENTS.CALL) return { v: 1, ok: true, admittedSessionIds: [] };
+                if (!payload || typeof payload !== 'object' || !('method' in payload)
+                    || payload.method !== `controller:${RPC_METHODS.DAEMON_CONNECTED_SERVICE_QUOTA_RECOVERY_CREDIT_CONSUME}`) {
+                    throw new Error('Unexpected scoped reset RPC');
+                }
+                issued = true;
+                return { ok: true, get result() {
+                    // callSocketRpc has accepted this ACK before decoding its result.
+                    if (disposition.endsWith('after-ack')) retire();
+                    return receipt;
+                } };
+            });
+        });
+        // The incumbent active-socket edge remains available to expose the pre-fix bypass.
+        const rpc = vi.spyOn(apiSocket, 'machineRPC').mockImplementation(async (_machineId, method, _payload, options) => {
+            if (method !== RPC_METHODS.DAEMON_CONNECTED_SERVICE_QUOTA_RECOVERY_CREDIT_CONSUME) throw new Error(`Unexpected machine RPC ${method}`);
+            setupReady();
+            await setup;
+            options?.signal?.throwIfAborted();
+            options?.onIssued?.();
+            issued = true;
+            if (disposition.endsWith('after-ack')) retire();
+            return receipt;
+        });
+        let operation: Promise<unknown> | undefined;
+        try {
+            operation = createUiConnectedServiceAction(account)({ actionId: 'connectedServices.quota.reset',
+                input: { machineId: 'controller', serviceId: 'openai-codex', profileId: 'work', providerCreditId: 'credit-1', sourceSnapshotFetchedAtMs: 123 },
+                context: { surface: 'ui', authority: 'present_user' }, signal: controller.signal,
+            });
+            await Promise.race([ready, operation.then(result => {
+                throw new Error(`Reset settled before socket setup: ${JSON.stringify(result)}`);
+            })]);
+            if (disposition.endsWith('before-issue')) retire();
+            releaseSetup();
+            const result = await operation;
+            if (disposition.endsWith('before-issue')) {
+                expect(issued).toBe(false);
+                expect(result).toMatchObject({ ok: false, errorCode: 'machine_rpc_failed' });
+            } else {
+                expect(issued, JSON.stringify(result)).toBe(true);
+                expect(result).toEqual(receipt);
+            }
+        } finally {
+            releaseSetup();
+            await operation?.catch(() => {});
+            await serverScopedRpcSocketPool.stopAll(); resetScopedMachineTransportCacheForTests();
+            installDisconnectedServerSocketBoundary();
+            rpc.mockRestore(); account.dispose(); storage.setState(previous, true); await connection.dispose(); bridge.dispose();
+        }
+    },
+);
 
 it('routes admitted authentication to the captured Home and refuses retired Account custody at actual issuance', async () => {
     const bridge = await loadSyncSingletonForTests();
@@ -209,7 +306,7 @@ it('admits quota refresh through the exact Home machine before requesting the se
     const beforeRefresh = groupRevision;
     const rpc = vi.spyOn(machineRpc, 'machineRpcWithServerScope').mockResolvedValue({
         status: 'described', service,
-        descriptor: { id: 'openai-codex', title: 'Codex', authentication: { defaultModeId: 'oauth', modes: [{ id: 'oauth', kind: 'oauthAuthorizationCode', pkce: 'required', outcomeReconciliation: 'none' }] } },
+        descriptor: { id: 'openai-codex', title: 'Codex', authentication: { defaultModeId: 'oauth', modes: [{ id: 'oauth', kind: 'oauthAuthorizationCode', callbackUrl: 'http://127.0.0.1:4000/auth/callback', pkce: 'required', outcomeReconciliation: 'none' }] } },
         occurrenceId: 'occurrence-1', sourceCustody: { kind: 'bundled_first_party', packagedRuntime: { kind: 'cli_version_root', versionRootId: 'cli-1' } },
         accounts: [], operationTransport: { kind: 'v4' },
     });

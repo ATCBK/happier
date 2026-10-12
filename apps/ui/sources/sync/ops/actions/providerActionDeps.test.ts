@@ -4,6 +4,7 @@ import { ProviderConnectionsCatalogV1Schema, ProviderConnectionsRowMutationV1Sch
     sealProviderConnectionsContentV1, openProviderConnectionsContentV1,
 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { formatSharedSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
+import { AccountSettingsV2UpdateRequestSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
@@ -51,6 +52,24 @@ describe('Provider Account source visibility Action', () => {
         const { serverId, accountId } = await account.restore({ catalog: retained, settings: {
             providerSettingsV1: { ...retained, defaultsByAgentTargetKey: {} },
         } });
+        // Model the genuine source-retirement CAS as well as the destination row.
+        // A GET-shaped reply to POST cannot acknowledge retirement or update its source.
+        let settingsContent: ReturnType<typeof AccountSettingsV2UpdateRequestSchema.parse>['content'] = {
+            t: 'plain', v: { providerSettingsV1: { ...retained, defaultsByAgentTargetKey: {} } },
+        };
+        let settingsVersion = 1;
+        account.home.answer(serverId, 'GET /v2/account/settings', {
+            select: () => ({ body: { version: settingsVersion, content: settingsContent } }),
+        });
+        account.home.answer(serverId, 'POST /v2/account/settings', {
+            select: input => {
+                const mutation = AccountSettingsV2UpdateRequestSchema.parse(input);
+                expect(mutation.expectedVersion).toBe(settingsVersion);
+                settingsContent = mutation.content;
+                settingsVersion += 1;
+                return { body: { success: true, version: settingsVersion } };
+            },
+        });
         let admitted: typeof retained | null = null;
         let revision = 0;
         let rowWrites = 0;
@@ -75,7 +94,8 @@ describe('Provider Account source visibility Action', () => {
         const context = { surface: 'ui' as const, authority: 'present_user' as const,
             actionCaller: { kind: 'host' as const }, serverId, expectedAccountId: accountId };
         for (let attempt = 0; attempt < 2; attempt += 1) {
-            expect(await executor.execute('providers.connections.describe', { connectionId: 'pc_a' }, context))
+            const result = await executor.execute('providers.connections.describe', { connectionId: 'pc_a' }, context);
+            expect(result, `describe attempt ${attempt + 1}: ${JSON.stringify(result)}`)
                 .toMatchObject({ ok: true, result: { connections: [{ connectionId: 'pc_a', authorized: false }] } });
         }
         expect(admitted).toMatchObject({ connections: retained.connections,

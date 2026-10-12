@@ -12,11 +12,8 @@ export async function openSessionAuthoringAction(input: SessionAuthoringOpenV1,
     lifetime: ServerAccountScopeLifetime, signal?: AbortSignal,
     executeAction?: MountedAuthoringActionExecute): Promise<SessionAuthoringOpenResultV1> {
     if (!lifetime.isCurrent()) return { kind: 'stale', reason: 'host_retired' };
-    const result = executeAction ? await executeAction('session.authoring.open', input, { signal })
-        : await (await import('./defaultActionExecutor')).createDefaultActionExecutor().execute('session.authoring.open', input, {
-        surface: 'ui', serverId: lifetime.scope.serverId, expectedAccountId: lifetime.scope.accountId,
-        ...(signal ? { signal } : {}),
-    });
+    if (!executeAction) return { kind: 'unavailable', reason: 'client_unavailable' };
+    const result = await executeAction('session.authoring.open', input, { signal });
     if (!lifetime.isCurrent()) return { kind: 'stale', reason: 'host_retired' };
     if (!result.ok) return { kind: 'unavailable', reason: 'client_unavailable' };
     const parsed = SessionAuthoringOpenResultV1Schema.safeParse(result.result);

@@ -19,6 +19,7 @@ import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/ser
 import { invokeMountedWorkRead } from './mountedWorkReadAction';
 import { sync } from '@/sync/sync';
 import { writeSessionInitialPromptV1 } from '@/sync/domains/sessionInitialPrompt/sessionInitialPromptV1';
+import { navigateToSavedNewSessionDraft } from '@/components/sessions/drafts/newSessionDraftNavigation';
 
 /** Thin projection of the incumbent bulk-acknowledgement and draft-repository owners. */
 export function createAppShellAction(accountContext?: LazyActionAccountContext): NonNullable<ActionExecutorDeps['appShellAction']> {
@@ -87,7 +88,25 @@ export function createAppShellAction(accountContext?: LazyActionAccountContext):
         try {
             account.assertCurrent();
             const scope = account.accountLifetime.scope;
+            if ((context.serverId && !areServerProfileIdentifiersEquivalent(scope.serverId, context.serverId))
+                || (context.runtimeAccountId && scope.accountId !== context.runtimeAccountId)) return { status: 'unavailable' };
             const address = { kind: 'newSession' as const, draftId };
+            if (actionId === 'session.draft.open') {
+                if (!getSessionDraftSnapshot(scope, address)) {
+                    const materialized = await runWithSessionDraftRepositoryScopedRuntime({
+                        binding: account.accountLifetime, activeRequest: account.request,
+                        operation: async ({ scope, runtime, isCurrent }) => {
+                            await materializeExactSessionDraftWithScopedRuntime({ scope, address, runtime, isCurrent });
+                            return true;
+                        },
+                    });
+                    if (materialized !== true) return { status: 'unavailable' };
+                }
+                account.assertCurrent();
+                if (!getSessionDraftSnapshot(scope, address)) return { status: 'missing' };
+                const opened = await navigateToSavedNewSessionDraft(draftId, scope, () => account.accountLifetime.isCurrent() && context.signal?.aborted !== true);
+                return opened ? { status: 'opened', draftId } : { status: 'unavailable' };
+            }
             const disposition = () => {
                 account.assertCurrent();
                 const draft = getSessionDraftSnapshot(scope, address);

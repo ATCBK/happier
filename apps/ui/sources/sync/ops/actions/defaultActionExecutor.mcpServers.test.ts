@@ -29,6 +29,7 @@ afterEach(() => {
     resetServerFeaturesClientForTests();
     getStorage().setState(initialState, true);
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
 });
 
 describe('UI MCP Actions through captured Home persistence', () => {
@@ -72,11 +73,14 @@ describe('UI MCP Actions through captured Home persistence', () => {
         const context = { serverId: home.id, surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } } as const;
         const entry = { id: 'server', name: 'server', transport: 'stdio', stdio: { command: 'mcp-tool', args: [] },
             env: { TOKEN: { t: 'literal', v: 'private' } }, createdAt: 1, updatedAt: 1 } as const;
-        expect(await executor.execute('mcp.servers.create', { entry, bindings: [], expectedRevision: 1 }, context))
+        // Native randomness is supplied by the UI platform adapter; Web Crypto is not required.
+        vi.stubGlobal('crypto', undefined);
+        expect(await executor.execute('mcp.servers.create', { entry, expectedRevision: 1 }, context))
             .toEqual({ ok: true, result: { status: 'updated', revision: 2, cursor: 2 } });
         expect(await executor.execute('mcp.servers.read', { serverId: 'server' }, context)).toMatchObject({ ok: true,
             result: { status: 'present', server: entry, revision: 2, complete: true, authority: 'active' } });
         expect(writes).toEqual(['/v1/account/entity-rows/mcp']);
+        expect(catalog.bindings).toMatchObject([{ serverId: 'server', enabled: true, target: { t: 'allMachines' } }]);
     });
     it('lists an admitted catalog without awaiting retained-source maintenance', async () => {
         const home = await upsertAndActivateServer({ serverUrl: 'https://mcp-action-read-home.test', scope: 'tab' });

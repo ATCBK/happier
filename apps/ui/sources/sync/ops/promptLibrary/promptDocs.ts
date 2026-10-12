@@ -3,11 +3,24 @@ import { ArtifactOrganizationMutationFailureV1, ArtifactOrganizationMutationFail
 
 import { withUiPromptLibraryArtifactStore } from './promptLibraryArtifactStore';
 import type { MountedAuthoringActionExecute } from '@/sync/ops/actions/sessionAuthoringActions';
+import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
+import type { ArtifactFolderCreateActionInputV1 } from '@happier-dev/protocol/prompts/library/promptFolderActionSchemasV1';
 export {
   findPromptExternalLink,
   removePromptExternalLink,
   upsertPromptExternalLink,
 } from './promptExternalLinks';
+
+function readPromptDocActionOutput(result: ActionExecuteResult): unknown {
+  if (!result.ok) {
+    if (result.errorCode === 'artifact_organization_failed') {
+      const details = ArtifactOrganizationMutationFailureDetailsV1Schema.safeParse(result.details);
+      if (details.success) throw new ArtifactOrganizationMutationFailureV1(details.data);
+    }
+    throw Object.assign(new Error(result.error), { code: result.errorCode, result });
+  }
+  return result.result;
+}
 
 export async function createPromptDoc(
   params: PromptDocCreateActionInputV1 & Readonly<{
@@ -21,14 +34,7 @@ export async function createPromptDoc(
   const result = executeAction ? await executeAction('prompt_doc.create', request, { signal })
     : await (await import('@/sync/ops/actions/defaultActionExecutor')).createDefaultActionExecutor().execute('prompt_doc.create', request,
     { surface: 'ui', serverId: serverId ?? undefined, expectedAccountId, signal });
-  if (!result.ok) {
-    if (result.errorCode === 'artifact_organization_failed') {
-      const details = ArtifactOrganizationMutationFailureDetailsV1Schema.safeParse(result.details);
-      if (details.success) throw new ArtifactOrganizationMutationFailureV1(details.data);
-    }
-    throw Object.assign(new Error(result.errorCode), { code: result.errorCode, result });
-  }
-  const output = result.result;
+  const output = readPromptDocActionOutput(result);
   if (!output || typeof output !== 'object' || !('ok' in output) || output.ok !== true
     || !('artifactId' in output) || typeof output.artifactId !== 'string') {
     throw Object.assign(new Error('action_not_completed'), { code: 'action_not_completed', result });
@@ -43,32 +49,31 @@ export async function updatePromptDoc(
     markdown: string;
     folderId?: string | null;
     tags?: readonly string[];
+    createFolder?: ArtifactFolderCreateActionInputV1;
     expectedRevision?: PromptDocRevisionV1;
     serverId?: string | null;
+    expectedAccountId?: string;
     signal?: AbortSignal;
+    executeAction?: MountedAuthoringActionExecute;
   }>,
 ): Promise<PromptDocRevisionV1> {
   const artifactId = String(params.artifactId ?? '').trim();
   if (!artifactId) throw new Error('invalid_artifact_id');
-  const { serverId, signal, ...request } = params;
-  const result = await (await import('@/sync/ops/actions/defaultActionExecutor')).createDefaultActionExecutor().execute(
-    'prompt_doc.update', { ...request, artifactId }, { surface: 'ui', serverId: serverId ?? undefined, signal },
-  );
-  if (!result.ok) {
-    if (result.errorCode === 'artifact_organization_failed') {
-      const details = ArtifactOrganizationMutationFailureDetailsV1Schema.safeParse(result.details);
-      if (details.success) throw new ArtifactOrganizationMutationFailureV1(details.data);
-    }
-    throw Object.assign(new Error(result.error), { code: result.errorCode, result });
-  }
-  const output = result.result;
+  const { serverId, expectedAccountId, signal, executeAction, ...request } = params;
+  const result = executeAction ? await executeAction('prompt_doc.update', { ...request, artifactId }, { signal })
+    : await (await import('@/sync/ops/actions/defaultActionExecutor')).createDefaultActionExecutor().execute(
+      'prompt_doc.update', { ...request, artifactId }, { surface: 'ui', serverId: serverId ?? undefined, expectedAccountId, signal },
+    );
+  const output = readPromptDocActionOutput(result);
   const revision = output && typeof output === 'object' && 'revision' in output
     ? PromptDocRevisionV1Schema.safeParse(output.revision) : null;
   if (!revision?.success) throw new Error('prompt_doc_update_receipt_unavailable');
   return revision.data;
 }
 
-export async function duplicatePromptDoc(artifactId: string, options?: Readonly<{ serverId?: string | null; signal?: AbortSignal }>): Promise<string> {
+export async function duplicatePromptDoc(artifactId: string, options?: Readonly<{
+  serverId?: string | null; expectedAccountId?: string; signal?: AbortSignal; executeAction?: MountedAuthoringActionExecute;
+}>): Promise<string> {
   return await withUiPromptLibraryArtifactStore(async (store, account) => {
     const existing = await store.read(artifactId, { signal: options?.signal });
     if (existing?.header?.kind !== 'prompt_doc.v2')
@@ -86,18 +91,19 @@ export async function duplicatePromptDoc(artifactId: string, options?: Readonly<
     const organization = read.header;
 
     return await createPromptDoc({
-        title: `${header.title || 'Prompt'} Copy`,
-        markdown: parsed.data.markdown,
-        folderId: organization.folderId ?? null,
-        tags: organization.tags ?? [],
+      title: `${header.title || 'Prompt'} Copy`,
+      markdown: parsed.data.markdown,
+      folderId: organization.folderId ?? null,
+      tags: organization.tags ?? [],
       serverId: store.organization.serverId,
+      expectedAccountId: account.accountId,
       signal: options?.signal,
-      executeAction: async (actionId, request, execution) => {
+      executeAction: options?.executeAction ?? (async (actionId, request, execution) => {
         const { executeDefaultActionInCapturedAccount } = await import('@/sync/ops/actions/defaultActionExecutor');
         return executeDefaultActionInCapturedAccount(account, actionId, request, {
           surface: 'ui', serverId: account.serverId, expectedAccountId: account.accountId, signal: execution?.signal,
         });
-      },
+      }),
     });
   }, options);
 }

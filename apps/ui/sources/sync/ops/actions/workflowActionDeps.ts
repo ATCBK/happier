@@ -57,6 +57,7 @@ import { storage } from '@/sync/domains/state/storage';
 import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 import { loadDaemonMergedProjectionCacheEntry } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
 import { resolveSessionActionDefaultBackend } from '@/sync/domains/session/resolveSessionActionDefaultBackend';
+import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { sessionRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc';
 import { randomUUID } from '@/platform/randomUUID';
 import { createEncryptionFromAuthCredentials } from '@/auth/encryption/createEncryptionFromAuthCredentials';
@@ -82,12 +83,13 @@ function createUiTriggerSessionResolver(account: LazyActionAccountContext): NonN
         account.assertCurrent();
         if (!areServerProfileIdentifiersEquivalent(getActiveServerSnapshot().serverId, account.serverId)) targetUnavailable();
         const session = storage.getState().sessions[sessionId];
-        const machineId = session?.metadata?.machineId?.trim();
-        const directory = session?.metadata?.path?.trim();
+        const ownerMetadata = session ? readSessionOwnerMetadataView(session) : null;
+        const machineId = ownerMetadata?.machineId?.trim();
+        const directory = ownerMetadata?.path?.trim();
         if (!session || !machineId || !directory) targetUnavailable();
         const agentTarget = resolveSessionActionDefaultBackend({ session })?.agentTarget;
         const selection = agentTarget ? WorkflowStepExecutionSelectionSchema.safeParse({
-            agentTarget, ...(session.metadata?.permissionMode ? { permissionMode: session.metadata.permissionMode } : {}),
+            agentTarget, ...(ownerMetadata?.permissionMode ? { permissionMode: ownerMetadata.permissionMode } : {}),
         }) : null;
         const facts = { project: { machineId, directory }, ...(selection?.success ? { executionSelection: selection.data } : {}) };
         if (session.active !== true) return { ...facts, nativeGoalOwner: false };
@@ -385,6 +387,7 @@ export function createUiWorkflowAction(params: Readonly<{
             // An addressed Home must not publish private content into another focused Account.
             const receipt = WorkflowActionOutputSchemasV1['workflow.trigger.run_now'].safeParse(result);
             if (receipt.success) {
+                if (receipt.data.run.automationId !== args.input.automationId) return unavailable;
                 const active = getActiveServerAccountScope();
                 if (active?.accountId === account.accountId
                     && areServerProfileIdentifiersEquivalent(active.serverId, account.serverId)) {

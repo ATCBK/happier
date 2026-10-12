@@ -1,8 +1,6 @@
 import type { Message } from '@happier-dev/session-core/messages';
 import { createReducer, reducer } from '@happier-dev/session-core/reducer';
 import { buildSessionMessagesPath } from '@happier-dev/protocol/sessions/messages/sessionMessagesPageV1';
-import { isSessionActionConfirmationRequest } from '@happier-dev/protocol/sessions/metadata/sessionActionConfirmationsV1';
-import { resolvePermissionToolCallLocations } from '@/utils/sessions/permissions/resolvePermissionToolCallLocations';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { normalizeSessionAddress, type SessionAddress } from '@/sync/domains/session/sessionAddress';
 import { listPendingSessionRequests, type SessionPendingRequest } from '@/sync/domains/session/pending/listPendingSessionRequests';
@@ -25,8 +23,7 @@ export type PendingNavigationDetailsResult =
 export async function readPendingNavigationDetails(
     address: SessionAddress,
     expectedScope?: ServerAccountScope,
-    options: Readonly<{ signal?: AbortSignal; reuse?: Extract<PendingNavigationDetailsResult, { kind: 'available' }>;
-        locateRequestId?: string }> = {},
+    options: Readonly<{ signal?: AbortSignal; reuse?: Extract<PendingNavigationDetailsResult, { kind: 'available' }> }> = {},
 ): Promise<PendingNavigationDetailsResult> {
     if (options.signal?.aborted) return { kind: 'unavailable', reason: 'cancelled' };
     const target = normalizeSessionAddress(address.serverId, address.sessionId);
@@ -67,8 +64,6 @@ export async function readPendingNavigationDetails(
             const projectedCount = (session.pendingPermissionRequestCount ?? 0) + (session.pendingUserActionRequestCount ?? 0);
             const stateComplete = (stateRequests.length > 0 && stateRequests.length >= projectedCount)
                 || (session.metadataLayoutVersion === 1 && projectedCount === 0);
-            const selected = options.locateRequestId ? stateRequests.find(request => request.id === options.locateRequestId) : null;
-            const needsLocation = options.locateRequestId !== undefined && selected !== undefined && !isSessionActionConfirmationRequest(selected ?? {});
             // Legacy/incomplete snapshots can still have transcript-only
             // identities. Reuse the selected transcript during fresh revalidation
             // instead of paging it again; completion comes from the new snapshot.
@@ -83,7 +78,7 @@ export async function readPendingNavigationDetails(
                 for (const message of reducer(reusedReduction, [], session.agentState).messages) refreshed.set(message.id, message);
                 reusedMessages = Array.from(refreshed.values());
             }
-            if (stateComplete && (!needsLocation || (reusedMessages && reusedMessages.length > 0))) {
+            if (stateComplete) {
                 return { kind: 'available', session, messages: reusedMessages ?? [], requests: stateRequests,
                     ...(reusedReduction ? { reduction: reusedReduction } : {}) };
             }
@@ -122,13 +117,9 @@ export async function readPendingNavigationDetails(
                     messagesById.set(message.id, message);
                 }
                 requests = listPendingSessionRequests(session, Array.from(messagesById.values()));
-                if (options.locateRequestId && resolvePermissionToolCallLocations({
-                    permissionIds: [options.locateRequestId], messageIdsOldestFirst: Array.from(messagesById.keys()),
-                    messagesById: Object.fromEntries(messagesById),
-                }).get(options.locateRequestId)) break;
                 // Known incomplete snapshots need only their missing identities;
                 // legacy snapshots without a count still exhaust the fallback.
-                if (!options.locateRequestId && projectedCount > stateRequests.length && requests.length >= projectedCount) break;
+                if (projectedCount > stateRequests.length && requests.length >= projectedCount) break;
                 if (page.page.hasMore !== true) break;
                 const next = page.page.nextBeforeSeq;
                 if (typeof next !== 'number' || next <= 0 || (beforeSeq !== undefined && next >= beforeSeq)) {

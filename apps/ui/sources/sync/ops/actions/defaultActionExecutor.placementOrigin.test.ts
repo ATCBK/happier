@@ -59,7 +59,7 @@ function buildSpawnInput(serverId: string) {
         agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
         transcriptStorage: 'persisted', profileId: null, environmentVariables: null,
         resumeSessionId: null, permissionMode: 'default', permissionModeUpdatedAt: 1,
-        modelSelection: null, mcpSelection: null, connectedServices: null, terminal: null,
+        modelSelection: null, capabilitySelection: null, connectedServices: null, terminal: null,
         windowsRemoteSessionLaunchMode: null, windowsRemoteSessionConsole: null,
         windowsTerminalWindowName: null, runtimeDescriptorV1: null, acpSessionModeId: null,
         sessionConfigOptionOverrides: null, automation: null,
@@ -125,7 +125,7 @@ describe('Session spawn first-dispatch placement origin', () => {
         });
         const input = buildSpawnInput(serverId);
         const result = await createDefaultActionExecutor().execute('session.spawn_new', input, { surface: 'ui', serverId });
-        expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
+        expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { type: 'success' } });
         expect(outgoing).toHaveLength(1);
         expect(outgoing[0]?.method).toBe(`machine-a:${RPC_METHODS.SESSION_SPAWN_NEW}`);
         expect(outgoing[0]?.params).toMatchObject({ executionTarget: { serverId, machineId: 'machine-a' }, creationKey: 'creation-a' });

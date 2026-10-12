@@ -88,6 +88,7 @@ async function callDetachedExecutionRunRpc(
             ...(getRequest?.success && (getRequest.data.waitForInputId || getRequest.data.waitForOutput)
                 ? { operationTimeoutMs: null } : {}),
             ...(opts?.signal ? { signal: opts.signal } : {}),
+            ...(opts?.onTransportIssued ? { onIssued: opts.onTransportIssued } : {}),
         });
     } catch (error) {
         return executionRunFailure(
@@ -149,7 +150,9 @@ export function createUiExecutionRunActionDeps(scope?: ServerAccountScope): UiEx
             await callDetachedExecutionRunRpc(SESSION_RPC_METHODS.EXECUTION_RUN_SEND, request, opts),
         executionRunStop: async (sessionId, request, opts) => sessionId === null
             ? await callDetachedExecutionRunRpc(SESSION_RPC_METHODS.EXECUTION_RUN_STOP, request, opts)
-            : await sessionExecutionRunStop(sessionId, request, { serverId: opts?.serverId, ...(scope ? { scope } : {}) }),
+            : await sessionExecutionRunStop(sessionId, request, { serverId: opts?.serverId, ...(scope ? { scope } : {}),
+                ...(opts?.onTransportIssued ? { onIssued: opts.onTransportIssued } : {}),
+                ...(opts?.signal ? { signal: opts.signal } : {}) }),
         executionRunCancelTurn: async (sessionId, request, opts) => sessionId === null
             ? await callDetachedExecutionRunRpc(SESSION_RPC_METHODS.EXECUTION_RUN_CANCEL_TURN_V1, request, opts)
             : await sessionExecutionRunCancelTurn(sessionId, request, { serverId: opts?.serverId, ...(scope ? { scope } : {}) }),

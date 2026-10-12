@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { renderHook, standardCleanup } from '@/dev/testkit';
+import { flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installSettingsViewCommonModuleMocks } from '@/components/settings/settingsViewTestHelpers';
 
@@ -16,8 +16,18 @@ vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async (importOrigin
 
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
-// Tauri event subscription is the desktop OS boundary; the bridge and runner remain real.
-vi.mock('@tauri-apps/api/event', () => ({ listen: async () => () => {} }));
+function installDesktopOsBoundary(invoke: (command: string, args: Record<string, unknown>) => Promise<unknown>) {
+    let callbackId = 0;
+    // The actual Tauri event SDK reads the WebView globals, while Happier's command seam
+    // also accepts globalThis. Both expose the same genuine native IPC boundary here.
+    const internals = { transformCallback: () => ++callbackId,
+        invoke: async (command: string, args: Record<string, unknown> = {}) =>
+            command === 'plugin:event|listen' ? ++callbackId
+                : command === 'plugin:event|unlisten' ? undefined : invoke(command, args) };
+    vi.stubGlobal('__TAURI_INTERNALS__', internals);
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: internals,
+        __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => {} } });
+}
 const { storage } = await import('@/sync/domains/state/storage');
 void storage;
 const [{ createUiRemoteHostActionExecuteV1 }, { captureLazyActionAccountContext }] = await Promise.all([
@@ -29,7 +39,7 @@ afterEach(async () => { await standardCleanup(); vi.unstubAllGlobals(); vi.unstu
 it('starts the exact desktop stop task and leaves terminal failure settlement with the incumbent runner', async () => {
     const specs: unknown[] = [];
     vi.stubEnv('EXPO_PUBLIC_SYSTEM_TASKS_RUNNER_MODE', 'tauri');
-    vi.stubGlobal('__TAURI_INTERNALS__', { invoke: async (command: string, args: Record<string, unknown>) => {
+    installDesktopOsBoundary(async (command, args) => {
         if (command === 'start_system_task') {
             specs.push(JSON.parse(String(args.specJson)));
             return { taskId: 'desktop-stop-exact' };
@@ -38,12 +48,12 @@ it('starts the exact desktop stop task and leaves terminal failure settlement wi
             protocolVersion: 1, taskId: 'desktop-stop-exact', ok: false, error: { code: 'stop_failed', message: 'Stop failed' },
         } };
         throw new Error(`Unexpected desktop command: ${command}`);
-    } });
+    });
     const serverId = await home.addHome({ name: 'Desktop tunnel', serverUrl: 'https://desktop-tunnel.test', accountId: 'owner' });
     const account = await captureLazyActionAccountContext(serverId);
     try {
         const result = await createUiRemoteHostActionExecuteV1(account)({ actionId: 'remote_hosts.tunnel.stop',
-            input: { target: { kind: 'desktop', tunnelKey: 'exact-private-tunnel' } } }, {});
+            input: { target: { kind: 'desktop', tunnelKey: 'exact-private-tunnel' } } }, { surface: 'ui', authority: 'present_user' });
         expect(result).toEqual({ ok: true, result: { status: 'task_started', taskId: 'desktop-stop-exact' } });
         expect(specs).toEqual([{ protocolVersion: 1, kind: 'daemon.sshTunnel.stop.v1', params: { tunnelKey: 'exact-private-tunnel' } }]);
         const { getDefaultSystemTaskRunner } = await import('@/components/systemTasks');
@@ -55,18 +65,22 @@ it('starts the exact desktop stop task and leaves terminal failure settlement wi
 });
 
 it('preserves desktop bridge failure settlement through mounted Action admission', async () => {
+    let stopAttempted = false;
     vi.stubEnv('EXPO_PUBLIC_SYSTEM_TASKS_RUNNER_MODE', 'tauri');
-    vi.stubGlobal('__TAURI_INTERNALS__', { invoke: async (command: string, args: Record<string, unknown>) => {
+    installDesktopOsBoundary(async (command, args) => {
         if (command === 'start_system_task') {
             const spec = JSON.parse(String(args.specJson));
-            if (spec.kind === 'daemon.sshTunnel.stop.v1') throw new Error('system task bridge unavailable');
+            if (spec.kind === 'daemon.sshTunnel.stop.v1') {
+                stopAttempted = true;
+                throw new Error('system task bridge unavailable');
+            }
             return { taskId: 'desktop-list-for-stop-error' };
         }
         if (command === 'get_system_task_snapshot') return { events: [], result: {
             protocolVersion: 1, taskId: 'desktop-list-for-stop-error', ok: true, data: { ok: true, tunnels: [] },
         } };
         throw new Error(`Unexpected desktop command: ${command}`);
-    } });
+    });
     await loadSyncSingletonForTests();
     const { resetScopedHomeActionExecutorsForTests } = await import('@/sync/ops/actions/scopedHomeActionExecutor');
     resetScopedHomeActionExecutorsForTests();
@@ -74,16 +88,21 @@ it('preserves desktop bridge failure settlement through mounted Action admission
         serverIdentityId: 'desktop-stop-error', accountId: 'owner', currentAccount: true });
     const settings = { ...storage.getState().settings, actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1,
         approvalWaivedSurfaces: { 'remote_hosts.tunnel.stop': ['ui'] } }) };
-    storage.setState({ settings, settingsVersion: 1 });
+    const { resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
+    const scope = { serverId: resolveServerProfileScopeIdForIdentifier(serverId), accountId: 'owner' };
+    storage.setState({ profileScope: scope, settingsScope: scope, settings, settingsVersion: 1 });
     home.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: settings }, version: 1 } });
     const { useRemoteHostSshTunnelControl } = await import('@/components/settings/remoteHosts/useRemoteHostSshTunnelControl');
     const { t } = await import('@/text');
     const hook = await renderHook(useRemoteHostSshTunnelControl);
     try {
-        await act(async () => { await hook.getCurrent().stopTunnel('exact-private-failed-tunnel'); });
-        await waitForHomeGovernance(() => {
-            expect(hook.getCurrent().isUnavailable).toBe(true);
-            expect(hook.getCurrent().lastErrorMessage).toBe(t('settings.systemTaskBridgeUnavailable'));
-        });
+        // The real secure-storage scope producer resolves asynchronously after mount.
+        await flushHookEffects({ cycles: 20 });
+        let stopped: Promise<string | null> | undefined;
+        await act(async () => { stopped = hook.getCurrent().stopTunnel('exact-private-failed-tunnel'); });
+        await waitForHomeGovernance(() => expect(stopAttempted).toBe(true));
+        await act(async () => { await stopped; });
+        expect(hook.getCurrent().isUnavailable).toBe(true);
+        expect(hook.getCurrent().lastErrorMessage).toBe(t('settings.systemTaskBridgeUnavailable'));
     } finally { await hook.unmount(); }
 });

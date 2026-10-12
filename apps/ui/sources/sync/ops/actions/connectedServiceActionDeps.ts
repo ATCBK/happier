@@ -9,8 +9,9 @@ import type { LazyActionAccountContext } from './actionAccountContext';
 import type { PreparedConnectedMetadataCleanup } from '@/sync/api/account/apiConnectedMetadataCatalog';
 import { BUNDLED_ACCOUNT_CONNECTED_SERVICE_DECLARATIONS } from '@/agents/registry/generatedBundledPluginEntries';
 import { getAccountConnectedServiceConfigurationMode } from '@/sync/domains/connectedServices/connectedServiceRegistry';
+import type { ProviderAccountUsageQuotaReadOptions } from '@/sync/api/account/apiProviderAccountUsage';
 
-export function createUiConnectedServiceAction(account: LazyActionAccountContext): NonNullable<ActionExecutorDeps['connectedServiceAction']> {
+export function createUiConnectedServiceAction(account: LazyActionAccountContext, quotaReadOptions?: Pick<ProviderAccountUsageQuotaReadOptions, 'readAllHistory'>): NonNullable<ActionExecutorDeps['connectedServiceAction']> {
     const invoke = async ({ actionId, input, signal }: Parameters<NonNullable<ActionExecutorDeps['connectedServiceAction']>>[0], prepare: boolean) => {
         const assertCurrent = () => { signal?.throwIfAborted(); account.assertCurrent(); };
         const localSettings = actionId === 'connectedServices.identityPrivacy.set'
@@ -119,7 +120,11 @@ export function createUiConnectedServiceAction(account: LazyActionAccountContext
                 },
                 resetQuota: async (args) => {
                     const { connectedServiceQuotaRecoveryCreditConsume } = await import('@/sync/ops/connectedServiceQuotaRecoveryCredits');
-                    return await connectedServiceQuotaRecoveryCreditConsume({ ...args, serverId: account.serverId });
+                    assertCurrent();
+                    return await connectedServiceQuotaRecoveryCreditConsume({ ...args,
+                        serverId: account.serverId, accountId: account.accountId, assertCurrent,
+                        ...(signal ? { signal } : {}),
+                    });
                 },
                 readQuota: async input => {
                     const accountMode = await account.resolveAccountMode();
@@ -127,6 +132,7 @@ export function createUiConnectedServiceAction(account: LazyActionAccountContext
                     const { getProviderAccountUsageQuota } = await import('@/sync/api/account/apiProviderAccountUsage');
                     assertCurrent();
                     return await getProviderAccountUsageQuota(account.credentials, input, {
+                        ...quotaReadOptions,
                         accountMode, request: account.request, assertCurrent,
                         readEnteredMonthlyPrice: async () => {
                             const [{ readConnectedMetadataCatalogInContext }, { readConnectedSubscriptionMonthlyPriceV1 }] = await Promise.all([

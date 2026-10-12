@@ -39,7 +39,7 @@ vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
 
 import { createServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { setActiveServerId, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
-import { listTeamCredentialDirectMaterialPreparation } from './teamCredentialOperations';
+import { getTeamCredentialPreparation } from './teamCredentialOperations';
 
 import {
     resetTeamActionClientForTests,
@@ -82,9 +82,9 @@ describe('runTeamAction', () => {
     it('checks credential preparation through the registered read Action without requesting the recipient census', async () => {
         const serverId = (await upsertServerProfile({ serverUrl: 'https://home-a.example', name: 'A' })).id;
         await setActiveServerId(serverId, { scope: 'device' });
-        const observation = { status: 'not_ready', reason: 'preparation_pending', counts: { ready: 2, pending: 1 } };
+        const observation = { status: 'not_ready', reason: 'preparation_pending', counts: { pending: 1 } };
         runtimeFetchMock.mockResolvedValue(json(observation));
-        const outcome = await listTeamCredentialDirectMaterialPreparation({
+        const outcome = await getTeamCredentialPreparation({
             scope: createServerAccountScope(serverId, 'account')!, teamId: 'team /1', resourceId: 'resource?/1',
         });
         expect(outcome).toEqual({ kind: 'succeeded', value: observation });
@@ -235,8 +235,10 @@ describe('Home domain Action failure decoding', () => {
             .toEqual({ kind: 'conflict', retryable: false, code: 'group_name_taken' });
         expect(homeDomainFailureFromActionFailure({ errorCode: 'home_policy_invalid' }))
             .toEqual({ kind: 'invalid', retryable: false, code: 'home_policy_invalid' });
+        // The Home answered with a resource refusal; an absent operation is
+        // separately represented by unsupported_action above.
         expect(homeDomainFailureFromActionFailure({ errorCode: 'home_account_not_found' }))
-            .toEqual({ kind: 'unsupported', retryable: false, code: 'home_account_not_found' });
+            .toEqual({ kind: 'forbidden', retryable: false, code: 'home_account_not_found' });
         expect(homeDomainFailureFromActionFailure({ errorCode: 'home_policy_revision_conflict' }))
             .toEqual({ kind: 'conflict', retryable: false, code: 'home_policy_revision_conflict' });
     });
@@ -263,11 +265,11 @@ describe('Home domain Action failure decoding', () => {
         expect(homeDomainFailureFromActionFailure({
             errorCode: 'provider_endpoint_unavailable',
             details,
-        })).toEqual({ kind: 'unknown', retryable: false, code: null });
+        })).toEqual({ kind: 'unknown', retryable: false, code: 'provider_endpoint_unavailable' });
         expect(homeDomainFailureFromActionFailure({
             errorCode: 'provider_endpoint_rate_limited',
             details: { code: 'provider_endpoint_rate_limited', bearer: 'must-not-pass' },
-        })).toEqual({ kind: 'unknown', retryable: false, code: null });
+        })).toEqual({ kind: 'unknown', retryable: false, code: 'provider_endpoint_rate_limited' });
 
         const authenticationDetails = {
             error: 'team_authentication_policy_unavailable',

@@ -3,13 +3,21 @@ import { createMcpServerActionExecuteV1, projectMcpServerActionFailureV1,
     MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/mcp/servers/serverActionsV1';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { readRpcRequestDisposition } from '@happier-dev/sync-client';
+import { randomUUID } from '@/platform/randomUUID';
 import { readMcpServerCatalogInContext, mutateMcpServerCatalogInContext } from '@/sync/api/account/apiMcpServerCatalog';
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 import type { LazyActionAccountContext } from './actionAccountContext';
+import { createUiConnectedServiceAction } from './connectedServiceActionDeps';
+import { resolveUiAccountActionFallbackMachineId } from './accountActionDeps';
+import { CONNECTED_ACCOUNT_CONTROL_COMMAND_RPC_METHOD, ConnectedAccountControlCommandRequestSchema } from '@happier-dev/protocol/connect/connectedAccountDaemonRpcV1';
+import { HOST_CONNECTED_ACCOUNT_SERVICE_REF_V1 } from '@happier-dev/protocol/connect/qualifiedConnectedAccountPersistence';
+import { storage } from '@/sync/domains/state/storageStore';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 
 /** Reuse the catalog and RPC owners within the Action host's captured Account lifetime. */
-export function createUiMcpServerActionExecuteV1(account: LazyActionAccountContext): NonNullable<ActionExecutorDeps['mcpServerAction']> {
+export function createUiMcpServerActionExecuteV1(account: LazyActionAccountContext,
+    connectedServiceAction = createUiConnectedServiceAction(account)): NonNullable<ActionExecutorDeps['mcpServerAction']> {
     return async request => {
         const { context } = request;
         const retired = new AbortController();
@@ -19,6 +27,27 @@ export function createUiMcpServerActionExecuteV1(account: LazyActionAccountConte
         try {
             assertCurrent();
             return await createMcpServerActionExecuteV1({
+                connectedServiceAction,
+                resolveAdministrationMachine: async () => {
+                    assertCurrent();
+                    const [{ resolveFreshMachineAdministrationExecutionTarget }, { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 }] = await Promise.all([
+                        import('@/sync/domains/machines/administration/useTargetSelection'),
+                        import('@/sync/domains/machines/administration/selectionPreferences'),
+                    ]);
+                    assertCurrent();
+                    const selected = storage.getState().settings.machineAdministrationTargetsLocalV1[MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.connectedAccounts] ?? null;
+                    const target = resolveFreshMachineAdministrationExecutionTarget(selected, { accountScope: account.accountLifetime.scope });
+                    return target && areServerProfileIdentifiersEquivalent(target.profile.id, account.serverId)
+                        ? target.machine.id : resolveUiAccountActionFallbackMachineId(account);
+                },
+                describeConnectedService: machineId => machineRpcWithServerScope({ machineId, serverId: account.serverId,
+                    accountId: account.accountId, preferScoped: true, requestId: context.actionRequestId,
+                    method: CONNECTED_ACCOUNT_CONTROL_COMMAND_RPC_METHOD,
+                    payload: ConnectedAccountControlCommandRequestSchema.parse({ v: 1, machineId,
+                        command: { operation: 'describeService', service: HOST_CONNECTED_ACCOUNT_SERVICE_REF_V1 } }),
+                    authorization: context.rpcSessionAuthorization, signal: cancellation.signal,
+                    operationTimeoutMs: null, onDispatched: assertCurrent }),
+                ruleWriteContext: () => ({ nowMs: Date.now(), newId: randomUUID }),
                 readCatalog: async () => {
                     const snapshot = await readMcpServerCatalogInContext(account, cancellation.signal);
                     assertCurrent();

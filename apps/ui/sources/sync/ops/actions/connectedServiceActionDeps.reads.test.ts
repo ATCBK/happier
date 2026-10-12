@@ -14,6 +14,8 @@ import * as machineRpc from '@/sync/runtime/orchestration/serverScopedRpc/server
 import type { ServerScopedMachineRpcParams } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcTypes';
 import { ConnectedPresentationRowMutationV1Schema, type ConnectedPresentationRecordV1 } from '@happier-dev/protocol/connect/connectedAccountPresentationRowsV1';
 
+vi.mock('socket.io-client', async (importOriginal) =>
+  (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 installDisconnectedServerSocketBoundary();
 afterEach(() => { vi.restoreAllMocks(); });
 
@@ -87,7 +89,7 @@ it.each(['current', 'retired'] as const)('opens provider billing locally only fo
     return { status: 'described', service, occurrenceId: 'runtime',
       sourceCustody: { kind: 'bundled_first_party', packagedRuntime: { kind: 'cli_version_root', versionRootId: 'cli-1' } },
       descriptor: { id: service.localId, title: 'Claude', billingUrl: destination, authentication: { defaultModeId: 'oauth', modes: [
-        { id: 'oauth', kind: 'oauthAuthorizationCode', pkce: 'required', outcomeReconciliation: 'none' },
+        { id: 'oauth', kind: 'oauthAuthorizationCode', callbackUrl: 'http://127.0.0.1:4000/auth/callback', pkce: 'required', outcomeReconciliation: 'none' },
       ] } }, accounts: [{ ref: account, status: 'connected', authenticationModeId: 'oauth', configurationReady: true,
         configurationRevision: null, scopes: [], revisionSemantics: 'legacy_unfenced', credentialRevision: null }] } as R;
   });

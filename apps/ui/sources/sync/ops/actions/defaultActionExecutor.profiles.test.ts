@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
@@ -9,6 +9,9 @@ import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 import { encodeBase64 } from '@/encryption/base64';
 import { invalidateAccountEncryptionModeCache } from '@/sync/api/account/apiAccountEncryptionMode';
 import { resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
@@ -41,8 +44,9 @@ import { AuthoringMemoryMutationRequestV1Schema, buildProjectLastOpenedMemoryKey
     type AuthoringMemoryRowV1 } from '@happier-dev/protocol/account/authoringMemory';
 import { importLegacyAuthoringMemorySetting } from '@happier-dev/protocol/account/authoringMemoryImport';
 import { LegacyLastUsedProfileSchema } from '@happier-dev/protocol/account/settings/legacyAuthoringMemorySettingsV1';
-import { useApplyProfileSave, useDeleteAiLaunchProfile } from '@/sync/store/settingsWriters';
+import { useApplyProfileSave, useDeleteAiLaunchProfile, useProfileFavoriteIdsMutable } from '@/sync/store/settingsWriters';
 import { useProfilesCollection } from '@/components/settings/profiles/useProfilesCollection';
+import { useProfilePromptStack } from '@/sync/store/useProfilePromptStack';
 
 vi.mock('socket.io-client', async original => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
 installDisconnectedServerSocketBoundary();
@@ -53,6 +57,8 @@ vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async importOrigina
 });
 
 const navigationBoundary = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn(), back: vi.fn() }));
+vi.mock('expo-router', async () =>
+    (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({ router: navigationBoundary }).module);
 // Only HTTP, credential persistence and native navigation boundaries are substituted.
 installApprovalCommonModuleMocks({ storage: original => original(), reactNavigation: async () =>
     (await import('@/dev/testkit/mocks/reactNavigation')).createReactNavigationNativeMock(),
@@ -67,6 +73,7 @@ const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
 const { router } = await import('expo-router');
 const { ProfileDetailScreen } = await import('@/components/settings/profiles/ProfileDetailScreen');
 const initialState = getStorage().getState();
+beforeAll(loadSyncSingletonForTests);
 let disposeConnection: (() => Promise<void>) | undefined;
 afterEach(async () => {
     standardCleanup();
@@ -83,8 +90,13 @@ afterEach(async () => {
 });
 
 async function fixture() {
-    Object.values(navigationBoundary).forEach(method => method.mockClear());
-    const navigation = navigationBoundary;
+    // Static imports can initialize the shared approval router before its optional
+    // factory is installed. Observe the actual native boundary consumed by Actions.
+    const navigation = {
+        push: vi.spyOn(router, 'push').mockClear(),
+        replace: vi.spyOn(router, 'replace').mockClear(),
+        back: vi.spyOn(router, 'back').mockClear(),
+    };
     const home = await upsertAndActivateServer({ serverUrl: 'https://profile-action-home.test', scope: 'tab' });
     await upsertAndActivateServer({ serverUrl: 'https://focused-profile-action-home.test', scope: 'tab' });
     const token = `header.${encodeBase64(new TextEncoder().encode(JSON.stringify({ sub: 'owner' })), 'base64url')}.signature`;
@@ -104,9 +116,20 @@ async function fixture() {
     let settings: Record<string, unknown> = { favoriteProfiles: ['existing'], futurePreference: { version: 'initial' } };
     let conflictFavorite = false;
     let rows: ProfileRowV1[] = [];
+    const catalogAfterWrite = { pending: false, readStarted: false, release: undefined as (() => void) | undefined };
+    const settingsAfterWrite = { pending: false, readStarted: false, release: undefined as (() => void) | undefined };
+    const delayedProfileReceipt = { pending: false, committed: false, release: undefined as (() => void) | undefined };
+    const historyCleanup = { active: false, pending: false, release: undefined as (() => void) | undefined };
+    const transferControl = () => historyCleanup.active ? { status: 'present', revision: 1, content: { t: 'plain', v: {
+        v: 1, phase: 'active', sourceSettingsVersion: 1, migratedLogicalRevision: 1, inventory: [],
+    } } } : { status: 'absent' };
     let referenceGuardRevision: number | 'absent' = 'absent';
     const profileMutations: ProfileRowMutationV1[] = [];
     const artifacts = new Map<string, Artifact>();
+    const approvalArtifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'owner', encryptionMode: 'plain' });
+    let approvalEnabled = false;
+    let ownedArtifactEnabled = false;
+    let artifactWriteAcknowledged = false;
     const savedSecretResources = SavedSecretResourceMaterialsResponseV1Schema.parse({ resources: [{
         resourceId: 'private-key', encryptionMode: 'plain',
         entry: { ref: formatSharedSavedSecretRefV1('private-key'), source: 'shared_resource', relationship: 'owner',
@@ -118,7 +141,8 @@ async function fixture() {
     const editableRecord = (id: string, attachments?: Pick<ProfileRecordV1, 'enabled' | 'promptStack' | 'secretBindings'>) =>
         ProfileRecordV1Schema.parse({ v: 1, id, enabled: true, promptStack: [], secretBindings: {}, ...attachments,
             definition: { kind: 'inline', profile: { v: 2, id, name: 'Editable', createdAt: 1, updatedAt: 1,
-                extraEnvironmentVariables: [], defaultPermissionModeByTargetKey: {}, defaultPersistenceModeByTargetKey: {}, compatibilityByTargetKey: {} } } });
+                extraEnvironmentVariables: [], envVarRequirements: [{ name: 'API_KEY', kind: 'secret', required: true }],
+                defaultPermissionModeByTargetKey: {}, defaultPersistenceModeByTargetKey: {}, compatibilityByTargetKey: {} } } });
     const http: Parameters<typeof setRuntimeFetch>[0] = async (url, init) => {
         const target = new URL(String(url));
         if (target.pathname === '/health' || target.pathname === '/v1/auth/ping') return Response.json({});
@@ -126,7 +150,8 @@ async function fixture() {
         requests.push(`${init?.method ?? 'GET'} ${target.pathname}`);
         if (target.pathname === '/v1/features') return Response.json(createRootLayoutFeaturesResponse());
         if (target.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
-        if (target.pathname === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+        if (target.pathname === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture(
+            historyCleanup.active ? { settingsVersion } : {}));
         if (target.pathname === '/v2/account/settings') {
             if (init?.method === 'POST') {
                 const input = JSON.parse(String(init.body)) as { expectedVersion: number; content: { t: 'plain'; v: Record<string, unknown> } };
@@ -142,6 +167,11 @@ async function fixture() {
                 settings = input.content.v;
                 settingsVersion += 1;
                 return Response.json({ success: true, version: settingsVersion });
+            }
+            // Hold the refresh read, not the separate authoritative remembered-selection cleanup read.
+            if (settingsAfterWrite.pending && !settingsAfterWrite.readStarted && profileMutations.some(mutation => mutation.settingsCleanup)) {
+                settingsAfterWrite.readStarted = true;
+                await new Promise<void>(resolve => { settingsAfterWrite.release = resolve; });
             }
             return Response.json({ content: { t: 'plain', v: settings }, version: settingsVersion });
         }
@@ -176,10 +206,16 @@ async function fixture() {
             return Response.json(neighboringMemory.content === null ? { status: 'deleted', revision: neighboringMemory.revision }
                 : { status: 'present', revision: neighboringMemory.revision, content: neighboringMemory.content });
         }
-        if (target.pathname === '/v1/account/entity-rows/profiles') return Response.json({ status: 'listed', rows,
-            nextCursor: null, complete: true, diagnostics: [], referenceGuardRevision, transferControl: { status: 'absent' } });
+        if (target.pathname === '/v1/account/entity-rows/profiles') {
+            if (catalogAfterWrite.pending && (profileMutations.length > 0 || artifactWriteAcknowledged)) {
+                catalogAfterWrite.readStarted = true;
+                await new Promise<void>(resolve => { catalogAfterWrite.release = resolve; });
+            }
+            return Response.json({ status: 'listed', rows,
+                nextCursor: null, complete: true, diagnostics: [], referenceGuardRevision, transferControl: transferControl() });
+        }
         if (target.pathname.endsWith('/profiles/reference-guard')) return Response.json({ status: 'ready', revision: referenceGuardRevision });
-        if (target.pathname.endsWith('/profiles/transfer')) return Response.json({ status: 'absent' });
+        if (target.pathname.endsWith('/profiles/transfer')) return Response.json(transferControl());
         if (target.pathname === PROFILE_RECORD_READ_ROUTE_V1 && init?.method === 'POST') {
             const { id } = ProfileRowReadRequestV1Schema.parse(JSON.parse(String(init.body)));
             const current = rows.find(row => row.id === id);
@@ -208,9 +244,23 @@ async function fixture() {
             const revision = (current?.revision ?? 0) + 1;
             referenceGuardRevision = referenceGuardRevision === 'absent' ? 1 : referenceGuardRevision + 1;
             rows = [...rows.filter(row => row.id !== id), { id, revision, content: mutation.content }];
+            if (delayedProfileReceipt.pending) {
+                delayedProfileReceipt.pending = false;
+                delayedProfileReceipt.committed = true;
+                await new Promise<void>(resolve => { delayedProfileReceipt.release = resolve; });
+            }
             return Response.json({ status: 'updated', revision, cursor: revision, referenceGuardRevision });
         }
         if (target.pathname === '/v1/account/saved-secrets/resources/materials') return Response.json(savedSecretResources);
+        if (approvalEnabled || ownedArtifactEnabled) {
+            const response = approvalArtifacts.handle(target.pathname, init);
+            if (response) {
+                const result = await response;
+                if (ownedArtifactEnabled && target.pathname === '/v1/artifacts/owned-definition' && init?.method === 'POST' && result.ok)
+                    artifactWriteAcknowledged = true;
+                return result;
+            }
+        }
         if (target.pathname === '/v1/artifacts') {
             if (init?.method === 'POST') {
                 // The genuine HTTP boundary carries this incumbent typed Artifact create DTO.
@@ -227,14 +277,40 @@ async function fixture() {
             const artifact = artifacts.get(decodeURIComponent(target.pathname.slice('/v1/artifacts/'.length)));
             if (artifact) return Response.json(artifact);
         }
-        if (target.pathname === '/v2/account/settings/history') return Response.json({ snapshots: [] });
+        if (target.pathname === '/v2/account/settings/history') {
+            if (historyCleanup.active) {
+                historyCleanup.pending = true;
+                await new Promise<void>(resolve => { historyCleanup.release = resolve; });
+            }
+            return Response.json({ snapshots: [] });
+        }
         return Response.json({ error: 'not_found' }, { status: 404 });
     };
     setRuntimeFetch(http);
     const context = { serverId: home.id, surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } } as const;
-    return { executor: createDefaultActionExecutor(), context, requests, settingsMutations, profileMutations, navigation,
+    return { executor: createDefaultActionExecutor(), context, requests, settingsMutations, profileMutations, navigation, approvalArtifacts,
         artifacts: () => artifacts,
+        async seedOwnedArtifactProfile() {
+            const inline = editableRecord('editable');
+            if (inline.definition.kind !== 'inline') throw new Error('Expected an inline source');
+            const content = LaunchProfileArtifactV1Schema.parse({ kind: 'launch-profile.v1', profile: inline.definition.profile, secretBindings: {} });
+            const response = await approvalArtifacts.handle('/v1/artifacts', { method: 'POST', body: JSON.stringify({
+                id: 'owned-definition', header: encodePlainArtifactStoredContent(buildLaunchProfileArtifactHeaderV1(content)),
+                body: encodePlainArtifactStoredContent({ body: JSON.stringify(content) }), dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+            }) });
+            if (!response?.ok) throw new Error('Could not seed an owned Artifact');
+            ownedArtifactEnabled = true;
+            rows = [{ id: 'editable', revision: 4, content: { t: 'plain', v: ProfileRecordV1Schema.parse({
+                ...inline, definition: { kind: 'artifact', artifactId: 'owned-definition' },
+            }) } }];
+            return inline.definition.profile;
+        },
         profileRows: () => rows,
+        catalogAfterWrite,
+        settingsAfterWrite,
+        delayedProfileReceipt,
+        historyCleanup,
+        activateHistoryCleanup() { settings = {}; historyCleanup.active = true; },
         neighboringMemory: () => neighboringMemory,
         memory: () => memory,
         setMemoryEnvelope: (content: unknown) => { memory = content; },
@@ -276,8 +352,14 @@ async function fixture() {
         disableUiAction(actionId: string) {
             settings = { ...settings, actionsSettingsV1: { v: 1, actions: { [actionId]: { disabledSurfaces: ['ui'] } } } };
         },
+        requireUiApproval(actionId: string) {
+            approvalEnabled = true;
+            settings = { ...settings, actionsSettingsV1: { v: 1, actions: { [actionId]: { approvalRequiredSurfaces: ['ui'] } } } };
+        },
+        advanceProfileRevision() { rows = rows.map(row => ({ ...row, revision: row.revision + 1 })); },
         conflictFavorite: () => { conflictFavorite = true; },
         async mountHome() {
+            await (await import('@/dev/testkit/harness/syncSingletonLoader')).loadSyncSingletonForTests();
             const connected = await restoreServerAccountForTest({ serverUrl: home.serverUrl, credentials: { token }, request: http });
             disposeConnection = connected.dispose;
             const scope = { serverId: connected.home.id, accountId: 'owner' };
@@ -316,12 +398,211 @@ async function fixture() {
 }
 
 describe('UI Profile Action front door', () => {
+    it('settles a referenced Profile deletion while the post-ACK Settings refresh is pending', async () => {
+        const f = await fixture();
+        f.setProfile(undefined, 'existing');
+        await f.mountHome();
+        f.settingsAfterWrite.pending = true;
+        let settled: Awaited<ReturnType<typeof f.executor.execute>> | undefined;
+        const running = f.executor.execute('launch_profiles.delete', { id: 'existing', expectedRevision: 4 }, f.context)
+            .then(result => { settled = result; });
+        try {
+            await vi.waitFor(() => expect(f.settingsAfterWrite.readStarted).toBe(true));
+            await vi.waitFor(() => expect(settled).toMatchObject({ ok: true, result: { status: 'updated', revision: 5 } }));
+            expect(f.profileMutations[0]?.settingsCleanup).toBeDefined();
+            expect(f.profileRows()[0]).toMatchObject({ revision: 5, content: null });
+            expect(getStorage().getState().settingsVersion).toBe(1);
+        } finally {
+            f.settingsAfterWrite.pending = false;
+            f.settingsAfterWrite.release?.();
+            await running;
+        }
+        await vi.waitFor(() => expect(getStorage().getState().settingsVersion).toBe(2));
+    });
+    it('does not resurrect a deleted Profile when an older committed save receipt arrives late', async () => {
+        const f = await fixture();
+        f.setProfile();
+        await f.mountHome();
+        const content = f.profileRows()[0]?.content;
+        const definition = ProfileRecordV1Schema.parse(content?.t === 'plain' ? content.v : undefined).definition;
+        if (definition.kind !== 'inline') throw new Error('Expected an inline fixture');
+        f.delayedProfileReceipt.pending = true;
+        const saving = f.executor.execute('launch_profiles.save', { id: 'editable', expectedRevision: 4,
+            profile: { ...definition.profile, name: 'Earlier save' } }, f.context);
+        try {
+            await vi.waitFor(() => expect(f.delayedProfileReceipt.committed).toBe(true));
+            const deleted = await f.executor.execute('launch_profiles.delete', { id: 'editable', expectedRevision: 5 }, f.context);
+            expect(deleted).toMatchObject({ ok: true, result: { status: 'updated', revision: 6 } });
+            // Hold only the reread following the delayed receipt. The deletion is already committed and acknowledged.
+            f.catalogAfterWrite.pending = true;
+            f.delayedProfileReceipt.release?.();
+            expect(await saving).toMatchObject({ ok: true, result: { status: 'updated', revision: 5 } });
+            expect(getProfileCatalogSnapshot({ serverId: f.context.serverId, accountId: 'owner' })?.data).toEqual([]);
+        } finally {
+            f.catalogAfterWrite.pending = false;
+            f.catalogAfterWrite.release?.();
+            f.delayedProfileReceipt.release?.();
+            await saving;
+        }
+    });
+    it('publishes an acknowledged Artifact body edit while its catalog refresh is still pending', async () => {
+        const f = await fixture();
+        const profile = await f.seedOwnedArtifactProfile();
+        await f.mountHome();
+        f.catalogAfterWrite.pending = true;
+        let settled: Awaited<ReturnType<typeof f.executor.execute>> | undefined;
+        const running = f.executor.execute('launch_profiles.save', { id: 'editable', expectedRevision: 4,
+            profile: { ...profile, name: 'Saved Artifact draft', artifactId: 'owned-definition' },
+            expectedArtifactRevision: { headerVersion: 1, bodyVersion: 1 } }, f.context).then(result => { settled = result; });
+        try {
+            await vi.waitFor(() => expect(f.catalogAfterWrite.readStarted).toBe(true));
+            await vi.waitFor(() => expect(settled).toMatchObject({ ok: true, result: { status: 'updated' } }));
+            const artifact = getProfileCatalogSnapshot({ serverId: f.context.serverId, accountId: 'owner' })?.artifactsById.get('owned-definition');
+            expect(artifact?.revision).toEqual({ headerVersion: 2, bodyVersion: 2 });
+            expect(artifact?.body).toContain('Saved Artifact draft');
+        } finally {
+            f.catalogAfterWrite.pending = false;
+            f.catalogAfterWrite.release?.();
+            await running;
+        }
+    });
+    it('admits a Profile save from active destination rows without waiting for unrelated history maintenance', async () => {
+        const f = await fixture();
+        f.setProfile();
+        f.activateHistoryCleanup();
+        const content = f.profileRows()[0]?.content;
+        const definition = ProfileRecordV1Schema.parse(content?.t === 'plain' ? content.v : undefined).definition;
+        if (definition.kind !== 'inline') throw new Error('Expected an inline fixture');
+        let settled: Awaited<ReturnType<typeof f.executor.execute>> | undefined;
+        const running = f.executor.execute('launch_profiles.save', { id: 'editable', expectedRevision: 4,
+            profile: { ...definition.profile, name: 'Saved while cleaning' } }, f.context).then(result => { settled = result; });
+        try {
+            await vi.waitFor(() => expect(f.historyCleanup.pending).toBe(true));
+            await vi.waitFor(() => expect(settled).toMatchObject({ ok: true, result: { status: 'updated', revision: 5 } }));
+        } finally {
+            f.historyCleanup.active = false;
+            f.historyCleanup.release?.();
+            await running;
+        }
+    });
+    it.each(['save', 'create', 'delete'] as const)('settles an acknowledged %s while its catalog refresh is still pending', async operation => {
+        const f = await fixture();
+        f.setProfile();
+        await f.mountHome();
+        f.catalogAfterWrite.pending = true;
+        let settled: Awaited<ReturnType<typeof f.executor.execute>> | undefined;
+        const content = f.profileRows()[0]?.content;
+        const profile = ProfileRecordV1Schema.parse(content?.t === 'plain' ? content.v : undefined).definition;
+        if (profile.kind !== 'inline') throw new Error('Expected an inline fixture');
+        const id = operation === 'create' ? 'created' : 'editable';
+        const revision = operation === 'create' ? 1 : 5;
+        const running = f.executor.execute(operation === 'delete' ? 'launch_profiles.delete' : 'launch_profiles.save', operation !== 'delete'
+            ? { id, profile: { ...profile.profile, id, name: 'Saved draft' }, expectedRevision: operation === 'create' ? 'absent' : 4 }
+            : { id: 'editable', expectedRevision: 4 }, f.context).then(result => { settled = result; });
+        try {
+            await vi.waitFor(() => expect(f.catalogAfterWrite.readStarted).toBe(true));
+            await vi.waitFor(() => expect(settled).toMatchObject({ ok: true, result: { status: 'updated', revision } }));
+            const snapshot = getProfileCatalogSnapshot({ serverId: f.context.serverId, accountId: 'owner' });
+            const visible = snapshot?.data?.find(row => row.record.id === id);
+            if (operation !== 'delete') expect(visible).toMatchObject({ revision, record: { definition: { profile: { name: 'Saved draft' } } } });
+            else expect(visible).toBeUndefined();
+        } finally {
+            f.catalogAfterWrite.pending = false;
+            f.catalogAfterWrite.release?.();
+            await running;
+        }
+    });
+    it('settles mounted Profile prompt-stack approval before acknowledging the captured row edit', async () => {
+        const f = await fixture();
+        const originalEntry = { id: 'reviewed-entry', ref: { kind: 'doc' as const, artifactId: 'reviewed-prompt' },
+            enabled: true, placement: 'system_append' as const };
+        f.setProfile({ enabled: true, promptStack: [originalEntry], secretBindings: { KEEP: null } });
+        f.requireUiApproval('launch_profiles.prompt_stack.update');
+        await f.mountHome();
+        const hook = await renderHook(() => useProfilePromptStack('editable'));
+        let settled = false;
+        let failure: unknown;
+        let editing: Promise<void> | undefined;
+        act(() => { editing = hook.getCurrent().update({ kind: 'set_enabled', entryId: originalEntry.id, enabled: false })
+            .then(() => { settled = true; }, error => { settled = true; failure = error; }); });
+        await vi.waitFor(() => expect(f.approvalArtifacts.list()).toHaveLength(1));
+        const approval = f.approvalArtifacts.list()[0]!;
+        expect(JSON.parse(f.approvalArtifacts.readPlainBody(approval.id)!)).toMatchObject({
+            actionId: 'launch_profiles.prompt_stack.update', actionArgs: { id: 'editable', expectedRevision: 4,
+                intent: { kind: 'set_enabled', entryId: originalEntry.id, enabled: false } },
+        });
+        expect(settled).toBe(false);
+        expect(f.profileMutations).toEqual([]);
+        await decideApprovalAsInbox(f.context.serverId, approval.id, 'approve');
+        await act(async () => { await editing; });
+        expect(failure).toBeUndefined();
+        expect(settled).toBe(true);
+        expect(f.profileRows()[0]).toMatchObject({ revision: 5, content: { t: 'plain', v: {
+            enabled: true, secretBindings: { KEEP: null }, promptStack: [{ ...originalEntry, enabled: false }],
+        } } });
+        await hook.unmount();
+    });
+
+    it.each([false, true])('settles mounted save approval with its original revision (concurrent edit: %s)', async concurrentEdit => {
+        const f = await fixture();
+        f.setProfile();
+        f.requireUiApproval('launch_profiles.save');
+        await f.mountHome();
+        const onApprovalPending = vi.fn();
+        const hook = await renderHook(() => ({ save: useApplyProfileSave({ onApprovalPending }), collection: useProfilesCollection() }));
+        const profile = hook.getCurrent().collection.resolveProfile('editable');
+        if (!profile) throw new Error('Fixture Profile unavailable');
+        let settled = false;
+        let saving: Promise<unknown> | undefined;
+        act(() => { saving = hook.getCurrent().save({ profile: { ...profile, name: 'Reviewed draft' }, expectedRevision: 4 })
+            .then(result => { settled = true; return result; }, error => { settled = true; throw error; }); });
+        // The operation remains pending through durable approval creation, with no row write.
+        await vi.waitFor(() => expect(f.approvalArtifacts.list()).toHaveLength(1));
+        const approval = f.approvalArtifacts.list()[0]!;
+        expect(JSON.parse(f.approvalArtifacts.readPlainBody(approval.id)!)).toMatchObject({ actionId: 'launch_profiles.save',
+            actionArgs: { expectedRevision: 4, profile: { name: 'Reviewed draft' } } });
+        expect(settled).toBe(false);
+        expect(f.profileMutations).toEqual([]);
+        const pendingNotification = onApprovalPending.mock.calls[0]?.[0];
+        if (concurrentEdit) f.advanceProfileRevision();
+        const outcome = concurrentEdit ? expect(saving).resolves.toMatchObject({ status: 'conflict', revision: 5 })
+            : expect(saving).resolves.toMatchObject({ status: 'updated', revision: 5 });
+        await decideApprovalAsInbox(f.context.serverId, approval.id, 'approve');
+        await act(async () => { await outcome; });
+        expect(settled).toBe(true);
+        expect(f.profileRows()[0]?.content).toMatchObject({ t: 'plain', v: { definition: { profile: {
+            name: concurrentEdit ? 'Editable' : 'Reviewed draft',
+        } } } });
+        expect(f.profileMutations).toHaveLength(concurrentEdit ? 0 : 1);
+        expect(pendingNotification).toMatchObject({ artifactId: approval.id,
+            scope: { serverId: f.context.serverId, accountId: 'owner' } });
+        await hook.unmount();
+    });
+
+    it('rejects mounted delete approval without deleting the reviewed Profile', async () => {
+        const f = await fixture();
+        f.setProfile();
+        f.requireUiApproval('launch_profiles.delete');
+        await f.mountHome();
+        const hook = await renderHook(useDeleteAiLaunchProfile);
+        let removing: Promise<unknown> | undefined;
+        act(() => { removing = hook.getCurrent()('editable', 4); });
+        await vi.waitFor(() => expect(f.approvalArtifacts.list()).toHaveLength(1));
+        const rejected = expect(removing).rejects.toThrow('approval_rejected');
+        await decideApprovalAsInbox(f.context.serverId, f.approvalArtifacts.list()[0]!.id, 'reject');
+        await act(async () => { await rejected; });
+        expect(f.profileRows()[0]?.revision).toBe(4);
+        expect(f.profileMutations).toEqual([]);
+        await hook.unmount();
+    });
+
     it.each(['save', 'delete', 'enabled.set', 'favorite.set', 'secrets.select'] as const)('mounted %s refuses a disabled Action before its writer', async operation => {
         const f = await fixture();
         f.setProfile({ enabled: true, promptStack: [], secretBindings: { API_KEY: formatSharedSavedSecretRefV1('private-key') } });
         f.disableUiAction(`launch_profiles.${operation}`);
         await f.mountHome();
-        const hook = await renderHook(() => ({ save: useApplyProfileSave(), remove: useDeleteAiLaunchProfile(), bindings: useCurrentSecretBindingsByProfileIdMutable()[1], collection: useProfilesCollection() }));
+        const hook = await renderHook(() => ({ save: useApplyProfileSave(), remove: useDeleteAiLaunchProfile(),
+            bindings: useCurrentSecretBindingsByProfileIdMutable()[1], collection: useProfilesCollection() }));
         const profile = hook.getCurrent().collection.resolveProfile('editable');
         if (!profile) throw new Error('Fixture Profile unavailable');
         const before = f.profileRows();
@@ -331,10 +612,39 @@ describe('UI Profile Action front door', () => {
             : operation === 'favorite.set' ? hook.getCurrent().collection.setFavoriteProfileIds(['neighbor', 'editable'])
             : operation === 'secrets.select' ? hook.getCurrent().bindings({ editable: {} })
             : hook.getCurrent().collection.setEnabled(hook.getCurrent().collection.profiles.find(entry => entry.id === 'editable')!, false);
-        await expect(Promise.resolve(invoke())).rejects.toThrow();
+        await expect(Promise.resolve().then(invoke)).rejects.toMatchObject({ message: 'action_disabled' });
         expect(f.profileMutations).toEqual([]);
         expect(f.profileRows()).toEqual(before);
         expect(f.settings()).toEqual(settingsBefore);
+    });
+
+    it('acknowledges the mounted machine-environment favorite without replacing concurrent Account preferences', async () => {
+        const f = await fixture();
+        await f.mountHome();
+        const hook = await renderHook(useProfileFavoriteIdsMutable);
+        f.conflictFavorite();
+        await act(async () => { await hook.getCurrent()[1]([...hook.getCurrent()[0], '']); });
+        expect(f.settings()).toMatchObject({ favoriteProfiles: expect.arrayContaining(['other-device', '']),
+            futurePreference: { version: 'concurrent' } });
+        expect(f.settings().favoriteProfiles).toHaveLength(2);
+        expect(f.profileMutations).toEqual([]);
+        await hook.unmount();
+    });
+
+    it('acknowledges mounted binding changes in one row CAS while retaining private None slots', async () => {
+        const f = await fixture();
+        f.setProfile({ enabled: true, promptStack: [], secretBindings: { KEEP: null } });
+        await f.mountHome();
+        const hook = await renderHook(useCurrentSecretBindingsByProfileIdMutable);
+        await act(async () => { await hook.getCurrent()[1]({ editable: {
+            API_KEY: formatSharedSavedSecretRefV1('private-key'), SECOND_KEY: formatSharedSavedSecretRefV1('private-key'),
+        } }); });
+        expect(f.profileMutations).toHaveLength(1);
+        expect(f.profileMutations[0]?.savedSecretRevisions).toEqual([{ resourceId: 'private-key', expectedRevision: 3 }]);
+        expect(f.profileRows()[0]?.content).toMatchObject({ t: 'plain', v: { secretBindings: {
+            KEEP: null, API_KEY: formatSharedSavedSecretRefV1('private-key'), SECOND_KEY: formatSharedSavedSecretRefV1('private-key'),
+        } } });
+        await hook.unmount();
     });
 
     it('acknowledges an atomic two-environment binding selection through one row CAS and preserves private None slots', async () => {
@@ -352,7 +662,7 @@ describe('UI Profile Action front door', () => {
         const acknowledged = structuredClone(f.profileRows());
         expect(await f.executor.execute('launch_profiles.secrets.select', { id: 'editable', expectedRevision: 4,
             selections: [{ envName: 'API_KEY', selection: { kind: 'none' } }] }, f.context))
-            .toMatchObject({ ok: false, errorCode: 'profile_revision_conflict' });
+            .toMatchObject({ ok: true, result: { status: 'conflict', id: 'editable', revision: 5 } });
         expect(f.profileRows()).toEqual(acknowledged);
         expect(f.profileMutations).toHaveLength(1);
     });
@@ -366,7 +676,8 @@ describe('UI Profile Action front door', () => {
             const result = await f.executor.execute('launch_profiles.secrets.select', { id: 'editable', expectedRevision: 4,
                 selections: [{ envName: 'API_KEY', selection: selected }, { envName: failure === 'invalid_environment' ? 'bad-name' : 'SECOND_KEY',
                     selection: { ...selected, expectedResourceRevision: failure === 'stale_resource' ? 2 : 4 } }] }, f.context);
-            expect(result.ok).toBe(false);
+            if (failure === 'conflicting_resource_proofs') expect(result).toMatchObject({ ok: true, result: { status: 'invalid' } });
+            else expect(result.ok).toBe(false);
             expect(f.profileRows()).toEqual(before);
             expect(f.profileMutations).toEqual([]);
         },
@@ -474,11 +785,12 @@ describe('UI Profile Action front door', () => {
     });
     it('favorites the default environment against the latest captured-Home Settings winner without erasing sibling preferences', async () => {
         const f = await fixture();
+        await f.mountHome();
+        const hook = await renderHook(useProfilesCollection);
         f.conflictFavorite();
-        await expect(f.executor.execute('launch_profiles.favorite.set', { id: '', favorite: true }, f.context))
-            .resolves.toEqual({ ok: true, result: { status: 'updated', id: '', favorite: true } });
-        expect(f.settings()).toMatchObject({ favoriteProfiles: ['', 'other-device'], futurePreference: { version: 'concurrent' } });
-        expect(f.requests.some(path => path.includes('/entity-rows/profiles') || path.includes('/authoring-memory'))).toBe(false);
+        await hook.getCurrent().setFavoriteProfileIds(['existing', '']);
+        await expect.poll(() => f.settings()).toMatchObject({ favoriteProfiles: ['', 'other-device'], futurePreference: { version: 'concurrent' } });
+        expect(f.profileMutations).toEqual([]);
     });
     it('opens an exact revision and returns an address without pretending the editor is mounted', async () => {
         const f = await fixture();
@@ -622,6 +934,36 @@ describe('UI Profile Action front door', () => {
         expect(settled).toBe(true);
         expect(f.profileRows()[0]?.content).toMatchObject({ t: 'plain', v: { definition: { profile: { name: 'Awaiting ACK' } } } });
         expect(nameField()?.props.value).toBe('Awaiting ACK');
+        await act(async () => { screen.unmount(); });
+    });
+    it('shows the shared approval row on a mounted save and keeps the draft until the approval settles', async () => {
+        const f = await fixture();
+        f.setProfile();
+        f.requireUiApproval('launch_profiles.save');
+        await f.mountHome();
+        const screen = await renderScreen(React.createElement(ProfileDetailScreen, { target: { kind: 'profile', profileId: 'editable' } }));
+        const nameField = () => screen.root.findAll(node => node.props.testID === 'profile-slim-name'
+            && typeof node.props.onChangeText === 'function')[0];
+        const notice = () => screen.root.findAll(node => node.props.testID === 'settings.profiles.detail.approval'
+            && typeof node.props.onOpenApproval === 'function')[0];
+        await act(async () => { nameField()!.props.onChangeText('Reviewed draft'); });
+        let saving: Promise<unknown> | undefined;
+        await act(async () => {
+            const save = screen.root.findAll(node => node.props.testID === 'settings.profiles.detail.save'
+                && typeof node.props.onPress === 'function')[0];
+            saving = Promise.resolve(save!.props.onPress());
+        });
+        await vi.waitFor(() => expect(f.approvalArtifacts.list()).toHaveLength(1));
+        const approval = f.approvalArtifacts.list()[0]!;
+        await vi.waitFor(() => expect(notice()).toBeDefined());
+        expect(nameField()?.props.value).toBe('Reviewed draft');
+        expect(f.profileMutations).toEqual([]);
+        await act(async () => { notice()!.props.onOpenApproval(); });
+        expect([...f.navigation.push.mock.calls].flat().map(String).some(href => href.includes(`/inbox/approvals/${approval.id}`))).toBe(true);
+        await decideApprovalAsInbox(f.context.serverId, approval.id, 'approve');
+        await act(async () => { await saving; });
+        expect(notice()).toBeUndefined();
+        expect(f.profileRows()[0]?.content).toMatchObject({ t: 'plain', v: { definition: { profile: { name: 'Reviewed draft' } } } });
         await act(async () => { screen.unmount(); });
     });
     it('routes legacy preview through the captured-Account Machine transport and reports its typed unavailable outcome', async () => {

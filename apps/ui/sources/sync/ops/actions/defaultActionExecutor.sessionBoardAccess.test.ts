@@ -218,7 +218,7 @@ describe('Session Board Action access gate', () => {
         expect(boardWrites()).toHaveLength(1);
     });
 
-    it('approves a deferred Board item creation, whose required item revision is null by contract', async () => {
+    it('approves deferred Board creation without making a successful approval stale on duplicate delivery', async () => {
         // `expectedItemRevision: null` is how the Action requests creation. It is present
         // context the schema admits, not missing context, so the Inbox can approve it.
         const serverId = await addBoardHome({ serverUrl: 'https://create-board-home.example' });
@@ -263,6 +263,14 @@ describe('Session Board Action access gate', () => {
         expect(stored).toMatchObject({ status: 'executed', execution: { ok: true } });
         expect(boardWrites()).toHaveLength(1);
         expect(boardWrites()[0]?.input).toMatchObject({ operation: 'upsert_item', expectedItemRevision: null });
+
+        // If a duplicate re-executes after creation, the real Board transport
+        // refuses its now-stale null revision. A terminal approval must instead
+        // return its durable success, without replacing it with approval_stale.
+        harness.answer(serverId, `PUT ${BOARD_PATH}`, { status: 409, body: { error: 'approval_stale' } });
+        const repeated = await decideApprovalAsInbox(serverId, artifactId, 'approve');
+        expect(repeated, observed(repeated)).toMatchObject({ ok: true, result: { status: 'executed', execution: { ok: true } } });
+        expect(JSON.parse(harness.artifacts(serverId).readPlainBody(artifactId) ?? 'null')).toEqual(stored);
     });
 
     it('publishes only the approved frozen snapshot through the real sealed Board writer', async () => {

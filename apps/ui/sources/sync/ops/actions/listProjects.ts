@@ -8,6 +8,7 @@ import { readCurrentProjectAccountRows, type ProjectAccountRowsSnapshot } from '
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import type { Machine, ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
 import { isWorkspaceScopeReachableFromState } from '@/sync/domains/workspaces/workspaceReachability';
+import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 
 /**
  * The Account's persisted projects, each with the two facts its SCM working
@@ -129,7 +130,7 @@ type ProjectsListMachineInventory = Readonly<{
  * saw a machine outside the active server at all, reporting every project on
  * another server as unreachable.
  *
- * `isMachineOnline` then owns liveness, including the two facts a bare
+ * The scoped reachability owner includes request failures and the facts a bare
  * `active === true` misses: a REVOKED machine is never reachable however active
  * its last heartbeat claimed, and a machine within the online grace window
  * still is.
@@ -138,8 +139,9 @@ function reachabilityOf(
     state: ProjectsListMachineInventory,
     ref: Readonly<{ serverId: string; machineId: string; rootPath: string }>,
     activeServerId: string,
+    accountScope: ServerAccountScope | null,
 ): boolean {
-    return isWorkspaceScopeReachableFromState(state, ref, activeServerId);
+    return isWorkspaceScopeReachableFromState(state, ref, activeServerId, accountScope);
 }
 
 export async function listProjectsForActions(params: Readonly<{
@@ -177,7 +179,7 @@ export async function listProjectsForActions(params: Readonly<{
             ...item,
             ...scope,
             ...(ref.label ? { label: ref.label } : {}),
-            reachable: reachabilityOf(state, scope, activeServerId),
+            reachable: reachabilityOf(state, scope, activeServerId, rows?.scope ?? null),
             ...(forge ? { forge } : {}),
             worktrees: worktreesOf(snapshot),
         });

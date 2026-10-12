@@ -28,6 +28,14 @@ type ResultFailureMessageKeyResolver = (
     | 'teams.policy.externalSharingAdmins';
 
 describe('session.spawn_new Action failure presentation', () => {
+    it('preserves first-input rejection and uncertainty codes in the existing diagnostic copy', () => {
+        const resolve = sessionSpawnNewAction.resolveSessionSpawnNewInitialInputFailureMessage;
+        expect(resolve({ status: 'outcomeUnknown', localId: 'first-input', code: 'session_input_admission_outcome_unknown' }, t('newSession.initialInputNotConfirmed')))
+            .toBe(t('errors.errorWithCode', { message: t('newSession.initialInputNotConfirmed'), code: 'session_input_admission_outcome_unknown' }));
+        expect(resolve({ status: 'rejected', code: 'session_input_storage_unavailable' }, t('session.pendingMessages.admissionRejected.storageUnavailable')))
+            .toContain('session_input_storage_unavailable');
+    });
+
     it('retains strict rejection and Action error codes in generic user-facing messages', () => {
         expect(sessionSpawnNewAction.resolveSessionSpawnNewResultFailureMessage({
             type: 'error', code: 'creation_conflict', retryable: false,

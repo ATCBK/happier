@@ -108,7 +108,7 @@ export type MachineCapabilitiesInvokeResult =
 export async function machineCapabilitiesInvoke(
     machineId: string,
     request: CapabilitiesInvokeRequest,
-    options?: { timeoutMs?: number | null; serverId?: string | null; accountId?: string | null },
+    options?: { timeoutMs?: number | null; serverId?: string | null; accountId?: string | null; signal?: AbortSignal },
 ): Promise<MachineCapabilitiesInvokeResult> {
     try {
         const result = await machineRpcWithServerScope<unknown, CapabilitiesInvokeRequest>({
@@ -117,6 +117,7 @@ export async function machineCapabilitiesInvoke(
             payload: request,
             serverId: options?.serverId,
             accountId: options?.accountId,
+            ...(options?.signal ? { signal: options.signal } : {}),
             ...(typeof options?.timeoutMs === 'number'
                 ? { timeoutMs: options.timeoutMs }
                 : { operationTimeoutMs: null }),
@@ -129,6 +130,7 @@ export async function machineCapabilitiesInvoke(
         if (!parsed) return { supported: false, reason: 'error' };
         return { supported: true, response: parsed };
     } catch (error) {
+        if (options?.signal?.aborted) throw error;
         const requestDisposition = readRpcRequestDisposition(error);
         return { supported: false, reason: 'error', ...(requestDisposition ? { requestDisposition } : {}) };
     }

@@ -41,8 +41,8 @@ import {
     type TeamCredentialExternalApiKeyRevokeAllOutputV1,
     TeamCredentialSourceCandidateListOutputV1Schema,
     type TeamCredentialSourceCandidateListOutputV1,
-    TeamCredentialDirectMaterialCensusOutputV1Schema,
-    type TeamCredentialDirectMaterialCensusOutputV1,
+    TeamCredentialPreparationOutputV1Schema,
+    type TeamCredentialPreparationOutputV1,
     TeamCredentialTestActionOutputV1Schema,
     type TeamCredentialTestActionOutputV1,
     TeamCredentialRequestPolicySupportOutputV1Schema,
@@ -52,7 +52,6 @@ import {
 
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import type { TeamAddress } from '@/sync/domains/teams/teamAddress';
-import { requestHomeDomain } from '@/sync/api/home/homeServerActionTransport';
 import { invalidateTeamCredentialResources } from '@/sync/store/teams/teamsSnapshots';
 
 import { runTeamAction, type HomeDomainFailure } from './teamActionClient';
@@ -62,9 +61,8 @@ import { runTeamAction, type HomeDomainFailure } from './teamActionClient';
  *
  * Mutating intents go through the same Team Action front door as membership and
  * Group work, so approval, per-surface enablement and provenance are enforced
- * identically. Internal lifecycle reads that are deliberately not Actions use
- * their resource-domain route here; the Home still re-decides authority inside
- * every request regardless of what the projected viewer decision said.
+ * identically. User-facing preparation reads use that same front door; the
+ * daemon retains ownership of the recipient census and material preparation.
  *
  * `expectedRevision` travels on every mutation the contract fences. A refusal
  * carrying `conflict` means the resource moved under the editor; the caller
@@ -259,24 +257,17 @@ export function listTeamCredentialSourceResources(params: Readonly<{
 }
 
 /** Source-owner, material-safe preparation status. Crypto remains daemon-owned. */
-export async function listTeamCredentialDirectMaterialPreparation(params: Readonly<{
+export function getTeamCredentialPreparation(params: Readonly<{
     scope: ServerAccountScope;
     teamId: string;
     resourceId: string;
-    cursor?: string | null;
-}>): Promise<TeamCredentialOutcome<TeamCredentialDirectMaterialCensusOutputV1>> {
-    const outcome = await requestHomeDomain({
+}>): Promise<TeamCredentialOutcome<TeamCredentialPreparationOutputV1>> {
+    return runTeamAction({
         scope: params.scope,
-        path: `/v2/teams/${encodeURIComponent(params.teamId)}/credential-resources/${encodeURIComponent(params.resourceId)}/direct-material?${new URLSearchParams({
-            view: 'census',
-            ...(params.cursor ? { cursor: params.cursor } : {}),
-        }).toString()}`,
-        method: 'GET',
-        effect: 'read',
-        input: undefined,
-        schema: TeamCredentialDirectMaterialCensusOutputV1Schema,
+        actionId: 'teams.credentials.preparation.get',
+        input: { teamId: params.teamId, resourceId: params.resourceId },
+        parse: (value) => TeamCredentialPreparationOutputV1Schema.parse(value),
     });
-    return outcome.ok ? succeeded(outcome.value) : failed(outcome.failure);
 }
 
 export function testTeamCredentialResource(params: Readonly<{

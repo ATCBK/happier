@@ -4,7 +4,7 @@ import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue'
 import type { PluginDeclarativeNodeV2 } from '@happier-dev/protocol/plugins/contributions/ui/v2';
 import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
 import type { ActionExecuteFailure } from '@happier-dev/protocol/actions/actionExecutionResult';
-import { isSameWidgetDefinitionV1, widgetCandidateDefinitionV1 } from '@happier-dev/protocol/widgets';
+import { isSameWidgetDefinitionV1, widgetCandidateDefinitionV1, readWidgetDefinitionResourcesV1 } from '@happier-dev/protocol/widgets';
 import { readInputPath } from '@happier-dev/protocol/inputs';
 import type { PluginUiResourceEntry } from '@happier-dev/plugin-ui/advanced';
 import type { PluginUiResourceSnapshot } from '@happier-dev/plugin-ui/hostApi';
@@ -12,10 +12,13 @@ import { selectWidgetPlacementsBySurface } from '@/sync/domains/plugins/ui/widge
 import { readPluginUiContributionOrigin } from '@/sync/domains/plugins/ui/projectionUnion';
 import { acquirePluginContextualResourceStore, createPluginDeclaredResourceStore } from '@/components/plugins/surfaces/PluginContextualResourceStoreProvider';
 import { resolveDeclarativeDataResourceBinding } from '@/components/plugins/surfaces/declarativeDataSource';
-import { readCurrentAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
+import { readCurrentAppShellPluginUiProjection } from '@/components/appShell/plugins/committedPluginUiProjection';
 import { describeAuthoredWidgetDefinitionV1, readWidgetDescriptor } from '@/components/widgets/widgetCatalog';
 import { readWidgetActionRuntimeV1, readWidgetSurfaceActionPortV1 } from './widgetCatalogActionDeps';
 import type { LazyActionAccountContext } from './actionAccountContext';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { resolveMountedWidgetAreaLayoutSelectionOwner } from '@/components/widgets/area/widgetAreaLayoutSelection';
+import { resolveCallerHostedHtmlResourceBindingV1 } from '@/components/ui/surfaces/hostedHtml/sessionCallerHostedHtmlRequestController';
 
 const unavailable = (errorCode = 'widget_refresh_unavailable'): ActionExecuteFailure => ({ ok: false, errorCode, error: errorCode });
 
@@ -43,6 +46,14 @@ export function createWidgetRefreshActionDepsV1(account: LazyActionAccountContex
     if (!account) return {};
     return { widgetRefresh: async ({ ref, context, signal }) => {
         account.assertCurrent();
+        const owner = ref.surface.owner;
+        // The admitted page port already supplies its captured context. Reverse
+        // dispatch has none and must resolve the same current owner as selection.
+        if ((owner.kind === 'project' || owner.kind === 'corePage' || owner.kind === 'pluginArea')
+            && !sameStrictJsonValue(context.widgetAreaContext?.surface, ref.surface)) {
+            const mounted = resolveMountedWidgetAreaLayoutSelectionOwner(ref.surface);
+            if ('ok' in mounted) return mounted;
+        }
         if (!deps.widgetInputs || !account.accountLifetime) return unavailable();
         const port = readWidgetSurfaceActionPortV1(deps, ref.surface);
         if (!port) return unavailable();
@@ -55,6 +66,9 @@ export function createWidgetRefreshActionDepsV1(account: LazyActionAccountContex
         const authored = definition.kind === 'inline' ? definition.definition
             : definition.kind === 'artifact' ? await deps.widgetDefinitionArtifacts?.get(definition.artifactId, signal) : null;
         account.assertCurrent();
+        // Native bodies refresh through their own domains; this Action admits
+        // declared plugin Resources only, including for saved native copies.
+        if (definition.kind === 'builtin' || authored?.body.kind === 'builtin') return unavailable();
         if (definition.kind !== 'installed' && !authored) return unavailable();
         const resolved = await deps.widgetInputs.resolve({ ref, instance, context, admission: 'execution', ...(signal ? { signal } : {}) });
         account.assertCurrent();
@@ -69,7 +83,7 @@ export function createWidgetRefreshActionDepsV1(account: LazyActionAccountContex
             ? describeAuthoredWidgetDefinitionV1(authored, definition, installedSeed) : installedSeed;
         if (!seed) return unavailable();
         const parsedSession = seed.sessionInputPath ? VoiceTrackedSessionAddressV1Schema.safeParse(readInputPath(resolved.input, seed.sessionInputPath)) : null;
-        if (parsedSession && (!parsedSession.success || parsedSession.data.serverId !== account.serverId)) return unavailable();
+        if (parsedSession && (!parsedSession.success || !areServerProfileIdentifiersEquivalent(parsedSession.data.serverId, account.serverId))) return unavailable();
         if (seed.target === 'session' && !parsedSession?.success) return unavailable();
         const runtime = parsedSession?.success ? await readWidgetActionRuntimeV1(ref.surface, account, signal, parsedSession.data, deps) : initial;
         if ('ok' in runtime) return runtime;
@@ -77,6 +91,30 @@ export function createWidgetRefreshActionDepsV1(account: LazyActionAccountContex
             const current = await deps.widgetDefinitionArtifacts?.get(definition.artifactId, signal);
             account.assertCurrent();
             if (!current || !sameStrictJsonValue(current, authored)) return unavailable('widget_definition_changed');
+        }
+        if (authored?.body.kind === 'html') {
+            const declarations = readWidgetDefinitionResourcesV1(authored);
+            if (!declarations.length || !runtime.projection || !runtime.isCurrent()) return unavailable();
+            const target = { machineId: runtime.machineId, serverId: runtime.machineId ? account.serverId : null,
+                generation: runtime.projection.generation, projection: runtime.projection, isCurrent: runtime.isCurrent };
+            const resources = declarations.map(reference => ({ reference, binding: resolveCallerHostedHtmlResourceBindingV1({
+                target, reference, serverId: account.serverId, sessionId: parsedSession?.success ? parsedSession.data.sessionId : undefined,
+                launchInput: resolved.input,
+            }) }));
+            // Refresh has no physical mount identity; surface-only reads remain
+            // unavailable, just as they do for declarative Resource refresh.
+            if (resources.some(row => !row.binding)) return unavailable();
+            const leases = resources.map(row => acquirePluginContextualResourceStore({ ...row.binding!,
+                pluginId: row.reference.pluginId, accountLifetime: account.accountLifetime! }));
+            try {
+                if (leases.some(lease => !lease)) return unavailable();
+                const results = await Promise.all(resources.map((row, index) => refreshEntry(leases[index]!.store.getEntry(row.reference), signal)));
+                account.assertCurrent();
+                if (!runtime.isCurrent()) return unavailable();
+                const failed = results.find(snapshot => snapshot.error || !snapshot.value);
+                return failed ? unavailable(failed.error?.code ?? 'plugin_resource_unavailable')
+                    : { ok: true, result: { ref, status: 'refreshed' } };
+            } finally { for (const lease of leases) lease?.dispose(); }
         }
         if (authored?.body.kind === 'declarative') {
             const nodes: PluginDeclarativeNodeV2[] = [authored.body.document.root];
@@ -115,7 +153,7 @@ export function createWidgetRefreshActionDepsV1(account: LazyActionAccountContex
         if (placement.length !== 1) return unavailable();
         const origin = readPluginUiContributionOrigin(placement[0]);
         const machineId = runtime.machineId ?? (origin?.phase === 'current' && origin.interactionEnabled ? origin.machineId : null);
-        if (!machineId || (origin?.serverId && origin.serverId !== account.serverId)) return unavailable();
+        if (!machineId || (origin?.serverId && !areServerProfileIdentifiersEquivalent(origin.serverId, account.serverId))) return unavailable();
         const occurrenceId = placement[0].occurrenceId;
         if (typeof occurrenceId !== 'string' || !occurrenceId) return unavailable();
         const store = createPluginDeclaredResourceStore({ accountLifetime: account.accountLifetime,

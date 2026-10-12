@@ -1,6 +1,6 @@
 import { ReviewEngineCapabilitiesSchema } from '@happier-dev/protocol/reviews/reviewEngines';
 import { ReviewWalkthroughResponseSchema, type ReviewFindingIdentity } from '@happier-dev/protocol/reviews/reviewNarration';
-import type { ActionExecuteResult } from '@happier-dev/protocol';
+import type { ActionExecuteResult, ActionExecutorContext } from '@happier-dev/protocol';
 
 import { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
 import { resolveActionExecutionFailureMessage } from '@/sync/ops/actions/resolveActionExecutionFailureMessage';
@@ -32,6 +32,20 @@ function failure(result: unknown, fallback: string): Failure {
 
 function executorFor(serverId: string | null) {
     return createDefaultActionExecutor({ resolveServerIdForSessionId: () => serverId });
+}
+
+type ReviewNarrationTarget = Readonly<{ sessionId: string; machineId?: never } | { sessionId: null; machineId: string }>;
+function narrationTarget(params: ReviewNarrationTarget & Readonly<{ serverId: string | null; cwd: string; accountId?: string }>) {
+    const context: ActionExecutorContext = {
+        ...(params.serverId ? { serverId: params.serverId } : {}),
+        ...(params.accountId ? { expectedAccountId: params.accountId } : {}),
+        ...(params.sessionId !== null ? { defaultSessionId: params.sessionId } : {
+            externalActionTarget: { kind: 'machine', machineId: params.machineId,
+                project: { machineId: params.machineId, directory: params.cwd } },
+            executionRunTargetMachineId: params.machineId,
+        }),
+    };
+    return { input: params.sessionId !== null ? { sessionId: params.sessionId } : { target: { kind: 'detached' as const } }, context };
 }
 
 /** The engines that can review this Session, with whether each can write prose. */
@@ -149,9 +163,9 @@ export async function startReviewOfComparison(params: Readonly<{
  * "Walk me through this" on a finished review. The host decides whether the reviewer's own Run can
  * continue (no review again) or one narrator writes from the findings and the captured comparison.
  */
-export async function requestFinishedReviewWalkthrough(params: Readonly<{
-    sessionId: string;
+export async function requestFinishedReviewWalkthrough(params: ReviewNarrationTarget & Readonly<{
     serverId: string | null;
+    accountId?: string;
     cwd: string;
     runId: string;
     reviewRunIds: readonly string[];
@@ -161,10 +175,11 @@ export async function requestFinishedReviewWalkthrough(params: Readonly<{
 }>): Promise<Readonly<{ ok: true; comparisonId: string; comparison: ScmReviewComparisonSelector }> | Failure> {
     const captured = await resolveComparisonId({ ...params, comparison: params.fallbackComparison });
     if (!captured.ok) return captured;
+    const target = narrationTarget(params);
     const result = await executorFor(params.serverId).execute(
         'review.walkthrough',
-        { sessionId: params.sessionId, runId: params.runId, reviewRunIds: [...params.reviewRunIds], comparisonId: captured.comparisonId },
-        { defaultSessionId: params.sessionId, ...(params.serverId ? { serverId: params.serverId } : {}) },
+        { ...target.input, runId: params.runId, reviewRunIds: [...params.reviewRunIds], comparisonId: captured.comparisonId },
+        target.context,
     );
     if (!result.ok) return failure(result, 'review_walkthrough_failed');
     const response = ReviewWalkthroughResponseSchema.safeParse(result.result);
@@ -177,9 +192,9 @@ export async function requestFinishedReviewWalkthrough(params: Readonly<{
 }
 
 /** The explicit request: explain these findings in the walkthrough (a scoped refinement, never automatic). */
-export async function requestExplainReviewFindings(params: Readonly<{
-    sessionId: string;
+export async function requestExplainReviewFindings(params: ReviewNarrationTarget & Readonly<{
     serverId: string | null;
+    accountId?: string;
     cwd: string;
     runId: string;
     reviewRunIds: readonly string[];
@@ -187,13 +202,16 @@ export async function requestExplainReviewFindings(params: Readonly<{
     expectedRevision: number;
     findingIds: readonly ReviewFindingIdentity[];
 }>): Promise<Readonly<{ ok: true }> | Failure> {
+    const target = narrationTarget(params);
     const result = await executorFor(params.serverId).execute(
         'review.explain_findings',
         {
-            sessionId: params.sessionId, runId: params.runId, reviewRunIds: [...params.reviewRunIds], cwd: params.cwd,
+            ...target.input, runId: params.runId, reviewRunIds: [...params.reviewRunIds], cwd: params.cwd,
             resultId: params.resultId, expectedRevision: params.expectedRevision, findingIds: params.findingIds.map((id) => ({ ...id })),
         },
-        { defaultSessionId: params.sessionId, ...(params.serverId ? { serverId: params.serverId } : {}) },
+        target.context,
     );
-    return result.ok ? { ok: true } : failure(result, 'review_explain_failed');
+    if (!result.ok) return failure(result, 'review_explain_failed');
+    const response = result.result as { success?: unknown };
+    return response?.success === false ? failure(response, 'review_explain_failed') : { ok: true };
 }

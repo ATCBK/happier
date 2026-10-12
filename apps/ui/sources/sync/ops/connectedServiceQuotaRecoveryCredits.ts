@@ -45,6 +45,10 @@ export function buildConnectedServiceQuotaRecoveryCreditIdempotencyKey(params: R
 export async function connectedServiceQuotaRecoveryCreditConsume(params: Readonly<{
     machineId: string;
     serverId?: string | null;
+    /** Captured Action custody; existing direct callers may retain their server-generation contract. */
+    accountId?: string;
+    signal?: AbortSignal;
+    assertCurrent?: () => void;
     expectedActiveServer?: Pick<
         ActiveServerSnapshot,
         'serverId' | 'generation'
@@ -93,16 +97,24 @@ export async function connectedServiceQuotaRecoveryCreditConsume(params: Readonl
                 );
             }
         };
-        assertExpectedServerIsCurrent();
+        const assertIssuanceIsCurrent = (): void => {
+            params.signal?.throwIfAborted();
+            params.assertCurrent?.();
+            assertExpectedServerIsCurrent();
+        };
+        assertIssuanceIsCurrent();
         const response = await machineRpcWithServerScope<ConnectedServiceQuotaRecoveryCreditConsumeResponseV1, typeof request.data>({
             machineId: params.machineId,
             serverId: params.serverId ?? null,
+            ...(params.accountId ? { accountId: params.accountId } : {}),
+            ...(params.signal ? { signal: params.signal } : {}),
             method: RPC_METHODS.DAEMON_CONNECTED_SERVICE_QUOTA_RECOVERY_CREDIT_CONSUME,
             payload: request.data,
-            ...(params.expectedActiveServer
-                ? { onIssued: assertExpectedServerIsCurrent }
+            ...(params.expectedActiveServer || params.assertCurrent
+                ? { onIssued: assertIssuanceIsCurrent }
                 : {}),
         });
+        // The RPC owner preserves consumed ACKs. Retirement afterward must not replace a durable receipt.
         const parsed = ConnectedServiceQuotaRecoveryCreditConsumeResponseV1Schema.safeParse(response);
         if (!parsed.success) return failure('invalid_response');
         const service = parseQualifiedPluginContributionKey(request.data.serviceId);

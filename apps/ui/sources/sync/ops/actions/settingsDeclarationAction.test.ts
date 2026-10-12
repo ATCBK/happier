@@ -1,4 +1,7 @@
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
+import 'fake-indexeddb/auto';
+// Vite does not apply Metro's .web selection. Use the real IndexedDB device adapter for this web owner.
+vi.mock('@/components/atmosphere/pictureStore', async () => import('@/components/atmosphere/pictureStore.web'));
 
 const humanConfirmation = vi.hoisted(() => ({ confirm: vi.fn(async () => false) }));
 const settingsMachineRpc = vi.hoisted(() => vi.fn());
@@ -77,6 +80,9 @@ import { ACP_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/acp/catalog/cat
 import { darkTheme } from '@/theme';
 import type { ApprovalRequest } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/actionExecutor';
+import type { SettingsMutationServices } from '@/components/settings/catalog/settingDeclarations';
+import { createAtmosphereSettingServices } from './atmosphereSettingServices';
+import { ProjectAccountRowMutationRequestV1Schema, type ProjectAccountRowV1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 
 describe('exact Account Settings history purge declaration', () => {
     it('requires incumbent approval and refuses execution without an Account history transport', async () => {
@@ -93,6 +99,193 @@ describe('exact Account Settings history purge declaration', () => {
     });
 });
 
+describe('Home atmosphere settings declarations', () => {
+    it('discovers and edits every Home control while rebasing nested edits over sibling changes', async () => {
+        const owner = createOwner(undefined, false, true, settingsDefaults, undefined, settings => ({
+            ...settings, homeAtmosphere: { ...settings.homeAtmosphere, moments: { ...settings.homeAtmosphere.moments, welcome: false } },
+        }));
+        const choices = [
+            ['atmosphereSource', 'picture'], ['atmospherePlanetPlacement', 'rise'], ['atmospherePlanetStyle', 'rich'],
+            ['atmospherePlanetDigits', false], ['atmospherePictureRef', { kind: 'builtin', id: 'calm-sea' }],
+            ['atmospherePictureLayout', 'wallpaper'], ['atmosphereBehindSessions', true],
+            ['atmosphereMoments', { send: false, loading: true }],
+        ] as const;
+        const listing = await owner.action({ actionId: 'settings.list', input: { pageId: 'appearance' } });
+        expect(listing).toMatchObject({ items: expect.arrayContaining(choices.map(([id]) => expect.objectContaining({
+            anchor: `appearance.${id}`, readable: true, writable: true,
+        }))) });
+        for (const [id, value] of choices) {
+            expect(await owner.action({ actionId: 'settings.set', input: { anchor: `appearance.${id}`, value } }))
+                .toEqual({ anchor: `appearance.${id}`, value });
+            if (id === 'atmospherePlanetStyle') expect(owner.account().homeAtmosphere.moments.welcome).toBe(false);
+        }
+        expect(owner.account().homeAtmosphere).toMatchObject({ source: 'picture',
+            planet: { placement: 'rise', style: 'rich', digits: false },
+            picture: { ref: { kind: 'builtin', id: 'calm-sea' }, layout: 'wallpaper' }, behindSessions: true,
+            moments: { send: false, loading: true },
+        });
+        expect(await owner.action({ actionId: 'settings.reset', input: { anchor: 'appearance.atmospherePlanetStyle' } }))
+            .toEqual({ anchor: 'appearance.atmospherePlanetStyle', value: 'balanced' });
+        expect(owner.account().homeAtmosphere.planet).toEqual({ placement: 'rise', style: 'balanced', digits: false });
+    });
+
+    it('stores only per-picture differences and resets through the same canonical mutation', async () => {
+        const owner = createOwner();
+        expect(await owner.action({ actionId: 'settings.set', input: { anchor: 'appearance.atmosphereLooks',
+            value: { 'white-rocks-open-sea': { look: 'fine', strength: 1, dissolve: 'ordered' },
+                'calm-sea': { look: 'halftone', strength: 0.8, dissolve: 'haze' } } } })).toMatchObject({ anchor: 'appearance.atmosphereLooks' });
+        expect(owner.account().homeAtmosphere.looks).toEqual({ 'calm-sea': { look: 'halftone', strength: 0.8, dissolve: 'haze' } });
+        expect(await owner.action({ actionId: 'settings.reset', input: { anchor: 'appearance.atmosphereLooks' } }))
+            .toEqual({ anchor: 'appearance.atmosphereLooks', value: {} });
+        expect(owner.account().homeAtmosphere.looks).toEqual({});
+    });
+
+    it('refuses the removed numeric fade field without changing remembered choices', async () => {
+        const owner = createOwner();
+        const before = owner.account().homeAtmosphere;
+        const result = await owner.action({ actionId: 'settings.set', input: { anchor: 'appearance.atmosphereLooks',
+            value: { 'calm-sea': { fade: 0.55 } } } });
+        expect(result).toMatchObject({ ok: false });
+        expect(owner.account().homeAtmosphere).toEqual(before);
+    });
+
+    it('requires approval by default for local picture removal through real Action admission', async () => {
+        expect(resolveSettingsDeclarationOperationApprovalRequired('appearance.atmospherePictureRemove', settingsDefaults)).toBe(true);
+        expect(resolveSettingsDeclarationOperationApprovalRequired('appearance.atmospherePictureAdd', settingsDefaults)).toBe(false);
+        const owner = createOwner();
+        const executor = throughActionExecutor(owner.action, () => settingsDefaults.actionsSettingsV1);
+        const result = await executor.execute('settings.invoke', { anchor: 'appearance.atmospherePictureRemove',
+            input: { kind: 'atmosphere_picture_remove', localId: 'user-1' } }, { surface: 'agent', authority: 'account_automation' });
+        expect(result).toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+    });
+});
+
+describe('Home atmosphere picture and Project mutations', () => {
+    function services(request: Parameters<typeof createAtmosphereSettingServices>[0]['request'] = async () => { throw new Error('unexpected_http'); }) {
+        return createAtmosphereSettingServices({ serverId: 'home-a', accountId: 'account-a', credentials: { token: 'plain-token' },
+            assertCurrent: () => {}, resolveAccountEncryption: async () => ({ accountMode: 'plain', encryption: null }), request });
+    }
+    function ownerWithServices(mutationServices: SettingsMutationServices) {
+        return createOwner(undefined, false, true, settingsDefaults, undefined, undefined, undefined, undefined, undefined, mutationServices);
+    }
+
+    it('does not acquire or select picture bytes after the answering Account retires during download', async () => {
+        let current = true;
+        vi.stubGlobal('fetch', vi.fn(async () => {
+            current = false;
+            return new Response(new Blob(['retired-account']));
+        }));
+        onTestFinished(() => vi.unstubAllGlobals());
+        const { pictureStore } = await import('@/components/atmosphere/pictureStore.web');
+        const before = await pictureStore.list();
+        const owner = createOwner(undefined, false, true, settingsDefaults, undefined, undefined, undefined,
+            { isCurrent: () => current }, undefined, services());
+        expect(await owner.action({ actionId: 'settings.invoke', input: { anchor: 'appearance.atmospherePictureAdd',
+            input: { kind: 'atmosphere_picture_add', source: { kind: 'url', url: 'https://example.test/retired.png' } } } }))
+            .toMatchObject({ status: 'cancelled' });
+        expect(owner.account().homeAtmosphere.picture.ref).toEqual(settingsDefaults.homeAtmosphere.picture.ref);
+        expect(await pictureStore.list()).toEqual(before);
+    });
+
+    it('acquires URL and exact Machine binary bytes through their real owners and refuses remove via the add anchor', async () => {
+        const encoded = new Blob(['prepared-webp'], { type: 'image/webp' });
+        const decode = vi.fn(async (data: Blob) => {
+            expect(new Uint8Array(await data.arrayBuffer())).toEqual(new Uint8Array([0, 255, 128, 3]));
+            return { width: 5120, height: 2560, close() {} };
+        });
+        vi.stubGlobal('createImageBitmap', decode);
+        vi.stubGlobal('document', { createElement: () => {
+            const canvas = { width: 0, height: 0, getContext: () => ({ drawImage() {} }),
+                toBlob: (callback: (blob: Blob) => void, mime: string, quality: number) => {
+                    expect({ width: canvas.width, height: canvas.height, mime, quality }).toEqual({ width: 2560, height: 1280, mime: 'image/webp', quality: 0.86 });
+                    callback(encoded);
+                } }; return canvas;
+        } });
+        const originalFetch = globalThis.fetch;
+        vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => String(input).startsWith('data:')
+            ? originalFetch(input) : new Response(new Blob([new Uint8Array([0, 255, 128, 3])], { type: 'image/png' }))));
+        onTestFinished(() => { vi.unstubAllGlobals(); settingsMachineRpc.mockReset(); });
+        const { pictureStore } = await import('@/components/atmosphere/pictureStore.web');
+        const owner = ownerWithServices(services());
+        const added = await owner.action({ actionId: 'settings.invoke', input: { anchor: 'appearance.atmospherePictureAdd',
+            input: { kind: 'atmosphere_picture_add', source: { kind: 'url', url: 'https://example.test/photo.png' } } } });
+        expect(added).toMatchObject({ status: 'completed', value: { localId: expect.any(String) } });
+        const selected = owner.account().homeAtmosphere.picture.ref;
+        if (selected.kind !== 'user') throw new Error('User picture was not selected');
+        onTestFinished(() => pictureStore.remove(selected.localId));
+        const fromUrl = await pictureStore.get(selected.localId);
+        expect(fromUrl?.data).toBeInstanceOf(Blob);
+        if (!(fromUrl?.data instanceof Blob)) throw new Error('Browser store did not return bytes');
+        expect(fromUrl.data.type).toBe('image/webp');
+        expect(await fromUrl.data.text()).toBe('prepared-webp');
+        expect(await owner.action({ actionId: 'settings.invoke', input: { anchor: 'appearance.atmospherePictureAdd',
+            input: { kind: 'atmosphere_picture_remove', localId: selected.localId } } })).toMatchObject({ status: 'unavailable' });
+        expect(await pictureStore.get(selected.localId)).toBeDefined();
+        settingsMachineRpc.mockResolvedValue({ success: true, content: 'AP+AAw==' });
+        expect(await owner.action({ actionId: 'settings.invoke', input: { anchor: 'appearance.atmospherePictureAdd',
+            input: { kind: 'atmosphere_picture_add', source: { kind: 'machine_file', machineId: 'machine-a', path: '/pictures/photo.png' } } } }))
+            .toMatchObject({ status: 'completed' });
+        expect(settingsMachineRpc.mock.calls.at(-1)?.[0]).toMatchObject({ serverId: 'home-a', accountId: 'account-a', machineId: 'machine-a',
+            method: 'readFile', payload: { path: '/pictures/photo.png' } });
+        const remote = owner.account().homeAtmosphere.picture.ref;
+        if (remote.kind !== 'user') throw new Error('Remote user picture was not selected');
+        onTestFinished(() => pictureStore.remove(remote.localId));
+        const fromFile = await pictureStore.get(remote.localId);
+        if (!(fromFile?.data instanceof Blob)) throw new Error('Remote file did not become browser bytes');
+        expect(fromFile.data.type).toBe('image/webp');
+        expect(await fromFile.data.text()).toBe('prepared-webp');
+        expect(decode).toHaveBeenCalledTimes(2);
+        expect(await owner.action({ actionId: 'settings.invoke', input: { anchor: 'appearance.atmospherePictureRemove',
+            input: { kind: 'atmosphere_picture_remove', localId: selected.localId } } })).toMatchObject({ status: 'completed' });
+        expect(await pictureStore.get(selected.localId)).toBeUndefined();
+        expect(await pictureStore.get(remote.localId)).toBeDefined();
+        await pictureStore.put({ localId: 'test-builtin-remove-guard', kind: 'builtin', data: new Blob(['builtin']) });
+        onTestFinished(() => pictureStore.remove('test-builtin-remove-guard'));
+        expect(await owner.action({ actionId: 'settings.invoke', input: { anchor: 'appearance.atmospherePictureRemove',
+            input: { kind: 'atmosphere_picture_remove', localId: 'test-builtin-remove-guard' } } }))
+            .toMatchObject({ status: 'unavailable', reason: 'user_picture_not_found' });
+        expect(await pictureStore.get('test-builtin-remove-guard')).toBeDefined();
+    });
+
+    it('reads, writes and resets exact Project rows through real HTTP/CAS while preserving neighbors and refusing stale writes', async () => {
+        const previous = storage.getState();
+        onTestFinished(() => storage.setState(previous, true));
+        storage.getState().activateProjectAccountRowsScope({ serverId: 'home-a', accountId: 'account-a' });
+        const key = { kind: 'project-organization' as const, serverId: 'home-a', projectKey: 'project-a' };
+        let row: ProjectAccountRowV1 = { key, revision: 4, content: { t: 'plain', v: { key, value: { pinned: true, label: 'Keep me' } } } };
+        let conflict = false;
+        const requests: ReturnType<typeof ProjectAccountRowMutationRequestV1Schema.parse>[] = [];
+        const owner = ownerWithServices(services(async (path, init) => {
+            if (path.endsWith('/list')) return new Response(JSON.stringify({ status: 'listed', coverage: 'complete', rows: [row] }));
+            const request = ProjectAccountRowMutationRequestV1Schema.parse(JSON.parse(String(init?.body)));
+            requests.push(request);
+            const mutation = request.mutations[0]!;
+            if (conflict) return new Response(JSON.stringify({ status: 'conflict', key, revision: 9 }));
+            expect(mutation.expectedRevision).toBe(row.revision);
+            row = { key, revision: row.revision + 1, content: mutation.content };
+            return new Response(JSON.stringify({ status: 'updated', rows: [row], cursor: row.revision }));
+        }));
+        const target = { kind: 'project', serverId: 'home-a', projectKey: 'project-a' };
+        expect(await owner.action({ actionId: 'settings.get', input: { anchor: 'appearance.projectAtmosphere', target } }))
+            .toEqual({ anchor: 'appearance.projectAtmosphere', value: 'home' });
+        const { moments: _moments, ...atmosphere } = settingsDefaults.homeAtmosphere;
+        const { projectAtmosphereEdit } = await import('@/components/atmosphere/look/projectAtmosphereEdit');
+        expect(await owner.action({ actionId: 'settings.set', input: { anchor: 'appearance.projectAtmosphere', target,
+            value: projectAtmosphereEdit(settingsDefaults.homeAtmosphere, undefined, current => ({ ...current, source: 'none' })) } })).toMatchObject({ value: { source: 'none' } });
+        expect(row.content).toMatchObject({ t: 'plain', v: { value: { pinned: true, label: 'Keep me', atmosphere: { source: 'none' } } } });
+        expect(await owner.action({ actionId: 'settings.reset', input: { anchor: 'appearance.projectAtmosphere', target } }))
+            .toEqual({ anchor: 'appearance.projectAtmosphere', value: 'home' });
+        const writes = requests.length;
+        expect(await owner.action({ actionId: 'settings.set', input: { anchor: 'appearance.projectAtmosphere', target: { ...target, serverId: 'other-home' }, value: 'home' } }))
+            .toMatchObject({ errorCode: 'setting_target_mismatch' });
+        expect(requests).toHaveLength(writes);
+        conflict = true;
+        expect(await owner.action({ actionId: 'settings.set', input: { anchor: 'appearance.projectAtmosphere', target, value: atmosphere } }))
+            .toMatchObject({ ok: false, errorCode: 'project_account_mutation_conflict' });
+        expect(row.content).toMatchObject({ t: 'plain', v: { value: { pinned: true, label: 'Keep me', atmosphere: 'home' } } });
+    });
+});
+
 // Preload the real scope/consent owners after the declaration graph is initialized.
 const { storage } = await import('@/sync/domains/state/storage');
 await import('@/voice/settings/panels/realtime/confirmRealtimeProviderSettingChange');
@@ -101,10 +294,14 @@ const { prepareSpeechEndpointSettingChange } = await import('@/voice/settings/pa
 
 function throughActionExecutor(settingsDeclarationAction: ReturnType<typeof createSettingsDeclarationAction>,
     readActionsSettings?: () => ActionsSettingsV1,
-    approvalTransport?: Pick<ActionExecutorDeps, 'approvalsCreate' | 'approvalsGet' | 'approvalsUpdate' | 'isApprovalExecutionOriginCurrent'>) {
+    approvalTransport?: Pick<ActionExecutorDeps, 'approvalsCreate' | 'approvalsGet' | 'approvalsUpdate' | 'approvalsWaitForDecision' | 'isApprovalExecutionOriginCurrent'>) {
     const approvalPolicy: Pick<Parameters<typeof createActionExecutor>[0], 'isActionApprovalRequired'> = readActionsSettings
-        ? { isActionApprovalRequired: (actionId, context, input) =>
-            isApprovalRequiredByActionsSettings(actionId, readActionsSettings(), context, undefined, undefined, input) }
+        ? { isActionApprovalRequired: (actionId, context, input) => {
+            const anchor = input && typeof input === 'object' && 'anchor' in input && typeof input.anchor === 'string' ? input.anchor : '';
+            const safety = actionId === 'settings.invoke'
+                ? resolveSettingsDeclarationOperationApprovalRequired(anchor, settingsDefaults) ? 'danger' : 'safe' : undefined;
+            return isApprovalRequiredByActionsSettings(actionId, readActionsSettings(), context, safety, undefined, input);
+        } }
         : {};
     // These unrelated outward ports must remain unused; Protocol admission and the declaration owner stay real.
     const unusedTransport = async () => { throw new Error('unexpected_unrelated_transport'); };
@@ -127,7 +324,7 @@ function createOwner(host: { os: 'web' | 'ios'; desktop: boolean } = { os: 'web'
     navigation?: (href: string, signal?: AbortSignal) => Promise<boolean>, rebase?: (settings: Settings) => Settings,
     automationSettings?: Readonly<{ read(): Promise<AutomationV3Settings>; write(settings: AutomationV3Settings): Promise<AutomationV3Settings> }>,
     lifetime?: Readonly<{ isCurrent(): boolean; onReadAccount?(): void }>,
-    featureSnapshot?: ServerFeaturesSnapshot) {
+    featureSnapshot?: ServerFeaturesSnapshot, atmosphereServices?: SettingsMutationServices) {
     let account = { ...initialAccount };
     let local = { ...localSettingsDefaults };
     const openedInteractions: string[] = [];
@@ -137,6 +334,7 @@ function createOwner(host: { os: 'web' | 'ios'; desktop: boolean } = { os: 'web'
     };
     // These ports substitute only the persisted Account and device storage boundaries.
     const action = createSettingsDeclarationAction({
+        ...(atmosphereServices ? { serverId: 'home-a', accountScope: { serverId: 'home-a', accountId: 'account-a' } } : {}),
         host,
         tauriDesktop: host.desktop,
         readPageGate: readSettingsPageGate,
@@ -146,7 +344,7 @@ function createOwner(host: { os: 'web' | 'ios'; desktop: boolean } = { os: 'web'
         canUseRuntimeContributions: () => runtimeContributions,
         isCurrent: lifetime?.isCurrent,
         openHumanInteraction: navigation ?? (async (href) => { openedInteractions.push(href); return true; }),
-        mutationServices: { readScmDiffSummaryCatalog, readAgentCatalog: async (settings) => {
+        mutationServices: { ...atmosphereServices, readScmDiffSummaryCatalog, readAgentCatalog: async (settings) => {
             const captured = await readSummaryCatalogAccount();
             const { catalog } = await readAcpCatalogInContext(captured);
             return { entries: getResolvedAgentCatalogEntries({
@@ -165,6 +363,127 @@ function createOwner(host: { os: 'web' | 'ios'; desktop: boolean } = { os: 'web'
     });
     return { action, account: () => account, local: () => local, openedInteractions };
 }
+
+describe('Voice public privacy policy destination', () => {
+    it('discovers and opens the fixed public policy on the answering client without a Voice machine', async () => {
+        const before = storage.getState();
+        const open = vi.fn();
+        vi.stubGlobal('open', open);
+        onTestFinished(() => { storage.setState(before, true); vi.unstubAllGlobals(); });
+        storage.setState({ machines: {} });
+        const owner = createOwner(undefined, true);
+        const executor = throughActionExecutor(owner.action, () => owner.account().actionsSettingsV1);
+        const context = { surface: 'agent', authority: 'account_automation' } as const;
+        expect(await executor.execute('settings.list', { pageId: 'voicePrivacy' }, context)).toMatchObject({ ok: true, result: {
+            items: expect.arrayContaining([expect.objectContaining({ anchor: 'voicePrivacy.privacyPolicy',
+                operation: { actionId: 'settings.invoke', requiresHumanInteraction: false, requiresApproval: false } })]),
+        } });
+        expect(await executor.execute('settings.invoke', { anchor: 'voicePrivacy.privacyPolicy' }, context))
+            .toEqual({ ok: true, result: { anchor: 'voicePrivacy.privacyPolicy', status: 'completed' } });
+        const { HAPPIER_PRIVACY_POLICY_URL } = await import('@/constants/legalUrls');
+        expect(open.mock.calls).toEqual([[HAPPIER_PRIVACY_POLICY_URL, '_blank', 'noopener,noreferrer']]);
+        expect(owner.openedInteractions).toEqual([]);
+    });
+
+    it('refuses retired Account and arbitrary operation input before opening the policy', async () => {
+        const open = vi.fn();
+        vi.stubGlobal('open', open);
+        onTestFinished(() => vi.unstubAllGlobals());
+        let current = true;
+        const owner = createOwner(undefined, true, true, settingsDefaults, undefined, undefined, undefined,
+            { isCurrent: () => current });
+        const executor = throughActionExecutor(owner.action, () => owner.account().actionsSettingsV1);
+        const context = { surface: 'agent', authority: 'account_automation' } as const;
+        expect(await executor.execute('settings.invoke', { anchor: 'voicePrivacy.privacyPolicy',
+            input: { kind: 'voice_preview', voiceId: 'unrelated' } }, context))
+            .toMatchObject({ ok: true, result: { status: 'unavailable', reason: 'operation_input_invalid' } });
+        current = false;
+        expect(await executor.execute('settings.invoke', { anchor: 'voicePrivacy.privacyPolicy' }, context))
+            .toMatchObject({ ok: false, errorCode: 'setting_not_bound' });
+        expect(open).not.toHaveBeenCalled();
+    });
+});
+
+describe('keyed machine offline Account consent', () => {
+    it('changes only the selected machine and preserves concurrently added consent without a session feature gate', async () => {
+        const owner = createOwner(undefined, false, true, settingsParse({ machineOfflineAlertsV1: { machineIds: ['peer'] } }),
+            undefined, current => settingsParse({ ...current, machineOfflineAlertsV1: { machineIds: [...new Set([...current.machineOfflineAlertsV1.machineIds, 'concurrent'])] } }));
+        const anchor = 'notifications.machineOffline';
+        expect(await owner.action({ actionId: 'settings.get', input: { anchor, key: 'machine' } })).toEqual({ anchor, value: false });
+        expect(await owner.action({ actionId: 'settings.set', input: { anchor, key: 'machine', value: true } })).toEqual({ anchor, value: true });
+        expect(owner.account().machineOfflineAlertsV1.machineIds).toEqual(['peer', 'concurrent', 'machine']);
+        expect(await owner.action({ actionId: 'settings.set', input: { anchor, key: 'machine', value: false } })).toEqual({ anchor, value: false });
+        expect(owner.account().machineOfflineAlertsV1.machineIds).toEqual(['peer', 'concurrent']);
+        expect(await owner.action({ actionId: 'settings.set', input: { anchor, value: true } })).toMatchObject({ ok: false, errorCode: 'setting_key_required' });
+        expect(await owner.action({ actionId: 'settings.set', input: { anchor, key: 'machine', value: 'true' } })).toMatchObject({ ok: false, errorCode: 'invalid_setting_value' });
+    });
+});
+
+describe('Agent HTML network Account setting', () => {
+    const anchor = 'transcript.agentHtmlNetworkPolicy';
+
+    it('discovers and reads the policy and applies only valid present-user choices through the Account writer', async () => {
+        const owner = createOwner();
+        const executor = throughActionExecutor(owner.action);
+        const context = { surface: 'ui', authority: 'present_user', presentUserConfirmation: { actionId: 'settings.set' } } as const;
+        expect(await executor.execute('settings.list', { pageId: 'transcript' }, context)).toMatchObject({ ok: true, result: {
+            items: expect.arrayContaining([expect.objectContaining({ anchor, readable: true, writable: true,
+                storageScope: 'account', allowedValues: ['allowed', 'ask', 'off'] })]),
+        } });
+        expect(await executor.execute('settings.get', { anchor }, context)).toMatchObject({ ok: true, result: { anchor, value: 'allowed' } });
+        for (const value of ['ask', 'off', 'allowed']) {
+            expect(await executor.execute('settings.set', { anchor, value }, context)).toMatchObject({ ok: true, result: { anchor, value } });
+            expect(owner.account()).toHaveProperty('agentHtmlNetworkPolicy', value);
+        }
+        expect(await executor.execute('settings.set', { anchor, value: 'open' }, context))
+            .toMatchObject({ ok: false, errorCode: 'invalid_setting_value' });
+        expect(owner.account()).toHaveProperty('agentHtmlNetworkPolicy', 'allowed');
+    });
+
+    it('asks Agent and MCP callers before changing the network default and honors an explicit Action waiver', async () => {
+        const requests = new Map<string, ApprovalRequest>();
+        const owner = createOwner(undefined, false, true, settingsParse({ agentHtmlNetworkPolicy: 'off',
+        }));
+        // Approval Artifacts are the persistence boundary; both declaration admission and policy stay real.
+        const executor = throughActionExecutor(owner.action, () => owner.account().actionsSettingsV1, {
+            approvalsGet: async ({ artifactId }) => requests.get(artifactId) ?? null,
+            approvalsUpdate: async ({ artifactId, request }) => { requests.set(artifactId, request); return { ok: true }; },
+            approvalsWaitForDecision: async ({ request }) => ({ decision: 'reject', request }),
+            approvalsCreate: async ({ request }) => {
+                const artifactId = `network-approval-${requests.size}`;
+                requests.set(artifactId, request);
+                return { artifactId };
+            },
+        });
+        for (const surface of ['agent', 'mcp'] as const) {
+            const context = { surface, serverId: 'home-a', runtimeAccountId: 'account-a',
+                actionRequestId: `network-${surface}`, actionsSettings: owner.account().actionsSettingsV1 };
+            expect(await executor.execute('settings.get', { anchor }, context)).toMatchObject({ ok: true, result: { anchor, value: 'off' } });
+            const setResult = await executor.execute('settings.set', { anchor, value: 'allowed' }, context);
+            expect(setResult, JSON.stringify(setResult)).toMatchObject({ ok: false, errorCode: 'approval_rejected' });
+            expect(await executor.execute('settings.reset', { anchor }, context))
+                .toMatchObject({ ok: false, errorCode: 'approval_rejected' });
+        }
+        expect(owner.account()).toHaveProperty('agentHtmlNetworkPolicy', 'off');
+        expect([...requests.values()]).toEqual(expect.arrayContaining([
+            expect.objectContaining({ status: 'rejected', actionId: 'settings.set', actionArgs: { anchor, value: 'allowed' } }),
+            expect.objectContaining({ status: 'rejected', actionId: 'settings.reset', actionArgs: { anchor } }),
+        ]));
+        const waived = createOwner(undefined, false, true, settingsParse({ agentHtmlNetworkPolicy: 'off',
+            actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'settings.set': ['agent', 'mcp'], 'settings.reset': ['agent', 'mcp'] } },
+        }));
+        const waivedExecutor = throughActionExecutor(waived.action, () => waived.account().actionsSettingsV1);
+        for (const surface of ['agent', 'mcp'] as const) {
+            const context = { surface, actionsSettings: waived.account().actionsSettingsV1 };
+            expect(await waivedExecutor.execute('settings.set', { anchor, value: 'off' }, context))
+                .toMatchObject({ ok: true, result: { anchor, value: 'off' } });
+            expect(waived.account()).toHaveProperty('agentHtmlNetworkPolicy', 'off');
+            expect(await waivedExecutor.execute('settings.reset', { anchor }, context))
+                .toMatchObject({ ok: true, result: { anchor, value: 'allowed' } });
+            expect(waived.account()).toHaveProperty('agentHtmlNetworkPolicy', 'allowed');
+        }
+    });
+});
 
 describe('Instructions Agent edits policy declaration', () => {
     const anchor = 'actions.promptDocAgentEdits';
@@ -419,7 +738,68 @@ describe('navigation placement Settings Actions', () => {
         await owner.action({ actionId: 'settings.set', input: { anchor: 'connectedServicesAgentSignIn.sharingConfig', value: 'isolated' } });
         expect(owner.account().connectedServicesProviderStateSharingSettingsV1.defaults.stateMode).toBe('shared');
     });
-    it('keeps human shared-state privacy consent on the declared Connected Services default', async () => {
+    it('changes one machine terminal host and tmux option through the keyed Account setting', async () => {
+        const owner = createOwner(undefined, true, true, settingsParse({ ...settingsDefaults,
+            sessionTerminalHost: 'herdr',
+            sessionTmuxByMachineId: { other: { useTmux: true, sessionName: 'other', isolated: false, tmpDir: null } },
+        }));
+        const anchor = 'machines.terminal.host';
+        expect(await owner.action({ actionId: 'settings.set', input: { anchor, key: 'machine', value: { host: 'tmux' } } }))
+            .toMatchObject({ anchor, value: { host: 'tmux' } });
+        expect(await owner.action({ actionId: 'settings.set', input: { anchor, key: 'machine', value: { tmux: { isolated: true } } } }))
+            .toMatchObject({ anchor, value: { tmux: { isolated: true } } });
+        expect(await owner.action({ actionId: 'settings.get', input: { anchor, key: 'machine' } }))
+            .toMatchObject({ value: { host: 'tmux', tmux: { isolated: true } } });
+        expect(owner.account().sessionTmuxByMachineId.other?.sessionName).toBe('other');
+        expect(await owner.action({ actionId: 'settings.set', input: { anchor, key: 'machine', value: { host: null } } }))
+            .toMatchObject({ anchor, value: { host: null } });
+        expect(await owner.action({ actionId: 'settings.get', input: { anchor, key: 'machine' } }))
+            .toMatchObject({ value: { host: null, tmux: null } });
+        expect(await owner.action({ actionId: 'settings.set', input: { anchor, value: { host: 'tmux' } } }))
+            .toMatchObject({ ok: false, errorCode: 'setting_key_required' });
+    });
+    it('rejects the prototype setter key before mutating machine terminal settings', async () => {
+        const owner = createOwner(undefined, true, true);
+        const anchor = 'machines.terminal.host';
+        const initialPrototype = Object.getPrototypeOf(owner.account().sessionTmuxByMachineId);
+        expect(await owner.action({ actionId: 'settings.set', input: { anchor, key: '__proto__', value: { host: 'tmux' } } }))
+            .toMatchObject({ ok: false, errorCode: 'setting_key_required' });
+        const map = owner.account().sessionTmuxByMachineId;
+        expect(Object.hasOwn(map, '__proto__')).toBe(false);
+        expect(Object.getPrototypeOf(map)).toBe(initialPrototype);
+    });
+    it('changes one installable policy through a keyed Account setting without replacing siblings', async () => {
+        const owner = createOwner(undefined, true, true, settingsParse({ ...settingsDefaults,
+            installablesPolicyByMachineId: { machine: { other: { autoUpdateMode: 'notify' } }, peer: { tool: { autoInstallWhenNeeded: true } } },
+        }), undefined, current => settingsParse({ ...current,
+            installablesPolicyByMachineId: { ...current.installablesPolicyByMachineId,
+                machine: { ...current.installablesPolicyByMachineId.machine, concurrent: { autoUpdateMode: 'off' } } },
+        }));
+        const anchor = 'machines.installables.policy';
+        expect(await owner.action({ actionId: 'settings.set', input: { anchor, key: 'machine', value: {
+            installableKey: 'tool', patch: { autoInstallWhenNeeded: false },
+        } } })).toMatchObject({ anchor });
+        expect(await owner.action({ actionId: 'settings.get', input: { anchor, key: 'machine' } }))
+            .toMatchObject({ value: { other: { autoUpdateMode: 'notify' }, concurrent: { autoUpdateMode: 'off' }, tool: { autoInstallWhenNeeded: false } } });
+        expect(owner.account().installablesPolicyByMachineId.peer).toEqual({ tool: { autoInstallWhenNeeded: true } });
+        expect(await owner.action({ actionId: 'settings.set', input: { anchor, value: {
+            installableKey: 'tool', patch: { autoInstallWhenNeeded: true },
+        } } })).toMatchObject({ ok: false, errorCode: 'setting_key_required' });
+    });
+    it('refuses an unrepresentable prototype-named installable policy key without claiming a saved override', async () => {
+        const owner = createOwner();
+        const anchor = 'machines.installables.policy';
+        const initialPrototype = Object.getPrototypeOf(owner.account().installablesPolicyByMachineId);
+        expect(await owner.action({ actionId: 'settings.set', input: { anchor, key: '__proto__', value: {
+            installableKey: 'constructor', patch: { autoUpdateMode: 'notify' },
+        } } })).toMatchObject({ ok: false, errorCode: 'invalid_setting_value' });
+        const map = owner.account().installablesPolicyByMachineId;
+        expect(Object.getPrototypeOf(map)).toBe(initialPrototype);
+        expect(Object.hasOwn(map, '__proto__')).toBe(false);
+        expect(await owner.action({ actionId: 'settings.get', input: { anchor, key: '__proto__' } }))
+            .toMatchObject({ value: {} });
+    });
+    it('records sharing acknowledgement from the admitted Action without a second confirmation', async () => {
         const owner = createOwner(undefined, true, true, settingsParse({ ...settingsDefaults,
             connectedServicesProviderStateSharingSettingsV1: {
                 ...settingsDefaults.connectedServicesProviderStateSharingSettingsV1,
@@ -429,14 +809,10 @@ describe('navigation placement Settings Actions', () => {
         humanConfirmation.confirm.mockResolvedValueOnce(false);
         expect(await owner.action({ actionId: 'settings.set', input: {
             anchor: 'connectedServicesAgentSignIn.sharingState', value: true,
-        } })).toMatchObject({ ok: false, errorCode: 'setting_value_unavailable' });
-        expect(owner.account().connectedServicesProviderStateSharingSettingsV1.defaults.stateMode).toBe('isolated');
-        humanConfirmation.confirm.mockResolvedValueOnce(true);
-        expect(await owner.action({ actionId: 'settings.set', input: {
-            anchor: 'connectedServicesAgentSignIn.sharingState', value: true,
         } })).toMatchObject({ value: true });
         expect(owner.account().connectedServicesProviderStateSharingSettingsV1.acknowledgedRisksByAgentId)
             .toMatchObject({ codex: { sharedStatePrivacy: true } });
+        expect(humanConfirmation.confirm).not.toHaveBeenCalled();
     });
     it('rejects malformed nested defaults and preserves concurrent sibling fields', async () => {
         const owner = createOwner(undefined, true, true, settingsDefaults, undefined, current => settingsParse({
@@ -711,6 +1087,140 @@ describe('declared settings owner', () => {
         }
         expect(owner.openedInteractions).toEqual([]);
     });
+    it.each([null, 'voice-machine'])('reads semantic Voice roles without probing a computer for device speech and the current session (%s)', async (machineId) => {
+        const before = storage.getState();
+        vi.stubGlobal('SpeechRecognition', function SpeechRecognition() {});
+        onTestFinished(() => { storage.setState(before, true); vi.unstubAllGlobals(); settingsMachineRpc.mockReset(); });
+        const local = readLocalConversationVoiceSettings(settingsDefaults.voice);
+        const voice = writeLocalConversationVoiceSettings(settingsDefaults.voice, { ...local, conversationMode: 'direct_session',
+            stt: { ...local.stt, provider: 'device' }, tts: { ...local.tts, provider: 'device' } });
+        const account = applySettings(settingsDefaults, normalizeVoiceSettingsLocalDelta({ voice: { ...voice, providerId: 'local_conversation',
+            executionMachine: { mode: 'fixed' as const, machineId } } }, settingsDefaults));
+        storage.setState({ settings: account, machines: machineId ? { [machineId]: createMachineFixture({ id: machineId, activeAt: Date.now() }) } : {} });
+        const owner = createOwner(undefined, true, true, account);
+        expect(await throughActionExecutor(owner.action).execute('settings.invoke', { anchor: 'voiceConversations.readiness' }, { surface: 'agent', authority: 'account_automation' }))
+            .toMatchObject({ ok: true, result: { status: 'completed', value: { providerId: 'local_conversation', machineId,
+                roles: { hear: { status: 'ready', recoveryAction: 'none' }, think: { status: 'ready', recoveryAction: 'none' }, speak: { status: 'ready', recoveryAction: 'none' } } } } });
+        expect(settingsMachineRpc).not.toHaveBeenCalled();
+    });
+    it.each([
+        { agentId: '', feature: true, machineId: null, code: 'settings_missing_required_setting', recoveryAction: 'open_provider_settings' },
+        { agentId: 'codex', feature: false, machineId: null, code: 'server_feature_disabled', recoveryAction: 'switch_provider' },
+        { agentId: 'codex', feature: true, machineId: 'offline-machine', code: 'execution_machine_incompatible', recoveryAction: 'select_execution_machine' },
+    ])('reads the canonical Think recovery for $code', async ({ agentId, feature, machineId, code, recoveryAction }) => {
+        const before = storage.getState();
+        onTestFinished(() => { storage.setState(before, true); settingsMachineRpc.mockReset(); });
+        const local = readLocalConversationVoiceSettings(settingsDefaults.voice);
+        const voice = writeLocalConversationVoiceSettings(settingsDefaults.voice, { ...local, conversationMode: 'agent',
+            agent: { ...local.agent, agentSource: 'agent', agentId },
+            stt: { ...local.stt, provider: 'device' }, tts: { ...local.tts, provider: 'device' } });
+        const account = applySettings(settingsDefaults, normalizeVoiceSettingsLocalDelta({ experiments: true,
+            featureToggles: { voice: true, 'voice.agent': feature, 'execution.runs': true },
+            voice: { ...voice, providerId: 'local_conversation',
+            executionMachine: { mode: 'fixed' as const, machineId } } }, settingsDefaults));
+        storage.setState({ settings: account, machines: {} });
+        // The Home payload and Account preferences feed the real feature decision owner.
+        const featureSnapshot: ServerFeaturesSnapshot = { status: 'ready',
+            features: FeaturesResponseSchema.parse({ features: { voice: { enabled: true }, execution: { runs: { enabled: true } } }, capabilities: {} }) };
+        const owner = createOwner(undefined, true, true, account, undefined, undefined, undefined, undefined, featureSnapshot);
+        const executor = throughActionExecutor(owner.action);
+        expect(await executor.execute('settings.invoke', { anchor: 'voiceConversations.readiness' }, { surface: 'agent', authority: 'account_automation' }))
+            .toMatchObject({ ok: true, result: { status: 'completed', value: { roles: { think: { code, recoveryAction } } } } });
+        expect(settingsMachineRpc).not.toHaveBeenCalled();
+    });
+    it('reads a machine-free contributed cloud service and independent Dictation readiness', async () => {
+        const before = storage.getState();
+        vi.stubGlobal('SpeechRecognition', function SpeechRecognition() {});
+        const pluginId = 'fixture.voice.readiness';
+        const providerId = `${pluginId}/cloud`;
+        const declaration = VoiceProviderContributionSchema.parse({ id: 'cloud', title: 'Cloud conversation', kind: 'conversation',
+            roles: ['realtime_conversation'], platforms: ['web'],
+            capabilities: { turn: { cancelResponse: true, bargeIn: true }, tools: { effectCalls: 'none' } },
+            client: { artifactId: 'voice', exportName: 'activate' },
+            settings: { schemaVersion: 1, fields: [{ id: 'model', title: 'Model', schema: { type: 'string', maxLength: 128 },
+                default: 'fixture-model', presentation: { control: 'text' } }] } });
+        const registry = createVoiceProviderRegistry({ bundledContributions: [{ pluginId, providerId, declaration }],
+            bundledPresentations: [{ providerId, settingsSectionId: 'fixture.cloud', createSettingsSpec: () => null }] });
+        const token = {};
+        commitExternalVoiceProviderRegistration({ token, pluginId, localId: 'cloud', providerId, descriptor: registry.get(providerId), adapter: null });
+        onTestFinished(() => { removeExternalVoiceProviderRegistration(token); storage.setState(before, true); vi.unstubAllGlobals(); settingsMachineRpc.mockReset(); });
+        const voice = writeVoiceProviderSettingsConfig({ ...settingsDefaults.voice, providerId,
+            executionMachine: { mode: 'fixed', machineId: null } }, providerId, { model: 'fixture-model' });
+        const account = applySettings(settingsDefaults, normalizeVoiceSettingsLocalDelta({ voice }, settingsDefaults));
+        storage.setState({ settings: account, machines: {} });
+        const owner = createOwner(undefined, true, true, account);
+        const executor = throughActionExecutor(owner.action);
+        const context = { surface: 'agent' as const, authority: 'account_automation' as const };
+        expect(await executor.execute('settings.invoke', { anchor: 'voiceConversations.readiness' }, context))
+            .toMatchObject({ ok: true, result: { status: 'completed', value: { providerId, machineId: null,
+                readiness: { status: 'ready', recoveryAction: 'none' }, roles: { hear: { status: 'ready' }, think: { status: 'ready' }, speak: { status: 'ready' } } } } });
+        expect(await executor.execute('settings.invoke', { anchor: 'voiceDictation.readiness' }, context))
+            .toMatchObject({ ok: true, result: { status: 'completed', value: { providerId: 'device', readiness: { status: 'ready', recoveryAction: 'none' } } } });
+        expect(settingsMachineRpc).not.toHaveBeenCalled();
+    });
+    it('checks only the selected daemon speech model and preserves the canonical model recovery', async () => {
+        const before = storage.getState();
+        const { primeServerFeaturesSnapshot, resetServerFeaturesClientForTests } = await import('@/sync/api/capabilities/serverFeaturesClient');
+        const { getAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+        onTestFinished(() => { storage.setState(before, true); settingsMachineRpc.mockReset(); resetServerFeaturesClientForTests(); });
+        const serverId = getAppliedActiveServerSnapshot().serverId;
+        const packId = 'sherpa-onnx-streaming-zipformer-en-20M-2023-02-17';
+        const entry = getModelPackCatalogEntry(packId);
+        if (!entry) throw new Error('Missing canonical speech model');
+        const local = readLocalConversationVoiceSettings(settingsDefaults.voice);
+        const voice = writeLocalConversationVoiceSettings(settingsDefaults.voice, { ...local, conversationMode: 'direct_session',
+            stt: { ...local.stt, provider: 'local_neural', localNeural: { ...local.stt.localNeural, assetId: packId, execution: 'daemon' } },
+            tts: { ...local.tts, provider: 'device' } });
+        const account = applySettings(settingsDefaults, normalizeVoiceSettingsLocalDelta({ experiments: true,
+            featureToggles: { voice: true, 'voice.agent': true, 'voice.daemonInference': true, 'execution.runs': true },
+            voice: { ...voice, providerId: 'local_conversation', executionMachine: { mode: 'fixed' as const, machineId: 'voice-machine' } },
+        }, settingsDefaults));
+        storage.setState({ settings: account, settingsScope: { serverId, accountId: 'test-account' },
+            machines: { 'voice-machine': createMachineFixture({ id: 'voice-machine', activeAt: Date.now() }) } });
+        // The page prioritizes the selected missing model before a missing heavy-audio route.
+        const featureSnapshot: ServerFeaturesSnapshot = { status: 'ready', features: FeaturesResponseSchema.parse({
+            features: { voice: { enabled: true }, execution: { runs: { enabled: true } },
+                machines: { enabled: true, liveStream: { enabled: true, serverRouted: { enabled: false } } } }, capabilities: {},
+        }) };
+        primeServerFeaturesSnapshot({ serverId, snapshot: featureSnapshot });
+        settingsMachineRpc.mockImplementation(async request => {
+            if (request.method !== 'daemon.voiceInference.models.status') throw new Error('Unexpected readiness operation');
+            expect(request).toMatchObject({ machineId: 'voice-machine', payload: { packIds: [packId] } });
+            return { ok: true, models: [{ packId, pluginIdentity: null, kind: entry.kind, model: entry.model, version: null,
+                executionSupport: ['daemon'], runtimeFamily: entry.runtimeFamily, runtimeSupported: true,
+                installState: 'not_installed', progress: null, lastError: null, updatedAtMs: 0 }] };
+        });
+        const owner = createOwner(undefined, true, true, account, undefined, undefined, undefined, undefined, featureSnapshot);
+        expect(await throughActionExecutor(owner.action).execute('settings.invoke', { anchor: 'voiceConversations.readiness' }, { surface: 'agent', authority: 'account_automation' }))
+            .toMatchObject({ ok: true, result: { status: 'completed', value: {
+                readiness: { code: 'model_missing', recoveryAction: 'install_model' },
+                models: [expect.objectContaining({ packId, installState: 'not_installed' })], roles: { think: { status: 'ready' } },
+            } } });
+        expect(settingsMachineRpc).toHaveBeenCalled();
+    });
+    it('cancels semantic readiness after Account retirement or selection replacement during its final read', async () => {
+        const before = storage.getState();
+        onTestFinished(() => { storage.setState(before, true); settingsMachineRpc.mockReset(); });
+        const local = readLocalConversationVoiceSettings(settingsDefaults.voice);
+        const voice = writeLocalConversationVoiceSettings(settingsDefaults.voice, { ...local, conversationMode: 'direct_session',
+            stt: { ...local.stt, provider: 'device' }, tts: { ...local.tts, provider: 'device' } });
+        const account = applySettings(settingsDefaults, normalizeVoiceSettingsLocalDelta({ voice: { ...voice, providerId: 'local_conversation',
+            executionMachine: { mode: 'fixed' as const, machineId: null } } }, settingsDefaults));
+        for (const retireAccount of [true, false]) {
+            storage.setState({ settings: account, machines: {} });
+            let reads = 0;
+            let current = true;
+            const owner = createOwner(undefined, true, true, account, undefined, undefined, undefined, {
+                isCurrent: () => current,
+                onReadAccount: () => { if (++reads >= 3) { if (retireAccount) current = false;
+                    else storage.setState({ settings: applySettings(account, normalizeVoiceSettingsLocalDelta({
+                        voice: { ...account.voice, executionMachine: { mode: 'fixed', machineId: 'changed' } },
+                    }, account)) }); } },
+            });
+            expect(await throughActionExecutor(owner.action).execute('settings.invoke', { anchor: 'voiceConversations.readiness' }, { surface: 'agent', authority: 'account_automation' }))
+                .toMatchObject({ ok: true, result: { status: 'cancelled' } });
+        }
+    });
     it('reports the unselected conversation provider honestly before readiness inspection', async () => {
         const before = storage.getState();
         onTestFinished(() => storage.setState(before, true));
@@ -774,6 +1284,21 @@ describe('declared settings owner', () => {
         const owner = createOwner(undefined, true, true, settingsDefaults, undefined, undefined, undefined, {
             isCurrent: () => current,
             onReadAccount: () => { if (++reads === 2) queueMicrotask(() => { current = false; }); },
+        });
+        expect(await owner.action({ actionId: 'settings.invoke', input: { anchor: 'voicePrivacy.diagnosticsLocation' } }))
+            .toMatchObject({ status: 'cancelled' });
+    });
+    it('does not disclose diagnostics when the Account retires during the final settings reread', async () => {
+        const before = storage.getState();
+        onTestFinished(() => storage.setState(before, true));
+        const account = applySettings(settingsDefaults, { voiceSettingsV1: { ...settingsDefaults.voice,
+            executionMachine: { mode: 'fixed', machineId: null } } });
+        storage.setState({ settings: account, machines: {} });
+        let current = true;
+        let reads = 0;
+        const owner = createOwner(undefined, true, true, account, undefined, undefined, undefined, {
+            isCurrent: () => current,
+            onReadAccount: () => { if (++reads === 3) queueMicrotask(() => { current = false; }); },
         });
         expect(await owner.action({ actionId: 'settings.invoke', input: { anchor: 'voicePrivacy.diagnosticsLocation' } }))
             .toMatchObject({ status: 'cancelled' });
@@ -1221,6 +1746,61 @@ describe('declared settings owner', () => {
             ]) });
     });
 
+    it('switches All machines between List and Grid on this device through its declared local setting', async () => {
+        const owner = createOwner();
+        expect(await owner.action({ actionId: 'settings.get', input: { anchor: 'machines.indexView' } }))
+            .toEqual({ anchor: 'machines.indexView', value: 'list' });
+        expect(await owner.action({ actionId: 'settings.set', input: { anchor: 'machines.indexView', value: 'grid' } }))
+            .toEqual({ anchor: 'machines.indexView', value: 'grid' });
+        expect(owner.local().machinesIndexViewV1).toBe('grid');
+        expect(await owner.action({ actionId: 'settings.set', input: { anchor: 'machines.indexView', value: 'board' } }))
+            .toMatchObject({ ok: false, errorCode: 'invalid_setting_value' });
+        expect(owner.local().machinesIndexViewV1).toBe('grid');
+    });
+
+    it('discovers and remembers Storage shape and sort for one qualified machine without replacing its peers', async () => {
+        const owner = createOwner();
+        const anchor = 'machines.storage.view';
+        const key = 'home-a\u0000machine';
+        const peer = 'home-b\u0000machine';
+        const defaults = { shape: 'list', sort: { by: 'size', direction: 'desc' } };
+        expect(await owner.action({ actionId: 'settings.list', input: { pageId: 'machines' } }))
+            .toMatchObject({ items: expect.arrayContaining([expect.objectContaining({ anchor, storageScope: 'local', readable: true, writable: true })]) });
+        expect(await owner.action({ actionId: 'settings.get', input: { anchor, key } })).toEqual({ anchor, value: defaults });
+        expect(await owner.action({ actionId: 'settings.set', input: { anchor, key: peer, value: { shape: 'rings' } } }))
+            .toEqual({ anchor, value: { shape: 'rings' } });
+        expect(await owner.action({ actionId: 'settings.set', input: { anchor, key, value: { shape: 'map' } } }))
+            .toEqual({ anchor, value: { shape: 'map' } });
+        expect(await owner.action({ actionId: 'settings.set', input: { anchor, key, value: { sort: { by: 'name', direction: 'asc' } } } }))
+            .toEqual({ anchor, value: { sort: { by: 'name', direction: 'asc' } } });
+        expect(await owner.action({ actionId: 'settings.get', input: { anchor, key } }))
+            .toEqual({ anchor, value: { shape: 'map', sort: { by: 'name', direction: 'asc' } } });
+        expect(owner.local().machineStorageViewV1[peer]).toEqual({ ...defaults, shape: 'rings' });
+        expect(await owner.action({ actionId: 'settings.set', input: { anchor, key, value: { shape: 'pie' } } }))
+            .toMatchObject({ ok: false, errorCode: 'invalid_setting_value' });
+        expect(await owner.action({ actionId: 'settings.set', input: { anchor, key: 'machine', value: { shape: 'rings' } } }))
+            .toMatchObject({ ok: false, errorCode: 'setting_key_required' });
+        expect(owner.local().machineStorageViewV1[key]).toEqual({ shape: 'map', sort: { by: 'name', direction: 'asc' } });
+    });
+
+    it('changes the Machine summary style and its shown metrics on this device, keeping an empty Show (names only)', async () => {
+        const owner = createOwner();
+        expect(await owner.action({ actionId: 'settings.get', input: { anchor: 'appearance.machineSummaryStyle' } }))
+            .toEqual({ anchor: 'appearance.machineSummaryStyle', value: 'sparklines' });
+        expect(await owner.action({ actionId: 'settings.set', input: { anchor: 'appearance.machineSummaryStyle', value: 'rings' } }))
+            .toEqual({ anchor: 'appearance.machineSummaryStyle', value: 'rings' });
+        expect(owner.local().uiMachineSummaryStyle).toBe('rings');
+        expect(await owner.action({ actionId: 'settings.set', input: { anchor: 'appearance.machineSummaryStyle', value: 'pies' } }))
+            .toMatchObject({ ok: false, errorCode: 'invalid_setting_value' });
+        // Known metrics once each, in canonical order; none at all is a real choice (R42.6).
+        expect(await owner.action({ actionId: 'settings.set', input: { anchor: 'appearance.machineSummaryMetrics', value: ['disk', 'cpu', 'disk', 'gpu'] } }))
+            .toEqual({ anchor: 'appearance.machineSummaryMetrics', value: ['cpu', 'disk'] });
+        expect(owner.local().uiMachineSummaryMetrics).toEqual(['cpu', 'disk']);
+        expect(await owner.action({ actionId: 'settings.set', input: { anchor: 'appearance.machineSummaryMetrics', value: [] } }))
+            .toEqual({ anchor: 'appearance.machineSummaryMetrics', value: [] });
+        expect(owner.local().uiMachineSummaryMetrics).toEqual([]);
+    });
+
     it('uses the Appearance slider presets as the admitted text-size choices', async () => {
         const owner = createOwner();
         expect(await owner.action({ actionId: 'settings.set', input: { anchor: 'appearance.textSize', value: UI_FONT_SCALE_PRESETS.large } }))
@@ -1466,6 +2046,7 @@ describe('declared settings owner', () => {
             if (!('items' in discovered) || !discovered.items) throw new Error('Discovery failed');
             for (const item of discovered.items.filter((item) => item.writable)) {
                 const current = await owner.action({ actionId: 'settings.get', input: { anchor: item.anchor } });
+                if ('errorCode' in current && current.errorCode === 'setting_key_required') continue;
                 if ('unset' in current) {
                     expect(current).toEqual({ anchor: item.anchor, unset: true });
                     continue;

@@ -1,10 +1,9 @@
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
-import { isHomeDomainActionIdV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
 import type { ActionId } from '@happier-dev/protocol/actions/actionIds';
 import type { ActionExecuteFailure } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 import {
-    createHomeActionApprovalContinuation,
+    createActionApprovalContinuation,
     type ActionApprovalRegistration,
 } from '@/components/approvals/actionApprovalContinuation';
 import {
@@ -76,10 +75,9 @@ function buildTeamActionApprovalRegistration<TValue>(input: Readonly<{
     onFailed?: (code: string, failure?: ActionExecuteFailure) => void;
 }>): ActionApprovalRegistration {
     if (!input.onSucceeded && !input.onFailed) return input.artifactId;
-    if (!isHomeDomainActionIdV1(input.actionId)) return input.artifactId;
     if (getActionSpec(input.actionId).sideEffectClass === 'read') return input.artifactId;
     const actionId = input.actionId;
-    return createHomeActionApprovalContinuation<unknown, typeof actionId>({
+    return createActionApprovalContinuation<unknown, typeof actionId>({
         artifactId: input.artifactId,
         actionId,
         scope: input.scope,
@@ -160,9 +158,11 @@ export async function runTeamAction<TValue>(params: Readonly<{
     onApprovalSucceeded?: (value: TValue) => void | Promise<void>;
     /** Receives the refusal code and the shared continuation's validated failure. */
     onApprovalFailed?: (code: string, failure?: ActionExecuteFailure) => void;
+    /** Invocation-local encryption progress stays below admission and outside Action input. */
+    executorOptions?: Parameters<typeof scopedHomeActionExecutor>[1];
 }>): Promise<TeamActionOutcome<TValue>> {
     const actionRequestId = randomUUID();
-    const result = await scopedHomeActionExecutor(params.scope)(params.actionId, params.input, {
+    const result = await scopedHomeActionExecutor(params.scope, params.executorOptions)(params.actionId, params.input, {
         surface: 'ui',
         authority: 'present_user',
         serverId: params.scope.serverId,

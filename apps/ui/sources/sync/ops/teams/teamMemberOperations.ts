@@ -17,7 +17,8 @@ import {
 
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import type { TeamAddress } from '@/sync/domains/teams/teamAddress';
-import { refreshTeam, refreshTeamsDirectory } from '@/sync/engine/teams/teamsDirectoryEngine';
+import { invalidateTeam, refreshTeamsDirectory } from '@/sync/engine/teams/teamsDirectoryEngine';
+import { fireAndForget } from '@/utils/system/fireAndForget';
 
 import { runTeamAction, type HomeDomainFailure } from './teamActionClient';
 
@@ -140,9 +141,10 @@ export async function addTeamMember(params: Readonly<{
 }>): Promise<TeamMemberOutcome<TeamMembershipV1>> {
     // One settlement for the immediate answer and the approved one: an
     // admission moves the roster and the viewer's own Team capabilities either
-    // way, so the exact Team is re-read before the caller acts on the result.
-    const publish = async (membership: TeamMembershipV1): Promise<TeamMembershipV1> => {
-        await refreshTeam(params.scope, params.address);
+    // way. Withdraw its capabilities now, then revalidate without holding the
+    // membership acknowledgement behind a separate read.
+    const publish = (membership: TeamMembershipV1): TeamMembershipV1 => {
+        fireAndForget(invalidateTeam(params.scope, params.address), { tag: 'teamMemberOperations.revalidate' });
         return membership;
     };
     const onApprovalSucceeded = params.onApprovalSucceeded;
@@ -160,13 +162,13 @@ export async function addTeamMember(params: Readonly<{
         ...(onApprovalSucceeded
             ? {
                 onApprovalSucceeded: async (membership: TeamMembershipV1) =>
-                    await onApprovalSucceeded(await publish(membership)),
+                    await onApprovalSucceeded(publish(membership)),
             }
             : {}),
         ...(params.onApprovalFailed ? { onApprovalFailed: params.onApprovalFailed } : {}),
     });
     if (outcome.kind === 'failed') return failed(outcome.failure);
-    return succeeded(await publish(outcome.value));
+    return succeeded(publish(outcome.value));
 }
 
 async function membershipTransition(params: Readonly<{
@@ -184,7 +186,7 @@ async function membershipTransition(params: Readonly<{
     if (outcome.kind === 'failed') return failed(outcome.failure);
     // A role or status change can move the viewer's own Team capabilities, so
     // the Team is re-read. A refusal moved nothing and spends no request.
-    await refreshTeam(params.scope, params.address);
+    fireAndForget(invalidateTeam(params.scope, params.address), { tag: 'teamMemberOperations.revalidate' });
     return succeeded(outcome.value);
 }
 
@@ -277,7 +279,7 @@ export async function removeTeamMember(params: Readonly<{
         parse: (value) => TeamMemberRemoveResultV1Schema.parse(value),
     });
     if (outcome.kind === 'failed') return failed(outcome.failure);
-    await refreshTeam(params.scope, params.address);
+    fireAndForget(invalidateTeam(params.scope, params.address), { tag: 'teamMemberOperations.revalidate' });
     return succeeded(outcome.value);
 }
 
@@ -289,14 +291,14 @@ export async function leaveTeam(params: Readonly<{
     onApprovalFailed?: (code: string) => void;
 }>): Promise<TeamMemberOutcome<TeamMemberRemoveResultV1>> {
     const publish = async () => {
-        await Promise.all([
+        fireAndForget(Promise.all([
             refreshTeamsDirectory(params.scope, { v: 1, scope: 'member', archived: 'active' }),
             refreshTeamsDirectory(params.scope, { v: 1, scope: 'member', archived: 'archived' }),
-        ]);
+        ]), { tag: 'teamMemberOperations.revalidateDirectories' });
         // Leaving withdraws the detail's read access. Continue to the directory
         // before that re-read can unmount the originating confirmation surface.
         await params.onSucceeded?.();
-        await refreshTeam(params.scope, params.address);
+        fireAndForget(invalidateTeam(params.scope, params.address), { tag: 'teamMemberOperations.revalidate' });
     };
     const outcome = await runTeamAction({
         scope: params.scope,

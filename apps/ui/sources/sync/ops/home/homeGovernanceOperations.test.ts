@@ -1,15 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import {
-    createHomeGovernanceHarness,
-    homeAccountRowFixture,
-    homeAdministrationEventFixture,
-    homeGovernancePolicyProjectionFixture,
-    homeSettingsProjectionFixture,
-    installHomeGovernanceBoundaries,
-    standardCleanup,
-} from '@/dev/testkit';
-import { resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createDeferred, homeAccountRowFixture, homeAdministrationEventFixture, homeGovernancePolicyProjectionFixture, homeSettingsProjectionFixture, standardCleanup } from '@/dev/testkit';
 import { createManagedResourceDependencyFixture } from '@/dev/testkit/fixtures/managedResourceDependencyFixtures';
 import { homeGovernanceProjectionFixture } from '@/dev/testkit/fixtures/homeGovernanceFixtures';
 
@@ -25,6 +17,7 @@ import { homeGovernanceProjectionFixture } from '@/dev/testkit/fixtures/homeGove
 
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
+const { resetServerFeaturesClientForTests } = await import('@/sync/api/capabilities/serverFeaturesClient');
 
 const GOVERNANCE_PATH = '/v1/home/governance/get';
 
@@ -58,6 +51,43 @@ afterEach(() => {
 });
 
 describe('home governance mutations', () => {
+    it.each(['disable', 'delete', 'incomplete_delete'] as const)(
+        'settles an acknowledged %s while the governance revalidation is pending',
+        async (operation) => {
+            const home = await addHome();
+            const snapshots = await import('@/sync/store/home/governance/homeGovernanceSnapshots');
+            snapshots.applyHomeGovernanceProjection({
+                scope: { serverId: home, accountId: 'account-admin' },
+                projection: homeGovernanceProjectionFixture(), observedAt: 1,
+            });
+            const refresh = createDeferred<void>();
+            harness.answer(home, GOVERNANCE_PATH, {
+                body: homeGovernanceProjectionFixture(), respondAfter: refresh.promise,
+            });
+            harness.answer(home, '/v1/home/accounts/disable', {
+                body: homeAccountRowFixture('acc_target', { status: 'suspended' }),
+            });
+            harness.answer(home, '/v1/home/accounts/delete', {
+                body: { status: operation === 'incomplete_delete' ? 'disabled_pending_completion' : 'deleted' },
+            });
+            const owner = await operations();
+            const params = { scope: { serverId: home, accountId: 'account-admin' }, accountId: 'acc_target' };
+            const receipt = operation === 'disable' ? owner.disableHomeAccount(params) : owner.deleteHomeAccount(params);
+            let settled: unknown;
+            void receipt.then(value => { settled = value; });
+            try {
+                await vi.waitFor(() => expect(settled).toEqual({
+                    kind: operation === 'incomplete_delete' ? 'incomplete' : 'succeeded',
+                }));
+                expect(harness.requestsFor(GOVERNANCE_PATH).length).toBeGreaterThan(0);
+                expect(snapshots.getHomeGovernanceSnapshot({ serverId: home, accountId: 'account-admin' })?.stale).toBe(true);
+            } finally {
+                refresh.resolve();
+                await receipt;
+            }
+        },
+    );
+
     it('forwards the exact explicitly reviewed manual responsibility without replacing the Home or account operand', async () => {
         const home = await addHome();
         harness.answer(home, GOVERNANCE_PATH, { body: homeGovernanceProjectionFixture() });
@@ -149,7 +179,7 @@ describe('home governance mutations', () => {
         });
 
         // The refresh is the observable consequence of an accepted change.
-        expect(harness.requestsFor(GOVERNANCE_PATH).length).toBeGreaterThan(0);
+        await vi.waitFor(() => expect(harness.requestsFor(GOVERNANCE_PATH).length).toBeGreaterThan(0));
     });
 
     it('does not re-read a Home that refused the change', async () => {
@@ -172,6 +202,7 @@ describe('home governance mutations', () => {
                 retryable: false,
                 code: 'home_governance_forbidden',
                 details: { error: 'home_governance_forbidden' },
+                httpStatus: 403,
             },
         });
         expect(harness.requestsFor(GOVERNANCE_PATH)).toHaveLength(0);
@@ -207,7 +238,7 @@ describe('home governance mutations', () => {
 
         expect(outcome.kind).toBe('incomplete');
         // Either answer means the Account's access is gone, so the Home moved.
-        expect(harness.requestsFor(GOVERNANCE_PATH).length).toBeGreaterThan(0);
+        await vi.waitFor(() => expect(harness.requestsFor(GOVERNANCE_PATH).length).toBeGreaterThan(0));
     });
 
     it('reports a finished erasure as succeeded', async () => {
@@ -337,7 +368,7 @@ describe('home governance mutations', () => {
         const claimed = await claimHomeWithCode({ scope, code: 'ABCD' });
         expect(claimed.kind).toBe('succeeded');
         expect(harness.requestsFor('/v1/home/governance/claim').at(-1)?.input).toEqual({ code: 'ABCD' });
-        expect(harness.requestsFor(GOVERNANCE_PATH).length).toBeGreaterThan(refusedReads);
+        await vi.waitFor(() => expect(harness.requestsFor(GOVERNANCE_PATH).length).toBeGreaterThan(refusedReads));
     });
 
     it('reads a People page without re-reading the viewer own capabilities', async () => {

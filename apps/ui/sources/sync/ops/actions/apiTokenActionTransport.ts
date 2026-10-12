@@ -13,7 +13,10 @@ export async function executeApiTokenAction(transport: ApiTokenActionTransport, 
     let body: unknown;
     try {
         const projection = actionId === 'session.spawn_new' ? projectSessionSpawnNewApiRequest(input) : { input, target: transport.target };
-        const validatedInput = PUBLIC_ACTION_INPUT_SCHEMAS[publicId.data].parse(projection.input);
+        const parsedInput = PUBLIC_ACTION_INPUT_SCHEMAS[publicId.data].safeParse(projection.input);
+        if (!parsedInput.success) return { ok: false, errorCode: 'invalid_parameters',
+            error: parsedInput.error.issues.map((issue) => issue.message).join('; ') };
+        const validatedInput = parsedInput.data;
         body = ExternalActionRequestEnvelopeV1Schema.parse({ v: 1, input: validatedInput, ...(projection.target ? { target: projection.target } : {}) });
     } catch { return refused('invalid_parameters'); }
     context?.signal?.throwIfAborted();

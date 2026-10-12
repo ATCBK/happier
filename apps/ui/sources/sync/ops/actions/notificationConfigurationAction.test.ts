@@ -16,6 +16,8 @@ import { prepareLegacyNotificationChannelCatalogV1 } from '@happier-dev/protocol
 import { BUILT_IN_EXPO_PUSH_NOTIFICATION_CHANNEL_ID } from '@happier-dev/protocol/account/settings/notificationChannels';
 import { PushTokensRemoteAlertProjectionV2Schema } from '@happier-dev/protocol/push/pushTokenRegistration';
 
+vi.mock('socket.io-client', async importOriginal =>
+  (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 installDisconnectedServerSocketBoundary();
 afterEach(resetRuntimeFetch);
 
@@ -27,29 +29,36 @@ vi.mock('@tauri-apps/plugin-notification', () => ({
   sendNotification: () => {},
 }));
 
-it('requests desktop permission only with present-human authority and reports the refreshed OS state', async () => {
+it('requests desktop permission after automation admission and reports the refreshed OS state', async () => {
   vi.stubGlobal('__TAURI_INTERNALS__', { invoke: async () => undefined });
   desktopPermission.granted = false; desktopPermission.requests = 0;
   try {
     const execute = createNotificationConfigurationAction(null);
     expect(await execute({ actionId: 'notifications.desktop.permission.request', input: {},
-      context: { surface: 'agent', authority: 'account_automation' } })).toMatchObject({ ok: false, errorCode: 'present_user_required' });
-    expect(desktopPermission.requests).toBe(0);
+      context: { surface: 'agent', authority: 'account_automation' } })).toEqual({ status: 'granted' });
+    expect(desktopPermission.requests).toBe(1);
     expect(await execute({ actionId: 'notifications.desktop.permission.request', input: {},
       context: { surface: 'ui', authority: 'present_user' } })).toEqual({ status: 'granted' });
     expect(await execute({ actionId: 'notifications.desktop.permission.read', input: {}, context: {} })).toEqual({ status: 'granted' });
   } finally { vi.unstubAllGlobals(); }
 });
 
+it('retains captured Account admission for a policy-admitted native push permission request', async () => {
+  expect(await createNotificationConfigurationAction(null)({ actionId: 'notifications.push.permission.request', input: {},
+    context: { surface: 'agent', authority: 'account_automation' } }))
+    .toMatchObject({ ok: false, errorCode: 'action_account_scope_unavailable' });
+});
+
 describe('notification configuration Action authority', () => {
   it('removes only the addressed registration on the captured Home without exposing token material in the operand or receipt', async () => {
     const deletions: string[] = [];
     const token = 'ExponentPushToken[private-registration]';
+    const shortToken = 'tiny';
     setRuntimeFetch(async (url, init) => {
       const parsed = new URL(String(url));
       if (parsed.pathname === '/v1/push-tokens') return Response.json({ tokens: [
         { id: 'registration-a', token, createdAt: 1, updatedAt: 2 },
-        { id: 'registration-b', token: 'ExponentPushToken[other]', createdAt: 1, updatedAt: 2 },
+        { id: 'registration-b', token: shortToken, createdAt: 1, updatedAt: 2 },
       ] });
       if (init?.method === 'DELETE') { deletions.push(String(url)); return Response.json({ success: true }); }
       if (parsed.pathname === '/health' || parsed.pathname === '/v1/auth/ping') return Response.json({});
@@ -68,6 +77,10 @@ describe('notification configuration Action authority', () => {
     const account = await captureLazyActionAccountContext(home.id);
     try {
       const execute = createNotificationConfigurationAction(account);
+      const { NotificationConfigurationActionOutputSchemas } = await import('@happier-dev/protocol/actions/notificationConfigurationActionFamily');
+      const listed = NotificationConfigurationActionOutputSchemas['notifications.push.tokens.list'].parse(
+        await execute({ actionId: 'notifications.push.tokens.list', input: {}, context: {} }));
+      expect(JSON.stringify(listed)).not.toContain(shortToken);
       expect(await execute({ actionId: 'notifications.push.tokens.remove', input: { tokenId: 'registration-a' }, context: {} }))
         .toEqual({ tokenId: 'registration-a', removed: true });
       expect(deletions).toEqual([`${home.serverUrl}/v1/push-tokens/${encodeURIComponent(token)}`]);

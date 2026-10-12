@@ -6,10 +6,10 @@ import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/
 import { SavedSecretResourceMaterialV1Schema } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
 import { formatSharedSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
-import { primeServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
 
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
+const { primeServerFeaturesSnapshot } = await import("@/sync/api/capabilities/serverFeaturesClient");
 
 // Only Home HTTP and device credential storage are replaced. Load the real
 // ownership graph after those boundaries, outside the operation's test body.
@@ -18,7 +18,7 @@ installHomeGovernanceBoundaries(home);
 const { storage } = await import('@/sync/domains/state/storage');
 const [{ getActiveServerSnapshot }, { setActiveServerId },
     { getActiveServerAccountScope }, { publishAppliedActiveServerSnapshot, publishAppliedActiveServerRuntimeAvailability },
-    { runRemoteHostRelayAccessTask, createUiRemoteHostActionExecuteV1 }, { settingsParse }] = await Promise.all([
+    { withRemoteHostSshConfig, createUiRemoteHostActionExecuteV1 }, { settingsParse }] = await Promise.all([
     import('@/sync/domains/server/serverRuntime'),
     import('@/sync/domains/server/serverProfiles'), import('@/sync/domains/scope/activeServerAccountScope'),
     import('@/sync/runtime/orchestration/appliedActiveServerRuntime'), import('./remoteHostOperations'),
@@ -133,7 +133,7 @@ it.each(['list', 'read', 'duplicate'] as const)('serves the current destination 
     }
 });
 
-it.each(['agent', 'password', 'missing-password'] as const)('keeps the admitted relay destination useful while history is unavailable and another Home is focused (%s)', async credential => {
+it.each(['agent', 'password', 'missing-password'] as const)('keeps admitted SSH material useful while history is unavailable and another Home is focused (%s)', async credential => {
     const serverId = await home.addHome({ name: 'Issued Home', serverUrl: 'https://issued-remote-host.test', accountId: 'account' });
     const focusedId = await home.addHome({ name: 'Staged Home', serverUrl: 'https://staged-remote-host.test', accountId: 'other', active: false });
     const scope = { serverId, accountId: 'account' };
@@ -171,13 +171,15 @@ it.each(['agent', 'password', 'missing-password'] as const)('keeps the admitted 
             content: { t: 'plain', v: { v: 1, hosts: [host] } } } };
     } });
     let issued = false;
-    const result = runRemoteHostRelayAccessTask({ scope, hostId: host.id, expectedRevision: 4,
-        run: async (target, upstreamUrl, assertCurrent) => {
+    const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
+    const account = await captureLazyActionAccountContext(serverId);
+    const result = withRemoteHostSshConfig(account, { hostId: host.id, expectedRevision: 4 },
+        async ({ config, assertCurrent }) => {
             assertCurrent(); issued = true;
-            expect(target).toMatchObject({ kind: 'ssh', ssh: { target: host.ssh.target } });
-            if (credential === 'password') expect(target).toMatchObject({ ssh: { password } });
-            return upstreamUrl;
-        } });
+            expect(config.value.sshTarget).toBe(host.ssh.target);
+            if (credential === 'password') expect(config.value.password).toBe(password);
+            return config.value.sshTarget;
+        });
     // Attach rejection handling while a genuine network response is held open.
     const settled = result.then(value => ({ ok: true as const, value }), error => ({ ok: false as const, error }));
     try {
@@ -192,11 +194,12 @@ it.each(['agent', 'password', 'missing-password'] as const)('keeps the admitted 
         if (credential === 'missing-password') {
             expect(await settled).toMatchObject({ ok: false, error: { reason: 'saved_secret_unavailable' } });
             expect(issued).toBe(false);
-        } else expect(await settled).toEqual({ ok: true, value: issuedSnapshot.serverUrl });
+        } else expect(await settled).toEqual({ ok: true, value: host.ssh.target });
         expect(home.requestsFor('/v1/account/entity-rows/remote-hosts').every(request => request.serverId === serverId)).toBe(true);
     } finally {
         answerReady.resolve();
         historyReady.resolve();
         await settled;
+        account.dispose();
     }
 });

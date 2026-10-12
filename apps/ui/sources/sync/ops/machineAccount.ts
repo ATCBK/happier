@@ -1,8 +1,7 @@
 import { serverFetch, type ServerFetch } from '@/sync/http/client';
-import { composeProviderSettingsV1, splitProviderSettingsV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { readProviderCatalogInContext, writeProviderCatalogAndPublishInContext } from '@/sync/api/account/apiProviderCatalog';
 import { captureLazyActionAccountContext, type LazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
-import { hasProviderMachineStateV1, removeProviderMachineStateV1 } from '@happier-dev/protocol/providers/settings/operationsV1';
+import { revokeMachineWithProviderCleanup, type MachineRevokeWithProviderCleanupResult } from '@happier-dev/protocol/machines/account/revokeWithProviderCleanup';
 import {
     areAccountSettingsScopesEqual,
     type AccountSettingsScope,
@@ -44,25 +43,7 @@ export async function machineRevokeFromAccount(machineId: string, request: Serve
     return readMachineAccountError(response);
 }
 
-export type MachineRevokeWithProviderCleanupResult =
-    | Readonly<{ ok: true; machineAlreadyRevoked: boolean; providerCleanup: 'complete' | 'not_needed' }>
-    | Readonly<{
-        ok: false;
-        status: number;
-        error: 'provider_cleanup_pending' | 'provider_settings_unreadable';
-        machineRevoked: true;
-        providerCleanup: 'pending';
-        retryable: boolean;
-    }>
-    | Extract<MachineRevokeFromAccountResult, { ok: false }>;
-
-function pendingProviderCleanup(unreadable = false): Extract<MachineRevokeWithProviderCleanupResult, { machineRevoked: true }> {
-    return {
-        ok: false, status: unreadable ? 409 : 503,
-        error: unreadable ? 'provider_settings_unreadable' : 'provider_cleanup_pending',
-        machineRevoked: true, providerCleanup: 'pending', retryable: !unreadable,
-    };
-}
+export type { MachineRevokeWithProviderCleanupResult };
 
 /**
  * Revoke and private Provider cleanup borrow one captured Home/Account. The
@@ -91,30 +72,11 @@ export async function machineRevokeWithProviderCleanup(
         if (context.accountId !== expectedSettingsScope.accountId) {
             return { ok: false, status: 409, error: 'account_settings_scope_changed' };
         }
-        const revoked = await machineRevokeFromAccount(id, context.request);
-        const machineAlreadyRevoked = !revoked.ok && revoked.status === 410 && revoked.error === 'machine_revoked';
-        if (!revoked.ok && !machineAlreadyRevoked) return revoked;
-
-        try {
-            const captured = await readProviderCatalogInContext(context);
-            if (captured.status !== 'ready') {
-                return pendingProviderCleanup(captured.status === 'partial'
-                    || captured.status === 'unavailable' && captured.reason === 'invalid-stored-content');
-            }
-            const settings = composeProviderSettingsV1(captured.catalog, {});
-            if (!hasProviderMachineStateV1(settings, id)) {
-                return { ok: true, machineAlreadyRevoked, providerCleanup: 'not_needed' };
-            }
-            const catalog = splitProviderSettingsV1(removeProviderMachineStateV1(settings, id)).catalog;
-            const mutation = await writeProviderCatalogAndPublishInContext(context, {
-                catalog, expectedRevision: captured.revision,
-            });
-            return mutation.status === 'updated'
-                ? { ok: true, machineAlreadyRevoked, providerCleanup: 'complete' }
-                : pendingProviderCleanup();
-        } catch {
-            return pendingProviderCleanup();
-        }
+        return await revokeMachineWithProviderCleanup(id, {
+            revoke: () => machineRevokeFromAccount(id, context.request),
+            readCatalog: () => readProviderCatalogInContext(context),
+            writeCatalog: value => writeProviderCatalogAndPublishInContext(context, value),
+        });
     } finally {
         context.dispose();
     }
@@ -124,14 +86,14 @@ export async function machineReplaceInAccount(params: Readonly<{
     oldMachineId: string;
     replacementMachineId: string;
     confirmActiveOldMachine?: boolean;
-}>): Promise<MachineReplacementAccountResult> {
+}>, request: ServerFetch = serverFetch): Promise<MachineReplacementAccountResult> {
     const oldMachineId = String(params.oldMachineId ?? '').trim();
     if (!oldMachineId) return { ok: false, status: 400, error: 'machine_id_required' };
 
     const replacementMachineId = String(params.replacementMachineId ?? '').trim();
     if (!replacementMachineId) return { ok: false, status: 400, error: 'replacement_machine_id_required' };
 
-    const response = await serverFetch(`/v1/machines/${encodeURIComponent(oldMachineId)}/replacement`, {
+    const response = await request(`/v1/machines/${encodeURIComponent(oldMachineId)}/replacement`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -149,11 +111,11 @@ export async function machineReplaceInAccount(params: Readonly<{
     return readMachineAccountError(response);
 }
 
-export async function machineClearReplacementFromAccount(machineId: string): Promise<MachineReplacementAccountResult> {
+export async function machineClearReplacementFromAccount(machineId: string, request: ServerFetch = serverFetch): Promise<MachineReplacementAccountResult> {
     const id = String(machineId ?? '').trim();
     if (!id) return { ok: false, status: 400, error: 'machine_id_required' };
 
-    const response = await serverFetch(`/v1/machines/${encodeURIComponent(id)}/replacement`, {
+    const response = await request(`/v1/machines/${encodeURIComponent(id)}/replacement`, {
         method: 'DELETE',
     });
 

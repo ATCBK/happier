@@ -53,7 +53,7 @@ describe('Recap synopsis Account lifetime', () => {
                 ownerState: 'settled', wake: 'finished', headline: 'Alice private worker report', canInspect: true } } };
         const retainedTranscript = createSessionMessagesFixture({ isLoaded: true,
             messageIdsOldestFirst: [workerUpdate.id], messagesById: { [workerUpdate.id]: workerUpdate } });
-        storage.setState({ sessions: { lead: createSessionFixture({ id: 'lead', serverId: connection.home.id, owner: 'alice' }) },
+        storage.setState({ sessions: { lead: createSessionFixture({ id: 'lead', serverId: connection.home.id, owner: 'alice' }, { memoryEnabled: true }) },
             sessionMessages: { lead: retainedTranscript } });
         const hook = await renderHook(() => useSessionRecap({ serverId: connection.home.id, sessionId: 'lead' }));
         await vi.waitFor(() => expect(hook.getCurrent()?.text).toBe(hasSynopsis ? synopsis.synopsis : 'Alice private worker report'));
@@ -62,8 +62,9 @@ describe('Recap synopsis Account lifetime', () => {
             if (transition === 'same_credential_refresh') {
                 expect(await TokenStorage.setCredentialsForServerUrl(connection.home.serverUrl, { serverId: connection.home.id }, connection.credentials)).toBe(true);
             } else if (transition === 'lifetime_retirement') {
-                // Exercise the real boundary used by connection resets, retaining both inputs.
-                // A same-token persistence write only retires the System Record repository.
+                // The same Account stays applied: renewal must fetch fresh synopsis
+                // content, not relabel the retained transcript or replay old content.
+                synopsis = { v: 1, seqTo: 3, updatedAtMs: 3, synopsis: 'Renewed Alice synopsis' };
                 retireActiveServerAccountScopeLifetime();
             } else if (transition === 'runtime_retirement') publishAppliedActiveServerRuntimeAvailability(false);
             else storage.getState().activateProfileScope({ serverId: connection.home.id, accountId: 'bob' });
@@ -75,6 +76,16 @@ describe('Recap synopsis Account lifetime', () => {
         }
         expect(beforeLifetime?.isCurrent()).toBe(false);
         expect(storage.getState().sessionMessages.lead).toBe(retainedTranscript);
+        if (transition === 'lifetime_retirement') {
+            const renewedLifetime = captureActiveServerAccountScopeLifetime();
+            expect(renewedLifetime).not.toBe(beforeLifetime);
+            expect(renewedLifetime?.scope).toEqual(beforeLifetime?.scope);
+            expect(renewedLifetime?.isCurrent()).toBe(true);
+            if (hasSynopsis) {
+                await vi.waitFor(() => expect(hook.getCurrent()).toEqual({ source: 'synopsis', text: synopsis.synopsis, atMs: 3 }));
+            } else expect(hook.getCurrent()).toBeNull();
+            return;
+        }
         expect(hook.getCurrent()).toBeNull();
         if (transition === 'runtime_retirement') {
             synopsis = { v: 1, seqTo: 3, updatedAtMs: 3, synopsis: 'Recovered synopsis' };

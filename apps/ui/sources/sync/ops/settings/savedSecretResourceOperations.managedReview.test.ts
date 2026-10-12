@@ -18,6 +18,7 @@ import { MCP_SERVER_CATALOG_ROWS_ROUTE_V1, McpServerCatalogRowReadResponseV1Sche
 import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRowReadResponseV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { PROVIDER_CONNECTIONS_ROWS_ROUTE_V1, ProviderConnectionsRowReadResponseV1Schema } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1, ConnectedAccountCatalogRowReadResponseV1Schema } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
+import { NOTIFICATION_CHANNELS_ROUTE_V1, NotificationChannelCatalogReadResponseV1Schema } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
 import { readProfileCatalog } from '@/sync/api/account/apiProfileCatalog';
 import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
@@ -54,6 +55,7 @@ let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null =
 afterEach(async () => { await connection?.dispose(); connection = null; resetTeamActionClientForTests(); });
 
 const emptyReferenceCatalogRows = new Map<string, unknown>([
+    [NOTIFICATION_CHANNELS_ROUTE_V1, NotificationChannelCatalogReadResponseV1Schema.parse({ status: 'absent' })],
     [MCP_SERVER_CATALOG_ROWS_ROUTE_V1, McpServerCatalogRowReadResponseV1Schema.parse({ status: 'absent' })],
     [ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRowReadResponseV1Schema.parse({ status: 'absent' })],
     [PROVIDER_CONNECTIONS_ROWS_ROUTE_V1, ProviderConnectionsRowReadResponseV1Schema.parse({ status: 'absent' })],
@@ -332,6 +334,7 @@ describe('Saved Secret native responsibility review through its real delete owne
         if (profiles.status !== 'ready') throw new Error('The real Profile reference inventory must be readable');
         const referenceCensus = SavedSecretReferenceCensusV1Schema.parse({ accountMode: 'plain',
             remoteHosts: { revision: 'absent', resourceRefs: [] },
+            notificationChannels: { revision: 'absent', resourceRefs: [] },
             catalogs: { mcp: 'absent', acp: 'absent', providerConnections: 'absent', connectedConfigurations: 'absent', connectedPurposes: 'absent' },
             profileTransferRevision: profiles.controlRevision, profiles: {
                 referenceGuardRevision: profiles.referenceGuardRevision,
@@ -360,3 +363,6 @@ describe('Saved Secret native responsibility review through its real delete owne
         expect(settingsWrites).toEqual([]);
     });
 });
+// Native filesystem classes are an OS boundary, not part of this source-driven UI journey.
+vi.mock('expo-file-system', async () =>
+    (await import('@/dev/testkit/mocks/expoFileSystem')).createExpoFileSystemFileMock().module);

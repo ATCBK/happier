@@ -38,7 +38,8 @@ import type { HomeDomainFailure } from '@/sync/api/home/homeServerActionTranspor
 import { homeDomainFailureFromActionFailure } from '@/sync/api/home/homeDomainActions';
 import { awaitActionApprovalResult, createActionApprovalContinuation, type ActionApprovalRegistration } from '@/components/approvals/actionApprovalContinuation';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
-import { refreshHomeGovernanceSnapshot } from '@/sync/engine/home/governance/homeGovernanceEngine';
+import { invalidateHomeGovernance } from '@/sync/engine/home/governance/homeGovernanceEngine';
+import { fireAndForget } from '@/utils/system/fireAndForget';
 import { scopedHomeActionExecutor } from '@/sync/ops/actions/scopedHomeActionExecutor';
 import { classifyHomeActionOutcome, type HomeActionOutcome } from './homeActionOutcome';
 
@@ -140,7 +141,7 @@ async function mutate(params: Readonly<{
     if (outcome.kind === 'approval_pending') return outcome;
     // Only an accepted change can have moved this Home. Refreshing after a
     // refusal would spend a request to observe state that did not change.
-    await refreshHomeGovernanceSnapshot(params.scope);
+    fireAndForget(invalidateHomeGovernance(params.scope), { tag: 'homeGovernanceOperations.revalidate' });
     return SUCCEEDED;
 }
 
@@ -238,7 +239,7 @@ export async function deleteHomeAccount(params: Readonly<{
 
     const parsed = HomeAccountDeleteResultV1Schema.safeParse(outcome.result);
     // Either answer means this Account's access is gone, so the Home moved.
-    await refreshHomeGovernanceSnapshot(params.scope);
+    fireAndForget(invalidateHomeGovernance(params.scope), { tag: 'homeGovernanceOperations.revalidate' });
     if (!parsed.success) {
         // An answer this surface cannot read is never reported as a completed
         // deletion; incomplete is the only safe reading.

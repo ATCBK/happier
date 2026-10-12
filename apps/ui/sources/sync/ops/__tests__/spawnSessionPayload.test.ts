@@ -187,26 +187,26 @@ describe('buildSpawnHappySessionRpcParams', () => {
         });
     });
 
-    it('includes mcpSelection when provided', () => {
+    it('includes capabilitySelection when provided', () => {
         const params = buildSpawnHappySessionRpcParams({
             machineId: 'm1',
             directory: '/tmp',
             backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
-            mcpSelection: {
+            capabilitySelection: { mcp: {
                 v: 1,
                 managedServersEnabled: false,
                 forceIncludeServerIds: ['portable-playwright'],
                 forceExcludeServerIds: ['workspace-db'],
-            },
+            } },
         } satisfies SpawnSessionOptions);
 
         expect(params).toMatchObject({
-            mcpSelection: {
+            capabilitySelection: { mcp: {
                 v: 1,
                 managedServersEnabled: false,
                 forceIncludeServerIds: ['portable-playwright'],
                 forceExcludeServerIds: ['workspace-db'],
-            },
+            } },
         });
     });
 

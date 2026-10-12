@@ -1,4 +1,6 @@
 import 'fake-indexeddb/auto';
+import * as React from 'react';
+import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-native', async () => {
@@ -24,7 +26,7 @@ import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/acti
 import { primeServerFeaturesSnapshot, resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 import { executeVoiceConversationAction } from './voiceConversationAction';
 import { serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
-import { createPlainAccountEncryptionCurrentnessFixture, createSessionListRenderableSessionFixture, renderHook, standardCleanup } from '@/dev/testkit';
+import { createPlainAccountEncryptionCurrentnessFixture, createSessionListRenderableSessionFixture, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createSessionActionTarget } from '@/components/sessions/actions/sessionActionContext';
 import { executeSessionAction } from '@/components/sessions/actions/sessionActionExecution';
 
@@ -59,6 +61,93 @@ async function createHarness(providerId = 'local_conversation', start = true) {
 }
 
 describe('local conversation Actions through the lifecycle owner', () => {
+    it.each(['ended', 'history', 'recovery'] as const)('opens $0 through the real default Action and the mounted workspace', async scenario => {
+        const features = FeaturesResponseSchema.parse({ features: { voice: { enabled: true } }, capabilities: {} });
+        const home = await serveActionHomes({ homes: [{ key: 'voice', serverUrl: 'https://voice-hosted-action.example.test',
+            accountId: 'voice-hosted-account', currentAccount: true,
+            settings: { voice: voiceSettingsParse({ providerId: 'local_conversation' }) } }], route: request => {
+                if (request.path === '/v1/features') return Response.json(features);
+                if (request.path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+                return undefined;
+            } });
+        const serverId = home.homes.voice!.id;
+        primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features } });
+        const { lifecycle, publish } = await createHarness();
+        const { createWorkspaceState, reduceWorkspaceState } = await import('@/components/appShell/workspace/workspaceState');
+        const { createWorkspaceNavigationAdapter } = await import('@/components/appShell/workspace/workspaceNavigationAdapter');
+        const { createWorkspaceActionAdapter } = await import('@/components/appShell/workspace/workspaceActions');
+        const { registerMountedWorkspaceAction } = await import('@/components/appShell/workspace/workspaceActionRuntime');
+        const { DestinationInstanceHost } = await import('@/components/appShell/workspace/DestinationInstanceHost');
+        const { hrefForDestinationRef, resolveCompactAppDestinations } = await import('@/components/appShell/destinations/compactAppDestinationCatalog');
+        const { Text } = await import('@/components/ui/text/Text');
+        const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
+        const catalog = resolveCompactAppDestinations({ pages: [], builtins: { externalSessions: false, inbox: true, workflows: true, friends: false } });
+        let workspace = createWorkspaceState({ id: 'voice-settings-tab', target: { kind: 'settings', params: { pageId: 'voice' } }, pinned: false, preview: false });
+        const navigation = createWorkspaceNavigationAdapter({ getState: () => workspace, getCatalog: () => catalog,
+            dispatch: action => { workspace = reduceWorkspaceState(workspace, action); }, transport: { commit() {} },
+            createId: () => 'voice-opened-tab', onChange() {} });
+        const workspaceAction = createWorkspaceActionAdapter({ getState: () => workspace, navigation,
+            readCanvas: () => null, createId: () => 'voice-opened-tab' });
+        const unregister = registerMountedWorkspaceAction(async ({ actionId, input }) => workspaceAction(actionId, input));
+        const hosted = () => {
+            const group = workspace.groups[workspace.focusedGroupId];
+            const tab = workspace.tabs[group.activeTabId];
+            const href = hrefForDestinationRef(catalog, tab.target) ?? '';
+            return React.createElement(DestinationInstanceHost, { tabId: tab.id, ref: tab.target, pathname: href,
+                focused: true, visible: true, navigation: { push() {}, replace() {}, back() {} },
+                children: React.createElement(Text, { testID: 'voice-action-hosted-destination' }, href) });
+        };
+        const screen = await renderScreen(hosted());
+        try {
+            const accountScope = { serverId, accountId: 'voice-hosted-account' };
+            setVoiceSessionSnapshot(lifecycle.getSnapshot(), { adapterId: 'local_conversation', controlSessionId: 'session-original',
+                conversationSessionId: 'saved-conversation', conversationSessionAddress: { serverId, sessionId: 'saved-conversation' },
+                targetSessionAddress: null, transcriptMode: 'synthetic', updatedAt: 1,
+                ...(scenario === 'history' ? { lifetime: 'runtime_attempt' as const } : {}) },
+                { accountScope, conversationScope: { kind: 'voice_home' } });
+            const expectedAttempt = getVoiceSessionAttemptId()!;
+            if (scenario === 'recovery') publish({ ...lifecycle.getSnapshot(), status: 'error', canStop: false,
+                errorRecoveryAction: 'review_credentials' });
+            else await lifecycle.stop('session-original');
+            useVoiceTargetStore.getState().setLastFocusedSessionAddress({ serverId: 'other-home', sessionId: 'visible-session' });
+            const actionId = scenario === 'recovery' ? 'ui.voice_global.recover' : 'ui.voice_global.open_conversation';
+            const context = { surface: 'ui' as const, authority: 'present_user' as const, serverId, expectedAccountId: accountScope.accountId };
+            const result = await createDefaultActionExecutor().execute(actionId, { expectedAttempt }, context);
+            expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { status: 'completed' } });
+            await act(async () => { await screen.update(hosted()); });
+            const destination = scenario === 'ended' ? `/session/saved-conversation?serverId=${serverId}`
+                : scenario === 'history' ? '/settings/voice-history' : '/settings/voice/conversations?focus=provider';
+            expect(screen.findByTestId('voice-action-hosted-destination')?.props.children).toBe(destination);
+            const stale = await createDefaultActionExecutor().execute(actionId, { expectedAttempt: 'previous-attempt' }, context);
+            expect(stale).toMatchObject({ ok: true, result: { status: 'unavailable', code: 'stale_voice_attempt' } });
+            expect(hrefForDestinationRef(catalog, workspace.tabs[workspace.groups[workspace.focusedGroupId].activeTabId].target)).toBe(destination);
+        } finally { await screen.unmount(); unregister(); await lifecycle.dispose(); home.dispose(); }
+    });
+    it('admits safe mute but refuses microphone reopening when the captured Home disables Voice', async () => {
+        const features = FeaturesResponseSchema.parse({ features: { voice: { enabled: false } }, capabilities: {} });
+        const home = await serveActionHomes({ homes: [{ key: 'voice', serverUrl: 'https://voice-unmute-admission.example.test',
+            accountId: 'voice-unmute-account', currentAccount: true,
+            settings: { voice: voiceSettingsParse({ providerId: 'local_conversation' }) } }], route: request => {
+                if (request.path === '/v1/features') return Response.json(features);
+                if (request.path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+                return undefined;
+            } });
+        const serverId = home.homes.voice!.id;
+        primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features } });
+        const { lifecycle, expectedAttempt } = await createHarness();
+        try {
+            const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
+            const executor = createDefaultActionExecutor();
+            const context = { surface: 'ui' as const, authority: 'present_user' as const, serverId,
+                expectedAccountId: 'voice-unmute-account' };
+            expect(await executor.execute('ui.voice_global.set_muted', { expectedAttempt, muted: true }, context))
+                .toMatchObject({ ok: true, result: { status: 'completed' } });
+            expect(lifecycle.getSnapshot().micMuted).toBe(true);
+            expect(await executor.execute('ui.voice_global.set_muted', { expectedAttempt, muted: false }, context))
+                .toMatchObject({ ok: false, errorCode: 'voice_unavailable' });
+            expect(lifecycle.getSnapshot().micMuted).toBe(true);
+        } finally { await lifecycle.dispose(); home.dispose(); }
+    });
     it.each([
         { lifetime: 'runtime_attempt' as const, target: null, destination: '/settings/voice-history' },
         { lifetime: 'runtime_attempt' as const, target: { serverId: 'ended-home', sessionId: 'coding-target' }, destination: '/session/coding-target?serverId=ended-home' },
@@ -212,6 +301,11 @@ describe('local conversation Actions through the lifecycle owner', () => {
             expect(read.voice.target).toEqual({ kind: 'session', sessionAddress: { serverId: 'home-original', sessionId: 'session-original' } });
             expect((await invoke('ui.voice_global.set_muted', { expectedAttempt, muted: true })).status).toBe('completed');
             expect(lifecycle.getSnapshot()).toMatchObject({ status: 'connected', micMuted: true });
+            expect(await invoke('ui.voice_global.set_muted', { expectedAttempt: 'previous-attempt', muted: false }))
+                .toMatchObject({ status: 'unavailable', code: 'stale_voice_attempt' });
+            expect(lifecycle.getSnapshot().micMuted).toBe(true);
+            expect((await invoke('ui.voice_global.set_muted', { expectedAttempt, muted: false })).status).toBe('completed');
+            expect(lifecycle.getSnapshot()).toMatchObject({ status: 'connected', micMuted: false });
             expect((await invoke('ui.voice_global.turn_control', { expectedAttempt, control: 'commit_input' })).status).toBe('completed');
             expect(lifecycle.getSnapshot().mode).toBe('thinking');
             expect((await invoke('ui.voice_global.turn_control', { expectedAttempt, control: 'cancel' })).status).toBe('completed');

@@ -75,11 +75,15 @@ function requireBuiltin(channels: readonly NotificationChannelRecordV1[]) {
 export function createNotificationConfigurationAction(account: LazyActionAccountContext | null): NonNullable<ActionExecutorDeps['notificationConfigurationAction']> {
     return async ({ actionId, input, context }) => {
         context.signal?.throwIfAborted();
+        if (actionId === 'notifications.push.permission.read') {
+            NotificationConfigurationActionInputSchemas[actionId].parse(input);
+            const { readPushPermission } = await import('@/activity/notifications/permission/pushNotificationAccess');
+            const result = await readPushPermission();
+            context.signal?.throwIfAborted();
+            return result.ok ? { status: 'ready', permission: result.permission } : { status: 'unavailable', reason: result.reason };
+        }
         if (actionId === 'notifications.desktop.permission.read' || actionId === 'notifications.desktop.permission.request') {
             NotificationConfigurationActionInputSchemas[actionId].parse(input);
-            if (actionId === 'notifications.desktop.permission.request' && context.authority !== 'present_user') {
-                return { ok: false, errorCode: 'present_user_required', error: 'present_user_required' };
-            }
             const { isDesktopHost } = await import('@/utils/platform/desktopHost');
             if (!isDesktopHost()) return { ok: false, errorCode: 'desktop_host_required', error: 'desktop_host_required' };
             const { isPermissionGranted, requestPermission } = await import('@/activity/notifications/channels/tauriNotificationPlugin');
@@ -89,6 +93,48 @@ export function createNotificationConfigurationAction(account: LazyActionAccount
         }
         if (!account) return { ok: false, errorCode: 'action_account_scope_unavailable', error: 'action_account_scope_unavailable' };
         account.assertCurrent();
+        if (actionId === 'notifications.push.permission.request') {
+            NotificationConfigurationActionInputSchemas[actionId].parse(input);
+            const { isExpoPushNotificationChannelEnabled } = await import('@happier-dev/protocol/account/settings/accountSettings');
+            const pushEnabled = isExpoPushNotificationChannelEnabled(await account.readSettings());
+            account.assertCurrent();
+            context.signal?.throwIfAborted();
+            const { runPushNotificationPermissionPriming } = await import('@/activity/notifications/permission/pushNotificationPermissionPriming');
+            return runPushNotificationPermissionPriming({ pushEnabled, trigger: 'user_action' });
+        }
+        if (actionId === 'notifications.push.register') {
+            NotificationConfigurationActionInputSchemas[actionId].parse(input);
+            const { registerPushTokenIfAvailable } = await import('@/sync/engine/account/syncAccount');
+            await registerPushTokenIfAvailable({ log: { log: () => {} } });
+            return { status: 'reconciled' };
+        }
+        if (actionId === 'notifications.push.tokens.list' || actionId === 'notifications.push.tokens.remove') {
+            NotificationConfigurationActionInputSchemas[actionId].parse(input);
+            const { fetchPushTokens, deletePushToken } = await import('@/sync/api/session/apiPush');
+            const currentDeviceToken = actionId === 'notifications.push.tokens.list' ? (async () => {
+                const { readExpoPushToken } = await import('@/activity/notifications/permission/pushNotificationAccess');
+                const { resolveTroubleshootingDeviceToken } = await import('@/components/settings/notifications/pushNotificationTroubleshootingRuntime');
+                return resolveTroubleshootingDeviceToken(await readExpoPushToken());
+            })() : Promise.resolve(null);
+            const [tokens, currentToken] = await Promise.all([
+                fetchPushTokens(account.credentials, { request: account.request }), currentDeviceToken,
+            ]);
+            account.assertCurrent();
+            context.signal?.throwIfAborted();
+            if (actionId === 'notifications.push.tokens.list') {
+                const { formatPushTokenFingerprint } = await import('@/components/settings/notifications/pushNotificationTroubleshootingRuntime');
+                return { tokens: tokens.map(token => ({ tokenId: token.id, fingerprint: formatPushTokenFingerprint(token.token),
+                    isCurrentDevice: Boolean(currentToken && currentToken === token.token), clientServerUrl: token.clientServerUrl ?? null,
+                    createdAt: token.createdAt, updatedAt: token.updatedAt,
+                })) };
+            }
+            const { tokenId } = NotificationConfigurationActionInputSchemas[actionId].parse(input);
+            const registration = tokens.find(token => token.id === tokenId);
+            if (!registration) return { ok: false, errorCode: 'push_token_not_found', error: 'push_token_not_found' };
+            await deletePushToken(account.credentials, registration.token, { request: account.request });
+            account.assertCurrent();
+            return { tokenId, removed: true };
+        }
         const { catalog } = await readNotificationChannelCatalogProjectionInContext(account, context.signal, undefined,
             actionId === 'notifications.expoPush.update' ? record => { requireBuiltin(record.channels); } : undefined);
         if (catalog.status !== 'ready') throw new NotificationChannelCatalogOperationError(
@@ -137,7 +183,6 @@ export function createNotificationConfigurationAction(account: LazyActionAccount
                     },
                 });
                 if (!created.ok) throw new NotificationChannelCatalogOperationError(created.reason, created);
-                await publishAcknowledgedNotificationChannelCatalog(account);
                 return { channelId };
             }
             if (actionId === 'notifications.webhooks.remove') next = channels.filter(row => row !== channel);

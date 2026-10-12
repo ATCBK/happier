@@ -26,7 +26,6 @@ export type WidgetEntityMovementPort = Readonly<{
 export async function readWidgetEntityMovementAdmission(deps: ActionExecutorDeps, ref: WidgetInstanceRefV1, surface: WidgetSurfaceRefV1, context: ActionExecutorContext): Promise<WidgetEntityMovementAdmission> {
     let observedRef: WidgetInstanceRefV1 | undefined;
     const refused = (code: string): WidgetEntityMovementAdmission => ({ status: 'refused', code, ...(observedRef ? { ref: observedRef } : {}) });
-    if (ref.surface.serverId !== surface.serverId) return refused('server_target_mismatch');
     if (ref.surface.accountId !== surface.accountId) return refused('account_target_mismatch');
     const authority = await admitWidgetActionSurfaceV1(deps, ref.surface, context) ?? await admitWidgetActionSurfaceV1(deps, surface, context);
     if (authority) return refused(authority.errorCode);
@@ -106,11 +105,19 @@ function describeWidgetMovementRefusal(code: string): string {
     }
 }
 
-/** The one presenter of a widget movement refusal: every layout, area, Home and Board target refuses through it. */
-export function widgetMovementRefused(code: string, preview?: EntityDropEffectV1['preview']): Extract<EntityDropAdmissionV1, { status: 'refused' }> {
+/**
+ * The one presenter of a widget movement refusal: every layout, area, Home and Board target refuses through it.
+ * A geometry owner's reason may already carry the named way forward (which group, beside which), and keeps it.
+ */
+export function widgetMovementRefused(
+    reason: string | Readonly<{ code: string; message: string }>,
+    preview?: EntityDropEffectV1['preview'],
+): Extract<EntityDropAdmissionV1, { status: 'refused' }> {
+    const code = typeof reason === 'string' ? reason : reason.code;
     // The geometry owner says "same position"; for a carried widget that is "nothing to say", not "Already here".
     const presented = code === 'same-position' ? WIDGET_MOVE_UNCHANGED_CODE : code;
-    return { status: 'refused', reason: { code: presented, message: describeWidgetMovementRefusal(presented) }, ...(preview ? { preview } : {}) };
+    const named = typeof reason !== 'string' && reason.message !== reason.code ? reason.message : null;
+    return { status: 'refused', reason: { code: presented, message: named ?? describeWidgetMovementRefusal(presented) }, ...(preview ? { preview } : {}) };
 }
 
 /** Preview cannot turn incomplete/denied input admission into an allowed outline. Release still revalidates at the Action. */

@@ -3,6 +3,9 @@ import { ScopeActionInputSchemas, type ScopeActionId, type ScopeActionInputById 
 import type { SessionListViewFilterController } from '@/components/sessions/shell/search/useSessionListViewFilterController';
 import { resolveSessionListViewContextDefaults } from '@/components/sessions/shell/search/sessionListViewFilters';
 import { resolveSessionListFilterScopeAvailability } from '@/components/sessions/shell/search/sessionListFilterEditorModel';
+import type { WorkflowLibraryViewController } from '@/components/workflows/library/useWorkflowLibraryView';
+import type { ActionExecutorContext } from '@happier-dev/protocol/actions/executor/types';
+import { selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
 
 export type SessionListScopeActionController = Pick<SessionListViewFilterController,
   'filters' | 'updateFilters' | 'resetFilters' | 'viewContext' | 'viewContextKey' | 'corpusStorage'
@@ -35,6 +38,13 @@ export type ShellColumnActionOwner = Readonly<{
 }>;
 
 let readColumnOwner: (() => ShellColumnActionOwner) | null = null;
+let readLibraryOwner: (() => WorkflowLibraryViewController) | null = null;
+
+/** The focused Library joins the same client-local view-control bridge as Sessions and shell chrome. */
+export function registerWorkflowLibraryScopeActionOwner(read: () => WorkflowLibraryViewController): () => void {
+  readLibraryOwner = read;
+  return () => { if (readLibraryOwner === read) readLibraryOwner = null; };
+}
 
 export function registerShellColumnActionOwner(read: () => ShellColumnActionOwner): () => void {
   readColumnOwner = read;
@@ -56,7 +66,24 @@ function readSessionListOwner(input: ScopeActionInputById['session.list.view.get
     && controller.retentionScopeKey === owner?.retentionScopeKey ? controller : null;
 }
 
-export async function invokeScopeAction(actionId: ScopeActionId, rawInput: unknown): Promise<unknown> {
+export async function invokeScopeAction(actionId: ScopeActionId, rawInput: unknown,
+  context?: Pick<ActionExecutorContext, 'serverId' | 'runtimeAccountId'>): Promise<unknown> {
+  if (actionId === 'workflow.library.view.get' || actionId === 'workflow.library.view.set' || actionId === 'workflow.library.view.reset') {
+    const controller = readLibraryOwner?.();
+    if (!controller?.focused || !controller.lifetime?.isCurrent()
+      || (context?.serverId && !selectActiveServerAccountScopeForServer(controller.lifetime.scope, context.serverId))
+      || (context?.runtimeAccountId && context.runtimeAccountId !== controller.lifetime.scope.accountId)) {
+      return unavailable('client_surface_unavailable');
+    }
+    ScopeActionInputSchemas[actionId].parse(rawInput);
+    if (actionId === 'workflow.library.view.get') return {
+      view: controller.view, searchQuery: controller.searchQuery,
+      offeredViews: controller.offeredViews, visibleKeys: controller.visibleKeys,
+    };
+    const patch = actionId === 'workflow.library.view.reset' ? { view: 'all' as const, searchQuery: '' }
+      : ScopeActionInputSchemas['workflow.library.view.set'].parse(rawInput);
+    return controller.update(patch) ? { ok: true } : unavailable('client_control_unavailable');
+  }
   if (actionId === 'shell.column.get' || actionId === 'shell.column.set') {
     const column = readColumnOwner?.();
     if (!column) return unavailable('client_surface_unavailable');

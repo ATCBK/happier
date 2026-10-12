@@ -1,10 +1,13 @@
 import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { createProviderActionExecuteV1 } from '@happier-dev/protocol/providers/executeProviderActionV1';
 import { applyProviderDefaultModelSelectionV1 } from '@happier-dev/protocol/providers/selection/v1';
 import { createAccountProviderActionExecuteV1 } from '@happier-dev/protocol/providers/connections/accountProviderActionV1';
 import { readAccountProviderDeclarations, readAccountAgentProviderRequirements } from '@/providers/catalog/accountProviderDeclarations';
 import { readProviderCatalogForMutationInContext,
   writeProviderCatalogAndPublishInContext } from '@/sync/api/account/apiProviderCatalog';
+import { refreshProviderCatalog } from '@/sync/engine/settings/providerCatalogEngine';
+import { getProviderCatalogSnapshot } from '@/sync/store/settings/providerCatalogSnapshot';
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 import type { LazyActionAccountContext } from './actionAccountContext';
 
@@ -23,7 +26,17 @@ export function createUiProviderActionExecuteV1(account: LazyActionAccountContex
     account: (request, context) => {
       const execute = createAccountProviderActionExecuteV1({
         assertCurrent: () => { context.signal?.throwIfAborted(); account.assertCurrent(); },
-        readCatalog: () => readProviderCatalogForMutationInContext(account, context.signal),
+        // Reads own first-use admission even without a mounted catalog observer.
+        // Mutations still require the admitted row and never activate an inactive source.
+        readCatalog: async () => {
+          if (getActionSpec(request.actionId).sideEffectClass !== 'read') {
+            return readProviderCatalogForMutationInContext(account, context.signal);
+          }
+          const scope = { serverId: account.serverId, accountId: account.accountId };
+          await refreshProviderCatalog(scope);
+          context.signal?.throwIfAborted(); account.assertCurrent();
+          return getProviderCatalogSnapshot(scope)?.catalog ?? { status: 'unavailable', reason: 'authority-not-confirmed' };
+        },
         writeCatalog: input => writeProviderCatalogAndPublishInContext(account, input, context.signal),
         readDefinitions: async () => readAccountProviderDeclarations(),
         readAgentProviderRequirements: readAccountAgentProviderRequirements,

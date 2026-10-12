@@ -146,7 +146,7 @@ describe('UI machine Agent inventory Action transport', () => {
         let dispatched!: () => void;
         const pendingResponse = new Promise<void>((resolve) => { release = resolve; });
         const reachedTransport = new Promise<void>((resolve) => { dispatched = resolve; });
-        harness.answer(serverId, 'GET /v1/artifacts?limit=500', { select: () => {
+        harness.answer(serverId, 'GET /v1/artifacts?limit=500&includeBody=true', { select: () => {
             dispatched();
             return { body: [], respondAfter: pendingResponse };
         } });
@@ -238,18 +238,27 @@ describe('UI machine Agent inventory Action transport', () => {
     it.each(['install', 'update'] as const)('starts a %s job on the captured Home with explicit vendor consent', async (intent) => {
         const serverId = await harness.addHome({ name: 'Setup Home', serverUrl: 'https://setup.test', accountId: 'alice' });
         const signal = new AbortController().signal;
-        rpc.machine.mockResolvedValueOnce({ ok: true, jobId: 'job-1' });
+        const job = { jobId: 'job-1', agentId: 'acme/helper', intent, startedAt: 1, steps: [], progress: [], done: true,
+            outcome: { kind: 'succeeded', version: '1.1.0' } };
+        rpc.machine.mockImplementation(async ({ method }) => method === RPC_METHODS.DAEMON_AGENTS_INSTALL_START
+            ? { ok: true, jobId: job.jobId } : method === RPC_METHODS.DAEMON_AGENTS_INSTALL_LIST
+                ? { ok: true, jobs: [job] } : { error: 'Unsupported fixture RPC' });
         const result = await createDefaultActionExecutor().execute('machines.agents.install', {
             machineId: 'machine-1', agentId: 'acme/helper', intent,
             ...(intent === 'update' ? { consent: { vendorRecipe: true }, force: true } : {}),
         }, { surface: 'ui', authority: 'present_user', serverId, signal });
         expect(result).toEqual({ ok: true, result: { ok: true, jobId: 'job-1' } });
-        expect(rpc.machine).toHaveBeenLastCalledWith({
-            machineId: 'machine-1', serverId, signal, method: RPC_METHODS.DAEMON_AGENTS_INSTALL_START,
+        const start = rpc.machine.mock.calls.find(([request]) => request.method === RPC_METHODS.DAEMON_AGENTS_INSTALL_START)?.[0];
+        expect(start).toMatchObject({
+            machineId: 'machine-1', serverId, accountId: 'alice', signal: expect.any(AbortSignal), method: RPC_METHODS.DAEMON_AGENTS_INSTALL_START,
             payload: { agentId: 'acme/helper', intent, consent: { vendorRecipe: intent === 'update' },
                 ...(intent === 'update' ? { force: true } : {}),
             },
         });
+        const { readAgentInstallJob, waitForAgentInstallJob } = await import('@/agents/machineAgents/installJobs/installJobStore');
+        const target = { serverId, accountId: 'alice', machineId: 'machine-1', agentId: 'acme/helper' };
+        expect(readAgentInstallJob(target)?.jobId).toBe(job.jobId);
+        expect(await waitForAgentInstallJob(target)).toEqual(job.outcome);
     });
 
     it('preserves current job progress at a consumed cursor and exposes cancellation failure', async () => {

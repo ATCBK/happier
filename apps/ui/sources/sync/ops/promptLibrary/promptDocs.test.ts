@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { createPlainArtifactHomeFixture, createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { createPromptLibraryCatalogBoundary } from '@/dev/testkit/harness/promptLibraryCatalogBoundary';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, decodePlainArtifactStoredContent, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { MachineAdministrationTargetV1Schema } from '@happier-dev/protocol/account/settings/machineAdministrationSelectionsV1';
 import { createPromptDocInLibrary } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
@@ -14,10 +15,23 @@ import {
   upsertPromptExternalLink,
 } from './promptDocs';
 
+// Prepare the real Account/Sync graph during collection, before the Home fixture's
+// concurrent imports. Module preparation is not part of the prompt-write contract.
+await import('@/sync/ops/actions/actionAccountContext');
+
 let fixture:
   | Awaited<ReturnType<typeof createPlainArtifactHomeFixture>>
   | undefined;
 let catalog = createPromptLibraryCatalogBoundary();
+function requireBodyVersion(row: Readonly<{ bodyVersion?: number }>): number {
+  if (typeof row.bodyVersion !== 'number') throw new Error('Expected a fetched Artifact body revision');
+  return row.bodyVersion;
+}
+// These cases exercise qualified writes, not the separate Ask-first review journey.
+// Persist the ordinary policy waiver at the real Account Settings boundary.
+const promptWriteSettings = { actionsSettingsV1: { v: 1, approvalWaivedSurfaces: {
+  'prompt_doc.create': ['ui'], 'prompt_doc.update': ['ui'],
+} } };
 afterEach(() => {
   fixture?.dispose();
   fixture = undefined;
@@ -25,9 +39,10 @@ afterEach(() => {
 async function home(receivedId?: string) {
   catalog = createPromptLibraryCatalogBoundary({ records: [{ key: 'folders', value: { v: 1,
     folders: [{ id: 'folder-1', name: 'Personal' }] } }] });
-  return (fixture = await createPlainArtifactHomeFixture(
+  fixture = await createPlainArtifactHomeFixture(
     'https://prompt-doc-operations.test',
     { handleRequest: async (path, init) => {
+      if (path === '/v2/account/settings') return Response.json({ version: 2, content: { t: 'plain', v: promptWriteSettings } });
       const response = await catalog.handle(path, init);
       if (response) return response;
       if (receivedId && path === `/v1/artifacts/${receivedId}` && (init?.method ?? 'GET') === 'GET') {
@@ -44,10 +59,27 @@ async function home(receivedId?: string) {
       }
       return null;
     } },
-  ));
+  );
+  await fixture.hydrateAccountSettings();
+  return fixture;
 }
 
 describe('promptDocs qualified operations', () => {
+  it('rejects an empty title before creating or updating, even when blank content is representable', async () => {
+    const f = await home();
+    const id = await createPromptDoc({ title: 'Original', markdown: 'Original' });
+    const original = f.boundary.list();
+    const requestsBefore = f.requests.length;
+    const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+    const executor = createDefaultActionExecutor();
+    const context = { surface: 'ui' as const, serverId: f.home.id, expectedAccountId: 'artifact-account' };
+    for (const actionId of ['prompt_doc.create', 'prompt_doc.update'] as const) {
+      const actionArgs = { title: '', markdown: '', ...(actionId === 'prompt_doc.update' ? { artifactId: id } : {}) };
+      expect(await executor.execute(actionId, actionArgs, context)).toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+    }
+    expect(f.boundary.list()).toEqual(original);
+    expect(f.requests.slice(requestsBefore).filter(request => request.method === 'POST')).toEqual([]);
+  });
   it.each(['update', 'duplicate'] as const)('refuses a disabled %s through Action admission without changing the source or creating a copy', async operation => {
     const f = await home();
     const id = await createPromptDoc({ title: 'Original', markdown: 'Original' });
@@ -59,15 +91,14 @@ describe('promptDocs qualified operations', () => {
         actionsSettingsV1: { v: 1, actions: { [operation === 'duplicate' ? 'prompt_doc.create' : 'prompt_doc.update']: { disabledSurfaces: ['ui'] } } },
       } } });
       if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
-      if (url.pathname === '/v1/account/encryption/currentness') return Response.json({ mode: 'plain', version: 0,
-        signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 0 });
+      if (url.pathname === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture({ version: 0, updatedAt: 0, settingsVersion: 3 }));
       return await catalog.handle(`${url.pathname}${url.search}`, init) ?? await f.boundary.handle(`${url.pathname}${url.search}`, init)
         ?? Response.json({}, { status: 404 });
     });
     await f.hydrateAccountSettings();
     await expect(operation === 'duplicate' ? duplicatePromptDoc(id)
       : updatePromptDoc({ artifactId: id, title: 'Changed', markdown: 'Changed', expectedRevision: {
-        headerVersion: before[0]!.headerVersion, bodyVersion: before[0]!.bodyVersion,
+        headerVersion: before[0]!.headerVersion, bodyVersion: requireBodyVersion(before[0]!),
       } })).rejects.toThrow();
     expect(f.boundary.list()).toEqual(before);
   });
@@ -83,8 +114,8 @@ describe('promptDocs qualified operations', () => {
       const url = new URL(String(input));
       if (['/health', '/v1/auth/ping', '/v1/features'].includes(url.pathname)) return Response.json({});
       if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
-      if (url.pathname === '/v1/account/encryption/currentness') return Response.json({ mode: 'plain', version: 0,
-        signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 0 });
+      if (url.pathname === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture({ version: 0, updatedAt: 0, settingsVersion: 2 }));
+      if (url.pathname === '/v2/account/settings') return Response.json({ version: 2, content: { t: 'plain', v: promptWriteSettings } });
       const guide = url.origin === new URL(guideUrl).origin;
       if (!guide && url.origin !== otherUrl) throw new Error('Unexpected guide Home');
       const path = `${url.pathname}${url.search}`;
@@ -129,7 +160,7 @@ describe('promptDocs qualified operations', () => {
     const id = await createPromptDoc({ title: 'Original', markdown: 'Original' });
     const original = f.boundary.read(id)!;
     const accepted = await updatePromptDoc({ artifactId: id, title: 'First', markdown: 'First', expectedRevision: {
-      headerVersion: original.headerVersion, bodyVersion: original.bodyVersion,
+      headerVersion: original.headerVersion, bodyVersion: requireBodyVersion(original),
     } });
     const afterFirst = f.boundary.read(id)!;
     expect(accepted).toEqual({ headerVersion: afterFirst.headerVersion, bodyVersion: afterFirst.bodyVersion });
@@ -143,7 +174,7 @@ describe('promptDocs qualified operations', () => {
     const preview = f.boundary.read(id)!;
     await updatePromptDoc({ artifactId: id, title: 'Newer', markdown: 'Newer' });
     await expect(updatePromptDoc({ artifactId: id, title: 'Draft', markdown: 'Draft', expectedRevision: {
-      headerVersion: preview.headerVersion, bodyVersion: preview.bodyVersion,
+      headerVersion: preview.headerVersion, bodyVersion: requireBodyVersion(preview),
     } })).rejects.toMatchObject({ code: 'version_mismatch' });
     expect(JSON.parse(f.boundary.readPlainBody(id)!)).toMatchObject({ markdown: 'Newer' });
     expect(decodePlainArtifactStoredContent(f.boundary.read(id)!.header)).toMatchObject({ title: 'Newer' });
@@ -235,7 +266,7 @@ describe('promptDocs qualified operations', () => {
       }),
     });
     expect(nativeWrite?.ok).toBe(true);
-    expect(f.boundary.read(id)).toMatchObject({ headerVersion: row.headerVersion, bodyVersion: row.bodyVersion + 1 });
+    expect(f.boundary.read(id)).toMatchObject({ headerVersion: row.headerVersion, bodyVersion: requireBodyVersion(row) + 1 });
     await expect(
       updatePromptDoc({ artifactId: id, title: 'Broken', markdown: 'new' }),
     ).rejects.toThrow('prompt_doc_invalid_body');

@@ -22,6 +22,7 @@ import { resolvePromptStackSystemAppendBlocksV1 } from './resolvePromptStackSyst
 import { expandPromptTemplateInvocation } from '@/sync/domains/input/slashCommands/expandPromptTemplateInvocation';
 import { importPromptAssetToLibrary } from './importPromptAssetToLibrary';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { MachineAdministrationTargetV1Schema } from '@happier-dev/protocol/account/settings/machineAdministrationSelectionsV1';
 import {
   updateSkillPromptBundleWithEntry,
   removeSkillPromptBundleEntry,
@@ -108,7 +109,9 @@ describe('UI qualified prompt-library Artifact authority', () => {
       const item = libraryKind === 'doc' ? { ...common, libraryKind, markdown: '# Review' }
         : { ...common, libraryKind, bundleSchemaId: 'skills.skill_md_v1' as const,
           bundleBody: { v: 1 as const, entries: [{ path: 'SKILL.md', contentBase64: Buffer.from('# Review').toString('base64'), contentKind: 'utf8' as const }], createdAtMs: 1, updatedAtMs: 1 } };
-      return await importPromptAssetToLibrary({ item, machineId: 'machine-1', promptExternalLinks: { v: 1, links: [] } }, store);
+      const machineTarget = MachineAdministrationTargetV1Schema.parse({ serverIdentityId: 'srv_library', machineId: 'machine-1' });
+      return await importPromptAssetToLibrary({ item, machineTarget, libraryServerIdentityId: machineTarget.serverIdentityId,
+        promptExternalLinks: { v: 1, links: [] } }, store);
     }, { serverId: f.home.id });
     await expect(importing).rejects.toMatchObject({ code: 'action_account_scope_changed' });
     expect(f.boundary.list()).toEqual([]);

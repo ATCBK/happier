@@ -17,8 +17,6 @@ import { projectWorkspaceTabsList } from '@/components/appShell/workspace/worksp
 import { createClientActionReverseDispatcher } from '../../../../../cli/src/session/actions/clientActionReverseDispatch';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
-import { storage } from '@/sync/domains/state/storage';
-import { apiSocket } from '@/sync/api/session/apiSocket';
 import { listNewSessionDraftProjections } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
 import { readNewSessionDraftProjectionFromRepository } from '@/components/sessions/composer/newSessionDraftRepositoryAdapter';
 import { API_TOKEN_FULL_GRANT_V1 } from '@happier-dev/protocol/auth/apiTokenGrant';
@@ -34,8 +32,11 @@ vi.mock('expo-router', async () => {
 installDisconnectedServerSocketBoundary();
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
+const { storage } = await import('@/sync/domains/state/storage');
+const { apiSocket } = await import('@/sync/api/session/apiSocket');
 await loadSyncSingletonForTests();
 const { createUiClientActionReverseHandler } = await import('./clientActionReverseDispatch');
+const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
 const releases: (() => void)[] = [];
 let serverId: string;
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
@@ -58,9 +59,8 @@ afterEach(async () => {
   if (connection) { await connection.dispose(); connection = null; installHomeGovernanceBoundaries(homes); }
 });
 
-describe('admitted daemon-to-app Action continuation', () => {
+describe('admitted app Actions and daemon-to-app continuations', () => {
   it('reaches the captured Home registry owner through the public app Settings executor after focus changes', async () => {
-    const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
     const { setActiveServerId } = await import('@/sync/domains/server/serverProfiles');
     const key = 'HAPPIER_API_CORS_MAX_AGE_SECONDS';
     const anchor = `homeAdministration.serverSettings.${key}`;
@@ -90,9 +90,13 @@ describe('admitted daemon-to-app Action continuation', () => {
     const key = 'HAPPIER_API_CORS_MAX_AGE_SECONDS';
     const projection = (value: number) => ({ revision: 3, startedAt: null, entries: [{ key, value,
       source: 'home', fixed: false, editable: 'home', apply: 'restart', declaration: { type: 'int', section: 'server' } }] });
-    // A legitimate Home policy waiver must not waive the requester's credential grant.
+    // A legitimate domain policy waiver must not waive the requester's credential grant.
+    const actionsSettingsV1 = ActionsSettingsV1Schema.parse({ v: 1,
+      approvalWaivedSurfaces: { [actionId]: ['agent'] },
+    });
+    storage.setState({ settings: { ...storage.getState().settings, actionsSettingsV1 } });
     homes.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: {
-      actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'home.settings.set': ['cli'] } },
+      actionsSettingsV1,
     } }, version: 1 } });
     homes.answer(serverId, '/v1/home/settings/get', { body: projection(600) });
     homes.answer(serverId, '/v1/home/settings/set', { body: projection(900) });
@@ -100,18 +104,11 @@ describe('admitted daemon-to-app Action continuation', () => {
     if (!followPath) throw new Error('Follow preference transport is undeclared');
     homes.answer(serverId, `GET ${followPath}`, { body: { assigned: false, direct: true, team: false, group: true } });
     homes.answer(serverId, `PUT ${followPath}`, { body: { assigned: true, direct: true, team: false, group: true } });
-    const receive = createUiClientActionReverseHandler({ serverId, accountId: 'relay-account', isCurrent: () => true });
-    const clientActionExecute = createClientActionReverseDispatcher(() => ({
-      hasConnectedClientRpcHandler: method => method === RPC_METHODS.UI_ACTION_EXECUTE,
-      callConnectedClientRpc: async (_method, payload, options) => {
-        options.onIssued();
-        return { ok: true, result: await receive(payload, { signal: options.signal ?? new AbortController().signal }) };
-      },
-    }));
-    // Unused process dependencies cannot be reached by this client-placed root Action.
-    const caller = createActionExecutor({ clientActionExecute } as unknown as ActionExecutorDeps);
+    // Home/Follow declarations now execute at their owning host. The strict
+    // reverse-dispatch schema rejects them because they are no longer client-placed.
+    const caller = createDefaultActionExecutor();
     const result = await caller.execute('settings.set', { anchor, value }, {
-      surface: 'cli', authority: 'account_automation', serverId, bypassApprovals: true,
+      surface: 'agent', authority: 'account_automation', serverId, bypassApprovals: true,
       actionRequestId: 'restricted-settings-root', externalActionCredential: {
         accountId: 'relay-account', principalId: 'limited-principal', credentialId: 'limited-credential',
         grant: { ...API_TOKEN_FULL_GRANT_V1, actions: { families: [], ids: ['settings.set'] } },
@@ -126,15 +123,15 @@ describe('admitted daemon-to-app Action continuation', () => {
   it.each([
     { anchor: 'homeAdministration.serverSettings.HAPPIER_API_CORS_MAX_AGE_SECONDS', value: 900, ownerId: 'home.settings.set' },
     { anchor: 'notifications.autoFollowAssigned', value: true, ownerId: 'session.follow.preferences.set' },
-  ] as const)('routes reverse $ownerId aliases through their captured domain owner', async ({ anchor, value, ownerId }) => {
+  ] as const)('routes admitted $ownerId Settings aliases through their captured domain owner', async ({ anchor, value, ownerId }) => {
     const key = 'HAPPIER_API_CORS_MAX_AGE_SECONDS';
     const projection = (value: number) => ({ revision: 3, startedAt: null, entries: [{ key, value,
       source: 'home', fixed: false, editable: 'home', apply: 'restart', declaration: { type: 'int', section: 'server' } }] });
     homes.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: {
-      actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { [ownerId]: ['cli'] } },
+      actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { [ownerId]: ['ui'] } },
     } }, version: 1 } });
     storage.setState({ settings: { ...storage.getState().settings, actionsSettingsV1: ActionsSettingsV1Schema.parse({
-      v: 1, approvalWaivedSurfaces: { [ownerId]: ['cli'] },
+      v: 1, approvalWaivedSurfaces: { [ownerId]: ['ui'] },
     }) } });
     homes.answer(serverId, '/v1/home/settings/get', { body: projection(600) });
     homes.answer(serverId, '/v1/home/settings/set', { body: projection(900) });
@@ -142,16 +139,9 @@ describe('admitted daemon-to-app Action continuation', () => {
     if (!followPath) throw new Error('Follow preference transport is undeclared');
     homes.answer(serverId, `GET ${followPath}`, { body: { assigned: false, direct: true, team: false, group: true } });
     homes.answer(serverId, `PUT ${followPath}`, { body: { assigned: true, direct: true, team: false, group: true } });
-    const receive = createUiClientActionReverseHandler({ serverId, accountId: 'relay-account', isCurrent: () => true });
-    const caller = createActionExecutor({ clientActionExecute: createClientActionReverseDispatcher(() => ({
-      hasConnectedClientRpcHandler: () => true,
-      callConnectedClientRpc: async (_method, payload, options) => {
-        options.onIssued();
-        return { ok: true, result: await receive(payload, { signal: options.signal ?? new AbortController().signal }) };
-      },
-    })) } as unknown as ActionExecutorDeps);
+    const caller = createDefaultActionExecutor();
     const result = await caller.execute('settings.set', { anchor, value }, {
-      surface: 'cli', authority: 'present_user', serverId, bypassApprovals: true, actionRequestId: 'settings-alias-request',
+      surface: 'ui', authority: 'present_user', serverId, bypassApprovals: true, actionRequestId: 'settings-alias-request',
     });
     expect(result).toEqual({ ok: true, result: { anchor, value } });
     const path = ownerId === 'home.settings.set' ? '/v1/home/settings/set' : followPath;
@@ -164,24 +154,26 @@ describe('admitted daemon-to-app Action continuation', () => {
   it('returns nested Home approval with original requester identity without executing the Home write', async () => {
     const key = 'HAPPIER_API_CORS_MAX_AGE_SECONDS';
     const anchor = `homeAdministration.serverSettings.${key}`;
+    // UI danger writes are normally direct; this Home policy explicitly requires
+    // approval and must survive the outer Settings Action's approved bypass.
+    const actionsSettingsV1 = ActionsSettingsV1Schema.parse({ v: 1,
+      actions: { 'home.settings.set': { approvalRequiredSurfaces: ['ui'] } },
+    });
+    storage.setState({ settings: { ...storage.getState().settings, actionsSettingsV1 } });
+    homes.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: {
+      actionsSettingsV1,
+    } }, version: 1 } });
     homes.answer(serverId, '/v1/home/settings/get', { body: { revision: 3, startedAt: null, entries: [{ key, value: 600,
       source: 'home', fixed: false, editable: 'home', apply: 'restart', declaration: { type: 'int', section: 'server' } }] } });
-    const receive = createUiClientActionReverseHandler({ serverId, accountId: 'relay-account', isCurrent: () => true });
-    const caller = createActionExecutor({ clientActionExecute: createClientActionReverseDispatcher(() => ({
-      hasConnectedClientRpcHandler: () => true,
-      callConnectedClientRpc: async (_method, payload, options) => {
-        options.onIssued();
-        return { ok: true, result: await receive(payload, { signal: options.signal ?? new AbortController().signal }) };
-      },
-    })) } as unknown as ActionExecutorDeps);
+    const caller = createDefaultActionExecutor();
     expect(await caller.execute('settings.set', { anchor, value: 900 }, {
-      surface: 'cli', authority: 'present_user', serverId, bypassApprovals: true, actionRequestId: 'nested-home-request',
-    })).toMatchObject({ ok: true, result: { kind: 'approval_request_created', actionId: 'home.settings.set' } });
+      surface: 'ui', authority: 'present_user', serverId, bypassApprovals: true, actionRequestId: 'nested-home-request',
+    })).toEqual({ ok: true, result: { kind: 'approval_request_created', actionId: 'home.settings.set', artifactId: expect.any(String) } });
     expect(homes.requestsFor('/v1/home/settings/set')).toEqual([]);
     expect(homes.artifacts(serverId).list()).toHaveLength(1);
     const artifact = homes.artifacts(serverId).list()[0];
     expect(JSON.parse(homes.artifacts(serverId).readPlainBody(artifact.id)!)).toMatchObject({
-      executionOriginV1: { requestId: 'nested-home-request', surface: 'cli', authority: 'present_user', caller: { kind: 'host' } },
+      executionOriginV1: { requestId: 'nested-home-request', surface: 'ui', authority: 'present_user', caller: { kind: 'host' } },
     });
   });
   it('opens one canonical editable authoring draft through the real answering-client owner', async () => {

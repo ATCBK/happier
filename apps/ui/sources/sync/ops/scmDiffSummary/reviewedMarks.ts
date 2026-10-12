@@ -17,7 +17,6 @@ export async function clearScmReviewedMarksForComparisonId(params: Readonly<{
     if (!params.shouldContinue()) throw new AccountKvScopeRetiredError();
     const transport = createAccountKvJsonTransport({ ...params, key: buildScmReviewedMarksKey(params.comparisonId) });
     const result = await clearScmReviewedMarksRecord({ comparisonId: params.comparisonId, transport });
-    if (!params.shouldContinue()) throw new AccountKvScopeRetiredError();
     return result;
   } catch (error) { return { success: false, errorCode: errorCode(error), error: error instanceof Error ? error.message : 'Reviewed marks are unavailable' }; }
 }
@@ -69,8 +68,10 @@ export function createScmReviewedMarksOperations(params: Readonly<{
     try {
       if (!current()) throw new AccountKvScopeRetiredError();
       const result = await operation();
-      if (!current()) throw new AccountKvScopeRetiredError();
-      if (result.success || result.record) apply({ status: 'ready', record: result.record ?? null, version: result.version ?? state.version });
+      if (current()) {
+        if (result.success || result.record) apply({ status: 'ready', record: result.record ?? null, version: result.version ?? state.version });
+        else apply({ status: 'error', record: null, version: state.version, errorCode: result.errorCode });
+      }
       return result;
     } catch (error) { fail(error); return { success: false, errorCode: errorCode(error), error: error instanceof Error ? error.message : 'Reviewed marks are unavailable' }; }
   };

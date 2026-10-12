@@ -13,16 +13,17 @@ import { readSavedSecretReferenceInContext } from '@/sync/api/account/apiSavedSe
 import { resolveRemoteHostEffectiveSshConfig } from '@/sync/domains/remoteHosts/resolveRemoteHostEffectiveSshConfig';
 import { getRemoteHostLocalOverrides } from '@/sync/domains/remoteHosts/remoteHostLocalOverrides';
 import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
-import { areServerAccountScopesEqual, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
 import { getServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
 import { resolveRuntimeFeatureDecisionFromSnapshot } from '@/sync/domains/features/featureDecisionRuntime';
 import { getFeatureBuildPolicyDecision } from '@/sync/domains/features/featureBuildPolicy';
 import { resolveSetupSurfacePolicy } from '@/sync/domains/server/setup/setupSurfacePolicy';
-import { captureLazyActionAccountContext, type LazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
-import type { RelayAccessTaskTarget } from '@happier-dev/cli-common/systemTasks';
+import type { LazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 import { getRemoteHostTrustedHostKeyStore } from '@/sync/domains/remoteHosts/hostKeys/trustedHostKeyStore';
 import { getNativeSshTunnelRuntime } from '@/sync/runtime/nativeSshTunnels/runtime';
 import { buildSshTunnelStopSystemTaskSpec } from '@/components/systemTasks/specs/localControl/buildSshTunnelSystemTaskSpec';
+import { settleClientSystemTaskAction } from '@/sync/ops/actions/systemTaskActionSettlement';
+import { createSshSystemTaskPromptContinuation } from '@/components/systemTasks/ssh/answerSshSystemTaskPrompt';
 
 export const REMOTE_HOST_MAINTENANCE_ACTION_IDS = {
     testConnection: 'remote_hosts.relay.test',
@@ -81,23 +82,6 @@ export async function withRemoteHostSshConfig<T>(account: LazyActionAccountConte
     return operation({ host, config, assertCurrent });
 }
 
-/** The current relay dialog borrows credentials only until its admitted runner accepts the task. */
-export async function runRemoteHostRelayAccessTask<T>(input: Readonly<{
-    scope: ServerAccountScope; hostId: string; expectedRevision: number | 'absent'; signal?: AbortSignal;
-    run(target: RelayAccessTaskTarget, upstreamUrl: string | null, assertCurrent: () => void): Promise<T>;
-}>): Promise<T> {
-    const account = await captureLazyActionAccountContext(input.scope.serverId, input.signal);
-    try {
-        if (!areServerAccountScopesEqual(account.accountLifetime.scope, input.scope)) throw new RemoteHostOperationError('action_account_scope_changed');
-        return await withRemoteHostSshConfig(account, input, async ({ config, assertCurrent }) => {
-            const relay = resolveRemoteHostRelayAccess({ config: config.value, homeTarget: await account.resolveHomeTarget() });
-            if (relay.status !== 'relay_ready') throw new RemoteHostOperationError(relay.reason);
-            assertCurrent();
-            return input.run(relay.target, relay.upstreamUrl, assertCurrent);
-        }, input.signal);
-    } finally { account.dispose(); }
-}
-
 /** Typed automation and menus consume the same catalog and existing admitted SSH task owner. */
 export function createUiRemoteHostActionExecuteV1(account: LazyActionAccountContext,
     openRoute: (route: string) => void | Promise<void> = route => router.push(route as never)): NonNullable<ActionExecutorDeps['remoteHostActionExecute']> {
@@ -121,13 +105,15 @@ export function createUiRemoteHostActionExecuteV1(account: LazyActionAccountCont
             assertCurrent();
             if (request.actionId === 'remote_hosts.tunnel.stop') {
                 if (request.input.target.kind === 'native') {
+                    if (getDefaultSystemTaskRunner().mode !== 'native') throw new RemoteHostOperationError('native_host_required');
                     await getNativeSshTunnelRuntime().releaseTunnel(request.input.target.leaseId);
                     return { ok: true, result: { status: 'released' } };
                 }
                 const runner = getDefaultSystemTaskRunner();
                 if (runner.mode !== 'tauri') throw new RemoteHostOperationError('desktop_host_required');
                 const taskId = await runner.start(buildSshTunnelStopSystemTaskSpec(request.input.target.tunnelKey));
-                return { ok: true, result: { status: 'task_started', taskId } };
+                return { ok: true, result: await settleClientSystemTaskAction(runner,
+                    { status: 'task_started', taskId }, context, account.assertAccountCurrent) };
             }
             if (request.actionId === 'remote_hosts.trusted_keys.list' || request.actionId === 'remote_hosts.trusted_keys.remove'
                 || request.actionId === 'remote_hosts.trusted_keys.clear') {
@@ -199,9 +185,10 @@ export function createUiRemoteHostActionExecuteV1(account: LazyActionAccountCont
                 await openEditorRoute(route);
                 return { ok: true, result: { status: 'opened', route, hostId: host.id } };
             }
-            return { ok: true, result: await withRemoteHostSshConfig(account, request.input, async ({ config, host, assertCurrent }) => {
-                const runner = getDefaultSystemTaskRunner();
-                const admission = { runner, config: config.value, assertCurrent, signal: context.signal };
+            const runner = getDefaultSystemTaskRunner();
+            const result = await withRemoteHostSshConfig(account, request.input, async ({ config, host, assertCurrent }) => {
+                const admission = { runner, config: config.value, assertCurrent, assertAccountCurrent: account.assertAccountCurrent, signal: context.signal,
+                    accountScope: { serverId: account.serverId, accountId: account.accountId } };
                 if (request.actionId === 'remote_hosts.relay.access.status') {
                     const relay = resolveRemoteHostRelayAccess({ config: config.value, homeTarget: await account.resolveHomeTarget() });
                     if (relay.status !== 'relay_ready') throw new RemoteHostOperationError(relay.reason);
@@ -234,7 +221,14 @@ export function createUiRemoteHostActionExecuteV1(account: LazyActionAccountCont
                 const action = Object.entries(REMOTE_HOST_MAINTENANCE_ACTION_IDS).find(([, id]) => id === request.actionId)?.[0];
                 if (!action) throw new RemoteHostOperationError('unsupported_action');
                 return startRemoteHostMaintenanceTask({ ...admission, action: action as RemoteHostMaintenanceTaskAction });
-            }, context.signal) };
+            }, context.signal);
+            if (result.status === 'task_started' && context.surface !== 'ui') {
+                runner.registerPromptContinuation?.(result.taskId,
+                    createSshSystemTaskPromptContinuation(runner, result.taskId, account.accountOnlyLifetime.isCurrent));
+            }
+            return { ok: true, result: result.status === 'task_started'
+                ? await settleClientSystemTaskAction(runner, result, context, account.assertAccountCurrent)
+                : result };
         } catch (error) {
             if (!(error instanceof RemoteHostOperationError)) throw error;
             return { ok: true, result: error.revision === undefined ? { status: 'unavailable', reason: error.reason }

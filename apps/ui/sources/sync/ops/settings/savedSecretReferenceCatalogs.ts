@@ -17,6 +17,15 @@ import { readProviderCatalogRowInContext, prepareProviderCatalogMutationInContex
 import { readConnectedAccountCatalogRowInContext, prepareConnectedAccountCatalogMutationInContext } from '@/sync/api/account/apiConnectedAccountCatalog';
 import { captureSavedSecretReferenceRevisionsInContext, type SavedSecretReferenceRevisionProof } from '@/sync/api/account/apiSavedSecretCatalog';
 import { readNotificationChannelCatalogRowInContext } from '@/sync/api/account/apiNotificationChannelCatalog';
+import { createAccountScopedCryptoMaterialSnapshotV1 } from '@happier-dev/protocol/crypto/accountScopedCipher';
+import type { SharedSavedSecretPromoteInputV1Schema, SharedSavedSecretPromoteOutputV1Schema } from '@happier-dev/protocol/account/settings/savedSecretResourceActionsV1';
+import { applyAcknowledgedMcpServerCatalog } from '@/sync/store/settings/mcpServerCatalogSnapshot';
+import { applyAcknowledgedAcpCatalog } from '@/sync/store/settings/acpCatalogSnapshot';
+import { applyAcknowledgedProviderCatalog } from '@/sync/store/settings/providerCatalogSnapshot';
+import { applyAcknowledgedConnectedAccountCatalog } from '@/sync/store/settings/connectedAccountCatalogSnapshot';
+import { applyAcknowledgedNotificationChannelCatalog } from '@/sync/store/settings/notificationChannelCatalogSnapshot';
+import { applyAcknowledgedRemoteHostCatalog } from '@/sync/store/settings/remoteHostCatalogSnapshot';
+import { fireAndForget } from '@/utils/system/fireAndForget';
 
 export type SavedSecretReferenceCatalogKey = keyof SavedSecretCatalogRevisionsV1;
 export type SavedSecretReferenceCatalogFacets = Pick<SavedSecretReferenceCatalogsV1, SavedSecretReferenceCatalogKey>;
@@ -33,6 +42,68 @@ type CapturedCatalogs = Readonly<{ catalogs: SavedSecretReferenceCatalogFacets; 
 type CompleteCapturedCatalogs = Readonly<{ catalogs: SavedSecretReferenceCatalogFacets; revisions: SavedSecretCatalogRevisionsV1;
     storedContents: CapturedCatalogStoredContents }>;
 const catalogKeys = ['mcp', 'acp', 'providerConnections', 'connectedConfigurations', 'connectedPurposes'] as const;
+
+/** Publish only explicit receipt revisions; revalidate the exact submitted mutation intent. */
+export function publishAcknowledgedSavedSecretReferenceCatalogsInContext(context: ProfileAccountContext, input: Readonly<{
+    catalogs: SavedSecretReferenceCatalogsV1; accountMode: 'plain' | 'e2ee';
+    mutation: Pick<ReturnType<typeof SharedSavedSecretPromoteInputV1Schema.parse>,
+        'catalogMutations' | 'notificationChannelMutation' | 'remoteHostMutation'>;
+    receipt: ReturnType<typeof SharedSavedSecretPromoteOutputV1Schema.parse>;
+}>): void {
+    if (!context.accountLifetime.isCurrent()) return;
+    const scope = context.accountLifetime.scope;
+    const revisions = input.receipt.catalogRevisions;
+    const refresh = (promise: Promise<unknown>) => fireAndForget(promise, { tag: 'savedSecretCatalog.afterAcknowledgedReferenceMutation' });
+    try {
+        if (input.mutation.catalogMutations?.mcp) {
+            if (typeof revisions?.mcp === 'number' && input.catalogs.mcp)
+                applyAcknowledgedMcpServerCatalog(scope, input.catalogs.mcp, revisions.mcp, true);
+            refresh(import('@/sync/engine/settings/mcpServerCatalogEngine').then(engine =>
+                engine.invalidateMcpServerCatalogAfterAcknowledgedMutation(scope, context.assertAccountCurrent)));
+        }
+        if (input.mutation.catalogMutations?.acp) {
+            if (typeof revisions?.acp === 'number' && input.catalogs.acp)
+                applyAcknowledgedAcpCatalog(scope, input.catalogs.acp, revisions.acp, true);
+            refresh(import('@/sync/engine/settings/acpCatalogEngine').then(engine =>
+                engine.invalidateAcpCatalogAfterAcknowledgedMutation(scope, context.assertAccountCurrent)));
+        }
+        if (input.mutation.catalogMutations?.providerConnections) {
+            if (typeof revisions?.providerConnections === 'number' && input.catalogs.providerConnections) {
+                const admission = input.accountMode === 'e2ee' ? createAccountScopedCryptoMaterialSnapshotV1({ accountEncryptionMode: 'e2ee',
+                    material: resolveAccountScopedCryptoMaterialFromCredentials(context.credentials) }) : null;
+                applyAcknowledgedProviderCatalog(scope, input.catalogs.providerConnections, revisions.providerConnections, true,
+                    admission?.contentPublicKeyFingerprint ? { contentPublicKeyFingerprint: admission.contentPublicKeyFingerprint } : null);
+            }
+            refresh(import('@/sync/engine/settings/providerCatalogEngine').then(engine =>
+                engine.invalidateProviderCatalogAfterAcknowledgedMutation(scope, context.assertAccountCurrent)));
+        }
+        if (input.mutation.catalogMutations?.connectedConfigurations) {
+            if (typeof revisions?.connectedConfigurations === 'number' && input.catalogs.connectedConfigurations)
+                applyAcknowledgedConnectedAccountCatalog(scope, { key: 'configurations', value: input.catalogs.connectedConfigurations },
+                    revisions.connectedConfigurations, true);
+            refresh(import('@/sync/engine/settings/connectedAccountCatalogEngine').then(engine =>
+                engine.invalidateConnectedAccountCatalogAfterAcknowledgedMutation(scope, 'configurations', context.assertAccountCurrent)));
+        }
+        if (input.mutation.catalogMutations?.connectedPurposes) {
+            if (typeof revisions?.connectedPurposes === 'number' && input.catalogs.connectedPurposes)
+                applyAcknowledgedConnectedAccountCatalog(scope, { key: 'purposes', value: input.catalogs.connectedPurposes }, revisions.connectedPurposes, true);
+            refresh(import('@/sync/engine/settings/connectedAccountCatalogEngine').then(engine =>
+                engine.invalidateConnectedAccountCatalogAfterAcknowledgedMutation(scope, 'purposes', context.assertAccountCurrent)));
+        }
+        if (input.mutation.notificationChannelMutation) {
+            if (input.receipt.notificationChannelRevision !== undefined && input.catalogs.notificationChannels)
+                applyAcknowledgedNotificationChannelCatalog(scope, input.catalogs.notificationChannels.channels, input.receipt.notificationChannelRevision, true);
+            refresh(import('@/sync/engine/settings/notificationChannelCatalogEngine').then(engine =>
+                engine.invalidateNotificationChannelCatalogAfterAcknowledgedMutation(scope, context.assertAccountCurrent)));
+        }
+        if (input.mutation.remoteHostMutation) {
+            if (input.receipt.remoteHostRevision !== undefined && input.catalogs.remoteHostRecords)
+                applyAcknowledgedRemoteHostCatalog(scope, input.catalogs.remoteHostRecords, input.receipt.remoteHostRevision, true);
+            refresh(import('@/sync/engine/settings/remoteHostCatalogEngine').then(engine => context.accountLifetime.isCurrent()
+                ? engine.invalidateRemoteHostCatalogProjection(scope) : undefined));
+        }
+    } catch { /* Display publication cannot retract an acknowledged atomic transaction. */ }
+}
 
 async function assertAccountMode(context: ProfileAccountContext, mode: 'plain' | 'e2ee') {
     context.assertCurrent();

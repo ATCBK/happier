@@ -1,0 +1,227 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+
+const rpc = vi.hoisted(() => ({ machine: vi.fn() }));
+// Only daemon network transport is replaced; Account capture, schemas and approval remain real.
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () => {
+    const { createServerScopedMachineRpcBoundaryMock } = await import('@/dev/testkit/mocks/serverScopedRpc');
+    return createServerScopedMachineRpcBoundaryMock(rpc.machine);
+});
+const homes = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(homes); installDisconnectedServerSocketBoundary();
+const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
+const { executeMachineProcessesActionV1, executeMachineProcessesLeftBehindCleanUpV1, executeMachineProcessesStartAgainV1 } = await import('@/sync/domains/machines/processes/machineProcessesActions');
+const { createFrontDoorRuntimeActionExecutor } = await import('./frontDoorRuntimeActionExecutor');
+const { keepMachineGuardWorkRunningViaAction, undoMachineGuardActivityViaAction } = await import('@/sync/domains/machines/guard/machineGuardRpc');
+const { fetchMachineVitalsViaMachineRpc, fetchMachineVitalsHistoryViaMachineRpc, watchMachineVitalsViaMachineRpc } = await import('@/sync/domains/machines/resources/machineRpc');
+const { fetchMachineProcessesViaMachineRpc, watchMachineProcessesViaMachineRpc } = await import('@/sync/domains/machines/processes/machineProcessesRpc');
+const { DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcTypes');
+let serverId: string;
+beforeEach(async () => {
+    await homes.reset(); await loadSyncSingletonForTests(); rpc.machine.mockReset();
+    serverId = await homes.addHome({ name: 'Process Home', serverUrl: 'https://process-actions.test', accountId: 'owner', currentAccount: true });
+});
+afterEach(async () => { vi.useRealTimers(); await homes.reset(); });
+const kill = { machineId: 'm', tree: true, targets: [{ ref: 'r', expect: { level: 'proven' as const, owner: { kind: 'session' as const, sessionId: 's' } } }] };
+describe('machine process Actions through the captured UI Home', () => {
+    it.each(['machines.processes.stop', 'machines.processes.kill', 'machines.processes.leftBehind.cleanUp'] as const)
+    ('preserves the delayed %s receipt after cancellation and Account retirement', async actionId => {
+        const controller = new AbortController();
+        const input = actionId === 'machines.processes.leftBehind.cleanUp' ? { machineId: 'm', refs: ['r'] } :
+            actionId === 'machines.processes.kill' ? kill : { machineId: 'm', targets: kill.targets };
+        const receipt = actionId === 'machines.processes.leftBehind.cleanUp'
+            ? { ended: [{ ref: 'r', freedBytes: 40 }], skipped: [] }
+            : { status: 'ended', outcomes: [{ ref: 'r', outcome: 'ended', freedBytes: 40 }] };
+        let entered!: () => void;
+        const started = new Promise<void>(resolve => { entered = resolve; });
+        rpc.machine.mockImplementationOnce((request: { operationTimeoutMs?: null }) => {
+            entered();
+            return new Promise((resolve, reject) => {
+                const deadline = request.operationTimeoutMs === null ? null : setTimeout(() => reject(new Error('MACHINE_RPC_TIMEOUT')), DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS);
+                setTimeout(() => { if (deadline) clearTimeout(deadline); resolve(receipt); }, DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS + 1000);
+            });
+        });
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        const pending = executeMachineProcessesActionV1(actionId, input, { serverId, expectedAccountId: 'owner', signal: controller.signal });
+        await started;
+        controller.abort();
+        await homes.switchAccount(serverId, 'replacement');
+        await vi.advanceTimersByTimeAsync(DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS + 1000);
+        expect(await pending).toEqual({ ok: true, result: receipt });
+    });
+    it.each(['keep', 'undo'] as const)('preserves delayed Guard %s through the real Action and UI result adapter', async kind => {
+        const controller = new AbortController();
+        const receipt = kind === 'keep' ? { status: 'kept' } : { outcomes: [{ entryId: 'e', status: 'restored', path: '/restored' }] };
+        let entered!: () => void;
+        const started = new Promise<void>(resolve => { entered = resolve; });
+        rpc.machine.mockImplementationOnce((request: { operationTimeoutMs?: null }) => {
+            entered();
+            return new Promise((resolve, reject) => {
+                const deadline = request.operationTimeoutMs === null ? null : setTimeout(() => reject(new Error('MACHINE_RPC_TIMEOUT')), DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS);
+                setTimeout(() => { if (deadline) clearTimeout(deadline); resolve(receipt); }, DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS + 1000);
+            });
+        });
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        const key = { serverId, expectedAccountId: 'owner', machineId: 'm', signal: controller.signal };
+        const pending = kind === 'keep' ? keepMachineGuardWorkRunningViaAction({ ...key, sessionId: 's' })
+            : undoMachineGuardActivityViaAction({ ...key, entryId: 'e' });
+        await started;
+        controller.abort();
+        await homes.switchAccount(serverId, 'replacement');
+        await vi.advanceTimersByTimeAsync(DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS + 1000);
+        expect(await pending).toEqual({ ok: true, value: receipt });
+    });
+    it('withholds retired Process reads and refuses effects before dispatch when already cancelled', async () => {
+        const controller = new AbortController();
+        rpc.machine.mockImplementationOnce(async () => { controller.abort(); return { row: null }; });
+        const executor = createDefaultActionExecutor();
+        await expect(executor.execute('machines.processes.get', { machineId: 'm', ref: 'r' }, { surface: 'ui', serverId, signal: controller.signal }))
+            .rejects.toMatchObject({ name: 'AbortError' });
+        rpc.machine.mockClear();
+        await expect(executor.execute('machines.processes.kill', kill, { surface: 'ui', serverId, signal: controller.signal }))
+            .rejects.toMatchObject({ name: 'AbortError' });
+        expect(rpc.machine).not.toHaveBeenCalled();
+    });
+    it('enforces disabled resource read Actions on domain Retry while keeping parked watch demand on its transport', async () => {
+        homes.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: {
+            actionsSettingsV1: { v: 1, actions: { 'machines.vitals.get': { enabled: false },
+                'machines.vitals.history.get': { enabled: false }, 'machines.processes.list': { enabled: false } } },
+        } }, version: 1 } });
+        const vitals = { machineId: 'm', serverId, view: 'overview' as const };
+        const processes = { machineId: 'm', serverId, accountId: 'owner', scope: 'all' as const, view: 'tree' as const };
+        rpc.machine.mockResolvedValue({ state: 'unavailable', series5m: { cpu: [], memory: [], networkRx: [], networkTx: [] }, sample: null });
+        expect(await fetchMachineVitalsViaMachineRpc(vitals)).toEqual({ ok: false, reason: 'request_failed' });
+        expect(await fetchMachineVitalsHistoryViaMachineRpc({ ...vitals, range: '7d' })).toEqual({ ok: false, reason: 'request_failed' });
+        expect(await fetchMachineProcessesViaMachineRpc(processes)).toEqual({ ok: false, reason: 'request_failed' });
+        expect(rpc.machine).not.toHaveBeenCalled();
+        rpc.machine.mockResolvedValue({ changed: false });
+        expect(await watchMachineVitalsViaMachineRpc(vitals)).toEqual({ ok: true, value: { changed: false } });
+        expect(await watchMachineProcessesViaMachineRpc(processes)).toEqual({ ok: true, value: { changed: false } });
+        expect(rpc.machine.mock.calls.map(call => call[0].method)).toEqual([RPC_METHODS.DAEMON_VITALS_WATCH, RPC_METHODS.DAEMON_PROCESSES_WATCH]);
+    });
+    it('returns the same Vitals, history and Processes facts through warmed Actions without adding inventory requests', async () => {
+        const { storage } = await import('@/sync/domains/state/storage');
+        const { normalizeActionsSettingsV1 } = await import('@happier-dev/protocol/actions/actionSettings');
+        const { machineRpcWithServerScope } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc');
+        // The running UI has already activated this Home's Account settings.
+        const scope = { serverId, accountId: 'owner' };
+        storage.setState({ settingsScope: scope, profileScope: scope });
+        storage.getState().applySettingsForScope(scope, { ...storage.getState().settings,
+            actionsSettingsV1: normalizeActionsSettingsV1({ v: 1, actions: {} }) }, 1);
+        const snapshot = { state: 'unavailable', sample: null, series5m: { cpu: [], memory: [], networkRx: [], networkTx: [] } };
+        const history = { range: '1h', bucketMs: 60_000, points: [], today: { rxBytes: 0, txBytes: 0 } };
+        const processes = { v: 1, machineId: 'm', capturedAtMs: 1000, state: 'live', platform: 'linux', evidenceModel: 'fenced', owners: [], leftBehind: [],
+            totals: { happier: { processCount: 0, memoryBytes: 0 }, leftBehind: { processCount: 0, memoryBytes: 0 } } };
+        const answerByMethod = new Map<string, unknown>([[RPC_METHODS.MACHINES_VITALS_GET, snapshot],
+            [RPC_METHODS.MACHINES_VITALS_HISTORY_GET, history], [RPC_METHODS.MACHINES_PROCESSES_LIST, processes]]);
+        rpc.machine.mockImplementation(async (request: { method: string }) => answerByMethod.get(request.method));
+        const readers = [
+            { method: RPC_METHODS.MACHINES_VITALS_GET, payload: { machineId: 'm', view: 'summary' },
+                read: () => fetchMachineVitalsViaMachineRpc({ serverId, machineId: 'm', view: 'summary' }), answer: snapshot },
+            { method: RPC_METHODS.MACHINES_VITALS_HISTORY_GET, payload: { machineId: 'm', range: '1h' },
+                read: () => fetchMachineVitalsHistoryViaMachineRpc({ serverId, machineId: 'm', range: '1h' }), answer: history },
+            { method: RPC_METHODS.MACHINES_PROCESSES_LIST, payload: { machineId: 'm', scope: 'happier', view: 'tree' },
+                read: () => fetchMachineProcessesViaMachineRpc({ serverId, accountId: 'owner', machineId: 'm', scope: 'happier', view: 'tree' }), answer: processes },
+        ];
+        for (const row of readers) for (let i = 0; i < 5; i++) await row.read();
+        const homeRequestsBefore = homes.requests.length;
+        const measurements = [];
+        for (const row of readers) {
+            const directAt = performance.now();
+            for (let i = 0; i < 40; i++) expect(await machineRpcWithServerScope({ serverId, machineId: 'm', method: row.method, payload: row.payload })).toEqual(row.answer);
+            const directMs = (performance.now() - directAt) / 40;
+            const actionTimes: number[] = [];
+            for (let i = 0; i < 40; i++) {
+                const actionAt = performance.now();
+                const result = await row.read();
+                actionTimes.push(performance.now() - actionAt);
+                expect(result).toEqual({ ok: true, value: row.answer });
+            }
+            actionTimes.sort((a, b) => a - b);
+            measurements.push({ method: row.method, directMs, actionMeanMs: actionTimes.reduce((sum, time) => sum + time, 0) / actionTimes.length,
+                actionP50Ms: actionTimes[20], actionP95Ms: actionTimes[38] });
+        }
+        expect(homes.requests.length).toBe(homeRequestsBefore);
+        console.info('FX26 warmed read timings (real Action logic, network boundary in memory)', JSON.stringify(measurements));
+    });
+    it('reaches the admitted machine family and preserves target/account capture and real waiver policy', async () => {
+        const answer = { v: 1, machineId: 'm', capturedAtMs: 1000, state: 'live', platform: 'linux', evidenceModel: 'fenced', owners: [], leftBehind: [],
+            totals: { happier: { processCount: 0, memoryBytes: 0 }, leftBehind: { processCount: 0, memoryBytes: 0 } } };
+        homes.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: {
+            actionsSettingsV1: { v: 1, actions: {}, approvalWaivedSurfaces: { 'machines.processes.kill': ['ui'], 'machines.processes.leftBehind.cleanUp': ['ui'] } },
+        } }, version: 1 } });
+        rpc.machine.mockResolvedValueOnce(answer);
+        const executor = createDefaultActionExecutor();
+        const context = { serverId, expectedAccountId: 'owner', surface: 'ui' as const };
+        expect(await executor.execute('machines.processes.list', { machineId: 'm' }, context)).toEqual({ ok: true, result: answer });
+        expect(rpc.machine.mock.calls[0][0]).toMatchObject({ serverId, accountId: 'owner', machineId: 'm', method: RPC_METHODS.MACHINES_PROCESSES_LIST,
+            payload: { machineId: 'm', serverId }, preferScoped: true });
+        const result = { status: 'ended', outcomes: [{ ref: 'r', outcome: 'ended', freedBytes: 40 }] };
+        rpc.machine.mockResolvedValueOnce(result);
+        expect(await executeMachineProcessesActionV1('machines.processes.kill', kill, { ...context, actionRequestId: 'captured-kill' })).toEqual({ ok: true, result });
+        expect(rpc.machine.mock.calls[1][0]).toMatchObject({ serverId, accountId: 'owner', method: RPC_METHODS.MACHINES_PROCESSES_KILL, payload: { ...kill, serverId }, requestId: 'captured-kill' });
+        const cleanUp = { ended: [{ ref: 'vite', freedBytes: 100 }], skipped: [] };
+        rpc.machine.mockResolvedValueOnce(cleanUp);
+        const rows = ['vite', 'sleep'].map((name, index) => ({ rowId: name, ref: name, name, pid: index + 20, startedAtMs: 1,
+            level: 'left_behind' as const, memoryBytes: 100, memoryKind: 'rss' as const, owner: { kind: 'session' as const, sessionId: 's' }, confirmedAtMs: 100 }));
+        expect(await executeMachineProcessesLeftBehindCleanUpV1('m', rows, { query: 'vite' }, context)).toEqual({ ok: true, result: cleanUp });
+        expect(rpc.machine.mock.calls[2][0]).toMatchObject({ method: RPC_METHODS.MACHINES_PROCESSES_LEFT_BEHIND_CLEAN_UP,
+            payload: { machineId: 'm', serverId, refs: ['vite'] } });
+        const priorCalls = rpc.machine.mock.calls.length;
+        expect(await executor.execute('machines.processes.list', { machineId: 'm', serverId: 'different' }, context)).toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });
+        expect(rpc.machine.mock.calls).toHaveLength(priorCalls);
+    });
+    it('creates the existing canonical approval Artifact without signaling the machine before review', async () => {
+        await homes.requireUiApproval(serverId, 'machines.processes.kill');
+        const outcome = await createDefaultActionExecutor().execute('machines.processes.kill', kill, {
+            serverId, expectedAccountId: 'owner', surface: 'ui', actionRequestId: 'review-kill',
+        });
+        expect(outcome.ok).toBe(true);
+        if (!outcome.ok) throw new Error(outcome.error);
+        const approval = ActionApprovalRequestCreatedResultSchema.parse(outcome.result);
+        expect(JSON.parse(homes.artifacts(serverId).readPlainBody(approval.artifactId)!)).toMatchObject({ actionId: 'machines.processes.kill', actionArgs: kill, status: 'open' });
+        expect(rpc.machine).not.toHaveBeenCalled();
+    });
+    it('resolves an explicit Process Action Home from its input rather than the focused Home', async () => {
+        const targetHome = await homes.addHome({ name: 'Background Home', serverUrl: 'https://background-processes.test', accountId: 'background-owner', currentAccount: true, active: false });
+        const answer = { v: 1, machineId: 'm', capturedAtMs: 1000, state: 'live', platform: 'linux', evidenceModel: 'fenced', owners: [], leftBehind: [],
+            totals: { happier: { processCount: 0, memoryBytes: 0 }, leftBehind: { processCount: 0, memoryBytes: 0 } } };
+        rpc.machine.mockResolvedValueOnce(answer);
+        expect(await createDefaultActionExecutor().execute('machines.processes.list', { machineId: 'm', serverId: targetHome }, { surface: 'ui' }))
+            .toEqual({ ok: true, result: answer });
+        expect(rpc.machine.mock.calls[0][0]).toMatchObject({ serverId: targetHome, accountId: 'background-owner', machineId: 'm' });
+    });
+    it.each(['accept', 'decline', 'retire', 'wrong_machine', 'wrong_home', 'missing_target'] as const)
+    ('joins the actual Service review only for the bound Process machine and current scope (%s)', async decision => {
+        homes.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: {
+            actionsSettingsV1: { v: 1, actions: {}, approvalWaivedSurfaces: { 'localServices.launcher.start': ['ui'] } },
+        } }, version: 1 } });
+        const machineId = decision === 'wrong_machine' ? 'other' : 'm';
+        const workspace = { serverId: decision === 'wrong_home' ? 'different-home' : serverId, machineId, workspaceId: 'w', rootPath: '/accepted' };
+        const request = { machineId, targetId: 'managed:preview', workspace, declaration: { workspaceRefId: 'w', selection: { kind: 'manifest' as const, name: 'preview' } }, expectedEffectDigest: 'a'.repeat(64) };
+        const target = { id: request.targetId, machineId, workspace, declaration: request.declaration, title: 'Actual native Preview',
+            source: 'managed_service' as const, sourceClass: { kind: 'managed_service' as const, managedServiceId: 'preview' },
+            confidence: 'medium' as const, state: 'available' as const, actions: ['start' as const] };
+        const snapshot = { v: 1 as const, machineId, updatedAt: 1000, targets: decision === 'missing_target' ? [] : [target] };
+        const response = { protocolVersion: 1 as const, machineId, targetId: request.targetId, status: 'denied' as const,
+            reasonCode: 'project_service_effect_changed', reviewedEffect: { v: 1, purpose: 'service' }, reviewedEffectDigest: 'b'.repeat(64), snapshot };
+        rpc.machine.mockResolvedValueOnce({ status: 'refused', reasonCode: response.reasonCode, serviceStart: { request, response } });
+        rpc.machine.mockResolvedValueOnce({ protocolVersion: 1, machineId, targetId: request.targetId, status: 'succeeded', snapshot });
+        let current = true;
+        const reviewEffect = vi.fn(async (_review: unknown) => { if (decision === 'retire') current = false; return decision !== 'decline'; });
+        const outcome = await executeMachineProcessesStartAgainV1({ machineId: 'm', ref: 'service-ref' }, { serverId, expectedAccountId: 'owner' }, {
+            runtimeActionExecute: createFrontDoorRuntimeActionExecutor(), isCurrent: () => current, reviewEffect,
+        });
+        expect(reviewEffect).toHaveBeenCalledTimes(['accept', 'decline', 'retire'].includes(decision) ? 1 : 0);
+        expect(rpc.machine.mock.calls).toHaveLength(decision === 'accept' ? 2 : 1);
+        if (decision === 'accept') {
+            expect(reviewEffect.mock.calls[0][0]).toMatchObject({ target, reviewedEffectDigest: 'b'.repeat(64) });
+            expect(rpc.machine.mock.calls[1][0]).toMatchObject({ machineId: 'm', payload: { ...request, expectedEffectDigest: 'b'.repeat(64) } });
+            expect(outcome.serviceStartResponse).toMatchObject({ status: 'succeeded' });
+        } else expect(outcome.processAction).toMatchObject({ ok: true, result: { status: 'refused' } });
+    });
+});

@@ -4,6 +4,67 @@ import { projectWork } from '@/components/sessions/work/workProjection';
 import { createActionOperationStore } from '@/sync/domains/actionOperations/actionOperationStore';
 import { createActionOperationSelectors } from '@/sync/domains/actionOperations/actionOperationSelectors';
 import { registerMountedWorkReadOwner, invokeMountedWorkRead } from './mountedWorkReadAction';
+import { registerMountedInboxReadOwner } from './mountedWorkReadAction';
+import { ApprovalRequestV2Schema, buildApprovalRequestArtifactHeaderV1 } from '@happier-dev/protocol';
+import { buildInboxWorkGroups } from '@/activity/presentation/buildInboxWorkGroups';
+import { createAutomationRunFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
+import { createInboxAttentionFixture } from '@/dev/testkit/fixtures/inboxFixtures';
+import { workflowRunRowFromAutomationRun } from '@/sync/store/domains/workflowRuns';
+import type { InboxModel } from '@/hooks/inbox/useInboxModel';
+import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
+
+it('reads approval and Automation rows from the canonical Inbox grouping without disclosing their private content', async () => {
+    const run = createAutomationRunFixture({ id: 'weekly-run' });
+    const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+        createdBy: { surface: 'agent', sessionId: 'step' }, requestedSurface: 'agent',
+        actionId: 'session.title.set', actionArgs: { sessionId: 'step', title: 'Private approval content' }, summary: 'Set title',
+        executionOriginV1: { v: 1, authority: 'account_automation', surface: 'agent', serverId: 'home-a',
+            caller: { kind: 'automationRun', automationId: run.automationId, runId: run.id,
+                cause: { kind: 'manual', invokedAt: 1 } }, runId: run.id, sessionId: 'step',
+            actionId: 'session.title.set', requestId: 'request-1' } });
+    const approval: DecryptedArtifact = { id: 'approval-1', title: 'Set title',
+        header: buildApprovalRequestArtifactHeaderV1(request), body: JSON.stringify(request), sessions: ['step'],
+        headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1, isDecrypted: true };
+    const groups = buildInboxWorkGroups({ sessionEntries: [], workflowRuns: [],
+        automationRuns: [workflowRunRowFromAutomationRun(run)], automationServerId: 'home-a', openApprovals: [approval],
+        stalledSessions: [], landings: [], snoozed: [], resolveSession: () => null, resolveOriginRunId: () => null });
+    const model: InboxModel = {
+        source: { isDataReady: true, sessionsById: {}, sessionListRowsByServerId: {},
+            ordinarySessionListMembershipByServerId: {}, sessionListIndexByServerId: {}, concurrentSessionListCacheByServerId: {} },
+        ...createInboxAttentionFixture('home-a'),
+        automationAttentionItems: [{ key: `automation-run:${run.id}`, run,
+            route: { pathname: '/automations/[id]/runs/[runId]', params: { id: run.automationId, runId: run.id } } }],
+        openApprovals: [approval], openUsageNotices: [], friendRequests: [],
+        sessionPresentation: { sessionsNeedingAttention: [], readySessions: [], markAllReadTargets: [], pendingRequestHydrationTargets: [] },
+        workGroups: groups, targetBySessionAddress: new Map(), actionOperationEntries: [], pendingReadKeys: new Set(),
+        markAllPending: false, isLoading: false, hasPrimaryAttention: true, hasContent: true, showCaughtUp: false, spansHomes: false,
+        dismissUsageNotice: async () => {}, markRead: async () => {}, resolveActionOperation: () => {},
+        settle: async () => {}, setReminder: async () => {},
+    };
+    let current = true;
+    let snapshot = model;
+    const remove = registerMountedInboxReadOwner({ scope: { serverId: 'home-a', accountId: 'account-a' },
+        isCurrent: () => current, read: () => snapshot });
+    const context = { surface: 'cli' as const, serverId: 'home-a', runtimeAccountId: 'account-a' };
+    try {
+        const result = await invokeMountedWorkRead({ actionId: 'inbox.get', input: {}, context });
+        expect(result).toMatchObject({ status: 'ready', approvalIds: [approval.id], automationRunIds: [run.id],
+            groups: [{ key: groups[0]!.key,
+                root: { kind: 'automation', serverId: 'home-a', automationId: run.automationId, runId: run.id },
+                items: [{ kind: 'automation_run', key: `automation-run:${run.id}`, runId: run.id },
+                    { kind: 'approval', key: `approval:${approval.id}`, artifactId: approval.id }] }] });
+        expect(JSON.stringify(result)).not.toContain('Private approval content');
+        expect(JSON.stringify(result)).not.toContain('actionArgs');
+        expect(await invokeMountedWorkRead({ actionId: 'inbox.get', input: {},
+            context: { ...context, runtimeAccountId: 'different-account' } })).toEqual({ status: 'unavailable' });
+        snapshot = { ...model, workGroups: [{ ...groups[0]!, root: { kind: 'automation', serverId: 'home-b',
+            automationId: run.automationId, runId: run.id } }] };
+        expect(await invokeMountedWorkRead({ actionId: 'inbox.get', input: {}, context })).toEqual({ status: 'unavailable' });
+        snapshot = model;
+        current = false;
+        expect(await invokeMountedWorkRead({ actionId: 'inbox.get', input: {}, context })).toEqual({ status: 'unavailable' });
+    } finally { remove(); }
+});
 
 describe('mounted canonical Work reads', () => {
     it('reads the canonical projection through the Action boundary and fences retirement, exact scope and unmount', async () => {

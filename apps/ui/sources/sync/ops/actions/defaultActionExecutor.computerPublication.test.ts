@@ -247,7 +247,9 @@ describe('default Action Computer Account publication', () => {
             });
             await approvalScreen.pressByTestIdAsync('computer-target-picker-target:window');
             await approvalScreen.pressByTestIdAsync('computer-target-picker-share');
-            expect(currentChoice().decisionOptions).toEqual({ computerTarget: target, computerAccess: 'use' });
+            expect(currentChoice().decisionOptions).toEqual({ narrowedInput: {
+                machineId: scope.machineId, requestedTarget: 'Account A window', target, access: 'use',
+            } });
             expect(currentChoice().presentation?.target?.title).toBe('Account A window');
             await act(async () => { currentChoice().chooseTarget(); });
             await vi.waitFor(() => {
@@ -270,7 +272,9 @@ describe('default Action Computer Account publication', () => {
             });
             await approvalScreen.pressByTestIdAsync('computer-target-picker-target:window');
             await approvalScreen.pressByTestIdAsync('computer-target-picker-share');
-            expect(currentChoice().decisionOptions).toEqual({ computerTarget: target, computerAccess: 'use' });
+            expect(currentChoice().decisionOptions).toEqual({ narrowedInput: {
+                machineId: scope.machineId, requestedTarget: 'Account A window', target, access: 'use',
+            } });
             holdAReadiness = true;
             const clientA = createComputerControlClient(scope, executor.execute, accountLifetimeA);
             const answerA = clientA.listTargets();
