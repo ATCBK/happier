@@ -35,9 +35,12 @@ export type ReviewWalkthroughRequest = z.infer<typeof ReviewWalkthroughRequestSc
 
 export const ReviewWalkthroughInputSchema = lazyZodSchema(() => ReviewWalkthroughRequestSchema.omit({ reviewRunIds: true, launchFailures: true }).extend({
   sessionId: z.string().min(1).optional(),
+  target: z.object({ kind: z.literal('detached') }).strict().optional(),
   runId: z.string().min(1),
   reviewRunIds: z.array(z.string().min(1)).min(1).optional(),
-}).strict());
+}).strict().refine(input => !input.target || input.sessionId === undefined, {
+  path: ['target'], message: 'A detached review cannot target a Session',
+}));
 export type ReviewWalkthroughInput = z.infer<typeof ReviewWalkthroughInputSchema>;
 
 /** The host-owned code basis a finished review's walkthrough actually reads. */
@@ -68,9 +71,12 @@ export type ReviewExplainFindingsRequest = z.infer<typeof ReviewExplainFindingsR
 
 export const ReviewExplainFindingsInputSchema = lazyZodSchema(() => ReviewExplainFindingsRequestSchema.omit({ reviewRunIds: true }).extend({
   sessionId: z.string().min(1).optional(),
+  target: z.object({ kind: z.literal('detached') }).strict().optional(),
   runId: z.string().min(1),
   reviewRunIds: z.array(z.string().min(1)).min(1).optional(),
-}).strict());
+}).strict().refine(input => !input.target || input.sessionId === undefined, {
+  path: ['target'], message: 'A detached review cannot target a Session',
+}));
 export type ReviewExplainFindingsInput = z.infer<typeof ReviewExplainFindingsInputSchema>;
 
 /** Host-verified targeting, consumed through the existing canonical refinement Action. */
