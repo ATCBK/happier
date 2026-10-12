@@ -1,0 +1,113 @@
+import type { Prisma } from "@prisma/client";
+import type { Tx } from "@/storage/inTx";
+import type { TeamOperationAuthenticationContext } from "@/app/teams/actorContext";
+import { readAutomationSessionReviewProjectionIdsInTx } from "@/app/automations/sessionReviewProjectionInvalidation";
+import { readManagedWakePublicationAccountIdsInTx } from "@/app/machines/managed/managedWake";
+import {
+    resolveWorkflowRunAdmissionRecipientAccountIdsInTx,
+    resolveWorkflowRunAdmissionVisibilityInTx,
+    resolveWorkflowRunRecipientAccountIdsInTx,
+} from "./workflowRunAccess";
+
+export interface WorkflowPublicationScope {
+    accountId: string;
+    runIds?: readonly string[];
+    runWhere?: Prisma.AutomationRunWhereInput;
+    automationIds?: readonly string[];
+    automationWhere?: Prisma.AutomationWhereInput;
+    triggerIds?: readonly string[];
+    runSourceTriggerWhere?: Prisma.AutomationTriggerWhereInput;
+    sessionIds?: readonly string[];
+    machineIds?: readonly string[];
+    admission?: Readonly<{
+        sourceArtifactId: string | null;
+        visibleTeamId?: string | null;
+        authentication?: TeamOperationAuthenticationContext;
+    }>;
+}
+
+export interface WorkflowPublicationAudience {
+    accountIds: string[];
+    sessionIds: string[];
+}
+
+async function readAutomationPublicationAudienceInTx(tx: Tx, automationIds: readonly string[]): Promise<WorkflowPublicationAudience> {
+    if (automationIds.length === 0) return { accountIds: [], sessionIds: [] };
+    const automations = await tx.automation.findMany({ where: { id: { in: [...automationIds] } }, select: {
+        accountId: true, scopeSessionId: true, assignments: { where: { enabled: true }, select: { machineId: true } },
+    } });
+    const sessionIds = [...new Set([
+        ...automations.flatMap(automation => automation.scopeSessionId ? [automation.scopeSessionId] : []),
+        ...await readAutomationSessionReviewProjectionIdsInTx(tx, automationIds),
+    ])].sort();
+    const managedAccounts = await readManagedWakePublicationAccountIdsInTx(tx, {
+        machineTargets: automations.flatMap(automation => automation.assignments.map(assignment => ({
+            accountId: automation.accountId, machineId: assignment.machineId,
+        }))),
+        sessionIds,
+    });
+    return { accountIds: [...new Set([...automations.map(automation => automation.accountId), ...managedAccounts])].sort(), sessionIds };
+}
+
+/** Session fact writers collect lifecycle admission's review/wake audience before locking their source. */
+export async function getSessionLifecycleAutomationPublicationAudienceInTx(tx: Tx, sourceSessionIds: readonly string[]): Promise<WorkflowPublicationAudience> {
+    if (sourceSessionIds.length === 0) return { accountIds: [], sessionIds: [] };
+    const triggers = await tx.automationTrigger.findMany({ where: {
+        kind: "sessionLifecycle", sourceSessionId: { in: [...sourceSessionIds] }, enabled: true, deletedAt: null,
+        automation: { enabled: true, deletedAt: null },
+    }, distinct: ["automationId"], select: { automationId: true } });
+    return readAutomationPublicationAudienceInTx(tx, triggers.map(trigger => trigger.automationId));
+}
+
+/** Pure census of the immediate source, watcher, review and managed-wake composition; never acquires locks. */
+export async function getWorkflowPublicationAudienceInTx(tx: Tx, scope: WorkflowPublicationScope): Promise<WorkflowPublicationAudience> {
+    const selectedAutomations = scope.automationWhere || scope.triggerIds?.length ? await tx.automation.findMany({
+        where: { accountId: scope.accountId, OR: [
+            ...(scope.automationWhere ? [scope.automationWhere] : []),
+            ...(scope.triggerIds?.length ? [{ triggers: { some: { id: { in: [...scope.triggerIds] } } } }] : []),
+        ] }, select: { id: true },
+    }) : [];
+    const automationIds = new Set([...(scope.automationIds ?? []), ...selectedAutomations.map(automation => automation.id)]);
+    // Definition writers validate and catch up their retained Run sources in the
+    // same transaction. Those source owners must precede the target's mode fence.
+    const sourceTriggers = scope.runSourceTriggerWhere ? await tx.automationTrigger.findMany({ where: {
+        AND: [scope.runSourceTriggerWhere], kind: "runLifecycle", sourceRunMachineId: null, deletedAt: null,
+    }, select: { sourceRunId: true } }) : [];
+    const runIds = [...new Set([...(scope.runIds ?? []), ...sourceTriggers.flatMap(trigger => trigger.sourceRunId ? [trigger.sourceRunId] : [])])];
+    const runs = runIds.length > 0 || scope.runWhere ? await tx.automationRun.findMany({ where: { OR: [
+        ...(runIds.length > 0 ? [{ id: { in: runIds } }] : []),
+        ...(scope.runWhere ? [scope.runWhere] : []),
+    ] }, select: { id: true, accountId: true, automationId: true, originSessionId: true, producedSessionId: true,
+        workflowCustodyState: true, assignments: { select: { machineId: true } } } }) : [];
+    for (const run of runs) if (run.automationId) automationIds.add(run.automationId);
+    const watchers = runs.length > 0 ? await tx.automationTrigger.findMany({ where: {
+        kind: "runLifecycle", sourceRunId: { in: runs.map(run => run.id) }, sourceRunMachineId: null,
+        enabled: true, deletedAt: null, remainingOccurrences: 1, automation: { enabled: true, deletedAt: null },
+    }, distinct: ["automationId"], select: { automationId: true } }) : [];
+    for (const watcher of watchers) automationIds.add(watcher.automationId);
+    const automationAudience = await readAutomationPublicationAudienceInTx(tx, [...automationIds]);
+    const sessionIds = [...new Set([...(scope.sessionIds ?? []), ...automationAudience.sessionIds,
+        ...runs.flatMap(run => [run.originSessionId, run.producedSessionId].filter((id): id is string => id !== null)),
+    ])].sort();
+    const accountIds = new Set([scope.accountId, ...runs.map(run => run.accountId), ...automationAudience.accountIds]);
+    for (const run of runs) {
+        if (run.workflowCustodyState !== null) {
+            for (const accountId of await resolveWorkflowRunRecipientAccountIdsInTx(tx, run.id)) accountIds.add(accountId);
+        }
+    }
+    if (scope.admission) {
+        const visibleTeamId = await resolveWorkflowRunAdmissionVisibilityInTx(tx, {
+            actorAccountId: scope.accountId, ...scope.admission,
+        });
+        for (const accountId of await resolveWorkflowRunAdmissionRecipientAccountIdsInTx(tx, {
+            accountId: scope.accountId, sourceArtifactId: scope.admission.sourceArtifactId, visibleTeamId,
+        })) accountIds.add(accountId);
+    }
+    for (const accountId of await readManagedWakePublicationAccountIdsInTx(tx, {
+        machineTargets: [
+            ...runs.flatMap(run => run.assignments.map(assignment => ({ accountId: run.accountId, machineId: assignment.machineId }))),
+            ...(scope.machineIds ?? []).map(machineId => ({ accountId: scope.accountId, machineId })),
+        ], sessionIds,
+    })) accountIds.add(accountId);
+    return { accountIds: [...accountIds].sort(), sessionIds };
+}

@@ -5,6 +5,7 @@ import {
     ARTIFACT_PLAIN_DATA_KEY_MARKER,
     AutomationRunCauseSchema,
     encodePlainArtifactStoredContent,
+    deriveAutomationOccurrenceKeyV1,
     serializeAutomationStoredWorkflowDefinitionRecipeV2,
 } from "@happier-dev/protocol";
 import { db, initDbPostgres } from "@/storage/db";
@@ -14,6 +15,12 @@ import { automationAccountCurrentnessSelect, deriveAutomationAccountCurrentnessW
 import { materializeWorkflowAcceptedSnapshotFixture } from "@/testkit/workflowAcceptedSnapshot";
 import { sealWorkflowAcceptedSnapshotStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1 } from "@happier-dev/protocol/workflows";
 import { admitWorkflowRun, cancelWorkflowRun } from "./workflowRunService";
+import { cancelAutomationRun } from "@/app/automations/automationRunService";
+import { revokeMachineInTx } from "@/app/machines/machineMutations";
+import { createAuthenticatedTestApp } from "@/app/api/testkit/sqliteFastify";
+import { registerSessionArchiveRoutes } from "@/app/api/routes/session/registerSessionArchiveRoutes";
+import { encodeAutomationSessionLifecycleConfiguration } from "@/app/automations/automationSessionLifecycleConfigurationCodec";
+import { updateAutomationTrigger } from "@/app/automations/automationCrudService";
 
 const provider = process.env.HAPPIER_DB_PROVIDER ?? process.env.HAPPY_DB_PROVIDER ?? "postgres";
 
@@ -53,6 +60,7 @@ describe.skipIf(provider !== "postgres" && provider !== "postgresql")("Workflow 
         await db.artifact.deleteMany({ where: { accountId: { in: accountIds } } });
         await db.session.deleteMany({ where: { accountId: { in: accountIds } } });
         await db.team.deleteMany({ where: { id: { in: teamIds } } });
+        await db.machine.deleteMany({ where: { accountId: { in: accountIds } } });
         await db.account.deleteMany({ where: { id: { in: accountIds } } });
         accountIds.length = 0;
         teamIds.length = 0;
@@ -84,15 +92,20 @@ describe.skipIf(provider !== "postgres" && provider !== "postgresql")("Workflow 
         const reviewSession = await db.session.create({ data: { accountId: accounts[2].id, tag: randomUUID(), encryptionMode: "plain", metadata: "{}" } });
         await db.sessionShare.create({ data: { sessionId: reviewSession.id, sharedByUserId: accounts[2].id,
             sharedWithUserId: accounts[3].id, accessLevel: "view" } });
+        const reviewTriggerId = randomUUID();
+        const reviewOccurrence = { v: 1 as const, kind: "sessionLifecycle" as const, event: "parentTurnCompleted" as const,
+            sourceSessionId: reviewSession.id, sourceTurnId: randomUUID(), occurredAt: Date.now() };
         await db.automationRun.create({ data: { accountId: accounts[2].id, automationId: watcher.id, originKind: "automation",
             state: "succeeded", scheduledAt: new Date(), dueAt: new Date(), finishedAt: new Date(),
             ...encodeAutomationRunCause(AutomationRunCauseSchema.parse({ kind: "trigger", triggerKind: "sessionLifecycle",
-                triggerId: randomUUID(), triggerRevision: 0, occurredAt: Date.now(), occurrenceKey: randomUUID(),
-                evidence: { event: "parentTurnCompleted", sourceSessionId: reviewSession.id, sourceTurnId: randomUUID(),
+                triggerId: reviewTriggerId, triggerRevision: 0, occurredAt: reviewOccurrence.occurredAt,
+                occurrenceKey: deriveAutomationOccurrenceKeyV1({ triggerId: reviewTriggerId, evidence: reviewOccurrence }),
+                evidence: { event: reviewOccurrence.event, sourceSessionId: reviewSession.id, sourceTurnId: reviewOccurrence.sourceTurnId,
                     policy: { kind: "everyMatch" } } })) } });
         const sources = [];
         for (const owner of accounts.slice(0, 2)) {
             const session = await db.session.create({ data: { accountId: owner.id, tag: randomUUID(), encryptionMode: "plain", metadata: "{}" } });
+            const sourceMachine = await db.machine.create({ data: { id: randomUUID(), accountId: owner.id, metadata: "{}" } });
             const artifact = await db.artifact.create({ data: { id: randomUUID(), accountId: owner.id,
                 header: new Uint8Array(privacyKit.decodeBase64(encodePlainArtifactStoredContent({ kind: "workflow-definition.v1" }))),
                 body: new Uint8Array(privacyKit.decodeBase64(encodePlainArtifactStoredContent({}))),
@@ -101,7 +114,7 @@ describe.skipIf(provider !== "postgres" && provider !== "postgresql")("Workflow 
             const run = await db.automationRun.create({ data: { id: randomUUID(), accountId: owner.id, originKind: "direct", causeKind: null,
                 originSessionId: session.id, originDeliveryAckRevision: 0, sourceArtifactId: artifact.id, visibleTeamId: team.id,
                 state: "queued", workflowCustodyState: "pending", workflowAcceptedSnapshotEnvelope: "{}",
-                scheduledAt: new Date(), dueAt: new Date() } });
+                scheduledAt: new Date(), dueAt: new Date(), assignments: { create: { machineId: sourceMachine.id, priority: 0 } } } });
             const trigger = await db.automationTrigger.create({ data: { automationId: watcher.id, kind: "runLifecycle", enabled: true,
                 sourceRunId: run.id, remainingOccurrences: 1, runLifecycleConfigurationJson: JSON.stringify({ kind: "runLifecycle",
                     source: { kind: "workflow_run", runId: run.id }, condition: "terminal" }) } });
@@ -144,7 +157,7 @@ describe.skipIf(provider !== "postgres" && provider !== "postgresql")("Workflow 
                     };
                 } });
                 return operation(boundary);
-            }, options);
+            }, { ...options, isolationLevel: "ReadCommitted" });
         };
         // Prisma overloads share this one interactive transport at this boundary.
         db.$transaction = interleaved as typeof db.$transaction;
@@ -171,12 +184,32 @@ describe.skipIf(provider !== "postgres" && provider !== "postgresql")("Workflow 
         } }, select: { accountId: true } })).toEqual({ accountId: f.accounts[3].id });
     });
 
-    it.each(["existing", "new", "review"] as const)("%s publication waits for the lower Account before acquiring the owner's mode fence", async kind => {
+    it.each(["existing", "new", "review", "automation", "machine", "archive", "registration"] as const)("%s publication waits for the lower Account before acquiring the owner's mode fence", async kind => {
         const f = await fixture();
         const [, owner, watcher] = f.accounts;
-        const lower = kind === "review" ? f.accounts[3] : f.accounts[0];
+        const lower = kind === "review" || kind === "archive" ? f.accounts[3] : f.accounts[0];
         const source = f.sources[1];
         const machine = await db.machine.create({ data: { id: randomUUID(), accountId: owner.id, metadata: "{}" } });
+        if (kind === "machine") {
+            await db.automationRunAssignment.deleteMany({ where: { runId: source.run.id } });
+            await db.automationRunAssignment.create({ data: { runId: source.run.id, machineId: machine.id, priority: 0 } });
+        }
+        if (kind === "automation") {
+            const automation = await db.automation.create({ data: { accountId: owner.id, name: "Workflow cancellation", enabled: true,
+                templateCiphertext: f.watcher.templateCiphertext, templateVersion: 1 } });
+            await db.automationRun.update({ where: { id: source.run.id }, data: { automationId: automation.id, originKind: "automation",
+                ...encodeAutomationRunCause(AutomationRunCauseSchema.parse({ kind: "manual", invokedAt: Date.now() })) } });
+        }
+        const archiveSession = kind === "archive" ? await db.session.create({ data: {
+            accountId: watcher.id, tag: randomUUID(), encryptionMode: "plain", metadata: "{}", active: false,
+        } }) : null;
+        if (archiveSession) {
+            await db.automationTrigger.create({ data: { automationId: f.watcher.id, kind: "sessionLifecycle", enabled: true,
+                ...encodeAutomationSessionLifecycleConfiguration({ kind: "sessionLifecycle", sourceSessionId: archiveSession.id,
+                    events: ["sessionArchived"], policy: { kind: "everyMatch" } }) } });
+        }
+        const app = archiveSession ? createAuthenticatedTestApp() : null;
+        if (app) { registerSessionArchiveRoutes(app); await app.ready(); }
         const runId = randomUUID();
         const currentness = deriveAutomationAccountCurrentnessWitness(await db.account.findUniqueOrThrow({
             where: { id: owner.id }, select: automationAccountCurrentnessSelect,
@@ -208,7 +241,7 @@ describe.skipIf(provider !== "postgres" && provider !== "postgresql")("Workflow 
                 const [row] = await tx.$queryRawUnsafe<{ pid: number }[]>("SELECT pg_backend_pid() AS pid");
                 pid = row.pid;
                 return operation(tx);
-            }, options);
+            }, { ...options, isolationLevel: "ReadCommitted" });
         // Observe the real interactive database boundary without replacing owners.
         db.$transaction = observed as typeof db.$transaction;
         restoreTransport = () => { db.$transaction = originalTransaction; };
@@ -217,7 +250,16 @@ describe.skipIf(provider !== "postgres" && provider !== "postgresql")("Workflow 
             ? admitWorkflowRun({ accountId: owner.id, runId, machineId: machine.id, accountCurrentness: currentness,
                 acceptedEnvelope, sourceArtifactId: source.run.sourceArtifactId, visibleTeamId: source.run.visibleTeamId,
                 origin: { kind: "direct", originSessionId: source.session.id } })
-            : cancelWorkflowRun({ accountId: owner.id, runId: source.run.id, expectedRevision: 0 });
+            : kind === "automation"
+                ? cancelAutomationRun({ accountId: owner.id, runId: source.run.id })
+                : kind === "machine"
+                    ? inTx(tx => revokeMachineInTx(tx, { accountId: owner.id, machineId: machine.id }), { isolationLevel: "ReadCommitted" })
+                : app && archiveSession
+                    ? app.inject({ method: "POST", url: `/v2/sessions/${archiveSession.id}/archive`, headers: { "x-test-user-id": watcher.id } })
+                : kind === "registration"
+                    ? updateAutomationTrigger({ accountId: watcher.id, automationId: f.watcher.id,
+                        triggerId: source.trigger.id, expectedRevision: 0, enabled: true })
+                : cancelWorkflowRun({ accountId: owner.id, runId: source.run.id, expectedRevision: 0 });
         const mutationOutcome = Promise.allSettled([mutation]).finally(() => { finished = true; });
         try {
             while (!finished) {
@@ -230,9 +272,23 @@ describe.skipIf(provider !== "postgres" && provider !== "postgresql")("Workflow 
             await expect(inTx(tx => tx.$queryRawUnsafe<{ id: string }[]>(
                 'SELECT "id" FROM "Account" WHERE "id" = ANY($1::text[]) ORDER BY "id" FOR UPDATE NOWAIT', [owner.id, watcher.id],
             ), { isolationLevel: "ReadCommitted" })).resolves.toEqual([owner, watcher].map(account => ({ id: account.id })));
+            if (archiveSession) {
+                await expect(inTx(tx => tx.$queryRawUnsafe<{ id: string }[]>(
+                    'SELECT "id" FROM "Session" WHERE "id" = $1 FOR NO KEY UPDATE NOWAIT', archiveSession.id,
+                ), { isolationLevel: "ReadCommitted" })).resolves.toEqual([{ id: archiveSession.id }]);
+            } else if (kind !== "new") {
+                await expect(inTx(tx => tx.$queryRawUnsafe<{ id: string }[]>(
+                    'SELECT "id" FROM "AutomationRun" WHERE "id" = $1 FOR NO KEY UPDATE NOWAIT', source.run.id,
+                ), { isolationLevel: "ReadCommitted" })).resolves.toEqual([{ id: source.run.id }]);
+            }
         } finally {
             release();
-            for (const outcome of [...await holderOutcome, ...await mutationOutcome]) if (outcome.status === "rejected") throw outcome.reason;
+            const outcomes = [...await holderOutcome, ...await mutationOutcome];
+            await app?.close();
+            for (const outcome of outcomes) if (outcome.status === "rejected") throw outcome.reason;
+            if (kind === "archive") {
+                expect(outcomes[1]).toMatchObject({ status: "fulfilled", value: { statusCode: 200 } });
+            }
         }
     });
 });

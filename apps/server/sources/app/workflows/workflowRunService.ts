@@ -21,7 +21,8 @@ import { WorkflowDirectRunAdmissionIdV1Schema, WorkflowInvocationRecordIdSchema,
 import { resolveWorkflowRunAdmissionVisibilityInTx, storeWorkflowRunInitialKeyEnvelopesInTx, resolveWorkflowRunRecipientAccountIdsInTx } from "./workflowRunAccess";
 import type { TeamOperationAuthenticationContext } from "@/app/teams/actorContext";
 
-import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { markAccountsChanged } from "@/app/changes/markAccountChanged";
+import { acquireWorkflowPublicationLocksInTx } from "./acquireWorkflowPublicationLocksInTx";
 import { markAccountChangesForSessionAccounts } from "@/app/session/changeTracking/markAccountChangesForSessionAccounts";
 import { emitAutomationRunUpdatedToMachineOnly } from "@/app/automations/automationChangePublisher";
 import { publishManagedRunWakeInTx, publishManagedContextWakeInTx } from '@/app/machines/managed/managedWake';
@@ -202,7 +203,8 @@ function projectRun(row: WorkflowRunRow): WorkflowRunSummaryV1 {
     };
 }
 
-async function loadAccountModeTx(tx: Tx, accountId: string): Promise<"plain" | "e2ee"> {
+async function loadAccountModeTx(tx: Tx, accountId: string, runId?: string): Promise<"plain" | "e2ee"> {
+    if (runId) await acquireWorkflowPublicationLocksInTx(tx, { accountId, runIds: [runId] });
     const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, accountId);
     if (fence.status !== "ready") {
         throw new WorkflowRunServiceError("content_unavailable");
@@ -214,7 +216,9 @@ async function loadCurrentWorkflowAccountModeTx(
     tx: Tx,
     accountId: string,
     supplied: AutomationAccountCurrentnessWitnessV1,
+    runId: string,
 ): Promise<"plain" | "e2ee"> {
+    await acquireWorkflowPublicationLocksInTx(tx, { accountId, runIds: [runId] });
     const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, accountId);
     if (fence.status !== "ready") throw new WorkflowRunServiceError("content_unavailable");
     const current = projectAutomationAccountCurrentnessWitnessV1({
@@ -270,11 +274,8 @@ async function reconcileWorkflowRunAttentionAndHintTx(tx: Tx, accountId: string,
 
 async function markWorkflowRunChangedTx(tx: Tx, accountId: string, runId: string, deliveryBefore?: OriginDeliverySignal | null, inputDeliverable = false): Promise<number> {
     const recipients = await resolveWorkflowRunRecipientAccountIdsInTx(tx, runId);
-    let ownerCursor = 0;
-    for (const recipientAccountId of new Set([accountId, ...recipients])) {
-        const cursor = await markAccountChanged(tx, { accountId: recipientAccountId, kind: "account", entityId: `workflow-run:${runId}` });
-        if (recipientAccountId === accountId) ownerCursor = cursor;
-    }
+    const cursors = await markAccountsChanged(tx, { accountIds: [accountId, ...recipients], kind: "account", entityId: `workflow-run:${runId}` });
+    const ownerCursor = cursors.find(cursor => cursor.accountId === accountId)?.cursor ?? 0;
     if (deliveryBefore !== undefined) await reconcileWorkflowRunAttentionAndHintTx(tx, accountId, runId, deliveryBefore, inputDeliverable);
     await admitWorkflowRunLifecycleAutomationRunsTx(tx, runId);
     return ownerCursor;
@@ -337,16 +338,22 @@ export async function admitWorkflowRunTx(tx: Tx, params: AdmitWorkflowRunInput):
         if (!WorkflowDirectRunAdmissionIdV1Schema.safeParse(params.runId).success) {
             throw new WorkflowRunServiceError("invalid_input");
         }
+        await withWorkflowRunAccess(() => acquireWorkflowPublicationLocksInTx(tx, {
+            accountId: params.accountId, runIds: [params.runId], machineIds: [params.machineId],
+            sessionIds: params.origin.originSessionId ? [params.origin.originSessionId] : [],
+            admission: { sourceArtifactId: params.sourceArtifactId ?? null, authentication: params.authentication,
+                ...(params.visibleTeamId === undefined ? {} : { visibleTeamId: params.visibleTeamId }) },
+        }));
         const existing = await tx.automationRun.findUnique({ where: { id: params.runId }, select: workflowRunSelect });
         if (existing) {
             if (existing.accountId !== params.accountId) throw new WorkflowRunServiceError("currentness_conflict");
             if (!isExactWorkflowAdmission(existing as WorkflowRunListRow, params)) throw new WorkflowRunServiceError("currentness_conflict");
-            const mode = await loadCurrentWorkflowAccountModeTx(tx, params.accountId, params.accountCurrentness);
+            const mode = await loadCurrentWorkflowAccountModeTx(tx, params.accountId, params.accountCurrentness, params.runId);
             assertWorkflowStoredEnvelopeOuterForMode({ raw: existing.workflowAcceptedSnapshotEnvelope!, mode, binding: { v: 1, purpose: "accepted_snapshot", accountId: params.accountId, runId: params.runId } });
             await assertWorkflowRunAdmissionKeysUnchangedTx(tx, params.accountId, params.runId, mode, params.recipientKeyEnvelopes ?? []);
             return { kind: "existing", run: projectRun(existing as WorkflowRunRow) };
         }
-        const mode = await loadCurrentWorkflowAccountModeTx(tx, params.accountId, params.accountCurrentness);
+        const mode = await loadCurrentWorkflowAccountModeTx(tx, params.accountId, params.accountCurrentness, params.runId);
         assertWorkflowStoredEnvelopeOuterForMode({ raw: params.acceptedEnvelope, mode, binding: { v: 1, purpose: "accepted_snapshot", accountId: params.accountId, runId: params.runId } });
         const machine = await tx.machine.findFirst({ where: { id: params.machineId, accountId: params.accountId, revokedAt: null }, select: { id: true } });
         if (!machine) throw new WorkflowRunServiceError("target_unavailable");
@@ -418,7 +425,7 @@ export async function admitWorkflowRun(params: AdmitWorkflowRunInput): Promise<{
 export async function attachAutomationWorkflowBodyTx(tx: Tx, params: Readonly<{
     accountId: string; runId: string; automationId: string; definitionEnvelope: string;
 }>): Promise<WorkflowRunSummaryV1> {
-    const mode = await loadAccountModeTx(tx, params.accountId);
+    const mode = await loadAccountModeTx(tx, params.accountId, params.runId);
     const definitionOuter = validateAutomationStoredContentEnvelopeOuterForMode({ raw: params.definitionEnvelope, mode });
     if (definitionOuter.kind !== "available") throw new WorkflowRunServiceError(definitionOuter.kind === "modeMismatch" ? "content_unavailable" : "invalid_input");
     const changed = await tx.automationRun.updateMany({
@@ -457,7 +464,7 @@ export async function resolveAutomationWorkflowAcceptedSnapshot(params: Readonly
 }>) {
     if (!Number.isSafeInteger(params.expectedAttempt) || params.expectedAttempt < 0) throw new WorkflowRunServiceError("invalid_input");
     return await inTx(async (tx) => {
-        const mode = await loadCurrentWorkflowAccountModeTx(tx, params.accountId, params.accountCurrentness);
+        const mode = await loadCurrentWorkflowAccountModeTx(tx, params.accountId, params.accountCurrentness, params.runId);
         const predecessor = readRetainedAutomationRunExecutionInputForWorkflowAdmission({ raw: params.definitionEnvelope, mode });
         if (predecessor === null) {
             const definitionOuter = validateAutomationStoredContentEnvelopeOuterForMode({ raw: params.definitionEnvelope, mode });
@@ -561,7 +568,7 @@ export async function initializeWorkflowRunExecution(params: Readonly<{
 }>) {
     return await inTx(async (tx) => {
         if (!WorkflowInvocationRecordIdSchema.safeParse(params.rootInvocation.id).success || !Number.isSafeInteger(params.parentAttempt) || params.parentAttempt < 0) throw new WorkflowRunServiceError("invalid_input");
-        const mode = await loadCurrentWorkflowAccountModeTx(tx, params.accountId, params.accountCurrentness);
+        const mode = await loadCurrentWorkflowAccountModeTx(tx, params.accountId, params.accountCurrentness, params.runId);
         assertWorkflowStoredEnvelopeOuterForMode({ raw: params.checkpointEnvelope, mode, binding: { v: 1, purpose: "checkpoint", accountId: params.accountId, runId: params.runId } });
         assertWorkflowStoredEnvelopeOuterForMode({ raw: params.rootInvocation.contentEnvelope, mode, binding: { v: 1, purpose: "invocation_progress", accountId: params.accountId, runId: params.runId, recordId: params.rootInvocation.id, sequence: "0", parentRecordId: null, memberOrdinal: "0", attempt: "0" } });
         const existing = await tx.automationRun.findFirst({
@@ -622,7 +629,7 @@ export async function admitWorkflowInvocations(params: Readonly<{
                 || invocation.replaces.attempt >= MAX_DATABASE_BIGINT || invocation.replaces.contentRevision < 0n
                 || invocation.replaces.contentRevision >= MAX_DATABASE_BIGINT)) throw new WorkflowRunServiceError("invalid_input");
         }
-        const mode = await loadCurrentWorkflowAccountModeTx(tx, params.accountId, params.accountCurrentness);
+        const mode = await loadCurrentWorkflowAccountModeTx(tx, params.accountId, params.accountCurrentness, params.runId);
         assertWorkflowStoredEnvelopeOuterForMode({ raw: params.checkpointEnvelope, mode, binding: { v: 1, purpose: "checkpoint", accountId: params.accountId, runId: params.runId } });
         for (const invocation of params.invocations) {
             assertWorkflowStoredEnvelopeOuterForMode({
@@ -1320,7 +1327,7 @@ async function loadWorkflowReviewMutationTx(tx: Tx, input: WorkflowReviewMutatio
         || input.expectedContentRevision < 0n || input.expectedContentRevision > MAX_DATABASE_BIGINT) throw new WorkflowRunServiceError("invalid_input");
     const access = await resolveEditableWorkflowRunAccessTx(tx, { actorAccountId: input.accountId, runId: input.runId });
     const ownerAccountId = access.ownerAccountId;
-    const mode = await loadCurrentWorkflowAccountModeTx(tx, ownerAccountId, input.accountCurrentness);
+    const mode = await loadCurrentWorkflowAccountModeTx(tx, ownerAccountId, input.accountCurrentness, input.runId);
     const run = await tx.automationRun.findFirst({ where: { ...workflowRunIdentityWhere({ accountId: ownerAccountId, runId: input.runId }),
         workflowCustodyState: "pending", state: { notIn: [...AUTOMATION_RUN_TERMINAL_STATES] } }, select: workflowRunSelect });
     if (!run) throw new WorkflowRunServiceError("currentness_conflict");
@@ -1660,7 +1667,7 @@ export async function commitWorkflowInvocationFact(params: WorkflowInvocationFac
         }
         const resolvesObservedTerminal = params.resolution === "observed_terminal_execution"
             && (observation ? observedSettlement : (params.lifecycle === "completed" || params.lifecycle === "needs_attention"));
-        const mode = await loadCurrentWorkflowAccountModeTx(tx, params.accountId, params.accountCurrentness);
+        const mode = await loadCurrentWorkflowAccountModeTx(tx, params.accountId, params.accountCurrentness, params.runId);
         if (!observation && params.lifecycle === "admitting") {
             // Lock the same parent row as Pause/Cancel before authorizing input, including exact revalidation.
             const admitted = await tx.automationRun.updateMany({
@@ -1749,7 +1756,7 @@ export async function recordWorkflowRunOriginInputWithdrawn(params: Readonly<{
         const parent = await tx.automationRun.findFirst({ where: { ...workflowRunIdentityWhere(params), originSessionId: params.originSessionId }, select: { state: true, revision: true, updatedAt: true } });
         if (!session || !parent) throw new WorkflowRunServiceError("run_not_found");
         if (parent.revision !== params.expectedRevision) throw new WorkflowRunServiceError("currentness_conflict");
-        const mode = await loadCurrentWorkflowAccountModeTx(tx, params.accountId, params.accountCurrentness);
+        const mode = await loadCurrentWorkflowAccountModeTx(tx, params.accountId, params.accountCurrentness, params.runId);
         const locked = await tx.automationRun.updateMany({
             where: { ...workflowRunIdentityWhere(params), originSessionId: params.originSessionId, revision: params.expectedRevision, state: parent.state },
             data: { revision: { increment: 0 }, updatedAt: parent.updatedAt },
@@ -1783,7 +1790,7 @@ export async function recordWorkflowRunOriginInputWithdrawn(params: Readonly<{
 export async function transitionWorkflowRun(params: Readonly<{ accountId: string; runId: string; machineId: string; parentAttempt: number; expectedRevision: number; state: WorkflowRunState; checkpointEnvelope: string; resultEnvelope?: string | null; custodyState?: WorkflowCustodyState; invocationTransitions?: readonly Readonly<{ id: string; expectedLifecycle: WorkflowInvocationLifecycleV1; lifecycle: WorkflowInvocationLifecycleV1; expectedContentRevision: bigint }>[]; accountCurrentness: AutomationAccountCurrentnessWitnessV1 }>) {
     return await inTx(async (tx) => {
         if (!Number.isSafeInteger(params.parentAttempt) || params.parentAttempt < 0) throw new WorkflowRunServiceError("invalid_input");
-        const mode = await loadCurrentWorkflowAccountModeTx(tx, params.accountId, params.accountCurrentness);
+        const mode = await loadCurrentWorkflowAccountModeTx(tx, params.accountId, params.accountCurrentness, params.runId);
         const deliveryBefore = await readOriginDeliverySignalTx(tx, params.accountId, params.runId);
         assertWorkflowStoredEnvelopeOuterForMode({ raw: params.checkpointEnvelope, mode, binding: { v: 1, purpose: "checkpoint", accountId: params.accountId, runId: params.runId } });
         if (params.resultEnvelope) assertWorkflowStoredEnvelopeOuterForMode({ raw: params.resultEnvelope, mode, binding: { v: 1, purpose: "final_result", accountId: params.accountId, runId: params.runId } });
@@ -1949,7 +1956,7 @@ async function controlWorkflowRun(params: Readonly<{
         if (!Number.isSafeInteger(params.expectedRevision) || params.expectedRevision < 0) throw new WorkflowRunServiceError("invalid_input");
         const access = await resolveEditableWorkflowRunAccessTx(tx, { actorAccountId: params.accountId, runId: params.runId });
         const ownerAccountId = access.ownerAccountId;
-        await loadAccountModeTx(tx, ownerAccountId);
+        await loadAccountModeTx(tx, ownerAccountId, params.runId);
         const current = await tx.automationRun.findFirst({ where: { id: params.runId, accountId: ownerAccountId }, select: { revision: true, state: true } });
         if (!current) throw new WorkflowRunServiceError("run_not_found");
         if (current.revision !== params.expectedRevision) throw new WorkflowRunServiceError("currentness_conflict");
@@ -2129,7 +2136,7 @@ export async function cancelWorkflowRunTx(
 export async function cancelWorkflowRun(params: Readonly<{ accountId: string; runId: string; expectedRevision: number }>) {
     return await inTx(async (tx) => {
         const access = await resolveEditableWorkflowRunAccessTx(tx, { actorAccountId: params.accountId, runId: params.runId });
-        await loadAccountModeTx(tx, access.ownerAccountId);
+        await loadAccountModeTx(tx, access.ownerAccountId, params.runId);
         return await cancelWorkflowRunTx(tx, { ...params, accountId: access.ownerAccountId });
     }, {
         // Source Run lifecycle and cross-Account watcher census must serialize with watcher registration.
@@ -2216,7 +2223,7 @@ export async function recoverWorkflowInvocations(params: Readonly<{
 }>) {
     if (params.recoveries.length === 0) throw new WorkflowRunServiceError("invalid_input");
     return await inTx(async (tx) => {
-        const mode = await loadCurrentWorkflowAccountModeTx(tx, params.accountId, params.accountCurrentness);
+        const mode = await loadCurrentWorkflowAccountModeTx(tx, params.accountId, params.accountCurrentness, params.runId);
         const deliveryBefore = await readOriginDeliverySignalTx(tx, params.accountId, params.runId);
         const ids = new Set<string>();
         for (const recovery of params.recoveries) {
@@ -2358,7 +2365,7 @@ export async function recoverWorkflowInvocations(params: Readonly<{
 
 export async function deleteWorkflowRun(params: Readonly<{ accountId: string; runId: string; expectedRevision: number }>) {
     return await inTx(async (tx) => {
-        await loadAccountModeTx(tx, params.accountId);
+        await loadAccountModeTx(tx, params.accountId, params.runId);
         // A settled ancestor still supplies causality to actual live Run/turn
         // publishers. The same retained-history owner governs clear and delete.
         const candidate = await tx.automationRun.findFirst({ where: {

@@ -16,7 +16,8 @@ import { acquireAccountEncryptionTransitionFenceInTx, deriveAccountEncryptionMig
 import { deriveAccountEncryptionCurrentnessFromRow } from "@/app/encryption/accountContentKeyAdmission";
 import { deriveAccountRecipientEnvelopeReadinessFromRow } from "@/app/encryption/accountRecipientEnvelopeReadiness";
 import { projectRecipientContentKey, RECIPIENT_READINESS_SELECT } from "@/app/session/encryption/sessionDataKeyRecipientProjection";
-import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { markAccountsChanged } from "@/app/changes/markAccountChanged";
+import { acquireWorkflowPublicationLocksInTx } from "./acquireWorkflowPublicationLocksInTx";
 
 export type WorkflowRunAccessErrorCode = "run_not_found" | "run_access_denied" | "visible_team_not_granted"
     | "currentness_conflict" | "invalid_input" | "content_unavailable" | "data_key_not_required";
@@ -109,7 +110,7 @@ export async function resolveWorkflowRunAdmissionVisibilityInTx(tx: Tx, input: R
     return visibility.visibleTeamId;
 }
 
-async function audienceFromFactsInTx(tx: Tx, row: RunFacts): Promise<string[]> {
+async function audienceFromFactsInTx(tx: Tx, row: Pick<RunFacts, "accountId" | "sourceArtifactId" | "visibleTeamId">): Promise<string[]> {
     if (!row.sourceArtifactId || !row.visibleTeamId) return [row.accountId];
     if ((await readGrantedTeamIdsInTx(tx, row.sourceArtifactId, [row.visibleTeamId])).length === 0) return [row.accountId];
     const candidates = await resolveArtifactAudienceInTx(tx, row.sourceArtifactId);
@@ -118,6 +119,12 @@ async function audienceFromFactsInTx(tx: Tx, row: RunFacts): Promise<string[]> {
         if (accountId !== row.accountId && await isLiveTeamMemberInTx(tx, row.visibleTeamId, accountId)) recipients.push(accountId);
     }
     return recipients.sort();
+}
+/** Admission uses the same audience before a physical Run exists. */
+export async function resolveWorkflowRunAdmissionRecipientAccountIdsInTx(tx: Tx, input: Readonly<{
+    accountId: string; sourceArtifactId: string | null; visibleTeamId: string | null;
+}>): Promise<string[]> {
+    return audienceFromFactsInTx(tx, input);
 }
 /** Key preparation and wake fan-out use the same live Run audience. */
 export async function resolveWorkflowRunRecipientAccountIdsInTx(tx: Tx, runId: string): Promise<string[]> {
@@ -241,6 +248,7 @@ export async function commitWorkflowRunRecipientKeyEnvelopesInTx(tx: Tx, input: 
     validateEnvelopeInputs(input.recipientKeyEnvelopes);
     const access = await resolveWorkflowRunAccessInTx(tx, input);
     if (!access) throw new WorkflowRunAccessError("run_not_found");
+    await acquireWorkflowPublicationLocksInTx(tx, { accountId: access.ownerAccountId, runIds: [input.runId] });
     const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, access.ownerAccountId);
     if (fence.status !== "ready") throw new WorkflowRunAccessError("content_unavailable");
     const census = await readWorkflowRunKeyProjectionInTx(tx, input);
@@ -252,7 +260,7 @@ export async function commitWorkflowRunRecipientKeyEnvelopesInTx(tx: Tx, input: 
     // Preparation cannot replace the owner token; Account transitions own key replacement.
     const envelopes = input.recipientKeyEnvelopes.filter(envelope => envelope.recipientAccountId !== row.accountId);
     const result = await applyPreparedEnvelopesInTx(tx, { row, runId: input.runId, recipientKeyEnvelopes: envelopes });
-    for (const accountId of result.appliedRecipientAccountIds) await markAccountChanged(tx, { accountId, kind: "account", entityId: `workflow-run:${input.runId}` });
+    await markAccountsChanged(tx, { accountIds: result.appliedRecipientAccountIds, kind: "account", entityId: `workflow-run:${input.runId}` });
     return { ...result, skippedRecipientAccountIds: [...result.skippedRecipientAccountIds,
         ...input.recipientKeyEnvelopes.filter(envelope => envelope.recipientAccountId === row.accountId).map(envelope => envelope.recipientAccountId)] };
 }

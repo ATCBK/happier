@@ -1,17 +1,53 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { materializeWorkflowAcceptedSnapshotFixture } from "@/testkit/workflowAcceptedSnapshot";
+import { sealWorkflowAcceptedSnapshotStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1 } from "@happier-dev/protocol/workflows";
 
 const mocks = vi.hoisted(() => ({
     transactionAttempts: 0,
-    markAccountChanged: vi.fn(),
     recoveryWhere: null as unknown,
+    acceptedEnvelope: "",
+    tx: {},
+    accountSeq: 1,
 }));
 
-vi.mock("@/storage/inTx", () => ({
-    afterTx: vi.fn(),
-    inTx: vi.fn(async (operation: (tx: unknown) => Promise<unknown>) => {
+const transactions = await vi.hoisted(async () => {
+    const { createDbTransactionMock } = await import("@/app/api/testkit/dbMocks");
+    return createDbTransactionMock(() => {
         mocks.transactionAttempts += 1;
-        const attempt = mocks.transactionAttempts;
-        const winner = {
+        return { ...mocks.tx };
+    });
+});
+
+// Only the interactive database transports are replaced. Admission, envelope
+// validation, Account fences and transaction recovery all use their real owners.
+vi.mock("@/storage/db", () => ({ db: transactions.wrapDb({}) }));
+vi.mock("@/storage/prisma", async importOriginal => ({
+    ...await importOriginal<typeof import("@/storage/prisma")>(),
+    withSqliteReadSnapshot: transactions.readSnapshot,
+}));
+
+import { admitWorkflowRun, deriveWorkflowRunAvailability, listWorkflowRunsForRecovery } from "./workflowRunService";
+
+beforeEach(async () => {
+    vi.stubEnv("HAPPIER_DB_PROVIDER", "postgres");
+    vi.stubEnv("HAPPY_DB_PROVIDER", "postgres");
+    vi.stubEnv("HAPPIER_SERVER_IDENTITY_ID", "");
+    mocks.transactionAttempts = 0;
+    mocks.accountSeq = 1;
+    mocks.recoveryWhere = null;
+    mocks.acceptedEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({
+        mode: "plain", binding: { v: 1, purpose: "accepted_snapshot", accountId: "account-1", runId: "11111111-1111-4111-8111-111111111111" },
+        acceptedSnapshot: await materializeWorkflowAcceptedSnapshotFixture({
+            definition: { version: 1, inputs: [], defaults: {}, blocks: [{ kind: "wait", id: "answer",
+                document: { text: "Wait", references: [], attachments: [] }, result: { kind: "text" } }] },
+            context: { source: { kind: "inline" }, inputs: {}, machineId: "machine-1", executionTarget: { kind: "session" },
+                workspaceTarget: { project: { machineId: "machine-1", directory: "/repo", checkoutRootPath: "/repo" } },
+                origin: { kind: "direct" }, authorization: { principal: { kind: "host" } } },
+        }),
+    }));
+    const account = { id: "account-1", seq: 1, publicKey: "ab".repeat(32), encryptionMode: "plain",
+        contentPublicKey: null, contentPublicKeySig: null, settings: null, settingsVersion: 0 };
+    const winner = {
             id: "11111111-1111-4111-8111-111111111111",
             accountId: "account-1",
             originKind: "direct",
@@ -25,21 +61,32 @@ vi.mock("@/storage/inTx", () => ({
             claimedByMachineId: null,
             workflowCustodyState: "pending",
             originDeliveryAckRevision: null,
-            workflowAcceptedSnapshotEnvelope: "accepted-envelope",
-            executionInputEnvelope: "accepted-envelope",
+            workflowAcceptedSnapshotEnvelope: mocks.acceptedEnvelope,
+            executionInputEnvelope: mocks.acceptedEnvelope,
             workflowCheckpointEnvelope: null,
             resultEnvelope: null,
             createdAt: new Date("2026-01-01T00:00:00.000Z"),
             updatedAt: new Date("2026-01-01T00:00:00.000Z"),
             assignments: [{ machineId: "machine-1" }],
             workflowInvocations: [],
+            _count: { workflowInvocations: 0 },
+            producedSessionId: null,
+            account: { encryptionMode: "plain" },
         };
-        const tx = {
+    mocks.tx = {
+            $queryRawUnsafe: async (query: string) => {
+                if (query.includes('SET "seq" = "seq" + 1')) mocks.accountSeq += 1;
+                return [{ id: account.id, accountId: account.id, cursor: mocks.accountSeq }];
+            },
+            account: { findUnique: async () => ({ ...account, seq: mocks.accountSeq }) },
+            simpleCache: { findUnique: async () => null },
+            session: { findMany: async () => [] },
+            automationTrigger: { findMany: async () => [] },
             automationRun: {
-                findUnique: vi.fn(async () => attempt === 1 ? null : winner),
+                findUnique: vi.fn(async () => mocks.transactionAttempts === 1 ? null : winner),
                 findMany: vi.fn(async (args: { where: unknown }) => {
                     mocks.recoveryWhere = args.where;
-                    return [];
+                    return mocks.transactionAttempts === 1 ? [] : [winner];
                 }),
                 findFirst: vi.fn(async () => {
                     throw Object.assign(new Error("current transaction is aborted"), { code: "25P02" });
@@ -48,38 +95,11 @@ vi.mock("@/storage/inTx", () => ({
                     throw Object.assign(new Error("duplicate run"), { code: "P2002" });
                 }),
             },
-            machine: { findFirst: vi.fn(async () => ({ id: "machine-1" })) },
-        };
-        return await operation(tx);
-    }),
-}));
-
-vi.mock("@/app/encryption/accountEncryptionTransition", () => ({
-    acquireAccountEncryptionTransitionFenceInTx: vi.fn(async () => ({
-        status: "ready",
-        account: {
-            version: 1,
-            contentKeyFingerprint: null,
-            currentness: { encryptionMode: "plain" },
-        },
-    })),
-}));
-
-vi.mock("@/app/changes/markAccountChanged", () => ({
-    markAccountChanged: mocks.markAccountChanged,
-}));
-
-vi.mock("./runs/storedContent", () => ({
-    assertWorkflowStoredEnvelopeOuterForMode: vi.fn(),
-}));
-
-import { admitWorkflowRun, deriveWorkflowRunAvailability, listWorkflowRunsForRecovery } from "./workflowRunService";
-
-beforeEach(() => {
-    mocks.transactionAttempts = 0;
-    mocks.markAccountChanged.mockReset();
-    mocks.recoveryWhere = null;
+            machine: { findFirst: async () => ({ id: "machine-1" }), findMany: async () => [{ accountId: account.id }] },
+    };
 });
+
+afterEach(() => vi.unstubAllEnvs());
 
 it("selects exact-machine terminal custody and nonterminal cancellation recovery only", async () => {
     await expect(listWorkflowRunsForRecovery({
@@ -130,11 +150,11 @@ it("restarts the complete admission transaction after a unique Run race and rejo
         runId: "11111111-1111-4111-8111-111111111111",
         origin: { kind: "direct" },
         machineId: "machine-1",
-        acceptedEnvelope: "accepted-envelope",
+        acceptedEnvelope: mocks.acceptedEnvelope,
         accountCurrentness: { mode: "plain", version: 1, contentKeyFingerprint: null },
     })).resolves.toMatchObject({ kind: "existing", run: { id: "11111111-1111-4111-8111-111111111111" } });
     expect(mocks.transactionAttempts).toBe(2);
-    expect(mocks.markAccountChanged).not.toHaveBeenCalled();
+    expect(mocks.accountSeq).toBe(1);
 });
 
 it("projects only coarse workspace-restore availability from server-visible Run facts", () => {

@@ -1098,7 +1098,18 @@ describe("workflowRunService (integration)", () => {
         const claimRequest = { machineInstallationId: installationId, nonce: randomUUID(), expiresAt: new Date(Date.now() + 60_000) };
         const claimed = await claimAutomationRun({ ...seeded, leaseDurationMs: 60_000,
             recipeFeaturePolicy: { workflowsEnabled: true }, claimRequest });
-        expect(toAutomationV3WorkerClaimResponse(claimed).run)
+        const noClaimContext = claimed.run === null ? JSON.stringify({
+            currentness: await accountCurrentness(seeded.accountId),
+            now: new Date(),
+            run: await db.automationRun.findUniqueOrThrow({ where: { id: runId }, select: {
+                state: true, revision: true, dueAt: true, workflowCustodyState: true,
+                workflowResumeRequestedRevision: true, assignments: { select: { machineId: true } },
+            } }),
+            machine: await db.machine.findUniqueOrThrow({ where: { id: seeded.machineId }, select: {
+                installationId: true, revokedAt: true, replacedByMachineId: true,
+            } }),
+        }) : undefined;
+        expect(toAutomationV3WorkerClaimResponse(claimed).run, noClaimContext)
             .toMatchObject({ id: runId, workflowResumeRequestedRevision: 2 });
         expect(await db.automationRun.findUniqueOrThrow({ where: { id: runId } }))
             .toMatchObject({ state: "claimed", workflowResumeRequestedRevision: null });

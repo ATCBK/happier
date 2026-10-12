@@ -45,21 +45,24 @@ beforeEach(() => {
     children = [{ id: "root", runId: "run", parentRecordId: null, lifecycle: "cancel_requested", contentRevision: 3n },
         { id: "child", runId: "run", parentRecordId: "root", lifecycle: "cancel_requested", contentRevision: 3n }];
     row = { id: "run", accountId: "account", originKind: "direct", automationId: null,
-        sourceArtifactId: null, visibleTeamId: null, originSessionId: null, state: "claimed", revision: 140,
+        sourceArtifactId: null, visibleTeamId: null, originSessionId: null, producedSessionId: null, state: "claimed", revision: 140,
         attempt: 138, claimedByMachineId: "old-machine", leaseExpiresAt: new Date(now.getTime() - 1),
         workflowCustodyState: "pending", workflowResumeRequestedRevision: null,
         workflowAcceptedSnapshotEnvelope: "accepted", workflowCheckpointEnvelope: null, resultEnvelope: null,
         originDeliveryAckRevision: null, executionInputEnvelope: null, triggerId: null, dueAt: now,
         scheduledAt: now, startedAt: now, createdAt: now, updatedAt: now, finishedAt: null, account: { encryptionMode: "plain" },
         assignments: [{ machineId: "old-machine" }], workflowInvocations: children };
-    const runSnapshot = () => ({ ...row, leaseExpiresAt: row.leaseExpiresAt, workflowInvocations: children.map(child => ({ ...child })) });
+    const runSnapshot = () => ({ ...row, leaseExpiresAt: row.leaseExpiresAt,
+        workflowInvocations: children.map(child => ({ ...child })),
+        _count: { workflowInvocations: children.filter(child => child.lifecycle === "waiting_for_review").length },
+    });
     const account = { seq: 1, publicKey: "ab".repeat(32), encryptionMode: "plain",
         contentPublicKey: null, contentPublicKeySig: null, settings: null, settingsVersion: 0 };
     const accountChanges = new Map<string, Record<string, unknown>>();
     boundary.tx = {
         $queryRawUnsafe: async (query: string) => {
-            if (query.includes('RETURNING "seq"')) account.seq += 1;
-            return [{ id: "account", cursor: account.seq }];
+            if (query.includes('SET "seq" = "seq" + 1')) account.seq += 1;
+            return [{ id: "account", accountId: "account", cursor: account.seq }];
         },
         $executeRawUnsafe: async () => 1,
         account: {
@@ -73,7 +76,9 @@ beforeEach(() => {
             accountChanges.set(create.entityId, create);
             return create;
         } },
-        machine: { findFirst: async () => ({ id: "old-machine", installationId: "installation" }) },
+        machine: { findFirst: async () => ({ id: "old-machine", installationId: "installation" }),
+            findMany: async () => [{ id: "old-machine", accountId: "account" }] },
+        simpleCache: { findUnique: async () => null },
         automationTrigger: { findMany: async () => [] },
         automationRun: {
             findUnique: async () => runSnapshot(),
