@@ -16,7 +16,7 @@ const boundary = vi.hoisted(() => ({
 }));
 installDisconnectedServerSocketBoundary();
 installSettingsViewCommonModuleMocks({
-    storage: importOriginal => importOriginal(),
+    storage: 'real',
     modal: async () => {
         const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
         return createModalModuleMock({ spies: { confirm: boundary.confirm, alertAsync: boundary.alertAsync } }).module;

@@ -10,7 +10,7 @@ import { t } from '@/text';
 
 type Benefit = Readonly<{ icon: 'magnifying-glass' | 'key' | 'device-mobile'; title: string; description: string }>;
 
-/** Below this width the three benefits read as a checklist instead of side-by-side columns. */
+/** Below this width the three benefits shrink to one line of names instead of side-by-side columns. */
 const BENEFIT_COLUMN_MIN_WIDTH_PX = 160;
 
 /**
@@ -34,7 +34,7 @@ export const AccountServiceInvitationIntro = React.memo(function AccountServiceI
 
 /**
  * The service's real capabilities — finding linked Homes, opening them directly, and connecting
- * other devices — as three columns on wide sheets and a checklist on phones.
+ * other devices — as three columns on wide sheets and one line of names on phones.
  */
 export const AccountServiceBenefits = React.memo(function AccountServiceBenefits() {
     const { theme } = useUnistyles();
@@ -48,20 +48,24 @@ export const AccountServiceBenefits = React.memo(function AccountServiceBenefits
         { icon: 'device-mobile', title: t('settingsAccount.accountServiceBenefitDevices'), description: t('settingsAccount.accountServiceBenefitDevicesDescription') },
     ];
     return (
-        <View onLayout={onLayout} style={columns ? styles.benefitColumns : styles.benefitList}>
-            {benefits.map((benefit, index) => (
+        <View onLayout={onLayout} style={columns ? styles.benefitColumns : styles.benefitLine}>
+            {benefits.map((benefit, index) => columns ? (
                 <View
                     key={benefit.icon}
-                    style={[
-                        columns ? styles.benefitColumn : styles.benefitListItem,
-                        columns && index > 0 ? styles.benefitColumnDivider : null,
-                    ]}
+                    style={[styles.benefitColumn, index > 0 ? styles.benefitColumnDivider : null]}
                 >
                     <View style={styles.benefitHeading}>
                         <Icon name={benefit.icon} size={15} color={theme.colors.text.secondary} />
                         <Text style={styles.benefitTitle}>{benefit.title}</Text>
                     </View>
-                    <Text style={[styles.benefitDescription, columns ? null : styles.benefitDescriptionIndented]}>{benefit.description}</Text>
+                    <Text style={styles.benefitDescription}>{benefit.description}</Text>
+                </View>
+            ) : (
+                // On a phone the three capabilities are one quiet line of names: the intro above
+                // already says what they add up to, so their descriptions are not repeated.
+                <View key={benefit.icon} style={styles.benefitHeading}>
+                    <Icon name={benefit.icon} size={14} color={theme.colors.text.secondary} />
+                    <Text style={styles.benefitLineTitle}>{benefit.title}</Text>
                 </View>
             ))}
         </View>
@@ -72,7 +76,7 @@ const styles = StyleSheet.create((theme) => ({
     intro: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 12,
+        gap: theme.space.s12,
     },
     mark: {
         flexShrink: 0,
@@ -88,10 +92,8 @@ const styles = StyleSheet.create((theme) => ({
         lineHeight: 20,
     },
     body: {
-        ...Typography.default('regular'),
         color: theme.colors.text.secondary,
-        fontSize: 13,
-        lineHeight: 18,
+        ...Typography.variant('body'),
         marginTop: 3,
     },
     // Columns bleed to the sheet edges so their dividers meet the band's hairlines.
@@ -108,31 +110,28 @@ const styles = StyleSheet.create((theme) => ({
         borderLeftWidth: StyleSheet.hairlineWidth,
         borderLeftColor: theme.colors.border.subtle,
     },
-    benefitList: {
-        gap: 12,
-    },
-    benefitListItem: {
-        minWidth: 0,
+    benefitLine: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        columnGap: 14,
+        rowGap: theme.space.s6,
     },
     benefitHeading: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 7,
+        gap: theme.space.s6,
     },
     benefitTitle: {
-        ...Typography.default('medium'),
         color: theme.colors.text.primary,
-        fontSize: 13,
-        lineHeight: 18,
+        ...Typography.variant('body', 'medium'),
     },
     benefitDescription: {
-        ...Typography.default('regular'),
         color: theme.colors.text.secondary,
-        fontSize: 12.5,
-        lineHeight: 17,
+        ...Typography.variant('meta'),
         marginTop: 3,
     },
-    benefitDescriptionIndented: {
-        marginLeft: 22,
+    benefitLineTitle: {
+        color: theme.colors.text.secondary,
+        ...Typography.variant('body'),
     },
 }));

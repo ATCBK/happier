@@ -57,7 +57,7 @@ const D10_CATALOGS = [
     { field: 'notificationChannels', route: NOTIFICATION_CHANNELS_ROUTE_V1, kind: 'account_notification_channels', collection: 'channels',
         record: { v: 1, channels: [{ v: 1, id: 'channel-a', kind: 'webhook', enabled: true,
             topics: { ready: true, permissionRequest: false, userActionRequest: true, connectedServiceAccountSwitch: false,
-                connectedServiceQuotaBlocked: false, connectedServiceQuotaRecovered: true, connectedServiceUsage: false },
+                connectedServiceQuotaBlocked: false, connectedServiceQuotaRecovered: true, connectedServiceUsage: false, machines: false },
             readyIncludeMessageText: false, requestIncludeMessageText: false, url: 'https://hooks.example.test', signingSecretRef: null }] } },
     { field: 'connectedPresentation', route: CONNECTED_PRESENTATION_ROWS_ROUTE_V1, kind: 'account_connected_presentation_catalog', collection: 'entries',
         record: { v: 1, entries: [{ v: 1, subject: { kind: 'account', account: {

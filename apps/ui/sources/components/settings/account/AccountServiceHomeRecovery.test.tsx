@@ -14,23 +14,17 @@ import { cancelPendingDirectoryHomeEnrollment, getPendingDirectoryHomeEnrollment
 import { createDirectoryHttpFixture } from '@/sync/ops/accountDirectory/accountDirectoryTestFixtures';
 import { AccountServiceSettingsSection } from './AccountServiceSettingsSection';
 import { HomeDeviceApprovalSection } from '../server/sections/HomeDeviceApprovalSection';
+import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
 
 installTokenStorageWebPlatformMocks();
+installDisconnectedServerSocketBoundary();
 const boundary = vi.hoisted(() => ({ request: vi.fn() }));
 
 /** Non-secret binding to the Account credential a continuation was created under. */
 const ACCOUNT_CREDENTIAL_TOKEN_DIGEST = 'C0jknAf55a-WIBFlxj8xId4cq00hoNQDzcbt4__9tlM';
-vi.mock('@/utils/system/runtimeFetch', () => ({
-    runtimeFetch: (input: RequestInfo | URL, init?: RequestInit) => {
-        const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
-        return boundary.request(url.origin, url.pathname, init);
-    },
-}));
-vi.mock('@/sync/http/client', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/sync/http/client')>(),
-    createServerFetchAtEndpoint: (target: { endpointUrl: string }) => (path: string, init?: RequestInit) => boundary.request(target.endpointUrl, path, init),
-    serverFetch: (path: string, init?: RequestInit) => boundary.request('ambient', path, init),
-}));
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({ pathname: '/settings/account' }).module);
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
@@ -38,9 +32,29 @@ vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).creat
 
 let screen: Awaited<ReturnType<typeof renderScreen>> | undefined;
 let restore: (() => void) | undefined;
-afterEach(async () => { await screen?.unmount(); screen = undefined; await cancelPendingDirectoryHomeEnrollment(); restore?.(); });
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
+let restoreExecutor: (() => void) | undefined;
+const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
+const { MainAppTabStateProvider } = await import('@/components/navigation/mobile/chrome/MainAppTabStateProvider');
+const { CurrentUiContextProvider, useOptionalCurrentUiContextReader } = await import('@/components/appShell/currentUiContext/CurrentUiContextProvider');
+const { CurrentUiContextActionHost } = await import('@/components/appShell/currentUiContext/currentUiContextVoiceToolPort');
+const { PluginSurfaceFocusEligibilityProvider } = await import('@/components/ui/presentation/PluginSurfaceFocusEligibility');
+let currentReader: ReturnType<typeof useOptionalCurrentUiContextReader> = null;
+function CurrentReaderProbe() {
+    currentReader = useOptionalCurrentUiContextReader();
+    return null;
+}
+afterEach(async () => {
+    await screen?.unmount(); screen = undefined;
+    await cancelPendingDirectoryHomeEnrollment();
+    await connection?.dispose(); connection = undefined;
+    restoreExecutor?.(); restoreExecutor = undefined;
+    resetRuntimeFetch(); restore?.();
+    currentReader = null;
+});
 
 it.each(['account', 'approval'])('%s Settings resumes exact Home authentication without another enrollment or focus', async (surface) => {
+    boundary.request.mockClear();
     restore = installLocalStorageMock().restore;
     const fixture = createDirectoryHttpFixture();
     const homeA = await adoptHomeProfile({ descriptor: { ...fixture.home.connectionDescriptor, homeServerIdentityId: 'srv_home_a',
@@ -57,9 +71,16 @@ it.each(['account', 'approval'])('%s Settings resumes exact Home authentication 
     const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } });
     boundary.request.mockImplementation(async (endpoint: string, path: string, init?: RequestInit) => {
         if (path === '/health') return json({ status: 'ok' });
-        if (path === '/v1/features' && endpoint === homeA.serverUrl) return json(createRootLayoutFeaturesResponse({ capabilities: {
+        if (path === '/v1/auth/ping') return json({});
+        if (path === '/v1/account/encryption') return json({ mode: 'plain', updatedAt: 1 });
+        if (path === '/v1/account/encryption/currentness') return json(createPlainAccountEncryptionCurrentnessFixture());
+        if (path === '/v2/account/settings') return json({ content: { t: 'plain', v: {} }, version: 1 });
+        if (path === '/v1/kv/bulk') return json({ values: [] });
+        if ((path === '/v1/features' || path === '/v1/features/authenticated') && endpoint === homeA.serverUrl) return json(createRootLayoutFeaturesResponse({ capabilities: {
             serverIdentity: { serverIdentityId: 'srv_home_a' }, server: { canonicalServerUrl: endpoint },
         } }));
+        // This Home has no optional bootstrap catalogs; report unsupported HTTP routes, not transport failures.
+        if (endpoint === homeA.serverUrl) return json({}, 404);
         if (path.includes('/login-assertion') && linkMissing) return json({ error: 'directory_link_not_found' }, 404);
         if (path === '/v1/features' && endpoint === fixture.home.canonicalServerUrl) return json({
             ...createRootLayoutFeaturesResponse({ capabilities: { auth: { keyChallenge: { v2: true },
@@ -73,19 +94,46 @@ it.each(['account', 'approval'])('%s Settings resumes exact Home authentication 
         if (path === '/v1/auth') { expect(endpoint).toBe(fixture.home.canonicalServerUrl); return json({ token: fixture.token }); }
         return fixture.request(endpoint, path, init);
     });
+    restoreExecutor = await installRealActionExecutorModuleLoader();
+    connection = await restoreServerAccountForTest({ serverUrl: homeA.serverUrl,
+        serverIdentityId: 'srv_home_a', credentials: credentialsA, credentialScope: 'restored-home',
+        request: async (input, init) => {
+            const url = new URL(String(input));
+            return boundary.request(url.origin, url.pathname, init);
+        } });
+    // Later Home authentication writes belong to the real Web credential fixture, not restoration's read override.
+    vi.mocked(TokenStorage.getCredentialsForServerUrl).mockRestore();
+    setRuntimeFetch(async (input, init) => {
+        const url = new URL(String(input));
+        return boundary.request(url.origin, url.pathname, init);
+    });
     await completeAccountServicePostAuth({ service: fixture.service,
         credentialTokenDigest: ACCOUNT_CREDENTIAL_TOKEN_DIGEST,
         session: new AccountDirectorySession({ endpoint: fixture.service.endpointUrl, serverIdentityId: fixture.service.serverIdentityId }, { capability: fixture.service.capability }),
         intent: { kind: 'enroll', homeServerIdentityId: fixture.home.homeServerIdentityId } });
-    screen = await renderScreen(<AuthProvider initialCredentials={credentialsA}>{surface === 'account'
-        ? <AccountServiceSettingsSection /> : <HomeDeviceApprovalSection homes={[]} />}</AuthProvider>);
+    screen = await renderScreen(<AuthProvider initialCredentials={credentialsA}>
+        <MainAppTabStateProvider><AppPaneProvider><CurrentUiContextProvider><CurrentUiContextActionHost /><CurrentReaderProbe />
+            <PluginSurfaceFocusEligibilityProvider active currentUiContextActive>{surface === 'account'
+                ? <AccountServiceSettingsSection /> : <HomeDeviceApprovalSection homes={[]} />}
+            </PluginSurfaceFocusEligibilityProvider>
+        </CurrentUiContextProvider></AppPaneProvider></MainAppTabStateProvider>
+    </AuthProvider>);
     fixture.state.approval = 'expired';
     await vi.waitFor(() => expect(getPendingDirectoryHomeEnrollment()).toBeNull(), { timeout: 3000 });
+    // The mounted host publishes the real Account command after restoration finishes.
+    await vi.waitFor(async () => {
+        await act(async () => {});
+        expect(currentReader?.readCurrentUiContext()?.commands.some(({ id }) => {
+            const command = currentReader?.resolveCurrentUiCommand(id)?.command;
+            return command?.kind === 'accountHomeContinuation' && command.operation === 'refresh';
+        })).toBe(true);
+    });
     linkMissing = true;
     await screen.pressByTestIdAsync('account-service-continuation-failure-action');
     // The Home-auth recovery card leads with signing in to that exact Home as its own primary action.
     await vi.waitFor(() => expect(screen?.findAll((node) => node.props.testID === 'account-service-continuation-failure-action'
-        && typeof node.props.title === 'string' && node.props.title.startsWith('Sign in to'))).not.toHaveLength(0));
+        && typeof node.props.title === 'string' && node.props.title.startsWith('Sign in to')),
+        `${screen?.getTextContent()} ${JSON.stringify(boundary.request.mock.calls.map(([endpoint, path]) => ({ endpoint, path })))}`).not.toHaveLength(0));
     await screen.pressByTestIdAsync('account-service-continuation-failure-action');
     await vi.waitFor(() => expect(screen?.findByTestId('home-auth-key_challenge-login-keyed'),
         `${screen?.getTextContent()} ${JSON.stringify(boundary.request.mock.calls.map(([endpoint, path]) => ({ endpoint, path })))}`).not.toBeNull());

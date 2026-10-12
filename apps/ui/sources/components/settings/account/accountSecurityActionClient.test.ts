@@ -35,6 +35,7 @@ describe('accountSecurityActionClient', () => {
                     result: {
                         v: 1 as const,
                         encryptionMode: 'plain' as const,
+                        terminalPresentUserPolicy: 'allowed' as const,
                         nativeEmail: 'person@example.test',
                         password: { status: 'enrolled' as const, revision: 3 },
                     },

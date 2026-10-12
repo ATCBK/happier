@@ -780,7 +780,7 @@ export function AccountServiceSettingsSection(): React.ReactElement {
             showChevron={false}
             accessoryLayout="adaptive"
             rightElementOutsidePressable
-            rightElement={<View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>{actions}</View>}
+            rightElement={<View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: theme.space.s8 }}>{actions}</View>}
         />
     );
     const retryButton = (
@@ -845,6 +845,8 @@ export function AccountServiceSettingsSection(): React.ReactElement {
                         />
                     </SectionContentRow>
                 );
+    // In a trouble state the section is the intro plus one notice row; the benefits would restate the intro.
+    const invitationIsNotice = connectionKind === 'unsupported' || connectionKind === 'unreachable' || connectionKind === 'methodless';
     const refreshedAt = directorySnapshot?.refreshedAtMs
         ? t('settingsAccount.accountServiceRefreshedAt', { time: formatRelativeTimeShort(directorySnapshot.refreshedAtMs, Date.now()) })
         : null;
@@ -1025,7 +1027,7 @@ export function AccountServiceSettingsSection(): React.ReactElement {
                         accessoryLayout="adaptive"
                         rightElementOutsidePressable
                         rightElement={(
-                            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: theme.space.s8 }}>
                             {account?.recoveryKey === 'password_unlock' ? (
                                 <RoundButton
                                     testID="settings-account-service-recovery-key-view"
@@ -1080,7 +1082,7 @@ export function AccountServiceSettingsSection(): React.ReactElement {
                         showChevron={false}
                     />
                 ) : null}
-                {primaryRows ? null : (
+                {primaryRows || invitationIsNotice ? null : (
                     <SectionContentRow testID="settings-account-service-benefits">
                         <AccountServiceBenefits />
                     </SectionContentRow>
@@ -1106,6 +1108,7 @@ export function AccountServiceSettingsSection(): React.ReactElement {
                     header={({ headerProps }) => (
                         <Item
                             {...headerProps}
+                            icon={<Icon name="sliders-horizontal" />}
                             title={t('settingsSession.handoff.advanced.title')}
                             detail={t('settingsAccount.accountServiceAdvancedSummary')}
                         />
@@ -1334,7 +1337,7 @@ export function AccountServiceSettingsSection(): React.ReactElement {
                                 accessibilityLabel={statusLabel ? `${home.label}, ${statusLabel}` : home.label}
                                 mode="info"
                                 rightElement={(
-                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s8 }}>
                                         {statusPill ? (
                                             <StatusPill
                                                 testID={`${testID}-status`}

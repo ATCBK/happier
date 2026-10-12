@@ -627,7 +627,8 @@ describe('Account Service settings continuation composition', () => {
         await vi.waitFor(() => expect(screen?.findByTestId('settings-account-service-notice')).not.toBeNull());
 
         expect(screen.findByTestId('settings-account-service-invitation')).not.toBeNull();
-        expect(screen.findByTestId('settings-account-service-benefits')).not.toBeNull();
+        // The intro already says what the service adds; a trouble state is that intro plus one notice.
+        expect(screen.findByTestId('settings-account-service-benefits')).toBeNull();
         // The failure and its recovery action share a narrow phone row. Its title must
         // grow with the text rather than hide the reason the service cannot be used.
         const notice = screen.findAll((node) => node.props.testID === 'settings-account-service-notice'

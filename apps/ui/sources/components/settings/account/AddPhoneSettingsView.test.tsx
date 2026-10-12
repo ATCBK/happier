@@ -35,9 +35,6 @@ vi.mock('@/components/qr/QRCode', () => ({
     QRCode: 'QRCode',
 }));
 
-vi.mock('@/components/ui/buttons/RoundButton', () => ({
-    RoundButton: 'RoundButton',
-}));
 
 const AUTH_FIXTURE = Object.freeze({
     isAuthenticated: true,
@@ -132,7 +129,8 @@ vi.mock('@/hooks/server/useServerProfilesGeneration', () => ({
     useServerProfilesGeneration: () => 0,
 }));
 
-vi.mock('@/sync/domains/server/serverRuntime', () => ({
+vi.mock('@/sync/domains/server/serverRuntime', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@/sync/domains/server/serverRuntime')>(),
     getActiveServerSnapshot: () => {
         return ({
         serverId: homeState.activeServerId,
@@ -234,9 +232,16 @@ vi.mock('@/sync/http/client', () => ({
 // Collect the real page graph after configuring the shared platform/modal boundaries,
 // rather than loading it inside a timed test or before that configuration exists.
 const { AddPhoneSettingsView } = await import('./AddPhoneSettingsView');
+const { storage } = await import('@/sync/domains/state/storageStore');
+const initialSettings = storage.getState().settings;
 
 describe('AddPhoneSettingsView', () => {
     beforeEach(() => {
+        // This suite observes the static QR payload; the moment renderer owns animated painting.
+        storage.setState((state) => ({ settings: { ...state.settings, homeAtmosphere: {
+            ...state.settings.homeAtmosphere,
+            moments: { ...state.settings.homeAtmosphere.moments, qr: false, pairing: false },
+        } } }));
         homeState.activeServerId = 'profile-test';
         homeState.activeServerUrl = 'https://stack.example.test';
         homeState.selectedFeatureProfileId = homeState.activeServerId;
@@ -256,6 +261,7 @@ describe('AddPhoneSettingsView', () => {
         homeState.descriptorOverride = null;
     });
     afterEach(() => {
+        storage.setState({ settings: initialSettings });
         clipboardMocks.setStringAsync.mockClear();
         modalMocks.alertAsync.mockClear();
     });
@@ -307,8 +313,6 @@ describe('AddPhoneSettingsView', () => {
             throw new Error(`Expected QR container; rendered=${screen.getTextContent()}`);
         }
         const qr = qrContainer.findByType('QRCode');
-        expect(qr.props.foregroundColor).toBeUndefined();
-        expect(qr.props.backgroundColor).toBeUndefined();
         const { parseHomeQrInviteDeepLink } = await import('@/auth/pairing/pairingUrl');
         expect(parseHomeQrInviteDeepLink(String(qr.props.data))?.invite).toMatchObject({
             v: 2,
@@ -476,7 +480,7 @@ describe('AddPhoneSettingsView', () => {
         const copyLinkButton = screen.findByTestId('add-phone-pairing-link-copy');
         expect(copyLinkButton).toBeTruthy();
         await act(async () => {
-            await copyLinkButton!.props.action();
+            await screen.pressByTestIdAsync('add-phone-pairing-link-copy');
         });
 
         expect(clipboardMocks.setStringAsync).toHaveBeenCalledTimes(1);
@@ -585,7 +589,7 @@ describe('AddPhoneSettingsView', () => {
         await flushHookEffects({ cycles: 4 });
 
         expect(screen.findByTestId('add-phone-invalid-request')).toBeTruthy();
-        expect(screen.findAllByTestId('add-phone-generate')).toHaveLength(1);
+        expect(screen.findAllHostsByTestId('add-phone-generate')).toHaveLength(1);
         expect(screen.findByTestId('add-phone-generate')?.props.disabled).toBe(false);
         expect(screen.findByTestId('add-phone-approve')).toBeNull();
         expect(screen.findByTestId('add-phone-reject')).toBeNull();
@@ -640,7 +644,7 @@ describe('AddPhoneSettingsView', () => {
         const copyLinkButton = screen.findByTestId('add-phone-pairing-link-copy');
         expect(copyLinkButton).toBeTruthy();
         await act(async () => {
-            await copyLinkButton!.props.action();
+            await screen.pressByTestIdAsync('add-phone-pairing-link-copy');
         });
         expect(clipboardMocks.setStringAsync).toHaveBeenCalledTimes(1);
         const { parseHomeQrInviteDeepLink } = await import('@/auth/pairing/pairingUrl');
@@ -649,7 +653,7 @@ describe('AddPhoneSettingsView', () => {
 
         // The live pairing can still be cancelled through the strict decision.
         await act(async () => {
-            await screen.findByTestId('add-phone-cancel')!.props.action();
+            await screen.pressByTestIdAsync('add-phone-cancel');
         });
         const cancellationCall = serverFetchSpy.mock.calls.find((call) => call[0] === '/v1/auth/pairing/consume');
         expect(JSON.parse(String(cancellationCall?.[1]?.body))).toEqual({ pairId: 'pair_123', intent: 'cancel' });
@@ -670,7 +674,7 @@ describe('AddPhoneSettingsView', () => {
         const cancelButton = screen.findByTestId('add-phone-cancel');
         expect(cancelButton).toBeTruthy();
         await act(async () => {
-            await cancelButton!.props.action();
+            await screen.pressByTestIdAsync('add-phone-cancel');
         });
 
         const cancellationCall = serverFetchSpy.mock.calls.find((call) => call[0] === '/v1/auth/pairing/consume');

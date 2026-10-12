@@ -23,7 +23,7 @@ vi.mock('@/auth/context/AuthContext', () => ({
     useAuth: () => ({ credentials: boundary.credentials }),
 }));
 vi.mock('expo-clipboard', () => ({
-    setStringAsync: async (value: string) => { boundary.clipboard.push(value); },
+    setStringAsync: async (value: string) => { boundary.clipboard.push(value); return true; },
 }));
 vi.mock('@/modal', async (importOriginal) => ({
     ...(await importOriginal<typeof import('@/modal')>()),

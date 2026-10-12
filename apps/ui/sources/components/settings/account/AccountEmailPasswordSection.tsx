@@ -1,4 +1,5 @@
 import React from 'react';
+import { resolveHomeDisplayNameForRelayUrl } from '@/components/settings/server/homeDisplayName';
 import { Platform, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
@@ -365,7 +366,7 @@ export const AccountEmailPasswordSection = React.memo(function AccountEmailPassw
                 kind: 'auth',
                 code,
             }),
-            { homeLabel: activeServer.serverUrl },
+            { homeLabel: resolveHomeDisplayNameForRelayUrl(activeServer.serverUrl) ?? t('settingsAccount.thisHomeTitle') },
         );
         setProblem(nextProblem);
         if (requiresAccountSecurityReconciliation(nextProblem)) void reload();
@@ -582,7 +583,7 @@ export const AccountEmailPasswordSection = React.memo(function AccountEmailPassw
                 const nextProblem = describeEmailPasswordFailure(cause, {
                     // Named-Home copy ("disabled on X", "update X") is otherwise
                     // rendered with an empty placeholder from this surface.
-                    homeLabel: activeServer.serverUrl,
+                    homeLabel: resolveHomeDisplayNameForRelayUrl(activeServer.serverUrl) ?? t('settingsAccount.thisHomeTitle'),
                     ...(credentialField ? { credentialField } : {}),
                 });
                 if (unknownOutcome) setOpenForm(requestedForm);
@@ -1410,10 +1411,10 @@ function FormError(props: Readonly<{ message: string; testID?: string }>) {
 
 const styles = StyleSheet.create((theme) => ({
     // Aligned to the row's own text inset so the form reads as the row's continuation.
-    body: { paddingHorizontal: 16, paddingTop: 4, paddingBottom: 16, gap: 14 },
+    body: { paddingHorizontal: theme.space.s16, paddingTop: theme.space.s4, paddingBottom: theme.space.s16, gap: 14 },
     // Text fields stay a readable width on wide pages instead of spanning the sheet.
-    fields: { gap: 12, maxWidth: 480, width: '100%' },
-    actions: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 },
-    notice: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, maxWidth: 560 },
+    fields: { gap: theme.space.s12, maxWidth: 480, width: '100%' },
+    actions: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: theme.space.s8 },
+    notice: { flexDirection: 'row', alignItems: 'flex-start', gap: theme.space.s8, maxWidth: 560 },
     noticeText: { flex: 1, fontSize: 14, lineHeight: 20, color: theme.colors.text.secondary },
 }));
