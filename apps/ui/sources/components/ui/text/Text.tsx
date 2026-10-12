@@ -2,6 +2,8 @@ import {
     HappierTextSelectabilityScope,
     useHappierTextPresentation,
     useHappierMaterialColorResolver,
+    type HappierTypeRole,
+    type HappierTypeEmphasis,
 } from '@happier-dev/plugin-ui/presentation';
 import * as React from 'react';
 import {
@@ -15,6 +17,7 @@ import {
 
 import { Typography } from '@/constants/Typography';
 import { readSurfaceStyleProperty } from '@/components/ui/surfaces/surfaceStyle';
+import { useGlassBackedInk } from '@/components/ui/glass/glassBackedInk';
 import { useLocalSetting } from '@/sync/store/hooks';
 
 import { scaleTextStyle } from './uiFontScale';
@@ -55,6 +58,8 @@ export const TextSelectabilityScope = HappierTextSelectabilityScope;
 export type AppTextProps = Omit<RNTextProps, 'style'> & Readonly<{
     /** App-owned hosts retain the complete React Native text style contract. */
     style?: RNTextProps['style'];
+    variant?: HappierTypeRole;
+    emphasis?: HappierTypeEmphasis;
     /** Web focus-order override forwarded to the underlying React Native Web text element. */
     tabIndex?: 0 | -1;
     /**
@@ -79,6 +84,8 @@ export const Text = React.memo(
     React.forwardRef<any, AppTextProps>(function AppText(
         {
             style,
+            variant,
+            emphasis,
             useDefaultTypography = true,
             disableUiFontScaling = false,
             selectable,
@@ -89,8 +96,9 @@ export const Text = React.memo(
     ) {
         const uiFontScaleSetting = useLocalSetting('uiFontScale');
         const uiFontScale = disableUiFontScaling ? 1 : uiFontScaleSetting;
-        const baseStyle = useDefaultTypography ? Typography.default() : undefined;
+        const baseStyle = React.useMemo(() => variant ? Typography.variant(variant, emphasis) : useDefaultTypography ? Typography.default(emphasis) : undefined, [variant, emphasis, useDefaultTypography]);
         const presentation = useHappierTextPresentation({ selectable, textScale: uiFontScale });
+        const backedInk = useGlassBackedInk();
         // Unistyles compiles all web styles, including plain numeric entries, into CSS.
         // useWebUiFontScale owns their scaling; pre-scaling would apply the preference twice.
         const metricScale = Platform.OS === 'web' ? 1 : presentation.metricScale;
@@ -100,10 +108,15 @@ export const Text = React.memo(
         );
         const mergedStyle = React.useMemo(() => {
             const entries: NonNullable<RNTextProps['style']>[] = [];
-            if (baseStyle) entries.push(baseStyle);
+            if (baseStyle) entries.push(scaleTextStyle(baseStyle, metricScale));
             if (scaledStyle) entries.push(scaledStyle);
+            // Faint ink passed as the theme's secondary value takes the containing material's step.
+            const authored = readSurfaceStyleProperty(entries, 'color');
+            const color = typeof authored === 'string' ? authored : undefined;
+            const ink = backedInk(color);
+            if (ink !== color) entries.push({ color: ink });
             return entries;
-        }, [baseStyle, scaledStyle]);
+        }, [baseStyle, scaledStyle, metricScale, backedInk]);
 
         return (
             <RNText
@@ -119,13 +132,15 @@ export const Text = React.memo(
 );
 
 export type AppTextInputProps = RNTextInputProps & Readonly<{
+    variant?: HappierTypeRole;
+    emphasis?: HappierTypeEmphasis;
     useDefaultTypography?: boolean;
     disableUiFontScaling?: boolean;
 }>;
 
 export const TextInput = React.memo(
     React.forwardRef<any, AppTextInputProps>(function AppTextInput(
-        { style, useDefaultTypography = true, disableUiFontScaling = false, ...props },
+        { style, variant, emphasis, useDefaultTypography = true, disableUiFontScaling = false, ...props },
         ref
     ) {
         const uiFontScaleSetting = useLocalSetting('uiFontScale');
@@ -135,10 +150,10 @@ export const TextInput = React.memo(
 
         const metricScale = Platform.OS === 'web' ? 1 : uiFontScale;
         const scaledStyle = React.useMemo(() => scaleTextStyle(style, metricScale), [style, metricScale]);
-        const defaultStyle = useDefaultTypography ? Typography.default() : null;
+        const defaultStyle = React.useMemo(() => variant ? Typography.variant(variant, emphasis) : useDefaultTypography ? Typography.default(emphasis) : null, [variant, emphasis, useDefaultTypography]);
         const mergedStyle = React.useMemo(() => {
             const out: NonNullable<RNTextInputProps['style']>[] = [];
-            if (defaultStyle) out.push(defaultStyle);
+            if (defaultStyle) out.push(scaleTextStyle(defaultStyle, metricScale));
             if (scaledStyle) out.push(scaledStyle);
             if (isIosWeb()) {
                 const resolvedFontSize = resolveFontSizeFromStyle(out);
@@ -161,7 +176,7 @@ export const TextInput = React.memo(
                 if (resolvedColor !== backgroundColor) out.push({ backgroundColor: resolvedColor });
             }
             return out;
-        }, [defaultStyle, scaledStyle, uiFontScale, paintColor]);
+        }, [defaultStyle, scaledStyle, uiFontScale, paintColor, metricScale]);
 
         const webAccessibilityProps = Platform.OS === 'web'
             ? { 'data-happier-text-input': 'true', ...(disableUiFontScaling ? WEB_FONT_SCALING_DISABLED_PROPS : null) }

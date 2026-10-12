@@ -21,17 +21,54 @@ afterEach(() => {
     vi.resetModules();
 });
 
-async function renderTextHosts(platform: 'web' | 'ios', disabled = false) {
+async function renderTextHosts(platform: 'web' | 'ios', disabled = false, variant?: 'body') {
     const { Platform } = await import('react-native');
     Object.defineProperty(Platform, 'OS', { configurable: true, value: platform });
     const { Text, TextInput } = await import('./Text');
     return renderScreen(<>
         <Text testID="text" disableUiFontScaling={disabled} style={{ fontSize: 14, lineHeight: 20 }}>Label</Text>
-        <TextInput testID="input" disableUiFontScaling={disabled} style={{ fontSize: 14, lineHeight: 20 }} value="Value" />
+        <TextInput testID="input" disableUiFontScaling={disabled} variant={variant} style={variant ? undefined : { fontSize: 14, lineHeight: 20 }} value="Value" />
     </>);
 }
 
 describe('Text metric scaling ownership', () => {
+    it.each(['web', 'ios'] as const)('resolves every type role through Text and the plugin host projection on %s', async (platform) => {
+        settings.fontScale = 1;
+        const { Platform } = await import('react-native');
+        Object.defineProperty(Platform, 'OS', { configurable: true, value: platform });
+        const { Text, TextInput } = await import('./Text');
+        const { projectPluginUiTheme, readPluginUiHostTypography } = await import('@/components/plugins/surfaces/pluginUiThemeProjection');
+        const { HAPPIER_TYPE_SCALE, resolveHappierTypeScale } = await import('@happier-dev/plugin-ui/presentation/typeScale');
+        const roles = ['display', 'title', 'heading', 'label', 'reading', 'body', 'meta', 'micro'] as const;
+        const screen = await renderScreen(<>{roles.map(role => <Text key={role} testID={role} variant={role}>{role}</Text>)}
+            <TextInput testID="role-input" variant="body" emphasis="semiBold" />
+        </>);
+        const projected = readPluginUiHostTypography();
+        const { lightTheme } = await import('@/theme');
+        const snapshot = projectPluginUiTheme(lightTheme);
+        for (const role of roles) {
+            const style = flattenTestStyle(screen.findByTestId(role)!.props.style);
+            expect(style.fontSize, role).toBeGreaterThan(0);
+            const { weight: _weight, ...expected } = resolveHappierTypeScale(role, platform);
+            expect(style).toMatchObject(expected);
+            expect(style).toMatchObject(projected[role]);
+            expect(style.fontFamily).toContain({ regular: 'Inter-Regular', medium: 'Inter-Medium', semiBold: 'Inter-SemiBold' }[HAPPIER_TYPE_SCALE[role].weight]);
+        }
+        for (const [key, role] of [['title', 'heading'], ['label', 'label'], ['body', 'body'], ['reading', 'reading'], ['caption', 'micro']] as const) {
+            const expected = resolveHappierTypeScale(role, platform);
+            expect(snapshot.typography[key]).toMatchObject({ fontSize: expected.fontSize, lineHeight: expected.lineHeight });
+        }
+        expect(flattenTestStyle(screen.findByTestId('role-input')!.props.style).fontFamily).toContain('Inter-SemiBold');
+        if (platform === 'ios') {
+            settings.fontScale = 1.3;
+            const scaled = await renderScreen(<><Text testID="scaled-role" variant="body">Body</Text><TextInput testID="scaled-role-input" variant="body" /></>);
+            for (const id of ['scaled-role', 'scaled-role-input']) {
+                const style = flattenTestStyle(scaled.findByTestId(id)!.props.style);
+                expect(style.fontSize).toBeCloseTo(resolveHappierTypeScale('body', platform).fontSize * settings.fontScale);
+                expect(style.lineHeight).toBeCloseTo(resolveHappierTypeScale('body', platform).lineHeight * settings.fontScale);
+            }
+        }
+    });
     it('retains the compiled field paint when the material resolver keeps authored paint unchanged', async () => {
         const { Platform } = await import('react-native');
         Object.defineProperty(Platform, 'OS', { configurable: true, value: 'web' });
@@ -103,8 +140,8 @@ describe('Text metric scaling ownership', () => {
     it('keeps the iOS web field at a 16px effective minimum even with small text', async () => {
         settings.fontScale = 0.8;
         vi.stubGlobal('navigator', { userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)' });
-        const screen = await renderTextHosts('web');
-        // The web CSS owner applies 0.8 after Unistyles compiles this base value.
+        const screen = await renderTextHosts('web', false, 'body');
+        // A role's metrics reach the floor before the web CSS owner applies 0.8.
         expect(flattenTestStyle(screen.findByTestId('input')!.props.style).fontSize).toBe(20);
     });
 });
