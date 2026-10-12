@@ -11,6 +11,7 @@ export interface OidcIdentityClaimMapping {
 
 export interface NormalizedOidcIdentityClaims {
     subject: string;
+    name?: string;
     login: string | null;
     email: string | null;
     emailVerified: boolean;
@@ -232,11 +233,14 @@ export function normalizeOidcIdentityClaims(params: {
         claimName: params.claims.groups,
     });
     if (!groups.ok) return groups.result;
+    const displayName = readSupplementedClaim(params.idTokenClaims, userInfo, "name").value;
+    const name = typeof displayName === "string" ? displayName.trim() : "";
 
     return Object.freeze({
         ok: true,
         value: Object.freeze({
             subject,
+            ...(name ? { name } : {}),
             login: login.value,
             email: email.value,
             emailVerified: emailVerifiedClaim.value === true,
@@ -259,6 +263,7 @@ export function createOidcIdentityProfile(
     };
     const createBaseProfile = (): Profile => {
         const profile: Profile = { sub: claims.subject };
+        if (claims.name) profile.name = claims.name;
         if (
             mapping.login !== "email_verified" &&
             mapping.email !== "email_verified" &&

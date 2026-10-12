@@ -8,6 +8,15 @@ import {
 const mapping = Object.freeze({ login: "login_name", email: "mail", groups: "roles" });
 
 describe("normalizeOidcIdentityClaims", () => {
+    it('retains the full display name from the matching UserInfo without splitting it', () => {
+        const normalized = normalizeOidcIdentityClaims({
+            idTokenClaims: { sub: 'subject', name: 'Token Name' },
+            userInfo: { sub: 'subject', name: '  Chosen Provider Name  ' },
+            claims: mapping,
+        });
+        expect(normalized).toMatchObject({ ok: true, value: { name: 'Chosen Provider Name' } });
+        if (normalized.ok) expect(createOidcIdentityProfile(normalized.value, mapping)).toMatchObject({ name: 'Chosen Provider Name' });
+    });
     it.each([
         undefined,
         null,

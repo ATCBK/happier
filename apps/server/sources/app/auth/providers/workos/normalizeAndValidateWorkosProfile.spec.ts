@@ -34,11 +34,20 @@ describe("normalizeAndValidateWorkosProfile", () => {
                 organizationId: expectedBinding.organizationId,
                 connectionId: expectedBinding.connectionId,
                 email: "alice@example.com",
+                name: "Alice Example",
             },
         });
         expect(JSON.stringify(result)).not.toContain("owners");
         expect(JSON.stringify(result)).not.toContain("discard-me");
         expect(JSON.stringify(result)).not.toContain("admin");
+    });
+
+    it('joins provider-given parts only at ingest and preserves a full name once normalized', () => {
+        const result = normalizeAndValidateWorkosProfile({
+            profile: { id: 'prof', email: 'alice@example.test', ...expectedBinding,
+                firstName: '  Alice ', lastName: ' Example  ' }, expectedBinding,
+        });
+        expect(result).toMatchObject({ ok: true, value: { name: 'Alice Example' } });
     });
 
     it("accepts a missing IdP correlation value without inventing one", () => {

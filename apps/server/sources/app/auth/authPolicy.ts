@@ -137,7 +137,7 @@ function hasAnyOidcAllowlistsConfigured(env: NodeJS.ProcessEnv): boolean {
  * When allowlists exist but offboarding is disabled, users may not be revoked
  * promptly when their upstream membership changes.
  */
-function hasAnyOffboardingRestrictionsConfigured(env: NodeJS.ProcessEnv): boolean {
+export function resolveDefaultAuthOffboardingEnabled(env: NodeJS.ProcessEnv): boolean {
     return hasAnyGitHubOrgAllowlistConfigured(env) || hasAnyOidcAllowlistsConfigured(env);
 }
 
@@ -165,7 +165,7 @@ export function resolveAuthPolicyFromEnv(env: NodeJS.ProcessEnv): AuthPolicy {
     const signupProviders = Object.freeze(parseProvidersList(env.AUTH_SIGNUP_PROVIDERS));
     const requiredLoginProviders = Object.freeze(parseProvidersList(env.AUTH_REQUIRED_LOGIN_PROVIDERS));
 
-    const restrictionsExist = hasAnyOffboardingRestrictionsConfigured(env);
+    const restrictionsExist = resolveDefaultAuthOffboardingEnabled(env);
     const defaultOffboardingEnabled = restrictionsExist;
     const offboardingEnabled = readServerConfig(env, SERVER_CONFIG.AUTH_OFFBOARDING_ENABLED) ?? defaultOffboardingEnabled;
     const offboardingStrict = readServerConfig(env, SERVER_CONFIG.AUTH_OFFBOARDING_STRICT);

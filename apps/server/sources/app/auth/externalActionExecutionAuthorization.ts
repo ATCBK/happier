@@ -8,7 +8,7 @@ import {
     decodeExternalActionResolvedTargetV1,
     encodeExternalActionResolvedTargetV1,
     getActionSpec,
-    isSettingsDeclarationActionIdV1,
+    isPluginProvenanceOnlyActionId,
     parseQualifiedPluginActionId,
     isExternalActionResolvedTargetAllowedV1,
     PublicActionIdSchema,
@@ -25,6 +25,7 @@ import {
     type ExternalActionMachineRpcEventV1,
     type ExternalActionServerPrincipalV1,
 } from "@happier-dev/protocol/actions";
+import type { ActionRequiredAuthority } from "@happier-dev/protocol/actions/metadata";
 import { SOCKET_RPC_EVENTS, WorkspaceSyncSourceExecutionV1Schema, type WorkspaceSyncSourceRoutingV1, type WorkspaceSyncSourceWriterTargetRoutingV1,
     type WorkspaceSyncSourceExecutionV1, type WorkspaceSyncTargetRoutingV1, type WorkspaceSyncSeedRoutingV1 } from "@happier-dev/protocol/socketRpc";
 import { OpenProjectInputV1Schema } from '@happier-dev/protocol/projects/openProjectV1';
@@ -48,9 +49,14 @@ import { db } from "@/storage/db";
 import type { Tx } from "@/storage/inTx";
 import { enforceLoginEligibility } from "./enforceLoginEligibility";
 import { narrowCredentialAuthority } from './effectiveCredentialAuthority';
-import { hasCurrentSessionActionRpcSourceBinding, hasCurrentSessionActionRpcSourceBindingInTx } from '@/app/api/socket/sessionScopedBinding';
+import { hasCurrentSessionActionRpcSourceBinding, hasCurrentSessionActionRpcSourceBindingInTx,
+    hasCurrentSessionScopedMachineAccessInTx } from '@/app/api/socket/sessionScopedBinding';
 import { PROJECT_ACCOUNT_ROWS_ROUTE_V1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
+import { ProjectSourcesCreateInputV1Schema, ProjectSourcesUpdateInputV1Schema,
+    ProjectSourcesDeleteInputV1Schema } from '@happier-dev/protocol/projects/sources/projectSourceV1';
 import { PROJECT_TRUST_ROUTE_V1, ProjectTrustMutationRequestV1Schema } from '@happier-dev/protocol/workspaces/projectSetup/projectTrustRowV1';
+import { WORKSPACE_EXECUTION_CONFIG_ROUTE_V1, WorkspaceExecutionConfigReadRequestV1Schema,
+    WorkspaceExecutionConfigMutationRequestV1Schema } from '@happier-dev/protocol/workspaces/workspaceExecutionConfigRowV1';
 import { isRequesterProjectExecutionActionV1, PROJECT_FINITE_ACTION_RPC_METHODS_V1 } from '@happier-dev/protocol/actions/projectActionFamily';
 
 import { auth, type VerifiedApiTokenPrincipal } from "./auth";
@@ -63,10 +69,11 @@ import { SessionSystemRecordAddressSchema } from '@happier-dev/protocol/sessions
 import { projectExternalActionPendingResetStartAdmissionV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { SCM_REVIEWED_MARKS_KV_PREFIX, buildScmReviewedMarksKey } from '@happier-dev/protocol/scm/reviewedMarks';
 import { KvMutationRequestSchema } from '@/app/kv/kvMutate';
+import { bindHomeDomainActionHttpRequestV1, isHomeDomainActionIdV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
 
 export type VerifiedExternalActionPrincipal = VerifiedApiTokenPrincipal
     | (Extract<ExternalActionServerPrincipalV1, { authentication: unknown }>
-        & Readonly<{ authenticationEvidence?: readonly AuthTokenAuthenticationEvidenceV1[] }>);
+        & Readonly<{ authority: ActionRequiredAuthority; authenticationEvidence?: readonly AuthTokenAuthenticationEvidenceV1[] }>);
 
 /** Original Account Project ingress still uses the canonical Action admission policy. */
 export function isOriginalAccountProjectAction(actionId: string): boolean {
@@ -78,39 +85,63 @@ export function isOriginalAccountHandoffAction(actionId: string): boolean {
         && (actionId === 'session.handoff' || actionId.startsWith('session.handoff.'));
 }
 
+/** An installed Session proposes on the Agent surface; this never grants execution authority.
+ * Ingress must verify its installation proof and current source before minting.
+ */
+export function readExternalActionSessionProposalSurface(
+    origin?: Pick<ExternalActionExecutionAuthorizationBindingV1, 'sessionActionOrigin' | 'sessionActionSource'>,
+): 'agent' | undefined {
+    return origin?.sessionActionOrigin && origin.sessionActionSource ? 'agent' : undefined;
+}
+
+/** Client roots need the installed Session proof; a paired credential alone cannot originate them. */
+function isInstalledSessionClientAction(
+    spec: Pick<ReturnType<typeof getActionSpec>, 'executionPlacement'>,
+    origin?: Pick<ExternalActionExecutionAuthorizationBindingV1, 'sessionActionOrigin' | 'sessionActionSource'>,
+): boolean {
+    return spec.executionPlacement === 'client' && readExternalActionSessionProposalSurface(origin) !== undefined;
+}
+
 /** Interactive Account execution consumes the canonical signed-root catalog and declaration families. */
 export function isOriginalAccountExecutionAction(actionId: string,
     origin?: Pick<ExternalActionExecutionAuthorizationBindingV1, 'sessionActionOrigin' | 'sessionActionSource'>): boolean {
     const parsed = SignedRootActionIdSchema.safeParse(actionId);
-    if (!parsed.success || parsed.data === 'session.spawn_new') return false;
+    if (!parsed.success) return false;
     const spec = getActionSpec(parsed.data);
-    return spec.executionPlacement === 'machine' || ManagedMachineActionIdV1Schema.safeParse(actionId).success
-        || isOriginalAccountProjectAction(actionId) || isOriginalAccountHandoffAction(actionId)
-        || isSettingsDeclarationActionIdV1(actionId)
-        || actionId === 'session.board.item.upsert' && Boolean(origin?.sessionActionOrigin && origin.sessionActionSource)
-        || actionId === 'connectedServices.quota.get'
-        || actionId === 'session.pending.resetStart.set' || actionId === 'session.pending.resetStart.cancel'
-        // The private approval owner reaches the exact daemon recorded by its
-        // Account Artifact; native authority remains in that owner, not this reviewer.
-        || spec.id === 'approval.request.decide';
+    if (spec.originalExecution?.accountRoot === 'separate') return false;
+    // Home cannot open encrypted operands. The declaration names the variants
+    // that the receiving daemon resolves after schema admission.
+    const placements = spec.executionPlacements ?? [spec.executionPlacement];
+    return isPluginProvenanceOnlyActionId(parsed.data)
+        || placements.includes('machine') || isInstalledSessionClientAction(spec, origin)
+        || spec.executionPlacement === 'session'
+            && spec.surfaces[readExternalActionSessionProposalSurface(origin) ?? 'api'] === true
+            && resolveCredentialActionAdmissionV1({ spec, authority: 'account_automation', grant: null,
+                surface: readExternalActionSessionProposalSurface(origin) }).ok
+        || spec.executionPlacement === 'account' && readExternalActionSessionProposalSurface(origin) !== undefined
+        || spec.originalExecution?.accountRoot === 'allowed';
 }
 
 /** Paired terminal roots consume catalog placement/policy without inventing a Session source. */
 export function isOriginalTerminalExecutionAction(actionId: string,
     origin?: Pick<ExternalActionExecutionAuthorizationBindingV1, 'sessionActionOrigin' | 'sessionActionSource' | 'workflowActionOrigin'>): boolean {
-    return Object.hasOwn(PROJECT_FINITE_ACTION_RPC_METHODS_V1, actionId)
-        || actionId !== 'session.spawn_new' && SignedRootActionIdSchema.safeParse(actionId).success
-            && getActionSpec(actionId).executionPlacement === 'machine'
-            && resolveCredentialActionAdmissionV1({ spec: getActionSpec(actionId), authority: 'account_automation', grant: null }).ok
-        || actionId === 'session.board.item.upsert' && Boolean(origin?.sessionActionOrigin && origin.sessionActionSource)
-            && SignedRootActionIdSchema.safeParse(actionId).success
-            && resolveCredentialActionAdmissionV1({ spec: getActionSpec(actionId), authority: 'account_automation', grant: null }).ok
-        || ManagedMachineActionIdV1Schema.safeParse(actionId).success
-            && resolveCredentialActionAdmissionV1({ spec: getActionSpec(actionId), authority: 'account_automation', grant: null }).ok
-        || (actionId === 'session.spawn_new' || isSettingsDeclarationActionIdV1(actionId))
+    if (isPluginProvenanceOnlyActionId(actionId)) return false;
+    const parsed = ActionIdSchema.safeParse(actionId);
+    if (!parsed.success) return false;
+    const spec = getActionSpec(parsed.data);
+    const surface = readExternalActionSessionProposalSurface(origin);
+    const placements = spec.executionPlacements ?? [spec.executionPlacement];
+    return spec.originalExecution?.accountRoot !== 'separate' && SignedRootActionIdSchema.safeParse(actionId).success
+            && (placements.some(placement => placement === 'machine' || placement === 'account' || placement === 'session')
+                || isInstalledSessionClientAction(spec, origin))
+            && (spec.executionPlacement !== 'session' || spec.surfaces[surface ?? 'api'] === true)
+            && resolveCredentialActionAdmissionV1({ spec, authority: 'account_automation', grant: null, surface }).ok
+        || spec.originalExecution?.terminalRoot === 'allowed'
+            && resolveCredentialActionAdmissionV1({ spec, authority: 'account_automation', grant: null, surface }).ok
+        || spec.originalExecution?.terminalRoot === 'host'
             && !origin?.sessionActionOrigin && !origin?.sessionActionSource
             && !origin?.workflowActionOrigin
-            && resolveCredentialActionAdmissionV1({ spec: getActionSpec(actionId), authority: 'account_automation', grant: null }).ok;
+            && resolveCredentialActionAdmissionV1({ spec, authority: 'account_automation', grant: null, surface }).ok;
 }
 
 /** Admission follows the actual existing native effect's C41 policy. */
@@ -127,7 +158,8 @@ function parseExternalActionEffectAction(binding: ExternalActionExecutionAuthori
         && isOriginalAccountHandoffAction(actionId)
         ? ActionIdSchema.safeParse(actionId)
         : 'authentication' in binding && (binding.authentication.kind === 'account'
-            || binding.actionId === 'session.board.item.upsert' && binding.sessionActionOrigin)
+            || binding.authentication.kind === 'terminal' && isOriginalTerminalExecutionAction(actionId, binding)
+            || readExternalActionSessionProposalSurface(binding) !== undefined)
             ? SignedRootActionIdSchema.safeParse(actionId) : PublicActionIdSchema.safeParse(actionId);
 }
 
@@ -143,7 +175,8 @@ export { isExternalActionAuthorizationBoundToEnvelope };
 /** Project the signed root's authority, narrowed only by the authenticated invocation ceiling. */
 export function projectExternalActionBoundPrincipal(binding: ExternalActionExecutionAuthorizationBindingV1,
     current: VerifiedExternalActionPrincipal,
-    authorityCeiling?: ExternalActionServerPrincipalV1['authority']): ExternalActionServerPrincipalV1 | null {
+    authorityCeiling?: ExternalActionServerPrincipalV1['authority']): (ExternalActionServerPrincipalV1
+        & Readonly<{ authority: ActionRequiredAuthority }>) | null {
     if (current.accountId !== binding.accountId) return null;
     if ('authentication' in binding) {
         if (!('authentication' in current)) return null;
@@ -156,7 +189,7 @@ export function projectExternalActionBoundPrincipal(binding: ExternalActionExecu
             ? { accountId: binding.accountId, authentication: binding.authentication,
                 authority: 'account_automation', sessionActionOrigin: binding.sessionActionOrigin }
             : { accountId: binding.accountId, authentication: binding.authentication,
-                authority: narrowCredentialAuthority('present_user', authorityCeiling) };
+                authority: narrowCredentialAuthority(current.authority, authorityCeiling) };
     }
     if ('authentication' in current) return null;
     return { accountId: binding.accountId, authority: 'account_automation', principalId: binding.principalId,
@@ -270,7 +303,8 @@ async function readCurrentExternalActionPrincipal(
             || binding.sessionActionOrigin.requestId !== binding.requestId
             || (purpose?.kind !== 'issued-managed-acquire-native-fact' && !await hasCurrentSessionActionRpcSourceBindingInTx(reader, { accountId: binding.accountId,
                 ...binding.sessionActionSource, sourceSessionId: binding.sessionActionOrigin.caller.sessionId }))) return null;
-        if (binding.actionId === 'session.board.item.upsert' && (binding.target.kind !== 'session'
+        const action = ActionIdSchema.safeParse(binding.actionId);
+        if (action.success && getActionSpec(action.data).originalExecution?.nativePurpose === 'session_board_write' && (binding.target.kind !== 'session'
             || binding.target.sessionId !== binding.sessionActionOrigin.caller.sessionId
             || binding.machineId !== binding.sessionActionSource.machineId)) return null;
         if (binding.handoffAdmission && (binding.sessionActionSource.machineId !== binding.handoffAdmission.sourceMachineId
@@ -322,6 +356,11 @@ async function readCurrentExternalActionPrincipal(
             && !(['session.spawn_new', 'machines.environment.apply'].includes(binding.actionId) && binding.managedContinuation)
             && !(binding.actionId === 'session.spawn_new' && binding.handoffContinuation)
             && !(binding.handoffContinuation && isOriginalAccountHandoffAction(binding.actionId))) return null;
+        const action = SignedRootActionIdSchema.safeParse(binding.actionId);
+        if (!binding.handoffAdmission && action.success && getActionSpec(action.data).executionPlacement === 'session'
+            && (binding.target.kind !== 'session' || !await hasCurrentSessionScopedMachineAccessInTx({
+                tx: reader, accountId: binding.accountId, machineId: binding.machineId, sessionId: binding.target.sessionId,
+            }))) return null;
         if (!await auth.isSignedCredentialCurrent(reader, binding.accountId, binding.authentication.tokenEpoch)) return null;
         const base = { accountId: binding.accountId, authentication: binding.authentication,
             ...(binding.authentication.evidence ? { authenticationEvidence: binding.authentication.evidence } : {}) };
@@ -396,6 +435,8 @@ type ExternalActionExecutionRequestProof = Readonly<{
     method: string;
     path: string;
     body: unknown;
+    /** Validated HTTP route operands, used only to compare with the canonical Action binding. */
+    routeInput?: unknown;
     resolveCurrentSessionMachine?: (input: Readonly<{ accountId: string; sessionId: string }>) => Promise<string | null>;
 }>;
 
@@ -520,6 +561,10 @@ async function readCurrentExternalActionSourceSigningPublicKey(
         && classifyMachineAvailabilityState(machine) === 'available' ? machine.installationPublicKey : null;
 }
 
+function isTeamCredentialUsageExportReadEffect(rootActionId: string, effectActionId: string): boolean {
+    return rootActionId === 'teams.credentials.usage.export' && effectActionId === 'teams.credentials.usage.query';
+}
+
 async function verifyCommon(
     proof: ExternalActionExecutionRequestProof,
 ): Promise<VerifiedExternalActionExecutionRequest | null> {
@@ -535,7 +580,8 @@ async function verifyCommon(
     })) return null;
     if (binding.actionId === 'session.pending.resetStart.set' && !binding.pendingResetStartAdmission) return null;
     if (!hasMatchingExecutionEffectFamily(binding.actionId, effectActionId.data)
-        || ('authentication' in binding || binding.handoffContinuation || binding.handoffPreflight) && binding.actionId !== effectActionId.data) return null;
+        || binding.actionId !== effectActionId.data && (binding.handoffContinuation || binding.handoffPreflight
+            || 'authentication' in binding && !isTeamCredentialUsageExportReadEffect(binding.actionId, effectActionId.data))) return null;
     if (binding.serverIdentityId !== await getOrCreateServerIdentityId()) return null;
     const currentnessBody = ExternalActionExecutionAuthorizationVerifyRequestV1Schema.safeParse(proof.body);
     const custodyTarget = currentnessBody.success ? currentnessBody.data.managedFiniteWakeTarget : undefined;
@@ -679,6 +725,79 @@ function isScmReviewedMarksHttpPurpose(proof: ExternalActionExecutionRequestProo
     } catch { return false; }
 }
 
+/** Metadata purposes of an original Project root; domain routes retain row/CAS/audience admission. */
+function isProjectAccountMetadataHttpPurpose(verified: VerifiedExternalActionExecutionRequest,
+    proof: ExternalActionExecutionRequestProof): boolean {
+    if (verified.effectActionId !== verified.binding.actionId) return false;
+    const actionId = verified.binding.actionId;
+    const url = new URL(proof.path, 'http://home.invalid');
+    const method = proof.method.toUpperCase();
+    const sourcePath = '/v1/projects/sources';
+    if (actionId.startsWith('projects.sources.')) {
+        if (method === 'GET' && proof.body === undefined
+            && url.searchParams.getAll('serverId').length === 1
+            && url.searchParams.get('serverId') === verified.binding.serverIdentityId) {
+            return actionId === 'projects.sources.list' && url.pathname === sourcePath
+                || actionId === 'projects.sources.read' && /^\/v1\/projects\/sources\/[^/]+$/u.test(url.pathname);
+        }
+        if (url.search !== '') return false;
+        const create = actionId === 'projects.sources.create' && method === 'POST' && url.pathname === sourcePath
+            ? ProjectSourcesCreateInputV1Schema.safeParse(proof.body) : null;
+        const mutation = actionId === 'projects.sources.update' && method === 'PATCH'
+            ? ProjectSourcesUpdateInputV1Schema.safeParse(proof.body)
+            : actionId === 'projects.sources.delete' && method === 'DELETE'
+                ? ProjectSourcesDeleteInputV1Schema.safeParse(proof.body) : null;
+        return Boolean(create?.success && create.data.serverId === verified.binding.serverIdentityId
+            || mutation?.success && mutation.data.serverId === verified.binding.serverIdentityId
+                && url.pathname === `${sourcePath}/${encodeURIComponent(mutation.data.sourceId)}`);
+    }
+    if (['projects.worker.preferences.get', 'projects.worker.preferences.set', 'projects.worker.preferences.reset',
+        'projects.service.placement.get', 'projects.service.placement.set'].includes(actionId)) {
+        if (url.search !== '') return false;
+        if (method === 'GET' && proof.body === undefined) return url.pathname === '/v1/account/encryption';
+        if (method !== 'POST') return false;
+        if (url.pathname === `${WORKSPACE_EXECUTION_CONFIG_ROUTE_V1}/read`) {
+            return WorkspaceExecutionConfigReadRequestV1Schema.safeParse(proof.body).success;
+        }
+        return !actionId.endsWith('.get') && url.pathname === `${WORKSPACE_EXECUTION_CONFIG_ROUTE_V1}/mutate`
+            && WorkspaceExecutionConfigMutationRequestV1Schema.safeParse(proof.body).success;
+    }
+    if (!['projects.list', 'projects.workspace.update', 'projects.workspace.forget',
+        'projects.context.update', 'projects.visibility.set'].includes(actionId) || url.search !== '') return false;
+    if (method === 'GET' && proof.body === undefined) return actionId === 'projects.list'
+        && (url.pathname === '/v1/account/authoring-memory' || url.pathname === '/v1/machines');
+    if (method !== 'POST') return false;
+    return url.pathname === `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/read` || url.pathname === `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`
+        || actionId !== 'projects.list' && url.pathname === `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/mutate`;
+}
+
+/** Match the canonical schema and transport rather than a parallel route permission. */
+function isHomeDomainActionHttpOperation(actionId: string,
+    proof: ExternalActionExecutionRequestProof): boolean {
+    if (!isHomeDomainActionIdV1(actionId)) return false;
+    const spec = getActionSpec(actionId);
+    const transport = spec.serverTransport;
+    if (spec.executionPlacement !== 'account' || !transport
+        || proof.method.toUpperCase() !== transport.method.toUpperCase()) return false;
+    const input = proof.routeInput ?? proof.body;
+    // GET binding omits the existing domain version marker from its query.
+    // Restore only that marker; all values/defaults still pass the Action schema.
+    const parsed = spec.inputSchema.safeParse(input);
+    const versioned = !parsed.success && transport.method.toUpperCase() === 'GET'
+        && input && typeof input === 'object' && !Array.isArray(input)
+        ? spec.inputSchema.safeParse({ v: 1, ...input }) : parsed;
+    if (!versioned.success) return false;
+    const expected = bindHomeDomainActionHttpRequestV1(actionId, versioned.data);
+    return expected.path === proof.path && sameManagedInput(expected.body, proof.body);
+}
+
+/** A signed Home-domain root spends only its catalog-declared HTTP operation. */
+function isHomeDomainActionHttpPurpose(verified: VerifiedExternalActionExecutionRequest,
+    proof: ExternalActionExecutionRequestProof): boolean {
+    return verified.effectActionId === verified.binding.actionId
+        && isHomeDomainActionHttpOperation(verified.binding.actionId, proof);
+}
+
 export async function verifyExternalActionDomainExecutionRequest(
     proof: ExternalActionExecutionRequestProof,
 ): Promise<VerifiedExternalActionExecutionRequest | null> {
@@ -694,15 +813,19 @@ export async function verifyExternalActionDomainExecutionRequest(
         && isExternalActionAuthorizationBoundToEnvelope(verified.binding, { actionId: verified.effectActionId,
             machineId: relay.data.machineId, envelope: relay.data.envelope });
     const root = SignedRootActionIdSchema.safeParse(verified.binding.actionId);
-    const readsExecutionMachine = root.success && getActionSpec(root.data).executionPlacement === 'machine'
+    const rootSpec = root.success ? getActionSpec(root.data) : null;
+    const nativePurpose = rootSpec?.originalExecution?.nativePurpose;
+    const readsExecutionMachine = root.success
+        && ((rootSpec?.executionPlacements ?? [rootSpec?.executionPlacement]).includes('machine')
+            && verified.binding.target.kind === 'machine' && verified.binding.target.machineId === verified.binding.machineId
+            || getActionSpec(root.data).executionPlacement === 'session' && verified.binding.target.kind === 'session')
         && verified.effectActionId === verified.binding.actionId
-        && verified.binding.target.kind === 'machine' && verified.binding.target.machineId === verified.binding.machineId
         && proof.method.toUpperCase() === 'GET' && proof.body === undefined
         && proof.path === `/v1/machines/${encodeURIComponent(verified.binding.machineId)}`;
     const managedRoot = ManagedMachineActionIdV1Schema.safeParse(verified.binding.actionId);
     let managedGuestActivity: VerifiedExternalActionExecutionRequest['managedGuestActivity'];
     if (readsExecutionMachine) {
-        // Native Machine RPC reads its exact execution Machine's content codec
+        // Native Machine and Session RPC read the exact execution Machine's content codec
         // before delivery. This is not Account read authority or a family grant.
     } else if (isAdmittedRootRelay || verified.binding.handoffPreflight) {
         // Exact root re-entry is not a family grant or a new originator.
@@ -728,6 +851,9 @@ export async function verifyExternalActionDomainExecutionRequest(
         const guestPurpose = guestPath && await readCurrentManagedGuestActivityInTx(db, verified.binding, guestPath[1]);
         if (!controllerPurpose && !readPurpose && !directPurpose && !childPurpose && !guestPurpose && !setupPurpose) return null;
         if (guestPurpose) managedGuestActivity = guestPurpose;
+    } else if (isProjectAccountMetadataHttpPurpose(verified, proof)) {
+        // The installed signature spends the unchanged root as its original
+        // requester, not the daemon's ambient bearer or a new Account grant.
     } else if (isOriginalAccountProjectAction(verified.binding.actionId)) {
         const actionId = verified.binding.actionId;
         const path = proof.path.split('?')[0];
@@ -750,7 +876,7 @@ export async function verifyExternalActionDomainExecutionRequest(
             || proof.method.toUpperCase() !== 'POST' || !child.success
             || !(child.data.handoffContinuation && readHandoffContinuationIssuanceAction(path) !== null
                 || child.data.handoffPreflight && path === bindExternalActionExecutionAuthorizationHttpPathV1('session.handoff'))) return null;
-    } else if (verified.binding.actionId === 'connectedServices.quota.get') {
+    } else if (nativePurpose === 'quota_read') {
         if (verified.effectActionId !== verified.binding.actionId || !isQuotaReadHttpPurpose(proof)) return null;
     } else if (verified.binding.actionId === 'scm.diffSummary.reviewed.mark'
         || verified.binding.actionId === 'scm.diffSummary.reviewed.unmark'
@@ -762,7 +888,7 @@ export async function verifyExternalActionDomainExecutionRequest(
         if (verified.effectActionId !== verified.binding.actionId
             || verified.binding.accountId !== verified.binding.custodianAccountId
             || !isScmReviewedMarksHttpPurpose(proof)) return null;
-    } else if (verified.binding.actionId === 'session.board.item.upsert') {
+    } else if (nativePurpose === 'session_board_write') {
         const target = verified.binding.target;
         const origin = verified.binding.sessionActionOrigin;
         if (verified.effectActionId !== verified.binding.actionId || target.kind !== 'session'
@@ -781,8 +907,7 @@ export async function verifyExternalActionDomainExecutionRequest(
         const readsSession = method === 'GET' && proof.body === undefined && url.pathname === sessionPath
             && (url.search === '' || url.search === '?accessProjectionVersion=1');
         if (!readsSession && !readsSurface && !(mutation?.success && mutation.data.operation === 'upsert_item')) return null;
-    } else if (verified.binding.actionId === 'session.pending.resetStart.set'
-        || verified.binding.actionId === 'session.pending.resetStart.cancel') {
+    } else if (nativePurpose === 'pending_reset_start') {
         const admission = verified.binding.pendingResetStartAdmission;
         const purpose = readExternalActionPendingResetStartPurpose({ actionId: verified.effectActionId,
             method: proof.method, path: proof.path, body: proof.body });
@@ -791,6 +916,18 @@ export async function verifyExternalActionDomainExecutionRequest(
         if (verified.effectActionId !== verified.binding.actionId
             || !preparesReset && (!purpose || (admission ? !purpose.reset || !sameManagedInput(projectExternalActionPendingResetStartAdmissionV1(purpose), admission)
                 : verified.binding.target.kind !== 'session' || purpose.sessionId !== verified.binding.target.sessionId))) return null;
+    } else if (verified.binding.actionId === 'teams.credentials.usage.export') {
+        // The installed executor derives this consumed read from the admitted
+        // export input. Home retains only its envelope digest, not the opened
+        // query: it cannot independently reconstruct parent/child input equality.
+        // The native signature binds the read bytes; the existing route still
+        // owns current actor, Team and resource authorization.
+        if (!isTeamCredentialUsageExportReadEffect(verified.binding.actionId, verified.effectActionId)
+            || !isHomeDomainActionHttpOperation(verified.effectActionId, proof)) return null;
+    } else if (isHomeDomainActionHttpPurpose(verified, proof)) {
+        // The signature binds these exact bytes; route schemas and the domain
+        // still own resource admission, while the credential policy below
+        // retains human-only execution floors.
     } else if ('authentication' in verified.binding) {
         const path = proof.path.split('?')[0];
         const childPurpose = verified.binding.actionId === 'session.spawn_new' && verified.binding.managedContinuation
@@ -822,8 +959,10 @@ export async function verifyExternalActionDomainExecutionRequest(
         }
     }
     const effect = parseExternalActionEffectAction(verified.binding, verified.effectActionId);
-    const credentialAction = verified.binding.handoffContinuation
-        ? PublicActionIdSchema.safeParse(readExternalActionCredentialActionId(verified.binding)) : effect;
+    const credentialAction = isTeamCredentialUsageExportReadEffect(verified.binding.actionId, verified.effectActionId)
+        ? PublicActionIdSchema.safeParse(verified.binding.actionId)
+        : verified.binding.handoffContinuation
+            ? PublicActionIdSchema.safeParse(readExternalActionCredentialActionId(verified.binding)) : effect;
     if (!effect.success || !credentialAction.success || !resolveCredentialActionAdmissionV1({
         spec: getActionSpec(credentialAction.data),
         authority: verified.principal.authority, grant: 'grant' in verified.binding ? verified.binding.grant : null }).ok) return null;
@@ -896,7 +1035,8 @@ async function readCurrentWorkspaceSyncSourceAuthorization(binding: ExternalActi
         || ('grant' in binding && !sameManagedInput(context.callerInputConstraints,
             { models: binding.grant.models, permissionModes: binding.grant.permissionModes }))) return null;
     const current = await verifyCurrentExternalActionPrincipal(binding);
-    const principal = current && projectExternalActionBoundPrincipal(binding, current);
+    if (!current) return null;
+    const principal = projectExternalActionBoundPrincipal(binding, current, context.callerAuthority);
     if (!principal || narrowCredentialAuthority(principal.authority, context.callerAuthority) !== context.callerAuthority
         || !await hasCurrentExecutionMachineAdmission(binding)
         || !resolveCredentialActionAdmissionV1({ spec: getActionSpec(action.data), authority: context.callerAuthority,
@@ -910,7 +1050,7 @@ async function readCurrentWorkspaceSyncSourceAuthorization(binding: ExternalActi
     if (source.kind !== 'admitted' || source.custodianAccountId !== claimed.custodianAccountId
         || source.installationId !== claimed.installationId || source.encryptionMode !== claimed.encryptionMode) return null;
     if (!await hasCurrentExternalActionSessionSource(binding, resolveCurrentSessionMachine)) return null;
-    return { binding, principal: { ...principal, authority: context.callerAuthority }, effectActionId: binding.actionId, target: binding.target };
+    return { binding, principal: { ...current, ...principal }, effectActionId: binding.actionId, target: binding.target };
 }
 
 /** Only an installed D proof or its retained original packet can attest this exact Project purpose. */
@@ -1219,6 +1359,9 @@ export async function verifyExternalActionExecutionAuthorizationCurrentness(
         ? PublicActionIdSchema.safeParse(readExternalActionCredentialActionId(verified.binding)) : effect;
     if (!effect.success || !credentialAction.success || !resolveCredentialActionAdmissionV1({
         spec: getActionSpec(credentialAction.data),
-        authority: verified.principal.authority, grant: 'grant' in verified.binding ? verified.binding.grant : null }).ok) return null;
+        authority: verified.principal.authority, grant: 'grant' in verified.binding ? verified.binding.grant : null,
+        // This verifies the admitted proposal, not a native effect. Human
+        // execution floors remain enforced by the domain and RPC owners.
+        surface: readExternalActionSessionProposalSurface(verified.binding) }).ok) return null;
     return verified;
 }

@@ -1,4 +1,5 @@
-import { SERVER_CONFIG, readServerConfig, readServerConfigRaw } from "@happier-dev/protocol";
+import { resolveAuthEmailSmtpConfig } from './authEmailSmtpConfig';
+export { resolveAuthEmailSmtpConfig } from './authEmailSmtpConfig';
 
 import {
     createDisabledAuthEmailDelivery,
@@ -17,27 +18,6 @@ import { isAuthEmailApplicationLinkBuildable, type ResolveAuthEmailApplicationLi
  * configured a host is unconfigured, not broken: mail-dependent operations
  * report unavailability while every other authentication journey continues.
  */
-export function resolveAuthEmailSmtpConfig(
-    env: Record<string, string | undefined>,
-): AuthEmailSmtpConfig | null {
-    const host = readServerConfig(env, SERVER_CONFIG.HAPPIER_AUTH_EMAIL_SMTP_HOST);
-    // The from address is read as written: a deployment may set any address its SMTP relay accepts,
-    // while a Home write is validated as a plain address by the registry.
-    const fromAddress = readServerConfigRaw(env, SERVER_CONFIG.HAPPIER_AUTH_EMAIL_FROM_ADDRESS)?.raw.trim();
-    if (!host || !fromAddress) return null;
-
-    const secure = readServerConfig(env, SERVER_CONFIG.HAPPIER_AUTH_EMAIL_SMTP_SECURE);
-    return {
-        host,
-        port: readServerConfig(env, SERVER_CONFIG.HAPPIER_AUTH_EMAIL_SMTP_PORT) ?? (secure ? 465 : 587),
-        secure,
-        username: readServerConfig(env, SERVER_CONFIG.HAPPIER_AUTH_EMAIL_SMTP_USERNAME) ?? null,
-        password: readServerConfig(env, SERVER_CONFIG.HAPPIER_AUTH_EMAIL_SMTP_PASSWORD) ?? null,
-        fromAddress,
-        fromName: readServerConfig(env, SERVER_CONFIG.HAPPIER_AUTH_EMAIL_FROM_NAME),
-    };
-}
-
 export type AuthEmailSmtpTransportFactory = (config: AuthEmailSmtpConfig) => AuthEmailSmtpTransport;
 
 export function resolveAuthEmailDelivery(

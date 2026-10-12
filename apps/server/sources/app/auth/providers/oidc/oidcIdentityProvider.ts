@@ -115,7 +115,7 @@ export function createOidcIdentityProvider(
                 eligibilityCheckedAt: new Date(),
                 eligibilityNextCheckAt: null,
             },
-            presentation: { username: preferredUsername },
+            presentation: { username: preferredUsername, name: normalized.value.name },
             transferFromAccountId: params.transferFromAccountId,
         });
         const verifiedMailbox = normalized.value.emailVerified && normalized.value.email
@@ -135,7 +135,7 @@ export function createOidcIdentityProvider(
         prepareConnect,
         connect: async (params) => {
             const prepared = await prepareConnect(params);
-            await inTx(prepared.connectInTx);
+            await inTx(prepared.connectInTx, { isolationLevel: "Serializable" /* Provider currentness, identity transfer and Account presentation share one link-admission snapshot. */ });
         },
         disconnect: async (params: { ctx: Context }) => {
             const userId = params.ctx.uid;

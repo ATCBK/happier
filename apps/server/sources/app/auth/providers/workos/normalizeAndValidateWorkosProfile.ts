@@ -2,6 +2,7 @@ import {
     ACCOUNT_IDENTITY_PROVIDER_LOGIN_MAX_CODE_UNITS,
     ACCOUNT_IDENTITY_PROVIDER_USER_ID_MAX_CODE_UNITS,
 } from "@/app/auth/providers/accountIdentityBounds";
+import { readAccountNameFromLegacyProfileV1 } from "@happier-dev/protocol";
 
 export interface WorkosIdentityBinding {
     organizationId: string;
@@ -10,6 +11,7 @@ export interface WorkosIdentityBinding {
 
 export interface NormalizedWorkosProfile {
     id: string;
+    name?: string;
     idpId: string | null;
     organizationId: string;
     connectionId: string;
@@ -80,8 +82,15 @@ export function normalizeAndValidateWorkosProfile(input: Readonly<{
         if (!idpId) return Object.freeze({ ok: false, error: "invalid_profile" });
     }
 
+    const fullName = typeof input.profile.name === "string" ? input.profile.name.trim() : "";
+    // Provider-part names are joined at ingress only; Account display never splits a name.
+    const name = readAccountNameFromLegacyProfileV1({
+        name: fullName || undefined,
+        firstName: typeof input.profile.firstName === "string" ? input.profile.firstName : null,
+        lastName: typeof input.profile.lastName === "string" ? input.profile.lastName : null,
+    });
     return Object.freeze({
         ok: true,
-        value: Object.freeze({ id, idpId, organizationId, connectionId, email }),
+        value: Object.freeze({ id, idpId, organizationId, connectionId, email, ...(name ? { name } : {}) }),
     });
 }

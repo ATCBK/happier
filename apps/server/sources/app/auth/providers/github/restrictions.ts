@@ -52,3 +52,12 @@ export function shouldRequestReadOrgScopeForGitHub(env: NodeJS.ProcessEnv): bool
     const restrictions = resolveGitHubAuthRestrictionsFromEnv(env);
     return restrictions.allowedOrgs.length > 0 && restrictions.orgMembershipSource === "oauth_user_token";
 }
+
+/** Token retention uses the membership policy's default, shared with Home settings. */
+export function shouldStoreGithubAccessToken(params: { env: NodeJS.ProcessEnv }): boolean {
+    const raw = (params.env.GITHUB_STORE_ACCESS_TOKEN ?? '').toString().trim().toLowerCase();
+    if (raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on') return true;
+    if (raw === '0' || raw === 'false' || raw === 'no' || raw === 'off') return false;
+    const restrictions = resolveGitHubAuthRestrictionsFromEnv(params.env);
+    return restrictions.orgMembershipSource === 'oauth_user_token' && restrictions.allowedOrgs.length > 0;
+}

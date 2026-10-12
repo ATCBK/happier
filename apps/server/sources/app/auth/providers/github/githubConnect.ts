@@ -2,30 +2,10 @@ import { prepareIdentityLink, preflightIdentityLink } from "../accountIdentityLi
 import { Context } from "@/context";
 import { encryptString } from "@/modules/encrypt";
 import { prepareUploadedImage } from "@/storage/blob/uploadImage";
-import { separateName } from "@/utils/strings/separateName";
 import { type GitHubProfile } from "@/app/auth/providers/github/types";
 import { inTx } from "@/storage/inTx";
-import { resolveGitHubAuthRestrictionsFromEnv } from "@/app/auth/providers/github/restrictions";
+import { shouldStoreGithubAccessToken } from "@/app/auth/providers/github/restrictions";
 import type { PreparedIdentityConnection } from "@/app/auth/providers/identityProviders/types";
-
-function parseExplicitGithubStoreTokenSetting(env: NodeJS.ProcessEnv): boolean | null {
-    const raw = (env.GITHUB_STORE_ACCESS_TOKEN ?? '').toString().trim().toLowerCase();
-    if (!raw) return null;
-
-    if (raw === "1" || raw === "true" || raw === "yes" || raw === "on") return true;
-    if (raw === "0" || raw === "false" || raw === "no" || raw === "off") return false;
-    return null;
-}
-
-function shouldStoreGithubAccessToken(params: { env: NodeJS.ProcessEnv }): boolean {
-    const explicit = parseExplicitGithubStoreTokenSetting(params.env);
-    if (explicit !== null) return explicit;
-
-    const restrictions = resolveGitHubAuthRestrictionsFromEnv(params.env);
-    // If org membership enforcement relies on user tokens, storing the access token is required
-    // for periodic eligibility checks. Default to enabled in this mode.
-    return restrictions.orgMembershipSource === "oauth_user_token" && restrictions.allowedOrgs.length > 0;
-}
 
 export { ProviderAlreadyLinkedError } from "../accountIdentityLifecycle";
 
@@ -66,9 +46,6 @@ export async function prepareGithubConnect(
         preparedAvatar = null;
     }
 
-    // Extract name from GitHub profile
-    const name = separateName(githubProfile.name);
-
     const identityConnection = await prepareIdentityLink({
         accountId: userId,
         provider: "github",
@@ -83,7 +60,7 @@ export async function prepareGithubConnect(
         },
         token: shouldStoreGithubAccessToken({ env: process.env })
             ? encryptString(['user', userId, 'github', 'token'], accessToken) : null,
-        presentation: { username: preferredUsername ?? githubLoginUsername, ...name, ...(preparedAvatar ? { avatar: preparedAvatar.image } : {}) },
+        presentation: { username: preferredUsername ?? githubLoginUsername, name: githubProfile.name, ...(preparedAvatar ? { avatar: preparedAvatar.image } : {}) },
         sameSubject: 'unchanged',
         transferFromAccountId: opts?.transferFromAccountId,
     });
@@ -102,5 +79,5 @@ export async function githubConnect(
     opts?: { preferredUsername?: string | null; transferFromAccountId?: string },
 ): Promise<void> {
     const prepared = await prepareGithubConnect(ctx, githubProfile, accessToken, opts);
-    await inTx(prepared.connectInTx);
+    await inTx(prepared.connectInTx, { isolationLevel: "Serializable" /* Identity transfer and fill-if-empty Account presentation depend on the observed link and Account. */ });
 }

@@ -35,6 +35,8 @@ import {
 import {
     ExternalActionExecutionAuthorizationBindingV1Schema,
     ExternalActionExecutionAuthorizationV1Schema,
+    SignedRootActionIdSchema,
+    getActionSpec,
     formatQualifiedPluginActionId,
     parseQualifiedPluginActionId,
     type ExternalActionExecutionAuthorizationBindingV1,
@@ -576,7 +578,8 @@ class AuthModule {
         const machine = await db.machine.findUnique({ where: { id: input.machineId },
             select: { accountId: true, installationId: true } });
         if (!machine?.installationId) throw new ApiTokenOperationError('invalid_token');
-        const needsAccountMode = 'authentication' in input || ManagedMachineActionIdV1Schema.safeParse(input.actionId).success
+        const needsAccountMode = 'authentication' in input || input.actionId === 'session.pending.resetStart.set'
+            || ManagedMachineActionIdV1Schema.safeParse(input.actionId).success
             || input.managedContinuation || Object.hasOwn(PROJECT_FINITE_ACTION_RPC_METHODS_V1, input.actionId);
         const accountMode = needsAccountMode
             ? await db.account.findUnique({ where: { id: input.accountId }, select: { encryptionMode: true } }) : null;
@@ -596,6 +599,11 @@ class AuthModule {
             if (!await this.isSignedCredentialCurrent(db, supplied.accountId, supplied.authentication.tokenEpoch)) {
                 throw new ApiTokenOperationError('invalid_token');
             }
+            const action = SignedRootActionIdSchema.safeParse(supplied.actionId);
+            if (!supplied.handoffAdmission && action.success && getActionSpec(action.data).executionPlacement === 'session'
+                && (supplied.target.kind !== 'session' || !await hasCurrentSessionScopedMachineAccessInTx({
+                    tx: db, accountId: supplied.accountId, machineId: supplied.machineId, sessionId: supplied.target.sessionId,
+                }))) throw new ApiTokenOperationError('invalid_token');
             if (supplied.handoffAdmission) {
                 const { readCurrentExternalActionHandoffBindingInTx } = await import('./externalActionExecutionAuthorization');
                 if (!await readCurrentExternalActionHandoffBindingInTx(db, { accountId: supplied.accountId,
@@ -925,7 +933,7 @@ class AuthModule {
                     authenticationEvidence: true,
                 },
             });
-        }).catch((error: unknown) => {
+        }, { isolationLevel: "Serializable" /* Child-token admission composes parent grants with current Session and Machine access. */ }).catch((error: unknown) => {
             if (isPrismaErrorCode(error, "P2002")) throw new ApiTokenOperationError("api_token_id_conflict");
             throw error;
         });

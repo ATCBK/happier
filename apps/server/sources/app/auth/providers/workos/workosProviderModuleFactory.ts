@@ -63,8 +63,8 @@ export function resolveWorkosAuthProviderFeatures(
  * so linked identities remain presentable after a provider is disabled or offboarded.
  */
 export function extractWorkosLinkedProvider(
-    { providerLogin }: Parameters<IdentityProvider["extractLinkedProvider"]>[0],
-): ReturnType<IdentityProvider["extractLinkedProvider"]> {
+    { providerLogin }: Parameters<NonNullable<IdentityProvider["extractLinkedProvider"]>>[0],
+): ReturnType<NonNullable<IdentityProvider["extractLinkedProvider"]>> {
     return { displayName: providerLogin, avatarUrl: null, profileUrl: null };
 }
 
@@ -107,6 +107,7 @@ export function createWorkosProviderModule(input: WorkosProviderModuleInput): Pr
             token: null,
             presentation: {
                 username: params.preferredUsername?.trim().toLowerCase() || null,
+                name: profile.name,
             },
             transferFromAccountId: params.transferFromAccountId,
         });
@@ -134,7 +135,7 @@ export function createWorkosProviderModule(input: WorkosProviderModuleInput): Pr
         prepareConnect,
         connect: async (params) => {
             const prepared = await prepareConnect(params);
-            await inTx(prepared.connectInTx);
+            await inTx(prepared.connectInTx, { isolationLevel: "Serializable" /* Provider currentness, identity transfer and Account presentation share one link-admission snapshot. */ });
         },
         disconnect: async (params) => {
             await unlinkIdentity({ accountId: params.ctx.uid, provider: input.providerInstanceId });

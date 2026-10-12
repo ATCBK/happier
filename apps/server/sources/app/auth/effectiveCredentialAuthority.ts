@@ -1,7 +1,10 @@
 import type { AuthTokenAuthority, AuthTokenKind } from "@happier-dev/protocol";
 import { resolveInvocationAuthority, TerminalPresentUserPolicySchema } from "@happier-dev/protocol/actions";
+import type { ActionRequiredAuthority } from "@happier-dev/protocol/actions/metadata";
 
 /** A caller can lower verified authority; no caller-supplied value can raise it. */
+export function narrowCredentialAuthority(authority: ActionRequiredAuthority, ceiling: unknown): ActionRequiredAuthority;
+export function narrowCredentialAuthority(authority: AuthTokenAuthority, ceiling: unknown): AuthTokenAuthority;
 export function narrowCredentialAuthority(authority: AuthTokenAuthority, ceiling: unknown): AuthTokenAuthority {
     return authority === "present_user" && ceiling === "account_automation" ? "account_automation" : authority;
 }

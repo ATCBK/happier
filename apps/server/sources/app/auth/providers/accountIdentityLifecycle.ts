@@ -56,8 +56,7 @@ export interface IdentityLinkIntent {
         'eligibilityStatus' | 'eligibilityReason' | 'eligibilityCheckedAt' | 'eligibilityNextCheckAt'>;
     presentation?: {
         username?: string | null;
-        firstName?: string | null;
-        lastName?: string | null;
+        name?: string | null;
         avatar?: Exclude<Prisma.AccountUncheckedUpdateInput['avatar'], undefined>;
     };
     /** GitHub's existing same-subject reconnect is intentionally a no-op. */
@@ -71,7 +70,7 @@ async function publishIdentityChanges(tx: Tx, accountIdsInput: readonly string[]
     if (accountIds.length === 0) return;
     const accounts = await tx.account.findMany({
         where: { id: { in: accountIds } },
-        select: { id: true, username: true, firstName: true, lastName: true, avatar: true },
+        select: { id: true, name: true, username: true, avatar: true },
         orderBy: { id: 'asc' },
     });
     if (accounts.length !== accountIds.length) throw new Error('account-not-found');
@@ -128,7 +127,7 @@ export async function linkIdentityInTx(tx: Tx, intent: IdentityLinkIntent): Prom
     if (existing?.providerUserId === intent.providerUserId && intent.sameSubject === 'unchanged') return;
     const account = await tx.account.findUnique({
         where: { id: intent.accountId },
-        select: { username: true, firstName: true, lastName: true, avatar: true },
+        select: { username: true, name: true, avatar: true },
     });
     if (!account) throw new Error('account-not-found');
     let transferredVisibility = existing?.showOnProfile;
@@ -185,8 +184,7 @@ export async function linkIdentityInTx(tx: Tx, intent: IdentityLinkIntent): Prom
         }
         await tx.account.update({ where: { id: intent.accountId }, data: {
             ...(username ? { username } : {}),
-            ...(!account.firstName && proposal.firstName ? { firstName: proposal.firstName } : {}),
-            ...(!account.lastName && proposal.lastName ? { lastName: proposal.lastName } : {}),
+            ...(!account.name?.trim() && proposal.name?.trim() ? { name: proposal.name.trim() } : {}),
             ...(!account.avatar && proposal.avatar ? { avatar: proposal.avatar } : {}),
         } });
     }
@@ -207,7 +205,7 @@ export async function unlinkIdentityInTx(tx: Tx, input: { accountId: string; pro
 }
 
 export async function unlinkIdentity(input: Parameters<typeof unlinkIdentityInTx>[1]): Promise<void> {
-    await inTx((tx) => unlinkIdentityInTx(tx, input));
+    await inTx((tx) => unlinkIdentityInTx(tx, input), { isolationLevel: "Serializable" /* Final-login viability spans identity, password, provider policy and Home-owner rows. */ });
 }
 
 async function readProviderLinkedAccountIdsInTx(tx: Tx, provider: string): Promise<readonly string[]> {
@@ -260,7 +258,7 @@ export async function refreshIdentity(input: { accountId: string; provider: stri
             where: { id: input.identityId, accountId: input.accountId, provider: input.provider }, data: input.data,
         });
         if (count) await publishIdentityChange(tx, input.accountId);
-    });
+    }, { isolationLevel: "Serializable" /* Eligibility changes participate in the same final-login viability family as identity removal. */ });
 }
 
 export async function setIdentityVisibilityInTx(tx: Tx, input: { accountId: string; provider: string; showOnProfile: boolean }): Promise<boolean> {

@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { readHomeGovernanceProjectionInTx } from "@/app/home/governance/homeGovernanceService";
 import { readHomeConfigEnv, setHomeSettings } from "@/app/home/settings/homeSettings";
@@ -50,6 +50,10 @@ afterAll(async () => {
     registerAuthEmailApplicationLinkTarget(null);
     await harness.close();
 });
+beforeEach(() => {
+    // This flow exercises an owner-stored address, not a deployment-locked address.
+    harness.resetEnv({ HAPPIER_WEBAPP_URL: undefined, HAPPY_WEBAPP_URL: undefined });
+});
 afterEach(async () => {
     registerAuthEmailApplicationLinkTarget(null);
     await db.homeAdministrationEvent.deleteMany({});
@@ -60,7 +64,7 @@ afterEach(async () => {
 describe("Home mail link target", () => {
     it("opens mail links at the web-app address the owner stored for this Home", async () => {
         const owner = await createOwner();
-        await setHomeSettings({ actorAccountId: owner, write: { expectedRevision: 0, values: { HAPPIER_WEBAPP_URL: OWNER_WEBAPP } } });
+        expect(await setHomeSettings({ actorAccountId: owner, write: { expectedRevision: 0, values: { HAPPIER_WEBAPP_URL: OWNER_WEBAPP } } })).toMatchObject({ status: "applied" });
 
         const resolve = createHomeMailLinkTargetResolver({ continuityStore, readDescriptor });
         await expect(resolve()).resolves.toMatchObject({ applicationOrigin: OWNER_WEBAPP, serverId: "home-identity-1" });
