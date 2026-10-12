@@ -18,6 +18,7 @@ import { AGENT_SESSION_RUNTIME_EVENT_KINDS_V1 } from './eventKindsV1.js';
 import { asProtocolZod } from "../plugins/actions/internalProtocolZodAdapter.js";
 import { AgentRuntimeDiagnosticDataV1Schema } from './agentRuntimeDiagnosticV1.js';
 import { NonBlankOpaqueIdentifierSchema } from '../strings/opaqueIdentifier.js';
+import { UsageRequestAttributionSchema } from '../usage/usageAnalyticsContracts.js';
 
 export { AGENT_SESSION_RUNTIME_EVENT_KINDS_V1 } from './eventKindsV1.js';
 
@@ -434,6 +435,7 @@ const OutputSchemas = [
   lazyZodSchema(() => EventBaseSchema.extend({
     kind: z.literal('usage-observed'),
     observationId: ProviderIdSchema,
+    attribution: UsageRequestAttributionSchema.optional(),
     turnId: HostIdSchema.optional(),
     source: exactString(SOURCE_MAX),
     scope: z.enum(['turn_delta', 'session_cumulative', 'session_final']),
