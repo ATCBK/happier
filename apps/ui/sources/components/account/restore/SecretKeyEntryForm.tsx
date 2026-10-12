@@ -29,33 +29,21 @@ export type SecretKeyEntryFormProps = Readonly<{
 }>;
 
 const stylesheet = StyleSheet.create((theme) => ({
-    noticeCard: {
-        borderWidth: 1,
-        borderColor: theme.colors.border.default,
-        borderRadius: 14,
-        paddingHorizontal: 16,
-        paddingVertical: 14,
-        backgroundColor: theme.colors.surface.base,
-        marginBottom: 16,
-    },
-    noticeText: {
-        fontSize: 16,
+    help: {
+        marginBottom: theme.space.s16,
+        ...Typography.variant('body'),
         color: theme.colors.text.secondary,
-        lineHeight: 24,
-        ...Typography.default(),
     },
     label: {
-        marginBottom: 8,
-        fontSize: 14,
-        lineHeight: 20,
+        marginBottom: theme.space.s8,
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.primary,
-        ...Typography.default('semiBold'),
     },
     input: {
         backgroundColor: theme.colors.input.background,
         borderWidth: 1,
         borderColor: theme.colors.border.default,
-        padding: 16,
+        padding: theme.space.s16,
         paddingRight: 58,
         borderRadius: 14,
         ...Typography.mono(),
@@ -67,7 +55,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     inputWrapper: {
         width: '100%',
         position: 'relative',
-        marginBottom: 8,
+        marginBottom: theme.space.s8,
     },
     revealButton: {
         position: 'absolute',
@@ -75,7 +63,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         top: 13,
     },
     error: {
-        marginBottom: 16,
+        marginBottom: theme.space.s16,
         fontSize: 14,
         lineHeight: 20,
         color: theme.colors.state.danger.foreground,
@@ -158,15 +146,12 @@ export const SecretKeyEntryForm = React.memo(function SecretKeyEntryForm(props: 
 
     return (
         <>
-            <View style={styles.noticeCard}>
-                <Text style={styles.noticeText}>{props.description}</Text>
-            </View>
-            <Text style={styles.label}>{t('settingsAccount.secretKey')}</Text>
+            <Text style={styles.label}>{t('connect.secretKeyInputLabel')}</Text>
             <View style={styles.inputWrapper}>
                 <TextInput
                     ref={inputRef}
                     testID="restore-manual-secret-input"
-                    accessibilityLabel={t('settingsAccount.secretKey')}
+                    accessibilityLabel={t('connect.secretKeyInputLabel')}
                     style={styles.input}
                     placeholder={t('connect.secretKeyPlaceholder')}
                     placeholderTextColor={theme.colors.input.placeholder}
@@ -199,6 +184,7 @@ export const SecretKeyEntryForm = React.memo(function SecretKeyEntryForm(props: 
                     />
                 </View>
             </View>
+            <Text style={styles.help}>{props.description}</Text>
             {error ? (
                 <Text testID="restore-manual-secret-error" accessibilityRole="alert" style={styles.error}>
                     {error}

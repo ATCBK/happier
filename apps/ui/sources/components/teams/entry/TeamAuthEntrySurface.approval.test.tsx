@@ -124,7 +124,6 @@ async function addTeamHome(): Promise<string> {
 }
 
 async function renderJoin(serverId: string, onAdmissionComplete: (result: TeamInvitationAcceptResultV1) => void) {
-    const { TeamAuthEntrySurface } = await import('./TeamAuthEntrySurface');
     const target: HomeTargetInput = { kind: 'saved_profile', profileRef: serverId };
     // The join screen passes the credential-scope binding's Account scope, which
     // names an identity-bearing Home by its scope id (its published identity).
@@ -149,6 +148,9 @@ async function renderJoin(serverId: string, onAdmissionComplete: (result: TeamIn
 function approvalIds(serverId: string): string[] {
     return harness.artifacts(serverId).list().map((row) => row.id);
 }
+
+// Load real screen owners after boundary setup, outside behavior deadlines.
+const { TeamAuthEntrySurface } = await import('./TeamAuthEntrySurface');
 
 describe('TeamAuthEntrySurface deferred admission approval', () => {
     beforeEach(async () => {

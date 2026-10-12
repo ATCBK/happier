@@ -195,7 +195,7 @@ export const SecretKeyLoginForm = React.memo(function SecretKeyLoginForm(props: 
         <View style={styles.container}>
             <SecretKeyEntryForm
                 description={t('connect.restoreWithSecretKeyDescription')}
-                submitTitle={props.submitTitle ?? t('connect.restoreAccount')}
+                submitTitle={props.submitTitle ?? t('connect.signInWithKeySubmit')}
                 onSubmit={handleLogin}
             />
         </View>

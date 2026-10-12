@@ -161,6 +161,15 @@ function readyAccountServiceEntry(
 }
 
 describe('WelcomeDecisionPanel', () => {
+    it.each(['incompatible', 'unavailable'] as const)('names the selected Home in the %s status instead of its address', async (serverAvailability) => {
+        const { screenPromise } = renderPanel({ serverAvailability });
+        const screen = await screenPromise;
+        const copy = serverAvailability === 'incompatible'
+            ? t('welcome.serverIncompatibleBody', { serverUrl: 'Home A' })
+            : t('welcome.serverUnavailableBody', { serverUrl: 'Home A' });
+        expect(screen.getTextContent()).toContain(copy);
+        await screen.unmount();
+    });
     it('offers direct key recovery for the same verified Home mistaken for a sign-in service', async () => {
         const onAuthenticate = vi.fn();
         const onRestore = vi.fn();
@@ -274,6 +283,37 @@ describe('WelcomeDecisionPanel', () => {
         expect(screen.findAllByTestId('welcome-primary-start')).toHaveLength(0);
         await screen.pressByTestIdAsync('welcome-account-service-provider-github');
         expect(onContinueWithAccountServiceProvider).toHaveBeenCalledWith(expect.objectContaining({ intendedHome: null }));
+    });
+
+    it('says what each Home sign-in way does instead of repeating the Home on every card', async () => {
+        const { screenPromise } = renderPanel({
+            authenticationActions: [
+                ...baseOptions.authenticationActions!,
+                {
+                    method: { id: 'key_challenge', enabledActions: [{ id: 'login', mode: 'keyed' }] },
+                    action: { id: 'login', mode: 'keyed' },
+                    execution: { kind: 'key_entry' },
+                },
+                {
+                    method: { id: 'email_password', enabledActions: [{ id: 'login', mode: 'either' }] },
+                    action: { id: 'login', mode: 'either' },
+                    execution: { kind: 'email_password', action: 'login', mode: 'either' },
+                },
+            ],
+        });
+        const screen = await screenPromise;
+        const subtitleByCard = new Map<string, string>();
+        for (const node of screen.findAll((candidate) => typeof candidate.props.testID === 'string'
+            && candidate.props.testID.endsWith('-subtitle') && typeof candidate.props.children === 'string')) {
+            subtitleByCard.set(node.props.testID as string, node.props.children as string);
+        }
+        const subtitles = [...subtitleByCard.values()];
+
+        expect(subtitles.length).toBeGreaterThanOrEqual(4);
+        // One message per card: no two sibling cards describe themselves with the same words,
+        // and the Home's bare name never stands in for what a card does.
+        expect(new Set(subtitles).size).toBe(subtitles.length);
+        expect(subtitles).not.toContain('Home A');
     });
 
     it('routes anonymous start and restore actions from stable controls', async () => {

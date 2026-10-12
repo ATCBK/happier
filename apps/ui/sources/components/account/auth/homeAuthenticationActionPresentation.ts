@@ -6,6 +6,12 @@ export type HomeAuthenticationActionPresentation = Readonly<{
     /** Stable per-execution suffix used for test IDs. */
     slug: string;
     title: string;
+    /**
+     * What choosing this way does, in one sentence. Sibling cards on an entry surface each
+     * say something different, so the Home's name is never what describes a method.
+     * Absent when the title already says everything (an external provider).
+     */
+    description?: string;
     iconName: IconName;
 }>;
 
@@ -25,13 +31,13 @@ export function describeHomeAuthenticationAction(input: Readonly<{
 }>): HomeAuthenticationActionPresentation {
     const execution = input.execution;
     if (execution.kind === 'generated_key') {
-        return { slug: 'generated-key', title: t('welcome.welcomePrimaryButton'), iconName: 'arrow-right' };
+        return { slug: 'generated-key', title: t('welcome.welcomePrimaryButton'), description: t('welcome.welcomePrimarySubtitle'), iconName: 'arrow-right' };
     }
     if (execution.kind === 'key_entry') {
-        return { slug: 'key-entry', title: t('welcome.continueWithKey'), iconName: 'key' };
+        return { slug: 'key-entry', title: t('welcome.continueWithKey'), description: t('welcome.keyEntryDescription'), iconName: 'key' };
     }
     if (execution.kind === 'mtls') {
-        return { slug: 'mtls', title: t('welcome.signInWithCertificate'), iconName: 'shield-check' };
+        return { slug: 'mtls', title: t('welcome.signInWithCertificate'), description: t('welcome.certificateDescription'), iconName: 'shield-check' };
     }
     if (execution.kind === 'email_password') {
         return {
@@ -41,6 +47,11 @@ export function describeHomeAuthenticationAction(input: Readonly<{
                 : execution.action === 'connect'
                     ? t('settingsAccount.nativePassword.connectTitle')
                     : t('settingsAccount.nativePassword.title'),
+            description: execution.action === 'provision'
+                ? t('welcome.emailCreateDescription')
+                : execution.action === 'connect'
+                    ? t('welcome.emailConnectDescription')
+                    : t('welcome.emailSignInDescription'),
             iconName: 'envelope',
         };
     }

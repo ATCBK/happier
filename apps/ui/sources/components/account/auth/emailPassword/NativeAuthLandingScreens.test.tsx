@@ -564,7 +564,7 @@ it('shows a specific update-required landing when the exact Home lacks the publi
     await vi.waitFor(() => expect(screen?.findByTestId('native-auth-reset-invalid')).not.toBeNull());
 
     expect(screen.findByTestId('native-auth-reset-invalid')?.props.children).toBe(
-        t('welcome.serverIncompatibleBody', { serverUrl: SAVED_HOME_URL }),
+        t('welcome.serverIncompatibleBody', { serverUrl: 'Saved Home' }),
     );
     expect(boundary.submitReset).not.toHaveBeenCalled();
 });

@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import * as React from 'react';
 import { useRouter } from 'expo-router';
 import type { HomeTargetInput } from '@happier-dev/cli-common/homeTarget';
@@ -18,7 +19,8 @@ import { useExactHomeDestination } from '@/components/account/auth/useExactHomeD
 import { ExactHomeDestinationNotice } from '@/components/account/auth/ExactHomeDestinationNotice';
 import { openAccountSecurityForHome } from '@/components/settings/account/openAccountSecurityForHome';
 import { useServerCredentialAccountScopeResolution } from '@/sync/domains/scope/useServerCredentialAccountScopes';
-import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
+import { getServerProfileById, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
+import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
 import { changeAccountSignInEmail } from '@/sync/api/auth/accountSecurity';
 import {
     previewNativeEmailVerification,
@@ -103,7 +105,7 @@ function useNativeAuthLandingTarget(carrier: string | null): NativeAuthLandingTa
             endpointUrl: target.endpointUrl,
             serverId: target.serverId,
             homeServerIdentityId: target.serverIdentityId,
-            homeLabel: target.canonicalServerUrl,
+            homeLabel: resolveHomeDisplayLabel(getServerProfileById(target.serverIdentityId), target.serverIdentityId),
             publicRequest: createServerFetchAtEndpoint({ ...target, credentials: null }),
             authenticatedRequest: createServerFetchAtEndpoint(target),
             createAuthenticatedRequest: (credentials) => createServerFetchAtEndpoint({ ...target, credentials }),
@@ -894,8 +896,8 @@ export const NativeAuthPasswordResetScreen = React.memo(function NativeAuthPassw
 });
 
 const styles = StyleSheet.create((theme) => ({
-    scroll: { paddingHorizontal: 20, paddingVertical: 32, gap: 16 },
+    scroll: { paddingHorizontal: theme.space.s20, paddingVertical: theme.space.s32, gap: theme.space.s16 },
     card: { gap: 14, width: '100%' },
-    title: { fontSize: 22, fontWeight: '600', color: theme.colors.text.primary },
+    title: { ...Typography.variant('title'),  color: theme.colors.text.primary },
     body: { fontSize: 14, color: theme.colors.text.secondary },
 }));

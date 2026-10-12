@@ -128,7 +128,7 @@ export const WelcomeDecisionPanel = React.memo(function WelcomeDecisionPanel(pro
                     : { kind: 'not_offered' as const };
     const model = composeWelcomeEntryModel({
         target: requestedHomeTarget
-            ? { kind: 'selected_home', home: requestedHomeTarget, label: options.homeLabel ?? options.serverUrlForCopy }
+            ? { kind: 'selected_home', home: requestedHomeTarget, label: options.homeLabel ?? t('settingsAccount.thisHomeTitle') }
             : accountServiceEntry?.endpoint.source === 'user'
                 ? { kind: 'selected_service', label: serviceName ?? formatAccountServiceHost(accountServiceEntry.endpoint.url) }
                 : { kind: 'none' },
@@ -136,7 +136,7 @@ export const WelcomeDecisionPanel = React.memo(function WelcomeDecisionPanel(pro
         ...(homeTarget && homeMethods.length > 0 && accountServiceEntry
             && createServerUrlComparableKey(accountServiceEntry.endpoint.url) === createServerUrlComparableKey(options.serverUrlForCopy)
             && (!accountServiceEntry.endpoint.serverIdentityId || accountServiceEntry.endpoint.serverIdentityId === options.observedHomeServerIdentityId)
-            ? { observedHomeAtServiceEndpoint: { home: homeTarget, label: options.homeLabel ?? options.serverUrlForCopy } } : {}),
+            ? { observedHomeAtServiceEndpoint: { home: homeTarget, label: options.homeLabel ?? t('settingsAccount.thisHomeTitle') } } : {}),
         ...(options.observedHomeServerIdentityId ? { observedHomeServerIdentityId: options.observedHomeServerIdentityId } : {}),
         context: { kind: 'home' },
         allowedNavigation: {
@@ -173,7 +173,7 @@ export const WelcomeDecisionPanel = React.memo(function WelcomeDecisionPanel(pro
                 />;
             }
             if (action.kind === 'choose_home') {
-                return <WelcomeActionCard key={row.id} actionId={row.id} testID="welcome-use-different-home" primary={row.emphasis === 'primary'} title={t('welcome.useDifferentHome')} subtitle={options.homeLabel ?? options.serverUrlForCopy} iconName="house" onPress={props.onChangeRelay} />;
+                return <WelcomeActionCard key={row.id} actionId={row.id} testID="welcome-use-different-home" primary={row.emphasis === 'primary'} title={t('welcome.useDifferentHome')} subtitle={t('welcome.useDifferentHomeSubtitle', { home: options.homeLabel ?? t('settingsAccount.thisHomeTitle') })} iconName="house" onPress={props.onChangeRelay} />;
             }
             if (action.kind === 'choose_sign_in_service') {
                 return <WelcomeActionCard key={row.id} actionId={row.id} testID="welcome-account-service-choose" primary={row.emphasis === 'primary'} title={t('welcome.chooseSignInService')} subtitle={t('welcome.signInServiceUrlPrompt')} iconName="globe" onPress={props.onChooseAccountService!} />;
@@ -204,10 +204,12 @@ export const WelcomeDecisionPanel = React.memo(function WelcomeDecisionPanel(pro
             const subtitle = isNewHere
                 ? isService
                     ? t('welcome.newHereServiceSubtitle', { service: serviceName ?? t('welcome.yourSignInService') })
-                    : t('welcome.newHereHomeSubtitle', { home: options.homeLabel ?? options.serverUrlForCopy })
+                    : t('welcome.newHereHomeSubtitle', { home: options.homeLabel ?? t('settingsAccount.thisHomeTitle') })
                 : isService
                     ? serviceName ?? t('welcome.yourSignInService')
-                    : options.homeLabel ?? options.serverUrlForCopy;
+                    // The Home is named once (New here, Use a different Home); each of its
+                    // own methods says what it does instead of repeating that name.
+                    : presentation.description;
             const invoke = () => {
                 if (request.authority.purpose === 'account_service') {
                     return request.execution.kind === 'oauth'
@@ -231,8 +233,8 @@ export const WelcomeDecisionPanel = React.memo(function WelcomeDecisionPanel(pro
                     <View testID="welcome-auth-blocked" style={styles.statusBlock}>
                         <Text style={styles.statusTitle}>{options.serverAvailability === 'incompatible' ? t('welcome.serverIncompatibleTitle') : t('welcome.serverUnavailableTitle')}</Text>
                         <Text style={styles.statusText}>{options.serverAvailability === 'incompatible'
-                            ? t('welcome.serverIncompatibleBody', { serverUrl: options.serverUrlForCopy })
-                            : t('welcome.serverUnavailableBody', { serverUrl: options.serverUrlForCopy })}</Text>
+                            ? t('welcome.serverIncompatibleBody', { serverUrl: options.homeLabel ?? t('settingsAccount.thisHomeTitle') })
+                            : t('welcome.serverUnavailableBody', { serverUrl: options.homeLabel ?? t('settingsAccount.thisHomeTitle') })}</Text>
                         <WelcomeActionCard testID="welcome-auth-blocked-retry" title={t('common.retry')} onPress={options.retryServerCheck} />
                     </View>
                 ) : null}

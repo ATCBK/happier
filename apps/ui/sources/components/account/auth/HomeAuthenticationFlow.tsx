@@ -178,7 +178,7 @@ export function HomeAuthenticationFlow(props: Readonly<{
             const testID = `home-auth-${method.id}-${action.id}-${action.mode}`;
             const presentation = describeHomeAuthenticationAction({ execution, providerName });
             return <WelcomeActionCard key={testID} testID={testID} title={presentation.title}
-                iconName={presentation.iconName} accentColor={method.presentation?.connectButtonColor}
+                subtitle={presentation.description} iconName={presentation.iconName} accentColor={method.presentation?.connectButtonColor}
                 onPress={async () => {
                     if (execution.kind === 'key_entry') {
                         setKeyRequest(request);

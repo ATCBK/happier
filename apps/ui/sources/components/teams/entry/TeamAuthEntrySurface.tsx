@@ -1,4 +1,6 @@
 import * as React from 'react';
+import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
+import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
 import { useRouter } from 'expo-router';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
@@ -46,7 +48,7 @@ import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
-import { formatAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
+import { formatAccountDisplayName, resolveViewerAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
 import type { HomeDomainFailure } from '@/sync/api/home/homeServerActionTransport';
 import { isTeamActionApprovalPendingError } from '@/sync/ops/teams/teamActionClient';
 import {
@@ -117,7 +119,7 @@ type AdmissionState =
 const TEAM_LOGO_SIZE = 52;
 const NOOP = () => {};
 
-function fallbackHomeLabel(canonicalServerUrl: string): string {
+function accountServiceAddressLabel(canonicalServerUrl: string): string {
     try {
         return new URL(canonicalServerUrl).host;
     } catch {
@@ -585,13 +587,13 @@ export const TeamAuthEntrySurface = React.memo(function TeamAuthEntrySurface(pro
         const { projection } = loadState;
         const teamName = projection.team.name;
         const homeDisplayName = projection.home.displayName
-            ?? fallbackHomeLabel(resolvedTarget?.canonicalServerUrl ?? '');
+            ?? resolveHomeDisplayLabel(getServerProfileById(resolvedTarget?.serverIdentityId ?? ''), '');
         const accountLabel = projection.account
-            ? formatAccountDisplayName(projection.account) ?? t('teams.entry.unnamedAccount')
+            ? resolveViewerAccountDisplayName(formatAccountDisplayName(projection.account))
             : null;
         const signInServiceName = projectedSignInService?.mode === 'external'
             ? accountServiceDiscovery?.accountServiceDisplayName
-                ?? fallbackHomeLabel(projectedSignInService.endpoint)
+                ?? accountServiceAddressLabel(projectedSignInService.endpoint)
             : null;
         const admissionComplete = admissionState.kind === 'complete' ? admissionState.result : null;
         const admissionTerminal = admissionState.kind === 'terminal' ? admissionState : null;
@@ -812,7 +814,7 @@ export const TeamAuthEntrySurface = React.memo(function TeamAuthEntrySurface(pro
                                         primary
                                         title={t('teams.entry.continueWith', {
                                             method: accountServiceDiscovery.accountServiceDisplayName
-                                                ?? fallbackHomeLabel(accountServiceDiscovery.endpointUrl),
+                                                ?? accountServiceAddressLabel(accountServiceDiscovery.endpointUrl),
                                         })}
                                         subtitle={t('settingsAccount.accountServiceSignInService')}
                                         onPress={() => { router.push(accountServiceHref); }}
@@ -1025,11 +1027,9 @@ const styles = StyleSheet.create((theme) => ({
         minWidth: 0,
     },
     teamName: {
-        ...Typography.default('semiBold'),
         flex: 1,
         minWidth: 0,
-        fontSize: 16,
-        lineHeight: 22,
+        ...Typography.variant('heading'),
         color: theme.colors.text.primary,
     },
     logoPlaceholder: {
@@ -1045,14 +1045,12 @@ const styles = StyleSheet.create((theme) => ({
         borderRadius: 6,
     },
     heading: {
-        ...Typography.default('semiBold'),
-        fontSize: 28,
-        lineHeight: 34,
+        ...Typography.variant('display'),
         color: theme.colors.text.primary,
     },
     subtitle: {
         ...Typography.default(),
-        marginTop: 6,
+        marginTop: theme.space.s6,
         fontSize: 14,
         lineHeight: 20,
         color: theme.colors.text.secondary,
