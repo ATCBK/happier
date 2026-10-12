@@ -183,6 +183,15 @@ export function tokenizeSimpleSyntaxLine(params: {
             continue;
         }
 
+        // Shell-family words: a digit inside a word (`host-01.example`, `ubuntu-24.04`) is part of that word, not a number.
+        if (hashComments && !isPython && isDigit(ch) && i > 0 && !/[\s=([{,:;|&<>"']/.test(raw[i - 1] ?? '')) {
+            let j = i + 1;
+            while (j < raw.length && !/\s/.test(raw[j] ?? '')) j += 1;
+            pushToken(out, { type: 'default', text: raw.slice(i, j) });
+            i = j;
+            continue;
+        }
+
         // Numbers.
         if (isDigit(ch)) {
             let j = i + 1;
@@ -226,7 +235,8 @@ export function tokenizeSimpleSyntaxText(params: {
     const raw = params.text ?? '';
     if (raw.length === 0) return [{ text: '', type: 'default' }];
 
-    const lines = raw.replace(/\r\n/g, '\n').split('\n');
+    // Tokens must retain source offsets so Find ranges stay aligned after CRLF line endings.
+    const lines = raw.split('\n');
     const out: SimpleSyntaxToken[] = [];
     for (let i = 0; i < lines.length; i++) {
         if (i > 0) out.push({ text: '\n', type: 'default' });

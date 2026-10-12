@@ -26,6 +26,11 @@ describe('simpleSyntaxTokenizer', () => {
         expect(yaml.filter((t) => t.type === 'comment').map((t) => t.text)).toEqual(['# docs']);
     });
 
+    it('keeps digits inside shell words (hosts, versions) as part of the word', () => {
+        const tokens = tokenizeSimpleSyntaxText({ text: 'ssh dev@host-01.example.com -p 2222 ubuntu-24.04', language: 'bash' });
+        expect(tokens.filter((t) => t.type === 'number').map((t) => t.text)).toEqual(['2222']);
+    });
+
     it('does not highlight generic programming keywords inside markdown text', () => {
         const tokens = tokenizeSimpleSyntaxText({
             text: 'This is a doc line for people.',
