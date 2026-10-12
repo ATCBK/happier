@@ -6,6 +6,14 @@ package dev.happier.cryptoworker
  * second envelope or payload implementation.
  */
 public object HappierCryptoWorkerSessionCrypto {
+  /** Machine data-key content uses the canonical AES-GCM worker, not Session secretbox. */
+  @JvmStatic
+  public fun decryptMachinePayload(ciphertextBase64: String, machineDataKeyBase64: String): String? =
+    HappierCryptoWorker.decryptAesGcmJsonBatch(listOf(mapOf(
+      "encryptedPayloadBase64" to ciphertextBase64,
+      "keyBase64" to machineDataKeyBase64,
+    ))).firstOrNull()
+
   @JvmStatic
   public fun openSessionDataKey(
     envelopeBase64: String,

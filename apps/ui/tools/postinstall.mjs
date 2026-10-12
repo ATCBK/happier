@@ -4,6 +4,7 @@ import process from 'node:process';
 import url from 'node:url';
 import { resolveUiPostinstallTasks } from './resolveUiPostinstallTasks.mjs';
 import { buildPasswordKdfWorker } from './password/buildPasswordKdfWorker.mjs';
+import { buildAtmosphereRenderers } from './atmosphere/buildAtmosphereRenderers.mjs';
 import { ensureNohoistPeerLinks } from './ensureNohoistPeerLinks.mjs';
 import { createFilteredPatchDir } from './postinstall/filteredPatchDirectory.mjs';
 import { runCommandBestEffort, runCommandOrExit } from './postinstall/runCommand.mjs';
@@ -20,6 +21,7 @@ import {
     findReactNativeEnrichedMarkdownPackageDirs,
     formatReactNativeEnrichedMarkdownWebStreamingPatchFailure,
     verifyReactNativeEnrichedMarkdownWebStreamingPatch,
+    verifyUiPatchedDependencies,
 } from './postinstall/verifyReactNativeEnrichedMarkdownWebStreamingPatch.mjs';
 import { repairReactNativeEnrichedMarkdownWebStreamingPatch } from './postinstall/repairReactNativeEnrichedMarkdownWebStreamingPatch.mjs';
 
@@ -81,10 +83,18 @@ const tasks = resolveUiPostinstallTasks({ env: process.env });
 const wants = (id) => tasks.includes(id);
 
 // Expo serves public/ in development and copies it into web/Tauri exports.
-// Password unlock has no fallback: a failed bundle must fail asset preparation.
+// Explicit full asset preparation is strict. Dependency-only refresh skips
+// these tasks; the UI source owner prepares its independent last-green assets.
 if (wants('vendor-password-kdf-worker')) {
     await buildPasswordKdfWorker();
 }
+if (wants('prepare-atmosphere-renderers')) {
+    await buildAtmosphereRenderers({ web: wants('vendor-password-kdf-worker') });
+}
+
+// Repair incomplete markdown artifacts before the all-package patch pass:
+// otherwise its strict failure exits before the existing partial repair runs.
+prepareEnrichedMarkdownOutputs();
 
 if (wants('patch-package')) {
     // Note: this repo uses Yarn workspaces, so some dependencies are hoisted to the repo root.
@@ -237,58 +247,62 @@ if (wants('verify-vendored-legend-patch')) {
     }
 }
 
-if (wants('install-react-native-enriched-markdown-web-wasm')) {
-    const packageDirs = findReactNativeEnrichedMarkdownPackageDirs({ repoRootDir, expoAppDir });
-    const vendoredWasmModulePath = path.resolve(
-        toolsDir,
-        'react-native-enriched-markdown',
-        'md4c.esm.single-file.js',
-    );
+function prepareEnrichedMarkdownOutputs() {
+    if (wants('install-react-native-enriched-markdown-web-wasm')) {
+        const packageDirs = findReactNativeEnrichedMarkdownPackageDirs({ repoRootDir, expoAppDir });
+        const vendoredWasmModulePath = path.resolve(
+            toolsDir,
+            'react-native-enriched-markdown',
+            'md4c.esm.single-file.js',
+        );
 
-    if (!fs.existsSync(vendoredWasmModulePath)) {
-        console.error(`Could not find vendored react-native-enriched-markdown WASM module at ${vendoredWasmModulePath}`);
-        process.exit(1);
-    }
+        if (!fs.existsSync(vendoredWasmModulePath)) {
+            console.error(`Could not find vendored react-native-enriched-markdown WASM module at ${vendoredWasmModulePath}`);
+            process.exit(1);
+        }
 
-    for (const packageDir of packageDirs) {
-        const sourceTargetPath = path.resolve(packageDir, 'src', 'web', 'wasm', 'md4c.js');
-        const builtTargetPath = path.resolve(packageDir, 'lib', 'module', 'web', 'wasm', 'md4c.js');
-        fs.mkdirSync(path.dirname(sourceTargetPath), { recursive: true });
-        fs.mkdirSync(path.dirname(builtTargetPath), { recursive: true });
-        fs.copyFileSync(vendoredWasmModulePath, sourceTargetPath);
-        fs.copyFileSync(vendoredWasmModulePath, builtTargetPath);
-    }
-}
-
-if (wants('verify-react-native-enriched-markdown-web-streaming-patch')) {
-    const packageDirs = findReactNativeEnrichedMarkdownPackageDirs({ repoRootDir, expoAppDir });
-
-    if (packageDirs.length === 0) {
-        console.error('Could not find react-native-enriched-markdown under repo or UI node_modules.');
-        process.exit(1);
-    }
-
-    const failureReports = [];
-    for (const [index, packageDir] of packageDirs.entries()) {
-        const initialResult = verifyReactNativeEnrichedMarkdownWebStreamingPatch({ packageDir });
-        const result = initialResult.status === 'ok'
-            ? initialResult
-            : repairReactNativeEnrichedMarkdownWebStreamingPatch({
-                packageDir,
-                patchDir,
-                patchPackageCliPath,
-                label: index === 0 ? 'root' : 'ui',
-            });
-        if (result.status !== 'ok') {
-            failureReports.push(`${packageDir}\n${formatReactNativeEnrichedMarkdownWebStreamingPatchFailure(result)}`);
+        for (const packageDir of packageDirs) {
+            const sourceTargetPath = path.resolve(packageDir, 'src', 'web', 'wasm', 'md4c.js');
+            const builtTargetPath = path.resolve(packageDir, 'lib', 'module', 'web', 'wasm', 'md4c.js');
+            fs.mkdirSync(path.dirname(sourceTargetPath), { recursive: true });
+            fs.mkdirSync(path.dirname(builtTargetPath), { recursive: true });
+            fs.copyFileSync(vendoredWasmModulePath, sourceTargetPath);
+            fs.copyFileSync(vendoredWasmModulePath, builtTargetPath);
         }
     }
 
-    if (failureReports.length > 0) {
-        console.error(`\n${failureReports.join('\n\n')}\n`);
-        process.exit(1);
+    if (wants('verify-react-native-enriched-markdown-web-streaming-patch')) {
+        const packageDirs = findReactNativeEnrichedMarkdownPackageDirs({ repoRootDir, expoAppDir });
+
+        if (packageDirs.length === 0) {
+            console.error('Could not find react-native-enriched-markdown under repo or UI node_modules.');
+            process.exit(1);
+        }
+
+        const failureReports = [];
+        for (const [index, packageDir] of packageDirs.entries()) {
+            const initialResult = verifyReactNativeEnrichedMarkdownWebStreamingPatch({ packageDir });
+            const result = initialResult.status === 'ok'
+                ? initialResult
+                : repairReactNativeEnrichedMarkdownWebStreamingPatch({
+                    packageDir,
+                    patchDir,
+                    patchPackageCliPath,
+                    label: index === 0 ? 'root' : 'ui',
+                });
+            if (result.status !== 'ok') {
+                failureReports.push(`${packageDir}\n${formatReactNativeEnrichedMarkdownWebStreamingPatchFailure(result)}`);
+            }
+        }
+
+        if (failureReports.length > 0) {
+            console.error(`\n${failureReports.join('\n\n')}\n`);
+            process.exit(1);
+        }
     }
 }
+
+if (wants('patch-package')) verifyUiPatchedDependencies({ uiPackageDir: expoAppDir });
 
 if (wants('verify-expo-router-web-modal-patch')) {
     const expoRouterPackageRoots = [

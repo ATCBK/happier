@@ -24,21 +24,20 @@ test('UI manifest declares every local postinstall input through the canonical i
     ['setup-skia-web', []],
     ['vendor-monaco', []],
     ['vendor-pierre-diffs-worker', ['tools/diffs']],
-    ['vendor-password-kdf-worker', ['tools/password', 'sources/auth/password/passwordKdf.worker.ts']],
+    ['vendor-password-kdf-worker', ['tools/password', 'tools/sourceAsset.mjs']],
+    ['prepare-atmosphere-renderers', ['tools/atmosphere', 'tools/sourceAsset.mjs']],
     ['vendor-codemirror-webview-bundle', ['tools/codemirror']],
     ['vendor-xterm-webview-bundle', ['tools/xterm']],
     [
       'vendor-tiptap-webview-bundle',
       [
         'tools/tiptap',
-        'sources/components/ui/markdown/editor/bridge/tiptapWebViewEntry.ts',
       ],
     ],
     [
       'vendor-mermaid-webview-bundle',
       [
         'tools/mermaid',
-        'sources/components/markdown/mermaidWebViewEntry.ts',
       ],
     ],
   ]);

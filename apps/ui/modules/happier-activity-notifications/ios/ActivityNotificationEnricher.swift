@@ -9,6 +9,79 @@ enum ActivityNotificationEnricher {
   typealias OpenSessionDataKey = (_ envelopeBase64: String, _ recipientSecretKeyOrSeedBase64: String) -> String?
   typealias DecryptSessionPayload = (_ ciphertextBase64: String, _ sessionDataKeyBase64: String) -> String?
 
+  static func fetchEnrichment(alert: MachineRemoteAlert, prepared: ActivityPreparedHomeContext,
+                              completion: @escaping (Enrichment?) -> Void) {
+    guard alert.phase == "offline", effectivePreviewBehavior(alert.previewBehavior, prepared.previewCeiling) != "status_only" else {
+      completion(nil)
+      return
+    }
+    let currentnessURL = prepared.apiEndpoint.appendingPathComponent("v1/account/encryption/currentness")
+    requestJSON(url: currentnessURL, token: prepared.token) { currentness in
+      guard let currentness, isAccountEncryptionCurrent(currentness, prepared: prepared) else { completion(nil); return }
+      let detailURL = prepared.apiEndpoint.appendingPathComponent("v1/machines").appendingPathComponent(alert.machineId)
+      requestJSON(url: detailURL, token: prepared.token, machineStoredContent: true) { root in
+        guard let machine = root?["machine"] as? [String: Any],
+              let name = openMachineName(machine: machine, alert: alert, prepared: prepared,
+                                        openDataKey: productionOpenSessionDataKey,
+                                        decryptPayload: productionDecryptMachinePayload) else { completion(nil); return }
+        completion(Enrichment(title: name, body: nil))
+      }
+    }
+  }
+
+  static func openMachineName(machine: [String: Any], alert: MachineRemoteAlert, prepared: ActivityPreparedHomeContext,
+                              openDataKey: OpenSessionDataKey, decryptPayload: DecryptSessionPayload) -> String? {
+    guard prepared.serverId == alert.serverId, prepared.accountId == alert.accountId,
+          machine["id"] as? String == alert.machineId,
+          let kind = machine["kind"] as? String, ["persistent", "ephemeral_session_runner"].contains(kind),
+          machine["revokedAt"] is NSNull, machine["replacedByMachineId"] is NSNull,
+          let access = machine["access"] as? [String: Any],
+          let custodian = access["custodian"] as? [String: Any], custodian["accountId"] as? String == alert.accountId,
+          exactKeys(access, ["custodian", "role", "resourceMode", "accessState"]), access["role"] as? String == "manage",
+          exactKeys(custodian, ["accountId", "displayName"]), custodian["displayName"] is String,
+          access["accessState"] as? String == "ready",
+          let mode = machine["storageMode"] as? String, access["resourceMode"] as? String == mode,
+          let stored = requiredString(machine["metadata"]) else { return nil }
+    let metadata: [String: Any]
+    if prepared.encryptionMode == "plain" {
+      guard mode == "plain", let marker = requiredString(machine["dataEncryptionKey"]),
+            let openedMarker = openPlainMachineEnvelope(marker), openedMarker["v"] is NSNull,
+            let envelope = openPlainMachineEnvelope(stored), let value = envelope["v"] as? [String: Any] else { return nil }
+      metadata = value
+    } else {
+      guard ["e2ee", "legacy_e2ee"].contains(prepared.encryptionMode), mode == "e2ee",
+            let envelope = requiredString(machine["dataEncryptionKey"]), let recipientKey = prepared.machineKey,
+            let key = openDataKey(envelope, recipientKey), let serialized = decryptPayload(stored, key),
+            let data = serialized.data(using: .utf8),
+            let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+      metadata = value
+    }
+    for key in ["displayName", "host"] {
+      if let value = metadata[key] as? String {
+        let name = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !name.isEmpty { return name }
+      }
+    }
+    return nil
+  }
+
+  private static func openPlainMachineEnvelope(_ encoded: String) -> [String: Any]? {
+    guard let data = Data(base64Encoded: encoded),
+          let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          root["t"] as? String == "plain", root["v"] != nil else { return nil }
+    return root
+  }
+
+  private static func productionDecryptMachinePayload(_ ciphertext: String, _ key: String) -> String? {
+    #if canImport(Clibsodium)
+    return HappierCryptoWorkerAesGcm.decryptAesGcmJsonBatch([[
+      "encryptedPayloadBase64": ciphertext, "keyBase64": key,
+    ]]).first ?? nil
+    #else
+    return nil
+    #endif
+  }
+
   private final class RejectRedirects: NSObject, URLSessionTaskDelegate {
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
@@ -211,10 +284,12 @@ enum ActivityNotificationEnricher {
     #endif
   }
 
-  private static func requestJSON(url: URL, token: String, completion: @escaping ([String: Any]?) -> Void) {
+  private static func requestJSON(url: URL, token: String, machineStoredContent: Bool = false,
+                                  completion: @escaping ([String: Any]?) -> Void) {
     var request = URLRequest(url: url, timeoutInterval: 2.5)
     request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
     request.setValue("application/json", forHTTPHeaderField: "Accept")
+    if machineStoredContent { request.setValue("2", forHTTPHeaderField: "x-happier-account-stored-content-protocol") }
     let configuration = URLSessionConfiguration.ephemeral
     configuration.urlCache = nil
     configuration.httpCookieStorage = nil

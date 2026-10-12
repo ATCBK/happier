@@ -123,5 +123,5 @@ test('terminated notification messages reach the strict Activity data-body consu
   assert.match(adapter, /gcm\.notification\./);
   assert.match(adapter, /remove\(key\)/);
   assert.match(adapter, /notification\.body\?\.let \{ adaptedExtras\.putString\("message", it\) \}/);
-  assert.match(adapter, /putString\("tag", alert\.replacementTag\)/);
+  assert.match(adapter, /putString\("tag", replacementTag\)/);
 });

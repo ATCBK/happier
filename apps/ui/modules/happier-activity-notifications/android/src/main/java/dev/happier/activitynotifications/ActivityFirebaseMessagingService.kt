@@ -55,6 +55,15 @@ class ActivityFirebaseMessagingService : ExpoFirebaseMessagingService() {
       ActivityNotificationMainProcessHandoff.offer(applicationContext, remoteMessage, alert)
       return
     }
+    val machineAlert = MachineRemoteAlert.parse(remoteMessage)
+    if (machineAlert != null) {
+      if (machineAlert.phase == "recovered") {
+        ActivityNotificationPresenter.present(applicationContext, remoteMessage, machineAlert)
+      } else {
+        ActivityNotificationMainProcessHandoff.offer(applicationContext, remoteMessage, machineAlert)
+      }
+      return
+    }
     if (SessionChangedWake.parse(remoteMessage) != null) {
       ActivityNotificationMainProcessHandoff.offerWake(applicationContext, remoteMessage)
       return

@@ -1,5 +1,7 @@
 import { lstat, mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
-import { dirname, join, relative, resolve, sep } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -20,6 +22,70 @@ const GENERATED_OUTPUT_RELATIVE_PATH = join(
   'availability',
   'generatedBundledPluginUiArtifacts.js',
 );
+
+// This producer emits static JSON-quoted requires. Describe exactly that graph
+// without executing an inventory; workspace startup owns file admission.
+const INVENTORY_REQUIRE = /\brequire\s*\(\s*("(?:[^"\\]|\\.)*")\s*\)/g;
+function readBundledPluginUiArtifactsInventory(inventoryPath) {
+  let source;
+  try {
+    source = readFileSync(inventoryPath, 'utf8');
+  } catch (error) {
+    if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') return null;
+    throw error;
+  }
+  if (!source.includes('export const BUNDLED_PLUGIN_UI_APP_ARTIFACTS')) return null;
+  const references = [...source.matchAll(INVENTORY_REQUIRE)];
+  if (references.length !== [...source.matchAll(/\brequire\s*\(/g)].length) return null;
+  const require = createRequire(inventoryPath);
+  const paths = [inventoryPath];
+  try {
+    for (const [, encoded] of references) {
+      const specifier = JSON.parse(encoded);
+      paths.push(isAbsolute(specifier) ? specifier : require.resolve(specifier));
+    }
+  } catch {
+    return null;
+  }
+  return { source, references: paths.slice(1), paths: Array.from(new Set(paths)) };
+}
+
+export function resolveBundledPluginUiArtifactsInputPaths(inventoryPath) {
+  return readBundledPluginUiArtifactsInventory(inventoryPath)?.paths ?? null;
+}
+
+/** Recover roots from this producer's static rows without evaluating UI code.
+ * These are candidates only; publication revalidates their entire byte graph. */
+export function resolveBundledPluginUiArtifactsRetainedRoots(inventoryPath) {
+  const retained = readBundledPluginUiArtifactsInventory(inventoryPath);
+  const roots = new Map();
+  if (!retained) return roots;
+  const rows = /pluginId: ("(?:[^"\\]|\\.)*"),[\s\S]*?files: Object.freeze\(\[\s*Object.freeze\(\{\s*relativePath: ("(?:[^"\\]|\\.)*"),\s*asset: BUNDLED_PLUGIN_UI_APP_ASSET_(\d+),/g;
+  for (const [, pluginId, relativePath, assetIndex] of retained.source.matchAll(rows)) {
+    const path = retained.references[Number(assetIndex)];
+    if (!path) continue;
+    const segments = JSON.parse(relativePath).split('/');
+    const root = resolve(dirname(path), ...segments.slice(1).map(() => '..'));
+    if (resolve(root, ...segments) === path) roots.set(JSON.parse(pluginId), root);
+  }
+  return roots;
+}
+
+/** Seed the existing consumer inventory from producer-owned retained bytes.
+ * Absolute references preserve the artifact graph across inventory locations;
+ * the normal compiler can later replace this same file atomically for Metro.
+ */
+export async function retainBundledPluginUiArtifactsInventory({ inventoryPath, outputPath }) {
+  const retained = readBundledPluginUiArtifactsInventory(inventoryPath);
+  if (!retained) return false;
+  let index = 0;
+  const output = retained.source.replace(INVENTORY_REQUIRE, () => `require(${JSON.stringify(retained.references[index++])})`);
+  await mkdir(dirname(outputPath), { recursive: true });
+  const temporaryPath = `${outputPath}.tmp.${process.pid}`;
+  await writeFile(temporaryPath, output, 'utf8');
+  await rename(temporaryPath, outputPath);
+  return true;
+}
 
 function parseJson(bytes, path) {
   try {
@@ -59,7 +125,7 @@ export function listBundledPluginUiArtifactExports(packageJson) {
     )).map(([key]) => key) : [];
 }
 
-async function collectBundledPluginUiArtifactSources(repoRoot, initialPluginFailures = [], artifactRoots, pluginManifests = {}) {
+export async function collectBundledPluginUiArtifactSources(repoRoot, initialPluginFailures = [], artifactRoots, pluginManifests = {}, artifactOutputDirs = {}) {
   const {
     PluginUiArtifactsManifestV2Schema,
     computePluginUiArtifactFileSetSha256DigestV1,
@@ -84,9 +150,12 @@ async function collectBundledPluginUiArtifactSources(repoRoot, initialPluginFail
     const candidatePackageName = `${PLUGIN_PACKAGE_PREFIX}${pluginDirectory}`;
     if (excludedPackageNames.has(candidatePackageName)) continue;
     const packageRoot = resolve(pluginsRoot, pluginDirectory);
-    const artifactsRoot = artifactRoots ? resolve(artifactRoots[pluginDirectory]) : resolve(packageRoot, 'dist', 'happier-plugin-ui');
+    const candidateRoots = artifactRoots
+      ? [...new Set([artifactRoots[pluginDirectory]].flat().filter(Boolean).map((root) => resolve(root)))]
+      : [resolve(packageRoot, 'dist', 'happier-plugin-ui')];
+    for (const [candidateIndex, artifactsRoot] of candidateRoots.entries()) {
     const artifactsManifestPath = resolve(artifactsRoot, 'ui-artifacts.json');
-    let pluginId = `happier.${pluginDirectory}`;
+    let pluginId = pluginManifests[pluginDirectory]?.id ?? `happier.${pluginDirectory}`;
     try {
     let rawArtifactManifest;
     try {
@@ -96,9 +165,9 @@ async function collectBundledPluginUiArtifactSources(repoRoot, initialPluginFail
         const packageJsonPath = resolve(packageRoot, 'package.json');
         const packageJson = parseJson(await readFile(packageJsonPath, 'utf8'), packageJsonPath);
         const bundleExports = listBundledPluginUiArtifactExports(packageJson);
-        if (bundleExports.length === 0) continue;
+        if (bundleExports.length === 0 && !artifactRoots) continue;
         const pluginManifestPath = resolve(packageRoot, '.happier-plugin', 'plugin.json');
-        const pluginManifest = parseJson(await readFile(pluginManifestPath, 'utf8'), pluginManifestPath);
+        const pluginManifest = pluginManifests[pluginDirectory] ?? parseJson(await readFile(pluginManifestPath, 'utf8'), pluginManifestPath);
         pluginId = readRequiredString(pluginManifest, 'id', pluginManifestPath);
         throw new Error(
           `Bundled Plugin UI artifact manifest is missing for '${pluginId}' with declared UI artifact exports: ${bundleExports.join(', ')}`,
@@ -117,18 +186,21 @@ async function collectBundledPluginUiArtifactSources(repoRoot, initialPluginFail
     if (!packageName.startsWith(PLUGIN_PACKAGE_PREFIX)) {
       throw new Error(`Bundled Plugin UI package '${packageName}' must use the '${PLUGIN_PACKAGE_PREFIX}' prefix`);
     }
-    if (uiDependencies[packageName] !== packageVersion) {
+    const parsedManifest = PluginUiArtifactsManifestV2Schema.safeParse(rawArtifactManifest);
+    if (!parsedManifest.success) {
+      throw new Error(`Invalid bundled Plugin UI artifact manifest for '${packageName}'`);
+    }
+    // App dependency membership applies to executable UI graphs. Daemon-only
+    // packages may emit empty manifests and still contribute packaged brands.
+    if (!artifactRoots && parsedManifest.data.entries.length > 0 && uiDependencies[packageName] !== packageVersion) {
       throw new Error(
         `apps/ui must depend on bundled Plugin UI package '${packageName}' at '${packageVersion}'`,
       );
     }
 
-    const parsedManifest = PluginUiArtifactsManifestV2Schema.safeParse(rawArtifactManifest);
-    if (!parsedManifest.success) {
-      throw new Error(`Invalid bundled Plugin UI artifact manifest for '${packageName}'`);
-    }
-
+    const destination = artifactOutputDirs[pluginDirectory] && resolve(artifactOutputDirs[pluginDirectory]);
     const pluginSources = [];
+    const pluginFiles = [];
     for (const entry of parsedManifest.data.entries) {
       const verifiedFiles = [];
       for (const file of entry.files) {
@@ -159,6 +231,7 @@ async function collectBundledPluginUiArtifactSources(repoRoot, initialPluginFail
           `Bundled Plugin UI artifact graph digest mismatch for '${packageName}/${entry.artifactId}'`,
         );
       }
+      if (destination && destination !== artifactsRoot) pluginFiles.push(...verifiedFiles);
 
       const coordinate = [pluginId, entry.artifactId, entry.tier, packageVersion].join('\u001f');
       const previousOwner = coordinateOwners.get(coordinate);
@@ -181,11 +254,29 @@ async function collectBundledPluginUiArtifactSources(repoRoot, initialPluginFail
             : `${packageName}/happier-plugin-ui/${file.relativePath}` })),
       });
     }
+    // Finite native construction owns fresh output roots. Write the exact
+    // bytes just verified, so a concurrent package publication cannot change
+    // the retained graph between validation and materialization.
+    if (destination && destination !== artifactsRoot) {
+      await mkdir(destination, { recursive: true });
+      for (const file of pluginFiles) {
+        const path = assertArtifactPath(destination, file.relativePath, candidatePackageName);
+        await mkdir(dirname(path), { recursive: true });
+        await writeFile(path, file.bytes);
+      }
+      await writeFile(join(destination, 'ui-artifacts.json'), JSON.stringify(parsedManifest.data));
+      for (const source of pluginSources) {
+        source.files = source.files.map((file) => ({ ...file,
+          specifier: assertArtifactPath(destination, file.relativePath, source.packageName) }));
+      }
+    }
     for (const source of pluginSources) {
       coordinateOwners.set([source.pluginId, source.artifactId, source.tier, source.packageVersion].join('\u001f'), source.packageName);
       sources.push(source);
     }
+    break;
     } catch (error) {
+      if (candidateIndex < candidateRoots.length - 1) continue;
       pluginFailures.push(createBundledPluginPublicationFailure({
         repoRoot,
         packageName: candidatePackageName,
@@ -193,6 +284,7 @@ async function collectBundledPluginUiArtifactSources(repoRoot, initialPluginFail
         code: 'plugin_ui_artifact_invalid',
         error,
       }));
+    }
     }
   }
 
@@ -259,6 +351,64 @@ function renderBundledPluginUiArtifactInventory(sources) {
   return lines.join('\n');
 }
 
+async function collectBundledPluginBrandMarks(repoRoot, pluginManifests, excludedPackageNames) {
+  const { computePluginUiArtifactSha256DigestV1 } = await import('@happier-dev/protocol/plugins/ui');
+  const directories = Object.keys(pluginManifests).length > 0
+    ? Object.keys(pluginManifests).sort()
+    : (await readdir(resolve(repoRoot, 'packages/plugins'), { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory() && !entry.name.startsWith('_')).map((entry) => entry.name).sort();
+  const marks = [];
+  const pluginFailures = [];
+  for (const directory of directories) {
+    if (excludedPackageNames.has(`${PLUGIN_PACKAGE_PREFIX}${directory}`)) continue;
+    const packageRoot = resolve(repoRoot, 'packages/plugins', directory);
+    let pluginId = `happier.${directory}`;
+    try {
+    let manifest = pluginManifests[directory];
+    if (!manifest) {
+      try {
+        manifest = parseJson(await readFile(join(packageRoot, '.happier-plugin/plugin.json'), 'utf8'), packageRoot);
+      } catch (error) {
+        if (error?.code === 'ENOENT') continue;
+        throw error;
+      }
+    }
+    if (!manifest.brand) continue;
+    pluginId = manifest.id;
+    const resource = manifest.contributes?.resources?.find((entry) => entry.id === manifest.brand.iconResourceId);
+    if (!resource || resource.kind !== 'asset' || resource.contentType !== 'image/png') {
+      throw new Error(`Invalid packaged brand Resource for '${manifest.id}'`);
+    }
+    const path = assertArtifactPath(packageRoot, resource.path, manifest.id);
+    const bytes = new Uint8Array(await readFile(path));
+    const packageJson = parseJson(await readFile(join(packageRoot, 'package.json'), 'utf8'), packageRoot);
+    marks.push({ pluginId: manifest.id, displayName: manifest.displayName, resourceId: resource.id,
+      releaseVersion: packageJson.version, digest: computePluginUiArtifactSha256DigestV1(bytes), bytes,
+      ...(manifest.brand.monochrome === true ? { monochrome: true } : {}) });
+    } catch (error) {
+      pluginFailures.push(createBundledPluginPublicationFailure({ repoRoot,
+        packageName: `${PLUGIN_PACKAGE_PREFIX}${directory}`, pluginId,
+        code: 'plugin_ui_artifact_invalid', error }));
+    }
+  }
+  return { marks, pluginFailures };
+}
+
+function renderBundledPluginBrandMarks(marks) {
+  return [
+    '/** Manifest-declared packaged identity bytes, admitted by the shared image owner before rendering. */',
+    "/** @type {ReadonlyArray<import('./bundledPluginUiArtifactInventory').BundledPluginBrandMark>} */",
+    'export const BUNDLED_PLUGIN_BRAND_MARKS = Object.freeze([',
+    ...marks.flatMap((mark) => [
+      '  Object.freeze({',
+      ...Object.entries(mark).filter(([key]) => key !== 'bytes').map(([key, value]) => `    ${key}: ${JSON.stringify(value)},`),
+      `    bytes: Uint8Array.from(${JSON.stringify([...mark.bytes])}),`,
+      '  }),',
+    ]),
+    ']);', '',
+  ].join('\n');
+}
+
 export function resolveBundledPluginUiArtifactsOutputPath(repoRoot) {
   return resolve(repoRoot, GENERATED_OUTPUT_RELATIVE_PATH);
 }
@@ -268,14 +418,16 @@ export async function generateBundledPluginUiArtifacts({
   mode = 'write',
   publicationMode = 'live',
   pluginFailures = [],
+  compilationFailures = [],
   outputPath = resolveBundledPluginUiArtifactsOutputPath(repoRoot),
   artifactRoots,
-  pluginManifests,
+  artifactOutputDirs = {},
+  pluginManifests = {},
 } = {}) {
   if (mode !== 'write' && mode !== 'check') {
     throw new Error(`Unsupported bundled Plugin UI artifact generation mode '${String(mode)}'`);
   }
-  if (publicationMode !== 'live' && publicationMode !== 'artifact') {
+  if (!['live', 'artifact', 'source'].includes(publicationMode)) {
     throw new Error(`Unsupported bundled Plugin UI publication mode '${String(publicationMode)}'`);
   }
   const inheritedCliFailures = publicationMode === 'live'
@@ -286,17 +438,33 @@ export async function generateBundledPluginUiArtifacts({
   const initialFailures = [...new Map(
     [...inheritedCliFailures, ...pluginFailures].map((failure) => [failure.packageName, failure]),
   ).values()];
-  const collected = await collectBundledPluginUiArtifactSources(repoRoot, initialFailures, artifactRoots, pluginManifests);
+  const collected = await collectBundledPluginUiArtifactSources(repoRoot, initialFailures, artifactRoots, pluginManifests,
+    mode === 'write' ? artifactOutputDirs : {});
+  // A compiler failure can still have a validated retained byte graph. Only
+  // unavailable graphs enter the existing failure set; every error is reported.
+  const compilationFailureByPackage = new Map(compilationFailures.map((failure) => [failure.packageName, failure]));
+  collected.pluginFailures = collected.pluginFailures.map((failure) => compilationFailureByPackage.get(failure.packageName) ?? failure);
+  for (const failure of compilationFailures) {
+    if (!collected.sources.some((source) => source.pluginId === failure.pluginId)
+      && !collected.pluginFailures.some((row) => row.packageName === failure.packageName)) {
+      collected.pluginFailures.push(failure);
+    }
+  }
+  const brands = await collectBundledPluginBrandMarks(repoRoot, pluginManifests,
+    new Set(collected.pluginFailures.map((failure) => failure.packageName)));
+  collected.pluginFailures.push(...brands.pluginFailures);
   if ((mode === 'check' || publicationMode === 'artifact') && collected.pluginFailures.length > 0) {
     throw new Error(`Bundled Plugin UI artifact publication failed for ${collected.pluginFailures.map((failure) => (
       `${failure.packageName}: ${failure.diagnostic.message}`
     )).join('; ')}`);
   }
   const { sources } = collected;
-  const diagnostics = collected.pluginFailures.map(({ pluginId, diagnostic }) => ({
+  const reportedFailures = [...new Map([...compilationFailures, ...collected.pluginFailures]
+    .map((failure) => [failure.packageName, failure])).values()];
+  const diagnostics = reportedFailures.map(({ pluginId, diagnostic }) => ({
     pluginId, ...diagnostic,
   }));
-  const output = renderBundledPluginUiArtifactInventory(sources);
+  const output = renderBundledPluginUiArtifactInventory(sources) + renderBundledPluginBrandMarks(brands.marks);
   if (mode === 'check') {
     let current = null;
     try {

@@ -6,6 +6,7 @@ import { delimiter, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { dirname, join as joinPath } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createCipheriv } from 'node:crypto';
 import { parseSessionChangedWakeV1, resolveActivityRemoteAlertEventIdentity } from '@happier-dev/protocol';
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
@@ -113,7 +114,7 @@ import java.math.BigDecimal
 
 class JSONException(message: String) : Exception(message)
 
-class JSONObject(raw: String) {
+class JSONObject(private val raw: String = "{}") {
   private val values: MutableMap<String, Any?> = LinkedHashMap()
 
   init {
@@ -134,11 +135,16 @@ class JSONObject(raw: String) {
   fun has(key: String): Boolean = values.containsKey(key)
 
   fun keys(): Iterator<String> = values.keys.iterator()
+  fun isNull(key: String): Boolean = values[key] == null
+  fun getBoolean(key: String): Boolean = values[key] as Boolean
+  fun optJSONArray(key: String): JSONArray? = values[key] as? JSONArray
+  fun put(key: String, value: Any?): JSONObject { values[key] = value; return this }
+  override fun toString(): String = raw
 
   private fun convert(value: JsonElement): Any? = when (value) {
     is JsonNull -> null
     is JsonObject -> JSONObject(value.toString())
-    is JsonArray -> value.map { convert(it) }
+    is JsonArray -> JSONArray(value.map { convert(it) })
     is JsonPrimitive -> if (value.isString) value.content else scalar(value.content)
   }
 
@@ -152,6 +158,10 @@ class JSONObject(raw: String) {
       BigDecimal(content)
     }
   }
+}
+class JSONArray(private val values: List<Any?>) {
+  fun length(): Int = values.size
+  fun opt(index: Int): Any? = values.getOrNull(index)
 }
 `;
 
@@ -305,6 +315,63 @@ const kotlinWakeSource = joinPath(
   moduleRoot, 'android', 'src', 'main', 'java', 'dev', 'happier', 'activitynotifications', 'SessionChangedWake.kt',
 );
 
+test('Android Machine alerts reach native presentation with one Account-bound replacement identity', (t) => {
+  const toolchain = discoverKotlinToolchain();
+  if (!toolchain) {
+    t.skip('Kotlin toolchain unavailable; Machine native presentation requires the JVM gate');
+    return;
+  }
+  const work = mkdtempSync(join(tmpdir(), 'happier-machine-alert-'));
+  const androidDir = dirname(kotlinAlertSource);
+  const transport = `
+package com.google.firebase.messaging
+import android.os.Bundle
+class RemoteMessage(extras: Bundle) {
+  val data = extras.values.filterKeys { !it.startsWith("gcm.n.") }.mapValues { it.value as String }
+  val notification = if (extras.values["gcm.n.e"] == "1") Notification(extras) else null
+  class Notification(extras: Bundle) {
+    val title = extras.values["gcm.n.title"] as? String
+    val body = extras.values["gcm.n.body"] as? String
+    val sound = extras.values["gcm.n.sound"] as? String
+    val channelId = extras.values["gcm.n.android_channel_id"] as? String
+  }
+}`;
+  const probe = `
+package dev.happier.activitynotifications
+import android.content.Intent
+import android.os.Bundle
+fun main() {
+  for (phase in listOf("offline", "recovered")) {
+    val body = """{"type":"machine_alert","v":1,"serverId":"srv-1","accountId":"acc-1","machineId":"machine-1","phase":"$phase","previewBehavior":"title_only"}"""
+    val extras = Bundle().apply {
+      putString("body", body); putString("gcm.n.e", "1")
+      putString("gcm.n.title", "Happier"); putString("gcm.n.body", "Generic machine status")
+    }
+    val adapted = ActivityRemoteAlertIntent.prepareForNativePresentation(Intent().replaceExtras(extras))
+    println(listOf(phase, adapted?.extras?.values?.get("tag") ?: "-", adapted?.extras?.values?.get("message") ?: "-").joinToString("|"))
+  }
+}`;
+  try {
+    const files = [
+      ['OrgJsonStub.kt', jsonRuntimeStub],
+      ['Bundle.kt', 'package android.os\nclass Bundle(other: Bundle? = null) { val values: MutableMap<String, Any> = other?.values?.toMutableMap() ?: mutableMapOf(); fun keySet() = values.keys; fun remove(key: String) { values.remove(key) }; fun putString(key: String, value: String) { values[key] = value } }'],
+      ['Intent.kt', 'package android.content\nimport android.os.Bundle\nclass Intent(other: Intent? = null) { var extras: Bundle? = other?.extras; fun replaceExtras(value: Bundle): Intent { extras = value; return this } }'],
+      ['Firebase.kt', transport], ['Probe.kt', probe],
+    ].map(([name, source]) => { const path = join(work, name); writeFileSync(path, source); return path; });
+    const machineParser = join(androidDir, 'MachineRemoteAlert.kt');
+    const classes = join(work, 'classes');
+    execFileSync('java', ['-cp', toolchain.compilerJars.join(delimiter), 'org.jetbrains.kotlin.cli.jvm.K2JVMCompiler',
+      '-classpath', toolchain.runtimeJars.join(delimiter), '-no-stdlib', '-d', classes, '-nowarn',
+      kotlinAlertSource, join(androidDir, 'ActivityRemoteAlertIntent.kt'), ...(existsSync(machineParser) ? [machineParser] : []), ...files],
+    { stdio: ['ignore', 'pipe', 'pipe'] });
+    const output = execFileSync('java', ['-cp', [classes, ...toolchain.runtimeJars].join(delimiter), 'dev.happier.activitynotifications.ProbeKt'], { encoding: 'utf8' });
+    assert.deepEqual(output.trim().split('\n'), [
+      'offline|machine_alert:srv-1:acc-1:machine-1|Generic machine status',
+      'recovered|machine_alert:srv-1:acc-1:machine-1|Generic machine status',
+    ]);
+  } finally { rmSync(work, { recursive: true, force: true }); }
+});
+
 // The Home's content-free closed-app wake exactly as it is submitted, beside
 // the neighbors the Android entry point must never hand to the wake consumer.
 const wakeScenarios = [
@@ -356,6 +423,115 @@ private fun sortedWakeScenarioKeys(input: JSONObject): List<String> =
     while (keys.hasNext()) add(keys.next())
   }.sorted()
 `;
+
+test('Android Machine enrichment uses authenticated own-Machine metadata and recovery only dismisses', (t) => {
+  const toolchain = discoverKotlinToolchain();
+  if (!toolchain) { t.skip('Kotlin toolchain unavailable; Machine enrichment requires the JVM gate'); return; }
+  const work = mkdtempSync(join(tmpdir(), 'happier-machine-enrichment-'));
+  const androidDir = dirname(kotlinAlertSource);
+  const cryptoDir = join(moduleRoot, '..', 'happier-crypto-worker', 'android', 'src', 'main', 'java', 'dev', 'happier', 'cryptoworker');
+  const key = Buffer.alloc(32, 7);
+  const nonce = Buffer.alloc(12, 3);
+  const cipher = createCipheriv('aes-256-gcm', key, nonce);
+  const encrypted = Buffer.concat([Buffer.from([0]), nonce, cipher.update(JSON.stringify({ displayName: 'edge-1', host: 'host-1' })), cipher.final(), cipher.getAuthTag()]).toString('base64');
+  const probe = `
+package dev.happier.activitynotifications
+import android.content.Context
+import com.google.firebase.messaging.RemoteMessage
+import com.sun.net.httpserver.HttpServer
+import expo.modules.notifications.service.delegates.ExpoPresentationDelegate
+import java.io.File
+import java.net.InetSocketAddress
+import org.json.JSONObject
+fun main(args: Array<String>) {
+  val input = JSONObject(readlnOrNull() ?: error("missing fixture"))
+  val context = Context(File(args[0]))
+  val preparedFile = File(context.filesDir, "happier-activity-alert-context-v1.json")
+  var scenario = "plain"
+  var mode = "plain"
+  var requests = 0
+  val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+  server.createContext("/") { exchange ->
+    check(exchange.requestHeaders.getFirst("Authorization") == "Bearer test-token")
+    requests += 1
+    val currentness = exchange.requestURI.path.endsWith("currentness")
+    if (!currentness) check(exchange.requestHeaders.getFirst("x-happier-account-stored-content-protocol") == "2")
+    val response = if (currentness) {
+      val version = if (scenario == "stale_account") 2 else 1
+      val readiness = if (mode == "plain") """{"status":"unavailable","reason":"plain_account"}""" else """{"status":"available"}"""
+      """{"mode":"$mode","version":$version,"settingsVersion":1,"signingKeyFingerprint":null,"contentKeyFingerprint":null,"updatedAt":1,"recipientEnvelopeReadiness":$readiness}"""
+    } else {
+      val metadata = if (mode == "plain") input.getString("plainMetadata") else input.getString("encryptedMetadata")
+      val envelope = if (mode == "plain") input.getString("plainMarker") else if (scenario == "bad_key") "Ag==" else "AQ=="
+      val custodian = if (scenario == "foreign_machine") "other-account" else "acc-1"
+      val kind = if (scenario == "runner") "ephemeral_session_runner" else "persistent"
+      if (scenario == "revoked_preparation") preparedFile.delete()
+      """{"machine":{"id":"machine-1","kind":"$kind","storageMode":"$mode","dataEncryptionKey":"$envelope","metadata":"$metadata","revokedAt":null,"replacedByMachineId":null,"access":{"custodian":{"accountId":"$custodian","displayName":"Alice"},"role":"manage","resourceMode":"$mode","accessState":"ready"}}}"""
+    }
+    val bytes = response.toByteArray()
+    val status = if (scenario == "network_failure") 403 else 200
+    exchange.sendResponseHeaders(status, bytes.size.toLong())
+    exchange.responseBody.use { it.write(bytes) }
+  }
+  server.start()
+  try {
+    for (case in listOf("plain", "e2ee", "runner", "stale_account", "foreign_machine", "bad_key", "network_failure", "revoked_preparation", "status_only", "recovered")) {
+      scenario = case
+      mode = if (case in listOf("e2ee", "bad_key")) "e2ee" else "plain"
+      requests = 0
+      val machineKey = if (mode == "e2ee") """, "machineKey":"CQ=="""" else ""
+      preparedFile.writeText("""{"v":1,"homes":[{"v":1,"serverId":"srv-1","apiEndpoint":"http://127.0.0.1:\${server.address.port}","accountId":"acc-1","credential":{"token":"test-token","encryptionMode":"$mode"$machineKey},"settingsVersion":1,"accountEncryptionVersion":1,"registrationId":"registration","pushToken":"push","previewCeiling":"include_preview"}]}""")
+      val phase = if (case == "recovered") "recovered" else "offline"
+      val preview = if (case == "status_only") "status_only" else "include_preview"
+      val body = """{"type":"machine_alert","v":1,"serverId":"srv-1","accountId":"acc-1","machineId":"machine-1","phase":"$phase","previewBehavior":"$preview"}"""
+      val message = RemoteMessage(mapOf("body" to body, "title" to "Happier", "message" to "Generic machine status"))
+      val alert = MachineRemoteAlert.parse(message) ?: error("alert rejected")
+      val enriched = ActivityNotificationPresenter.enrichedMessage(context, message, alert)
+      println("$case|\${enriched.data["title"]}|\${enriched.data["message"]}|$requests")
+      if (case == "recovered") {
+        ActivityNotificationPresenter.present(context, message, alert)
+        check(ExpoPresentationDelegate.dismissed == listOf("machine_alert:srv-1:acc-1:machine-1"))
+        check(ExpoPresentationDelegate.presented == 0)
+      }
+    }
+  } finally { server.stop(0) }
+}`;
+  try {
+    const sources = [
+      ['OrgJson.kt', jsonRuntimeStub],
+      ['Context.kt', 'package android.content\nimport java.io.File\nclass Context(val filesDir: File) { val packageName = "dev.happier" }'],
+      ['Uri.kt', 'package android.net\nobject Uri { fun encode(value: String) = java.net.URLEncoder.encode(value, "UTF-8") }'],
+      ['Os.kt', 'package android.system\nobject Os { fun rename(from: String, to: String) { java.io.File(from).renameTo(java.io.File(to)) } }'],
+      ['Base64.kt', 'package android.util\nobject Base64 { const val DEFAULT = 0; const val NO_WRAP = 2; fun decode(value: String, flags: Int) = java.util.Base64.getDecoder().decode(value); fun encodeToString(value: ByteArray, flags: Int) = java.util.Base64.getEncoder().encodeToString(value) }'],
+      // The JNI envelope-opening boundary is unavailable on a host JVM. Keep
+      // the canonical envelope adapter and real AES-GCM worker beneath it.
+      ['NativeCrypto.kt', 'package dev.happier.cryptoworker\nobject HappierCryptoWorkerNative { fun openDataKeyEnvelopeV1(envelope: ByteArray, recipient: ByteArray): ByteArray? = if (envelope.contentEquals(byteArrayOf(1)) && recipient.contentEquals(byteArrayOf(9))) ByteArray(32) { 7 } else null; fun openSecretboxJson(ciphertext: ByteArray, key: ByteArray): ByteArray? = null }'],
+      ['Firebase.kt', 'package com.google.firebase.messaging\nclass RemoteMessage(val data: Map<String, String>) { val from: String? = null; val messageId: String? = null; val sentTime: Long = 1; class Builder(from: String) { var data = emptyMap<String, String>(); fun setMessageId(id: String) = this; fun setData(value: Map<String, String>): Builder { data=value; return this }; fun build() = RemoteMessage(data) } }'],
+      ['Models.kt', 'package expo.modules.notifications.notifications.model\nclass RemoteNotificationContent(message: com.google.firebase.messaging.RemoteMessage)\nclass NotificationRequest(val identifier: String, content: RemoteNotificationContent, trigger: Any)\nclass Notification(val notificationRequest: NotificationRequest, date: java.util.Date)'],
+      ['Trigger.kt', 'package expo.modules.notifications.notifications.model.triggers\nclass FirebaseNotificationTrigger(message: com.google.firebase.messaging.RemoteMessage)'],
+      ['Presentation.kt', 'package expo.modules.notifications.service.delegates\nclass ExpoPresentationDelegate(context: android.content.Context) { companion object { var dismissed = emptyList<String>(); var presented = 0 }; fun dismissNotifications(ids: Collection<String>) { dismissed = ids.toList() }; fun presentNotification(notification: expo.modules.notifications.notifications.model.Notification, behavior: Any?) { presented += 1 } }'],
+      ['Probe.kt', probe],
+    ].map(([name, source]) => { const path = join(work, name); writeFileSync(path, source); return path; });
+    const classes = join(work, 'classes');
+    const realSources = ['ActivityRemoteAlert.kt', 'MachineRemoteAlert.kt', 'ActivityPreparedContext.kt', 'ActivityNotificationEnricher.kt', 'ActivityNotificationPresenter.kt'].map((name) => join(androidDir, name));
+    const cryptoSources = ['HappierCryptoWorker.kt', 'HappierCryptoWorkerBase64.kt', 'HappierCryptoWorkerTypes.kt', 'HappierCryptoWorkerSessionCrypto.kt'].map((name) => join(cryptoDir, name));
+    try {
+      execFileSync('java', ['-cp', toolchain.compilerJars.join(delimiter), 'org.jetbrains.kotlin.cli.jvm.K2JVMCompiler', '-classpath', toolchain.runtimeJars.join(delimiter), '-no-stdlib', '-d', classes, '-nowarn', ...realSources, ...cryptoSources, ...sources], { stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (error) { throw new Error(error.stderr?.toString() ?? error.message); }
+    const plainEnvelope = (v) => Buffer.from(JSON.stringify({ t: 'plain', v })).toString('base64');
+    const output = execFileSync('java', ['-cp', [classes, ...toolchain.runtimeJars].join(delimiter), 'dev.happier.activitynotifications.ProbeKt', work], {
+      encoding: 'utf8', input: JSON.stringify({ plainMarker: plainEnvelope(null), plainMetadata: plainEnvelope({ displayName: 'edge-1', host: 'host-1' }), encryptedMetadata: encrypted }),
+    });
+    assert.deepEqual(output.trim().split('\n'), [
+      'plain|edge-1|Generic machine status|2', 'e2ee|edge-1|Generic machine status|2',
+      'runner|edge-1|Generic machine status|2',
+      'stale_account|Happier|Generic machine status|1', 'foreign_machine|Happier|Generic machine status|2',
+      'bad_key|Happier|Generic machine status|2', 'network_failure|Happier|Generic machine status|1',
+      'revoked_preparation|Happier|Generic machine status|2', 'status_only|Happier|Generic machine status|0',
+      'recovered|Happier|Generic machine status|0',
+    ]);
+  } finally { rmSync(work, { recursive: true, force: true }); }
+});
 
 test('Android admits exactly the Protocol content-free wake and never an alert as one', async (t) => {
   const toolchain = discoverKotlinToolchain();

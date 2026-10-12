@@ -5,6 +5,19 @@ import { constants as fsConstants } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+test('native hidden overlay state uses the same state event as visible updates', async () => {
+  // The native WebView event boundary cannot run in the Node harness. Verify its
+  // actual Hide producer wiring; the real bridge/hook suite exercises delivery.
+  const source = await readFile(new URL('../src-tauri/src/activity_overlay.rs', import.meta.url), 'utf-8');
+  const applyState = source.slice(source.indexOf('fn apply_overlay_state<'));
+  const hideBranch = applyState.slice(
+    applyState.indexOf('if action == OverlayWindowVisibilityAction::Hide'),
+    applyState.indexOf('let window = ensure_overlay_window'),
+  );
+  assert.match(hideBranch, /window\.emit\(OVERLAY_STATE_EVENT,\s*window_state/);
+  assert.match(hideBranch, /last_window_state\s*=\s*Some\(window_state\.clone\(\)\)/);
+});
+
 test('apps/ui exposes a rollout-local activity-surfaces typecheck and certification contract', async () => {
   const scriptsDir = dirname(fileURLToPath(import.meta.url));
   const packageRoot = dirname(scriptsDir);

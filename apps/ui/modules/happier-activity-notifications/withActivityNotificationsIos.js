@@ -16,6 +16,7 @@ const STORAGE_LOCATION_SOURCE_FILE_NAME = 'ActivityNotificationStorageLocation.s
 const ENRICHER_SOURCE_FILE_NAME = 'ActivityNotificationEnricher.swift';
 const CRYPTO_SOURCE_FILE_NAMES = [
   'HappierCryptoWorkerBase64.swift',
+  'HappierCryptoWorkerAesGcm.swift',
   'HappierCryptoWorkerDataKeyEnvelope.swift',
   'HappierCryptoWorkerSecretbox.swift',
   'HappierCryptoWorkerSessionCrypto.swift',

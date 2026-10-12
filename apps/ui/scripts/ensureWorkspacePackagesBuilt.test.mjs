@@ -2,16 +2,18 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { computeSourceDevSharedDepsSignature } from '../../cli/scripts/buildSharedDeps.mjs';
 import { resolveBundledPluginUiArtifactsOutputPath } from './generateBundledPluginUiArtifacts.mjs';
 
-test('hasUsableUiWorkspaceLastGreen requires both recorded workspace outputs and target-owned UI artifacts', async () => {
+test('workspace startup admits Metro inputs independently of workspace dist publication', async () => {
   const root = await mkdtemp(join(tmpdir(), 'happier-ui-last-green-'));
   const uiPackageDir = join(root, 'apps', 'ui');
   try {
     await mkdir(uiPackageDir, { recursive: true });
-    const { hasUsableUiWorkspaceLastGreen } = await import('./ensureWorkspacePackagesBuilt.mjs');
+    const { resolveUiWorkspaceStartupOutputs } = await import('./ensureWorkspacePackagesBuilt.mjs');
+    const { hasUsableWorkspaceLastGreen } = await import('../../../scripts/workspaces/ensureWorkspacePackagesBuilt.mjs');
+    const lastGreen = () => hasUsableWorkspaceLastGreen(uiPackageDir, { requiredFiles: resolveUiWorkspaceStartupOutputs({ uiPackageDir }) });
     await mkdir(join(root, 'apps', 'cli', 'scripts'), { recursive: true });
     await writeFile(join(root, 'apps', 'cli', 'scripts', 'buildSharedDeps.mjs'),
       `export { inspectUsableSourceDevSharedDepsLastGreen } from ${JSON.stringify(new URL('../../cli/scripts/buildSharedDeps.mjs', import.meta.url).href)};\n`);
@@ -26,13 +28,22 @@ test('hasUsableUiWorkspaceLastGreen requires both recorded workspace outputs and
     await writeFile(join(root, '.project', 'tmp', 'cli-source-dev-shared-deps-sync.json'), JSON.stringify({
       version: signature.version, entries: { sdk: { signature, syncedAtMs: 1 } },
     }));
-    assert.equal(await hasUsableUiWorkspaceLastGreen({ uiPackageDir }), false);
+    assert.equal(await lastGreen(), false);
     const outputPath = resolveBundledPluginUiArtifactsOutputPath(root);
     await mkdir(join(outputPath, '..'), { recursive: true });
     await writeFile(outputPath, 'export const BUNDLED_PLUGIN_UI_APP_ARTIFACTS = [];\n');
-    assert.equal(await hasUsableUiWorkspaceLastGreen({ uiPackageDir }), true);
+    assert.equal(await lastGreen(), true);
+    const assetPath = join(root, 'consumer/preparation/entry.cjs.bundle');
+    await writeFile(outputPath, `const asset = require(${JSON.stringify(assetPath)});\nexport const BUNDLED_PLUGIN_UI_APP_ARTIFACTS = [];\n`);
+    assert.equal(await lastGreen(), false, 'an inventory without its consumed asset graph is not last-green');
+    await mkdir(dirname(assetPath), { recursive: true });
+    await writeFile(assetPath, 'module.exports = {};\n');
+    assert.equal(await lastGreen(), true);
+    await rm(assetPath);
+    assert.equal(await lastGreen(), false);
+    await writeFile(outputPath, 'export const BUNDLED_PLUGIN_UI_APP_ARTIFACTS = [];\n');
     await rm(join(sdkDir, 'dist', 'index.js'));
-    assert.equal(await hasUsableUiWorkspaceLastGreen({ uiPackageDir }), false);
+    assert.equal(await lastGreen(), true);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

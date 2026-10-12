@@ -47,7 +47,7 @@ const kotlinSessionCryptoSource = read(
 );
 
 function canonicalEventTypes() {
-  const union = protocolSource.match(/ActivityRemoteAlertEventV1Schema = z\.discriminatedUnion\([\s\S]*?\]\);/);
+  const union = protocolSource.match(/ActivityRemoteAlertEventV1Schema = [\s\S]*?(?=export type ActivityRemoteAlertEventV1)/);
   assert.ok(union, 'canonical alert event union not found');
   return [...union[0].matchAll(/z\.literal\('([^']+)'\)/g)].map((match) => match[1]).filter((value) => value !== 'type').sort();
 }

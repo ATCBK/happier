@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,6 +10,7 @@ import { applyExpoNodeHeapEnv } from '../../../stack/scripts/utils/expo/expoNode
 import { runSourceBuildCommand } from '../../../stack/scripts/utils/proc/runSourceBuildCommand.mjs';
 import { buildStackWebExportEnv } from '../../../stack/scripts/utils/ui/ui_export_env.mjs';
 import { prepareSourceWebUi } from '../../../stack/scripts/build/build_source_web_ui.mjs';
+import { withBuildInputDependencies } from '../../../../scripts/workspaces/buildInputConvergence.mjs';
 
 // Use Expo's real export driver and Metro's own source-map consumer. This is
 // measurement tooling: it changes neither app imports nor bundler chunk policy.
@@ -19,33 +20,50 @@ const require = createRequire(join(uiRoot, 'package.json'));
 const metroRequire = createRequire(require.resolve('metro/package.json'));
 const Consumer = metroRequire('metro-source-map/private/Consumer/index').default;
 const fromExport = process.argv.find(argument => argument.startsWith('--from-export='))?.slice('--from-export='.length);
-const outputDir = fromExport ? dirname(resolve(fromExport)) : await mkdtemp(join(tmpdir(), 'happier-web-entry-size-'));
+const exportWorkerDir = process.argv.find(argument => argument.startsWith('--export-worker='))?.slice('--export-worker='.length);
+const outputDir = fromExport ? dirname(resolve(fromExport)) : exportWorkerDir ? resolve(exportWorkerDir)
+    : await mkdtemp(join(tmpdir(), 'happier-web-entry-size-'));
 const webOutputDir = fromExport ? resolve(fromExport) : join(outputDir, 'web');
 let inventoryPath;
-if (!fromExport) {
-    console.log(JSON.stringify({ phase: 'source-preparation', outputDir }));
-    ({ inventoryPath } = await prepareSourceWebUi({
-        repoDir: repoRoot, outputDir: join(outputDir, 'source-inputs'),
-    }));
-    const { env: isolatedEnv } = await prepareExpoCommandEnv({
-        baseDir: outputDir, kind: 'source-web-export', projectDir: uiRoot,
-        baseEnv: buildStackWebExportEnv(),
-    });
-    const env = applyExpoNodeHeapEnv({ ...isolatedEnv, CI: '1', HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY: inventoryPath });
-    console.log(JSON.stringify({ phase: 'expo-export', outputDir }));
-    await runSourceBuildCommand({
-        repoDir: repoRoot, command: await resolveExpoBin(uiRoot),
-        args: applyExpoExportMaxWorkersArgs([
-            'export', '--platform', 'web', '--source-maps', '--output-dir', webOutputDir,
-        ], env),
-        cwd: uiRoot, env, captureStdout: false,
-    });
+if (!fromExport && !exportWorkerDir) {
+    // One admitted finite producer contains capture, preparation and Metro;
+    // dependency custody is never held by the parent across admission waits.
+    await runSourceBuildCommand({ repoDir: repoRoot, scriptPath: fileURLToPath(import.meta.url),
+        args: [`--export-worker=${outputDir}`], captureStdout: false });
+} else if (exportWorkerDir) {
+    const workerOutputDir = resolve(exportWorkerDir);
+    const workerWebOutputDir = join(workerOutputDir, 'web');
+    await withBuildInputDependencies({ sourceDir: repoRoot }, async dependencyEnv => { try {
+        console.log(JSON.stringify({ phase: 'source-preparation', outputDir: workerOutputDir }));
+        let uiProjectDir;
+        ({ inventoryPath, uiProjectDir } = await prepareSourceWebUi({
+            repoDir: repoRoot, outputDir: join(workerOutputDir, 'source-inputs'), env: dependencyEnv,
+        }));
+        const { env: isolatedEnv } = await prepareExpoCommandEnv({
+            baseDir: workerOutputDir, kind: 'source-web-export', projectDir: uiRoot,
+            baseEnv: buildStackWebExportEnv({ baseEnv: dependencyEnv }),
+        });
+        const env = applyExpoNodeHeapEnv({ ...isolatedEnv, CI: '1', HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY: inventoryPath });
+        console.log(JSON.stringify({ phase: 'expo-export', outputDir: workerOutputDir }));
+        await runSourceBuildCommand({
+            repoDir: repoRoot, command: await resolveExpoBin(uiRoot),
+            args: applyExpoExportMaxWorkersArgs([
+                'export', '--platform', 'web', '--source-maps', '--output-dir', workerWebOutputDir,
+            ], env),
+            cwd: uiProjectDir, env, captureStdout: false,
+        });
+    } finally {
+        await rm(join(workerOutputDir, 'source-inputs/workspace'), { recursive: true, force: true });
+    } });
+    process.exit(0);
 }
 
 const html = await readFile(join(webOutputDir, 'index.html'), 'utf8');
 const required = [];
 const unselectedLocaleModules = new Set();
 const eagerSecondaryRoutes = new Set();
+const eagerProtocolRootModules = new Set();
+const eagerSessionImplementations = new Set();
 for (const match of html.matchAll(/<script\b[^>]*\bsrc="([^"]+\.js)"/g)) {
     const filename = match[1].replace(/^\//, '');
     const source = await readFile(join(webOutputDir, filename), 'utf8');
@@ -71,6 +89,8 @@ for (const match of html.matchAll(/<script\b[^>]*\bsrc="([^"]+\.js)"/g)) {
         && !file.includes('/sources/text/'));
     for (const { file } of contributors) {
         if (/\/sources\/app\/\(app\)\/(?:settings|dev)\//.test(file)) eagerSecondaryRoutes.add(file);
+        if (/\/packages\/protocol\/src\/index\.ts$/.test(file)) eagerProtocolRootModules.add(file);
+        if (/\/components\/sessions\/shell\/SessionView\.tsx$/.test(file)) eagerSessionImplementations.add(file);
     }
     const textContributors = contributors.filter(({ file }) => file.includes('/sources/text/'));
     for (const { file } of textContributors) {
@@ -116,7 +136,8 @@ const measurement = { outputDir: webOutputDir, inventory: inventoryPath, require
     homeRouteChunks,
     requiredBytes: required.reduce((sum, script) => sum + script.bytes, 0),
     homeRouteMinimumBytes: [...required, ...homeRouteChunks].reduce((sum, script) => sum + script.bytes, 0),
-    unselectedLocaleModules: [...unselectedLocaleModules], eagerSecondaryRoutes: [...eagerSecondaryRoutes] };
+    unselectedLocaleModules: [...unselectedLocaleModules], eagerSecondaryRoutes: [...eagerSecondaryRoutes],
+    eagerProtocolRootModules: [...eagerProtocolRootModules], eagerSessionImplementations: [...eagerSessionImplementations] };
 if (!fromExport) await writeFile(join(outputDir, 'measurement.json'), JSON.stringify(measurement, null, 2));
 console.log(JSON.stringify({ ...measurement,
     eagerSecondaryRoutes: { count: measurement.eagerSecondaryRoutes.length,
@@ -129,4 +150,12 @@ if (process.argv.includes('--verify-locale-demand')) {
 if (process.argv.includes('--verify-route-demand')) {
     assert.deepEqual(measurement.eagerSecondaryRoutes, [],
         'required production scripts must not download unopened settings or development routes');
+}
+if (process.argv.includes('--verify-protocol-demand')) {
+    assert.deepEqual(measurement.eagerProtocolRootModules, [],
+        'required production scripts must not download the complete Protocol root barrel');
+}
+if (process.argv.includes('--verify-session-demand')) {
+    assert.deepEqual(measurement.eagerSessionImplementations, [],
+        'required production scripts must not download the unopened session implementation');
 }

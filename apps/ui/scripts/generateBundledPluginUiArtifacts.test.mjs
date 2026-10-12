@@ -96,6 +96,19 @@ async function addSecondPlugin(repoRoot) {
   }));
 }
 
+async function addFixtureBrand(fixture) {
+  const pluginRoot = join(fixture.repoRoot, 'packages/plugins/fixture');
+  const bytes = await readFile(resolve(packageRoot, '../../packages/plugins/inspector/assets/brand.png'));
+  await mkdir(join(pluginRoot, 'assets'), { recursive: true });
+  await writeFile(join(pluginRoot, 'assets/brand.png'), bytes);
+  const manifest = {
+    id: 'happier.fixture', displayName: 'Fixture', brand: { iconResourceId: 'brand-icon', monochrome: true },
+    contributes: { resources: [{ id: 'brand-icon', kind: 'asset', path: 'assets/brand.png', contentType: 'image/png' }] },
+  };
+  await writeFile(join(pluginRoot, '.happier-plugin/plugin.json'), JSON.stringify(manifest));
+  return { bytes, manifest };
+}
+
 test('the UI prebuild owns one universal exact app-preseed registry from canonical artifact manifests', async () => {
   const fixture = await createFixture();
   try {
@@ -126,6 +139,32 @@ test('the UI prebuild owns one universal exact app-preseed registry from canonic
   }
 });
 
+test('the UI byte publisher projects declared packaged brand marks, including packages without UI entries', async () => {
+  const fixture = await createFixture();
+  try {
+    const { bytes, manifest } = await addFixtureBrand(fixture);
+    await writeFile(join(fixture.artifactRoot, 'ui-artifacts.json'), JSON.stringify({ version: 2, entries: [] }));
+    // Daemon-only bundled plugins (including machine provisioners) have brands
+    // without an app dependency or an executable UI graph.
+    await writeFile(join(fixture.repoRoot, 'apps/ui/package.json'), JSON.stringify({ dependencies: {} }));
+    const result = await generateBundledPluginUiArtifacts({ repoRoot: fixture.repoRoot, publicationMode: 'artifact' });
+    const output = await readFile(result.outputPath, 'utf8');
+    assert.match(output, /export const BUNDLED_PLUGIN_BRAND_MARKS/);
+    assert.match(output, /resourceId: "brand-icon"/);
+    assert.match(output, /monochrome: true/);
+    assert.ok(output.includes(`bytes: Uint8Array.from(${JSON.stringify([...bytes])})`));
+    assert.ok(output.includes(`digest: ${JSON.stringify(computePluginUiArtifactSha256DigestV1(bytes))}`));
+    assert.doesNotMatch(output, /require\([^)]*brand\.png/);
+    const privateResult = await generateBundledPluginUiArtifacts({
+      repoRoot: fixture.repoRoot, publicationMode: 'artifact', artifactRoots: {},
+      pluginManifests: { fixture: manifest }, outputPath: join(fixture.repoRoot, 'private/inventory.js'),
+    });
+    assert.match(await readFile(privateResult.outputPath, 'utf8'), /resourceId: "brand-icon"/);
+  } finally {
+    await rm(fixture.repoRoot, { recursive: true, force: true });
+  }
+});
+
 test('source preparation projects private artifacts without touching package dist or the live inventory', async () => {
   const fixture = await createFixture();
   try {
@@ -134,6 +173,9 @@ test('source preparation projects private artifacts without touching package dis
     const { cp } = await import('node:fs/promises');
     await cp(fixture.artifactRoot, privateArtifacts, { recursive: true });
     await rm(fixture.artifactRoot, { recursive: true });
+    // Daemon and native CLI packages carry plugins the app does not bundle.
+    const uiPackagePath = join(fixture.repoRoot, 'apps', 'ui', 'package.json');
+    await writeFile(uiPackagePath, JSON.stringify({ ...JSON.parse(await readFile(uiPackagePath, 'utf8')), dependencies: {} }));
     const outputPath = join(privateRoot, 'inventory.js');
     await generateBundledPluginUiArtifacts({
       repoRoot: fixture.repoRoot, publicationMode: 'artifact', outputPath,
@@ -145,6 +187,34 @@ test('source preparation projects private artifacts without touching package dis
     assert.ok(output.includes(JSON.stringify(join(privateArtifacts, fixture.relativePath))));
     await assert.rejects(stat(resolveBundledPluginUiArtifactsOutputPath(fixture.repoRoot)), { code: 'ENOENT' });
     await assert.rejects(stat(fixture.artifactRoot), { code: 'ENOENT' });
+
+    // The same compiler emits a valid empty graph for daemon-only plugins.
+    await writeFile(join(privateArtifacts, 'ui-artifacts.json'), JSON.stringify({ version: 2, entries: [] }));
+    const empty = await generateBundledPluginUiArtifacts({
+      repoRoot: fixture.repoRoot, publicationMode: 'artifact', outputPath,
+      artifactRoots: { fixture: privateArtifacts },
+      pluginManifests: { fixture: { id: 'happier.authored-fixture' } },
+    });
+    assert.deepEqual(empty.pluginFailures, []);
+    assert.doesNotMatch(await readFile(outputPath, 'utf8'), /happier\.authored-fixture/);
+  } finally {
+    await rm(fixture.repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('live and packaged app inventories require their nonempty plugin graphs to be app dependencies', async () => {
+  const fixture = await createFixture();
+  try {
+    await writeFile(join(fixture.repoRoot, 'apps', 'ui', 'package.json'), JSON.stringify({ dependencies: {} }));
+    await assert.rejects(
+      generateBundledPluginUiArtifacts({ repoRoot: fixture.repoRoot, publicationMode: 'artifact' }),
+      /apps\/ui must depend on bundled Plugin UI package/,
+    );
+    const live = await generateBundledPluginUiArtifacts({ repoRoot: fixture.repoRoot });
+    assert.deepEqual(live.diagnostics.map(({ pluginId, code }) => ({ pluginId, code })), [
+      { pluginId: 'happier.fixture', code: 'plugin_ui_artifact_invalid' },
+    ]);
+    assert.doesNotMatch(await readFile(live.outputPath, 'utf8'), /pluginId: "happier\.fixture"/);
   } finally {
     await rm(fixture.repoRoot, { recursive: true, force: true });
   }
@@ -153,6 +223,7 @@ test('source preparation projects private artifacts without touching package dis
 test('the emitted JavaScript and committed declaration satisfy the inventory contract', async () => {
   const fixture = await createFixture();
   try {
+    await addFixtureBrand(fixture);
     await generateBundledPluginUiArtifacts({ repoRoot: fixture.repoRoot, mode: 'write' });
     const outputPath = resolveBundledPluginUiArtifactsOutputPath(fixture.repoRoot);
     const fixtureDir = dirname(outputPath);
@@ -172,10 +243,12 @@ test('the emitted JavaScript and committed declaration satisfy the inventory con
     ].join('\n'));
     const consumerPath = join(fixtureDir, 'consumer.ts');
     await writeFile(consumerPath, [
-      "import { BUNDLED_PLUGIN_UI_APP_ARTIFACTS } from './generatedBundledPluginUiArtifacts';",
-      "import type { BundledPluginUiAppArtifactInventory } from './bundledPluginUiArtifactInventory';",
+      "import { BUNDLED_PLUGIN_UI_APP_ARTIFACTS, BUNDLED_PLUGIN_BRAND_MARKS } from './generatedBundledPluginUiArtifacts';",
+      "import type { BundledPluginUiAppArtifactInventory, BundledPluginBrandMark } from './bundledPluginUiArtifactInventory';",
       'const inventory: BundledPluginUiAppArtifactInventory = BUNDLED_PLUGIN_UI_APP_ARTIFACTS;',
+      'const brands: readonly BundledPluginBrandMark[] = BUNDLED_PLUGIN_BRAND_MARKS;',
       'void inventory;',
+      'void brands;',
       '',
     ].join('\n'));
     const compiler = resolve(packageRoot, '..', '..', 'scripts', 'workspaces', 'runTypeScriptCli.mjs');

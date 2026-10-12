@@ -24,8 +24,7 @@ import java.util.concurrent.Executors
  * loaded. Process liveness is deliberately not used as a proxy for handler
  * availability.
  *
- * Two message kinds cross this hop and each keeps exactly one owner: a
- * recognized Activity alert is presented (by the app process when it accepts
+ * Recognized Activity and offline Machine alerts are presented (by the app process when it accepts
  * the handoff, otherwise by the isolated fallback), and the Home's content-free
  * `session_changed` wake only runs the app process's registered wake task. A
  * wake has nothing to present, so it carries no fallback.
@@ -64,6 +63,13 @@ object ActivityNotificationMainProcessHandoff {
             val alert = ActivityRemoteAlert.parse(message)
             if (alert != null) {
               val enrichedMessage = ActivityNotificationPresenter.enrichedMessage(applicationContext, message, alert)
+              FirebaseMessagingDelegate(applicationContext).onMessageReceived(enrichedMessage)
+              pending.setResultCode(RESULT_PRESENTED)
+              return@execute
+            }
+            val machineAlert = MachineRemoteAlert.parse(message)
+            if (machineAlert != null) {
+              val enrichedMessage = ActivityNotificationPresenter.enrichedMessage(applicationContext, message, machineAlert)
               FirebaseMessagingDelegate(applicationContext).onMessageReceived(enrichedMessage)
               pending.setResultCode(RESULT_PRESENTED)
               return@execute
@@ -114,18 +120,31 @@ object ActivityNotificationMainProcessHandoff {
 
   @JvmStatic
   fun offer(context: Context, remoteMessage: RemoteMessage, alert: ActivityRemoteAlert) {
+    offer(context, remoteMessage, alert.replacementTag) {
+      ActivityNotificationPresenter.present(context.applicationContext, remoteMessage, alert)
+    }
+  }
+
+  @JvmStatic
+  fun offer(context: Context, remoteMessage: RemoteMessage, alert: MachineRemoteAlert) {
+    offer(context, remoteMessage, alert.replacementTag) {
+      ActivityNotificationPresenter.present(context.applicationContext, remoteMessage, alert)
+    }
+  }
+
+  private fun offer(context: Context, remoteMessage: RemoteMessage, replacementTag: String, presentFallback: () -> Unit) {
     val handoff = Intent(action(context)).setPackage(context.packageName)
     copy(remoteMessage.data, EXTRA_BODY, handoff)
     copy(remoteMessage.data, EXTRA_TITLE, handoff)
     copy(remoteMessage.data, EXTRA_MESSAGE, handoff)
     copy(remoteMessage.data, EXTRA_SOUND, handoff)
     copy(remoteMessage.data, EXTRA_CHANNEL_ID, handoff)
-    handoff.putExtra(EXTRA_TAG, alert.replacementTag)
+    handoff.putExtra(EXTRA_TAG, replacementTag)
 
     val fallback = object : BroadcastReceiver() {
       override fun onReceive(receiverContext: Context, intent: Intent) {
         if (resultCode != RESULT_PRESENTED) {
-          ActivityNotificationPresenter.present(context.applicationContext, remoteMessage, alert)
+          presentFallback()
         }
       }
     }

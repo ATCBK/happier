@@ -140,6 +140,81 @@ private func serializedBody(_ payload: [AnyHashable: Any]) -> String {
       token: "token", encryptionMode: "e2ee", machineKey: "machine-key", settingsVersion: 1,
       accountEncryptionVersion: 1, registrationId: "registration", pushToken: "push",
       previewCeiling: "include_preview")
+
+    let machinePayload: [AnyHashable: Any] = [
+      "type": "machine_alert", "v": 1, "serverId": "home-1", "accountId": "account-1",
+      "machineId": "machine-1", "phase": "offline", "previewBehavior": "status_only",
+    ]
+    let machineAlert = MachineRemoteAlert(remoteUserInfo: ["body": machinePayload])!
+    var machineDelivered: UNNotificationContent?
+    HappierActivityNotificationService().didReceive(makeRequest(userInfo: ["body": machinePayload])) {
+      machineDelivered = $0
+    }
+    precondition(machineDelivered?.threadIdentifier == "machine_alert:home-1:account-1:machine-1",
+                 "an offline Machine lost its exact Home/Account grouping")
+    precondition(machineDelivered?.title == "Happier" && machineDelivered?.body == "A session you follow is ready.",
+                 "a Machine alert changed the submitted generic fallback")
+    var recoveredPayload = machinePayload
+    recoveredPayload["phase"] = "recovered"
+    precondition(MachineRemoteAlert(remoteUserInfo: ["body": serializedBody(recoveredPayload)])?.threadIdentifier
+                   == machineAlert.threadIdentifier, "quiet recovery lost the established Machine identity")
+    for (key, invalid) in [("v", true as Any), ("machineId", " " as Any), ("unexpected", true as Any)] {
+      var malformedMachine = machinePayload
+      malformedMachine[key] = invalid
+      precondition(MachineRemoteAlert(remoteUserInfo: ["body": malformedMachine]) == nil,
+                   "an invalid Machine envelope gained native admission")
+    }
+
+    func plainMachineEnvelope(_ value: Any) -> String {
+      try! JSONSerialization.data(withJSONObject: ["t": "plain", "v": value]).base64EncodedString()
+    }
+    var machine: [String: Any] = [
+      "id": "machine-1", "kind": "persistent", "storageMode": "plain",
+      "revokedAt": NSNull(), "replacedByMachineId": NSNull(),
+      "dataEncryptionKey": plainMachineEnvelope(NSNull()),
+      "metadata": plainMachineEnvelope(["displayName": " edge-1 ", "host": "host-1"]),
+      "access": ["custodian": ["accountId": "account-1", "displayName": "Alice"],
+                 "role": "manage", "resourceMode": "plain", "accessState": "ready"],
+    ]
+    precondition(ActivityNotificationEnricher.openMachineName(
+      machine: machine, alert: machineAlert, prepared: plainPrepared,
+      openDataKey: { _, _ in preconditionFailure("plain Machine opened E2EE material") },
+      decryptPayload: { _, _ in preconditionFailure("plain Machine decrypted ciphertext") }) == "edge-1")
+    var runnerMachine = machine
+    runnerMachine["kind"] = "ephemeral_session_runner"
+    precondition(ActivityNotificationEnricher.openMachineName(
+      machine: runnerMachine, alert: machineAlert, prepared: plainPrepared,
+      openDataKey: { _, _ in nil }, decryptPayload: { _, _ in nil }) == "edge-1",
+      "an own Runner lost the same authenticated metadata reader")
+    var foreignMachine = machine
+    foreignMachine["access"] = ["custodian": ["accountId": "account-2", "displayName": "Bob"],
+                                "role": "manage", "resourceMode": "plain", "accessState": "ready"]
+    precondition(ActivityNotificationEnricher.openMachineName(
+      machine: foreignMachine, alert: machineAlert, prepared: plainPrepared,
+      openDataKey: { _, _ in nil }, decryptPayload: { _, _ in nil }) == nil,
+      "a different custodian's Machine disclosed its name")
+    precondition(ActivityNotificationEnricher.openMachineName(
+      machine: machine, alert: machineAlert, prepared: encryptedPrepared,
+      openDataKey: { _, _ in nil }, decryptPayload: { _, _ in nil }) == nil,
+      "the Account mode/content mismatch was reinterpreted")
+    machine["storageMode"] = "e2ee"
+    machine["dataEncryptionKey"] = "machine-envelope"
+    machine["metadata"] = "machine-ciphertext"
+    machine["access"] = ["custodian": ["accountId": "account-1", "displayName": "Alice"],
+                         "role": "manage", "resourceMode": "e2ee", "accessState": "ready"]
+    precondition(ActivityNotificationEnricher.openMachineName(
+      machine: machine, alert: machineAlert, prepared: encryptedPrepared,
+      openDataKey: { envelope, recipientKey in
+        precondition(envelope == "machine-envelope" && recipientKey == "machine-key")
+        return "machine-data-key"
+      }, decryptPayload: { ciphertext, key in
+        precondition(ciphertext == "machine-ciphertext" && key == "machine-data-key")
+        return #"{"displayName":"","host":"encrypted-host"}"#
+      }) == "encrypted-host")
+    precondition(ActivityNotificationEnricher.openMachineName(
+      machine: machine, alert: machineAlert, prepared: encryptedPrepared,
+      openDataKey: { _, _ in nil }, decryptPayload: { _, _ in preconditionFailure("failed envelope decrypted") }) == nil)
+
     let assignedAlert = ActivityRemoteAlert(localUserInfo: [
       "type": "activity_alert", "v": 1, "serverId": "home-1", "sessionId": "session-1",
       "accountId": "account-1", "event": ["type": "assigned"], "previewBehavior": "title_only",

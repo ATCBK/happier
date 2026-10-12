@@ -8,6 +8,7 @@ function parseOptionalBoolean(raw) {
 
 export function resolveUiPostinstallTasks({ env }) {
     const tasks = [
+        'prepare-atmosphere-renderers',
         'patch-package',
         'verify-native-patch-compilation',
         'verify-vendored-reanimated-patch',
@@ -42,5 +43,11 @@ export function resolveUiPostinstallTasks({ env }) {
         // run by the web release build against its own export output.
     }
 
+    // Dependency refresh verifies installed packages. Source compilers own
+    // their output freshness and last-green reuse at UI preparation instead.
+    if (env?.HAPPIER_UI_POSTINSTALL_DEPENDENCIES_ONLY === '1') {
+        return tasks.filter(task => !['prepare-atmosphere-renderers', 'vendor-password-kdf-worker',
+            'vendor-tiptap-webview-bundle', 'vendor-mermaid-webview-bundle'].includes(task))
+    }
     return tasks
 }

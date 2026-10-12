@@ -10,6 +10,55 @@ import java.net.URL
 object ActivityNotificationEnricher {
   data class Enrichment(val title: String?, val body: String?)
 
+  @JvmStatic fun enrichment(context: Context, alert: MachineRemoteAlert): Enrichment? {
+    val prepared = ActivityPreparedContext.home(context, alert.serverId, alert.accountId) ?: return null
+    if (alert.phase != "offline" || effectivePreviewBehavior(alert.previewBehavior, prepared.previewCeiling) == "status_only") return null
+    val currentness = fetchJson(prepared.apiEndpoint.trimEnd('/') + "/v1/account/encryption/currentness", prepared.token) ?: return null
+    if (!isAccountEncryptionCurrent(currentness, prepared)) return null
+    val detail = fetchJson(prepared.apiEndpoint.trimEnd('/') + "/v1/machines/" + Uri.encode(alert.machineId), prepared.token, machineStoredContent = true) ?: return null
+    val machine = detail.opt("machine") as? JSONObject ?: return null
+    val name = openMachineName(machine, alert, prepared) ?: return null
+    return Enrichment(name, null).takeIf {
+      ActivityPreparedContext.home(context, alert.serverId, alert.accountId) == prepared
+    }
+  }
+
+  @JvmStatic fun openMachineName(machine: JSONObject, alert: MachineRemoteAlert, prepared: ActivityPreparedHomeContext): String? {
+    if (prepared.serverId != alert.serverId || prepared.accountId != alert.accountId) return null
+    if (machine.requiredString("id") != alert.machineId || machine.opt("kind") !in setOf("persistent", "ephemeral_session_runner")
+      || !machine.has("revokedAt") || !machine.isNull("revokedAt")
+      || !machine.has("replacedByMachineId") || !machine.isNull("replacedByMachineId")) return null
+    val access = machine.opt("access") as? JSONObject ?: return null
+    val custodian = access.opt("custodian") as? JSONObject ?: return null
+    if (!access.hasExactly("custodian", "role", "resourceMode", "accessState")
+      || !custodian.hasExactly("accountId", "displayName") || custodian.opt("displayName") !is String
+      || access.opt("role") != "manage") return null
+    if (custodian.requiredString("accountId") != alert.accountId || access.opt("accessState") != "ready") return null
+    val mode = machine.requiredString("storageMode") ?: return null
+    if (access.opt("resourceMode") != mode) return null
+    val stored = machine.requiredString("metadata") ?: return null
+    val metadata = if (prepared.encryptionMode == "plain") {
+      if (mode != "plain") return null
+      val marker = machine.requiredString("dataEncryptionKey")?.let(::openPlainMachineEnvelope) ?: return null
+      if (!marker.isNull("v")) return null
+      openPlainMachineEnvelope(stored)?.opt("v") as? JSONObject ?: return null
+    } else {
+      if (prepared.encryptionMode !in setOf("e2ee", "legacy_e2ee") || mode != "e2ee") return null
+      val envelope = machine.requiredString("dataEncryptionKey") ?: return null
+      val recipientKey = prepared.machineKey ?: return null
+      val key = HappierCryptoWorkerSessionCrypto.openSessionDataKey(envelope, recipientKey) ?: return null
+      val serialized = HappierCryptoWorkerSessionCrypto.decryptMachinePayload(stored, key) ?: return null
+      try { JSONObject(serialized) } catch (_: Throwable) { return null }
+    }
+    return (metadata.opt("displayName") as? String)?.trim()?.takeIf { it.isNotEmpty() }
+      ?: (metadata.opt("host") as? String)?.trim()?.takeIf { it.isNotEmpty() }
+  }
+
+  private fun openPlainMachineEnvelope(encoded: String): JSONObject? = try {
+    val decoded = android.util.Base64.decode(encoded, android.util.Base64.DEFAULT).toString(Charsets.UTF_8)
+    JSONObject(decoded).takeIf { it.opt("t") == "plain" && it.has("v") }
+  } catch (_: Throwable) { null }
+
   @JvmStatic fun enrichment(context: Context, alert: ActivityRemoteAlert): Enrichment? {
     val prepared = ActivityPreparedContext.home(context, alert.serverId, alert.accountId) ?: return null
     val enriched = enrichment(alert, prepared)
@@ -139,7 +188,7 @@ object ActivityNotificationEnricher {
     return title
   }
 
-  private fun fetchJson(endpoint: String, token: String): JSONObject? {
+  private fun fetchJson(endpoint: String, token: String, machineStoredContent: Boolean = false): JSONObject? {
     val connection = try { URL(endpoint).openConnection() as HttpURLConnection } catch (_: Throwable) { return null }
     return try {
       connection.connectTimeout = 2_500
@@ -147,6 +196,9 @@ object ActivityNotificationEnricher {
       connection.instanceFollowRedirects = false
       connection.setRequestProperty("Authorization", "Bearer $token")
       connection.setRequestProperty("Accept", "application/json")
+      // V2 is the existing Plain Machine stored-content declaration; this read
+      // consumes no newer protocol operations or unknown projection authority.
+      if (machineStoredContent) connection.setRequestProperty("x-happier-account-stored-content-protocol", "2")
       if (connection.responseCode != 200) return null
       JSONObject(connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() })
     } catch (_: Throwable) {

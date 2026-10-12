@@ -25,7 +25,8 @@ object ActivityRemoteAlertIntent {
   fun prepareForNativePresentation(intent: Intent): Intent? {
     val originalExtras = intent.extras ?: return null
     val remoteMessage = RemoteMessage(Bundle(originalExtras))
-    val alert = ActivityRemoteAlert.parse(remoteMessage) ?: return null
+    val replacementTag = ActivityRemoteAlert.parse(remoteMessage)?.replacementTag
+      ?: MachineRemoteAlert.parse(remoteMessage)?.replacementTag ?: return null
     val notification = remoteMessage.notification ?: return null
 
     val adaptedExtras = Bundle(originalExtras)
@@ -40,7 +41,7 @@ object ActivityRemoteAlertIntent {
     notification.channelId?.let { adaptedExtras.putString("channelId", it) }
     // Expo's incumbent delegate consumes this field as its replacement
     // identifier when the main process owns foreground/background handling.
-    adaptedExtras.putString("tag", alert.replacementTag)
+    adaptedExtras.putString("tag", replacementTag)
 
     return Intent(intent).replaceExtras(adaptedExtras)
   }

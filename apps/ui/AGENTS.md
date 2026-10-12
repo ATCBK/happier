@@ -22,6 +22,15 @@ Use yarn:
 
 Use the smallest relevant test slice while iterating, then run the UI typecheck/build-enforcing and broader relevant lanes before handoff.
 
+The public typecheck compiles foundation → core → source remainder → tests serially.
+`scripts/deriveTypecheckProjects.mjs` derives their file membership from the current
+editor roots and dependency graph at the shared native compiler choke point. Change
+that producer rather than hand-registering files in the generated partition lists.
+Compiler options remain in the authored tsconfigs. Finite membership and
+declaration-reference projections live in `node_modules/.cache/tsc/tsconfig.*.json`;
+public checking does not rewrite tracked configs. `node scripts/deriveTypecheckProjects.mjs --check`
+validates the ignored membership projection.
+
 ## Structure and ownership
 
 - Expo Router routes live in `sources/app/**` and remain thin screen entrypoints; extract non-trivial UI/logic into domain-owned components, hooks, sync modules, or utilities.
@@ -40,8 +49,8 @@ Use the smallest relevant test slice while iterating, then run the UI typecheck/
 - `sync/store/**` owns state domains, selectors, normalization, and persistence-facing state.
 - `sync/domains/**` owns domain behavior and must not depend on `sync/store/**`.
 - `sync/ops/**` owns orchestration-facing operations.
-- `sync/domains/plugins/availability/generatedBundledPluginUiArtifacts.js` is an ignored app-preseed runtime output. Its single producer/check is `scripts/generateBundledPluginUiArtifacts.mjs`, invoked after workspace/plugin publication by `ensure:workspace:built`; it projects exact digest-addressed assets from each plugin package's canonical `dist/happier-plugin-ui/ui-artifacts.json`. The committed sibling `.d.ts` owns its TypeScript shape, so source typechecks do not publish runtime artifacts. Change the UI generator or declaration, never the output. Platform-specific `.web`/`.ios`/`.android` inventories are retired and must stay absent. The CLI generator owns semantic/catalog/daemon projections and never this byte graph.
-- In 0.3 development source, explicit web artifact construction and source QA web export share `apps/stack/scripts/build/build_source_web_ui.mjs#prepareSourceWebUi`. It reuses the inventory producer via `scripts/prepareSourcePluginUiArtifacts.mjs`, compiling current authored manifests and UI entrypoints with the SDK's canonical compiler and explicit source resolution into private inputs. This preparation does not publish workspace dist or overwrite a live Expo inventory. Stack supplies the private inventory through `HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY` to the existing Metro resolver; Expo retains browser/asset export and the web artifact owner retains final publication. Metro resolves explicit authored workspace exports, preferring nested `browser`/`react-native` source targets before portable `happier-source` targets; do not infer source paths from dist or replace platform branches with a generic source override. Explicit rebuild/reload selects new web bytes. Ordinary Expo and public package builds keep their existing preparation inputs.
+- `sync/domains/plugins/availability/generatedBundledPluginUiArtifacts.js` is an ignored app-preseed runtime output. Its single producer/check is `scripts/generateBundledPluginUiArtifacts.mjs`, invoked by `ensure:workspace:built`; it projects exact digest-addressed assets from the canonical SDK UI compiler's output, either package `dist/happier-plugin-ui/ui-artifacts.json` for explicit artifact preparation or private source inputs for live Expo. The committed sibling `.d.ts` owns its TypeScript shape, so source typechecks do not publish runtime artifacts. Change the UI generator or declaration, never the output. Platform-specific `.web`/`.ios`/`.android` inventories are retired and must stay absent. The CLI generator owns semantic/catalog/daemon projections and never this byte graph.
+- In 0.3 development source, explicit web artifact construction and source QA web export share `apps/stack/scripts/build/build_source_web_ui.mjs#prepareSourceWebUi`. It reuses the inventory producer via `scripts/prepareSourcePluginUiArtifacts.mjs`, compiling current authored manifests and UI entrypoints with the SDK's canonical compiler and explicit source resolution into private inputs. Finite preparation does not publish workspace dist or overwrite a live Expo inventory; Stack supplies its private inventory through `HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY`. Ordinary Expo uses the same `prepareSourcePluginUiInventory` compiler path without capturing live source and atomically publishes a consumer-owned inventory referencing retained inputs beside it (managed Expo state directory, or standalone `.expo/hstack`). Its readiness requires every referenced asset and does not depend on CLI dist/materialization stamps. Expo retains browser/asset export and the web artifact owner retains final publication. Metro resolves explicit authored workspace exports, preferring nested `browser`/`react-native` source targets before portable `happier-source` targets; do not infer source paths from dist or replace platform branches with a generic source override. Explicit rebuild/reload selects new web bytes. Public package builds retain their dist preparation inputs.
 
 ## Agent and Provider composition
 
@@ -57,7 +66,8 @@ Details: [Agent catalog](../../docs/agents-catalog.md), [Providers](../../docs/p
 - Use Unistyles theme tokens; do not hardcode colors or raw hex/rgb values.
 - A bounded art-directed experience may define a named, theme-aware palette in one domain-owned token module when global semantic theme roles are genuinely insufficient. Feature components consume those named tokens rather than scattering raw values; document the boundary and light/dark/accessibility behavior, and do not turn it into a competing global design system.
 - Icons use themed colors, tints, and backgrounds.
-- Use app `Text`/`TextInput` primitives so in-app font scaling works; avoid new hardcoded font sizes.
+- Use app `Text`/`TextInput` primitives so in-app font scaling works. Text takes a type role from `HAPPIER_TYPE_SCALE` (`variant` + `emphasis`, or `Typography.variant(role, emphasis)` in a style); never write a font size, line height or tracking at a call site. Transcript, Markdown, terminal and code keep their domain scales.
+- Spacing uses `theme.space` steps and the layout roles in `HAPPIER_PAGE_METRICS`; pages get their column and gutters from `PageFrame`. A missing value is a change to that owner, not a local number.
 - All user-visible strings, accessibility labels, and placeholders use `t(...)` and are added to every locale under `sources/text/translations/`.
 - Inspect existing translation keys first and reuse common keys when appropriate.
 

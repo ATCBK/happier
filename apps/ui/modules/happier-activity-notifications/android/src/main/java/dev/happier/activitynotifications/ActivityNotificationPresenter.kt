@@ -22,6 +22,29 @@ import java.util.Date
  */
 object ActivityNotificationPresenter {
   @JvmStatic
+  fun enrichedMessage(context: Context, remoteMessage: RemoteMessage, alert: MachineRemoteAlert): RemoteMessage {
+    val enrichment = ActivityNotificationEnricher.enrichment(context, alert) ?: return remoteMessage
+    return RemoteMessage.Builder(remoteMessage.from ?: context.packageName)
+      .setMessageId(remoteMessage.messageId ?: alert.replacementTag)
+      .setData(remoteMessage.data + (enrichment.title?.let { mapOf("title" to it) } ?: emptyMap()))
+      .build()
+  }
+
+  @JvmStatic
+  fun present(context: Context, remoteMessage: RemoteMessage, alert: MachineRemoteAlert) {
+    val delegate = ExpoPresentationDelegate(context)
+    if (alert.phase == "recovered") {
+      if (ActivityPreparedContext.home(context, alert.serverId, alert.accountId) == null) return
+      // Clearing the established identity never posts a recovery notification.
+      delegate.dismissNotifications(listOf(alert.replacementTag))
+      return
+    }
+    val presented = enrichedMessage(context, remoteMessage, alert)
+    val request = NotificationRequest(alert.replacementTag, RemoteNotificationContent(presented), FirebaseNotificationTrigger(presented))
+    delegate.presentNotification(Notification(request, Date(remoteMessage.sentTime)), null)
+  }
+
+  @JvmStatic
   fun enrichedMessage(context: Context, remoteMessage: RemoteMessage, alert: ActivityRemoteAlert): RemoteMessage {
     val enrichment = ActivityNotificationEnricher.enrichment(context, alert)
     return if (enrichment == null) remoteMessage else RemoteMessage.Builder(

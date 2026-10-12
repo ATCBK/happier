@@ -122,9 +122,13 @@ const config = getSentryExpoConfig(__dirname, {
   isCSSEnabled: true,
 });
 
-// Expo's transform cache key does not include the app Babel config. Invalidate
-// pre-existing web transforms when enabling its import.meta script transform.
-config.cacheVersion = `${config.cacheVersion ?? '1.0'}-web-script-import-meta-v1`;
+// Expo's transform cache key omits the project root and app Babel config.
+// Router transforms embed the root's route directory, so partition captures
+// while retaining invalidation for the web import.meta Babel transform.
+config.cacheVersion = JSON.stringify([
+  `${config.cacheVersion ?? '1.0'}-web-script-import-meta-v1`,
+  config.projectRoot,
+]);
 
 // Web development's large presentation entries overlap almost entirely with
 // index. Lazy bundling retains another transitive graph (including raw maps)
@@ -452,8 +456,8 @@ const existingWatchFolders = Array.isArray(config.watchFolders) ? config.watchFo
 config.watchFolders = existingWatchFolders.filter(
   (folder, index, all) => typeof folder === 'string' && folder.length > 0 && all.indexOf(folder) === index,
 );
-// One-shot source exports prepare the canonical inventory and its bytes outside
-// the live checkout. Ordinary Expo retains its existing generated input.
+// Every source Expo consumer owns an inventory and retained inputs. Finite
+// exports and interactive Metro share this transport, not a writable inventory.
 const privatePluginUiInventory = String(process.env.HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY ?? '').trim();
 if (privatePluginUiInventory && !path.isAbsolute(privatePluginUiInventory)) {
   throw new Error('HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY must be an absolute path');

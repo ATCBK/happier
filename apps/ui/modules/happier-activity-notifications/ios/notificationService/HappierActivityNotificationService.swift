@@ -1,6 +1,40 @@
 import UserNotifications
 import CoreFoundation
 
+/// Separate closed Machine alert V1; Session alert epochs remain unchanged.
+struct MachineRemoteAlert {
+  let serverId: String
+  let accountId: String
+  let machineId: String
+  let phase: String
+  let previewBehavior: String
+  var threadIdentifier: String { "machine_alert:\(serverId):\(accountId):\(machineId)" }
+
+  init?(remoteUserInfo: [AnyHashable: Any]) {
+    let payload: [String: Any]
+    if let object = remoteUserInfo["body"] as? [String: Any] { payload = object }
+    else if let serialized = remoteUserInfo["body"] as? String,
+            let data = serialized.data(using: .utf8),
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] { payload = object }
+    else { return nil }
+    guard Set(payload.keys) == Set(["type", "v", "serverId", "accountId", "machineId", "phase", "previewBehavior"]),
+          payload["type"] as? String == "machine_alert",
+          let version = payload["v"] as? NSNumber, CFGetTypeID(version) != CFBooleanGetTypeID(),
+          version.doubleValue == 1,
+          let serverId = (payload["serverId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !serverId.isEmpty,
+          let accountId = (payload["accountId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !accountId.isEmpty,
+          let machineId = (payload["machineId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !machineId.isEmpty,
+          let phase = payload["phase"] as? String, ["offline", "recovered"].contains(phase),
+          let preview = payload["previewBehavior"] as? String,
+          ["status_only", "title_only", "include_preview"].contains(preview) else { return nil }
+    self.serverId = serverId
+    self.accountId = accountId
+    self.machineId = machineId
+    self.phase = phase
+    self.previewBehavior = preview
+  }
+}
+
 /// The committed canonical reference an Activity remote alert points at.
 ///
 /// Mirrors `ActivityRemoteAlert` in `packages/protocol/src/push/activityRemoteAlert.ts`,
@@ -205,6 +239,27 @@ class HappierActivityNotificationService: UNNotificationServiceExtension {
   ) {
     self.contentHandler = contentHandler
     self.deliverableContent = request.content
+
+    if let machine = MachineRemoteAlert(remoteUserInfo: request.content.userInfo), machine.phase == "offline",
+       let content = request.content.mutableCopy() as? UNMutableNotificationContent {
+      content.threadIdentifier = machine.threadIdentifier
+      self.deliverableContent = content
+      guard let root = ActivityNotificationStorageLocation.appGroupRoot(bundle: .main, fileManager: .default),
+            let prepared = ActivityPreparedContext.home(root: root, serverId: machine.serverId, accountId: machine.accountId) else {
+        finish(content)
+        return
+      }
+      ActivityNotificationEnricher.fetchEnrichment(alert: machine, prepared: prepared) { [weak self] enrichment in
+        guard let self else { return }
+        if ActivityPreparedContext.home(root: root, serverId: machine.serverId, accountId: machine.accountId) == prepared,
+           let title = enrichment?.title { content.title = title }
+        self.finish(content)
+      }
+      return
+    }
+    // Recovery is submitted as content-available data, without an APNs alert;
+    // the existing app background task dismisses delivered notices. The NSE
+    // thread above groups offline notices but does not claim to replace them.
 
     guard let alert = ActivityRemoteAlert(remoteUserInfo: request.content.userInfo),
           let content = request.content.mutableCopy() as? UNMutableNotificationContent else {
