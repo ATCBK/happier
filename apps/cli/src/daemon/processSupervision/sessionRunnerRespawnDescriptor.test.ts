@@ -829,17 +829,17 @@ describe('sessionRunnerRespawnDescriptor', () => {
     expect(descriptor).not.toHaveProperty('codexBackendMode');
   });
 
-  it('round-trips mcpSelection through the respawn descriptor', () => {
+  it('round-trips canonical MCP selection through the respawn descriptor', () => {
     const spawnOptions = {
       directory: '/tmp/repo',
       backendTarget: { kind: 'backend', backendId: 'claude', sourceKind: 'built_in' },
       resume: 'vendor-session-1',
-      mcpSelection: {
+      capabilitySelection: { mcp: {
         v: 1,
         managedServersEnabled: false,
         forceIncludeServerIds: ['portable-playwright'],
         forceExcludeServerIds: ['workspace-db'],
-      },
+      } },
     } satisfies SpawnSessionOptions;
 
     const descriptor = buildSessionRunnerRespawnDescriptorV1FromSpawnOptions(spawnOptions);
@@ -848,12 +848,12 @@ describe('sessionRunnerRespawnDescriptor', () => {
       version: 1,
       directory: '/tmp/repo',
       backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
-      mcpSelection: {
+      capabilitySelection: { mcp: {
         v: 1,
         managedServersEnabled: false,
         forceIncludeServerIds: ['portable-playwright'],
         forceExcludeServerIds: ['workspace-db'],
-      },
+      } },
     });
 
     const restored = buildSpawnSessionOptionsFromRespawnDescriptorV1(descriptor!);
@@ -862,12 +862,12 @@ describe('sessionRunnerRespawnDescriptor', () => {
       backendTarget: { kind: 'backend', backendId: 'claude', sourceKind: 'built_in' },
       resume: 'vendor-session-1',
       approvedNewDirectoryCreation: true,
-      mcpSelection: {
+      capabilitySelection: { mcp: {
         v: 1,
         managedServersEnabled: false,
         forceIncludeServerIds: ['portable-playwright'],
         forceExcludeServerIds: ['workspace-db'],
-      },
+      } },
     });
   });
 

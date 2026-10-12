@@ -15,7 +15,7 @@ import { ConnectedServiceMaterializationIdentityV1Schema } from '@happier-dev/pr
 import { PluginContributionIdentityV1Schema } from '@happier-dev/protocol/plugins/contribution-identity';
 import { openAccountScopedBlobCiphertext, sealAccountScopedBlobCiphertext } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { RuntimeDescriptorV1Schema, writeRuntimeDescriptorV1ForPersistence } from '@happier-dev/protocol/sessions/metadata/runtime-descriptor';
-import { SessionMcpSelectionV1Schema } from '@happier-dev/protocol/mcp/servers/sessionSelectionV1';
+import { readCapabilitySelectionCarrierV1, SessionCapabilitySelectionV1Schema } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
 import { SessionCreationTagV1Schema } from '@happier-dev/protocol/sessions/creation/sessionCreationIdentityV1';
 import { SessionModelSelectionV1Schema } from '@happier-dev/protocol/providers/model-selection';
 import { SessionProviderBindingMetadataV1Schema } from '@happier-dev/protocol/providers/sessions/bindingMetadataV1';
@@ -209,6 +209,8 @@ function canonicalizeSessionRunnerRespawnDescriptorIngress(value: unknown): unkn
   }
 
   const candidate = value as Record<string, unknown>;
+  const capabilitySelection = readCapabilitySelectionCarrierV1(candidate);
+  if ((candidate.capabilitySelection !== undefined || candidate.mcpSelection !== undefined) && !capabilitySelection) return undefined;
   const parsedAgentTarget = AgentExecutionTargetV1Schema.safeParse(candidate.agentTarget);
   const parsedAgentIdentity = PluginContributionIdentityV1Schema.safeParse(candidate.agentIdentity);
   // Earlier draft persistence wrote the qualified identity without its
@@ -303,11 +305,14 @@ function canonicalizeSessionRunnerRespawnDescriptorIngress(value: unknown): unkn
     agentRuntimeDescriptorV1: _legacyAgentRuntimeDescriptorV1,
     codexBackendMode: _legacyCodexBackendMode,
     agentIdentity: _persistedAgentIdentity,
+    mcpSelection: _legacyMcpSelection,
+    capabilitySelection: _capabilitySelection,
     ...rest
   } = candidate;
 
   return {
     ...rest,
+    ...(capabilitySelection ? { capabilitySelection } : {}),
     ...(agentTarget ? { agentTarget } : {}),
     ...(persistedBackendTarget ? { backendTarget: persistedBackendTarget } : {}),
     ...(normalizedBackendTargetV2Shadow ? { backendTargetV2: normalizedBackendTargetV2Shadow } : {}),
@@ -350,7 +355,7 @@ export const SessionRunnerRespawnDescriptorSchema = z
     sealedEnvironmentVariables: SealedRespawnEnvironmentVariablesSchema.optional(),
     connectedServices: z.unknown().optional(),
     connectedServiceMaterializationIdentityV1: ConnectedServiceMaterializationIdentityV1Schema.optional(),
-    mcpSelection: SessionMcpSelectionV1Schema.optional(),
+    capabilitySelection: SessionCapabilitySelectionV1Schema.optional(),
     runtimeDescriptorV1: RuntimeDescriptorV1Schema.optional(),
   })
   .passthrough().superRefine((value, ctx) => {
@@ -504,7 +509,10 @@ export function writeSessionRunnerRespawnDescriptorForPersistence(
   } = parsed;
   return {
     ...rest,
-    agentIdentity: persistedBackendTarget.identity,
+    // A configured contribution's identity alone cannot identify its instance.
+    ...(persistedBackendTarget.definitionId === undefined
+      ? { agentIdentity: persistedBackendTarget.identity }
+      : { agentTarget: persistedBackendTarget }),
     ...(persistedModelSelection ? { modelSelection: persistedModelSelection } : {}),
     ...(persistedRuntimeDescriptor ? { runtimeDescriptorV1: persistedRuntimeDescriptor } : {}),
   };
@@ -608,7 +616,7 @@ export function buildSessionRunnerRespawnDescriptorV1FromSpawnOptions(
     ...(spawnOptions.connectedServiceMaterializationIdentityV1
       ? { connectedServiceMaterializationIdentityV1: spawnOptions.connectedServiceMaterializationIdentityV1 }
       : {}),
-    ...(spawnOptions.mcpSelection ? { mcpSelection: spawnOptions.mcpSelection } : {}),
+    ...(spawnOptions.capabilitySelection ? { capabilitySelection: spawnOptions.capabilitySelection } : {}),
     ...(runtimeDescriptorV1 ? { runtimeDescriptorV1 } : {}),
   };
 
@@ -667,7 +675,7 @@ export function buildSpawnSessionOptionsFromRespawnDescriptorV1(
     ...(descriptor.connectedServiceMaterializationIdentityV1
       ? { connectedServiceMaterializationIdentityV1: descriptor.connectedServiceMaterializationIdentityV1 }
       : {}),
-    ...(descriptor.mcpSelection ? { mcpSelection: descriptor.mcpSelection } : {}),
+    ...(descriptor.capabilitySelection ? { capabilitySelection: descriptor.capabilitySelection } : {}),
     ...(descriptor.runtimeDescriptorV1 ? { runtimeDescriptorV1: descriptor.runtimeDescriptorV1 } : {}),
     approvedNewDirectoryCreation: descriptor.directoryKind !== 'managed',
   };
