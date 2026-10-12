@@ -12,11 +12,13 @@ export async function sendExpoPushActivityNotificationAsync(params: Readonly<{
   sender: ExpoPushActivityNotificationSender;
   deliveryOptions?: PushNotificationDeliveryOptions;
   previewBehavior?: AttentionPreviewBehavior;
+  nowMs?: number;
 }>): Promise<boolean> {
   const built = buildActivityNotificationContent(params.event, {
     readyIncludeMessageText: params.channel.readyIncludeMessageText !== false,
     requestIncludeMessageText: params.channel.requestIncludeMessageText !== false,
     previewBehavior: params.previewBehavior,
+    ...(params.nowMs === undefined ? {} : { nowMs: params.nowMs }),
   });
   if (params.deliveryOptions) {
     return await params.sender.sendToAllDevicesAsync(built.title, built.body, built.data, params.deliveryOptions);

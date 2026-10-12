@@ -1,4 +1,5 @@
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
+import { guardStopWarningNotificationIdV1 } from '@happier-dev/protocol/activity/webhookPayload';
 import { isUsageQuotaNotificationEnabled } from '@happier-dev/protocol/account/settings/usagePacingPreferencesV1';
 import { UsageNoticeArtifactHeaderV1Schema, UsageNoticeArtifactBodyV1Schema, USAGE_NOTICE_ARTIFACT_KIND_V1 } from '@happier-dev/protocol/activity/usageNoticeArtifactV1';
 import type { createAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
@@ -43,6 +44,7 @@ function isTopicEnabled(channel: {
     connectedServiceQuotaBlocked?: boolean;
     connectedServiceQuotaRecovered?: boolean;
     connectedServiceUsage?: boolean;
+    machines?: boolean;
   };
 }, topic: ActivityNotificationEvent['topic']): boolean {
   if (channel.enabled !== true) return false;
@@ -55,12 +57,18 @@ function isTopicEnabled(channel: {
   if (topic === 'connected_service_quota_blocked') return channel.topics.connectedServiceQuotaBlocked === true;
   if (topic === 'connected_service_quota_recovered') return channel.topics.connectedServiceQuotaRecovered === true;
   if (topic === 'connected_service_usage') return channel.topics.connectedServiceUsage === true;
+  if (topic === 'guard_stop_warning' || topic === 'guard_attention' || topic === 'machine_guard_activity' || topic === 'resource_limit') return channel.topics.machines === true;
   return false;
 }
 
 const recentDispatchesByKey = new Map<string, number>();
 
 function notificationDedupeKey(event: ActivityNotificationEvent, accountId?: string): string | null {
+  if (event.topic === 'resource_limit') return accountId
+    ? [event.topic, accountId, event.machineId, event.kind, 'volumeId' in event ? event.volumeId : '', event.phase, event.at].join('\0')
+    : null;
+  if (event.topic === 'machine_guard_activity') return [event.topic, event.machineId, event.episodeId].join('\0');
+  if (event.topic === 'guard_stop_warning') return [event.topic, event.machineId, guardStopWarningNotificationIdV1(event)].join('\0');
   if (event.topic === 'connected_service_usage') return accountId
     ? [event.topic, accountId, event.kind, event.serviceId, event.profileId, event.issueFingerprint].join('\0')
     : null;
@@ -305,7 +313,7 @@ export async function dispatchActivityNotificationAsync(params: Readonly<{
 
   // Inbox is an existing private Account Artifact projection. Its badge policy is
   // noninterruptive; push/webhook preview policy remains independent below.
-  if (params.event.topic === 'connected_service_usage' && params.usageNoticeArtifactStore && !selectedChannelIds) {
+  if ((params.event.topic === 'connected_service_usage' || params.event.topic === 'resource_limit') && params.usageNoticeArtifactStore && !selectedChannelIds) {
     const decision = resolveChannelDecision({ settings, channel: 'badge', event: params.event, now: policyNow });
     if (decision.delivery !== 'suppress') {
       const notice = params.event;
@@ -352,9 +360,12 @@ export async function dispatchActivityNotificationAsync(params: Readonly<{
           sender: params.expoPushSender,
           deliveryOptions: {
             ...resolveExpoPushDeliveryOptions(expoDecision),
+            ...(params.event.topic === 'resource_limit' && params.event.phase === 'recovered'
+              ? { sound: null, priority: 'normal' as const, androidSoundId: 'none' } : {}),
             ...(expoDecision.suppressIfComputerFocused === true ? { suppressIfComputerFocused: true } : {}),
           },
           previewBehavior: expoDecision.previewBehavior,
+          nowMs,
         });
         if (accepted) deliveredChannels += 1;
       } catch (error) {
@@ -437,6 +448,7 @@ export async function dispatchActivityNotificationAsync(params: Readonly<{
             readyIncludeMessageText: decision.previewBehavior === 'include_preview',
             requestIncludeMessageText: decision.previewBehavior === 'include_preview',
             previewBehavior: decision.previewBehavior,
+            nowMs,
           });
           if (await pluginNotifications.sendHostNotification({
             channelId: channel.value, title: content.title, body: content.body, data: content.data,

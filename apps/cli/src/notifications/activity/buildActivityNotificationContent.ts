@@ -3,6 +3,10 @@ import { buildReadyNotificationContent } from '@happier-dev/protocol/push/readyN
 import { redactBugReportSensitiveText } from '@happier-dev/protocol/bugs/reports/redaction';
 import { WorkflowRunUpdateNotificationV1Schema } from '@happier-dev/protocol/activity/webhookPayload';
 import type { AttentionPreviewBehavior } from '@happier-dev/protocol';
+import { GuardStopWarningNotificationV1Schema, GuardAttentionNotificationV1Schema, buildGuardStopWarningPushDataV1 } from '@happier-dev/protocol/activity/webhookPayload';
+import { MachineGuardActivityNotificationV1Schema } from '@happier-dev/protocol/activity/webhookPayload';
+import { MachineVitalsNotificationV1Schema, MachineVitalsPushRoutingDataV1Schema } from '@happier-dev/protocol/activity/webhookPayload';
+import { resolveMachineVitalsNextStepsV1 } from '@happier-dev/protocol/machines/vitals/resolveMachineVitalsNextStepsV1';
 
 import type { ActivityNotificationEvent } from './activityNotificationEvent';
 
@@ -81,12 +85,24 @@ function buildSwitchReasonSentence(reason: string, serviceDisplayName: string): 
   return `Happier switched ${serviceDisplayName} accounts.`;
 }
 
+/** "1 h 55 min", "41 min", "2 d": an idle time as the warning says it. */
+function formatGuardIdle(ms: number): string {
+  const minutes = Math.max(1, Math.round(ms / 60_000));
+  if (minutes < 60) return `${minutes} min`;
+  if (minutes % 1440 === 0) return `${minutes / 1440} d`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest === 0 ? `${hours} h` : `${hours} h ${rest} min`;
+}
+
 export function buildActivityNotificationContent(
   event: ActivityNotificationEvent,
   options: Readonly<{
     readyIncludeMessageText: boolean;
     requestIncludeMessageText?: boolean;
     previewBehavior?: AttentionPreviewBehavior;
+    /** The send time, for words that count down to a moment (a guard stop's "in 5 minutes"). */
+    nowMs?: number;
   }>,
 ): Readonly<{
   title: string;
@@ -98,6 +114,76 @@ export function buildActivityNotificationContent(
     ? null
     : event.sessionTitle;
   const includePreview = options.previewBehavior === undefined || options.previewBehavior === 'include_preview';
+  if (event.topic === 'resource_limit') {
+    const notice = MachineVitalsNotificationV1Schema.parse(event);
+    const minutes = (notice.at - notice.since) / 60_000;
+    const window = `${minutes} ${minutes === 1 ? 'minute' : 'minutes'}`;
+    const recovered = notice.phase === 'recovered';
+    const subject = notice.machineName && options.previewBehavior !== 'status_only' ? notice.machineName : 'Machine';
+    const titles = { memory_pressure: 'memory alert', cpu_busy: 'CPU alert', disk_nearly_full: 'disk space alert' };
+    const observation = notice.kind === 'memory_pressure'
+      ? `The ${notice.evidence.level} memory alert condition ${recovered ? 'cleared' : 'held'} over ${window}.`
+      : notice.kind === 'cpu_busy'
+        ? `CPU stayed ${recovered ? 'at or below' : 'above'} ${notice.evidence.abovePct}% over ${window}; latest ${notice.evidence.busyPct}%.`
+        : `${notice.volumeLabel || 'Volume'} ${recovered ? 'has recovered from' : 'is below'} its free-space threshold over ${window}; ${notice.evidence.freeBytes} bytes free of ${notice.evidence.totalBytes}.`;
+    const working = notice.workingSessionCount === undefined ? ''
+      : ` ${notice.workingSessionCount} ${notice.workingSessionCount === 1 ? 'session is' : 'sessions are'} currently working.`;
+    return {
+      title: `${subject} ${titles[notice.kind]}${recovered ? ' recovered' : ''}`,
+      body: includePreview ? `${observation}${working} Nothing was stopped by this alert.` : '',
+      data: MachineVitalsPushRoutingDataV1Schema.parse({ topic: notice.topic, kind: notice.kind, phase: notice.phase,
+        machineId: notice.machineId,
+        notificationId: `machine-vitals:${JSON.stringify([notice.machineId, notice.kind, 'volumeId' in notice ? notice.volumeId : null])}`,
+        nextSteps: resolveMachineVitalsNextStepsV1(notice, { guardEnabled: notice.guardEnabled }),
+        ...(includePreview ? { machineVitals: notice } : {}),
+      }),
+    };
+  }
+  if (event.topic === 'machine_guard_activity') {
+    const episode = MachineGuardActivityNotificationV1Schema.parse(event);
+    const summary = [
+      episode.counts.stoppedSessions ? `${episode.counts.stoppedSessions} sessions stopped` : '',
+      episode.counts.closedBrowsers ? `${episode.counts.closedBrowsers} browsers closed` : '',
+      episode.counts.stoppedServices ? `${episode.counts.stoppedServices} services stopped` : '',
+      episode.counts.stoppedLeftBehind ? `${episode.counts.stoppedLeftBehind} left-behind groups stopped` : '',
+    ].filter(Boolean).join(', ');
+    return {
+      title: episode.outOfSteps ? 'Guard needs a look' : 'Guard activity',
+      body: includePreview ? summary || 'Open the machine to review its activity.' : '',
+      data: { ...episode, notificationId: `guard-episode:${episode.machineId}:${episode.episodeId}` },
+    };
+  }
+  if (event.topic === 'guard_stop_warning') {
+    const warning = GuardStopWarningNotificationV1Schema.parse(event);
+    // Lab `rg` G3-3: the session by name, when it stops, how long it sat idle and where; both actions work
+    // from the notification itself. Status-only previews keep to the bare fact.
+    const leadMinutes = Math.max(1, Math.round((warning.stopAt - (options.nowMs ?? Date.now())) / 60_000));
+    const inMinutes = `in ${leadMinutes} ${leadMinutes === 1 ? 'minute' : 'minutes'}`;
+    if (warning.rule === 'idle_terminals') {
+      return {
+        title: `Closing an idle terminal ${inMinutes}`,
+        body: includePreview ? `${warning.idleMs !== undefined ? `Idle for ${formatGuardIdle(warning.idleMs)}. ` : ''}Keep it running if a command still needs it.` : '',
+        data: buildGuardStopWarningPushDataV1(warning),
+      };
+    }
+    const title = includePreview && warning.sessionTitle?.trim() ? `Stopping “${warning.sessionTitle.trim()}” ${inMinutes}` : `Stopping a session ${inMinutes}`;
+    const where = warning.machineName?.trim() ? ` on ${warning.machineName.trim()}` : '';
+    const idle = warning.idleMs !== undefined ? `Idle for ${formatGuardIdle(warning.idleMs)}${where}. ` : where ? `On${where.slice(3)}. ` : '';
+    return {
+      title,
+      body: includePreview
+        ? warning.rule === 'memory_guard'
+          ? `${idle}The machine is short on memory. It finished its work and wakes on your next message.`
+          : `${idle}It finished its work and wakes on your next message.`
+        : '',
+      data: buildGuardStopWarningPushDataV1(warning),
+    };
+  }
+  if (event.topic === 'guard_attention') {
+    const notice = GuardAttentionNotificationV1Schema.parse(event);
+    return { title: notice.kind === 'ceiling_near' ? 'Session is near its memory ceiling' : 'Session reached its memory ceiling',
+      body: includePreview ? 'Review the session or change its memory ceiling.' : '', data: notice };
+  }
   if (event.topic === 'connected_service_usage') {
     const descriptions = {
       pace: 'Usage has crossed above even pace for this allowance window.',

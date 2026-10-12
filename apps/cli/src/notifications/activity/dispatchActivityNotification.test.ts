@@ -6,7 +6,9 @@ import {
   encryptSecretStringV1,
   LiveActivityRemoteUpdateRequestV1Schema,
   type LiveActivityRemoteUpdateRequestV1,
+  decodePlainArtifactStoredContent,
 } from '@happier-dev/protocol';
+import { readUsageNoticeArtifactV1 } from '@happier-dev/protocol/activity/usageNoticeArtifactV1';
 
 import { logger } from '@/ui/logger';
 import type {
@@ -22,11 +24,14 @@ import type { ActivityNotificationEvent } from './activityNotificationEvent';
 import { createSessionNotificationContextFixture } from '@/testkit/backends/sessionFixtures';
 import { createStablePluginNotificationsOwner, type PluginNotificationSenderBinding } from '@/plugins/runtime/invocation/services/notifications';
 import { createWorkflowRunReviewEntryNotificationHandler } from './dispatchWorkflowRunUpdateNotification';
+import { buildMachineGuardEpisodeNotificationEvent } from './buildMachineGuardEpisodeNotification';
+import type { MachineGuardActivityEntryV1 } from '@happier-dev/protocol/machines/guard/activityV1';
 import { NotificationChannelRecordV1Schema, openNotificationChannelCatalogContentV1,
   sealNotificationChannelCatalogContentV1 } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
 import { prepareLegacyNotificationChannelCatalogV1 } from '@happier-dev/protocol/account/settings/notificationChannelCatalogV1';
 import { createSavedSecretMaterializerV1 } from '@/settings/secrets/savedSecretCatalog';
 import { createAccountArtifactStore, createCredentialedAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
+import { readCarrierMutation } from '@/api/artifacts/accountArtifactStore.testkit';
 import { notificationSettingsFixture as accountSettingsParse, notificationCatalogFixture } from './activityNotification.testkit';
 import { clearActiveAccountSettingsSnapshot, setActiveAccountSettingsSnapshot,
   resetActiveAccountSettingsSnapshotForTests } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
@@ -50,6 +55,171 @@ vi.mock('@/ui/logger', () => ({
 }));
 
 describe('dispatchActivityNotificationAsync', () => {
+  it('delivers terminal guard warnings without a Session and keeps exact-target action inputs', async () => {
+    const delivered: unknown[][] = [];
+    const event = { topic: 'guard_stop_warning' as const, machineId: 'terminal-warning-machine',
+      terminalId: 'terminal-1', terminalKey: 'shell-1', stopAt: 300_000, rule: 'idle_terminals' as const };
+    const input = {
+      settings: accountSettingsParse({}), pluginNotifications: null,
+      notificationChannelCatalog: { status: 'ready' as const, revision: 1, diagnostics: [], channels: [
+        NotificationChannelRecordV1Schema.parse({ v: 1, id: 'terminal-warning-push', kind: 'expo_push', topics: { machines: true } }),
+      ] },
+      expoPushSender: { sendToAllDevicesAsync: async (...args: unknown[]) => { delivered.push(args); return true; } },
+      nowMs: () => 1,
+    };
+    await expect(dispatchActivityNotification({ ...input, event })).resolves.toMatchObject({ deliveredChannels: 1 });
+    await expect(dispatchActivityNotification({ ...input, event })).resolves.toMatchObject({ deliveredChannels: 0 });
+    await expect(dispatchActivityNotification({ ...input, event: { ...event, terminalId: 'terminal-2', terminalKey: 'shell-2' } })).resolves.toMatchObject({ deliveredChannels: 1 });
+    expect(delivered[0]![2]).toMatchObject({ notificationId: 'guard-stop:terminal:["terminal-warning-machine","shell-1","terminal-1",300000]',
+      actions: {
+        keepRunning: { actionId: 'machines.guard.idleStop.keepRunning', input: { machineId: event.machineId, terminalKey: 'shell-1' } },
+        stopNow: { actionId: 'machines.terminal.close', input: { machineId: event.machineId, terminalId: 'terminal-1' } },
+      } });
+    expect(delivered[0]![2]).not.toHaveProperty('sessionId');
+    const attention = { topic: 'guard_attention' as const, machineId: event.machineId,
+      sessionId: 'ceiling-session', kind: 'ceiling_near' as const };
+    await expect(dispatchActivityNotification({ ...input, event: attention })).resolves.toMatchObject({ deliveredChannels: 1 });
+    expect(delivered[2]![2]).toMatchObject(attention);
+    await expect(dispatchActivityNotification({ ...input, event: { ...attention, kind: 'ceiling_reached' } }))
+      .resolves.toMatchObject({ deliveredChannels: 1 });
+  });
+
+  it('persists machine alert and recovery in the existing Inbox and delivers recovery silently through Machines', async () => {
+    const accountId = 'machine-vitals-notice-account';
+    const credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`, encryption: null };
+    const writes: Array<{ id: string; header: unknown; body: unknown }> = [];
+    const post = vi.spyOn(axios, 'post').mockImplementation(async (_url, wire) => {
+      const mutation = readCarrierMutation(wire);
+      if (typeof mutation.id !== 'string') throw new Error('Expected Artifact identity at HTTP boundary');
+      writes.push({ id: mutation.id, header: mutation.header, body: mutation.body });
+      return { status: 200, data: { id: mutation.id, headerVersion: 1, bodyVersion: 1 } };
+    });
+    const delivered: unknown[][] = [];
+    const input = {
+      settings: accountSettingsParse({}), pluginNotifications: null,
+      notificationChannelCatalog: { status: 'ready' as const, revision: 1, diagnostics: [], channels: [
+        NotificationChannelRecordV1Schema.parse({ v: 1, id: 'resource-push', kind: 'expo_push', topics: { machines: true } }),
+      ] },
+      usageNoticeArtifactStore: { accountId, store: createAccountArtifactStore({ credentials, getAccountEncryptionMode: async () => 'plain' }) },
+      expoPushSender: { sendToAllDevicesAsync: async (...args: unknown[]) => { delivered.push(args); return true; } },
+      nowMs: () => 600_000,
+    };
+    const notice = { topic: 'resource_limit' as const, kind: 'memory_pressure' as const, machineId: 'machine-vitals-1',
+      at: 120_000, since: 0, workingSessionCount: 2, guardEnabled: false,
+      evidence: { level: 'elevated' as const, sustainMs: 120_000, swapUsedBytes: 10 } };
+    const event = (phase: 'started' | 'recovered') => ({ ...notice, phase }) satisfies ActivityNotificationEvent;
+    try {
+      await expect(dispatchActivityNotification({ ...input, event: event('started') })).resolves.toMatchObject({ deliveredChannels: 2 });
+      await expect(dispatchActivityNotification({ ...input, event: event('recovered') })).resolves.toMatchObject({ deliveredChannels: 2 });
+      expect(writes).toHaveLength(2);
+      expect(writes[0]!.id).not.toBe(writes[1]!.id);
+      expect(writes.map(wire => {
+        if (typeof wire.header !== 'string' || typeof wire.body !== 'string') throw new Error('Expected stored content envelopes');
+        const body = decodePlainArtifactStoredContent(wire.body);
+        if (!body || typeof body !== 'object' || !('body' in body)) throw new Error('Expected Artifact body');
+        return readUsageNoticeArtifactV1({ header: decodePlainArtifactStoredContent(wire.header), body: body.body })?.notice;
+      })).toEqual([event('started'), event('recovered')]);
+      expect(delivered[0]![2]).toMatchObject({ topic: 'resource_limit', machineId: notice.machineId,
+        nextSteps: ['review_processes', 'turn_on_guard'], machineVitals: { phase: 'started' } });
+      expect(delivered[1]![2]).toMatchObject({ notificationId: (delivered[0]![2] as { notificationId: string }).notificationId,
+        machineVitals: { phase: 'recovered' } });
+      expect(delivered[1]![3]).toMatchObject({ sound: null, priority: 'normal', androidSoundId: 'none' });
+    } finally { post.mockRestore(); }
+  });
+  it('keeps machine evidence private under status-only policy and cannot revive a disabled Machines push topic', async () => {
+    const delivered: unknown[][] = [];
+    const channel = NotificationChannelRecordV1Schema.parse({ v: 1, id: 'resource-privacy-push', kind: 'expo_push', topics: { machines: true } });
+    const input = { settings: accountSettingsParse({ attentionDeliveryPolicyV1: { privacy: { defaultPreviewBehavior: 'status_only' } } }),
+      pluginNotifications: null, notificationChannelCatalog: { status: 'ready' as const, revision: 1, diagnostics: [], channels: [channel] },
+      expoPushSender: { sendToAllDevicesAsync: async (...args: unknown[]) => { delivered.push(args); return true; } },
+      event: { topic: 'resource_limit' as const, kind: 'cpu_busy' as const, phase: 'recovered' as const,
+        machineId: 'resource-privacy-machine', machineName: 'Private machine label', at: 120_000, since: 0,
+        guardEnabled: true, evidence: { abovePct: 90, busyPct: 10, sustainMs: 120_000 } } };
+    await expect(dispatchActivityNotification(input)).resolves.toMatchObject({ deliveredChannels: 1 });
+    expect(delivered[0]![1]).toBe('');
+    expect(delivered[0]![2]).toMatchObject({ machineId: input.event.machineId, nextSteps: ['review_processes'] });
+    expect(delivered[0]![2]).not.toHaveProperty('machineVitals');
+    expect(JSON.stringify(delivered)).not.toContain('Private machine label');
+    await expect(dispatchActivityNotification({ ...input, notificationChannelCatalog: { ...input.notificationChannelCatalog,
+      channels: [NotificationChannelRecordV1Schema.parse({ ...channel, topics: { ...channel.topics, machines: false } })] } })).resolves.toMatchObject({ deliveredChannels: 0 });
+    await expect(dispatchActivityNotification({ ...input, settings: accountSettingsParse({ attentionDeliveryPolicyV1: {
+      events: { resource_limit: { enabled: false } } } }) })).resolves.toMatchObject({ deliveredChannels: 0 });
+    expect(delivered).toHaveLength(1);
+  });
+  it('coalesces a share-safe machine guard episode through the same Machines channel', async () => {
+    const delivered: unknown[] = [];
+    const sessionStop = { v: 1, id: 'private-entry', at: 1, kind: 'stopped_session', rule: 'memory_guard',
+      subject: { kind: 'session', sessionId: 'private-session', title: 'private-label' },
+      outcome: 'done', note: 'private-note', attribution: { kind: 'unknown' } } satisfies MachineGuardActivityEntryV1;
+    const event = buildMachineGuardEpisodeNotificationEvent({ machineId: 'machine-1', episode: {
+      episodeId: 'episode-1', freedBytes: 4096, outOfSteps: true,
+      entries: [sessionStop, { ...sessionStop, id: 'failed', outcome: 'failed' },
+        { ...sessionStop, id: 'browser', kind: 'closed_browser', subject: { kind: 'browser' } },
+        { ...sessionStop, id: 'kept', kind: 'kept_running' }],
+    } });
+    const input = {
+      settings: accountSettingsParse({}),
+      notificationChannelCatalog: { status: 'ready' as const, revision: 1, diagnostics: [], channels: [
+        NotificationChannelRecordV1Schema.parse({ v: 1, id: 'episode-push', kind: 'expo_push', topics: { machines: true } }),
+      ] },
+      event,
+      pluginNotifications: null,
+      expoPushSender: { sendToAllDevicesAsync: async (...args: unknown[]) => { delivered.push(args); return true; } },
+      nowMs: () => 1,
+    };
+    await expect(dispatchActivityNotification(input)).resolves.toMatchObject({ deliveredChannels: 1 });
+    await expect(dispatchActivityNotification(input)).resolves.toMatchObject({ deliveredChannels: 0 });
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]).toEqual(expect.arrayContaining([expect.objectContaining({
+      topic: 'machine_guard_activity', machineId: 'machine-1', episodeId: 'episode-1', outOfSteps: true,
+      notificationId: 'guard-episode:machine-1:episode-1',
+      counts: { stoppedSessions: 1, closedBrowsers: 1, stoppedServices: 0, stoppedLeftBehind: 0 },
+    })]));
+    expect(JSON.stringify(delivered)).not.toContain('sessionId');
+    expect(JSON.stringify(delivered)).not.toContain('private-');
+  });
+
+  it('names the session, its idle time and its machine in an idle-stop warning, and keeps them out of the routing data', async () => {
+    const delivered: unknown[][] = [];
+    const event = { topic: 'guard_stop_warning' as const, machineId: 'machine-1', sessionId: 'tidy-session', stopAt: 300_001,
+      idleMs: 6_900_000, rule: 'idle_sessions' as const, sessionTitle: 'Tidy fixtures', machineName: 'leeroy-mbp' };
+    const input = {
+      settings: accountSettingsParse({}), pluginNotifications: null, event,
+      notificationChannelCatalog: { status: 'ready' as const, revision: 1, diagnostics: [], channels: [
+        NotificationChannelRecordV1Schema.parse({ v: 1, id: 'guard-copy-push', kind: 'expo_push', topics: { machines: true } }),
+      ] },
+      expoPushSender: { sendToAllDevicesAsync: async (...args: unknown[]) => { delivered.push(args); return true; } },
+      nowMs: () => 1,
+    };
+    await expect(dispatchActivityNotification(input)).resolves.toMatchObject({ deliveredChannels: 1 });
+    expect(delivered[0]![0]).toBe('Stopping “Tidy fixtures” in 5 minutes');
+    expect(delivered[0]![1]).toBe('Idle for 1 h 55 min on leeroy-mbp. It finished its work and wakes on your next message.');
+    expect(delivered[0]![2]).not.toHaveProperty('sessionTitle');
+    expect(delivered[0]![2]).not.toHaveProperty('machineName');
+  });
+
+  it('delivers one guard warning through the shared Machines topic with a stable action identifier', async () => {
+    const delivered: unknown[] = [];
+    const event = { topic: 'guard_stop_warning' as const, machineId: 'machine-1', sessionId: 'guard-warning-session',
+      stopAt: 300_000, rule: 'memory_guard' as const };
+    const input = {
+      settings: accountSettingsParse({}),
+      notificationChannelCatalog: { status: 'ready' as const, revision: 1, diagnostics: [], channels: [
+        NotificationChannelRecordV1Schema.parse({ v: 1, id: 'guard-push', kind: 'expo_push', topics: { machines: true } }),
+      ] },
+      event,
+      pluginNotifications: null,
+      expoPushSender: { sendToAllDevicesAsync: async (...args: unknown[]) => { delivered.push(args); return true; } },
+      nowMs: () => 1,
+    };
+    await expect(dispatchActivityNotification(input)).resolves.toMatchObject({ deliveredChannels: 1 });
+    await expect(dispatchActivityNotification(input)).resolves.toMatchObject({ deliveredChannels: 0 });
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]).toEqual(expect.arrayContaining([expect.objectContaining({
+      topic: 'guard_stop_warning', machineId: 'machine-1', sessionId: 'guard-warning-session', stopAt: 300_000,
+      notificationId: 'guard-stop:guard-warning-session:300000', categoryId: 'happier.guardStopWarning.v1',
+    })]));
+  });
   it('refuses the private notice write when its Account retires during the real Artifact mode read', async () => {
     let current = true;
     let started: (() => void) | undefined;
@@ -61,8 +231,10 @@ describe('dispatchActivityNotificationAsync', () => {
       return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
     });
     const written: unknown[] = [];
-    const post = vi.spyOn(axios, 'post').mockImplementation(async (_url, data: { id: string }) => {
-      written.push(data); return { status: 200, data: { id: data.id, headerVersion: 1, bodyVersion: 1 } };
+    const post = vi.spyOn(axios, 'post').mockImplementation(async (_url, data) => {
+      const mutation = readCarrierMutation(data);
+      if (typeof mutation.id !== 'string') throw new Error('Expected Artifact identity at HTTP boundary');
+      written.push(mutation); return { status: 200, data: { id: mutation.id, headerVersion: 1, bodyVersion: 1 } };
     });
     const accountId = 'retiring-notice-account';
     const credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`, encryption: null };

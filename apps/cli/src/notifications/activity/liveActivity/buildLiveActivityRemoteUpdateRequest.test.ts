@@ -8,6 +8,22 @@ import {
 import { buildLiveActivityRemoteUpdateRequest } from './buildLiveActivityRemoteUpdateRequest';
 
 describe('Live Activity request content budget', () => {
+  it('does not turn machine alert or recovery notices into Session Live Activities', () => {
+    const nowMs = Date.parse('2026-05-04T12:00:00.000Z');
+    const policy = accountSettingsParse({ attentionDeliveryPolicyV1: {
+      liveActivityRemoteUpdates: { enabled: true, preferredMode: 'direct_apns' },
+    } }).attentionDeliveryPolicyV1;
+    const decision = resolveAttentionDeliveryPolicyDecision({ policy, channel: 'live_activity', event: 'permission_request', now: new Date(nowMs) });
+    expect(decision.delivery).not.toBe('suppress');
+    expect(decision.liveActivityRemoteBehavior).toMatchObject({ mode: 'direct_apns', freshness: 'fresh' });
+    for (const phase of ['started', 'recovered'] as const) {
+      expect(buildLiveActivityRemoteUpdateRequest({ decision, nowMs, serverId: 'server-a',
+        event: { topic: 'resource_limit', kind: 'memory_pressure', phase, machineId: 'machine-1',
+          at: nowMs, since: nowMs - 120_000, guardEnabled: false,
+          evidence: { level: 'elevated', sustainMs: 120_000 } },
+      })).toBeNull();
+    }
+  });
   it('preserves a routable update for long Unicode request previews and alert text', () => {
     const nowMs = Date.parse('2026-05-04T12:00:00.000Z');
     const policy = accountSettingsParse({ attentionDeliveryPolicyV1: {

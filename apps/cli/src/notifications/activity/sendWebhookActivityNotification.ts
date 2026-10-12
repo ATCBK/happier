@@ -196,7 +196,7 @@ export async function sendWebhookActivityNotificationAsync(params: Readonly<{
   const payload = buildActivityWebhookPayload({
     // Only the canonical content builder's privacy-admitted projection leaves
     // the process; raw Account evidence never bypasses preview policy.
-    ...(params.event.topic === 'connected_service_usage' ? { metadata: built.data } : {}),
+    ...(params.event.topic === 'connected_service_usage' || params.event.topic === 'resource_limit' ? { metadata: built.data } : {}),
     ...(params.event.topic === 'notify_me' ? { notificationOpen: params.event.open } : {}),
     channelId: params.channel.id,
     createdAt: (params.nowMs ?? (() => Date.now()))(),
@@ -207,7 +207,7 @@ export async function sendWebhookActivityNotificationAsync(params: Readonly<{
     },
     session: 'sessionId' in params.event && params.event.sessionId ? {
       sessionId: params.event.sessionId,
-      title: params.previewBehavior === 'status_only' ? null : params.event.sessionTitle ?? null,
+      title: params.previewBehavior === 'status_only' || !('sessionTitle' in params.event) ? null : params.event.sessionTitle ?? null,
     } : null,
     request,
     workflowRun: params.event.topic === 'workflow_run_update'
