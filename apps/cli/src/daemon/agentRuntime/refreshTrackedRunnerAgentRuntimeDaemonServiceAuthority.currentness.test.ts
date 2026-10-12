@@ -53,7 +53,7 @@ function retainedAgent() {
 }
 
 describe('refreshTrackedRunnerAgentRuntimeDaemonServiceAuthority currentness', () => {
-  it('keeps a reattached live runner authorized when its command changes within the same process generation', async () => {
+  it('uses the captured runner generation behind a live wrapper and permits same-generation command changes', async () => {
     const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-refresh-reattached-'));
     try {
       const launchCommand =
@@ -87,8 +87,13 @@ describe('refreshTrackedRunnerAgentRuntimeDaemonServiceAuthority currentness', (
         pid: 4261,
         sessionRunnerPid: 4262,
         happySessionId: 'session-reattached',
-        processStartTimeMs: 23_346,
+        processStartTimeMs: 12_345,
         processCommandHash: launchHash,
+        runnerProcessIdentity: {
+          pid: 4262,
+          processStartTimeMs: 23_346,
+          processCommandHash: launchHash,
+        },
         reattachedFromDiskMarker: true,
         agentRuntimeDaemonServiceAuthorityFilePath: authorityPath,
       };

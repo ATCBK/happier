@@ -13,7 +13,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { mkdtemp, rm, unlink, writeFile } from 'node:fs/promises';
 import { createOnChildExited } from './onChildExited';
-import { readSessionMarkerForPid, writeSessionMarker } from '../sessionRegistry';
+import { promoteSessionMarkerPid, readSessionMarkerForPid, writeSessionMarker } from '../sessionRegistry';
 import { spawnInlineNodeParentWithChild, spawnInlineNodeTestProcess } from '@/testkit/process/spawn';
 import { once } from 'node:events';
 
@@ -45,6 +45,59 @@ function createMetadata(pid: number, startedBy: 'daemon' | 'terminal', rootPath 
 }
 
 describe('createOnHappySessionWebhook', () => {
+  it('publishes the captured runner marker before fresh wrapper startup readiness without retiring wrapper custody', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'happier-wrapper-startup-marker-'));
+    const originalHome = Object.getOwnPropertyDescriptor(configuration, 'happyHomeDir')!;
+    Object.defineProperty(configuration, 'happyHomeDir', { ...originalHome, value: dir });
+    try {
+      const wrapperPid = 649121;
+      const runnerPid = 649122;
+      const sessionId = 'session-wrapper-startup';
+      const readIdentity = async (pid: number) => ({
+        pid,
+        processStartTimeMs: pid === wrapperPid ? 12_345 : 23_456,
+        command: pid === wrapperPid ? '/runtime/scope-exit' : '/runtime/versions/1.2.3/bin/happier claude',
+      });
+      const tracked: TrackedSession = {
+        pid: wrapperPid, startedBy: 'daemon', happySessionId: `PID-${wrapperPid}`,
+        agentRuntimeDaemonServiceAuthorityFilePath: path.join(dir, 'authority.json'),
+        acceptedSpawnMarkerGate: Promise.resolve(true),
+        spawnOptions: { directory: dir, backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, spawnNonce: 'wrapper-launch' },
+      };
+      await writeSessionMarker({
+        pid: wrapperPid, happySessionId: `PID-${wrapperPid}`, startedBy: 'daemon', cwd: dir,
+        processStartTimeMs: 12_345,
+        respawn: { version: 1, directory: dir, backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, spawnNonce: 'wrapper-launch' },
+      });
+      const sessions = new Map([[wrapperPid, tracked]]);
+      const awaiter = vi.fn();
+      const report = createOnHappySessionWebhook({
+        pidToTrackedSession: sessions, pidToAwaiter: new Map([[wrapperPid, awaiter]]),
+        getParentPidFn: () => wrapperPid,
+        readProcessIdentityByPidFn: readIdentity,
+        // The OS identity read is the boundary; the marker promotion and persistence remain real.
+        promoteSessionMarkerFn: (fromPid, toPid) => promoteSessionMarkerPid(fromPid, toPid, { readProcessIdentityByPidFn: readIdentity }),
+        readCredentialsFn: async () => null,
+        onTrackedSessionReady: async () => {
+          expect(await readSessionMarkerForPid(runnerPid)).toMatchObject({
+            pid: runnerPid, happySessionId: sessionId, processStartTimeMs: 23_456,
+            agentRuntimeDaemonServiceAuthorityFilePath: tracked.agentRuntimeDaemonServiceAuthorityFilePath,
+          });
+          expect(sessions.get(wrapperPid)).toBe(tracked);
+          expect(tracked.pid).toBe(wrapperPid);
+          expect(tracked.processStartTimeMs).toBe(12_345);
+          expect(tracked.runnerProcessIdentity).toMatchObject({ pid: runnerPid, processStartTimeMs: 23_456 });
+        },
+      });
+      await report(sessionId, createMetadata(runnerPid, 'daemon', dir));
+      expect(awaiter).toHaveBeenCalledOnce();
+      expect((await readSessionMarkerForPid(wrapperPid))?.happySessionId).toBe(sessionId);
+    } finally {
+      Object.defineProperty(configuration, 'happyHomeDir', originalHome);
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('preserves canonical marker custody validation after early fresh-session identity binding', async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'happier-early-startup-marker-'));
     const originalHome = Object.getOwnPropertyDescriptor(configuration, 'happyHomeDir')!;

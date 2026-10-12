@@ -36,10 +36,10 @@ describe('Account Project capability reach', () => {
   });
   it('keeps unreadable association pending rather than returning an Off decision', async () => {
     rows().mockRejectedValue(new Error('unreachable'));
-    await expect(resolveSessionCapabilitiesForDirectory({ settings, machineId: 'linux', directory: '/srv/project',
+    await expect(Promise.resolve().then(() => resolveSessionCapabilitiesForDirectory({ settings, machineId: 'linux', directory: '/srv/project',
       agentId: 'codex', agentAcceptsUserMcp: true,
       sessionProject: { credentials, serverId, metadata: { workspaceId: 'linux-checkout', projectId: 'shared-project' } },
-    })).rejects.toMatchObject({ code: 'preparation_pending', reason: 'project_association_unavailable' });
+    }))).rejects.toMatchObject({ code: 'preparation_pending', reason: 'project_association_unavailable' });
   });
   it('does not use directory containment to invent an association for a session with no Project', async () => {
     const request = rows();

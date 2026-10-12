@@ -85,7 +85,8 @@ export function createMachineProcessesView(options: MachineProcessesViewOptions)
                 const ownership = latestRead;
                 if (ticking || ownership?.status !== 'ok') return;
                 ticking = (async () => {
-                    const snapshot = await options.processOwnershipRuntime.readOwnedProcessMetrics(ownership);
+                    const ownedPids = ownership.rows.flatMap(row => row.owner ? [row.pid] : []);
+                    const snapshot = await options.processOwnershipRuntime.readProcessMetrics(ownedPids);
                     if (disposed || controller.signal.aborted || !listeners.size) return;
                     if (snapshot.status === 'ok') {
                         const owners = new Map<string, number[]>();

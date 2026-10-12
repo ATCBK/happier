@@ -9,7 +9,8 @@ import { readProjectFiniteIngressRefusal, readProjectRuntimeRequesterRefusal, ty
 import { resolveProjectRequesterSecretEnvironment } from '@/workspaces/projectSetup/projectSetupRequesterInputs';
 import { projectRuntimeAccountRowsInput } from '@/workspaces/projectAccountRows';
 import { resolveProjectSetupAcceptedWorkspace } from '@/workspaces/projectSetup/projectSetupAcceptedWorkspace';
-import { prepareProjectSetup, type PreparedProjectSetupCommand, type PreparedProjectSetupPlan, type ProjectSetupPreparationInput } from '@/workspaces/projectSetup/projectSetupPreparation';
+import { prepareProjectSetup, readProjectActionApprovalSettings, type PreparedProjectSetupCommand, type PreparedProjectSetupPlan, type ProjectSetupPreparationInput } from '@/workspaces/projectSetup/projectSetupPreparation';
+import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
 import { authorizePreparedProjectCommand, createProjectNativeInvocationCustody, executeProjectSetup, publishProjectFiniteAdmission, type ProjectSetupExecutionInput, type ProjectSetupExecutionOutcome, type ProjectSetupOperationContext } from '@/workspaces/projectSetup/projectSetupExecution';
 import { resolveProjectNativeCommand } from '@/workspaces/projectSetup/projectNativeResolution';
 import { readProjectDefinitionFileBytes } from '@/workspaces/projectSetup/nativeDefinitionFiles';
@@ -367,12 +368,17 @@ export function createProjectServiceDeclarationStarter(input: ProjectServiceDecl
         return result;
     }
 
-    async function resolveStartTarget(request: DaemonLocalServiceLauncherStartRequestV1, ingress?: RpcHandlerContext, context?: ActionContext, executeCanonicalAction?: CanonicalPoolRead): Promise<LocalServiceLauncherStartResolution<SelectedDeclaration>> {
+    async function resolveStartTargetForAction(actionId: 'localServices.launcher.start' | 'localServices.actions.restartManaged', request: DaemonLocalServiceLauncherStartRequestV1, ingress?: RpcHandlerContext, context?: ActionContext, executeCanonicalAction?: CanonicalPoolRead): Promise<LocalServiceLauncherStartResolution<SelectedDeclaration>> {
         const nativeInvocations = new Set<ProjectNativeEffectCaptureForHost>();
         let uncertain = false;
         try {
             const current = await review(nativeInvocations, request, ingress, context, false, executeCanonicalAction);
-            if (!request.expectedEffectDigest || request.expectedEffectDigest !== current.reviewedEffectDigest) return {
+            const settings = readProjectActionApprovalSettings(current.kind === 'target' ? current.preparation : {
+                approvalContext: context, requester: { ...projectRuntimeAccountRowsInput(current.runtime, actionId), serverHttpBaseUrl: current.runtime.serverHttpBaseUrl },
+                secretEnvironment: current.runtime.secretEnvironment,
+            });
+            if (request.expectedEffectDigest !== undefined ? request.expectedEffectDigest !== current.reviewedEffectDigest
+                : isApprovalRequiredByActionsSettings(actionId, settings, context)) return {
                 ok: false, reasonCode: request.expectedEffectDigest ? 'project_service_effect_changed' : 'project_service_effect_review_required',
                 reviewedEffect: current.reviewedEffect, reviewedEffectDigest: current.reviewedEffectDigest,
             };
@@ -384,12 +390,16 @@ export function createProjectServiceDeclarationStarter(input: ProjectServiceDecl
         } finally { if (!uncertain) await Promise.all([...nativeInvocations].map(production => production.release())); }
     }
 
+    const resolveStartTarget = (request: DaemonLocalServiceLauncherStartRequestV1, ingress?: RpcHandlerContext, context?: ActionContext, executeCanonicalAction?: CanonicalPoolRead) =>
+        resolveStartTargetForAction('localServices.launcher.start', request, ingress, context, executeCanonicalAction);
+
     async function startManagedDeclaration(selected: SelectedDeclaration, request: DaemonLocalServiceLauncherStartRequestV1, ingress?: RpcHandlerContext, context?: ActionContext, executeCanonicalAction?: CanonicalPoolRead): Promise<LocalServiceLauncherStartExecutionOutcome> {
         let lease: PluginRuntimeLease | undefined;
         const nativeInvocations = new Set<ProjectNativeEffectCaptureForHost>();
         let uncertain = false;
         try {
-            if (selected.targetId !== request.targetId || selected.reviewedEffectDigest !== request.expectedEffectDigest) throw new ServiceStartRefusal('project_service_effect_changed');
+            if (selected.targetId !== request.targetId || request.expectedEffectDigest !== undefined
+                && selected.reviewedEffectDigest !== request.expectedEffectDigest) throw new ServiceStartRefusal('project_service_effect_changed');
             const initial = await review(nativeInvocations, request, ingress, context, false, executeCanonicalAction);
             const unchanged = (fresh: Pick<Review, 'reviewedEffect' | 'reviewedEffectDigest'>) => {
                 if (fresh.reviewedEffectDigest !== selected.reviewedEffectDigest) throw new ServiceStartRefusal('project_service_effect_changed', fresh);
@@ -564,13 +574,13 @@ export function createProjectServiceDeclarationStarter(input: ProjectServiceDecl
             ...(request.choice ? { choice: request.choice } : {}),
         };
         // Fresh source/effect/placement review precedes disruption. Stop never authorizes replacement.
-        const selected = await resolveStartTarget(start, execution.ingress, execution.actionContext);
+        const selected = await resolveStartTargetForAction('localServices.actions.restartManaged', start, execution.ingress, execution.actionContext);
         if (!selected.ok) return { status: 'denied', reasonCode: selected.reasonCode,
             ...(selected.reviewedEffect !== undefined ? { reviewedEffect: selected.reviewedEffect } : {}),
             ...(selected.reviewedEffectDigest ? { reviewedEffectDigest: selected.reviewedEffectDigest } : {}) };
         // Start's required-result Action preparation completes its independent approval before
         // disruption. Its one-shot invocation still revalidates current admission when run.
-        const prepared = await execution.prepareStartAction(start, execution.actionContext);
+        const prepared = await execution.prepareStartAction({ ...start, expectedEffectDigest: selected.declaration.reviewedEffectDigest }, execution.actionContext);
         if (prepared.kind === 'ready') {
             const signals = [execution.ingress?.signal, execution.actionContext.signal].filter((signal): signal is AbortSignal => signal !== undefined);
             const stopped = await stopProjectManagedService(handle, signals.length ? AbortSignal.any(signals) : undefined);

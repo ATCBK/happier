@@ -29,9 +29,7 @@ export function createProcessOwnershipRuntime(input: Readonly<{
             if (snapshot.status !== 'ok') return snapshot;
             return resolveSnapshot(snapshot);
         },
-        async readOwnedProcessMetrics(read: Awaited<ReturnType<typeof resolveSnapshot>>) {
-            if (read.status !== 'ok') return read;
-            const pids = read.rows.flatMap(row => row.owner ? [row.pid] : []);
+        async readProcessMetrics(pids: readonly number[]) {
             return census({ freshness: 'shared', scope: 'all', pids, fields: ['memory', 'cpuTimeUs'] });
         },
     };
