@@ -92,7 +92,10 @@ describe('default browser runtime Action placement', () => {
         dispatchInputCommand: async () => ({ ok: true }) },
     }) });
     const control = createBrowserDaemonControlRoutes({ broker, automation: () => service });
-    const app = createApp(true, { browserControl: control });
+    expect(broker.ownsView(view)).toBe(true);
+    const app = createApp(true, { browserControl: control,
+      browserUiAutomation: { ownsAutomationView: broker.ownsView, uiAutomation: createUnavailableRuntimeActionExecutor() },
+    });
     vi.spyOn(persistence, 'readDaemonState').mockResolvedValue({ pid: 123, httpPort: 12345,
       controlToken: 'browser-control-token', startedAt: 1, startedWithCliVersion: '0.3.0' });
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
@@ -108,18 +111,20 @@ describe('default browser runtime Action placement', () => {
       approvalsUpdate: async () => ({ ok: true }), isApprovalExecutionOriginCurrent: async () => true,
     });
     const context = { surface: 'agent' as const, authority: 'account_automation' as const,
-      defaultSessionId: view.browserSessionId, serverId: 'home', actionRequestId: 'controller-request',
+      defaultSessionId: view.browserSessionId, defaultSessionMachineId: 'machine_browser', serverId: 'home', actionRequestId: 'controller-request',
       actionsSettings: ActionsSettingsV1Schema.parse({ v: 1 }) };
     try {
       expect(await control.dispatchCommand({ ...view, kind, commandId: 'unapproved' }, { authority: 'account_automation' }))
         .toMatchObject({ status: 'failed', error: { code: 'permission_denied' } });
       if (kind === 'handBack') await control.dispatchCommand({ ...view, kind: 'takeControl', commandId: 'take' }, { authority: 'present_user' });
       const before = service.getStatus(view).controller;
-      expect(await harness.executor.execute(`browser.control.${kind}`, { ...view, kind, commandId: 'controller' }, context))
+      const rejected = await harness.executor.execute(`browser.control.${kind}`, { ...view, kind, commandId: 'controller' }, context);
+      expect(rejected, !rejected.ok ? JSON.stringify({ errorCode: rejected.errorCode, error: rejected.error }) : undefined)
         .toMatchObject({ ok: false, errorCode: 'approval_rejected' });
       expect(service.getStatus(view).controller).toBe(before);
       decision = 'approve';
-      expect(await harness.executor.execute(`browser.control.${kind}`, { ...view, kind, commandId: 'controller' }, context))
+      const approved = await harness.executor.execute(`browser.control.${kind}`, { ...view, kind, commandId: 'controller' }, context);
+      expect(approved, !approved.ok ? JSON.stringify({ errorCode: approved.errorCode, error: approved.error }) : undefined)
         .toMatchObject({ ok: true, result: { status: 'dispatched' } });
       expect(service.getStatus(view).controller).toBe(kind === 'takeControl' ? 'human' : 'none');
       if (kind === 'handBack') {
@@ -187,7 +192,8 @@ describe('default browser runtime Action placement', () => {
             features: { browser: { enabled: true, viewTargets: { enabled: true }, internal: { enabled: true }, diagnostics: { enabled: true } } },
           }) }),
           getPermissionMode: () => 'yolo',
-          getActiveTurnPermissionWitness: () => ({ turnId: 'browser-turn', causalPermissionAuthority: {
+          getWorkDepth: () => 0,
+          getActiveTurnPermissionWitness: () => ({ turnId: 'browser-turn', workDepth: 0, causalPermissionAuthority: {
             kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'yolo',
           } }),
         }, { credentials: { token: 'token', encryption: null }, accountSettings: accountSettingsParse({}) })
@@ -196,7 +202,7 @@ describe('default browser runtime Action placement', () => {
       const result = entrypoint === 'harness'
         ? await harness.executor.execute('browser.diagnostics.snapshot', input, { surface: 'agent', defaultSessionId: 'session_browser' })
         : await executeFromMcp();
-      expect(result).toMatchObject({
+      expect(result, !result.ok ? JSON.stringify({ errorCode: result.errorCode, error: result.error }) : undefined).toMatchObject({
         ok: true, result: { v: 1, machineId: 'machine_browser', events: [], diagnostics: [] },
       });
     } finally {

@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { accountSettingsParse, ActionsSettingsV1Schema, FeaturesResponseSchema } from '@happier-dev/protocol';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { formatQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
 import type { ProjectedPluginToolCatalogEntry } from '@/plugins/runtime/toolCatalog';
 import type { CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 
@@ -12,13 +14,111 @@ const daemonCatalogBoundary = vi.hoisted(() => ({ read: vi.fn() }));
 vi.mock('@/daemon/controlClient', async (importOriginal) => ({
     ...await importOriginal<typeof import('@/daemon/controlClient')>(),
     readDaemonPluginCatalog: daemonCatalogBoundary.read,
+    // An available daemon with no contributed metadata Action returns unmatched;
+    // the real Session Action owner then serves its built-in catalog.
+    requestDaemonPluginActionExecution: async () => ({ matched: false }),
 }));
 
-import { startHappyServer } from '@/mcp/startHappyServer';
+import { registerHappierSessionAgentToolRpc, startHappyServer } from '@/mcp/startHappyServer';
+import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
 
 describe('startHappyServer notification stream', () => {
+    it('keeps a shared catalog read available to a surviving native tool when another caller cancels', async () => {
+        daemonCatalogBoundary.read.mockReset();
+        const host = new AbortController();
+        const cancelledCaller = new AbortController();
+        const survivingCaller = new AbortController();
+        let enter: () => void = () => undefined;
+        let release: () => void = () => undefined;
+        const entered = new Promise<void>(resolve => { enter = resolve; });
+        let catalogReads = 0;
+        let producerSignal: AbortSignal | undefined;
+        daemonCatalogBoundary.read.mockImplementation(async (options?: Readonly<{ signal?: AbortSignal }>) => {
+            catalogReads += 1;
+            producerSignal = options?.signal;
+            enter();
+            return await new Promise((resolve, reject) => {
+                release = () => resolve({ kind: 'available', plugins: [], tools: [] });
+                options?.signal?.addEventListener('abort', () => reject(options.signal?.reason), { once: true });
+            });
+        });
+        const session = Object.assign(createMutableApiSessionClientFixture({ sessionId: 'shared-catalog-session' }), {
+            getHostTurnAbortSignal: () => host.signal,
+            getWorkDepth: () => 0,
+            getActiveTurnPermissionWitness: () => ({ turnId: 'shared-catalog-turn', workDepth: 0,
+                causalPermissionAuthority: { kind: 'admittedSessionInputV1' as const, admittedPermissionCeiling: 'yolo' as const } }),
+        });
+        registerHappierSessionAgentToolRpc(session, {
+            sessionCredentials: { token: 'shared-catalog-fixture', encryption: null }, accountSettings: accountSettingsParse({}),
+        });
+        const execute = (signal: AbortSignal) => session.rpcHandlerManager.invokeLocal(
+            SESSION_RPC_METHODS.SESSION_AGENT_TOOL_CALL_V1,
+            { toolName: 'action_spec_get', args: { id: 'browser.view.open' } }, { signal },
+        );
+        const cancelled = execute(cancelledCaller.signal);
+        const surviving = execute(survivingCaller.signal);
+        try {
+            await entered;
+            cancelledCaller.abort();
+            await expect(cancelled).resolves.toMatchObject({ ok: false, errorCode: 'cancelled' });
+            expect(host.signal.aborted).toBe(false);
+            expect(survivingCaller.signal.aborted).toBe(false);
+            expect(producerSignal).toBeDefined();
+            expect(producerSignal?.aborted).toBe(false);
+            release();
+            await expect(surviving).resolves.toMatchObject({ ok: true, result: { actionSpec: { id: 'browser.view.open' } } });
+            expect(catalogReads).toBe(1);
+        } finally {
+            release(); await Promise.allSettled([cancelled, surviving]);
+        }
+    });
+
+    it('settles a tool cancelled by host Stop while its daemon catalog admission is pending', async () => {
+        daemonCatalogBoundary.read.mockReset();
+        daemonCatalogBoundary.read.mockResolvedValueOnce({ kind: 'available', plugins: [], tools: [] });
+        const turn = new AbortController();
+        let enter: (signal: AbortSignal | undefined) => void = () => undefined;
+        let release: () => void = () => undefined;
+        const entered = new Promise<AbortSignal | undefined>(resolve => { enter = resolve; });
+        daemonCatalogBoundary.read.mockImplementation(async (options?: Readonly<{ signal?: AbortSignal }>) => {
+            enter(options?.signal);
+            return await new Promise((resolve, reject) => {
+                release = () => resolve({ kind: 'available', plugins: [], tools: [] });
+                options?.signal?.addEventListener('abort', () => reject(options.signal?.reason), { once: true });
+            });
+        });
+        const session = Object.assign(createMutableApiSessionClientFixture({ sessionId: 'catalog-stop-session' }), {
+            getHostTurnAbortSignal: () => turn.signal,
+        });
+        const server = await startHappyServer(session);
+        const pending = fetch(server.url, {
+            method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+            body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'action_execute', arguments: {
+                actionId: 'browser.view.open', input: { kind: 'openView', commandId: 'catalog-stop',
+                    browserSessionId: session.sessionId, viewId: 'view', platform: 'web',
+                    target: { kind: 'externalUrl', targetId: 'target', url: 'https://example.test' } },
+            } } }),
+        });
+        try {
+            const signal = await Promise.race([entered, pending.then(async response => {
+                throw new Error(`MCP request settled before catalog admission: ${await response.clone().text()}`);
+            })]);
+            expect(signal).toBeDefined();
+            turn.abort();
+            const response = await pending;
+            expect(response.status).toBe(503);
+            expect(await response.json()).toMatchObject({ ok: false, errorCode: 'cancelled' });
+        } finally {
+            release(); await pending; server.stop();
+        }
+    });
+
     it('refreshes the admitted inventory on policy, feature and contributor occurrence changes', async () => {
+        // Board reads also serve transcript visuals. Layout is the Action
+        // whose canonical availability actually depends on sessions.board.
+        const boardLayoutAction = 'session.board.layout.update' as const;
+        const boardLayoutTool = getActionSpec(boardLayoutAction).bindings?.mcpToolName;
         let settings = accountSettingsParse({});
         let features: CliServerFeaturesSnapshot = { status: 'ready', features: FeaturesResponseSchema.parse({
             features: { sessions: { enabled: true, board: { enabled: true } } }, capabilities: {},
@@ -35,18 +135,18 @@ describe('startHappyServer notification stream', () => {
         const server = await startHappyServer(session, {
             sessionCredentials: { token: 'offline-fixture', encryption: null },
             getAccountSettings: () => settings,
-            requiredDirectActionIds: ['session.board.get'],
+            requiredDirectActionIds: [boardLayoutAction],
         });
         const client = new Client({ name: 'inventory-refresh-test', version: '1.0.0' });
         try {
             await client.connect(new StreamableHTTPClientTransport(new URL(server.url)));
             const names = async () => (await client.listTools()).tools.map(tool => tool.name);
             expect(await names()).toContain('change_title');
-            expect(await names()).toContain('session_board_get');
+            expect(await names()).toContain(boardLayoutTool);
             vi.stubEnv('HAPPIER_BUILD_FEATURES_DENY', 'sessions.board');
-            expect(await names()).not.toContain('session_board_get');
+            expect(await names()).not.toContain(boardLayoutTool);
             vi.unstubAllEnvs();
-            expect(await names()).toContain('session_board_get');
+            expect(await names()).toContain(boardLayoutTool);
             // Supply the reader's effective policy rather than exercise a
             // persisted Settings migration in this inventory regression.
             settings = { ...settings, actionsSettingsV1: ActionsSettingsV1Schema.parse({
@@ -54,10 +154,10 @@ describe('startHappyServer notification stream', () => {
             }) };
             expect(await names()).not.toContain('change_title');
             features = { status: 'ready', features: FeaturesResponseSchema.parse({ features: {}, capabilities: {} }) };
-            expect(await names()).not.toContain('session_board_get');
+            expect(await names()).not.toContain(boardLayoutTool);
             settings = accountSettingsParse({});
             expect(await names()).toContain('change_title');
-            tools = [{ toolId: 'acme.plugin/read', actionId: 'acme.plugin/read-action', name: 'plugin_read',
+            tools = [{ toolId: 'acme.plugin/read', actionId: formatQualifiedPluginActionId({ pluginId: 'acme.plugin', localId: 'read-action' }), name: 'plugin_read',
                 title: 'Plugin read', description: 'Read', inputSchema: { type: 'object', properties: {} },
                 surfaces: ['agent'], expectedContributorOccurrenceId: 'occurrence-one' }];
             expect(await names()).toContain('plugin_read');

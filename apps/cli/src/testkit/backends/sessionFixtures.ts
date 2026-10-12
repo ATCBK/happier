@@ -16,6 +16,7 @@ import type {
 } from '@happier-dev/protocol';
 
 import { createTestMetadata } from './sessionMetadata';
+import { UNKNOWN_PENDING_QUEUE_STATE } from '@/api/session/pendingQueueState';
 
 type RecordLike = Record<string, unknown>;
 export type SessionRecordFixture = V2SessionRecord;
@@ -215,6 +216,12 @@ export function createMutableApiSessionClientFixture<TMetadata extends Record<st
             return null;
         },
         async popPendingMessage() {
+            return false;
+        },
+        getPendingQueueState() {
+            return UNKNOWN_PENDING_QUEUE_STATE;
+        },
+        async reconcilePendingQueueState() {
             return false;
         },
         shouldAttemptPendingMaterialization() {

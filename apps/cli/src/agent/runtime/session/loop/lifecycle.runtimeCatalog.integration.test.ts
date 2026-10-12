@@ -36,6 +36,15 @@ import { runPermissionModePromptLoop } from '@/agent/runtime/runPermissionModePr
 import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
 import { combinePermissionModeQueuedPrompts, type PermissionModeQueuedPrompt, type PermissionModeQueuedPromptMode } from '@/agent/runtime/permissions/queuedPrompt';
 import { projectAgentRuntimeDaemonServiceTurnWitnessV1 } from '../process/agentRuntimeDaemonServiceTurnWitness';
+import { registerHappierSessionAgentToolRpc, startHappyServer } from '@/mcp/startHappyServer';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
+import { FeaturesResponseSchema, accountSettingsParse } from '@happier-dev/protocol';
+import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import * as persistence from '@/persistence';
+import { BROWSER_RUNTIME_ACTION_CONTROL_PATH, BrowserRuntimeActionControlRequestSchema } from '@/daemon/browser/actions/controlTransport';
+import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
 
 const { loggerDebugMock, recoveryNotify, recoveryBoundary } = vi.hoisted(() => ({
   loggerDebugMock: vi.fn(),
@@ -142,6 +151,7 @@ function createLifecycleParams(overrides?: Readonly<{
     resetOrDisposeRuntime: vi.fn(async () => undefined),
   };
   const session = {
+    ...createMutableApiSessionClientFixture({ sessionId: 'session-1', metadata: createMetadata() }),
     sessionId: 'session-1',
     rpcHandlerManager: {
       sessionId: 'session-1',
@@ -1676,6 +1686,141 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
     expect(loggerReceivedIdentity(hostileFailure)).toBe(false);
     expect(runPermissionModePromptLoopFn).not.toHaveBeenCalled();
     expect(baseParams.deps.cleanupBackendRunResourcesFn).toHaveBeenCalledOnce();
+  });
+
+  it.each(['native', 'http'] as const)('settles a %s Browser tool when the real host Stop cancels its containing turn', async entrypoint => {
+    const lease = await pluginReloadController.acquireRuntimeRegistry({
+      resolveRuntimeRegistry: async () => await resolveExecutablePluginRuntimeRegistry({
+        contributes: getResolvedContributionRegistry(), pluginIds: [],
+      }),
+    });
+    const base = createLifecycleParams({ runPermissionModePromptLoopFn: runPermissionModePromptLoop });
+    const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(
+      mode => JSON.stringify(mode), { batcher: combinePermissionModeQueuedPrompts },
+    );
+    queue.push({ text: 'Open the browser', localId: 'browser-input', userMessageSeq: 1 }, { permissionMode: 'yolo' });
+    let listener: ((event: AgentSessionRuntimeEvent) => void) | undefined;
+    const provider: AgentSessionRuntime = {
+      async send(request) {
+        for (const event of [
+          { kind: 'input-accepted', inputIds: request.inputIds, delivery: request.delivery },
+          { kind: 'turn-start', turnId: request.delivery.turnId, startedBy: 'host' },
+        ]) listener?.(canonicalRuntimeEvent({ ...event, sessionId: 'session-1', emittedAtMs: 1 }));
+        return { status: 'admitted' };
+      },
+      watch(next) { listener = next; return { dispose() { listener = undefined; } }; },
+      dispose() {},
+    };
+    const runtimeLifetime = new AbortController();
+    const runtime = createNativeAgentSessionOperations(provider, 'session-1', undefined, undefined, undefined, undefined, undefined, {
+      context: { signal: runtimeLifetime.signal } as AgentSessionRuntimeContext,
+      cwd: '/workspace', connectedAccounts: [],
+      capabilities: { open: ['create'], delivery: ['newTurn'], cancel: true },
+      cancellation: { declared: true, cancel: async ({ turnId }) => {
+        listener?.(canonicalRuntimeEvent({ kind: 'turn-cancelled', sessionId: 'session-1', emittedAtMs: 2, turnId, cause: 'user' }));
+        return { status: 'requested' };
+      } },
+      configuration: { declared: false }, manualCompaction: { declared: false },
+    });
+    let abortTurn: (() => void | Promise<void>) | null = null;
+    let readTurnSignal: (() => AbortSignal) | undefined;
+    const rpc = new RpcHandlerManager({ scopePrefix: 'session-1', encryptionMode: 'plain' });
+    const session = Object.assign(base.session, {
+      rpcHandlerManager: rpc,
+      getServerBinding: () => ({ serverId: 'browser_home', serverUrl: 'https://browser-home.example.test' }),
+      getWorkDepth: () => 0,
+      getHostTurnWorkDepth: (turnId: string) => {
+        const witness = runtime.readActiveTurnAdmissionWitness?.();
+        return witness?.turnId === turnId ? witness?.agentStartCaller?.turnDepth : undefined;
+      },
+      getPermissionMode: () => 'yolo' as const,
+      getActiveTurnPermissionWitness: () => runtime.readActiveTurnPermissionWitness?.(),
+      getHostTurnAbortSignal: () => readTurnSignal?.() ?? null,
+      getRuntimeLifetimeSignal: () => runtimeLifetime.signal,
+      getServerFeaturesSnapshot: () => ({ status: 'ready' as const, features: FeaturesResponseSchema.parse({
+        features: { browser: { enabled: true, viewTargets: { enabled: true }, internal: { enabled: true }, sidecar: { enabled: true } } },
+      }) }),
+    });
+    registerHappierSessionAgentToolRpc(session, {
+      sessionCredentials: { token: 'browser-fixture', encryption: null }, accountSettings: accountSettingsParse({
+        actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'browser.view.open': ['agent'] } },
+      }),
+      pluginRuntimeRegistryLease: lease,
+    });
+    let enter: (signal: AbortSignal | undefined) => void = () => undefined;
+    let release: () => void = () => undefined;
+    const entered = new Promise<AbortSignal | undefined>(resolve => { enter = resolve; });
+    vi.spyOn(persistence, 'readDaemonState').mockResolvedValue({ pid: 123, httpPort: 12345,
+      controlToken: 'browser-control-token', startedAt: 1, startedWithCliVersion: '0.3.0' });
+    // The daemon HTTP transport is outside this Session process. All MCP and Action owners remain real.
+    const realFetch = globalThis.fetch;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
+      const endpoint = new URL(String(url));
+      if (endpoint.port !== '12345') return await realFetch(url, options);
+      if (endpoint.pathname !== BROWSER_RUNTIME_ACTION_CONTROL_PATH) throw new Error(`Unexpected daemon request: ${endpoint.pathname}`);
+      expect(BrowserRuntimeActionControlRequestSchema.parse(JSON.parse(String(options?.body))))
+        .toMatchObject({ actionId: 'browser.view.open', sessionId: 'session-1', input: {
+          kind: 'openView', commandId: 'stop-open', browserSessionId: 'session-1',
+          target: { kind: 'externalUrl', targetId: 'target', url: 'https://example.test' },
+        } });
+      const signal = options?.signal ?? undefined;
+      enter(signal);
+      return await new Promise<Response>((resolve, reject) => {
+        release = () => resolve(new Response(JSON.stringify({ result: { v: 1, commandId: 'stop-open', status: 'failed',
+          completion: 'known', error: { code: 'adapter_unavailable', message: 'fixture retired' } } })));
+        signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+      });
+    });
+    let terminate: ((event: RunnerTerminationEvent) => void) | undefined;
+    const running = runSessionLoopLifecycle({
+      ...base, session, runtime, hookRuntime: runtime,
+      permissionModeState: { ...base.permissionModeState, messageQueue: queue },
+      setAbortRequestedCallback: (callback, signalReader?: () => AbortSignal) => {
+        abortTurn = callback; readTurnSignal = signalReader;
+      },
+      deps: { ...base.deps, registerRunnerTerminationHandlersFn: registration => {
+        const handlers = registerRunnerTerminationHandlers({ ...registration, processLifecycleOwnership: 'caller', sessionExitReport: null,
+          exit: () => undefined });
+        terminate = handlers.requestTermination;
+        return handlers;
+      } },
+    });
+    let pending: Promise<unknown> | undefined;
+    let mcpServer: Awaited<ReturnType<typeof startHappyServer>> | undefined;
+    let mcpClient: Client | undefined;
+    try {
+      await vi.waitFor(() => expect(runtime.readActiveTurnPermissionWitness?.()).not.toBeNull());
+      const args = { actionId: 'browser.view.open', input: {
+          kind: 'openView', commandId: 'stop-open', browserSessionId: 'session-1', viewId: 'view', platform: 'web',
+          target: { kind: 'externalUrl', targetId: 'target', url: 'https://example.test' },
+      } };
+      if (entrypoint === 'native') {
+        pending = rpc.invokeLocal(SESSION_RPC_METHODS.SESSION_AGENT_TOOL_CALL_V1, {
+          toolName: 'action_execute', toolCallId: 'browser-stop-tool', args,
+        });
+      } else {
+        mcpServer = await startHappyServer(session, {
+          sessionCredentials: { token: 'browser-fixture', encryption: null }, accountSettings: accountSettingsParse({
+            actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'browser.view.open': ['agent'] } },
+          }),
+          pluginRuntimeRegistryLease: lease,
+        });
+        mcpClient = new Client({ name: 'host-stop-browser', version: '1.0.0' });
+        await mcpClient.connect(new StreamableHTTPClientTransport(new URL(mcpServer.url)));
+        pending = mcpClient.callTool({ name: 'action_execute', arguments: args });
+      }
+      const signal = await Promise.race([entered, pending.then(result => { throw new Error(`Tool ended before daemon dispatch: ${JSON.stringify(result)}`); })]);
+      expect(signal).toBeDefined();
+      await abortTurn?.();
+      expect(signal?.aborted).toBe(true);
+      if (entrypoint === 'native') await expect(pending).resolves.toMatchObject({ ok: false, errorCode: 'outcome_unknown' });
+      else await expect(pending).resolves.toMatchObject({ isError: true, content: [{ type: 'text', text: expect.stringContaining('outcome_unknown') }] });
+      expect(runtimeLifetime.signal.aborted).toBe(false);
+    } finally {
+      release(); terminate?.({ kind: 'killSession' }); await pending?.catch(() => undefined); await running;
+      await mcpClient?.close(); mcpServer?.stop();
+      vi.restoreAllMocks(); await lease.release();
+    }
   });
 
   it('does not log a hostile runtime cancellation rejection', async () => {

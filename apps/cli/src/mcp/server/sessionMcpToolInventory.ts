@@ -54,18 +54,38 @@ export function createSessionMcpToolInventory(params: Readonly<{
         && catalog.signalReady && params.client.isDaemonPluginCatalogSignalReady?.() === true
         && catalog.connectionEpoch === params.client.getEphemeralStreamConnectionEpoch?.()
         && isDeepStrictEqual(catalog.projection, latestProjection);
-    const readPluginToolCatalog = async (): Promise<readonly ProjectedPluginToolCatalogEntry[]> => {
+    const awaitCatalogRead = (pending: Promise<void>, signal?: AbortSignal) => {
+        if (!signal) return pending;
+        return new Promise<void>((resolve, reject) => {
+            const abort = () => { signal.removeEventListener('abort', abort); reject(signal.reason); };
+            signal.addEventListener('abort', abort, { once: true });
+            void pending.then(
+                () => { signal.removeEventListener('abort', abort); resolve(); },
+                (error: unknown) => { signal.removeEventListener('abort', abort); reject(error); },
+            );
+            if (signal.aborted) abort();
+        });
+    };
+    const readPluginToolCatalog = async (signal?: AbortSignal): Promise<readonly ProjectedPluginToolCatalogEntry[]> => {
+        signal?.throwIfAborted();
         if (params.pluginRuntimeRegistryLease) {
             return projectOccurrenceBoundExecutablePluginToolCatalog(params.pluginRuntimeRegistryLease.registry);
         }
         subscribe();
         while (!isCatalogCurrent()) {
+            signal?.throwIfAborted();
             if (!readingCatalog) {
                 const hintAtStart = latestProjection;
                 const connectionEpoch = params.client.getEphemeralStreamConnectionEpoch?.();
                 const signalReady = params.client.isDaemonPluginCatalogSignalReady?.() === true;
+                // Catalog work is shared by concurrent RPC callers. Only the
+                // containing host turn/runtime can cancel its producer; each
+                // request's signal cancels that request's wait below.
+                const producerSignals = [params.client.getHostTurnAbortSignal?.(), lifetime]
+                    .filter((candidate): candidate is AbortSignal => candidate != null);
+                const producerSignal = producerSignals.length > 1 ? AbortSignal.any(producerSignals) : producerSignals[0];
                 readingCatalog = (async () => {
-                    const response = await readDaemonPluginCatalog({ selection: 'tools' }).catch(() => ({ kind: 'unavailable' as const }));
+                    const response = await readDaemonPluginCatalog({ selection: 'tools', ...(producerSignal ? { signal: producerSignal } : {}) }).catch(() => ({ kind: 'unavailable' as const }));
                     if (response.kind !== 'available') throw new DaemonPluginToolCatalogUnavailableError();
                     const parsed = DaemonPluginCatalogProjectionSchema.safeParse(response.projection);
                     const projection = parsed.success ? parsed.data : undefined;
@@ -79,7 +99,8 @@ export function createSessionMcpToolInventory(params: Readonly<{
                     }
                 })().finally(() => { readingCatalog = undefined; });
             }
-            await readingCatalog;
+            await awaitCatalogRead(readingCatalog, signal);
+            signal?.throwIfAborted();
             // Incumbent daemons without this signal contract retain the original
             // per-request freshness behavior. No guessed revision or TTL.
             if (!canRetainCatalog() || !catalog?.projection || !catalog.signalReady) break;

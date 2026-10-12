@@ -19,6 +19,9 @@ const daemonCatalogBoundary = vi.hoisted(() => ({ read: vi.fn() }));
 vi.mock('@/daemon/controlClient', async importOriginal => ({
     ...await importOriginal<typeof import('@/daemon/controlClient')>(),
     readDaemonPluginCatalog: daemonCatalogBoundary.read,
+    // Mirrors an available daemon with no contributed metadata Action. The
+    // Session's actual built-in catalog/Action owner handles the unmatched read.
+    requestDaemonPluginActionExecution: async () => ({ matched: false }),
 }));
 
 import { resolveRunnerMcpServers } from './runtime/resolveRunnerMcpServers';
@@ -26,9 +29,13 @@ import { registerHappierSessionAgentToolRpc } from './startHappyServer';
 
 afterEach(() => { vi.unstubAllEnvs(); daemonCatalogBoundary.read.mockReset(); });
 
-function bootstrap(accountSettings: AccountSettings | null = null, session = createMutableApiSessionClientFixture({
+function bootstrap(accountSettings: AccountSettings | null = null, session = Object.assign(createMutableApiSessionClientFixture({
     sessionId: 'offline-child-bootstrap', metadataPermissionMode: 'default',
     overrides: { getServerBinding: () => ({ serverId: 'test-home', serverUrl: 'https://test-home.example.test' }) },
+}), {
+    getWorkDepth: () => 0,
+    getActiveTurnPermissionWitness: () => ({ turnId: 'offline-bootstrap-turn', workDepth: 0,
+        causalPermissionAuthority: { kind: 'admittedSessionInputV1' as const, admittedPermissionCeiling: 'default' as const } }),
 })) {
     vi.stubEnv('HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT', '1');
     vi.stubEnv('HAPPIER_ACTIONS_SETTINGS_V1', '');
@@ -326,7 +333,9 @@ it('reuses the admitted Action inventory across stateless MCP requests', async (
         await measure('initialize+notification+GET', async () => await client.connect(new StreamableHTTPClientTransport(new URL(url))));
         await measure('tools/list', async () => await client.listTools());
         const second = await measure('tools/list repeated', async () => await client.listTools());
-        const call = await measure('tools/call change_title', async () => await client.callTool({ name: 'change_title', arguments: { title: 'Offline measurement' } }));
+        // Account writes require the real daemon Session capability. This
+        // offline cache measurement uses the host's local catalog read instead.
+        const call = await measure('tools/call action_spec_get', async () => await client.callTool({ name: 'action_spec_get', arguments: { id: 'browser.view.open' } }));
         console.log('MCP_REQUEST_COST', JSON.stringify(rows));
         expect(second.row.inventory).toBe(0);
         expect(second.row.maps).toBe(0);
