@@ -2,6 +2,16 @@ import { describe, expect, it } from 'vitest';
 
 import { EphemeralUpdateSchema, MessageAckResponseSchema, UpdateBodySchema } from './index.js';
 
+describe('machine presence reconnect evidence', () => {
+  it('accepts legacy heartbeat and true reconnect evidence, rejecting malformed reconnect claims', () => {
+    const heartbeat = { type: 'machine-activity', id: 'machine', active: true, activeAt: 1000 };
+    expect(EphemeralUpdateSchema.parse(heartbeat)).toEqual(heartbeat);
+    expect(EphemeralUpdateSchema.parse({ ...heartbeat, reconnected: true })).toEqual({ ...heartbeat, reconnected: true });
+    expect(EphemeralUpdateSchema.safeParse({ ...heartbeat, reconnected: 'true' }).success).toBe(false);
+    expect(EphemeralUpdateSchema.safeParse({ ...heartbeat, reconnected: false }).success).toBe(false);
+  });
+});
+
 describe('updates transcript vNext payloads', () => {
   it('parses message-updated payload', () => {
     const parsed = UpdateBodySchema.safeParse({

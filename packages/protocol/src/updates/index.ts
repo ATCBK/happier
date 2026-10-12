@@ -236,6 +236,7 @@ export const UpdateBodySchema = lazyZodSchema(() => z.discriminatedUnion('t', [
   z.object({
     t: z.literal('update-account'),
     id: z.string(),
+    name: z.string().nullable().optional(),
   }).passthrough(),
   z.object({
     t: z.literal('account-settings-changed'),
@@ -491,6 +492,8 @@ export const EphemeralUpdateSchema = lazyZodSchema(() => z.discriminatedUnion('t
     id: z.string(),
     active: z.boolean(),
     activeAt: TimestampMsSchema,
+    /** Admitted daemon socket connection; ordinary heartbeats omit this hint. */
+    reconnected: z.literal(true).optional(),
   }).passthrough(),
   z.object({
     type: z.literal('usage'),
