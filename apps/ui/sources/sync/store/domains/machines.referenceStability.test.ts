@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createStore } from 'zustand/vanilla';
 
 import { settingsDefaults } from '@/sync/domains/settings/settings';
@@ -34,6 +34,31 @@ function machine(id: string, overrides: Partial<Machine> = {}): Machine {
 }
 
 describe('machine inventory reference stability through the real store', () => {
+    it('publishes freshness recovery for the active Home without replacing semantic rows or notifying on subsequent heartbeats', () => {
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(100_000);
+        try {
+            const store = createTestStore();
+            const options = { sourceServerId: getActiveServerSnapshot().serverId };
+            store.getState().applyMachines([machine('one', { activeAt: Date.now() })], true, options);
+            const before = store.getState();
+            const notify = vi.fn();
+            const unsubscribe = store.subscribe(notify);
+            vi.setSystemTime(180_001);
+            store.getState().applyMachines([machine('one', { activeAt: Date.now(), updatedAt: Date.now() })], false, options);
+            const recovered = store.getState();
+            expect(notify).toHaveBeenCalledTimes(1);
+            expect(recovered.machines).toBe(before.machines);
+            expect(recovered.machineDisplayById).toBe(before.machineDisplayById);
+            expect(recovered.machineListByServerId).toBe(before.machineListByServerId);
+            vi.setSystemTime(180_002);
+            store.getState().applyMachines([machine('one', { activeAt: Date.now(), updatedAt: Date.now() })], false, options);
+            expect(store.getState()).toBe(recovered);
+            expect(notify).toHaveBeenCalledTimes(1);
+            unsubscribe();
+        } finally { vi.useRealTimers(); }
+    });
+
     it('keeps semantic machine projections stable when an online heartbeat only advances timestamps', () => {
         const store = createTestStore();
         const serverId = getActiveServerSnapshot().serverId;

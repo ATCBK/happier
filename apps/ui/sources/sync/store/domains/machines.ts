@@ -29,6 +29,7 @@ import {
 } from '../../domains/state/machineDisplayWarmCacheWriter';
 import { areStoredMachineSemanticsEqual, hasMachineContributionRegistryProjectionChanged, hasMachineDaemonStateAdvanced } from './areStoredMachinesEqual';
 import { applyWorkspaceSyncRuntimeEvent } from '../../domains/sessionHandoff/applyWorkspaceSyncRuntimeEvent';
+import { isMachineOnline } from '@/utils/sessions/machineUtils';
 
 import type { StoreGet, StoreSet } from './_shared';
 
@@ -125,6 +126,10 @@ function retainMachinePresenceForHeartbeat(
     next: MachinePresence,
 ): MachinePresence {
     if (!previous || previous.active !== next.active) return next;
+    // A fresh heartbeat after grace expiry is a semantic recovery, even when
+    // the server's active bit never changed. Publish that edge to re-arm readers.
+    const nowMs = Date.now();
+    if (isMachineOnline(previous, nowMs) !== isMachineOnline(next, nowMs)) return next;
     Object.assign(previous, { activeAt: next.activeAt, updatedAt: next.updatedAt });
     return previous;
 }

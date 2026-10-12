@@ -21,7 +21,7 @@ describe('reactive Machine presence', () => {
         vi.setSystemTime(Date.now());
         const previous = storage.getState();
         const machine = createMachineFixture({ id: 'machine', activeAt: Date.now() });
-        storage.setState({ machines: { machine }, machineListByServerId: { home: [machine] } });
+        storage.getState().applyMachines([machine], true, { sourceServerId: 'home' });
         try {
             const hook = await renderHook(() => useMachinePresenceSummary('home', 'machine'));
             expect(hook.getCurrent().reachability).toBe('reachable');
@@ -29,7 +29,7 @@ describe('reactive Machine presence', () => {
             await act(async () => {
                 vi.advanceTimersByTime(20_000);
                 const heartbeat = { ...machine, activeAt: Date.now() };
-                storage.setState({ machines: { machine: heartbeat }, machineListByServerId: { home: [heartbeat] } });
+                storage.getState().applyMachines([heartbeat], false, { sourceServerId: 'home' });
             });
             expect(hook.getCurrent()).toBe(admitted);
             await act(async () => { vi.advanceTimersByTime(40_001); });
@@ -37,9 +37,9 @@ describe('reactive Machine presence', () => {
             await act(async () => { vi.advanceTimersByTime(20_000); });
             expect(hook.getCurrent().reachability).toBe('unreachable');
             const refreshed = { ...machine, activeAt: Date.now() };
-            await act(async () => { storage.setState({ machines: { machine: refreshed }, machineListByServerId: { home: [refreshed] } }); });
+            await act(async () => { storage.getState().applyMachines([refreshed], false, { sourceServerId: 'home' }); });
             expect(hook.getCurrent().reachability).toBe('reachable');
-            await act(async () => { storage.setState({ machines: {}, machineListByServerId: { home: [] } }); });
+            await act(async () => { storage.getState().applyMachines([], true, { sourceServerId: 'home' }); });
             expect(hook.getCurrent().reachability).toBe('unknown');
             await hook.unmount();
         } finally { storage.setState(previous); }
@@ -49,7 +49,7 @@ describe('reactive Machine presence', () => {
         const now = Date.now();
         const previous = storage.getState();
         const machine = createMachineFixture({ id: 'machine', activeAt: now });
-        storage.setState({ machines: { machine }, machineListByServerId: { home: [machine] } });
+        storage.getState().applyMachines([machine], true, { sourceServerId: 'home' });
         try {
             const hook = await renderHook(() => useMachinePresenceSummary('home', 'machine'));
             expect(hook.getCurrent().reachability).toBe('reachable');
@@ -61,7 +61,7 @@ describe('reactive Machine presence', () => {
 
             await act(async () => {
                 const heartbeat = { ...machine, activeAt: now + 2 };
-                storage.setState({ machines: { machine: heartbeat }, machineListByServerId: { home: [heartbeat] } });
+                storage.getState().applyMachines([heartbeat], false, { sourceServerId: 'home' });
             });
             expect(hook.getCurrent().reachability).toBe('unreachable');
 
