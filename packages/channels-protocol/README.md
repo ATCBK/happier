@@ -393,6 +393,11 @@ reply reference only to the first chunk while keeping thread addressing on all
 chunks. Discord keeps its native reply reference on every chunk. GitHub declares
 65,536 Unicode code points per comment and suppresses mentions with the
 one-code-point `＠`, without a guessed local byte ceiling or truncation.
+This bound is a retained provider setup fact in the current 0.3 development
+source. GitHub connections created before it was declared remain without core
+splitting if their retained `outboundTextLimit` is absent. Creating a connection
+or successfully transferring it runs setup and retains the current bound;
+Retest re-observes readiness only and does not refresh this setup fact.
 
 Known-no-effect delivery failures retain `retryDue` custody and attention,
 with growing exponential backoff; a positive provider `retryAfterMs` takes
