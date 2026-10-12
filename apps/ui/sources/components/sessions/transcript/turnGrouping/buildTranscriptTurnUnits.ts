@@ -1,7 +1,7 @@
 import type { ChatListItem } from '@/components/sessions/chatListItems';
 import type { Message } from "@happier-dev/session-core/messages";
 
-import type { TranscriptTurn } from './buildTranscriptTurns';
+import type { WorkflowTranscriptTurnItem } from './workflowTranscriptTurns';
 import { resolveToolCallsGroupPresentation } from '@/components/sessions/transcript/toolCalls/resolveToolCallsGroupPresentation';
 
 type ForkMessageMetadata = Readonly<{
@@ -65,7 +65,7 @@ export type TranscriptToolGroupUnitItem =
 
 export type TranscriptTurnUnitSourceItem =
     | ChatListItem
-    | { kind: 'turn'; id: string; turn: TranscriptTurn }
+    | WorkflowTranscriptTurnItem
     // Already-decomposed unit items pass through unchanged, so callers holding the
     // wider transcript row union (e.g. ChatList) can feed the builder without narrowing.
     | TranscriptToolGroupUnitItem;
@@ -291,7 +291,12 @@ export function buildTranscriptTurnUnits(params: Readonly<{
     const collapsedPreviewCount = params.collapsedPreviewCount;
     const output: TranscriptTurnUnitListItem[] = [];
 
+    const items: TranscriptTurnUnitSourceItem[] = [];
     for (const item of params.items) {
+        if (item.kind === 'turn' && item.linearItems && !params.quietWorkflowTurnIds?.has(item.id)) items.push(...item.linearItems);
+        else items.push(item);
+    }
+    for (const item of items) {
         if (item.kind === 'turn') {
             if (params.quietWorkflowTurnIds?.has(item.id)) {
                 output.push(item);

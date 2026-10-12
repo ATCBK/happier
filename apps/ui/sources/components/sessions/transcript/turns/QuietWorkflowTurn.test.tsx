@@ -15,16 +15,18 @@ const userMessage: Message = { kind: 'user-text', id: 'habit', localId: null, cr
 const reply: Message = { kind: 'agent-text', id: 'reply', localId: null, createdAt: 2, text: 'Nothing to report\nFull details stay available.' };
 
 describe('quiet workflow turn disclosure', () => {
-    it('starts folded, preserves the first reply line and discloses the full turn with accessible local controls', async () => {
+    it.each(['\n', '\r\n', '\\n'])('preserves first-line accessible disclosure for separator %j', async separator => {
+        const replyWithSeparator = { ...reply, text: `Nothing to report${separator}Full details stay available.` };
+        const summary = separator === '\\n' ? replyWithSeparator.text : 'Nothing to report';
         const mutations = vi.fn();
-        const source = createTestSessionTranscriptSource({ messages: [userMessage, reply] });
+        const source = createTestSessionTranscriptSource({ messages: [userMessage, replyWithSeparator] });
         const screen = await renderScreen(wrapWithSessionTranscriptSource(
             <TranscriptRowLayoutMutationProvider value={mutations}>
-                <QuietWorkflowTurn turnId="turn:habit" userMessage={userMessage} messages={[userMessage, reply]} reducedMotion>
+                <QuietWorkflowTurn turnId="turn:habit" userMessage={userMessage} messages={[userMessage, replyWithSeparator]} reducedMotion>
                     <View testID="full-habit-turn">
                         <TurnView turn={{ id: 'turn:habit', userMessageId: 'habit', content: [{ kind: 'message', messageId: 'reply' }] }}
                             sessionId={source.sessionId} metadata={null} activeThinkingMessageId={null}
-                            getMessageById={(id) => id === userMessage.id ? userMessage : id === reply.id ? reply : null}
+                            getMessageById={(id) => id === userMessage.id ? userMessage : id === reply.id ? replyWithSeparator : null}
                             hideUserProvenanceAttribution expandedToolCallsAnchorMessageIds={new Set()}
                             setToolCallsGroupExpanded={() => {}} interaction={{ canSendMessages: false, canApprovePermissions: false }} />
                     </View>
@@ -32,10 +34,11 @@ describe('quiet workflow turn disclosure', () => {
             </TranscriptRowLayoutMutationProvider>, source));
         const toggleId = 'quiet-workflow-turn-toggle:turn:habit';
         expect(screen.tree.findByTestId(toggleId)?.props.accessibilityState).toMatchObject({ expanded: false });
-        expect(screen.tree.findByTestId(toggleId)?.props.accessibilityLabel).toContain('Nothing to report');
+        expect(screen.tree.findByTestId(toggleId)?.props.accessibilityLabel).toBe(`Expand: ${summary}`);
         expect(screen.tree.findAllHostsByTestId('full-habit-turn')).toHaveLength(0);
         await screen.tree.pressByTestIdAsync(toggleId);
         expect(screen.tree.findByTestId(toggleId)?.props.accessibilityState).toMatchObject({ expanded: true });
+        expect(screen.tree.findByTestId(toggleId)?.props.accessibilityLabel).toBe(`Collapse: ${summary}`);
         expect(screen.tree.findAllHostsByTestId('full-habit-turn')).toHaveLength(1);
         expect(screen.tree.findAllHostsByTestId('transcript-message-habit')).toHaveLength(1);
         expect(screen.tree.findAllHostsByTestId('transcript-message-reply')).toHaveLength(1);

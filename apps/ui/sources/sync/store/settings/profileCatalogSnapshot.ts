@@ -24,6 +24,8 @@ export type ProfileCatalogSnapshot = Readonly<{
     source: 'destination' | 'legacy' | null;
 }> & ProfileCatalogLegacyProjection;
 const snapshots = new Map<string, ProfileCatalogSnapshot>();
+// Display-only receipt ordering survives row removal and inventory refresh, but not an authority refusal.
+const acknowledgedRevisionsByScope = new Map<string, Map<string, number>>();
 const listeners = new Set<() => void>();
 const emptyArtifacts: ReadonlyMap<string, ArtifactSharingResourceV1> = new Map();
 const loading: ProfileCatalogSnapshotV1 = Object.freeze({ status: 'loading' });
@@ -57,6 +59,9 @@ export function applyProfileCatalogSnapshot(scope: ServerAccountScope, catalog: 
     const previous = getProfileCatalogSnapshot(scope);
     const refused = catalog.status === 'unavailable' && ['unauthorized', 'forbidden', 'account-mode-mismatch',
         'account-not-found', 'account-inconsistent', 'encryption-material-unavailable'].includes(catalog.reason);
+    if (refused || ((catalog.status === 'ready' || catalog.status === 'partial') && catalog.source !== 'destination')) {
+        acknowledgedRevisionsByScope.delete(serverAccountScopeKeySuffix(scope));
+    }
     let data = refused ? null : previous?.data ?? null;
     if (catalog.status === 'ready' || catalog.status === 'partial') {
         const byId = new Map(previous?.data?.map(row => [row.record.id, row]) ?? []);
@@ -96,7 +101,13 @@ export function applyAcknowledgedProfileRecord(scope: ServerAccountScope,
     const previous = getProfileCatalogSnapshot(scope);
     if (!current || !previous?.data || previous.source !== 'destination') return;
     const existing = previous.data.find(row => row.record.id === input.id);
-    if (existing && existing.revision >= input.revision) return;
+    const key = serverAccountScopeKeySuffix(scope);
+    const revisions = acknowledgedRevisionsByScope.get(key) ?? new Map<string, number>();
+    const acknowledgedRevision = revisions.get(input.id);
+    if ((existing && existing.revision >= input.revision)
+        || (acknowledgedRevision !== undefined && acknowledgedRevision >= input.revision)) return;
+    revisions.set(input.id, input.revision);
+    acknowledgedRevisionsByScope.set(key, revisions);
     const record = input.record;
     const data = record ? previous.data.map(row => row.record.id === input.id ? { record, revision: input.revision } : row)
         : previous.data.filter(row => row.record.id !== input.id);
@@ -117,4 +128,4 @@ export function applyAcknowledgedProfileArtifact(scope: ServerAccountScope, arti
 export function invalidateProfileCatalogsForServer(serverId: string): void {
     for (const snapshot of snapshots.values()) if (snapshot.scope.serverId === serverId) beginProfileCatalogLoad(snapshot.scope);
 }
-export function resetProfileCatalogSnapshotsForTests(): void { snapshots.clear(); listeners.clear(); }
+export function resetProfileCatalogSnapshotsForTests(): void { snapshots.clear(); acknowledgedRevisionsByScope.clear(); listeners.clear(); }
