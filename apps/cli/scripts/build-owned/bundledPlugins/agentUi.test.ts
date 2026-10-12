@@ -7,6 +7,7 @@ import { renderAgentIdsTs } from './agentFacts.ts';
 import type { BundledPluginPackage } from './projectionFacts.ts';
 import { AGENT_IDS, BUNDLED_AGENT_CONTRIBUTION_IDENTITIES } from '../../../../../packages/agents/src/generated/agentIds';
 import { BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS } from '../../../src/plugins/projection/registry/sources/generatedBundledPluginManifests';
+import { readBundledPluginManifest } from '../../../src/plugins/projection/registry/builtIn/locators';
 import { ingestPluginManifestV2 } from '@happier-dev/protocol/plugins/manifest';
 import { collectBundledPluginUiTranslations } from '../generateBundledPluginEntries.ts';
 import { assertHostCanExcludeBundledPlugin } from '../../../../../scripts/workspaces/bundledPluginPublicationFailure.mjs';
@@ -31,7 +32,7 @@ function emittedMapKeys(source: string, name: string): string[] {
 describe('bundled Agent exclusion projections', () => {
     it('publishes declared provisioner kinds and billing without activating their runtimes', () => {
         const locator = BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.find(entry => entry.pluginId === 'happier.machine.lima');
-        const parsed = ingestPluginManifestV2(locator?.manifest);
+        const parsed = ingestPluginManifestV2(locator ? readBundledPluginManifest(locator) : undefined);
         if (!parsed.ok) throw new Error(JSON.stringify(parsed.diagnostics));
         const pluginPackages: readonly BundledPluginPackage[] = [{ pluginPackageId: 'machine-lima', pluginId: parsed.manifest.id,
             packageName: '@happier-dev/plugins-machine-lima', packageVersion: '0.0.0', manifest: parsed.manifest }];
@@ -43,7 +44,7 @@ describe('bundled Agent exclusion projections', () => {
     });
     it('projects the admitted contribution identity when its local id differs from the UI routing id', () => {
         const locator = BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.find((entry) => entry.pluginId === 'happier.agent.qwen');
-        const parsed = ingestPluginManifestV2(locator?.manifest);
+        const parsed = ingestPluginManifestV2(locator ? readBundledPluginManifest(locator) : undefined);
         if (!parsed.ok) throw new Error(JSON.stringify(parsed.diagnostics));
         // Like ohMyPi/ohmypi, a retained UI routing id is not the manifest local id.
         const manifest = { ...parsed.manifest, contributes: { ...parsed.manifest.contributes,
@@ -61,12 +62,12 @@ describe('bundled Agent exclusion projections', () => {
     it('publishes Provider definitions and Agent requirements as admitted data without executable adapters', () => {
         const packages = ['happier.agent.qwen', 'happier.agent.claude', 'happier.provider.deepseek'].map(pluginId => {
             const locator = BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.find(entry => entry.pluginId === pluginId);
-            const parsed = ingestPluginManifestV2(locator?.manifest);
+            const parsed = ingestPluginManifestV2(locator ? readBundledPluginManifest(locator) : undefined);
             if (!parsed.ok) throw new Error(JSON.stringify(parsed.diagnostics));
             return parsed.manifest;
         });
         const [qwen, claude, deepseek] = packages;
-        const connected = BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.map(locator => ingestPluginManifestV2(locator.manifest))
+        const connected = BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.map(locator => ingestPluginManifestV2(readBundledPluginManifest(locator)))
             .find(parsed => parsed.ok && (parsed.manifest.contributes.connectedAccountDescriptors?.length ?? 0) > 0);
         if (!connected?.ok) throw new Error('Missing admitted Connected Service declaration');
         const requirements = claude!.contributes.agents![0]!.providerRequirements;
@@ -110,7 +111,7 @@ describe('bundled Agent exclusion projections', () => {
 
         // A recovered optional package is included again through the same owner.
         const locator = BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.find((entry) => entry.pluginId === 'happier.agent.qwen');
-        const parsed = ingestPluginManifestV2(locator?.manifest);
+        const parsed = ingestPluginManifestV2(locator ? readBundledPluginManifest(locator) : undefined);
         if (!parsed.ok) throw new Error(JSON.stringify(parsed.diagnostics));
         const recoveredPackages: readonly BundledPluginPackage[] = [{
             pluginPackageId: 'qwen', pluginId: parsed.manifest.id,

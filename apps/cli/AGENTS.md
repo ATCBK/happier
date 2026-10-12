@@ -54,7 +54,7 @@ Details: [Agent catalog](../../docs/agents-catalog.md), [Providers](../../docs/p
 
 Voice runtime `.ios.ts` / `.android.ts` siblings are emitted only when manifest-declared platform membership differs from the common file. Platform package exports select each plugin implementation; equal host projections share one file.
 
-The normalized CLI manifest projection is the tracked clean-checkout declaration source. `packages/plugins/*/.happier-plugin/plugin.json` is an ignored on-demand package artifact, produced alongside the runtime for distribution; source Agent preparation consumes the tracked projection before those packaged artifacts exist.
+The normalized CLI manifest projections in `assets/bundled-plugin-manifests/*.json` are the tracked clean-checkout declaration source. The generated TypeScript locator module carries paths and metadata only; catalog consumers read declarations lazily through the bundled manifest reader. `packages/plugins/*/.happier-plugin/plugin.json` is an ignored on-demand package artifact, produced alongside the runtime for distribution; source Agent preparation consumes the tracked JSON projections before those packaged artifacts exist.
 
 - Change the generator, never an emitted file. A hand edit to any emitted artifact is erased by the next run and is a review finding; the real defect is in the generator, in a bundled plugin's manifest, or in the bundled-plugin membership list.
 - Regeneration is the **last** step of a batch and runs **once**. Adding, renaming or re-manifesting a bundled plugin invalidates every emitted artifact, and several programs do this concurrently. Land every manifest/membership source change first, then run one regeneration:

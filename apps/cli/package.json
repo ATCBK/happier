@@ -74,6 +74,10 @@
     }
   },
   "imports": {
+    "#process-census": {
+      "happier-source": "./src/processes/census/processCensus.ts",
+      "default": "./dist/processes/census/processCensus.mjs"
+    },
     "#voice-inference-runtime": {
       "happier-source": "./src/daemon/voiceInference/runtime/packagedVoiceInferenceRuntime.ts",
       "default": "./dist/daemon/voiceInference/runtime/packagedVoiceInferenceRuntime.mjs"
@@ -89,6 +93,8 @@
     "assets/android/scrcpy-server/**",
     "assets/ios/simulator-helper",
     "assets/ios/simulator-helper/**",
+    "assets/bundled-plugin-manifests",
+    "assets/bundled-plugin-manifests/**",
     "scripts/**/*.cjs",
     "scripts/runtime/**",
     "scripts/shims/git",
@@ -102,6 +108,7 @@
     "@happier-dev/brand",
     "@happier-dev/cli-common",
     "@happier-dev/channels-protocol",
+    "@happier-dev/email-transports-protocol",
     "@happier-dev/connection-supervisor",
     "@happier-dev/sync-client",
     "@happier-dev/iroh-native",
@@ -120,6 +127,7 @@
     "@happier-dev/plugins-antigravity",
     "@happier-dev/plugins-auggie",
     "@happier-dev/plugins-channel-discord",
+    "@happier-dev/plugins-channel-email",
     "@happier-dev/plugins-channel-telegram",
     "@happier-dev/plugins-channels",
     "@happier-dev/plugins-claude",
@@ -142,6 +150,7 @@
     "@happier-dev/plugins-kimi",
     "@happier-dev/plugins-kiro",
     "@happier-dev/plugins-lmstudio",
+    "@happier-dev/plugins-machine-boat",
     "@happier-dev/plugins-machine-crabbox",
     "@happier-dev/plugins-machine-cua",
     "@happier-dev/plugins-machine-digitalocean",
@@ -243,6 +252,7 @@
     "@happier-dev/agents": "0.0.0",
     "@happier-dev/brand": "0.0.0",
     "@happier-dev/channels-protocol": "0.0.0",
+    "@happier-dev/email-transports-protocol": "0.0.0",
     "@happier-dev/cli-common": "0.0.0",
     "@happier-dev/connection-supervisor": "0.0.0",
     "@happier-dev/sync-client": "0.0.0",
@@ -313,7 +323,6 @@
     "@stablelib/hex": "^2.0.1",
     "@types/cross-spawn": "^6.0.6",
     "@types/http-proxy": "^1.17.17",
-    "@types/ps-list": "^6.2.1",
     "@types/qrcode-terminal": "^0.12.2",
     "@types/react": "^19.2.7",
     "@types/tmp": "^0.2.6",
@@ -337,7 +346,6 @@
     "open": "^10.2.0",
     "openapi-types": "12.1.3",
     "proper-lockfile": "4.1.2",
-    "ps-list": "^8.1.1",
     "qrcode-terminal": "^0.12.0",
     "react": "^19.2.0",
     "react-devtools-core": "^6.1.5",
@@ -354,7 +362,9 @@
     "yaml": "^2.4.2",
     "zod": "4.3.6",
     "@happier-dev/plugins-channel-discord": "0.0.0",
+    "@happier-dev/plugins-channel-email": "0.0.0",
     "@happier-dev/plugins-devin": "0.0.0",
+    "@happier-dev/plugins-machine-boat": "0.0.0",
     "@happier-dev/plugins-machine-cua": "0.0.0",
     "@happier-dev/plugins-machine-lume": "0.0.0",
     "@happier-dev/plugins-machine-crabbox": "0.0.0",

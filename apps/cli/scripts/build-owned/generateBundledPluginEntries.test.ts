@@ -33,10 +33,12 @@ import { AGENT_IDS, BUNDLED_AGENT_CONTRIBUTION_IDENTITIES } from '../../../../pa
 import { collectBundledAgentContributionIdentities, importPluginAuthorRuntimeModules, main, runRuntimeConsumedAgentFactsPrivatePhase } from './generateBundledPluginEntries.ts';
 import { renderAgentIdsTs } from './bundledPlugins/agentFacts.ts';
 import { BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS } from '../../src/plugins/projection/registry/sources/generatedBundledPluginManifests';
+import { readBundledPluginManifest } from '../../src/plugins/projection/registry/builtIn/locators';
 import { collectBuiltInLegacyConnectedAccountCompatibility } from './generateBundledPluginEntries.ts';
 import { ConnectedServiceIdSchema } from '../../../../packages/protocol/src/connect/connectedServiceBindings.ts';
 import { BUNDLED_LEGACY_CONNECTED_ACCOUNT_COMPATIBILITY } from '../../../../packages/plugins/antigravity/src/connectedAccounts/builtInLegacyCompatibility.ts';
 import type { BundledPluginPackage } from './bundledPlugins/projectionFacts.ts';
+import { renderCliBundledAgentRegistrationBindingsTs } from './bundledPlugins/registry.ts';
 
 const generatorSource = readFileSync(new URL('./generateBundledPluginEntries.ts', import.meta.url), 'utf8');
 const registryRendererSource = readFileSync(new URL('./bundledPlugins/registry.ts', import.meta.url), 'utf8');
@@ -121,9 +123,12 @@ describe('generated output ownership', () => {
     const projectionPath = join(happyCliDir, 'src/plugins/projection/registry/sources/generatedBundledPluginManifests.ts');
     mkdirSync(dirname(projectionPath), { recursive: true });
     writeFileSync(projectionPath, `export const BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS = ${JSON.stringify([{
-      pluginId: CUSTOM_ACP_MANIFEST.id, manifest: CUSTOM_ACP_MANIFEST,
+      pluginId: CUSTOM_ACP_MANIFEST.id, manifestRelativePath: 'assets/bundled-plugin-manifests/custom-acp.json',
       sourceSpec: { locator: '@happier-dev/plugins-custom-acp' },
     }])};`);
+    const declarationPath = join(happyCliDir, 'assets/bundled-plugin-manifests/custom-acp.json');
+    mkdirSync(dirname(declarationPath), { recursive: true });
+    writeFileSync(declarationPath, JSON.stringify(CUSTOM_ACP_MANIFEST));
     mkdirSync(join(packageRoot, 'src/agent'), { recursive: true });
     writeFileSync(join(packageRoot, 'src/agent/definition.ts'), `export const AGENT_DEFINITION = ${JSON.stringify(CUSTOM_ACP_DEFINITION)};`);
     writeFileSync(join(packageRoot, 'src/manifest.ts'), `export const PLUGIN_MANIFEST = ${JSON.stringify(CUSTOM_ACP_MANIFEST)};`);
@@ -207,12 +212,20 @@ describe('generated output ownership', () => {
 
   it('publishes core and session-mode facts for every catalog Agent despite an unavailable executable manifest', async () => {
     const { repoRoot, happyCliDir, cleanup } = createPackageLayoutSandbox('happier-complete-agent-facts-');
-    const locators = BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.filter((entry) => entry.manifest.contributes.agents?.length);
+    const locators = BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.filter((entry) => {
+      const ingestion = ingestPluginManifestV2(readBundledPluginManifest(entry));
+      if (!ingestion.ok) throw new Error(JSON.stringify(ingestion.diagnostics));
+      return ingestion.manifest.contributes.agents?.length;
+    });
     writeCliBundledHostPackage({ happyCliDir, bundledDependencies: locators.map((entry) => entry.sourceSpec.locator) });
     const projectionPath = join(happyCliDir, 'src/plugins/projection/registry/sources/generatedBundledPluginManifests.ts');
     mkdirSync(dirname(projectionPath), { recursive: true });
     writeFileSync(projectionPath, `export const BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS = ${JSON.stringify(locators)};`);
     for (const locator of locators) {
+      const manifest = readBundledPluginManifest(locator);
+      const manifestPath = join(happyCliDir, locator.manifestRelativePath);
+      mkdirSync(dirname(manifestPath), { recursive: true });
+      writeFileSync(manifestPath, JSON.stringify(manifest));
       const packageId = locator.sourceSpec.locator.replace('@happier-dev/plugins-', '');
       const packageRoot = writeBundledPluginSourceInputs({ repoRoot, pluginId: packageId });
       const agentId = AGENT_IDS.find((id) => BUNDLED_AGENT_CONTRIBUTION_IDENTITIES[id].pluginId === locator.pluginId);
@@ -221,7 +234,7 @@ describe('generated output ownership', () => {
       writeFileSync(join(packageRoot, 'src/agent/definition.ts'), `export const AGENT_DEFINITION = ${JSON.stringify(BUNDLED_AGENT_DEFINITIONS_BY_ID[agentId])};`);
       writeFileSync(join(packageRoot, 'src/manifest.ts'), agentId === 'opencode'
         ? 'throw new Error("OpenCode executable manifest unavailable");'
-        : `export const PLUGIN_MANIFEST = ${JSON.stringify(locator.manifest)};`);
+        : `export const PLUGIN_MANIFEST = ${JSON.stringify(manifest)};`);
     }
     try {
       await withWorkspaceBundleLock(async (lease) => {
@@ -250,7 +263,7 @@ describe('generated output ownership', () => {
     writeCliBundledHostPackage({ happyCliDir, bundledDependencies: ['@happier-dev/plugins-claude', '@happier-dev/plugins-unrelated'] });
     const locator = BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.find((entry) => entry.pluginId === 'happier.agent.claude');
     if (!locator) throw new Error('Missing Claude declaration fixture');
-    const ingestion = ingestPluginManifestV2(locator.manifest);
+    const ingestion = ingestPluginManifestV2(readBundledPluginManifest(locator));
     if (!ingestion.ok) throw new Error(JSON.stringify(ingestion.diagnostics));
     const agent = ingestion.manifest.contributes.agents?.[0];
     if (!agent?.cli) throw new Error('Missing Claude CLI metadata fixture');
@@ -259,7 +272,10 @@ describe('generated output ownership', () => {
     } };
     const projectionPath = join(happyCliDir, 'src/plugins/projection/registry/sources/generatedBundledPluginManifests.ts');
     mkdirSync(dirname(projectionPath), { recursive: true });
-    writeFileSync(projectionPath, `export const BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS = ${JSON.stringify([{ ...locator, manifest }])};`);
+    writeFileSync(projectionPath, `export const BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS = ${JSON.stringify([locator])};`);
+    const manifestPath = join(happyCliDir, locator.manifestRelativePath);
+    mkdirSync(dirname(manifestPath), { recursive: true });
+    writeFileSync(manifestPath, JSON.stringify(manifest));
     writeFileSync(join(packageRoot, 'package.json'), JSON.stringify({ name: '@happier-dev/plugins-claude', version: '0.0.0' }));
     writeFileSync(join(packageRoot, 'src/manifest.ts'), `export const PLUGIN_MANIFEST = ${JSON.stringify(manifest)};`);
     mkdirSync(join(packageRoot, 'src/agent'), { recursive: true });
@@ -296,7 +312,8 @@ describe('generated output ownership', () => {
   });
   it('projects identities from the authored Agent routing id and manifest local id', () => {
     const locator = BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.find((entry) => entry.pluginId === 'happier.agent.ohmypi');
-    const ingestion = ingestPluginManifestV2(locator?.manifest);
+    if (!locator) throw new Error('Missing OhMyPi declaration fixture');
+    const ingestion = ingestPluginManifestV2(readBundledPluginManifest(locator));
     if (!ingestion.ok) throw new Error(JSON.stringify(ingestion.diagnostics));
     const identities = collectBundledAgentContributionIdentities([{
       pluginPackageId: 'ohmypi', pluginId: ingestion.manifest.id,
@@ -946,7 +963,7 @@ describe('CLI bundled plugin registry projection', () => {
   it('publishes serialized manifest locators through the aggregate final-artifact owner', () => {
     const aggregatePublisher = sourceBetween(
       'async function publishBundledPluginSemanticProjection(',
-      'function collectBundledAgentContributionIdentities(',
+      'function collectGeneratedAgentIds(',
     );
 
     expect(aggregatePublisher).toContain('renderCliBundledPluginManifestEntriesTs({ pluginPackages })');
@@ -957,7 +974,7 @@ describe('CLI bundled plugin registry projection', () => {
   it('keeps tracked projections independent of transient publication admission', () => {
     const aggregatePublisher = sourceBetween(
       'async function publishBundledPluginSemanticProjection(',
-      'function collectBundledAgentContributionIdentities(',
+      'function collectGeneratedAgentIds(',
     );
     const fullPublisher = sourceBetween(
       'async function generateBundledPluginEntries(',
@@ -1001,7 +1018,9 @@ describe('CLI bundled plugin registry projection', () => {
         readBundledPluginPublicationFailures(repoRoot),
       ), { lockPath: join(repoRoot, 'publication.lock') });
       const output = readFileSync(join(happyCliDir, 'src/plugins/projection/registry/sources/generatedBundledPluginManifests.ts'), 'utf8');
-      expect(output).toContain('Healthy changed');
+      expect(JSON.parse(readFileSync(join(happyCliDir, 'assets/bundled-plugin-manifests/healthy.json'), 'utf8')))
+        .toMatchObject({ id: 'happier.healthy', displayName: 'Healthy changed' });
+      expect(output).not.toContain('Healthy changed');
       expect(output).toContain('happier.inspector');
       expect(output).not.toContain('optional UI bytes missing');
       expect(output).not.toContain('BUNDLED_FIRST_PARTY_PLUGIN_FAILURES');
@@ -1009,6 +1028,53 @@ describe('CLI bundled plugin registry projection', () => {
     } finally {
       cleanup();
     }
+  });
+
+  it('rejects an orphaned retained Agent binding before publishing refreshed manifests', async () => {
+    const { repoRoot, happyCliDir, cleanup } = createPackageLayoutSandbox('happier-agent-binding-coherence-');
+    const packageRoot = writeBundledPluginSourceInputs({ repoRoot, pluginId: 'custom-acp' });
+    writeFileSync(join(packageRoot, 'package.json'), JSON.stringify({
+      name: '@happier-dev/plugins-custom-acp', version: '0.0.0',
+    }));
+    writeCliBundledHostPackage({ happyCliDir, bundledDependencies: ['@happier-dev/plugins-custom-acp'] });
+    const outputDir = join(happyCliDir, 'src/plugins/projection/registry/sources');
+    mkdirSync(outputDir, { recursive: true });
+    const bindingsPath = join(outputDir, 'generatedBundledPlugins.ts');
+    const manifestPath = join(outputDir, 'generatedBundledPluginManifests.ts');
+    const bindings = renderCliBundledAgentRegistrationBindingsTs([{
+      pluginId: CUSTOM_ACP_MANIFEST.id, localId: 'custom-acp',
+      implementationOwnerId: 'custom-acp', registrationFamily: 'agents',
+    }]);
+    writeFileSync(bindingsPath, bindings);
+    writeFileSync(manifestPath, 'previous manifest publication');
+    const publish = async () => await withWorkspaceBundleLock(async (lease) =>
+      await publishBundledPluginSemanticProjection(
+        parseGeneratorCliArgs(['--mode', 'write', '--root', repoRoot, '--aggregate']),
+        { protocol: { ingestPluginManifestV2 } }, lease,
+      ), { lockPath: join(repoRoot, 'publication.lock') });
+    mkdirSync(join(packageRoot, '.happier-plugin'), { recursive: true });
+    try {
+      for (const agents of [
+        [],
+        [{ ...CUSTOM_ACP_MANIFEST.contributes.agents![0]!, id: 'renamed' }],
+        [{ ...CUSTOM_ACP_MANIFEST.contributes.agents![0]!, title: 0 }],
+      ]) {
+        writeFileSync(join(packageRoot, '.happier-plugin/plugin.json'), JSON.stringify({
+          ...CUSTOM_ACP_MANIFEST, contributes: { ...CUSTOM_ACP_MANIFEST.contributes, agents },
+        }));
+        await expect(publish()).rejects.toThrow(/Missing bundled manifest.*custom-acp/u);
+        expect(readFileSync(manifestPath, 'utf8')).toBe('previous manifest publication');
+        expect(readFileSync(bindingsPath, 'utf8')).toBe(bindings);
+      }
+      // Canonical implementation ids need not equal manifest-local ids.
+      writeFileSync(bindingsPath, renderCliBundledAgentRegistrationBindingsTs([{
+        pluginId: CUSTOM_ACP_MANIFEST.id, localId: 'custom-acp',
+        implementationOwnerId: 'canonical-custom-acp', registrationFamily: 'agents',
+      }]));
+      writeFileSync(join(packageRoot, '.happier-plugin/plugin.json'), JSON.stringify(CUSTOM_ACP_MANIFEST));
+      await publish();
+      expect(readFileSync(manifestPath, 'utf8')).toContain(CUSTOM_ACP_MANIFEST.id);
+    } finally { cleanup(); }
   });
 
   it('aggregate publication preserves unrelated source failures while recording the current failed scope', async () => {

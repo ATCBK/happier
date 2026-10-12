@@ -23,7 +23,3 @@ func terminateCustodyJob(args []string) error {
 func queryCustodyJob(args []string) error {
 	return unsupportedPlatform()
 }
-
-func pidStartIdentityCommand(args []string) error {
-	return unsupportedPlatform()
-}

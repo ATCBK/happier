@@ -6,22 +6,36 @@ import {
   readdirSync,
   realpathSync,
 } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { exitWithCommandResult, runCommand } from '../../stack/scripts/utils/proc/proc.mjs';
 import { resolveWorkspaceBuildMode } from '../../../scripts/workspaces/ensureWorkspacePackagesBuilt.mjs';
+import { resolveWorkspaceTypeScriptCompilerArgs } from '../../../packages/cli-common/workspaceChildBuildEnv.mjs';
+import { callerHoldsWorkspaceBundleLock, resolveWorkspaceBundleLockPath } from '../../../scripts/workspaces/workspaceBundleLock.mjs';
+import { resolveRemoteCommandPolicy } from '../../stack/scripts/utils/dev_targets/remote_commands.mjs';
+import { runWorkspaceBuildAdmission } from '../../stack/scripts/utils/proc/workspace_build_admission.mjs';
 
-import { resolveTypeScriptCliInvocation } from '../../../scripts/workspaces/resolveTypeScriptCliInvocation.mjs';
+import { requiresTypeScriptAdmission, resolveTypeScriptCliInvocation } from '../../../scripts/workspaces/resolveTypeScriptCliInvocation.mjs';
 import { readHappyCliRuntimeInputFreshness } from '../../stack/scripts/utils/proc/cli_runtime_inputs.mjs';
 import { readCliNodeWorkspaceRuntimeIdentity } from '@happier-dev/cli-common/componentArtifacts/copyCliNodeRuntimePayload';
 import { finalizeDist, readCliDistBuildManifestFingerprint } from './finalizeDist.mjs';
-import { withOptionalCliDistBuildLock } from './optionalWorkspaceBundleLock.mjs';
+import { findRepoRoot, withOptionalCliDistBuildLock } from './optionalWorkspaceBundleLock.mjs';
 import { main as rmDist } from './rmDist.mjs';
 import { rmDirSafeSync } from './rmDirSafe.mjs';
 import { runPkgrollBuild } from './runPkgrollBuild.mjs';
 
 const INCREMENTAL_SOURCE_DIR = '.tmp.hstack-cli-build-source.incremental';
 const BUILD_SOURCE_PATHS = ['package.json', 'tsconfig.json', 'tsconfig.build.json', 'src'];
+const CLI_DIST_WORKER_FLAG = '--happier-cli-dist-build-worker';
+
+function authenticatedCliPublicationLease(lockPath, env) {
+  let leases;
+  try { leases = JSON.parse(env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_LEASES || '[]'); }
+  catch { return null; }
+  if (!Array.isArray(leases)) return null;
+  return [env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD, ...leases].find(lease =>
+    typeof lease === 'string' && callerHoldsWorkspaceBundleLock(lockPath, lease)) ?? null;
+}
 
 function resolveBuildOutputDir(env = process.env) {
   const raw = String(env?.HAPPIER_CLI_BUILD_OUTPUT_DIR ?? '').trim();
@@ -124,21 +138,66 @@ export async function buildCliDist(options = {}) {
   const lexicalPackageRoot = resolve(String(options.packageRoot ?? process.cwd()));
   const packageJsonPath = realpathSync.native(join(lexicalPackageRoot, 'package.json'));
   const packageRoot = dirname(packageJsonPath);
+  const repoRoot = resolve(String(options.repoRoot ?? findRepoRoot(packageRoot)));
+  const lockPath = resolve(String(options.lockPath ?? resolveWorkspaceBundleLockPath(repoRoot)));
+  let env = { ...process.env, ...(options.env ?? {}) };
+  const effectiveCompilerArgs = resolveWorkspaceTypeScriptCompilerArgs({
+    compilerArgs: ['-p', 'tsconfig.build.json', '--noEmit', '--singleThreaded'], env,
+  });
+  const admissionClass = resolveRemoteCommandPolicy(
+    [process.execPath, fileURLToPath(import.meta.url), ...effectiveCompilerArgs],
+    { cwd: relative(repoRoot, packageRoot).replaceAll('\\', '/') || '.' },
+  ).heavyClass;
+  const privateWorker = process.argv[2] === CLI_DIST_WORKER_FLAG
+    && resolve(process.argv[1] ?? '') === fileURLToPath(import.meta.url);
+  if (privateWorker) {
+    const heldLockValue = authenticatedCliPublicationLease(lockPath, env);
+    if (!heldLockValue) throw new Error('CLI dist worker requires its authenticated inherited CLI publication lease');
+    env = { ...env, HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD: heldLockValue };
+  } else if (options.skipLock !== true && !String(env.HAPPIER_CLI_BUILD_OUTPUT_DIR ?? '').trim()
+    && !Object.entries(options).some(([key, value]) => key.endsWith('Impl') && value !== undefined)) {
+    const workerOptions = { packageRoot, repoRoot, lockPath,
+      lockTimeoutMs: options.lockTimeoutMs, lockPollIntervalMs: options.lockPollIntervalMs,
+      lockStaleAfterMs: options.lockStaleAfterMs };
+    const result = await runWorkspaceBuildAdmission({
+      command: process.execPath,
+      args: [fileURLToPath(import.meta.url), CLI_DIST_WORKER_FLAG, JSON.stringify(workerOptions)],
+      locks: [{ path: lockPath, errorLabel: 'CLI dist build lock',
+        timeoutMs: options.lockTimeoutMs, pollIntervalMs: options.lockPollIntervalMs,
+        staleAfterMs: options.lockStaleAfterMs }],
+      cwd: packageRoot, repoDir: repoRoot, env, signal: options.signal,
+      admissionClass, admissionRequired: requiresTypeScriptAdmission({ env }), stdio: 'inherit',
+    });
+    if (result.error) throw result.error;
+    if (result.status !== 0 || result.signal) {
+      const error = new Error(result.signal
+        ? `CLI dist build terminated by signal ${result.signal}`
+        : `CLI dist build exited with status ${String(result.status)}`);
+      error.exitCode = result.status;
+      error.signal = result.signal;
+      throw error;
+    }
+    return;
+  }
   return await withOptionalCliDistBuildLock(
     () => buildCliDistUnlocked({
       ...options,
       packageRoot,
       packageJsonPath,
+      repoRoot,
+      env,
+      effectiveCompilerArgs,
+      admissionClass,
     }),
     {
       startDir: packageRoot,
-      repoRoot: options.repoRoot,
-      lockPath: options.lockPath,
+      repoRoot,
+      lockPath,
       lockTimeoutMs: options.lockTimeoutMs,
       lockPollIntervalMs: options.lockPollIntervalMs,
       lockStaleAfterMs: options.lockStaleAfterMs,
       skipLock: options.skipLock,
-      env: options.env,
+      env,
     },
   );
 }
@@ -210,8 +269,12 @@ async function buildCliDistUnlocked(options = {}) {
     if (buildMode === 'strict') {
       const typeScriptInvocation = (options.resolveTypeScriptCliInvocationImpl ?? resolveTypeScriptCliInvocation)({
         processExecPath: process.execPath,
+        env,
+        args: options.effectiveCompilerArgs,
+        workspaceDir: packageRoot,
+        admissionClass: options.admissionClass,
       });
-      await measure('typecheck', () => (options.runTypecheckImpl ?? runNodeScript)(typeScriptInvocation.argsPrefix[0], [...typeScriptInvocation.argsPrefix.slice(1), '-p', 'tsconfig.build.json', '--noEmit', '--singleThreaded'], {
+      await measure('typecheck', () => (options.runTypecheckImpl ?? runNodeScript)(typeScriptInvocation.argsPrefix[0], [...typeScriptInvocation.argsPrefix.slice(1), ...options.effectiveCompilerArgs], {
         command: typeScriptInvocation.command,
         cwd: immutableSource.packageRoot,
         env,
@@ -265,9 +328,10 @@ const invokedAsMain = (() => {
 
 if (invokedAsMain) {
   try {
-    await buildCliDist();
+    const options = process.argv[2] === CLI_DIST_WORKER_FLAG ? JSON.parse(process.argv[3] ?? '{}') : {};
+    await buildCliDist(options);
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
-    exitWithCommandResult({ status: 1, signal: error?.signal });
+    exitWithCommandResult({ status: error?.exitCode ?? 1, signal: error?.signal });
   }
 }

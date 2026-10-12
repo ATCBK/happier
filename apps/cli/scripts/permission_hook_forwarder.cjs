@@ -18,7 +18,9 @@ function readSecret(args) {
     }
 }
 
-const secret = readSecret(hookEventName ? process.argv.slice(4) : process.argv.slice(3));
+const options = hookEventName ? process.argv.slice(4) : process.argv.slice(3);
+const secret = readSecret(options);
+const denyOnUnavailable = options.includes('--deny-on-unavailable');
 
 function buildFallback() {
     return JSON.stringify({
@@ -26,12 +28,23 @@ function buildFallback() {
         suppressOutput: true,
         hookSpecificOutput: {
             hookEventName: hookEventName || 'PermissionRequest',
+            ...(denyOnUnavailable ? {
+                permissionDecision: 'deny',
+                decision: { behavior: 'deny', message: 'Happier permission authority is unavailable.' },
+            } : {}),
         },
     });
 }
 
+let responseWritten = false;
+function writeResponse(payload) {
+    if (responseWritten) return;
+    responseWritten = true;
+    process.stdout.write(payload);
+}
+
 if (!port || Number.isNaN(port)) {
-    process.stdout.write(buildFallback());
+    writeResponse(buildFallback());
     process.exit(0);
 }
 
@@ -72,23 +85,40 @@ process.stdin.on('end', () => {
         },
         (res) => {
             const responseChunks = [];
+            res.on('aborted', () => writeResponse(buildFallback()));
+            res.on('error', () => writeResponse(buildFallback()));
             res.on('data', (chunk) => {
                 responseChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
             });
             res.on('end', () => {
                 const statusCode = res.statusCode ?? 0;
                 if (statusCode < 200 || statusCode >= 300) {
-                    process.stdout.write(buildFallback());
+                    writeResponse(buildFallback());
                     return;
                 }
                 const payload = Buffer.concat(responseChunks).toString('utf8').trim();
-                process.stdout.write(payload || buildFallback());
+                if (denyOnUnavailable) {
+                    try {
+                        const parsed = JSON.parse(payload);
+                        const output = parsed?.hookSpecificOutput;
+                        const decision = hookEventName === 'PreToolUse'
+                            ? output?.permissionDecision : output?.decision?.behavior;
+                        if (decision !== 'allow' && decision !== 'deny') {
+                            writeResponse(buildFallback());
+                            return;
+                        }
+                    } catch {
+                        writeResponse(buildFallback());
+                        return;
+                    }
+                }
+                writeResponse(payload || buildFallback());
             });
         },
     );
 
     req.on('error', () => {
-        process.stdout.write(buildFallback());
+        writeResponse(buildFallback());
     });
 
     req.end(body);

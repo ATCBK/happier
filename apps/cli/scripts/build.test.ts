@@ -336,7 +336,7 @@ describe('buildCliDist', () => {
       expect(typecheckInvocations).toEqual([
         [
           '/canonical/runTypeScriptCli.mjs',
-          ['-p', 'tsconfig.build.json', '--noEmit', '--singleThreaded'],
+          ['-p', 'tsconfig.build.json', '--noEmit', '--singleThreaded', '--noCheck', 'false'],
           expect.objectContaining({ cwd: realpathSync.native(packageRoot) }),
         ],
       ]);

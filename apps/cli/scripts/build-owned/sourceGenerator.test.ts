@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { dirname, join } from 'node:path';
@@ -10,6 +10,9 @@ describe('bundled generator preparation process boundary', () => {
   it('publishes and checks semantic projections from authored dependencies without internal dist', async () => {
     const { repoRoot, happyCliDir, cleanup } = createPackageLayoutSandbox('happier-source-generator-');
     const sourceRoot = join(dirname(fileURLToPath(import.meta.url)), '../../../..');
+    // CLI source imports consume transfers and its peer-mediation dependency.
+    // Keep that real source closure available to the no-dist loader boundary.
+    const sourceWorkspaces = ['agents', 'protocol', 'cli-common', 'plugin-sdk', 'release-runtime', 'brand', 'transfers', 'peer-mediation'];
     const copy = (path: string) => {
       mkdirSync(dirname(join(repoRoot, path)), { recursive: true });
       cpSync(join(sourceRoot, path), join(repoRoot, path), { recursive: true });
@@ -20,7 +23,7 @@ describe('bundled generator preparation process boundary', () => {
       copy('apps/cli/scripts');
       copy('apps/cli/src');
       copy('apps/cli/tsconfig.json');
-      for (const name of ['agents', 'protocol', 'cli-common', 'plugin-sdk', 'release-runtime', 'brand']) {
+      for (const name of sourceWorkspaces) {
         copy(`packages/${name}/package.json`);
         copy(`packages/${name}/src`);
       }
@@ -45,6 +48,9 @@ describe('bundled generator preparation process boundary', () => {
       writeFileSync(join(happyCliDir, 'package.json'), JSON.stringify({
         name: '@happier-dev/cli', type: 'module', bundledDependencies: ['@happier-dev/plugins-selected'],
       }));
+      // The fixture host declares no Agents; copied source must not retain the
+      // real host's unrelated executable registrations during scoped publication.
+      unlinkSync(join(happyCliDir, 'src/plugins/projection/registry/sources/generatedBundledPlugins.ts'));
       const packageRoot = writeBundledPluginSourceInputs({ repoRoot, pluginId: 'selected' });
       const manifest = { schemaVersion: 2, id: 'happier.selected', version: '0.0.0', displayName: 'Selected',
         engines: { happier: '^0.0.0' }, runtime: { apiVersion: 1 }, hostAccess: { required: [], optional: [] }, contributes: {} };
@@ -77,7 +83,7 @@ describe('bundled generator preparation process boundary', () => {
         }, encoding: 'utf8' });
       await run('write');
       expect(existsSync(join(packageRoot, '.happier-plugin'))).toBe(false);
-      for (const name of ['agents', 'protocol', 'cli-common', 'plugin-sdk', 'release-runtime', 'brand']) {
+      for (const name of sourceWorkspaces) {
         expect(existsSync(join(repoRoot, 'packages', name, 'dist'))).toBe(false);
       }
       const projection = join(happyCliDir, 'src/plugins/projection/registry/sources/generatedBundledPluginManifests.ts');

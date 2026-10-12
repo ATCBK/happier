@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -368,6 +368,85 @@ function createWorkspaceCompilerBoundary(
 }
 
 describe('buildSharedDeps', () => {
+  it('prepares cli-common helpers without holding the shared runtime publication lock', async ({ onTestFinished }) => {
+    const { repoRoot, happyCliDir, cleanup } = createPackageLayoutSandbox('happier-shared-helper-lock-order-');
+    const lockPath = join(repoRoot, '.project', 'tmp', 'shared-runtime.lock');
+    const compiled: string[] = [];
+    const cancellation = new AbortController();
+    onTestFinished(() => cancellation.abort());
+    try {
+      writeCliBundledHostPackage({
+        happyCliDir, bundledDependencies: ['@happier-dev/protocol'], dependencies: { tweetnacl: '1.0.0' },
+      });
+      writeRuntimeDependencyStub({ repoRoot, packageName: 'tweetnacl' });
+      for (const name of ['protocol', 'cli-common']) {
+        writeWorkspacePackageFixture({
+          repoRoot, workspacePath: `packages/${name}`, packageName: `@happier-dev/${name}`,
+          files: { 'tsconfig.json': '{}\n', 'src/index.ts': 'export {};\n' },
+        });
+      }
+      const ensurePackages = createWorkspaceCompilerBoundary(
+        repoRoot, ['@happier-dev/protocol', '@happier-dev/cli-common'],
+        (packageDir, outputDir) => {
+          // The real package owner and helper loader may compile a cold cli-common.
+          // Replacing only the compiler process makes the ordering observable.
+          expect(existsSync(lockPath)).toBe(false);
+          compiled.push(packageDir);
+          mkdirSync(join(outputDir, 'workspaces'), { recursive: true });
+          writeFileSync(join(outputDir, 'index.js'), 'export {};\n');
+          writeFileSync(join(outputDir, 'index.d.ts'), 'export {};\n');
+          writeFileSync(join(outputDir, 'workspaces', 'index.js'), 'export {};\n');
+        },
+      );
+      const options = {
+        repoRoot, workspaceNames: ['protocol'], lockPath,
+        ensureWorkspacePackagesBuiltByNameImpl: ensurePackages,
+        signal: cancellation.signal,
+      };
+      await main(options);
+      expect(compiled).toContain(join(repoRoot, 'packages', 'cli-common'));
+      expect(existsSync(lockPath)).toBe(false);
+      const installedEntry = join(happyCliDir, 'node_modules', '@happier-dev', 'protocol', 'dist', 'index.js');
+      expect(existsSync(installedEntry)).toBe(true);
+      const compilerCount = compiled.length;
+      const currentGeneration = statSync(installedEntry, { bigint: true });
+      let publishedGeneration = currentGeneration;
+      let waiter: Promise<unknown> | undefined;
+      await withBuildSharedDepsLock(async ({ heldLockValue }: { heldLockValue: string }) => {
+        // A genuinely current closure is read-only even while another copy
+        // publisher owns the physical lock. No fake inspection result is used.
+        await main(options);
+        expect(compiled).toHaveLength(compilerCount);
+        expect(statSync(installedEntry, { bigint: true }).mtimeNs).toBe(currentGeneration.mtimeNs);
+
+        // Keep canonical package output current, but invalidate its installed
+        // projection. Wait for the real OS lock observation before publishing.
+        rmSync(installedEntry);
+        let observeWait: () => void = () => undefined;
+        const waiting = new Promise<void>((resolveWait) => { observeWait = resolveWait; });
+        waiter = main({ ...options, onWait: () => observeWait() });
+        await Promise.race([
+          waiting,
+          waiter.then(() => { throw new Error('A stale installed closure must wait for the active copy publisher'); }),
+        ]);
+        await main({
+          ...options,
+          env: { ...process.env, HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD: heldLockValue },
+        });
+        expect(compiled).toHaveLength(compilerCount);
+        expect(readFileSync(installedEntry, 'utf8')).toBe('export {};\n');
+        // Keep this generation identity outside the lock so the waiter must
+        // prove it reused the competing publisher's exact installed bytes.
+        publishedGeneration = statSync(installedEntry, { bigint: true });
+      }, { repoRoot, lockPath });
+      await waiter;
+      expect(compiled).toHaveLength(compilerCount);
+      expect(statSync(installedEntry, { bigint: true }).ino).toBe(publishedGeneration.ino);
+      expect(statSync(installedEntry, { bigint: true }).mtimeNs).toBe(publishedGeneration.mtimeNs);
+      expect(existsSync(lockPath)).toBe(false);
+    } finally { cleanup(); }
+  });
+
   it('builds synthetic bundled plugin workspaces the canonical membership owner accepts', () => {
     const { repoRoot, cleanup } = createPackageLayoutSandbox('happier-cli-bundled-plugin-fixture-membership-');
 
@@ -3484,6 +3563,38 @@ describe('buildSharedDeps', () => {
     }
   });
 
+  it('repairs missing private source modules instead of reusing a warm declarations stamp', async () => {
+    const { repoRoot, happyCliDir, cleanup } = createPackageLayoutSandbox('happier-private-source-readiness-');
+    try {
+      writeCliBundledHostPackage({ happyCliDir, bundledDependencies: ['@happier-dev/agents'] });
+      writeWorkspacePackageFixture({
+        repoRoot, workspacePath: 'packages/agents', packageName: '@happier-dev/agents',
+        manifestOverrides: {
+          exports: { '.': { 'happier-source': './src/index.js', default: './dist/index.js' } },
+        },
+        files: {
+          'src/index.js': 'export { selected } from "./private/value.js";\n',
+          'src/private/value.js': 'export const selected = "source";\n',
+          'dist/index.d.ts': 'export declare const selected: "source";\n',
+        },
+      });
+      const runSync = () => main({ repoRoot, mode: 'declarations', workspaceNames: ['agents'] });
+      await expect(runSync()).resolves.toEqual({ synced: true, stamped: true });
+      await expect(runSync()).resolves.toEqual({ synced: false, reason: 'current' });
+
+      const installedPrivateModule = resolve(happyCliDir, 'node_modules/@happier-dev/agents/src/private/value.js');
+      rmSync(installedPrivateModule);
+      await expect(runSync()).resolves.toEqual({ synced: true, stamped: true });
+      const loaded = spawnSync(process.execPath, [
+        '--conditions=happier-source', '--input-type=module', '-e',
+        'const module = await import("@happier-dev/agents"); console.log(module.selected);',
+      ], { cwd: happyCliDir, encoding: 'utf8' });
+      expect(loaded.status, loaded.stderr).toBe(0);
+      expect(loaded.stdout.trim()).toBe('source');
+      await expect(runSync()).resolves.toEqual({ synced: false, reason: 'current' });
+    } finally { cleanup(); }
+  });
+
   it('publishes source-child readiness from an already-built canonical runtime closure', async () => {
     const repoRoot = createTempDirSync('happy-cli-runtime-source-dev-readiness-');
     try {
@@ -4360,7 +4471,10 @@ describe('buildSharedDeps', () => {
         withBuildSharedDepsLockImpl: async (fn: () => Promise<unknown> | unknown) => await fn(),
         ensureWorkspacePackagesBuiltByNameImpl: createWorkspaceCompilerBoundary(repoRoot,
           ['@happier-dev/plugins-healthy', '@happier-dev/plugins-failed'], (dir, outputDir) => {
-          if (dir === failedDir) throw new Error('failed plugin compile');
+          // The compiler receives the admitted source capture, not the live workspace path.
+          if (JSON.parse(readFileSync(resolve(dir, 'package.json'), 'utf8')).name === '@happier-dev/plugins-failed') {
+            throw new Error('failed plugin compile');
+          }
           writeFileSync(resolve(outputDir, 'index.js'), 'export const healthy = true;\n', 'utf8');
         }),
         syncBundledWorkspaceDistImpl: ({ workspaceNames = [] }: { workspaceNames?: readonly string[] }) => {

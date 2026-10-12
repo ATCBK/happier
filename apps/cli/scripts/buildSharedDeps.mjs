@@ -941,6 +941,14 @@ function readPublishedPackageRootTargetSignatures(
     }
   }
 
+  // The canonical workspace publisher carries the whole authored src tree
+  // when an export references it; warm admission must compare that same tree.
+  if ([...targetPaths].some((targetPath) => (
+    relative(packageDir, targetPath).split(sep).join('/').startsWith('src/')
+  ))) {
+    targetPaths.add(resolve(packageDir, 'src'));
+  }
+
   return [...targetPaths]
     .map((targetPath) => ({
       relativePath: relative(packageDir, targetPath).split(sep).join('/'),
@@ -2695,25 +2703,22 @@ export async function main(options = {}) {
   if (publishesArtifact && bundledPluginPublicationError) {
     throw bundledPluginPublicationError;
   }
+  // The loader may prepare a cold or newly invalidated cli-common package.
+  // Finish that admitted compiler work before holding the runtime-copy lock.
+  // Its imported graph is an immutable snapshot used by the copy below.
+  const resolveCliCommonHelpers = options.resolveCliCommonWorkspacesHelpersAfterBuildImpl
+    ?? resolveCliCommonWorkspacesHelpersAfterBuild;
+  const cliCommonWorkspacesModule = await resolveCliCommonHelpers({
+    ...options,
+    repoRoot: buildRepoRoot,
+    env: options.env ?? process.env,
+  });
   const withLock = options.withBuildSharedDepsLockImpl ?? withBuildSharedDepsLock;
   return withLock(async () => {
     // The closure may have become current before this caller acquired the
     // repository-wide publication lock. Reuse that exact stamped generation
     // instead of rebuilding the same workspace packages again.
     if (canReuseCurrentRuntimeClosure()) return undefined;
-
-    // Resolve helpers after every package/generator writer has completed and
-    // after the exact-closure recheck above: a closure another caller made
-    // current while this caller waited for the lock must be reused without
-    // rebuilding the cli-common helper bundle. Resolving under this lock keeps
-    // the shared runtime copy and its helper snapshot one coherent generation.
-    const resolveCliCommonHelpers = options.resolveCliCommonWorkspacesHelpersAfterBuildImpl
-      ?? resolveCliCommonWorkspacesHelpersAfterBuild;
-    const cliCommonWorkspacesModule = await resolveCliCommonHelpers({
-      ...options,
-      repoRoot: buildRepoRoot,
-      env: options.env ?? process.env,
-    });
 
     const protocolDist = resolve(buildRepoRoot, 'packages', 'protocol', 'dist', 'index.js');
     const exists = options.existsSync ?? existsSync;

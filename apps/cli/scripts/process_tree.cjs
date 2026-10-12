@@ -1,267 +1,288 @@
-// One process-tree algorithm for CLI callers and the standalone terminal launcher.
-// The factory admits genuine OS adapters; the launcher resolves its shipped dependency closure.
+// One identity-safe process-tree owner for CLI callers and the standalone terminal launcher.
 async function taskkillWindowsProcessTree(input, windowsSystemToolCommand, execFileWithDeadline) {
-    const args = ['/PID', String(input.pid), '/T', ...(input.force ? ['/F'] : [])];
-    const run = input.execFile ?? execFileWithDeadline;
+    const args = ['/PID', String(input.pid), ...(input.tree === false ? [] : ['/T']), ...(input.force ? ['/F'] : [])];
     try {
-        // The containing teardown owns the budget. Force-stop the tool itself when it
-        // stalls so its late /T cannot race cleanup after this operation has returned.
-        await run(windowsSystemToolCommand('taskkill.exe'), args, {
+        await (input.execFile ?? execFileWithDeadline)(windowsSystemToolCommand('taskkill.exe'), args, {
             timeout: input.timeoutMs,
-            terminateOnAbort: async (child) => { child.kill('SIGKILL'); },
+            terminateOnAbort: async child => { child.kill('SIGKILL'); },
         });
     } catch (error) {
-        // Exit 128 is the only benign, idempotent result; localized text cannot establish it.
         if (error?.code === 128 && error?.killed !== true) return;
         throw error;
     }
 }
 
-function createProcessTreeOwner({ psList, execFileWithDeadline, isPidPresent, probeProcessGroupLiveness, taskkillWindowsProcessTree }) {
-    const DESCENDANT_DISCOVERY_TIMEOUT_MS = 150;
-    const DESCENDANT_DISCOVERY_INTERVAL_MS = 25;
-    const DIRECT_CHILD_COMMAND_TIMEOUT_MS = 500;
-    async function readDescendantPids(rootPid, timeoutMs) {
-        const timedOut = Symbol('descendant-discovery-timeout');
-        let timer = null;
-        const processes = await Promise.race([
-            psList(),
-            new Promise((resolve) => {
-                timer = setTimeout(() => resolve(timedOut), Math.max(1, timeoutMs));
-                timer.unref?.();
-            }),
-        ]).finally(() => {
-            if (timer)
-                clearTimeout(timer);
-        });
-        if (processes === timedOut)
-            return null;
-        const childrenByParent = new Map();
-        for (const p of processes) {
-            if (typeof p.pid !== 'number' || typeof p.ppid !== 'number')
-                continue;
-            const list = childrenByParent.get(p.ppid) ?? [];
-            list.push(p.pid);
-            childrenByParent.set(p.ppid, list);
-        }
-        const out = [];
-        const seen = new Set();
-        const visit = (pid) => {
-            const kids = childrenByParent.get(pid) ?? [];
-            for (const childPid of kids) {
-                if (seen.has(childPid))
-                    continue;
-                seen.add(childPid);
-                visit(childPid);
-                out.push(childPid);
-            }
-        };
-        visit(rootPid);
-        return out;
-    }
-    async function resolveDescendantPids(rootPid, onUnverifiedDiscovery) {
-        const descendants = new Set();
-        const startedAt = Date.now();
-        while (Date.now() - startedAt < DESCENDANT_DISCOVERY_TIMEOUT_MS) {
-            const remainingMs = DESCENDANT_DISCOVERY_TIMEOUT_MS - (Date.now() - startedAt);
-            const current = await readDescendantPids(rootPid, remainingMs);
-            if (current === null) {
-                onUnverifiedDiscovery();
-                break;
-            }
-            for (const pid of current)
-                descendants.add(pid);
-            if (descendants.size > 0)
-                break;
-            await new Promise((resolve) => setTimeout(resolve, DESCENDANT_DISCOVERY_INTERVAL_MS));
-        }
-        return Array.from(descendants);
-    }
-    function bestEffortKillPid(pid, signal) {
-        try {
-            process.kill(pid, signal);
-        }
-        catch {
-            // ignore
-        }
-    }
-    async function bestEffortSignalDirectChildren(parentPid, signal) {
-        if (process.platform === 'win32')
-            return;
-        const signalName = signal.replace(/^SIG/, '');
-        // Signal-only: nothing reads this command's output, and `pkill` exits 1 when nothing matched.
-        await execFileWithDeadline('pkill', [`-${signalName}`, '-P', String(parentPid)], {
-            timeout: DIRECT_CHILD_COMMAND_TIMEOUT_MS,
-        }).catch(() => { });
-    }
-    async function bestEffortReadDirectChildPids(parentPid, onUnverifiedDiscovery) {
-        if (process.platform === 'win32')
-            return [];
-        // The deadline is owned here rather than by `child_process`, whose `timeout` destroys a
-        // finished `pgrep`'s buffered pid list and still reports success. That empty list is read below
-        // as "this process has no direct children", and the kill walks past them — leaving the user's
-        // agent subprocesses running after their session was terminated.
-        //
-        // `pgrep` exits 1 when nothing matched. Other failures may retain useful partial
-        // output, but an unavailable command is not proof that there are no direct children.
-        const stdout = await execFileWithDeadline('pgrep', ['-P', String(parentPid)], {
-            timeout: DIRECT_CHILD_COMMAND_TIMEOUT_MS,
-        }).then((result) => String(result.stdout ?? ''), (error) => {
-            if (error?.code !== 1) onUnverifiedDiscovery();
-            return String(error?.stdout ?? '');
-        });
-        const childPids = stdout
-            .split(/\s+/)
-            .map((value) => Number.parseInt(value, 10))
-            .filter((pid) => Number.isFinite(pid) && pid > 0 && pid !== parentPid);
-        return Array.from(new Set(childPids));
-    }
-    function bestEffortKillProcessGroup(groupLeaderPid, signal) {
-        if (process.platform === 'win32')
-            return;
-        try {
-            process.kill(-groupLeaderPid, signal);
-        }
-        catch {
-            // ignore
-        }
-    }
-    async function waitForAllGone(pids, timeoutMs) {
-        const start = Date.now();
-        while (Date.now() - start < timeoutMs) {
-            if (pids.every((pid) => !isPidPresent(pid)))
-                return;
-            await new Promise((r) => setTimeout(r, 25));
-        }
-    }
-    async function waitForProcessGroupGone(groupLeaderPid, timeoutMs) {
-        const start = Date.now();
-        while (Date.now() - start < timeoutMs) {
-            if (probeProcessGroupLiveness(groupLeaderPid) === 'absent')
-                return true;
-            await new Promise((resolve) => setTimeout(resolve, 25));
-        }
-        return probeProcessGroupLiveness(groupLeaderPid) === 'absent';
-    }
-    function terminationIncomplete() {
-        return Object.assign(new Error('Process-tree termination could not be verified'), { code: 'plugin_exec_termination_incomplete' });
-    }
-    async function killProcessTree(proc, opts) {
-        const pid = proc.pid;
-        if (!pid)
-            return;
-        const graceMs = Math.max(1, opts?.graceMs ?? 1000);
-        const rootIsTerminal = ((proc.exitCode !== null && proc.exitCode !== undefined)
-            || (proc.signalCode !== null && proc.signalCode !== undefined));
-        if (rootIsTerminal && !opts?.ownedProcessGroup && isPidPresent(pid)) {
-            // Without an explicit group-custody fact, a terminal root's numeric PID
-            // may already name a replacement. Preserve the existing fail-closed rule;
-            // managed SVC09 passes its owned group fact explicitly below.
-            throw terminationIncomplete();
-        }
-        const shouldSignalProcessGroup = process.platform !== 'win32'
-            && (!rootIsTerminal || opts?.ownedProcessGroup === true)
-            && probeProcessGroupLiveness(pid) !== 'absent';
-        let censusVerified = true;
-        let directChildrenVerified = process.platform !== 'win32';
-        // Capture escaped descendants BEFORE any signal can kill their parent
-        // and reparent them. The owned group still covers same-group late forks;
-        // group absence alone cannot prove that an escaped child was stopped.
-        const [descendants, directChildren] = await Promise.all([
-            resolveDescendantPids(pid, () => { censusVerified = false; }).catch(() => {
-                censusVerified = false;
-                return [];
-            }),
-            process.platform === 'win32' ? Promise.resolve([])
-                : bestEffortReadDirectChildPids(pid, () => { directChildrenVerified = false; }),
-        ]);
-        if (shouldSignalProcessGroup)
-            bestEffortKillProcessGroup(pid, 'SIGTERM');
-        if (process.platform !== 'win32') {
-            await bestEffortSignalDirectChildren(pid, 'SIGTERM');
-        }
-        const all = Array.from(new Set([...descendants, ...directChildren, pid]));
-        if (process.platform === 'win32') {
-            const terminateWindowsTree = opts?.terminateWindowsTree ?? taskkillWindowsProcessTree;
-            let windowsTreeVerified = false;
-            const gracefulDeadline = Date.now() + graceMs;
-            try {
-                await terminateWindowsTree({ pid, force: false, timeoutMs: graceMs });
-                windowsTreeVerified = true;
-            }
-            catch {
-                for (const targetPid of all)
-                    bestEffortKillPid(targetPid, 'SIGTERM');
-            }
-            await waitForAllGone(all, Math.max(0, gracefulDeadline - Date.now()));
-            const remaining = all.filter((targetPid) => isPidPresent(targetPid));
-            if (remaining.length === 0) {
-                if (!censusVerified && !windowsTreeVerified) throw terminationIncomplete();
-                return;
-            }
-            const forceMs = Math.min(250, graceMs);
-            const forceDeadline = Date.now() + forceMs;
-            try {
-                await terminateWindowsTree({ pid, force: true, timeoutMs: forceMs });
-                windowsTreeVerified = true;
-            }
-            catch {
-                for (const targetPid of remaining)
-                    bestEffortKillPid(targetPid, 'SIGKILL');
-            }
-            await waitForAllGone(remaining, Math.max(0, forceDeadline - Date.now()));
-            if (remaining.some((targetPid) => isPidPresent(targetPid)) || (!censusVerified && !windowsTreeVerified)) {
-                throw terminationIncomplete();
-            }
-            return;
-        }
-        for (const targetPid of all) {
-            if (targetPid !== pid)
-                await bestEffortSignalDirectChildren(targetPid, 'SIGTERM');
-        }
-        for (const targetPid of all)
-            bestEffortKillPid(targetPid, 'SIGTERM');
-        await waitForAllGone(all, graceMs);
-        const remaining = all.filter((p) => isPidPresent(p));
-        if (remaining.length === 0 && !shouldSignalProcessGroup) {
-            if (!censusVerified && !directChildrenVerified) throw terminationIncomplete();
-            return;
-        }
-        if (shouldSignalProcessGroup) {
-            bestEffortKillProcessGroup(pid, 'SIGTERM');
-            await new Promise((resolve) => setTimeout(resolve, Math.min(100, graceMs)));
-            bestEffortKillProcessGroup(pid, 'SIGKILL');
-            if (!await waitForProcessGroupGone(pid, Math.min(250, graceMs))) {
-                throw terminationIncomplete();
-            }
-        }
-        if (remaining.length === 0)
-            return;
-        for (const targetPid of remaining)
-            await bestEffortSignalDirectChildren(targetPid, 'SIGKILL');
-        for (const targetPid of remaining)
-            bestEffortKillPid(targetPid, 'SIGKILL');
-        await waitForAllGone(remaining, Math.min(250, graceMs));
-        if (remaining.some((targetPid) => isPidPresent(targetPid))
-            || (!censusVerified && !directChildrenVerified && !shouldSignalProcessGroup)) {
-            throw terminationIncomplete();
-        }
-    }
-    return { killProcessTree };
-}
-
-async function killProcessTree(proc, opts) {
-    if (!proc.pid) return;
-    const [processTools, processes] = await Promise.all([
-        import('@happier-dev/cli-common/process'),
-        import('ps-list'),
-    ]);
-    const owner = createProcessTreeOwner({
-        ...processTools,
-        psList: processes.default,
-        taskkillWindowsProcessTree: (input) => taskkillWindowsProcessTree(input, processTools.windowsSystemToolCommand, processTools.execFileWithDeadline),
+function createProcessTreeOwner({ readProcessCensus, indexCensus, descendantsOf, protectedSet,
+    membersOfCgroup, membersOfJob, membersOfPgid, taskkillWindowsProcessTree, terminateWindowsJob,
+    platform, windowsJobTerminationBudgetMs, kill = (pid, signal) => process.kill(pid, signal),
+    wait = ms => new Promise(resolve => setTimeout(resolve, ms)) }) {
+    const sameStart = (left, right) => Number.isFinite(left?.startTimeMs) && left.startTimeMs === right?.startTimeMs
+        && (!left.native || !right.native || left.native === right.native);
+    const samePrincipal = (left, right) => left && right && left.kind === right.kind && left.value === right.value;
+    const present = row => row && row.state !== 'zombie';
+    const incomplete = result => Object.assign(new Error('Process-tree termination could not be verified'), {
+        code: 'plugin_exec_termination_incomplete', result,
     });
-    await owner.killProcessTree(proc, opts);
+    async function census(containment, targetPid) {
+        try {
+            const snapshot = await readProcessCensus({ freshness: 'fresh', scope: 'all',
+                ...(targetPid === undefined ? {} : { pids: [targetPid], fields: [], includeAncestors: true }),
+                ...(containment?.kind === 'windows_job' ? { verifiedJobNames: [containment.name] } : {}) });
+            if (snapshot.status !== 'ok' || new Set(snapshot.rows.map(row => row.pid)).size !== snapshot.rows.length) return null;
+            if (containment?.kind === 'windows_job') {
+                const job = snapshot.jobObservations?.find(job => job.name === containment.name);
+                if (!job || job.state === 'unavailable' || (job.state === 'live'
+                    && (!job.pids || job.pids.some(pid => !snapshot.rows.some(row => row.pid === pid))))) return null;
+            }
+            return { snapshot, index: indexCensus(snapshot.rows) };
+        } catch { return null; }
+    }
+    function refusal(table, expected) {
+        if (table.authorityRefused) return 'containment_authority_changed';
+        const row = table.index.byPid.get(expected.pid);
+        if (!row) return table.snapshot.partial?.some(item => item.pid === expected.pid) ? 'identity_unavailable' : null;
+        if (!sameStart(expected.start, row.start)) return 'identity_changed';
+        if (!samePrincipal(row.principal, table.index.byPid.get(process.pid)?.principal)) return 'principal_unavailable';
+        if (protectedSet(table.index, process.pid, { signalExtent: 'process' }).has(row.pid)) return 'protected_process';
+        return null;
+    }
+    async function captureTargets(root) {
+        const table = await census();
+        if (!table) return { status: 'unavailable', reason: 'census_unavailable' };
+        const row = table.index.byPid.get(root.pid);
+        if (!present(row)) return { status: 'refused', reason: 'root_missing' };
+        const expected = { pid: root.pid, start: root.start ?? row.start };
+        const reason = refusal(table, expected);
+        if (reason) return { status: 'refused', reason };
+        const rows = [row, ...descendantsOf(table.index, [root.pid])].filter(present);
+        if (rows.some(member => refusal(table, member))) return { status: 'refused', reason: 'descendant_identity_unavailable' };
+        return { status: 'ok', capturedAtMs: table.snapshot.capturedAtMs,
+            capturedTargets: rows.map(member => ({ pid: member.pid, start: member.start })) };
+    }
+    async function terminateTargets(input, options = {}) {
+        let containmentRefused = false;
+        const read = async () => {
+            const table = await census(input.containment);
+            if (table && input.authorizeSnapshot) {
+                try { table.authorityRefused = !await input.authorizeSnapshot(table.snapshot); }
+                catch { table.authorityRefused = true; }
+                containmentRefused ||= table.authorityRefused;
+            }
+            return table;
+        };
+        const authorizeSignal = async () => {
+            if (!input.authorizeSignal) return true;
+            let current = false;
+            try { current = await input.authorizeSignal(); } catch {}
+            containmentRefused ||= !current;
+            return current;
+        };
+        // Preserve the existing listener and ordinary-tree budgets at their canonical owner.
+        const graceMs = Math.max(1, options.graceMs ?? input.graceMs
+            ?? (input.rootKind === 'service' || input.rootKind === 'dev_server' ? 4000 : 1000));
+        const first = await read();
+        const requested = input.targets ?? [];
+        if (!first) return { status: 'unavailable', outcomes: requested.map(target => ({ pid: target.pid, outcome: 'refused', reason: 'census_unavailable' })) };
+        const captured = new Map();
+        const continuation = new Map();
+        const outcomes = new Map();
+        let verificationUnavailable = false;
+        for (const target of requested) {
+            const root = first.index.byPid.get(target.pid);
+            if (!root) {
+                const missing = first.snapshot.partial?.some(item => item.pid === target.pid);
+                outcomes.set(target.pid, { pid: target.pid, outcome: missing ? 'refused' : 'gone_before', ...(missing ? { reason: 'identity_unavailable' } : {}) });
+                continue;
+            }
+            const expected = { pid: target.pid, start: target.start ?? root.start };
+            const reason = refusal(first, expected);
+            if (reason) { outcomes.set(target.pid, { pid: target.pid, outcome: 'refused', reason }); continue; }
+            if (!present(root)) { outcomes.set(target.pid, { pid: target.pid, outcome: 'gone_before' }); continue; }
+            captured.set(root.pid, root);
+            if (input.captureDescendants) {
+                continuation.set(root.pid, { pid: root.pid, start: root.start });
+                for (const row of descendantsOf(first.index, [root.pid])) {
+                    const childReason = refusal(first, row);
+                    if (childReason) outcomes.set(row.pid, { pid: row.pid, outcome: 'refused', reason: childReason });
+                    else if (present(row)) continuation.set(row.pid, { pid: row.pid, start: row.start });
+                }
+            }
+            if (input.tree !== false) {
+                for (const row of descendantsOf(first.index, [root.pid])) {
+                    const childReason = refusal(first, row);
+                    if (childReason) outcomes.set(row.pid, { pid: row.pid, outcome: 'refused', reason: childReason });
+                    else if (present(row)) captured.set(row.pid, row);
+                }
+            }
+        }
+        function addMembers(table) {
+            if (table.authorityRefused) {
+                for (const row of captured.values()) if (!outcomes.has(row.pid)) outcomes.set(row.pid,
+                    { pid: row.pid, outcome: 'refused', reason: 'containment_authority_changed' });
+                return;
+            }
+            // A vacated or recycled numeric root never grants authority to new children.
+            const liveRoots = [...captured.values()].filter(row => !outcomes.has(row.pid)
+                && present(table.index.byPid.get(row.pid)) && !refusal(table, row));
+            const discovered = input.tree === false ? [] : [...descendantsOf(table.index, liveRoots.map(row => row.pid))];
+            // Explicit containment is independently established by the lifecycle owner,
+            // unlike a numeric PID whose vanished generation grants no discovery authority.
+            if (input.containment?.kind === 'linux_unit') discovered.push(...membersOfCgroup(table.index, input.containment.prefix));
+            if (input.containment?.kind === 'windows_job') discovered.push(...membersOfJob(table.index, input.containment.name));
+            for (const row of discovered) {
+                if (captured.has(row.pid) || outcomes.has(row.pid) || !present(row)) continue;
+                const reason = refusal(table, row);
+                if (reason) outcomes.set(row.pid, { pid: row.pid, outcome: 'refused', reason });
+                else captured.set(row.pid, row);
+            }
+        }
+        const signalFor = options.firstSignal ?? input.firstSignal ?? (input.policy === 'kill' ? 'SIGKILL' : input.rootKind === 'pty' ? 'SIGHUP'
+            : input.rootKind === 'service' || input.rootKind === 'dev_server' ? 'SIGINT' : 'SIGTERM');
+        async function signalRound(signal, timeoutMs) {
+            const table = await read();
+            if (!table) {
+                verificationUnavailable = true;
+                for (const row of captured.values()) if (!outcomes.has(row.pid)) outcomes.set(row.pid, { pid: row.pid, outcome: 'refused', reason: 'census_unavailable' });
+                return;
+            }
+            addMembers(table);
+            // Descendants first; each signal follows its own fresh generation/protection check.
+            for (const expected of [...captured.values()].reverse()) {
+                if (outcomes.has(expected.pid)) continue;
+                const fresh = await census(undefined, expected.pid);
+                if (!fresh) { verificationUnavailable = true; outcomes.set(expected.pid, { pid: expected.pid, outcome: 'refused', reason: 'census_unavailable' }); continue; }
+                const reason = refusal(fresh, expected);
+                if (reason) { outcomes.set(expected.pid, { pid: expected.pid, outcome: 'refused', reason }); continue; }
+                if (!present(fresh.index.byPid.get(expected.pid))) continue;
+                if (!await authorizeSignal()) {
+                    outcomes.set(expected.pid, { pid: expected.pid, outcome: 'refused', reason: 'containment_authority_changed' });
+                    continue;
+                }
+                try {
+                    if ((platform ?? process.platform) === 'win32') {
+                        // /T can address a recycled descendant; validated members are individual targets.
+                        await (options.terminateWindowsTree ?? taskkillWindowsProcessTree)({ pid: expected.pid, tree: false, force: signal === 'SIGKILL', timeoutMs });
+                    } else kill(expected.pid, signal);
+                } catch (error) {
+                    const permissionDenied = error?.code === 'EPERM' || error?.code === 'EACCES';
+                    // Headless Windows processes cannot accept taskkill's gentle request.
+                    // Keep that generation eligible for the independently rechecked force round.
+                    if (error?.code !== 'ESRCH' && (permissionDenied || signal === 'SIGKILL')) {
+                        outcomes.set(expected.pid, { pid: expected.pid, outcome: 'refused',
+                            reason: permissionDenied ? 'permission_denied' : 'signal_failed' });
+                    }
+                }
+            }
+        }
+        async function verify() {
+            const table = await read();
+            if (!table) { verificationUnavailable = true; return false; }
+            addMembers(table);
+            for (const expected of captured.values()) {
+                if (outcomes.has(expected.pid)) continue;
+                const reason = refusal(table, expected);
+                if (reason) outcomes.set(expected.pid, { pid: expected.pid, outcome: 'refused', reason });
+                else if (!present(table.index.byPid.get(expected.pid))) outcomes.set(expected.pid, {
+                    pid: expected.pid, outcome: 'ended', ...(expected.memory ? { freedBytes: expected.memory.bytes } : {}),
+                });
+            }
+            return [...captured.keys()].every(pid => outcomes.has(pid));
+        }
+        const nativeJobKill = input.policy === 'kill' && (platform ?? process.platform) === 'win32'
+            && input.containment?.kind === 'windows_job';
+        if (nativeJobKill) {
+            // Existing verified custody stops use the native Job's own budget, not
+            // a second gentle/force sequence. Fresh identities protect every member.
+            addMembers(first);
+            const fresh = await read();
+            if (!fresh) verificationUnavailable = true;
+            else if (!fresh.authorityRefused) {
+                addMembers(fresh);
+                const members = membersOfJob(fresh.index, input.containment.name);
+                if (members.length && ![...outcomes.values()].some(row => row.outcome === 'refused')
+                    && members.every(row => captured.has(row.pid) && !refusal(fresh, captured.get(row.pid))) && await authorizeSignal()) {
+                    await terminateWindowsJob?.({ jobName: input.containment.name,
+                        timeoutMs: windowsJobTerminationBudgetMs }).catch(() => undefined);
+                }
+            }
+            await verify();
+        } else {
+            await signalRound(signalFor, graceMs);
+            const gracefulDeadline = Date.now() + graceMs;
+            if (input.waitForExit !== false) {
+                while (!await verify() && Date.now() < gracefulDeadline) await wait(Math.min(25, Math.max(0, gracefulDeadline - Date.now())));
+            }
+            if (input.waitForExit !== false && [...captured.keys()].some(pid => !outcomes.has(pid))) {
+                const forceMs = Math.min(250, graceMs);
+                if ((platform ?? process.platform) === 'win32' && input.containment?.kind === 'windows_job' && terminateWindowsJob) {
+                    const fresh = await read();
+                    if (fresh && !fresh.authorityRefused) {
+                        addMembers(fresh);
+                        const members = membersOfJob(fresh.index, input.containment.name);
+                        if (members.length && members.every(row => captured.has(row.pid) && !refusal(fresh, captured.get(row.pid))) && await authorizeSignal()) {
+                            await terminateWindowsJob({ jobName: input.containment.name, timeoutMs: forceMs }).catch(() => undefined);
+                        }
+                    }
+                }
+                await signalRound('SIGKILL', forceMs);
+                const forceDeadline = Date.now() + forceMs;
+                while (!await verify() && Date.now() < forceDeadline) await wait(Math.min(25, Math.max(0, forceDeadline - Date.now())));
+            }
+        }
+        const final = await read();
+        if (!final) verificationUnavailable = true;
+        for (const expected of captured.values()) {
+            const previous = outcomes.get(expected.pid);
+            if (previous) {
+                // Procfs may lose status/start while a signalled generation exits.
+                // Never signal that unreadable row; the existing final full census
+                // can still prove this previously authorized identity is now absent.
+                if (!verificationUnavailable && !containmentRefused && final && !final.authorityRefused
+                    && previous.outcome === 'refused'
+                    && (previous.reason === 'principal_unavailable' || previous.reason === 'identity_unavailable')
+                    && !final.index.byPid.has(expected.pid)
+                    && !final.snapshot.partial?.some(item => item.pid === expected.pid)) {
+                    outcomes.set(expected.pid, { pid: expected.pid, outcome: 'ended',
+                        ...(expected.memory ? { freedBytes: expected.memory.bytes } : {}) });
+                }
+                continue;
+            }
+            if (!final) outcomes.set(expected.pid, { pid: expected.pid, outcome: 'refused', reason: 'verification_unavailable' });
+            else {
+                const reason = refusal(final, expected);
+                outcomes.set(expected.pid, reason ? { pid: expected.pid, outcome: 'refused', reason }
+                    : present(final.index.byPid.get(expected.pid)) ? { pid: expected.pid, outcome: 'survived' }
+                    : { pid: expected.pid, outcome: 'ended', ...(expected.memory ? { freedBytes: expected.memory.bytes } : {}) });
+            }
+        }
+        const resultOutcomes = [...outcomes.values()];
+        return { status: verificationUnavailable ? 'unavailable'
+            : containmentRefused || resultOutcomes.some(row => row.outcome === 'refused' || row.outcome === 'survived') ? 'incomplete' : 'complete', outcomes: resultOutcomes,
+            ...(input.captureDescendants ? { capturedTargets: [...continuation.values()] } : {}) };
+    }
+    async function terminateProcessTree(proc, options) {
+        if (!proc.pid) return;
+        if ((proc.exitCode !== null && proc.exitCode !== undefined) || (proc.signalCode !== null && proc.signalCode !== undefined)) {
+            const table = await census();
+            if (!table || present(table.index.byPid.get(proc.pid))) throw incomplete({ outcomes: [{ pid: proc.pid, outcome: 'refused', reason: 'identity_changed' }] });
+            if (options?.ownedProcessGroup && membersOfPgid(table.index, proc.pid).some(present)) {
+                throw incomplete({ outcomes: [{ pid: proc.pid, outcome: 'refused', reason: 'root_missing' }] });
+            }
+            return;
+        }
+        const result = await terminateTargets({ targets: [{ pid: proc.pid, start: proc.start }], tree: options?.tree !== false }, options);
+        if (result.status !== 'complete') throw incomplete(result);
+    }
+    return { terminateProcessTree, terminateTargets, captureTargets };
 }
 
-module.exports = { createProcessTreeOwner, killProcessTree, taskkillWindowsProcessTree };
+async function terminateProcessTree(proc, options) {
+    if (!proc.pid) return;
+    const [processTools, processes] = await Promise.all([import('@happier-dev/cli-common/process'), import('#process-census')]);
+    const owner = createProcessTreeOwner({ ...processTools, ...processes,
+        taskkillWindowsProcessTree: input => taskkillWindowsProcessTree(input, processTools.windowsSystemToolCommand, processTools.execFileWithDeadline),
+    });
+    await owner.terminateProcessTree(proc, options);
+}
+
+module.exports = { createProcessTreeOwner, terminateProcessTree, taskkillWindowsProcessTree };

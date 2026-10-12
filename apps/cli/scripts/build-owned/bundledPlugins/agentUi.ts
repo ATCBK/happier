@@ -521,6 +521,14 @@ export function renderUiBundledPluginEntriesTs(params: Readonly<{
   }
   lines.push(']);');
   lines.push('');
+  lines.push('/** First-party manifest presentation only; no installation or execution authority. */');
+  lines.push('export const BUNDLED_FIRST_PARTY_PLUGIN_PRESENTATION: Readonly<Record<string, Readonly<{ displayName: string; description?: string }>>> = Object.freeze({');
+  for (const plugin of params.pluginPackages) {
+    const { displayName, description } = plugin.manifest;
+    lines.push(`  ${JSON.stringify(plugin.pluginId)}: Object.freeze(${renderJsonLiteral({ displayName, ...(description ? { description } : {}) })}),`);
+  }
+  lines.push('});');
+  lines.push('');
   lines.push('export const BUNDLED_CANONICAL_AGENTS_CORE: Readonly<Record<CanonicalAgentId, AgentCoreConfig>> = Object.freeze({');
   for (const agentId of AGENT_UI_PROJECTION_ORDER) {
     const valueName = selectedProjectionSourcesByAgentId.get(agentId)?.coreConst;

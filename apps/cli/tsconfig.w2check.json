@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "incremental": false, "noEmit": true },
+  "include": [
+    "src/agent/acp/AcpBackend.ts",
+    "src/agent/acp/createAcpBackend.ts",
+    "src/agent/acp/runtime/definition/nativeSessionMcpConfig.ts",
+    "src/agent/acp/runtime/publicSession/createPublicAcpSession.ts",
+    "src/agent/acp/runtime/publicSession/createPublicAcpRuntimeProtocols.ts",
+    "src/agent/runtime/registry/engineRegistry/runtimeCore.ts"
+  ]
+}

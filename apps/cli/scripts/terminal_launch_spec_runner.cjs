@@ -4,7 +4,7 @@ const fs = require('node:fs/promises');
 const fsSync = require('node:fs');
 const { spawn } = require('node:child_process');
 const path = require('node:path');
-const { killProcessTree } = require('./process_tree.cjs');
+const { terminateProcessTree } = require('./process_tree.cjs');
 
 const terminalSignalNames = ['SIGINT', 'SIGQUIT'];
 
@@ -63,8 +63,19 @@ async function readLaunchSpecFile(specPath) {
     let cleanupIncomplete = false;
     const recordCleanupFailure = (error) => { if (error?.code !== 'ENOENT') cleanupIncomplete = true; };
     await fs.unlink(specPath).catch(recordCleanupFailure);
-    if (path.basename(specDir).startsWith('happier-terminal-launch-')) {
-        try { await fs.rmdir(specDir); }
+    const legacyTemporaryDirectory = path.basename(specDir).startsWith('happier-terminal-launch-');
+    let markerPath;
+    if (path.basename(specDir).startsWith('terminal-launch-')) {
+        // The sidecar stager bundles this authored workspace leaf into the
+        // standalone runner. No installed package is needed by the staged asset.
+        const owner = await import('@happier-dev/cli-common/tempDirs');
+        if (owner.readHappierTempDirOwner(specDir)?.purpose === 'terminal-launch') {
+            markerPath = owner.getHappierTempDirOwnerPath(specDir);
+        } else cleanupIncomplete = true;
+    }
+    if (legacyTemporaryDirectory || markerPath) {
+        let removed = false;
+        try { await fs.rmdir(specDir); removed = true; }
         catch (error) {
             let onlyOwnedReceipt = false;
             if (error?.code === 'ENOTEMPTY' && ownsSpawnResult) {
@@ -75,6 +86,7 @@ async function readLaunchSpecFile(specPath) {
             }
             if (!onlyOwnedReceipt) recordCleanupFailure(error);
         }
+        if (removed && markerPath) await fs.unlink(markerPath).catch(recordCleanupFailure);
     }
     // The private handoff has been read. Cleanup is observable but must not
     // replace validation/startup failures or a completed native outcome.
@@ -166,7 +178,7 @@ function runLaunchSpec(spec, controllerSignal, controllerChannel) {
         let controllerCleanup = null;
         const onControllerClosed = () => {
             // The surviving launcher owns this tree; no polling or independent host policy.
-            controllerCleanup ??= killProcessTree(child).catch(() => {
+            controllerCleanup ??= terminateProcessTree(child).catch(() => {
                 console.error('Owned terminal process cleanup could not be verified (terminal_controller_cleanup_incomplete)');
                 report({ type: 'terminal-native-signal-failed' });
             });

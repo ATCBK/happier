@@ -11,10 +11,11 @@
 //     environment are the caller's, inherited unchanged by the target.
 //     `run --wait-for-job-empty` retains natural descendants until the same
 //     job is positively empty, then returns the observed target-root code.
-//   - darwin: `pid-startidentity <pid>` reports the native subsecond process
-//     start identity (kinfo_proc p_starttime) via the numeric sysctl MIB
-//     {CTL_KERN, KERN_PROC, KERN_PROC_PID, pid}. The parse is validated at
-//     runtime and fails closed instead of guessing a layout.
+//   - darwin/windows: `process-census` reports one native process-table
+//     snapshot, including start identities and own-principal enrichment.
+//   - linux/darwin/windows: `disk-measure` reports allocated and reclaimable
+//     bytes; `disk-scan` streams breadth-first directory records and a summary.
+//   - linux/darwin/windows: `storage-rename` renames a leaf without replacement.
 //   - linux/darwin/windows: `peer-identity [--pipe-handle=<handle>]` inspects
 //     the inherited accepted local IPC connection (fixed extra descriptor 3,
 //     never a path in argv) with the platform's real peer primitive —
@@ -35,13 +36,14 @@
 //   - any other platform: every subcommand fails closed; Linux SVC09 custody
 //     stays on its process-group owner and never consumes this helper.
 //
-// One JSON line goes to stdout for machine-readable outcomes; diagnostics go to
-// stderr. Exit codes: 0 success, 2 usage, 3 custody outcome not proven, 4
+// JSON outcomes go to stdout (NDJSON for disk-scan); diagnostics go to stderr.
+// Exit codes: 0 success, 2 usage, 3 custody outcome not proven, 4
 // custody could not be established, 5 platform/OS error.
 package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -72,7 +74,12 @@ usage:
   happier-process-custody run --job=<name> [--wait-for-job-empty] [--target-windows-verbatim] [--target-inherited-stdin-arg=<arg>] -- <command> [args...]
   happier-process-custody terminate --job=<name> [--timeout-ms=<ms>]
   happier-process-custody query --job=<name>
-  happier-process-custody pid-startidentity <pid>
+  happier-process-custody job-join --job=<name> --pid=<pid> --holder-pid=<pid>
+  happier-process-custody job-release --holder-pid=<pid> --holder-handle=<handle> --holder-start-time-ms=<ms>
+  happier-process-custody process-census [--scope=own_principal|all] [--pids=<csv>] [--caller-pid=<pid>] [--job=<verified-name>]...
+  happier-process-custody vitals-sample [--extras]
+  happier-process-custody keep-awake
+  happier-process-custody scope-exec --unit=<scope> --evidence=<path> -- <command> [args...]
   happier-process-custody peer-identity [--pipe-handle=<handle>]
   happier-process-custody secure-pipe-relay --pipe-name=<name> --target-port=<port>
   happier-process-custody workspace-confined-read
@@ -81,7 +88,10 @@ usage:
   happier-process-custody workspace-confined-capture
   happier-process-custody workspace-confined-apply
   happier-process-custody workspace-confined-inspect
-  happier-process-custody workspace-confined-recover`))
+  happier-process-custody workspace-confined-recover
+  happier-process-custody disk-measure
+  happier-process-custody storage-rename
+  happier-process-custody disk-scan`))
 }
 
 func main() {
@@ -99,8 +109,18 @@ func main() {
 		err = terminateCustodyJob(rest)
 	case "query":
 		err = queryCustodyJob(rest)
-	case "pid-startidentity":
-		err = pidStartIdentityCommand(rest)
+	case "job-join":
+		err = joinCustodyJob(rest)
+	case "job-release":
+		err = releaseCustodyJobHandle(rest)
+	case "process-census":
+		err = processCensusCommand(rest)
+	case "vitals-sample":
+		err = vitalsSampleCommand(rest)
+	case "keep-awake":
+		err = keepAwakeCommand(rest)
+	case "scope-exec":
+		err = scopeExitCommand(rest)
 	case "peer-identity":
 		err = peerIdentityCommand(rest)
 	case "secure-pipe-relay":
@@ -119,12 +139,27 @@ func main() {
 		err = workspaceConfinedInspectCommand(rest, os.Stdin, os.Stdout)
 	case "workspace-confined-recover":
 		err = workspaceConfinedRecoverCommand(rest, os.Stdin, os.Stdout)
+	case "disk-measure":
+		err = diskMeasureCommand(rest, os.Stdin, os.Stdout)
+	case "storage-rename":
+		err = storageRenameCommand(rest, os.Stdin, os.Stdout)
+	case "disk-scan":
+		err = diskScanCommand(rest, os.Stdin, os.Stdout)
 	default:
 		usage()
 		os.Exit(exitUsage)
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "happier-process-custody:", err.Error())
+		var invalidIndex *diskPreviousIndexError
+		if errors.As(err, &invalidIndex) {
+			_ = json.NewEncoder(os.Stderr).Encode(struct {
+				V       int    `json:"v"`
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			}{V: 1, Code: "native_disk_invalid_previous_index", Message: invalidIndex.Error()})
+		} else {
+			fmt.Fprintln(os.Stderr, "happier-process-custody:", err.Error())
+		}
 		os.Exit(exitOSError)
 	}
 }

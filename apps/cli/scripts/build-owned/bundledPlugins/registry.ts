@@ -59,7 +59,7 @@ export function renderCliBundledPluginManifestEntriesTs(params: Readonly<{
   lines.push('');
   lines.push('export type BundledFirstPartyPluginLocator = Readonly<{');
   lines.push('  pluginId: string;');
-  lines.push('  manifest: unknown;');
+  lines.push('  manifestRelativePath: string;');
   lines.push('  manifestPath: string;');
   lines.push('  daemonEntryPath: string | null;');
   lines.push('  devDaemonEntryPath?: string | null;');
@@ -77,7 +77,7 @@ export function renderCliBundledPluginManifestEntriesTs(params: Readonly<{
   for (const entry of params.pluginPackages) {
     lines.push('  Object.freeze({');
     lines.push(`    pluginId: ${JSON.stringify(entry.pluginId)},`);
-    lines.push(`    manifest: ${renderCompactJsonLiteral(entry.manifest)},`);
+    lines.push(`    manifestRelativePath: ${JSON.stringify(`assets/bundled-plugin-manifests/${entry.pluginPackageId}.json`)},`);
     lines.push(`    manifestPath: ${JSON.stringify(`bundled:${entry.pluginId}`)},`);
     lines.push(`    daemonEntryPath: ${manifestDeclaresDaemonEntrypoint(entry.manifest) ? JSON.stringify(entry.packageName) : 'null'},`);
     lines.push('    sourceSpec: Object.freeze({');
@@ -93,6 +93,16 @@ export function renderCliBundledPluginManifestEntriesTs(params: Readonly<{
   lines.push('');
   lines.push('');
   return lines.join('\n');
+}
+
+/** The same normalized declarations, stored outside the eagerly imported module. */
+export function renderCliBundledPluginManifestAssets(params: Readonly<{
+  pluginPackages: readonly BundledPluginPackage[];
+}>): readonly Readonly<{ relativePath: string; out: string }>[] {
+  return params.pluginPackages.map((entry) => ({
+    relativePath: `assets/bundled-plugin-manifests/${entry.pluginPackageId}.json`,
+    out: `${renderCompactJsonLiteral(entry.manifest)}\n`,
+  }));
 }
 
 export function renderCliBundledAgentRegistrationBindingsTs(

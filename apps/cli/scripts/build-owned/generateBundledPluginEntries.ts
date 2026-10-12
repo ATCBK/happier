@@ -117,6 +117,7 @@ import {
   renderCliBundledAgentRegistrationBindingsTs,
   renderCliBundledPluginEntriesTs,
   renderCliBundledPluginManifestEntriesTs,
+  renderCliBundledPluginManifestAssets,
   renderCliPromptAssetPluginDescriptorsTs,
 } from './bundledPlugins/registry.ts';
 import {
@@ -2807,7 +2808,7 @@ async function readBundledSourceAgentDefinitionProjection(
   // Static catalog facts survive optional executable-plugin failures.
   const manifestProjection = await import(pathToFileURL(resolve(repoRoot,
     'apps/cli/src/plugins/projection/registry/sources/generatedBundledPluginManifests.ts')).href) as Readonly<{
-      BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS: readonly Readonly<{ pluginId: string; manifest: unknown; sourceSpec: { locator: string } }>[];
+      BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS: readonly Readonly<{ pluginId: string; manifestRelativePath: string; sourceSpec: { locator: string } }>[];
   }>;
   return await withTypescriptModuleInspectionSession(async () => {
     const entries: Pick<BundledPluginPackage, 'agentId' | 'agentDefinition' | 'agentNativeHomeEnvironmentKeys'>[] = [];
@@ -2821,13 +2822,15 @@ async function readBundledSourceAgentDefinitionProjection(
       const packageRoot = resolve(repoRoot, 'packages/plugins', pluginPackageId);
       const definitionPath = resolve(packageRoot, 'src/agent/definition.ts');
       const locator = manifestProjection.BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.find((entry) => entry.sourceSpec.locator === packageName);
+      const manifest = prepared?.manifest ?? (locator
+        ? normalizePluginManifest(readFileSync(resolve(repoRoot, 'apps/cli', locator.manifestRelativePath)), `bundled:${locator.pluginId}`, parser)
+        : undefined);
       if (!existsSync(definitionPath)) {
-        if (locator && readManifestContributionArray(locator.manifest, 'agents').length > 0) {
+        if (manifest && readManifestContributionArray(manifest, 'agents').length > 0) {
           throw new Error(`Missing required agent definition at ${definitionPath}`);
         }
         continue;
       }
-      const manifest = locator ? normalizePluginManifest(locator.manifest, `bundled:${locator.pluginId}`, parser) : undefined;
       if (!manifest) throw new Error(`Missing tracked bundled plugin declaration: ${packageName}`);
       const sourceFacts = await loadPluginAgentDefinitionFacts(repoRoot, pluginPackageId);
       const definition = projectNativeAgentCliDefinitionFacts(
@@ -3642,11 +3645,23 @@ export async function publishBundledPluginSemanticProjection(
   const failures = mergeBundledPluginFailures(publicationFailures, serialized.failures);
   assertNoBundledPluginPublicationFailures(failures, options.mode);
   const pluginPackages = serialized.pluginPackages;
+  const cliOutPath = resolve(
+    options.rootDir,
+    'apps/cli/src/plugins/projection/registry/sources/generatedBundledPlugins.ts',
+  );
+  // Scoped and aggregate publication retain executable identity bindings.
+  // Validate them against the newly admitted declarations before replacing outputs.
+  if (!options.targetOwnedOnly && existsSync(cliOutPath)) {
+    renderRetainedCliBundledPluginImplementationEntriesTs(cliOutPath, new Set(), pluginPackages);
+  }
   const cliManifestOutPath = resolve(
     options.rootDir,
     'apps/cli/src/plugins/projection/registry/sources/generatedBundledPluginManifests.ts',
   );
   const cliManifestOut = renderCliBundledPluginManifestEntriesTs({ pluginPackages });
+  const cliManifestAssetOutputs = renderCliBundledPluginManifestAssets({ pluginPackages }).map((asset) => ({
+    outPath: resolve(options.rootDir, 'apps/cli', asset.relativePath), out: asset.out,
+  }));
   // Serialized declaration facts suffice for executable roots; never inspect
   // failed authored leaves or retain an old activation import in scoped publication.
   const runtimeFailures = resolveBundledPluginPublicationFailures(options.rootDir, failures,
@@ -3667,6 +3682,7 @@ export async function publishBundledPluginSemanticProjection(
 
   if (options.mode === 'check') {
     assertGeneratedOutputMatches(cliManifestOutPath, cliManifestOut);
+    for (const output of cliManifestAssetOutputs) assertGeneratedOutputMatches(output.outPath, output.out);
     for (const output of [...additionalOutputs, ...voiceRuntimeOutputs]) {
       assertGeneratedOutputMatches(output.outPath, output.out);
     }
@@ -3675,7 +3691,7 @@ export async function publishBundledPluginSemanticProjection(
 
   publishCoherentProjectionOutputs(options.rootDir, [
     ...(!options.targetOwnedOnly
-      ? [{ outPath: cliManifestOutPath, out: cliManifestOut }]
+      ? [{ outPath: cliManifestOutPath, out: cliManifestOut }, ...cliManifestAssetOutputs]
       : []),
     ...additionalOutputs,
     ...voiceRuntimeOutputs,
@@ -4103,6 +4119,7 @@ async function collectProtocolExternalSessionSourceContributions(
 export function renderRetainedCliBundledPluginImplementationEntriesTs(
   entriesOutPath: string,
   excludedPluginIds: ReadonlySet<string> = new Set(),
+  pluginPackages?: readonly BundledPluginPackage[],
 ): string {
   const source = readFileSync(entriesOutPath, 'utf8');
   const registrations = [...source.matchAll(
@@ -4117,6 +4134,22 @@ export function renderRetainedCliBundledPluginImplementationEntriesTs(
     throw new Error(
       `Invalid generated bundled plugin registry at ${entriesOutPath}: missing Agent registration bindings`,
     );
+  }
+  if (pluginPackages) {
+    const manifestAgentIdentities = new Set(pluginPackages.flatMap((pluginPackage) =>
+      readManifestContributionArray(pluginPackage.manifest, 'agents').map((agent) =>
+        JSON.stringify([pluginPackage.pluginId, readRequiredContributionId(agent, 'agents', pluginPackage.pluginPackageId)]),
+      ),
+    ));
+    for (const registration of registrations) {
+      if (registration.registrationFamily === 'agents'
+        && !manifestAgentIdentities.has(JSON.stringify([registration.pluginId, registration.localId]))) {
+        throw new Error(
+          `Missing bundled manifest for agent '${registration.implementationOwnerId}' `
+          + `(registration '${registration.pluginId}/${registration.localId}')`,
+        );
+      }
+    }
   }
   return renderCliBundledAgentRegistrationBindingsTs(registrations);
 }
@@ -4494,6 +4527,9 @@ async function generateBundledPluginEntries(
 
   const cliOut = renderCliBundledPluginEntriesTs({ pluginPackages });
   const cliManifestOut = renderCliBundledPluginManifestEntriesTs({ pluginPackages });
+  const cliManifestAssetOutputs = renderCliBundledPluginManifestAssets({ pluginPackages }).map((asset) => ({
+    outPath: resolve(options.rootDir, 'apps/cli', asset.relativePath), out: asset.out,
+  }));
 
   const agentsOut = renderBundledAgentDefinitionsTs({
     agentIds: bundledAgentDefinitionIds,
@@ -4564,6 +4600,7 @@ async function generateBundledPluginEntries(
   if (options.mode === 'check') {
     assertGeneratedOutputMatches(cliOutPath, cliOut);
     assertGeneratedOutputMatches(cliManifestOutPath, cliManifestOut);
+    for (const output of cliManifestAssetOutputs) assertGeneratedOutputMatches(output.outPath, output.out);
     assertGeneratedOutputMatches(agentsOutPath, agentsOut);
     assertGeneratedOutputMatches(agentIdsOutPath, agentIdsOut);
     assertGeneratedOutputMatches(runtimeDescriptorReadersOutPath, runtimeDescriptorReadersOut);
@@ -4601,6 +4638,7 @@ async function generateBundledPluginEntries(
   publishCoherentProjectionOutputs(options.rootDir, [
     { outPath: cliOutPath, out: cliOut },
     { outPath: cliManifestOutPath, out: cliManifestOut },
+    ...cliManifestAssetOutputs,
     { outPath: agentsOutPath, out: agentsOut },
     { outPath: agentIdsOutPath, out: agentIdsOut },
     { outPath: runtimeDescriptorReadersOutPath, out: runtimeDescriptorReadersOut },

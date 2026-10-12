@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
+import { createRequire, syncBuiltinESMExports } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
 
 import {
@@ -19,10 +20,122 @@ import {
   writeWorkspacePackageFixture,
 } from './testkit/packageLayoutSandbox';
 import { writeSandboxTextFile } from './testkit/cliBinPreflightSandbox';
+import { installNativeAdmissionFixture } from '../../../../apps/stack/scripts/testkit/core/native_admission_fixture.mjs';
+import { writeFakeBin } from '../../../../apps/stack/scripts/testkit/core/fake_bin_harness.mjs';
+import { defaultWorkspaceBuildBoundary, ensureWorkspacePackagesBuiltByName as ensurePackages } from '../../../../scripts/workspaces/ensureWorkspacePackagesBuilt.mjs';
+import { withWorkspaceBundleLock } from '../../../../scripts/workspaces/workspaceBundleLock.mjs';
+import { resolveWorkspacePackageBuildLockPath } from '../../../../scripts/workspaces/workspacePackageBuildLock.mjs';
 
 const execFileAsync = promisify(execFile);
 
 describe('bundleWorkspaceDeps', () => {
+  it.skipIf(process.platform !== 'linux')('prepares packages unreserved before owning the runtime copy lease', async () => {
+    const sandbox = createPackageLayoutSandbox('cli-bundle-joint-order-');
+    const cancellation = new AbortController();
+    let publication: Promise<void> | undefined;
+    let restoreSpawn: (() => void) | undefined;
+    let fixtureBinDir = '';
+    try {
+      const { launcher, admissionRoot } = await installNativeAdmissionFixture({ root: sandbox.repoRoot });
+      const repoRoot = join(sandbox.repoRoot, 'native-owner');
+      const happyCliDir = join(repoRoot, 'apps/cli');
+      mkdirSync(happyCliDir, { recursive: true });
+      writeFileSync(join(repoRoot, 'package.json'), JSON.stringify({ private: true, workspaces: ['packages/*'] }));
+      writeFileSync(join(repoRoot, 'yarn.lock'), '# fixture\n');
+      for (const app of ['ui', 'server']) {
+        mkdirSync(join(repoRoot, 'apps', app), { recursive: true });
+        writeFileSync(join(repoRoot, 'apps', app, 'package.json'), JSON.stringify({ name: `@fixture/${app}` }));
+      }
+      writeCliBundledHostPackage({ happyCliDir, bundledDependencies: ['@happier-dev/protocol'] });
+      for (const name of ['protocol', 'cli-common']) {
+        writeWorkspacePackageFixture({ repoRoot, workspacePath: `packages/${name}`, packageName: `@happier-dev/${name}`,
+          manifestOverrides: { scripts: { build: 'fixture-compiler' } }, files: { 'src/index.ts': 'export {};\n', 'tsconfig.json': '{}' } });
+        rmSync(join(repoRoot, 'packages', name, 'dist'), { recursive: true, force: true });
+      }
+      const sourceRoot = fileURLToPath(new URL('../../../../', import.meta.url));
+      const childProcess = createRequire(import.meta.url)('node:child_process') as typeof import('node:child_process');
+      const originalSpawn = childProcess.spawn;
+      const canonicalLauncher = join(sourceRoot, 'apps/stack/bin/hstack-exec');
+      childProcess.spawn = ((command, args, options) => originalSpawn(command === canonicalLauncher ? launcher : command,
+        args?.map(value => value === canonicalLauncher ? launcher : value), {
+          ...options,
+          ...(options?.env ? { env: { ...options.env, PATH: `${fixtureBinDir}:${options.env.PATH ?? ''}` } } : {}),
+        })) as typeof childProcess.spawn;
+      syncBuiltinESMExports();
+      restoreSpawn = () => { childProcess.spawn = originalSpawn; syncBuiltinESMExports(); };
+      const sourceScript = join(sourceRoot, 'apps/cli/scripts/bundleWorkspaceDeps.mjs');
+      const fixtureScript = join(happyCliDir, 'scripts/bundleWorkspaceDeps.mjs');
+      mkdirSync(dirname(fixtureScript), { recursive: true });
+      // The physical module's dirname supplies its real fixture repository.
+      // Only import filesystem endpoints are remapped; every owner stays real.
+      writeFileSync(fixtureScript, readFileSync(sourceScript, 'utf8').replace(/from '([^']+)'/gu, (match, specifier: string) =>
+        specifier.startsWith('.') ? `from ${JSON.stringify(pathToFileURL(resolve(dirname(sourceScript), specifier)).href)}` : match));
+      const compiler = join(sandbox.repoRoot, 'compiler.mjs');
+      const helperEntry = pathToFileURL(join(sourceRoot, 'packages/cli-common/dist/workspaces/index.js')).href;
+      writeFileSync(compiler, `import { mkdirSync, writeFileSync } from 'node:fs'; import { join } from 'node:path';
+const output = process.env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR;
+mkdirSync(join(output, 'workspaces'), { recursive: true });
+writeFileSync(join(output, 'index.js'), 'export const ready = true;\\n');
+writeFileSync(join(output, 'index.d.ts'), 'export declare const ready: true;\\n');
+writeFileSync(join(output, 'workspaces/index.js'), ${JSON.stringify(`export * from ${JSON.stringify(helperEntry)};\n`)});
+`);
+      const memory = join(sandbox.repoRoot, 'memory');
+      const memoryObservations = join(sandbox.repoRoot, 'memory-observations');
+      writeFileSync(memory, '1 73400320\n');
+      const { binDir } = writeFakeBin({ root: repoRoot, binDirName: 'node_modules/.bin', name: 'awk', content: '#!/bin/sh\ncase "$*" in */proc/meminfo*) /usr/bin/awk \'{print $1, $2}\' "$FIXTURE_MEMORY" | /usr/bin/tee -a "$FIXTURE_MEMORY_OBSERVATIONS" ;; *) exec /usr/bin/awk "$@" ;; esac\n' });
+      fixtureBinDir = binDir;
+      writeFakeBin({ root: repoRoot, binDirName: 'node_modules/.bin', name: 'systemctl', content: '#!/bin/sh\nexit 1\n' });
+      const env = { ...process.env, PATH: `${binDir}:${process.env.PATH}`, npm_execpath: compiler, CI: '', FIXTURE_MEMORY: memory, FIXTURE_MEMORY_OBSERVATIONS: memoryObservations,
+        HAPPIER_DEV_TARGET_EXECUTION: '1', HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD: '', HAPPIER_WORKSPACE_DIST_BUILD_LOCK_LEASES: '[]',
+        HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '', HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: '', HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: '' };
+      const adapter = await import(pathToFileURL(fixtureScript).href);
+      const ensure = (root: string, names: string[], options: Parameters<typeof ensurePackages>[2]) => ensurePackages(root, names, {
+        ...options, signal: cancellation.signal, workspaceBuildBoundary: { ...defaultWorkspaceBuildBoundary, workerLauncherPath: launcher },
+      });
+      const copyLock = join(repoRoot, '.project/tmp/cli-shared-deps.lock');
+      const packageDir = join(repoRoot, 'packages/cli-common');
+      const packageJson = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8'));
+      const waitForQueue = async () => {
+        while (!existsSync(join(admissionRoot, 'waiters')) || readdirSync(join(admissionRoot, 'waiters')).length === 0) {
+          await Promise.race([delay(10), publication?.then(() => { throw new Error('publication terminated before queue observation'); })]);
+        }
+      };
+      await withWorkspaceBundleLock(async () => {
+        publication = adapter.bundleWorkspaceDeps({ repoRoot, happyCliDir, env, ensureWorkspacePackagesBuiltByName: ensure });
+        await waitForQueue();
+        expect(existsSync(copyLock)).toBe(false);
+        expect(!existsSync(join(admissionRoot, 'owners')) || readdirSync(join(admissionRoot, 'owners')).length === 0).toBe(true);
+      }, { lockPath: resolveWorkspacePackageBuildLockPath(packageDir, packageJson) });
+      while (!existsSync(memoryObservations) || !readFileSync(memoryObservations, 'utf8').includes('1 73400320')) {
+        await Promise.race([delay(10), publication?.then(() => { throw new Error('publication terminated before low-capacity observation'); })]);
+      }
+      await waitForQueue();
+      expect(existsSync(copyLock)).toBe(false);
+      writeFileSync(memory, '73400320 73400320\n');
+      await publication;
+      expect(readFileSync(join(happyCliDir, 'node_modules/@happier-dev/protocol/dist/index.js'), 'utf8')).toContain('ready = true');
+      expect(existsSync(copyLock)).toBe(false);
+      writeWorkspacePackageFixture({ repoRoot, workspacePath: 'packages/extra', packageName: '@happier-dev/extra',
+        files: { 'dist/index.js': 'export const selectedAfterWait = true;\n' } });
+      await withWorkspaceBundleLock(async () => {
+        let observeWait: () => void = () => undefined;
+        const waited = new Promise<void>(resolveWait => { observeWait = resolveWait; });
+        publication = adapter.bundleWorkspaceDeps({ repoRoot, happyCliDir, env, signal: cancellation.signal,
+          ensureWorkspacePackagesBuiltByName: ensure, onWait: () => observeWait() });
+        await Promise.race([waited, publication.then(() => { throw new Error('copy must wait for the real foreign publication lease'); })]);
+        // The current manifest, not the selection prepared before waiting,
+        // owns what the locked copier publishes.
+        writeCliBundledHostPackage({ happyCliDir, bundledDependencies: ['@happier-dev/extra'] });
+      }, { lockPath: copyLock });
+      await publication;
+      expect(readFileSync(join(happyCliDir, 'node_modules/@happier-dev/extra/dist/index.js'), 'utf8')).toContain('selectedAfterWait');
+    } finally {
+      cancellation.abort();
+      await publication?.catch(() => undefined);
+      restoreSpawn?.();
+      sandbox.cleanup();
+    }
+  });
   it('admits an existing cli-common dist before importing the implementation helper', async () => {
     const { repoRoot, cleanup } = createPackageLayoutSandbox('happy-bundle-workspace-helper-admission-');
 

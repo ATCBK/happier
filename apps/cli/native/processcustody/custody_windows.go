@@ -680,7 +680,3 @@ func queryCustodyJob(args []string) error {
 	}
 	return emit(map[string]any{"state": "live", "members": members})
 }
-
-func pidStartIdentityCommand(args []string) error {
-	return fmt.Errorf("Darwin process identity is unavailable on Windows")
-}

@@ -3,7 +3,6 @@ import { dirname } from 'node:path';
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-import { createWorkspaceChildBuildEnv } from '../../../scripts/workspaces/workspaceChildBuildEnv.mjs';
 import {
   loadCliCommonWorkspacesModule,
 } from '../../../scripts/workspaces/loadCliCommonWorkspacesModule.mjs';
@@ -74,26 +73,20 @@ export async function bundleWorkspaceDeps(opts = {}) {
   const forceArtifactWorkspaceBuilds = publicationMode === 'artifact';
   const ensureWorkspacePackagesBuiltByName = opts.ensureWorkspacePackagesBuiltByName
     ?? ensureWorkspacePackagesBuiltByNameDefault;
-  return withOptionalCliSharedDepsBuildLock(async ({ heldLockValue } = {}) => {
-    const heldLockEnv = createWorkspaceChildBuildEnv({
-      env: baseEnv,
-      heldLockValue,
-    });
-    const {
-      bundleWorkspacePackagesWithRuntimeDependencies,
-      readBundledWorkspacePackageNames,
-      resolveWorkspaceBundlesFromPackageJson,
-    } = await loadCliCommonWorkspacesModule(
-      SCRIPT_REPO_ROOT,
-      heldLockEnv,
-      ensureWorkspacePackagesBuiltByName,
-      {
-        force: forceArtifactWorkspaceBuilds,
-        includeDevDependencies: false,
-        publicationMode,
-      },
-    );
-
+  const {
+    bundleWorkspacePackagesWithRuntimeDependencies,
+    resolveWorkspaceBundlesFromPackageJson,
+  } = await loadCliCommonWorkspacesModule(
+    SCRIPT_REPO_ROOT,
+    baseEnv,
+    ensureWorkspacePackagesBuiltByName,
+    {
+      force: forceArtifactWorkspaceBuilds,
+      includeDevDependencies: false,
+      publicationMode,
+    },
+  );
+  const readBundleInputs = () => {
     const hostPackageJsonPath = resolve(happyCliDir, 'package.json');
     const hostPackageJsonRaw = readJsonSync(hostPackageJsonPath);
     const bundledDependencyNames = readBundledDependencyNames(hostPackageJsonRaw);
@@ -144,39 +137,47 @@ export async function bundleWorkspaceDeps(opts = {}) {
       repoRoot: targetRepoRoot,
       hostPackageDir: happyCliDir,
     });
-    const bundledWorkspacePackageNames = [...new Set(
-      bundles.map((bundle) => String(bundle?.packageName ?? bundle?.name ?? '').trim()).filter(Boolean),
-    )];
-    const generatorOwnedPluginPackageNames = forceArtifactWorkspaceBuilds
-      ? new Set(discoveredBundledPluginPackageNames)
-      : new Set();
+    return { bundles, discoveredBundledPluginPackageNames };
+  };
+  const { bundles, discoveredBundledPluginPackageNames } = readBundleInputs();
+  const bundledWorkspacePackageNames = [...new Set(
+    bundles.map((bundle) => String(bundle?.packageName ?? bundle?.name ?? '').trim()).filter(Boolean),
+  )];
+  const generatorOwnedPluginPackageNames = forceArtifactWorkspaceBuilds
+    ? new Set(discoveredBundledPluginPackageNames)
+    : new Set();
     // `build:shared` is the natural prepack builder and owns the full force-build
     // followed by first-party plugin runtime publication. The pack-time copier must
     // not re-admit those canonical members to the ordinary
     // workspace compiler again: even a non-forced staleness check can replace the
     // staged bundle/chunk tree with compiler-owned reexports. The direct prepared-tree
     // correspondence check below is the admission check for those bytes.
-    const workspacePackageNamesToForceBuild = bundledWorkspacePackageNames.filter(
-      (packageName) => !generatorOwnedPluginPackageNames.has(packageName),
+  const workspacePackageNamesToForceBuild = bundledWorkspacePackageNames.filter(
+    (packageName) => !generatorOwnedPluginPackageNames.has(packageName),
+  );
+  if (workspacePackageNamesToForceBuild.length > 0) {
+    await ensureWorkspacePackagesBuiltByName(
+      targetRepoRoot,
+      workspacePackageNamesToForceBuild,
+      {
+        quiet: false,
+        env: baseEnv,
+        ...(opts.signal ? { signal: opts.signal } : {}),
+        includeDevDependencies: false,
+        publicationMode,
+        ...(forceArtifactWorkspaceBuilds ? { force: true } : {}),
+      },
     );
-    if (workspacePackageNamesToForceBuild.length > 0) {
-      await ensureWorkspacePackagesBuiltByName(
-        targetRepoRoot,
-        workspacePackageNamesToForceBuild,
-        {
-          quiet: false,
-          env: heldLockEnv,
-          includeDevDependencies: false,
-          publicationMode,
-          ...(forceArtifactWorkspaceBuilds
-            ? { force: true }
-            : {}),
-        },
-      );
-    }
+  }
+  return withOptionalCliSharedDepsBuildLock(async () => {
+    // Package preparation never runs under this copy lease. Re-read the real
+    // manifest and guardrails after waiting, then copy through the immutable
+    // prepared helper; missing prepared outputs fail in the canonical copier.
+    const { bundles: currentBundles, discoveredBundledPluginPackageNames: currentPluginNames } = readBundleInputs();
+    const currentGeneratorOwnedPluginPackageNames = forceArtifactWorkspaceBuilds ? new Set(currentPluginNames) : new Set();
     bundleWorkspacePackagesWithRuntimeDependencies({
-      bundles: bundles.map((bundle) => (
-        forceArtifactWorkspaceBuilds && generatorOwnedPluginPackageNames.has(bundle.packageName)
+      bundles: currentBundles.map((bundle) => (
+        currentGeneratorOwnedPluginPackageNames.has(bundle.packageName)
           ? {
               ...bundle,
               validatePreparedPackage: ({ packageDir }) => {
@@ -195,6 +196,8 @@ export async function bundleWorkspaceDeps(opts = {}) {
     repoRoot: targetRepoRoot,
     lockPath,
     env: baseEnv,
+    ...(opts.signal ? { signal: opts.signal } : {}),
+    ...(opts.onWait ? { onWait: opts.onWait } : {}),
     lockTimeoutMs: DEFAULT_WORKSPACE_BUNDLE_LOCK_TIMEOUT_MS,
     lockPollIntervalMs: 250,
     lockStaleAfterMs: DEFAULT_WORKSPACE_BUNDLE_LOCK_TIMEOUT_MS,
