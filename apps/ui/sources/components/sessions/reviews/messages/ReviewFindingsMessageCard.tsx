@@ -49,7 +49,7 @@ import { useReviewGroupSiblings } from '@/components/sessions/reviews/findings/u
 import { useReviewRunsComments } from '@/components/sessions/reviews/findings/useReviewRunComments';
 import { resolveEffectiveReviewFindings } from '@/components/sessions/reviews/messages/resolveEffectiveReviewFindings';
 import { findCommentForFinding, readReviewFindingDecision } from '@/components/sessions/reviews/findings/reviewFindingComment';
-import { ReviewSeverityLabel, ReviewSeveritySummary } from '@/components/sessions/reviews/walkthrough/ReviewWalkthroughParts';
+import { REVIEW_SEVERITY_COLUMN_WIDTH_PX, ReviewFindingLine, ReviewSeveritySummary } from '@/components/sessions/reviews/findings/ReviewSeverity';
 import { ReviewWalkMeThroughButton, ReviewWalkthroughEntryHint } from '@/components/sessions/reviews/walkthrough/ReviewWalkthroughEntry';
 import {
     ExecutionRunResultLayout,
@@ -387,7 +387,7 @@ function ReviewFindingsCardContent(props: ReviewFindingsMessageCardProps & Reado
                     messageMarkdown: params.messageMarkdown,
                 },
             });
-            if (!accountLifetime.isCurrent()) return false;
+            if (!accountLifetime.isCurrent() || !followUpExecution.isCurrent()) return false;
             if (!result.ok) {
                 const code = ReviewFollowUpFailureCodeSchema.safeParse('errorCode' in result ? result.errorCode : undefined);
                 setError(describeReviewFollowUpFailure(code.success ? code.data : undefined));
@@ -395,11 +395,11 @@ function ReviewFindingsCardContent(props: ReviewFindingsMessageCardProps & Reado
             }
             return true;
         } catch {
-            if (!accountLifetime.isCurrent()) return false;
+            if (!accountLifetime.isCurrent() || !followUpExecution.isCurrent()) return false;
             setError(describeReviewFollowUpFailure(undefined));
             return false;
         }
-    }, [accountLifetime, followUpExecution.execute, sessionId, scope]);
+    }, [accountLifetime, followUpExecution.execute, followUpExecution.isCurrent, sessionId, scope]);
 
     /** Sends to each target; accepted when at least one reviewer took it (the others say why not). */
     const sendToEach = React.useCallback(async (targets: readonly Parameters<typeof sendFollowUp>[0][]) => {
@@ -597,20 +597,23 @@ function ReviewFindingsCardContent(props: ReviewFindingsMessageCardProps & Reado
             >
                 <View testID="review-findings-finished-header" style={styles.finishedHead}>
                     <Icon name="shield-check" size={ICON_SIZE.sm} color={theme.colors.text.secondary} />
-                    <StructuredFindText blockId={findDisplay.finished.id} text={findDisplay.finished.text} style={styles.finishedTitle} />
+                    <StructuredFindText blockId={findDisplay.finished.id} text={findDisplay.finished.text} style={styles.finishedTitle} numberOfLines={1} />
                     <StructuredFindText blockId={findDisplay.meta.id} text={findDisplay.meta.text} style={styles.finishedMeta} numberOfLines={1} />
                     <View style={styles.grow} />
-                    {rows.length > 0 ? <StructuredFindText blockId={findDisplay.count.id} text={findDisplay.count.text} style={styles.finishedCount} /> : null}
+                    {rows.length > 0 ? <StructuredFindText blockId={findDisplay.count.id} text={findDisplay.count.text} style={styles.finishedCount} numberOfLines={1} /> : null}
                 </View>
                 {rows.length > 0 ? <ReviewSeveritySummary testID="review-findings-severity-summary" findings={rowFindings} findBlockPrefix="structured-review:count" /> : null}
                 {compactRows.length > 0 ? (
                     <View style={styles.compactRows}>
                         {compactRows.map((row) => (
-                            <View key={row.rowId} testID={`review-finding-compact:${row.rowId}`} style={styles.compactRow}>
-                                <ReviewSeverityLabel severity={row.finding.severity} size="md" findBlockId={`structured-review-finding:${row.rowId}:severity`} />
-                                <StructuredFindText blockId={`structured-review-finding:${row.rowId}:title`} text={row.finding.title} numberOfLines={1} style={styles.compactTitle} />
-                                <StructuredFindText blockId={`structured-review-finding:${row.rowId}:reviewer`} text={row.sources.map((source) => source.member.reviewerLabel).join(t('reviewWalkthrough.and'))} numberOfLines={1} style={styles.compactEngine} />
-                            </View>
+                            <ReviewFindingLine
+                                key={row.rowId}
+                                testID={`review-finding-compact:${row.rowId}`}
+                                severity={row.finding.severity}
+                                title={row.finding.title}
+                                reviewer={row.sources.map((source) => source.member.reviewerLabel).join(t('reviewWalkthrough.and'))}
+                                findBlockPrefix={`structured-review-finding:${row.rowId}`}
+                            />
                         ))}
                         {rows.length > compactRows.length ? (
                             <StructuredFindText blockId="structured-review:more" text={findDisplay.more?.text ?? ''} testID="review-findings-more" style={styles.compactMore} />
@@ -844,14 +847,13 @@ const stylesheet = StyleSheet.create((theme) => ({
     startedReview: { ...Typography.default(), color: theme.colors.text.tertiary, fontSize: 13, lineHeight: 19, marginBottom: 8 },
     grow: { flex: 1 },
     finishedHead: { flexDirection: 'row', alignItems: 'center', gap: 7 },
-    finishedTitle: { ...Typography.default('semiBold'), color: theme.colors.text.primary, fontSize: 15 },
+    // One line at every width (lab WT5-R8p): the title and the count keep their words; only the meta truncates.
+    finishedTitle: { ...Typography.default('semiBold'), flexShrink: 0, color: theme.colors.text.primary, fontSize: 15 },
     finishedMeta: { ...Typography.default(), flexShrink: 1, color: theme.colors.text.tertiary, fontSize: 14 },
-    finishedCount: { ...Typography.default(), color: theme.colors.text.tertiary, fontSize: 14, fontVariant: ['tabular-nums'] },
+    finishedCount: { ...Typography.default(), flexShrink: 0, color: theme.colors.text.tertiary, fontSize: 14, fontVariant: ['tabular-nums'] },
     compactRows: { gap: 2 },
-    compactRow: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 28 },
-    compactTitle: { ...Typography.default(), flex: 1, minWidth: 0, color: theme.colors.text.primary, fontSize: 14 },
-    compactEngine: { ...Typography.default(), flexShrink: 0, maxWidth: '30%', color: theme.colors.text.tertiary, fontSize: 13 },
-    compactMore: { ...Typography.default(), paddingLeft: 2, paddingTop: 2, color: theme.colors.text.tertiary, fontSize: 13 },
+    // Under the titles, on their shared edge (severity column + the line's gap).
+    compactMore: { ...Typography.default(), paddingLeft: REVIEW_SEVERITY_COLUMN_WIDTH_PX + 12, paddingTop: 2, color: theme.colors.text.tertiary, fontSize: 13 },
     compactDivider: { height: StyleSheet.hairlineWidth, backgroundColor: theme.colors.border.default },
     lead: {
         ...Typography.default(),
@@ -913,7 +915,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     more: {
         alignSelf: 'flex-start',
         paddingVertical: 8,
-        paddingLeft: 84,
+        paddingLeft: REVIEW_SEVERITY_COLUMN_WIDTH_PX + 12,
     },
     moreText: {
         ...Typography.default(),

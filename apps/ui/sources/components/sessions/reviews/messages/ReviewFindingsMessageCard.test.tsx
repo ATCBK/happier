@@ -4,8 +4,12 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import type { ReviewCommentV1 } from '@happier-dev/protocol';
 import { REVIEW_FINDINGS_VERIFY_AND_FIX_INSTRUCTIONS_V1 } from '@happier-dev/protocol';
 
-import { changeTextTestInstance, renderScreen } from '@/dev/testkit';
-import { installSessionMessageCardCommonModuleMocks } from '@/components/sessions/sessionMessageCardTestHelpers';
+import { changeTextTestInstance, renderScreen, standardCleanup } from '@/dev/testkit';
+import { installToolShellCommonModuleMocks } from '@/components/tools/shell/views/ToolView.testHelpers';
+import { getStorage } from '@/sync/domains/state/storage';
+import { createReducer } from '@happier-dev/session-core/reducer';
+import type { Message } from '@happier-dev/session-core/messages';
+import { t } from '@/text';
 import { buildReviewCommentFixture, storePlainReviewCommentFixture } from '@/dev/testkit/fixtures/reviewComments';
 import { createTestSessionTranscriptSource, renderWithSessionTranscriptSource as renderTranscriptCard } from '@/dev/testkit/sessionTranscriptSource';
 import { serveActionHomes, type ServedHomeRequest } from '@/dev/testkit/harness/actionHomesHttpHarness';
@@ -27,7 +31,6 @@ const sessionExecutionRunActionSpy = vi.fn(async (..._args: any[]): Promise<any>
 const sessionExecutionRunListSpy = vi.fn(async (..._args: any[]): Promise<any> => ({ runs: [] }));
 const sessionExecutionRunGetSpy = vi.fn(async (..._args: any[]): Promise<any> => ({ ok: false, error: 'not found' }));
 const submitMessageSpy = vi.fn(async (..._args: any[]) => undefined);
-const useSessionMessagesSpy = vi.fn<(...args: any[]) => any>((..._args: any[]) => ({ messages: [], isLoaded: true }));
 const homeRoute = vi.hoisted(() => ({ current: null as null | ((request: any) => Response | undefined) }));
 const home = vi.hoisted(() => ({ serverId: '', otherServerId: '' }));
 
@@ -38,35 +41,7 @@ function renderWithSessionTranscriptSource(element: React.ReactElement, source =
     return renderTranscriptCard(element, source);
 }
 
-installSessionMessageCardCommonModuleMocks({
-    text: async () => {
-        const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-        return createTextModuleMock({
-            translate: (key: string, params?: Record<string, unknown>) => {
-                switch (key) {
-                    case 'runPage.review.findingTotal': return `${String(params?.count)} findings`;
-                    case 'runPage.review.highCount': return `${String(params?.count)} high`;
-                    case 'runPage.review.moreFindings': return `${String(params?.count)} more findings`;
-                    case 'runPage.review.replies': return `${String(params?.count)} replies`;
-                    case 'runPage.review.implementFixes': return `Implement ${String(params?.count ?? 0)} fixes`;
-                    case 'runPage.review.followUpUnavailable.notResumable': return 'This review ended; follow-ups need a review that stays open.';
-                    default: return params ? `${key}:${JSON.stringify(params)}` : key;
-                }
-            },
-        });
-    },
-    uiText: async () => ({
-        Text: (props: Record<string, unknown> & { children?: React.ReactNode }) => React.createElement('Text', props, props.children),
-        TextInput: (props: Record<string, unknown> & { children?: React.ReactNode }) => React.createElement('TextInput', props, props.children),
-    }),
-    storage: async (importOriginal) => {
-        const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-        return await createStorageModuleMock({
-            importOriginal: importOriginal as never,
-            overrides: { useSessionMessages: (...args: any[]) => useSessionMessagesSpy(...args) },
-        });
-    },
-});
+installToolShellCommonModuleMocks();
 
 vi.mock('@/sync/ops/sessionExecutionRuns', () => ({
     sessionExecutionRunAction: (...args: any[]) => sessionExecutionRunActionSpy(...args),
@@ -207,7 +182,9 @@ async function flush() {
 }
 
 let disposeHome: (() => void) | null = null;
+let previousStorageState: ReturnType<ReturnType<typeof getStorage>['getState']>;
 beforeEach(async () => {
+    previousStorageState = getStorage().getState();
     // The app's own startup step for the synchronized draft repository (`app/_layout.tsx`).
     const { prepareSessionDraftPersistenceStorage } = await import('@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage');
     await prepareSessionDraftPersistenceStorage();
@@ -226,6 +203,10 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+    standardCleanup();
+    // Releasing this test's ambient transcript also releases the intentional
+    // stale-while-revalidate snapshot before restoring an unloaded prior state.
+    getStorage().getState().evictSessionMessages('sess_1');
     disposeHome?.();
     disposeHome = null;
     homeRoute.current = null;
@@ -240,7 +221,7 @@ afterEach(() => {
     sessionExecutionRunGetSpy.mockReset();
     sessionExecutionRunGetSpy.mockResolvedValue({ ok: false, error: 'not found' });
     submitMessageSpy.mockClear();
-    useSessionMessagesSpy.mockReturnValue({ messages: [], isLoaded: true });
+    getStorage().setState(previousStorageState);
 });
 
 // Imported after the module mocks above are installed (a static import would load the real modules),
@@ -261,7 +242,12 @@ describe('ReviewFindingsMessageCard', () => {
             parentRunRef: payload.runRef, threadId: 'thread_f1', findingIds: ['f1'], requestMarkdown: 'Question', answerMarkdown: 'Answer',
             updatedFindings: [finding('f1', 'low', { title })], generatedAtMs: 2,
         } } } });
-        useSessionMessagesSpy.mockReturnValue({ isLoaded: true, messages: [followUpMessage('Ambient title')] });
+        const ambient = followUpMessage('Ambient title');
+        const messagesById = { [ambient.id]: ambient };
+        getStorage().setState({ sessionMessages: { sess_1: {
+            messageIdsOldestFirst: [ambient.id], messagesById, messagesMap: messagesById, reducerState: createReducer(),
+            latestThinkingMessageId: null, latestThinkingMessageActivityAtMs: null, messagesVersion: 1, isLoaded: true,
+        } } });
         const source = createTestSessionTranscriptSource({ sessionId: 'sess_1', serverId: home.serverId, messages: [followUpMessage('Source title')] });
         const screen = await renderWithSessionTranscriptSource(<ReviewFindingsMessageCard serverId={home.serverId} payload={payload} sessionId="sess_1" canSendMessages={false} />, source);
         expect(screen.getTextContent()).toContain('Source title');
@@ -388,9 +374,7 @@ describe('ReviewFindingsMessageCard', () => {
 
     it('asks the reviewer that found a finding in that finding\'s own thread', async () => {
         serveComments([commentFor('f1')]);
-        useSessionMessagesSpy.mockReturnValue({
-            isLoaded: true,
-            messages: [{
+        const messages: Message[] = [{
                 id: 'follow_up_1', kind: 'agent-text', localId: null, createdAt: 2, text: '',
                 meta: { happier: { kind: 'review_follow_up.v1', payload: {
                     parentRunRef: { runId: 'run_1', callId: 'call_1', backendId: 'claude' },
@@ -401,8 +385,13 @@ describe('ReviewFindingsMessageCard', () => {
                     updatedFindings: [finding('f1', 'low')],
                     generatedAtMs: 2,
                 } } },
-            }],
-        });
+            }];
+        const messagesById = Object.fromEntries(messages.map((message) => [message.id, message]));
+        getStorage().setState({ sessionMessages: { sess_1: {
+            messageIdsOldestFirst: messages.map((message) => message.id), messagesById, messagesMap: messagesById,
+            reducerState: createReducer(), latestThinkingMessageId: null, latestThinkingMessageActivityAtMs: null,
+            messagesVersion: 1, isLoaded: true,
+        } } });
         const screen = await renderScreen(
             <ReviewFindingsMessageCard serverId={home.serverId} payload={payloadFor([finding('f1', 'medium')])} sessionId="sess_1" canSendMessages presentation="page" />,
         );
@@ -418,7 +407,7 @@ describe('ReviewFindingsMessageCard', () => {
         await sendThroughComposer(screen, 'review-finding-ask-field:f1', 'Narrow it to iOS?');
         // The thread names who answers: the reviewer that found it.
         expect(screen.findByTestId('review-finding-ask-field:f1:recipient')!.props.accessibilityLabel)
-            .toMatch(/^runPage\.review\.toReviewer:/);
+            .toBe(t('runPage.review.toReviewer', { reviewer: t('agentInput.agent.claude') }));
 
         expect(sessionExecutionRunActionSpy).toHaveBeenCalledWith('sess_1', {
             runId: 'run_1',
@@ -436,7 +425,7 @@ describe('ReviewFindingsMessageCard', () => {
 
         const ask = screen.findByTestId('review-finding-ask:f1')!;
         expect(ask.props.disabled).toBe(true);
-        expect(ask.props.accessibilityHint).toBe('This review ended; follow-ups need a review that stays open.');
+        expect(ask.props.accessibilityHint).toBe(t('runPage.review.followUpUnavailable.notResumable'));
         expect(screen.findByTestId('review-findings-follow-up-unavailable')).not.toBeNull();
         expect(screen.findByTestId('review-findings-follow-up')).toBeNull();
     });
@@ -453,7 +442,7 @@ describe('ReviewFindingsMessageCard', () => {
         await flush();
 
         // The total heads the card's foot; the per-severity counts are the summary under the lead (lab WT5-R8).
-        expect(screen.findAllByType('Text').some((node) => node.props.children === '4 findings')).toBe(true);
+        expect(screen.getTextContent()).toContain(t('runPage.review.findingTotal', { count: 4 }));
         expect(screen.findByTestId('review-findings-severity-summary')).not.toBeNull();
         expect(screen.findByTestId('review-finding:f2')).not.toBeNull();
         expect(screen.findByTestId('review-finding:f4')).toBeNull();
@@ -469,7 +458,10 @@ describe('ReviewFindingsMessageCard', () => {
         const source = createTestSessionTranscriptSource({ sessionId: 'sess_1', serverId: home.serverId, workspacePath: '/repo', navigate });
         const content = renderExecutionRunStructuredMeta({
             meta: { kind: 'review_findings.v2', payload: {
-                ...payloadFor([finding('f1', 'high'), finding('f2', 'low')]), comparisonId: 'cmp_1',
+                ...payloadFor([finding('f1', 'high', { comment: {
+                    id: 'retained-comment', state: 'proposed', serverRevision: 1, retiredCommentField: true,
+                    workspace: { ...WORKSPACE, retiredWorkspaceField: true },
+                } }), finding('f2', 'low')]), comparisonId: 'cmp_1', retiredPayloadField: true,
                 ...(fileCount === undefined ? {} : { fileCount }),
             } },
             sessionId: 'sess_1', serverId: home.serverId,
@@ -482,7 +474,7 @@ describe('ReviewFindingsMessageCard', () => {
         if (fileCount === undefined) {
             expect(started).toBeNull();
         } else {
-            expect(started?.props.children).toBe(`reviewWalkthrough.started.transcript:${JSON.stringify({ engineCount: 1, fileCount })}`);
+            expect(started?.props.children).toBe(t('reviewWalkthrough.started.transcript', { engineCount: 1, fileCount }));
         }
         expect(sessionExecutionRunActionSpy).not.toHaveBeenCalled();
         expect(navigate).not.toHaveBeenCalled();
@@ -527,7 +519,7 @@ describe('ReviewFindingsMessageCard', () => {
         );
         await flush();
         expect(endedScreen.findByTestId('review-findings-walkthrough-hint')!.findAllByType('Text').map((node) => node.props.children))
-            .toContain('reviewWalkthrough.finished.narrates:{"count":1}');
+            .toContain(t('reviewWalkthrough.finished.narrates', { count: 1 }));
     });
 
     it('draws a navigable finished review compactly and keeps triage, Ask and Implement fixes one press away in Open findings', async () => {
@@ -636,7 +628,10 @@ describe('ReviewFindingsMessageCard', () => {
         const reference = { id: 'comment-f1', state: 'proposed', serverRevision: 3, workspace: WORKSPACE, sessionId: 'sess_1', runId: 'earlier_round' };
         const claudeF1 = finding('f1', 'medium', { title: 'Key reused across tenants', ...(shared ? { comment: reference } : {}) });
         const codexG1 = finding('g1', 'high', { title: 'Tenant key collides', ...(shared ? { comment: reference } : {}) });
-        const codexG2 = finding('g2', 'low');
+        const codexG2 = finding('g2', 'low', { comment: {
+            id: 'comment-g2', state: 'proposed', serverRevision: 3, retiredCommentField: true,
+            workspace: { ...WORKSPACE, retiredWorkspaceField: true },
+        } });
         let applying = false;
         let applyReads = 0;
         const server = serveComments([
@@ -666,7 +661,7 @@ describe('ReviewFindingsMessageCard', () => {
         expect(screen.findByTestId('review-finding-attribution:run_1:f1')!
             .findAll((node) => node.props.children === 'runPage.review.both')).not.toHaveLength(0);
         expect(screen.findByTestId('review-findings-headline')!.props.children)
-            .toBe('runPage.review.reviewerCount:{"count":2} · 2 findings · 1 high');
+            .toBe(`${t('runPage.review.reviewerCount', { count: 2 })} · ${t('runPage.review.findingTotal', { count: 2 })} · ${t('runPage.review.highCount', { count: 1 })}`);
 
         if (!canAct) {
             expect(screen.findByTestId('review-finding-triage:run_1:f1:accept')).toBeNull();
@@ -715,7 +710,7 @@ describe('ReviewFindingsMessageCard', () => {
         expect(screen.findByTestId('review-reviewer:run_2')).not.toBeNull();
         expect(screen.getTextContent()).toContain('runPage.review.reviewerDidNotFinish');
         expect(screen.findByTestId('review-findings-headline')!.props.children)
-            .toBe('runPage.review.reviewerCount:{"count":2} · 1 findings · 1 high');
+            .toBe(`${t('runPage.review.reviewerCount', { count: 2 })} · ${t('runPage.review.findingTotal', { count: 1 })} · ${t('runPage.review.highCount', { count: 1 })}`);
         // A single completed result keeps its own finding ids.
         expect(screen.findByTestId('review-finding:f1')).not.toBeNull();
     });

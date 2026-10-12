@@ -5,13 +5,15 @@ import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
 import type { ReviewFinding } from '@happier-dev/protocol';
 
 import { MarkdownView } from '@/components/markdown/MarkdownView';
-import { reviewSeverityCounts, reviewSeverityLabel } from '@/components/sessions/reviews/findings/reviewFindingPresentation';
+import { reviewSeverityLabel } from '@/components/sessions/reviews/findings/reviewFindingPresentation';
+import { ReviewFindingLine, ReviewSeverityLabel } from '@/components/sessions/reviews/findings/ReviewSeverity';
 import { StructuredFindText } from '@/components/sessions/transcript/structured/structuredFindText';
 import { useReviewSeverityColors } from '@/components/sessions/reviews/findings/useReviewSeverityColors';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback';
 import { KeyHint } from '@/components/ui/keyboard/KeyHint';
+import { StatusPill } from '@/components/ui/status/StatusPill';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
@@ -24,38 +26,6 @@ import type { ReviewWalkthroughProgress } from './reviewWalkthroughProgress';
  * same code and each looks different: explanation is prose, a finding is a card with a severity rail,
  * a comment keeps its own card, a reviewed mark is the green check. Severity colour appears only here.
  */
-/** A severity: its dot and its word, in its colour ("● High"). */
-export function ReviewSeverityLabel(props: Readonly<{ severity: ReviewFinding['severity']; label?: string; size?: 'sm' | 'md'; findBlockId?: string }>) {
-    const colors = useReviewSeverityColors(props.severity);
-    return (
-        <View style={styles.severity}>
-            <View style={[styles.dot, { backgroundColor: colors.foreground }]} />
-            {props.findBlockId ? <StructuredFindText blockId={props.findBlockId} text={props.label ?? reviewSeverityLabel(props.severity)} style={[styles.severityText, props.size === 'md' ? styles.severityTextMd : null, { color: colors.foreground }]} /> : (
-                <Text style={[styles.severityText, props.size === 'md' ? styles.severityTextMd : null, { color: colors.foreground }]}>{props.label ?? reviewSeverityLabel(props.severity)}</Text>
-            )}
-        </View>
-    );
-}
-
-/** The dot a contents row carries when its stop has a finding; the most severe one's colour. */
-export function ReviewSeverityDot(props: Readonly<{ severity: ReviewFinding['severity'] }>) {
-    const colors = useReviewSeverityColors(props.severity);
-    return <View accessibilityLabel={reviewSeverityLabel(props.severity)} style={[styles.railDot, { backgroundColor: colors.foreground }]} />;
-}
-
-/** "● 1 high  ● 2 medium  ● 1 low": a finished review's counts, most severe first (lab WT5-R8). */
-export function ReviewSeveritySummary(props: Readonly<{ findings: readonly ReviewFinding[]; testID?: string; findBlockPrefix?: string }>) {
-    const counts = React.useMemo(() => reviewSeverityCounts(props.findings), [props.findings]);
-    if (counts.length === 0) return null;
-    return (
-        <View testID={props.testID} style={styles.summary}>
-            {counts.map(({severity, label}) => (
-                <ReviewSeverityLabel key={severity} severity={severity} label={label} findBlockId={props.findBlockPrefix ? `${props.findBlockPrefix}:${severity}` : undefined} />
-            ))}
-        </View>
-    );
-}
-
 /** A finding named in the prose: severity and engine, scrolling to its card (lab WT5-R6). */
 export function ReviewFindingReference(props: Readonly<{ view: WalkthroughFindingView; onPress?: (view: WalkthroughFindingView) => void }>) {
     const { theme } = useUnistyles();
@@ -112,10 +82,10 @@ export const WalkthroughFindingCard = React.memo(function WalkthroughFindingCard
             <View style={[styles.rail, { backgroundColor: colors.foreground }]} />
             <View style={styles.cardBody}>
                 <View style={styles.cardHead}>
-                    <ReviewSeverityLabel severity={view.severity} size="md" />
+                    <ReviewSeverityLabel severity={view.severity} />
                     <Text style={styles.cardMeta} numberOfLines={1}>{meta}</Text>
                     <View style={styles.grow} />
-                    {tagLabel ? <Text style={styles.tag}>{tagLabel}</Text> : null}
+                    {tagLabel ? <StatusPill variant="neutral" label={tagLabel} labelVariant="phrase" hideDot /> : null}
                 </View>
                 <Text selectable style={styles.cardTitle}>{view.finding.title}</Text>
                 {props.tag === 'outdated'
@@ -260,17 +230,13 @@ export function ReviewFindingsFirst(props: Readonly<{
                 {props.publishedAt ? <Text style={styles.firstMeta} numberOfLines={1}>{`· ${t('reviewWalkthrough.publishedBefore', { time: props.publishedAt })}`}</Text> : null}
             </View>
             {props.views.map((view) => (
-                <HappierPressable
+                <ReviewFindingLine
                     key={view.key}
-                    accessibilityRole="button"
-                    accessibilityLabel={`${reviewSeverityLabel(view.severity)}: ${view.finding.title}`}
-                    onPress={() => props.onPressFinding?.(view)}
-                    style={(state) => [styles.firstRow, state.pressed ? styles.pressed : null]}
-                >
-                    <View style={styles.firstSeverity}><ReviewSeverityLabel severity={view.severity} size="md" /></View>
-                    <Text style={styles.firstRowTitle} numberOfLines={1}>{view.finding.title}</Text>
-                    <Text style={styles.firstEngine} numberOfLines={1}>{view.engineLabel}</Text>
-                </HappierPressable>
+                    severity={view.severity}
+                    title={view.finding.title}
+                    reviewer={view.engineLabel}
+                    onPress={props.onPressFinding ? () => props.onPressFinding?.(view) : undefined}
+                />
             ))}
         </View>
     );
@@ -297,10 +263,6 @@ export function ReviewWalkthroughSteps(props: Readonly<{ progress: ReviewWalkthr
             style={[styles.steps, props.phone ? styles.stepsPhone : null]}>
             {props.phone ? null : <Icon name="shield-check" size={14} color={theme.colors.text.secondary} />}
             <Step state={review.state} label={reviewLabel} />
-            {review.state === 'running' ? <Text testID="walkthrough-engine-progress-unavailable" style={styles.cardMeta}>
-                {review.kind === 'engines_reviewing' ? `${review.running.join(t('reviewWalkthrough.and'))} · ` : ''}
-                {t('walkthrough.progress.filesReadUnavailable')}
-            </Text> : null}
             {narrationLabel && narration ? (
                 <>
                     <Icon name="caret-right" size={11} color={theme.colors.text.tertiary} />
@@ -343,12 +305,7 @@ function Step(props: Readonly<{ state: 'waiting' | 'running' | 'done' | 'partial
 const styles = StyleSheet.create((theme) => ({
     grow: { flex: 1 },
     pressed: { opacity: 0.7 },
-    severity: { flexDirection: 'row', alignItems: 'center', gap: 5 },
     dot: { width: 6, height: 6, borderRadius: 3 },
-    railDot: { width: 7, height: 7, borderRadius: 4 },
-    severityText: { fontSize: 13, ...Typography.default('semiBold') },
-    severityTextMd: { fontSize: 13.5 },
-    summary: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 14, rowGap: 4 },
     refs: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 },
     ref: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 7 },
     refText: { fontSize: 13, ...Typography.default('semiBold') },
@@ -366,17 +323,6 @@ const styles = StyleSheet.create((theme) => ({
     cardBody: { flex: 1, minWidth: 0, paddingVertical: 12, paddingLeft: 14, paddingRight: 14, gap: 4 },
     cardHead: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     cardMeta: { flexShrink: 1, fontSize: 13, color: theme.colors.text.secondary, ...Typography.default() },
-    tag: {
-        flexShrink: 0,
-        overflow: 'hidden',
-        paddingHorizontal: 7,
-        paddingVertical: 2,
-        borderRadius: 6,
-        fontSize: 12,
-        color: theme.colors.text.secondary,
-        backgroundColor: theme.colors.surface.inset,
-        ...Typography.default('medium'),
-    },
     cardTitle: { marginTop: 2, fontSize: 14.5, lineHeight: 20, color: theme.colors.text.primary, ...Typography.default('semiBold') },
     cardSummary: { fontSize: 14, lineHeight: 20, color: theme.colors.text.secondary, ...Typography.default() },
     cardFoot: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginTop: 8 },
@@ -428,10 +374,6 @@ const styles = StyleSheet.create((theme) => ({
     firstHead: { flexDirection: 'row', alignItems: 'center', gap: 7, paddingVertical: 4 },
     firstTitle: { flexShrink: 0, fontSize: 14, color: theme.colors.text.primary, ...Typography.default('semiBold') },
     firstMeta: { flexShrink: 1, fontSize: 13.5, color: theme.colors.text.tertiary, ...Typography.default() },
-    firstRow: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 30 },
-    firstSeverity: { width: 84 },
-    firstRowTitle: { flex: 1, minWidth: 0, fontSize: 14, color: theme.colors.text.primary, ...Typography.default() },
-    firstEngine: { fontSize: 13, color: theme.colors.text.tertiary, ...Typography.default() },
     steps: {
         flexDirection: 'row',
         alignItems: 'center',
