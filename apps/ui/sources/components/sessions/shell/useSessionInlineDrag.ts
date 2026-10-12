@@ -1,5 +1,5 @@
 import { useMemo, useRef } from 'react';
-import type { ViewStyle } from 'react-native';
+import { Platform, type ViewStyle } from 'react-native';
 import { useSharedValue, useAnimatedStyle, withSpring, type AnimatedStyle } from 'react-native-reanimated';
 import { Gesture, type ComposedGesture, type GestureType } from 'react-native-gesture-handler';
 import { scheduleOnRN } from 'react-native-worklets';
@@ -267,9 +267,14 @@ export function useSessionInlineDrag(params: UseSessionInlineDragParams): UseSes
 
         // Pan drives the actual drag/reorder. On native we delay its activation with
         // `activateAfterLongPress(...)` so the list can still scroll naturally.
-        let pan = Gesture.Pan()
-            .minDistance(requiresLongPress ? 0 : 4)
-            .cancelsTouchesInView(false);
+        // Android Pan activates on the first move when minDistance is 0 (before the
+        // long-press delay) and ignores `cancelsTouchesInView`, so that activation
+        // cancels taps on child Pressables. Keep Android on its native touch-slop default.
+        const panMinDistance = !requiresLongPress ? 4 : Platform.OS === 'android' ? null : 0;
+        let pan = Gesture.Pan().cancelsTouchesInView(false);
+        if (panMinDistance !== null) {
+            pan = pan.minDistance(panMinDistance);
+        }
         if (typeof activateAfterLongPressMs === 'number') {
             const panWithLongPress = pan as unknown as { activateAfterLongPress?: (ms: number) => typeof pan };
             if (typeof panWithLongPress.activateAfterLongPress === 'function') {
