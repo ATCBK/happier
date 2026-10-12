@@ -10,6 +10,9 @@ describe('machine shared Provider gateway authority', () => {
             machineId: 'machine-one', readAccountId: () => accountId, readOrigin: async () => origin,
         });
         const request = { connectionId: 'connection-one', consumerId: 'model-catalog' };
+        expect(await resolve.readIdentity!({ connectionId: request.connectionId })).toEqual({
+            homeId: 'home-one', accountId: 'account-one', machineId: 'machine-one', connectionId: request.connectionId,
+        });
         expect(await resolve(request)).toEqual({ homeId: 'home-one', accountId: 'account-one', machineId: 'machine-one', ...request });
         origin = { serverIdentityId: 'home-two', machineId: 'machine-one' };
         expect(await resolve(request)).toMatchObject({ homeId: 'home-two' });
@@ -20,6 +23,7 @@ describe('machine shared Provider gateway authority', () => {
         origin = { serverIdentityId: 'home-two', machineId: 'machine-one' };
         accountId = null;
         await expect(resolve(request)).rejects.toMatchObject({ code: 'provider_authorization_changed' });
+        await expect(resolve.readIdentity!({ connectionId: request.connectionId })).rejects.toMatchObject({ code: 'provider_authorization_changed' });
     });
 
     it('refuses cancellation during authority lookup before returning consumer access', async () => {

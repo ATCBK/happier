@@ -5,6 +5,7 @@ import { createPromptAssetAdapterRegistry } from '@/prompts/assets/createPromptA
 import { createPromptRegistryAdapterRegistry } from '@/prompts/registries/createPromptRegistryAdapterRegistry';
 import { DEFAULT_MEMORY_SETTINGS } from '@/settings/memorySettings';
 import { createDeferred } from '@/testkit/async/deferred';
+import { createApiMachineTransportFixture } from '@/testkit/apiMachineTransport';
 import type { SpawnSessionResult } from '@/rpc/handlers/registerSessionHandlers';
 
 import type { AutomationWorkerHandle } from '../automation/automationWorker';
@@ -53,12 +54,9 @@ describe('bootstrapMachineSyncRuntime memory startup ordering', () => {
       }
     });
     const apiMachine = {
+      ...createApiMachineTransportFixture(),
       setRPCHandlers: vi.fn(() => ({}) as ReturnType<ConnectedApiMachine['setRPCHandlers']>),
       registerLiveStreamRelayRoutes: vi.fn(),
-      onUpdate: vi.fn(() => () => {}),
-      onAccountSettingsVersionHint: vi.fn(() => () => {}),
-      onAccountProjectRowsChanged: vi.fn(() => () => {}),
-      onPendingSessionActivationHint: vi.fn(() => () => {}),
       onSessionDeletedChange: vi.fn((listener: NonNullable<typeof deletedListener>) => {
         deletedListener = listener;
         return () => { deletedListener = null; };
@@ -71,17 +69,12 @@ describe('bootstrapMachineSyncRuntime memory startup ordering', () => {
         resetListener = listener;
         return () => { resetListener = null; };
       }),
-      onSessionArchivedStateChange: vi.fn(() => () => {}),
-      onConnectionStateChange: vi.fn(() => () => {}),
       connect,
       updateDaemonState: vi.fn(async () => {}),
       updateMachineMetadata: vi.fn(async () => {}),
       emitExternalSessionTranscriptUpdate: vi.fn(),
-      onMachineTransferEnvelope: vi.fn(() => () => {}),
       sendMachineTransferEnvelope: vi.fn(),
-      onTransferRelayV2Envelope: vi.fn(() => () => {}),
       sendTransferRelayV2Envelope: vi.fn(),
-      onMachineLiveStreamRelayEnvelope: vi.fn(() => () => {}),
       sendMachineLiveStreamRelayEnvelope: vi.fn(),
       getPeerMediationMachineRpcHandlerManager: vi.fn(() => ({
         invokeLocal: async () => ({ ok: true }),

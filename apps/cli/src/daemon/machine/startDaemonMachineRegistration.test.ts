@@ -252,7 +252,7 @@ describe('startDaemonMachineRegistration', () => {
         stopDirectPeerServer: runtime.stopPeerMediationLoopbackServer,
         stopTailscaleTransferServeLifecycle: async () => {},
         stopControlServer: async () => {},
-        stopCaffeinate: async () => {},
+        stopKeepAwake: async () => {},
         daemonLockHandle: null,
         releaseDaemonLock: async () => {},
       });
@@ -464,7 +464,7 @@ describe('startDaemonMachineRegistration', () => {
         stopDirectPeerServer: runtime.stopPeerMediationLoopbackServer,
         stopTailscaleTransferServeLifecycle: async () => {},
         stopControlServer: async () => {},
-        stopCaffeinate: async () => {},
+        stopKeepAwake: async () => {},
         daemonLockHandle: null,
         releaseDaemonLock: async () => {},
       });

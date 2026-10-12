@@ -29,8 +29,11 @@ import type {
   PromptRegistryFetchItemRequestV1,
 } from '@happier-dev/protocol';
 import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
-import { HAPPIER_AUTOMATION_RUN_STATE_CHANGED_HOST_EVENT_ID_V1 } from '@happier-dev/protocol/plugins/events/hostReferencesV1';
-import { parseHostEventPayloadV1 } from '@happier-dev/protocol/plugins/events/hostV1';
+import {
+  HAPPIER_AUTOMATION_RUN_STATE_CHANGED_HOST_EVENT_ID_V1,
+  HAPPIER_AUTOMATION_EVENT_SOURCES_INVALIDATED_HOST_EVENT_ID_V1,
+} from '@happier-dev/protocol/plugins/events/hostReferencesV1';
+import { parseHostEventPayloadV1, type HostEventEnvelopeV1 } from '@happier-dev/protocol/plugins/events/hostV1';
 import { readServerEnabledBit } from '@happier-dev/protocol/features/serverEnabledBit';
 import { SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY, SessionUsageLimitRecoveryV1Schema } from '@happier-dev/protocol/sessions/state/valueSchemas/usageLimitRecovery';
 import { SessionExecutionRunBrokerAuthorityResponseV1Schema } from '@happier-dev/protocol/daemon/executionRuns';
@@ -41,7 +44,7 @@ import { UpdateBodySchema } from '@happier-dev/protocol/updates';
 import type { SessionHandoffLocalMetadataSource } from '@/session/handoff/metadata/runtimeLocalSessionHandoffMetadata';
 import type { SpawnSessionOptions, SpawnSessionResult } from '@/session/shared/spawnSessionContract';
 import type { StopSessionResult } from '@/daemon/sessions/stopSessionContract';
-import { activatePendingInactiveSession } from '@/daemon/sessions/activatePendingInactiveSession';
+import { activatePendingInactiveSession, type PendingInactiveSessionActivationRejected } from '@/daemon/sessions/activatePendingInactiveSession';
 import {
   createPendingSessionActivationRecovery,
   readRequesterPendingSessionActivation,
@@ -50,6 +53,8 @@ import {
 import type { RequesterSessionRuntimeContext, ResolveRequesterSessionRuntimeContext, RequesterSessionCredentialBindingsResult,
   RequesterSessionCredentialBinding } from '../sessionEncryption/requesterSessionCredentials';
 import { activateInactiveUsageLimitResume } from '@/daemon/sessions/activateInactiveUsageLimitResume';
+import { publishOrphanedStartupSessionEnds } from '@/daemon/sessions/publishOrphanedStartupSessionEnds';
+import type { OrphanedDeadDaemonSession } from '@/daemon/sessions/reattachFromMarkers';
 import type { AutomationWorkerHandle } from '../automation/automationWorker';
 import type { MemoryWorkerHandle } from '../memory/memoryWorker';
 import { subscribeMemorySessionRemoval } from '../memory/subscribeMemorySessionRemoval';
@@ -166,6 +171,25 @@ function readAccountSettingsChangedHintVersion(update: unknown): number | null {
  * ingress validates and projects it into the daemon-lifetime broker; it never
  * derives lifecycle facts or participates in Automation settlement.
  */
+function publishDaemonHostEvent(event: HostEventEnvelopeV1, isShuttingDown: () => boolean): void {
+  if (isShuttingDown()) return;
+  const registryLease = tryAcquireAuthoritativePluginRuntimeRegistryLease();
+  if (!registryLease) return;
+  try {
+    registryLease.registry.stableEventsBroker?.publishHostEventEnvelope(event);
+  } catch (error) {
+    logger.warn('[DAEMON RUN] Host Event projection failed (ignored)', {
+      message: error instanceof Error ? error.message : String(error),
+    });
+  } finally {
+    void registryLease.release().catch((error) => {
+      logger.warn('[DAEMON RUN] Host Event registry release failed (ignored)', {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }
+}
+
 function projectAutomationRunStateChangedHostEvent(
   update: unknown,
   isShuttingDown: () => boolean,
@@ -189,27 +213,11 @@ function projectAutomationRunStateChangedHostEvent(
         : { transitionCause: body.data.transitionCause }),
     },
   );
-  const registryLease = tryAcquireAuthoritativePluginRuntimeRegistryLease();
-  if (!registryLease) return true;
-  try {
-    const broker = registryLease.registry.stableEventsBroker;
-    if (!broker) return true;
-    broker.publishHostEventEnvelope({
-      eventId: HAPPIER_AUTOMATION_RUN_STATE_CHANGED_HOST_EVENT_ID_V1,
-      scope: { kind: 'account' },
-      payload,
-    });
-  } catch (error) {
-    logger.warn('[DAEMON RUN] Automation lifecycle Host Event projection failed (ignored)', {
-      message: error instanceof Error ? error.message : String(error),
-    });
-  } finally {
-    void registryLease.release().catch((error) => {
-      logger.warn('[DAEMON RUN] Automation lifecycle Host Event registry release failed (ignored)', {
-        message: error instanceof Error ? error.message : String(error),
-      });
-    });
-  }
+  publishDaemonHostEvent({
+    eventId: HAPPIER_AUTOMATION_RUN_STATE_CHANGED_HOST_EVENT_ID_V1,
+    scope: { kind: 'account' },
+    payload,
+  }, isShuttingDown);
   return true;
 }
 
@@ -283,27 +291,6 @@ function normalizeNonEmptyString(value: string | null | undefined): string | nul
   return normalized ? normalized : null;
 }
 
-export function createMachineSharedProviderGatewayResolver(input: Readonly<{
-  machineId: string;
-  readAccountId(): string | null;
-  readOrigin(): Promise<CurrentMachineExecutionOriginContext | null>;
-}>): ResolveSharedManagedProviderGatewayBinding {
-  return async ({ connectionId, consumerId, signal }) => {
-    signal?.throwIfAborted();
-    const origin = await input.readOrigin();
-    signal?.throwIfAborted();
-    const accountId = normalizeNonEmptyString(input.readAccountId());
-    const homeId = normalizeNonEmptyString(origin?.serverIdentityId);
-    if (!homeId || !accountId || origin?.machineId !== input.machineId) {
-      throw createProviderErrorV1('provider_authorization_changed', {
-        connectionId,
-        machineId: input.machineId,
-      });
-    }
-    return Object.freeze({ homeId, accountId, connectionId, machineId: input.machineId, consumerId });
-  };
-}
-
 function readUsageLimitRecoveryResultStatus(result: unknown): string | null {
   if (!result || typeof result !== 'object' || Array.isArray(result)) return null;
   const status = (result as Record<string, unknown>).status;
@@ -371,6 +358,12 @@ function reconcileMachineIrohEndpoint(
       iroh: runtime ? { endpoint: runtime.endpoint } : undefined,
     },
   };
+}
+
+function removePeerMediationLoopbackEndpoint(state: DaemonState | null): DaemonState {
+  const base: DaemonState = state ?? { status: 'running' };
+  if (!base.peerMediation?.loopback) return base;
+  return { ...base, peerMediation: { ...base.peerMediation, loopback: undefined } };
 }
 
 function removeMachineIrohEndpoint(state: DaemonState | null): DaemonState {
@@ -500,6 +493,27 @@ async function resolvePeerTcpTunnelRelayBootstrapContext(params: Readonly<{
   return { accountId, serverFeatures };
 }
 
+export function createMachineSharedProviderGatewayResolver(input: Readonly<{
+  machineId: string;
+  readAccountId(): string | null;
+  readOrigin(): Promise<CurrentMachineExecutionOriginContext | null>;
+}>): ResolveSharedManagedProviderGatewayBinding {
+  const readIdentity: NonNullable<ResolveSharedManagedProviderGatewayBinding['readIdentity']> = async ({ connectionId, signal }) => {
+    signal?.throwIfAborted();
+    const origin = await input.readOrigin();
+    signal?.throwIfAborted();
+    const accountId = normalizeNonEmptyString(input.readAccountId());
+    const homeId = normalizeNonEmptyString(origin?.serverIdentityId);
+    if (!homeId || !accountId || origin?.machineId !== input.machineId) {
+      throw createProviderErrorV1('provider_authorization_changed', { connectionId, machineId: input.machineId });
+    }
+    return Object.freeze({ homeId, accountId, connectionId, machineId: input.machineId });
+  };
+  const resolve: ResolveSharedManagedProviderGatewayBinding = async ({ consumerId, ...request }) =>
+    Object.freeze({ ...await readIdentity(request), consumerId });
+  return Object.assign(resolve, { readIdentity });
+}
+
 export type BootstrapMachineSyncRuntimeResult = Readonly<{
   externalSessionPluginAdmissionOwner?: ExternalSessionPluginAdmissionOwner;
   externalSessionHostActionExecutor?: RpcActionExecutor;
@@ -615,6 +629,8 @@ export type BootstrapMachineSyncRuntimeParams = Readonly<{
   readRequesterSessionCredentialBindings?: () => Promise<RequesterSessionCredentialBindingsResult>;
   releaseRequesterSessionRuntimeContext?: (context: RequesterSessionRuntimeContext) => Promise<void>;
   daemonSessionMutationCustody?: DaemonSessionMutationCustody;
+  orphanedDeadDaemonSessions?: ReadonlyArray<OrphanedDeadDaemonSession>;
+  isPublicationQuiescing?: () => boolean;
   deviceLocalSecretStorage?: DeviceLocalSecretStorage;
   preferredHost: string;
   happyHomeDir: string;
@@ -636,6 +652,7 @@ export type BootstrapMachineSyncRuntimeParams = Readonly<{
   startAutomationWorkerForMachine: (machineId: string) => AutomationWorkerHandle | null;
   startMemoryWorkerForMachine: (machineId: string) => Promise<MemoryWorkerHandle | null>;
   spawnSession: (options: SpawnSessionOptions) => Promise<SpawnSessionResult>;
+  onActivationRejected?: (event: PendingInactiveSessionActivationRejected) => Promise<void>;
   stopSession: (sessionId: string) => Promise<StopSessionResult>;
   sessionRunnerStatus?: MachineRpcHandlerDeps['sessionRunnerStatus'];
   awaitAgentSessionOpen?: SessionLifecycleMachineDeps['awaitAgentSessionOpen'];
@@ -762,6 +779,54 @@ export async function bootstrapMachineSyncRuntime(
   let cleanupPeerTcpTunnelRelay: (() => void) | null = null;
   let resumeMachineConnectionPublications = async (): Promise<void> => {};
   let disposeInactiveSessionUsageLimitRecovery: (() => void) | null = null;
+  let peerMediationPublicationInFlight: Promise<Awaited<ReturnType<ApiMachineClient['updateDaemonState']>> | null> | null = null;
+  let peerMediationPublicationRequested = false;
+  const refreshPeerMediationEndpointPublication = async () => {
+    const hadPendingPublication = peerMediationPublicationRequested;
+    peerMediationPublicationRequested = true;
+    if (!connectedApiMachine || params.isShuttingDown()) return 'suppressed' as const;
+    if (peerMediationPublicationInFlight) return peerMediationPublicationInFlight;
+    if (!hadPendingPublication && !peerMediationLoopback && !needsPersistedIrohEndpointWithdrawal
+      && !params.machine.daemonState?.peerMediation?.iroh
+      && !params.machine.daemonState?.peerMediation?.loopback) {
+      peerMediationPublicationRequested = false;
+      return 'unchanged' as const;
+    }
+    const operation = (async () => {
+      let outcome: Awaited<ReturnType<ApiMachineClient['updateDaemonState']>> = 'unchanged';
+      while (peerMediationPublicationRequested && !params.isShuttingDown()) {
+        peerMediationPublicationRequested = false;
+        outcome = await connectedApiMachine.updateDaemonState((state) => {
+          // Read the live owner inside the CAS handler, including conflict retries:
+          // a captured startup advert must never revive a stopped listener.
+          const loopback = peerMediationLoopback;
+          const endpoint = loopback?.readEndpoint();
+          return reconcileMachineIrohEndpoint(
+            loopback && endpoint
+              ? mergePeerMediationLoopbackEndpoint(state, endpoint, loopback.activeFlows)
+              : removePeerMediationLoopbackEndpoint(state),
+            activeMachineIrohRuntime,
+          );
+        });
+        if (outcome === 'suppressed') {
+          peerMediationPublicationRequested = true;
+          break;
+        }
+        if (outcome === 'published') needsPersistedIrohEndpointWithdrawal = false;
+      }
+      return outcome;
+    })().catch((error) => {
+      peerMediationPublicationRequested = true;
+      logger.warn('[DAEMON RUN] Failed to reconcile peer mediation endpoints', error);
+      return null;
+    });
+    peerMediationPublicationInFlight = operation;
+    try {
+      return await operation;
+    } finally {
+      if (peerMediationPublicationInFlight === operation) peerMediationPublicationInFlight = null;
+    }
+  };
 
   const getAttemptResources = (): MachineSyncRuntimeAttemptResources => ({
     apiMachine: connectedApiMachine,
@@ -1483,16 +1548,34 @@ export async function bootstrapMachineSyncRuntime(
     });
     if (peerMediationLoopback) {
       const startedPeerMediationLoopback = peerMediationLoopback;
+      const unsubscribeEndpointChanges = startedPeerMediationLoopback.subscribeEndpointChanges(() => {
+        void refreshPeerMediationEndpointPublication();
+      });
       const hasNativePreviewApplication = Boolean(
         params.acquireLocalServicePreviewApplication && peerMediationLoopback.activeFlows.tcp_tunnel,
       );
       stopPeerMediationLoopbackServer = async () => {
+        if (peerMediationLoopback !== startedPeerMediationLoopback) return;
+        peerMediationLoopback = null;
+        unsubscribeEndpointChanges();
         if (hasNativePreviewApplication) {
           await connectedApiMachine.setLocalServicePreviewNativeAccessLive(false).catch((error) => {
             logger.warn('[DAEMON RUN] Failed to withdraw native preview capability', error);
           });
         }
-        await startedPeerMediationLoopback.stop();
+        try {
+          await startedPeerMediationLoopback.stop();
+        } finally {
+          // Settle any older write before the final withdrawal. Reconnect and
+          // endpoint handlers now see no listener, even while stop is pending.
+          await peerMediationPublicationInFlight?.catch(() => {});
+          await connectedApiMachine.updateDaemonState(removePeerMediationLoopbackEndpoint, {
+            allowWhileQuiescing: true,
+          }).catch((error) => {
+            peerMediationPublicationRequested = true;
+            logger.warn('[DAEMON RUN] Failed to withdraw peer mediation loopback endpoint', error);
+          });
+        }
       };
       if (params.machineIrohRuntime) {
         const admissionPort = Number(new URL(peerMediationLoopback.endpoint.url).port);
@@ -1518,6 +1601,7 @@ export async function bootstrapMachineSyncRuntime(
             await connectedApiMachine.updateDaemonState(removeMachineIrohEndpoint, {
               allowWhileQuiescing: true,
             }).catch((error) => {
+              peerMediationPublicationRequested = true;
               logger.warn('[DAEMON RUN] Failed to remove retired Iroh machine endpoint publication', error);
             });
           };
@@ -1673,10 +1757,12 @@ export async function bootstrapMachineSyncRuntime(
             pendingVersion: hint?.pendingVersion ?? current.pendingVersion, requester: context.bootstrap,
             expectedTarget: current.target,
             resolveCurrentMachineExecutionOriginContext: params.resolveCurrentMachineExecutionOriginContext,
+            onActivationRejected: params.onActivationRejected,
             spawnSession: options => params.spawnSession({ ...options, requesterSessionBootstrap: context.bootstrap,
               requesterSessionRuntimeContext: context }) });
           if (result.status === 'rejected') logger.warn('[DAEMON RUN] Requester Pending activation rejected; custody retained', {
             sessionId: current.sessionId, requestId: current.requestId, reason: result.reason,
+            failureDetails: result.failureDetails,
           });
         } finally { await params.releaseRequesterSessionRuntimeContext(context); }
       };
@@ -1698,6 +1784,7 @@ export async function bootstrapMachineSyncRuntime(
           requestId: hint.requestId,
           pendingVersion: hint.pendingVersion,
           spawnSession: params.spawnSession,
+          onActivationRejected: params.onActivationRejected,
         });
         if (result.status === 'rejected') {
           logger.warn('[DAEMON RUN] Exact inactive Pending activation was rejected; Pending custody retained', {
@@ -1705,6 +1792,7 @@ export async function bootstrapMachineSyncRuntime(
             requestId: hint.requestId,
             source: hint.source,
             reason: result.reason,
+            failureDetails: result.failureDetails,
           });
         }
       };
@@ -1737,6 +1825,13 @@ export async function bootstrapMachineSyncRuntime(
         pendingSessionActivationRecovery.recoverAfterConnect;
     }
 
+    connectedApiMachine.onAutomationEventSourcesInvalidated(() => {
+      publishDaemonHostEvent({
+        eventId: HAPPIER_AUTOMATION_EVENT_SOURCES_INVALIDATED_HOST_EVENT_ID_V1,
+        scope: { kind: 'account' },
+        payload: {},
+      }, params.isShuttingDown);
+    });
     connectedApiMachine.onUpdate((update) => {
       const body = UpdateBodySchema.safeParse(update?.body);
       if (body.success && body.data.t === 'pending-changed' && !params.isShuttingDown()) {
@@ -1929,6 +2024,7 @@ export async function bootstrapMachineSyncRuntime(
     }) ?? null;
     let hasPendingMachineConnectionPublications = false;
     let machineConnectionPublicationsInFlight: Promise<void> | null = null;
+    let pendingOrphanedSessions = params.orphanedDeadDaemonSessions ?? [];
     const refreshMachineConnectionPublications = async (): Promise<void> => {
       hasPendingMachineConnectionPublications = true;
       if (params.isShuttingDown()) return;
@@ -1941,6 +2037,17 @@ export async function bootstrapMachineSyncRuntime(
       }
 
       const operation = (async () => {
+        // connect() starts the transport asynchronously. Settle dead markers only
+        // on this connected edge; retain failures for reconnect or handoff resume.
+        if (pendingOrphanedSessions.length > 0) {
+          pendingOrphanedSessions = await publishOrphanedStartupSessionEnds({
+            apiMachine: connectedApiMachine,
+            orphanedDeadDaemonSessions: pendingOrphanedSessions,
+            isSessionAlreadyRunning: params.isSessionAlreadyRunning,
+            isShuttingDown: params.isPublicationQuiescing ?? params.isShuttingDown,
+          });
+          if (params.isShuttingDown()) return;
+        }
         // Incident Jun-11 H-A / FIX-1a: best-effort snapshot warm on every machine (re)connect.
         // The changes catch-up only emits a hint when account changes exist past the persisted
         // cursor, so a freshly restarted daemon can connect and still hold a NULL snapshot.
@@ -1951,26 +2058,8 @@ export async function bootstrapMachineSyncRuntime(
           });
         }
 
-        const activePeerMediationLoopback = peerMediationLoopback;
-        if (activePeerMediationLoopback || needsPersistedIrohEndpointWithdrawal || params.machine.daemonState?.peerMediation?.iroh) {
-          const outcome = await connectedApiMachine
-            .updateDaemonState((state) => reconcileMachineIrohEndpoint(
-              activePeerMediationLoopback
-                ? mergePeerMediationLoopbackEndpoint(
-                    state,
-                    activePeerMediationLoopback.endpoint,
-                    activePeerMediationLoopback.activeFlows,
-                  )
-                : state ?? { status: 'running' },
-              activeMachineIrohRuntime,
-            ))
-            .catch((error) => {
-              logger.warn('[DAEMON RUN] Failed to reconcile peer mediation endpoints', error);
-              return null;
-            });
-          if (outcome === 'suppressed' || params.isShuttingDown()) return;
-          if (outcome === 'published') needsPersistedIrohEndpointWithdrawal = false;
-        }
+        const peerPublicationOutcome = await refreshPeerMediationEndpointPublication();
+        if (peerPublicationOutcome === 'suppressed' || params.isShuttingDown()) return;
 
         if (activeAutomationWorker) {
           const automationWorkerHandle = activeAutomationWorker;
