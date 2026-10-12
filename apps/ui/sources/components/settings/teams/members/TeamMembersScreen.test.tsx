@@ -1,34 +1,32 @@
 import * as React from 'react';
+import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import {
-    accountDisplayProfileFixture,
-    collectRenderedTestIds,
-    createHomeGovernanceHarness,
-    installHomeGovernanceBoundaries,
-    renderScreen,
-    standardCleanup,
-    teamCapabilitiesFixture,
-    teamMembershipFixture,
-    teamSummaryFixture,
-} from '@/dev/testkit';
+import { accountDisplayProfileFixture, collectRenderedTestIds, renderScreen, standardCleanup, teamCapabilitiesFixture, teamMembershipFixture, teamSummaryFixture } from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 
 import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelpers';
+import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const routerPush = vi.hoisted(() => vi.fn());
+const routerReplace = vi.hoisted(() => vi.fn());
 const languageMock = vi.hoisted(() => ({ current: 'en' }));
 const virtualizedBoundary = vi.hoisted(() => ({
     props: null as Record<string, unknown> | null,
     mountLimit: Number.POSITIVE_INFINITY,
+    updateViewport: null as (() => void) | null,
 }));
 const navigationState = vi.hoisted(() => ({
     focused: true,
+    listeners: new Set<() => void>(),
 }));
 
 vi.mock('@/components/ui/lists/virtualized', () => ({
     VirtualizedList: (props: Record<string, unknown>) => {
+        const [, setViewport] = React.useState(0);
+        virtualizedBoundary.updateViewport = () => setViewport((value) => value + 1);
         virtualizedBoundary.props = props;
         const data = ((props.data as readonly unknown[] | undefined) ?? []).slice(0, virtualizedBoundary.mountLimit);
         const renderItem = props.renderItem as (info: { item: unknown; index: number }) => React.ReactNode;
@@ -43,20 +41,26 @@ vi.mock('@/components/ui/lists/virtualized', () => ({
 
 vi.mock('@react-navigation/native', async () => {
     const { createReactNavigationNativeMock } = await import('@/dev/testkit/mocks/reactNavigation');
+    const subscribe = (listener: () => void) => {
+        navigationState.listeners.add(listener);
+        return () => { navigationState.listeners.delete(listener); };
+    };
+    const focused = () => navigationState.focused;
     return {
         ...createReactNavigationNativeMock(),
-        useIsFocused: () => navigationState.focused,
+        useIsFocused: () => React.useSyncExternalStore(subscribe, focused, focused),
     };
 });
 
 installSettingsViewCommonModuleMocks({
+    storage: 'real',
     text: async () => {
         const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
         return createTextModuleMock({ getPreferredLanguage: () => languageMock.current });
     },
     router: async () => {
         const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
-        return createExpoRouterMock({ router: { push: routerPush } }).module;
+        return createExpoRouterMock({ router: { push: routerPush, replace: routerReplace } }).module;
     },
 });
 
@@ -66,13 +70,15 @@ installHomeGovernanceBoundaries(harness);
 const TEAM_GET_PATH = '/v1/teams/get';
 const MEMBERS_LIST_PATH = '/v1/teams/members/list';
 
-async function renderMembers(serverId: string) {
+async function renderMembers(serverId: string, split = false) {
     const { TeamMembersScreen } = await import('./TeamMembersScreen');
     const { NavigationContext, useNavigation } = await import('@react-navigation/native');
     function NativeRoute({ children }: React.PropsWithChildren) {
         return <NavigationContext.Provider value={useNavigation()}>{children}</NavigationContext.Provider>;
     }
-    return renderScreen(<TeamMembersScreen serverId={serverId} teamId="team-1" />, { wrapper: NativeRoute });
+    const { HappierListDetailLayout } = await import('@happier-dev/plugin-ui/presentation');
+    const page = <TeamMembersScreen serverId={serverId} teamId="team-1" />;
+    return renderScreen(split ? <HappierListDetailLayout testID="members-test-layout" list={null} detail={page} minListWidth={264} minDetailWidth={480} preferredListRatio={0.3} /> : page, { wrapper: NativeRoute });
 }
 
 async function addHome(team: ReturnType<typeof teamSummaryFixture>): Promise<string> {
@@ -104,10 +110,13 @@ beforeEach(async () => {
     await harness.reset();
     await harness.selectHomes([]);
     routerPush.mockReset();
+    routerReplace.mockReset();
     languageMock.current = 'en';
     navigationState.focused = true;
+    navigationState.listeners.clear();
     virtualizedBoundary.props = null;
     virtualizedBoundary.mountLimit = Number.POSITIVE_INFINITY;
+    virtualizedBoundary.updateViewport = null;
 });
 
 afterEach(() => {
@@ -115,6 +124,39 @@ afterEach(() => {
 });
 
 describe('TeamMembersScreen', () => {
+    it('lands on a person beside the Members rail instead of rendering the roster twice', async () => {
+        const serverId = await addHome(teamSummaryFixture({ capabilities: teamCapabilitiesFixture({ viewRoster: true }) }));
+        harness.answer(serverId, MEMBERS_LIST_PATH, { body: { items: [teamMembershipFixture()], nextCursor: null } });
+        const screen = await renderMembers(serverId, true);
+        await act(async () => screen.findByTestId('members-test-layout')?.props.onLayout({ nativeEvent: { layout: { width: 1200 } } }));
+        await vi.waitFor(() => expect(screen.findAllByType('Redirect' as never)[0]?.props.href).toBe(`/settings/teams/${encodeURIComponent(serverId)}/team-1/members/membership-1`));
+        expect(collectRenderedTestIds(screen.tree.toJSON())).not.toContain('team-members-virtualized-list');
+    });
+    it('finishes approved leave even when the own-entry row was virtualized away', async () => {
+        const serverId = await addHome(teamSummaryFixture({ viewerRole: 'member', capabilities: teamCapabilitiesFixture({ leave: true }) }));
+        const { Modal } = await import('@/modal');
+        vi.spyOn(Modal, 'confirm').mockResolvedValue(true);
+        await harness.requireUiApproval(serverId, 'teams.members.leave');
+        harness.answer(serverId, MEMBERS_LIST_PATH, { body: { items: [teamMembershipFixture()], nextCursor: null } });
+        harness.answer(serverId, '/v1/teams/members/leave', { body: { status: 'removed', membershipId: 'membership-1' } });
+        harness.answer(serverId, '/v1/teams/list', { body: { items: [], nextCursor: null } });
+        const screen = await renderMembers(serverId);
+        await waitForTestId(screen, 'team-members-leave:membership-1');
+        await screen.pressByTestIdAsync('team-members-leave:membership-1');
+        await waitForTestId(screen, 'team-approval');
+        await act(async () => {
+            virtualizedBoundary.mountLimit = 0;
+            virtualizedBoundary.updateViewport?.();
+        });
+        expect(collectRenderedTestIds(screen.tree.toJSON())).not.toContain('team-members-leave:membership-1');
+        expect(routerReplace).not.toHaveBeenCalled();
+        const artifact = harness.artifacts(serverId).list()[0];
+        if (!artifact) throw new Error('leave_approval_artifact_missing');
+        await expect(decideApprovalAsInbox(serverId, artifact.id, 'approve')).resolves.toMatchObject({ ok: true });
+        await vi.waitFor(() => expect(routerReplace).toHaveBeenCalledWith('/settings/teams'));
+        expect(harness.requestsFor('/v1/teams/members/leave')).toHaveLength(1);
+    });
+
     it.each([
         { leave: true, status: 'active' },
         { leave: false, status: 'active' },
@@ -354,11 +396,16 @@ describe('TeamMembersScreen', () => {
                 nextCursor: null,
             },
         });
-        const { TeamMembersScreen } = await import('./TeamMembersScreen');
-        navigationState.focused = false;
-        await screen.update(<TeamMembersScreen serverId={serverId} teamId="team-1" />);
-        navigationState.focused = true;
-        await screen.update(<TeamMembersScreen serverId={serverId} teamId="team-1" />);
+        // Native focus is an observable event, not a prop update that a memoized
+        // route can legitimately ignore.
+        await act(async () => {
+            navigationState.focused = false;
+            navigationState.listeners.forEach((listener) => listener());
+        });
+        await act(async () => {
+            navigationState.focused = true;
+            navigationState.listeners.forEach((listener) => listener());
+        });
 
         await waitForTestId(screen, 'team-members-row:membership-new');
         expect(harness.requestsFor(MEMBERS_LIST_PATH)).toHaveLength(2);

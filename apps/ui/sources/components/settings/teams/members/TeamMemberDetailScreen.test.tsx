@@ -3,17 +3,8 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
 
-import {
-    collectRenderedTestIds,
-    createHomeGovernanceHarness,
-    installHomeGovernanceBoundaries,
-    renderScreen,
-    standardCleanup,
-    teamCapabilitiesFixture,
-    teamGroupFixture,
-    teamMembershipFixture,
-    teamSummaryFixture,
-} from '@/dev/testkit';
+import { collectRenderedTestIds, renderScreen, standardCleanup, teamCapabilitiesFixture, teamGroupFixture, teamMembershipFixture, teamSummaryFixture } from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 
 import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelpers';
 
@@ -340,7 +331,7 @@ describe('TeamMemberDetailScreen current membership', () => {
         expect(screen.getTextContent()).not.toContain('teams.status.active');
     });
 
-    it('preserves the last-known member and offers retry when a refresh cannot reach the Home', async () => {
+    it('preserves the last-known member and offers retry when the Home fails a refresh', async () => {
         const serverId = await addHome(teamSummaryFixture({
             capabilities: teamCapabilitiesFixture({ manageMembers: true }),
         }));
@@ -360,7 +351,7 @@ describe('TeamMemberDetailScreen current membership', () => {
 
         await waitForTestId(screen, 'team-member-retry');
         expect(collectRenderedTestIds(screen.tree.toJSON())).toContain('team-member-identity');
-        expect(screen.getTextContent()).toContain('teams.unavailable.offline');
+        expect(screen.getTextContent()).toContain('teams.errors.loadFailed');
     });
 
     it('withdraws the last-known member after an authoritative access refusal', async () => {
@@ -582,7 +573,7 @@ describe('TeamMemberDetailScreen effective Groups', () => {
 
         const screen = await renderDetail(serverId);
         await waitForTestId(screen, 'team-member-groups-retry');
-        expect(screen.getTextContent()).toContain('teams.unavailable.offline');
+        expect(screen.getTextContent()).toContain('teams.errors.loadFailed');
 
         harness.answer(serverId, MEMBER_GROUPS_PATH, {
             body: { items: [teamGroupFixture({ id: 'group-infra' })], nextCursor: 'next-page' },
@@ -595,7 +586,7 @@ describe('TeamMemberDetailScreen effective Groups', () => {
         await screen.pressByTestIdAsync('team-member-groups-load-more');
         await waitForTestId(screen, 'team-member-groups-retry');
         expect(collectRenderedTestIds(screen.tree.toJSON())).toContain('team-member-group:group-infra');
-        expect(screen.getTextContent()).toContain('teams.unavailable.offline');
+        expect(screen.getTextContent()).toContain('teams.errors.loadFailed');
     });
 
     it('reads the membership\'s own Groups and opens one at its exact address', async () => {

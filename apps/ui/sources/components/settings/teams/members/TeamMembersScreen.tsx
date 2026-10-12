@@ -1,5 +1,6 @@
 import * as React from 'react';
-import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { Redirect, useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { useHappierCollectionIndexView } from '@happier-dev/plugin-ui/presentation';
 import { useFocusEffect } from '@/components/appShell/workspace/destinationRoute';
 import type { TeamMembersListFilterV1, TeamMembershipV1 } from '@happier-dev/protocol/teams';
 import { Platform } from 'react-native';
@@ -12,6 +13,7 @@ import { ItemLoadStateRows } from '@/components/ui/lists/ItemLoadStateRows';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { ItemList } from '@/components/ui/lists/ItemList';
 import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
 import { VirtualizedList } from '@/components/ui/lists/virtualized';
 import { StatusPill } from '@/components/ui/status/StatusPill';
@@ -95,6 +97,7 @@ const MemberRoster = React.memo(function MemberRoster(props: Readonly<{
 }>) {
     const { theme } = useUnistyles();
     const router = useRouter();
+    const view = useHappierCollectionIndexView();
     const { context } = props;
     const [filter, setFilter] = React.useState<TeamMembersListFilterV1>('all');
     const [query, setQuery] = React.useState('');
@@ -301,6 +304,28 @@ const MemberRoster = React.memo(function MemberRoster(props: Readonly<{
         ({ item }: Readonly<{ item: MemberVirtualizedRow }>) => item.render(),
         [],
     );
+
+    if (view === 'pending') return null;
+    if (view === 'land') {
+        const firstMember = roster.rows[0];
+        if (canRead && firstMember) return <Redirect href={teamMemberDetailPath(context.address, firstMember.id) as never} />;
+        return (
+            <ItemList>
+                {props.header}
+                {!canRead ? (
+                    <SurfaceStateCard kind="denied" size="line" title={t('teams.denied.title')} />
+                ) : roster.error ? (
+                    <SurfaceStateCard kind={roster.error.retryable ? 'error' : 'denied'} size="line"
+                        title={teamReadFailureLabel(roster.error)} action={roster.error.retryable ? {
+                            label: t('teams.unavailable.retry'), onPress: roster.reload, testID: 'team-members-retry',
+                        } : undefined} />
+                ) : roster.status === 'ready' ? (
+                    <SurfaceStateCard kind="empty" size="line" title={t('teams.members.emptyTitle')}
+                        reason={t('teams.members.emptyBody')} />
+                ) : null}
+            </ItemList>
+        );
+    }
 
     return (
         <VirtualizedList

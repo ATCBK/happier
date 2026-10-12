@@ -459,6 +459,7 @@ const MemberDetail = React.memo(function MemberDetail(props: Readonly<{
         .map((role) => ({ id: role, label: teamRoleLabel(role), description: teamRoleDescription(role) }));
 
     const memberContext = {
+        requestApproval: context.requestApproval,
         scope: context.scope,
         address: context.address,
         team: context.team,
@@ -608,8 +609,13 @@ const MemberDetail = React.memo(function MemberDetail(props: Readonly<{
                     <Item
                         testID="team-member-role"
                         title={teamRoleLabel(membership.role)}
+                        // "Only owners and admins change roles" is said only to a viewer who is
+                        // neither; a manager looking at a role they cannot change here (their own,
+                        // the last owner's) reads what the role means.
                         subtitle={management.kind === 'native'
-                            ? `${teamRoleDescription(membership.role)} ${t('teams.members.roleReadOnly', { team: context.team.name })}`
+                            ? context.team.capabilities.manageMembers
+                                ? teamRoleDescription(membership.role)
+                                : `${teamRoleDescription(membership.role)} ${t('teams.members.roleReadOnly', { team: context.team.name })}`
                             : t('teams.members.roleSetBy', { source: management.label })}
                         subtitleLines={0}
                         mode="info"
@@ -664,7 +670,10 @@ const MemberDetail = React.memo(function MemberDetail(props: Readonly<{
             {hasLifecycleActions ? (
                 <ItemGroup surface="none">
                     <SectionButtonRow
-                        footnote={t('teams.members.lifecycleFootnote')}
+                        // The footnote explains the operations this row offers: a suspended member is reactivated, not suspended.
+                        footnote={membership.status === 'suspended'
+                            ? t('teams.members.lifecycleFootnoteSuspended')
+                            : t('teams.members.lifecycleFootnote')}
                         trailing={membership.capabilities.remove ? (
                             <RoundButton
                                 testID="team-member-remove"
@@ -687,7 +696,7 @@ const MemberDetail = React.memo(function MemberDetail(props: Readonly<{
                                 const confirmed = await Modal.confirm(
                                     t('teams.members.suspendTitle', { name: displayName }),
                                     t('teams.members.suspendBody'),
-                                    { confirmText: t('teams.members.suspend') },
+                                    { confirmText: t('teams.members.suspendShort') },
                                 );
                                 if (!confirmed) return;
                                 await run(() => suspendTeamMember({

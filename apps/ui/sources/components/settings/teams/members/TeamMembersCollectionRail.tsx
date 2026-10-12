@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useUnistyles } from 'react-native-unistyles';
 import { HappierCollectionListMark } from '@happier-dev/plugin-ui/presentation';
 
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
@@ -10,7 +11,7 @@ import {
   collectionListStyles,
 } from '@/components/ui/lists/collection/CollectionList';
 import { VirtualizedList } from '@/components/ui/lists/virtualized';
-import { StatusPill } from '@/components/ui/status/StatusPill';
+import { StatusDot } from '@/components/ui/status/StatusDot';
 import { useTeamBinding } from '@/hooks/teams/useTeamBinding';
 import { useTeamMembersRoster } from '@/hooks/teams/useTeamMembersRoster';
 import { resolveAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
@@ -42,10 +43,11 @@ export const TeamMembersCollectionRail = React.memo(
   function TeamMembersCollectionRail(
     props: Readonly<{
       address: TeamAddress;
-      selectedMembershipId: string;
+      selectedMembershipId: string | null;
     }>,
   ) {
     const router = useRouter();
+    const { theme } = useUnistyles();
     const binding = useTeamBinding(props.address.serverId, props.address.teamId);
     const ready =
       binding.kind === 'bound' && binding.state.kind === 'ready' ? binding : null;
@@ -108,7 +110,15 @@ export const TeamMembersCollectionRail = React.memo(
         <Item
           testID={`team-members-rail-row:${membership.id}`}
           title={person.name}
-          subtitle={teamMemberRowSubtitle(membership, person)}
+          // The rail is narrow: a suspension leads the row's one line with its amber dot (the
+          // invitations' "email didn't arrive" anatomy) instead of a pill that squeezes the name.
+          subtitle={membership.status === 'suspended'
+            ? `${t('teams.status.suspended')} · ${teamMemberRowSubtitle(membership, person)}`
+            : teamMemberRowSubtitle(membership, person)}
+          subtitleLines={1}
+          subtitleLeading={membership.status === 'suspended'
+            ? <StatusDot size={6} color={theme.colors.state.warning.foreground} />
+            : undefined}
           icon={
             <HappierCollectionListMark>
               <Avatar
@@ -117,15 +127,6 @@ export const TeamMembersCollectionRail = React.memo(
                 imageUrl={membership.account.avatarUrl}
               />
             </HappierCollectionListMark>
-          }
-          rightElement={
-            membership.status === 'suspended' ? (
-              <StatusPill
-                variant="warning"
-                label={t('teams.status.suspended')}
-                labelVariant="phrase"
-              />
-            ) : undefined
           }
           selected={props.selectedMembershipId === membership.id}
           density="compact"
@@ -201,7 +202,7 @@ export const TeamMembersCollectionRail = React.memo(
             renderItem={renderRailRow}
             extraData={props.selectedMembershipId}
             style={{ flex: 1, minHeight: 0 }}
-            contentContainerStyle={{ paddingBottom: 16 }}
+            contentContainerStyle={{ paddingBottom: theme.space.s16 }}
             maintainVisibleContentPosition
           />
         }

@@ -1,5 +1,4 @@
 import * as React from 'react';
-import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
@@ -19,7 +18,6 @@ export const TeamLeaveAction = React.memo(function TeamLeaveAction(props: Readon
     presentation?: 'row' | 'button';
 }>) {
     const { context } = props;
-    const router = useRouter();
     const [busy, setBusy] = React.useState(false);
     const inFlight = React.useRef(false);
     const mounted = React.useRef(true);
@@ -31,8 +29,8 @@ export const TeamLeaveAction = React.memo(function TeamLeaveAction(props: Readon
     const leave = React.useCallback(async () => {
         if (inFlight.current || !context.mutationsAvailable || context.approvalPending) return;
         inFlight.current = true;
-        const finish = () => { if (mounted.current) router.replace('/settings/teams'); };
-        const failure = (message: string) => { if (mounted.current) Modal.alert(t('homeGovernance.changeFailedTitle'), message); };
+        const finish = () => context.settleLeave({ kind: 'succeeded' });
+        const failure = (message: string) => context.settleLeave({ kind: 'failed', message });
         try {
             const confirmed = await Modal.confirm(
                 t('teams.leave.confirmTitle', { name: context.team.name }),
@@ -55,7 +53,7 @@ export const TeamLeaveAction = React.memo(function TeamLeaveAction(props: Readon
             inFlight.current = false;
             if (mounted.current) setBusy(false);
         }
-    }, [context, router]);
+    }, [context]);
 
     if (!context.team.capabilities.leave) return null;
     const button = <RoundButton
