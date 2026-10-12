@@ -70,7 +70,9 @@ describe("workflow Run persistence contract", () => {
         expect(schema).toContain("workflowAcceptedSnapshotEnvelope String?");
         expect(schema).toContain("workflowCheckpointEnvelope String?");
         expect(schema).toContain("workflowCustodyState       WorkflowRunCustodyState?");
-        expect(schema).toContain("workflowResultDeliveryState WorkflowRunResultDeliveryState?");
+        expect(schema).toMatch(/^\s*originDeliveryAckRevision\s+Int\?\s*$/mu);
+        expect(schema).not.toContain("workflowResultDeliveryState");
+        expect(schema).not.toContain("WorkflowRunResultDeliveryState");
         expect(schema).toMatch(/model AccountEncryptionTransitionAutomationStage \{[\s\S]*?automationId\s+String\?[\s\S]*?sourceRevision\s+Int\?/u);
         expect(schema).toContain("model WorkflowRunInvocation {");
         expect(schema).toContain("sequence        BigInt");
@@ -115,7 +117,9 @@ describe("workflow Run persistence contract", () => {
         expect(migration).toMatch(/"participantKind" = 'workflow_invocation'.*"automationId" IS NULL.*"sourceRevision" IS NULL/iu);
         expect(migration).toContain('"originKind" = \'automation\'');
         expect(migration).toContain('"originKind" = \'direct\'');
-        expect(migration).toMatch(/"originKind" = 'automation'.*"automationId" IS NOT NULL.*"originSessionId" IS NULL.*"causeKind" IS NOT NULL/iu);
+        // Scoped Automation runs may retain their origin Session; the complete
+        // Automation arm requires only Automation identity and cause identity.
+        expect(migration).toMatch(/\((?:NEW\.)?"originKind" = 'automation' AND (?:NEW\.)?"automationId" IS NOT NULL AND (?:NEW\.)?"causeKind" IS NOT NULL\)/iu);
         expect(migration).toMatch(/"originKind" = 'direct'.*"workflowAcceptedSnapshotEnvelope" IS NOT NULL.*"workflowCustodyState" IS NOT NULL/iu);
         for (const column of DIRECT_ORIGIN_NULL_COLUMNS) {
             expect(migration).toContain(`"${column}" IS NULL`);

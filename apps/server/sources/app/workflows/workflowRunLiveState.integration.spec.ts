@@ -141,6 +141,9 @@ describe("workflow Run live state", () => {
             contentEnvelope,
         } } });
         expect(JSON.stringify(page)).not.toContain("private-child-result");
+        const direct = await service.getWorkflowRun({ accountId: seeded.accountId, runId: input.runId });
+        expect(direct).toMatchObject({ rootProgress: page.rootProgressByRunId[input.runId] });
+        expect(JSON.stringify(direct)).not.toContain("private-child-result");
         const stranger = await seed();
         expect(await service.listWorkflowRuns({ accountId: stranger.accountId, pageByteLimit: 16_384 }))
             .toMatchObject({ runs: [], rootProgressByRunId: {} });
@@ -207,6 +210,79 @@ describe("workflow Run live state", () => {
         })).rejects.toMatchObject({ code: "currentness_conflict" });
     });
 
+    it("includes only the first held invocation in the authorized attention page and clears it after settlement", async () => {
+        const seeded = await seed();
+        const stranger = await seed();
+        const { input } = await admit(seeded);
+        const ids = Array.from({ length: 5 }, () => randomUUID());
+        for (const [position, id] of ids.entries()) {
+            const contentEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowProgressStoredEnvelopeV1({
+                mode: "plain", binding: { v: 1, purpose: "invocation_progress", accountId: seeded.accountId, runId: input.runId,
+                    recordId: id, sequence: String(position), parentRecordId: null, memberOrdinal: String(position), attempt: "0" },
+                progress: { kind: "happier.workflow-progress.v1", invocationPath: { blockId: "work", scope: [] },
+                    blockKind: "step", attempt: "0", logicalInvocationRecordId: id },
+            }));
+            await db.workflowRunInvocation.create({ data: { id, runId: input.runId, sequence: BigInt(position),
+                memberOrdinal: BigInt(position), attempt: 0n, lifecycle: "waiting_for_review", contentEnvelope } });
+        }
+        const request = { accountId: seeded.accountId, attention: "required" as const, pageByteLimit: EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES };
+        expect(await service.listWorkflowRuns(request)).toMatchObject({ heldProgressByRunId: {
+            [input.runId]: { index: { id: ids[0], lifecycle: "waiting_for_review" }, contentEnvelope: expect.any(String) },
+        }, runs: [{ id: input.runId, heldCount: 5 }] });
+        expect(await service.getWorkflowRun({ accountId: seeded.accountId, runId: input.runId }))
+            .toMatchObject({ run: { heldCount: 5 } });
+        expect(await service.listWorkflowRuns({ ...request, accountId: stranger.accountId })).toMatchObject({ runs: [], heldProgressByRunId: {} });
+        await db.workflowRunInvocation.update({ where: { id: ids[0] }, data: { lifecycle: "completed" } });
+        expect(await service.listWorkflowRuns(request)).toMatchObject({ heldProgressByRunId: { [input.runId]: { index: { id: ids[1] } } },
+            runs: [{ heldCount: 4 }] });
+        await db.workflowRunInvocation.updateMany({ where: { id: { in: ids.slice(1) } }, data: { lifecycle: "completed" } });
+        expect(await service.listWorkflowRuns(request)).toMatchObject({ runs: [], heldProgressByRunId: {} });
+        expect(await service.listWorkflowRuns({ ...request, attention: undefined })).not.toHaveProperty("heldProgressByRunId");
+        expect(await service.getWorkflowRun({ accountId: seeded.accountId, runId: input.runId }))
+            .toMatchObject({ run: { heldCount: 0 } });
+    });
+
+    it("keeps Needs-you membership actionable and consistent across list, detail, wait and definition summaries", async () => {
+        const seeded = await seed();
+        const sourceArtifactId = randomUUID();
+        const cases = [
+            { state: "cancelled", lifecycle: "cancel_requested", attention: false },
+            { state: "cancelled", lifecycle: "waiting_for_review", attention: false },
+            { state: "interrupted", lifecycle: "failed", attention: false },
+            { state: "interrupted", lifecycle: "cancel_requested", attention: false },
+            { state: "interrupted", lifecycle: "needs_attention", attention: true },
+            { state: "interrupted", lifecycle: "outcome_uncertain", attention: true },
+            { state: "running", lifecycle: "waiting_for_review", attention: true },
+            { state: "running", lifecycle: "waiting_for_approval", attention: true },
+        ] as const;
+        const expectedAttentionIds = new Set<string>();
+        for (const [position, scenario] of cases.entries()) {
+            const { input } = await admit(seeded, sourceArtifactId);
+            await db.automationRun.update({ where: { id: input.runId }, data: {
+                state: scenario.state, workflowCustodyState: "pending", createdAt: new Date(Date.UTC(2026, 1, position + 1)),
+            } });
+            await db.workflowRunInvocation.create({ data: {
+                id: randomUUID(), runId: input.runId, sequence: 0n, memberOrdinal: 0n,
+                lifecycle: scenario.lifecycle, contentEnvelope: "unopened-private-progress",
+            } });
+            if (scenario.attention) expectedAttentionIds.add(input.runId);
+            const direct = await service.getWorkflowRun({ accountId: seeded.accountId, runId: input.runId });
+            expect(direct.run.attentionRequired, JSON.stringify(scenario)).toBe(scenario.attention);
+            expect(direct.run.heldCount).toBe(scenario.state !== "cancelled" && scenario.lifecycle === "waiting_for_review" ? 1 : 0);
+            const exact = await service.listWorkflowRuns({ accountId: seeded.accountId, runId: input.runId, pageByteLimit: EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES });
+            expect(exact.runs[0].attentionRequired, JSON.stringify(scenario)).toBe(scenario.attention);
+            const wait = await service.waitWorkflowRun({ accountId: seeded.accountId, runId: input.runId, timeoutSeconds: 0 });
+            expect(wait.observation === "needs_attention", JSON.stringify(scenario)).toBe(scenario.attention);
+        }
+        const attention = await service.listWorkflowRuns({ accountId: seeded.accountId, sourceArtifactId,
+            attention: "required", pageByteLimit: EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES });
+        expect(new Set(attention.runs.map(run => run.id))).toEqual(expectedAttentionIds);
+        const summaries = await service.summarizeWorkflowRuns({ accountId: seeded.accountId, sourceArtifactIds: [sourceArtifactId],
+            recent: 1, pageByteLimit: EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES });
+        expect(summaries.summaries[0]).toMatchObject({ needsYouCount: expectedAttentionIds.size,
+            needsYouRunId: attention.runs[0].id });
+    });
+
     it("excludes unacknowledged origin delivery from attention and wait", async () => {
         const seeded = await seed();
         const { input } = await admit(seeded);
@@ -266,11 +342,11 @@ describe("workflow Run live state", () => {
                 const { input } = await admit(seeded, sourceArtifactId);
                 const createdAt: Date = new Date(Date.UTC(2026, 0, records.length + 1));
                 await db.automationRun.update({ where: { id: input.runId }, data: { state, createdAt, workflowCustodyState: state === "succeeded" ? "settled" : "pending", originDeliveryAckRevision: state === "succeeded" ? 0 : null } });
-                if (state === "running") {
+                if (state === "running" || state === "interrupted") {
                     await db.workflowRunInvocation.create({ data: {
                         id: randomUUID(), runId: input.runId, sequence: 0n, memberOrdinal: 0n,
                         // Unopenable DB-boundary content proves this lean read uses public lifecycle facts only.
-                        lifecycle: "waiting_for_approval", contentEnvelope: "unopened-private-progress",
+                        lifecycle: state === "running" ? "waiting_for_approval" : "needs_attention", contentEnvelope: "unopened-private-progress",
                     } });
                     const unchanged = await db.automationRun.findUniqueOrThrow({ where: { id: input.runId }, select: { revision: true } });
                     expect(unchanged.revision).toBe(0);
@@ -303,7 +379,7 @@ describe("workflow Run live state", () => {
         expect(empty.summaries).toEqual([{ sourceArtifactId: sourceArtifactIds[1], lastRun: null, recent: [], needsYouCount: 0, needsYouRunId: null }]);
         // The first actionable Run may be older than the entire recent strip.
         // Settling the newest child row must not make that history invisible.
-        await db.workflowRunInvocation.updateMany({ data: { lifecycle: "completed" } });
+        await db.workflowRunInvocation.updateMany({ where: { lifecycle: "waiting_for_approval" }, data: { lifecycle: "completed" } });
         const olderAttention = await service.summarizeWorkflowRuns(request);
         for (const summary of olderAttention.summaries) {
             const interrupted = records.find((row) => row.sourceArtifactId === summary.sourceArtifactId && row.state === "interrupted");
