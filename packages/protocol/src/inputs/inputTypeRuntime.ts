@@ -13,6 +13,7 @@ import type { HostInputTypeReferenceV1, InputTypeReferenceV1 } from './inputType
 import { inputTypeOptionsSourceId } from './inputTypes.js';
 import { VoiceTrackedSessionAddressV1Schema } from '../sessions/follow/voiceTrackedTargetsCompatibilityV1.js';
 import { WorkspaceRefV1Schema } from '../workspaces/workspaceRefV1.js';
+import { MachineTargetV1Schema } from '../machines/machineAccessV1.js';
 
 function isInputOptionAvailable(value: unknown, options: readonly Pick<InputOption, 'value' | 'disabled'>[]): boolean {
   return options.some(option => !option.disabled && pluginJsonValuesEqual(option.value, value));
@@ -35,7 +36,8 @@ export function validateHostInputTypeValue(reference: HostInputTypeReferenceV1, 
       : { status: 'invalid', reasonCode: 'input_type_value_invalid' };
   }
   const parsed = reference.hostType === 'session'
-    ? VoiceTrackedSessionAddressV1Schema.safeParse(value) : WorkspaceRefV1Schema.safeParse(value);
+    ? VoiceTrackedSessionAddressV1Schema.safeParse(value)
+    : reference.hostType === 'machine' ? MachineTargetV1Schema.safeParse(value) : WorkspaceRefV1Schema.safeParse(value);
   return parsed.success ? { status: 'valid', value: projectNativeJsonValueForTransport(parsed.data) }
     : { status: 'invalid', reasonCode: 'input_type_value_invalid' };
 }
@@ -53,9 +55,14 @@ export function readInputFieldOptionsSourceId(field: Pick<InputFieldHint, 'input
 
 /** Schema-only types and exact native refs do not invent a discovery prerequisite. */
 export function readInputFieldOptionsConstraint(field: InputFieldHint, type?: ResolvedInputTypeV1 | null,
-  viewerPurpose = false): Readonly<{ kind: 'none' }> | Readonly<{ kind: 'static'; options: readonly InputOption[] }> | Readonly<{ kind: 'dynamic' }> {
+  viewerPurpose = false, selection: Readonly<{ contextBound?: boolean; value?: JsonValue }> = {}): Readonly<{ kind: 'none' }> | Readonly<{ kind: 'static'; options: readonly InputOption[] }> | Readonly<{ kind: 'dynamic' }> {
+  // The binder owns followed values. Choices constrain own selections, and an empty
+  // collection selects nothing (Usage's All), so neither needs a choice inventory.
+  if (selection.contextBound || field.widget === 'multiselect' && Array.isArray(selection.value) && selection.value.length === 0)
+    return { kind: 'none' };
+  if (type?.definition.options) return { kind: 'dynamic' };
   if (field.options !== undefined) return { kind: 'static', options: field.options };
-  if (field.optionsSourceId || type?.definition.options || field.connectedAccountOptions && !viewerPurpose) return { kind: 'dynamic' };
+  if (field.optionsSourceId || field.connectedAccountOptions && !viewerPurpose) return { kind: 'dynamic' };
   return { kind: 'none' };
 }
 
@@ -85,18 +92,29 @@ export function validateInputFieldSchema(params: Readonly<{
 /** Full admission fails closed until every declared choice constraint is available. */
 export function validateInputFieldValue(params: Readonly<{
   field: InputFieldHint; value: JsonValue; type?: ResolvedInputTypeV1 | null;
-  options?: readonly Pick<InputOption, 'value' | 'disabled'>[]; viewerPurpose?: boolean;
+  options?: readonly Pick<InputOption, 'value' | 'disabled'>[]; viewerPurpose?: boolean; contextBound?: boolean;
 }>): ReturnType<typeof validateInputFieldSchema> {
   const schema = validateInputFieldSchema(params);
   if (schema.status !== 'valid') return schema;
-  const constraint = readInputFieldOptionsConstraint(params.field, params.type, params.viewerPurpose);
+  if (params.contextBound) return schema;
+  const constraint = readInputFieldOptionsConstraint(params.field, params.type, params.viewerPurpose, params);
   const options = constraint.kind === 'static' ? constraint.options : params.options;
   if (constraint.kind === 'dynamic' && options === undefined)
     return { status: 'unavailable', reasonCode: 'input_type_options_unavailable' };
   const values = params.field.widget === 'multiselect' && Array.isArray(params.value) ? params.value : [params.value];
+  const fieldOptions = params.field.options;
+  if (fieldOptions && values.some(selected => !isInputOptionAvailable(selected, fieldOptions)))
+    return { status: 'invalid', reasonCode: 'input_type_option_invalid' };
   if (options && values.some(selected => !isInputOptionAvailable(selected, options)))
     return { status: 'invalid', reasonCode: 'input_type_option_invalid' };
   return schema;
+}
+
+/** Presentation projects the same admission; it never adds a second choice rule. */
+export function narrowInputFieldOptions(params: Readonly<{ field: InputFieldHint; type?: ResolvedInputTypeV1 | null;
+  options?: readonly InputOption[]; candidates?: readonly InputOption[] }>): readonly InputOption[] {
+  return (params.candidates ?? params.field.options ?? params.options ?? []).filter(option =>
+    validateInputFieldValue({ ...params, value: params.field.widget === 'multiselect' ? [option.value] : option.value }).status === 'valid');
 }
 
 /** The same value/schema/options admission applies to picker and headless values. */

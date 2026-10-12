@@ -2,7 +2,7 @@ import { qualifyPluginContributionReferenceV1, type PluginContributionIdentityV1
 import { PluginUiEphemeralInputSettlementV1Schema } from '../plugins/ui/hostApiRequests.js';
 import type { JsonValue } from '../json/strictJsonValue.js';
 import type { InputOption, InputFieldHint } from './inputFields.js';
-import { readInputFieldOptionsConstraint, validateInputFieldValue, type ResolvedInputTypeV1 } from './inputTypeRuntime.js';
+import { readInputFieldOptionsConstraint, validateInputFieldValue, narrowInputFieldOptions, type ResolvedInputTypeV1 } from './inputTypeRuntime.js';
 import type { InputTypePickerLaunchInputV1 } from './inputTypePickerContract.js';
 import type { HostInputTypeReferenceV1 } from './inputTypes.js';
 import { USAGE_QUERY_INPUT_FIELDS } from './usageQuery.js';
@@ -62,7 +62,7 @@ export async function invokeInputTypePicker(request: Readonly<{
     if (currentBeforeMount?.occurrenceId !== type.occurrenceId) return { status: 'error', reasonCode: 'input_type_retired' };
     const answer = await host.openPicker({ type, signal,
       launchInput: { inputType: type.identity, semantic: type.definition.semantic,
-        ...(options === undefined ? {} : { options }), ...(request.value === undefined ? {} : { value: request.value }) },
+        ...(options === undefined ? {} : { options: narrowInputFieldOptions({ field, type, options }) }), ...(request.value === undefined ? {} : { value: request.value }) },
       picker: qualifyPluginContributionReferenceV1(type.definition.picker, type.identity.pluginId) });
     if (signal.aborted) return { status: 'cancelled' };
     const current = await host.resolveType(field.inputType);

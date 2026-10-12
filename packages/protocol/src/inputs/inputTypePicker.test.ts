@@ -13,7 +13,23 @@ const type: ResolvedInputTypeV1 = { identity, occurrenceId: 'one', definition: {
 const field = { path: 'repository', title: 'Repository', widget: 'select' as const, inputType: identity };
 
 describe('host-admitted input type picker', () => {
-  // Blocked: the public field grammar cannot safely admit these combinations before the CLI consumer is migrated.
+  it('never widens a Resource-owning type with consuming static choices', async () => {
+    const constrained = InputFieldHintSchema.parse({ ...field,
+      options: [{ value: 'one', label: 'One' }, { value: 'outside-resource', label: 'Outside' }] });
+    let answer = 'outside-resource';
+    const host: InputTypePickerHostV1 = {
+      resolveType: async () => type,
+      resolveOptions: async () => [{ value: 'one', label: 'One' }],
+      openPicker: async request => {
+        expect(request.launchInput.options).toEqual([{ value: 'one', label: 'One' }]);
+        return { kind: 'completed', input: answer };
+      },
+    };
+    const request = { field: constrained, host, signal: new AbortController().signal };
+    expect(await invokeInputTypePicker(request)).toEqual({ status: 'error', reasonCode: 'input_type_option_invalid' });
+    answer = 'one';
+    expect(await invokeInputTypePicker(request)).toEqual({ status: 'selected', value: 'one' });
+  });
   it('[blocked: authored contributed constraints] enforces consuming static and dynamic constraints for a picker-only contributed type', async () => {
     const pickerOnly = { ...type, definition: { ...type.definition, options: undefined } };
     let answer = 'excluded';

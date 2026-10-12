@@ -13,13 +13,36 @@ const type: ResolvedInputTypeV1 = { identity, occurrenceId: 'serving-1', definit
       required: ['repositoryId'], additionalProperties: false }, options: { resource: 'repositories' }, picker: 'repository-picker' }) };
 
 describe('typed inputs across consumer domains', () => {
+  it('admits only a closed Home-qualified machine value through the shared host input owner', () => {
+    const field = InputFieldHintSchema.parse({ path: 'machine', title: 'Machine', widget: 'select', inputType: { hostType: 'machine' } });
+    const reference = field.inputType!;
+    expect(inputTypeOptionsSourceId(reference)).toBe('host-input:machine');
+    expect(parseInputTypeOptionsSourceId('host-input:machine')).toEqual(reference);
+    const machine = { serverId: 'home', machineId: 'offline-machine' };
+    expect(validateInputFieldValue({ field, value: machine })).toEqual({ status: 'valid', value: machine });
+    for (const invalid of [{ machineId: 'unqualified' }, { serverId: '', machineId: 'm' }, { ...machine, accountId: 'forged' }]) {
+      expect(validateInputFieldValue({ field, value: invalid }).status).toBe('invalid');
+    }
+  });
+  it('normalizes an optional setup prompt without replacing the noun title or changing value admission', () => {
+    const fields = [{ path: 'repository', title: 'Repository', prompt: 'Which repository?', widget: 'text' as const },
+      { path: 'branch', title: 'Branch', widget: 'text' as const }];
+    const normalized = normalizeInputHintsText({ fields }, text => `Localized ${text}`);
+    expect(normalized.fields).toMatchObject([
+      { title: 'Localized Repository', prompt: 'Localized Which repository?' },
+      { title: 'Localized Branch' },
+    ]);
+    expect(normalized.fields[1]).not.toHaveProperty('prompt');
+    expect(resolveEffectiveInputFields({ inputHints: normalized }, {})).toMatchObject(normalized.fields);
+    expect(validateInputFieldValue({ field: normalized.fields[0]!, value: 'repo' })).toEqual({ status: 'valid', value: 'repo' });
+    expect(InputFieldHintSchema.safeParse({ ...fields[0], prompt: ' ' }).success).toBe(false);
+  });
   it('refuses unresolved dynamic choices', () => {
     const dynamic = InputFieldHintSchema.parse({ path: 'query', title: 'Usage', widget: 'json',
       inputType: { hostType: 'usageQuery' }, optionsSourceId: 'notifications.channels.available' });
     expect(validateInputFieldValue({ field: dynamic, value: { metric: 'cost' } }))
       .toEqual({ status: 'unavailable', reasonCode: 'input_type_options_unavailable' });
   });
-  // Blocked: author grammar remains restrictive until every executable consumer, including CLI, is validated and migrated.
   it('[blocked: authored typed static choices] compares authored options before host normalization', () => {
     const selected = ['two', 'one', 'two'];
     const field = InputFieldHintSchema.parse({ path: 'session', title: 'Sessions', widget: 'select',
@@ -77,12 +100,22 @@ describe('typed inputs across consumer domains', () => {
       .toMatchObject([{ contextMode: 'own' }, { contextMode: 'follow' }]);
     expect(InputFieldHintSchema.safeParse({ ...own, contextMode: 'other' }).success).toBe(false);
   });
+  it('preserves host-slot visibility independently of draft predicates and value admission', () => {
+    const field = InputFieldHintSchema.parse({ path: 'detail', title: 'Detail', widget: 'text',
+      visibleWhenContextSlot: 'selection', visibleWhen: { op: 'truthy', path: 'enabled' } });
+    const normalized = normalizeInputHintsText({ fields: [field] }, text => text);
+    expect(resolveEffectiveInputFields({ inputHints: normalized }, { enabled: true }, { contextSlots: [] })).toEqual([]);
+    expect(resolveEffectiveInputFields({ inputHints: normalized }, { enabled: false }, { contextSlots: ['selection'] })).toEqual([]);
+    expect(resolveEffectiveInputFields({ inputHints: normalized }, { enabled: true }, { contextSlots: ['selection'] }))
+      .toMatchObject([{ path: 'detail', visible: true }]);
+    expect(validateInputFieldValue({ field, value: 'retained' })).toEqual({ status: 'valid', value: 'retained' });
+  });
   it('retains the same qualified type in Workflow and neutral Action/widget fields after removal', () => {
     const saved = WorkflowInputDefinitionSchema.parse({ name: 'repository', valueType: 'json', required: true, inputType: identity });
     const workflow = workflowInputToFieldHint(saved);
     const neutral = { path: 'repository', title: 'Repository', widget: 'select' as const, inputType: identity };
-    expect(InputFieldHintSchema.safeParse({ ...neutral, optionsSourceId: 'session.modes.available' }).success).toBe(false);
-    expect(InputFieldHintSchema.safeParse({ ...neutral, options: [{ value: 'a-field-choice', label: 'Choice' }] }).success).toBe(false);
+    expect(InputFieldHintSchema.safeParse({ ...neutral, optionsSourceId: 'session.modes.available' }).success).toBe(true);
+    expect(InputFieldHintSchema.safeParse({ ...neutral, options: [{ value: 'a-field-choice', label: 'Choice' }] }).success).toBe(true);
     expect(InputFieldHintSchema.safeParse({ ...neutral, optionsSourceId: inputTypeOptionsSourceId(identity) }).success).toBe(true);
     for (const field of [workflow, neutral]) {
       expect(resolveEffectiveInputFields({ inputHints: { fields: [field] } }, { repository: { repositoryId: 'saved' } }))
@@ -107,5 +140,22 @@ describe('typed inputs across consumer domains', () => {
     expect(validateInputTypeValue(type, { repositoryId: 'one', machineId: 'spoof' })).toMatchObject({ status: 'invalid' });
     const numeric = { ...type, definition: { ...type.definition, valueSchema: { type: 'integer' as const } } };
     expect(readInputTypeOptions(numeric, [{ value: 4, label: 'Four' }])).toEqual([{ value: 4, label: 'Four' }]);
+  });
+  it('never admits a static choice outside the type schema or a disabled multiselection', () => {
+    const field = InputFieldHintSchema.parse({ path: 'repository', title: 'Repositories', widget: 'multiselect',
+      inputType: identity, options: [{ value: { repositoryId: 'one' }, label: 'One' },
+        { value: { repositoryId: 'two' }, label: 'Two', disabled: true },
+        { value: { repositoryId: 'one', machineId: 'forged' }, label: 'Forged' }] });
+    const options = [{ value: { repositoryId: 'one' }, label: 'One' }];
+    expect(validateInputFieldValue({ field, type, options, value: [{ repositoryId: 'one' }] }))
+      .toEqual({ status: 'valid', value: [{ repositoryId: 'one' }] });
+    expect(validateInputFieldValue({ field, type, options, value: [{ repositoryId: 'one' }, { repositoryId: 'two' }] }))
+      .toEqual({ status: 'invalid', reasonCode: 'input_type_option_invalid' });
+    expect(validateInputFieldValue({ field, type, options, value: [{ repositoryId: 'one', machineId: 'forged' }] }))
+      .toEqual({ status: 'invalid', reasonCode: 'input_type_value_invalid' });
+    expect(validateInputFieldValue({ field, value: [{ repositoryId: 'one' }] }))
+      .toEqual({ status: 'unavailable', reasonCode: 'input_type_unavailable' });
+    expect(validateInputFieldValue({ field, type, value: [{ repositoryId: 'one' }] }))
+      .toEqual({ status: 'unavailable', reasonCode: 'input_type_options_unavailable' });
   });
 });

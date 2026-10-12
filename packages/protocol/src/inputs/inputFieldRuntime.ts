@@ -25,7 +25,7 @@ export type EffectiveInputField = InputFieldHint & Readonly<{
 export function resolveEffectiveInputFields(
   spec: Readonly<{ inputHints?: InputHints }>,
   input: unknown,
-  options: Readonly<{ includeHidden?: boolean }> = {},
+  options: Readonly<{ includeHidden?: boolean; contextSlots?: readonly string[] }> = {},
 ): readonly EffectiveInputField[] {
   const fields = spec.inputHints?.fields ?? [];
 
@@ -33,7 +33,9 @@ export function resolveEffectiveInputFields(
   for (const field of fields) {
     const { visibleWhen, requiredWhen, disabledWhen } = field;
 
-    const visible = visibleWhen ? evaluateInputPredicate(visibleWhen, input) : true;
+    const visible = (!visibleWhen || evaluateInputPredicate(visibleWhen, input))
+      && (field.visibleWhenContextSlot === undefined || options.contextSlots === undefined
+        || options.contextSlots.includes(field.visibleWhenContextSlot));
     // Hidden fields stay out of forms, but any forwarded value still requires admission.
     if (!visible && options.includeHidden !== true) continue;
 

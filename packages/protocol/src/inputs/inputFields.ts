@@ -1,7 +1,6 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod';
-import { InputTypeReferenceV1Schema, inputTypeOptionsSourceId, type InputTypeReferenceV1 } from './inputTypes.js';
-import { PluginContributionIdentityV1Schema } from '../plugins/contributionIdentity.js';
+import { InputTypeReferenceV1Schema, type InputTypeReferenceV1 } from './inputTypes.js';
 import { StrictJsonValueSchema, type JsonValue } from '../json/strictJsonValue.js';
 import { pluginJsonValuesEqual } from '../plugins/contributions/jsonSchemaValues.js';
 import { createCanonicalJsonSigningInput } from '../crypto/canonicalJson.js';
@@ -87,6 +86,8 @@ const InputHintCoreFieldSchema = lazyZodSchema(() => z.object({
   listSeparator: z.enum(['comma', 'newline']).optional(),
   maxSelections: z.number().int().positive().optional(),
   visibleWhen: InputPredicateSchema.optional(),
+  /** Surface-aware editors show this field only when the host declares the named context slot. */
+  visibleWhenContextSlot: InputPathSchema.optional(),
   requiredWhen: InputPredicateSchema.optional(),
   disabledWhen: InputPredicateSchema.optional(),
 }).strict());
@@ -118,6 +119,8 @@ export type InputHintOptionDescriptor<TText, TValue = InputOptionValue> = Readon
 export type InputFieldHintDescriptor<TText, TValue = InputOptionValue> = Readonly<{
   path: string;
   title: TText;
+  /** Optional setup question; title remains the noun used in summaries. */
+  prompt?: TText;
   description?: TText;
   placeholder?: TText;
   widget: InputWidget;
@@ -128,10 +131,12 @@ export type InputFieldHintDescriptor<TText, TValue = InputOptionValue> = Readonl
   requireExplicitSelection?: boolean;
   listSeparator?: 'comma' | 'newline';
   maxSelections?: number;
+  /** Choices restrict the type's admitted values; they cannot widen its schema. */
   options?: readonly InputHintOptionDescriptor<TText, TValue>[];
   optionsSourceId?: string;
   connectedAccountOptions?: true;
   visibleWhen?: InputPredicate;
+  visibleWhenContextSlot?: InputPath;
   requiredWhen?: InputPredicate;
   disabledWhen?: InputPredicate;
 }>;
@@ -176,16 +181,6 @@ function validateInputHintField(
     || value.inputType !== undefined;
   const hasConnectedAccountOptions = value.connectedAccountOptions === true;
   const hasResolvedEmptyConnectedAccountOptions = value.resolvedEmptyConnectedAccountOptions === true;
-
-  if (value.inputType !== undefined && hasDeclaredOptions) {
-    context.addIssue({ code: 'custom', path: ['options'], message: 'An input type owns its choices; field-level static options would compete with it.' });
-  }
-  if (value.inputType !== undefined && value.optionsSourceId !== undefined) {
-    const type = PluginContributionIdentityV1Schema.safeParse(value.inputType);
-    if (type.success && value.optionsSourceId !== inputTypeOptionsSourceId(type.data)) {
-      context.addIssue({ code: 'custom', path: ['optionsSourceId'], message: 'An input type cannot declare a competing options source.' });
-    }
-  }
 
   const hasAllowedConnectedAccountOptions = validationOptions.allowConnectedAccountOptions && hasConnectedAccountOptions;
   if ((widget === 'select' || widget === 'multiselect') && !hasOptions && !hasOptionsSource && !hasAllowedConnectedAccountOptions && !hasResolvedEmptyConnectedAccountOptions) {
@@ -376,6 +371,7 @@ function createInputHintsSchemasForSharedField<
   const fieldSchema = InputHintCoreFieldSchema.extend({
     ...sourceShape,
     title: textSchema,
+    prompt: textSchema.optional(),
     description: textSchema.optional(),
     placeholder: textSchema.optional(),
     options: z.array(optionSchema).readonly().optional(),
@@ -467,6 +463,7 @@ export function normalizeInputHintsText<TText>(
     fields: hints.fields.map((field) => ({
       path: field.path,
       title: resolveText(field.title),
+      ...(field.prompt === undefined ? {} : { prompt: resolveText(field.prompt) }),
       ...(field.description === undefined ? {} : { description: resolveText(field.description) }),
       ...(field.placeholder === undefined ? {} : { placeholder: resolveText(field.placeholder) }),
       widget: field.widget,
@@ -489,6 +486,7 @@ export function normalizeInputHintsText<TText>(
         : { optionsSourceId: field.optionsSourceId }),
       ...(field.connectedAccountOptions === undefined ? {} : { connectedAccountOptions: field.connectedAccountOptions }),
       ...(field.visibleWhen === undefined ? {} : { visibleWhen: field.visibleWhen }),
+      ...(field.visibleWhenContextSlot === undefined ? {} : { visibleWhenContextSlot: field.visibleWhenContextSlot }),
       ...(field.requiredWhen === undefined ? {} : { requiredWhen: field.requiredWhen }),
       ...(field.disabledWhen === undefined ? {} : { disabledWhen: field.disabledWhen }),
     })),

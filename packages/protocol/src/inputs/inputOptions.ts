@@ -13,12 +13,18 @@ import { resolveActionBackendTargetSelection, resolveExecutionBackendTargetSelec
 import { readRecord, readRecordListProperty, readNonEmptyString, isRecord, hasOwn } from './inputRecords.js';
 import { projectInputOptionsDependencies } from './inputOptionsDependencies.js';
 import { parseInputTypeOptionsSourceId } from './inputTypes.js';
-import { resolveInputTypeOptions } from './inputTypeRuntime.js';
-import type { InputOption } from './inputFields.js';
+import { resolveInputTypeOptions, narrowInputFieldOptions } from './inputTypeRuntime.js';
+import type { InputOption, InputFieldHint } from './inputFields.js';
 import { VoiceTrackedSessionAddressV1Schema } from '../sessions/follow/voiceTrackedTargetsCompatibilityV1.js';
 import { parseSessionAwarenessListResultV1 } from '../sessions/awareness/action.js';
 import { isSessionAwarenessContentReadableV1 } from '../sessions/awareness/availability.js';
 import { readSessionAwarenessWorkStatusV1, readSessionWorkStateGroupV1 } from '../sessions/awareness/presentationV1.js';
+import { MachineTargetV1Schema } from '../machines/machineAccessV1.js';
+import { MachineVitalsSnapshotV1Schema } from '../machines/vitals/machineVitalsRpcV1.js';
+import { normalizeUsageQuery, readUsageGroupByOptions } from './usageQuery.js';
+import { executeUsageAction } from '../actions/executor/usageActions.js';
+import { UsageQueryBatchResultSchema } from '../usage/resolveUsagePageAggregation.js';
+import { readUsageScopeOptions } from '../usage/usageFilterOptions.js';
 
 export function normalizeResolvedOptions(value: unknown, options: Readonly<{ allowEmptyValue?: boolean }> = {}): readonly Readonly<{ value: string; label: string; description?: string; disabled?: boolean }>[] {
   const items = readRecordListProperty(value, 'items').length > 0
@@ -171,6 +177,36 @@ function readDynamicOptionDirectory(
   return readNonEmptyString(input.directory) ?? readNonEmptyString(input.path);
 }
 
+/** Field choices restrict, never replace, the type's schema and declared Resource choices. */
+export async function resolveTypedInputFieldOptions(params: Omit<Parameters<typeof resolveInputOptions>[0], 'optionsSourceId'> &
+  Readonly<{ field: InputFieldHint }>): ReturnType<typeof resolveInputOptions> {
+  const { field, deps, ctx } = params;
+  const identity = field.inputType;
+  if (!identity || 'hostType' in identity) return { ok: false, errorCode: 'input_type_unavailable', error: 'input_type_unavailable' };
+  const type = await deps.resolveInputType?.(identity, ctx);
+  if (!type || type.identity.pluginId !== identity.pluginId || type.identity.localId !== identity.localId)
+    return { ok: false, errorCode: 'input_type_unavailable', error: 'input_type_unavailable' };
+  let typeOptions: readonly InputOption[] | undefined;
+  if (type.definition.options) {
+    const sessionId = params.resolveSessionId(params.input, ctx);
+    const resolved = await resolveInputTypeOptions({ deps, ctx, identity, readFailure: params.readFailure,
+      ...(sessionId ? { sessionId } : {}) });
+    if (!resolved.ok) return resolved;
+    typeOptions = resolved.result;
+  }
+  let options = field.options ?? typeOptions ?? [];
+  if (field.options === undefined && field.optionsSourceId) {
+    const resolved = await resolveInputOptions({ ...params, optionsSourceId: field.optionsSourceId });
+    if (!resolved.ok) return resolved;
+    options = resolved.result;
+  }
+  const current = await deps.resolveInputType?.(identity, ctx);
+  if (ctx.signal?.aborted || current?.occurrenceId !== type.occurrenceId)
+    return { ok: false, errorCode: 'input_type_retired', error: 'input_type_retired' };
+  return { ok: true, result: narrowInputFieldOptions({ field, type, options: typeOptions ?? options, candidates: options }),
+    ...(field.options !== undefined || !field.optionsSourceId && !type.definition.options ? { optionsSourceId: null } : {}) };
+}
+
 export async function resolveInputOptions(params: Readonly<{
   deps: ActionExecutorDeps;
   ctx: ActionExecutorContext;
@@ -195,6 +231,79 @@ export async function resolveInputOptions(params: Readonly<{
     : readNonEmptyString(ctx.serverId);
   const modelId = readDynamicOptionModelId(input, actionId);
   const directory = readDynamicOptionDirectory(input, actionId);
+
+  if (optionsSourceId === 'usage.query.breakdown') {
+    const draft = isRecord(params.input.query) ? params.input.query : params.input;
+    return { ok: true, result: readUsageGroupByOptions(draft.breakdown) };
+  }
+
+  const usageField = optionsSourceId === 'usage.filters.agents' ? 'agents'
+    : optionsSourceId === 'usage.filters.machines' ? 'machines'
+    : optionsSourceId === 'usage.filters.projects' ? 'projects'
+    : optionsSourceId === 'usage.filters.sources' ? 'sources' : null;
+  if (usageField) {
+    // Inventory is the same authorized accounting read the Usage toolbar consumes; no execution
+    // target catalog or consumer-owned picker decides what a usage identity means.
+    const draft = isRecord(params.input.query) ? params.input.query : params.input;
+    const query = normalizeUsageQuery({ period: draft.period, session: draft.session, costBasis: draft.costBasis,
+      breakdown: ['agent', 'machine', 'project', 'source'] });
+    const result = await executeUsageAction('usage.query', { queries: [query] }, deps.usageActions, ctx);
+    if (!result.ok) return result;
+    const batch = UsageQueryBatchResultSchema.parse(result.result);
+    const selected = Array.isArray(draft[usageField]) ? draft[usageField].filter((value): value is string => typeof value === 'string') : [];
+    const labels = readUsageScopeOptions(batch.results, usageField, selected);
+    if (usageField === 'machines') {
+      if (!serverId) return { ok: false, errorCode: 'server_not_selected', error: 'server_not_selected' };
+      const machines = await deps.machinesList({ serverId, purpose: 'input' });
+      const failure = params.readFailure(machines);
+      if (failure) return failure;
+      ctx.signal?.throwIfAborted();
+      // This catalog names only the existing accounting identities; it cannot add choices.
+      for (const machine of readRecordListProperty(machines, 'items')) {
+        const id = readNonEmptyString(machine.machineId) ?? readNonEmptyString(machine.id);
+        const label = readNonEmptyString(machine.label);
+        if (id && label && labels.has(id)) labels.set(id, label);
+      }
+    }
+    return { ok: true, result: [...labels]
+      .map(([value, label]) => ({ value, label })) };
+  }
+
+  if (optionsSourceId === 'host-input:machine') {
+    const selectedServerId = readNonEmptyString(ctx.serverId);
+    if (!selectedServerId) return { ok: false, errorCode: 'server_not_selected', error: 'server_not_selected' };
+    const result = await deps.machinesList({ serverId: selectedServerId,
+      ...(ctx.surface === 'voice' ? {} : { purpose: 'input' as const }) });
+    const failure = params.readFailure(result);
+    if (failure) return failure;
+    ctx.signal?.throwIfAborted();
+    const machines = readRecordListProperty(result, 'items');
+    const options: InputOption[] = [];
+    for (const machine of machines) {
+      if (typeof machine.revokedAt === 'number' && machine.revokedAt > 0 || readNonEmptyString(machine.replacedByMachineId)) continue;
+      const target = MachineTargetV1Schema.safeParse({ serverId: readNonEmptyString(machine.serverId) ?? selectedServerId,
+        machineId: readNonEmptyString(machine.machineId) ?? readNonEmptyString(machine.id) });
+      if (!target.success || target.data.serverId !== selectedServerId) return { ok: false, errorCode: 'invalid_action_output', error: 'invalid_action_output' };
+      const online = machine.presence === 'online' || (machine.presence === undefined && machine.active === true);
+      options.push({ value: target.data, label: readNonEmptyString(machine.label) ?? target.data.machineId,
+        description: online ? 'Online' : 'Offline' });
+    }
+    return { ok: true, result: options };
+  }
+
+  if (optionsSourceId === 'machines.volumes.available') {
+    const machine = MachineTargetV1Schema.safeParse(input.machine);
+    if (!machine.success) return { ok: false, errorCode: 'missing_option_dependency', error: 'missing_option_dependency',
+      details: { requiredDraftPath: 'machine' } };
+    const { createActionExecutor } = await import('../actions/actionExecutor.js');
+    const result = await createActionExecutor(deps).execute('machines.vitals.get', { ...machine.data, view: 'overview' }, ctx);
+    if (!result.ok) return result;
+    const snapshot = MachineVitalsSnapshotV1Schema.safeParse(result.result);
+    if (!snapshot.success) return { ok: false, errorCode: 'invalid_action_output', error: 'invalid_action_output' };
+    const disk = snapshot.data.sample?.disk;
+    if (!disk?.reported) return { ok: false, errorCode: 'machine_volumes_unavailable', error: 'machine_volumes_unavailable' };
+    return { ok: true, result: disk.volumes.map(volume => ({ value: volume.id, label: volume.label, description: volume.mount })) };
+  }
 
   const inputTypeIdentity = parseInputTypeOptionsSourceId(optionsSourceId);
   if (inputTypeIdentity) {

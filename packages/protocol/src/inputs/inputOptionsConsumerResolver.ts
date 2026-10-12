@@ -4,7 +4,7 @@ import { resolveWorkflowDefinitionRefV1 } from '../workflows/workflowDefinitionR
 import { WorkflowDefinitionGetResultV1Schema, WorkflowDefinitionListResultV1Schema } from '../workflows/actionsV1.js';
 import { WidgetInstanceActionOutputSchemasV1 } from '../widgets/actionsV1.js';
 import { readBuiltinWidgetDescriptorV1 } from '../widgets/builtinWidgetDescriptorV1.js';
-import { admitWidgetActionSurfaceV1 } from '../widgets/widgetActionScopeV1.js';
+import { admitWidgetActionSurfaceV1, readWidgetActionAccountScopeAdmissionV1 } from '../widgets/widgetActionScopeV1.js';
 import { createCanonicalJsonSigningInput } from '../crypto/canonicalJson.js';
 import { ActionExecuteFailureSchema, type ActionExecuteFailure } from '../actions/actionExecutionResult.js';
 import type { ActionExecutorContext, ActionExecutorDeps } from '../actions/executor/types.js';
@@ -19,8 +19,16 @@ export async function resolveInputOptionsConsumerField(params: Readonly<{
   if (consumer.kind === 'widget') {
     const native = readBuiltinWidgetDescriptorV1(consumer.definition);
     if (native) {
-      const refused = await admitWidgetActionSurfaceV1(deps, consumer.surface, context);
-      if (refused) return refused;
+      // Builtin field metadata belongs to the host, not a saved core-page layout.
+      // Add/Edit and untouched presets have no Artifact yet. Their choices still
+      // run under captured Account admission and the options source's own authority.
+      if (consumer.surface.owner.kind === 'corePage') {
+        const admission = readWidgetActionAccountScopeAdmissionV1(deps, consumer.surface, context);
+        if (!admission.ok) return admission;
+      } else {
+        const refused = await admitWidgetActionSurfaceV1(deps, consumer.surface, context);
+        if (refused) return refused;
+      }
       if (consumer.selectedSession && consumer.selectedSession.serverId !== consumer.surface.serverId)
         return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
       return native.inputs?.fields.find(field => field.path === fieldPath) ?? null;
