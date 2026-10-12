@@ -4838,7 +4838,10 @@ export async function createAutomation(params: {
     const serverIdentityId = await resolveAutomationDurablePushServerIdentityId(
         durablePushEvent?.trigger.kind === "pluginEvent" ? durablePushEvent.trigger : null,
     );
-    const create = async () => await inTx((tx) => createAutomationInTx(tx, { ...params, serverIdentityId }));
+    const create = async () => await inTx((tx) => createAutomationInTx(tx, { ...params, serverIdentityId }), {
+        // Run-lifecycle watcher definitions compose with source Run transitions across Accounts.
+        isolationLevel: "Serializable",
+    });
     try {
         return await create();
     } catch (error) {
@@ -4850,7 +4853,10 @@ export async function createAutomation(params: {
             tx,
             accountId: params.accountId,
             input: currentInput,
-        }));
+        }), {
+            // Run-lifecycle watcher definitions compose with source Run transitions across Accounts.
+            isolationLevel: "Serializable",
+        });
         if (!rejoined) {
             const identityIsBound = await db.automation.findUnique({
                 where: { id: params.input.automationId },
@@ -5282,6 +5288,9 @@ export async function updateAutomation(params: {
         });
 
         return updated;
+    }, {
+        // Run-lifecycle watcher definitions compose with source Run transitions across Accounts.
+        isolationLevel: "Serializable",
     });
 }
 
@@ -5659,6 +5668,9 @@ export async function reconcileAutomationDefinition(params: Readonly<{
             previousAssignments: existing.assignments,
         });
         return result;
+    }, {
+        // Run-lifecycle watcher definitions compose with source Run transitions across Accounts.
+        isolationLevel: "Serializable",
     });
 }
 
@@ -5741,6 +5753,9 @@ export async function createAutomationTrigger(params: Readonly<{
             cursor,
         });
         return updated;
+    }, {
+        // Run-lifecycle watcher definitions compose with source Run transitions across Accounts.
+        isolationLevel: "Serializable",
     });
     try {
         return await create();
@@ -5752,7 +5767,10 @@ export async function createAutomationTrigger(params: Readonly<{
                 accountId: params.accountId,
                 automationId: params.automationId,
                 request,
-            }),
+            }), {
+                // Run-lifecycle watcher definitions compose with source Run transitions across Accounts.
+                isolationLevel: "Serializable",
+            },
         );
         if (!rejoined) {
             const identityIsBound = await db.automationTrigger.findUnique({
@@ -5983,6 +6001,9 @@ export async function updateAutomationTrigger(params: Readonly<{
             cursor,
         });
         return updated;
+    }, {
+        // Run-lifecycle watcher definitions compose with source Run transitions across Accounts.
+        isolationLevel: "Serializable",
     });
 }
 
@@ -6055,6 +6076,9 @@ export async function deleteAutomationTrigger(params: Readonly<{
             cursor,
         });
         return updated;
+    }, {
+        // Run-lifecycle watcher definitions compose with source Run transitions across Accounts.
+        isolationLevel: "Serializable",
     });
 }
 
@@ -6062,8 +6086,11 @@ export async function deleteAutomation(params: {
     accountId: string;
     automationId: string;
 
-}): Promise<boolean> {
-    return await inTx(async (tx) => deleteAutomationTx(tx, params));
+}): Promise<Readonly<{ removedRevision: number }> | false> {
+    return await inTx(async (tx) => deleteAutomationTx(tx, params), {
+        // Run-lifecycle watcher definitions compose with source Run transitions across Accounts.
+        isolationLevel: "Serializable",
+    });
 }
 
 /** Session deletion composes the same soft-deletion owner in its transaction. */
@@ -6071,7 +6098,7 @@ export async function deleteAutomationTx(tx: Tx, params: {
     accountId: string;
     automationId: string;
 
-}): Promise<boolean> {
+}): Promise<Readonly<{ removedRevision: number }> | false> {
         const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
         if (accountFence.status !== "ready") return false;
         const existing = await loadAutomationTx(tx, {
@@ -6149,7 +6176,7 @@ export async function deleteAutomationTx(tx: Tx, params: {
             });
         });
 
-        return true;
+        return { removedRevision: existing.templateVersion };
 }
 
 /**

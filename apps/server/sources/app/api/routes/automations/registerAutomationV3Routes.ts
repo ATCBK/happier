@@ -494,7 +494,7 @@ export function registerAutomationV3Routes(
             automationId: request.params.id,
         });
         if (!deleted) return reply.code(404).send({ error: "automation_not_found" });
-        return reply.send(AutomationDeleteResponseSchema.parse({ ok: true }));
+        return reply.send(AutomationDeleteResponseSchema.parse({ ok: true, removedRevision: deleted.removedRevision }));
     });
 
     app.post("/v3/automations/:id/pause", {
@@ -655,7 +655,10 @@ export function registerAutomationV3Routes(
             machineId: body.machineId })) return reply.code(401).send(null);
         try {
             const results = await inTx(tx => admitExecutionRunLifecycleAutomationRunsTx({ tx, accountId: request.userId,
-                machineId: body.machineId, occurrence: body.occurrence }));
+                machineId: body.machineId, occurrence: body.occurrence }), {
+                    // Execution-source lifecycle evidence and watcher definitions must share admission currentness.
+                    isolationLevel: "Serializable",
+                });
             return { ok: true, consumed: results.every(result => result.result.kind !== "ineligible") };
         } catch (error) {
             if (!isAutomationDefinitionValidationError(error)) throw error;
