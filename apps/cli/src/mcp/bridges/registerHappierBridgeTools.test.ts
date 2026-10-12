@@ -29,6 +29,7 @@ describe('registerHappierBridgeTools', () => {
 
     const forwarded: any[] = [];
     registerHappierBridgeTools(registrar as any, {
+      tools: listBuiltInHappierTools({ surface: 'agent', isServerFeatureEnabled: () => false }),
       callHttpTool: async (name: string, args: unknown) => {
         forwarded.push({ name, args });
         return { content: [{ type: 'text', text: 'ok' }], isError: false };

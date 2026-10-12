@@ -1,4 +1,3 @@
-import { listBuiltInHappierTools } from '@/agent/tools/happierTools/listBuiltInHappierTools';
 import { z } from 'zod';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { RequestOptions } from '@modelcontextprotocol/sdk/shared/protocol.js';
@@ -105,7 +104,7 @@ export function registerHappierBridgeTools(
   server: ToolRegistrar,
   deps: Readonly<{
     callHttpTool: HappierBridgeToolCaller;
-    tools?: readonly Readonly<{
+    tools: readonly Readonly<{
       name: string;
       title?: string;
       description?: string;
@@ -116,13 +115,7 @@ export function registerHappierBridgeTools(
     }>[];
   }>,
 ): void {
-  // Production bridges forward the upstream exact-runtime catalog. The local
-  // fallback has no exact Home feature fact, so server-backed tools fail closed.
-  const tools = deps.tools ?? listBuiltInHappierTools({
-    surface: 'agent',
-    isServerFeatureEnabled: () => false,
-  });
-  for (const tool of tools) {
+  for (const tool of deps.tools) {
     const meta = {
       description: tool.description ?? tool.title ?? tool.name,
       title: tool.title ?? tool.name,
