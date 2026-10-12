@@ -4,6 +4,26 @@ import { describe, expect, it, vi } from 'vitest';
 import { registerDaemonControlRequestTiming } from './registerDaemonControlRequestTiming';
 
 describe('registerDaemonControlRequestTiming', () => {
+  it('suppresses successful ping floods, keeps failures visible, and leaves probes at debug', async () => {
+    const debug = vi.fn();
+    const warn = vi.fn();
+    const app = fastify({ logger: false });
+    registerDaemonControlRequestTiming(app, { debug, warn });
+    let statusCode = 200;
+    app.post('/ping', async (_request, reply) => reply.code(statusCode).send({ ok: statusCode === 200 }));
+    try {
+      await app.inject({ method: 'POST', url: '/ping' });
+      await app.inject({ method: 'POST', url: '/ping' });
+      expect(debug.mock.calls).toEqual([]);
+      expect(warn.mock.calls).toEqual([]);
+      statusCode = 401;
+      await app.inject({ method: 'POST', url: '/ping' });
+      expect(warn.mock.calls).toEqual([['[CONTROL SERVER] Request completed', expect.objectContaining({ route: '/ping', statusCode: 401 })]]);
+      await app.inject({ method: 'HEAD', url: '/never-log-path?token=never-log-query' });
+      expect(debug.mock.calls).toEqual([['[CONTROL SERVER] Request completed', expect.objectContaining({ route: '<unmatched>', method: 'HEAD', statusCode: 404 })]]);
+      expect(JSON.stringify([debug.mock.calls, warn.mock.calls])).not.toContain('never-log');
+    } finally { await app.close(); }
+  });
   it('logs only the registered route template around the real request lifecycle', async () => {
     let nowMs = 100;
     const debug = vi.fn();
@@ -27,14 +47,6 @@ describe('registerDaemonControlRequestTiming', () => {
 
       expect(response.statusCode).toBe(200);
       expect(debug.mock.calls).toEqual([
-        [
-          '[CONTROL SERVER] Request received',
-          {
-            requestId: expect.any(String),
-            method: 'POST',
-            route: '/session/:sessionId/lifecycle',
-          },
-        ],
         [
           '[CONTROL SERVER] Request completed',
           {
@@ -66,14 +78,6 @@ describe('registerDaemonControlRequestTiming', () => {
 
       expect(response.statusCode).toBe(404);
       expect(debug.mock.calls).toEqual([
-        [
-          '[CONTROL SERVER] Request received',
-          {
-            requestId: expect.any(String),
-            method: 'GET',
-            route: '<unmatched>',
-          },
-        ],
         [
           '[CONTROL SERVER] Request completed',
           {

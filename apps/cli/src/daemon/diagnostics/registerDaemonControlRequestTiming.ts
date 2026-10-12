@@ -13,6 +13,7 @@ export function registerDaemonControlRequestTiming(
   app: FastifyInstance,
   input: Readonly<{
     debug: (message: string, data: Readonly<Record<string, unknown>>) => void;
+    warn?: (message: string, data: Readonly<Record<string, unknown>>) => void;
     nowMs?: () => number;
   }>,
 ): void {
@@ -22,18 +23,18 @@ export function registerDaemonControlRequestTiming(
   app.addHook('onRequest', async (request) => {
     const route = readSafeRoute(request);
     timings.set(request, { receivedAtMs: nowMs(), route });
-    input.debug('[CONTROL SERVER] Request received', {
-      requestId: request.id,
-      method: request.method,
-      route,
-    });
   });
 
   app.addHook('onResponse', async (request, reply) => {
     const timing = timings.get(request);
     if (!timing) return;
     timings.delete(request);
-    input.debug('[CONTROL SERVER] Request completed', {
+    if (timing.route === '/ping' && reply.statusCode < 400) return;
+    // Discovery probes are debug noise; actual route refusals and server
+    // failures remain visible through the existing file-log level owner.
+    const log = reply.statusCode >= 500 || reply.statusCode >= 400 && timing.route !== '<unmatched>'
+      ? input.warn ?? input.debug : input.debug;
+    log('[CONTROL SERVER] Request completed', {
       requestId: request.id,
       method: request.method,
       route: timing.route,
