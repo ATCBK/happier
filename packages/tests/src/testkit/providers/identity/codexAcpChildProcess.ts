@@ -1,9 +1,9 @@
 import { basename } from 'node:path';
 
 import {
-  listProcessSnapshot,
-  type ProcessSnapshotEntry,
-} from '../../../../../../apps/cli/src/daemon/processSnapshotCache';
+  readProcessCensus,
+  type ProcessCensusRow,
+} from '../../../../../../apps/cli/src/processes/census/processCensus';
 import {
   readProcessIdentityByPid,
 } from '../../../../../../apps/cli/src/daemon/processIdentity';
@@ -12,17 +12,18 @@ import { tokenizeObservedProcessCommand } from './processCommand';
 type ExactProcessIdentity = NonNullable<Awaited<ReturnType<typeof readProcessIdentityByPid>>>;
 
 export type CodexAcpChildProcessObserverDependencies = Readonly<{
-  listProcessSnapshot?: () => Promise<readonly ProcessSnapshotEntry[]>;
+  readProcessCensus?: typeof readProcessCensus;
   readProcessIdentityByPid?: (pid: number) => Promise<ExactProcessIdentity | null>;
   expectedExecutable?: string;
 }>;
 
 function collectDescendantPids(
   runnerPid: number,
-  processes: readonly ProcessSnapshotEntry[],
+  processes: readonly Pick<ProcessCensusRow, 'pid' | 'ppid'>[],
 ): number[] {
   const childrenByParent = new Map<number, number[]>();
   for (const process of processes) {
+    if (process.ppid === null) continue;
     const children = childrenByParent.get(process.ppid);
     if (children) children.push(process.pid);
     else childrenByParent.set(process.ppid, [process.pid]);
@@ -88,9 +89,11 @@ export async function observeExactCodexAcpChildProcess(
   pid: number;
   processStartTimeMs: number;
 }> | null> {
-  const processes = await (dependencies.listProcessSnapshot ?? (
-    async () => await listProcessSnapshot({ ttlMs: 0 })
-  ))();
+  const snapshot = await (dependencies.readProcessCensus ?? readProcessCensus)({ freshness: 'fresh' });
+  if (snapshot.status !== 'ok') {
+    throw new Error(`Codex ACP child process census unavailable: ${snapshot.reason}`);
+  }
+  const processes = snapshot.rows;
   const descendantPids = collectDescendantPids(params.runnerPid, processes);
   const readIdentity = dependencies.readProcessIdentityByPid ?? readProcessIdentityByPid;
   const configuredExecutable = dependencies.expectedExecutable

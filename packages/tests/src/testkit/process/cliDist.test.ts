@@ -1939,6 +1939,30 @@ describe('ensureCliDistBuilt', () => {
     expect(rebuildCalls).toBe(1);
   });
 
+  it('accepts third-party runtime trees with absent declaration exports without rebuilding', async () => {
+    const repoRoot = await createRepoRoot();
+    const agentsDir = join(repoRoot, 'apps', 'cli', 'node_modules', '@happier-dev', 'agents');
+    await writeFile(join(agentsDir, 'package.json'), JSON.stringify({
+      name: '@happier-dev/agents', dependencies: { 'cbor-x': '1.6.0' },
+    }));
+    const dependencyDir = join(agentsDir, 'node_modules', 'cbor-x');
+    await mkdir(dependencyDir, { recursive: true });
+    await writeFile(join(dependencyDir, 'package.json'), JSON.stringify({
+      name: 'cbor-x', version: '1.6.0', types: './index.d.ts',
+      exports: { '.': { import: { types: './index.d.ts', default: './index.js' },
+        require: { types: './index.d.cts', default: './index.cjs' } } },
+    }));
+    await writeFile(join(dependencyDir, 'index.js'), 'export const decode = () => {};\n');
+    await writeFile(join(dependencyDir, 'index.cjs'), 'exports.decode = () => {};\n');
+    let rebuildCalls = 0;
+    await ensureCliSharedDepsBuilt(
+      { testDir: join(repoRoot, '.project'), env: process.env },
+      { repoRoot, skipSourceFreshnessCheck: true, maxBuildAttempts: 1,
+        runCommand: async () => { rebuildCalls += 1; } },
+    );
+    expect(rebuildCalls).toBe(0);
+  });
+
   it('accepts extensionless main files in bundled runtime dependency trees', async () => {
     const repoRoot = await createRepoRoot();
     const workspaceCliCommonPackageJsonPath = join(repoRoot, 'packages', 'cli-common', 'package.json');
@@ -2001,6 +2025,7 @@ describe('ensureCliDistBuilt', () => {
       JSON.stringify(
         {
           name: 'extract-zip',
+          version: '2.0.1',
           main: './index.js',
           dependencies: {
             debug: '4.3.7',
@@ -2019,6 +2044,7 @@ describe('ensureCliDistBuilt', () => {
       JSON.stringify(
         {
           name: 'debug',
+          version: '4.3.7',
           main: './index.js',
           dependencies: {
             ms: '2.1.3',
@@ -2037,6 +2063,7 @@ describe('ensureCliDistBuilt', () => {
       JSON.stringify(
         {
           name: 'ms',
+          version: '2.1.3',
           main: './index',
         },
         null,

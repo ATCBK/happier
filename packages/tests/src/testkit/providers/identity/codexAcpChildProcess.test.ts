@@ -1,15 +1,36 @@
 import { describe, expect, it } from 'vitest';
 
 import { observeExactCodexAcpChildProcess } from './codexAcpChildProcess';
+import type { ProcessCensusRow, ProcessCensusSnapshot } from '../../../../../../apps/cli/src/processes/census/processCensus';
+
+function okCensus<T extends Pick<ProcessCensusRow, 'pid' | 'ppid'>>(rows: readonly T[]): ProcessCensusSnapshot {
+  return {
+    status: 'ok', capturedAtMs: 0, logicalCpus: 1,
+    rows: rows.map((row) => ({ ...row, name: 'fixture', start: { startTimeMs: 1 }, principal: null, memory: null, cpuTimeUs: null })),
+  };
+}
 
 describe('exact Codex ACP child-process observation', () => {
+  it('reports unavailable OS census instead of omitting child identity evidence', async () => {
+    await expect(observeExactCodexAcpChildProcess(
+      { runnerPid: 100 },
+      { readProcessCensus: async () => ({ status: 'unavailable', reason: 'read_failed' }) },
+    )).rejects.toThrow('read_failed');
+  });
+
+  it('preserves successful empty census as an unobserved child', async () => {
+    await expect(observeExactCodexAcpChildProcess(
+      { runnerPid: 100 }, { readProcessCensus: async () => okCensus([]) },
+    )).resolves.toBeNull();
+  });
+
   it('rejects an undifferentiated sole descendant', async () => {
     await expect(observeExactCodexAcpChildProcess(
       { runnerPid: 100 },
       {
-        listProcessSnapshot: async () => [
+        readProcessCensus: async () => okCensus([
           { pid: 101, ppid: 100, name: 'node', cmd: 'node worker.js', cpu: 0, memory: 0 },
-        ],
+        ]),
         readProcessIdentityByPid: async () => ({
           pid: 101,
           ppid: 100,
@@ -24,10 +45,10 @@ describe('exact Codex ACP child-process observation', () => {
     await expect(observeExactCodexAcpChildProcess(
       { runnerPid: 100 },
       {
-        listProcessSnapshot: async () => [
+        readProcessCensus: async () => okCensus([
           { pid: 101, ppid: 100, name: 'sh', cmd: 'sh wrapper', cpu: 0, memory: 0 },
           { pid: 102, ppid: 101, name: 'codex-acp', cmd: '/opt/bin/codex-acp --stdio', cpu: 0, memory: 0 },
-        ],
+        ]),
         readProcessIdentityByPid: async (pid) => pid === 102
           ? {
               pid,
@@ -50,14 +71,14 @@ describe('exact Codex ACP child-process observation', () => {
       { runnerPid: 200 },
       {
         expectedExecutable: 'C:\\tools\\private-codex-wrapper.cmd',
-        listProcessSnapshot: async () => [
+        readProcessCensus: async () => okCensus([
           {
             pid: 201,
             ppid: 200,
             name: 'private-codex-wrapper.exe',
             cmd: undefined,
           },
-        ],
+        ]),
         readProcessIdentityByPid: async () => ({
           pid: 201,
           ppid: 200,
@@ -78,7 +99,7 @@ describe('exact Codex ACP child-process observation', () => {
     await expect(observeExactCodexAcpChildProcess(
       { runnerPid: 300 },
       {
-        listProcessSnapshot: async () => processes,
+        readProcessCensus: async () => okCensus(processes),
         readProcessIdentityByPid: async (pid) => ({
           pid,
           ppid: 300,

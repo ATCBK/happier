@@ -13,6 +13,9 @@ import { spawnSync } from 'node:child_process';
 import { basename, dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import ts from 'typescript';
+import {
+  hasBundledWorkspaceRuntimeDependencyTreeHealthy as isBundledWorkspaceRuntimeDependencyTreeHealthy,
+} from '@happier-dev/cli-common/workspaces';
 
 import {
   resolveWorkspaceBundleLockPath,
@@ -368,124 +371,6 @@ function hasCliBundledSharedDepsOutputs(rootDir: string): boolean {
     if (!hasCliBundledWorkspaceDistParity(rootDir, packageName)) return false;
     return isBundledWorkspaceRuntimeDependencyTreeHealthy(resolve(packageDir, 'package.json'));
   });
-}
-
-function collectExternalRuntimeDepNamesFromPackageJson(packageJson: any): ReadonlyArray<{ name: string; optional: boolean }> {
-  const deps = packageJson?.dependencies ?? {};
-  const optionalDeps = packageJson?.optionalDependencies ?? {};
-
-  const required = Object.keys(deps)
-    .filter((name) => typeof name === 'string' && !name.startsWith('@happier-dev/'))
-    .map((name) => ({ name, optional: false }));
-  const optional = Object.keys(optionalDeps)
-    .filter((name) => typeof name === 'string' && !name.startsWith('@happier-dev/'))
-    .map((name) => ({ name, optional: true }));
-
-  return [...required, ...optional];
-}
-
-function collectPackageJsonRelativeFileTargets(value: unknown, result: Set<string>): void {
-  if (typeof value === 'string') {
-    if (value.startsWith('./') && !value.includes('*')) {
-      result.add(value.slice(2));
-    }
-    return;
-  }
-  if (!value || typeof value !== 'object') return;
-  if (Array.isArray(value)) {
-    for (const item of value) collectPackageJsonRelativeFileTargets(item, result);
-    return;
-  }
-  for (const nested of Object.values(value)) collectPackageJsonRelativeFileTargets(nested, result);
-}
-
-function doesPackageRelativeFileTargetExist(packageDir: string, relativeTarget: string): boolean {
-  const absoluteTargetPath = resolve(packageDir, relativeTarget);
-  if (existsSync(absoluteTargetPath)) return true;
-
-  const extensionCandidates = ['', '.js', '.mjs', '.cjs', '.json', '.node'];
-  const hasExplicitExtension = /\.[^/\\]+$/u.test(absoluteTargetPath);
-  if (!hasExplicitExtension) {
-    for (const extension of extensionCandidates) {
-      if (existsSync(`${absoluteTargetPath}${extension}`)) return true;
-    }
-    for (const extension of extensionCandidates) {
-      if (existsSync(resolve(absoluteTargetPath, `index${extension}`))) return true;
-    }
-  }
-
-  return false;
-}
-
-function hasBundledWorkspacePackageReferencedFiles(packageJsonPath: string): boolean {
-  if (!existsSync(packageJsonPath)) return false;
-
-  let pkg: any;
-  try {
-    pkg = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
-  } catch {
-    return false;
-  }
-
-  const packageDir = dirname(packageJsonPath);
-  const relativeFileTargets = new Set<string>();
-  collectPackageJsonRelativeFileTargets(pkg.main, relativeFileTargets);
-  collectPackageJsonRelativeFileTargets(pkg.module, relativeFileTargets);
-  collectPackageJsonRelativeFileTargets(pkg.types, relativeFileTargets);
-  collectPackageJsonRelativeFileTargets(pkg.exports, relativeFileTargets);
-
-  for (const relPath of relativeFileTargets) {
-    if (!doesPackageRelativeFileTargetExist(packageDir, relPath)) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
-function isBundledWorkspaceRuntimeDependencyTreeHealthy(
-  packageJsonPath: string,
-  opts?: { visited?: Set<string> },
-): boolean {
-  if (!existsSync(packageJsonPath)) return false;
-
-  const visited = opts?.visited ?? new Set<string>();
-  if (visited.has(packageJsonPath)) return true;
-  visited.add(packageJsonPath);
-
-  let pkg: any;
-  try {
-    pkg = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
-  } catch {
-    return false;
-  }
-
-  if (!hasBundledWorkspacePackageReferencedFiles(packageJsonPath)) {
-    return false;
-  }
-
-  const packageDir = dirname(packageJsonPath);
-  const deps = collectExternalRuntimeDepNamesFromPackageJson(pkg);
-
-  for (const dep of deps) {
-    const depPackageDir = resolve(packageDir, 'node_modules', ...dep.name.split('/'));
-    if (!existsSync(depPackageDir)) {
-      if (dep.optional) continue;
-      return false;
-    }
-
-    const depPackageJsonPath = resolve(depPackageDir, 'package.json');
-    if (!existsSync(depPackageJsonPath)) {
-      if (dep.optional) continue;
-      return false;
-    }
-
-    if (!isBundledWorkspaceRuntimeDependencyTreeHealthy(depPackageJsonPath, { visited })) {
-      return false;
-    }
-  }
-
-  return true;
 }
 
 function resolveCliSharedDepSourcePaths(rootDir: string, packageName: CliSharedDepPackageName): string[] {
