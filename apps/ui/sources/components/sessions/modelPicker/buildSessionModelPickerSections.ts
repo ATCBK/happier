@@ -54,7 +54,6 @@ export function withSessionModelSourceSuffixes(
 ): ReadonlyArray<SessionModelPickerSection> {
     const sourcesByName = new Map<string, Set<string>>();
     for (const section of sections) {
-        if (section.id === favoritesSectionId) continue;
         for (const option of section.options) {
             if (!option.source) continue;
             const name = option.label.trim().toLowerCase();
