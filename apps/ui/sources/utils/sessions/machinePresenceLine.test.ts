@@ -1,0 +1,59 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('@/text', async () => {
+  const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
+  return createTextModuleMock({ translate: (key: string) => `t:${key}` });
+});
+
+import {
+  clearMachineRequestReachabilityForTest,
+  recordMachineRequestFailed,
+} from '@/sync/domains/machines/reachability/machineReachability';
+import { describeMachinePresenceLine } from './machinePresenceLine';
+
+afterEach(() => clearMachineRequestReachabilityForTest());
+
+describe('describeMachinePresenceLine', () => {
+  const scope = { serverId: 'home', accountId: 'presence-account' };
+  const now = Date.now();
+  const fresh = { id: 'machine', active: true, activeAt: now - 1_000 };
+  const stale = {
+    id: 'machine',
+    active: true,
+    activeAt: now - 60 * 60 * 1_000,
+  };
+
+  it('says a machine with a fresh heartbeat that this Home could not reach is unreachable from here, not offline', () => {
+    // The daemon is alive (fresh heartbeat), but this Home's last request to it failed after that.
+    recordMachineRequestFailed({
+      serverId: 'home',
+      accountId: scope.accountId,
+      machineId: 'machine',
+      observedAtMs: now,
+    });
+    const line = describeMachinePresenceLine(fresh, now, null, scope);
+    expect(line.online).toBe(false);
+    expect(line.label).toBe('t:settingsOverview.machineUnreachableFromHome');
+  });
+
+  it('keeps "Offline · last seen" for a stale heartbeat, failed request or not', () => {
+    expect(describeMachinePresenceLine(stale, now, null, scope).label).toBe(
+      't:settingsOverview.machineOffline',
+    );
+    recordMachineRequestFailed({
+      serverId: 'home',
+      accountId: scope.accountId,
+      machineId: 'machine',
+      observedAtMs: now,
+    });
+    expect(describeMachinePresenceLine(stale, now, null, scope).label).toBe(
+      't:settingsOverview.machineOffline',
+    );
+  });
+
+  it('reads Online for a fresh heartbeat this Home can reach', () => {
+    const line = describeMachinePresenceLine(fresh, now, null, scope);
+    expect(line.online).toBe(true);
+    expect(line.label).toBe('t:settingsOverview.machineOnline');
+  });
+});

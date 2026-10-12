@@ -6,7 +6,10 @@ type InvalidateSyncCycleOutcome =
     | Readonly<{ ok: true }>
     | Readonly<{ ok: false; error: unknown }>;
 
-type InvalidateSyncCyclePending = (outcome: InvalidateSyncCycleOutcome) => void;
+type InvalidateSyncCyclePending = Readonly<{
+    settleOnFirstAttempt: boolean;
+    notify: (outcome: InvalidateSyncCycleOutcome) => void;
+}>;
 
 const INVALIDATE_SYNC_CYCLE_SUCCEEDED: InvalidateSyncCycleOutcome = { ok: true };
 
@@ -101,17 +104,20 @@ export class InvalidateSync {
         this._doSync();
     }
 
-    async invalidateAndAwait() {
+    async invalidateAndAwait(opts?: { settleOnFirstAttempt?: boolean }) {
         if (this._stopped) {
             return;
         }
         await new Promise<void>((resolve, reject) => {
-            const pending: InvalidateSyncCyclePending = (outcome) => {
-                if (!outcome.ok) {
-                    reject(outcome.error);
-                    return;
-                }
-                resolve();
+            const pending: InvalidateSyncCyclePending = {
+                settleOnFirstAttempt: opts?.settleOnFirstAttempt === true,
+                notify: (outcome) => {
+                    if (!outcome.ok) {
+                        reject(outcome.error);
+                        return;
+                    }
+                    resolve();
+                },
             };
             if (this._invalidated && this._hasStartedCommandThisCycle) {
                 this._nextCyclePendings.push(pending);
@@ -166,10 +172,10 @@ export class InvalidateSync {
 
     private _notifyPendings = () => {
         for (let pending of this._cyclePendings) {
-            pending(INVALIDATE_SYNC_CYCLE_SUCCEEDED);
+            pending.notify(INVALIDATE_SYNC_CYCLE_SUCCEEDED);
         }
         for (let pending of this._nextCyclePendings) {
-            pending(INVALIDATE_SYNC_CYCLE_SUCCEEDED);
+            pending.notify(INVALIDATE_SYNC_CYCLE_SUCCEEDED);
         }
         for (let pending of this._queuePendings) {
             pending(SYNC_QUEUE_STOPPED);
@@ -179,11 +185,13 @@ export class InvalidateSync {
         this._queuePendings = [];
     }
 
-    private _notifyCyclePendings = (outcome: InvalidateSyncCycleOutcome) => {
+    private _notifyCyclePendings = (outcome: InvalidateSyncCycleOutcome, firstAttemptOnly = false) => {
+        const retained: InvalidateSyncCyclePending[] = [];
         for (let pending of this._cyclePendings) {
-            pending(outcome);
+            if (firstAttemptOnly && !pending.settleOnFirstAttempt) retained.push(pending);
+            else pending.notify(outcome);
         }
-        this._cyclePendings = [];
+        this._cyclePendings = retained;
     }
 
     private _promoteNextCyclePendings = () => {
@@ -216,6 +224,9 @@ export class InvalidateSync {
                 await this._command();
                 return;
             } catch (e) {
+                // Bootstrap observes a settled attempt; ordinary refresh callers
+                // still wait for this cycle's retry recovery.
+                this._notifyCyclePendings({ ok: false, error: e }, true);
                 failuresCount += 1;
 
                 if (!this._shouldRetry(e, failuresCount)) {

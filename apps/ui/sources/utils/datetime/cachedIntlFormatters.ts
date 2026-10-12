@@ -36,3 +36,17 @@ export function formatWithCachedDateTimeFormatter(
 ): string {
     return getCachedDateTimeFormatter(locales, options).format(date);
 }
+
+/** A calendar day as "Oct 18"; the year appears only when it is not the current one ("Jan 3, 2027"). */
+export function formatCalendarDate(
+    date: Date | number,
+    locales?: Intl.LocalesArgument,
+    now: Date | number = Date.now(),
+): string {
+    const sameYear = new Date(date).getFullYear() === new Date(now).getFullYear();
+    return formatWithCachedDateTimeFormatter(date, locales, {
+        day: 'numeric',
+        month: 'short',
+        ...(sameYear ? {} : { year: 'numeric' }),
+    });
+}

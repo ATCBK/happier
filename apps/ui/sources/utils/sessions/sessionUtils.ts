@@ -41,6 +41,7 @@ import {
 import { readSessionDisplayTitleField } from '@/sync/state/selectors';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { readSessionListRenderableOwnerMetadataView } from '@/sync/domains/session/listing/sessionListRenderableSessionProjection';
+import { readSessionListRowForServerId } from '@/sync/domains/session/listing/sessionListRowStateLookup';
 import { t } from '@/text';
 import { formatWithCachedDateTimeFormatter } from '@/utils/datetime/cachedIntlFormatters';
 import { formatSessionPath } from './formatPathRelativeToHome';
@@ -137,6 +138,15 @@ function readDisplayOwnerMetadata(session: SessionDisplayNameSource): ReturnType
     return 'ownerMetadataView' in session || 'agentState' in session
         ? readSessionOwnerMetadataView(session)
         : readSessionListRenderableOwnerMetadataView(session);
+}
+
+/**
+ * The machine a Session ran on, as the Session itself recorded it: the name every surface falls back
+ * to while that Machine's record is not loaded, so one page never names it in one pane and not the next.
+ */
+export function readSessionOwnerHostName(session: SessionDisplayNameSource): string | null {
+    const host = readDisplayOwnerMetadata(session)?.host?.trim();
+    return host ? host : null;
 }
 
 function readPrivateDisplayMachineTarget(
@@ -401,8 +411,8 @@ export function presentSessionAwarenessV1(
     if (state === 'archived') {
         return { state: 'waiting', statusText: t('status.online'), quiet: true };
     }
-    // Every state the content owner cannot read stays visible and quiet: guessing an operational
-    // state from facts we cannot see is how a blocked session reports itself as working.
+    // Settled content blockers keep their recovery copy; unreadable content must not be guessed
+    // into an operational state such as working.
     if (state === 'locked' || state === 'preparing' || state === 'repair_needed' || state === 'access_pending' || state === 'setup_required' || state === 'content_unavailable') {
         return { ...presentUnreadableSessionContent(awareness.encryption), quiet: false };
     }
@@ -422,7 +432,7 @@ export function presentSessionAwarenessV1(
             quiet: false,
         };
     }
-    if (state === 'unknown') return { state: 'unknown', statusText: t('status.unknown'), quiet: false };
+    if (state === 'unknown') return { state: 'unknown', statusText: '—', quiet: true };
     if (state === 'stale') return { state: 'stale', statusText: t('status.awaitingUpdates'), quiet: false };
     switch (state) {
         case 'failed': return { state: 'failed', statusText: t('status.error'), quiet: false };
@@ -590,6 +600,16 @@ export function getSessionName(session: SessionDisplayNameSource, serverId?: str
         const name = ownerMetadata.name.trim();
         if (name.length > 0) return name;
     }
+    // The held row already owns the transcript projection. Full Sessions (headers and notices)
+    // reuse its Home-qualified title instead of scanning the transcript or deriving another name.
+    if (session.metadata != null && ('agentState' in session || 'ownerMetadataView' in session)) {
+        const home = serverId?.trim() || session.serverId?.trim() || getActiveServerId();
+        const row = readSessionListRowForServerId(storage.getState().sessionListRowsByServerId, home, session.id);
+        const title = readSessionDisplayTitleField(session, {
+            fallbackTitle: readSessionDisplayTitleField(row).value,
+        }).value;
+        if (title) return title;
+    }
     if (readSessionDirectoryKind(ownerMetadata) === 'managed') {
         // A no-folder session is not named after its private folder.
         return t('session.folderless.untitledChat');
@@ -655,7 +675,7 @@ export function getSessionWorkContext(session: SessionStatusSource, serverId?: s
     const machineId = target?.machineId ?? ownerMetadata?.machineId;
     const machine = machineId ? state.machineListByServerId[home]?.find(item => item.id === machineId)
         ?? (home === getActiveServerId() ? state.machines[machineId] : undefined) : undefined;
-    const machineName = getMachineDisplayName(machine) ?? ownerMetadata?.host;
+    const machineName = getMachineDisplayName(machine) ?? readSessionOwnerHostName(session);
     const agentId = readSessionPresentationAgentId(session);
     const agent = agentId ? resolveAgentCatalogProjection(agentId, { enabledAgentIds: [] }).title : null;
     const workspace = !machineName && ownerMetadata && readSessionDirectoryKind(ownerMetadata) !== 'managed'

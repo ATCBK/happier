@@ -6,6 +6,46 @@ import { t } from '@/text';
 export interface MicrophonePermissionResult {
   granted: boolean;
   canAskAgain?: boolean;
+  /** No microphone is connected: nothing was denied, and asking again cannot help until one is. */
+  unavailable?: boolean;
+}
+
+/** The setup-facing reading of one permission result. */
+export type MicrophonePermissionState = 'granted' | 'denied' | 'unavailable' | 'unknown';
+
+export function readMicrophonePermissionState(result: MicrophonePermissionResult): MicrophonePermissionState {
+  if (result.granted) return 'granted';
+  if (result.unavailable === true) return 'unavailable';
+  return result.canAskAgain === false ? 'denied' : 'unknown';
+}
+
+const MICROPHONE_UNAVAILABLE = 'mic_unavailable';
+
+function readErrorName(error: unknown): string {
+  if (!error || typeof error !== 'object') return '';
+  const candidate = error as { name?: unknown; code?: unknown };
+  return typeof candidate.name === 'string' ? candidate.name : typeof candidate.code === 'string' ? candidate.code : '';
+}
+
+/** The platform found no microphone to open (or Voice already said so). */
+export function isMicrophoneUnavailableError(error: unknown): boolean {
+  const name = readErrorName(error);
+  if (name === 'NotFoundError' || name === 'DevicesNotFoundError') return true;
+  return error instanceof Error && error.message === MICROPHONE_UNAVAILABLE;
+}
+
+/**
+ * The one decision on a refused microphone request. A missing device fails as unavailable without
+ * the permission recovery (nothing was denied); a denial presents the platform's recovery once.
+ */
+export function rejectRefusedMicrophone(
+  permission: MicrophonePermissionResult,
+  presentDenied: (canAskAgain: boolean) => void,
+): void {
+  if (permission.granted) return;
+  if (permission.unavailable === true) throw new Error(MICROPHONE_UNAVAILABLE);
+  presentDenied(permission.canAskAgain === true);
+  throw new Error('mic_permission_denied');
 }
 
 export function isPermissionDeniedMicrophoneError(error: unknown): boolean {
@@ -52,6 +92,7 @@ export async function requestMicrophonePermission(): Promise<MicrophonePermissio
         stream.getTracks().forEach(track => track.stop());
         return { granted: true };
       } catch (error: any) {
+        if (isMicrophoneUnavailableError(error)) return { granted: false, unavailable: true };
         // User denied permission or browser doesn't support getUserMedia
         console.error('Web microphone permission denied:', error);
         return { granted: false, canAskAgain: !isPermissionDeniedMicrophoneError(error) };

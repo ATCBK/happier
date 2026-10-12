@@ -6,7 +6,7 @@ import type {
     AgentExecutionTargetV1,
     BackendTargetRefV2,
     RuntimeDescriptorV1,
-    SessionMcpSelectionV1,
+    SessionCapabilitySelectionV1,
     SessionModelSelectionV1,
     SessionSpawnSourceContextV1,
     SessionAuthoringExecutionTargetV2,
@@ -21,7 +21,7 @@ import type { NewSessionAutomationDraft } from '@/sync/domains/automations/autom
 import type { BackendNewSessionOptionStateByTargetKey } from '@/utils/sessions/backendNewSessionOptionState';
 import type { SessionIdentityAdditions } from '@happier-dev/protocol/sessions/identity/sessionBotV1';
 import type { SessionPromptStackV1 } from '@happier-dev/protocol/sessions/context/sessionContextV1';
-import type { SessionInstructionsAuthoringDraft } from '@/sync/ops/promptLibrary/sessionInstructions';
+import type { SessionInstructionsAuthoringDraft } from '@/sync/domains/state/sessionInstructionsDraft';
 import type { ManagedMachineSelectionDraft } from '@/sync/domains/state/newSessionManagedMachineDraft';
 
 export interface TempDataEntry {
@@ -67,7 +67,7 @@ export interface NewSessionData {
     acpSessionModeId?: string | null;
     sessionConfigOptionOverrides?: AcpConfigOptionOverridesV1 | null;
     runtimeDescriptorV1?: RuntimeDescriptorV1 | null;
-    mcpSelection?: SessionMcpSelectionV1 | null;
+    capabilitySelection?: SessionCapabilitySelectionV1 | null;
     automationDraft?: NewSessionAutomationDraft | null;
     backendNewSessionOptionStateByTargetKey?: BackendNewSessionOptionStateByTargetKey;
     agentNewSessionOptionStateByAgentId?: BackendNewSessionOptionStateByTargetKey;

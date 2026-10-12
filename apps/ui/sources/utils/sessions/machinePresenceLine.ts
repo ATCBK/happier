@@ -1,6 +1,6 @@
 import { t } from '@/text';
 import { isMachineOnline } from '@/utils/sessions/machineUtils';
-import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
+import { isMachineReachable, type MachineReachabilityScope } from '@/sync/domains/machines/reachability/machineReachability';
 import { formatLastSeen } from '@/utils/sessions/sessionUtils';
 import type { ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
 import { resolveWorkStatusTone } from '@/components/work/status/resolveWorkStatusTone';
@@ -17,15 +17,14 @@ export type MachinePresenceLine = Readonly<{
  * same wherever it appears. Callers append their own facts after it ("· Update available").
  */
 export function describeMachinePresenceLine(
-    machine: Readonly<{ id?: string; active: boolean; activeAt?: number | null; revokedAt?: number | null }>,
+    machine: Readonly<{ id?: string; active: boolean; activeAt?: number | null; revokedAt?: number | null; presence?: null }>,
     nowMs?: number,
     managedMachine?: ManagedMachineV1 | null,
-    serverId?: string | null,
+    scope?: MachineReachabilityScope | null,
 ): MachinePresenceLine {
+    if (machine.presence === null) return { online: false, label: '' };
     const presenceOnline = isMachineOnline(machine, nowMs);
-    const online = machine.id && serverId
-        ? isMachineReachable(serverId, { ...machine, id: machine.id }, nowMs)
-        : presenceOnline;
+    const online = machine.id ? isMachineReachable(scope, { ...machine, id: machine.id }, nowMs) : false;
     const lastSeen = formatLastSeen(machine.activeAt ?? 0);
     // A fresh heartbeat with a failed request from this Home is a live machine this Home cannot
     // reach, not an offline one ("Offline · last seen just now" contradicts itself). "Offline"

@@ -1,7 +1,8 @@
 import type { Machine } from '@/sync/domains/state/storageTypes';
 
 import { readMachineName } from '@/utils/sessions/machineDisplayNames';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import { isMachineSelectableForFleet } from '@/sync/domains/machines/administration/fleetUnion';
+import type { MachineReachabilityScope } from '@/sync/domains/machines/reachability/machineReachability';
 
 function compareMachinesForPicker(a: Machine, b: Machine): number {
     if (a.active !== b.active) return a.active ? 1 : -1;
@@ -17,6 +18,7 @@ function compareMachinesForPicker(a: Machine, b: Machine): number {
 }
 
 export function resolveMachineActionCandidates(
+    scope: MachineReachabilityScope | null | undefined,
     allMachines: readonly Machine[],
     options: Readonly<{ onlineOnly?: boolean; nowMs?: number }> = {},
 ): Machine[] {
@@ -25,7 +27,7 @@ export function resolveMachineActionCandidates(
     const bestById = new Map<string, Machine>();
 
     for (const machine of allMachines) {
-        if (onlineOnly && !isMachineOnline(machine, nowMs)) continue;
+        if (onlineOnly && !isMachineSelectableForFleet(scope, machine, nowMs)) continue;
 
         // Display names are not identity: distinct registrations remain separately selectable.
         const existing = bestById.get(machine.id);
@@ -38,8 +40,13 @@ export function resolveMachineActionCandidates(
         }
     }
 
+    // The Machines that can work lead, as on the Machines page; inside each presence group the order is the
+    // name, so a heartbeat never reshuffles a list (an open picker also keeps the order it opened with).
+    const online = new Map([...bestById.values()].map(machine => [machine.id, isMachineSelectableForFleet(scope, machine, nowMs)]));
     return [...bestById.values()]
         .sort((a, b) => {
+            const presenceCmp = Number(online.get(b.id)) - Number(online.get(a.id));
+            if (presenceCmp !== 0) return presenceCmp;
             const aLabel = readMachineName(a) ?? a.id;
             const bLabel = readMachineName(b) ?? b.id;
             const labelCmp = aLabel.localeCompare(bLabel);

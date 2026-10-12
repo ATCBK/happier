@@ -1,10 +1,20 @@
 import { isRpcMethodNotAvailableError } from '@happier-dev/protocol/rpcErrors';
 import { t } from '@/text';
+import { HappyError } from './errors';
+import { ConnectedAccountCatalogOperationError } from '@/sync/api/account/connectedAccountCatalogOperationError';
 
 export function getErrorMessage(err: unknown): string {
     if (err === null || err === undefined) return '';
 
     if (typeof err === 'string') return err;
+
+    if (err instanceof HappyError) {
+        if (err.code === 'action_disabled') return t('common.disabled');
+        if (err.code === 'approval_request_created') return t('approvals.status.open');
+    }
+
+    // Its message is a machine reason code; the person needs to know what could not be reached.
+    if (err instanceof ConnectedAccountCatalogOperationError) return t('errors.connectedAccountsUnavailable');
 
     if (isRpcMethodNotAvailableError(err)) {
         return t('errors.daemonUnavailableBody');

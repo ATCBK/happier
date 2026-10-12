@@ -1,7 +1,8 @@
 import { t } from '@/text';
 
 /**
- * How the app names machines. `getMachineDisplayName` names one machine; `resolveMachineDisplayNames`
+ * How the app names machines. `getMachineDisplayName` names one machine, optionally in its inventory;
+ * `resolveMachineDisplayNames`
  * names a set shown together and tells same-named machines apart. Every list, picker and detail
  * title reads these, never its own `displayName || host || id`. A machine is never shown by its raw
  * id: without a name or host it is "Unnamed machine", a machine whose details cannot be read is
@@ -85,13 +86,19 @@ export function unnamedMachineName(): string {
     return t('machine.unnamedMachine');
 }
 
-export function getMachineDisplayName(machine: MachineNameInput): string;
-export function getMachineDisplayName(machine: MachineNameInput | null | undefined): string | null;
-export function getMachineDisplayName(machine: MachineNameInput | null | undefined): string | null {
+export function getMachineDisplayName(machine: MachineNameInput, inventory?: readonly MachineNameSource[]): string;
+export function getMachineDisplayName(machine: MachineNameInput | null | undefined, inventory?: readonly MachineNameSource[]): string | null;
+export function getMachineDisplayName(machine: MachineNameInput | null | undefined, inventory?: readonly MachineNameSource[]): string | null {
     if (!machine) return null;
     if (machine.absence) return t(ABSENT_MACHINE_NAME_KEYS[machine.absence]);
     if (isMachineLocked(machine)) return lockedMachineName();
     if (isMachineDisplayHydrating(machine)) return t('common.loading');
+    // A selected chip keeps the same identity as the list it opens. The list's resolver owns
+    // disambiguation; callers supply its Home inventory rather than reimplementing suffix rules.
+    if (inventory && machine.id) {
+        const name = resolveMachineDisplayNames(inventory).get(machine.id);
+        if (name !== undefined) return name;
+    }
     return readMachineName(machine) ?? unnamedMachineName();
 }
 

@@ -23,4 +23,12 @@ describe('cached Intl date/time formatters', () => {
         expect(constructorSpy).toHaveBeenCalledTimes(2);
         expect(formatSpy).toHaveBeenCalledTimes(3);
     });
+
+    it('names a calendar day without the year only while it is the current year', async () => {
+        const { formatCalendarDate } = await import('./cachedIntlFormatters');
+        const now = Date.parse('2026-10-12T12:00:00Z');
+        expect(formatCalendarDate(Date.parse('2026-10-18T12:00:00Z'), 'en', now)).toBe('Oct 18');
+        expect(formatCalendarDate(Date.parse('2027-01-03T12:00:00Z'), 'en', now)).toBe('Jan 3, 2027');
+        expect(formatCalendarDate(Date.parse('2025-12-30T12:00:00Z'), 'en', now)).toBe('Dec 30, 2025');
+    });
 });

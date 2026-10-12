@@ -14,6 +14,15 @@ function withGraceMs(graceMs: string, fn: () => void): void {
 }
 
 describe('isMachineOnline', () => {
+  it('honors a configured grace window longer than five minutes', () => {
+    withGraceMs('600000', () => {
+      const nowMs = 1_000_000;
+      const machine = { active: false, activeAt: nowMs - 450_000 };
+      expect(isMachineOnline(machine, nowMs)).toBe(true);
+      expect(isMachineOnline({ ...machine, activeAt: nowMs - 600_001 }, nowMs)).toBe(false);
+    });
+  });
+
   it('defaults to a 60s grace window when env is not set', () => {
     withGraceMs('', () => {
       const nowMs = 100_000;

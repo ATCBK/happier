@@ -22,6 +22,24 @@ describe('getMachineDisplayName', () => {
         expect(getMachineDisplayName(null)).toBeNull();
         expect(getMachineDisplayName(undefined)).toBeNull();
     });
+
+    it('keeps a selected machine as distinguishable as its inventory row', () => {
+        const machines = [m('2cd4-machine', 'NLDW4-5-40-40'), m('ae13-machine', 'NLDW4-5-40-40')];
+        expect(getMachineDisplayName(machines[0]!, machines)).toBe('NLDW4-5-40-40 · 2cd4');
+        expect(getMachineDisplayName(m('third-machine', 'Laptop'), machines)).toBe('Laptop');
+        expect(getMachineDisplayName(null, machines)).toBeNull();
+    });
+
+    it('does not let readable inventory context override an unreadable or absent selected machine', () => {
+        const inventory = [m('machine-1', 'Previously readable host')];
+        expect(getMachineDisplayName({ id: 'machine-1', absence: 'removed' }, inventory))
+            .toBe(t('machine.removedMachine'));
+        expect(getMachineDisplayName({
+            id: 'machine-1', metadata: null, availability: { kind: 'locked' },
+        }, inventory)).toBe(t('machine.lockedMachine'));
+        expect(getMachineDisplayName({ id: 'machine-1', metadata: null }, inventory))
+            .toBe(t('common.loading'));
+    });
 });
 
 describe('readMachineName', () => {

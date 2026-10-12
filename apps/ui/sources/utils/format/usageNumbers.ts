@@ -30,7 +30,8 @@ export function formatTokenCountLong(value: number): string {
 export function formatUsageCost(usd: number, currency: string): string {
     if (!isValidUsageNumber(usd)) return '—';
 
-    const maximumFractionDigits = usd < 1 ? 4 : 2;
+    // Cents from a dime up ("$0.63", not "$0.6344"); smaller amounts keep the digits that show them.
+    const maximumFractionDigits = usd < 0.1 ? 4 : 2;
     try {
         return new Intl.NumberFormat(undefined, {
             style: 'currency',

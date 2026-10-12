@@ -34,7 +34,10 @@ describe('usage number formatting', () => {
 
     it('uses one precision rule for usage cost', () => {
         expect(formatUsageCost(0, 'USD')).toBe('$0.00');
-        expect(formatUsageCost(0.1587, 'USD')).toBe('$0.1587');
+        // Cents from a dime up; sub-dime amounts keep the digits that make them non-zero.
+        expect(formatUsageCost(0.6344, 'USD')).toBe('$0.63');
+        expect(formatUsageCost(0.1587, 'USD')).toBe('$0.16');
+        expect(formatUsageCost(0.0587, 'USD')).toBe('$0.0587');
         expect(formatUsageCost(0.0012, 'USD')).toBe('$0.0012');
         expect(formatUsageCost(1, 'USD')).toBe('$1.00');
         expect(formatUsageCost(12.4567, 'USD')).toBe('$12.46');

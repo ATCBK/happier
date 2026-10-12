@@ -16,6 +16,7 @@ import { projectManager } from '@/sync/runtime/orchestration/projectManager';
 import type { ToolCall, ToolCallMessage } from "@happier-dev/session-core/messages";
 import type { SessionMessages } from '@/sync/store/domains/messages';
 import type { PendingMessage, Session } from '@/sync/domains/state/storageTypes';
+import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
 
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
@@ -154,18 +155,58 @@ function createPendingUserMessage(overrides: Partial<PendingMessage> = {}): Pend
     };
 }
 
+describe('shared transient session titles', () => {
+    it('names full Sessions and their roster/list/Talk rows consistently before a summary arrives', async () => {
+        const { getSessionName } = await import('./sessionUtils');
+        const session = createBaseSession({
+            serverId: 'home-a', metadata: { path: '/tmp', host: 'devbox', bot: { kind: 'bot' } },
+        });
+        const row = buildSessionListRenderableFromSession(session, undefined, [{
+            id: 'first-prompt', kind: 'user-text', localId: null, createdAt: 1,
+            text: 'Internal prompt', displayText: '  Plan the\n release  ',
+        }]);
+        storage.setState({ sessionListRowsByServerId: { 'home-a': { [session.id]: row } } });
+
+        expect(getSessionName(row, 'home-a')).toBe('Plan the release');
+        expect(getSessionName(session)).toBe('Plan the release');
+        expect(getSessionName({ ...session, metadata: { ...session.metadata!, name: 'Release bot' } })).toBe('Release bot');
+        expect(getSessionName({ ...session, metadata: { ...session.metadata!, summary: { text: 'Saved title', updatedAt: 2 } } })).toBe('Saved title');
+        const namedRow = { ...row, metadata: { ...row.metadata!, summaryText: 'User  chosen title' } };
+        storage.setState({ sessionListRowsByServerId: { 'home-a': { [session.id]: namedRow } } });
+        expect(getSessionName(session)).toBe(getSessionName(namedRow, 'home-a'));
+    });
+
+    it('keeps transient title lookup within the Session Home and does not revive unreadable metadata', async () => {
+        const { getSessionName } = await import('./sessionUtils');
+        const session = createBaseSession({ serverId: 'home-b', metadata: { path: '/tmp', host: 'devbox' } });
+        const row = createSessionListRenderableSessionFixture({
+            id: session.id, metadata: { path: '/tmp', summaryText: 'Other Home title' },
+        });
+        storage.setState({ sessionListRowsByServerId: { 'home-a': { [session.id]: row } } });
+        expect(getSessionName(session)).toBe('tmp');
+        expect(getSessionName({ ...session, serverId: 'home-a', metadata: null })).toBe('session.untitled');
+    });
+});
+
 describe('getSessionStatus', () => {
     it.each([
         ['encrypted_access_pending', 'access_pending'],
         ['recipient_encryption_setup_required', 'setup_required'],
         ['encrypted_access_needs_repair', 'repair_needed'],
         ['encrypted_content_unavailable', 'content_unavailable'],
-        [undefined, 'unknown'],
     ] as const)('keeps %s visible without working motion', async (encryptedContentAvailability, state) => {
         const { getSessionStatus } = await import('./sessionUtils');
         const session = createBaseSession({ encryptionMode: 'e2ee', encryptedContentAvailability,
             metadata: null, latestTurnStatus: 'in_progress', activeAt: 1_000 });
         expect(getSessionStatus(session, 1_000)).toMatchObject({ state, isPulsing: false, shouldShowStatus: true });
+    });
+    it('keeps undecided content quiet without claiming a runtime state', async () => {
+        const { getSessionStatus } = await import('./sessionUtils');
+        const session = createBaseSession({ encryptionMode: 'e2ee', encryptedContentAvailability: undefined,
+            metadata: null, latestTurnStatus: 'in_progress', activeAt: 1_000 });
+        expect(getSessionStatus(session, 1_000)).toMatchObject({
+            state: 'unknown', statusText: '—', isPulsing: false, shouldShowStatus: false,
+        });
     });
     it('stops working motion while the runtime observation is stale', async () => {
         const { getSessionStatus } = await import('./sessionUtils');
@@ -180,6 +221,15 @@ describe('getSessionStatus', () => {
         expect(status.state).toBe('disconnected');
         expect(status.isConnected).toBe(false);
         expect(status.shouldShowStatus).toBe(true);
+    });
+
+    it('reads a hydrated Session the Home marked inactive as last seen, never as an unknown status', async () => {
+        const { getSessionStatus } = await import('./sessionUtils');
+        // HTTP hydration carries the durable `active: false` but no device-observed presence.
+        const session = createBaseSession({ active: false, presence: undefined, activeAt: 1_000 });
+        const status = getSessionStatus(session, 1_000 + 3 * 60 * 60 * 1_000, 0);
+        expect(status.state).toBe('disconnected');
+        expect(status.statusText).not.toBe('status.unknown');
     });
 
     it('surfaces recoverable session-control unserviceability without Runtime Activity state', async () => {

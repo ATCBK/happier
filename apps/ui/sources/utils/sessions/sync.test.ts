@@ -45,6 +45,32 @@ describe('InvalidateSync.awaitQueue', () => {
 });
 
 describe('InvalidateSync.invalidateAndAwait', () => {
+    it('can settle the first attempt while the same queue continues retrying', async () => {
+        await withFakeTimers(async () => {
+            const error = new RetryableServerResponseError(503, 'temporarily unavailable');
+            const command = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce(undefined);
+            const onRetryFailure = vi.fn();
+            const sync = new InvalidateSync(command, {
+                onRetryFailure,
+                backoff: { minDelayMs: 1000, maxDelayMs: 1000, maxFailureCount: 'infinite' },
+            });
+            let firstError: unknown;
+            const firstAttempt = sync.invalidateAndAwait({ settleOnFirstAttempt: true }).catch(e => { firstError = e; });
+            await vi.advanceTimersByTimeAsync(0);
+            expect(firstError).toBe(error);
+            expect(onRetryFailure).toHaveBeenCalled();
+            expect(command).toHaveBeenCalledTimes(1);
+            let drained = false;
+            const queue = sync.awaitQueue().then(() => { drained = true; });
+            expect(drained).toBe(false);
+            await vi.advanceTimersByTimeAsync(1000);
+            await firstAttempt;
+            await queue;
+            expect(command).toHaveBeenCalledTimes(2);
+            expect(drained).toBe(true);
+        });
+    });
+
     it('retries a transient Home response on its default policy', async () => {
         const command = vi.fn()
             .mockRejectedValueOnce(new RetryableServerResponseError(503, 'temporarily unavailable'))
