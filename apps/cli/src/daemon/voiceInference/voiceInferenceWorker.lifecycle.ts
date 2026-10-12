@@ -556,6 +556,9 @@ export function createVoiceInferenceWorkerLifecycle(params?: VoiceInferenceWorke
             }
           }
           throwIfWarmAborted(warmSignal);
+          if (publicEntry && loadedRuntime.warmModel) {
+            await publicModelPacks!.recordLoaded(packId);
+          }
         } catch (error) {
           try {
             await loadedRuntime.releaseModel?.({

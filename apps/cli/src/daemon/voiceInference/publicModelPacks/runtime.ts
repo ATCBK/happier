@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
+import { lstat, rename } from 'node:fs/promises';
 
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { parseModelPackManifest } from '@happier-dev/protocol/voice/modelPacks/manifest';
@@ -24,6 +25,7 @@ import {
 import packageJson from '../../../../package.json';
 import { readInstalledPluginCatalogSnapshot } from '@/plugins/projection/catalog/installed';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
+import { renameStoragePathNoReplace } from '@/storage/trash/renameStoragePath';
 import type { PluginFinalPolicyCurrentRuntime } from '@/plugins/runtime/policy/facts';
 import {
   clearModelPackPromotionIntent,
@@ -48,6 +50,7 @@ import { resolveDaemonVoiceRuntimeFamilyCapabilities } from '../runtime/runtimeF
 import {
   createDaemonPublicVoiceModelPackStateStore,
   parseInstalledVoiceModelPackMetadataV1,
+  parseStoredInstalledVoiceModelPackMetadataV1,
 } from './state';
 
 const PUBLIC_PACK_RECOVERY_KIND = 'daemon_public_voice_model_pack_state_v1';
@@ -69,6 +72,7 @@ export type DaemonPublicVoiceModelPackEntry = Readonly<{
   installedManifest: ModelPackManifest | null;
   runtimeDescriptor: VoiceModelPackRuntimeV1 | null;
   supportArtifacts: readonly VoiceModelPackSupportArtifactV1[];
+  lastUsedAt?: number;
 }>;
 
 export type DaemonPublicVoiceModelPackRuntime = Readonly<{
@@ -91,7 +95,11 @@ export type DaemonPublicVoiceModelPackRuntime = Readonly<{
     licenseTextDigest: string;
     artifactBinding: VoiceModelPackArtifactBindingV1;
   }>): Promise<DaemonPublicVoiceModelPackEntry>;
-  remove(key: string): Promise<void>;
+  remove(key: string, options?: Readonly<{ retainTo?: string; beforeEffect?: () => Promise<void> }>): Promise<void>;
+  adopt(key: string, directory: string, options?: Readonly<{ metadata: InstalledVoiceModelPackMetadataV1; beforeEffect?: () => Promise<void> }>): Promise<DaemonPublicVoiceModelPackEntry>;
+  /** Called by the worker only after a successful fresh model load. */
+  recordLoaded(key: string): Promise<void>;
+  subscribeChanges(listener: () => void): () => void;
   /** Reload is the existing admission-currentness event for public packs. */
   subscribeInvalidations?: (listener: (changedPluginIds: readonly string[]) => void) => () => void;
 }>;
@@ -170,6 +178,10 @@ export function createDaemonPublicVoiceModelPackRuntime(params: Readonly<{
   });
   const host = params.host ?? defaultHostCapabilities();
   const now = params.now ?? Date.now;
+  const changeListeners = new Set<() => void>();
+  const notifyChanged = () => {
+    for (const listener of changeListeners) listener();
+  };
   const integrityHost = createNodeInstalledModelPackIntegrityHost(params.paths.packsRootDir);
   const verifiedInstallKeys = new Set<string>();
   const verifiedPhysicalFingerprints = new Map<string, string>();
@@ -215,8 +227,8 @@ export function createDaemonPublicVoiceModelPackRuntime(params: Readonly<{
       let before: InstalledVoiceModelPackMetadataV1 | null;
       let after: InstalledVoiceModelPackMetadataV1;
       try {
-        before = record.before === null ? null : parseInstalledVoiceModelPackMetadataV1(record.before);
-        after = parseInstalledVoiceModelPackMetadataV1(record.after);
+        before = record.before === null ? null : parseStoredInstalledVoiceModelPackMetadataV1(record.before);
+        after = parseStoredInstalledVoiceModelPackMetadataV1(record.after);
       } catch {
         throw new Error('voice_model_pack_promotion_recovery_invalid');
       }
@@ -400,6 +412,7 @@ export function createDaemonPublicVoiceModelPackRuntime(params: Readonly<{
         directoryKey: descriptor.directoryKey,
         descriptor,
         installedMetadata,
+        ...(installedMetadata?.lastUsedAt !== undefined ? { lastUsedAt: installedMetadata.lastUsedAt } : {}),
         installedManifest: installedMetadata
           ? descriptor.loadable
             ? await readVerifiedInstalledManifest({ descriptor, metadata: installedMetadata })
@@ -424,6 +437,7 @@ export function createDaemonPublicVoiceModelPackRuntime(params: Readonly<{
         directoryKey: metadata.directoryKey,
         descriptor: null,
         installedMetadata: metadata,
+        ...(metadata.lastUsedAt !== undefined ? { lastUsedAt: metadata.lastUsedAt } : {}),
         installedManifest: await readInstalledVoiceModelPackManifest({
           packsRootDir: params.paths.packsRootDir,
           packId: metadata.directoryKey,
@@ -463,6 +477,19 @@ export function createDaemonPublicVoiceModelPackRuntime(params: Readonly<{
     ready,
     list: project,
     resolve,
+    recordLoaded: async (key) => {
+      await ready();
+      const durable = await state.read();
+      const installed = durable.installed.find((metadata) => buildQualifiedPluginContributionKey({
+        pluginId: metadata.identity.pluginId,
+        localId: metadata.identity.packId,
+      }) === key);
+      if (installed && await state.recordLoaded(installed.identity, now())) notifyChanged();
+    },
+    subscribeChanges: (listener) => {
+      changeListeners.add(listener);
+      return () => { changeListeners.delete(listener); };
+    },
     acceptLicense: async (input) => {
       const entry = await resolve(input.qualifiedPackId);
       const descriptor = entry?.descriptor;
@@ -494,6 +521,7 @@ export function createDaemonPublicVoiceModelPackRuntime(params: Readonly<{
       });
       const accepted = await resolve(input.qualifiedPackId);
       if (!accepted) throw new Error('voice_model_pack_license_state_missing');
+      notifyChanged();
       return accepted;
     },
     install: async ({ key, signal, reportProgress }) => {
@@ -591,18 +619,109 @@ export function createDaemonPublicVoiceModelPackRuntime(params: Readonly<{
       }
       const installed = await resolve(key);
       if (!installed) throw new Error('voice_model_pack_install_state_missing');
+      notifyChanged();
       return installed;
     },
-    remove: async (key) => {
+    adopt: async (key, directory, options) => {
       const entry = await resolve(key);
-      if (!entry) return;
-      await removeInstalledVoiceModelPack({
-        packsRootDir: params.paths.packsRootDir,
-        packId: entry.directoryKey,
+      const descriptor = entry?.descriptor;
+      if (!entry || !descriptor?.installable || !descriptor.identity || !descriptor.contribution || !descriptor.directoryKey) {
+        throw new Error('voice_model_pack_not_installable');
+      }
+      const metadata = parseInstalledVoiceModelPackMetadataV1(options?.metadata ?? {
+        schemaVersion: 1, identity: descriptor.identity, directoryKey: descriptor.directoryKey,
+        pluginVersion: descriptor.pluginVersion, artifactBinding: descriptor.artifactBinding,
+        packVersion: descriptor.contribution.manifest.version,
+        manifestDigest: deriveVoiceModelPackManifestDigestV1(descriptor.contribution.manifest), verifiedAtMs: now(),
       });
-      await state.removeInstalled(entry.identity);
+      const matchesDescriptor = (current: DaemonPublicVoiceModelPackEntry | null) => {
+        const candidate = current?.descriptor;
+        return candidate?.installable === true && candidate.identity?.pluginId === metadata.identity.pluginId
+          && candidate.identity.packId === metadata.identity.packId && candidate.directoryKey === metadata.directoryKey
+          && candidate.pluginVersion === metadata.pluginVersion && candidate.contribution?.manifest.version === metadata.packVersion
+          && voiceModelPackArtifactBindingsEqualV1(candidate.artifactBinding, metadata.artifactBinding)
+          && deriveVoiceModelPackManifestDigestV1(candidate.contribution.manifest) === metadata.manifestDigest;
+      };
+      if (!matchesDescriptor(entry)) throw new Error('voice_model_pack_source_stale');
+      const destination = join(params.paths.packsRootDir, metadata.directoryKey);
+      const retainedInfo = await lstat(directory).catch(error => {
+        if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') return null;
+        throw error;
+      });
+      const recoveringMovedBytes = retainedInfo === null;
+      if (!recoveringMovedBytes && entry.installedMetadata) throw new Error('voice_model_pack_restore_occupied');
+      const sourceDirectory = recoveringMovedBytes ? destination : directory;
+      const sourceInfo = retainedInfo ?? await lstat(destination);
+      if (!sourceInfo.isDirectory() || sourceInfo.isSymbolicLink()) throw new Error('model_pack_installed_file_invalid');
+      const sourcePackId = basename(sourceDirectory);
+      const sourceRoot = dirname(sourceDirectory);
+      const actualManifest = await readInstalledVoiceModelPackManifest({ packsRootDir: sourceRoot, packId: sourcePackId });
+      if (!actualManifest) throw new Error('model_pack_installed_manifest_mismatch');
+      const sourceIntegrityHost = createNodeInstalledModelPackIntegrityHost(sourceRoot);
+      await verifyInstalledModelPackWithHost({
+        host: { streamFile: (_packId, filePath, onChunk) => sourceIntegrityHost.streamFile(sourcePackId, filePath, onChunk) },
+        packId: metadata.directoryKey, expectedManifest: buildLegacyManifest(descriptor), actualManifest,
+      });
+      const current = await resolve(key);
+      if (!matchesDescriptor(current)) throw new Error('voice_model_pack_source_stale');
+      const installed = current?.installedMetadata;
+      if (installed && (!recoveringMovedBytes || installed.identity.pluginId !== metadata.identity.pluginId
+        || installed.identity.packId !== metadata.identity.packId || installed.directoryKey !== metadata.directoryKey
+        || installed.pluginVersion !== metadata.pluginVersion || installed.packVersion !== metadata.packVersion
+        || installed.manifestDigest !== metadata.manifestDigest
+        || !voiceModelPackArtifactBindingsEqualV1(installed.artifactBinding, metadata.artifactBinding))) {
+        throw new Error('voice_model_pack_restore_occupied');
+      }
+      if (!recoveringMovedBytes) {
+        try { await lstat(destination); throw new Error('voice_model_pack_restore_occupied'); }
+        catch (error) { if (!(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')) throw error; }
+      }
+      await options?.beforeEffect?.();
+      if (!recoveringMovedBytes) await renameStoragePathNoReplace(directory, destination);
+      if (!installed) {
+        try { await state.recordInstalled(metadata, recoveringMovedBytes ? { beforeEffect: options?.beforeEffect } : undefined); }
+        catch (error) { if (!recoveringMovedBytes) await rename(destination, directory); throw error; }
+      }
       verifiedInstallKeys.clear();
       verifiedPhysicalFingerprints.clear();
+      notifyChanged();
+      const adopted = await resolve(key);
+      if (!adopted) throw new Error('voice_model_pack_install_state_missing');
+      return adopted;
+    },
+    remove: async (key, options) => {
+      const entry = await resolve(key);
+      if (!entry) return;
+      const source = join(params.paths.packsRootDir, entry.directoryKey);
+      if (options?.retainTo) {
+        const info = await lstat(source).catch(error => {
+          if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') return null;
+          throw error;
+        });
+        if (!info) {
+          const retainedInfo = await lstat(options.retainTo);
+          if (!retainedInfo.isDirectory() || retainedInfo.isSymbolicLink()) throw new Error('model_pack_installed_file_invalid');
+          // Trash proves retained identity and the original source's absence;
+          // recovery completes bookkeeping without moving bytes again.
+          await options.beforeEffect?.();
+          if (entry.installedMetadata) await state.removeInstalled(entry.identity, { beforeEffect: options.beforeEffect });
+        } else {
+          if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('model_pack_installed_file_invalid');
+          try { await lstat(options.retainTo); throw new Error('voice_model_pack_restore_occupied'); }
+          catch (error) { if (!(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')) throw error; }
+          await options.beforeEffect?.();
+          await rename(source, options.retainTo);
+          try { await state.removeInstalled(entry.identity); }
+          catch (error) { await rename(options.retainTo, source); throw error; }
+        }
+      } else {
+        await options?.beforeEffect?.();
+        await removeInstalledVoiceModelPack({ packsRootDir: params.paths.packsRootDir, packId: entry.directoryKey });
+        await state.removeInstalled(entry.identity);
+      }
+      verifiedInstallKeys.clear();
+      verifiedPhysicalFingerprints.clear();
+      notifyChanged();
     },
     subscribeInvalidations: (listener) => pluginReloadController.subscribe((result) => {
       if (result.changedPluginIds.length > 0) listener(result.changedPluginIds);

@@ -11,6 +11,7 @@
  */
 
 import { INSTALLABLE_KEYS } from '@happier-dev/protocol/installables/codexAcp';
+import type { HappierProcessRootSource } from '@/daemon/processes/roots/listHappierProcessRoots';
 
 import { ensureOptionalRuntime } from '@/packagedRuntime/installables/optionalRuntimes';
 
@@ -29,6 +30,7 @@ export type ForkedVoiceInferenceRuntimeHandle = Readonly<{
   runtimeLoader: RuntimeLoader;
   /** Terminate the child and reject in-flight requests. Idempotent. */
   dispose: () => Promise<void>;
+  readProcessRoots: (stopWorker?: () => Promise<void>) => readonly HappierProcessRootSource[];
 }>;
 
 export type ForkedVoiceInferenceWorkerProcessObservation = Pick<
@@ -108,6 +110,7 @@ export function createForkedVoiceInferenceRuntimeHandle(
   }
 
   return {
+    readProcessRoots: (stopWorker) => client?.readProcessRoots(stopWorker) ?? [],
     // The loader always returns the same supervised client; the manager treats it as the
     // engine. Lazy spawn happens on first engine call inside the client.
     runtimeLoader: async () => {

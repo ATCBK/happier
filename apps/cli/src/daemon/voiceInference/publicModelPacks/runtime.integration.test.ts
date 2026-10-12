@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
-import { cp, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, rename, rm, rmdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { createProcessCustodyFixture } from '@/testkit/processCustodyFixture';
 
 import { reloadConfiguration } from '@/configuration';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
@@ -21,6 +22,8 @@ import {
 import { startVoiceInferenceWorker } from '../voiceInferenceWorker';
 import { deriveVoiceModelPackLicenseTextDigestV1 } from '@happier-dev/voice-modelpacks';
 import { resolveVoiceInferencePaths } from '../voiceInferencePaths';
+import { createStorageCategoryCatalog } from '@/storage/categoryCatalog';
+import { readResidentVoiceModelPackPaths } from './storagePaths';
 import { readInstalledVoiceModelPackManifest } from '../voiceModelPackInstaller';
 import { createNodeModelPackInstallerHost } from '../nodeModelPackInstallerHost';
 import type { PinnedHttpStreamTransport } from '@/network/pinnedHttp';
@@ -186,6 +189,9 @@ function createFixtureInstallerHostFactory(
 }
 
 describe('daemon public Voice model-pack consumed vertical', () => {
+  let disposeNative: (() => Promise<void>) | undefined;
+  beforeAll(async () => { disposeNative = await createProcessCustodyFixture(); });
+  afterAll(async () => { await disposeNative?.(); });
   const roots: string[] = [];
   const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR']);
 
@@ -193,6 +199,60 @@ describe('daemon public Voice model-pack consumed vertical', () => {
     envScope.restore();
     reloadConfiguration();
     await Promise.all(roots.splice(0).map(async (root) => await rm(root, { recursive: true, force: true })));
+  });
+
+  it('retains packs for Trash, restores use metadata after real integrity verification and refuses tampered bytes', async () => {
+    const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-public-model-pack-trash-'));
+    roots.push(happyHomeDir);
+    envScope.patch({ HAPPIER_HOME_DIR: happyHomeDir });
+    reloadConfiguration();
+    const assets = await installZipformerPluginFixture({ happyHomeDir, roots });
+    const paths = resolveVoiceInferencePaths();
+    const params = { accountId: 'account-trash', machineId: 'machine-trash', happyHomeDir, paths,
+      stateFilePath: join(happyHomeDir, 'packs-state.json'), now: () => 2_000,
+      createInstallerHost: createFixtureInstallerHostFactory(assets) };
+    const runtime = createDaemonPublicVoiceModelPackRuntime(params);
+    const key = `${ZIPFORMER_VOICE_MODEL_PACK_FIXTURE_PLUGIN_ID}/${ZIPFORMER_VOICE_MODEL_PACK_FIXTURE_LOCAL_ID}`;
+    await runtime.install({ key, signal: new AbortController().signal });
+    await runtime.recordLoaded(key);
+    const installed = (await runtime.resolve(key))!;
+    const payload = join(happyHomeDir, 'payload');
+    const catalog = createStorageCategoryCatalog({ happyHomeDir, activeServerDir: dirname(paths.rootDir),
+      tempRoot: join(happyHomeDir, 'absent-temp'), modelPackRuntime: runtime });
+    const storageItem = (await catalog.discover()).find(item => item.categoryId === 'modelPacks' && item.path === join(paths.packsRootDir, installed.directoryKey))!;
+    const bound = await catalog.resolveAdapter(storageItem);
+    const denied = Object.assign(new Error('approval changed'), { code: 'changed_since_review' });
+    await expect(bound.retire({ payloadPath: payload, beforeEffect: async () => { throw denied; } })).rejects.toBe(denied);
+    expect((await runtime.resolve(key))?.installedMetadata?.lastUsedAt).toBe(2_000);
+    // The filesystem move can finish before installed-state retirement commits.
+    await rename(storageItem.path, payload);
+    await bound.retire({ payloadPath: payload });
+    await bound.retire({ payloadPath: payload });
+    expect((await runtime.resolve(key))?.installedMetadata).toBeNull();
+    expect(await readFile(join(payload, 'pack.json'), 'utf8')).toContain(installed.directoryKey);
+    const restarted = createDaemonPublicVoiceModelPackRuntime(params);
+    const restartedCatalog = createStorageCategoryCatalog({ happyHomeDir, activeServerDir: dirname(paths.rootDir),
+      tempRoot: join(happyHomeDir, 'absent-temp'), modelPackRuntime: restarted });
+    const restored = await restartedCatalog.adapterForEntry('modelPacks', bound.ownerData);
+    await expect(restored.reinstate({ payloadPath: payload, restorePath: storageItem.path,
+      beforeEffect: async () => { await mkdir(storageItem.path); } })).rejects.toMatchObject({ code: 'destination_occupied' });
+    expect((await restarted.resolve(key))?.installedMetadata).toBeNull();
+    expect(await readFile(join(payload, 'pack.json'), 'utf8')).toContain(installed.directoryKey);
+    await rmdir(storageItem.path);
+    // A process crash can leave bytes at the canonical target before adoption commits.
+    await rename(payload, storageItem.path);
+    await restored.reinstate({ payloadPath: payload, restorePath: storageItem.path });
+    await restored.reinstate({ payloadPath: payload, restorePath: storageItem.path });
+    expect(await restarted.resolve(key)).toMatchObject({ lastUsedAt: 2_000, installedMetadata: { lastUsedAt: 2_000 }, installedManifest: expect.any(Object) });
+    await restarted.remove(key, { retainTo: payload });
+    await restored.reinstate({ payloadPath: payload, restorePath: storageItem.path });
+    expect((await restarted.resolve(key))?.lastUsedAt).toBe(2_000);
+    await restarted.remove(key, { retainTo: payload });
+    const file = installed.installedManifest!.files[0]!;
+    await writeFile(join(payload, file.path), 'tampered-pack-bytes');
+    await expect(restarted.adopt(key, payload, { metadata: installed.installedMetadata! })).rejects.toThrow('model_pack_installed_');
+    expect((await restarted.resolve(key))?.installedMetadata).toBeNull();
+    expect(await readFile(join(payload, file.path), 'utf8')).toBe('tampered-pack-bytes');
   });
 
   it.each([
@@ -402,6 +462,99 @@ describe('daemon public Voice model-pack consumed vertical', () => {
     await restarted.removeModel(qualifiedPackId);
     await expect(restarted.listModels()).resolves.toEqual([]);
     await restarted.stop();
+  });
+
+  it('persists last use only after successful worker model load, including after restart', async () => {
+    const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-public-model-pack-use-'));
+    roots.push(happyHomeDir);
+    envScope.patch({ HAPPIER_HOME_DIR: happyHomeDir });
+    reloadConfiguration();
+    const assets = await installZipformerPluginFixture({ happyHomeDir, roots });
+    const paths = resolveVoiceInferencePaths();
+    const stateFilePath = join(happyHomeDir, 'public-model-packs.v1.json');
+    let clock = 1_000;
+    const runtimeParams = {
+      accountId: 'account-use-fixture',
+      machineId: 'machine-use-fixture',
+      happyHomeDir,
+      paths,
+      stateFilePath,
+      now: () => clock,
+      createInstallerHost: createFixtureInstallerHostFactory(assets),
+    };
+    const publicModelPacks = createDaemonPublicVoiceModelPackRuntime(runtimeParams);
+    const changes: number[] = [];
+    const unsubscribe = publicModelPacks.subscribeChanges(() => { changes.push(clock); });
+    const qualifiedPackId = `${ZIPFORMER_VOICE_MODEL_PACK_FIXTURE_PLUGIN_ID}/${ZIPFORMER_VOICE_MODEL_PACK_FIXTURE_LOCAL_ID}`;
+    await publicModelPacks.install({ key: qualifiedPackId, signal: new AbortController().signal });
+    expect(changes).toEqual([1_000]);
+    const installedBytes = await readFile(stateFilePath, 'utf8');
+    expect((await publicModelPacks.list())[0]).not.toHaveProperty('lastUsedAt');
+    expect(await readFile(stateFilePath, 'utf8')).toBe(installedBytes);
+
+    let loadOutcome: 'failed' | 'cancelled' | 'loaded' = 'failed';
+    const cancellation = new AbortController();
+    const startWorker = (packs: typeof publicModelPacks) => startVoiceInferenceWorker({
+      publicModelPacks: packs,
+      runtimeLoader: async () => ({
+        // The native engine is the system boundary; metadata, disk and host lifecycle stay real.
+        warmModel: async () => {
+          if (loadOutcome === 'failed') throw new Error('native_load_failed');
+          if (loadOutcome === 'cancelled') cancellation.abort();
+        },
+        transcribeAudio: async () => ({ text: 'loaded', language: 'en' }),
+        synthesizeTts: async () => { throw new Error('not a TTS fixture'); },
+      }),
+    });
+    const worker = await startWorker(publicModelPacks);
+    try {
+      await expect(worker.warmModelPack(qualifiedPackId)).rejects.toThrow('native_load_failed');
+      expect(await readFile(stateFilePath, 'utf8')).toBe(installedBytes);
+      expect(changes).toEqual([1_000]);
+      loadOutcome = 'cancelled';
+      await expect(worker.warmModelPack(qualifiedPackId, cancellation.signal)).rejects.toMatchObject({ code: 'cancelled' });
+      expect(await readFile(stateFilePath, 'utf8')).toBe(installedBytes);
+      expect(changes).toEqual([1_000]);
+      loadOutcome = 'loaded';
+      clock = 2_000;
+      await worker.warmModelPack(qualifiedPackId);
+      expect((await publicModelPacks.list())[0]).toMatchObject({
+        lastUsedAt: 2_000,
+        installedMetadata: { lastUsedAt: 2_000 },
+      });
+      expect(changes).toEqual([1_000, 2_000]);
+      const loadedBytes = await readFile(stateFilePath, 'utf8');
+      clock = 3_000;
+      await worker.warmModelPack(qualifiedPackId);
+      expect(await readFile(stateFilePath, 'utf8')).toBe(loadedBytes);
+      expect(changes).toEqual([1_000, 2_000]);
+      const oldPackCatalog = createStorageCategoryCatalog({
+        happyHomeDir, activeServerDir: dirname(paths.rootDir),
+        tempRoot: join(happyHomeDir, 'absent-temporary'), now: () => 100 * 24 * 60 * 60 * 1_000,
+        readModelPacks: publicModelPacks.list,
+        readInUsePaths: () => readResidentVoiceModelPackPaths({ worker, modelPacks: publicModelPacks, packsRootDir: paths.packsRootDir }),
+      });
+      const entry = (await publicModelPacks.list())[0]!;
+      const resident = (await oldPackCatalog.discover()).find(item => item.path === join(paths.packsRootDir, entry.directoryKey));
+      expect(resident).toMatchObject({ verdict: 'keep', reason: { code: 'in_use' } });
+      expect(await readFile(stateFilePath, 'utf8')).toBe(loadedBytes);
+      await worker.stop();
+      expect(await readResidentVoiceModelPackPaths({ worker, modelPacks: publicModelPacks, packsRootDir: paths.packsRootDir }))
+        .toEqual({ reliable: true, paths: [] });
+    } finally {
+      await worker.stop();
+      unsubscribe();
+    }
+    const restartedPacks = createDaemonPublicVoiceModelPackRuntime(runtimeParams);
+    expect((await restartedPacks.list())[0]).toMatchObject({ lastUsedAt: 2_000 });
+    const restartedWorker = await startWorker(restartedPacks);
+    try {
+      clock = 4_000;
+      await restartedWorker.warmModelPack(qualifiedPackId);
+      expect((await restartedPacks.list())[0]).toMatchObject({ lastUsedAt: 4_000 });
+    } finally {
+      await restartedWorker.stop();
+    }
   });
 
   it('leaves no installed state when cancellation interrupts the real installer', async () => {

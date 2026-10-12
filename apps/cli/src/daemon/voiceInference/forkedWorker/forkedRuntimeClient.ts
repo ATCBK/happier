@@ -14,6 +14,7 @@
  */
 
 import type { DaemonVoiceInferenceModelRuntimeState } from '@happier-dev/protocol';
+import type { HappierProcessRootSource } from '@/daemon/processes/roots/listHappierProcessRoots';
 
 import {
   createSupervisedProcess,
@@ -81,6 +82,7 @@ export type ForkedVoiceInferenceRuntimeClient = Readonly<
   VoiceInferenceRuntime & {
     /** Tear down the child and reject any in-flight requests. No leaked processes. */
     stop: () => Promise<void>;
+    readProcessRoots: (stopWorker?: () => Promise<void>) => readonly HappierProcessRootSource[];
   }
 >;
 
@@ -726,13 +728,27 @@ export function createForkedVoiceInferenceRuntimeClient(
     };
   }
 
-  return {
+  const client: ForkedVoiceInferenceRuntimeClient = {
     warmModel,
     primeModel,
     releaseModel,
     synthesizeTts,
     transcribeAudio,
     createStreamingTranscriptionSession,
+    readProcessRoots: (stopWorker) => {
+      const channel = activeChannel ?? retiringChannel;
+      if (stopped || !channel || channel.pid === null) return [];
+      return [{ owner: { kind: 'happier', component: 'voice_worker' }, pid: channel.pid,
+        stop: async () => {
+          if ((activeChannel ?? retiringChannel) !== channel) {
+            throw Object.assign(new Error('Voice worker root has changed'), { code: 'process_root_changed' });
+          }
+          // Record intent before the public worker awaits model cleanup; a native
+          // exit during that cleanup must not schedule another inference child.
+          supervisor.markStopRequested({ reason: 'user_request', requestedAtMs: Date.now() });
+          await (stopWorker ?? client.stop)();
+        } }];
+    },
     stop: async () => {
       if (stopped) {
         return;
@@ -758,4 +774,5 @@ export function createForkedVoiceInferenceRuntimeClient(
       supervisor.dispose();
     },
   };
+  return client;
 }

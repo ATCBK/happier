@@ -3,7 +3,8 @@ import { join } from 'node:path';
 import { readFile, rm, stat } from 'node:fs/promises';
 
 import { assertManifestPathsSafe } from '@happier-dev/protocol/voice/modelPacks/pathSafety';
-import { parseModelPackManifest } from '@happier-dev/protocol/voice/modelPacks/manifest';
+import { ModelPackManifestSchema, parseModelPackManifest } from '@happier-dev/protocol/voice/modelPacks/manifest';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import type { ModelPackManifest } from '@happier-dev/protocol';
 import {
   assertManifestUrlsAllowed,
@@ -148,7 +149,7 @@ export async function readInstalledVoiceModelPackManifest(params: Readonly<{
 }>): Promise<ModelPackManifest | null> {
   try {
     const manifestPath = join(params.packsRootDir, assertVoiceInferencePackIdFilesystemSafe(params.packId), 'pack.json');
-    return parseModelPackManifest(JSON.parse(await readFile(manifestPath, 'utf8')));
+    return createStoredReadSchema(ModelPackManifestSchema).parse(JSON.parse(await readFile(manifestPath, 'utf8')));
   } catch {
     return null;
   }

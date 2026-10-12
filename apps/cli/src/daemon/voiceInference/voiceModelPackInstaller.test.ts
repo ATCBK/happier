@@ -1,11 +1,15 @@
 import { mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createServer as createHttpsServer, request as httpsRequest, type RequestOptions } from 'node:https';
+import type { IncomingMessage } from 'node:http';
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { fetchVoiceModelPackManifest, installVoiceModelPack, removeInstalledVoiceModelPack } from './voiceModelPackInstaller';
+import { fetchVoiceModelPackManifest, installVoiceModelPack, readInstalledVoiceModelPackManifest, removeInstalledVoiceModelPack } from './voiceModelPackInstaller';
 import type { PinnedHttpStreamTransport } from '../../network/pinnedHttp';
+import { openPinnedHttpStream } from '../../network/pinnedHttp';
+import { createEphemeralTlsServerFixture } from '../../../../../packages/tests/src/testkit/tls/ephemeralTlsServerFixture.mjs';
 
 const manifestFixture = (packId: string) => ({
   packId,
@@ -38,6 +42,20 @@ async function withLegacyFetchFixture<T>(
 }
 
 describe('voiceModelPackInstaller packId filesystem safety', () => {
+  it('drops retired installed manifest fields recursively and keeps known frontend validation', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-stored-voice-manifest-'));
+    const packId = 'stored-manifest';
+    const path = join(root, packId, 'pack.json');
+    const canonical = { ...manifestFixture(packId), frontend: { lang: 'en' } };
+    await mkdir(join(root, packId));
+    await writeFile(path, JSON.stringify({ ...canonical, retired: true,
+      frontend: { ...canonical.frontend, retired: true },
+      files: canonical.files.map((file) => ({ ...file, retired: true })) }));
+    expect(await readInstalledVoiceModelPackManifest({ packsRootDir: root, packId })).toEqual(canonical);
+    await writeFile(path, JSON.stringify({ ...canonical, frontend: { lang: 12 } }));
+    expect(await readInstalledVoiceModelPackManifest({ packsRootDir: root, packId })).toBeNull();
+  });
+
   it('rejects pack ids that attempt to escape packsRootDir via path traversal', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-voice-packid-'));
     const packsRootDir = join(root, 'packs');
@@ -129,6 +147,75 @@ describe('voiceModelPackInstaller download validation', () => {
 });
 
 describe('fetchVoiceModelPackManifest URL policy (LB-M1)', () => {
+  it('fetches a manifest through a server-issued signed HTTPS redirect without retaining its query', async () => {
+    const packId = 'signed-redirect-pack';
+    const manifest = manifestFixture(packId);
+    const tls = await createEphemeralTlsServerFixture();
+    const ca = await readFile(tls.caCertificatePath);
+    let signedUrl = '';
+    const received: Array<{ url: string | undefined; authorization: string | undefined }> = [];
+    const server = createHttpsServer({ key: await readFile(tls.privateKeyPath),
+      cert: await readFile(tls.leafCertificatePath) }, (request, response) => {
+      received.push({ url: request.url, authorization: request.headers.authorization });
+      if (request.url === '/manifest.json') {
+        response.writeHead(302, { location: signedUrl });
+        response.end();
+      } else {
+        response.end(JSON.stringify(manifest));
+      }
+    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(0, '127.0.0.1', resolve);
+      });
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('server_failed_to_bind');
+      signedUrl = `https://127.0.0.1:${address.port}/asset.json?sig=transport-secret&jwt=transport-token`;
+      // HTTPS system boundary: add only the ephemeral fixture CA; preserve real TLS and DNS pinning.
+      const requestWithCa = ((options: RequestOptions, callback: (response: IncomingMessage) => void) =>
+        httpsRequest({ ...options, ca }, callback)) as typeof httpsRequest;
+      const result = await fetchVoiceModelPackManifest({ packId,
+        env: { HAPPIER_MODEL_PACK_MANIFESTS: JSON.stringify({ [packId]: `https://localhost:${address.port}/manifest.json` }) },
+        network: { resolveAddresses: async () => ['127.0.0.1'],
+          pinnedTransport: (request) => openPinnedHttpStream(request, { httpsRequest: requestWithCa }) },
+      });
+      expect(result).toEqual(manifest);
+      expect(JSON.stringify(result)).not.toContain('transport-secret');
+      expect(received).toEqual([
+        { url: '/manifest.json', authorization: undefined },
+        { url: '/asset.json?sig=transport-secret&jwt=transport-token', authorization: undefined },
+      ]);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await tls.cleanup();
+    }
+  });
+
+  it('still refuses configured signed manifest and asset URLs before using them', async () => {
+    const packId = 'configured-credentials-pack';
+    const transport = vi.fn<PinnedHttpStreamTransport>();
+    await expect(fetchVoiceModelPackManifest({
+      packId,
+      env: { HAPPIER_MODEL_PACK_MANIFESTS: JSON.stringify({ [packId]: 'https://models.example/manifest.json?jwt=configured-secret' }) },
+      network: { resolveAddresses: async () => ['93.184.216.34'], pinnedTransport: transport },
+    })).rejects.toThrow('model_pack_url_credentials_forbidden');
+    expect(transport).not.toHaveBeenCalled();
+
+    const manifest = manifestFixture(packId);
+    manifest.files[0].url += '?api_key=configured-secret';
+    let sent = false;
+    transport.mockResolvedValue({ status: 200, headers: {}, contentLength: null,
+      read: async () => { if (sent) return null; sent = true; return Buffer.from(JSON.stringify(manifest)); },
+      cancel: () => undefined });
+    await expect(fetchVoiceModelPackManifest({
+      packId,
+      env: { HAPPIER_MODEL_PACK_MANIFESTS: JSON.stringify({ [packId]: 'https://models.example/manifest.json' }) },
+      network: { resolveAddresses: async () => ['93.184.216.34'], pinnedTransport: transport },
+    })).rejects.toThrow('model_pack_url_credentials_forbidden');
+  });
+
   it('rejects an insecure (non-loopback http) manifest URL before any network fetch', async () => {
     // Route the manifest map to an http:// host that is NOT loopback. The daemon
     // url policy permits http only on loopback, so this must be refused by the

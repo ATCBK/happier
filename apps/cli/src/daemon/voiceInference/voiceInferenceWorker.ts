@@ -18,10 +18,12 @@ import type { RuntimeLoader } from './voiceInferenceWorker.shared';
 import type { DaemonPublicVoiceModelPackRuntime } from './publicModelPacks/runtime';
 import { reconcileModelPackPromotions } from './nodeModelPackInstallerHost';
 import { resolveVoiceInferencePaths } from './voiceInferencePaths';
+import type { HappierProcessRootSource } from '@/daemon/processes/roots/listHappierProcessRoots';
 
 export type VoiceInferenceWorkerHandle = Readonly<
   VoiceInferenceWorkerLifecycleHandle
   & VoiceInferenceWorkerExecutionHandle
+  & { readProcessRoots(): readonly HappierProcessRootSource[] }
 >;
 
 export async function startVoiceInferenceWorker(params?: Readonly<{
@@ -86,9 +88,10 @@ export async function startVoiceInferenceWorker(params?: Readonly<{
     ...publicLifecycle
   } = lifecycle;
   const { abortAllRequests: _abortAllRequests, ...executionHandle } = execution;
-  return {
+  const worker: VoiceInferenceWorkerHandle = {
     ...publicLifecycle,
     ...executionHandle,
+    readProcessRoots: () => forkedHandle?.readProcessRoots(() => worker.stop()) ?? [],
     stop: async () => {
       try {
         // Release every warm model while the forked runtime channel is still available.
@@ -101,4 +104,5 @@ export async function startVoiceInferenceWorker(params?: Readonly<{
       }
     },
   };
+  return worker;
 }

@@ -128,18 +128,22 @@ async function installPublicAuthoringFixture() {
       kind: 'registerExplicit',
       rootPath: fileURLToPath(publicAuthoringEntry),
     });
-    expect(registration.kind).toBe('status');
+    // Explicit source trust does not grant the example's required host access.
+    // The development owner reports the pending installation review as its
+    // unavailable diagnostic until that same change is approved below.
+    expect(registration).toMatchObject({ kind: 'failed', code: 'plugin_dev_reviewRequired' });
     const pending = await owner.changeService.listPendingPluginChanges();
     expect(pending.changes).toHaveLength(1);
     const review = pending.changes[0];
     if (!review || review.kind !== 'reviewRequired' || review.reviewKind !== 'installation') {
       throw new Error('Expected the public example host-access installation review');
     }
-    await expect(owner.changeService.decidePluginChange({
+    const decision = await owner.changeService.decidePluginChange({
       pendingChangeId: review.pendingChangeId,
       decision: 'installAndTrust',
       optionalSelections: [],
-    })).resolves.toMatchObject({ kind: 'committed', pluginId });
+    });
+    expect(decision, JSON.stringify(decision)).toMatchObject({ kind: 'committed', pluginId });
     const sourceCustody = runtime.controller.readCurrentPluginSourceCustody?.(pluginId);
     expect(sourceCustody).toMatchObject({ kind: 'development' });
     expect(runtime.controller.readCurrentPluginOccurrenceId?.(pluginId)).toEqual(expect.any(String));

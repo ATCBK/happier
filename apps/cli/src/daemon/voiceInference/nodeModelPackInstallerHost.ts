@@ -45,10 +45,11 @@ import type {
 } from '@happier-dev/voice-modelpacks';
 import {
   assertModelPackResolvedAddressesAllowed,
+  assertModelPackRedirectUrlAllowed,
   assertModelPackUrlAllowed,
   isLegacyModelPackPromotionIntent,
   MODEL_PACK_PROMOTION_INTENT_MAX_BYTES,
-  parseModelPackPromotionIntentV1,
+  parseStoredModelPackPromotionIntentV1,
 } from '@happier-dev/voice-modelpacks';
 
 import {
@@ -215,6 +216,16 @@ export function createNodeModelPackDownloadOpener(opts: Readonly<{
       cleanup();
     };
     operation.signal.addEventListener('abort', settleAbortedOperation, { once: true });
+    let redirects = 0;
+    const safeTransportError = (error: unknown): unknown => {
+      if (redirects === 0) return error;
+      // A transport error can quote its request URL. Keep signed Locations out
+      // of outward errors, including causes/stacks, while retaining our budgets.
+      if (error instanceof Error && /^pinned_http_(wall|idle)_timeout$/.test(error.message)) {
+        return new Error(error.message);
+      }
+      return new Error('model_pack_download_transport_failed');
+    };
     const awaitOperation = <T>(
       pending: Promise<T>,
       onAbortedResolve?: (value: T) => void,
@@ -230,25 +241,29 @@ export function createNodeModelPackDownloadOpener(opts: Readonly<{
             return;
           }
           resolve(value);
-        }, reject).finally(() => {
+        }, (error) => reject(safeTransportError(error))).finally(() => {
           operation.signal.removeEventListener('abort', onAbort);
         });
       });
     };
 
     let currentUrl = request.url;
-    let redirects = 0;
     try {
+      const admittedUrl = assertModelPackUrlAllowed(request.url, opts.urlPolicy);
       for (;;) {
-        assertModelPackUrlAllowed(currentUrl, opts.urlPolicy);
-        const hostname = resolveUrlConnectionIdentity(new URL(currentUrl).hostname).hostname;
+        const destination = redirects === 0
+          ? admittedUrl
+          : admittedUrl.protocol === 'https:'
+            ? assertModelPackRedirectUrlAllowed(currentUrl, opts.urlPolicy)
+            : assertModelPackUrlAllowed(currentUrl, opts.urlPolicy);
+        const hostname = resolveUrlConnectionIdentity(destination.hostname).hostname;
         const resolvedAddresses = Object.freeze([
           ...new Set(await awaitOperation(resolveAddresses(hostname))),
         ].sort());
         assertModelPackResolvedAddressesAllowed(resolvedAddresses, {
           ...opts.urlPolicy,
           requireResolvedAddresses: true,
-          requestUrl: currentUrl,
+          requestUrl: destination.toString(),
         });
         const headers: Record<string, string> = {};
         if (request.rangeStart && request.rangeStart > 0) headers.Range = `bytes=${request.rangeStart}-`;
@@ -290,10 +305,11 @@ export function createNodeModelPackDownloadOpener(opts: Readonly<{
           activeResponse = null;
           cleanup();
         };
+        if (redirects > 0) destination.search = '';
         return {
           contentLength: response.contentLength,
           isPartial: response.status === 206,
-          finalUrl: currentUrl,
+          finalUrl: destination.toString(),
           resolvedAddresses,
           read: async () => {
             if (streamSettled) return null;
@@ -591,7 +607,7 @@ export async function readModelPackPromotionIntents(
       }
       const raw = JSON.parse(await readFile(path, 'utf8')) as unknown;
       try {
-        intents.push(parseModelPackPromotionIntentV1(raw, packId));
+        intents.push(parseStoredModelPackPromotionIntentV1(raw, packId));
       } catch {
         if (!isLegacyModelPackPromotionIntent(raw, packId)) throw new Error('model_pack_promotion_intent_invalid');
         const liveExists = await pathExists(liveDirFor(packsRootDir, packId));

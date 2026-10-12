@@ -968,6 +968,8 @@ describe('createVoiceInferenceWorkerLifecycle', () => {
         install: async () => { throw new Error('not exercised'); },
         acceptLicense: async () => { throw new Error('not exercised'); },
         remove: async () => {},
+        recordLoaded: async () => {},
+        subscribeChanges: () => () => {},
         subscribeInvalidations: (listener) => {
           invalidate = listener;
           return () => { invalidate = null; };
@@ -1065,6 +1067,8 @@ describe('createVoiceInferenceWorkerLifecycle', () => {
         install: async () => { throw new Error('not exercised'); },
         acceptLicense: async () => { throw new Error('not exercised'); },
         remove: async () => {},
+        recordLoaded: async () => {},
+        subscribeChanges: () => () => {},
         subscribeInvalidations: (listener) => {
           invalidate = listener;
           return () => { invalidate = null; };

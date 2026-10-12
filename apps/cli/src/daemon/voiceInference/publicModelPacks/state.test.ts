@@ -48,6 +48,87 @@ afterEach(async () => {
 });
 
 describe('daemon public voice model-pack durable state', () => {
+  it('drops retired stored fields recursively while keeping write admission strict', async () => {
+    const owner = createDaemonPublicVoiceModelPackStateStore({ stateFilePath, accountId: 'account-a', machineId: 'machine-a' });
+    const localMetadata: InstalledVoiceModelPackMetadataV1 = { ...metadata, artifactBinding: {
+      kind: 'materialization', sourceCustody: { kind: 'development', registeredRootId: 'root-a' },
+    } };
+    await owner.recordInstalled(localMetadata);
+    await owner.acceptLicense({ identity: metadata.identity, packVersion: metadata.packVersion,
+      licenseId: 'Apache-2.0', ...licenseBinding, artifactBinding: localMetadata.artifactBinding, acceptedAtMs: 200 });
+    const canonical = JSON.parse(await readFile(stateFilePath, 'utf8'));
+    const stored = structuredClone(canonical);
+    stored.retired = true;
+    stored.installed[0].retired = true;
+    stored.installed[0].identity.retired = true;
+    stored.installed[0].artifactBinding.retired = true;
+    stored.installed[0].artifactBinding.sourceCustody.retired = true;
+    stored.licenseAcceptances[0].retired = true;
+    stored.licenseAcceptances[0].artifactBinding.retired = true;
+    stored.licenseAcceptances[0].artifactBinding.sourceCustody.retired = true;
+    const cleanupIdentity = { pluginId: 'acme.speech', packId: 'obsolete' };
+    const cleanup = { identity: cleanupIdentity, directoryKey: deriveVoiceModelPackDirectoryKeyV1(cleanupIdentity) };
+    stored.unboundInstalled = [{ ...cleanup, retired: true, identity: { ...cleanupIdentity, retired: true } }];
+    await writeFile(stateFilePath, JSON.stringify(stored));
+    const restarted = createDaemonPublicVoiceModelPackStateStore({ stateFilePath, accountId: 'account-a', machineId: 'machine-a' });
+    expect(await restarted.read()).toEqual({ ...canonical, unboundInstalled: [cleanup] });
+    const extraMetadata = { ...localMetadata, retired: true };
+    const extraIdentity = { ...localMetadata, identity: { ...metadata.identity, retired: true } };
+    await expect(restarted.recordInstalled(extraMetadata)).rejects.toThrow();
+    await expect(restarted.recordInstalled(extraIdentity)).rejects.toThrow();
+    const inheritedMetadata: InstalledVoiceModelPackMetadataV1 = Object.create(localMetadata);
+    await expect(restarted.recordInstalled(inheritedMetadata)).rejects.toThrow('voice_model_pack_state_invalid');
+    const nonEnumerableUsage = Object.defineProperty({ ...localMetadata }, 'lastUsedAt', { value: 300 });
+    await expect(restarted.recordInstalled(nonEnumerableUsage)).rejects.toThrow('voice_model_pack_state_invalid');
+    await restarted.recordLoaded(metadata.identity, 300);
+    expect(JSON.parse(await readFile(stateFilePath, 'utf8'))).toEqual({ ...canonical,
+      installed: [{ ...localMetadata, lastUsedAt: 300 }], unboundInstalled: [cleanup] });
+  });
+
+  it('rechecks effect authority inside queued install and removal commits without changing durable state on refusal', async () => {
+    const store = createDaemonPublicVoiceModelPackStateStore({ stateFilePath, accountId: 'account-a', machineId: 'machine-a' });
+    await store.recordInstalled(metadata);
+    const denied = Object.assign(new Error('authority changed'), { code: 'unauthorized' });
+    const usage = store.recordLoaded(metadata.identity, 200);
+    const removal = store.removeInstalled(metadata.identity, { beforeEffect: async () => {
+      expect(JSON.parse(await readFile(stateFilePath, 'utf8')).installed[0].lastUsedAt).toBe(200);
+      throw denied;
+    } });
+    await usage;
+    await expect(removal).rejects.toBe(denied);
+    await expect(store.recordInstalled({ ...metadata, lastUsedAt: 300 }, { beforeEffect: async () => { throw denied; } })).rejects.toBe(denied);
+    const restarted = createDaemonPublicVoiceModelPackStateStore({ stateFilePath, accountId: 'account-a', machineId: 'machine-a' });
+    expect((await restarted.read()).installed).toEqual([{ ...metadata, lastUsedAt: 200 }]);
+  });
+  it('reads older metadata without usage and cannot resurrect a removed install with a late load', async () => {
+    await writeFile(stateFilePath, JSON.stringify({
+      schemaVersion: 1,
+      accountId: 'account-a',
+      machineId: 'machine-a',
+      installed: [metadata],
+      licenseAcceptances: [],
+    }), 'utf8');
+    const store = createDaemonPublicVoiceModelPackStateStore({
+      stateFilePath,
+      accountId: 'account-a',
+      machineId: 'machine-a',
+    });
+    expect((await store.read()).installed).toEqual([metadata]);
+    await expect(store.recordInstalled({ ...metadata, lastUsedAt: -1 })).rejects.toThrow('voice_model_pack_state_invalid');
+    await expect(store.recordLoaded(metadata.identity, 200)).resolves.toBe(true);
+    expect((await store.read()).installed).toEqual([{ ...metadata, lastUsedAt: 200 }]);
+    const removed = store.removeInstalled(metadata.identity);
+    const lateLoad = store.recordLoaded(metadata.identity, 300);
+    await expect(removed).resolves.toBe(true);
+    await expect(lateLoad).resolves.toBe(false);
+    const restarted = createDaemonPublicVoiceModelPackStateStore({
+      stateFilePath,
+      accountId: 'account-a',
+      machineId: 'machine-a',
+    });
+    expect((await restarted.read()).installed).toEqual([]);
+  });
+
   it('persists structured installed identity and exact account/machine-bound license acceptance', async () => {
     const store = createDaemonPublicVoiceModelPackStateStore({
       stateFilePath,

@@ -1,6 +1,9 @@
 import { chmod, lstat, mkdir, open } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { z } from 'zod';
 
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
+import { VoiceModelPackArtifactBindingV1Schema } from '@happier-dev/protocol/voice/modelPacks/artifactBindingV1';
 import { VoiceModelPackIdentityV1Schema } from '@happier-dev/protocol/voice/modelPacks/identityV1';
 import type {
   InstalledVoiceModelPackMetadataV1,
@@ -69,25 +72,89 @@ function assertNonNegativeSafeInteger(value: unknown): number {
   return value;
 }
 
-function assertOnlyKnownKeys(raw: Record<string, unknown>, allowed: readonly string[]): void {
-  if (Object.keys(raw).some((key) => !allowed.includes(key))) {
-    throw new Error('voice_model_pack_state_invalid');
-  }
-}
+const CleanupOnlyInstalledSchema = z.object({
+  identity: VoiceModelPackIdentityV1Schema,
+  directoryKey: z.unknown(),
+}).strict();
 
-function assertExactKeys(raw: Record<string, unknown>, expected: readonly string[]): void {
-  assertOnlyKnownKeys(raw, expected);
-  if (Object.keys(raw).length !== expected.length || expected.some((key) => !Object.hasOwn(raw, key))) {
-    throw new Error('voice_model_pack_state_invalid');
+const InstalledVoiceModelPackMetadataObjectSchema = z.object({
+  schemaVersion: z.unknown(),
+  identity: VoiceModelPackIdentityV1Schema,
+  directoryKey: z.unknown(),
+  pluginVersion: z.unknown(),
+  artifactBinding: VoiceModelPackArtifactBindingV1Schema,
+  packVersion: z.unknown(),
+  manifestDigest: z.unknown(),
+  verifiedAtMs: z.unknown(),
+  lastUsedAt: z.unknown().optional(),
+}).strict();
+const metadataFields = Object.entries(InstalledVoiceModelPackMetadataObjectSchema.shape);
+
+const InstalledVoiceModelPackMetadataV1Schema = z.preprocess((value, context) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  if (metadataFields.some(([key, schema]) => {
+    const own = Object.hasOwn(value, key);
+    return (!own && !(schema instanceof z.ZodOptional))
+      || (own && !Object.prototype.propertyIsEnumerable.call(value, key));
+  })) {
+    context.addIssue({ code: 'custom', message: 'Installed metadata requires its own known fields' });
   }
-}
+  // Preserve the original own-field admission, including absent optional usage.
+  return { ...value };
+}, InstalledVoiceModelPackMetadataObjectSchema.transform((raw): InstalledVoiceModelPackMetadataV1 => {
+  const directoryKey = assertBoundedId(raw.directoryKey);
+  if (deriveVoiceModelPackDirectoryKeyV1(raw.identity) !== directoryKey) {
+    throw new Error('voice_model_pack_directory_key_mismatch');
+  }
+  if (raw.schemaVersion !== 1) throw new Error('voice_model_pack_state_invalid');
+  return Object.freeze({
+    schemaVersion: 1,
+    identity: Object.freeze(raw.identity),
+    directoryKey,
+    pluginVersion: assertBoundedId(raw.pluginVersion),
+    artifactBinding: parseVoiceModelPackArtifactBindingV1(raw.artifactBinding),
+    packVersion: assertBoundedId(raw.packVersion),
+    manifestDigest: assertDigest(raw.manifestDigest),
+    verifiedAtMs: assertNonNegativeSafeInteger(raw.verifiedAtMs),
+    ...(Object.hasOwn(raw, 'lastUsedAt') ? { lastUsedAt: assertNonNegativeSafeInteger(raw.lastUsedAt) } : {}),
+  });
+}));
+
+const AcceptedLicenseSchema = z.object({
+  accountId: z.unknown(),
+  executionHost: z.literal('daemon'),
+  hostId: z.unknown(),
+  pluginId: VoiceModelPackIdentityV1Schema.shape.pluginId,
+  packId: VoiceModelPackIdentityV1Schema.shape.packId,
+  packVersion: z.unknown(),
+  licenseId: z.unknown(),
+  licenseSourceUrl: z.unknown(),
+  licenseTextDigest: z.unknown(),
+  artifactBinding: VoiceModelPackArtifactBindingV1Schema,
+  acceptedAtMs: z.unknown(),
+}).strict();
+
+const StateEnvelopeSchema = z.object({
+  schemaVersion: z.unknown(),
+  accountId: z.unknown(),
+  machineId: z.unknown(),
+  // Records are admitted by their owners below, including cleanup-only legacy records.
+  installed: z.unknown(),
+  licenseAcceptances: z.unknown(),
+  unboundInstalled: z.unknown().optional(),
+  unboundLicenseAcceptances: z.unknown().optional(),
+}).strict();
+
+const StoredInstalledVoiceModelPackMetadataV1Schema = createStoredReadSchema(InstalledVoiceModelPackMetadataV1Schema);
+const StoredCleanupOnlyInstalledSchema = createStoredReadSchema(CleanupOnlyInstalledSchema);
+const StoredAcceptedLicenseSchema = createStoredReadSchema(AcceptedLicenseSchema);
+const StoredStateEnvelopeSchema = createStoredReadSchema(StateEnvelopeSchema);
 
 function parseCleanupOnlyInstalled(value: unknown): UnboundInstalledRecordV1 | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const raw = value as Record<string, unknown>;
   try {
-    assertExactKeys(raw, ['identity', 'directoryKey']);
-    const identity = VoiceModelPackIdentityV1Schema.parse(raw.identity);
+    const raw = StoredCleanupOnlyInstalledSchema.parse(value);
+    const identity = raw.identity;
     const directoryKey = assertBoundedId(raw.directoryKey);
     if (deriveVoiceModelPackDirectoryKeyV1(identity) !== directoryKey) return null;
     return Object.freeze({ identity: Object.freeze(identity), directoryKey });
@@ -117,60 +184,32 @@ function parseLegacyCleanupOnlyInstalled(value: unknown): UnboundInstalledRecord
 }
 
 export function parseInstalledVoiceModelPackMetadataV1(value: unknown): InstalledVoiceModelPackMetadataV1 {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('voice_model_pack_state_invalid');
-  const raw = value as Record<string, unknown>;
-  assertExactKeys(raw, [
-    'schemaVersion',
-    'identity',
-    'directoryKey',
-    'pluginVersion',
-    'artifactBinding',
-    'packVersion',
-    'manifestDigest',
-    'verifiedAtMs',
-  ]);
-  const identity = VoiceModelPackIdentityV1Schema.parse(raw.identity);
-  const directoryKey = assertBoundedId(raw.directoryKey);
-  if (deriveVoiceModelPackDirectoryKeyV1(identity) !== directoryKey) {
-    throw new Error('voice_model_pack_directory_key_mismatch');
+  // Input admission retains the binding owner's own-data checks before Zod projects it.
+  if (value && typeof value === 'object' && !Array.isArray(value) && Object.hasOwn(value, 'artifactBinding')) {
+    parseVoiceModelPackArtifactBindingV1((value as Record<string, unknown>).artifactBinding);
   }
-  if (raw.schemaVersion !== 1) throw new Error('voice_model_pack_state_invalid');
-  return Object.freeze({
-    schemaVersion: 1,
-    identity: Object.freeze(identity),
-    directoryKey,
-    pluginVersion: assertBoundedId(raw.pluginVersion),
-    artifactBinding: parseVoiceModelPackArtifactBindingV1(raw.artifactBinding),
-    packVersion: assertBoundedId(raw.packVersion),
-    manifestDigest: assertDigest(raw.manifestDigest),
-    verifiedAtMs: assertNonNegativeSafeInteger(raw.verifiedAtMs),
-  });
+  try {
+    return InstalledVoiceModelPackMetadataV1Schema.parse(value);
+  } catch (error) {
+    if (error instanceof z.ZodError) throw new Error('voice_model_pack_state_invalid');
+    throw error;
+  }
+}
+
+export function parseStoredInstalledVoiceModelPackMetadataV1(value: unknown): InstalledVoiceModelPackMetadataV1 {
+  return StoredInstalledVoiceModelPackMetadataV1Schema.parse(value);
 }
 
 function parseAcceptedLicense(value: unknown): AcceptedLicenseRecordV1 | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const raw = value as Record<string, unknown>;
-  if (raw.executionHost !== 'daemon') return null;
   try {
-    assertExactKeys(raw, [
-      'accountId',
-      'executionHost',
-      'hostId',
-      'pluginId',
-      'packId',
-      'packVersion',
-      'licenseId',
-      'licenseSourceUrl',
-      'licenseTextDigest',
-      'artifactBinding',
-      'acceptedAtMs',
-    ]);
+    const raw = StoredAcceptedLicenseSchema.parse(value);
     return Object.freeze({
       accountId: assertBoundedId(raw.accountId),
       executionHost: 'daemon',
       hostId: assertBoundedId(raw.hostId),
-      pluginId: VoiceModelPackIdentityV1Schema.shape.pluginId.parse(raw.pluginId),
-      packId: VoiceModelPackIdentityV1Schema.shape.packId.parse(raw.packId),
+      pluginId: raw.pluginId,
+      packId: raw.packId,
       packVersion: assertBoundedId(raw.packVersion),
       licenseId: assertBoundedId(raw.licenseId),
       licenseSourceUrl: assertHttpsUrl(raw.licenseSourceUrl),
@@ -220,16 +259,7 @@ function parseState(params: Readonly<{
   if (!params.raw || typeof params.raw !== 'object' || Array.isArray(params.raw)) {
     throw new Error('voice_model_pack_state_invalid');
   }
-  const raw = params.raw as Record<string, unknown>;
-  assertOnlyKnownKeys(raw, [
-    'schemaVersion',
-    'accountId',
-    'machineId',
-    'installed',
-    'licenseAcceptances',
-    'unboundInstalled',
-    'unboundLicenseAcceptances',
-  ]);
+  const raw = StoredStateEnvelopeSchema.parse(params.raw);
   if (raw.schemaVersion !== 1) throw new Error('voice_model_pack_state_invalid');
   if (raw.accountId !== params.accountId || raw.machineId !== params.machineId) {
     throw new Error('voice_model_pack_state_scope_mismatch');
@@ -244,7 +274,7 @@ function parseState(params: Readonly<{
   const unboundInstalled: UnboundInstalledRecordV1[] = [];
   for (const candidate of raw.installed) {
     try {
-      installed.push(parseInstalledVoiceModelPackMetadataV1(candidate));
+      installed.push(parseStoredInstalledVoiceModelPackMetadataV1(candidate));
     } catch {
       const cleanupOnly = parseLegacyCleanupOnlyInstalled(candidate);
       if (!cleanupOnly) throw new Error('voice_model_pack_state_invalid');
@@ -313,8 +343,9 @@ export function createDaemonPublicVoiceModelPackStateStore(params: Readonly<{
   machineId: string;
 }>): Readonly<{
   read(): Promise<DaemonPublicVoiceModelPackStateV1>;
-  recordInstalled(metadata: InstalledVoiceModelPackMetadataV1): Promise<void>;
-  removeInstalled(identity: VoiceModelPackIdentityV1): Promise<boolean>;
+  recordInstalled(metadata: InstalledVoiceModelPackMetadataV1, options?: Readonly<{ beforeEffect?: () => Promise<void> }>): Promise<void>;
+  recordLoaded(identity: VoiceModelPackIdentityV1, lastUsedAt: number): Promise<boolean>;
+  removeInstalled(identity: VoiceModelPackIdentityV1, options?: Readonly<{ beforeEffect?: () => Promise<void> }>): Promise<boolean>;
   acceptLicense(input: Readonly<{
     identity: VoiceModelPackIdentityV1;
     packVersion: string;
@@ -351,8 +382,9 @@ export function createDaemonPublicVoiceModelPackStateStore(params: Readonly<{
     return memory;
   }
 
-  async function commitUnlocked(next: DaemonPublicVoiceModelPackStateV1): Promise<void> {
+  async function commitUnlocked(next: DaemonPublicVoiceModelPackStateV1, beforeEffect?: () => Promise<void>): Promise<void> {
     await ensurePrivateParent(params.stateFilePath);
+    await beforeEffect?.();
     await writeJsonAtomic(params.stateFilePath, next);
     memory = next;
   }
@@ -377,7 +409,7 @@ export function createDaemonPublicVoiceModelPackStateStore(params: Readonly<{
 
   return {
     read: () => enqueue(async () => structuredClone(await loadUnlocked())),
-    recordInstalled: (metadata) => enqueue(async () => {
+    recordInstalled: (metadata, options) => enqueue(async () => {
       const parsed = parseInstalledVoiceModelPackMetadataV1(metadata);
       const current = await loadUnlocked();
       const installed = current.installed.filter((candidate) => (
@@ -394,9 +426,24 @@ export function createDaemonPublicVoiceModelPackStateStore(params: Readonly<{
         ...current,
         installed: Object.freeze(installed),
         unboundInstalled: Object.freeze(unboundInstalled),
-      }));
+      }), options?.beforeEffect);
     }),
-    removeInstalled: (input) => enqueue(async () => {
+    recordLoaded: (input, lastUsedAt) => enqueue(async () => {
+      const identity = VoiceModelPackIdentityV1Schema.parse(input);
+      const at = assertNonNegativeSafeInteger(lastUsedAt);
+      const current = await loadUnlocked();
+      const index = current.installed.findIndex((candidate) => (
+        candidate.identity.pluginId === identity.pluginId
+        && candidate.identity.packId === identity.packId
+      ));
+      // A usage observation cannot recreate an install removed through its owner.
+      if (index === -1 || current.installed[index]!.lastUsedAt === at) return false;
+      const installed = [...current.installed];
+      installed[index] = Object.freeze({ ...installed[index]!, lastUsedAt: at });
+      await commitUnlocked(Object.freeze({ ...current, installed: Object.freeze(installed) }));
+      return true;
+    }),
+    removeInstalled: (input, options) => enqueue(async () => {
       const identity = VoiceModelPackIdentityV1Schema.parse(input);
       const current = await loadUnlocked();
       const installed = current.installed.filter((candidate) => (
@@ -415,7 +462,7 @@ export function createDaemonPublicVoiceModelPackStateStore(params: Readonly<{
         ...current,
         installed: Object.freeze(installed),
         unboundInstalled: Object.freeze(unboundInstalled),
-      }));
+      }), options?.beforeEffect);
       return true;
     }),
     acceptLicense: (input) => enqueue(async () => {

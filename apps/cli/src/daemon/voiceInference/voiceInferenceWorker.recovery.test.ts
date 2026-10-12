@@ -13,8 +13,11 @@ describe('voice inference worker recovery ordering', () => {
       list: async () => [],
       resolve: async () => null,
       install: async () => { throw new Error('not used'); },
+      adopt: async () => { throw new Error('not used'); },
       acceptLicense: async () => { throw new Error('not used'); },
       remove: async () => undefined,
+      recordLoaded: async () => undefined,
+      subscribeChanges: () => () => undefined,
     };
 
     let started = false;

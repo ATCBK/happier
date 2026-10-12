@@ -5,13 +5,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { ModelPackManifest } from '@happier-dev/protocol';
-import { deriveModelPackStagingPlan, installModelPackWithHost } from '@happier-dev/voice-modelpacks';
+import { deriveModelPackStagingPlan, installModelPackWithHost, parseModelPackPromotionIntentV1 } from '@happier-dev/voice-modelpacks';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   createNodeModelPackDownloadOpener,
   createNodeModelPackInstallerHost,
   reconcileModelPackPromotions,
+  readModelPackPromotionIntents,
 } from './nodeModelPackInstallerHost';
 import type { PinnedHttpStreamTransport } from '../../network/pinnedHttp';
 
@@ -78,6 +79,93 @@ function createTestNodeModelPackInstallerHost(
 }
 
 describe('node model-pack installer host — real Range resume (FIND-010)', () => {
+  it('drops retired persisted promotion fields and rejects malformed known recovery identity', async () => {
+    const marker = join(packsRootDir, '.stored-pack.promote-intent');
+    const canonical = { schemaVersion: 1, packId: 'stored-pack', phase: 'metadata_pending',
+      startedAtMs: 100, token: 'token-a', priorInstall: { scopeKey: 'scope-a', identityKey: 'identity-a' },
+      recovery: { kind: 'owner-a', value: { ownerData: true } } };
+    await writeFile(marker, JSON.stringify({ ...canonical, retired: true,
+      priorInstall: { ...canonical.priorInstall, retired: true }, recovery: { ...canonical.recovery, retired: true } }));
+    expect(await readModelPackPromotionIntents(packsRootDir)).toEqual([canonical]);
+    expect(() => parseModelPackPromotionIntentV1({ ...canonical, retired: true }, canonical.packId)).toThrow('model_pack_promotion_intent_invalid');
+    await writeFile(marker, JSON.stringify({ ...canonical, priorInstall: { ...canonical.priorInstall, identityKey: 12 } }));
+    await expect(readModelPackPromotionIntents(packsRootDir)).rejects.toThrow('model_pack_promotion_intent_invalid');
+  });
+
+  it('installs signed HTTPS redirects through the real core without persisting their query or forwarding credentials', async () => {
+    const bytes = Buffer.from('signed model bytes');
+    const signedUrl = 'https://release-assets.example/model.bin?sig=transport-secret&jwt=transport-token';
+    const transport = vi.fn<PinnedHttpStreamTransport>(async (request) => {
+      if (request.url === 'https://models.example/model.bin') {
+        return { status: 302, headers: { location: signedUrl }, contentLength: 0,
+          read: async () => null, cancel: () => undefined };
+      }
+      expect(request.url).toBe(signedUrl);
+      expect(Object.keys(request.headers).map((name) => name.toLowerCase())).not.toContain('authorization');
+      let sent = false;
+      return { status: 200, headers: {}, contentLength: bytes.length,
+        read: async () => { if (sent) return null; sent = true; return bytes; },
+        cancel: () => undefined };
+    });
+    const host = createNodeModelPackInstallerHost({ packsRootDir,
+      resolveAddresses: async () => ['93.184.216.34'], pinnedTransport: transport });
+    const manifest = { packId: 'signed-asset-pack', kind: 'tts_sherpa', model: 'kokoro', version: 'v1',
+      files: [{ path: 'model.bin', url: 'https://models.example/model.bin',
+        sha256: sha256Hex(bytes), sizeBytes: bytes.length }] } satisfies ModelPackManifest;
+    const progress: unknown[] = [];
+    const logs = [vi.spyOn(console, 'log'), vi.spyOn(console, 'warn'), vi.spyOn(console, 'error')];
+    try {
+      await installModelPackWithHost({ host, packId: manifest.packId, manifest,
+        signal: new AbortController().signal, onProgress: (event) => { progress.push(event); } });
+      expect(await readFile(join(packsRootDir, manifest.packId, 'model.bin'))).toEqual(bytes);
+      const persisted = await readFile(join(packsRootDir, manifest.packId, 'pack.json'), 'utf8');
+      expect(JSON.parse(persisted)).toEqual(manifest);
+      expect(JSON.stringify([persisted, progress, logs.map((log) => log.mock.calls)])).not.toContain('transport-secret');
+      expect(await readdir(packsRootDir)).toEqual([manifest.packId]);
+      const stream = await host.openDownload({ url: manifest.files[0].url, signal: new AbortController().signal });
+      expect(stream.finalUrl).toBe('https://release-assets.example/model.bin');
+      stream.cancel?.();
+    } finally {
+      for (const log of logs) log.mockRestore();
+    }
+  });
+
+  it.each(['connect', 'read'] as const)('keeps signed redirect queries out of %s errors', async (failure) => {
+    const signedUrl = 'https://release-assets.example/model.bin?jwt=transport-secret';
+    const transport = vi.fn<PinnedHttpStreamTransport>(async (request) => {
+      if (request.url === 'https://models.example/model.bin') {
+        return { status: 302, headers: { location: signedUrl }, contentLength: 0,
+          read: async () => null, cancel: () => undefined };
+      }
+      if (failure === 'connect') throw new Error(`request failed: ${request.url}`);
+      return { status: 200, headers: {}, contentLength: null,
+        read: async () => { throw new Error(`body failed: ${request.url}`); }, cancel: () => undefined };
+    });
+    const openDownload = createNodeModelPackDownloadOpener({
+      resolveAddresses: async () => ['93.184.216.34'], pinnedTransport: transport });
+    const pending = async () => {
+      const stream = await openDownload({ url: 'https://models.example/model.bin', signal: new AbortController().signal });
+      await stream.read();
+    };
+    await expect(pending()).rejects.toMatchObject({ message: 'model_pack_download_transport_failed' });
+  });
+
+  it.each([
+    ['http://cdn.example/model.bin?jwt=transport-secret', 'model_pack_url_insecure_scheme'],
+    ['http://127.0.0.1/model.bin?jwt=transport-secret', 'model_pack_url_insecure_scheme'],
+    ['https://user:pass@cdn.example/model.bin?jwt=transport-secret', 'model_pack_url_credentials_forbidden'],
+    ['https://169.254.169.254/model.bin?jwt=transport-secret', 'model_pack_url_private_destination'],
+    ['https://outside.example/model.bin?jwt=transport-secret', 'model_pack_url_origin_not_allowed'],
+  ])('refuses unsafe signed redirect %s before connecting', async (location, code) => {
+    const transport = vi.fn<PinnedHttpStreamTransport>().mockResolvedValue({ status: 302,
+      headers: { location }, contentLength: 0, read: async () => null, cancel: () => undefined });
+    const openDownload = createNodeModelPackDownloadOpener({
+      urlPolicy: { allowInsecureLoopback: true, allowedOrigins: ['https://models.example', 'https://cdn.example'] },
+      resolveAddresses: async () => ['93.184.216.34'], pinnedTransport: transport });
+    await expect(openDownload({ url: 'https://models.example/model.bin', signal: new AbortController().signal })).rejects.toThrow(code);
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+
   it('applies the absolute wall budget while DNS resolution is still pending', async () => {
     const transport = vi.fn<PinnedHttpStreamTransport>();
     const openDownload = createNodeModelPackDownloadOpener({

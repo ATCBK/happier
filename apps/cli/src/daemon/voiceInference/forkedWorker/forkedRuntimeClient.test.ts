@@ -142,7 +142,35 @@ describe('forked voice inference runtime client', () => {
 
     expect(Buffer.from(result.bytes)).toEqual(audio);
     expect(result.name).toBe('forked.wav');
+    const root = client.readProcessRoots()[0];
+    expect(root).toMatchObject({ owner: { kind: 'happier', component: 'voice_worker' }, pid: 4242 });
+    await root?.stop?.();
+    expect(client.readProcessRoots()).toEqual([]);
+    await expect(invokeWarmOrPrime(client, 'warm')).rejects.toMatchObject({ code: 'runtime_unavailable' });
     await client.stop();
+  });
+
+  it('records a root stop before awaiting public model cleanup so a native exit cannot restart it', async () => {
+    vi.useFakeTimers();
+    const channel = createFakeChannel({ onRequest: (frame, reply) => {
+      if (frame.kind === 'warm') reply({ kind: 'result', id: frame.id, result: { kind: 'warm' } });
+    } });
+    const channelFactory = vi.fn(async () => channel.channel);
+    const client = createForkedVoiceInferenceRuntimeClient({ channelFactory, random: () => 0 });
+    await invokeWarmOrPrime(client, 'warm');
+    let finishCleanup!: () => void;
+    const cleanup = new Promise<void>((resolve) => { finishCleanup = resolve; });
+    const root = client.readProcessRoots(async () => {
+      await cleanup;
+      await client.stop();
+    })[0];
+    const stopping = root?.stop?.();
+    // Native exit while the existing model-cleanup callback is still awaiting.
+    channel.crash();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(channelFactory).toHaveBeenCalledTimes(1);
+    finishCleanup();
+    await stopping;
   });
 
   it('preserves an output-bound terminal error without retiring a healthy worker', async () => {
@@ -1195,6 +1223,7 @@ describe('forked voice inference runtime client', () => {
   it('restarts the worker with bounded backoff after an unexpected crash and serves the next request', async () => {
     vi.useFakeTimers();
     let spawnCount = 0;
+    const firstChannels: ReturnType<typeof createFakeChannel>[] = [];
     const channelFactory = async () => {
       spawnCount += 1;
       const fake = createFakeChannel({
@@ -1209,8 +1238,7 @@ describe('forked voice inference runtime client', () => {
         },
       });
       if (spawnCount === 1) {
-        // First worker crashes immediately after spawning.
-        queueMicrotask(() => fake.crash());
+        firstChannels.push(fake);
       }
       return fake.channel;
     };
@@ -1227,16 +1255,20 @@ describe('forked voice inference runtime client', () => {
       },
     });
 
-    // Trigger the first spawn (will crash). Drain microtasks so the crash + restart schedule.
+    // Trigger the first spawn, then retain its root before observing a native crash.
     const first = client.synthesizeTts({
       requestId: 'tts-1', text: 'a', packId: 'pack-1', packDir: '/tmp/pack-1', manifest, voiceId: null, speed: null, output: { codec: 'wav', mimeType: 'audio/wav' },
     }).catch((error) => error);
     await vi.advanceTimersByTimeAsync(1);
     await first;
+    const departedRoot = client.readProcessRoots()[0];
+    firstChannels[0]?.crash();
 
     // Advance past the backoff delay so the supervisor respawns.
     await vi.advanceTimersByTimeAsync(200);
     expect(spawnCount).toBeGreaterThanOrEqual(2);
+    // The boundary intentionally reuses PID 4242 across both channel objects.
+    await expect(departedRoot?.stop?.()).rejects.toMatchObject({ code: 'process_root_changed' });
 
     const second = await client.synthesizeTts({
       requestId: 'tts-2', text: 'b', packId: 'pack-1', packDir: '/tmp/pack-1', manifest, voiceId: null, speed: null, output: { codec: 'wav', mimeType: 'audio/wav' },

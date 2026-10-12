@@ -14,6 +14,7 @@
  */
 
 import type { ChildProcess } from 'node:child_process';
+import { withProcessOwnerEnvironment } from '@/processes/ownerTag';
 
 import { spawnHappyCLI } from '@/utils/spawnHappyCLI';
 import { createManagedChildProcess } from '@/subprocess/supervision/managedChildProcess';
@@ -27,12 +28,12 @@ export function spawnVoiceInferenceWorkerChannel(): VoiceInferenceWorkerChannel 
     stdio: ['pipe', 'pipe', 'inherit'],
     // The worker must not keep the daemon alive on its own; the supervisor owns lifecycle.
     windowsHide: true,
-    env: {
+    env: withProcessOwnerEnvironment({
       ...process.env,
       // Mark the child so its own startup code knows it is the inference worker role and
       // never tries to attach to the relay / start a nested daemon.
       HAPPIER_VOICE_INFERENCE_WORKER_CHILD: '1',
-    },
+    }, { kind: 'happier', component: 'voice_worker' }),
   });
 
   const managed = createManagedChildProcess(child);
