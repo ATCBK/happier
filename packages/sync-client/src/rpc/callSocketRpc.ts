@@ -1,4 +1,4 @@
-import { resolveSocketRpcSessionAuthorization, SOCKET_RPC_AUTHORIZATION_CONTEXT_KINDS } from '@happier-dev/protocol/socketRpc';
+import { resolveSocketRpcSessionAuthorization, SOCKET_RPC_AUTHORIZATION_CONTEXT_KINDS, SocketRpcTimeoutMsSchema } from '@happier-dev/protocol/socketRpc';
 import type { SocketRpcAuthorizationContext } from '@happier-dev/protocol/socketRpc';
 import { SOCKET_RPC_EVENTS, SessionTransferRoutingV1Schema, SocketRpcSessionActionAuthorizationContextSchema, WorkspaceSyncSourceRoutingV1Schema, WorkspaceSyncTargetRoutingV1Schema, WorkspaceSyncSourceWriterTargetRoutingV1Schema, isSessionActionRpcMethodV1 } from '@happier-dev/protocol/socketRpc';
 import type { SessionTransferRoutingV1, SocketRpcRequestPayload, WorkspaceSyncSourceRoutingV1, WorkspaceSyncTargetRoutingV1, WorkspaceSyncSourceWriterTargetRoutingV1 } from '@happier-dev/protocol/socketRpc';
@@ -66,6 +66,8 @@ export async function callSocketRpc<R>(params: Readonly<{
   workspaceSyncSeedRouting?: WorkspaceSyncSeedRoutingV1;
   originalActionEnvelope?: ExternalActionRequestEnvelope;
   signal?: AbortSignal; onIssued?: () => void; requestId?: string;
+  /** Records the transport reply before asynchronous result admission/decoding. */
+  onResponse?: () => void;
   randomBytes?: (length: number) => Uint8Array;
   transportResponseEnvelopeVersion?: SocketRpcRequestPayload['transportResponseEnvelopeVersion'];
   createExternalActionExecution?: (request: Readonly<{ method: string; requestId: string; params: unknown }>) => SocketRpcRequestPayload['externalActionExecution'];
@@ -73,6 +75,7 @@ export async function callSocketRpc<R>(params: Readonly<{
   let acknowledged = false;
   try {
     if (params.signal?.aborted) throw createSocketRpcAbortError();
+    const timeoutMs = SocketRpcTimeoutMsSchema.parse(params.timeoutMs);
     const sessionActionAuthorization = params.authorization?.kind === SOCKET_RPC_AUTHORIZATION_CONTEXT_KINDS.SESSION_ACTION
       ? SocketRpcSessionActionAuthorizationContextSchema.parse(params.authorization) : undefined;
     if (sessionActionAuthorization && (params.target.kind !== 'session'
@@ -125,13 +128,14 @@ export async function callSocketRpc<R>(params: Readonly<{
       ...(workspaceSyncSeedRouting ? { workspaceSyncSeedRouting } : {}),
       ...(originalActionEnvelope ? { originalActionEnvelope } : {}),
       ...(requestId ? { requestId } : {}),
-      ...(typeof params.timeoutMs === 'number' && params.timeoutMs > 0 ? { timeoutMs: params.timeoutMs } : {}),
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
       ...(authorization ? { authorization } : {}),
       ...(externalActionExecution ? { externalActionExecution } : {}),
       ...(params.transportResponseEnvelopeVersion === undefined ? {} : { transportResponseEnvelopeVersion: params.transportResponseEnvelopeVersion }),
     };
     const ack = await emitWithAckCancellable({ ...params, event: SOCKET_RPC_EVENTS.CALL, payload, requestId });
     acknowledged = true;
+    params.onResponse?.();
     const result = await socketRpcCodec.decodeResult(params.content, ack, callId);
     // Pending-call cancellation is settled by the ACK owner. A valid decoded
     // acknowledgement remains authoritative even if cancellation arrives later.

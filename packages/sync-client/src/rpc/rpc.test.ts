@@ -44,6 +44,32 @@ afterEach(async () => {
   await destroy?.();
   if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
 });
+it.each([undefined, null, 180_000])('carries the caller deadline intent across real Socket.IO (%s)', async timeoutMs => {
+  const socket = await setup();
+  const received = new Promise<Record<string, unknown>>(resolve => server.sockets.sockets.forEach(remote => {
+    remote.once('rpc-call', (payload, ack) => {
+      resolve(payload);
+      ack({ ok: true, result: { accepted: true } });
+    });
+  }));
+  await expect(callSocketRpc({ socket, target: { kind: 'machine', id: 'm' }, method: 'read', params: {},
+    content: { mode: 'plain' }, timeoutMs })).resolves.toEqual({ accepted: true });
+  if (timeoutMs === undefined) expect(await received).not.toHaveProperty('timeoutMs');
+  else expect(await received).toHaveProperty('timeoutMs', timeoutMs);
+});
+it('rejects malformed authored deadlines before submitting them over Socket.IO', async () => {
+  const socket = await setup();
+  let requests = 0;
+  server.sockets.sockets.forEach(remote => remote.on('rpc-call', (_payload, ack) => {
+    requests += 1;
+    ack({ ok: true, result: { accepted: true } });
+  }));
+  for (const timeoutMs of [-1, Number.POSITIVE_INFINITY]) {
+    await expect(callSocketRpc({ socket, target: { kind: 'machine', id: 'm' }, method: 'read', params: {},
+      content: { mode: 'plain' }, timeoutMs })).rejects.toThrow();
+  }
+  expect(requests).toBe(0);
+});
 it('accepts a delayed real Socket.IO acknowledgement for a deadline beyond its native timer range', async () => {
   const socket = await setup();
   server.sockets.sockets.forEach((remote) => remote.on('rpc-call', (_payload, ack) => {
@@ -105,6 +131,28 @@ it('issues prefixed RPC with session-write authority and decodes the ack', async
     ack({ ok: true, result: { stopped: true } });
   }));
   expect(await callSocketRpc({ socket, target: { kind: 'session', id: 's' }, method: 'abort', params: { reason: 'test' }, content: { mode: 'plain' } })).toEqual({ stopped: true });
+});
+it('records an acknowledgement before delayed result decoding completes', async () => {
+  const socket = await setup();
+  server.sockets.sockets.forEach(remote => remote.on('rpc-call', (_payload, ack) => {
+    ack({ ok: true, result: 'encrypted-result' });
+  }));
+  let received = false;
+  let decoding = false;
+  let release!: () => void;
+  const decoded = new Promise<void>(resolve => { release = resolve; });
+  const content: SocketRpcContent = { mode: 'e2ee', cipher: {
+    encryptRaw: async () => 'encrypted-request',
+    decryptRaw: async () => { decoding = true; await decoded;
+      return { v: 2, k: 'res', c: '00'.repeat(16), r: { accepted: true } }; },
+  } };
+  const pending = callSocketRpc({ socket, target: { kind: 'machine', id: 'm' }, method: 'read',
+    params: {}, content, randomBytes: length => new Uint8Array(length), onResponse: () => { received = true; } });
+  try {
+    await vi.waitFor(() => expect(decoding).toBe(true));
+    expect(received).toBe(true);
+  } finally { release(); }
+  await expect(pending).resolves.toEqual({ accepted: true });
 });
 it('preserves explicit Session Action authorization rather than projecting it to a human write', async () => {
   const socket = await setup();
