@@ -28,7 +28,7 @@ export const WorkflowTriggerSummaryInputV1Schema = lazyZodSchema(() => z.discrim
   z.object({ kind: z.literal('ciFailed') }).strict(),
 ]));
 export type WorkflowTriggerSummaryInputV1 = z.infer<typeof WorkflowTriggerSummaryInputV1Schema>;
-const ContextFields = AutomationStoredWorkflowDefinitionV2Schema.omit({ workspace: true, inlineDefinition: true, onComplete: true });
+const ContextFields = lazyZodSchema(() => AutomationStoredWorkflowDefinitionV2Schema.omit({ workspace: true, inlineDefinition: true, onComplete: true }));
 export const WorkflowTriggerListRequestV1Schema = lazyZodSchema(() => z.union([
   z.object({ workflow: WorkflowDefinitionRefV1StringSchema }).strict(),
   z.object({ scope: z.enum(['account_inline', 'account_all']) }).strict(),
@@ -69,7 +69,9 @@ export const WorkflowTriggerUpdateRequestV1Schema = lazyZodSchema(() => z.object
   }
 }));
 export const WorkflowTriggerRemoveRequestV1Schema = lazyZodSchema(() => z.object({
-  automationId: asProtocolZod(AutomationIdV1Schema), triggerId: AutomationTriggerIdSchema,
+  automationId: asProtocolZod(AutomationIdV1Schema),
+  /** Omission removes the Account trigger set; a child id removes only that trigger. */
+  triggerId: AutomationTriggerIdSchema.optional(),
 }).strict());
 /** Admits the retained Automation's manual occurrence; it does not edit or convert the definition. */
 export const WorkflowTriggerRunNowRequestV1Schema = lazyZodSchema(() => z.object({
@@ -108,6 +110,11 @@ export const WorkflowTriggerWriteResultV1Schema = lazyZodSchema(() => z.object({
   triggerId: AutomationTriggerIdSchema.optional(),
   triggerRevision: Revision.optional(),
 }).strict());
+export const WorkflowTriggerRemoveResultV1Schema = lazyZodSchema(() => z.union([
+  WorkflowTriggerWriteResultV1Schema,
+  z.object({ automationId: asProtocolZod(AutomationIdV1Schema), deleted: z.literal(true),
+    removedRevision: Revision.optional() }).strict(),
+]));
 export type WorkflowTriggerListRequestV1 = z.infer<typeof WorkflowTriggerListRequestV1Schema>;
 export type WorkflowTriggerAddRequestV1 = z.infer<typeof WorkflowTriggerAddRequestV1Schema>;
 export type WorkflowTriggerUpdateRequestV1 = z.infer<typeof WorkflowTriggerUpdateRequestV1Schema>;
@@ -116,7 +123,7 @@ export type WorkflowTriggerRunNowRequestV1 = z.infer<typeof WorkflowTriggerRunNo
 export type WorkflowTriggerSetV1 = z.infer<typeof WorkflowTriggerSetV1Schema>;
 
 const SessionId = asProtocolZod(SessionIdSchema);
-const SessionContextFields = AutomationStoredWorkflowDefinitionV2Schema.omit({ workspace: true, inlineDefinition: true });
+const SessionContextFields = lazyZodSchema(() => AutomationStoredWorkflowDefinitionV2Schema.omit({ workspace: true, inlineDefinition: true }));
 const SessionPullRequestTriggerSchema = lazyZodSchema(() => AutomationPullRequestTriggerSchema.extend({
   pullRequest: AutomationPullRequestTriggerSchema.shape.pullRequest.optional(),
 }).strict());
@@ -172,6 +179,9 @@ export const SessionTriggerUpdateRequestV1Schema = lazyZodSchema(() => z.object(
 export const SessionTriggerRemoveRequestV1Schema = lazyZodSchema(() => z.object({ sessionId: SessionId, triggerId: AutomationTriggerIdSchema }).strict());
 export const SessionPullRequestLinkV1Schema = lazyZodSchema(() => z.object({
   provider: z.literal('github'), repository: z.string().min(1), number: z.number().int().positive().safe(),
+  url: z.string().url(),
+  state: z.enum(['open', 'merged', 'closed', 'unknown']).optional(),
+  observedAt: z.number().int().nonnegative().optional(),
 }).strict());
 export type SessionPullRequestLinkV1 = z.infer<typeof SessionPullRequestLinkV1Schema>;
 /** Unavailable is not evidence that the Session has no linked pull requests. */

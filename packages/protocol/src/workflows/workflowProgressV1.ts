@@ -8,6 +8,7 @@ import { createCanonicalJsonSigningInput } from '../crypto/canonicalJson.js';
 import { StrictJsonValueSchema } from '../json/strictJsonValue.js';
 import { AutomationRunStateV3Schema } from '../automations/automationRunStateV3.js';
 import { AutomationRunCauseSchema } from '../automations/automationRunCause.js';
+import { AutomationEventSourceDisplayLabelV1Schema, MAX_AUTOMATION_SOURCE_DISPLAY_LABEL_CODE_POINTS } from '../automations/automationEventJsonBoundsV1.js';
 import { ExecutionRunResumeHandleProviderSessionV1Schema } from '../execution/runs/startRequest.js';
 import { preservedBoundedNfcString } from '../strings/preservedBoundedNfcString.js';
 import {
@@ -64,7 +65,7 @@ export function isWorkflowDraftPublicationLifecycleV1(lifecycle: WorkflowInvocat
 
 /** Canonical actionable-row vocabulary shared by storage and presentation. */
 export const WORKFLOW_ATTENTION_INVOCATION_LIFECYCLES_V1 = [
-  'waiting_for_approval', 'needs_attention', 'waiting_for_review', 'cancel_requested', 'outcome_uncertain',
+  'waiting_for_approval', 'needs_attention', 'waiting_for_review', 'outcome_uncertain',
 ] as const satisfies readonly WorkflowInvocationLifecycleV1[];
 
 export const WORKFLOW_RUN_STATES_V1 = [
@@ -188,6 +189,14 @@ export const WorkflowRunSummaryV1Schema = lazyZodSchema(() => z.object({
   startedBy: WorkflowRunStartedByV1Schema.nullable().optional(),
   stepProgress: WorkflowRunStepProgressV1Schema.nullable().optional(),
   stepProgressCurrentness: WorkflowRunStepProgressCurrentnessV1Schema.nullable().optional(),
+  /** Authorized attention-list projection; null clears a hold, omission preserves a prior observation. */
+  heldStep: z.object({
+    invocationId: WorkflowInvocationRecordIdSchema,
+    label: z.string().min(1),
+    laneLabel: z.string().min(1).optional(),
+  }).strict().nullable().optional(),
+  /** Server-indexed current review holds; omission means the operation did not read the count. */
+  heldCount: z.number().int().nonnegative().safe().optional(),
   /** Opened by the authorized list host; null is unreadable, omission is an operation that did not open it. */
   where: WorkflowProjectTargetV1Schema.nullable().optional(),
   /** Current server attention membership; absent on projections that did not read it. */
@@ -330,11 +339,36 @@ export const WorkflowExecutionCorrespondenceV1Schema = lazyZodSchema(() => z.dis
 ]));
 export type WorkflowExecutionCorrespondenceV1 = z.infer<typeof WorkflowExecutionCorrespondenceV1Schema>;
 
+/** A private occurrence label uses the existing Automation display-label budget, never a JSON preview. */
+export function projectWorkflowLoopItemDisplayLabelV1(value: unknown): string | undefined {
+  const scalar = (candidate: unknown): string | undefined => {
+    if (typeof candidate !== 'string' && typeof candidate !== 'number' && typeof candidate !== 'boolean') return undefined;
+    const label = String(candidate).replace(/\s+/gu, ' ').trim().normalize('NFC');
+    if (!label) return undefined;
+    // A single item-name line is a projection: keep useful long values with an explicit ellipsis.
+    const points = Array.from(label);
+    return points.length <= MAX_AUTOMATION_SOURCE_DISPLAY_LABEL_CODE_POINTS ? label
+      : points.slice(0, MAX_AUTOMATION_SOURCE_DISPLAY_LABEL_CODE_POINTS - 1).join('') + '…';
+  };
+  if (value === null || typeof value !== 'object') return scalar(value);
+  if (Array.isArray(value)) return undefined;
+  const fields = value as Record<string, unknown>;
+  const title = Object.prototype.hasOwnProperty.call(fields, 'title') ? scalar(fields.title) : undefined;
+  if (title !== undefined) return title;
+  for (const field of Object.values(fields)) {
+    const label = scalar(field);
+    if (label !== undefined) return label;
+  }
+  return undefined;
+}
+
 export const WorkflowInvocationFrameV1Schema = lazyZodSchema(() => z.object({
   ownerBlockId: WorkflowBlockIdSchema,
   source: z.discriminatedUnion('kind', [
     z.object({ kind: z.literal('branch'), branchId: WorkflowBlockIdSchema }).strict(),
-    z.object({ kind: z.literal('item'), index: WorkflowDecimalV1Schema }).strict(),
+    z.object({ kind: z.literal('item'), index: WorkflowDecimalV1Schema,
+      /** Frozen from the selected item value, under the same private progress binding. */
+      displayLabel: AutomationEventSourceDisplayLabelV1Schema.optional() }).strict(),
     z.object({ kind: z.literal('iteration'), index: WorkflowDecimalV1Schema }).strict(),
   ]),
 }).strict());
@@ -506,6 +540,22 @@ export function mergeWorkflowResultProvenanceV1(
   return next;
 }
 
+/** Diagnostic kinds/ids only; never raw selections, credential values or prompt content. */
+export const WorkflowConversationUnavailableDetailsV1Schema = lazyZodSchema(() => z.object({
+  code: z.literal('workflow_conversation_unavailable'),
+  reason: z.enum([
+    ...WorkflowSessionAuthoringSelectionSchema.keyof().options,
+    'recovery_execution_missing', 'target_kind_mismatch', 'session_unavailable', 'producer_conversation_missing',
+    'origin_session_missing', 'session_identity_mismatch', 'machine_mismatch', 'workspace_mismatch', 'workspace_unavailable',
+    'account_scope_unavailable', 'owner_metadata_unavailable', 'work_depth_unavailable',
+  ]),
+  expected: z.object({ kind: z.enum(['unset', 'null', 'object', 'string', 'number', 'boolean', 'array', 'agent',
+    'available', 'unavailable', 'session', 'session_ready', 'detached_run', 'action']), ids: z.array(z.string().min(1)).optional() }).strict(),
+  observed: z.object({ kind: z.enum(['unset', 'null', 'object', 'string', 'number', 'boolean', 'array', 'agent',
+    'available', 'unavailable', 'session', 'session_ready', 'detached_run', 'action']), ids: z.array(z.string().min(1)).optional() }).strict(),
+}).strict());
+export type WorkflowConversationUnavailableDetailsV1 = z.infer<typeof WorkflowConversationUnavailableDetailsV1Schema>;
+
 export const WorkflowProgressEnvelopeV1Schema = lazyZodSchema(() => z.object({
   kind: z.literal('happier.workflow-progress.v1'),
   invocationPath: WorkflowInvocationPathV1Schema,
@@ -516,6 +566,11 @@ export const WorkflowProgressEnvelopeV1Schema = lazyZodSchema(() => z.object({
   /** Evaluated Notify me conditions keyed by the exact physical result, retained only on the mutable root. */
   resultProvenance: WorkflowResultProvenanceV1Schema.optional(),
   container: WorkflowContainerProgressV1Schema.optional(),
+  /** Producer-observed occurrence timing; review holds remain open and later content writes do not move a terminal finish. */
+  timing: z.object({ startedAt: z.string().datetime(), finishedAt: z.string().datetime().optional() }).strict().optional(),
+  /** Resolved loop members, counted by the same producer as the root's currentLoop view. */
+  loopProgress: z.object({ completed: z.number().int().nonnegative().safe(), total: z.number().int().nonnegative().safe() })
+    .strict().refine(value => value.completed <= value.total).optional(),
   attempt: WorkflowDecimalV1Schema,
   input: StrictJsonValueSchema.optional(),
   validationIssues: WorkflowResultValidationIssuesV1Schema.optional(),
@@ -538,13 +593,17 @@ export const WorkflowProgressEnvelopeV1Schema = lazyZodSchema(() => z.object({
   }).strict().optional(),
   observationDeadline: z.object({ kind: z.literal('at'), expiresAt: z.string().datetime() }).strict().optional(),
   workspace: WorkflowWorkspaceProgressV1Schema.optional(),
-  reason: z.object({ code: z.string().min(1), message: z.string().optional() }).strict().optional(),
+  reason: z.object({ code: z.string().min(1), message: z.string().optional(),
+    details: WorkflowConversationUnavailableDetailsV1Schema.optional() }).strict().optional(),
   previousAttemptRecordId: WorkflowInvocationRecordIdSchema.optional(),
   recovery: WorkflowInvocationRecoveryV1Schema.optional(),
   uncertainPriorEffects: z.object({ activity: z.literal('stopped') }).strict().optional(),
   logicalInvocationRecordId: WorkflowInvocationRecordIdSchema,
 }).strict().superRefine((value, context) => {
   const isRoot = value.blockKind === 'root';
+  if (value.loopProgress !== undefined && (value.blockKind !== 'loop' || value.frame?.ownerBlockId === value.invocationPath.blockId)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['loopProgress'], message: 'Loop progress belongs only to the loop container' });
+  }
   if (value.resultProvenance !== undefined && !isRoot) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ['resultProvenance'],
       message: 'Result condition provenance belongs only to the root frame' });
@@ -626,6 +685,7 @@ export const WorkflowInvocationFactV1Schema = lazyZodSchema(() => z.object({
   interaction: StrictJsonValueSchema.optional(),
   reason: z.string().min(1).optional(),
   reasonMessage: z.string().optional(),
+  reasonDetails: WorkflowConversationUnavailableDetailsV1Schema.optional(),
   execution: WorkflowExecutionCorrespondenceV1Schema.optional(),
   sharedConversationInvocationRecordId: z.object({
     session: WorkflowInvocationRecordIdSchema.optional(), detached_run: WorkflowInvocationRecordIdSchema.optional(),
@@ -641,16 +701,33 @@ export type WorkflowInvocationFactV1 = z.infer<typeof WorkflowInvocationFactV1Sc
 export function applyWorkflowInvocationFactV1(
   currentProgress: WorkflowProgressEnvelopeV1,
   fact: WorkflowInvocationFactV1,
+  observation?: Readonly<{
+    previousLifecycle: WorkflowInvocationLifecycleV1;
+    lifecycle: WorkflowInvocationLifecycleV1;
+    observedAtMs: number;
+  }>,
 ): WorkflowProgressEnvelopeV1 {
   const owned = WorkflowInvocationFactV1Schema.parse(fact);
-  const { result, reason, reasonMessage, sharedConversationInvocationRecordId, workspace, resultProvenance, ...fields } = owned;
+  const { result, reason, reasonMessage, reasonDetails, sharedConversationInvocationRecordId, workspace, resultProvenance, ...fields } = owned;
   const definedFields = Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined));
+  // The daemon and human-review writer use one timing policy. Holds are not terminal, and an
+  // already-running/terminal historical row cannot acquire a fabricated boundary during bookkeeping.
+  const observedAt = observation === undefined ? undefined : new Date(observation.observedAtMs).toISOString();
+  const timing = currentProgress.timing ?? (observedAt !== undefined && observation
+    && (observation.previousLifecycle === 'pending' || observation.previousLifecycle === 'waiting_for_capacity')
+    && (observation.lifecycle === 'admitting' || observation.lifecycle === 'running' || observation.lifecycle === 'waiting_for_review')
+    ? { startedAt: observedAt } : undefined);
+  const terminal = observation && (observation.lifecycle === 'completed' || observation.lifecycle === 'failed' || observation.lifecycle === 'cancelled');
+  const wasTerminal = observation && (observation.previousLifecycle === 'completed' || observation.previousLifecycle === 'failed' || observation.previousLifecycle === 'cancelled');
   return WorkflowProgressEnvelopeV1Schema.parse({
     ...currentProgress, ...definedFields,
+    ...(timing ? { timing: { ...timing, ...(observedAt !== undefined && terminal && !wasTerminal && timing.finishedAt === undefined
+      ? { finishedAt: observedAt } : {}) } } : {}),
     ...(resultProvenance !== undefined ? { resultProvenance: mergeWorkflowResultProvenanceV1(currentProgress.resultProvenance, resultProvenance) } : {}),
     ...(currentProgress.result === undefined && result !== undefined ? { result } : {}),
     ...(currentProgress.reason === undefined && reason !== undefined
-      ? { reason: { code: reason, ...(reasonMessage !== undefined ? { message: reasonMessage } : {}) } } : {}),
+      ? { reason: { code: reason, ...(reasonMessage !== undefined ? { message: reasonMessage } : {}),
+        ...(reasonDetails !== undefined ? { details: reasonDetails } : {}) } } : {}),
     ...(sharedConversationInvocationRecordId !== undefined ? { sharedConversationInvocationRecordId: {
       ...currentProgress.sharedConversationInvocationRecordId, ...sharedConversationInvocationRecordId,
     } } : {}),
@@ -752,7 +829,7 @@ const WORKFLOW_OPERATION_ERROR_CODES_WITHOUT_DETAILS_V1 = [
   'missing_reference', 'invalid_reference_scope',
   'workflow_input_too_large', 'workflow_outcome_unresolved',
   'workflow_interaction_capacity_exceeded',
-  'workflow_conversation_unavailable', 'continuation_unavailable',
+  'continuation_unavailable',
   'workflow_workspace_restore_unavailable', 'workflow_workspace_restore_failed',
   'ineligible_state', 'custody_pending',
   'source_unavailable',
@@ -760,15 +837,39 @@ const WORKFLOW_OPERATION_ERROR_CODES_WITHOUT_DETAILS_V1 = [
   'native_goal_owner', 'session_already_started',
 ] as const;
 
+export const WorkflowTargetUnavailableReasonV1Schema = lazyZodSchema(() => z.enum([
+  'machine_check_failed', 'session_unavailable', 'action_unavailable', 'selection_unavailable',
+  'agent_probe_failed', 'agent_not_installed', 'platform_unsupported', 'dependency_not_installed',
+  'session_creation_unavailable', 'detached_execution_unavailable', 'workspace_unavailable',
+]));
+export type WorkflowTargetUnavailableReasonV1 = z.infer<typeof WorkflowTargetUnavailableReasonV1Schema>;
+export const WorkflowTargetUnavailableDetailsV1Schema = lazyZodSchema(() => z.object({
+  code: z.literal('target_unavailable'), reason: WorkflowTargetUnavailableReasonV1Schema,
+  blockId: WorkflowBlockIdSchema.optional(), agentId: z.string().min(1).optional(),
+  errorCode: z.string().min(1).optional(),
+  platformReason: z.enum(['os', 'arch']).optional(),
+}).strict());
+export type WorkflowTargetUnavailableDetailsV1 = z.infer<typeof WorkflowTargetUnavailableDetailsV1Schema>;
+
 /** Closed semantic failure returned by the Workflow Action family dependency. */
 export const WorkflowActionFailureV1Schema = lazyZodSchema(() => z.discriminatedUnion('errorCode', [
+  z.object({
+    ok: z.literal(false), errorCode: z.literal('workflow_conversation_unavailable'), error: z.string().trim().min(1),
+    details: WorkflowConversationUnavailableDetailsV1Schema.optional(),
+  }).strict(),
   z.object({
     ok: z.literal(false), errorCode: z.literal('content_unavailable'), error: z.string().trim().min(1),
     details: z.object({ reason: WorkflowDefinitionContentUnavailableReasonV1Schema }).strict().optional(),
   }).strict(),
   z.object({
-    ok: z.literal(false), errorCode: z.enum(AGENT_START_REFUSAL_CODES_V1), error: z.string().trim().min(1),
+    ok: z.literal(false), errorCode: z.enum(AGENT_START_REFUSAL_CODES_V1.filter((code) => code !== 'target_unavailable')), error: z.string().trim().min(1),
     details: AgentStartRefusalV1Schema.optional(),
+  }).strict(),
+  z.object({
+    ok: z.literal(false), errorCode: z.literal('target_unavailable'), error: z.string().trim().min(1),
+    // Admission policy refusals retain their canonical ORC contract. Concrete
+    // machine availability refusals use the Workflow owner's diagnostic facts.
+    details: z.union([WorkflowTargetUnavailableDetailsV1Schema, AgentStartRefusalV1Schema]).optional(),
   }).strict(),
   z.object({
     ok: z.literal(false), errorCode: z.literal('invalid_input'), error: z.string().trim().min(1),

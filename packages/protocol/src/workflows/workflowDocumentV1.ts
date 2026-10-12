@@ -1,6 +1,5 @@
 import { z } from 'zod';
 
-import { createCanonicalJsonSigningInput } from '../crypto/canonicalJson.js';
 import {
   type WorkflowDefinitionV1,
   type WorkflowIngressContextV1,
@@ -142,7 +141,7 @@ export function parseWorkflowDocumentJsonV1(json: string): WorkflowDocumentV1 {
   return throwWorkflowDocumentParseFailure(result);
 }
 
-/** Stable JSON interchange projection derived from the one executable document schema. */
+/** Schema-owned JSON interchange preserves authored field order; identity hashing remains canonical. */
 export function serializeWorkflowDocumentJsonV1(document: unknown): string {
-  return createCanonicalJsonSigningInput(parseWorkflowDocumentV1(document));
+  return JSON.stringify(parseWorkflowDocumentV1(document));
 }

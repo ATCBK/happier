@@ -47,6 +47,11 @@ function codesOf(result: ReturnType<typeof validateWorkflowDefinition>): string[
 }
 
 describe('workflow input option sources', () => {
+  it('retains unattended tool restrictions in the canonical workflow selection', () => {
+    const policy = { allowedTools: ['mcp__wilson-brief__*'], unlistedTools: 'deny' };
+    expect(WorkflowSessionAuthoringSelectionSchema.parse(policy)).toMatchObject(policy);
+    expect(WorkflowSessionAuthoringSelectionSchema.safeParse({ ...policy, unlistedTools: 'allow' }).success).toBe(false);
+  });
   it('adapts declared choices without importing Workflow defaults into field selection', () => {
     expect(workflowInputToFieldHint({ name: 'channel', valueType: 'string', required: true,
       optionsSourceId: 'notifications.channels.available' })).toMatchObject({

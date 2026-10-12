@@ -179,7 +179,8 @@ function sealWorkflowStoredEnvelopeV1(params: Readonly<{
   if (!isWorkflowRunDataKey(params.runDataKey)) throw new TypeError('Workflow run data key must be 32 bytes');
   const nonce = params.randomBytes(tweetnacl.secretbox.nonceLength);
   if (nonce.length !== tweetnacl.secretbox.nonceLength) throw new TypeError('Invalid Workflow encryption nonce');
-  const boxed = tweetnacl.secretbox(new TextEncoder().encode(createCanonicalJsonSigningInput(payload)), nonce, params.runDataKey);
+  // Content is not an identity digest: schema property order carries the author's presentation.
+  const boxed = tweetnacl.secretbox(new TextEncoder().encode(JSON.stringify(payload)), nonce, params.runDataKey);
   const bytes = new Uint8Array(nonce.length + boxed.length);
   bytes.set(nonce); bytes.set(boxed, nonce.length);
   return WorkflowStoredContentEnvelopeV1Schema.parse({
@@ -286,7 +287,7 @@ export function openWorkflowFinalResultStoredEnvelopeV1(params: Readonly<{
 }
 
 export function serializeWorkflowStoredContentEnvelopeV1(envelope: unknown): string {
-  return createCanonicalJsonSigningInput(WorkflowStoredContentEnvelopeV1Schema.parse(envelope));
+  return JSON.stringify(WorkflowStoredContentEnvelopeV1Schema.parse(envelope));
 }
 
 export function parseWorkflowStoredContentEnvelopeV1(serialized: unknown): WorkflowStoredContentEnvelopeV1 | null {

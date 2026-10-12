@@ -4,6 +4,9 @@ import type { AccountScopedCryptoMaterial } from '../crypto/accountScopedCipher.
 import { sealAccountScopedBlobCiphertext } from '../crypto/accountScopedCipher.js';
 import { createDeepWorkflowDefinition } from './workflowDefinition.testkit.js';
 import { sameStrictJsonValue } from '../json/strictJsonValue.js';
+import { createCanonicalJsonSigningInput } from '../crypto/canonicalJson.js';
+import { deriveWorkflowPlanRunIdV1 } from './workflowInvocationIdentityV1.js';
+import { parseWorkflowDocumentV1, parseWorkflowDocumentJsonV1, serializeWorkflowDocumentJsonV1 } from './workflowDocumentV1.js';
 import {
   openWorkflowAcceptedSnapshotStoredEnvelopeV1,
   openWorkflowCheckpointStoredEnvelopeV1,
@@ -14,6 +17,8 @@ import {
   sealWorkflowFinalResultStoredEnvelopeV1,
   sealWorkflowProgressStoredEnvelopeV1,
   validateWorkflowStoredEnvelopeOuterForModeV1,
+  parseWorkflowStoredContentEnvelopeV1,
+  serializeWorkflowStoredContentEnvelopeV1,
 } from './workflowStoredContentV1.js';
 
 const material: AccountScopedCryptoMaterial = {
@@ -54,6 +59,58 @@ const finalResultBinding = {
 };
 
 describe('Workflow stored Account content', () => {
+  it('retains declared result field order through workflow JSON interchange', () => {
+    const document = { kind: 'happier.workflow', version: 1, definition: { version: 1, inputs: [], defaults: createDeepWorkflowDefinition(0).defaults,
+      blocks: [{ kind: 'step', id: 'gather', document: { text: 'Gather changes', references: [], attachments: [] }, input: [],
+        execution: { modelSelection: null, permissionMode: 'default' },
+        result: { kind: 'json', schema: { type: 'object', properties: {
+          issues: { type: 'string' }, commits: { type: 'string' },
+        } } } }],
+    } };
+    const imported = parseWorkflowDocumentJsonV1(serializeWorkflowDocumentJsonV1(document));
+    const leaf = imported.definition.blocks[0]!;
+    if (leaf.kind !== 'step' || leaf.result.kind !== 'json') throw new Error('Expected structured result');
+    expect(Object.keys(leaf.result.schema.properties!)).toEqual(['issues', 'commits']);
+  });
+  it.each(['plain', 'e2ee'] as const)('retains authored field order through accepted Run storage without changing semantic identity (%s)', (mode) => {
+    const definition = { version: 1 as const, inputs: [], defaults: createDeepWorkflowDefinition(0).defaults, blocks: [{ kind: 'step' as const,
+      id: 'gather', document: { text: 'Gather changes', references: [], attachments: [] }, input: [],
+      execution: { modelSelection: null, permissionMode: 'default' as const },
+      result: { kind: 'json' as const, schema: { type: 'object' as const, properties: {
+        issues: { type: 'string' as const }, commits: { type: 'string' as const },
+      } } },
+    }] };
+    const reordered = { ...definition, blocks: [{ ...definition.blocks[0]!, result: { kind: 'json' as const,
+      schema: { type: 'object' as const, properties: { commits: { type: 'string' as const }, issues: { type: 'string' as const } } },
+    } }] };
+    expect(deriveWorkflowPlanRunIdV1('run-1', 'row-1', definition))
+      .toBe(deriveWorkflowPlanRunIdV1('run-1', 'row-1', reordered));
+    const imported = parseWorkflowDocumentV1({ kind: 'happier.workflow', version: 1, definition });
+    const fields = (value: typeof imported.definition) => {
+      const leaf = value.blocks[0]!;
+      if (leaf.kind !== 'step' || leaf.result.kind !== 'json') throw new Error('Expected structured result');
+      return Object.keys(leaf.result.schema.properties!);
+    };
+    expect(fields(imported.definition)).toEqual(['issues', 'commits']);
+    const acceptedSnapshot = { startedBy: 'user' as const, authoredDefinition: imported.definition,
+      definition: imported.definition, workDepth: 0, metadata: null, materializedLeaves: [], frozenChildren: {},
+      inputs: {}, machineId: 'machine-1', executionTarget: { kind: 'session' as const },
+      workspaceTarget: { project: { machineId: 'machine-1', directory: '/repo', checkoutRootPath: '/repo' } },
+      source: { kind: 'inline' as const }, origin: { kind: 'direct' as const },
+      authorization: { admittedPermissionCeiling: 'default' as const, principal: { kind: 'host' as const } },
+    };
+    const envelope = sealWorkflowAcceptedSnapshotStoredEnvelopeV1({ binding: acceptedBinding, acceptedSnapshot,
+      ...(mode === 'plain' ? { mode } : { mode, runDataKey, randomBytes }),
+    });
+    const opened = openWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode, binding: acceptedBinding, runDataKey,
+      envelope: parseWorkflowStoredContentEnvelopeV1(serializeWorkflowStoredContentEnvelopeV1(envelope)),
+    });
+    if (opened.kind !== 'available') throw new Error('Expected readable Run');
+    expect(fields(opened.content.definition)).toEqual(['issues', 'commits']);
+    // Already-stored, key-sorted definitions keep their order; no inferred historical order.
+    const stored = parseWorkflowDocumentJsonV1(createCanonicalJsonSigningInput({ kind: 'happier.workflow', version: 1, definition }));
+    expect(fields(stored.definition)).toEqual(['commits', 'issues']);
+  });
   it('projects retained finite completion addresses while preserving arbitrary Action output JSON', () => {
     const target = { key: 'command', serverId: 'home', machineId: 'worker', operationId: 'finite' };
     const output = { arbitraryFutureOutput: { preserve: true } };

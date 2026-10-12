@@ -353,13 +353,6 @@ function requireExactlyOneDefinitionContent(
   }
 }
 
-const AutomationDefinitionDetailContentShape = {
-  /** Predecessor bytes for direct reads and narrow retained-template recovery; ordinary writes use executionRecipe. */
-  templateCiphertext: z.string().min(1).optional(),
-  /** Direct-reader-only current recipe; definition lists never disclose it. */
-  executionRecipe: z.union([AutomationStoredDefinitionExecutionRecipeV1ReadSchema, AutomationStoredWorkflowDefinitionRecipeV2ReadSchema]).optional(),
-};
-
 /** Bounded definition list item; no private source/configuration envelope. */
 export const AutomationDefinitionListItemSchema = lazyZodSchema(() => AutomationDefinitionBaseSchema.extend({
   triggers: z.array(AutomationTriggerListItemSchema),
@@ -372,7 +365,10 @@ export type AutomationDefinitionListItem = z.infer<typeof AutomationDefinitionLi
  */
 export const AutomationDefinitionDetailSchema = lazyZodSchema(() => AutomationDefinitionBaseSchema.extend({
   triggers: z.array(AutomationTriggerDetailSchema),
-  ...AutomationDefinitionDetailContentShape,
+  /** Predecessor bytes for direct reads and narrow retained-template recovery; ordinary writes use executionRecipe. */
+  templateCiphertext: z.string().min(1).optional(),
+  /** Direct-reader-only current recipe; definition lists never disclose it. */
+  executionRecipe: z.union([AutomationStoredDefinitionExecutionRecipeV1ReadSchema, AutomationStoredWorkflowDefinitionRecipeV2ReadSchema]).optional(),
 }).strict().superRefine(requireExactlyOneDefinitionContent));
 export type AutomationDefinitionDetail = z.infer<typeof AutomationDefinitionDetailSchema>;
 
@@ -974,5 +970,9 @@ export const AutomationV3RunMutationResponseSchema = lazyZodSchema(() => z.objec
 }));
 export type AutomationV3RunMutationResponse = z.infer<typeof AutomationV3RunMutationResponseSchema>;
 
-export const AutomationDeleteResponseSchema = lazyZodSchema(() => z.object({ ok: z.literal(true) }).strict());
+export const AutomationDeleteResponseSchema = lazyZodSchema(() => z.object({
+  ok: z.literal(true),
+  /** The live templateVersion removed by deletion; older servers omit this evidence. */
+  removedRevision: z.number().int().nonnegative().safe().optional(),
+}).strict());
 export type AutomationDeleteResponse = z.infer<typeof AutomationDeleteResponseSchema>;

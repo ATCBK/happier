@@ -966,9 +966,9 @@ export const WorkflowBlockListRefV1Schema = lazyZodSchema(() => z.discriminatedU
   z.object({ kind: z.literal('parallelBranch'), parallelId: WorkflowBlockIdSchema, branchId: WorkflowBlockIdSchema }).strict(),
 ]));
 
-type WorkflowSelectionEdit<TKind extends string> = {
-  [TField in keyof WorkflowStepExecutionSelection]-?: { kind: TKind; field: TField; value?: WorkflowStepExecutionSelection[TField] }
-}[keyof WorkflowStepExecutionSelection];
+type WorkflowSelectionEdit<TKind extends string, TSelection extends object> = {
+  [TField in keyof TSelection]-?: { kind: TKind; field: TField; value?: TSelection[TField] }
+}[keyof TSelection];
 
 function selectionEditSchema<TKind extends 'set_default' | 'set_step_setting'>(kind: TKind) {
   const variants = Object.entries(WorkflowStepExecutionSelectionSchema.shape).map(([field, value]) => z.object({
@@ -976,7 +976,9 @@ function selectionEditSchema<TKind extends 'set_default' | 'set_step_setting'>(k
     ...(kind === 'set_step_setting' ? { blockId: WorkflowBlockIdSchema } : {}),
   }).strict());
   return z.union(variants) as z.ZodType<
-    WorkflowSelectionEdit<TKind> & (TKind extends 'set_step_setting' ? { blockId: string } : object)
+    WorkflowSelectionEdit<TKind, WorkflowStepExecutionSelection> & (TKind extends 'set_step_setting' ? { blockId: string } : object),
+    WorkflowSelectionEdit<TKind, z.input<typeof WorkflowStepExecutionSelectionSchema>>
+      & (TKind extends 'set_step_setting' ? { blockId: string } : object)
   >;
 }
 

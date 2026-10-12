@@ -37,7 +37,7 @@ export const WorkflowEffectActionOutputSchemasV1 = {
 
 export const WORKFLOW_EFFECT_ACTION_SPECS_V1 = [
   {
-    id: 'webhooks.call', title: 'Call a webhook',
+    id: 'webhooks.call', approval: {result: 'required'}, title: 'Call a webhook',
     description: 'POST typed JSON through the host webhook destination policy. Retains the response; status 300 or higher fails.',
     safety: 'danger', sideEffectClass: 'write', requiredAuthority: 'account_automation',
     executionPlacement: 'account', placements: [],
@@ -50,7 +50,7 @@ export const WORKFLOW_EFFECT_ACTION_SPECS_V1 = [
     ] },
   },
   {
-    id: 'machines.command.run', title: 'Run a command',
+    id: 'machines.command.run', approval: {result: 'required'}, title: 'Run a command',
     description: 'Run literal shell syntax on the selected Machine in its project workspace. Dynamic values belong only in env. Retains exit code, stdout and stderr.',
     safety: 'danger', sideEffectClass: 'danger', requiredAuthority: 'account_automation',
     executionPlacement: 'machine', placements: [],

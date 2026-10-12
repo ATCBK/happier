@@ -21,6 +21,7 @@ import {
 } from './automationEventJsonBoundsV1.js';
 import {
   AutomationStoredContentEnvelopeV1Schema,
+  AutomationStoredContentEnvelopeV1ReadSchema,
   MAX_AUTOMATION_MATERIALIZED_INPUT_UTF8_BYTES,
   MAX_AUTOMATION_STORED_ENVELOPE_UTF8_BYTES,
 } from './automationStoredContentEnvelopeV1.js';
@@ -127,6 +128,20 @@ export type AutomationRunTriggerEvidenceV1 = z.infer<
   typeof AutomationRunTriggerEvidenceV1Schema
 >;
 const AutomationRunTriggerEvidenceV1ReadSchema = createStoredReadSchema(AutomationRunTriggerEvidenceV1Schema);
+
+/** One retained evidence projection for the recipe and its separately stored sibling. */
+export const AutomationRunTriggerEvidenceEnvelopeV1ReadSchema = lazyZodSchema(() =>
+  AutomationStoredContentEnvelopeV1ReadSchema.transform((envelope, context) => {
+    if (envelope.t === 'encrypted') return envelope;
+    const evidence = AutomationRunTriggerEvidenceV1ReadSchema.safeParse(envelope.v);
+    if (!evidence.success) {
+      for (const issue of evidence.error.issues) {
+        context.addIssue({ ...issue, path: ['v', ...issue.path] });
+      }
+      return z.NEVER;
+    }
+    return AutomationStoredContentEnvelopeV1Schema.parse({ t: 'plain', v: evidence.data });
+  }));
 
 /**
  * Why one frozen prompt program could not be materialized. Execution surfaces
@@ -430,12 +445,12 @@ function projectAutomationExecutionRecipePlainContentV1<T extends Readonly<{
   template: z.infer<typeof AutomationStoredContentEnvelopeV1Schema>;
   triggerEvidence: z.infer<typeof AutomationStoredContentEnvelopeV1Schema> | null;
 }>>(recipe: T, context: z.RefinementCtx) {
-  const evidence = recipe.triggerEvidence?.t === 'plain'
-    ? AutomationRunTriggerEvidenceV1ReadSchema.safeParse(recipe.triggerEvidence.v)
-    : null;
+  const evidence = recipe.triggerEvidence === null
+    ? null
+    : AutomationRunTriggerEvidenceEnvelopeV1ReadSchema.safeParse(recipe.triggerEvidence);
   if (evidence !== null && !evidence.success) {
     for (const issue of evidence.error.issues) {
-      context.addIssue({ ...issue, path: ['triggerEvidence', 'v', ...issue.path] });
+      context.addIssue({ ...issue, path: ['triggerEvidence', ...issue.path] });
     }
     return z.NEVER;
   }
@@ -447,7 +462,7 @@ function projectAutomationExecutionRecipePlainContentV1<T extends Readonly<{
       })
       : recipe.template,
     triggerEvidence: evidence?.success
-      ? AutomationStoredContentEnvelopeV1Schema.parse({ t: 'plain', v: evidence.data })
+      ? evidence.data
       : recipe.triggerEvidence,
   };
 }

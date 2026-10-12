@@ -31,6 +31,40 @@ import {
 } from './workflowProgressV1.js';
 
 describe('workflow progress v1', () => {
+  it('carries closed, non-secret conversation refusal facts through Actions and progress', () => {
+    const details = { code: 'workflow_conversation_unavailable', reason: 'agentTarget',
+      expected: { kind: 'agent', ids: ['happier.agent.claude/claude'] }, observed: { kind: 'unset' } };
+    const failure = { ok: false, errorCode: 'workflow_conversation_unavailable', error: 'workflow_conversation_unavailable', details };
+    expect(WorkflowActionFailureV1Schema.safeParse(failure)).toMatchObject({ success: true, data: failure });
+    const progress = WorkflowProgressEnvelopeV1Schema.parse({ kind: 'happier.workflow-progress.v1', blockKind: 'step',
+      invocationPath: { blockId: 'a', scope: [] }, attempt: '0', logicalInvocationRecordId: 'inv-1' });
+    expect(applyWorkflowInvocationFactV1(progress, { reason: 'workflow_conversation_unavailable', reasonDetails: details }))
+      .toMatchObject({ reason: { code: 'workflow_conversation_unavailable', details } });
+    expect(WorkflowActionFailureV1Schema.safeParse({ ...failure, details: { ...details, token: 'secret' } }).success).toBe(false);
+    expect(WorkflowActionFailureV1Schema.safeParse({ ...failure, details: { ...details, reason: 'invented' } }).success).toBe(false);
+    expect(WorkflowActionFailureV1Schema.safeParse({ ...failure, details: { ...details,
+      observed: { kind: 'object', value: 'secret' } } }).success).toBe(false);
+    expect(WorkflowActionFailureV1Schema.safeParse({ ok: false, errorCode: 'workflow_conversation_unavailable', error: 'legacy' }).success).toBe(true);
+  });
+  it('retains occurrence timing and completed item counts independently of admission cursors', () => {
+    const progress = { kind: 'happier.workflow-progress.v1', blockKind: 'loop',
+      invocationPath: { blockId: 'batch', scope: [] }, attempt: '0', logicalInvocationRecordId: 'batch-row',
+      timing: { startedAt: '2026-10-11T10:00:00.000Z', finishedAt: '2026-10-11T10:02:00.000Z' },
+      loopProgress: { completed: 214, total: 500 },
+    };
+    expect(WorkflowProgressEnvelopeV1Schema.safeParse(progress)).toMatchObject({ success: true, data: progress });
+    expect(WorkflowProgressEnvelopeV1Schema.safeParse({ ...progress, loopProgress: { completed: 501, total: 500 } }).success).toBe(false);
+    expect(WorkflowProgressEnvelopeV1Schema.safeParse({ ...progress, blockKind: 'step' }).success).toBe(false);
+    expect(WorkflowProgressEnvelopeV1Schema.safeParse({ ...progress, timing: { startedAt: 'not-a-time' } }).success).toBe(false);
+  });
+  it('preserves a typed exact-machine Agent probe refusal without accepting opaque diagnostics', () => {
+    const failure = { ok: false, errorCode: 'target_unavailable', error: 'target_unavailable',
+      details: { code: 'target_unavailable', blockId: 'writer', reason: 'agent_probe_failed',
+        agentId: 'claude', errorCode: 'cli-detection-failed' } };
+    expect(WorkflowActionFailureV1Schema.parse(failure)).toEqual(failure);
+    expect(WorkflowActionFailureV1Schema.safeParse({ ...failure, details: { ...failure.details, reason: 'unknown_reason' } }).success).toBe(false);
+    expect(WorkflowActionFailureV1Schema.safeParse({ ...failure, details: { ...failure.details, diagnostics: 'private log' } }).success).toBe(false);
+  });
   it('retains destination labels and exact last-observed invocation facts in private root progress', () => {
     const progress = { kind: 'happier.workflow-progress.v1', blockKind: 'root', invocationPath: { blockId: '$root', scope: [] },
       attempt: '0', logicalInvocationRecordId: 'root', stepProgress: { completed: 0, total: 1, destinations: [
@@ -117,6 +151,10 @@ describe('workflow progress v1', () => {
       expect(WorkflowRunSummaryV1Schema.safeParse(missing).success).toBe(false);
     }
     expect(WorkflowRunSummaryV1Schema.safeParse({ ...summary, attentionRequired: true }).success).toBe(true);
+    for (const heldCount of [0, 5]) {
+      expect(WorkflowRunSummaryV1Schema.parse({ ...summary, heldCount })).toMatchObject({ heldCount });
+    }
+    expect(WorkflowRunSummaryV1Schema.safeParse({ ...summary, heldCount: -1 }).success).toBe(false);
   });
   it('preserves the existing typed Run access denial at the Workflow failure boundary', () => {
     expect(WorkflowActionFailureV1Schema.safeParse({
@@ -521,7 +559,7 @@ describe('workflow progress v1', () => {
     const parsed = WorkflowProgressEnvelopeV1Schema.parse({
       kind: 'happier.workflow-progress.v1',
       invocationPath: { blockId: 'inspect', scope: [{ kind: 'iteration', blockId: 'files', index: 3 }] },
-      frame: { ownerBlockId: 'files', source: { kind: 'item', index: '3' } },
+      frame: { ownerBlockId: 'files', source: { kind: 'item', index: '3', displayLabel: '#1482' } },
       blockKind: 'loop', attempt: '0', logicalInvocationRecordId: 'inv-loop',
       container: {
         kind: 'loop', mode: 'items',
@@ -532,6 +570,7 @@ describe('workflow progress v1', () => {
       containerResult: { kind: 'container', containerRecordId: 'inv-loop' },
     });
     expect(parsed.container).toMatchObject({ kind: 'loop', nextMemberIndex: '4' });
+    expect(parsed.frame?.source).toEqual({ kind: 'item', index: '3', displayLabel: '#1482' });
     expect(WorkflowProgressEnvelopeV1Schema.safeParse({
       ...parsed,
       container: { ...parsed.container, members: ['inv-1', 'inv-2'] },

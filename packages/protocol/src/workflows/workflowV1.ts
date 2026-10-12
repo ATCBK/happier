@@ -113,6 +113,8 @@ export type WorkflowResultContract = z.infer<typeof WorkflowResultContractSchema
  * the Agent launch contract and are not synced Session draft fields.
  */
 const WORKFLOW_SESSION_AUTHORING_SELECTION_SHAPE = {
+  allowedTools: SessionAuthoringSelectionFieldsV1.allowedTools,
+  unlistedTools: SessionAuthoringSelectionFieldsV1.unlistedTools,
   agentTarget: SessionAuthoringSelectionFieldsV1.agentTarget.optional(),
   // The catalog entry carries a `.default(null)` for draft hydration. A workflow
   // definition must distinguish omission from an explicit null, so this consumes
