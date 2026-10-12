@@ -48,7 +48,7 @@ describe('encodeSentryInstanceConfiguration', () => {
     })).ok).toBe(false);
   });
 
-  it('rejects unknown fields at every declared exact configuration boundary', () => {
+  it('drops unknown retained fields at every configuration boundary and keeps encoded output canonical', () => {
     const configuration = {
       v: 1,
       organizationId: '7701',
@@ -58,15 +58,15 @@ describe('encodeSentryInstanceConfiguration', () => {
     expect(decodeSentryInstanceConfiguration(JSON.stringify({
       ...configuration,
       unexpected: true,
-    })).ok).toBe(false);
+    }))).toEqual({ ok: true, configuration });
     expect(decodeSentryInstanceConfiguration(JSON.stringify({
       ...configuration,
       projectScope: { kind: 'allAccessible', unexpected: true },
-    })).ok).toBe(false);
+    }))).toEqual({ ok: true, configuration });
     expect(decodeSentryInstanceConfiguration(JSON.stringify({
       ...configuration,
       environmentScope: { kind: 'all', unexpected: true },
-    })).ok).toBe(false);
+    }))).toEqual({ ok: true, configuration });
   });
 
   it('refuses to encode a configuration that would exceed the bounded token size', () => {

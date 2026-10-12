@@ -13,6 +13,7 @@
  */
 
 import { MAX_TRIAGE_CONFIGURATION_TOKEN_UTF8_BYTES_V1 } from '@happier-dev/triage-protocol/v1';
+import { createProtocolStoredReadSchema, defineProtocolLiteral, defineProtocolObject, defineProtocolString } from '@happier-dev/plugin-sdk/protocol';
 
 import { SENTRY_SCOPE_SEPARATOR } from '../sentryContracts.js';
 
@@ -35,16 +36,12 @@ export type SentryLocalInstanceKeyResultV1 =
   | Readonly<{ ok: false }>;
 
 const REJECTED = Object.freeze({ ok: false as const });
-
-function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function hasExactKeys(value: Readonly<Record<string, unknown>>, keys: readonly string[]): boolean {
-  const actual = Object.keys(value);
-  return actual.length === keys.length
-    && keys.every((key) => Object.prototype.hasOwnProperty.call(value, key));
-}
+const SentryInstanceConfigurationV1Schema = defineProtocolObject({
+  v: defineProtocolLiteral(1), organizationId: defineProtocolString(),
+  projectScope: defineProtocolObject({ kind: defineProtocolLiteral('allAccessible') }, { policy: 'closed' }),
+  environmentScope: defineProtocolObject({ kind: defineProtocolLiteral('all') }, { policy: 'closed' }),
+}, { policy: 'closed' });
+const storedConfiguration = createProtocolStoredReadSchema(SentryInstanceConfigurationV1Schema);
 
 export function encodeSentryInstanceConfiguration(
   configuration: SentryInstanceConfigurationV1,
@@ -85,17 +82,10 @@ export function decodeSentryInstanceConfiguration(
   } catch {
     return REJECTED;
   }
-  if (!isRecord(parsed)
-    || !hasExactKeys(parsed, ['v', 'organizationId', 'projectScope', 'environmentScope'])
-    || parsed.v !== 1) return REJECTED;
-  const { organizationId, projectScope, environmentScope } = parsed;
-  if (typeof organizationId !== 'string' || !isSentryNumericId(organizationId)) return REJECTED;
-  if (!isRecord(projectScope)
-    || !hasExactKeys(projectScope, ['kind'])
-    || projectScope.kind !== 'allAccessible') return REJECTED;
-  if (!isRecord(environmentScope)
-    || !hasExactKeys(environmentScope, ['kind'])
-    || environmentScope.kind !== 'all') return REJECTED;
+  const result = storedConfiguration.safeParse(parsed);
+  if (!result.success) return REJECTED;
+  const { organizationId } = result.data;
+  if (!isSentryNumericId(organizationId)) return REJECTED;
   return Object.freeze({
     ok: true as const,
     configuration: Object.freeze({

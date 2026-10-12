@@ -20,6 +20,7 @@
     "./happier-plugin-ui/sentry-triage-sources-native": "./src/ui/settings/renderSettingsSurface.tsx"
   },
   "files": [
+    "assets",
     "dist",
     ".happier-plugin",
     "package.json"

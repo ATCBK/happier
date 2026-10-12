@@ -14,7 +14,7 @@
  * stays `renderSurface`.
  */
 
-import { createTriageSourceSettingsSurface } from '@happier-dev/triage-sources';
+import { createTriageSourceSettingsSurface } from '@happier-dev/triage-sources/ui';
 
 import {
   SENTRY_ACTION_IDS,

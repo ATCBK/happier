@@ -49,8 +49,8 @@ export const SENTRY_UI_TRANSLATIONS = Object.freeze({
   fr: Object.freeze({
     ...SENTRY_RENDER_UI_TRANSLATIONS.fr,
     'plugins.sentry.account.title': 'Compte Sentry', 'plugins.sentry.account.description': 'Déploiement Sentry et jeton d’authentification utilisés pour lire les organisations et les problèmes.',
-    'plugins.sentry.auth.region.title': 'Région Sentry Cloud', 'plugins.sentry.auth.region.description': 'Choisissez la région qui stocke les données de cette organisation.',
-    'plugins.sentry.auth.origin.title': 'URL Sentry', 'plugins.sentry.auth.origin.description': 'L’origine de votre Sentry auto-hébergé, par exemple https://sentry.example.com.',
+    'plugins.sentry.auth.region.title': 'Région Sentry Cloud', 'plugins.sentry.auth.region.description': 'Choisis la région qui stocke les données de cette organisation.',
+    'plugins.sentry.auth.origin.title': 'URL Sentry', 'plugins.sentry.auth.origin.description': 'L’origine de ton Sentry auto-hébergé, par exemple https://sentry.example.com.',
     'plugins.sentry.auth.token.title': 'Jeton d’authentification Sentry', 'plugins.sentry.auth.token.description': 'Un jeton d’intégration interne ou personnel avec org:read et event:read.',
     'plugins.sentry.auth.cloud.title': 'Jeton Sentry Cloud', 'plugins.sentry.auth.selfHosted.title': 'Jeton Sentry auto-hébergé',
     'plugins.sentry.detail.fallback.body': 'Les détails du problème Sentry ne sont pas disponibles sur cette surface.',

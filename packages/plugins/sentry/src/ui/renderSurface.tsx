@@ -246,7 +246,7 @@ function SelectedOccurrenceSummary({
   return (
     <Stack gap="small">
       <Text
-        variant="caption"
+        variant="micro"
         tone="neutral"
         valueKey={when === null
           ? 'plugins.sentry.ui.showingSelection'
@@ -266,13 +266,13 @@ function SelectedOccurrenceSummary({
         */}
       <RedactionNotice projection={projection} />
       {exception === null
-        ? <Text variant="body">{projection.message === '' ? projection.title : projection.message}</Text>
+        ? <Text variant="meta">{projection.message === '' ? projection.title : projection.message}</Text>
         : (
           <Stack gap="small">
-            <Text variant="body">{`${exception.type}: ${exception.value}`}</Text>
+            <Text variant="meta">{`${exception.type}: ${exception.value}`}</Text>
             {frame === undefined
               ? null
-              : <Text variant="caption" tone="neutral">{frameLabel(frame)}</Text>}
+              : <Text variant="micro" tone="neutral">{frameLabel(frame)}</Text>}
           </Stack>
         )}
       {!sentryProjectionHasTrace(projection) || onOpenStackTrace === undefined
@@ -437,7 +437,7 @@ function LiveSummary({
         ? null
         : <Metadata title="Sentry now" titleKey="plugins.sentry.ui.sentryNow" entries={entries} />}
       <Text
-        variant="caption"
+        variant="micro"
         tone="neutral"
         valueKey="plugins.sentry.ui.retainedCount.description"
         fallback="Sentry counts what it retained for this project’s window, never every occurrence."
@@ -531,7 +531,7 @@ function TagValuesSection({
         ))}
       </ItemGroup>
       <Text
-        variant="caption"
+        variant="micro"
         tone="neutral"
         valueKey="plugins.sentry.ui.valuesRead"
         fallback="{count} value(s) read."
@@ -617,7 +617,7 @@ function TagsSection({
         descriptionKey="plugins.sentry.ui.tagsUnclassified.description"
       />
       <Text
-        variant="caption"
+        variant="micro"
         tone="neutral"
         valueKey="plugins.sentry.ui.tagValues.description"
         fallback="Tag values come from the events Sentry retained. Opening one reads its distribution."
@@ -647,7 +647,7 @@ function TagsSection({
         ? null
         : (
           <Text
-            variant="caption"
+            variant="micro"
             tone="neutral"
             valueKey="plugins.sentry.ui.tagsUnreadable"
             fallback="{count} tag(s) on this issue could not be read."
@@ -764,7 +764,7 @@ function OverviewPanel({
 
   return (
       <TriageDetailStory kind={story ? 'error' : undefined} changes={story ? spread : undefined}>
-        {overview.summary === null ? null : <Text variant="body">{overview.summary}</Text>}
+        {overview.summary === null ? null : <Text variant="meta">{overview.summary}</Text>}
         <LiveSummary summary={summary} locale={locale} nowMs={nowMs} />
         {story ? null : spread}
         {statusFields.length === 0 ? null : (
@@ -787,7 +787,7 @@ function OverviewPanel({
         {pendingFields.length === 0 ? null : (
           <Stack gap="small">
             <Text
-              variant="caption"
+              variant="micro"
               tone="neutral"
               valueKey="plugins.sentry.ui.detailOnly"
               fallback="Read only in this detail body:"
@@ -870,7 +870,7 @@ function IncompleteWalkNotice({
   const description = incompleteDescription(incomplete);
   if (description === null) return null;
   return (
-    <Text variant="caption" tone="neutral">
+    <Text variant="micro" tone="neutral">
       {text(description.key, description.fallback)}
     </Text>
   );
@@ -887,10 +887,19 @@ function OccurrencesFooter({
   controller: SentryPagedControllerV1<SentryProjectedEventRowV1>;
 }>): React.ReactElement {
   const { state } = controller;
+  const text = usePluginTranslation();
+  const commands = React.useMemo<readonly TriageSourcePanelCommandV1[]>(() =>
+    state.canLoadMore && !state.pending ? [{ title: text('plugins.sentry.ui.loadMoreEvents', 'Load more retained events'),
+      operation: { kind: 'loadMoreSourceOccurrences' } }] : [], [state.canLoadMore, state.pending, text]);
+  const loadMore = useTriageSourcePanelIntentV1('loadMoreSourceOccurrences', async (operation, signal) => {
+    if (operation.kind !== 'loadMoreSourceOccurrences' || signal.aborted || !state.canLoadMore || state.pending) return { status: 'unavailable' };
+    controller.loadMore();
+    return { status: 'applied' };
+  }, commands);
   return (
     <Stack gap="small">
       <Text
-        variant="caption"
+        variant="micro"
         tone="neutral"
         valueKey={state.omittedRowCount === 0
           ? 'plugins.sentry.ui.retainedEventsRead'
@@ -908,7 +917,7 @@ function OccurrencesFooter({
             titleKey="plugins.sentry.ui.loadMoreEvents"
             variant="secondary"
             busy={state.pending}
-            onPress={controller.loadMore}
+            onPress={() => { void loadMore({ kind: 'loadMoreSourceOccurrences' }); }}
           />
         )
         : null}
@@ -1106,7 +1115,7 @@ function SelectedOccurrenceEvidenceAction({
 
   return (
     <Stack gap="small">
-      <Text variant="caption" value={description} />
+      <Text variant="micro" value={description} />
       <Button
         title={action}
         variant="secondary"
@@ -1178,7 +1187,7 @@ function OccurrencesPanel({
       {spread
         ? (
           <Text
-            variant="caption"
+            variant="micro"
             tone="neutral"
             valueKey="plugins.sentry.ui.spread.description"
             fallback={'A spread is a pseudo-random deterministic ordering of the same retained'
@@ -1228,7 +1237,7 @@ function OccurrencesPanel({
       header={(
         <Stack gap="small">
           <Text
-            variant="caption"
+            variant="micro"
             tone="neutral"
             valueKey={RETENTION_DISCLOSURE_KEY}
             fallback={RETENTION_DISCLOSURE}
@@ -1378,7 +1387,7 @@ function StackTracePanel({
       header={(
         <Stack gap="large">
           <Text
-            variant="caption"
+            variant="micro"
             tone="neutral"
             valueKey={when === null
               ? 'plugins.sentry.ui.selectionIdentity'
@@ -1436,7 +1445,7 @@ function StackTracePanel({
             ? null
             : (
               <Text
-                variant="caption"
+                variant="micro"
                 tone="neutral"
                 valueKey="plugins.sentry.ui.framesOmitted"
                 fallback="{count} outer frame(s) are not shown. The frames nearest the failure are kept."
@@ -1446,7 +1455,7 @@ function StackTracePanel({
           {messages.map((section, index) => (
             section.kind !== 'message'
               ? null
-              : <Text key={`message:${String(index)}`} variant="body">{section.formatted}</Text>
+              : <Text key={`message:${String(index)}`} variant="meta">{section.formatted}</Text>
           ))}
         </Stack>
       )}
@@ -1479,7 +1488,7 @@ function ReleasePanel({
     <ScrollArea>
       <Stack gap="large">
         <Text
-          variant="caption"
+          variant="micro"
           tone="neutral"
           valueKey="plugins.sentry.ui.releaseEvidence.description"
           fallback="Sentry states these releases on the issue itself; nothing here is inferred from a deploy history."
@@ -1583,7 +1592,7 @@ function ActivityBody({
       footer={(
         <Stack gap="small">
           <Text
-            variant="caption"
+            variant="micro"
             tone="neutral"
             valueKey="plugins.sentry.ui.activityRecordsRead"
             fallback="{count} activity record(s) read. Sentry states this history on the issue itself and does not paginate it."
@@ -1593,7 +1602,7 @@ function ActivityBody({
             ? null
             : (
               <Text
-                variant="caption"
+                variant="micro"
                 tone="neutral"
                 valueKey="plugins.sentry.ui.recordsNotShown"
                 fallback="{count} record(s) could not be shown."
