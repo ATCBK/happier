@@ -1,16 +1,16 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { buildRepositoryCheckpointRefs } from './refs';
+import { buildRepositoryCheckpointRefs, encodeRepositoryCheckpointScope } from './refs';
 import { gitCheckpointAdapter } from './gitCheckpointAdapter';
-import { readRepositoryCheckpointBranchEvidence, readRepositoryCheckpointCommitEvidence, readRepositoryCheckpointPullRequestEvidence, retainRepositoryCheckpointTurnEvidence } from './sessionEvidence';
+import { findRepositoryCheckpointTurnEvidenceByReceipt, readRepositoryCheckpointBranchEvidence, readRepositoryCheckpointCommitEvidence, readRepositoryCheckpointInitialEvidence, readRepositoryCheckpointPullRequestEvidence, readRepositoryCheckpointTurnEvidence, retainRepositoryCheckpointTurnEvidence } from './sessionEvidence';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { createTestGitRpcManager } from '../rpc/__tests__/testRpcHarness';
 
 describe('checkpoint/commit correspondence', () => {
   it('uses only server-stamped exact Session proof at the encrypted SCM ingress', async () => {
-    const { createTestGitRpcManager } = await import('../rpc/__tests__/testRpcHarness');
     const cwd = mkdtempSync(join(tmpdir(), 'happier-work-ingress-'));
     try {
       const { call } = createTestGitRpcManager({ workingDirectory: cwd });
@@ -64,14 +64,27 @@ describe('checkpoint/commit correspondence', () => {
           contentConfidence: 'exact', attributionScope: 'shared_worktree', receipts: [...before.receipts, ...after.receipts] },
       } as const;
       await retainRepositoryCheckpointTurnEvidence({ cwd, scopeId, turnChangeSet });
+      const directory = join(cwd, git(['rev-parse', '--git-path', 'happier/checkpoint-evidence']), encodeRepositoryCheckpointScope(scopeId));
+      const turnPath = join(directory, 'turns', `${encodeRepositoryCheckpointScope('turn')}.json`);
+      const stored = JSON.parse(readFileSync(turnPath, 'utf8')) as Record<string, unknown>;
+      writeFileSync(turnPath, JSON.stringify({ ...stored, retiredField: true,
+        repositoryCheckpoint: { ...turnChangeSet.repositoryCheckpoint, retiredField: true,
+          receipts: turnChangeSet.repositoryCheckpoint.receipts.map(receipt => ({ ...receipt, retiredField: true })) } }));
+      expect(await readRepositoryCheckpointTurnEvidence({ cwd, scopeId, turnId: 'turn' })).toEqual(turnChangeSet);
+      expect(await findRepositoryCheckpointTurnEvidenceByReceipt({ cwd, scopeId, receiptId: after.receipts[0].id })).toEqual(turnChangeSet);
+      writeFileSync(join(directory, 'initial.json'), JSON.stringify({ state: 'unavailable', reason: 'Retained reason', retiredField: true }));
+      expect(await readRepositoryCheckpointInitialEvidence({ cwd, scopeId })).toEqual({ state: 'unavailable', reason: 'Retained reason' });
       git(['add', 'a']); git(['commit', '-m', 'real commit']);
       const commitSha = git(['rev-parse', 'HEAD']);
+      const committedAtMs = Number(git(['show', '-s', '--format=%ct', commitSha])) * 1000;
+      const checkpointCommittedAtMs = Number(git(['show', '-s', '--format=%ct', after.commitSha])) * 1000;
       const branchRef = git(['symbolic-ref', 'HEAD']);
       const branchEvidence = await readRepositoryCheckpointBranchEvidence({ cwd, sessionId: 'session' });
       expect(branchEvidence).toMatchObject([{ turnId: 'turn', commitSha,
+        committedAtMs, checkpointCommittedAtMs, retainedChange: { targetSha: commitSha, method: 'changed_file_tree_comparison',
+          status: 'retained', addedLines: 1, removedLines: 1 },
         attributionScope: 'shared_worktree', branch: { ref: branchRef, headSha: commitSha } }]);
       expect(branchEvidence[0].repositoryKey).not.toContain(cwd);
-      const { createTestGitRpcManager } = await import('../rpc/__tests__/testRpcHarness');
       const { call } = createTestGitRpcManager({ workingDirectory: cwd });
       expect(await call(RPC_METHODS.SCM_BRANCH_LIST, { workEvidence: { sessionId: 'session' } },
         { kind: 'session.write', sessionId: 'session' })).toMatchObject({ success: true, branchEvidenceStatus: 'partial',
@@ -80,9 +93,9 @@ describe('checkpoint/commit correspondence', () => {
       expect((await readRepositoryCheckpointBranchEvidence({ cwd, sessionId: 'session' }))
         .map(row => row.branch.ref).sort()).toEqual([branchRef, 'refs/heads/same-graph'].sort());
       const input = { cwd, repositoryKey: 'repo', sessionId: 'session', commitShas: [commitSha] };
-      expect(await readRepositoryCheckpointCommitEvidence(input)).toEqual([{
+      expect(await readRepositoryCheckpointCommitEvidence(input)).toMatchObject([{
         sessionId: 'session', turnId: 'turn', repositoryKey: 'repo', checkpointRef: refs.turnFinal!.ref,
-        checkpointCommitSha: after.commitSha, commitSha, attributionScope: 'shared_worktree',
+        checkpointCommitSha: after.commitSha, commitSha, committedAtMs, attributionScope: 'shared_worktree',
       }]);
       expect(await readRepositoryCheckpointCommitEvidence({ ...input, sessionId: 'another-session' })).toEqual([]);
       const clone = join(cwd, 'other-repository');
@@ -97,6 +110,21 @@ describe('checkpoint/commit correspondence', () => {
       const linked = await readRepositoryCheckpointPullRequestEvidence({ ...input, pullRequests: [pullRequest,
         { ...pullRequest, number: 2, headSha: baseSha }, { ...pullRequest, number: 3, headSha: 'not-an-oid' }] });
       expect(linked.map(row => [row.turnId, row.commitSha, row.pullRequest.number])).toEqual([['turn', commitSha, 1]]);
+      expect(linked[0]).toMatchObject({ branchRepositoryKey: branchEvidence[0].repositoryKey, branches: [{ ref: branchRef, headSha: commitSha },
+        { ref: 'refs/heads/same-graph', headSha: commitSha }],
+        retainedChange: { targetSha: commitSha, status: 'retained', addedLines: 1, removedLines: 1 } });
+      writeFileSync(join(cwd, 'unrelated'), 'unrelated\n'); git(['add', 'unrelated']); git(['commit', '-m', 'unrelated']);
+      expect(await readRepositoryCheckpointBranchEvidence({ cwd, sessionId: 'session' })).toMatchObject([
+        { retainedChange: { status: 'retained', addedLines: 1, removedLines: 1 } },
+        { retainedChange: { status: 'retained', addedLines: 1, removedLines: 1 } },
+      ]);
+      // The hosting head is an immutable proof. A matching display name cannot link a moved branch.
+      expect((await readRepositoryCheckpointPullRequestEvidence({ ...input, pullRequests: [pullRequest] }))[0]?.branches)
+        .toEqual([{ ref: 'refs/heads/same-graph', headSha: commitSha }]);
+      writeFileSync(join(cwd, 'a'), 'later edit\n'); git(['add', 'a']); git(['commit', '-m', 'later edit']);
+      expect((await readRepositoryCheckpointBranchEvidence({ cwd, sessionId: 'session' }))
+        .find(row => row.branch.ref === branchRef)?.retainedChange).toMatchObject({ status: 'partial', addedLines: 0,
+          removedLines: 0, targetSha: git(['rev-parse', 'HEAD']) });
       const otherTurnRefs = buildRepositoryCheckpointRefs({ scopeId, turnId: 'another-turn' });
       git(['update-ref', otherTurnRefs.turnStart!.ref, before.commitSha]);
       git(['update-ref', otherTurnRefs.turnFinal!.ref, after.commitSha]);

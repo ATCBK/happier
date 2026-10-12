@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 
 import type { ScmBackendRegistry } from './registry';
 import type { ScmBackend } from './types';
@@ -28,6 +29,72 @@ async function withFirstPartyScmRuntime<T>(
 }
 
 describe('scmBackendCatalog', () => {
+  it('refuses uncustodied forge Actions at activation without poisoning healthy backends', async () => {
+    // A source-only registry without the daemon's development-root admission
+    // must not publish executable Actions with invented source custody.
+    const runtime = await resolveExecutablePluginRuntimeRegistry({
+      pluginIds: ['happier.scm.backend.git', 'happier.scm.forge.azure-devops'],
+    });
+    try {
+      const registry = await resolveDefaultScmBackendRegistry({ pluginRuntimeRegistry: runtime });
+      expect(registry.listBackends().map((backend) => backend.id)).toEqual(['happier.scm.backend.git/git']);
+      expect(runtime.activatedPluginIds.has('happier.scm.forge.azure-devops')).toBe(false);
+      expect(runtime.targetActionInvocations?.has('happier.scm.forge.azure-devops', 'triage-list-instances')).toBe(false);
+      expect(runtime.targetActivationFacts).toEqual(expect.arrayContaining([
+        expect.objectContaining({ pluginId: 'happier.scm.forge.azure-devops', status: 'unavailable' }),
+      ]));
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it.each(['selected', 'all'] as const)('publishes admitted forge Actions with the host occurrence and source custody (%s plugins)', async (scope) => {
+    const fixture = await createAdmittedPluginRuntimeFixture({
+      runtimeOptions: scope === 'selected'
+        ? { pluginIds: ['happier.scm.backend.git', 'happier.scm.forge.azure-devops'] }
+        : {},
+    });
+    try {
+      const runtime = fixture.registry;
+      const registry = await resolveDefaultScmBackendRegistry({ pluginRuntimeRegistry: runtime });
+      expect(registry.listBackends().map((backend) => backend.id)).toEqual(scope === 'selected'
+        ? ['happier.scm.backend.git/git']
+        : ['happier.scm.backend.git/git', 'happier.scm.backend.sapling/sapling']);
+      expect(runtime.targetActionInvocations?.has('happier.scm.forge.azure-devops', 'triage-list-instances')).toBe(true);
+      expect(runtime.readPluginSourceCustody?.('happier.scm.forge.azure-devops')).toEqual(expect.objectContaining({ kind: 'development' }));
+      expect(runtime.targetActivationFacts).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: 'happier.scm.forge.azure-devops',
+          status: 'active',
+          occurrenceId: runtime.readPluginOccurrenceId?.('happier.scm.forge.azure-devops'),
+        }),
+      ]));
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  it('keeps forge activation outside a backend-scoped admitted runtime', async () => {
+    const fixture = await createAdmittedPluginRuntimeFixture({
+      runtimeOptions: { pluginIds: ['happier.scm.backend.git', 'happier.scm.backend.sapling'] },
+    });
+    try {
+      const runtime = fixture.registry;
+      const registry = await resolveDefaultScmBackendRegistry({ pluginRuntimeRegistry: runtime });
+      expect(registry.listBackends().map((backend) => backend.id)).toEqual([
+        'happier.scm.backend.git/git',
+        'happier.scm.backend.sapling/sapling',
+      ]);
+      expect([...runtime.activatedPluginIds].sort()).toEqual([
+        'happier.scm.backend.git',
+        'happier.scm.backend.sapling',
+      ]);
+      await expect(runtime.activatePluginsForValidation(['happier.scm.forge.azure-devops'])).resolves.toEqual([]);
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
   it('merges registered plugin backends through the catalog without editing built-in provider arrays', () => {
     const pluginBackend = {
       id: 'acme-vcs',

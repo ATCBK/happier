@@ -39,6 +39,7 @@ function createContributionRegistry(): ResolvedContributionRegistry {
 
 function createRuntimeRegistry(contributes: ResolvedContributionRegistry): ResolvedExecutablePluginRuntimeRegistry {
   return {
+    claimReleaseLessDeclarations: async () => undefined,
     contributes,
     resolvePromptAssetBlocks: async () => [],
     resolveCaptureSource: async () => null,

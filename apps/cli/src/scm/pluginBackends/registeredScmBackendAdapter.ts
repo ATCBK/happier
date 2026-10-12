@@ -19,6 +19,7 @@ import { runWithHostingProviderRuntimeServices as runWithHostSuppliedScmHostingP
 import { runWithBackendRuntimeServices as runWithScmBackendRuntimeServices } from '@happier-dev/plugin-sdk/scm/backend';
 
 import type { ScmBackend } from '../types';
+import { withScmWorktreeMutationActivity } from '../worktreeMutationActivity';
 import { resolveScmBackendCapabilities } from '@happier-dev/protocol/scm/resolveScmBackendCapabilities';
 import type { ScmWorkspaceIntegrationPortableWorkspacePathClassification as HostPortableWorkspacePathClassification } from '../workspace/portableWorkspacePath';
 import { runScmCommand as runHostScmCommand } from '../runtime';
@@ -124,6 +125,16 @@ function createScmBackendRuntimeServices(
     return { runCommand, runCommandStreaming: runCommand };
 }
 
+function useWorktreeMutationHandler<TInput extends object, TResult>(
+    services: ScmBackendRuntimeServices,
+    hostingServices: ScmHostingProviderRuntimeServices | null,
+    handler: ((input: TInput & Readonly<{ signal: AbortSignal }>) => Promise<TResult> | TResult) | undefined,
+    input: TInput,
+): Promise<TResult | UnsupportedResult> {
+    if (!handler) return unsupportedOperation();
+    return withScmWorktreeMutationActivity(() => useHandler(services, hostingServices, handler, input));
+}
+
 export type ScmBackendExecutableDefinition = Readonly<{
     repoModes: readonly ScmRepoMode[];
     capabilities: ScmBackendCapabilities;
@@ -175,14 +186,14 @@ function createWorkspaceIntegrationAdapter(
         ...(handlers.prepareReviewWorkspace ? {
             prepareReviewWorkspace: async (input) => {
                 const operationInput = withOperationSignal(input);
-                return await runWithScmBackendRuntimeServices(
+                return await withScmWorktreeMutationActivity(() => runWithScmBackendRuntimeServices(
                     services,
                     async () => await runWithScmHostingProviderRuntimeServices(
                         hostingServices,
                         async () => await handlers.prepareReviewWorkspace!(operationInput),
                         { signal: operationInput.signal },
                     ),
-                );
+                ));
             },
         } : {}),
         ...(handlers.verifyPreparedReviewWorkspace ? {
@@ -199,31 +210,31 @@ function createWorkspaceIntegrationAdapter(
             },
         } : {}),
         ...(handlers.realizeWorkspaceCheckout ? {
-            realizeWorkspaceCheckout: async (input) => await runWithScmBackendRuntimeServices(
+            realizeWorkspaceCheckout: async (input) => await withScmWorktreeMutationActivity(() => runWithScmBackendRuntimeServices(
                 services,
                 async () => await runWithScmHostingProviderRuntimeServices(
                     hostingServices,
                     async () => await handlers.realizeWorkspaceCheckout!(input),
                 ),
-            ),
+            )),
         } : {}),
         ...(handlers.createWorkspaceCheckout ? {
-            createWorkspaceCheckout: async (input) => await runWithScmBackendRuntimeServices(
+            createWorkspaceCheckout: async (input) => await withScmWorktreeMutationActivity(() => runWithScmBackendRuntimeServices(
                 services,
                 async () => await runWithScmHostingProviderRuntimeServices(
                     hostingServices,
                     async () => await handlers.createWorkspaceCheckout!(input),
                 ),
-            ),
+            )),
         } : {}),
         ...(handlers.materializeWorkspaceCheckout ? {
-            materializeWorkspaceCheckout: async (input) => await runWithScmBackendRuntimeServices(
+            materializeWorkspaceCheckout: async (input) => await withScmWorktreeMutationActivity(() => runWithScmBackendRuntimeServices(
                 services,
                 async () => await runWithScmHostingProviderRuntimeServices(
                     hostingServices,
                     async () => await handlers.materializeWorkspaceCheckout!(input),
                 ),
-            ),
+            )),
         } : {}),
         ...(handlers.resolveWorkspaceTransfer ? {
             resolveWorkspaceTransfer: async (input) => await runWithScmBackendRuntimeServices(
@@ -382,6 +393,9 @@ export function createRegisteredScmBackendAdapter(input: Readonly<{
         async worktreesEnrichment({ context, request }) {
             return useHandler(runtimeServices, hostingProviderRuntimeServices, input.registration.handlers.read?.worktreesEnrichment, { context, request });
         },
+        async ignoredPaths(operationInput) {
+            return useHandler(runtimeServices, hostingProviderRuntimeServices, input.registration.handlers.read?.ignoredPaths, operationInput);
+        },
         async diffFile({ context, request }) {
             return useHandler(runtimeServices, hostingProviderRuntimeServices, input.registration.handlers.read?.diffFile, { context, request });
         },
@@ -460,19 +474,25 @@ export function createRegisteredScmBackendAdapter(input: Readonly<{
         async worktreeCreate({ context, request }) {
             const handler = input.registration.handlers.worktree?.create;
             if (!handler) return unsupportedOperation();
-            return await runWithScmBackendRuntimeServices(
+            return await withScmWorktreeMutationActivity(() => runWithScmBackendRuntimeServices(
                 runtimeServices,
                 async () => await runWithScmHostingProviderRuntimeServices(
                     hostingProviderRuntimeServices,
                     async () => await handler(withOperationSignal({ context, request })),
                 ),
-            );
+            ));
         },
         async worktreeRemove({ context, request }) {
-            return useHandler(runtimeServices, hostingProviderRuntimeServices, input.registration.handlers.worktree?.remove, { context, request });
+            return useWorktreeMutationHandler(runtimeServices, hostingProviderRuntimeServices, input.registration.handlers.worktree?.remove, { context, request });
+        },
+        async worktreeRetire({ context, request }) {
+            return useWorktreeMutationHandler(runtimeServices, hostingProviderRuntimeServices, input.registration.handlers.worktree?.retire, { context, request });
+        },
+        async worktreeReinstate({ context, request }) {
+            return useWorktreeMutationHandler(runtimeServices, hostingProviderRuntimeServices, input.registration.handlers.worktree?.reinstate, { context, request });
         },
         async worktreePrune({ context, request }) {
-            return useHandler(runtimeServices, hostingProviderRuntimeServices, input.registration.handlers.worktree?.prune, { context, request });
+            return useWorktreeMutationHandler(runtimeServices, hostingProviderRuntimeServices, input.registration.handlers.worktree?.prune, { context, request });
         },
         async remoteAdd({ context, request }) {
             return useHandler(runtimeServices, hostingProviderRuntimeServices, input.registration.handlers.remote?.add, { context, request });
@@ -544,7 +564,7 @@ export function createRegisteredScmBackendAdapter(input: Readonly<{
             return useHandler(runtimeServices, hostingProviderRuntimeServices, input.registration.handlers.hosting?.pullRequestCheckout, { context, request });
         },
         async pullRequestPrepareWorktree({ context, request }) {
-            return useHandler(runtimeServices, hostingProviderRuntimeServices, input.registration.handlers.hosting?.pullRequestPrepareWorktree, { context, request });
+            return useWorktreeMutationHandler(runtimeServices, hostingProviderRuntimeServices, input.registration.handlers.hosting?.pullRequestPrepareWorktree, { context, request });
         },
         async pullRequestRunStacked({ context, request }) {
             const handler = input.registration.handlers.hosting?.pullRequestRunStacked;

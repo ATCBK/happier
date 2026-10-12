@@ -964,13 +964,16 @@ export async function executeScmActionOperation(
         const response = settled as Record<string, unknown>;
         if (!params.actionId.startsWith('scm.diffSummary.') && spec.sideEffectClass !== 'read' && typeof response.success === 'boolean') {
             const code = ScmOperationErrorCodeSchema.safeParse(response.errorCode);
-            settled = { ...response, outcome: normalizeScmOperationOutcome({
+            const withOutcome = spec.outputSchema.safeParse({ ...response, outcome: normalizeScmOperationOutcome({
                 success: response.success,
                 ...(response.outcome ? { outcome: ScmOperationOutcomeSchema.parse(response.outcome) } : {}),
                 ...(code.success ? { errorCode: code.data } : {}),
                 ...(typeof response.error === 'string' ? { error: response.error } : {}),
                 ...(typeof response.commitSha === 'string' ? { commitSha: response.commitSha } : {}),
-            }) };
+            }) });
+            // The declared result owns its envelope. Closed operations such as
+            // prepared-workspace materialization do not carry SCM outcomes.
+            if (withOutcome.success) settled = withOutcome.data;
         }
     }
     return params.rpcCompatibility && !params.actionId.startsWith('scm.diffSummary.')

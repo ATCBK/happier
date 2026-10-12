@@ -14,6 +14,7 @@ import {
     materializeWorkspaceExportArtifactsWithScmWorkspace,
     recoverInterruptedWorkspaceTargetMaterialization,
     rehydrateWorkspaceTargetMaterialization,
+    rehydrateWorkspaceTargetMaterializationFromReceiptPath,
     removeCommittedWorkspaceTargetMaterialization,
     type WorkspaceTargetMaterializationReceiptV1,
 } from './workspaceExportMaterialization';
@@ -35,6 +36,37 @@ const naming = {
 } as const;
 const registry = createScmBackendRegistry([]);
 describe('workspace export materialization custody', () => {
+    it('opens retained receipt fields across restart and rewrites only canonical custody', async () => {
+        const fixture = await realpath(await mkdtemp(join(tmpdir(), 'workspace-export-retained-receipt-')));
+        try {
+            const target = join(fixture, 'copy');
+            const receiptPath = join(fixture, 'receipt.json');
+            await mkdir(target);
+            const creation = { serverId: 'home', relationshipId: 'worker-link', sourceWorkspaceRefId: 'source', targetWorkspaceRefId: 'target' };
+            const initial = await beginWorkspaceTargetMaterialization({ targetPath: target, backupDirectoryPrefix: '.backup', receiptPath,
+                targetFence: { state: 'empty', identity: await readWorkspaceSyncRootObjectIdentity(target), workerCopyCreation: creation } });
+            await mkdir(target);
+            await initial.custody.bindPromotedTarget();
+            const receipt = initial.custody.receipt;
+            await writeFile(receiptPath, JSON.stringify({ ...receipt, retiredReceipt: true,
+                originalTargetIdentity: { ...receipt.originalTargetIdentity, retiredIdentity: true },
+                promotedTargetIdentity: { ...receipt.promotedTargetIdentity, retiredIdentity: true },
+                expectedBackupIdentity: { ...receipt.expectedBackupIdentity, retiredIdentity: true },
+                workerCopyCreation: { ...creation, retiredCreation: true } }));
+            const restarted = await rehydrateWorkspaceTargetMaterializationFromReceiptPath({ targetPath: target, backupDirectoryPrefix: '.backup', receiptPath });
+            expect(restarted?.receipt).toEqual(receipt);
+            await restarted!.commit();
+            const canonical = JSON.parse(await readFile(receiptPath, 'utf8')) as WorkspaceTargetMaterializationReceiptV1;
+            expect(canonical).not.toHaveProperty('retiredReceipt');
+            expect(canonical.originalTargetIdentity).not.toHaveProperty('retiredIdentity');
+            expect(canonical.workerCopyCreation).toEqual(creation);
+            await writeFile(receiptPath, JSON.stringify({ ...canonical, committed: { ...canonical.committed, retiredCommit: true } }));
+            await expect(inspectCommittedWorkspaceTargetMaterialization({ targetPath: target, receiptPath }))
+                .resolves.toEqual(canonical);
+        } finally {
+            await rm(fixture, { recursive: true, force: true });
+        }
+    });
     it.each(['ordinary', 'different_worker'] as const)('does not relabel an original uncommitted materialization receipt (%s)', async original => {
         const fixture = await realpath(await mkdtemp(join(tmpdir(), 'workspace-export-creation-binding-')));
         try {

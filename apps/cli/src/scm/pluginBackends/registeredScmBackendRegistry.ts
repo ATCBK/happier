@@ -36,6 +36,9 @@ type SupportedLeaf = Readonly<{
 }>;
 
 const EXECUTABLE_SUPPORTED_LEAVES: readonly SupportedLeaf[] = [
+    { key: 'read.ignoredPaths', hasHandler: (registration) => typeof registration.handlers.read?.ignoredPaths === 'function' },
+    { key: 'worktree.retire', hasHandler: (registration) => typeof registration.handlers.worktree?.retire === 'function' },
+    { key: 'worktree.reinstate', hasHandler: (registration) => typeof registration.handlers.worktree?.reinstate === 'function' },
     {
         key: 'detection.repository',
         hasHandler: (registration) => typeof registration.handlers.detection?.detectRepo === 'function',

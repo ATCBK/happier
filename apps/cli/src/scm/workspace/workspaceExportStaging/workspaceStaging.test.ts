@@ -1,11 +1,11 @@
-import { access, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { cleanupWorkspaceStaging } from './cleanupWorkspaceStaging';
-import { createWorkspaceStagingRoot, resolveWorkspaceStagingRootDirectory } from './createWorkspaceStagingRoot';
+import { createWorkspaceStagingRoot, readWorkspaceStagingRootMarker, resolveWorkspaceStagingRootDirectory } from './createWorkspaceStagingRoot';
 
 const tempRoots: string[] = [];
 
@@ -44,6 +44,11 @@ describe('workspaceStaging', () => {
             parentDirectory,
             stagingId: 'run_cleanup',
         });
+
+        const marker = { schemaVersion: 1, stagingId: stagingRoot.stagingId, rootDirectory: stagingRoot.rootDirectory };
+        await writeFile(stagingRoot.markerFilePath, JSON.stringify({ ...marker, retiredStaging: true }));
+        await expect(readWorkspaceStagingRootMarker({ rootDirectory: stagingRoot.rootDirectory })).resolves.toEqual(marker);
+        await expect(createWorkspaceStagingRoot({ parentDirectory, stagingId: 'run_cleanup' })).resolves.toEqual(stagingRoot);
 
         await cleanupWorkspaceStaging({ rootDirectory: stagingRoot.rootDirectory });
 

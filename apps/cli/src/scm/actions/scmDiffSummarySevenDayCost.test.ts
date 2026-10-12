@@ -5,10 +5,10 @@ import { summarizeScmDiffSummarySevenDayCost } from './scmDiffSummarySevenDayCos
 describe('saved change explanation cost projection', () => {
   it('sums only actual recent execution records and discloses incomplete cost coverage', () => {
     const untilMs = 10 * 24 * 60 * 60 * 1000;
-    const payload = (estimatedUsd?: number) => ({ kind: 'scm_diff_summary.v1', payload: ScmDiffSummaryGenerateOutputSchema.parse({
+    const payload = (estimatedUsd?: number) => ({ kind: 'scm_diff_summary.v1', payload: { ...ScmDiffSummaryGenerateOutputSchema.parse({
       success: true, summaryMarkdown: 'Summary', sourceKey: 'comparison', metadata: { sourceKey: 'comparison', source: { kind: 'workingTree' } },
       ...(estimatedUsd === undefined ? {} : { cost: { estimatedUsd } }),
-    }) });
+    }), retiredOutput: true, ...(estimatedUsd === undefined ? {} : { cost: { estimatedUsd, retiredCost: true } }) } });
     expect(summarizeScmDiffSummarySevenDayCost([
       { intent: 'scm_diff_summary', startedAtMs: untilMs - 100, structuredMeta: payload(0.12) },
       { intent: 'scm_diff_summary', startedAtMs: untilMs - 200, structuredMeta: payload(0) },

@@ -1,8 +1,10 @@
 import { ScmDiffSummaryGenerateOutputSchema } from '@happier-dev/protocol/scm/diffSummary';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import type { ScmDiffSummarySevenDayCost } from '@happier-dev/protocol';
 import type { RetainedExecutionRunRecord } from '@/agent/runtime/bridges/executionRun/retainedState';
 
 type CostRecord = Pick<RetainedExecutionRunRecord['state'], 'intent' | 'startedAtMs' | 'finishedAtMs' | 'structuredMeta'>;
+const StoredScmDiffSummaryGenerateOutputSchema = createStoredReadSchema(ScmDiffSummaryGenerateOutputSchema);
 /** Retained Run projections are not a complete historical cost ledger. */
 export function summarizeScmDiffSummarySevenDayCost(records: readonly CostRecord[], untilMs: number): ScmDiffSummarySevenDayCost {
   const sinceMs = Math.max(0, untilMs - 7 * 24 * 60 * 60 * 1000);
@@ -12,7 +14,7 @@ export function summarizeScmDiffSummarySevenDayCost(records: readonly CostRecord
   let pricedRunCount = 0;
   for (const record of recent) {
     if (record.structuredMeta?.kind !== 'scm_diff_summary.v1') continue;
-    const output = ScmDiffSummaryGenerateOutputSchema.safeParse(record.structuredMeta.payload);
+    const output = StoredScmDiffSummaryGenerateOutputSchema.safeParse(record.structuredMeta.payload);
     const cost = output.success ? output.data.cost?.estimatedUsd : undefined;
     if (cost === undefined) continue;
     estimatedUsd += cost;

@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { access, readFile, readdir, realpath, rename, rm, rmdir } from 'node:fs/promises';
 import { basename, dirname, join, parse, resolve } from 'node:path';
+import { z } from 'zod';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import type { ScmBackendRegistry } from '../registry';
 import { writeJsonAtomic } from '@/utils/fs/writeJsonAtomic';
@@ -29,7 +31,7 @@ import {
 import type { ScmWorkspaceIntegrationWorkspaceExportArtifacts } from './workspaceExportArtifacts';
 import type { ScmWorkspaceIntegrationWorkspaceTransferConflictPolicy } from './workspaceTransfer';
 import {
-    isWorkspaceSyncRootObjectIdentityV1,
+    WorkspaceSyncRootObjectIdentityV1Schema,
     readWorkspaceSyncRootObjectIdentity,
     workspaceSyncRootObjectIdentitiesEqual,
     computeWorkspaceSyncRootFingerprint,
@@ -63,6 +65,30 @@ export type WorkspaceTargetMaterializationReceiptV1 = Readonly<{
     removalTargetName?: string;
 }>;
 
+const WorkerCopyCreationSchema = z.object({
+    serverId: z.string().min(1).refine(value => value === value.trim()),
+    relationshipId: z.string().min(1).refine(value => value === value.trim()),
+    sourceWorkspaceRefId: z.string().min(1).refine(value => value === value.trim()),
+    targetWorkspaceRefId: z.string().min(1).refine(value => value === value.trim()),
+}).strict().refine(value => value.sourceWorkspaceRefId !== value.targetWorkspaceRefId);
+
+const CommittedTargetSchema = z.object({
+    canonicalRoot: z.string().refine(value => value === resolve(value)),
+    rootFingerprint: z.string().regex(/^[a-f0-9]{64}$/u),
+}).strict();
+const RemovalTargetNameSchema = z.string().regex(/^\.happier-sync-backup\.[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu);
+const MaterializationReceiptSchema = z.object({
+    v: z.literal(1),
+    previousTargetName: z.string().nullable(),
+    originalTargetIdentity: WorkspaceSyncRootObjectIdentityV1Schema.nullable(),
+    promotedTargetIdentity: WorkspaceSyncRootObjectIdentityV1Schema.nullable(),
+    expectedBackupIdentity: WorkspaceSyncRootObjectIdentityV1Schema.nullable(),
+    workerCopyCreation: WorkerCopyCreationSchema.optional(),
+    committed: CommittedTargetSchema.optional(),
+    removalTargetName: RemovalTargetNameSchema.optional(),
+}).strict();
+const StoredMaterializationReceiptSchema = createStoredReadSchema(MaterializationReceiptSchema);
+
 export type WorkspaceExportMaterializationCustody = Readonly<{
     receipt: WorkspaceTargetMaterializationReceiptV1;
     bindPromotedTarget(): Promise<void>;
@@ -90,31 +116,7 @@ async function readMaterializationReceipt(path: string): Promise<WorkspaceTarget
     });
     if (raw === null) return null;
     try {
-        const value = JSON.parse(raw) as unknown;
-        if (!value || typeof value !== 'object' || Array.isArray(value)
-            || Object.keys(value).filter((key) => key !== 'committed' && key !== 'removalTargetName' && key !== 'workerCopyCreation').sort().join('\0') !== [
-                'expectedBackupIdentity',
-                'originalTargetIdentity',
-                'previousTargetName',
-                'promotedTargetIdentity',
-                'v',
-            ].sort().join('\0')) {
-            throw new Error('invalid receipt');
-        }
-        const candidate = value as Record<string, unknown>;
-        if (candidate.v !== 1
-            || !(candidate.previousTargetName === null || typeof candidate.previousTargetName === 'string')
-            || !(candidate.originalTargetIdentity === null
-                || isWorkspaceSyncRootObjectIdentityV1(candidate.originalTargetIdentity))
-            || !(candidate.promotedTargetIdentity === null
-                || isWorkspaceSyncRootObjectIdentityV1(candidate.promotedTargetIdentity))
-            || !isCommittedTarget(candidate.committed) || !isRemovalTargetName(candidate.removalTargetName)
-            || !isWorkerCopyCreation(candidate.workerCopyCreation)
-            || !(candidate.expectedBackupIdentity === null
-                || isWorkspaceSyncRootObjectIdentityV1(candidate.expectedBackupIdentity))) {
-            throw new Error('invalid receipt');
-        }
-        return candidate as WorkspaceTargetMaterializationReceiptV1;
+        return StoredMaterializationReceiptSchema.parse(JSON.parse(raw));
     } catch {
         throw materializationRecoveryError('Invalid or unsupported workspace target materialization receipt');
     }
@@ -125,16 +127,7 @@ function materializationRecoveryError(message: string): Error {
 }
 
 function isWorkerCopyCreation(value: unknown): boolean {
-    if (value === undefined) return true;
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-    const candidate = value as Record<string, unknown>;
-    const fields = ['relationshipId', 'serverId', 'sourceWorkspaceRefId', 'targetWorkspaceRefId'];
-    return Object.keys(candidate).sort().join('\0') === fields.join('\0')
-        && fields.every(key => {
-            const field = candidate[key];
-            return typeof field === 'string' && field !== '' && field === field.trim();
-        })
-        && candidate.sourceWorkspaceRefId !== candidate.targetWorkspaceRefId;
+    return value === undefined || WorkerCopyCreationSchema.safeParse(value).success;
 }
 
 function workerCopyCreationsEqual(
@@ -155,20 +148,6 @@ export function assertWorkspaceTargetMaterializationWorkerCopyCreation(
     expected: WorkspaceTargetMaterializationWorkerCopyCreation,
 ): void {
     if (!workerCopyCreationsEqual(receipt.workerCopyCreation, expected)) throw workerCopyCreationError();
-}
-
-function isCommittedTarget(value: unknown): boolean {
-    if (value === undefined) return true;
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-    const candidate = value as Record<string, unknown>;
-    return Object.keys(candidate).sort().join('\0') === ['canonicalRoot', 'rootFingerprint'].join('\0')
-        && typeof candidate.canonicalRoot === 'string' && candidate.canonicalRoot === resolve(candidate.canonicalRoot)
-        && typeof candidate.rootFingerprint === 'string' && /^[a-f0-9]{64}$/u.test(candidate.rootFingerprint);
-}
-
-function isRemovalTargetName(value: unknown): boolean {
-    return value === undefined || (typeof value === 'string'
-        && /^\.happier-sync-backup\.[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value));
 }
 
 async function committedReceipt(targetPath: string, receipt: WorkspaceTargetMaterializationReceiptV1): Promise<WorkspaceTargetMaterializationReceiptV1> {
@@ -409,27 +388,11 @@ export async function rehydrateWorkspaceTargetMaterialization(input: Readonly<{
     receipt: WorkspaceTargetMaterializationReceiptV1;
     receiptPath?: string;
 }>): Promise<WorkspaceExportMaterializationCustody | null> {
-    const receipt = input.receipt as unknown;
-    if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)
-        || Object.keys(receipt).filter((key) => key !== 'committed' && key !== 'removalTargetName' && key !== 'workerCopyCreation').sort().join('\0') !== [
-            'expectedBackupIdentity',
-            'originalTargetIdentity',
-            'previousTargetName',
-            'promotedTargetIdentity',
-            'v',
-        ].sort().join('\0')) {
-        throw materializationRecoveryError('Unsupported partial workspace target materialization receipt');
-    }
-    const candidate = receipt as Record<string, unknown>;
-    if (candidate.v !== 1 || !isCommittedTarget(candidate.committed) || !isRemovalTargetName(candidate.removalTargetName)
-        || !isWorkerCopyCreation(candidate.workerCopyCreation)
-        || !(candidate.previousTargetName === null || typeof candidate.previousTargetName === 'string')
-        || !(candidate.originalTargetIdentity === null || isWorkspaceSyncRootObjectIdentityV1(candidate.originalTargetIdentity))
-        || !(candidate.promotedTargetIdentity === null || isWorkspaceSyncRootObjectIdentityV1(candidate.promotedTargetIdentity))
-        || !(candidate.expectedBackupIdentity === null || isWorkspaceSyncRootObjectIdentityV1(candidate.expectedBackupIdentity))) {
+    const parsedReceipt = MaterializationReceiptSchema.safeParse(input.receipt);
+    if (!parsedReceipt.success) {
         throw materializationRecoveryError('Invalid workspace target materialization receipt identity');
     }
-    const validatedReceipt = candidate as WorkspaceTargetMaterializationReceiptV1;
+    const validatedReceipt = parsedReceipt.data;
     const targetPath = resolve(input.targetPath);
     if (validatedReceipt.committed) {
         await inspectCommittedWorkspaceTargetMaterialization({

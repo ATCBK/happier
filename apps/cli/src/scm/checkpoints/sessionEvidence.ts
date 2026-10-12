@@ -1,6 +1,7 @@
 import { readFile, readdir, realpath } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { z } from 'zod';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { TurnChangeSetSchema } from '@happier-dev/protocol/sessions/changes/schemas';
 import type { RepositoryCheckpointCommitEvidence, TurnChangeSet } from '@happier-dev/protocol';
 import { ScmCommitOidSchema, type ScmBranchWorkEvidence, type ScmPullRequestSummary, type ScmPullRequestWorkEvidence } from '@happier-dev/protocol/scm';
@@ -18,6 +19,51 @@ const InitialEvidenceSchema = z.discriminatedUnion('state', [
 ]);
 export type RepositoryCheckpointInitialEvidence = z.infer<typeof InitialEvidenceSchema>;
 
+function gitTimestampMs(value: string | undefined): number | undefined {
+    if (!value || !/^\d+$/.test(value)) return undefined;
+    const milliseconds = Number(value) * 1000;
+    return Number.isSafeInteger(milliseconds) ? milliseconds : undefined;
+}
+
+/** One opaque identity for the actual local Git common directory, shared by branch graph readers. */
+async function readLocalBranchRepositoryKey(cwd: string, signal?: AbortSignal): Promise<string> {
+    signal?.throwIfAborted();
+    const result = await runGitCheckpointCommand({ cwd, signal, args: ['--no-replace-objects', 'rev-parse', '--git-common-dir'] });
+    signal?.throwIfAborted();
+    if (!result.success) throw new Error(result.stderr || 'Branch graph is unavailable');
+    const directory = await realpath(resolve(cwd, result.stdout.trim()));
+    const storage = await readOrCreateDeviceLocalSecretStorage({ path: configuration.deviceLocalSecretKeyFile });
+    return storage.deriveOpaqueIdentity({ purpose: 'usage_accounting_identity',
+        value: JSON.stringify(['local-branch-repository', directory]) });
+}
+
+/** This is a retained changed-file lower bound, never authorship or inferred line survival. */
+async function readRetainedChange(cwd: string, commitSha: string, targetSha: string, signal?: AbortSignal)
+    : Promise<RepositoryCheckpointCommitEvidence['retainedChange']> {
+    const run = (args: string[]) => runGitCheckpointCommand({ cwd, signal, args: ['--no-replace-objects', ...args] });
+    signal?.throwIfAborted();
+    const [original, changed] = await Promise.all([
+        run(['diff', '--no-ext-diff', '--no-textconv', '--numstat', '--no-renames', '-z', `${commitSha}^`, commitSha, '--']),
+        run(['diff', '--no-ext-diff', '--no-textconv', '--name-only', '--no-renames', '-z', commitSha, targetSha, '--']),
+    ]);
+    signal?.throwIfAborted();
+    if (!original.success || !changed.success) return undefined;
+    const changedPaths = new Set(changed.stdout.split('\0').filter(Boolean));
+    let addedLines = 0;
+    let removedLines = 0;
+    let partial = false;
+    for (const row of original.stdout.split('\0').filter(Boolean)) {
+        // --no-renames gives one NUL-terminated path, including tabs/newlines, after two numeric columns.
+        const match = /^(\d+|-)\t(\d+|-)\t([\s\S]+)$/.exec(row);
+        if (!match) { partial = true; continue; }
+        const [, added, removed, path] = match;
+        if (changedPaths.has(path) || added === '-' || removed === '-') { partial = true; continue; }
+        addedLines += Number(added);
+        removedLines += Number(removed);
+    }
+    return { targetSha, method: 'changed_file_tree_comparison', status: partial ? 'partial' : 'retained', addedLines, removedLines };
+}
+
 /** A branch without hosting metadata still has a witnessed immutable local graph. */
 export async function readRepositoryCheckpointBranchEvidence(input: Readonly<{
     cwd: string; sessionId: string; signal?: AbortSignal;
@@ -29,10 +75,7 @@ export async function readRepositoryCheckpointBranchEvidence(input: Readonly<{
         if (!result.success) throw new Error(result.stderr || 'Branch graph is unavailable');
         return result.stdout;
     };
-    const directory = await realpath(resolve(input.cwd, (await git(['rev-parse', '--git-common-dir'])).trim()));
-    const storage = await readOrCreateDeviceLocalSecretStorage({ path: configuration.deviceLocalSecretKeyFile });
-    const repositoryKey = storage.deriveOpaqueIdentity({ purpose: 'usage_accounting_identity',
-        value: JSON.stringify(['local-branch-repository', directory]) });
+    const repositoryKey = await readLocalBranchRepositoryKey(input.cwd, input.signal);
     const refs = await git(['for-each-ref', '--format=%(refname)%00%(objectname)%00%(objecttype)', 'refs/heads/']);
     const branches = refs.trim().split('\n').flatMap(row => {
         const [ref, headSha, type] = row.split('\0');
@@ -47,14 +90,30 @@ export async function readRepositoryCheckpointBranchEvidence(input: Readonly<{
     }
     const witnesses = await readRepositoryCheckpointCommitEvidence({ ...input, repositoryKey,
         commitShas: [...new Set([...graphs.values()].flatMap(graph => [...graph]))] });
-    return branches.flatMap(branch => witnesses.filter(witness => graphs.get(branch.headSha)!.has(witness.commitSha))
-        .map(witness => ({ ...witness, branch })));
+    const retained = new Map<string, Promise<RepositoryCheckpointCommitEvidence['retainedChange']>>();
+    return Promise.all(branches.flatMap(branch => witnesses.filter(witness => graphs.get(branch.headSha)!.has(witness.commitSha))
+        .map(async witness => {
+            const key = JSON.stringify([witness.commitSha, branch.headSha]);
+            if (!retained.has(key)) retained.set(key, readRetainedChange(input.cwd, witness.commitSha, branch.headSha, input.signal));
+            const retainedChange = await retained.get(key);
+            return { ...witness, branch, ...(retainedChange ? { retainedChange } : {}) };
+        })));
 }
 
 export async function readRepositoryCheckpointPullRequestEvidence(input: Readonly<{
     cwd: string; sessionId: string; pullRequests: readonly ScmPullRequestSummary[]; signal?: AbortSignal;
 }>): Promise<ScmPullRequestWorkEvidence[]> {
     const evidence: ScmPullRequestWorkEvidence[] = [];
+    const refs = await runGitCheckpointCommand({ cwd: input.cwd, signal: input.signal,
+        args: ['--no-replace-objects', 'for-each-ref', '--format=%(refname)%00%(objectname)%00%(objecttype)', 'refs/heads/'] });
+    input.signal?.throwIfAborted();
+    const branches = refs.success ? refs.stdout.trim().split('\n').flatMap(row => {
+        const [ref, headSha, type] = row.split('\0');
+        return ref?.startsWith('refs/heads/') && ScmCommitOidSchema.safeParse(headSha).success && type === 'commit'
+            ? [{ ref, headSha }] : [];
+    }) : null;
+    const branchRepositoryKey = branches === null ? undefined : await readLocalBranchRepositoryKey(input.cwd, input.signal);
+    const retained = new Map<string, Promise<RepositoryCheckpointCommitEvidence['retainedChange']>>();
     const repositories = new Map<string, { commits: Set<string>; pullRequests: { summary: ScmPullRequestSummary; commits: Set<string> }[] }>();
     for (const pullRequest of input.pullRequests) {
         input.signal?.throwIfAborted();
@@ -81,8 +140,15 @@ export async function readRepositoryCheckpointPullRequestEvidence(input: Readonl
         const witnesses = await readRepositoryCheckpointCommitEvidence({ cwd: input.cwd, sessionId: input.sessionId,
             repositoryKey, commitShas: [...group.commits], signal: input.signal });
         for (const pullRequest of group.pullRequests) {
-            evidence.push(...witnesses.filter(witness => pullRequest.commits.has(witness.commitSha))
-                .map(witness => ({ ...witness, pullRequest: pullRequest.summary })));
+            for (const witness of witnesses.filter(witness => pullRequest.commits.has(witness.commitSha))) {
+                const headSha = pullRequest.summary.headSha!;
+                const key = JSON.stringify([witness.commitSha, headSha]);
+                if (!retained.has(key)) retained.set(key, readRetainedChange(input.cwd, witness.commitSha, headSha, input.signal));
+                const retainedChange = await retained.get(key);
+                evidence.push({ ...witness, pullRequest: pullRequest.summary,
+                    ...(branches ? { branchRepositoryKey, branches: branches.filter(branch => branch.headSha === headSha) } : {}),
+                    ...(retainedChange ? { retainedChange } : {}) });
+            }
         }
     }
     input.signal?.throwIfAborted();
@@ -110,24 +176,24 @@ export async function readRepositoryCheckpointCommitEvidence(input: Readonly<{
     };
     // One invocation-local read of actual retained objects replaces per-turn subprocesses.
     // It is not a cache: moved/pruned refs are re-read on every evidence request.
-    const refs = await git(['for-each-ref', '--format=%(refname)%00%(objectname)%00%(objecttype)%00%(tree)',
+    const refs = await git(['for-each-ref', '--format=%(refname)%00%(objectname)%00%(objecttype)%00%(tree)%00%(committerdate:unix)',
         buildRepositoryCheckpointScopePrefix(scopeId)]);
     if (!refs.success) throw new Error('Retained checkpoint refs are unavailable');
     const endpoints = new Map(refs.stdout.trim().split('\n').map(row => {
-        const [ref, commitSha, objectType, treeSha] = row.split('\0');
-        return [ref, { commitSha, objectType, treeSha }] as const;
+        const [ref, commitSha, objectType, treeSha, time] = row.split('\0');
+        return [ref, { commitSha, objectType, treeSha, committedAtMs: gitTimestampMs(time) }] as const;
     }));
-    const commits = new Map<string, { beforeTree: string; afterTree: string }>();
+    const commits = new Map<string, { beforeTree: string; afterTree: string; committedAtMs?: number }>();
     const oids = [...new Set(input.commitShas)].filter(oid => ScmCommitOidSchema.safeParse(oid).success).sort();
     if (oids.length) {
         // Read the actual immutable objects in batches; a branch graph must not
         // require two subprocesses for every historical commit.
-        const result = await git(['log', '--no-walk=unsorted', '--format=%H%x00%T%x00%P', '--stdin'], oids.join('\n'));
+        const result = await git(['log', '--no-walk=unsorted', '--format=%H%x00%T%x00%P%x00%ct', '--stdin'], oids.join('\n'));
         if (!result.success) throw new Error('Commit objects are unavailable');
         const candidates = result.stdout.trim().split('\n').flatMap(row => {
-            const [oid, afterTree, parents] = row.split('\0');
+            const [oid, afterTree, parents, time] = row.split('\0');
             const [parent, ...otherParents] = (parents ?? '').split(' ');
-            return parent && !otherParents.length ? [{ oid, afterTree, parent }] : [];
+            return parent && !otherParents.length ? [{ oid, afterTree, parent, committedAtMs: gitTimestampMs(time) }] : [];
         });
         if (candidates.length) {
             const parentRows = await git(['log', '--no-walk=unsorted', '--format=%H%x00%T', '--stdin'],
@@ -136,9 +202,9 @@ export async function readRepositoryCheckpointCommitEvidence(input: Readonly<{
             const trees = new Map(parentRows.stdout.trim().split('\n').map(row => {
                 const [oid, tree] = row.split('\0'); return [oid, tree] as const;
             }));
-            for (const { oid, afterTree, parent } of candidates) {
+            for (const { oid, afterTree, parent, committedAtMs } of candidates) {
                 const beforeTree = trees.get(parent);
-                if (beforeTree) commits.set(oid, { beforeTree, afterTree });
+                if (beforeTree) commits.set(oid, { beforeTree, afterTree, committedAtMs });
             }
         }
     }
@@ -146,7 +212,7 @@ export async function readRepositoryCheckpointCommitEvidence(input: Readonly<{
     for (const entry of entries.sort()) {
         if (!entry.endsWith('.json')) continue;
         input.signal?.throwIfAborted();
-        const turn = TurnChangeSetSchema.parse(JSON.parse(await readFile(join(directory, entry), 'utf8')));
+        const turn = createStoredReadSchema(TurnChangeSetSchema).parse(JSON.parse(await readFile(join(directory, entry), 'utf8')));
         const checkpoint = turn.repositoryCheckpoint;
         if (turn.sessionId !== input.sessionId || checkpoint?.scopeId !== scopeId || checkpoint.contentConfidence !== 'exact') continue;
         const readEndpoint = (ref: string | undefined, phase: 'turn-start' | 'turn-final') => {
@@ -168,6 +234,9 @@ export async function readRepositoryCheckpointCommitEvidence(input: Readonly<{
             if (facts.beforeTree !== start.treeSha || facts.afterTree !== final.treeSha) continue;
             evidence.push({ sessionId: turn.sessionId, turnId: turn.turnId, repositoryKey: input.repositoryKey,
                 checkpointRef: checkpoint.finalRef!, checkpointCommitSha: final.commitSha!, commitSha,
+                ...(facts.committedAtMs !== undefined ? { committedAtMs: facts.committedAtMs } : {}),
+                ...(endpoints.get(checkpoint.finalRef!)?.committedAtMs !== undefined
+                    ? { checkpointCommittedAtMs: endpoints.get(checkpoint.finalRef!)!.committedAtMs } : {}),
                 attributionScope: checkpoint.attributionScope });
         }
     }
@@ -186,7 +255,7 @@ export function buildRepositoryCheckpointInitialRef(scopeId: string): string {
 }
 
 export async function readRepositoryCheckpointInitialEvidence(input: Readonly<{ cwd: string; scopeId: string }>): Promise<RepositoryCheckpointInitialEvidence | null> {
-    try { return InitialEvidenceSchema.parse(JSON.parse(await readFile(join(await evidenceDirectory(input.cwd, input.scopeId), 'initial.json'), 'utf8'))); }
+    try { return createStoredReadSchema(InitialEvidenceSchema).parse(JSON.parse(await readFile(join(await evidenceDirectory(input.cwd, input.scopeId), 'initial.json'), 'utf8'))); }
     catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
         throw error;
@@ -240,7 +309,7 @@ export async function retainRepositoryCheckpointTurnEvidence(input: Readonly<{ c
 
 export async function readRepositoryCheckpointTurnEvidence(input: Readonly<{ cwd: string; scopeId: string; turnId: string }>): Promise<TurnChangeSet | null> {
     try {
-        return TurnChangeSetSchema.parse(JSON.parse(await readFile(join(await evidenceDirectory(input.cwd, input.scopeId), 'turns', `${encodeRepositoryCheckpointScope(input.turnId)}.json`), 'utf8')));
+        return createStoredReadSchema(TurnChangeSetSchema).parse(JSON.parse(await readFile(join(await evidenceDirectory(input.cwd, input.scopeId), 'turns', `${encodeRepositoryCheckpointScope(input.turnId)}.json`), 'utf8')));
     } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
         throw error;
@@ -257,7 +326,7 @@ export async function findRepositoryCheckpointTurnEvidenceByReceipt(input: Reado
     const matches: TurnChangeSet[] = [];
     for (const entry of entries) {
         if (!entry.endsWith('.json')) continue;
-        const turn = TurnChangeSetSchema.parse(JSON.parse(await readFile(join(directory, entry), 'utf8')));
+        const turn = createStoredReadSchema(TurnChangeSetSchema).parse(JSON.parse(await readFile(join(directory, entry), 'utf8')));
         if (turn.repositoryCheckpoint?.scopeId === input.scopeId
             && turn.repositoryCheckpoint.receipts.some((receipt) => receipt.id === input.receiptId || receipt.ref === input.receiptId)) matches.push(turn);
     }

@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 export const WORKSPACE_TRANSFER_STAGING_ROOT_PREFIX = 'workspace-transfer-staging-';
 const stagingMarkerFileName = 'workspace-staging-root.json';
@@ -20,6 +21,7 @@ export const WorkspaceStagingRootMarkerSchema = z.object({
     rootDirectory: z.string().min(1),
 }).strict();
 export type WorkspaceStagingRootMarker = z.infer<typeof WorkspaceStagingRootMarkerSchema>;
+const StoredWorkspaceStagingRootMarkerSchema = createStoredReadSchema(WorkspaceStagingRootMarkerSchema);
 
 export function resolveWorkspaceStagingRootDirectory(params: Readonly<{
     parentDirectory: string;
@@ -65,7 +67,7 @@ export async function readWorkspaceStagingRootMarker(params: Readonly<{ rootDire
         throw new Error(`Workspace staging root marker is invalid for ${params.rootDirectory}`);
     }
 
-    const marker = WorkspaceStagingRootMarkerSchema.safeParse(parsedMarkerContent);
+    const marker = StoredWorkspaceStagingRootMarkerSchema.safeParse(parsedMarkerContent);
     if (!marker.success) {
         throw new Error(`Workspace staging root marker is invalid for ${params.rootDirectory}`);
     }

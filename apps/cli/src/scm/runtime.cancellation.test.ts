@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   children: [] as EventEmitter[],
-  killProcessTree: vi.fn(),
+  terminateProcessTree: vi.fn(),
   spawn: vi.fn(),
 }));
 
@@ -13,8 +13,8 @@ vi.mock('child_process', async (importOriginal) => ({
   spawn: mocks.spawn,
 }));
 
-vi.mock('@/agent/runtime/process/killProcessTree', () => ({
-  killProcessTree: mocks.killProcessTree,
+vi.mock('@/processes/terminate/terminateProcessTree', () => ({
+  terminateProcessTree: mocks.terminateProcessTree,
 }));
 
 import { runScmCommand } from './runtime';
@@ -53,8 +53,8 @@ describe('runScmCommand cancellation', () => {
     mocks.spawn.mockReset();
     mocks.spawn.mockReturnValue(child);
     let settleCleanup!: () => void;
-    mocks.killProcessTree.mockReset();
-    mocks.killProcessTree.mockReturnValue(new Promise<void>((resolve) => { settleCleanup = resolve; }));
+    mocks.terminateProcessTree.mockReset();
+    mocks.terminateProcessTree.mockReturnValue(new Promise<void>((resolve) => { settleCleanup = resolve; }));
     const chunks: string[] = [];
     let completed = false;
     const controller = new AbortController();
@@ -79,8 +79,8 @@ describe('runScmCommand cancellation', () => {
     const child = createFakeChild(41007);
     mocks.spawn.mockReset();
     mocks.spawn.mockReturnValue(child);
-    mocks.killProcessTree.mockReset();
-    mocks.killProcessTree.mockImplementation(async () => { queueMicrotask(() => child.emit('close', null)); });
+    mocks.terminateProcessTree.mockReset();
+    mocks.terminateProcessTree.mockImplementation(async () => { queueMicrotask(() => child.emit('close', null)); });
     const controller = new AbortController();
     const command = runScmCommand({
       bin: 'git', cwd: process.cwd(), args: ['log'], signal: controller.signal,
@@ -131,7 +131,7 @@ describe('runScmCommand cancellation', () => {
 
   it('does not spawn when the operation was already aborted', async () => {
     mocks.spawn.mockReset();
-    mocks.killProcessTree.mockReset();
+    mocks.terminateProcessTree.mockReset();
     const controller = new AbortController();
     controller.abort();
 
@@ -145,7 +145,7 @@ describe('runScmCommand cancellation', () => {
       stderr: 'SCM command was aborted',
     }));
     expect(mocks.spawn).not.toHaveBeenCalled();
-    expect(mocks.killProcessTree).not.toHaveBeenCalled();
+    expect(mocks.terminateProcessTree).not.toHaveBeenCalled();
   });
 
   it('terminates every command sharing an AbortSignal through the process-tree owner', async () => {
@@ -156,8 +156,8 @@ describe('runScmCommand cancellation', () => {
       if (!child) throw new Error('Unexpected SCM spawn');
       return child;
     });
-    mocks.killProcessTree.mockReset();
-    mocks.killProcessTree.mockImplementation(async (child: FakeChild) => {
+    mocks.terminateProcessTree.mockReset();
+    mocks.terminateProcessTree.mockImplementation(async (child: FakeChild) => {
       queueMicrotask(() => child.emit('close', null));
     });
     const controller = new AbortController();
@@ -169,7 +169,7 @@ describe('runScmCommand cancellation', () => {
     controller.abort();
     const results = await Promise.all(commands);
 
-    expect(mocks.killProcessTree.mock.calls.map(([child]) => child)).toEqual(children);
+    expect(mocks.terminateProcessTree.mock.calls.map(([child]) => child)).toEqual(children);
     expect(results).toEqual([
       expect.objectContaining({ success: false }),
       expect.objectContaining({ success: false }),
@@ -205,8 +205,8 @@ describe('runScmCommand cancellation', () => {
     mocks.spawn.mockReset();
     mocks.spawn.mockReturnValue(child);
     let settleCleanup!: () => void;
-    mocks.killProcessTree.mockReset();
-    mocks.killProcessTree.mockReturnValue(new Promise<void>((resolve) => { settleCleanup = resolve; }));
+    mocks.terminateProcessTree.mockReset();
+    mocks.terminateProcessTree.mockReturnValue(new Promise<void>((resolve) => { settleCleanup = resolve; }));
     let respond!: (value: string) => void;
     const response = new Promise<string>((resolve) => { respond = resolve; });
     const write = vi.spyOn(child.stdin, 'write');

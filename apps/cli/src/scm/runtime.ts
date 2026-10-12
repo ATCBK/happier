@@ -16,7 +16,7 @@ import {
     type FilesystemAccessPolicy,
 } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemAccessPolicy';
 import { expandHomeDirPath } from '@/utils/path/expandHomeDirPath';
-import { killProcessTree } from '@/agent/runtime/process/killProcessTree';
+import { terminateProcessTree } from '@/processes/terminate/terminateProcessTree';
 
 export type ScmExecResult = BackendCommandRunResult;
 
@@ -172,7 +172,7 @@ export function runScmCommand(input: {
         const terminate = () => {
             if (terminationRequested) return;
             terminationRequested = true;
-            void killProcessTree(child).then(
+            void terminateProcessTree(child).then(
                 () => {
                     terminationSettled = true;
                     finishClosedResult();
