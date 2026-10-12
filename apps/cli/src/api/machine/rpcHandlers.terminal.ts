@@ -332,6 +332,10 @@ export function registerMachineTerminalRpcHandlers(params: Readonly<{
     return manager.close({ terminalId });
   };
 
+  const projectActionContext = (context: RpcHandlerContext) => ({ ...context.localActionContext,
+    surface: context.localActionContext?.surface ?? 'api' as const,
+    actionRequestId: context.localActionContext?.actionRequestId ?? context.sessionActionOrigin?.requestId ?? context.transportRequestId });
+
   const dispatchProjectAction = async (runtime: ProjectTerminalRuntime, context: RpcHandlerContext,
     actionId: 'projects.prepare' | 'projects.script.run', input: unknown) => {
     if (!params.deps?.projectScriptExecutor) throw Object.assign(new Error('project_finite_execution_unavailable'), { code: 'project_finite_execution_unavailable' });
@@ -345,8 +349,7 @@ export function registerMachineTerminalRpcHandlers(params: Readonly<{
       callerAuthority: context.callerAuthority, sessionActionOrigin: context.sessionActionOrigin,
       ...(context.authorization?.kind === 'session.write' ? { rpcSessionAuthorization: context.authorization } : {}),
       runtimeAccountId: context.machineAdmission!.actorAccountId,
-      localActionContext: { ...context.localActionContext, surface: context.localActionContext?.surface ?? 'api',
-        actionRequestId: context.localActionContext?.actionRequestId ?? context.sessionActionOrigin?.requestId ?? context.transportRequestId },
+      localActionContext: projectActionContext(context),
     });
   };
   const observeShellReleaseFailure = () => logger.debug('[terminal] Project shell native resources remain unsettled');
@@ -390,7 +393,7 @@ export function registerMachineTerminalRpcHandlers(params: Readonly<{
       };
       const platform = runtime.platform ?? params.deps?.platform ?? process.platform;
       const preparation = { workspace: association.workspace, projectAssociation: association,
-        approvalContext: context.localActionContext,
+        approvalContext: projectActionContext(context),
         requester: { ...accountAccess, serverHttpBaseUrl: runtime.serverHttpBaseUrl }, purpose: 'setup' as const,
         platform: { os: platform === 'win32' ? 'windows' : platform, arch: runtime.arch ?? process.arch },
         nativeIo: runtime.nativeIo, signal: context.signal, retainNativeInvocation: nativeCustody.retain,
