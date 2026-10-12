@@ -16,7 +16,6 @@ export const OLLAMA_PROVIDER_CONTRIBUTION = {
   v: 1,
   id: 'ollama',
   name: 'Ollama',
-  icon: 'ollama',
   websiteUrl: 'https://ollama.com',
   kind: 'local',
   endpointTemplates: [
