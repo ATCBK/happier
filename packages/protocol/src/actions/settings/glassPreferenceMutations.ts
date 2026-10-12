@@ -1,15 +1,24 @@
-import type { AccountSettings } from '../../account/settings/accountSettings.js';
-type GlassSurfaceMaterials = NonNullable<AccountSettings['glassSurfaceMaterials']>;
-type GlassSurfaceGroup = keyof GlassSurfaceMaterials;
-type GlassSurfaceMaterial = GlassSurfaceMaterials[GlassSurfaceGroup];
-type GlassBlurStep = GlassSurfaceMaterial['blur'];
+import type { GlassSurfaceMaterials, GlassSurfaceGroup, GlassSurfaceMaterial, GlassBlurStep } from '../../account/settings/glassSurfaceMaterials.js';
 
 export type { GlassBlurStep, GlassSurfaceGroup, GlassSurfaceMaterial, GlassSurfaceMaterials };
 export const GLASS_PRESETS = ['solid', 'auto', 'everywhere', 'clear'] as const;
 export type GlassPreset = typeof GLASS_PRESETS[number];
 export type GlassMaterialChoice = GlassPreset | 'custom';
-export const GLASS_SURFACE_GROUPS = ['chrome', 'sidebar', 'content', 'floating'] as const;
+export const GLASS_SURFACE_GROUPS = ['chrome', 'sidebar', 'content', 'card', 'floating'] as const;
 export const GLASS_BLUR_STEPS = ['off', 'light', 'regular', 'strong'] as const;
+/** How much of its own paint a named preset's Elements and menus carry over the blurred backdrop. */
+export const GLASS_TINT_STEPS = ['subtle', 'medium', 'strong'] as const;
+export type GlassTintStep = typeof GLASS_TINT_STEPS[number];
+/**
+ * Coats per tint for the named presets' Elements (`card`) and floating surfaces. Subtle is the thinnest
+ * coat that still carries the surface's own warm paint without a neutral lift. Medium is the earlier faint coat, Strong a clearly
+ * frosted one. Clear keeps a lighter Elements coat. Shell planes keep each preset's own recipe.
+ */
+const TINT_COATS = {
+    subtle: { card: 0.07, clearCard: 0.06, floating: 0.11 },
+    medium: { card: 0.25, clearCard: 0.15, floating: 0.02 },
+    strong: { card: 0.45, clearCard: 0.3, floating: 0.25 },
+} as const satisfies Record<GlassTintStep, Readonly<{ card: number; clearCard: number; floating: number }>>;
 export const GLASS_BLUR_INTENSITY = { off: 0, light: 25, regular: 50, strong: 80 } as const;
 /** Strong matches the reference's 24px frost through the existing blur control. */
 export const GLASS_BLUR_RADIUS_PX = { off: 0, light: 5, regular: 10, strong: 24 } as const;
@@ -20,7 +29,8 @@ const CONTENT_OPACITY = { light: 0.78, regular: 0.84, strong: 0.90 } as const;
 export type GlassMaterialSettings = Readonly<{
     glassBlurEnabled?: boolean;
     glassBlurIntensity?: 'light' | 'regular' | 'strong';
-    glassSurfaceMaterials?: GlassSurfaceMaterials | null;
+    glassTintIntensity?: GlassTintStep;
+    glassSurfaceMaterials?: Omit<GlassSurfaceMaterials, 'card'> & Partial<Pick<GlassSurfaceMaterials, 'card'>> | null;
 }>;
 
 export function glassPresetMaterials(preset: GlassPreset, intensity: 'light' | 'regular' | 'strong' = 'regular'): GlassSurfaceMaterials {
@@ -28,12 +38,16 @@ export function glassPresetMaterials(preset: GlassPreset, intensity: 'light' | '
     const glass: GlassSurfaceMaterial = { blur: intensity, opacity: PRESET_OPACITY[intensity] };
     // Floating tasks need the reference's frost even when surrounding planes use Light.
     const floating: GlassSurfaceMaterial = { blur: 'strong', opacity: 0.02 };
-    if (preset === 'solid') return { chrome: solid, sidebar: solid, content: solid, floating: solid };
-    if (preset === 'everywhere') return { chrome: glass, sidebar: glass, content: glass, floating };
+    // Elements only turn glass where something shows through (a background or the desktop). Their coat
+    // is faint, as in the monocode reference: the heavy blur and the backdrop tone carry the material.
+    const card: GlassSurfaceMaterial = { blur: 'strong', opacity: 0.25 };
+    if (preset === 'solid') return { chrome: solid, sidebar: solid, content: solid, card: solid, floating: solid };
+    if (preset === 'everywhere') return { chrome: glass, sidebar: glass, content: glass, card, floating };
     if (preset === 'clear') return {
         chrome: { blur: intensity, opacity: 0.08 },
         sidebar: { blur: intensity, opacity: 0.08 },
         content: { blur: intensity, opacity: 0.1 },
+        card: { blur: 'strong', opacity: 0.15 },
         floating,
     };
     // W3: the sidebar's 18% paper lift over chrome is represented as its own
@@ -42,6 +56,7 @@ export function glassPresetMaterials(preset: GlassPreset, intensity: 'light' | '
         chrome: glass,
         sidebar: { blur: intensity, opacity: 1 - (1 - glass.opacity) * 0.82 },
         content: { blur: intensity, opacity: CONTENT_OPACITY[intensity] },
+        card,
         floating,
     };
 }
@@ -49,49 +64,111 @@ export function glassPresetMaterials(preset: GlassPreset, intensity: 'light' | '
 /** Null is the predecessor/default input, not another material mode. */
 export function readGlassMaterials(settings: GlassMaterialSettings): GlassSurfaceMaterials {
     if (settings.glassBlurEnabled === false) return glassPresetMaterials('solid');
-    return settings.glassSurfaceMaterials ?? glassPresetMaterials('auto', settings.glassBlurIntensity);
+    const materials = settings.glassSurfaceMaterials;
+    if (!materials) return glassPresetMaterials('auto', settings.glassBlurIntensity);
+    if (materials.card) return materials as GlassSurfaceMaterials;
+    const preset = matchGlassPreset(materials, settings.glassBlurIntensity);
+    return { ...materials, card: materials.card ?? glassPresetMaterials(preset === 'custom' ? 'auto' : preset, settings.glassBlurIntensity).card };
 }
 
-export function readGlassPreset(settings: GlassMaterialSettings): GlassMaterialChoice {
-    const materials = readGlassMaterials(settings);
+function matchGlassPreset(materials: NonNullable<GlassMaterialSettings['glassSurfaceMaterials']>, intensity: GlassMaterialSettings['glassBlurIntensity']): GlassMaterialChoice {
     for (const preset of GLASS_PRESETS) {
-        const candidate = glassPresetMaterials(preset, settings.glassBlurIntensity);
-        if (GLASS_SURFACE_GROUPS.every(group => materials[group].blur === candidate[group].blur
-            && materials[group].opacity === candidate[group].opacity)) return preset;
+        const candidate = glassPresetMaterials(preset, intensity);
+        // Elements has an independent binary toggle, not an exemption for authored coats.
+        if (GLASS_SURFACE_GROUPS.every(group => {
+            const material = materials[group];
+            if (material?.authoredOpacity === true) return false;
+            if (group === 'card' && (!material || (material.blur === 'off' && material.opacity === 1))) return true;
+            return material?.blur === candidate[group].blur && material.opacity === candidate[group].opacity;
+        })) return preset;
     }
     return 'custom';
 }
 
+export function readGlassPreset(settings: GlassMaterialSettings): GlassMaterialChoice {
+    return matchGlassPreset(readGlassMaterials(settings), settings.glassBlurIntensity);
+}
+
+/**
+ * The materials a named preset renders with: its stored table, with the Elements and floating coats of
+ * the selected tint (Subtle when unset). Solid groups, the Solid preset and authored (custom) tables
+ * keep their exact values.
+ */
+export function readGlassTintedMaterials(settings: GlassMaterialSettings): GlassSurfaceMaterials {
+    const materials = readGlassMaterials(settings);
+    const preset = matchGlassPreset(materials, settings.glassBlurIntensity);
+    if (preset === 'custom' || preset === 'solid') return materials;
+    const coats = TINT_COATS[settings.glassTintIntensity ?? 'subtle'];
+    const tinted = (material: GlassSurfaceMaterial, opacity: number) => material.opacity < 1 ? { ...material, opacity } : material;
+    return { ...materials,
+        card: tinted(materials.card, preset === 'clear' ? coats.clearCard : coats.card),
+        floating: tinted(materials.floating, coats.floating) };
+}
+
+export function resolveGlassTintSettingsDelta(_settings: GlassMaterialSettings, tint: GlassTintStep) {
+    return { glassTintIntensity: tint };
+}
+
+/** Elements intent survives Solid, while the effective material remains solid. */
+function readCardChoice(settings: GlassMaterialSettings): GlassSurfaceMaterial {
+    return settings.glassSurfaceMaterials?.card ?? readGlassMaterials({ ...settings, glassBlurEnabled: true }).card;
+}
+
+export function readGlassSurfaceMode(settings: GlassMaterialSettings, group: GlassSurfaceGroup): 'glass' | 'solid' {
+    const material = group === 'card' ? readCardChoice(settings) : readGlassMaterials(settings)[group];
+    return material.blur === 'off' && material.opacity === 1 ? 'solid' : 'glass';
+}
+
 export function resolveGlassPresetSettingsDelta(settings: GlassMaterialSettings, preset: GlassPreset) {
     const intensity = preset === 'clear' ? 'strong' : settings.glassBlurIntensity;
+    // Solid is the existing enable switch; keep Auto underneath it so re-enabling
+    // the predecessor switch still restores Auto while Elements intent survives.
+    const materials = glassPresetMaterials(preset === 'solid' ? 'auto' : preset, intensity);
+    const card = readCardChoice(settings);
     return {
         glassBlurEnabled: preset !== 'solid',
         ...(preset === 'clear' ? { glassBlurIntensity: 'strong' as const } : {}),
-        glassSurfaceMaterials: preset === 'everywhere' || preset === 'clear' ? glassPresetMaterials(preset, intensity) : null,
+        glassSurfaceMaterials: { ...materials, card: readGlassSurfaceMode(settings, 'card') === 'solid' || preset === 'solid' ? card : materials.card },
+    };
+}
+
+function resolveGlassSurfaceDelta(settings: GlassMaterialSettings, group: GlassSurfaceGroup, update: (current: GlassSurfaceMaterial) => GlassSurfaceMaterial) {
+    // Elements edits preserve the configured planes even while Solid masks them.
+    // Other layers edit their effective Solid state without erasing Elements intent.
+    const current = group === 'card' ? readGlassMaterials({ ...settings, glassBlurEnabled: true })
+        : { ...readGlassMaterials(settings), card: readCardChoice(settings) };
+    const material = update(current[group]);
+    const glassSurfaceMaterials = { ...current, [group]: material };
+    return {
+        ...(group === 'card' ? {} : { glassBlurEnabled: GLASS_SURFACE_GROUPS.some(key => key !== 'card' && (glassSurfaceMaterials[key].blur !== 'off' || glassSurfaceMaterials[key].opacity < 1)) }),
+        glassSurfaceMaterials,
     };
 }
 
 export function resolveGlassSurfaceSettingsDelta(settings: GlassMaterialSettings, group: GlassSurfaceGroup, patch: Partial<GlassSurfaceMaterial>) {
-    const current = readGlassMaterials(settings);
-    const material = { ...current[group], ...patch };
-    const glassSurfaceMaterials = { ...current, [group]: material };
-    return {
-        glassBlurEnabled: GLASS_SURFACE_GROUPS.some(key => glassSurfaceMaterials[key].blur !== 'off' || glassSurfaceMaterials[key].opacity < 1),
-        glassSurfaceMaterials,
-    };
+    return resolveGlassSurfaceDelta(settings, group, current => ({ ...current, ...patch,
+        ...(group === 'card' && patch.opacity !== undefined ? { authoredOpacity: true as const } : {}) }));
+}
+
+export function resolveGlassSurfaceModeSettingsDelta(settings: GlassMaterialSettings, group: GlassSurfaceGroup, mode: 'glass' | 'solid') {
+    // Restore the configured shell's default Elements coat, including Clear, after an authored edit.
+    const { card: _card, ...planes } = readGlassMaterials({ ...settings, glassBlurEnabled: true });
+    const preset = group === 'card' ? matchGlassPreset(planes, settings.glassBlurIntensity) : readGlassPreset(settings);
+    // A binary mode writes the default coat afresh, retiring any authored-opacity intent.
+    return resolveGlassSurfaceDelta(settings, group, () => mode === 'solid' ? { blur: 'off', opacity: 1 }
+        : glassPresetMaterials(preset === 'solid' || preset === 'custom' ? 'auto' : preset, settings.glassBlurIntensity)[group]);
 }
 
 export function resolveGlassIntensitySettingsDelta(settings: GlassMaterialSettings, intensity: 'light' | 'regular' | 'strong') {
     const preset = readGlassPreset(settings);
     return {
         glassBlurIntensity: intensity,
-        glassSurfaceMaterials: preset === 'auto' ? null : preset === 'custom'
+        glassSurfaceMaterials: preset === 'custom'
             ? Object.fromEntries(GLASS_SURFACE_GROUPS.map(group => {
                 const material = readGlassMaterials(settings)[group];
                 return [group, { ...material, blur: material.blur === 'off' ? 'off' : intensity }];
             })) as GlassSurfaceMaterials
-            : glassPresetMaterials(preset, intensity),
+            : { ...glassPresetMaterials(preset === 'solid' ? 'auto' : preset, intensity), card: readGlassSurfaceMode(settings, 'card') === 'solid' || preset === 'solid'
+                ? readCardChoice(settings) : glassPresetMaterials(preset, intensity).card },
     };
 }
-
-
