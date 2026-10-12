@@ -25,6 +25,7 @@ export function resolveExecutionRunRouteChoice(input: Readonly<{
         ? resolveExecutionRunSelectionLabel(
             { source: 'inherited', modelSelection: input.inheritedSelection },
             (connectionId) => applied?.kind === 'provider' && applied.connectionId === connectionId ? applied.sourceLabel : null,
+            source,
         )
         : null;
     return { label: label ?? t('runPage.menu.selectionInherited'), inheritDetail };

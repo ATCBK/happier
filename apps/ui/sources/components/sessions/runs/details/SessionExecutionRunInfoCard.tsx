@@ -16,6 +16,7 @@ import { ExecutionRunAgentMark } from '@/components/sessions/runs/ExecutionRunAg
 import { resolveExecutionRunBackendLabel } from '@/components/sessions/runs/resolveExecutionRunBackendLabel';
 import { resolveExecutionRunTitle } from '@/components/sessions/runs/resolveExecutionRunTitle';
 import { resolveExecutionRunSelectionLabel } from '@/components/sessions/runs/resolveExecutionRunSelectionLabel';
+import { useExecutionRunSourceLabel } from '@/components/sessions/runs/useExecutionRunSourceLabel';
 import { useProviderSettingsForServer } from '@/providers/hooks/useProviderSettings';
 import { ExecutionRunActionsMenu, type ExecutionRunMenuFact } from '@/components/sessions/runs/details/ExecutionRunActionsMenu';
 import { DetailsTabHeader, type DetailsTabHeaderMetaFact } from '@/components/appShell/panes/details/header/DetailsTabHeader';
@@ -112,6 +113,7 @@ const RunElapsed = React.memo((props: Readonly<{ startedAtMs: number }>) => {
  */
 export const SessionExecutionRunInfoCard = React.memo((props: Readonly<{
     run: ExecutionRunPublicState;
+    serverId?: string | null;
     acpCatalogSnapshot?: AcpCatalogSnapshotV1;
     hostSessionId?: string | null;
     daemonProcessLine?: string | null;
@@ -143,11 +145,12 @@ export const SessionExecutionRunInfoCard = React.memo((props: Readonly<{
         ?? props.run.resolvedSelection?.modelId
         ?? props.run.requestedConfiguration?.modelId)?.trim() || null;
     const agentLabel = resolveExecutionRunBackendLabel(props.run.backendTarget, props.acpCatalogSnapshot);
-    const providerConnections = useProviderSettingsForServer().connections;
+    const providerConnections = useProviderSettingsForServer(props.serverId ?? undefined).connections;
+    const resolvedSourceLabel = useExecutionRunSourceLabel(props.run.resolvedSelection, props.serverId);
     // D9: "Inherit session · <route> · <model>" or "Chosen for this run · …" when the host recorded it.
     const selectionLabel = resolveExecutionRunSelectionLabel(props.run.resolvedSelection, (connectionId) => (
         providerConnections.find((connection) => connection.id === connectionId)?.displayName ?? null
-    ));
+    ), resolvedSourceLabel);
     const agentAndModel = [agentLabel, selectionLabel ?? modelId].filter((part): part is string => Boolean(part)).join(' · ') || null;
     const permissionLabel = resolvePermissionLabel(props.run, agentId);
     // `> 0`, not `typeof === 'number'`: an unrecorded start or finish arrives as 0, and a time or a

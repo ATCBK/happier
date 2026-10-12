@@ -100,6 +100,18 @@ describe('resolveDaemonExecutionRunFallback', () => {
         expect(machineExecutionRunsListSpy).not.toHaveBeenCalled();
     });
 
+    it('retains the transcript selection when a predecessor marker has no selection summary', async () => {
+        const { resolveDaemonExecutionRunFallback } = await import('./resolveDaemonExecutionRunFallback');
+        const listed = await machineExecutionRunsListSpy();
+        const { resolvedSelection: _selection, ...marker } = listed.runs[0];
+        machineExecutionRunsListSpy.mockResolvedValue({ ok: true, runs: [marker] });
+        const selection = { source: 'retained' as const, modelId: 'retained-model', connectedServices: null };
+        await expect(resolveDaemonExecutionRunFallback({
+            sessionId: 's1', serverId: 'server_fallback', runId: 'run_1',
+            transcriptFallback: { run: { ...transcriptFallback.run, resolvedSelection: selection } },
+        })).resolves.toMatchObject({ run: { resolvedSelection: selection } });
+    });
+
     it('does not borrow the ambient same-id Session machine for an explicitly different Home', async () => {
         const { resolveDaemonExecutionRunFallback } = await import('./resolveDaemonExecutionRunFallback');
 

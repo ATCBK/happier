@@ -27,6 +27,7 @@ import { readAppliedModelSelection } from '@/sync/domains/models/describeEffecti
 import { readSessionConnectedServiceBindings } from '@/sync/domains/connectedServices/readSessionConnectedServiceBindings';
 import { readSessionProviderBindingMetadataV1 } from '@happier-dev/protocol/providers/sessions/bindingMetadataV1';
 import { resolveSessionRoutePresentation } from '@/providers/session/resolveSessionRoutePresentation';
+import { useExecutionRunSourceLabel } from '@/components/sessions/runs/useExecutionRunSourceLabel';
 import { resolveConnectedServicesAuthLabel } from '@/components/settings/connectedServices/model/resolveConnectedServicesAuthLabel';
 import { t } from '@/text';
 
@@ -63,18 +64,23 @@ export function useExecutionRunLaunchContext(sessionId: string | null, serverId:
     const inheritedConnectedServicesSelection = React.useMemo(() => session && defaultBackend?.defaultAgentId
         ? readSessionConnectedServiceBindings({ agentId: defaultBackend.defaultAgentId, metadata: readSessionOwnerMetadataView(session) })
         : null, [session, defaultBackend?.defaultAgentId]);
+    const inheritedDisplaySelection = React.useMemo(() => ({ source: 'inherited' as const,
+        ...(inheritedModelSelection ? { modelSelection: inheritedModelSelection } : {}),
+        connectedServices: inheritedConnectedServicesSelection,
+    }), [inheritedModelSelection, inheritedConnectedServicesSelection]);
+    const inheritedSourceLabel = useExecutionRunSourceLabel(inheritedDisplaySelection, serverId);
     const inheritedRoutePresentation = React.useMemo(() => {
         const bindingsByServiceId = inheritedConnectedServicesSelection?.bindingsByServiceId ?? {};
         const auth = resolveConnectedServicesAuthLabel({ supportedServiceIds: Object.keys(bindingsByServiceId), bindingsByServiceId,
-            profileOptionsByServiceId: {}, bindingPresentation: 'requested', resolveServiceTitle: (serviceId) => serviceId,
+            profileOptionsByServiceId: {}, bindingPresentation: 'requested', resolveServiceTitle: () => t('connectedServices.fallbackName'),
             nativeLabel: t('connectedServices.authChip.nativeLabel'),
             formatConnectedCountLabel: (count) => t('connectedServices.authChip.connectedCountLabel', { count }) });
         const provider = session ? readSessionProviderBindingMetadataV1(readSessionOwnerMetadataView(session)) : null;
         return resolveSessionRoutePresentation({ phase: 'running', selection: null, appliedSelection: inheritedModelSelection,
-            native: { label: auth.label, connectedCount: auth.connectedCount,
+            native: { label: inheritedSourceLabel ?? (auth.connectedCount > 0 ? t('common.unavailable') : auth.label), connectedCount: auth.connectedCount,
                 authSource: inheritedConnectedServicesSelection === null ? 'unknown' : auth.connectedCount > 0 ? 'connected' : 'native' },
             ...(provider ? { appliedProviderSource: { connectionId: provider.connectionId, ...provider.displaySnapshot } } : {}) });
-    }, [session, inheritedModelSelection, inheritedConnectedServicesSelection]);
+    }, [session, inheritedModelSelection, inheritedConnectedServicesSelection, inheritedSourceLabel]);
     const sessionMachineTarget = useSessionMachineTarget(sessionId, serverId);
     const workspaceMachine = useMachinePresenceSummary(serverId, sessionId ? null : workspace?.machineId);
     const workspaceMachineKnown = workspaceMachine.reachability !== 'unknown';
@@ -119,13 +125,13 @@ export function useExecutionRunLaunchContext(sessionId: string | null, serverId:
         }) : [];
         await admitExactTarget({ secretReferenceOverlay: input.secretReferenceOverlay !== undefined,
             teamCredentialModel: input.teamCredentialModel !== undefined, roleBinding: input.roleId !== undefined }, readinessOperationId, runBackendTargets);
-        return executor.execute(actionId, { ...input, sessionId,
-            ...(!sessionId && workspace ? { target: { kind: 'detached' }, machineId: workspace.machineId, cwd: workspace.cwd } : {}) },
+        return executor.execute(actionId, { ...input, ...(sessionId !== null ? { sessionId } : {}) },
             { ...(sessionId ? { defaultSessionId: sessionId } : {}), ...(serverId ? { serverId } : {}),
+                ...(accountBinding ? { expectedAccountId: accountBinding.accountId } : {}),
                 ...(machineId ? { executionRunTargetMachineId: machineId } : {}),
                 ...(launchOrigin ? { executionRunLaunchOrigin: launchOrigin } : {}),
                 ...(!sessionId && workspace ? { externalActionTarget: { kind: 'machine' as const, machineId: workspace.machineId } } : {}) });
-    }, [admitExactTarget, executor, machineId, sessionId, serverId, workspace?.machineId, workspace?.cwd]);
+    }, [accountBinding, admitExactTarget, executor, machineId, sessionId, serverId, workspace?.machineId, workspace?.cwd]);
     return { session, accountBinding, accountLifetime, exactSettings, settings, profileCatalogReady, acpCatalogReady, acpCatalogSnapshot, enabledAgentIds, defaultBackend,
         backendTarget, inheritedModelSelection, inheritedConnectedServicesSelection, inheritedRoutePresentation, machineTarget, machineId, admitExactTarget, startAction };
 }

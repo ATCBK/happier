@@ -12,11 +12,13 @@ const PROVENANCE_KEY = {
 /**
  * Where a Run's model came from and what it runs through, from the host's resolved launch record
  * (plan R2/D9): "Inherit session · DeepSeek · deepseek-v4", "Chosen for this run · …". The route is
- * named only when the Run uses a Provider connection the Account still knows; nothing is guessed.
+ * named from the recorded route's recipient-safe display facts; nothing is guessed.
  */
 export function resolveExecutionRunSelectionLabel(
   selection: ExecutionRunResolvedSelection | undefined,
   connectionLabel: (connectionId: string) => string | null,
+  /** Display only, from the canonical Connected/Team route presenter for this resolved selection. */
+  resolvedSourceLabel?: string | null,
 ): string | null {
   if (!selection) return null;
   const connectionId = selection.modelSelection?.providerConnectionId ?? null;
@@ -27,7 +29,7 @@ export function resolveExecutionRunSelectionLabel(
     null;
   return [
     t(PROVENANCE_KEY[selection.source]),
-    connectionId ? connectionLabel(connectionId) : null,
+    connectionId ? connectionLabel(connectionId) : resolvedSourceLabel,
     model,
   ]
     .filter((part): part is string => Boolean(part))

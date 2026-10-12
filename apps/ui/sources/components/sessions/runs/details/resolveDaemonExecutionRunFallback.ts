@@ -43,10 +43,11 @@ function buildExecutionRunPublicStateFromDaemonEntry(params: Readonly<{
     transcriptFallback?: ExecutionRunTranscriptFallback | null;
 }>): ExecutionRunPublicState | null {
     const fallbackRun = params.transcriptFallback?.run ?? null;
-    // Marker persistence intentionally retains only bounded identity/status facts.
+    // Marker persistence retains bounded identity/status and resolved display facts.
     // Do not fabricate the run's configuration or resumability from that marker;
     // a matching transcript state remains the canonical source for those fields.
     if (!fallbackRun || fallbackRun.runId !== params.entry.runId) return null;
+    const resolvedSelection = params.entry.resolvedSelection ?? fallbackRun.resolvedSelection;
 
     return {
         runId: params.entry.runId,
@@ -65,6 +66,7 @@ function buildExecutionRunPublicStateFromDaemonEntry(params: Readonly<{
         ...(fallbackRun.display ? { display: fallbackRun.display } : {}),
         ...(fallbackRun.transcript ? { transcript: fallbackRun.transcript } : {}),
         ...(fallbackRun.error ? { error: fallbackRun.error } : {}),
+        ...(resolvedSelection ? { resolvedSelection } : {}),
     };
 }
 

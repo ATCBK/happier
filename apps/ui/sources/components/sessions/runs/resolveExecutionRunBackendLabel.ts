@@ -1,7 +1,7 @@
 import { readBackendTargetRefV2, type BackendTargetRefV2Input } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import type { AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 
-import { isBundledAgentId } from '@/agents/catalog/catalog';
+import { hasAgentIconMark, isBundledAgentId } from '@/agents/catalog/catalog';
 import { resolveAgentCatalogTitle } from '@/agents/backendCatalog/agentCatalogProjection';
 import { getResolvedBackendCatalogEntries } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
 import { backendTargetKeysMatch } from '@/agents/backendCatalog/backendTargetKeyV2';
@@ -25,4 +25,24 @@ export function resolveExecutionRunBackendLabel(
     const entry = getResolvedBackendCatalogEntries({ enabledAgentIds: [], acpCatalogSnapshot: catalog })
         .find(candidate => candidate.kind === 'configuredBackend' && backendTargetKeysMatch(candidate.backendTarget, canonicalTarget));
     return entry?.title ?? canonicalTarget.configuredBackendId;
+}
+
+/**
+ * The Agent whose brand mark stands for a run's backend (the walkthrough's "Opus 5.5 read all 14").
+ * A configured backend, an unreadable target or an Agent without a contributed mark has none: callers
+ * keep their neutral glyph rather than inventing an identity.
+ */
+export function resolveExecutionRunAgentMarkId(
+    backendTarget: BackendTargetRefV2Input | null | undefined,
+    theme: Parameters<typeof hasAgentIconMark>[1],
+): string | null {
+    if (!backendTarget) return null;
+    let canonicalTarget;
+    try {
+        canonicalTarget = readBackendTargetRefV2(backendTarget);
+    } catch {
+        return null;
+    }
+    if (canonicalTarget.configuredBackendId) return null;
+    return hasAgentIconMark(canonicalTarget.backendId, theme) ? canonicalTarget.backendId : null;
 }
