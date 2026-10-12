@@ -8,6 +8,11 @@ describe('daemon terminal listing V1', () => {
     expect(DaemonTerminalListRequestV1Schema.safeParse({ sessionId: 'other' }).success).toBe(false);
     const terminal = { terminalId: 't', terminalKey: 'shell', cwd: '/repo', ended: true, exit: { exitCode: 1, signal: null } };
     expect(DaemonTerminalListResponseV1Schema.parse({ ok: true, terminals: [terminal] })).toEqual({ ok: true, terminals: [terminal] });
+    const warning = { v: 1, kind: 'stopping', stopAt: 300_000, rule: 'idle_terminals' };
+    expect(DaemonTerminalListResponseV1Schema.parse({ ok: true, terminals: [{ ...terminal, terminalGuardStateV1: warning }] }))
+      .toEqual({ ok: true, terminals: [{ ...terminal, terminalGuardStateV1: warning }] });
+    expect(DaemonTerminalListResponseV1Schema.safeParse({ ok: true, terminals: [{ ...terminal,
+      terminalGuardStateV1: { ...warning, sessionId: 'unrelated-session' } }] }).success).toBe(false);
     expect(DaemonTerminalListResponseV1Schema.safeParse({ ok: true, terminals: [{ ...terminal, env: { TOKEN: 'secret' } }] }).success).toBe(false);
     expect(DaemonTerminalListResponseV1Schema.safeParse({ ok: true, terminals: [{ ...terminal, exit: { exitCode: 1, signal: null, detail: 'secret' } }] }).success).toBe(false);
     expect(DaemonTerminalListResponseV1Schema.safeParse({ ok: false, errorCode: 'terminal_disabled', error: 'disabled', extra: true }).success).toBe(false);

@@ -407,7 +407,7 @@ describe('DaemonExecutionRunMarkerSchema', () => {
     });
     expect(parsed.executionRunConnectedServicesLaunchV1).not.toHaveProperty('materializationKey');
     expect(parsed.executionRunConnectedServicesLaunchV1).not.toHaveProperty('connectedServiceSelectionsEnv');
-    expect(DaemonExecutionRunMarkerPersistenceReadSchema.safeParse({
+    expect(JSON.stringify(DaemonExecutionRunMarkerPersistenceReadSchema.parse({
       ...parsed,
       executionRunConnectedServicesLaunchV1: {
         ...parsed.executionRunConnectedServicesLaunchV1,
@@ -418,8 +418,8 @@ describe('DaemonExecutionRunMarkerSchema', () => {
           accessToken: 'must-not-survive',
         }]),
       },
-    }).success).toBe(false);
-    expect(DaemonExecutionRunMarkerPersistenceReadSchema.safeParse({
+    }))).not.toContain('must-not-survive');
+    expect(JSON.stringify(DaemonExecutionRunMarkerPersistenceReadSchema.parse({
       ...parsed,
       executionRunConnectedServicesLaunchV1: {
         ...parsed.executionRunConnectedServicesLaunchV1,
@@ -435,10 +435,10 @@ describe('DaemonExecutionRunMarkerSchema', () => {
           },
         },
       },
-    }).success).toBe(false);
+    }))).not.toContain('must-not-survive');
   });
 
-  it('accepts a strict legacy launch fact only on the compatibility read path', () => {
+  it('opens legacy launch facts and drops retired fields only on the compatibility read path', () => {
     const launch = {
       v: 1,
       activationId: '11111111-1111-4111-8111-111111111111',
@@ -519,7 +519,7 @@ describe('DaemonExecutionRunMarkerSchema', () => {
       },
     }).success).toBe(false);
 
-    expect(DaemonExecutionRunMarkerPersistenceReadSchema.safeParse({
+    expect(JSON.stringify(DaemonExecutionRunMarkerPersistenceReadSchema.parse({
       ...parsed,
       executionRunConnectedServicesLaunchV1: {
         ...launch,
@@ -530,12 +530,12 @@ describe('DaemonExecutionRunMarkerSchema', () => {
           capabilityDigest: 'b'.repeat(64),
         },
       },
-    }).success).toBe(false);
-    expect(DaemonExecutionRunMarkerPersistenceReadSchema.safeParse({
+    }))).not.toContain('brokerCapability');
+    expect(JSON.stringify(DaemonExecutionRunMarkerPersistenceReadSchema.parse({
       ...parsed,
       executionRunConnectedServicesLaunchV1: { ...launch, credential: 'must-not-persist' },
-    }).success).toBe(false);
-    expect(DaemonExecutionRunMarkerPersistenceReadSchema.safeParse({
+    }))).not.toContain('must-not-persist');
+    expect(JSON.stringify(DaemonExecutionRunMarkerPersistenceReadSchema.parse({
       ...parsed,
       executionRunConnectedServicesLaunchV1: {
         ...launch,
@@ -548,7 +548,7 @@ describe('DaemonExecutionRunMarkerSchema', () => {
           }]),
         },
       },
-    }).success).toBe(false);
+    }))).not.toContain('must-not-persist');
     expect(DaemonExecutionRunMarkerPersistenceReadSchema.safeParse({
       ...parsed,
       executionRunConnectedServicesLaunchV1: {
@@ -559,7 +559,7 @@ describe('DaemonExecutionRunMarkerSchema', () => {
         },
       },
     }).success).toBe(false);
-    expect(DaemonExecutionRunMarkerPersistenceReadSchema.safeParse({
+    expect(JSON.stringify(DaemonExecutionRunMarkerPersistenceReadSchema.parse({
       ...parsed,
       executionRunConnectedServicesLaunchV1: {
         ...launch,
@@ -575,7 +575,7 @@ describe('DaemonExecutionRunMarkerSchema', () => {
           },
         },
       },
-    }).success).toBe(false);
+    }))).not.toContain('must-not-persist');
   });
   it('drops provider resume handles from canonical marker bytes', () => {
     const parsed = DaemonExecutionRunMarkerSchema.parse({

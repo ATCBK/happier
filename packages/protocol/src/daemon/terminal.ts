@@ -1,6 +1,8 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod';
 import { WorkspaceAddressV1Schema } from '../workspaces/workspaceRefV1.js';
+import { SpawnFailureV1Schema } from '../machines/processes/spawnFailureV1.js';
+import { TerminalGuardStateV1Schema } from '../machines/guard/terminalGuardStateV1.js';
 
 export const DaemonTerminalErrorCodeSchema = lazyZodSchema(() => z.enum([
   'terminal_disabled',
@@ -21,6 +23,7 @@ export const DaemonTerminalErrorSchema = lazyZodSchema(() => z.object({
   ok: z.literal(false),
   errorCode: DaemonTerminalErrorCodeSchema,
   error: z.string().min(1),
+  spawnFailure: SpawnFailureV1Schema.optional(),
 }).passthrough());
 export type DaemonTerminalError = z.infer<typeof DaemonTerminalErrorSchema>;
 
@@ -35,6 +38,7 @@ export const DaemonTerminalListEntryV1Schema = lazyZodSchema(() => z.object({
   cwd: z.string().min(1).max(10_000),
   sessionId: z.string().min(1).max(256).optional(),
   ended: z.boolean(),
+  terminalGuardStateV1: TerminalGuardStateV1Schema.optional(),
   exit: z.object({
     exitCode: z.number().int().nullable(),
     signal: z.number().int().nullable(),

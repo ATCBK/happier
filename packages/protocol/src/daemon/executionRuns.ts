@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { lazyZodSchema } from '../lazyZodSchema.js';
+import { createStoredReadSchema, defineStoredReadProjection } from '../json/storedReadSchema.js';
 import { RequesterWorkAttributionV1Schema } from '../machines/requesterWorkAttributionV1.js';
 
 import { ExecutionRunClassSchema, ExecutionRunIntentSchema, ExecutionRunIoModeSchema, ExecutionRunRetentionPolicySchema } from '../execution/runs/runPrimitives.js';
@@ -208,26 +209,39 @@ const PersistedConnectedServiceChildSelectionV1Schema = lazyZodSchema(() => z.di
   }).strict(),
 ]));
 
-const PersistedConnectedServiceSelectionsJsonSchema = lazyZodSchema(() => z.string().trim().min(1).transform((raw, ctx) => {
-  let parsedJson: unknown;
-  try {
-    parsedJson = JSON.parse(raw) as unknown;
-  } catch {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Invalid connected service selections JSON' });
-    return z.NEVER;
-  }
-  const parsed = z.array(PersistedConnectedServiceChildSelectionV1Schema).safeParse(parsedJson);
-  if (!parsed.success) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Invalid connected service selections' });
-    return z.NEVER;
-  }
-  const serviceIds = parsed.data.map((selection) => selection.serviceId);
-  if (new Set(serviceIds).size !== serviceIds.length) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Duplicate connected service selection' });
-    return z.NEVER;
-  }
-  return JSON.stringify(parsed.data);
-}));
+function createPersistedConnectedServiceSelectionsJsonSchema(stored: boolean): z.ZodType<string, string> {
+  const selections = z.array(PersistedConnectedServiceChildSelectionV1Schema);
+  const selectionsReader = stored ? createStoredReadSchema(selections) : selections;
+  const schema = z.string().trim().min(1).transform((raw, ctx) => {
+    let parsedJson: unknown;
+    try {
+      parsedJson = JSON.parse(raw) as unknown;
+    } catch {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Invalid connected service selections JSON' });
+      return z.NEVER;
+    }
+    const parsed = selectionsReader.safeParse(parsedJson);
+    if (!parsed.success) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Invalid connected service selections' });
+      return z.NEVER;
+    }
+    const serviceIds = parsed.data.map((selection) => selection.serviceId);
+    if (new Set(serviceIds).size !== serviceIds.length) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Duplicate connected service selection' });
+      return z.NEVER;
+    }
+    return JSON.stringify(parsed.data);
+  });
+  // Nullable/optional compositions retain the concrete transform, so its
+  // persistence projection belongs to that identity as well as the lazy facade.
+  return stored ? schema : defineStoredReadProjection(schema,
+    () => createPersistedConnectedServiceSelectionsJsonSchema(true));
+}
+
+const PersistedConnectedServiceSelectionsJsonSchema = defineStoredReadProjection(
+  lazyZodSchema(() => createPersistedConnectedServiceSelectionsJsonSchema(false)),
+  () => createPersistedConnectedServiceSelectionsJsonSchema(true),
+);
 
 const PERSISTED_CONNECTED_SERVICE_SELECTIONS_ENV_KEY =
   'HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON';
@@ -238,34 +252,40 @@ const PERSISTED_SELECTION_IDENTITY_VALUE_PATTERN =
 const SECRET_BEARING_IDENTITY_VALUE_PATTERN =
   /^(?:bearer[ :]|sk-|gh[opusr]_|github_pat_|xox[baprs]-|ya29[.-])/i;
 
-const PersistedConnectedServiceSelectionsEnvSchema = lazyZodSchema(() => z.record(
-  z.string(),
-  z.string(),
-).transform((env, ctx) => {
-  const normalized: Record<string, string> = {};
-  for (const [key, rawValue] of Object.entries(env)) {
-    if (key === PERSISTED_CONNECTED_SERVICE_SELECTIONS_ENV_KEY) {
-      const parsed = PersistedConnectedServiceSelectionsJsonSchema.safeParse(rawValue);
-      if (!parsed.success) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Invalid persisted connected service selections' });
+function createPersistedConnectedServiceSelectionsEnvSchema(stored: boolean) {
+  const selectionsReader = stored ? createStoredReadSchema(PersistedConnectedServiceSelectionsJsonSchema)
+    : PersistedConnectedServiceSelectionsJsonSchema;
+  return z.record(z.string(), z.string()).transform((env, ctx) => {
+    const normalized: Record<string, string> = {};
+    for (const [key, rawValue] of Object.entries(env)) {
+      if (key === PERSISTED_CONNECTED_SERVICE_SELECTIONS_ENV_KEY) {
+        const parsed = selectionsReader.safeParse(rawValue);
+        if (!parsed.success) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Invalid persisted connected service selections' });
+          return z.NEVER;
+        }
+        normalized[key] = parsed.data;
+        continue;
+      }
+      const value = rawValue.trim();
+      if (
+        !PERSISTED_SELECTION_IDENTITY_ENV_KEY_PATTERN.test(key)
+        || !PERSISTED_SELECTION_IDENTITY_VALUE_PATTERN.test(value)
+        || SECRET_BEARING_IDENTITY_VALUE_PATTERN.test(value)
+      ) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Invalid persisted selection identity environment' });
         return z.NEVER;
       }
-      normalized[key] = parsed.data;
-      continue;
+      normalized[key] = value;
     }
-    const value = rawValue.trim();
-    if (
-      !PERSISTED_SELECTION_IDENTITY_ENV_KEY_PATTERN.test(key)
-      || !PERSISTED_SELECTION_IDENTITY_VALUE_PATTERN.test(value)
-      || SECRET_BEARING_IDENTITY_VALUE_PATTERN.test(value)
-    ) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Invalid persisted selection identity environment' });
-      return z.NEVER;
-    }
-    normalized[key] = value;
-  }
-  return normalized;
-}));
+    return normalized;
+  });
+}
+
+const PersistedConnectedServiceSelectionsEnvSchema = defineStoredReadProjection(
+  lazyZodSchema(() => createPersistedConnectedServiceSelectionsEnvSchema(false)),
+  () => createPersistedConnectedServiceSelectionsEnvSchema(true),
+);
 
 const PersistedCurrentExecutionRunConnectedServicesLaunchV1Schema =
   lazyZodSchema(() => ExecutionRunConnectedServicesLaunchV1Schema.extend({
@@ -319,10 +339,20 @@ export type RemoteDevExecutionRunConnectedServicesLaunchV1 = z.infer<
   typeof RemoteDevExecutionRunConnectedServicesLaunchV1Schema
 >;
 
-export const PersistedExecutionRunConnectedServicesLaunchV1Schema = lazyZodSchema(() => z.union([
+export const PersistedExecutionRunConnectedServicesLaunchV1Schema = defineStoredReadProjection(lazyZodSchema(() => z.union([
   PersistedCurrentExecutionRunConnectedServicesLaunchV1Schema,
   RemoteDevExecutionRunConnectedServicesLaunchV1Schema,
   PersistedLegacyExecutionRunConnectedServicesLaunchV1Schema,
+])), () => z.union([
+  createStoredReadSchema(PersistedCurrentExecutionRunConnectedServicesLaunchV1Schema),
+  createStoredReadSchema(PersistedLegacyExecutionRunConnectedServicesLaunchV1Schema),
+  z.preprocess((value) => {
+    // A malformed current fact must not downgrade into the predecessor shape
+    // when its current-only fields would otherwise be dropped on stored read.
+    if (value && typeof value === 'object' && !Array.isArray(value)
+      && (Object.hasOwn(value, 'materializationKey') || Object.hasOwn(value, 'connectedServiceSelectionsEnv'))) return null;
+    return value;
+  }, createStoredReadSchema(RemoteDevExecutionRunConnectedServicesLaunchV1Schema)),
 ]));
 export type PersistedExecutionRunConnectedServicesLaunchV1 = z.infer<
   typeof PersistedExecutionRunConnectedServicesLaunchV1Schema
@@ -336,37 +366,35 @@ export type NormalizedPersistedExecutionRunConnectedServicesLaunchV1 = Readonly<
 export function normalizePersistedExecutionRunConnectedServicesLaunchV1(
   value: unknown,
 ): NormalizedPersistedExecutionRunConnectedServicesLaunchV1 | null {
-  const current = PersistedCurrentExecutionRunConnectedServicesLaunchV1Schema.safeParse(value);
-  if (current.success) return { source: 'current', registration: current.data };
-  const legacyCurrent = PersistedLegacyExecutionRunConnectedServicesLaunchV1Schema.safeParse(value);
-  if (legacyCurrent.success) {
+  const parsed = createStoredReadSchema(PersistedExecutionRunConnectedServicesLaunchV1Schema).safeParse(value);
+  if (!parsed.success) return null;
+  const launch = parsed.data;
+  if ('materializationKey' in launch) {
     return {
       source: 'current',
       registration: {
-        ...legacyCurrent.data,
+        ...launch,
         connectedServicesBindings: ConnectedServiceBindingsV2IngressSchema.parse(
-          legacyCurrent.data.connectedServicesBindings,
+          launch.connectedServicesBindings,
         ),
       },
     };
   }
-  const predecessor = RemoteDevExecutionRunConnectedServicesLaunchV1Schema.safeParse(value);
-  if (!predecessor.success) return null;
   return {
     source: 'remote_dev_predecessor',
     registration: {
       v: 1,
-      runKey: predecessor.data.runKey,
-      agentId: predecessor.data.agentId,
-      materializationKey: predecessor.data.runKey,
+      runKey: launch.runKey,
+      agentId: launch.agentId,
+      materializationKey: launch.runKey,
       connectedServicesBindings: ConnectedServiceBindingsV2IngressSchema.parse(
-        predecessor.data.connectedServicesBindings,
+        launch.connectedServicesBindings,
       ),
-      connectedServiceSelectionsEnv: predecessor.data.connectedServiceSelectionsJson
-        ? { HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON: predecessor.data.connectedServiceSelectionsJson }
+      connectedServiceSelectionsEnv: launch.connectedServiceSelectionsJson
+        ? { HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON: launch.connectedServiceSelectionsJson }
         : {},
-      sessionDirectory: predecessor.data.sessionDirectory ?? null,
-      materializedRoot: predecessor.data.materializedRoot,
+      sessionDirectory: launch.sessionDirectory ?? null,
+      materializedRoot: launch.materializedRoot,
     },
   };
 }
@@ -585,7 +613,7 @@ export type DaemonExecutionRunMarker = z.infer<typeof DaemonExecutionRunMarkerSc
 
 export const DaemonExecutionRunMarkerPersistenceReadSchema = lazyZodSchema(() => z.preprocess(
   normalizeLegacyExecutionRunBackendTargetInput,
-  DaemonExecutionRunMarkerPersistenceReadSchemaCore,
+  createStoredReadSchema(DaemonExecutionRunMarkerPersistenceReadSchemaCore),
 ));
 export type DaemonExecutionRunMarkerPersistenceRead = z.infer<
   typeof DaemonExecutionRunMarkerPersistenceReadSchema
