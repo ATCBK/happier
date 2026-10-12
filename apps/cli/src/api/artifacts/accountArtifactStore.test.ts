@@ -42,7 +42,7 @@ describe('createAccountArtifactStore', () => {
   it.each([401, 403, 503])('keeps HTTP %i distinct from definitive Artifact absence', async (status) => {
     const store = createAccountArtifactStore({ credentials: { token: 'token', encryption: null }, getAccountEncryptionMode: async () => 'plain' });
     mockGet.mockResolvedValue({ status, data: { error: 'unavailable' } });
-    await expect(store.read('required-doc')).rejects.toMatchObject({ code: 'artifact_read_unavailable' });
+    await expect(store.read('required-doc')).rejects.toMatchObject({ code: 'artifact_read_unavailable', status });
     mockGet.mockResolvedValue({ status: 404, data: { error: 'not_found' } });
     expect(await store.read('required-doc')).toBeNull();
   });

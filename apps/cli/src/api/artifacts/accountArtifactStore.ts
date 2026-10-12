@@ -275,7 +275,9 @@ export function createAccountArtifactStore(params: Readonly<{
     if (response.status === 404) return null;
     if (response.data?.error === 'artifact_content_unavailable') throw new ArtifactEncryptionMaterialUnavailableError();
     if (response.status === 500 && response.data?.error === 'Failed to get artifact') throw new ArtifactEncryptionMaterialUnavailableError();
-    if (response.status < 200 || response.status >= 300) throw Object.assign(new Error('artifact_read_unavailable'), { code: 'artifact_read_unavailable' });
+    if (response.status < 200 || response.status >= 300) throw Object.assign(new Error('artifact_read_unavailable'), {
+      code: 'artifact_read_unavailable', status: response.status,
+    });
     const stored = parseStoredArtifact(response.data);
     if (!stored) throw Object.assign(new Error('artifact_read_invalid'), { code: 'artifact_read_invalid' });
     return stored;
