@@ -12,13 +12,18 @@ function asRecord(value: unknown): Readonly<Record<string, unknown>> | null {
     : null;
 }
 
-export async function probeAcpCatalogs(params: Readonly<{
+type AcpPreflightSessionParams = Readonly<{
   client: AgentPreflightJsonRpcRequestClientV1;
   cwd: string;
   signal: AbortSignal;
   authenticationMethodId?: string;
   selectAuthentication?: (initializeResult: JsonValue) => Readonly<{ methodId: string; metadata?: JsonValue }> | null;
-}>): Promise<AcpCatalogsProbeResult> {
+}>;
+
+async function withAcpPreflightSession<TResult>(
+  params: AcpPreflightSessionParams,
+  inspect: (session: Readonly<Record<string, unknown>>, readCommands: () => Promise<unknown[]>) => Promise<TResult> | TResult,
+): Promise<TResult> {
   params.signal.throwIfAborted();
   let nativeSessionId: string | null = null;
   let supportsClose = false;
@@ -42,7 +47,7 @@ export async function probeAcpCatalogs(params: Readonly<{
     else if (nativeSessionId === sessionId) resolveCommands(update.availableCommands);
   });
   try {
-    const discover = async (): Promise<AcpCatalogsProbeResult> => {
+    const discover = async (): Promise<TResult> => {
       const initializeResult = await params.client.request('initialize', {
         protocolVersion: 1,
         clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
@@ -64,13 +69,13 @@ export async function probeAcpCatalogs(params: Readonly<{
       params.signal.throwIfAborted();
       const session = asRecord(await params.client.request('session/new', { cwd: params.cwd, mcpServers: [] }));
       const sessionId = session?.sessionId;
-      if (typeof sessionId !== 'string' || !sessionId.trim()) throw new Error('ACP session/new omitted its native session identifier');
+      if (!session || typeof sessionId !== 'string' || !sessionId.trim()) throw new Error('ACP session/new omitted its native session identifier');
       nativeSessionId = sessionId;
       params.signal.throwIfAborted();
       const snapshot = snapshots.get(sessionId);
       if (snapshot !== undefined) resolveCommands(snapshot);
       snapshots.clear();
-      return { commands: await commandsUpdate, skills: null };
+      return await inspect(session, () => commandsUpdate);
     };
     return await Promise.race([discover(), cancelled]);
   } finally {
@@ -86,4 +91,24 @@ export async function probeAcpCatalogs(params: Readonly<{
       await permissions.dispose();
     }
   }
+}
+
+
+export async function probeAcpCatalogs(params: AcpPreflightSessionParams): Promise<AcpCatalogsProbeResult> {
+  return await withAcpPreflightSession(params, async (_session, readCommands) => ({
+    commands: await readCommands(), skills: null,
+  }));
+}
+
+/** Session controls are available at session/new and do not require a command update. */
+export async function probeAcpSessionControls(params: AcpPreflightSessionParams): Promise<Readonly<{
+  models: unknown;
+  modes: unknown;
+  configOptions: unknown;
+}>> {
+  return await withAcpPreflightSession(params, (session) => ({
+    models: asRecord(session.models)?.availableModels ?? null,
+    modes: asRecord(session.modes)?.availableModes ?? null,
+    configOptions: session.configOptions ?? null,
+  }));
 }

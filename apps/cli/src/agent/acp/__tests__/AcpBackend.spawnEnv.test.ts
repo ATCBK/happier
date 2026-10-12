@@ -22,6 +22,7 @@ function writeEnvCaptureAcpAgentScript(params: { dir: string }): string {
         gemini_model: process.env.gemini_model ?? null,
         [${JSON.stringify(preservedEnvKey)}]: process.env[${JSON.stringify(preservedEnvKey)}] ?? null,
         CLAUDECODE: process.env.CLAUDECODE ?? null,
+        CLAUDE_CODE_ENTRYPOINT: process.env.CLAUDE_CODE_ENTRYPOINT ?? null,
         HAPPIER_DAEMON_RUNTIME_ID: process.env.HAPPIER_DAEMON_RUNTIME_ID ?? null,
         HAPPIER_SESSION_PROFILE_ID: process.env.HAPPIER_SESSION_PROFILE_ID ?? null,
         HAPPIER_SESSION_ATTACH_FILE: process.env.HAPPIER_SESSION_ATTACH_FILE ?? null,
@@ -101,6 +102,34 @@ function writeRejectedInitializeAcpAgentScript(params: { dir: string; secret: st
 }
 
 describe('AcpBackend spawn environment', () => {
+  it('restores host ownership after provider environment replacement', async () => {
+    const hostTag = 'v1.0123456789ab.session.session-host';
+    vi.stubEnv('HAPPIER_PROCESS_OWNER', hostTag);
+    try {
+      await withTempDir('happier-acp-owner-', async dir => {
+        const capturePath = join(dir, 'owner.txt');
+        const script = writeAcpTestAgentScript({ dir, fileName: 'owner-agent.mjs', source: `
+          const { writeFileSync } = await import('node:fs');
+          writeFileSync(${JSON.stringify(capturePath)}, process.env.HAPPIER_PROCESS_OWNER || 'absent');
+          const { createInterface } = await import('node:readline');
+          createInterface({ input: process.stdin }).on('line', line => {
+            const request = JSON.parse(line);
+            if (request.method === 'initialize') process.stdout.write(JSON.stringify({ jsonrpc:'2.0', id:request.id, result:{ protocolVersion:1,authMethods:[] } }) + '\\n');
+            if (request.method === 'session/new') process.stdout.write(JSON.stringify({ jsonrpc:'2.0', id:request.id, result:{ sessionId:'test-session' } }) + '\\n');
+          });
+        ` });
+        const backend = new AcpBackend({ agentName: 'test', cwd: dir, command: process.execPath, args: [script],
+          env: { HAPPIER_PROCESS_OWNER: 'forged-plugin' }, unsetEnv: ['HAPPIER_PROCESS_OWNER'],
+          transformAgentChildLaunchEnvironment: () => ({ HAPPIER_PROCESS_OWNER: 'forged-provider' }),
+          transportHandler: createAcpTestTransportHandler({ idleTimeoutMs: 1 }),
+        });
+        try {
+          await backend.startSession();
+          expect(readFileSync(capturePath, 'utf8')).toBe(hostTag);
+        } finally { await backend.dispose(); }
+      });
+    } finally { vi.unstubAllEnvs(); }
+  });
   const preservedEnvKey = 'HAPPIER_ACP_ENV_PRESERVED_KEY';
   const envScope = createEnvKeyScope([
     'GEMINI_MODEL',
@@ -108,6 +137,7 @@ describe('AcpBackend spawn environment', () => {
     'gemini_model',
     preservedEnvKey,
     'CLAUDECODE',
+    'CLAUDE_CODE_ENTRYPOINT',
     'HAPPIER_DAEMON_RUNTIME_ID',
     'HAPPIER_SESSION_PROFILE_ID',
     'HAPPIER_SESSION_ATTACH_FILE',
@@ -126,6 +156,7 @@ describe('AcpBackend spawn environment', () => {
         Gemini_Model: 'inherited-mixed',
         gemini_model: 'inherited-lower',
         CLAUDECODE: '1',
+        CLAUDE_CODE_ENTRYPOINT: 'parent',
         HAPPIER_DAEMON_RUNTIME_ID: 'runtime-parent',
         HAPPIER_SESSION_PROFILE_ID: 'ambient-profile',
         HAPPIER_SESSION_ATTACH_FILE: '/tmp/ambient-attach.json',
@@ -146,6 +177,7 @@ describe('AcpBackend spawn environment', () => {
             Gemini_Model: 'explicit-mixed',
             gemini_model: 'explicit-lower',
             [preservedEnvKey]: 'preserved-explicit',
+            CLAUDE_CODE_ENTRYPOINT: 'happier',
             HAPPIER_SESSION_PROFILE_ID: 'plugin-spoof',
             HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON: 'plugin-spoof',
           },
@@ -163,6 +195,7 @@ describe('AcpBackend spawn environment', () => {
           gemini_model: 'explicit-lower',
           [preservedEnvKey]: 'preserved-explicit',
           CLAUDECODE: null,
+          CLAUDE_CODE_ENTRYPOINT: 'happier',
           HAPPIER_DAEMON_RUNTIME_ID: null,
           HAPPIER_SESSION_PROFILE_ID: null,
           HAPPIER_SESSION_ATTACH_FILE: null,

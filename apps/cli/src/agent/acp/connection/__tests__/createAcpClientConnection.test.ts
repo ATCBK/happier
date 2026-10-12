@@ -1,7 +1,8 @@
-import { agent, methods, PROTOCOL_VERSION, RequestError } from '@agentclientprotocol/sdk';
+import { agent, methods, PROTOCOL_VERSION, RequestError, type ClientContext } from '@agentclientprotocol/sdk';
 import { describe, expect, it } from 'vitest';
 
 import { createAcpClientConnection } from '../createAcpClientConnection';
+import { AcpAgentPeer } from '../AcpAgentPeer';
 import { defineAcpExtensionNotification, defineAcpExtensionRequest } from '../types';
 
 const stringValueParams = {
@@ -16,6 +17,15 @@ const stringValueParams = {
 };
 
 describe('createAcpClientConnection', () => {
+  it('preserves non-extensible SDK transport errors without a provider classifier', async () => {
+    const failure = Object.preventExtensions(new Error('SDK transport unavailable'));
+    const context = { request: async () => { throw failure; } } satisfies Pick<ClientContext, 'request'>;
+    // SDK boundary fixture: this operation uses only request; unrelated SDK session builders are absent.
+    const peer = new AcpAgentPeer(context as unknown as ClientContext, new AbortController().signal);
+    await expect(peer.loadSession({ sessionId: 'missing', cwd: '/tmp', mcpServers: [] })).rejects.toBe(failure);
+    expect(failure).not.toHaveProperty('authenticationSetupFailure');
+  });
+
   it('uses one public app connection for standard requests and notifications', async () => {
     const updates: string[] = [];
     const testAgent = agent({ name: 'connection-test-agent' })

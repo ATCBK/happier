@@ -8,6 +8,7 @@ import {
   resolvePluginExecManagedDependencyForHost,
   resolvePluginExecSystemToolForHost,
 } from '@/plugins/runtime/invocation/services/exec';
+import { normalizeUnsetEnvKeys, stripUnsetEnvironmentVariables } from '@/utils/processEnv/buildScopedProcessEnv';
 
 /**
  * One owner for turning a declared ACP transport into an executable launch.
@@ -193,21 +194,17 @@ export async function resolveAcpTransportLaunch(params: Readonly<{
       resolved.release?.();
       throw new Error('Host-resolved ACP launch requires a non-empty command');
     }
-    const environment = {
+    const unsetEnv = normalizeUnsetEnvKeys([...resolved.unsetEnv, ...launchEnvironment.unset]);
+    const environment = stripUnsetEnvironmentVariables({
       ...resolved.env,
       ...launchEnvironment.values,
-    };
-    for (const key of [...resolved.unsetEnv, ...launchEnvironment.unset]) {
-      delete environment[key];
-    }
+    }, unsetEnv);
     return Object.freeze({
       kind: 'stdio' as const,
       command,
       args: Object.freeze([...resolved.args]),
       env: Object.freeze(environment),
-      unsetEnv: Object.freeze([
-        ...new Set([...resolved.unsetEnv, ...launchEnvironment.unset]),
-      ]),
+      unsetEnv,
       timeouts: resolved.timeouts,
       ...(resolved.release ? { release: resolved.release } : {}),
     });
@@ -264,14 +261,11 @@ export async function resolveAcpTransportLaunch(params: Readonly<{
     env = resolved.env;
     release = resolved.release;
   }
-  const environment = {
+  const environment = stripUnsetEnvironmentVariables({
     ...(env ?? {}),
     ...(transport.env ?? {}),
     ...launchEnvironment.values,
-  };
-  for (const key of launchEnvironment.unset) {
-    delete environment[key];
-  }
+  }, launchEnvironment.unset);
   return Object.freeze({
     kind: 'stdio' as const,
     command,

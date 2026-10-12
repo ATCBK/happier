@@ -40,6 +40,7 @@ export function materializeConfiguredAcpEnvironment(params: Readonly<{
     if (
       resolved.status !== 'ready'
       && resolved.status !== 'literal_unavailable'
+      && resolved.status !== 'session_attested_unavailable'
       && valueRef.t === 'savedSecret'
     ) {
       throw new SavedSecretResolutionError({

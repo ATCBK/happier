@@ -36,6 +36,8 @@ describe('provider probes with missing CLI availability', () => {
       availableModels: [],
       supportsFreeform: false,
       source: 'unavailable',
+      cacheable: false,
+      refreshError: true,
     });
 
     await expect(probeAgentModesBestEffort({

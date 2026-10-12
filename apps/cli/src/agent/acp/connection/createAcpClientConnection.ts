@@ -47,7 +47,7 @@ export function createAcpClientConnection(
   void connection.closed.then(settleClosed, settleClosed);
 
   return {
-    peer: new AcpAgentPeer(connection.agent, connection.signal),
+    peer: new AcpAgentPeer(connection.agent, connection.signal, options.isAuthenticationSetupFailure),
     signal: connection.signal,
     closed,
     close: (error?: unknown, closeOptions?: AcpClientConnectionCloseOptions) => {

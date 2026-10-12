@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 
 import { isPidAlive, spawnInlineNodeParentWithChild } from '@/testkit/process/spawn';
 import { AcpBackend } from '../AcpBackend';
-import { killProcessTree } from '@/agent/runtime/process/killProcessTree';
+import { terminateProcessTree } from '@/processes/terminate/terminateProcessTree';
 
 function waitForChildProcessExit(parent: { exitCode: number | null; signalCode: NodeJS.Signals | null; once: (event: 'exit', listener: () => void) => void }, timeoutMs: number): Promise<boolean> {
   if (parent.exitCode !== null || parent.signalCode !== null) return Promise.resolve(true);
@@ -40,7 +40,7 @@ describe('AcpBackend.dispose', () => {
       expect(parentExited, 'parent process exited').toBe(true);
     } finally {
       // Defensive cleanup so a failing test doesn't leak background processes.
-      await killProcessTree(parent, { graceMs: 250 });
+      await terminateProcessTree(parent, { graceMs: 250 });
       try {
         process.kill(childPid, 'SIGKILL');
       } catch {

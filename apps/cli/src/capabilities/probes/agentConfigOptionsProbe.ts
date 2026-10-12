@@ -122,12 +122,14 @@ export async function probeAgentConfigOptionsBestEffort(params: {
     if (cached2?.kind === 'success' && agentConfigOptionsProbeCache.isFresh(cached2, nowMs2)) return cached2.value;
 
     const fallback = buildStatic(params.agentId);
-    if (shouldFailClosedForMissingCli(params)) {
+    const preflightAdapter = await resolvePreflightSessionControlsProbeAdapter(params.agentId, params.catalogEntry);
+    // A declared preflight hook resolves and checks its own executable; its
+    // transport may differ from the Agent's interactive CLI.
+    if (!preflightAdapter?.probeConfigOptionsRaw && shouldFailClosedForMissingCli(params)) {
       const unavailable = buildUnavailable(params.agentId);
       agentConfigOptionsProbeCache.setError(cacheKey, { nowMs: nowMs2, ttlMs: PROBE_CONFIG_OPTIONS_FAILURE_TTL_MS });
       return unavailable;
     }
-    const preflightAdapter = await resolvePreflightSessionControlsProbeAdapter(params.agentId, params.catalogEntry);
     if (preflightAdapter?.probeConfigOptionsRaw) {
       const timeoutMs = typeof params.timeoutMs === 'number' ? params.timeoutMs : 15_000;
 

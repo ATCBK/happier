@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { killProcessTree } from '@/agent/runtime/process/killProcessTree';
+import { terminateProcessTree } from '@/processes/terminate/terminateProcessTree';
 import { isPidAlive, spawnInlineNodeParentWithChild } from '@/testkit/process/spawn';
 import { AcpBackend } from '../../AcpBackend';
 
@@ -107,7 +107,7 @@ describe('createAcpClientConnection explicit close deadline', () => {
       expect(isPidAlive(parent.pid!)).toBe(false);
       expect(sdkBoundary.close).toHaveBeenCalledTimes(1);
     } finally {
-      await killProcessTree(parent, { graceMs: 250 });
+      await terminateProcessTree(parent, { graceMs: 250 });
       try {
         process.kill(childPid, 'SIGKILL');
       } catch {

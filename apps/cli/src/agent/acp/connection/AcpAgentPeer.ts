@@ -27,6 +27,8 @@ import {
 } from '@agentclientprotocol/sdk';
 import { redactBugReportSensitiveText, trimBugReportTextToMaxBytes } from '@happier-dev/protocol/bugs/reports/redaction';
 
+import type { AcpClientConnectionOptions } from './types';
+
 const ACP_ERROR_DIAGNOSTIC_MAX_BYTES = 16_384;
 
 function cloneErrorWithSanitizedData(
@@ -35,6 +37,7 @@ function cloneErrorWithSanitizedData(
 ): Error & { data: Record<string, unknown> } {
   const descriptors = Object.getOwnPropertyDescriptors(error);
   delete descriptors.data;
+  delete descriptors.authenticationSetupFailure;
   const clone = Object.create(Object.getPrototypeOf(error)) as Error & { data: Record<string, unknown> };
   Object.defineProperties(clone, descriptors);
   Object.defineProperty(clone, 'data', {
@@ -50,6 +53,7 @@ export class AcpAgentPeer {
   constructor(
     private readonly context: ClientContext,
     private readonly connectionSignal: AbortSignal,
+    private readonly isAuthenticationSetupFailure?: AcpClientConnectionOptions['isAuthenticationSetupFailure'],
   ) {}
 
   private assertActive(): void {
@@ -66,6 +70,10 @@ export class AcpAgentPeer {
       const dataRecord = data && typeof data === 'object' && !Array.isArray(data)
         ? data as Record<string, unknown>
         : null;
+      const authenticationSetupFailure = this.isAuthenticationSetupFailure?.({
+        code: 'code' in error ? error.code : undefined,
+        data,
+      }) === true;
       const rawDetails = typeof dataRecord?.details === 'string'
         ? dataRecord.details.trim().slice(0, ACP_ERROR_DIAGNOSTIC_MAX_BYTES)
         : '';
@@ -97,6 +105,16 @@ export class AcpAgentPeer {
           redactBugReportSensitiveText(safeError.stack),
           ACP_ERROR_DIAGNOSTIC_MAX_BYTES,
         );
+      }
+      if (authenticationSetupFailure) {
+        if (!Object.isExtensible(safeError)
+          || Object.getOwnPropertyDescriptor(safeError, 'authenticationSetupFailure')?.configurable === false) {
+          safeError = cloneErrorWithSanitizedData(safeError, sanitizedDetails ? { details: sanitizedDetails } : {});
+        }
+        Object.defineProperty(safeError, 'authenticationSetupFailure', {
+          configurable: true,
+          value: true,
+        });
       }
       throw safeError;
     }

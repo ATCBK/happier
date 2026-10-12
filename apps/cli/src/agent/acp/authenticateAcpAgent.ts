@@ -10,7 +10,7 @@ import { createAcpFilteredStdoutReadable } from './createAcpFilteredStdoutReadab
 import { createAcpNdJsonStream } from './createAcpNdJsonStream';
 import { nodeToWebStreams } from './nodeToWebStreams';
 import { DefaultTransport } from '@/agent/transport';
-import { killProcessTree } from '@/agent/runtime/process/killProcessTree';
+import { terminateProcessTree } from '@/processes/terminate/terminateProcessTree';
 
 /** Explicit terminal login only: the provider owns browser interaction and credential storage. */
 export async function authenticateAcpAgent(params: Readonly<{
@@ -83,7 +83,7 @@ export async function authenticateAcpAgent(params: Readonly<{
     child.stderr?.removeListener('data', params.onStderr);
     connection?.close();
     try {
-      await killProcessTree(child);
+      await terminateProcessTree(child);
     } catch (cleanupError) {
       if (loginFailure) {
         throw new AggregateError([loginFailure.error, cleanupError], 'ACP login and process cleanup failed');

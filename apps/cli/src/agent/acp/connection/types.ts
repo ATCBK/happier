@@ -119,4 +119,6 @@ export type AcpClientConnectionOptions = Readonly<{
   handlers: AcpClientConnectionHandlers;
   extensions?: ReadonlyArray<AcpExtensionRegistration>;
   createExtensionContext?: AcpExtensionContextFactory;
+  /** Fixed provider classification extracted before arbitrary error data is stripped. */
+  isAuthenticationSetupFailure?: (failure: Readonly<{ code: unknown; data: unknown }>) => boolean;
 }>;

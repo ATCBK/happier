@@ -61,6 +61,7 @@ export interface CreateAcpBackendOptions {
 
   /** Optional ACP auth method to invoke after initialize. */
   authMethodId?: string;
+  isAuthenticationSetupFailure?: AcpBackendOptions['isAuthenticationSetupFailure'];
 
   /** Optional ACP authenticate metadata forwarded as `_meta`. */
   authMeta?: Record<string, unknown>;
@@ -134,6 +135,7 @@ export function createAcpBackend(options: CreateAcpBackendOptions): AcpBackend {
     ...(typeof options.fsEnabled === 'boolean' ? { fsEnabled: options.fsEnabled } : {}),
     transportHandler: options.transportHandler ?? new DefaultTransport(options.agentName),
     ...(options.authMethodId ? { authMethodId: options.authMethodId } : {}),
+    isAuthenticationSetupFailure: options.isAuthenticationSetupFailure,
     ...(options.authMeta ? { authMeta: options.authMeta } : {}),
     ...(options.authSelector ? { authSelector: options.authSelector } : {}),
     ...(typeof options.parameterizedModelPicker === 'boolean'

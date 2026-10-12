@@ -9,14 +9,28 @@ import { isPidAlive } from '@/testkit/process/spawn';
 
 // Genuine OS enumeration boundary; the ACP transport and cleanup owner remain real.
 const enumeration = vi.hoisted(() => ({ denied: false }));
-vi.mock('ps-list', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('ps-list')>();
-  return { default: () => {
-    if (enumeration.denied) return Promise.reject(new Error('process listing unavailable'));
-    return actual.default();
+const realNow = Date.now;
+let samplingClockOffsetMs = 0;
+vi.spyOn(Date, 'now').mockImplementation(() => realNow() + samplingClockOffsetMs);
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, readdir: (...args: Parameters<typeof actual.readdir>) => {
+    if (enumeration.denied && String(args[0]) === '/proc') throw new Error('process listing unavailable');
+    return actual.readdir(...args);
   } };
 });
-afterEach(() => { enumeration.denied = false; });
+vi.mock('@happier-dev/cli-common/process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@happier-dev/cli-common/process')>();
+  return { ...actual, execFileWithDeadline: async (...args: Parameters<typeof actual.execFileWithDeadline>) => {
+    if (enumeration.denied && args[1]?.[0] === 'process-census') throw new Error('process listing unavailable');
+    return await actual.execFileWithDeadline(...args);
+  } };
+});
+afterEach(() => {
+  // Native sampling recovers at its owning minute boundary after an OS failure.
+  if (enumeration.denied) samplingClockOffsetMs += 60_000;
+  enumeration.denied = false;
+});
 
 function fixture(dir: string, behavior: 'success' | 'reject' | 'wait' = 'success') {
   const script = writeAcpTestAgentScript({

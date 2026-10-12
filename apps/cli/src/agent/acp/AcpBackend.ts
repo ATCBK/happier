@@ -48,6 +48,7 @@ import type {
 import { logger } from '@/ui/logger';
 import { buildScopedProcessEnv } from '@/utils/processEnv/buildScopedProcessEnv';
 import { finalizeSessionChildEnvironment } from '@/session/runtime/control/finalizeSessionChildEnvironment';
+import { withHostProcessOwnerEnvironment } from '@/processes/ownerTag';
 import { delay } from '@/utils/time';
 import { createSubprocessStderrAppender, type BoundedTextFileAppender } from '@/agent/runtime/subprocessArtifacts';
 import { createAcpStderrLogSummarizer } from './diagnostics/summarizeAcpStderrForLogs';
@@ -68,7 +69,7 @@ import type { MergedAcpToolResult } from './toolCalls/types';
 import { createAcpRequestFailureLogRecord, withRetry } from './withRetry';
 import { nodeToWebStreams } from './nodeToWebStreams';
 import { buildAcpSpawnSpec } from './acpSpawn';
-import { killProcessTree } from '@/agent/runtime/process/killProcessTree';
+import { terminateProcessTree } from '@/processes/terminate/terminateProcessTree';
 import type { AcpPermissionHandler } from './permissions/acpPermissionHandler';
 import { AcpReplayCapture, type AcpReplayEvent } from './history/acpReplayCapture';
 import { createAcpFilteredStdoutReadable, type DroppedStdoutLine } from './createAcpFilteredStdoutReadable';
@@ -317,6 +318,7 @@ export interface AcpBackendOptions {
    * from environment variables until the `authenticate` method is called.
    */
   authMethodId?: string;
+  isAuthenticationSetupFailure?: import('./connection/types').AcpClientConnectionOptions['isAuthenticationSetupFailure'];
 
   /** Optional ACP authenticate metadata forwarded as `_meta`. */
   authMeta?: Record<string, unknown>;
@@ -636,20 +638,21 @@ export class AcpBackend implements CatalogAcpBackend {
         explicitEnv: this.options.env,
         unsetEnvKeys: this.options.unsetEnv,
       }),
+      explicitEnvironment: this.options.env,
       enableCgroupSelfMigration: false,
       stackProcessKind: null,
     });
     if (!this.options.transformAgentChildLaunchEnvironment) {
-      return environment;
+      return withHostProcessOwnerEnvironment(environment);
     }
-    return this.options.transformAgentChildLaunchEnvironment(
+    return withHostProcessOwnerEnvironment(this.options.transformAgentChildLaunchEnvironment(
       Object.freeze(Object.fromEntries(
         Object.entries(environment).filter(
           (entry): entry is [string, string] =>
             typeof entry[1] === 'string',
         ),
       )),
-    );
+    ));
   }
 
   private async cleanupInitializedProcessConnection(params: { graceMs: number }): Promise<void> {
@@ -681,7 +684,7 @@ export class AcpBackend implements CatalogAcpBackend {
     }
     if (proc) {
       try {
-        await killProcessTree(proc, { graceMs: params.graceMs });
+        await terminateProcessTree(proc, { graceMs: params.graceMs });
       } catch {
         // best-effort cleanup
       }
@@ -1018,6 +1021,7 @@ export class AcpBackend implements CatalogAcpBackend {
 
     this.connection = createAcpClientConnection({
       name: 'happier-cli',
+      isAuthenticationSetupFailure: this.options.isAuthenticationSetupFailure,
       transport: stream,
       handlers: clientHandlers,
       ...(this.options.extensions ? { extensions: this.options.extensions } : {}),
@@ -3052,7 +3056,7 @@ export class AcpBackend implements CatalogAcpBackend {
     // Kill the whole process tree (some ACP CLIs spawn child processes).
     if (this.process) {
       try {
-        await killProcessTree(this.process, { graceMs: processConnectionGraceMs });
+        await terminateProcessTree(this.process, { graceMs: processConnectionGraceMs });
       } catch (error) {
         logger.debug('[AcpBackend] Failed to kill process tree (non-fatal):', error);
       } finally {
