@@ -739,6 +739,11 @@ async function refreshServerSnapshot(entry: ManagedConcurrentServer, signal: Abo
             encryption,
             sessionDataKeys: entry.sessionDataKeys,
             sessionDataKeyEnvelopes: entry.sessionDataKeyEnvelopes,
+            // Secondary-Home refresh owns the lightweight list projection only. Opening every
+            // ordinary row's full Session metadata turns a retained multi-Home account into
+            // continuous background work; active, attention, and explicitly demanded rows still
+            // hydrate through the shared priority owner.
+            sessionListBackgroundHydrationMaxRows: 0,
             request,
             getExistingSession: () => null,
             getCurrentSessionListRenderable: (sessionId) => (

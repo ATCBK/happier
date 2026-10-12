@@ -4,7 +4,7 @@ import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/s
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 import {
-    createServerProfilesModuleMock,
+    createPartialServerProfilesModuleMock,
     createSessionListRenderableSessionFixture,
     createTokenStorageModuleMock,
 } from '@/dev/testkit';
@@ -36,6 +36,7 @@ type SessionSnapshotParams = {
     request?: SnapshotRequest;
     sessionListCursor?: string | null;
     sessionListAttentionCursor?: string | null;
+    sessionListBackgroundHydrationMaxRows?: number;
 };
 type SessionSnapshotResult = Readonly<{
     sessionIds: string[];
@@ -138,7 +139,7 @@ function mockConcurrentSessionCacheRuntimeDeps() {
     vi.doMock('socket.io-client', () => ({
         io: (...args: unknown[]) => ioSpy(...args),
     }));
-    vi.doMock('@/sync/domains/server/serverProfiles', () => createServerProfilesModuleMock({
+    vi.doMock('@/sync/domains/server/serverProfiles', async (importOriginal) => await createPartialServerProfilesModuleMock(importOriginal, {
         listServerProfiles: () => listServerProfilesSpy(),
         overrides: {
             loadHomeViewState: () => null,
@@ -332,6 +333,7 @@ describe('concurrent session cache supervised sockets', () => {
         expect(fetchAndApplySessionsSpy.mock.calls[0]?.[0]).toMatchObject({
             sessionListCursor: null,
             sessionListAttentionCursor: null,
+            sessionListBackgroundHydrationMaxRows: 0,
         });
         expect(storage.getState().concurrentSessionListCacheByServerId['server-b']?.listObservation?.phase)
             .not.toBe('ready');
