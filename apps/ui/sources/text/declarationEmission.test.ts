@@ -1,5 +1,6 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
@@ -7,7 +8,7 @@ import { expect, it } from 'vitest';
 it('emits real locale declarations while retaining exact keys and interpolation parameters', () => {
     const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
     const uiDir = join(repoRoot, 'apps/ui');
-    const fixture = mkdtempSync(join(repoRoot, '.translation-types-'));
+    const fixture = mkdtempSync(join(tmpdir(), 'happier-translation-types-'));
     const locales = ['en', 'ca', 'de', 'es', 'fr', 'it', 'ja', 'pl', 'pt', 'ru', 'zh-Hans', 'zh-Hant'];
     const consumerPath = join(fixture, 'consumer.ts');
     const consumer = `import { en } from ${JSON.stringify(join(uiDir, 'sources/text/translations/en'))};
@@ -37,6 +38,9 @@ authored.referenced.value = 'updated';
 authored.referenced.optional = 'present';
 `;
     try {
+        const relativeFixture = relative(repoRoot, fixture);
+        expect(relativeFixture === '..' || relativeFixture.startsWith(`..${sep}`) || isAbsolute(relativeFixture),
+            'declaration fixtures must remain outside synchronized source').toBe(true);
         const config = {
             extends: join(uiDir, 'tsconfig.json'),
             compilerOptions: {
@@ -47,7 +51,7 @@ authored.referenced.optional = 'present';
                 rootDir: repoRoot,
                 outDir: join(fixture, 'declarations'),
             },
-            files: [...locales.map((locale) => join(uiDir, `sources/text/translations/${locale}.ts`)), consumerPath],
+            files: locales.map((locale) => join(uiDir, `sources/text/translations/${locale}.ts`)),
             include: [],
             exclude: [],
         };
@@ -66,7 +70,14 @@ authored.referenced.optional = 'present';
             JSON.stringify(join(uiDir, 'sources/text', module)),
             JSON.stringify(join(fixture, 'declarations/apps/ui/sources/text', module)),
         ), consumer);
-        writeFileSync(join(fixture, 'tsconfig.json'), JSON.stringify({ ...config, files: [consumerPath] }));
+        // Only authored locales emit under the repository root. The external
+        // consumer checks those declarations without emitting or widening the
+        // declaration producer's root to include the private scratch directory.
+        const { rootDir: _rootDir, ...consumerCompilerOptions } = config.compilerOptions;
+        writeFileSync(join(fixture, 'tsconfig.json'), JSON.stringify({ ...config,
+            compilerOptions: { ...consumerCompilerOptions, noEmit: true, declaration: false, emitDeclarationOnly: false },
+            files: [consumerPath],
+        }));
         writeFileSync(consumerPath, declarationConsumer + `
 en.sessionBoard.views.reconciled({ title: 42 });
 export const invalid: keyof typeof en.sessionBoard.views = 'not-a-key';
@@ -82,6 +93,7 @@ authored.label = 'changed';
         expect(rejected.status).not.toBe(0);
         expect((rejected.stdout + rejected.stderr).match(/consumer\.ts.*TS2322/gu)).toHaveLength(8);
         expect((rejected.stdout + rejected.stderr).match(/consumer\.ts.*TS2540/gu)).toHaveLength(1);
+        expect((rejected.stdout + rejected.stderr).match(/error TS\d+:/gu)).toHaveLength(9);
     } finally {
         rmSync(fixture, { recursive: true, force: true });
     }
