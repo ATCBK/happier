@@ -14,6 +14,22 @@ const titlePermissions = {
 };
 
 describe('resolveClaudeNativeLaunchSettings', () => {
+  it.each(['interactive_terminal', 'noninteractive_sdk'] as const)(
+    'merges native skill disables key-wise into the one settings overlay for %s',
+    (interactionKind) => {
+      const args = resolveClaudeLaunchSettingsOverlayArgs({
+        args: ['--settings', JSON.stringify({ skillOverrides: { retained: 'on', blocked: 'on' }, env: { KEEP: 'yes' } })],
+        interactionKind,
+        permissionMode: 'default',
+        launchSettings: { skillOverrides: { fromLaunch: 'on' } },
+        skillOverrides: { blocked: 'off' },
+      });
+      expect(args.filter(arg => arg === '--settings')).toHaveLength(1);
+      expect(JSON.parse(args[args.indexOf('--settings') + 1])).toMatchObject({
+        skillOverrides: { retained: 'on', fromLaunch: 'on', blocked: 'off' }, env: { KEEP: 'yes' },
+      });
+    },
+  );
   it.each([false, true])('uses opt-in Happier attribution for terminal and SDK launch settings (%s)', async (includeAdvancedOptions) => {
     for (const value of [undefined, false, 'true', true]) {
       const launchEnv = { EXISTING_ENV: 'kept' };
