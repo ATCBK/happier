@@ -3480,6 +3480,7 @@ export {
   type SpawnSessionExecutionAuthorization,
   type SpawnSessionResult,
 } from './sessions/spawnSession.js';
+export { SpawnFailureV1Schema, type SpawnFailureV1 } from './machines/processes/spawnFailureV1.js';
 export {
   normalizeSpawnSessionNonceResolution,
   settleSpawnSessionNonce,
@@ -9706,6 +9707,7 @@ export {
   type GlassBlurStep,
 } from './account/settings/glassSurfaceMaterials.js';
 export * from './account/settings/machineRetentionDefaultsV1.js';
+export * from './push/machineRemoteAlert.js';
 export * from './machines/managed/resolveMachineRetentionPolicyV1.js';
 export * from './machines/managed/managedIntentV1.js';
 export * from './workspaces/projectSetup/projectManifestV1.js';
