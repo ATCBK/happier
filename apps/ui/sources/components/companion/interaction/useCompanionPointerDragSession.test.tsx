@@ -43,7 +43,7 @@ class TestPointerEvent extends Event {
         screenY: number;
         timeStamp?: number;
     }) {
-        super(type);
+        super(type, { cancelable: true });
         this.button = init.button ?? 0;
         this.pointerId = init.pointerId ?? 1;
         this.clientX = init.clientX;
@@ -105,17 +105,24 @@ describe('useCompanionPointerDragSession', () => {
             });
         });
 
+        // A press is not a drag yet: capturing now would retarget the coming `click` away from the
+        // pressed child, so a tap on a control inside the handle would never activate it.
+        expect(setPointerCapture).not.toHaveBeenCalled();
+
+        const move = new TestPointerEvent('pointermove', {
+            pointerId: 7,
+            clientX: 11,
+            clientY: 22,
+            screenX: 112,
+            screenY: 206,
+            timeStamp: 20,
+        });
+        await act(async () => { fakeWindow.dispatchEvent(move); });
+
         expect(setPointerCapture).toHaveBeenCalledWith(7);
+        expect(move.defaultPrevented).toBe(true);
 
         await act(async () => {
-            fakeWindow.dispatchEvent(new TestPointerEvent('pointermove', {
-                pointerId: 7,
-                clientX: 11,
-                clientY: 22,
-                screenX: 112,
-                screenY: 206,
-                timeStamp: 20,
-            }));
             fakeWindow.dispatchEvent(new TestPointerEvent('pointerup', {
                 pointerId: 7,
                 clientX: 11,
@@ -177,15 +184,16 @@ describe('useCompanionPointerDragSession', () => {
             });
         });
 
+        const move = new TestPointerEvent('pointermove', {
+            pointerId: 8,
+            clientX: 12,
+            clientY: 20,
+            screenX: 102,
+            screenY: 200,
+            timeStamp: 10,
+        });
         await act(async () => {
-            fakeWindow.dispatchEvent(new TestPointerEvent('pointermove', {
-                pointerId: 8,
-                clientX: 12,
-                clientY: 20,
-                screenX: 102,
-                screenY: 200,
-                timeStamp: 10,
-            }));
+            fakeWindow.dispatchEvent(move);
             fakeWindow.dispatchEvent(new TestPointerEvent('pointerup', {
                 pointerId: 8,
                 clientX: 12,
@@ -197,12 +205,64 @@ describe('useCompanionPointerDragSession', () => {
         });
 
         expect(onDragMove).not.toHaveBeenCalled();
+        expect(move.defaultPrevented).toBe(false);
         expect(onDragEnd).toHaveBeenCalledWith(expect.objectContaining({
             pointerId: 8,
             cancelled: false,
             coordinateSpace: 'screen',
         }));
         expect(onActivate).toHaveBeenCalledTimes(1);
+    });
+
+    it('leaves a tap uncaptured and unsuppressed so the pressed child receives its click', async () => {
+        const fakeWindow = new EventTarget();
+        vi.stubGlobal('window', fakeWindow);
+        const setPointerCapture = vi.fn();
+        const releasePointerCapture = vi.fn();
+        const onDragMove = vi.fn();
+        let suppress: (() => boolean) | null = null;
+
+        function Harness() {
+            const drag = useCompanionPointerDragSession({
+                coordinateSpace: 'client',
+                selectors: PET_POINTER_DRAG_SELECTORS,
+                onDragMove,
+            });
+            suppress = drag.shouldSuppressPress;
+            return <View ref={drag.dragTargetRef} testID="pet-drag-target" {...drag.pointerHandlers} />;
+        }
+
+        const screen = await renderScreen(<Harness />);
+        const target = screen.findByTestId('pet-drag-target');
+
+        await act(async () => {
+            target?.props.onPointerDown?.({
+                button: 0,
+                pointerId: 11,
+                clientX: 10,
+                clientY: 20,
+                screenX: 100,
+                screenY: 200,
+                timeStamp: 0,
+                target: { closest: closestMascot },
+                currentTarget: { setPointerCapture, releasePointerCapture },
+                preventDefault: vi.fn(),
+                stopPropagation: vi.fn(),
+            });
+        });
+        await act(async () => {
+            fakeWindow.dispatchEvent(new TestPointerEvent('pointermove', {
+                pointerId: 11, clientX: 11, clientY: 21, screenX: 101, screenY: 201, timeStamp: 10,
+            }));
+            fakeWindow.dispatchEvent(new TestPointerEvent('pointerup', {
+                pointerId: 11, clientX: 11, clientY: 21, screenX: 101, screenY: 201, timeStamp: 20,
+            }));
+        });
+
+        expect(setPointerCapture).not.toHaveBeenCalled();
+        expect(releasePointerCapture).not.toHaveBeenCalled();
+        expect(onDragMove).not.toHaveBeenCalled();
+        expect(suppress!()).toBe(false);
     });
 
     it('ignores pointer starts that did not originate on the mascot', async () => {
