@@ -7,6 +7,7 @@ import { reapHistoricalTempRoots } from './historical_temp_roots.mjs';
 import fs from 'node:fs';
 import childProcess from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
+import { fileURLToPath } from 'node:url';
 
 test('same-UID procfs permission denial uses complete read-only observation, never a process-name exemption', async t => {
   const { root } = await createTempFixture(t, { prefix: 'hstack-proc-permission-' });
@@ -32,21 +33,18 @@ test('same-UID procfs permission denial uses complete read-only observation, nev
     return original(fixturePath(path), ...args);
   });
   let privilegedAvailable = false;
+  let privilegedCalls = 0;
   t.mock.method(childProcess, 'spawnSync', (command, args) => {
     assert.equal(command, 'sudo');
     assert.ok(args.every(arg => !arg.includes('\0')), 'spawn arguments must not contain NUL bytes');
     assert.deepEqual(args.slice(0, 2), ['-n', '--']);
     if (!privilegedAvailable) return { status: 1, stdout: '', stderr: 'permission denied' };
-    const path = args.find(arg => arg.startsWith('/proc/'));
-    assert.ok(path?.startsWith('/proc/42/'), 'elevation is restricted to the observed process');
-    if (args[2] === '/usr/bin/cat') return { status: 0, stdout: originals.readFileSync(fixturePath(path), 'utf8') };
-    if (args[2] === '/usr/bin/readlink') return { status: 0, stdout: originals.readlinkSync(fixturePath(path)) + '\0' };
-    if (args[2] === '/usr/bin/find') return { status: 0, stdout: originals.readdirSync(fixturePath(path)).map(name => name + '\0').join('') };
-    if (args[2] === '/usr/bin/stat') {
-      const info = originals.statSync(fixturePath(path));
-      return { status: 0, stdout: `${info.dev}:${info.ino}\n` };
-    }
-    assert.fail('unexpected privileged command');
+    privilegedCalls++;
+    assert.equal(args[2], process.execPath);
+    assert.deepEqual(args.slice(-2), ['--observe-process-references', String(process.getuid())]);
+    return { status: 0, stdout: JSON.stringify({
+      paths: [join(temp, 'happier-held'), join(temp, 'happier-inherited')], identities: [],
+    }) };
   });
   syncBuiltinESMExports();
   t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
@@ -58,6 +56,50 @@ test('same-UID procfs permission denial uses complete read-only observation, nev
   await assert.rejects(access(join(temp, 'happier-old')), { code: 'ENOENT' });
   await access(join(temp, 'happier-held'));
   await access(join(temp, 'happier-inherited'));
+  assert.equal(privilegedCalls, 2, 'each of the two reference snapshots needs one privileged collector, not a new sudo process for every proc entry');
+});
+
+test('native privileged observation reclaims an unused root while preserving actual cwd/fd and inherited temp bindings', { skip: process.platform !== 'linux' }, async t => {
+  // The physical Linux privilege boundary is available on the managed worker;
+  // other test hosts keep the deterministic procfs contract above.
+  if (childProcess.spawnSync('sudo', ['-n', 'true']).status !== 0) return t.skip('noninteractive privileged procfs observation unavailable');
+  const { root } = await createTempFixture(t, { prefix: 'hstack-native-reference-' });
+  const parent = join(root, 'tmp');
+  const old = new Date(Date.now() - 48 * 3600000);
+  for (const name of ['happier-old', 'happier-held', 'happier-inherited']) {
+    await mkdir(join(parent, name), { recursive: true });
+    await writeFile(join(parent, name, 'data'), 'controlled fixture');
+    await utimes(join(parent, name, 'data'), old, old);
+    await utimes(join(parent, name), old, old);
+  }
+  const child = childProcess.spawn(process.execPath, ['--input-type=module', '-e',
+    'import{openSync}from"node:fs";openSync("data","r");process.stdin.resume();process.stdin.on("end",()=>process.exit(0));console.log("ready");'], {
+    cwd: join(parent, 'happier-held'),
+    env: { ...process.env, TMPDIR: join(parent, 'happier-inherited'), HAPPIER_REFERENCE_PRIVATE_FIXTURE: 'never-print-this-fixture-value' },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  const closed = new Promise(resolve => child.once('close', resolve));
+  t.after(async () => { child.stdin.end(); await closed; });
+  await new Promise((resolve, reject) => {
+    child.stdout.once('data', resolve);
+    child.once('error', reject);
+    child.once('close', () => reject(new Error('reference fixture exited before readiness')));
+  });
+  const observation = childProcess.spawnSync('sudo', ['-n', '--', process.execPath,
+    fileURLToPath(new URL('./historical_temp_roots.mjs', import.meta.url)), '--observe-process-references', String(process.getuid())], {
+    encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: Infinity,
+  });
+  assert.equal(observation.status, 0, 'native read-only collector must complete');
+  assert.equal(observation.stdout.includes('never-print-this-fixture-value'), false, 'unselected environment values must not cross the collector boundary');
+  const references = JSON.parse(observation.stdout);
+  assert.ok(references.paths.includes(join(parent, 'happier-held')));
+  assert.ok(references.paths.includes(join(parent, 'happier-inherited')));
+  await access(join(parent, 'happier-old'));
+  const result = reapHistoricalTempRoots(parent);
+  assert.equal(result.observationUnavailable, null);
+  assert.equal(result.reclaimedRoots, 1);
+  await assert.rejects(access(join(parent, 'happier-old')), { code: 'ENOENT' });
+  for (const name of ['happier-held', 'happier-inherited']) await access(join(parent, name));
 });
 
 test('historical sweep reclaims only old known roots with no cwd, fd or mapped-file users', async t => {

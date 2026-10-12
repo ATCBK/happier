@@ -1,6 +1,6 @@
 import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { join, sep } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 // Approved historical sweep: legitimate builds run <=3h and watchers <=2h.
@@ -28,46 +28,19 @@ function inspectTree(path, countedInodes = new Set()) {
   return { info, newestMtimeMs, bytes, identities };
 }
 
-function processReferences(procRoot, ownerUid) {
+function collectProcessReferences(procRoot, ownerUid) {
   const paths = [], identities = new Set();
   for (const pid of readdirSync(procRoot).filter(name => /^\d+$/.test(name))) {
     const processRoot = join(procRoot, pid);
+    let matchingOwnerUid = false;
     try {
       const status = readFileSync(join(processRoot, 'status'), 'utf8');
       // Procfs inode ownership changes with dumpability; status owns actual
       // process UIDs. Skip only known foreign users, not unknown visibility.
       const uids = /^Uid:[ \t]+(\d+)[ \t]+(\d+)[ \t]+(\d+)[ \t]+(\d+)[ \t]*$/m.exec(status);
+      matchingOwnerUid = uids?.slice(1).some(uid => Number(uid) === ownerUid) === true;
       if (uids && !uids.slice(1).some(uid => Number(uid) === ownerUid)) continue;
       if (/^State:\s+Z/m.test(status) || /^Kthread:\s+1/m.test(status)) continue;
-      const observe = (path, read, command, decode = value => value) => {
-        try { return read(); }
-        catch (error) {
-          // Nondumpable same-UID processes (including SSH sessions) still hold
-          // real references. Never exempt them by name. The kernel permits a
-          // privileged read; use only existing noninteractive OS authorization,
-          // for this known UID's proc entries, and keep all mutation unprivileged.
-          if (!['EACCES', 'EPERM'].includes(error.code) || procRoot !== '/proc'
-            || ownerUid !== process.getuid() || !uids?.slice(1).some(uid => Number(uid) === ownerUid)) throw error;
-          const result = spawnSync('sudo', ['-n', '--', ...command], {
-            encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: Infinity,
-          });
-          // Neither environment bytes nor sudo output belong in diagnostics.
-          if (result.error || result.status !== 0) throw error;
-          return decode(result.stdout);
-        }
-      };
-      const readText = path => observe(path, () => readFileSync(path, 'utf8'), ['/usr/bin/cat', '--', path]);
-      const readLink = path => observe(path, () => readlinkSync(path), ['/usr/bin/readlink', '--zero', '--', path], value => {
-        if (!value.endsWith('\0')) throw new Error('invalid privileged proc link observation');
-        return value.slice(0, -1);
-      });
-      const readDirectory = path => observe(path, () => readdirSync(path),
-        ['/usr/bin/find', path, '-mindepth', '1', '-maxdepth', '1', '-printf', '%f\\0'], value => value.split('\0').filter(Boolean));
-      const readIdentity = path => observe(path, () => identity(statSync(path)), ['/usr/bin/stat', '-L', '-c', '%d:%i', '--', path], value => {
-        const key = value.trim();
-        if (!/^\d+:\d+$/.test(key)) throw new Error('invalid privileged proc inode observation');
-        return key;
-      });
       const addPath = path => {
         paths.push(path.replace(/ \(deleted\)$/, ''));
         try { identities.add(identity(statSync(path))); }
@@ -75,7 +48,7 @@ function processReferences(procRoot, ownerUid) {
       };
       // Detached children can inherit scratch before opening a file in it.
       // Observe only the explicit non-secret temp bindings, never emit env.
-      for (const binding of readText(join(processRoot, 'environ')).split('\0')) {
+      for (const binding of readFileSync(join(processRoot, 'environ'), 'utf8').split('\0')) {
         if (binding.startsWith('TMPDIR=/')) addPath(binding.slice('TMPDIR='.length));
         if (binding.startsWith('HAPPIER_TEST_TEMP_ROOTS=')) {
           for (const path of binding.slice('HAPPIER_TEST_TEMP_ROOTS='.length).split('\n')) {
@@ -83,26 +56,53 @@ function processReferences(procRoot, ownerUid) {
           }
         }
       }
-      for (const link of [join(processRoot, 'cwd'), ...readDirectory(join(processRoot, 'fd')).map(fd => join(processRoot, 'fd', fd))]) {
+      for (const link of [join(processRoot, 'cwd'), ...readdirSync(join(processRoot, 'fd')).map(fd => join(processRoot, 'fd', fd))]) {
         try {
-          addPath(readLink(link));
-          identities.add(readIdentity(link));
+          addPath(readlinkSync(link));
+          identities.add(identity(statSync(link)));
         } catch (error) {
           // A descriptor may close during inspection. Missing cwd for a live
           // userspace process is unknown, not proof that it owns no root.
           if (error.code !== 'ENOENT' || link.endsWith('/cwd')) throw error;
         }
       }
-      for (const line of readText(join(processRoot, 'maps')).split('\n')) {
+      for (const line of readFileSync(join(processRoot, 'maps'), 'utf8').split('\n')) {
         const path = /^\S+(?:\s+\S+){4}\s+(\/.*)$/.exec(line)?.[1];
         if (path) addPath(path.replace(/\\([0-7]{3})/g, (_, octal) => String.fromCharCode(parseInt(octal, 8))));
       }
     } catch (error) {
       if (!existsSync(processRoot)) continue; // exited while being observed
-      throw new Error(`live process ${pid} references unavailable (${error.code ?? error.message})`);
+      const unavailable = new Error(`live process ${pid} references unavailable (${error.code ?? error.message})`);
+      unavailable.canRetryPrivilegedReferences = matchingOwnerUid && ['EACCES', 'EPERM'].includes(error.code);
+      throw unavailable;
     }
   }
   return { paths, identities };
+}
+
+function processReferences(procRoot, ownerUid) {
+  try { return collectProcessReferences(procRoot, ownerUid); }
+  catch (error) {
+    // Nondumpable same-UID processes still hold real references. Acquire one
+    // complete read-only observation with existing noninteractive authorization,
+    // reusing this collector instead of spawning sudo for every proc entry.
+    // Unknown UID/visibility remains closed, and deletion keeps the caller's UID.
+    if (!error.canRetryPrivilegedReferences || procRoot !== '/proc' || ownerUid !== process.getuid()) throw error;
+    const result = spawnSync('sudo', ['-n', '--', process.execPath, fileURLToPath(import.meta.url),
+      '--observe-process-references', String(ownerUid)], {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: Infinity,
+    });
+    if (result.error || result.status !== 0) throw error;
+    // Only paths, inode identities and explicitly selected non-secret temp
+    // bindings leave the collector. Never log its output or environment bytes.
+    try {
+      const references = JSON.parse(result.stdout);
+      if (!references || Object.keys(references).sort().join(',') !== 'identities,paths'
+        || !Array.isArray(references.paths) || !references.paths.every(path => typeof path === 'string')
+        || !Array.isArray(references.identities) || !references.identities.every(key => typeof key === 'string' && /^\d+:\d+$/.test(key))) throw error;
+      return { paths: references.paths, identities: new Set(references.identities) };
+    } catch { throw error; }
+  }
 }
 
 function hasUser(directory, tree, references) {
@@ -176,5 +176,10 @@ export function reapHistoricalTempRoots(tempParent, procRoot = '/proc', {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  console.error(JSON.stringify(reapHistoricalTempRoots(process.argv[2])));
+  if (process.argv[2] === '--observe-process-references') {
+    const ownerUid = Number(process.argv[3]);
+    if (process.argv.length !== 4 || !Number.isSafeInteger(ownerUid) || ownerUid < 0) throw new Error('process reference owner UID unavailable');
+    const references = collectProcessReferences('/proc', ownerUid);
+    process.stdout.write(JSON.stringify({ paths: references.paths, identities: [...references.identities] }) + '\n');
+  } else console.error(JSON.stringify(reapHistoricalTempRoots(process.argv[2])));
 }
