@@ -45,6 +45,25 @@ encodes that choice through GitHub's existing configuration owner. The editor
 changes only `draft.configuration`, preserving the discovered binding, instance
 key, key stability and locator. The shared page still submits the caller-bound
 administration Action and owns settlement; canceling the editor writes nothing.
+Update and Restore seed the source editor from its stored opaque configuration,
+combined with the current discovered binding and locator. The shared row
+projection retains configuration after confirmed writes, and switching rows
+resets unsaved editor inputs. GitHub repository scope and PostHog environment
+and window choices therefore survive reopening and remounting the editor.
+
+GitHub also declares its existing deployment-derived instance-key stability to
+the shared page. When discovery cannot reach a configured login, Update uses
+the exact retained binding, key, configuration and locator from the caller-scoped
+read. Changing its repository scope needs no provider login; provider reads still
+reauthorize that binding on the executing Machine. Sources without this declared
+key contract retain the discovery requirement, and a stored record without a
+locator remains removable rather than receiving invented edit metadata.
+
+Remove uses the administration Action's shared approval policy, just like the
+other lifecycle changes: the default asks once, Allowed skips the question, and
+resetting the preference restores Ask first. The settings page adds no separate
+confirmation. The Action's confirmation explains that removing a source takes
+its entries out of the list while retaining the user's pins and Session links.
 
 ### Native GitHub source bindings (0.3 development)
 
@@ -54,7 +73,7 @@ Connected Service identity. GitHub discovery offers this candidate when the
 executing machine's CLI login is usable and no explicit account is selected.
 The shared source settings owner labels it **Use this machine's GitHub CLI
 login** and persists it through `administerSourceInstanceAction`, exactly as
-agent callers do. Neither configuration path contains a token.
+agent callers do. Neither configuration path contains authentication material.
 When no account is selected and the machine login is unavailable, discovery
 retains the native service identity with the authentication failure
 `plugin_connected_account_native_unavailable`, exposing the sign-in remedy
@@ -88,19 +107,48 @@ this is a development source shape, not a generic host repository-scope schema.
 
 The client-target [`ui/mounted-v1`](../packages/plugins/triage/src/actions/mountedUiProtocol.ts) Action accepts finite semantic operations against a `mountId` from the current UI context. It opens/closes detail through the existing reducer and route settlement, controls the same detail Tabs and List/Board preference as the UI, applies a lens or saved view through the existing lens/view owners, sets bulk selection through the public Collection selection store, and refreshes/pages through the mounted window and continuation owners. `focusRow` requests the Collection's physical row focus without activation; `peekRow` expands that row's table peek without opening detail (`expanded: false` closes it). Repeating the same peek intent is idempotent. Both require a key in the current Collection. `retryRun` and `cancelRun` reach the mounted bulk controller's existing Try again and Stop operations, preserving its retained identities and completed outcomes. The local-state Collection APIs are unchanged.
 
+In the current development implementation, `setLens` also accepts optional
+`smartPolicy: { v: 1, precedence: ['attention', 'activity'] }` or the reversed
+precedence. Omission retains the mounted policy. The canonical Smart-policy
+parser rejects repeated predicates; the same settled route used by the UI
+records an accepted change. This does not write a saved view or start a Session.
+
+The mounted entry picker publishes its own `mountedAction` address in current
+UI context. `attachEntry` and `removeEntry` accept an `entryRef` for a row in
+that picker; they call the existing revision-checked attachment owner against
+the exact Composer from the picker launch. The owner supplies Triage's
+canonical attachment key, configured source and row presentation. Unknown rows
+or retired picker mounts return `unavailable`; a list-page mount cannot handle
+these operations. They change only the draft's identity attachment, never text,
+navigation, provider disclosure or submission. Generic
+`composer.transaction.apply` remains the host transaction transport, not a
+second owner of Triage's attachment identity.
+
 The existing Account/plugin/generation ephemeral scope leases only the addressed page's callback. No React state, provider rows, or mount address is persisted. Choosing a saved view here applies its route lens, just like a shared view link; it does not write the Account's durable selected-view preference. Durable saved-view changes remain separately admitted Actions. An absent/inactive page or unavailable tab/selection/continuation returns `unavailable`; refused route settlement returns `rejected`. Agent/MCP callers require an answering mounted client; a headless CLI cannot operate another client's UI. Opaque current-context commands remain subject to the host's existing retirement and Action admission.
 
 The same mounted dispatcher now reaches source-panel intents in development:
 `selectSourceOccurrence` calls the source's incumbent selection controller, and
 Sentry's `setSourceOrdering` changes its existing retained-event ordering.
+`loadMoreSourceOccurrences` advances the active Sentry retained-events or
+PostHog sampled-occurrences controller, so a later occurrence can then be
+selected and inserted. The visible Load more button uses this same intent;
+pending, exhausted or inactive panels return `unavailable`.
 Concealing already revealed user details is an ordinary mounted intent. Revealing
 them uses `ui/reveal-source-user-v1`; adding the selected evidence uses
 `ui/insert-selected-evidence-v1`. Both named Actions apply the shared manifest
 default, per-surface Ask-first setting and explicit waiver. Sensitive operations
 cannot be submitted through the ordinary `ui/mounted-v1` input.
 
-Commands are published only by active source panels and carry the selected
-occurrence identity. A changed selection, hidden/retired panel or absent mounted
+The detail's `selectLinkedSession` operand names a currently loaded linked
+Session and selects it in the same inline Session panel as the UI picker.
+`loadMore` with `section: 'linkedSessions'` advances that detail's existing
+linked-Session controller, including its retained rows and failed-page retry.
+The visible Load more and Retry controls invoke the same mounted intent.
+Exhausted or retired details return `unavailable`; page acceptance is not a
+claim that its asynchronous Account read succeeded.
+
+Source commands are published only by active panels; selection and evidence
+commands carry the occurrence identity. A changed selection, hidden/retired panel or absent mounted
 owner returns `unavailable`, rather than selecting a substitute or rereading the
 provider. Source controllers retain selection; the existing Triage disclosure
 bridge issues the same identity-only candidate to the bound, revision-checked
@@ -161,6 +209,8 @@ read returns honest pending. There is no local three-read/750 ms settlement wind
 
 ## Detail panels and cross-source fix links
 
+In 0.3 development source, snapshots may also carry `scopeDisplayName`, a bounded short name authored by the source for the compact place cell. GitHub, GitLab, Bitbucket and Azure DevOps publish the repository name alongside the full `scopeLabel`; GitLab resolves its nested group path within the source. Triage carries this fact through its canonical row projection without parsing paths. Older snapshots omit it and retain the existing full-label presentation. The full path remains in the list byline, detail and accessible row context. Kind glyphs use the source descriptor's declared `workflowSubject`; an unmatched kind uses neutral lifecycle marks (`info` while active, `check` when resolved), never an inferred pull request.
+
 A present snapshot ([`observations.ts`](../packages/triage-protocol/src/v1/observations.ts)) may carry two optional display lines for list rows and the detail header: `authorLabel` (who opened the entry, as the provider names them) and `designation` (its short native designation as the provider writes it: GitHub `#2481`, GitLab `!88`/`#12`, Bitbucket `#42`, Azure DevOps `!17`, Sentry's short id). Both are presentation only, never parsed back into identity, and a shortened one sets `projectionTruncated`. PostHog error groups and Sentry issues carry no author; PostHog carries no designation.
 
 [`descriptor.ts`](../packages/triage-protocol/src/v1/descriptor.ts) owns per-kind `detailTabs` and `detailActions`. Shared tab ids select the target's Overview, Activity, Files and Checks vocabulary; source tab ids keep source-owned names and append after the shared tabs. A source tab's optional `titleKey` resolves through that admitted source's projected translation bundle, with `title` as the fallback. Either tab arm may name a `summaryFact`: the id of a row fact the kind's snapshots already carry. Triage's tab plan ([`tabs.ts`](../packages/plugins/triage/src/ui/detail/tabs.ts)) reads that fact from the snapshot of the entry that renders the tab (the linked fix PR's own facts for an issue's Files and Checks) and the strip shows its value beside the title: a number in the reader's locale (`~` when approximate), a status in the shared status tone (`resolveTriageRowFactStatusToneV1`), text quietly; time, actor and detail-only facts and a missing fact show nothing. Current declarations: GitHub Checks (`github/checks`), Sentry Occurrences (`events`), PostHog Occurrences and Affected sessions (`posthog/occurrences`, `posthog/sessions`). No source carries a changed-file count as a row fact, so Files has no summary. Triage owns the frame and tab strip. A source renders the requested [`detail.ts`](../packages/triage-protocol/src/v1/detail.ts) `panel` through its existing detail surface; `detailActions: true` requests the `actions` panel in the header. Omission preserves the whole-detail path. A source using public Plugin UI `Tabs` consumes `tabList="host"` for a target-selected panel and `useTabPanelActivity().activeSignal` for retained asynchronous work.
@@ -217,12 +267,21 @@ consume canonical provider rollups, never counts inferred from the loaded page;
 missing, partial, unknown, and inapplicable evidence never becomes a passing
 marker. Source-only evidence tabs and header write controls remain source-owned.
 
+Checks, review and merge facts share
+[`TriageStatusRow`](../packages/triage-sources/src/ui/statusRow.tsx) across cockpit,
+story summary and the full source checks list. It owns only presentation; sources
+retain state vocabulary, filtering, reads and operations. Spread tiles use the
+public Metric caption slot instead of a separate caption renderer.
+
 All six host Activity bodies render one chronological stream through
 [`TriageActivityTimeline`](../packages/triage-sources/src/ui/activityTimeline.tsx).
 Each source maps its provider records (remarks, reviews, threads, pushes,
 state/label changes) into `TriageActivityEventV1` and hands them over unsorted;
-the owner orders them (by instant, undated last, ties in source order) and draws
-the marker rail, the sentence, any quoted remark and the time. Sources keep their
+the owner orders them (by instant, undated last, ties in source order) and maps
+them into the public Plugin UI
+[`Timeline`](../packages/plugin-ui/src/components/Timeline.tsx). Timeline owns
+the themed rail and delegates scrolling and prepend continuity to List; source
+event policy stays in triage-sources. Sources keep their
 reads, dedupe and controls: thread replies and resolve/publication writes ride in
 an event's `inset`, and every paged collection keeps its own continuation
 (`reads: 'earlier'` above the stream for newest-first walks). Triage appends its

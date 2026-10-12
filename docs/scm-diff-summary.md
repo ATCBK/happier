@@ -139,6 +139,13 @@ verified Session authority through the existing `session.write` RPC proof;
 caller-supplied Session and root selectors never grant access. The fixed Run
 profile scope enforces the same rule: detached intent input cannot open a
 private capture or saved result by naming its Session.
+In the Project Changes destination, Session choices come from the canonical
+admitted Project Sessions roster, narrowed to the displayed Machine and checkout.
+The optional `evidenceSessionId` travels with the review target and URL; it is a
+selector, not authority. Selecting a Session or its latest turn uses that
+Session's existing comparison binding. Withdrawal removes the choice and leaves
+the selected private source unavailable, without substituting working-tree
+evidence or borrowing another Session.
 Local retained reads also bind explicit Home overrides to the active Home's
 canonical public/API URL identity; an alternate Home with the same Session ID
 does not open this Home's files. Native profile capture applies the incumbent
@@ -155,6 +162,10 @@ Personal reviewed marks use the requester's Account material, never a Machine
 custodian's material on behalf of another actor. Missing requester material
 returns `reviewed_marks_unavailable`; result deletion reports personal-mark
 cleanup separately without changing that authority.
+In current 0.3 development, admitted native mark/unmark and saved-result
+deletion/clear use the existing signed Home request for Account currentness and
+the reviewed-mark KV namespace only. They do not grant access to other Account
+settings or KV keys, and inconsistent Account mode still refuses the write.
 
 Stored comparison, result and personal-mark readers use the canonical recursive
 stored-read normalizer: unknown fields are removed at known nested schema
@@ -169,6 +180,10 @@ it does not commit or send. A wait timeout is pending observation, not Run
 failure: the accepted handle is retained for Get or explicit Stop on its original
 target, and Stop acknowledgement is not a terminal fact. Session suggestions
 consume the same operation and observation owner.
+Selected paths and patch paths retain literal filename whitespace through UI
+selection, include/exclude scope matching, native SCM reads and model context.
+An empty path is omitted; a whitespace-only filename is not empty, and a spaced
+filename never selects its stripped sibling.
 
 Project Explain and Ask seed the ordinary editable New Session draft with its
 captured checkout origin and authorized displayed evidence. They do not create a
@@ -258,6 +273,13 @@ returns unavailable evidence. The strict optional id is an unreleased 0.3 input
 extension, not a safely ignorable instruction for an older capture owner.
 Captured Files does not offer working-file preview, staging, discard, or diff-area
 controls. Its missing-content and freshness notices retain the original evidence.
+
+The comparison menu's PR choice uses the existing ephemeral input picker.
+Triage supplies the `pull-request-comparison` input from its admitted source
+reader, including the source-owned locator and Action. Completion returns that
+comparison to the incumbent Project or Session review; cancellation keeps the
+previous comparison. The host does not parse a hosting URL or navigate away to
+Triage's ordinary app page to select this input.
 
 The Triage PR-detail Walk entrance reads a source-owned PR comparison locator
 from the transient `get` result, not from the persisted entry snapshot. It opens
@@ -387,10 +409,23 @@ before a revisioned write. Home/Account retirement withdraws requests/listeners.
 ## Generator interaction and settings
 
 The runtime contract is `retentionPolicy: 'resumable'`, `runClass: 'long_lived'`,
-with existing Session-owned retained interaction. It is not a new retention enum.
+with existing Session-owned or detached Run interaction. It is not a new retention enum.
 A settled output can leave a healthy generator idle. Per-turn structured output
 is published by the host, not by observing arbitrary transcript JSON or prose.
 The host remains the lifecycle, input-custody and streaming owner.
+
+In unreleased 0.3 source, `review.start`, `review.walkthrough` and
+`review.explain_findings` accept an explicit `target: { kind: 'detached' }` on
+the admitted Home/Machine/root. Run association stays `sessionId: null` even
+when the caller has a default Session. Narration reads the selected review's
+captured comparison and retained findings, then continues that reviewer or
+starts the existing seeded narrator. Detached input uses the canonical Run
+sender with its exact input identity; Session input keeps Session Pending
+admission. Selected Runs must share their repository and protected requester
+scope. A private Session capture or saved result cannot be selected by dropping
+its Session identity. Finding explanation returns targeted refinement to the
+existing SCM Action, retaining saved-result authorization and revision checks.
+These source contracts do not establish loaded-runtime certification.
 
 Discuss/Ask uses actual authenticated Run send/resume affordances and the existing
 `execution_run` recipient. Stop context carries the displayed result/revision.
@@ -412,6 +447,10 @@ Run; failed or unknown admission is not silently retried by prefetch. Explicit
 Regenerate bypasses that reuse. Summary model and Start share the offered model catalog and
 structured-output capability admission. Unknown/unsupported capability cannot be
 made supported by a default model name; continuation is a separate capability.
+In 0.3 development, UI and CLI Run preflight share Protocol's observation
+classifier. A missing method or unsupported protocol reports
+`execution_run_protocol_unsupported`; a transient or typed failed observation
+reports `execution_run_target_unavailable`; cancellation reports `cancelled`.
 The Summary model and Prepare after each turn declarations use domain admission
 before the Account settings CAS write. UI and `settings.set` use that same owner:
 unsupported or unavailable model choices and preparation without a supported
@@ -432,6 +471,11 @@ findings before requesting a walkthrough through the shared SCM profile/store.
 A single eligible reviewer continues its Run. Multiple/findings-only engines
 use one selected narration-capable narrator, retaining physical reviewer Run
 identities and launch failures. Narration failure does not erase findings.
+Built-in Agent and review-engine inventories remain available when the optional
+configured-ACP catalog is unobserved or unavailable. Configured choices are
+listed only from ready catalog authority; configured launch still checks its
+currentness. Finished-review narration receives the host's captured ACP catalog
+instead of borrowing an ambient catalog or fabricating an empty ready one.
 
 `review.walkthrough` reads effective findings at the host for the named Session
 Runs. Eligible continuation requests output without repeating review; a seeded
