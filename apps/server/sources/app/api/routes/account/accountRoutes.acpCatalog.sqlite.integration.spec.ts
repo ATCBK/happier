@@ -20,8 +20,18 @@ import { signAccountContentKeyBindingV1, attachAccountEncryptionMigrateProofSign
     type AccountEncryptionMigrateUnsignedRequest } from '@happier-dev/protocol';
 
 const record = AcpCatalogRecordV1Schema.parse({ v: 1, definitions: [{ id: 'configured', name: 'configured', title: 'Configured',
-    command: 'configured-agent', args: ['--acp'], env: { PUBLIC_CONFIG: { t: 'literal', v: 'retained' } },
+    launch: { kind: 'command', command: 'configured-agent', args: ['--acp'] }, env: { PUBLIC_CONFIG: { t: 'literal', v: 'retained' } },
     capabilities: {}, defaultModel: 'selected-model', createdAt: 1, updatedAt: 2 }] });
+const predecessorDefinitions = record.definitions.map(({ launch, ...fields }) => {
+    if (launch.kind !== 'command') throw new Error('Expected command fixture');
+    return { ...fields, command: launch.command, args: launch.args };
+});
+
+function createSigningKeyPair() {
+    const keys = tweetnacl.sign.keyPair();
+    // TweetNaCl's boundary types permit SharedArrayBuffer; persisted fixture bytes use owned ArrayBuffers.
+    return { publicKey: new Uint8Array(keys.publicKey), secretKey: new Uint8Array(keys.secretKey) };
+}
 
 describe('Account configured ACP catalog (SQLite)', () => {
     let harness: LightSqliteHarness;
@@ -32,7 +42,7 @@ describe('Account configured ACP catalog (SQLite)', () => {
     it('serves one admitted catalog with CAS and prevents retained-source replacement', async () => {
         const account = await db.account.create({ data: { encryptionMode: 'plain', settingsVersion: 7 } });
         const retained = await db.account.create({ data: { encryptionMode: 'plain', settingsVersion: 7,
-            settings: JSON.stringify({ t: 'plain', v: { acpCatalogSettingsV1: { v: 2, backends: record.definitions } } }) } });
+            settings: JSON.stringify({ t: 'plain', v: { acpCatalogSettingsV1: { v: 2, backends: predecessorDefinitions } } }) } });
         const app = createAuthenticatedTestApp() as Fastify;
         accountRoutes(app); kvRoutes(app);
         const headers = { 'x-test-user-id': account.id };
@@ -137,7 +147,7 @@ describe('Account configured ACP catalog (SQLite)', () => {
     });
 
     it('prevents direct Settings reseeding after ACP authority, while retained legacy Accounts remain writable', async () => {
-        const content = { t: 'plain' as const, v: { acpCatalogSettingsV1: { v: 2, backends: record.definitions } } };
+        const content = { t: 'plain' as const, v: { acpCatalogSettingsV1: { v: 2, backends: predecessorDefinitions } } };
         const account = await db.account.create({ data: { encryptionMode: 'plain' } });
         await db.userKVStore.create({ data: { accountId: account.id, key: ACP_CATALOG_ACCOUNT_ROW_KEY_V1, version: 0,
             value: new TextEncoder().encode(JSON.stringify({ t: 'plain', v: record })) } });
@@ -158,7 +168,7 @@ describe('Account configured ACP catalog (SQLite)', () => {
 
     it('activates only an exact captured predecessor transfer before ordinary user CAS', async () => {
         const settings = JSON.stringify({ t: 'plain', v: { acpCatalogSettingsV1: {
-            v: 2, backends: record.definitions.map(definition => ({ ...definition, transportProfile: 'generic' })),
+            v: 2, backends: predecessorDefinitions.map(definition => ({ ...definition, transportProfile: 'generic' })),
         }, unrelatedPreference: 'retained' } });
         const account = await db.account.create({ data: { encryptionMode: 'plain', settingsVersion: 11, settings } });
         const changedRecord = { ...record, definitions: record.definitions.map(definition => ({ ...definition, defaultModel: 'new-intent' })) };
@@ -254,7 +264,7 @@ describe('Account configured ACP catalog (SQLite)', () => {
 
     it('rolls back catalog admission and hints when canonical Settings storage refuses source cleanup', async () => {
         harness.resetEnv({ HAPPIER_FEATURE_ENCRYPTION__PLAIN_ACCOUNT_SETTINGS_AT_REST: 'sealed' });
-        const settings = JSON.stringify({ t: 'plain', v: { acpCatalogSettingsV1: { v: 2, backends: record.definitions } } });
+        const settings = JSON.stringify({ t: 'plain', v: { acpCatalogSettingsV1: { v: 2, backends: predecessorDefinitions } } });
         const account = await db.account.create({ data: { encryptionMode: 'plain', settingsVersion: 2, settings } });
         const app = createAuthenticatedTestApp() as Fastify; accountRoutes(app);
         try {
@@ -273,8 +283,8 @@ describe('Account configured ACP catalog (SQLite)', () => {
 
     it.each(['plain', 'e2ee'] as const)('guards a singleton tombstone capture during conversion without resurrecting or advancing it (%s)', async fromMode => {
         harness.resetEnv({ HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: 'optional', HAPPIER_FEATURE_ENCRYPTION__ALLOW_ACCOUNT_OPTOUT: '1' });
-        const signing = tweetnacl.sign.keyPair();
-        const recipient = tweetnacl.box.keyPair().publicKey;
+        const signing = createSigningKeyPair();
+        const recipient = new Uint8Array(tweetnacl.box.keyPair().publicKey);
         const contentPublicKeySig = signAccountContentKeyBindingV1({ accountSigningSecretKey: signing.secretKey, contentPublicKey: recipient });
         const account = await db.account.create({ data: { encryptionMode: fromMode, publicKey: encodeHex(signing.publicKey),
             contentPublicKey: recipient, contentPublicKeySig } });
@@ -291,8 +301,8 @@ describe('Account configured ACP catalog (SQLite)', () => {
             if (toMode === 'plain') return request;
             const unsigned: AccountEncryptionMigrateUnsignedRequest = { ...request, keyProof: { v: 1, publicKey: encodeBase64(signing.publicKey),
                 contentPublicKey: encodeBase64(recipient), contentPublicKeySig: encodeBase64(contentPublicKeySig) } };
-            return attachAccountEncryptionMigrateProofSignatureV1({ request: unsigned, signature: encodeBase64(tweetnacl.sign.detached(
-                createAccountEncryptionMigrateProofSigningInputV1({ request: unsigned, accountId: account.id, sourceMode: 'plain' }), signing.secretKey)) });
+            return attachAccountEncryptionMigrateProofSignatureV1({ request: unsigned, signature: encodeBase64(new Uint8Array(tweetnacl.sign.detached(
+                createAccountEncryptionMigrateProofSigningInputV1({ request: unsigned, accountId: account.id, sourceMode: 'plain' }), signing.secretKey))) });
         };
         const app = createAuthenticatedTestApp() as Fastify; accountRoutes(app);
         const options = { method: 'POST' as const, url: '/v1/account/encryption/migrate', headers: { 'x-test-user-id': account.id,
@@ -317,8 +327,8 @@ describe('Account configured ACP catalog (SQLite)', () => {
     it.each(['plain', 'e2ee'] as const)('preserves harmless stored ACP metadata through Account conversion and exact replay (%s)', async fromMode => {
         harness.resetEnv({ HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: 'optional', HAPPIER_FEATURE_ENCRYPTION__ALLOW_ACCOUNT_OPTOUT: '1',
             HAPPIER_FEATURE_ENCRYPTION__PLAIN_ACCOUNT_SETTINGS_AT_REST: 'none' });
-        const signing = tweetnacl.sign.keyPair();
-        const recipient = tweetnacl.box.keyPair().publicKey;
+        const signing = createSigningKeyPair();
+        const recipient = new Uint8Array(tweetnacl.box.keyPair().publicKey);
         const contentPublicKeySig = signAccountContentKeyBindingV1({ accountSigningSecretKey: signing.secretKey, contentPublicKey: recipient });
         const account = await db.account.create({ data: { encryptionMode: fromMode, publicKey: encodeHex(signing.publicKey),
             contentPublicKey: recipient, contentPublicKeySig, settings: null } });
@@ -348,8 +358,8 @@ describe('Account configured ACP catalog (SQLite)', () => {
         const request = toMode === 'plain' ? base : (() => {
             const unsigned: AccountEncryptionMigrateUnsignedRequest = { ...base, keyProof: { v: 1,
                 publicKey: encodeBase64(signing.publicKey), contentPublicKey: encodeBase64(recipient), contentPublicKeySig: encodeBase64(contentPublicKeySig) } };
-            return attachAccountEncryptionMigrateProofSignatureV1({ request: unsigned, signature: encodeBase64(tweetnacl.sign.detached(
-                createAccountEncryptionMigrateProofSigningInputV1({ request: unsigned, accountId: account.id, sourceMode: 'plain' }), signing.secretKey)) });
+            return attachAccountEncryptionMigrateProofSignatureV1({ request: unsigned, signature: encodeBase64(new Uint8Array(tweetnacl.sign.detached(
+                createAccountEncryptionMigrateProofSigningInputV1({ request: unsigned, accountId: account.id, sourceMode: 'plain' }), signing.secretKey))) });
         })();
         const app = createAuthenticatedTestApp() as Fastify; accountRoutes(app);
         const options = { method: 'POST' as const, url: '/v1/account/encryption/migrate', headers: { 'x-test-user-id': account.id,
@@ -377,8 +387,8 @@ describe('Account configured ACP catalog (SQLite)', () => {
     it.each(['plain', 'e2ee'] as const)('reseals the populated ACP catalog atomically, rejecting missing, stale and wrong-mode coverage (%s)', async fromMode => {
         harness.resetEnv({ HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: 'optional', HAPPIER_FEATURE_ENCRYPTION__ALLOW_ACCOUNT_OPTOUT: '1',
             HAPPIER_FEATURE_ENCRYPTION__PLAIN_ACCOUNT_SETTINGS_AT_REST: 'none' });
-        const signing = tweetnacl.sign.keyPair();
-        const recipient = tweetnacl.box.keyPair().publicKey;
+        const signing = createSigningKeyPair();
+        const recipient = new Uint8Array(tweetnacl.box.keyPair().publicKey);
         const contentPublicKeySig = signAccountContentKeyBindingV1({ accountSigningSecretKey: signing.secretKey, contentPublicKey: recipient });
         const account = await db.account.create({ data: { encryptionMode: fromMode, publicKey: encodeHex(signing.publicKey),
             contentPublicKey: recipient, contentPublicKeySig, settings: null } });
@@ -399,8 +409,8 @@ describe('Account configured ACP catalog (SQLite)', () => {
             if (toMode === 'plain') return base;
             const request: AccountEncryptionMigrateUnsignedRequest = { ...base, keyProof: { v: 1,
                 publicKey: encodeBase64(signing.publicKey), contentPublicKey: encodeBase64(recipient), contentPublicKeySig: encodeBase64(contentPublicKeySig) } };
-            return attachAccountEncryptionMigrateProofSignatureV1({ request, signature: encodeBase64(tweetnacl.sign.detached(
-                createAccountEncryptionMigrateProofSigningInputV1({ request, accountId: account.id, sourceMode: 'plain' }), signing.secretKey)) });
+            return attachAccountEncryptionMigrateProofSignatureV1({ request, signature: encodeBase64(new Uint8Array(tweetnacl.sign.detached(
+                createAccountEncryptionMigrateProofSigningInputV1({ request, accountId: account.id, sourceMode: 'plain' }), signing.secretKey))) });
         };
         const app = createAuthenticatedTestApp() as Fastify; accountRoutes(app);
         const options = { method: 'POST' as const, url: '/v1/account/encryption/migrate', headers: { 'x-test-user-id': account.id,

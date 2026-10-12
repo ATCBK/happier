@@ -313,7 +313,8 @@ describe("Saved Secret resource service (SQLite integration)", () => {
         const disagreement = await prepare();
         const modified = { ...disagreement.input, catalogMutations: { acp: { ...disagreement.input.catalogMutations.acp,
             content: { t: 'plain' as const, v: { ...disagreement.record, definitions: disagreement.record.definitions.map((definition, index) =>
-                index === 0 ? { ...definition, command: 'user-edited-before-source-activation' } : definition) } } } } };
+                index === 0 ? { ...definition, launch: { kind: 'command' as const,
+                    command: 'user-edited-before-source-activation', args: definition.launch.args } } : definition) } } } } };
         const rejected = await inTx(tx => promoteSavedSecretResourceInTx(tx, modified)).catch(error => {
             if (error instanceof SavedSecretResourceTransactionAbort) return { ok: false, error: error.error };
             throw error;
