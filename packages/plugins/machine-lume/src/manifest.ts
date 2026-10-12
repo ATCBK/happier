@@ -71,6 +71,10 @@ export const LUME_MACHINE_PROVISIONER = {
 export const LUME_PLUGIN = definePlugin({
   id: LUME_PLUGIN_ID, version: '0.0.0', displayName: 'Lume Machines',
   description: 'Managed Lume guests on the selected Apple silicon Mac.',
+  brand: { iconResourceId: 'brand-icon', monochrome: true },
+  resources: {
+    'brand-icon': { kind: 'asset', path: 'assets/brand.png', contentType: 'image/png' },
+  },
   engines: { happier: '^0.0.0' }, runtime: { apiVersion: 1 }, entrypoints: { daemon: './.happier-plugin/daemon.js' },
   hostAccess: { required: [
     { id: processAccess, capability: 'process', reason: 'Prepare the public SSH key and inspect the reviewed local Lume guest.',
