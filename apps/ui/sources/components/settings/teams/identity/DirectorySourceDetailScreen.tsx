@@ -6,10 +6,13 @@ import { SettingAnchor, SettingSection, useSettingRevealRequested } from '@/comp
 import { SearchHeader } from '@/components/ui/forms/SearchHeader';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { ItemLoadStateRows } from '@/components/ui/lists/ItemLoadStateRows';
 import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { SectionButtonRow } from '@/components/ui/lists/SectionButtonRow';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { PageHeader } from '@/components/ui/layout/PageHeader';
+import { PageHeaderMarkSlot } from '@/components/ui/layout/PageHeaderMarkSlot';
 import { VirtualizedList, type VirtualizedListRef } from '@/components/ui/lists/virtualized';
 import { restoreFocusToBestTarget } from '@/keyboard/focusReturn';
 import { useTeamGroups } from '@/hooks/teams/useTeamGroups';
@@ -19,6 +22,7 @@ import type { TeamDirectoryGroupPageV1 } from '@happier-dev/protocol/teams';
 import { identityAdministrationFailureMessage } from '@/components/settings/identity/identityAdministrationFailure';
 import { announceAccessibilityMessage } from '@/components/ui/accessibility/announceAccessibilityMessage';
 import { getPreferredLanguage, t } from '@/text';
+import { fireAndForget } from '@/utils/system/fireAndForget';
 import { Modal } from '@/modal';
 import { formatWithCachedDateTimeFormatter } from '@/utils/datetime/cachedIntlFormatters';
 import { openExternalUrl } from '@/utils/url/openExternalUrl';
@@ -28,7 +32,7 @@ import type { ActionApprovalRegistration } from '@/components/approvals/actionAp
 import { TeamSection } from '../TeamSection';
 import { teamMemberDetailPath } from '../teamsRoutes';
 import { DirectoryListFailure, useDirectoryPeopleList } from './DirectoryPeopleList';
-import { directorySourcePresentationState, directorySourceRemovalBody, directorySourceStateLabel } from './directoryAdministrationPresentation';
+import { directoryGroupMappingTargetLabel, directorySourcePresentationState, directorySourceRemovalBody, directorySourceStateLabel } from './directoryAdministrationPresentation';
 import { runDirectoryGroupMappingChange } from './directoryGroupMapping';
 import { runDirectorySourceRemoval } from './directorySourceRemoval';
 import {
@@ -40,6 +44,7 @@ import { useDirectorySourceAdministration } from './useDirectoryAdministration';
 import { buildVirtualizedSegments } from './directorySourceDetailVirtualization';
 import { createWorkosPortalReturnController } from './workosPortalReturn';
 import { DIRECTORY_SOURCE_SETTINGS } from './directorySettings';
+import { identityProviderKindMark } from './identityAdministrationPresentation';
 
 type DirectoryDetailVirtualRow = Readonly<{
     key: string;
@@ -143,10 +148,10 @@ const DirectoryGroupMappings = React.memo(function DirectoryGroupMappings(props:
         // Roster binding counts describe the people behind this mapping. They
         // are not a promise of exact grants/removals: native ownership survives.
         const teamGroupName = (teamGroupId: string) =>
-            nativeGroupNames.get(teamGroupId) ?? t('teams.authentication.directory.unknown');
+            nativeGroupNames.get(teamGroupId) ?? t('identityAdministration.mappedGroupNotVisible');
         const mappedTo = (name: string) => `${t('identityAdministration.mappedTo')}: ${name}`;
         const destination = target === null
-            ? (group.mapping.state === 'bound' ? mappedTo(teamGroupName(group.mapping.teamGroupId)) : null)
+            ? (group.mapping.state === 'bound' ? mappedTo(directoryGroupMappingTargetLabel(group.mapping)) : null)
             : target.kind === 'native_target'
                 ? mappedTo(teamGroupName(target.teamGroupId))
                 : t('identityAdministration.mapCreate');
@@ -167,9 +172,9 @@ const DirectoryGroupMappings = React.memo(function DirectoryGroupMappings(props:
         if (!confirmed) return;
         setPendingGroupId(group.id);
         setFailure(null);
-        const finishMapping = async () => {
+        const finishMapping = () => {
             closeChooser();
-            await directoryGroups.reload();
+            fireAndForget(directoryGroups.reload(), { tag: 'DirectorySourceDetailScreen.revalidateMappings' });
         };
         try {
             const result = await runDirectoryGroupMappingChange({
@@ -220,15 +225,19 @@ const DirectoryGroupMappings = React.memo(function DirectoryGroupMappings(props:
         result.push({
             key: 'groups-search',
             element: <SettingSection section={DIRECTORY_SOURCE_SETTINGS.sectionRefs.groups}>
-                <SettingAnchor setting={DIRECTORY_SOURCE_SETTINGS.settings.searchGroups}>
-                    <SearchHeader testID="directory-groups-search" value={query} onChangeText={setQuery} placeholder={t(DIRECTORY_SOURCE_SETTINGS.settings.searchGroups.titleKey)} />
-                </SettingAnchor>
+                {/* The section's title leads its search, so the field reads as part of Directory Groups
+                    rather than as a trailing control of People above it. */}
+                <ItemGroup title={t('identityAdministration.directoryGroups')} surface="none">
+                    <SettingAnchor setting={DIRECTORY_SOURCE_SETTINGS.settings.searchGroups}>
+                        <SearchHeader testID="directory-groups-search" value={query} onChangeText={setQuery} placeholder={t(DIRECTORY_SOURCE_SETTINGS.settings.searchGroups.titleKey)} />
+                    </SettingAnchor>
+                </ItemGroup>
             </SettingSection>,
         });
         if (directoryGroups.status === 'loading' && directoryGroups.rows.length === 0) {
-            result.push({ key: 'groups-loading', element: <ItemGroup title={t('identityAdministration.directoryGroups')}><Item title={t('common.loading')} loading showChevron={false} /></ItemGroup> });
+            result.push({ key: 'groups-loading', element: <ItemGroup><ItemLoadStateRows state={{ kind: 'loading' }} rows={2} accessibilityLabel={t('common.loading')} /></ItemGroup> });
         } else if (directoryGroups.rows.length === 0 && !directoryGroups.error) {
-            result.push({ key: 'groups-empty', element: <ItemGroup title={t('identityAdministration.directoryGroups')}><Item title={t('teams.authentication.directory.empty')} showChevron={false} /></ItemGroup> });
+            result.push({ key: 'groups-empty', element: <ItemGroup><SurfaceStateCard kind="empty" size="line" title={t('teams.authentication.directory.empty')} /></ItemGroup> });
         } else {
             // Give the opened chooser its own adjacent virtual row so the list
             // can reach it directly, even on a long directory page.
@@ -248,13 +257,13 @@ const DirectoryGroupMappings = React.memo(function DirectoryGroupMappings(props:
                 result.push({
                     key: `groups:${group.id}`,
                     element: (
-                    <ItemGroup title={index === 0 ? t('identityAdministration.directoryGroups') : undefined} virtualizedSegment={{ first: index === 0, last: index === directoryGroups.rows.length - 1 }}>
+                    <ItemGroup virtualizedSegment={{ first: index === 0, last: index === directoryGroups.rows.length - 1 }}>
                             <Item
                                 key={group.id}
                                 testID={`directory-group:${group.id}`}
                                 title={group.displayName}
                                 subtitle={group.mapping.state === 'bound'
-                                    ? `${t('identityAdministration.mappedTo')}: ${nativeGroupNames.get(group.mapping.teamGroupId) ?? t('teams.authentication.directory.unknown')}`
+                                    ? `${t('identityAdministration.mappedTo')}: ${directoryGroupMappingTargetLabel(group.mapping)}`
                                     : t('identityAdministration.unmapped')}
                                 detail={group.memberCount === null ? undefined : t('teams.groups.memberCount', { count: group.memberCount })}
                                 loading={pendingGroupId === group.id}
@@ -274,7 +283,7 @@ const DirectoryGroupMappings = React.memo(function DirectoryGroupMappings(props:
         }
         if (directoryGroups.error) result.push({ key: 'groups-error', element: <ItemGroup><DirectoryListFailure testID="directory-groups" failure={directoryGroups.error} retry={directoryGroups.reload} /></ItemGroup> });
         if (directoryGroups.hasMore && directoryGroups.status !== 'loading' && !directoryGroups.error) result.push({ key: 'groups-more', element: <ItemGroup><Item testID="directory-groups-load-more" title={t('identityAdministration.loadMore')} loading={directoryGroups.status === 'loading_more'} disabled={directoryGroups.status === 'loading_more'} onPress={() => void directoryGroups.loadMore()} showChevron={false} /></ItemGroup> });
-        if (failure) result.push({ key: 'groups-failure', element: <ItemGroup><Item testID="directory-group-mapping-failure" title={failure} showChevron={false} /></ItemGroup> });
+        if (failure) result.push({ key: 'groups-failure', element: <ItemGroup><SurfaceStateCard testID="directory-group-mapping-failure" kind="error" size="line" title={failure} accessibilitySemantics="alert" /></ItemGroup> });
         return [...result, ...(props.afterRows ?? [])];
     }, [props.afterRows, changeMapping, choosingFor, closeChooser, focusChooser, onChooserKeyDown, directoryGroups.error, directoryGroups.hasMore, directoryGroups.loadMore, directoryGroups.reload, directoryGroups.rows, directoryGroups.status, failure, mappingAvailable, nativeGroupNames, nativeGroups.error, nativeGroups.hasMore, nativeGroups.isCurrent, nativeGroups.loadMore, nativeGroups.reload, nativeGroups.rows, nativeGroups.status, pendingGroupId, props.beforeRows, props.groupMappingsAvailable, query, selectedGroup]);
 
@@ -477,7 +486,7 @@ const AuthorizedDirectorySourceDetail = React.memo(function AuthorizedDirectoryS
                 key: 'source-loading',
                 element: <ItemGroup><SurfaceStateCard testID="team-directory-source-loading" kind="loading" size="line" title={t('common.loading')} accessibilitySemantics="status" /></ItemGroup>,
             }]}
-            header={<>{props.shellHeader}</>}
+            header={<><PageHeader title={t('teams.authentication.directory.title')} description={t('teams.authentication.directory.sourcePurpose')} />{props.shellHeader}</>}
         />;
     }
     if (state.kind === 'unavailable') {
@@ -504,7 +513,7 @@ const AuthorizedDirectorySourceDetail = React.memo(function AuthorizedDirectoryS
                     </ItemGroup>
                 ),
             }]}
-            header={<>{props.shellHeader}</>}
+            header={<><PageHeader title={t('teams.authentication.directory.title')} description={t('teams.authentication.directory.sourcePurpose')} />{props.shellHeader}</>}
         />;
     }
     if (!source) {
@@ -519,16 +528,16 @@ const AuthorizedDirectorySourceDetail = React.memo(function AuthorizedDirectoryS
                 key: 'source-not-found',
                 element: <ItemGroup><SurfaceStateCard testID="team-directory-source-not-found" kind="unavailable" size="line" title={t('teams.errors.notFound')} /></ItemGroup>,
             }]}
-            header={<>{props.shellHeader}</>}
+            header={<><PageHeader title={t('teams.authentication.directory.title')} description={t('teams.authentication.directory.sourcePurpose')} />{props.shellHeader}</>}
         />;
     }
     const projectionCurrent = !state.refreshing && !state.stale;
     const beforeRows: DirectoryDetailVirtualRow[] = [];
     const peopleSegments = buildVirtualizedSegments(people.rows, DIRECTORY_DETAIL_SEGMENT_SIZE);
     if (people.status === 'loading' && people.rows.length === 0) {
-        beforeRows.push({ key: 'people-loading', element: <ItemGroup title={t('teams.authentication.directory.people.section')}><Item title={t('common.loading')} loading showChevron={false} /></ItemGroup> });
+        beforeRows.push({ key: 'people-loading', element: <ItemGroup title={t('teams.authentication.directory.people.section')}><ItemLoadStateRows state={{ kind: 'loading' }} rows={3} accessibilityLabel={t('common.loading')} /></ItemGroup> });
     } else if (people.rows.length === 0 && !people.error) {
-        beforeRows.push({ key: 'people-empty', element: <ItemGroup title={t('teams.authentication.directory.people.section')}><Item title={t('teams.authentication.directory.people.empty')} showChevron={false} /></ItemGroup> });
+        beforeRows.push({ key: 'people-empty', element: <ItemGroup title={t('teams.authentication.directory.people.section')}><SurfaceStateCard kind="empty" size="line" title={t('teams.authentication.directory.people.empty')} /></ItemGroup> });
     } else {
         peopleSegments.forEach((segment, index) => beforeRows.push({
             key: `people:${index}`,
@@ -560,8 +569,21 @@ const AuthorizedDirectorySourceDetail = React.memo(function AuthorizedDirectoryS
             </ItemGroup>
         </SettingSection>,
     });
+    const actionsDisabled = !projectionCurrent || pendingAction !== null || !props.mutationsAvailable;
     const header = (
         <>
+            {/* Identity first (lab `tsDirectory-A`): the source by its mark and name, with its state and kind. */}
+            <PageHeader
+                testID="team-directory-source-header"
+                alwaysShowTitle
+                leading={<PageHeaderMarkSlot>{identityProviderKindMark(source.kind === 'workos_directory' ? 'workos_sso' : 'github_app_identity')}</PageHeaderMarkSlot>}
+                title={source.displayName}
+                description={t('teams.authentication.directory.sourcePurpose')}
+                meta={[
+                    { key: 'state', testID: 'team-directory-source-status', text: directorySourceStateLabel(directorySourcePresentationState(source)) },
+                    { key: 'kind', text: source.kind === 'workos_directory' ? t('teams.authentication.directory.kind.workos') : t('teams.authentication.directory.kind.github') },
+                ]}
+            />
             {props.shellHeader}
             {state.stale ? (
                 <AttentionBanner
@@ -572,38 +594,50 @@ const AuthorizedDirectorySourceDetail = React.memo(function AuthorizedDirectoryS
                     action={{ label: t('common.retry'), onPress: refresh }}
                 />
             ) : null}
-            <ItemGroup title={source.displayName}>
-                <Item
-                    testID="team-directory-source-status"
-                    title={t('teams.authentication.directory.detail.status')}
-                    detail={directorySourceStateLabel(directorySourcePresentationState(source))}
-                    showChevron={false}
+            {source.error ? (
+                // The last sync failed: what happened, that the Team keeps its last-known access, and
+                // the one recovery — the same complete-scan sync (child 05 §14.1).
+                <AttentionBanner
+                    testID="team-directory-source-error"
+                    title={identityAdministrationFailureMessage(source.error.code)}
+                    description={source.error.retryable
+                        ? t('teams.authentication.directory.detail.attentionRetryable')
+                        : t('teams.authentication.directory.detail.attentionAdmin')}
                 />
-                <Item
-                    title={t('teams.authentication.directory.detail.sourceType')}
-                    detail={source.kind === 'workos_directory'
-                        ? t('teams.authentication.directory.kind.workos')
-                        : t('teams.authentication.directory.kind.github')}
-                    showChevron={false}
-                />
-            </ItemGroup>
+            ) : null}
             <ItemGroup title={t('teams.authentication.directory.detail.syncSection')}>
+                {actionFailure ? (
+                    <SurfaceStateCard
+                        testID="team-directory-source-action-error"
+                        kind="error"
+                        size="line"
+                        title={actionFailure}
+                        accessibilitySemantics="alert"
+                    />
+                ) : null}
                 <Item
-                    title={t('teams.authentication.directory.detail.mode')}
-                    detail={source.sync.mode === 'events_and_full'
-                        ? t('teams.authentication.directory.mode.eventsAndFull')
-                        : t('teams.authentication.directory.mode.fullOnly')}
-                    showChevron={false}
-                />
-                <Item
-                    title={t('teams.authentication.directory.detail.freshness')}
-                    detail={t(`teams.authentication.directory.freshness.${source.sync.freshness}`)}
-                    showChevron={false}
-                />
-                <Item
+                    testID="team-directory-source-last-sync"
                     title={t('teams.authentication.directory.detail.lastSuccess')}
-                    detail={formatTimestamp(source.sync.lastSuccessAt)}
+                    subtitle={[
+                        formatTimestamp(source.sync.lastSuccessAt),
+                        source.sync.freshness === 'fresh' ? null : t(`teams.authentication.directory.freshness.${source.sync.freshness}`),
+                    ].filter((value): value is string => value !== null).join(' · ')}
                     showChevron={false}
+                    rightElement={can('teams.directory.sources.sync') ? (
+                        <SettingAnchor setting={DIRECTORY_SOURCE_SETTINGS.settings.syncNow}>
+                            <RoundButton
+                                testID="team-directory-source-sync"
+                                size="small"
+                                display="secondary"
+                                // child 05 §14.1: a failed source offers Retry — the same one
+                                // complete-scan Sync Action.
+                                title={source.error ? t('common.retry') : t(DIRECTORY_SOURCE_SETTINGS.settings.syncNow.titleKey)}
+                                loading={pendingAction === 'teams.directory.sources.sync'}
+                                disabled={actionsDisabled}
+                                onPress={() => void run('teams.directory.sources.sync')}
+                            />
+                        </SettingAnchor>
+                    ) : undefined}
                 />
                 {source.sync.nextScheduledAt ? (
                     <Item
@@ -612,101 +646,79 @@ const AuthorizedDirectorySourceDetail = React.memo(function AuthorizedDirectoryS
                         showChevron={false}
                     />
                 ) : null}
+                <Item
+                    title={t('teams.authentication.directory.detail.mode')}
+                    subtitle={source.sync.mode === 'events_and_full'
+                        ? t('teams.authentication.directory.mode.eventsAndFull')
+                        : t('teams.authentication.directory.mode.fullOnly')}
+                    showChevron={false}
+                />
             </ItemGroup>
-            {source.error ? (
-                <ItemGroup title={t('teams.authentication.directory.detail.attentionSection')}>
-                    <Item
-                        testID="team-directory-source-error"
-                        title={identityAdministrationFailureMessage(source.error.code)}
-                        subtitle={source.error.retryable
-                            ? t('teams.authentication.directory.detail.attentionRetryable')
-                            : t('teams.authentication.directory.detail.attentionAdmin')}
-                        showChevron={false}
-                    />
-                </ItemGroup>
-            ) : null}
-            {actionFailure ? (
-                <ItemGroup>
-                    <Item
-                        testID="team-directory-source-action-error"
-                        title={actionFailure}
-                        showChevron={false}
-                    />
-                </ItemGroup>
-            ) : null}
-            <SettingSection section={DIRECTORY_SOURCE_SETTINGS.sectionRefs.actions}>
-                <ItemGroup title={t('teams.authentication.directory.actions.section')}>
-                    {source.kind === 'workos_directory' && source.workosAdminPortalConnectionId ? (
-                        <SettingAnchor setting={DIRECTORY_SOURCE_SETTINGS.settings.workosSetup}>
-                            <Item
-                                testID="team-directory-source-open-workos"
-                                title={t(DIRECTORY_SOURCE_SETTINGS.settings.workosSetup.titleKey)}
-                                disabled={!projectionCurrent || pendingAction !== null || workosPortalPending || !props.mutationsAvailable}
-                                loading={workosPortalPending}
-                                onPress={() => void openWorkosSetup()}
-                                showChevron={false}
-                            />
-                        </SettingAnchor>
-                    ) : null}
-                    {can('teams.directory.sources.sync') ? (
-                        <SettingAnchor setting={DIRECTORY_SOURCE_SETTINGS.settings.syncNow}>
-                            <Item
-                                testID="team-directory-source-sync"
-                                // child 05 §14.1: a failed source offers Retry — the
-                                // same one complete-scan Sync Action.
-                                title={source.error ? t('common.retry') : t(DIRECTORY_SOURCE_SETTINGS.settings.syncNow.titleKey)}
-                                disabled={!projectionCurrent || pendingAction !== null || !props.mutationsAvailable}
-                                detail={pendingAction === 'teams.directory.sources.sync' ? t('common.loading') : undefined}
-                                onPress={() => void run('teams.directory.sources.sync')}
-                                showChevron={false}
-                            />
-                        </SettingAnchor>
-                    ) : null}
-                    {can('teams.directory.sources.pause') ? (
-                        <SettingAnchor setting={DIRECTORY_SOURCE_SETTINGS.settings.pause}>
-                            <Item
-                                testID="team-directory-source-pause"
-                                title={t(DIRECTORY_SOURCE_SETTINGS.settings.pause.titleKey)}
-                                disabled={!projectionCurrent || pendingAction !== null || !props.mutationsAvailable}
-                                onPress={() => void pause()}
-                                showChevron={false}
-                            />
-                        </SettingAnchor>
-                    ) : null}
-                    {can('teams.directory.sources.resume') ? (
-                        <SettingAnchor setting={DIRECTORY_SOURCE_SETTINGS.settings.resume}>
-                            <Item
-                                testID="team-directory-source-resume"
-                                title={t(DIRECTORY_SOURCE_SETTINGS.settings.resume.titleKey)}
-                                disabled={!projectionCurrent || pendingAction !== null || !props.mutationsAvailable}
-                                onPress={() => void run('teams.directory.sources.resume')}
-                                showChevron={false}
-                            />
-                        </SettingAnchor>
-                    ) : null}
-                </ItemGroup>
-            </SettingSection>
         </>
     );
-    // Removing the source closes this page, so it ends the page as a quiet button row.
-    const afterRows: DirectoryDetailVirtualRow[] = can('teams.directory.sources.remove') ? [{
+    // The source's lifecycle closes the page as one quiet button row (lab `tsDirectory-A`): pause or
+    // resume and the WorkOS portal on the left, removal last and destructive on the right.
+    const lifecycleButtons = [
+        source.kind === 'workos_directory' && source.workosAdminPortalConnectionId ? (
+            <SettingAnchor key="workos" setting={DIRECTORY_SOURCE_SETTINGS.settings.workosSetup}>
+                <RoundButton
+                    testID="team-directory-source-open-workos"
+                    size="small"
+                    display="secondary"
+                    title={t(DIRECTORY_SOURCE_SETTINGS.settings.workosSetup.titleKey)}
+                    loading={workosPortalPending}
+                    disabled={actionsDisabled || workosPortalPending}
+                    onPress={() => void openWorkosSetup()}
+                />
+            </SettingAnchor>
+        ) : null,
+        can('teams.directory.sources.pause') ? (
+            <SettingAnchor key="pause" setting={DIRECTORY_SOURCE_SETTINGS.settings.pause}>
+                <RoundButton
+                    testID="team-directory-source-pause"
+                    size="small"
+                    display="secondary"
+                    title={t(DIRECTORY_SOURCE_SETTINGS.settings.pause.titleKey)}
+                    disabled={actionsDisabled}
+                    onPress={() => void pause()}
+                />
+            </SettingAnchor>
+        ) : null,
+        can('teams.directory.sources.resume') ? (
+            <SettingAnchor key="resume" setting={DIRECTORY_SOURCE_SETTINGS.settings.resume}>
+                <RoundButton
+                    testID="team-directory-source-resume"
+                    size="small"
+                    display="secondary"
+                    title={t(DIRECTORY_SOURCE_SETTINGS.settings.resume.titleKey)}
+                    loading={pendingAction === 'teams.directory.sources.resume'}
+                    disabled={actionsDisabled}
+                    onPress={() => void run('teams.directory.sources.resume')}
+                />
+            </SettingAnchor>
+        ) : null,
+    ].filter((button) => button !== null);
+    const removeButton = can('teams.directory.sources.remove') ? (
+        <SettingAnchor setting={DIRECTORY_SOURCE_SETTINGS.settings.remove}>
+            <RoundButton
+                testID="team-directory-source-remove"
+                size="small"
+                display="destructive"
+                title={t(DIRECTORY_SOURCE_SETTINGS.settings.remove.titleKey)}
+                loading={pendingAction === 'teams.directory.sources.remove'}
+                disabled={actionsDisabled}
+                onPress={() => void remove()}
+            />
+        </SettingAnchor>
+    ) : undefined;
+    const afterRows: DirectoryDetailVirtualRow[] = lifecycleButtons.length > 0 || removeButton ? [{
         key: 'source-remove',
         element: (
-            <ItemGroup surface="none">
-                <SettingAnchor setting={DIRECTORY_SOURCE_SETTINGS.settings.remove}>
-                    <SectionButtonRow>
-                        <RoundButton
-                            testID="team-directory-source-remove"
-                            size="small"
-                            display="destructive"
-                            title={t(DIRECTORY_SOURCE_SETTINGS.settings.remove.titleKey)}
-                            loading={pendingAction === 'teams.directory.sources.remove'}
-                            disabled={!projectionCurrent || pendingAction !== null || !props.mutationsAvailable}
-                            onPress={() => void remove()}
-                        />
-                    </SectionButtonRow>
-                </SettingAnchor>
-            </ItemGroup>
+            <SettingSection section={DIRECTORY_SOURCE_SETTINGS.sectionRefs.actions}>
+                <ItemGroup surface="none">
+                    <SectionButtonRow trailing={removeButton}>{lifecycleButtons}</SectionButtonRow>
+                </ItemGroup>
+            </SettingSection>
         ),
     }] : [];
     return <DirectoryGroupMappings
@@ -728,7 +740,7 @@ export const DirectorySourceDetailScreen = React.memo(function DirectorySourceDe
     sourceId: string;
 }>) {
     return (
-        <TeamSection serverId={props.serverId} teamId={props.teamId} title={t('teams.authentication.directory.title')} description={t('teams.authentication.directory.sourcePurpose')} presentation="virtualized-list">
+        <TeamSection serverId={props.serverId} teamId={props.teamId} title={t('teams.authentication.directory.title')} description={t('teams.authentication.directory.sourcePurpose')} presentation="virtualized-list" childRendersHeader>
             {({ team, scope, address, canMutate, requestApproval }, shellHeader) => team.capabilities.manageAuthentication ? (
                 <AuthorizedDirectorySourceDetail
                     scope={scope}
@@ -741,6 +753,7 @@ export const DirectorySourceDetailScreen = React.memo(function DirectorySourceDe
                     shellHeader={shellHeader}
                 />
             ) : <>
+                <PageHeader title={t('teams.authentication.directory.title')} description={t('teams.authentication.directory.sourcePurpose')} />
                 {shellHeader}
                 <SettingSection section={DIRECTORY_SOURCE_SETTINGS.sectionRefs.actions} answersFor={[DIRECTORY_SOURCE_SETTINGS.sectionRefs.groups]}>
                     <ItemGroup><SurfaceStateCard testID="team-directory-source-forbidden" kind="denied" size="line" title={t('teams.errors.forbidden')} /></ItemGroup>

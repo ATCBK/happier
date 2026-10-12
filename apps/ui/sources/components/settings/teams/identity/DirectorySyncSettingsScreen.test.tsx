@@ -370,10 +370,8 @@ describe('DirectorySyncSettingsScreen source setup', () => {
         await vi.waitFor(() => expect(screen.findByTestId('team-directory-setup-workos')).not.toBeNull());
         await screen.pressByTestIdAsync('team-directory-setup-workos');
 
-        const setupGroup = screen.root.findAllByType('ItemGroup')
-            .find((group) => group.props.title === 'teams.authentication.directory.setup.options');
-        expect(setupGroup?.props.description).toBe('identityAdministration.errorInvalid');
-        expect(setupGroup?.props.description).not.toBe('workos_portal_open_failed');
+        expect(screen.getTextContent()).toContain('identityAdministration.errorInvalid');
+        expect(screen.getTextContent()).not.toContain('workos_portal_open_failed');
     });
 
     it('continues approved WorkOS connection and portal Actions through the same setup flow', async () => {

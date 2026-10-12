@@ -1,39 +1,20 @@
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-    ApprovalRequestV2Schema,
-    ARTIFACT_PLAIN_DATA_KEY_MARKER,
-    buildApprovalRequestArtifactHeaderV1,
-    decodePlainArtifactStoredContent,
-    type AuthEntryProjectionV1,
-} from '@happier-dev/protocol';
+import type { AuthEntryProjectionV1 } from '@happier-dev/protocol';
 
 import { collectRenderedTestIds } from '@/dev/testkit/render/collectRenderedTestIds';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { teamCapabilitiesFixture, teamPolicyFixture, teamSummaryFixture } from '@/dev/testkit/fixtures/teamFixtures';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol';
-import {
-    resetServerFeaturesClientForTests,
-} from '@/sync/api/capabilities/serverFeaturesClient';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 
 import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelpers';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
-const approvalArtifactBinding = vi.hoisted(() => ({
-    artifact: null as Readonly<Record<string, unknown>> | null,
-    version: 0,
-    listeners: new Set<() => void>(),
-    publish(artifact: Readonly<Record<string, unknown>>) {
-        this.artifact = artifact;
-        this.version += 1;
-        for (const listener of this.listeners) listener();
-    },
-}));
 
 installSettingsViewCommonModuleMocks({
     router: async () => ({
@@ -41,24 +22,7 @@ installSettingsViewCommonModuleMocks({
         useNavigation: () => ({ setOptions: vi.fn() }),
         useLocalSearchParams: () => ({}),
     }),
-    storage: async () => {
-        const ReactModule = await import('react');
-        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleStub({
-            useArtifact: (artifactId: string) => {
-                ReactModule.useSyncExternalStore(
-                    (listener) => {
-                        approvalArtifactBinding.listeners.add(listener);
-                        return () => approvalArtifactBinding.listeners.delete(listener);
-                    },
-                    () => approvalArtifactBinding.version,
-                );
-                return approvalArtifactBinding.artifact?.id === artifactId
-                    ? approvalArtifactBinding.artifact
-                    : null;
-            },
-        });
-    },
+    storage: 'real',
 });
 
 // App-bundled plugin bytes are an unrelated generated build boundary. The
@@ -91,6 +55,7 @@ vi.mock('@/sync/domains/plugins/availability/reader', () => ({
 
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
+const { resetServerFeaturesClientForTests } = await import("@/sync/api/capabilities/serverFeaturesClient");
 
 // Load the real graph after the transport boundaries are installed, during
 // collection rather than inside each test's reset deadline.
@@ -103,8 +68,6 @@ const TEAM_GET_PATH = '/v1/teams/get';
 const TEAM_POLICY_PATH = '/v1/teams/policy/set';
 const CONNECTIONS_LIST_PATH = '/v1/teams/identity/connections/list';
 const HOME_AUTH_ENTRY_PATH = '/v1/auth/entry';
-const ACCOUNT_SETTINGS_V2_PATH = '/v2/account/settings';
-const ARTIFACT_CREATE_PATH = '/v1/artifacts';
 
 const HOME_AUTH_ENTRY = Object.freeze({
     v: 1,
@@ -179,20 +142,6 @@ const RESTRICTED_TO_HOME_PASSKEY = Object.freeze({
     accepted: [{ kind: 'home_method' as const, methodId: 'passkey' }],
 });
 
-function artifactBody(id: string) {
-    return {
-        id,
-        header: '',
-        body: '',
-        dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
-        headerVersion: 1,
-        bodyVersion: 1,
-        seq: 1,
-        createdAt: 1,
-        updatedAt: 1,
-    };
-}
-
 async function renderAuthentication(serverId: string) {
     const { getStorage } = await import('@/sync/domains/state/storageStore');
     getStorage().setState({ profileScope: { serverId, accountId: 'account-ada' } });
@@ -221,20 +170,7 @@ async function addHomeWithTeam(
         },
     });
     if (options.requireUiApproval) {
-        harness.answer(serverId, ACCOUNT_SETTINGS_V2_PATH, {
-            body: {
-                content: {
-                    t: 'plain',
-                    v: {
-                        actionsSettingsV1: {
-                            v: 1,
-                            actions: { 'teams.policy.set': { approvalRequiredSurfaces: ['ui'] } },
-                        },
-                    },
-                },
-                version: 1,
-            },
-        });
+        await harness.requireUiApproval(serverId, 'teams.policy.set');
     }
     return serverId;
 }
@@ -288,9 +224,6 @@ beforeEach(async () => {
     resetServerFeaturesClientForTests();
     await harness.reset();
     await harness.selectHomes([]);
-    approvalArtifactBinding.artifact = null;
-    approvalArtifactBinding.version = 0;
-    approvalArtifactBinding.listeners.clear();
 }, 120_000);
 
 afterEach(() => {
@@ -309,6 +242,13 @@ describe('TeamAuthenticationPolicySections', () => {
 
         const screen = await renderAuthentication(serverId);
         await waitForPressable(screen, 'team-admission-mode:provisioned');
+        const { SegmentedChoiceItem } = await import('@/components/ui/lists/SegmentedChoiceItem');
+        const admission = screen.findAllByType(SegmentedChoiceItem).find((node) => node.props.testID === 'team-admission-mode');
+        expect(admission?.props.options.map((option: { description?: string }) => option.description)).toEqual([
+            'teams.authentication.policy.admissionInviteOnlyDescription',
+            'teams.authentication.policy.admissionProvisionedDescription',
+            'teams.authentication.policy.admissionJitDescription',
+        ]);
         expect(screen.findByTestId('team-admission-mode:jit')?.props.accessibilityState).toMatchObject({ disabled: false });
         await screen.pressByTestIdAsync('team-admission-mode:provisioned');
 
@@ -612,7 +552,6 @@ describe('TeamAuthenticationPolicySections', () => {
             capabilities: teamCapabilitiesFixture({ manageAuthentication: true }),
         });
         const serverId = await addHomeWithTeam(team, { requireUiApproval: true });
-        harness.answer(serverId, ARTIFACT_CREATE_PATH, { body: artifactBody('artifact-team-policy') });
 
         const screen = await renderAuthentication(serverId);
         await waitForPressable(screen, 'team-admission-mode:provisioned');
@@ -623,46 +562,17 @@ describe('TeamAuthenticationPolicySections', () => {
 
         // The person rejected it in the Inbox. Nothing can execute this mutation
         // now, so the section must stop saying it is waiting.
-        const approvalArtifactId = (harness.requestsFor(ARTIFACT_CREATE_PATH)[0]?.input as { id?: unknown } | undefined)?.id;
-        expect(typeof approvalArtifactId).toBe('string');
-        const artifactCreateInput = harness.requestsFor(ARTIFACT_CREATE_PATH)[0]?.input;
-        if (!artifactCreateInput || typeof artifactCreateInput !== 'object' || Array.isArray(artifactCreateInput)) {
-            throw new Error('Expected the approval Artifact create input');
-        }
-        const storedBody = Reflect.get(artifactCreateInput, 'body');
-        const decodedBody = typeof storedBody === 'string'
-            ? decodePlainArtifactStoredContent(storedBody)
-            : null;
-        if (!decodedBody || typeof decodedBody !== 'object' || Array.isArray(decodedBody)) {
-            throw new Error('Expected the Plain approval Artifact body envelope');
-        }
-        const plaintextBody = Reflect.get(decodedBody, 'body');
-        const openRequest = ApprovalRequestV2Schema.parse(
-            typeof plaintextBody === 'string' ? JSON.parse(plaintextBody) : null,
-        );
-        const rejectedRequest = ApprovalRequestV2Schema.parse({
-            ...openRequest,
-            status: 'rejected',
-            updatedAtMs: openRequest.updatedAtMs + 1,
-            decision: { kind: 'reject', decidedAtMs: openRequest.updatedAtMs + 1 },
-        });
-        const { act } = await import('react-test-renderer');
-        act(() => {
-            approvalArtifactBinding.publish({
-                id: approvalArtifactId,
-                header: buildApprovalRequestArtifactHeaderV1(rejectedRequest),
-                body: JSON.stringify(rejectedRequest),
-                seq: 2,
-                createdAt: 1,
-                updatedAt: 2,
-                isDecrypted: true,
-            });
-        });
+        const approvalArtifactId = harness.artifacts(serverId).list()[0]?.id;
+        if (!approvalArtifactId) throw new Error('Expected the pending approval Artifact');
+        await expect(decideApprovalAsInbox(serverId, approvalArtifactId, 'reject'))
+            .resolves.toMatchObject({ ok: true });
 
         await vi.waitFor(() => {
             expect(collectRenderedTestIds(screen.tree.toJSON()))
                 .not.toContain('team-admission-approval-pending');
         });
+        expect(harness.requestsFor(TEAM_POLICY_PATH)).toHaveLength(0);
+        await waitForPressable(screen, 'team-admission-mode:provisioned');
     });
 
     it('abandons an edited draft without telling the Home anything', async () => {

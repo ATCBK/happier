@@ -17,6 +17,7 @@ function teamContext(overrides?: Partial<TeamSectionContext>): TeamSectionContex
         approvalPending: false,
         refresh: vi.fn(),
         requestApproval: vi.fn(),
+        settleLeave: vi.fn(),
         ...overrides,
     };
 }

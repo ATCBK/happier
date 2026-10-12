@@ -3,6 +3,7 @@ import * as React from 'react';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { SettingAnchor, SettingRow } from '@/components/settings/shell/SettingRow';
 import { TEAM_IDENTITY_CONNECTION_SETTINGS } from './teamAuthenticationSettings';
 import { useTeamGroups } from '@/hooks/teams/useTeamGroups';
@@ -12,6 +13,7 @@ import type { TeamAddress } from '@/sync/domains/teams/teamAddress';
 import { identityAdministrationFailureMessage } from '@/components/settings/identity/identityAdministrationFailure';
 import { announceAccessibilityMessage } from '@/components/ui/accessibility/announceAccessibilityMessage';
 import { t } from '@/text';
+import { fireAndForget } from '@/utils/system/fireAndForget';
 import type { ActionApprovalRegistration } from '@/components/approvals/actionApprovalContinuation';
 
 import { buildIdentityConnectionGroupMappingCommand } from './identityConnectionGroupMapping';
@@ -99,10 +101,10 @@ export const IdentityConnectionGroupMappings = React.memo(function IdentityConne
             }),
             { cancelText: t('common.cancel'), confirmText: t('common.continue') },
         )) return;
-        const finishBinding = async () => {
+        const finishBinding = () => {
             setExternalGroupId('');
             setChoosingTarget(false);
-            await bindings.reload();
+            fireAndForget(bindings.reload(), { tag: 'IdentityConnectionGroupMappings.revalidate' });
         };
         setPending('create'); setFailure(null);
         try {
@@ -127,7 +129,9 @@ export const IdentityConnectionGroupMappings = React.memo(function IdentityConne
             }),
             { cancelText: t('common.cancel'), confirmText: t('identityAdministration.removeMapping'), destructive: true },
         )) return;
-        const finishRemoval = async () => await bindings.reload();
+        const finishRemoval = () => {
+            fireAndForget(bindings.reload(), { tag: 'IdentityConnectionGroupMappings.revalidate' });
+        };
         setPending(binding.id); setFailure(null);
         try {
             const result = await client.executeExternalGroupBinding('teams.externalGroupBindings.remove', {
@@ -144,7 +148,7 @@ export const IdentityConnectionGroupMappings = React.memo(function IdentityConne
     return (
         <>
             <SettingAnchor setting={TEAM_IDENTITY_CONNECTION_SETTINGS.settings.groupMappings}><ItemGroup title={t('identityAdministration.directoryGroups')}>
-                {bindings.status === 'loading' && bindings.rows.length === 0 ? <Item title={t('common.loading')} loading showChevron={false} /> : bindings.rows.length === 0 && !bindings.error ? <Item title={t('identityAdministration.unmapped')} showChevron={false} /> : bindings.rows.map((binding) => (
+                {bindings.status === 'loading' && bindings.rows.length === 0 ? <SurfaceStateCard kind="loading" size="line" title={t('common.loading')} /> : bindings.rows.length === 0 && !bindings.error ? <SurfaceStateCard kind="empty" size="line" title={t('identityAdministration.unmapped')} /> : bindings.rows.map((binding) => (
                     <Item key={binding.id} testID={`identity-group-binding:${binding.id}`} title={binding.externalGroupId} subtitle={`${t('identityAdministration.mappedTo')}: ${binding.target.name}`} loading={pending === binding.id} disabled={pending !== null || !props.mutationsAvailable} onPress={() => void remove(binding)} showChevron={false} />
                 ))}
                 {bindings.hasMore && !bindings.error ? <Item testID="identity-group-bindings-load-more" title={t('identityAdministration.loadMore')} loading={bindings.status === 'loading_more'} disabled={bindings.status === 'loading_more'} onPress={() => void bindings.loadMore()} showChevron={false} /> : null}
@@ -153,17 +157,14 @@ export const IdentityConnectionGroupMappings = React.memo(function IdentityConne
                 <SettingRow setting={TEAM_IDENTITY_CONNECTION_SETTINGS.settings.externalGroupId} accessoryLayout="adaptive" showChevron={false} rightElement={<FieldTextInput testID="identity-external-group-id" accessibilityLabel={t('identityAdministration.directoryGroups')} value={externalGroupId} editable={props.mutationsAvailable} onChangeText={setExternalGroupId} autoCapitalize="none" />} />
                 <SettingRow setting={TEAM_IDENTITY_CONNECTION_SETTINGS.settings.mapCreate} testID="identity-group-map-create" loading={pending === 'create'} disabled={pending !== null || !props.mutationsAvailable} onPress={() => void bind({ kind: 'directory_created' })} showChevron={false} />
                 <SettingRow setting={TEAM_IDENTITY_CONNECTION_SETTINGS.settings.mapExisting} testID="identity-group-map-existing" selected={choosingTarget} disabled={pending !== null || !props.mutationsAvailable} onPress={() => setChoosingTarget((value) => !value)} showChevron={false} />
-                {choosingTarget && nativeGroups.status === 'loading' && nativeGroups.rows.length === 0 ? <Item testID="identity-group-native-loading" title={t('common.loading')} loading showChevron={false} /> : null}
-                {choosingTarget && nativeGroups.isCurrent && nativeGroups.rows.length === 0 ? <Item testID="identity-group-native-empty" title={t('teams.groups.emptyTitle')} showChevron={false} /> : null}
+                {choosingTarget && nativeGroups.status === 'loading' && nativeGroups.rows.length === 0 ? <SurfaceStateCard testID="identity-group-native-loading" kind="loading" size="line" title={t('common.loading')} /> : null}
+                {choosingTarget && nativeGroups.isCurrent && nativeGroups.rows.length === 0 ? <SurfaceStateCard testID="identity-group-native-empty" kind="empty" size="line" title={t('teams.groups.emptyTitle')} /> : null}
                 {choosingTarget ? nativeGroups.rows.map((group) => <Item key={group.id} testID={`identity-group-native-target:${group.id}`} title={group.name} subtitle={t('teams.groups.memberCount', { count: group.memberCount })} disabled={pending !== null || !props.mutationsAvailable || !nativeGroups.isCurrent} onPress={() => void bind({ kind: 'native_target', teamGroupId: group.id })} showChevron={false} />) : null}
-                {choosingTarget && nativeGroups.error ? <>
-                    <Item testID="identity-group-native-error" title={teamReadFailureLabel(nativeGroups.error)} accessibilityLiveRegion="polite" showChevron={false} />
-                    {nativeGroups.error.retryable ? <Item testID="identity-group-native-retry" title={t('common.retry')} onPress={() => void nativeGroups.reload()} showChevron={false} /> : null}
-                </> : null}
+                {choosingTarget && nativeGroups.error ? <SurfaceStateCard testID="identity-group-native-error" kind="error" size="line" title={teamReadFailureLabel(nativeGroups.error)} action={nativeGroups.error.retryable ? { testID: 'identity-group-native-retry', label: t('common.retry'), onPress: () => void nativeGroups.reload() } : undefined} /> : null}
                 {choosingTarget && nativeGroups.hasMore && nativeGroups.status !== 'loading' && !nativeGroups.error ? <Item title={t('identityAdministration.loadMore')} loading={nativeGroups.status === 'loading_more'} disabled={nativeGroups.status === 'loading_more'} onPress={() => void nativeGroups.loadMore()} showChevron={false} /> : null}
             </ItemGroup>
-            {bindings.error ? <ItemGroup description={bindings.error.retryable ? t('teams.unavailable.offline') : t('identityAdministration.error')}>{bindings.error.retryable ? <Item testID="identity-group-bindings-retry" title={t('common.retry')} onPress={() => void bindings.reload()} showChevron={false} /> : null}</ItemGroup> : null}
-            {failure ? <ItemGroup><Item testID="identity-group-mapping-failure" title={failure} showChevron={false} /></ItemGroup> : null}
+            {bindings.error ? <ItemGroup><SurfaceStateCard kind="error" size="line" title={teamReadFailureLabel(bindings.error)} action={bindings.error.retryable ? { testID: 'identity-group-bindings-retry', label: t('common.retry'), onPress: () => void bindings.reload() } : undefined} /></ItemGroup> : null}
+            {failure ? <ItemGroup><SurfaceStateCard testID="identity-group-mapping-failure" kind="error" size="line" title={failure} /></ItemGroup> : null}
         </>
     );
 });

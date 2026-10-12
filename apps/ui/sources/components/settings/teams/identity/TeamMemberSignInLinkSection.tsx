@@ -1,8 +1,8 @@
 import * as React from 'react';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 
-import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { t } from '@/text';
 import type { TeamAddress } from '@/sync/domains/teams/teamAddress';
 
@@ -42,10 +42,11 @@ export const TeamMemberSignInLinkSection = React.memo(function TeamMemberSignInL
                 title={t('teams.authentication.memberSignIn.section')}
                 description={t('teams.authentication.memberSignIn.unavailableBody')}
             >
-                <Item
+                <SurfaceStateCard
                     testID="team-member-sign-in-unavailable"
+                    kind="unavailable"
+                    size="line"
                     title={t('teams.authentication.memberSignIn.unavailable')}
-                    showChevron={false}
                 />
             </ItemGroup>
         );
@@ -58,7 +59,7 @@ export const TeamMemberSignInLinkSection = React.memo(function TeamMemberSignInL
             title={t('teams.authentication.memberSignIn.section')}
             copyLabel={t('teams.authentication.memberSignIn.copyLink')}
             shareLabel={t('teams.authentication.memberSignIn.shareLink')}
-            qrActionLabel={t('teams.authentication.memberSignIn.qrLabel')}
+            qrActionLabel={t('teams.authentication.memberSignIn.qrAction')}
             qrAccessibilityLabel={t('teams.authentication.memberSignIn.qrLabel')}
             description={t('teams.authentication.memberSignIn.footer')}
             open={{ label: t('teams.authentication.memberSignIn.open'), onPress: preview }}

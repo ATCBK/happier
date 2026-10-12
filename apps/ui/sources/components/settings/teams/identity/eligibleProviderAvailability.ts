@@ -1,3 +1,4 @@
+import * as React from 'react';
 import type { HomeRoleV1 } from '@happier-dev/protocol/home/governance';
 import type { TeamIdentityEligibleProviderV1 } from '@happier-dev/protocol/teams';
 
@@ -9,6 +10,9 @@ import {
 import { homeSignInPlatformHref } from '@/components/settings/home/signInProviders/homeSignInPlatforms';
 import { HOME_SIGN_IN_PROVIDERS_SETTINGS } from '@/components/settings/home/signInProviders/homeSignInProvidersSettings';
 import { buildSettingHref } from '@/components/settings/catalog/settingDeclarations';
+import { useHomeGovernanceEligibilitySnapshots } from '@/hooks/home/useHomeGovernanceEligibilitySnapshots';
+import { useHomeViewerRole } from '@/hooks/home/useHomeViewerRole';
+import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { t } from '@/text';
 
 /**
@@ -83,6 +87,26 @@ export function resolveEligibleProviderRecovery(
   if (viewer.viewerHomeRole === 'owner')
     return { kind: 'fix_on_home', destination: homeDestination(provider, code) };
   return { kind: 'ask', names: viewer.administratorNames ?? [] };
+}
+
+/**
+ * Who is looking, as the recovery above needs it: the viewer's Home role and the Home's one
+ * disclosure of its owners' and administrators' names (the same answer Team creation names them
+ * from). Every surface that explains an unavailable sign-in choice reads it here.
+ */
+export function useEligibleProviderRecoveryViewer(scope: ServerAccountScope): Readonly<{
+  viewerHomeRole: HomeRoleV1 | null;
+  administratorNames: readonly string[] | null;
+}> {
+  const viewerHomeRole = useHomeViewerRole(scope.serverId);
+  const scopes = React.useMemo(() => [scope], [scope]);
+  const eligibility = useHomeGovernanceEligibilitySnapshots(scopes);
+  const administratorNames =
+    eligibility.snapshotsByServerId.get(scope.serverId)?.data?.administratorNames ?? null;
+  return React.useMemo(
+    () => ({ viewerHomeRole, administratorNames }),
+    [viewerHomeRole, administratorNames],
+  );
 }
 
 /** One sentence per typed reason, said in the Home's name rather than as a configuration fragment. */

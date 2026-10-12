@@ -13,7 +13,7 @@ import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelpers';
 
-installSettingsViewCommonModuleMocks({ storage: async (importOriginal) => await importOriginal() });
+installSettingsViewCommonModuleMocks({ storage: 'real' });
 // Hook tests do not render rows; these platform view boundaries keep unrelated
 // rendering modules out while the storage, Actions and read lifecycle stay real.
 vi.mock('@/components/ui/lists/Item', () => ({ Item: 'Item' }));

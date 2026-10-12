@@ -6,7 +6,7 @@ import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHo
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelpers';
 
-installSettingsViewCommonModuleMocks({ storage: async (importOriginal) => await importOriginal() });
+installSettingsViewCommonModuleMocks({ storage: 'real' });
 // These view primitives stand in for platform rendering only; the directory
 // reader, Action executor, transport and paged-list lifetime remain real.
 vi.mock('@/components/ui/lists/Item', () => ({ Item: 'Item' }));

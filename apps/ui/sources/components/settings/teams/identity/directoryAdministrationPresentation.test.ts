@@ -3,7 +3,16 @@ import type { TeamDirectorySourceSummaryV1 } from '@happier-dev/protocol/teams';
 
 import { t } from '@/text';
 
-import { directorySourcePresentationState, directorySourceRemovalBody } from './directoryAdministrationPresentation';
+import { directoryGroupMappingTargetLabel, directorySourcePresentationState, directorySourceRemovalBody } from './directoryAdministrationPresentation';
+
+describe('directoryGroupMappingTargetLabel', () => {
+    it('names the reader-projected target or states that it is not visible', () => {
+        const mapping = { state: 'bound', bindingId: 'binding-1', mode: 'native_target', teamGroupId: 'group-1', teamGroupName: 'Platform Engineering' } as const;
+        expect(directoryGroupMappingTargetLabel(mapping)).toBe('Platform Engineering');
+        expect(directoryGroupMappingTargetLabel({ ...mapping, teamGroupName: null }))
+            .toBe(t('identityAdministration.mappedGroupNotVisible'));
+    });
+});
 
 function source(overrides: Partial<TeamDirectorySourceSummaryV1>): TeamDirectorySourceSummaryV1 {
     return {

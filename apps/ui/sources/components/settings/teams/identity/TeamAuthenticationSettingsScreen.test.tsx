@@ -9,7 +9,13 @@ const routerPushMock = vi.hoisted(() => vi.fn());
 const teamGitHubAppsSectionMock = vi.hoisted(() => vi.fn((_props: Readonly<{
     createAvailable: boolean;
 }>) => null));
-const teamContextMock = vi.hoisted(() => ({ canMutate: false }));
+const teamContextMock = vi.hoisted(() => ({
+    canMutate: false,
+    manageAuthentication: true,
+    directoryMembership: undefined as undefined | null | Readonly<{
+        providerDisplayName: string; state: 'syncing' | 'healthy' | 'needs_attention';
+    }>,
+}));
 const identityStateMock = vi.hoisted(() => ({
     current: {
         kind: 'ready' as const,
@@ -82,7 +88,8 @@ vi.mock('../TeamSection', async () => {
         TeamSection: (props: Readonly<{ children: (context: unknown) => React.ReactNode }>) => props.children({
             // The Team policy is part of every Team projection this screen reads;
             // the authentication policy editor renders from it.
-            team: { capabilities: { manageAuthentication: true }, policy: teamPolicyFixture() },
+            team: { name: 'Platform', capabilities: { manageAuthentication: teamContextMock.manageAuthentication },
+                policy: teamPolicyFixture(), directoryMembership: teamContextMock.directoryMembership },
             scope: { serverId: 'home-1', accountId: 'account-1' },
             address: { serverId: 'home-1', teamId: 'team-1' },
             canMutate: teamContextMock.canMutate,
@@ -159,9 +166,42 @@ beforeEach(() => {
         },
     }];
     teamContextMock.canMutate = false;
+    teamContextMock.manageAuthentication = true;
+    teamContextMock.directoryMembership = undefined;
 });
 
 describe('TeamAuthenticationSettingsScreen', () => {
+    it.each([
+        ['syncing', 'syncing'],
+        ['healthy', 'active'],
+        ['needs_attention', 'needsAttention'],
+    ] as const)('renders the safe Directory fact (%s) for a read-only member without requesting source administration', async (state, label) => {
+        teamContextMock.manageAuthentication = false;
+        teamContextMock.directoryMembership = { providerDisplayName: 'Okta via WorkOS', state };
+        const screen = await renderScreen(<TeamAuthenticationSettingsScreen serverId="home-1" teamId="team-1" />);
+        const fact = screen.findAllByTestId('team-authentication-fact-directory')[0];
+        expect(fact?.props).toMatchObject({
+            title: 'Okta via WorkOS', subtitle: `teams.authentication.directory.state.${label}`,
+            mode: 'info', showChevron: false,
+        });
+        expect(fact?.props.onPress).toBeUndefined();
+        expect(executeDirectoryMock).not.toHaveBeenCalled();
+        expect(screen.findAllByTestId('team-authentication-add-menu')).toHaveLength(0);
+    });
+
+    it.each([
+        [null, 'teams.authentication.directory.empty'],
+        [undefined, 'teams.authentication.directory.unknown'],
+    ] as const)('distinguishes absent Directory from an omitted older-server fact (%s)', async (fact, title) => {
+        teamContextMock.manageAuthentication = false;
+        teamContextMock.directoryMembership = fact;
+        const screen = await renderScreen(<TeamAuthenticationSettingsScreen serverId="home-1" teamId="team-1" />);
+        const row = screen.findAllByTestId('team-authentication-fact-directory')[0];
+        expect(row?.props).toMatchObject({ title, mode: 'info', showChevron: false });
+        expect(row?.props.onPress).toBeUndefined();
+        expect(executeDirectoryMock).not.toHaveBeenCalled();
+    });
+
     it('uses the translated canonical provider-kind label when the catalog has no display name', async () => {
         identityStateMock.current.eligibleProviders[0]!.displayName = null;
         const screen = await renderScreen(<TeamAuthenticationSettingsScreen serverId="home-1" teamId="team-1" />);
@@ -434,14 +474,14 @@ describe('TeamAuthenticationSettingsScreen', () => {
         expect(routerPushMock).toHaveBeenCalledWith('/settings/teams/home-1/team-1/authentication/directory/source-acme');
     });
 
-    it('offers to connect a directory when the Team has none', async () => {
+    it('says a Team without a directory in one quiet line and offers "Add source" as the section action', async () => {
         const screen = await renderScreen(<TeamAuthenticationSettingsScreen serverId="home-1" teamId="team-1" />);
 
         await vi.waitFor(() => {
-            expect(screen.findByTestId('team-authentication-directory')?.props.title)
-                .toBe('teams.authentication.directory.empty');
+            expect(screen.findByTestId('team-authentication-directory')).toBeTruthy();
         });
-        await screen.pressByTestIdAsync('team-authentication-directory');
+        expect(screen.getTextContent()).toContain('teams.authentication.directory.empty');
+        await screen.pressByTestIdAsync('team-authentication-directory-add');
         expect(routerPushMock).toHaveBeenCalledWith('/settings/teams/home-1/team-1/authentication/directory');
     });
 });

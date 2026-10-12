@@ -4,7 +4,9 @@ import {
     signInConnectionStatusLabel,
     type SignInConnectionStatus,
 } from '@/components/settings/identity/signInConnectionStatus';
-import type { IconName } from '@/components/ui/icons/Icon';
+import * as React from 'react';
+import { Icon } from '@/components/ui/icons/Icon';
+import { WorkosMark } from '@/components/settings/identity/WorkosMark';
 import { t } from '@/text';
 
 export type IdentityConnectionMode = 'sign_in_only' | 'sign_in_time_groups';
@@ -20,11 +22,12 @@ export function identityProviderKindLabel(kind: TeamIdentityConnectionV1['provid
 
 /** WorkOS owns these wire strings and may add values independently. */
 export function workosConnectionStrategyLabel(strategy: string): string {
-    switch (strategy.trim().toLowerCase()) {
-        case 'saml': return t('identityAdministration.workosStrategySaml');
-        case 'oidc': return t('identityAdministration.workosStrategyOidc');
-        default: return t('identityAdministration.workosStrategyOther');
-    }
+    // WorkOS names connection types by provider and protocol ("OktaSAML", "GenericOIDC"); the protocol
+    // suffix is the part this label says.
+    const value = strategy.trim().toLowerCase();
+    if (value.endsWith('saml')) return t('identityAdministration.workosStrategySaml');
+    if (value.endsWith('oidc')) return t('identityAdministration.workosStrategyOidc');
+    return t('identityAdministration.workosStrategyOther');
 }
 
 /**
@@ -40,12 +43,12 @@ export function connectionStateLabel(state: TeamIdentityConnectionStateV1): stri
     return signInConnectionStatusLabel(teamIdentityConnectionStatus(state));
 }
 
-/** The glyph that stands for a provider kind where a row names a connection (no brand marks exist yet). */
-export function identityProviderKindIconName(kind: TeamIdentityConnectionV1['provider']['kind']): IconName {
+/** The shared identity mark wherever a connection or its available kind is named. */
+export function identityProviderKindMark(kind: TeamIdentityConnectionV1['provider']['kind'], size?: number): React.ReactElement {
     switch (kind) {
-        case 'oidc': return 'key';
-        case 'workos_sso': return 'shield-check';
-        case 'github_app_identity': return 'github-logo';
+        case 'oidc': return React.createElement(Icon, { name: 'key', size });
+        case 'workos_sso': return React.createElement(WorkosMark, { size });
+        case 'github_app_identity': return React.createElement(Icon, { name: 'github-logo', size });
     }
 }
 

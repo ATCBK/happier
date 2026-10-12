@@ -29,6 +29,7 @@ describe('runDirectoryGroupMappingChange', () => {
                 bindingId: 'binding-1',
                 mode: 'native_target' as const,
                 teamGroupId: 'team-group-old',
+                teamGroupName: 'Existing Group',
             },
         };
 

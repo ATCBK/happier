@@ -269,6 +269,17 @@ afterEach(() => {
     vi.useRealTimers();
 });
 
+/** Every string rendered beneath a node, in order. */
+function renderedText(node: import('react-test-renderer').ReactTestInstance | string): string {
+    return typeof node === 'string' ? node : node.children.map(renderedText).join('');
+}
+
+/** What the recomposed control or notice actually says on screen (its rendered text). */
+function textOfTestId(screen: Readonly<{ findHostByTestId(testID: string): import('react-test-renderer').ReactTestInstance | null }>, testID: string): string | undefined {
+    const node = screen.findHostByTestId(testID);
+    return node ? renderedText(node) || undefined : undefined;
+}
+
 describe('DirectorySourceDetailScreen', () => {
     it.each([
         ['remove', 'source-remove', 'team-directory-source-remove'],
@@ -343,17 +354,26 @@ describe('DirectorySourceDetailScreen', () => {
         };
         directoryGroupsBinding.rows = [{
             id: 'external-group-1', sourceId: 'source-1', externalGroupId: 'external-1', displayName: 'External engineering',
-            memberCount: 4, boundAccountCount: 4, unboundPeopleCount: 0, mapping: { state: 'bound', bindingId: 'binding-1', teamGroupId: 'team-group-opaque-id' },
+            memberCount: 4, boundAccountCount: 4, unboundPeopleCount: 0, mapping: { state: 'bound', bindingId: 'binding-1', teamGroupId: 'team-group-opaque-id', teamGroupName: 'Platform Engineering' },
         }];
-        nativeGroupsBinding.rows = [{ id: 'team-group-opaque-id', name: 'Platform Engineering', memberCount: 4 }];
+        nativeGroupsBinding.rows = [];
 
         const screen = await renderScreen(<DirectorySourceDetailScreen serverId="home-1" teamId="team-1" sourceId="source-1" />);
 
         expect(screen.findByTestId('directory-group:external-group-1')?.props.subtitle)
             .toBe('identityAdministration.mappedTo: Platform Engineering');
+        directoryGroupsBinding.rows = [{ ...directoryGroupsBinding.rows[0], mapping: {
+            state: 'bound', bindingId: 'binding-1', teamGroupId: 'team-group-opaque-id', teamGroupName: null,
+        } }];
+        nativeGroupsBinding.rows = [{ id: 'team-group-opaque-id', name: 'A retained name the reader withheld', memberCount: 4 }];
+        // This fixture hook has no subscription: mount the withheld projection rather than
+        // pretending an equal-props update can wake the memoized real screen.
+        const withheldScreen = await renderScreen(<DirectorySourceDetailScreen serverId="home-1" teamId="team-1" sourceId="source-1" />);
+        expect(withheldScreen.findByTestId('directory-group:external-group-1')?.props.subtitle)
+            .toBe('identityAdministration.mappedTo: identityAdministration.mappedGroupNotVisible');
     });
 
-    it('projects a full directory page of mapping labels from one Team Groups snapshot', async () => {
+    it('projects a full directory page of mapping labels from the directory reader', async () => {
         directoryBinding.state = {
             kind: 'ready', refreshing: false, stale: false, failure: null,
             item: {
@@ -368,7 +388,7 @@ describe('DirectorySourceDetailScreen', () => {
             memberCount: index,
             boundAccountCount: index,
             unboundPeopleCount: 0,
-            mapping: { state: 'bound', teamGroupId: `team-group-${index}` },
+            mapping: { state: 'bound', teamGroupId: `team-group-${index}`, teamGroupName: `Team Group ${index}` },
         }));
         nativeGroupsBinding.rows = Array.from({ length: 50 }, (_, index) => ({
             id: `team-group-${index}`,
@@ -453,8 +473,9 @@ describe('DirectorySourceDetailScreen', () => {
             };
             directoryBinding.publish();
         })).resolves.toBeUndefined();
-        expect(screen.findByTestId('team-directory-source-status')?.props.detail)
-            .toBe('teams.authentication.directory.state.paused');
+        // The state is the header's first fact.
+        expect(screen.findByTestId('team-directory-source-status')).not.toBeNull();
+        expect(renderedText(screen.tree.root)).toContain('teams.authentication.directory.state.paused');
         expect(screen.tree.root.findAllByType('VirtualizedList' as never)).toHaveLength(1);
     });
 
@@ -548,10 +569,10 @@ describe('DirectorySourceDetailScreen', () => {
         // A lost directory permission is an administrator's job, not a provider
         // outage: the one failure owner answers `needs_attention` so no Retry
         // is offered for something a retry cannot clear.
-        expect(screen.findByTestId('team-directory-source-error')?.props.title)
-            .toBe('identityAdministration.errorNeedsAttention');
+        expect(textOfTestId(screen, 'team-directory-source-error'))
+            .toContain('identityAdministration.errorNeedsAttention');
         await screen.pressByTestIdAsync('team-directory-source-sync');
-        const visibleMessage = screen.findByTestId('team-directory-source-action-error')?.props.title;
+        const visibleMessage = textOfTestId(screen, 'team-directory-source-action-error');
         expect(visibleMessage).toBe('identityAdministration.errorRateLimited');
         expect(announceMock).toHaveBeenCalledWith(visibleMessage);
 
@@ -562,7 +583,7 @@ describe('DirectorySourceDetailScreen', () => {
             failure: { code: 'directory_sync_needs_attention', retryable: false },
         });
         await screen.pressByTestIdAsync('team-directory-source-sync');
-        expect(screen.findByTestId('team-directory-source-action-error')?.props.title)
+        expect(textOfTestId(screen, 'team-directory-source-action-error'))
             .toBe('identityAdministration.errorSyncPaused');
     });
 
@@ -583,7 +604,7 @@ describe('DirectorySourceDetailScreen', () => {
 
         // child 05 §14.1: a failed source offers Retry, and pressing it runs
         // the one Sync Action (a complete scan), not a Pause → Resume detour.
-        expect(screen.findByTestId('team-directory-source-sync')?.props.title).toBe('common.retry');
+        expect(textOfTestId(screen, 'team-directory-source-sync')).toBe('common.retry');
         await screen.pressByTestIdAsync('team-directory-source-sync');
         expect(runActionMock).toHaveBeenCalledWith('teams.directory.sources.sync', expect.anything());
 
@@ -591,7 +612,7 @@ describe('DirectorySourceDetailScreen', () => {
             directoryBinding.state = sourceWith(null);
             directoryBinding.publish();
         });
-        expect(screen.findByTestId('team-directory-source-sync')?.props.title)
+        expect(textOfTestId(screen, 'team-directory-source-sync'))
             .toBe('teams.authentication.directory.actions.sync');
     });
 
@@ -774,7 +795,7 @@ describe('DirectorySourceDetailScreen', () => {
         };
         directoryGroupsBinding.rows = [{
             id: 'external-group-1', sourceId: 'source-1', externalGroupId: 'external-1', displayName: 'External engineering',
-            memberCount: 12, boundAccountCount: 8, unboundPeopleCount: 4, mapping: { state: 'bound', bindingId: 'binding-1', teamGroupId: 'team-group-opaque-id' },
+            memberCount: 12, boundAccountCount: 8, unboundPeopleCount: 4, mapping: { state: 'bound', bindingId: 'binding-1', teamGroupId: 'team-group-opaque-id', teamGroupName: 'Platform Engineering' },
         }];
         nativeGroupsBinding.rows = [{ id: 'team-group-opaque-id', name: 'Platform Engineering', memberCount: 4 }];
         // Declining keeps this test on the confirmation contract: what the

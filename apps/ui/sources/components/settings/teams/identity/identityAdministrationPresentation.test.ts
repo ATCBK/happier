@@ -91,6 +91,9 @@ describe('identityAdministrationPresentation', () => {
         expect(workosConnectionStrategyLabel('SAML')).toBe(t('identityAdministration.workosStrategySaml'));
         expect(workosConnectionStatusLabel('active')).toBe(t('identityAdministration.active'));
         expect(workosConnectionStrategyLabel('future_strategy')).toBe(t('identityAdministration.workosStrategyOther'));
+        // WorkOS names a connection by provider and protocol ("OktaSAML", "GenericOIDC"); the protocol is what we say.
+        expect(workosConnectionStrategyLabel('OktaSAML')).toBe(t('identityAdministration.workosStrategySaml'));
+        expect(workosConnectionStrategyLabel('GenericOIDC')).toBe(t('identityAdministration.workosStrategyOidc'));
         expect(workosConnectionStatusLabel('future_status')).toBe(t('identityAdministration.workosStatusUnknown'));
     });
 

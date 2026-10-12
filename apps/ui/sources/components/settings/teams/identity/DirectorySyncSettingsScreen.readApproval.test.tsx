@@ -18,7 +18,7 @@ const routeParams = vi.hoisted(() => ({ value: {} as Record<string, string> }));
 // Platform view boundaries only; Team state, Actions, approval custody and the
 // directory reader remain real through the Home's HTTP answers.
 installSettingsViewCommonModuleMocks({
-    storage: async (importOriginal) => await importOriginal(),
+    storage: 'real',
     router: async () => {
         const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
         return createExpoRouterMock({ navigation: { setOptions: () => undefined }, params: () => routeParams.value }).module;

@@ -1,9 +1,10 @@
 import * as React from 'react';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
-import { AppState } from 'react-native';
+import { AppState, View } from 'react-native';
+import { StyleSheet } from 'react-native-unistyles';
+import { HAPPIER_STATE_SIZE_METRICS } from '@happier-dev/plugin-ui/presentation';
 import type { TeamDirectorySourceSetupOptionV1, TeamDirectorySourceSetupOptionsV1 } from '@happier-dev/protocol/teams';
 
-import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
@@ -26,8 +27,19 @@ import { teamDirectorySourcePath } from '../teamsRoutes';
 import { directorySourcePresentationState, directorySourceStateLabel } from './directoryAdministrationPresentation';
 import { createIdentityAdministrationClient, executeIdentityAdministrationRead } from './identityAdministrationClient';
 import { useDirectoryAdministration } from './useDirectoryAdministration';
+import { identityProviderKindMark } from './identityAdministrationPresentation';
 import { createWorkosPortalReturnController } from './workosPortalReturn';
 
+
+/** The directories a Team can follow, drawn at the pane state's own glyph size and gap. */
+const DIRECTORY_MARK_SIZE = HAPPIER_STATE_SIZE_METRICS.pane.glyphPx;
+
+const styles = StyleSheet.create({
+    marks: {
+        flexDirection: 'row',
+        gap: HAPPIER_STATE_SIZE_METRICS.pane.glyphGapPx,
+    },
+});
 
 function directorySetupOptionKey(option: TeamDirectorySourceSetupOptionV1): string {
     return option.kind === 'workos_directory'
@@ -63,8 +75,8 @@ const AuthorizedDirectoryList = React.memo(function AuthorizedDirectoryList(prop
     const setupRequestControllerRef = React.useRef<AbortController | null>(null);
     const setupVisibleRef = React.useRef(false);
     const projectionCurrent = state.kind === 'ready' && !state.refreshing && !state.stale;
-    // Setup failures render in the options footer, out of the pressed control's
-    // reading order, so the same sentence is announced as it is stored.
+    // Setup failures render in the shared recovery line, out of the pressed
+    // control's reading order, and announce the same sentence as it is stored.
     const reportSetupFailure = React.useCallback((code: string) => {
         const message = identityAdministrationFailureMessage(code);
         announceAccessibilityMessage(message);
@@ -293,6 +305,11 @@ const AuthorizedDirectoryList = React.memo(function AuthorizedDirectoryList(prop
     }
 
     const setupOpen = setup.kind !== 'hidden';
+    const addDisabled = !projectionCurrent || !props.mutationsAvailable || pendingSetup !== null || setup.kind === 'loading';
+    // No source yet: the page is the invitation (lab `tsDirectory-E`) — the directories it can follow,
+    // what following one does, and the one way to start. The section and its "+" appear with the
+    // first source, so the action is never offered twice.
+    const empty = state.items.length === 0 && !state.nextCursor;
     return (
         <>
             {state.stale ? (
@@ -304,7 +321,27 @@ const AuthorizedDirectoryList = React.memo(function AuthorizedDirectoryList(prop
                     action={{ label: t('common.retry'), onPress: refresh }}
                 />
             ) : null}
-            <SettingSection section={DIRECTORY_SETTINGS.sectionRefs.actions}><ItemGroup
+            <SettingSection section={DIRECTORY_SETTINGS.sectionRefs.actions}>{empty ? (
+                <SettingAnchor setting={DIRECTORY_SETTINGS.settings.addSource}><SurfaceStateCard
+                    testID="team-directory-sources-empty"
+                    kind="empty"
+                    size="pane"
+                    icon={<View style={styles.marks}>
+                        {identityProviderKindMark('workos_sso', DIRECTORY_MARK_SIZE)}
+                        {identityProviderKindMark('github_app_identity', DIRECTORY_MARK_SIZE)}
+                    </View>}
+                    title={t('teams.authentication.directory.empty')}
+                    reason={t('teams.authentication.directory.emptyBody')}
+                    note={t('teams.authentication.directory.setup.optionsFooter')}
+                    action={{
+                        label: t('teams.authentication.directory.setup.add'),
+                        testID: 'team-directory-source-add',
+                        onPress: () => void loadSetup(),
+                        disabled: addDisabled,
+                        busy: setup.kind === 'loading',
+                    }}
+                /></SettingAnchor>
+            ) : <ItemGroup
                 title={t('teams.authentication.directory.sourcesSection')}
                 description={t('teams.authentication.directory.subtitle')}
                 action={(
@@ -316,23 +353,16 @@ const AuthorizedDirectoryList = React.memo(function AuthorizedDirectoryList(prop
                         title={t('teams.authentication.directory.setup.add')}
                         expanded={setupOpen}
                         loading={setup.kind === 'loading'}
-                        disabled={!projectionCurrent || !props.mutationsAvailable || pendingSetup !== null || setup.kind === 'loading'}
+                        disabled={addDisabled}
                         onPress={() => void loadSetup()}
                     /></SettingAnchor>
                 )}
             >
-                {state.items.length === 0 ? (
-                    <SurfaceStateCard
-                        testID="team-directory-sources-empty"
-                        kind="empty"
-                        size="line"
-                        title={t('teams.authentication.directory.empty')}
-                        reason={t('teams.authentication.directory.emptyBody')}
-                    />
-                ) : state.items.map((source) => (
+                {state.items.map((source) => (
                     <Item
                         key={source.id}
                         testID={`team-directory-source-${source.id}`}
+                        icon={identityProviderKindMark(source.kind === 'workos_directory' ? 'workos_sso' : 'github_app_identity')}
                         title={source.displayName}
                         subtitle={source.kind === 'workos_directory'
                             ? t('teams.authentication.directory.kind.workos')
@@ -342,12 +372,12 @@ const AuthorizedDirectoryList = React.memo(function AuthorizedDirectoryList(prop
                     />
                 ))}
                 {state.nextCursor && state.failure && !state.stale ? (
-                    <Item
+                    <SurfaceStateCard
                         testID="team-directory-sources-load-more"
+                        kind="error"
+                        size="line"
                         title={identityAdministrationFailureMessage(state.failure.code)}
-                        detail={t('common.retry')}
-                        onPress={() => void loadMore()}
-                        showChevron={false}
+                        action={{ label: t('common.retry'), onPress: () => void loadMore() }}
                     />
                 ) : state.nextCursor && !state.stale ? (
                     <Item
@@ -359,14 +389,15 @@ const AuthorizedDirectoryList = React.memo(function AuthorizedDirectoryList(prop
                         showChevron={false}
                     />
                 ) : null}
-            </ItemGroup></SettingSection>
+            </ItemGroup>}</SettingSection>
             {setup.kind === 'ready' || setup.kind === 'unavailable' || (setup.kind === 'loading' && setup.items.length > 0) ? (
                 <ItemGroup
                     title={t('teams.authentication.directory.setup.options')}
-                    description={setup.failure ?? t('teams.authentication.directory.setup.optionsFooter')}
+                    description={t('teams.authentication.directory.setup.optionsFooter')}
                 >
                     <SettingAnchor setting={DIRECTORY_SETTINGS.settings.workosSetup}><Item
                         testID="team-directory-setup-workos"
+                        icon={identityProviderKindMark('workos_sso')}
                         title={t('teams.authentication.directory.setup.workos')}
                         subtitle={t('teams.authentication.directory.setup.workosSubtitle')}
                         loading={pendingSetup === 'workos-portal'}
@@ -382,6 +413,7 @@ const AuthorizedDirectoryList = React.memo(function AuthorizedDirectoryList(prop
                             <Item
                                 key={`${option.kind}:${optionId}`}
                                 testID={`team-directory-setup-option:${option.kind}:${optionId}`}
+                                icon={identityProviderKindMark(option.kind === 'workos_directory' ? 'workos_sso' : 'github_app_identity')}
                                 title={option.displayName}
                                 subtitle={option.kind === 'workos_directory'
                                     ? t('teams.authentication.directory.kind.workos')
@@ -394,7 +426,7 @@ const AuthorizedDirectoryList = React.memo(function AuthorizedDirectoryList(prop
                         );
                     })}
                     {setup.kind === 'ready' && setup.items.length === 0 ? (
-                        <Item title={t('teams.authentication.directory.setup.empty')} showChevron={false} />
+                        <SurfaceStateCard kind="empty" size="line" title={t('teams.authentication.directory.setup.empty')} />
                     ) : null}
                     {setup.kind === 'ready' && !setup.complete && setup.nextCursor ? (
                         <Item
@@ -405,19 +437,21 @@ const AuthorizedDirectoryList = React.memo(function AuthorizedDirectoryList(prop
                         />
                     ) : null}
                     {setup.kind === 'loading' && setup.items.length > 0 ? (
-                        <Item
+                        <SurfaceStateCard
                             testID="team-directory-setup-loading-more"
+                            kind="loading"
+                            size="line"
                             title={t('teams.authentication.directory.setup.loadMore')}
-                            leftElement={<ActivitySpinner />}
-                            showChevron={false}
                         />
                     ) : null}
-                    {setup.kind === 'unavailable' ? (
-                        <Item
-                            testID="team-directory-setup-retry"
-                            title={t('common.retry')}
-                            onPress={() => void loadSetup(setup.retryCursor)}
-                            showChevron={false}
+                    {setup.failure || setup.kind === 'unavailable' ? (
+                        <SurfaceStateCard
+                            kind="error"
+                            size="line"
+                            title={setup.failure ?? t('identityAdministration.error')}
+                            action={setup.kind === 'unavailable'
+                                ? { testID: 'team-directory-setup-retry', label: t('common.retry'), onPress: () => void loadSetup(setup.retryCursor) }
+                                : undefined}
                         />
                     ) : null}
                 </ItemGroup>

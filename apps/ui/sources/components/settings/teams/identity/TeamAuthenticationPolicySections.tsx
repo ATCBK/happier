@@ -24,7 +24,7 @@ import { t } from '@/text';
 
 import type { TeamSectionContext } from '../teamSectionContext';
 import { teamMutationFailureLabel } from '../teamMutationPresentation';
-import { teamAdmissionModeLabel } from '../teamPolicyPresentation';
+import { teamAdmissionModeSegmentLabel, teamAdmissionModeConsequence } from '../teamPolicyPresentation';
 import { identityConnectionDiscriminator } from './identityAdministrationPresentation';
 import { TEAM_AUTHENTICATION_SETTINGS } from './teamAuthenticationSettings';
 
@@ -394,7 +394,8 @@ export const TeamAuthenticationPolicySections = React.memo(function TeamAuthenti
                             const availability = admissionModeApplicability?.modes[mode] ?? null;
                             return {
                                 id: mode,
-                                label: teamAdmissionModeLabel(mode),
+                                label: teamAdmissionModeSegmentLabel(mode),
+                                description: teamAdmissionModeConsequence(mode),
                                 // The mode the Home holds stays shown chosen even when it can no
                                 // longer be enforced, and says why like any other unavailable mode.
                                 unavailableReason: availability?.status === 'unavailable'
@@ -453,9 +454,18 @@ export const TeamAuthenticationPolicySections = React.memo(function TeamAuthenti
                         subtitleLines={0}
                         accessoryLayout="stacked"
                         options={[
-                            { id: 'inherit', label: t('teams.authentication.policy.acceptedInherit') },
+                            {
+                                id: 'inherit',
+                                label: t('teams.authentication.policy.acceptedInherit'),
+                                description: t('teams.authentication.policy.acceptedInheritConsequence', { home: context.homeName }),
+                            },
                             // The set to choose from is the connection list: it must be current.
-                            { id: 'restricted', label: t('teams.authentication.policy.acceptedRestricted'), disabled: !connectionsCurrent },
+                            {
+                                id: 'restricted',
+                                label: t('teams.authentication.policy.acceptedRestricted'),
+                                description: t('teams.authentication.policy.acceptedRestrictedConsequence'),
+                                disabled: !connectionsCurrent,
+                            },
                         ]}
                         value={selectedMode ?? 'unset'}
                         onChange={(mode) => { if (mode !== 'unset' && mode !== selectedMode) chooseMode(mode); }}

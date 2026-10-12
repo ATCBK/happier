@@ -21,8 +21,6 @@ import {
 } from '@/components/settings/identity/signInConnectionStatus';
 import { useTeamManagerNames } from '@/hooks/teams/useTeamManagerNames';
 import { teamSignInReturnPath } from '@/components/teams/entry/teamSignInHome';
-import { useHomeViewerRole } from '@/hooks/home/useHomeViewerRole';
-import { useHomeGovernanceEligibilitySnapshots } from '@/hooks/home/useHomeGovernanceEligibilitySnapshots';
 import {
   SettingAnchor,
   SettingSection,
@@ -52,6 +50,7 @@ import {
 } from '../teamsRoutes';
 import {
   teamAcceptedSignInSummary,
+  teamAdmissionModeConsequence,
   teamAdmissionModeLabel,
 } from '../teamPolicyPresentation';
 import {
@@ -65,7 +64,7 @@ import { TeamGitHubAppsSection } from './TeamGitHubAppScreens';
 import {
   identityConnectionMode,
   identityConnectionNextStepLabel,
-  identityProviderKindIconName,
+  identityProviderKindMark,
   identityProviderKindLabel,
   teamIdentityConnectionStatus,
 } from './identityAdministrationPresentation';
@@ -75,6 +74,7 @@ import {
   eligibleProviderFixLabel,
   eligibleProviderUnavailableReason,
   resolveEligibleProviderRecovery,
+  useEligibleProviderRecoveryViewer,
 } from './eligibleProviderAvailability';
 import {
   askAdministratorsText,
@@ -503,7 +503,7 @@ const ConnectionRow = React.memo(function ConnectionRow(
   return (
     <Item
       testID={`team-authentication-connection-${connection.id}`}
-      icon={<Icon name={identityProviderKindIconName(connection.provider.kind)} />}
+      icon={identityProviderKindMark(connection.provider.kind)}
       title={connection.provider.displayName}
       subtitle={subtitle}
       subtitleLeading={
@@ -546,6 +546,16 @@ const DirectorySection = React.memo(function DirectorySection(
     <ItemGroup
       title={t('teams.authentication.directory.section')}
       description={t('teams.authentication.directory.overviewSubtitle')}
+      // The way to a (first or another) source is the section's "+", like "Add connection" above;
+      // each source row opens its own page, so no separate "manage" row repeats them.
+      action={state.kind === 'ready' ? (
+        <SectionActionButton
+          testID="team-authentication-directory-add"
+          icon="plus"
+          title={t('teams.authentication.directory.setup.add')}
+          onPress={openDirectory}
+        />
+      ) : undefined}
     >
       <SettingAnchor setting={TEAM_AUTHENTICATION_SETTINGS.settings.directory}>
         {state.kind === 'loading' ? (
@@ -564,14 +574,13 @@ const DirectorySection = React.memo(function DirectorySection(
             onPress={openDirectory}
           />
         ) : state.items.length === 0 ? (
-          <Item
+          // The section description already says what a directory does; the quiet line names the
+          // state, as it does for sign-in connections above, and "+ Add source" is the way in.
+          <SurfaceStateCard
             testID="team-authentication-directory"
-            icon={<Icon name="tree-structure" />}
+            kind="empty"
+            size="line"
             title={t('teams.authentication.directory.empty')}
-            subtitle={t('teams.authentication.directory.emptyBody')}
-            subtitleLines={0}
-            detail={t('teams.authentication.directory.connect')}
-            onPress={openDirectory}
           />
         ) : (
           <>
@@ -579,7 +588,9 @@ const DirectorySection = React.memo(function DirectorySection(
               <Item
                 key={source.id}
                 testID={`team-authentication-directory-source:${source.id}`}
-                icon={<Icon name="tree-structure" />}
+                icon={identityProviderKindMark(
+                  source.kind === 'workos_directory' ? 'workos_sso' : 'github_app_identity',
+                )}
                 title={source.displayName}
                 subtitle={[
                   source.kind === 'workos_directory'
@@ -594,12 +605,6 @@ const DirectorySection = React.memo(function DirectorySection(
                 }
               />
             ))}
-            <Item
-              testID="team-authentication-directory"
-              title={t('teams.authentication.directory.title')}
-              subtitle={t('teams.authentication.directory.manageSubtitle')}
-              onPress={openDirectory}
-            />
           </>
         )}
       </SettingAnchor>
@@ -637,17 +642,8 @@ const AddConnectionMenu = React.memo(function AddConnectionMenu(
   const router = useRouter();
   const [open, setOpen] = React.useState(false);
   const serverId = props.context.address.serverId;
-  const viewerHomeRole = useHomeViewerRole(serverId);
-  // Whom to ask comes from the Home's one disclosure of its owners' and administrators' names,
-  // the same answer Team creation names them from.
-  const eligibilityScopes = React.useMemo(
-    () => [props.context.scope],
-    [props.context.scope],
-  );
-  const eligibility = useHomeGovernanceEligibilitySnapshots(eligibilityScopes);
-  const administratorNames =
-    eligibility.snapshotsByServerId.get(serverId)?.data?.administratorNames ??
-    null;
+  const { viewerHomeRole, administratorNames } =
+    useEligibleProviderRecoveryViewer(props.context.scope);
   const choices = props.eligibleProviders.map((provider, index) => {
     const choice =
       provider.availability.status === 'available'
@@ -695,7 +691,7 @@ const AddConnectionMenu = React.memo(function AddConnectionMenu(
         testID: `team-eligible-provider:${provider.providerId ?? provider.providerKind}`,
         title,
         subtitle,
-        icon: <Icon name={identityProviderKindIconName(provider.providerKind)} />,
+        icon: identityProviderKindMark(provider.providerKind),
         // A reason a Home owner can fix stays pressable: it leads to the fix.
         disabled: fix
           ? false
@@ -763,18 +759,41 @@ const AuthenticationFacts = React.memo(function AuthenticationFacts(
         <Item
           testID="team-authentication-fact-admission"
           title={teamAdmissionModeLabel(context.team.policy.admissionMode)}
+          subtitle={teamAdmissionModeConsequence(context.team.policy.admissionMode)}
           mode="info"
           showChevron={false}
+          subtitleLines={0}
         />
       </ItemGroup>
       <ItemGroup title={t('teams.authentication.policy.acceptedSection')}>
         <Item
           testID="team-authentication-fact-accepted"
-          title={teamAcceptedSignInSummary(context.team.policy, context.homeName)}
+          title={teamAcceptedSignInSummary(context.team.policy)}
           mode="info"
           showChevron={false}
+          subtitleLines={0}
         />
       </ItemGroup>
+      <SettingAnchor setting={TEAM_AUTHENTICATION_SETTINGS.settings.directory}>
+        <ItemGroup title={t('teams.authentication.directory.section')}>
+          <Item
+            testID="team-authentication-fact-directory"
+            title={context.team.directoryMembership?.providerDisplayName ?? (
+              context.team.directoryMembership === null
+                ? t('teams.authentication.directory.empty')
+                : t('teams.authentication.directory.unknown')
+            )}
+            subtitle={context.team.directoryMembership
+              ? directorySourceStateLabel(context.team.directoryMembership.state === 'healthy'
+                ? 'active' : context.team.directoryMembership.state)
+              : undefined}
+            mode="info"
+            showChevron={false}
+            titleLines={0}
+            subtitleLines={0}
+          />
+        </ItemGroup>
+      </SettingAnchor>
     </>
   );
 });

@@ -1,6 +1,13 @@
-import type { TeamDirectorySourceRemovalImpactV1, TeamDirectorySourceSummaryV1 } from '@happier-dev/protocol/teams';
+import type { TeamDirectoryGroupV1, TeamDirectorySourceRemovalImpactV1, TeamDirectorySourceSummaryV1 } from '@happier-dev/protocol/teams';
 
 import { t } from '@/text';
+
+/** The directory reader supplies the mapped identity independently of the chooser's paged snapshot. */
+export function directoryGroupMappingTargetLabel(mapping: TeamDirectoryGroupV1['mapping']): string {
+    return mapping.state === 'bound' && mapping.teamGroupName
+        ? mapping.teamGroupName
+        : t('identityAdministration.mappedGroupNotVisible');
+}
 
 export type DirectorySourcePresentationState =
     | 'initializing'
