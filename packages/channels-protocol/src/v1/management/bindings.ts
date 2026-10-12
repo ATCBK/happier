@@ -12,8 +12,6 @@ import {
 import {
     CONVERSATION_BINDING_INPUT_MODES_V1,
     CONVERSATION_DELIVERY_LINK_PREVIEW_POLICIES_V1,
-    MAX_CONVERSATION_BINDINGS_PER_ACCOUNT,
-    MAX_CONVERSATION_INBOUND_DEBOUNCE_MS,
 } from '../bounds.js';
 import type {
     ConversationBindingInputModeV1,
@@ -36,6 +34,7 @@ import {
 import {
     ConversationBindingTargetV1ProtocolSchema,
     ConversationBindingV1ProtocolSchema,
+    ConversationInboundDebounceMsV1ProtocolSchema,
     ConversationPrincipalIdV1ProtocolSchema,
 } from './targets.js';
 import type { ConversationSessionBindingTargetV1 } from './targets.js';
@@ -65,11 +64,7 @@ const mutableBindingPolicyFieldsV1 = {
         defineProtocolLiteral(CONVERSATION_BINDING_INPUT_MODES_V1[1]),
         defineProtocolLiteral(CONVERSATION_BINDING_INPUT_MODES_V1[2]),
     ]),
-    inboundDebounceMs: defineProtocolNumber({
-        integer: true,
-        minimum: 0,
-        maximum: MAX_CONVERSATION_INBOUND_DEBOUNCE_MS,
-    }),
+    inboundDebounceMs: ConversationInboundDebounceMsV1ProtocolSchema,
     linkPreviewPolicy: defineProtocolUnion([
         defineProtocolLiteral(CONVERSATION_DELIVERY_LINK_PREVIEW_POLICIES_V1[0]),
         defineProtocolLiteral(CONVERSATION_DELIVERY_LINK_PREVIEW_POLICIES_V1[1]),
@@ -191,7 +186,7 @@ const conversationBindingPrincipalSelectionV1 = defineProtocolObject({
     query: ConversationResolutionQueryV1ProtocolSchema,
     selected: defineProtocolUniqueArray(
         conversationBindingPrincipalSelectionEntryV1,
-        { minItems: 1, maxItems: MAX_CONVERSATION_BINDINGS_PER_ACCOUNT },
+        { minItems: 1 },
     ),
 }, { policy: 'closed' });
 
@@ -202,7 +197,7 @@ const conversationBindingHumanPrincipalSelectionV1 = defineProtocolObject({
             id: ConversationPrincipalIdV1ProtocolSchema,
             kind: defineProtocolLiteral('human'),
         }, { policy: 'closed' }),
-        { minItems: 1, maxItems: MAX_CONVERSATION_BINDINGS_PER_ACCOUNT },
+        { minItems: 1 },
     ),
 }, { policy: 'closed' });
 

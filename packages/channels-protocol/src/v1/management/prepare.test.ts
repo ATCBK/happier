@@ -24,6 +24,8 @@ describe('Channels V1 connection preparation result', () => {
         } as const;
 
         expect(ConversationConnectionPrepareResultV1Schema.parse(ready)).toEqual(ready);
+        const { outboundTextLimit: _nativeLimit, ...unlimited } = ready;
+        expect(ConversationConnectionPrepareResultV1Schema.parse(unlimited)).toEqual(unlimited);
         expect(ConversationConnectionPrepareResultV1Schema.parse({
             ...ready,
             destinationLabel: '\ud83d\ude00'.repeat(256),

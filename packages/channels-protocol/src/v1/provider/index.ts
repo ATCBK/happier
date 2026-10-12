@@ -1,4 +1,24 @@
 export {
+    assertConversationChannelsCoreCallerV1,
+    classifyConversationProviderMaterializationFailureV1,
+    rethrowConversationProviderLifecycleFailureV1,
+} from './invocation.js';
+
+export {
+    ConversationMessageAttachmentV1Schema,
+    ConversationMessageAttachmentV1JsonSchema,
+    ConversationAttachmentFetchInputV1Schema,
+    ConversationAttachmentFetchInputV1JsonSchema,
+    ConversationAttachmentFetchResultV1Schema,
+    ConversationAttachmentFetchResultV1JsonSchema,
+} from './attachments.js';
+export type {
+    ConversationMessageAttachmentV1,
+    ConversationAttachmentFetchInputV1,
+    ConversationAttachmentFetchResultV1,
+} from './attachments.js';
+
+export {
     areConversationEndpointIdentitiesEqual,
     compareCanonicalConversationResolutionCandidatesV1,
     hasCanonicalConversationResolutionCandidateOrderV1,
@@ -28,6 +48,10 @@ export type {
 } from './resolution.js';
 
 export {
+    ConversationDeliveryContentV1Schema,
+    ConversationDeliveryContentV1JsonSchema,
+    ConversationDeliveryNewThreadV1Schema,
+    ConversationDeliveryNewThreadV1JsonSchema,
     ConversationDeliveryInputV1JsonSchema,
     ConversationDeliveryInputV1Schema,
     ConversationDeliveryReconcileInputV1JsonSchema,
@@ -38,6 +62,8 @@ export {
     ConversationDeliveryResultV1Schema,
 } from './delivery.js';
 export type {
+    ConversationDeliveryContentV1,
+    ConversationDeliveryNewThreadV1,
     ConversationDeliveryInputV1,
     ConversationDeliveryReconcileInputV1,
     ConversationDeliveryReplyContextV1,
@@ -111,6 +137,8 @@ export type {
 } from './observations.js';
 
 export {
+    ConversationOutboundTextLimitV1JsonSchema,
+    ConversationOutboundTextLimitV1Schema,
     ConversationProviderSetupOutcomeV1JsonSchema,
     ConversationProviderSetupOutcomeV1Schema,
     ConversationProviderSetupRemediationV1JsonSchema,
@@ -126,6 +154,7 @@ export {
     ConversationProvidersContributionProtocolV1,
 } from './contribution.js';
 export type {
+    ConversationOutboundTextLimitV1,
     ConversationProviderSetupOutcomeV1,
     ConversationProviderSetupRemediationV1,
     ConversationProviderSetupRemediationResultV1,

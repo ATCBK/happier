@@ -31,7 +31,7 @@ export const ConversationPollInputV1ProtocolSchema = defineProtocolObject({
     ...ConversationProviderConnectionInputV1Fields,
     bindings: defineProtocolArray(defineProtocolObject({
         endpoint: ConversationResolvedEndpointV1ProtocolSchema,
-        scopedTriggerKind: defineProtocolUnion([defineProtocolLiteral('prComment'), defineProtocolLiteral('ciFailed')]),
+        scopedTriggerKind: defineProtocolUnion([defineProtocolLiteral('prComment'), defineProtocolLiteral('ciFailed')]).optional(),
     }, { policy: 'closed' })).optional(),
     checkpoint: ConversationCheckpointV1ProtocolSchema.nullable(),
     limit: defineProtocolNumber({
@@ -66,12 +66,14 @@ const batchObservationsV1 = defineProtocolArray(
 const conversationPollBatchResultV1 = defineProtocolObject({
     kind: defineProtocolLiteral('batch'),
     observations: batchObservationsV1,
+    pullRequestEndpoints: defineProtocolArray(ConversationResolvedEndpointV1ProtocolSchema).optional(),
     checkpointAfterBatch: ConversationCheckpointV1ProtocolSchema,
     retryHint: retryHintV1.optional(),
 }, { policy: 'closed' });
 
 const conversationPollCheckpointOnlyResultV1 = defineProtocolObject({
     kind: defineProtocolLiteral('checkpointOnly'),
+    pullRequestEndpoints: defineProtocolArray(ConversationResolvedEndpointV1ProtocolSchema).optional(),
     checkpointAfterBatch: ConversationCheckpointV1ProtocolSchema,
     retryHint: retryHintV1.optional(),
 }, { policy: 'closed' });

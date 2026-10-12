@@ -14,6 +14,8 @@ import {
     ConversationBindingUpdateResultV1Schema,
 } from './bindings.js';
 export * from './sessionPullRequestBindings.js';
+export * from './conversationStart.js';
+import { ConversationStartInputV1Schema, ConversationStartResultV1Schema } from './conversationStart.js';
 import {
     ConversationConnectionCreateInputV1Schema,
     ConversationConnectionCreateResultV1Schema,
@@ -254,16 +256,22 @@ export type {
     ConversationIngressRetryResultV1,
 } from './recovery.js';
 export {
+    ConversationAllowedPrincipalIdsV1JsonSchema,
+    conversationThreadRouterAllowedPrincipalIdsV1,
+    ConversationAllowedPrincipalIdsV1Schema,
     ConversationBindingTargetV1JsonSchema,
     ConversationBindingTargetV1Schema,
     ConversationBindingV1JsonSchema,
     ConversationBindingV1Schema,
+    ConversationInboundDebounceMsV1JsonSchema,
+    ConversationInboundDebounceMsV1Schema,
 } from './targets.js';
 export type {
     ChannelSessionSpawnRecipeV1,
     ConversationBindingTargetV1,
     ConversationBindingV1,
     ConversationSessionBindingTargetV1,
+    ConversationThreadRouterBindingTargetV1,
 } from './targets.js';
 
 /** The exact manifest-facing declaration for transport-free provider setup observation. */
@@ -385,6 +393,10 @@ export const ConversationDeliveryResolveManagementActionDeclarationV1: Conversat
  * its strict continuation arm.
  */
 export const CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1: ConversationManagementActionDeclarationsV1 = Object.freeze({
+    conversationStart: {
+        inputSchema: ConversationStartInputV1Schema.jsonSchema,
+        resultSchema: ConversationStartResultV1Schema.jsonSchema,
+    },
     connectionCreate: ConversationConnectionCreateManagementActionDeclarationV1,
     connectionTransfer: ConversationConnectionTransferManagementActionDeclarationV1,
     connectionPrepare: ConversationConnectionPrepareManagementActionDeclarationV1,

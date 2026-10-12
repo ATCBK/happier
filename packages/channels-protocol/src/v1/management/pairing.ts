@@ -11,8 +11,6 @@ import {
 } from '@happier-dev/plugin-sdk/protocol';
 
 import {
-    MAX_CONVERSATION_BINDINGS_PER_ACCOUNT,
-    MAX_CONVERSATION_CONNECTIONS_PER_ACCOUNT,
     MAX_CONVERSATION_PAIRING_DEEP_LINK_TEMPLATE_UTF8_BYTES,
 } from '../bounds.js';
 import {
@@ -128,12 +126,8 @@ const conversationPairingResourceV1 = defineProtocolObject({
         minimum: 0,
         maximum: Number.MAX_SAFE_INTEGER,
     }),
-    challenges: defineProtocolArray(conversationPairingChallengeResourceEntryV1, {
-        maxItems: MAX_CONVERSATION_CONNECTIONS_PER_ACCOUNT,
-    }),
-    proposals: defineProtocolArray(conversationPairingProposalResourceEntryV1, {
-        maxItems: MAX_CONVERSATION_BINDINGS_PER_ACCOUNT,
-    }),
+    challenges: defineProtocolArray(conversationPairingChallengeResourceEntryV1, {}),
+    proposals: defineProtocolArray(conversationPairingProposalResourceEntryV1, {}),
 }, { policy: 'closed' });
 
 /**

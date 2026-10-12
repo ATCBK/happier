@@ -18,8 +18,6 @@ import { PluginWebhookEndpointIdV1JsonSchema } from '@happier-dev/plugin-sdk/web
 
 import {
     MAX_CONVERSATION_CONNECTION_ID_ASCII_BYTES,
-    MAX_CONVERSATION_OBSERVATION_AGE_MS,
-    MIN_CONVERSATION_OBSERVATION_AGE_MS,
 } from '../bounds.js';
 import { ConversationProviderFailureV1ProtocolSchema } from '../diagnostics.js';
 import {
@@ -28,6 +26,7 @@ import {
 } from '../identity.js';
 import { ConversationJsonValueV1ProtocolSchema } from '../json.js';
 import { ConversationQualifiedConnectedAccountRefV1ProtocolSchema } from '../provider/connection.js';
+import { ConversationMaximumObservationAgeV1ProtocolSchema } from '../provider/setup.js';
 
 /**
  * A Channels-owned authority epoch. It is advanced by this package rather
@@ -41,11 +40,7 @@ const authorityEpochV1 = defineProtocolNumber({
 });
 /** One exact Account Collection row revision witness; see its Protocol owner. */
 const collectionRowRevision = ConversationCollectionRowRevisionV1ProtocolSchema;
-const observationAgeV1 = defineProtocolNumber({
-    integer: true,
-    minimum: MIN_CONVERSATION_OBSERVATION_AGE_MS,
-    maximum: MAX_CONVERSATION_OBSERVATION_AGE_MS,
-});
+const observationAgeV1 = ConversationMaximumObservationAgeV1ProtocolSchema;
 const protocolBoolean = defineProtocolUnion([
     defineProtocolLiteral(true),
     defineProtocolLiteral(false),

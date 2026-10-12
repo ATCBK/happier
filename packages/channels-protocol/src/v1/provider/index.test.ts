@@ -5,12 +5,20 @@ import * as provider from './index.js';
 describe('Channels V1 provider barrel', () => {
     it('publishes the one complete operation vocabulary without relative-only composition parsers', () => {
         expect(Object.keys(provider).sort()).toEqual([
+            'ConversationAttachmentFetchInputV1JsonSchema',
+            'ConversationAttachmentFetchInputV1Schema',
+            'ConversationAttachmentFetchResultV1JsonSchema',
+            'ConversationAttachmentFetchResultV1Schema',
             'ConversationConnectionTestInputV1JsonSchema',
             'ConversationConnectionTestInputV1Schema',
             'ConversationConnectionTestResultV1JsonSchema',
             'ConversationConnectionTestResultV1Schema',
+            'ConversationDeliveryContentV1JsonSchema',
+            'ConversationDeliveryContentV1Schema',
             'ConversationDeliveryInputV1JsonSchema',
             'ConversationDeliveryInputV1Schema',
+            'ConversationDeliveryNewThreadV1JsonSchema',
+            'ConversationDeliveryNewThreadV1Schema',
             'ConversationDeliveryReconcileInputV1JsonSchema',
             'ConversationDeliveryReconcileInputV1Schema',
             'ConversationDeliveryReplyContextV1JsonSchema',
@@ -23,6 +31,10 @@ describe('Channels V1 provider barrel', () => {
             'ConversationEndpointResolveInputV1Schema',
             'ConversationEndpointResolveResultV1JsonSchema',
             'ConversationEndpointResolveResultV1Schema',
+            'ConversationMessageAttachmentV1JsonSchema',
+            'ConversationMessageAttachmentV1Schema',
+            'ConversationOutboundTextLimitV1JsonSchema',
+            'ConversationOutboundTextLimitV1Schema',
             'ConversationPollInputV1JsonSchema',
             'ConversationPollInputV1Schema',
             'ConversationPollResultV1JsonSchema',
@@ -68,9 +80,12 @@ describe('Channels V1 provider barrel', () => {
             'ConversationResolvedPrincipalV1JsonSchema',
             'ConversationResolvedPrincipalV1Schema',
             'areConversationEndpointIdentitiesEqual',
+            'assertConversationChannelsCoreCallerV1',
+            'classifyConversationProviderMaterializationFailureV1',
             'compareCanonicalConversationResolutionCandidatesV1',
             'hasCanonicalConversationResolutionCandidateOrderV1',
             'hasCurrentConversationProviderConnectionV1',
+            'rethrowConversationProviderLifecycleFailureV1',
         ]);
         expect(Object.keys(provider).some((key) => key.endsWith('ProtocolSchema'))).toBe(false);
     });

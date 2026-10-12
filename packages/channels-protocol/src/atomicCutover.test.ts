@@ -65,6 +65,7 @@ describe('Channels public protocol atomic cutover', () => {
         expect(declaredProtocol).not.toHaveProperty('descriptor');
         expect(protocol.ConversationProvidersContributionPointV1.maxContributionsPerContributor).toBe(1);
         expect(Object.keys(declaredProtocol?.operations ?? {}).sort()).toEqual([
+            'attachmentFetch',
             'automationEventAdmit',
             'connectionStop',
             'connectionTest',

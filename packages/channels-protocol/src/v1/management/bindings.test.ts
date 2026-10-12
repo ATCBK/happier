@@ -58,11 +58,10 @@ describe('Channels V1 binding management mutation contracts', () => {
         expect(readInputSchema.safeParse({ ...input, unexpected: true }).success).toBe(false);
         expect(readResultSchema.safeParse({ kind: 'notFound', revision: 7 }).success).toBe(false);
         expect(readResultSchema.safeParse({ kind: 'ready', revision: 0, binding }).success).toBe(false);
-        expect(readInputSchema.jsonSchema).toMatchObject({
-            type: 'object',
-            additionalProperties: false,
-            required: ['bindingId'],
-        });
+        expect(readInputSchema.parse({ automationId: 'automation-1' })).toEqual({ automationId: 'automation-1' });
+        expect(readInputSchema.safeParse({ ...input, automationId: 'automation-1' }).success).toBe(false);
+        const association = { kind: 'automationAssociation', automationId: 'automation-1', association: 'absent' } as const;
+        expect(readResultSchema.parse(association)).toEqual(association);
     });
 
     it('makes direct binding deletion an exact-revision, two-outcome contract', () => {

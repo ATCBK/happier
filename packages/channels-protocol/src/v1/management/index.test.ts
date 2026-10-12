@@ -59,6 +59,10 @@ describe('Channels V1 public management barrel', () => {
             resultSchema: management.ConversationDeliveryResolveResultV1JsonSchema,
         });
         expect(management.CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1).toEqual({
+            conversationStart: {
+                inputSchema: management.ConversationStartInputV1JsonSchema,
+                resultSchema: management.ConversationStartResultV1JsonSchema,
+            },
             connectionCreate: management.ConversationConnectionCreateManagementActionDeclarationV1,
             connectionTransfer: management.ConversationConnectionTransferManagementActionDeclarationV1,
             connectionPrepare: management.ConversationConnectionPrepareManagementActionDeclarationV1,

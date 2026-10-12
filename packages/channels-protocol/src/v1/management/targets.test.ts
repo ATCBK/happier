@@ -33,6 +33,18 @@ function hasFinalizingDeleteDisabledBranch(schema: unknown): boolean {
 }
 
 describe('Channels V1 binding targets', () => {
+    it('accepts ordered thread routes and rejects duplicate group records and unknown routing fields', () => {
+        const policy = { deliveryMode: 'repliesOnly', permissionCeiling: 'read-only', approvals: { kind: 'off' }, newSession: { kind: 'off' } } as const;
+        const target = {
+            kind: 'threadRouter',
+            principalGroups: [{ id: 'sales', principalIds: ['alice'] }, { id: 'questions', principalIds: ['alice', 'bob'] }],
+            routes: [{ id: 'forward', when: { group: 'any', forwarded: true }, recipe: { agentId: 'claude' }, policy }, { id: 'sales', when: { group: 'sales', forwarded: 'any' }, recipe: {}, policy }],
+        };
+        expect(ConversationBindingTargetV1Schema.parse(target)).toEqual(target);
+        expect(ConversationBindingTargetV1Schema.safeParse({ ...target, routes: [{ ...target.routes[0], when: { group: 'any', forwarded: true, classifier: 'guess' } }] }).success).toBe(false);
+        expect(ConversationBindingTargetV1Schema.safeParse({ ...target, allowedPrincipalIds: ['mallory'] }).success).toBe(false);
+        expect(ConversationBindingTargetV1Schema.safeParse({ ...target, principalGroups: [target.principalGroups[0], target.principalGroups[0]] }).success).toBe(false);
+    });
     it('requires the explicit direct-delete state and forbids it from retaining enabled authority', () => {
         const binding = {
             v: 1,

@@ -1,8 +1,10 @@
 import type { PluginJsonSchema } from '@happier-dev/plugin-sdk/protocol';
 
 import {
+    defineProtocolArray,
     defineProtocolLiteral,
     defineProtocolNumber,
+    defineProtocolString,
     defineProtocolObject,
     defineProtocolUnion,
     defineProtocolUtf8String,
@@ -18,8 +20,6 @@ import {
     CONVERSATION_BINDING_INPUT_MODES_V1,
     CONVERSATION_DELIVERY_LINK_PREVIEW_POLICIES_V1,
     MAX_CONVERSATION_ACTOR_PRINCIPAL_ID_UTF8_BYTES,
-    MAX_CONVERSATION_BINDINGS_PER_ACCOUNT,
-    MAX_CONVERSATION_INBOUND_DEBOUNCE_MS,
 } from '../bounds.js';
 import {
     ConversationBindingIdV1ProtocolSchema,
@@ -59,8 +59,19 @@ export const ConversationPrincipalIdV1ProtocolSchema = defineProtocolUtf8String(
 /** @internal One set-valued principal allow-list shared with the binding writer. */
 export const ConversationAllowedPrincipalIdsV1ProtocolSchema = defineProtocolUniqueArray(
     ConversationPrincipalIdV1ProtocolSchema,
-    { minItems: 1, maxItems: MAX_CONVERSATION_BINDINGS_PER_ACCOUNT },
+    { minItems: 1 },
 );
+
+/** The same allow-list contract is consumed by binding mutations and storage. */
+export const ConversationAllowedPrincipalIdsV1Schema = ConversationAllowedPrincipalIdsV1ProtocolSchema;
+export const ConversationAllowedPrincipalIdsV1JsonSchema: PluginJsonSchema =
+    ConversationAllowedPrincipalIdsV1Schema.jsonSchema;
+
+/** @internal Shared with policy mutations; safe-integer representation is the only ceiling. */
+export const ConversationInboundDebounceMsV1ProtocolSchema = nonnegativeSafeInteger;
+export const ConversationInboundDebounceMsV1Schema = ConversationInboundDebounceMsV1ProtocolSchema;
+export const ConversationInboundDebounceMsV1JsonSchema: PluginJsonSchema =
+    ConversationInboundDebounceMsV1Schema.jsonSchema;
 
 const conversationSessionApprovalPolicyV1 = defineProtocolUnion([
     defineProtocolObject({
@@ -87,19 +98,38 @@ const conversationSessionNewSessionPolicyV1 = defineProtocolUnion([
     }, { policy: 'closed' }),
 ]);
 
+const conversationSessionBindingPolicyV1 = defineProtocolObject({
+    deliveryMode: defineProtocolUnion([
+        defineProtocolLiteral('repliesOnly'),
+        defineProtocolLiteral('mirrorSession'),
+    ]),
+    permissionCeiling: agentPermissionIntentV1,
+    approvals: conversationSessionApprovalPolicyV1,
+    newSession: conversationSessionNewSessionPolicyV1,
+}, { policy: 'closed' });
+
 const conversationSessionBindingTargetV1 = defineProtocolObject({
     kind: defineProtocolLiteral('session'),
     sessionId: sessionIdV1,
     pullRequestLink: ConversationPullRequestV1Schema.optional(),
-    policy: defineProtocolObject({
-        deliveryMode: defineProtocolUnion([
-            defineProtocolLiteral('repliesOnly'),
-            defineProtocolLiteral('mirrorSession'),
-        ]),
-        permissionCeiling: agentPermissionIntentV1,
-        approvals: conversationSessionApprovalPolicyV1,
-        newSession: conversationSessionNewSessionPolicyV1,
-    }, { policy: 'closed' }),
+    policy: conversationSessionBindingPolicyV1,
+}, { policy: 'closed' });
+
+const conversationThreadRouterBindingTargetV1 = defineProtocolObject({
+    kind: defineProtocolLiteral('threadRouter'),
+    principalGroups: defineProtocolUniqueArray(defineProtocolObject({
+        id: defineProtocolString({ minLength: 1 }),
+        principalIds: defineProtocolUniqueArray(ConversationPrincipalIdV1ProtocolSchema),
+    }, { policy: 'closed' }), { minItems: 1 }),
+    routes: defineProtocolArray(defineProtocolObject({
+        id: defineProtocolString({ minLength: 1 }),
+        when: defineProtocolObject({
+            group: defineProtocolString({ minLength: 1 }),
+            forwarded: defineProtocolUnion([defineProtocolLiteral(true), defineProtocolLiteral(false), defineProtocolLiteral('any')]),
+        }, { policy: 'closed' }),
+        recipe: ConversationJsonObjectV1ProtocolSchema,
+        policy: conversationSessionBindingPolicyV1,
+    }, { policy: 'closed' })),
 }, { policy: 'closed' });
 
 const conversationAutomationBindingTargetV1 = defineProtocolObject({
@@ -118,6 +148,7 @@ const conversationAutomationBindingTargetV1 = defineProtocolObject({
 export const ConversationBindingTargetV1ProtocolSchema = defineProtocolUnion([
     conversationSessionBindingTargetV1,
     conversationAutomationBindingTargetV1,
+    conversationThreadRouterBindingTargetV1,
 ]);
 
 /** The persisted Channels target keeps stable Automation identity, never a mutable recipe generation. */
@@ -128,6 +159,12 @@ export type ConversationSessionBindingTargetV1 = Extract<
     ConversationBindingTargetV1,
     Readonly<{ kind: 'session' }>
 >;
+export type ConversationThreadRouterBindingTargetV1 = Extract<ConversationBindingTargetV1, Readonly<{ kind: 'threadRouter' }>>;
+
+/** Groups are the router's only sender authority; order follows first membership. */
+export function conversationThreadRouterAllowedPrincipalIdsV1(target: ConversationThreadRouterBindingTargetV1): readonly string[] {
+    return [...new Set(target.principalGroups.flatMap((group) => group.principalIds))];
+}
 /** The bounded JSON recipe that Channels validates through the Session owner at dispatch time. */
 export type ChannelSessionSpawnRecipeV1 = ConversationJsonObjectV1;
 export const ConversationBindingTargetV1JsonSchema: PluginJsonSchema = ConversationBindingTargetV1Schema.jsonSchema;
@@ -136,6 +173,7 @@ const conversationBindingV1CommonFields = {
     v: defineProtocolLiteral(1),
     id: ConversationBindingIdV1ProtocolSchema,
     connectionId: ConversationConnectionIdV1ProtocolSchema,
+    parentBindingId: ConversationBindingIdV1ProtocolSchema.optional(),
     endpoint: ConversationResolvedEndpointV1ProtocolSchema,
     target: ConversationBindingTargetV1ProtocolSchema,
     allowedPrincipalIds: ConversationAllowedPrincipalIdsV1ProtocolSchema,
@@ -145,11 +183,7 @@ const conversationBindingV1CommonFields = {
         defineProtocolLiteral(CONVERSATION_BINDING_INPUT_MODES_V1[1]),
         defineProtocolLiteral(CONVERSATION_BINDING_INPUT_MODES_V1[2]),
     ]),
-    inboundDebounceMs: defineProtocolNumber({
-        integer: true,
-        minimum: 0,
-        maximum: MAX_CONVERSATION_INBOUND_DEBOUNCE_MS,
-    }),
+    inboundDebounceMs: ConversationInboundDebounceMsV1ProtocolSchema,
     linkPreviewPolicy: defineProtocolUnion([
         defineProtocolLiteral(CONVERSATION_DELIVERY_LINK_PREVIEW_POLICIES_V1[0]),
         defineProtocolLiteral(CONVERSATION_DELIVERY_LINK_PREVIEW_POLICIES_V1[1]),

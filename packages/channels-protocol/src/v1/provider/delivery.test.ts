@@ -9,6 +9,27 @@ import {
 } from './delivery.js';
 
 describe('Channels V1 provider delivery results', () => {
+    it('admits a new thread with principal recipients and preserves 120KB HTML plus created endpoint evidence', () => {
+        const endpoint = { kind: 'direct', audience: 'direct', id: 'mailbox' } as const;
+        const content = { text: 'Brief', html: '<p>' + 'a'.repeat(120 * 1024) + '</p>' };
+        const delivery = {
+            v: 1, connectionId: 'connection-1', providerConnectionKey: 'mailbox',
+            providerConfigVersion: 1, providerConfig: {}, credentialRef: null,
+            endpoint, content, deliveryKey: 'start-1',
+            newThread: { recipients: ['owner@example.com'], subject: 'Brief' },
+            mentionPolicy: 'suppress', linkPreviewPolicy: 'suppress',
+        } as const;
+        expect(ConversationDeliveryInputV1Schema.parse(delivery)).toEqual(delivery);
+        expect(ConversationDeliveryInputV1Schema.safeParse({
+            ...delivery, newThread: { ...delivery.newThread, cc: ['other@example.com'] },
+        }).success).toBe(false);
+        const result = { kind: 'delivered', providerMessageIds: ['<message>'], endpoint: {
+            kind: 'thread', audience: 'shared', id: '<message>', parentId: 'mailbox',
+        } } as const;
+        expect(ConversationDeliveryResultV1Schema.parse(result)).toEqual(result);
+        expect(ConversationDeliveryResultV1Schema.parse({ kind: 'notReady', reason: 'unsupported' }))
+            .toEqual({ kind: 'notReady', reason: 'unsupported' });
+    });
     it('preserves the core-derived delivery identity and prevents reconciliation from re-sending content', () => {
         const connection = {
             v: 1,
@@ -21,7 +42,7 @@ describe('Channels V1 provider delivery results', () => {
         const delivery = {
             ...connection,
             endpoint: { kind: 'thread', audience: 'shared', id: 'thread-1' },
-            content: 'A bounded reply',
+            content: { text: 'A bounded reply' },
             deliveryKey: 'binding-1:reply-1',
             replyContext: { replyToMessageId: 'message-1' },
             mentionPolicy: 'suppress',
@@ -41,7 +62,7 @@ describe('Channels V1 provider delivery results', () => {
         }).success).toBe(false);
         expect(ConversationDeliveryReconcileInputV1Schema.safeParse({
             ...reconciliation,
-            content: 'must not cross the reconciliation boundary',
+            content: { text: 'must not cross the reconciliation boundary' },
         }).success).toBe(false);
         expect(ConversationDeliveryInputV1Schema.safeParse({
             ...delivery,
@@ -103,7 +124,7 @@ describe('Channels V1 provider delivery results', () => {
         expect(ConversationDeliveryResultV1Schema.safeParse({
             kind: 'delivered',
             providerMessageIds: Array.from({ length: 33 }, () => 'message'),
-        }).success).toBe(false);
+        }).success).toBe(true);
         expect(ConversationDeliveryResultV1Schema.safeParse({
             ...partial,
             providerEvidence: 'must stay provider-local',

@@ -31,6 +31,16 @@ describe('Channels V1 provider setup outcomes', () => {
         } as const;
 
         expect(ConversationProviderSetupResultV1Schema.parse(durablePush)).toEqual(durablePush);
+        const { outboundTextLimit: _nativeLimit, ...unlimited } = durablePush;
+        expect(ConversationProviderSetupResultV1Schema.parse(unlimited)).toEqual(unlimited);
+        for (const outboundTextLimit of [
+            null,
+            { maximum: 0, unit: 'unicodeCodePoints' },
+            { maximum: 1.5, unit: 'unicodeCodePoints' },
+            { maximum: 4_000, unit: 'unknown' },
+        ]) {
+            expect(ConversationProviderSetupResultV1Schema.safeParse({ ...unlimited, outboundTextLimit }).success).toBe(false);
+        }
         expect(ConversationProviderSetupResultV1Schema.safeParse({
             ...durablePush,
             supportedTransports: ['checkpointedPull'],

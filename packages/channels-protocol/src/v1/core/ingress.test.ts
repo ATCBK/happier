@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { ConversationProvidersContributionProtocolV1 } from '../provider/contribution.js';
 
 import {
     ConversationAuthenticatedObservationShellV1Schema,
@@ -38,6 +39,22 @@ const observation = {
 } as const;
 
 describe('Channels V1 normalized ingress', () => {
+    it('declares an optional safe attachment-fetch provider operation', () => {
+        expect(ConversationProvidersContributionProtocolV1.operations).toHaveProperty('attachmentFetch');
+    });
+    it('admits provider-neutral file descriptors, including an attachment-only message, without admitting bytes', () => {
+        const attachments = [{ attachmentId: 'part-2', name: 'lead.pdf', mediaType: 'application/pdf', byteLength: 120_000 }];
+        for (const text of ['Please read the attached lead.', '']) {
+            const withFiles = { ...observation, message: { ...observation.message, text, attachments } };
+            expect(ConversationObservationV1Schema.safeParse(withFiles).success).toBe(true);
+            expect(ConversationObservationV1Schema.safeParse({
+                ...withFiles, message: { ...withFiles.message, attachments: [{ ...attachments[0], bytes: 'secret' }] },
+            }).success).toBe(false);
+        }
+        expect(ConversationObservationV1Schema.safeParse({ ...observation, message: { ...observation.message, text: '', attachments: [] } }).success).toBe(false);
+        expect(ConversationObservationV1Schema.safeParse({ ...observation, message: { ...observation.message, attachments: [{ ...attachments[0], byteLength: -1 }] } }).success).toBe(false);
+    });
+
     it('accepts strictly authenticated full-text evidence and emits a closed projection', () => {
         expect(ConversationObservationV1Schema.parse(observation)).toEqual(observation);
         expect(ConversationObservationV1Schema.jsonSchema).toMatchObject({

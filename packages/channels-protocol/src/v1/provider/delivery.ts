@@ -5,6 +5,7 @@ import {
     defineProtocolLiteral,
     defineProtocolNumber,
     defineProtocolObject,
+    defineProtocolString,
     defineProtocolUnion,
     defineProtocolUtf8String,
 } from '@happier-dev/plugin-sdk/protocol';
@@ -14,14 +15,14 @@ import {
     CONVERSATION_DELIVERY_LINK_PREVIEW_POLICIES_V1,
     CONVERSATION_DELIVERY_MENTION_POLICIES_V1,
     CONVERSATION_DELIVERY_RETRY_KINDS_V1,
-    MAX_CONVERSATION_DELIVERY_CHUNKS,
-    MAX_CONVERSATION_DELIVERY_TEXT_UTF8_BYTES,
     MAX_CONVERSATION_PROVIDER_MESSAGE_ID_UTF8_BYTES,
     MAX_CONVERSATION_RETRY_AFTER_MS,
     MAX_CONVERSATION_SESSION_IDEMPOTENCY_KEY_UTF8_BYTES,
 } from '../bounds.js';
 import { ConversationProviderConnectionInputV1Fields } from './connection.js';
 import { ConversationResolvedEndpointV1ProtocolSchema } from './resolution.js';
+import { ConversationAllowedPrincipalIdsV1Schema } from '../management/targets.js';
+import { ConversationProviderFailureV1ProtocolSchema } from '../diagnostics.js';
 
 /** @internal Relative-only input for composed Channels protocol schemas. */
 export const ConversationProviderMessageIdV1ProtocolSchema = defineProtocolUtf8String({
@@ -57,10 +58,19 @@ export type ConversationDeliveryReplyContextV1 = ReturnType<
 export const ConversationDeliveryReplyContextV1JsonSchema: PluginJsonSchema =
     ConversationDeliveryReplyContextV1Schema.jsonSchema;
 
-const conversationDeliveryContentV1 = defineProtocolUtf8String({
-    maxUtf8Bytes: MAX_CONVERSATION_DELIVERY_TEXT_UTF8_BYTES,
-    minLength: 1,
-});
+export const ConversationDeliveryContentV1Schema = defineProtocolObject({
+    text: defineProtocolString({ minLength: 1 }),
+    html: defineProtocolString().optional(),
+}, { policy: 'closed' });
+export type ConversationDeliveryContentV1 = ReturnType<typeof ConversationDeliveryContentV1Schema.parse>;
+export const ConversationDeliveryContentV1JsonSchema: PluginJsonSchema = ConversationDeliveryContentV1Schema.jsonSchema;
+
+export const ConversationDeliveryNewThreadV1Schema = defineProtocolObject({
+    recipients: ConversationAllowedPrincipalIdsV1Schema,
+    subject: defineProtocolString({ minLength: 1 }),
+}, { policy: 'closed' });
+export type ConversationDeliveryNewThreadV1 = ReturnType<typeof ConversationDeliveryNewThreadV1Schema.parse>;
+export const ConversationDeliveryNewThreadV1JsonSchema: PluginJsonSchema = ConversationDeliveryNewThreadV1Schema.jsonSchema;
 
 const conversationDeliveryKeyV1 = defineProtocolUtf8String({
     maxUtf8Bytes: MAX_CONVERSATION_SESSION_IDEMPOTENCY_KEY_UTF8_BYTES,
@@ -77,7 +87,8 @@ const linkPreviewPolicyV1 = defineProtocolUnion([
 export const ConversationDeliveryInputV1ProtocolSchema = defineProtocolObject({
     ...ConversationProviderConnectionInputV1Fields,
     endpoint: ConversationResolvedEndpointV1ProtocolSchema,
-    content: conversationDeliveryContentV1,
+    content: ConversationDeliveryContentV1Schema,
+    newThread: ConversationDeliveryNewThreadV1Schema.optional(),
     deliveryKey: conversationDeliveryKeyV1,
     replyContext: ConversationDeliveryReplyContextV1ProtocolSchema.optional(),
     mentionPolicy: mentionPolicyV1,
@@ -104,12 +115,12 @@ export const ConversationDeliveryReconcileInputV1JsonSchema: PluginJsonSchema =
 
 const conversationProviderMessageIdsV1 = defineProtocolArray(
     ConversationProviderMessageIdV1ProtocolSchema,
-    { maxItems: MAX_CONVERSATION_DELIVERY_CHUNKS },
 );
 
 const conversationDeliveredV1 = defineProtocolObject({
     kind: defineProtocolLiteral('delivered'),
     providerMessageIds: conversationProviderMessageIdsV1,
+    endpoint: ConversationResolvedEndpointV1ProtocolSchema.optional(),
 }, { policy: 'closed' });
 
 const conversationPartialDeliveryV1 = defineProtocolObject({
@@ -118,7 +129,7 @@ const conversationPartialDeliveryV1 = defineProtocolObject({
     failedChunk: defineProtocolNumber({
         integer: true,
         minimum: 0,
-        maximum: MAX_CONVERSATION_DELIVERY_CHUNKS,
+        maximum: Number.MAX_SAFE_INTEGER,
     }),
     retrySafe: defineProtocolLiteral(false),
 }, { policy: 'closed' });
@@ -148,10 +159,12 @@ const conversationEndpointArchivedV1 = defineProtocolObject({
 const conversationOutcomeUnknownV1 = defineProtocolObject({
     kind: defineProtocolLiteral('outcomeUnknown'),
     providerMessageIds: conversationProviderMessageIdsV1.optional(),
+    endpoint: ConversationResolvedEndpointV1ProtocolSchema.optional(),
 }, { policy: 'closed' });
 
 /** @internal Relative-only input for composed Channels protocol schemas. */
 export const ConversationDeliveryResultV1ProtocolSchema = defineProtocolUnion([
+    ConversationProviderFailureV1ProtocolSchema,
     conversationDeliveredV1,
     conversationPartialDeliveryV1,
     conversationNotDeliveredV1,

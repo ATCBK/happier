@@ -15,7 +15,7 @@ describe('Channels V1 Session last-delivery presentation', () => {
             { ...deliveries[0], content: 'private' },
         ]).success).toBe(false);
         expect(protocol.ConversationSessionLastDeliveriesV1Schema.safeParse(
-            Array.from({ length: protocol.MAX_CONVERSATION_BINDINGS_PER_ACCOUNT + 1 }, () => deliveries[0]),
-        ).success).toBe(false);
+            Array.from({ length: 256 + 1 }, () => deliveries[0]),
+        ).success).toBe(true);
     });
 });

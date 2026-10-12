@@ -4,9 +4,11 @@ import type {
 } from '@happier-dev/plugin-sdk/protocol';
 
 import {
+    defineProtocolArray,
     defineProtocolLiteral,
     defineProtocolNumber,
     defineProtocolObject,
+    defineProtocolString,
     defineProtocolUnion,
     defineProtocolUtf8String,
 } from '@happier-dev/plugin-sdk/protocol';
@@ -19,7 +21,6 @@ import {
     CONVERSATION_OBSERVATION_TRANSPORT_KINDS_V1,
     MAX_CONVERSATION_AUTOMATION_EVENT_SOURCE_INSTANCE_ID_UTF8_BYTES,
     MAX_CONVERSATION_ACTOR_PRINCIPAL_ID_UTF8_BYTES,
-    MAX_CONVERSATION_INGRESS_TEXT_UTF8_BYTES,
     MAX_CONVERSATION_OCCURRENCE_ID_UTF8_BYTES,
     MAX_CONVERSATION_PROVIDER_MESSAGE_ID_UTF8_BYTES,
 } from '../bounds.js';
@@ -29,6 +30,7 @@ import {
     ConversationEndpointDisplayLabelV1ProtocolSchema,
     ConversationResolvedEndpointV1ProtocolSchema,
 } from '../provider/resolution.js';
+import { ConversationMessageAttachmentV1Schema } from '../provider/attachments.js';
 
 const conversationOccurrenceIdV1 = defineProtocolUtf8String({
     maxUtf8Bytes: MAX_CONVERSATION_OCCURRENCE_ID_UTF8_BYTES,
@@ -42,10 +44,7 @@ const conversationProviderMessageIdV1 = defineProtocolUtf8String({
     maxUtf8Bytes: MAX_CONVERSATION_PROVIDER_MESSAGE_ID_UTF8_BYTES,
     minLength: 1,
 });
-const conversationIngressTextV1 = defineProtocolUtf8String({
-    maxUtf8Bytes: MAX_CONVERSATION_INGRESS_TEXT_UTF8_BYTES,
-    minLength: 1,
-});
+const conversationIngressTextV1 = defineProtocolString({ minLength: 1 });
 
 /**
  * The Event owner identifies its own declaration through this qualified
@@ -152,6 +151,7 @@ const conversationFullTextMessageV1 = defineProtocolUnion([
         ...conversationMessageBaseFields,
         revision: conversationProviderMessageIdV1.optional(),
         text: conversationIngressTextV1,
+        attachments: defineProtocolArray(ConversationMessageAttachmentV1Schema).optional(),
         replyToMessageId: conversationProviderMessageIdV1,
         addressingEvidence: defineProtocolLiteral(replyToIntegrationEvidence),
     }, { policy: 'closed' }),
@@ -159,6 +159,23 @@ const conversationFullTextMessageV1 = defineProtocolUnion([
         ...conversationMessageBaseFields,
         revision: conversationProviderMessageIdV1.optional(),
         text: conversationIngressTextV1,
+        attachments: defineProtocolArray(ConversationMessageAttachmentV1Schema).optional(),
+        replyToMessageId: conversationProviderMessageIdV1.optional(),
+        addressingEvidence: nonReplyAddressingEvidenceV1,
+    }, { policy: 'closed' }),
+    defineProtocolObject({
+        ...conversationMessageBaseFields,
+        revision: conversationProviderMessageIdV1.optional(),
+        text: defineProtocolLiteral(''),
+        attachments: defineProtocolArray(ConversationMessageAttachmentV1Schema, { minItems: 1 }),
+        replyToMessageId: conversationProviderMessageIdV1,
+        addressingEvidence: defineProtocolLiteral(replyToIntegrationEvidence),
+    }, { policy: 'closed' }),
+    defineProtocolObject({
+        ...conversationMessageBaseFields,
+        revision: conversationProviderMessageIdV1.optional(),
+        text: defineProtocolLiteral(''),
+        attachments: defineProtocolArray(ConversationMessageAttachmentV1Schema, { minItems: 1 }),
         replyToMessageId: conversationProviderMessageIdV1.optional(),
         addressingEvidence: nonReplyAddressingEvidenceV1,
     }, { policy: 'closed' }),

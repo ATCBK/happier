@@ -107,6 +107,10 @@ async function installPublicSdkPublicBoundaryStub(consumerRoot: string): Promise
             private: true,
             type: 'module',
             exports: {
+                '.': {
+                    types: './index.d.ts',
+                    default: './index.js',
+                },
                 './protocol': {
                     types: './protocol.d.ts',
                     default: './protocol.js',
@@ -122,6 +126,15 @@ async function installPublicSdkPublicBoundaryStub(consumerRoot: string): Promise
             },
         }, null, 2)}\n`, 'utf8'),
         writeFile(join(sdkRoot, 'protocol.js'), 'export {};\n', 'utf8'),
+        writeFile(join(sdkRoot, 'index.js'), 'export {};\n', 'utf8'),
+        // The emitted invocation helper uses only these public context keys.
+        // Runtime caller admission is exercised separately through the SDK testkit.
+        writeFile(join(sdkRoot, 'index.d.ts'), `
+export interface PluginInvocationContext {
+    readonly surface: string;
+    readonly caller?: Readonly<{ kind: string; pluginId?: string }>;
+}
+`, 'utf8'),
         writeFile(join(sdkRoot, 'contributions.js'), 'export {};\n', 'utf8'),
         // This is the declared external SDK boundary, deliberately limited to
         // the public type names Channels emits. Using the workspace SDK here

@@ -7,7 +7,6 @@ import {
     defineProtocolUnion,
 } from '@happier-dev/plugin-sdk/protocol';
 
-import { MAX_CONVERSATION_BINDINGS_PER_ACCOUNT } from '../bounds.js';
 import { ConversationBindingIdV1ProtocolSchema } from '../identity.js';
 
 /** A read-only custody summary; resolution never proves complete provider delivery. */
@@ -29,7 +28,6 @@ export const ConversationSessionLastDeliveryV1JsonSchema: PluginJsonSchema = Con
 /** Optional `lastDeliveries` sibling in `session-conversations-v1`, at most one per binding. */
 export const ConversationSessionLastDeliveriesV1Schema = defineProtocolArray(
     ConversationSessionLastDeliveryV1Schema,
-    { maxItems: MAX_CONVERSATION_BINDINGS_PER_ACCOUNT },
 );
 export type ConversationSessionLastDeliveriesV1 = ReturnType<typeof ConversationSessionLastDeliveriesV1Schema.parse>;
 export const ConversationSessionLastDeliveriesV1JsonSchema: PluginJsonSchema = ConversationSessionLastDeliveriesV1Schema.jsonSchema;

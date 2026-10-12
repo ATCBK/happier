@@ -14,6 +14,8 @@ import {
     CONVERSATION_OUTBOUND_TEXT_UNITS_V1,
     CONVERSATION_TRANSPORT_KINDS_V1,
     MAX_CONVERSATION_PAIRING_DEEP_LINK_TEMPLATE_UTF8_BYTES,
+    MAX_CONVERSATION_OBSERVATION_AGE_MS,
+    MIN_CONVERSATION_OBSERVATION_AGE_MS,
 } from '../bounds.js';
 import {
     ConversationProviderConfigV1ProtocolSchema,
@@ -31,6 +33,13 @@ import { ConversationProviderFailureV1ProtocolSchema } from '../diagnostics.js';
 
 const ConversationPluginContributionRefV1ProtocolSchema = PluginContributionIdentityV1Schema;
 const conversationPluginContributionRefV1 = ConversationPluginContributionRefV1ProtocolSchema;
+
+/** @internal One configurable freshness range, also used by connection writes. */
+export const ConversationMaximumObservationAgeV1ProtocolSchema = defineProtocolNumber({
+    integer: true,
+    minimum: MIN_CONVERSATION_OBSERVATION_AGE_MS,
+    maximum: MAX_CONVERSATION_OBSERVATION_AGE_MS,
+});
 
 const conversationTransportKindV1 = defineProtocolUnion([
     defineProtocolLiteral(CONVERSATION_TRANSPORT_KINDS_V1[0]),
@@ -93,6 +102,11 @@ export const ConversationOutboundTextLimitV1ProtocolSchema = defineProtocolObjec
     ]),
 }, { policy: 'closed' });
 
+/** A declared provider-native ceiling; omission in setup means no text ceiling. */
+export const ConversationOutboundTextLimitV1Schema = ConversationOutboundTextLimitV1ProtocolSchema;
+export type ConversationOutboundTextLimitV1 = ReturnType<typeof ConversationOutboundTextLimitV1Schema.parse>;
+export const ConversationOutboundTextLimitV1JsonSchema: PluginJsonSchema = ConversationOutboundTextLimitV1Schema.jsonSchema;
+
 /** @internal Relative-only input for the contributed setup result. */
 export const ConversationProviderSetupResultV1ProtocolSchema = defineProtocolObject({
     v: defineProtocolLiteral(1),
@@ -105,7 +119,8 @@ export const ConversationProviderSetupResultV1ProtocolSchema = defineProtocolObj
     recommendedTransport: conversationTransportKindV1,
     overlapSafety: ConversationConnectionOverlapSafetyV1ProtocolSchema,
     replayContinuity: ConversationConnectionReplayContinuityV1ProtocolSchema,
-    outboundTextLimit: ConversationOutboundTextLimitV1ProtocolSchema,
+    outboundTextLimit: ConversationOutboundTextLimitV1ProtocolSchema.optional(),
+    recommendedMaximumObservationAgeMs: ConversationMaximumObservationAgeV1ProtocolSchema.optional(),
     sharedEndpointInputModes: ConversationSharedEndpointInputModesV1ProtocolSchema.optional(),
     setupGuidance: ConversationProviderSetupGuidanceV1ProtocolSchema.optional(),
     pairingDeepLinkTemplate: pairingDeepLinkTemplateV1.optional(),

@@ -36,6 +36,7 @@ import {
     ConversationProviderSetupOutcomeV1Schema,
     ConversationProviderSetupRemediationResultV1Schema,
 } from './setup.js';
+import { ConversationAttachmentFetchInputV1Schema, ConversationAttachmentFetchResultV1Schema } from './attachments.js';
 
 /**
  * The descriptor-free V1 provider role contract. Its arbitrary provider-local
@@ -86,6 +87,12 @@ export const ConversationProvidersContributionProtocolV1 = defineContributionPro
             required: false,
             input: { kind: 'protocolDefined', schema: ConversationPollInputV1Schema },
             resultSchema: ConversationPollResultV1Schema,
+            action: { surfaces: ['plugin'], dangerLevel: 'safe' },
+        },
+        attachmentFetch: {
+            required: false,
+            input: { kind: 'protocolDefined', schema: ConversationAttachmentFetchInputV1Schema },
+            resultSchema: ConversationAttachmentFetchResultV1Schema,
             action: { surfaces: ['plugin'], dangerLevel: 'safe' },
         },
         /**

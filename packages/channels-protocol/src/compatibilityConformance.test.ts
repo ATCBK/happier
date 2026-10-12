@@ -9,11 +9,8 @@ import * as testingV1 from './testing/v1/index.js';
 import * as v1 from './v1/index.js';
 import {
     MAX_CONVERSATION_CHECKPOINT_UTF8_BYTES,
-    MAX_CONVERSATION_CONNECTIONS_PER_ACCOUNT,
-    MAX_CONVERSATION_DELIVERY_TEXT_UTF8_BYTES,
     MAX_CONVERSATION_ENDPOINT_DISPLAY_LABEL_CODE_POINTS,
     MAX_CONVERSATION_ENDPOINT_STABLE_ID_UTF8_BYTES,
-    MAX_CONVERSATION_INGRESS_TEXT_UTF8_BYTES,
     MAX_CONVERSATION_PROVIDER_CONFIG_UTF8_BYTES,
     MAX_CONVERSATION_RESOLUTION_CANDIDATES,
 } from './v1/bounds.js';
@@ -114,7 +111,7 @@ const bindingCreateInput = {
 const deliveryInput = {
     ...connectionInput,
     endpoint,
-    content: 'A bounded outbound message.',
+    content: { text: 'An outbound message.' },
     deliveryKey: 'delivery-key-1',
     mentionPolicy: 'suppress',
     linkPreviewPolicy: 'suppress',
@@ -395,7 +392,7 @@ describe('Channels V1 compatibility policy and schema projections', () => {
             .not.toHaveProperty('propertyNames');
 
         const atLimit = Object.fromEntries(Array.from(
-            { length: MAX_CONVERSATION_CONNECTIONS_PER_ACCOUNT },
+            { length: 32 },
             (_, index) => {
                 const connectionId = `connection-${index + 1}`;
                 return [connectionId, { ...reconciliationSnapshot, connectionId }];
@@ -456,16 +453,16 @@ describe('Channels V1 bounded contract edges', () => {
             checkpoint: checkpointAboveLimit,
         }).success).toBe(false);
 
-        const deliveryAtLimit = 'x'.repeat(MAX_CONVERSATION_DELIVERY_TEXT_UTF8_BYTES);
+        const deliveryAtLimit = 'x'.repeat(196608);
         const deliveryAboveLimit = `${deliveryAtLimit}x`;
         expect(ConversationDeliveryInputV1Schema.safeParse({
             ...deliveryInput,
-            content: deliveryAtLimit,
+            content: { text: deliveryAtLimit },
         }).success).toBe(true);
         expect(ConversationDeliveryInputV1Schema.safeParse({
             ...deliveryInput,
-            content: deliveryAboveLimit,
-        }).success).toBe(false);
+            content: { text: deliveryAboveLimit },
+        }).success).toBe(true);
     });
 
     it('keeps bounded candidate and ingress text paths closed to additive root fields', () => {
@@ -499,7 +496,7 @@ describe('Channels V1 bounded contract edges', () => {
             actor: { principalId: 'principal-1', kind: 'human', isIntegrationSelf: false },
             message: {
                 id: 'message-1',
-                text: 'x'.repeat(MAX_CONVERSATION_INGRESS_TEXT_UTF8_BYTES),
+                text: 'x'.repeat(65536),
                 addressingEvidence: 'none',
                 contentProvenance: 'original',
                 providerTimestamp: 1_700_000_000_000,
@@ -512,7 +509,7 @@ describe('Channels V1 bounded contract edges', () => {
                 ...ingress.message,
                 text: `${ingress.message.text}x`,
             },
-        }).success).toBe(false);
+        }).success).toBe(true);
         expect(v1.ConversationObservationV1Schema.safeParse({
             ...ingress,
             unexpected: true,

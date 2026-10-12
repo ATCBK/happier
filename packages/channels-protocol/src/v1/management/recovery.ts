@@ -8,6 +8,7 @@ import {
 } from '@happier-dev/plugin-sdk/protocol';
 
 import { ConversationCollectionRowRevisionV1ProtocolSchema } from '../identity.js';
+import { ConversationResolvedEndpointV1Schema } from '../provider/resolution.js';
 
 const opaqueCustodyIdV1 = defineProtocolString({ pattern: '^[A-Za-z0-9_-]{43}$' });
 /** One exact Account Collection row revision witness; see its Protocol owner. */
@@ -45,6 +46,8 @@ export const ConversationIngressRetryResultV1JsonSchema: PluginJsonSchema =
 export const ConversationDeliveryResolveInputV1ProtocolSchema = defineProtocolObject({
     custodyId: opaqueCustodyIdV1,
     expectedRevision: collectionRowRevision,
+    /** Created-thread identity when an ambiguous provider effect needs owner confirmation. */
+    endpoint: ConversationResolvedEndpointV1Schema.optional(),
     resolution: defineProtocolUnion([
         defineProtocolLiteral('accepted'),
         defineProtocolLiteral('discarded'),
