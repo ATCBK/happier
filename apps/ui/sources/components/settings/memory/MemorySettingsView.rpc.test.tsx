@@ -97,7 +97,6 @@ function installMemoryRpc(handlers: Readonly<{
 }
 
 async function renderMemorySettingsView() {
-    const { MemorySettingsView } = await import('./MemorySettingsView');
     return renderScreen(React.createElement(MemorySettingsView));
 }
 
@@ -242,8 +241,10 @@ afterEach(() => {
         serverId: 'srv_1',
         machine: { id: 'm1' },
     };
-    vi.resetModules();
 });
+
+// Load real screen owners after boundary setup, outside behavior deadlines.
+const { MemorySettingsView } = await import('./MemorySettingsView');
 
 describe('MemorySettingsView', () => {
     it('keeps default keyword settings keyless when another indexing preference is saved', async () => {
@@ -802,10 +803,22 @@ describe('MemorySettingsView', () => {
         });
 
         const screen = await renderSettledMemorySettingsView();
-        // While the read is in flight the page shows no control that could write defaults over the machine.
+        // While the read is in flight the row's switch holds its place (no jump when the value arrives)
+        // but is disabled and cannot write defaults over the machine.
         const pending = screen.findByProps({ title: 'memorySearchSettings.enabled.title' });
-        expect(pending.props?.rightElement ?? null).toBeNull();
-        expect(pending.props?.subtitle).toBe('common.loading');
+        expect(pending.props?.rightElement?.props?.disabled).toBe(true);
+        expect(pending.props?.rightElement?.props?.onValueChange).toBeFalsy();
+        // It still says what it does.
+        expect(pending.props?.subtitle).toBe('memorySearchSettings.enabled.subtitle');
+        expect(pending.props?.loading).toBeFalsy();
+        // The rows whose values are not known yet wait with the same spinner; none claims "unavailable".
+        // Each reserves its value line (a blank one), so the sheet does not grow when the values arrive.
+        for (const title of ['memorySearchSettings.status.title', 'memorySearchSettings.status.diskUsageTitle']) {
+            const row = screen.findByProps({ title });
+            expect(row.props?.loading).toBe(true);
+            expect(String(row.props?.subtitle).trim()).toBe('');
+            expect(row.props?.subtitle).toBeTruthy();
+        }
         expect(findSegmentedChoice(screen, 'deep')).toBeUndefined();
         expect(screen.findAllByTestId('memory-settings-budget-light')).toHaveLength(0);
 

@@ -46,6 +46,9 @@ type IndexMode = MemorySettingsV1['indexMode'];
 type BackfillPolicy = MemorySettingsV1['backfillPolicy'];
 type SummarizerPermissionMode = MemorySettingsV1['hints']['summarizerPermissionMode'];
 
+/** A blank value line: pending rows keep the height they will have, so the sheet does not grow when the values arrive. */
+const PENDING_VALUE_LINE = '\u00A0';
+
 export const MemorySettingsView = React.memo(function MemorySettingsView() {
     const router = useRouter();
     const memorySearchEnabled = useFeatureEnabled('memory.search');
@@ -122,7 +125,7 @@ export const MemorySettingsView = React.memo(function MemorySettingsView() {
     if (!memorySearchEnabled) {
         return (
             <ItemList>
-                <SettingsPageHeader description={t('memorySearchSettings.pagePurpose')} actions={machineChip} />
+                <SettingsPageHeader description={t('memorySearchSettings.pagePurpose')} actions={machineChip} actionsPlacement="page" />
                 <ItemGroup
                     title={t('memorySearchSettings.disabled.title')}
                     description={t('memorySearchSettings.disabled.footer')}
@@ -138,19 +141,19 @@ export const MemorySettingsView = React.memo(function MemorySettingsView() {
         );
     }
 
-    const enabledSubtitle = access === 'ready'
+    // Until the machine answers, values are unknown, not unavailable: their rows keep their title and wait with a spinner.
+    const pending = access === 'pending';
+    const enabledSubtitle = access === 'ready' || pending
         ? t('memorySearchSettings.enabled.subtitle')
         : access === 'noMachine'
             ? t('memorySearchSettings.enabled.chooseMachine')
-            : access === 'pending'
-                ? t('common.loading')
-                : access === 'unreachable'
+            : access === 'unreachable'
                 ? t('memorySearchSettings.enabled.unreachable')
                 : t('memorySearchSettings.enabled.updateRequired');
 
     return (
         <ItemList>
-            <SettingsPageHeader description={t('memorySearchSettings.pagePurpose')} actions={machineChip} />
+            <SettingsPageHeader description={t('memorySearchSettings.pagePurpose')} actions={machineChip} actionsPlacement="page" />
             <SettingSection section={MEMORY_SETTINGS.sectionRefs.localIndex} answersFor={access === 'ready' ? undefined : MEMORY_SECTIONS_AFTER_READY}>
                 <ItemGroup
                     title={t('memorySearchSettings.enabled.sectionTitle')}
@@ -160,6 +163,7 @@ export const MemorySettingsView = React.memo(function MemorySettingsView() {
                         setting={MEMORY_SETTINGS.settings.enabled}
                         subtitle={enabledSubtitle}
                         subtitleLines={0}
+                        // Until the machine answers, the row still says what it does and its switch holds its place, disabled.
                         rightElement={access === 'ready' ? (
                             <Switch
                                 value={settings.enabled}
@@ -167,6 +171,8 @@ export const MemorySettingsView = React.memo(function MemorySettingsView() {
                                     void writeSettings({ ...settings, enabled: Boolean(value) });
                                 }}
                             />
+                        ) : pending ? (
+                            <Switch value={false} disabled />
                         ) : access === 'unreachable' ? (
                             <RoundButton
                                 testID="memory-settings-retry"
@@ -183,12 +189,14 @@ export const MemorySettingsView = React.memo(function MemorySettingsView() {
                         <>
                             <Item
                                 title={t('memorySearchSettings.status.title')}
-                                subtitle={statusSubtitle}
+                                subtitle={pending ? PENDING_VALUE_LINE : statusSubtitle}
+                                loading={pending}
                                 showChevron={false}
                             />
                             <Item
                                 title={t('memorySearchSettings.status.diskUsageTitle')}
-                                subtitle={diskUsageSubtitle}
+                                subtitle={pending ? PENDING_VALUE_LINE : diskUsageSubtitle}
+                                loading={pending}
                                 showChevron={false}
                             />
                         </>
@@ -197,24 +205,26 @@ export const MemorySettingsView = React.memo(function MemorySettingsView() {
                         <>
                             <Item
                                 title={t('memorySearchSettings.status.embeddingsTitle')}
-                                subtitle={embeddingsStatusSubtitle}
+                                subtitle={pending ? PENDING_VALUE_LINE : embeddingsStatusSubtitle}
+                                loading={pending}
                                 showChevron={false}
                             />
                             <Item
                                 title={t('memorySearchSettings.status.embeddingsProviderTitle')}
-                                subtitle={embeddingsProviderSubtitle}
+                                subtitle={pending ? PENDING_VALUE_LINE : embeddingsProviderSubtitle}
+                                loading={pending}
                                 showChevron={false}
                             />
                             <Item
                                 title={t('memorySearchSettings.status.embeddingsModelTitle')}
-                                subtitle={embeddingsModelSubtitle}
+                                subtitle={pending ? PENDING_VALUE_LINE : embeddingsModelSubtitle}
+                                loading={pending}
                                 showChevron={false}
                             />
                         </>
                     ) : null}
-                    {/* Which conversations are searched, and how, is the Search page's. */}
+                    {/* Which conversations are searched, and how, is the Search page's. No leading icon: it would reserve a gutter that indents every other title in this sheet (the same rule as the Search page's Memory search row). */}
                     <Item
-                        icon={<Icon name="magnifying-glass" />}
                         testID="memory-settings-open-search"
                         title={t('conversationSearch.openSearchSettings')}
                         onPress={() => router.push('/settings/search')}
