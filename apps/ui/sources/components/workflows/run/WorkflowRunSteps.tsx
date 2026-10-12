@@ -1,14 +1,16 @@
 import * as React from 'react';
 import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
-import type { WorkflowDefinitionV1, WorkflowRunInvocationIndexV1 } from '@happier-dev/protocol';
+import type { WorkflowDefinitionV1, WorkflowProgressEnvelopeV1, WorkflowRunInvocationIndexV1 } from '@happier-dev/protocol';
 import { walkWorkflowBlocks } from '@happier-dev/protocol/workflows/workflowDefinitionEditV1';
 
 import { useWorkflowAuthoringComposerCustody } from '@/components/sessions/authoring/authoringComposerCustody';
 import { WorkflowBlockListEditor, type WorkflowDocumentPresentation } from '@/components/workflows/editor/WorkflowBlockListEditor';
 import { WorkflowLifecycleStatus } from '@/components/workflows/presentation/WorkflowLifecycleStatus';
+import { formatWorkflowInvocationElapsedLabel } from '@/components/workflows/presentation/workflowUsagePresentation';
 import {
     WORKFLOW_ATTENTION_LIFECYCLES,
     describeWorkflowInvocationAttempt,
+    type WorkflowInvocationLifecycleContext,
 } from '@/components/workflows/presentation/workflowLifecyclePresentation';
 import { Text } from '@/components/ui/text/Text';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
@@ -20,21 +22,27 @@ import type { WorkflowInvocationStructureEntry } from './workflowInvocationStruc
 import { workflowRunStyles as styles } from './workflowRunStyles';
 
 function WorkflowRunOccurrenceSelector(props: Readonly<{
+    invocationStatusContext?: WorkflowInvocationLifecycleContext;
     invocations: readonly WorkflowRunInvocationIndexV1[];
     selectedInvocationId: string | null;
     onSelectInvocation: (id: string) => void;
     label: (invocation: WorkflowRunInvocationIndexV1) => string;
     blockKind: string | null;
+    progressById?: ReadonlyMap<string, WorkflowProgressEnvelopeV1>;
     testIDPrefix: string;
 }>): React.ReactElement {
     const [open, setOpen] = React.useState(false);
-    const items = props.invocations.map((invocation) => ({
-        id: invocation.id,
-        testID: `${props.testIDPrefix}-occurrence-${invocation.id}`,
-        title: props.label(invocation),
-        checked: invocation.id === props.selectedInvocationId,
-        rightElement: <WorkflowLifecycleStatus lifecycle={invocation.lifecycle} blockKind={props.blockKind} chrome="plain" />,
-    }));
+    const items = props.invocations.map((invocation) => {
+        const elapsed = formatWorkflowInvocationElapsedLabel(props.progressById?.get(invocation.id)?.timing);
+        return {
+            id: invocation.id,
+            testID: `${props.testIDPrefix}-occurrence-${invocation.id}`,
+            title: props.label(invocation),
+            checked: invocation.id === props.selectedInvocationId,
+            rightElement: <>{elapsed === null ? null : <Text style={styles.provenance}>{elapsed}</Text>}
+                <WorkflowLifecycleStatus lifecycle={invocation.lifecycle} blockKind={props.blockKind} context={props.invocationStatusContext} chrome="plain" /></>,
+        };
+    });
     return <DropdownMenu open={open} onOpenChange={setOpen} items={items}
         selectedId={props.selectedInvocationId}
         onSelect={(id) => { setOpen(false); props.onSelectInvocation(id); }}
@@ -67,6 +75,7 @@ function describeWorkflowOpenWorkLabel(input: Readonly<{
 
 /** Frozen Run document, presented by the same recursive owner as authoring. */
 export function WorkflowRunSteps(props: Readonly<{
+    invocationStatusContext?: WorkflowInvocationLifecycleContext;
     runId: string;
     machineId: string;
     serverId?: string | null;
@@ -74,6 +83,7 @@ export function WorkflowRunSteps(props: Readonly<{
     frozenChildren?: Readonly<Record<string, WorkflowDefinitionV1>>;
     workflowPath?: readonly string[];
     invocations: readonly WorkflowRunInvocationIndexV1[];
+    progressById?: ReadonlyMap<string, WorkflowProgressEnvelopeV1>;
     structure: ReadonlyMap<string, WorkflowInvocationStructureEntry>;
     selectedInvocationId: string | null;
     onSelectInvocation: (invocationId: string) => void;
@@ -122,6 +132,9 @@ export function WorkflowRunSteps(props: Readonly<{
             const only = occurrences.length === 1 ? occurrences[0]! : null;
             const onlyEntry = only === null ? undefined : props.structure.get(only.id);
             const onlyAttempt = only === null ? null : describeWorkflowInvocationAttempt(only.attempt);
+            const displayedOccurrence = selected ?? only;
+            const elapsed = formatWorkflowInvocationElapsedLabel(displayedOccurrence === null
+                ? undefined : props.progressById?.get(displayedOccurrence.id)?.timing);
             // The single occurrence opens from the step's footer, worded for what it opens (lab
             // run-A_steps "Open conversation", "Review"), instead of a bare "Attempt 1" line.
             const onlyNeedsYou = only !== null && WORKFLOW_ATTENTION_LIFECYCLES.includes(only.lifecycle);
@@ -141,10 +154,15 @@ export function WorkflowRunSteps(props: Readonly<{
             </HappierPressable>;
             return {
                 ...(block?.kind === 'workflow' ? { nestedDefinition: child ?? null } : {}),
-                state: selected || occurrences.length === 1 ? <WorkflowLifecycleStatus lifecycle={(selected ?? occurrences[0]!).lifecycle} blockKind={block?.kind ?? null} /> : null,
+                state: displayedOccurrence === null ? null : <>
+                    {elapsed === null ? null : <Text style={styles.provenance}>{elapsed}</Text>}
+                    <WorkflowLifecycleStatus lifecycle={displayedOccurrence.lifecycle} blockKind={block?.kind ?? null} context={props.invocationStatusContext} />
+                </>,
                 occurrenceSelector: occurrences.length > 1 ? <WorkflowRunOccurrenceSelector
                     invocations={occurrences} selectedInvocationId={props.selectedInvocationId}
                     onSelectInvocation={props.onSelectInvocation} label={label} blockKind={block?.kind ?? null} testIDPrefix={`${props.testIDPrefix}-${blockId}`}
+                    progressById={props.progressById}
+                    invocationStatusContext={props.invocationStatusContext}
                 /> : null,
                 footer: child === undefined ? openWork : <>
                     {openWork}

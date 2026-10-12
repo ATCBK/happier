@@ -25,13 +25,12 @@ import {
 
 import type { WorkflowBlockAction } from './WorkflowBlockActionsMenu';
 import { WorkflowBlockHeading, type WorkflowBlockNameEditor } from './WorkflowBlockHeading';
-import { formatWorkflowConditionLead, formatWorkflowConditionSentence, WorkflowConditionArmLines, WorkflowConditionEditor } from './WorkflowConditionEditor';
+import { formatWorkflowConditionSentence, resolveWorkflowConditionHeadline, WorkflowConditionEditor } from './WorkflowConditionEditor';
 import { WorkflowContainerBody, WorkflowContainerLane, WorkflowContainerOptionsControl } from './WorkflowContainerBody';
 import { failurePolicyLabel, WorkflowFailurePolicyControl, WorkflowMaxConcurrentControl } from './WorkflowGroupEditor';
 import { WORKFLOW_BLOCK_KIND_GLYPH } from '@/components/workflows/presentation/workflowBlockKindGlyph';
 import { WorkflowNumberField } from './WorkflowNumberField';
 import { formatWorkflowValueReference, WorkflowReferenceSentence, WorkflowValueReferenceEditor } from './WorkflowStepDataEditor';
-import { collectWorkflowConditionValueReferences } from '@happier-dev/protocol/workflows/workflowReferenceV1';
 import { workflowEditorStyles } from './workflowEditorStyles';
 import { resolveWorkflowUnnamedHeading, workflowBlockReferenceLabel } from '@/sync/domains/workflows/workflowBlockLabel';
 
@@ -348,6 +347,7 @@ export function WorkflowLoopEditor(props: Readonly<{
     const repetition = block.repetition;
     const stopWhen = repetition.kind === 'until' ? repetition.stopWhen : null;
     const sentence = formatWorkflowLoopSentence(props.draft, block);
+    const stopHeadline = stopWhen === null ? null : resolveWorkflowConditionHeadline(props.draft, stopWhen);
 
     return (
         <View testID={idPrefix} style={workflowEditorStyles.blockBody}>
@@ -361,11 +361,11 @@ export function WorkflowLoopEditor(props: Readonly<{
                 displayName={displayName}
                 meta={<Text testID={`${idPrefix}-sentence`} accessibilityLabel={sentence}>
                     <WorkflowReferenceSentence draft={props.draft}
-                        sentence={stopWhen === null ? sentence
-                            : t('workflows.page.inspector.repeatUntil', { condition: formatWorkflowConditionLead(props.draft, stopWhen) })}
+                        sentence={stopHeadline === null ? sentence
+                            : t('workflows.page.inspector.repeatUntil', { condition: stopHeadline.sentence })}
                         references={repetition.kind === 'count' ? [repetition.count]
                             : repetition.kind === 'items' ? [repetition.items]
-                                : stopWhen !== null ? collectWorkflowConditionValueReferences(stopWhen) : []} />
+                                : stopHeadline?.references ?? []} />
                 </Text>}
                 trailing={<WorkflowContainerOptionsControl
                     {...(repetition.kind === 'items' ? { label: failurePolicyLabel(repetition.failurePolicy) } : {})}
@@ -379,13 +379,13 @@ export function WorkflowLoopEditor(props: Readonly<{
                 testID={`${idPrefix}-label`}
                 actionsTestID={`${idPrefix}-actions`}
             />
-            {stopWhen === null ? null : <WorkflowConditionArmLines draft={props.draft} condition={stopWhen} testID={`${idPrefix}-summary-arms`} />}
 
             <WorkflowContainerBody>
                 {props.renderBody()}
                 {repetition.kind === 'evaluate' ? (
                     <WorkflowContainerLane label={t('workflows.editor.continuation')} labelTestID={`${idPrefix}-continuation-label`}>
-                        {props.renderContinuation?.()}
+                        {/* The deciding step sits on its lane's grid like a listed block: ordinal in the gutter. */}
+                        <View style={workflowEditorStyles.blockColumn}>{props.renderContinuation?.()}</View>
                     </WorkflowContainerLane>
                 ) : null}
             </WorkflowContainerBody>

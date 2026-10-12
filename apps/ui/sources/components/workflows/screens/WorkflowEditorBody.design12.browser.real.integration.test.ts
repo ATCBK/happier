@@ -17,7 +17,11 @@ beforeAll(async () => {
     if (!address || typeof address === 'string') throw new Error('Editor browser harness did not bind');
     origin = `http://127.0.0.1:${address.port}`;
 }, 600_000);
-afterAll(async () => { if (server.listening) await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); });
+afterAll(async () => {
+    try {
+        if (server.listening) await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    } finally { script = ''; }
+});
 
 type Harness = { editorHarness: { mount: (phone: boolean, theme: 'light' | 'dark', state: 'wait' | 'lost-copy') => void } };
 

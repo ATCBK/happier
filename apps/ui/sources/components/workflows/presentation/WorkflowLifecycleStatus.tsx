@@ -10,11 +10,13 @@ import {
     describeWorkflowInvocationLifecycle,
     describeWorkflowRunState,
     type WorkflowLifecycleMarker,
+    type WorkflowInvocationLifecycleContext,
 } from './workflowLifecyclePresentation';
 
 import type {
     WorkflowInvocationLifecycleV1,
     WorkflowRunStateV1,
+    WorkflowRunSummaryV1,
 } from '@happier-dev/protocol/workflows/workflowProgressV1';
 
 /**
@@ -42,10 +44,13 @@ function WorkflowStatusMarker(props: Readonly<{
     );
 }
 
+const PLAIN_STATUS_SHRINKS = { flexShrink: 1, minWidth: 0 } as const;
+
 export function WorkflowLifecycleStatus(props: Readonly<{
     lifecycle: WorkflowInvocationLifecycleV1;
     /** The authored block's kind, when known, so a held Wait-for-you step reads its own word. */
     blockKind?: string | null;
+    context?: WorkflowInvocationLifecycleContext;
     chrome?: 'pill' | 'plain';
     /**
      * Only the marker, for a place where healthy state is quiet (a finished Map node). The word stays
@@ -56,7 +61,7 @@ export function WorkflowLifecycleStatus(props: Readonly<{
     accessibilityLabel?: string;
 }>): React.ReactElement {
     const { theme } = useUnistyles();
-    const presentation = describeWorkflowInvocationLifecycle(props.lifecycle, { blockKind: props.blockKind });
+    const presentation = describeWorkflowInvocationLifecycle(props.lifecycle, { ...props.context, blockKind: props.blockKind });
     if (props.markerOnly === true) {
         return (
             <View
@@ -84,6 +89,9 @@ export function WorkflowLifecycleStatus(props: Readonly<{
             label={presentation.label}
             labelVariant="phrase"
             chrome={props.chrome ?? 'pill'}
+            // A plain status beside a title can be a sentence ("Stops when ubuntu-01 reconnects"): it wraps
+            // inside the room its slot gives it rather than running past the card's edge (DESIGN-17 live).
+            {...((props.chrome ?? 'pill') === 'plain' ? { labelNumberOfLines: 2, style: PLAIN_STATUS_SHRINKS } : {})}
             leading={(
                 <WorkflowStatusMarker
                     marker={presentation.marker}
@@ -98,6 +106,7 @@ export function WorkflowLifecycleStatus(props: Readonly<{
 
 export function WorkflowRunStateStatus(props: Readonly<{
     state: WorkflowRunStateV1;
+    workflowCustodyState?: WorkflowRunSummaryV1['workflowCustodyState'];
     /** A composed terminal outcome label, when real child coverage warrants one. */
     label?: string;
     chrome?: 'pill' | 'plain';
@@ -105,7 +114,7 @@ export function WorkflowRunStateStatus(props: Readonly<{
     accessibilityLabel?: string;
 }>): React.ReactElement {
     const { theme } = useUnistyles();
-    const presentation = describeWorkflowRunState(props.state);
+    const presentation = describeWorkflowRunState(props.state, { workflowCustodyState: props.workflowCustodyState });
     return (
         <StatusPill
             {...(props.testID === undefined ? {} : { testID: props.testID })}
@@ -135,10 +144,11 @@ export function WorkflowRunStateStatus(props: Readonly<{
 export function WorkflowRunStateMark(props: Readonly<{
     state: WorkflowRunStateV1;
     inAttentionWindow?: boolean;
+    context?: Parameters<typeof describeWorkflowRunState>[1];
     testID?: string;
 }>): React.ReactElement {
     const { theme } = useUnistyles();
-    const presentation = describeWorkflowRunState(props.state, { inAttentionWindow: props.inAttentionWindow });
+    const presentation = describeWorkflowRunState(props.state, { ...props.context, inAttentionWindow: props.inAttentionWindow });
     return (
         <View
             {...(props.testID === undefined ? {} : { testID: props.testID })}

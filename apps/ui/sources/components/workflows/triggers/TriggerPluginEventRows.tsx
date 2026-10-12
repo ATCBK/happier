@@ -1,5 +1,6 @@
 import * as React from 'react';
-import { AutomationEventTestResultV1Schema, type AutomationEventTestResultV1 } from '@happier-dev/protocol';
+import { AutomationEventTestResultV1Schema } from '@happier-dev/protocol/automations/automationEventTestV1';
+import { type AutomationEventTestResultV1 } from '@happier-dev/protocol';
 import type { AutomationRunPluginEventTriggerEvidenceV1 } from '@happier-dev/protocol/automations/automationRunExecutionRecipeV1';
 
 import { PluginEventAutomationEditor } from '@/components/automations/editor/PluginEventAutomationEditor';

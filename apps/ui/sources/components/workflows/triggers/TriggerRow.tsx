@@ -13,7 +13,7 @@ import { useSessionListRuntimeDeadlineNowMs } from '@/hooks/session/sessionListR
 import { formatRelativeTimeShort, readRelativeTimeShortRefreshAtMs } from '@/utils/time/formatShortRelativeTime';
 import { formatScheduledRunQualifier, formatTriggerLastOutcome, readNextScheduledRunRefreshAtMs, type ScheduledRunQualifierTime } from './formatTriggerSummary';
 import type { WorkStatusTone } from '@/components/work/status/resolveWorkStatusTone';
-import { HAPPIER_COLLECTION_LIST_METRICS } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_COLLECTION_LIST_METRICS, HappierTriggerRow, type HappierTriggerRowHost } from '@happier-dev/plugin-ui/presentation';
 
 /**
  * One trigger, as every trigger list shows it (07 S16 owner-approved presentation, item 4; I4-W
@@ -54,18 +54,41 @@ export type TriggerRowProps = Readonly<{
     presentation?: 'sheet' | 'column';
     /** The event's glyph; a column row leads with it like its sibling rows' marks. */
     glyph?: IconName;
-    /** Secondary controls for rows that cannot offer the editor (retained legacy records). */
+    /** The row's own line under its words (History · Run now); the switch then closes that line. */
     actions?: React.ReactNode;
 }>;
 
 const stylesheet = StyleSheet.create((theme) => ({
     off: { color: theme.colors.text.tertiary },
+    // The habit's own line (History · Run now · switch) belongs to the row above it: it tucks into that
+    // row's bottom padding so the quiet line and its actions read as one block (lab `b-habit T`),
+    // while the switch keeps its full touch target.
     actions: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: theme.margins.xs,
+        marginTop: -theme.margins.md,
         paddingHorizontal: HAPPIER_COLLECTION_LIST_METRICS.rowInset, paddingBottom: theme.margins.xs },
 }));
 
+const triggerRowHost: HappierTriggerRowHost = {
+    Toggle: Switch,
+    Text: ({ tone, ...props }) => <Text {...props} style={workStatusWordStyle(tone)} />,
+    actionsStyle: stylesheet.actions,
+    Row: (props) => props.presentation === 'column' && props.onPress ? (
+        <CollectionNavigationRow testID={props.testID} title={props.title}
+            {...(props.subtitleText ? { subtitle: props.subtitleText } : {})}
+            {...(props.attention ? { subtitleLeading: <View style={collectionListStyles.troubleDot} /> } : {})}
+            icon={props.icon} selected={false} rightElement={props.toggle} onPress={props.onPress} />
+    ) : (
+        <Item testID={props.testID} title={props.title} accessibilityLabel={props.accessibilityLabel}
+            icon={props.icon} {...(props.multiline ? { titleLines: 0, subtitleLines: 0 } : {})}
+            {...(props.subtitle ? { subtitle: props.subtitle } : {})}
+            {...(props.attention ? { subtitleStyle: workStatusWordStyle('attention') }
+                : props.enabled ? {} : { titleStyle: stylesheet.off, subtitleStyle: stylesheet.off })}
+            {...(props.onPress ? { onPress: props.onPress } : { mode: 'info' as const })}
+            showChevron={false} showDivider={false} rightElementOutsidePressable rightElement={props.toggle} />
+    ),
+};
+
 export const TriggerRow = React.memo(function TriggerRow(props: TriggerRowProps) {
-    const styles = stylesheet;
     const relativeAge = props.outcome?.relativeAge;
     const qualifierTime = props.attention ? undefined : props.qualifierTime;
     const readNextRefresh = React.useCallback((nowMs: number) => {
@@ -84,53 +107,11 @@ export const TriggerRow = React.memo(function TriggerRow(props: TriggerRowProps)
     const outcome = props.outcome === undefined || props.outcome === null ? null : relativeAge
         ? { ...props.outcome, text: formatTriggerLastOutcome(formatRelativeTimeShort(relativeAge.atMs, nowMs), relativeAge.state) }
         : props.outcome;
-    const subtitle = outcome === null
-        ? lead
-        : (
-            <Text style={workStatusWordStyle('neutral')}>
-                {lead ? `${lead} · ` : ''}
-                <Text testID={`${props.testID}-outcome`} style={workStatusWordStyle(outcome.tone)}>{outcome.text}</Text>
-            </Text>
-        );
-    const toggle = (
-        <Switch
-            testID={`${props.testID}-switch`}
-            value={props.enabled}
-            disabled={props.toggleDisabled}
-            accessibilityLabel={t(props.enabled ? 'workflows.triggers.row.turnOff' : 'workflows.triggers.row.turnOn', { name: props.title })}
-            onValueChange={props.onToggle}
-        />
-    );
-    if (props.presentation === 'column' && props.onPress) {
-        const line = [lead, outcome?.text].filter(Boolean).join(' · ');
-        return (
-            <CollectionNavigationRow
-                testID={props.testID}
-                title={props.title}
-                {...(line ? { subtitle: line } : {})}
-                {...(props.attention ? { subtitleLeading: <View style={collectionListStyles.troubleDot} /> } : {})}
-                {...(props.glyph ? { icon: <Icon name={props.glyph} /> } : {})}
-                selected={false}
-                rightElement={toggle}
-                onPress={props.onPress}
-            />
-        );
-    }
-    return (<>
-        <Item
-            testID={props.testID}
-            title={props.title}
-            {...(props.qualifierAccessibilityLabel ? { accessibilityLabel: [props.title, lead, props.qualifierAccessibilityLabel, outcome?.text].filter(Boolean).join('. ') } : {})}
-            {...(props.glyph ? { icon: <Icon name={props.glyph} /> } : {})}
-            {...(props.multiline ? { titleLines: 0, subtitleLines: 0 } : {})}
-            {...(subtitle ? { subtitle } : {})}
-            {...(props.attention ? { subtitleStyle: workStatusWordStyle('attention') }
-                : props.enabled ? {} : { titleStyle: styles.off, subtitleStyle: styles.off })}
-            {...(props.onPress ? { onPress: props.onPress } : { mode: 'info' as const })}
-            showChevron={false}
-            rightElementOutsidePressable
-            rightElement={toggle}
-        />
-        {props.actions ? <View testID={`${props.testID}-actions`} style={styles.actions}>{props.actions}</View> : null}
-    </>);
+    return <HappierTriggerRow testID={props.testID} title={props.title} qualifier={lead}
+        qualifierAccessibilityLabel={props.qualifierAccessibilityLabel} outcome={outcome}
+        enabled={props.enabled} attention={Boolean(props.attention)} toggleDisabled={props.toggleDisabled}
+        toggleLabel={t(props.enabled ? 'workflows.triggers.row.turnOff' : 'workflows.triggers.row.turnOn', { name: props.title })}
+        onToggle={props.onToggle} onPress={props.onPress} presentation={props.presentation} multiline={props.multiline}
+        icon={props.glyph ? <Icon name={props.glyph} /> : undefined}
+        actions={props.presentation === 'column' && props.onPress ? undefined : props.actions} host={triggerRowHost} />;
 });

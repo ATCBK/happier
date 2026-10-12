@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { WorkflowDefinitionV1 } from '@happier-dev/protocol/workflows/workflowV1';
 import type { SessionWorkflowRunSnapshotV1 } from '@happier-dev/protocol';
 import { t } from '@/text';
+import { countWorkflowStepsV1 } from '@happier-dev/protocol/workflows/workflowDefinitionEditV1';
 
 import {
   indexWorkflowFlowRunStates,
@@ -39,6 +40,18 @@ function definition(blocks: WorkflowDefinitionV1['blocks']): WorkflowDefinitionV
 }
 
 describe('definition flow projection', () => {
+  it('uses five authored steps for a release with three lanes and a repeated issue check', () => {
+    const wait = (id: string) => ({ kind: 'wait' as const, id, document: { text: id, references: [], attachments: [] } });
+    const source = definition([wait('scope'), { kind: 'parallel', id: 'lanes', failurePolicy: 'collect_outcomes', branches: [
+      { id: 'changelog', blocks: [wait('draft')] },
+      { id: 'issues', blocks: [{ kind: 'loop', id: 'each-issue', repetition: { kind: 'items',
+        items: { kind: 'literal', value: ['#1480', '#1482', '#1487'] }, execution: 'parallel', failurePolicy: 'collect_outcomes' }, body: [wait('check')] }] },
+      { id: 'tests', blocks: [wait('test')] },
+    ] }, wait('publish')]);
+    const projection = projectWorkflowFlow(source);
+    expect(countWorkflowStepsV1(source.blocks)).toBe(5);
+    expect(['scope', 'draft', 'check', 'test', 'publish'].map(id => projection.nodesById.get(id)?.stepOrdinal)).toEqual(['1', '2', '3', '4', '5']);
+  });
   it('keeps authored names authoritative over presentation labels for leaves and containers', () => {
     const projection = projectWorkflowFlow(definition([
       { ...step('inspect'), name: 'Inspect the change' },

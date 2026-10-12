@@ -1,5 +1,4 @@
 import * as React from 'react';
-import { StyleSheet } from 'react-native';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -15,6 +14,7 @@ import { createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflow
 import { configureSessionDraftRepository, resetSessionDraftRepositoryForTests, writeNewSessionDraft } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
 import { WorkflowsRunsRoute } from '@/app/(app)/workflows/runs/index';
 import { WorkflowsColumn } from './WorkflowsColumn';
+import { AppShellColumnContext } from '@/components/navigation/shell/appRail/appShellColumnContext';
 import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { UniversalSearchRuntimeProvider } from '@/components/appShell/search/UniversalSearchRuntimeContext';
 import { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
@@ -131,6 +131,17 @@ afterEach(async () => {
 });
 
 describe('WorkflowsColumn', () => {
+    it('uses the shared Home reachability line while retaining definitions, and clears it on reconnect', async () => {
+        answerLists();
+        const screen = await renderScreen(<WorkflowsColumn />, { wrapper: TestAuth });
+        await act(async () => { storage.setState({ socketStatus: 'error', endpointStatus: 'offline', endpointReason: null }); });
+        expect(screen.findHostByTestId('home-unreachable')).not.toBeNull();
+        expect(screen.findHostByTestId('home-unreachable-retry')).not.toBeNull();
+        expect(screen.findHostByTestId('workflows-column:offline')).toBeNull();
+        expect(screen.findHostByTestId('workflows-column:builtin:builtin:plan-with-a-panel')).not.toBeNull();
+        await act(async () => { storage.setState({ socketStatus: 'connected', endpointStatus: 'online' }); });
+        expect(screen.findHostByTestId('home-unreachable')).toBeNull();
+    });
     it('selects only the exact open definition and clears that selection on the library home', async () => {
         answerLists();
         const { DestinationInstanceHost } = await import('@/components/appShell/workspace/DestinationInstanceHost');
@@ -175,23 +186,51 @@ describe('WorkflowsColumn', () => {
         }
         expect(screen.findHostByTestId('workflows-column:library:readable')).not.toBeNull();
     });
-    it('makes a failed-library retry visibly keyboard focusable without changing its link role', async () => {
+    it('keeps the Library index alive from the shared run summaries: needs you, running, then the last run\'s age', async () => {
+        answerLists();
+        const answer = executeMock.getMockImplementation()!;
+        const definition = (definitionId: string, title: string) => ({ kind: 'workflow-definition.v1', definitionId, metadata: { title },
+            revision: { headerVersion: 1, bodyVersion: 1 }, contentStatus: 'available', stepCount: 2, ownerAccountId: 'account-a',
+            access: 'owner', triggers: [], nextRunAt: null });
+        const fiveDaysAgo = new Date(Date.now() - 5 * 86_400_000).toISOString();
+        const lastRun = (runId: string, state: string) => ({ runId, state, createdAt: fiveDaysAgo, finishedAt: null });
+        executeMock.mockImplementation((actionId: string, input: Record<string, unknown>) => {
+            if (actionId === 'workflow.definition.list') return Promise.resolve({ ok: true, result: { definitions: [
+                definition('waits', 'Prepare the release'), definition('works', 'Review each file'),
+                definition('rests', 'Fix a failing test'), definition('never', 'Triage new issues'),
+            ] } });
+            if (actionId === 'workflow.run.summaries') return Promise.resolve({ ok: true, result: { remainingSourceArtifactIds: [], summaries: [
+                { sourceArtifactId: 'waits', lastRun: lastRun('run-w', 'running'), recent: [{ runId: 'run-w', state: 'running' }], needsYouCount: 1, needsYouRunId: 'run-w' },
+                { sourceArtifactId: 'works', lastRun: lastRun('run-r', 'running'), recent: [{ runId: 'run-r', state: 'running' }], needsYouCount: 0, needsYouRunId: null },
+                { sourceArtifactId: 'rests', lastRun: lastRun('run-c', 'succeeded'), recent: [{ runId: 'run-c', state: 'succeeded' }], needsYouCount: 0, needsYouRunId: null },
+                { sourceArtifactId: 'never', lastRun: null, recent: [], needsYouCount: 0, needsYouRunId: null },
+            ] } });
+            return answer(actionId, input);
+        });
+        const screen = await renderScreen(<WorkflowsColumn />, { wrapper: TestAuth });
+        const row = (id: string) => screen.findAll(node => node.props.testID === `workflows-column:library:${id}` && typeof node.props.href === 'string')[0]!.props;
+        await vi.waitFor(async () => {
+            await act(async () => { await new Promise<void>(resolve => setTimeout(resolve, 0)); });
+            expect(row('rests').detail).toBeDefined();
+        });
+        // Needs you is the one amber mark, and it is spoken; a working run says so; a rested one shows how long ago.
+        expect(row('waits').accessibilityLabel).toContain('workflows.destination.sections.needsYou');
+        expect(row('waits').titleAccessory).toBeTruthy();
+        expect(row('works').detail).toBe('workflows.destination.sections.running');
+        expect(row('works').titleAccessory).toBeFalsy();
+        expect(row('rests').detail).toContain('time.daysAgoShort');
+        expect(row('never').detail).toBeUndefined();
+    });
+    it('states a failed library in the one in-list state line, whose Try again retries the read', async () => {
         answerLists();
         const answer = executeMock.getMockImplementation()!;
         executeMock.mockImplementation((actionId: string, input: Record<string, unknown>) => actionId === 'workflow.definition.list'
             ? Promise.resolve({ ok: false, error: 'unavailable', errorCode: 'unavailable' }) : answer(actionId, input));
         const screen = await renderScreen(<WorkflowsColumn />, { wrapper: TestAuth });
         await act(async () => { await Promise.resolve(); await Promise.resolve(); });
-        const target = () => screen.tree.findHostByTestId('workflows-column:library:failed:retry')!;
-        const flattened = () => StyleSheet.flatten(typeof target().props.style === 'function'
-            ? target().props.style({ pressed: false }) : target().props.style);
-        expect(target().props.role ?? target().props.accessibilityRole).toBe('link');
-        const restingOutline = flattened()?.outlineColor;
-        await act(async () => { target().props.onFocus({ target: { matches: () => true } }); });
-        expect(flattened()?.outlineStyle).toBe('solid');
-        expect(flattened()?.outlineWidth).toBeGreaterThan(0);
-        expect(flattened()?.outlineColor).toBeTruthy();
-        expect(flattened()?.outlineColor).not.toBe(restingOutline);
+        const target = screen.tree.findHostByTestId('workflows-column:library:failed:retry')!;
+        // The shared state line's action: a button with the canonical keyboard focus owner (HappierPressable).
+        expect(target.props.role ?? target.props.accessibilityRole).toBe('button');
         await screen.pressByTestIdAsync('workflows-column:library:failed:retry');
         expect(executeMock.mock.calls.filter(([actionId]) => actionId === 'workflow.definition.list').length).toBeGreaterThan(1);
     });
@@ -212,7 +251,10 @@ describe('WorkflowsColumn', () => {
     });
     it('opens the Runs deep link as the same list rather than a separate History collection', async () => {
         answerLists();
+        // Without a shell column (a phone), the destination's column-as-page opens on Runs.
+        routeState.pathname = '/workflows/runs';
         const screen = await renderScreen(<WorkflowsRunsRoute />, { wrapper: TestAuth });
+        routeState.pathname = '/workflows';
         await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 
         expect(screen.tree.root.findAll((node) => node.props?.testID === 'sessions-list-keyboard-frame').length).toBeGreaterThan(0);
@@ -221,6 +263,21 @@ describe('WorkflowsColumn', () => {
         expect(rows.length).toBeGreaterThan(0);
         await act(async () => { rows[0]!.props.onPress(); });
         expect(routerPush).toHaveBeenCalledWith('/workflows/runs/run-waiting');
+    });
+
+    it('keeps the library in main beside a column that already lists Runs (DESIGN-16 D9)', async () => {
+        answerLists();
+        routeState.pathname = '/workflows/runs';
+        try {
+            const screen = await renderScreen(<AppShellColumnContext.Provider value={{ present: true, columnVisible: true }}>
+                <WorkflowsRunsRoute />
+            </AppShellColumnContext.Provider>, { wrapper: TestAuth });
+            await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+            // The column is the one Runs list; main never repeats it.
+            expect(screen.findAllHostsByTestId('sessions-list-keyboard-frame')).toHaveLength(0);
+        } finally {
+            routeState.pathname = '/workflows';
+        }
     });
 
     it('reveals Account triggers from an old link even while the retained column shows Runs', async () => {
@@ -252,6 +309,10 @@ describe('WorkflowsColumn', () => {
         const runRows = screen.tree.root.findAll((node) => node.props?.testID === 'workflow-run-row:run-waiting' && typeof node.props.onPress === 'function');
         expect(runRows.length).toBeGreaterThan(0);
         expect(screen.findByTestId(`session-draft-row:new-session:${draftId}`)).toBeNull();
+        const filterTrigger = screen.findByTestId('session-list-filter-trigger');
+        expect(filterTrigger?.props.accessibilityLabel).toContain('sessionsList.filtersShowRuns');
+        expect(filterTrigger?.props.accessibilityLabel).not.toContain('sessionsList.filtersMyWork');
+        expect(screen.findByTestId('session-list-filter-summary-reset')).toBeTruthy();
         await act(async () => { runRows[0]!.props.onPress(); });
         expect(routerPush).toHaveBeenCalledWith('/workflows/runs/run-waiting');
 

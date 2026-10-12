@@ -88,30 +88,6 @@ describe('real workspace workflow library row actions (DESIGN12)', () => {
             await expect.poll(async () => { const rect = await geometry(); return Math.abs(rect.row.x + 1 - rect.title); }).toBeLessThanOrEqual(1);
         } finally { await browser.close(); }
     }, 180_000);
-    it.each(['light', 'dark'] as const)('aligns narrow built-in actions with their title text in %s', async (theme) => {
-        const browser = await chromium.launch({ executablePath: resolveChromiumExecutable() });
-        try {
-            const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
-            await page.goto(`${origin}/workflows`);
-            await page.addScriptTag({ url: `${origin}/bundle.js` });
-            await page.evaluate(theme => (window as unknown as Harness).libraryHarness.mount(true, theme), theme);
-            const counts = page.locator('[data-testid^="workflow-builtins:"][data-testid$=":count"]');
-            await expect.poll(() => counts.count()).toBe(4);
-            const geometry = async () => counts.evaluateAll(nodes => nodes.map(count => {
-                const primary = count.closest('[data-testid]')!.parentElement!.closest('[data-testid]')!;
-                const text = primary.querySelector('[dir="auto"]');
-                if (!text) throw new Error('Built-in title missing');
-                const range = document.createRange();
-                range.selectNodeContents(text);
-                const action = primary.parentElement!.querySelector('[data-testid$=":session"], [data-testid$=":run"]');
-                if (!action) throw new Error('Built-in action missing');
-                return { title: range.getBoundingClientRect().left, action: action.getBoundingClientRect().left };
-            }));
-            await expect.poll(async () => (await geometry()).map(rect => Math.abs(rect.action - rect.title)))
-                .toEqual([0, 0, 0, 0]);
-            console.log('narrow built-in leading edges', theme, await geometry());
-        } finally { await browser.close(); }
-    }, 180_000);
     it.each(['pending', 'receipt', 'pending after runtime reactivation'] as const)('retires deletion %s without stealing focus when a kept Library changes Account', async (phase) => {
         const browser = await chromium.launch({ executablePath: resolveChromiumExecutable() });
         try {
@@ -167,7 +143,7 @@ describe('real workspace workflow library row actions (DESIGN12)', () => {
             await expect.poll(() => page.getByTestId('workflows-home:new').evaluate(node => node.contains(document.activeElement))).toBe(true);
         } finally { await browser.close(); }
     }, 180_000);
-    it('recomposes Needs you beneath the full-width phone row', async () => {
+    it('keeps Needs you on the phone row\'s own line, beside its one overflow column', async () => {
         const browser = await chromium.launch({ executablePath: resolveChromiumExecutable() });
         try {
             const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
@@ -181,7 +157,8 @@ describe('real workspace workflow library row actions (DESIGN12)', () => {
             await expect.poll(async () => (await row.boundingBox())!.width).toBeGreaterThan(250);
             const primaryRect = await row.boundingBox();
             const accessoryRect = await needsYou.boundingBox();
-            expect(accessoryRect!.y).toBeGreaterThanOrEqual(primaryRect!.y + primaryRect!.height);
+            // Like the Sessions list on a phone (lab `convo-N6b`): the state word stays inside the row, nothing wraps beneath it.
+            expect(accessoryRect!.y + accessoryRect!.height).toBeLessThanOrEqual(primaryRect!.y + primaryRect!.height);
             const plainRow = await page.getByTestId('workflows-home:row:10000000-0000-4000-8000-000000000002').boundingBox();
             const plainOverflow = await page.getByRole('button', { name: 'Workflow options', exact: true }).nth(1).boundingBox();
             const overflowCenter = plainOverflow!.y + plainOverflow!.height / 2;
@@ -221,33 +198,6 @@ describe('real workspace workflow library row actions (DESIGN12)', () => {
             await expect.poll(() => row.getAttribute('aria-busy')).not.toBe('true');
             await expect.poll(() => row.evaluate(node => node.contains(document.activeElement))).toBe(true);
             expect(await page.getByTestId('workflows-home:deleted').count()).toBe(0);
-        } finally { await browser.close(); }
-    }, 180_000);
-    it('keeps built-in counts right-aligned and actions leading-aligned in their desktop columns', async () => {
-        const browser = await chromium.launch({ executablePath: resolveChromiumExecutable() });
-        try {
-            const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
-            await page.goto(`${origin}/workflows`);
-            await page.addScriptTag({ url: `${origin}/bundle.js` });
-            await page.evaluate(() => (window as unknown as Harness).libraryHarness.mount(false, 'light'));
-            const counts = page.locator('[data-testid^="workflow-builtins:"][data-testid$=":count"]');
-            await expect.poll(() => counts.count()).toBe(4);
-            await page.evaluate(() => document.fonts.ready);
-            const countRects = await counts.evaluateAll(nodes => nodes.map(node => {
-                const range = document.createRange();
-                range.selectNodeContents(node);
-                const rect = range.getBoundingClientRect();
-                const primary = node.parentElement!.closest('[data-testid]')!;
-                const action = primary.parentElement!.querySelector('[data-testid$=":session"], [data-testid$=":run"]');
-                if (!action) throw new Error('Built-in action missing');
-                return { right: rect.right, width: rect.width, actionLeft: action.getBoundingClientRect().left };
-            }));
-            expect(countRects.every(rect => rect.width > 0)).toBe(true);
-            const rightEdges = countRects.map(rect => rect.right);
-            console.log('builtin count geometry', countRects);
-            expect(Math.max(...rightEdges) - Math.min(...rightEdges)).toBeLessThanOrEqual(1);
-            const actionEdges = countRects.map(rect => rect.actionLeft);
-            expect(Math.max(...actionEdges) - Math.min(...actionEdges)).toBeLessThanOrEqual(1);
         } finally { await browser.close(); }
     }, 180_000);
     it.each([

@@ -101,3 +101,32 @@ describe('attention partial count truth', () => {
         expect(section?.props.accessibilityLabel).toBe('workflows.a11y.needsYou:{"count":2}');
     });
 });
+
+describe('Needs-you index rows (DESIGN-15 R6)', () => {
+    it('gives a For-each\'s held items one row, opening item 1 first, instead of one identical sentence per item', async () => {
+        const item = (id: string, index: number) => [id, {
+            invocationId: id, nodeId: 'check', blockId: 'check', isFrame: false, coverageKind: 'executable',
+            occurrence: [{ kind: 'item', blockId: 'issues', index }],
+        }] as const;
+        const onSelectInvocation = vi.fn();
+        const screen = await renderContent({
+            invocations: [
+                createWorkflowInvocationIndexFixture({ id: 'inv-item-3', sequence: '1', lifecycle: 'waiting_for_review' }),
+                createWorkflowInvocationIndexFixture({ id: 'inv-item-2', sequence: '2', lifecycle: 'waiting_for_review' }),
+                createWorkflowInvocationIndexFixture({ id: 'inv-item-1', sequence: '3', lifecycle: 'waiting_for_review' }),
+            ],
+            invocationStructure: new Map([item('inv-item-3', 2), item('inv-item-2', 1), item('inv-item-1', 0)]) as never,
+            onSelectInvocation,
+        } as never);
+
+        // All three still count as needing the person...
+        expect(screen.findByTestId('workflow-run-needs-you')?.props.accessibilityLabel).toBe('workflows.a11y.needsYou:{"count":3}');
+        // ...in one row whose Review opens the first item.
+        expect(screen.findByTestId('workflow-run-needs-you-inv-item-1')).not.toBeNull();
+        expect(screen.findByTestId('workflow-run-needs-you-inv-item-2')).toBeNull();
+        expect(screen.findByTestId('workflow-run-needs-you-inv-item-3')).toBeNull();
+        expect(screen.getTextContent()).toContain('workflows.run.attentionItemCount:{"count":3}');
+        await screen.pressByTestIdAsync('workflow-run-needs-you-inv-item-1');
+        expect(onSelectInvocation).toHaveBeenCalledWith('inv-item-1');
+    });
+});

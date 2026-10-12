@@ -25,6 +25,7 @@ import {
 } from '@/sync/domains/workflows/workflowTriggerActions';
 import { sync } from '@/sync/sync';
 import { t } from '@/text';
+import { fireAndForget } from '@/utils/system/fireAndForget';
 
 import { projectAccountTriggerRows, type AccountTriggerRow } from './accountTriggerRows';
 import { TriggerPopover } from './TriggerPopover';
@@ -129,6 +130,10 @@ function AccountTriggersContent(props: Readonly<{ first?: boolean }>) {
         }
     };
     if (rows.length === 0 && status === 'ready') return null;
+    // Between other sections, a section whose existence is not yet known draws nothing: a "Triggers ·
+    // Loading…" inserted after the column drew, then removed for an Account with none, pushed the
+    // sections under it twice (DESIGN-14 D12). As the page's only section it keeps the loading line.
+    if (rows.length === 0 && status === 'loading' && props.first !== true) return null;
     return (
         <>
             <CollectionListGroupLabel
@@ -267,6 +272,7 @@ function AccountTriggerPopover(props: Readonly<{
             submitLabel={needsReview ? t('common.save') : undefined}
             workflowOptions={props.workflowOptions}
             machineId={project?.machineId ?? null}
+            directory={project?.directory ?? null}
             {...(triggerId !== null && form.when.kind === 'pluginEvent' ? { eventEdit: { automationId: set.automationId, triggerId } } : {})}
             hostComplete={project !== null}
             setRows={<>
@@ -300,8 +306,8 @@ function AccountTriggerPopover(props: Readonly<{
                 });
                 props.onWritten();
             }}
-            onDelete={triggerId === null ? undefined : async () => {
-                await removeWorkflowTrigger({ automationId: set.automationId, triggerId });
+            onDelete={async () => {
+                await removeWorkflowTrigger({ automationId: set.automationId, ...(triggerId === null ? {} : { triggerId }) });
                 props.onWritten();
             }}
         />
@@ -328,6 +334,7 @@ export function NewAccountTriggerPopover(props: Readonly<{
             initial={null}
             workflowOptions={thenOptions.workflowOptions}
             machineId={project?.machineId ?? null}
+            directory={project?.directory ?? null}
             hostComplete={project !== null}
             setRows={(
                 <TriggerRunsOnRow
@@ -346,7 +353,7 @@ export function NewAccountTriggerPopover(props: Readonly<{
                     executionTarget: buildTriggerExecutionTarget(value.then),
                     inputs: write.inputs,
                 });
-                await sync.refreshAutomations().catch(() => undefined);
+                fireAndForget(sync.refreshAutomations());
             }}
         />
     );

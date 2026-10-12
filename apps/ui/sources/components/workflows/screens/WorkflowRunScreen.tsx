@@ -1,8 +1,9 @@
 import * as React from 'react';
 import { useManagedMachineInventory } from '@/components/settings/machines/managed/useManagedMachineInventory';
 import { resolveWorkStatusTone } from '@/components/work/status/resolveWorkStatusTone';
-import { View } from 'react-native';
-import { useDestinationParams, useDestinationRouter, useDestinationVisibility } from '@/components/appShell/workspace/DestinationInstanceHost';
+import { View, type StyleProp, type ViewStyle } from 'react-native';
+import { useDestinationFocus, useDestinationInstanceKey, useDestinationParams, useDestinationRouter, useDestinationVisibility } from '@/components/appShell/workspace/DestinationInstanceHost';
+import { NavigationBackChromeProvider, useNavigationBackControl } from '@/components/ui/layout/NavigationBackChrome';
 import { Stack } from '@/components/appShell/workspace/destinationRoute';
 import { DefaultBackButton } from '@/components/navigation/Header';
 import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
@@ -18,11 +19,13 @@ import type {
     WorkflowReplayAgentOverrideV1,
 } from '@happier-dev/protocol';
 import { ArtifactAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { WorkflowResultContractSchema } from '@happier-dev/protocol/workflows/workflowV1';
 import { parseWorkflowDefinitionRefV1, resolveBuiltinWorkflowDefinitionV1 } from '@happier-dev/protocol/workflows';
 import { readWorkflowPlanResult } from '@/sync/domains/workflows/workflowPlanReview';
 
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { Text } from '@/components/ui/text/Text';
 import { WorkflowProjectTargetControl, formatWorkflowWhereSummary } from '../editor/WorkflowProjectTargetControl';
 import { createExecutionRunStartContentChip } from '@/components/sessions/runs/launcher/executionRunStartChips';
@@ -40,6 +43,7 @@ import {
     workflowRunRowFromSummary,
 } from '@/sync/store/domains/workflowRuns';
 import { workflowRunDetailActions } from '@/sync/domains/workflows/workflowRunDetailActions';
+import { WorkflowActionError } from '@/sync/domains/workflows/workflowActionError';
 import { publishOpenedWorkflowRunDetail, refreshWorkflowRunById } from '@/sync/engine/workflows/refreshWorkflowRun';
 import { subscribeVisibleWorkflowRunListInvalidation } from '@/sync/domains/workflows/workflowRunListInvalidation';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
@@ -59,7 +63,7 @@ import {
     requiresUncertainPriorEffectsAcknowledgement,
     type WorkflowRecoveryContinuation,
 } from '../run/workflowRunDetailPresentation';
-import { isTerminalWorkflowRunState } from '../presentation/workflowLifecyclePresentation';
+import { isTerminalWorkflowRunState, isWorkflowRunStopPending } from '../presentation/workflowLifecyclePresentation';
 import { projectUnconfirmedWorkflowWaitReview, projectWorkflowInvocationStructure } from '../run/workflowInvocationStructure';
 import { SETTINGS_ROUTES } from '@/components/settings/catalog/routes';
 import { hasWorkflowInvocationRequest } from '../run/workflowPermissionRequests';
@@ -72,6 +76,7 @@ import { useWorkflowAnnouncements } from '../accessibility/useWorkflowAnnounceme
 import type { WorkflowAnnouncementTerminalKind } from '../accessibility/workflowAnnouncementSelection';
 import {
     WORKFLOW_ATTENTION_LIFECYCLES,
+    isWorkflowAttentionInvocation,
     summarizeWorkflowInvocationCoverage,
 } from '@/components/workflows/presentation/workflowLifecyclePresentation';
 import { useWorkflowRunNowController } from '../run/useWorkflowRunNowController';
@@ -90,7 +95,10 @@ import {
 import { readWorkflowInvocationId, readWorkflowRunId } from '@/sync/domains/workflows/workflowRunRoute';
 import { useOpenProject } from '@/components/projects/useOpenProject';
 import { setClipboardStringSafe } from '@/utils/ui/clipboard';
-import { getMachineDisplayName, isMachineOnline } from '@/utils/sessions/machineUtils';
+import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
+import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
+import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
 import { normalizeResultPreview } from '../presentation/resultPreview';
 import { formatWorkflowUsageLabel } from '../presentation/workflowUsagePresentation';
 import {
@@ -104,6 +112,17 @@ import { useDetailsPaneAvailable } from '@/components/appShell/panes/details/det
 import { createWorkflowDefinitionRoute, createWorkflowInvocationRoute, createWorkflowRunRoute } from '@/sync/domains/workflows/workflowRunRoute';
 import { WorkflowInvocationReview, type WorkflowInvocationReviewBuffers } from '../run/WorkflowInvocationReview';
 import { useWorkflowDefinitionLibrary } from '../library/workflowLibraryReads';
+import { glassSurfaceBackgroundColor } from '@/components/ui/glass/glassSurfacePaint';
+
+function sameSourceArtifactFact(previous: ReturnType<typeof useArtifact>, next: ReturnType<typeof useArtifact>): boolean {
+    if (previous === next) return true;
+    if (!previous || !next) return false;
+    // Opening the already-current body is hydration, not a source/grant change.
+    // Every identity, revision, custody, readability and access fact still invalidates the action.
+    const { body: _previousBody, ...previousFact } = previous;
+    const { body: _nextBody, ...nextFact } = next;
+    return sameStrictJsonValue(previousFact, nextFact);
+}
 
 /**
  * The exact managed Run route.
@@ -116,9 +135,10 @@ import { useWorkflowDefinitionLibrary } from '../library/workflowLibraryReads';
  */
 
 const styles = StyleSheet.create((theme) => ({
+    // The page's paper, as the editor's page paints it (lab run-A): the Run is a document, not a canvas.
     root: {
         flex: 1,
-        backgroundColor: theme.colors.background.canvas,
+        backgroundColor: glassSurfaceBackgroundColor(theme.colors.surface.base, 'content', true),
     },
     // In another page's pane the run sits on that pane's surface, not on a page canvas of its own.
     embeddedRoot: {
@@ -260,10 +280,21 @@ export function WorkflowRunScreen(props: Readonly<{
     const headerLeft = React.useCallback(({ tintColor }: Readonly<{ tintColor?: string }>) => (
         <DefaultBackButton testID="workflow-run-back" tintColor={tintColor} onPress={onBack} />
     ), [onBack]);
-    const options = React.useMemo(() => ({ headerTitle: title, headerLeft }), [headerLeft, title]);
+    // A hosted destination has no Expo header: its Back belongs in the page header's own slot, on
+    // the title line, rather than trailing among the header actions (the Workflow editor does the same).
+    const hosted = useDestinationInstanceKey() !== null && props.embedded !== true;
+    const focused = useDestinationFocus();
+    const inheritedBack = useNavigationBackControl();
+    const { theme } = useUnistyles();
+    const pageBack = React.useCallback(({ style }: Readonly<{ style: StyleProp<ViewStyle> }>) => (
+        focused ? <View style={style}><DefaultBackButton testID="workflow-run-back" tintColor={theme.colors.text.primary} onPress={onBack} /></View> : null
+    ), [focused, onBack, theme.colors.text.primary]);
+    const options = React.useMemo(() => hosted ? { headerTitle: title } : { headerTitle: title, headerLeft }, [headerLeft, hosted, title]);
     return <>
         {props.embedded ? null : <Stack.Screen options={options} />}
-        <WorkflowRunBody onCloseInvocation={onBack} embedded={props.embedded === true} />
+        <NavigationBackChromeProvider control={hosted ? pageBack : inheritedBack}>
+            <WorkflowRunBody onCloseInvocation={onBack} embedded={props.embedded === true} />
+        </NavigationBackChromeProvider>
     </>;
 }
 
@@ -599,10 +630,12 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
                     ? { revision: refreshedSummary?.revision ?? observedRevision, terminal: summaryTerminal }
                     : { revision: detail.run.revision, terminal: isTerminalWorkflowRunState(detail.run.state) };
 
-                const historyPromise = workflowRunDetailActions.listInvocations({ runId }, controller.signal);
+                const historyPromise = workflowRunDetailActions.listInvocations({ runId, includeContent: true }, controller.signal);
                 const failedPromise = observedState.terminal
                     ? workflowRunDetailActions.listInvocations({ runId, lifecycles: ['failed'], limit: 1 }, controller.signal)
                     : Promise.resolve(null);
+                // Awaited after the Run's pages land; a rejection before then is still handled there.
+                failedPromise.catch(() => undefined);
                 if (isBackgroundRefresh) {
                     // Refresh the complete loaded filtered span, not only its
                     // first page. The helper replays the traversal the reader
@@ -617,6 +650,7 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
                                 runId,
                                 ...(cursor === undefined ? {} : { cursor }),
                                 lifecycles: WORKFLOW_ATTENTION_LIFECYCLES,
+                                includeContent: true,
                             }, controller.signal),
                             previousPageCount: Math.max(1, attentionPageCountRef.current),
                             signal: controller.signal,
@@ -627,6 +661,7 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
                     store.applyWorkflowRunInvocationPage({
                         runId,
                         invocations: page.invocations,
+                        invocationDetails: page.invocationDetails,
                         nextCursor: page.nextCursor ?? null,
                         parentRevision: page.parentRevision,
                         mode: 'refresh',
@@ -635,6 +670,7 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
                         runId,
                         window: 'attention',
                         invocations: refreshedAttention.invocations,
+                        invocationDetails: refreshedAttention.invocationDetails,
                         nextCursor: refreshedAttention.nextCursor,
                         parentRevision: refreshedAttention.parentRevision ?? page.parentRevision,
                         mode: 'refresh',
@@ -651,16 +687,18 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
                     return;
                 }
 
-                const [page, attentionPage, failedPage] = await Promise.all([
+                // The Run's own pages land as soon as they answer, so the page can arrive whole (DESIGN-15
+                // R12) without also waiting on the separate first-failure lookup, which settles after.
+                const [page, attentionPage] = await Promise.all([
                     historyPromise,
-                    workflowRunDetailActions.listInvocations({ runId, lifecycles: WORKFLOW_ATTENTION_LIFECYCLES }, controller.signal),
-                    failedPromise,
+                    workflowRunDetailActions.listInvocations({ runId, lifecycles: WORKFLOW_ATTENTION_LIFECYCLES, includeContent: true }, controller.signal),
                 ]);
                 if (cancelled || !lifetime.isCurrent() || !isContentIdentityCurrent(requestScopeKey)) return;
                 const store = getStorage().getState();
                 store.applyWorkflowRunInvocationPage({
                     runId,
                     invocations: page.invocations,
+                    invocationDetails: page.invocationDetails,
                     nextCursor: page.nextCursor ?? null,
                     parentRevision: page.parentRevision,
                     mode: 'replace',
@@ -669,12 +707,15 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
                     runId,
                     window: 'attention',
                     invocations: attentionPage.invocations,
+                    invocationDetails: attentionPage.invocationDetails,
                     nextCursor: attentionPage.nextCursor ?? null,
                     parentRevision: attentionPage.parentRevision,
                     mode: 'replace',
                 });
                 attentionPageCountRef.current = 1;
-                store.setWorkflowRunFirstFailedInvocation({ runId, invocation: failedPage?.invocations[0] ?? null });
+                const failedPage = await failedPromise;
+                if (cancelled || !lifetime.isCurrent() || !isContentIdentityCurrent(requestScopeKey)) return;
+                getStorage().getState().setWorkflowRunFirstFailedInvocation({ runId, invocation: failedPage?.invocations[0] ?? null });
                 setFirstFailedInvocationResolution('resolved');
                 loadedDetailRef.current = {
                     contentIdentity: requestScopeKey,
@@ -716,11 +757,15 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
         ? cachedRow?.summary ?? null
         : null;
     const runMachine = useServerScopedMachine(activeAccountScope?.serverId ?? '', summary?.machineId ?? '');
+    const observedRunMachines = React.useMemo(() => activelyViewed && runMachine ? [runMachine] : [], [activelyViewed, runMachine]);
+    const presenceNowMs = useMachinePresenceNowMs(observedRunMachines);
+    useMachineReachabilityRevision(activelyViewed && runMachine !== null);
+    const runMachineReachable = runMachine ? isMachineReachable(accountLifetime?.isCurrent() ? activeAccountScope : null, runMachine, presenceNowMs) : undefined;
     const managedHomes = React.useMemo(() => summary && activelyViewed && activeAccountScope ? [activeAccountScope.serverId] : [],
         [summary, activelyViewed, activeAccountScope]);
     const managedInventory = useManagedMachineInventory(managedHomes);
     const runMachineStatus = runMachine && activeAccountScope ? resolveWorkStatusTone({ kind: 'machine', facts: {
-        machineId: runMachine.id, revokedAt: runMachine.revokedAt, online: isMachineOnline(runMachine), word: '', needsYouCount: 0, runningSessionCount: 0,
+        machineId: runMachine.id, revokedAt: runMachine.revokedAt, online: runMachineReachable === true, word: '', needsYouCount: 0, runningSessionCount: 0,
         managedMachine: managedInventory.machinesByEnrolledMachineIdByServerId[activeAccountScope.serverId]?.[runMachine.id],
     } }) : undefined;
     const visibleDefinition = contentBelongsToActiveScope ? definition : null;
@@ -753,22 +798,25 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
         }
     }, [pluginSourceActive, pluginSourcePresent, sourceLibrary.status, sourceLibrary.hasMore,
         sourceLibrary.loadingMore, sourceLibrary.loadMoreFailed, sourceLibrary.loadMore]);
-    // Artifact content updates and removals invalidate this source's observed
-    // rights; the grant Action, rather than Run control access or cached content,
-    // confirms that the source still exists and which action is available.
+    // Artifact changes recheck rights; only the grant Action confirms a change
+    // in source access. A refresh is not itself a revocation.
     const sourceArtifact = useArtifact(activelyViewed ? sourceArtifactId ?? '' : '');
-    const sourceIdentity = `${contentIdentity}\u0000${sourceRef ?? ''}`;
+    const sourceIdentity = `${accountScopeKey ?? ''}\u0000${sourceRef ?? ''}`;
     const currentSourceRef = React.useRef({ identity: sourceIdentity, artifact: sourceArtifact, active: activelyViewed, available: sourceAvailable });
     currentSourceRef.current = { identity: sourceIdentity, artifact: sourceArtifact, active: activelyViewed, available: sourceAvailable };
     const [executeSourceAction] = React.useState(() => createFrontDoorActionExecute());
     const [sourceObservation, setSourceObservation] = React.useState<Readonly<{
         identity: string;
-        artifact: typeof sourceArtifact;
         lifetime: ActiveAccountScopeLifetime;
         action: Readonly<{ kind: 'edit' | 'open'; onPress(): void }>;
     }> | null>(null);
+    const sourceObservationRef = React.useRef(sourceObservation);
+    sourceObservationRef.current = sourceObservation;
+    /** The source whose access check answered "no": its slot is released rather than held open. */
+    const [sourceRefusedIdentity, setSourceRefusedIdentity] = React.useState<string | null>(null);
     React.useEffect(() => {
-        setSourceObservation(null);
+        setSourceObservation(previous => previous?.identity === sourceIdentity
+            && previous.lifetime.isCurrent() ? previous : null);
         if (!activelyViewed || accountScopeKey === null || sourceRef === null || !sourceAvailable) return;
         const lifetime = captureActiveServerAccountScopeLifetime();
         if (lifetime === null) return;
@@ -776,17 +824,26 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
         const controller = new AbortController();
         const isCurrent = () => !cancelled && mountedRef.current && lifetime.isCurrent()
             && currentSourceRef.current.active && currentSourceRef.current.available && currentSourceRef.current.identity === sourceIdentity
-            && currentSourceRef.current.artifact === sourceArtifact;
+            && sameSourceArtifactFact(currentSourceRef.current.artifact, sourceArtifact);
         const retirement = lifetime.onRetire(() => {
             controller.abort();
+            sourceObservationRef.current = null;
             if (mountedRef.current) setSourceObservation(null);
         });
         const publish = (kind: 'edit' | 'open') => {
             if (!isCurrent()) return;
-            setSourceObservation({ identity: sourceIdentity, artifact: sourceArtifact, lifetime,
-                action: { kind, onPress: () => {
-                    if (isCurrent()) router.push(createWorkflowDefinitionRoute(sourceRef) as never);
-                } } });
+            const action: Readonly<{ kind: 'edit' | 'open'; onPress(): void }> = { kind, onPress: () => {
+                    // A cancelled refresh does not revoke the last confirmed source.
+                    // A changed source, confirmed grant or Account retirement does.
+                    const latest = currentSourceRef.current;
+                    if (mountedRef.current && lifetime.isCurrent() && latest.active && latest.available
+                        && latest.identity === sourceIdentity && sourceObservationRef.current?.action === action) {
+                        router.push(createWorkflowDefinitionRoute(sourceRef) as never);
+                    }
+                } };
+            const observation = { identity: sourceIdentity, lifetime, action };
+            sourceObservationRef.current = observation;
+            setSourceObservation(observation);
         };
         if (sourceArtifactId === null) {
             publish('open');
@@ -795,7 +852,15 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
                 surface: 'ui', serverId: lifetime.scope.serverId, expectedAccountId: lifetime.scope.accountId,
                 signal: controller.signal,
             }).then((response) => {
-                if (!isCurrent() || !response.ok) return;
+                if (!isCurrent()) return;
+                if (!response.ok) {
+                    if (response.errorCode === 'artifact_not_found' || response.errorCode === 'artifact_access_forbidden') {
+                        sourceObservationRef.current = null;
+                        setSourceObservation(null);
+                        setSourceRefusedIdentity(sourceIdentity);
+                    }
+                    return;
+                }
                 const parsed = ArtifactAccessGrantsListResponseV1Schema.safeParse(response.result);
                 if (!parsed.success || parsed.data.artifactId !== sourceArtifactId) return;
                 publish(parsed.data.access === 'view' ? 'open' : 'edit');
@@ -808,13 +873,16 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
         };
     }, [accountLifetime, accountScopeKey, activelyViewed, executeSourceAction, loadAttempt, mountedRef, router, sourceArtifact, sourceArtifactId, sourceAvailable, sourceIdentity, sourceRef]);
     const sourceAction = activelyViewed && sourceAvailable && sourceObservation?.identity === sourceIdentity
-        && sourceObservation.artifact === sourceArtifact && sourceObservation.lifetime.isCurrent()
+        && sourceObservation.lifetime.isCurrent()
         ? sourceObservation.action : null;
+    // While the access check is out, the source control's slot is held so it arrives without moving the
+    // view row (DESIGN-17 R9). Presentation only: what the control does is still the observation's answer.
+    const sourceActionPending = sourceAction === null && activelyViewed && sourceAvailable && sourceRef !== null
+        && sourceRefusedIdentity !== sourceIdentity;
     const visibleResult = contentBelongsToActiveScope ? result : undefined;
     const visibleFinalOutputInvocationId = contentBelongsToActiveScope ? finalOutputInvocationId : null;
     const visibleFirstFailedInvocation = selectWorkflowRunFirstFailedInvocation(visibleInvocations);
     const visibleUsageLabel = contentBelongsToActiveScope ? usageLabel : null;
-    const visibleAttentionInvocations = selectWorkflowRunWindowInvocations(visibleInvocations, 'attention');
     const visibleProgressByInvocationId = contentBelongsToActiveScope
         ? progressByInvocationId
         : EMPTY_PROGRESS_BY_INVOCATION_ID;
@@ -842,7 +910,11 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
         frozenChildren: visibleAcceptedContext?.frozenChildren,
         invocations: allInvocations,
         progressByInvocationId: visibleProgressByInvocationId,
-    }), [allInvocations, visibleAcceptedContext?.frozenChildren, visibleDefinition, visibleProgressByInvocationId]);
+        invocationEvidenceById: contentBelongsToActiveScope ? invocationEvidenceById : undefined,
+    }), [allInvocations, contentBelongsToActiveScope, invocationEvidenceById, visibleAcceptedContext?.frozenChildren, visibleDefinition, visibleProgressByInvocationId]);
+    const visibleAttentionInvocations = React.useMemo(() => selectWorkflowRunWindowInvocations(visibleInvocations, 'attention')
+        .filter(entry => isWorkflowAttentionInvocation(entry.lifecycle, invocationStructure.get(entry.id)?.coverageKind, summary?.state)),
+    [invocationStructure, visibleInvocations, summary?.state]);
     const selectedInvocation = selectedInvocationId === null
         ? null
         : allInvocations.find((entry) => entry.id === selectedInvocationId) ?? null;
@@ -997,7 +1069,7 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
      */
     const issueRunOperation = React.useCallback(async <T,>(
         kind: WorkflowRunOperationKind,
-        operation: (current: WorkflowRunSummaryV1) => Promise<T>,
+        operation: (current: WorkflowRunSummaryV1, owns: () => boolean) => Promise<T>,
         settle: (result: T) => void,
     ): Promise<void> => {
         if (!canEdit || runId === null || summary === null) return;
@@ -1013,7 +1085,7 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
             && lifetime.isCurrent()
             && isContentIdentityCurrent(requestIdentity);
         try {
-            const result = await operation(summary);
+            const result = await operation(summary, owns);
             if (owns()) settle(result);
         } catch (error) {
             // The durable intent may still have been recorded; the authoritative
@@ -1021,7 +1093,7 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
             // The canonical mapping decides the sentence AND whether it
             // interrupts; keeping only the sentence is what left a failed Stop
             // silent to a screen reader.
-            if (owns()) setControlError(resolveWorkflowProblemPresentation(error));
+            if (owns()) setControlError(resolveWorkflowProblemPresentation(error, 'run'));
         } finally {
             if (pendingOperationRef.current === token) {
                 pendingOperationRef.current = null;
@@ -1056,15 +1128,26 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
         kind: 'pause' | 'resume' | 'cancel',
     ) => {
         if (runId === null) return;
-        await issueRunOperation(kind, (current) => (kind === 'pause'
+        await issueRunOperation(kind, async (current, owns) => {
+            if (kind === 'cancel') {
+                try { return await workflowRunDetailActions.cancelRun({ runId, expectedRevision: current.revision }); }
+                catch (error) {
+                    if (!(error instanceof WorkflowActionError) || error.code !== 'currentness_conflict' || !owns()) throw error;
+                    const latest = await workflowRunDetailActions.getRun(runId);
+                    if (!owns() || !latest.callerAccess.canEdit) throw error;
+                    // A concurrent state transition is reread once; another conflict
+                    // remains a typed recoverable problem, never a blind retry loop.
+                    return await workflowRunDetailActions.cancelRun({ runId, expectedRevision: latest.run.revision });
+                }
+            }
+            return kind === 'pause'
             ? workflowRunDetailActions.pauseRun({ runId, expectedRevision: current.revision })
-            : kind === 'cancel'
-                ? workflowRunDetailActions.cancelRun({ runId, expectedRevision: current.revision })
-                : workflowRunDetailActions.resumeRun({
+            : workflowRunDetailActions.resumeRun({
                     mode: 'boundary',
                     runId,
                     expectedRevision: current.revision,
-                })), settleControl);
+                });
+        }, settleControl);
     }, [issueRunOperation, runId, settleControl]);
 
     const loadMoreInvocations = React.useCallback(async () => {
@@ -1074,10 +1157,11 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
         if (lifetime === null) return;
         setLoadingMoreInvocations(true);
         try {
-            const page = await workflowRunDetailActions.listInvocations({ runId, cursor: invocationWindow.nextCursor });
+            const page = await workflowRunDetailActions.listInvocations({ runId, cursor: invocationWindow.nextCursor, includeContent: true });
             if (!lifetime.isCurrent() || !isContentIdentityCurrent(requestIdentity)) return;
             getStorage().getState().applyWorkflowRunInvocationPage({
                 runId, invocations: page.invocations, nextCursor: page.nextCursor ?? null,
+                invocationDetails: page.invocationDetails,
                 parentRevision: page.parentRevision, mode: 'append',
             });
             // Only the page that actually arrived clears the failure it replaces.
@@ -1105,10 +1189,12 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
         try {
             const page = await workflowRunDetailActions.listInvocations({
                 runId, cursor: attentionNextCursor, lifecycles: WORKFLOW_ATTENTION_LIFECYCLES,
+                includeContent: true,
             });
             if (!lifetime.isCurrent() || !isContentIdentityCurrent(requestIdentity)) return;
             getStorage().getState().applyWorkflowRunInvocationPage({
                 runId, window: 'attention', invocations: page.invocations, nextCursor: page.nextCursor ?? null,
+                invocationDetails: page.invocationDetails,
                 parentRevision: page.parentRevision, mode: 'append',
             });
             attentionPageCountRef.current += 1;
@@ -1249,7 +1335,7 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
                 // machine only means this screen cannot say that it did.
                 if (!lifetime.isCurrent() || !isContentIdentityCurrent(requestIdentity)) return;
                 definitivePreIssuanceFailure = !transportIssued;
-                responseFailure = new Error(resolveWorkflowProblemPresentation(error).message);
+                responseFailure = new Error(resolveWorkflowProblemPresentation(error, 'run').message);
             }
 
             if (!lifetime.isCurrent() || !isContentIdentityCurrent(requestIdentity)) return;
@@ -1284,7 +1370,7 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
                 // Without current exact content the outcome remains unknown.
                 // Keep controls withdrawn; a later canonical read retires them.
                 if (lifetime.isCurrent() && isContentIdentityCurrent(requestIdentity)) {
-                    setControlError(resolveWorkflowProblemPresentation(error));
+                    setControlError(resolveWorkflowProblemPresentation(error, 'run'));
                 }
             }
             if (responseFailure !== null) throw responseFailure;
@@ -1337,10 +1423,14 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
                 ? null
                 : recoveryAvailabilityByInvocationId.get(selectedInvocationId) ?? null,
             machineHomeDirectory: runMachine?.metadata?.homeDir ?? null,
+            ...(runMachineReachable === undefined ? {} : { machine: {
+                name: getMachineDisplayName(runMachine) ?? summary.machineId, reachable: runMachineReachable,
+                lastSeenAt: runMachine?.activeAt ?? null,
+            } }),
             invocations: allInvocations,
             invocationHistoryComplete: (invocationWindow?.loaded ?? false) && invocationWindow?.nextCursor == null,
         })
-    ), [allInvocations, invocationWindow, recoveryAvailabilityByInvocationId, runMachine, selectedInvocation, selectedInvocationId, selectedProgress, summary]);
+    ), [allInvocations, invocationWindow, recoveryAvailabilityByInvocationId, runMachine, runMachineReachable, selectedInvocation, selectedInvocationId, selectedProgress, summary]);
     // Acknowledgement is recorded against the exact attempt it was given for.
     // Changing selection therefore withdraws it rather than carrying blanket
     // consent to a different invocation.
@@ -1437,6 +1527,8 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
             acceptedContext: visibleAcceptedContext }).definition;
         const admitted = await runNow.runNow({
             runId: nextRunId,
+            refusal: 'inline',
+            isInvocationCurrent: () => isContentIdentityCurrent(requestIdentity),
             ...(visibleAcceptedContext.metadata ? { metadata: visibleAcceptedContext.metadata } : {}),
             source: {
                 kind: 'inline',
@@ -1464,13 +1556,23 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
 
     const requestRunAgain = React.useCallback(async () => {
         if (visibleDefinition === null || visibleAcceptedContext === null) return;
+        if (runNow.isPending(pendingRunAgainIdRef.current ?? '')) {
+            setRunAgainInputOpen(true);
+            return;
+        }
+        runNow.clearRefusal();
+        pendingRunAgainIdRef.current = null;
         setRunAgainValues(visibleAcceptedContext.inputs);
         setRunAgainRawTextValues({});
         setRunAgainAgentOverride(null);
         setRunAgainInputOpen(true);
-    }, [visibleAcceptedContext, visibleDefinition]);
+    }, [runNow, visibleAcceptedContext, visibleDefinition]);
 
     const requestRunWithAnotherAgent = React.useCallback(() => {
+        if (runNow.isPending(pendingRunAgainIdRef.current ?? '')) {
+            setRunAgainInputOpen(true);
+            return;
+        }
         if (!selectedRecovery?.canRunWithAnotherAgent || !selectedProgress || !visibleAcceptedContext || !visibleDefinition) return;
         let definition = visibleDefinition;
         let sourceKey: WorkflowReplayAgentOverrideV1['sourceKey'] = '$root';
@@ -1493,7 +1595,7 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
         setRunAgainRawTextValues({});
         setRunAgainAgentOverride({ sourceKey, blockId, step: workflowBlockReferenceLabel(block) });
         setRunAgainInputOpen(true);
-    }, [selectedProgress, selectedRecovery, visibleAcceptedContext, visibleDefinition]);
+    }, [runNow, selectedProgress, selectedRecovery, visibleAcceptedContext, visibleDefinition]);
 
     /**
      * D4's second arm: when the recorded workspace cannot be used and no
@@ -1609,9 +1711,13 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
     // One selected-read state, placed inside Review when it exists (including
     // its phone modal), otherwise inside the exact detail. Outer failures are
     // only Run loading/control failures, never a duplicate of this state.
+    // A refresh in flight is not a warning: last-known content stays as it is, quietly, and the stale
+    // line appears only once a read has actually come back without confirming it (DESIGN-15 R7).
     const selectedReadState = !selectedContentUnavailable ? null : selectedReadPending
-        ? <SurfaceStateCard testID="workflow-run-read-pending" size="line" kind="loading"
-            title={t('common.loading')} accessibilitySemantics="status" />
+        ? selectedProgress !== null
+            ? null
+            : <SurfaceStateCard testID="workflow-run-read-pending" size="line" kind="loading"
+                title={t('common.loading')} accessibilitySemantics="status" />
         : selectedReadProblem ? <SurfaceStateCard testID="workflow-run-read-problem" size="line"
             kind={selectedReadProblem.accessibilitySemantics === 'status' ? 'unavailable' : 'error'}
             title={selectedReadProblem.title} reason={selectedReadProblem.message}
@@ -1619,9 +1725,24 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
             action={repairReadProblem && selectedReadProblem.repairLabel ? {
                 testID: 'workflow-run-read-retry', label: selectedReadProblem.repairLabel, onPress: repairReadProblem,
             } : undefined} />
-            : <Text accessibilityLiveRegion="polite">{t(selectedProgress === null
-                ? 'workflows.contentUnavailable' : 'workflows.run.evidenceStale')}</Text>;
+            : selectedProgress !== null
+                ? <SurfaceFreshnessLine testID="workflow-run-read-freshness" reason={t('workflows.run.evidenceStale')}
+                    action={{ testID: 'workflow-run-read-retry', label: t('common.retry'), onPress: retryLoad }} />
+                : <Text accessibilityLiveRegion="polite">{t('workflows.contentUnavailable')}</Text>;
 
+    // The controller's methods are stable; the memoized composer must consume its observed state,
+    // not the method object's identity. No second admission state or pending guard lives here.
+    const runAgainState = runNow.stateFor(pendingRunAgainIdRef.current ?? '');
+    const runAgainPending = runAgainState === 'submitting' || runAgainState === 'reconciling';
+    const runAgainRefusal = pendingRunAgainIdRef.current === null ? null : runNow.refusal;
+    const runAgainStatus = runAgainInputOpen ? null : runAgainPending
+        ? <SurfaceStateCard testID="workflow-run-again-pending" size="line" kind="loading"
+            title={t(runAgainState === 'reconciling' ? 'workflows.start.stillStarting' : 'workflows.start.starting')}
+            accessibilitySemantics="status" />
+        : runAgainRefusal ? <SurfaceStateCard testID="workflow-run-again-refused" size="line"
+            kind={runAgainRefusal.accessibilitySemantics === 'status' ? 'unavailable' : 'error'}
+            title={runAgainRefusal.title} reason={runAgainRefusal.message}
+            accessibilitySemantics={runAgainRefusal.accessibilitySemantics} /> : null;
     const runAgainModalProps = React.useMemo<WorkflowRunComposerModalProps | null>(
         () => visibleDefinition === null ? null : ({
             definition: visibleDefinition,
@@ -1642,34 +1763,40 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
                 ...createExecutionRunStartContentChip({
                     key: 'workflow-start-where', icon: 'folder', title: t('workflows.page.where.label'),
                     label: formatWorkflowWhereSummary({ target: visibleAcceptedContext.workspaceTarget.project,
-                        machineName: getMachineDisplayName(runMachine) }) ?? visibleAcceptedContext.machineId,
+                        machineName: getMachineDisplayName(runMachine), machineHomeDir: runMachine?.metadata?.homeDir }) ?? visibleAcceptedContext.machineId,
                     testID: 'workflow-start-where-chip',
                     // No setter: this is the accepted target, not another authored choice.
                     renderContent: <WorkflowProjectTargetControl purpose="workflow" target={visibleAcceptedContext.workspaceTarget.project}
-                        machineName={getMachineDisplayName(runMachine)} testIDPrefix="workflow-repeat-where" />,
+                        machineName={getMachineDisplayName(runMachine)} machineHomeDir={runMachine?.metadata?.homeDir}
+                        testIDPrefix="workflow-repeat-where" />,
                 }), controlId: 'machine' as const,
             }, ...(runAgainAgentOverride === null ? [] : [{ ...createExecutionRunStartContentChip({
                 key: 'workflow-run-another-agent', icon: 'users', title: t('workflows.start.agentForStep', { step: runAgainAgentOverride.step }),
                 label: t('workflows.start.agentForStep', { step: runAgainAgentOverride.step }),
                 testID: 'workflow-run-another-agent-chip',
                 revision: JSON.stringify(runAgainAgentOverride.engine),
-                disabled: runNow.isPending(pendingRunAgainIdRef.current ?? ''),
+                disabled: runAgainPending,
                 renderContent: <WorkflowRunAgentOverrideField step={runAgainAgentOverride.step} value={runAgainAgentOverride.engine}
-                    disabled={runNow.isPending(pendingRunAgainIdRef.current ?? '')}
+                    disabled={runAgainPending}
                     onChange={(engine) => setRunAgainAgentOverride((current) => current === null ? null : { ...current, engine })} />,
             }), controlId: 'engine' as const }])] }),
             onRun: (inputs) => { void admitRunAgain(inputs); },
             onCancel: () => setRunAgainInputOpen(false),
-            pending: runNow.isPending(pendingRunAgainIdRef.current ?? ''),
-            reconciling: runNow.stateFor(pendingRunAgainIdRef.current ?? '') === 'reconciling',
+            pending: runAgainPending,
+            reconciling: runAgainState === 'reconciling',
+            startProblem: runAgainRefusal?.message,
         }),
-        [admitRunAgain, runAgainAgentOverride, runAgainRawTextValues, runAgainValues, runMachine, runNow, sourceRef, visibleAcceptedContext, visibleDefinition],
+        [admitRunAgain, runAgainAgentOverride, runAgainPending, runAgainRawTextValues, runAgainRefusal, runAgainState, runAgainValues, runMachine, sourceRef, visibleAcceptedContext, visibleDefinition],
     );
 
-    useWorkflowRunComposerModal({
+    // One host, one presentation for one composer: Run again anchors to its button on wide layouts and
+    // becomes the sheet on phones, exactly as Run now does (DESIGN-14 D7).
+    const runAgainAnchorRef = React.useRef<View | null>(null);
+    const runAgainComposer = useWorkflowRunComposerModal({
         open: runAgainInputOpen,
         props: runAgainModalProps,
         testID: 'workflow-run-again-inputs-modal',
+        anchorRef: runAgainAnchorRef,
     });
 
     if (runId === null) {
@@ -1685,7 +1812,9 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
         );
     }
 
-    if (summary === null) {
+    // A Run arrives whole (DESIGN-15 R12): until its first read has settled, a cached row alone would paint a
+    // map with no step states ("Not started" on held work) and then move everything as the states land.
+    if (summary === null || (loadState === 'loading' && invocationWindow?.loaded !== true)) {
         return (
             <View testID="workflow-run-screen" style={[props.embedded ? styles.embeddedRoot : styles.root, styles.centered]}>
                 {loadState === 'failed' ? (
@@ -1711,6 +1840,7 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
             style={props.embedded ? styles.embeddedRoot : styles.root}
         >
             <WorkflowRunContent
+                runAgainStatus={runAgainStatus}
                 embedded={props.embedded === true}
                 notificationOperation={activeAccountScope !== null && visibleAcceptedContext !== null
                     && !isTerminalWorkflowRunState(summary.state) ? <RunWorkNotifications
@@ -1719,10 +1849,11 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
                         serverId={activeAccountScope.serverId} /> : undefined}
                 run={summary}
                 machineName={getMachineDisplayName(runMachine)}
+                machineLastSeenAt={runMachine?.activeAt ?? null}
                 machineStatus={runMachineStatus}
                 {...(runMachine === null || runMachine === undefined
                     ? {}
-                    : { machineReachable: isMachineOnline(runMachine) })}
+                    : { machineReachable: runMachineReachable })}
                 // An opened accepted context with no metadata is an untitled
                 // Run — the unnamed-draft case — not private content this
                 // device cannot open; only an unopened context is unavailable.
@@ -1738,6 +1869,7 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
                 materializedLeaves={visibleAcceptedContext?.materializedLeaves}
                 hasSource={hasSource}
                 sourceAction={sourceAction}
+                sourceActionPending={sourceActionPending}
                 invocations={allInvocations}
                 invocationsLoaded={invocationWindow?.loaded ?? false}
                 invocationHistoryComplete={(invocationWindow?.loaded ?? false) && invocationWindow?.nextCursor == null}
@@ -1769,7 +1901,7 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
                         current={reviewCurrent} onSettled={settleReview}
                         onDiscuss={onDiscuss} machineName={getMachineDisplayName(runMachine)}
                         acknowledgeUncertainPriorEffects={uncertaintyAcknowledged ? acknowledgedUncertainInvocation ?? undefined : undefined}
-                        machineReachable={runMachine ? isMachineOnline(runMachine) : undefined}
+                        machineReachable={runMachineReachable}
                         onOpenDraft={(seed) => router.push({ pathname: '/workflows/new', params: { reviewedRunSeedId: storeWorkflowReviewedRunSeed(seed) } } as never)}
                         onOpenRun={(id) => router.push(createWorkflowRunRoute(id) as never)} />
                     : undefined}
@@ -1840,8 +1972,11 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
                 onDelete={canEdit && isTerminalWorkflowRunState(summary.state) && summary.workflowCustodyState === 'settled' ? () => { void deleteRun(); } : undefined}
                 deleteBlockedByCustody={isTerminalWorkflowRunState(summary.state) && summary.workflowCustodyState === 'pending'}
                 onRunAgain={canEdit && visibleAcceptedContext !== null && isTerminalWorkflowRunState(summary.state)
+                    // A Stop still being carried out is not a settled Run to start again from (DESIGN-17 R2).
+                    && !isWorkflowRunStopPending({ ...summary, cancelRequested })
                     ? () => { void requestRunAgain(); }
                     : undefined}
+                runAgainAnchorRef={runAgainAnchorRef}
                 onSaveAsWorkflow={visibleDefinition === null
                     || visibleAcceptedContext === null
                     ? undefined
@@ -1866,6 +2001,7 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
                 selectedReadState={selectedReadState}
                 contentContainerStyle={contentStyle}
             />
+            {runAgainComposer}
         </View>
     );
 }

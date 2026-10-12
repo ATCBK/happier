@@ -37,8 +37,10 @@ const WritesHere = React.memo(function WritesHere(props: Readonly<{ sessionId: s
     const readFailed = read.status === 'failed' || read.loadMoreFailed;
     const hasScheduled = scheduled.available && (scheduled.rows.length > 0 || scheduled.status === 'failed');
     if (read.runIds.length === 0 && !readFailed && !hasScheduled) return null;
+    // What is next leads, then what already wrote here, newest first; Load more closes the Runs it extends.
     return <WorkSection testID="session-work-writes-here" anatomy="page" title={t('sessionWork.scheduled.writesHere')}
-        count={read.runIds.length}>
+        count={read.runIds.length + (hasScheduled ? scheduled.rows.length : 0)}>
+        {hasScheduled ? <ScheduledWorkflowRows read={scheduled} sessionId={props.sessionId} /> : null}
         {read.runIds.map((runId, index) => <DestinationRun key={runId} runId={runId} serverId={props.serverId}
             sessionId={props.sessionId}
             first={index === 0} last={index === read.runIds.length - 1} />)}
@@ -47,7 +49,6 @@ const WritesHere = React.memo(function WritesHere(props: Readonly<{ sessionId: s
             action={{ label: t('workflows.retry'), onPress: read.loadMoreFailed ? read.loadMore : read.retry }} /> : null}
         {read.hasMore ? <ToolbarButton testID="session-work-writes-here-more" label={t('workflows.destination.history.loadMore')}
             disabled={read.loadingMore} onPress={read.loadMore} /> : null}
-        {hasScheduled ? <ScheduledWorkflowRows read={scheduled} sessionId={props.sessionId} /> : null}
     </WorkSection>;
 });
 

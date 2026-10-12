@@ -44,6 +44,7 @@ import {
     describeWorkflowRunState,
     isWorkflowWaitForYouHold,
     isTerminalWorkflowRunState,
+    isWorkflowRunStopPending,
     summarizeWorkflowInvocationCoverage,
 } from '@/components/workflows/presentation/workflowLifecyclePresentation';
 import { t } from '@/text';
@@ -136,6 +137,8 @@ export type WorkflowRunContentProps = Readonly<{
      * means not known here, which states nothing about contact.
      */
     machineReachable?: boolean;
+    /** Last actual Machine presence observation; never the current refresh time. */
+    machineLastSeenAt?: number | null;
     /** Qualified power/wake presentation from the canonical Machine status owner. */
     machineStatus?: WorkStatusPresentation;
     /** A quiet observation request, independent of durable Run controls. */
@@ -157,6 +160,8 @@ export type WorkflowRunContentProps = Readonly<{
     hasSource?: boolean;
     /** Current source existence/access, resolved by the source owner. */
     sourceAction?: Readonly<{ kind: 'edit' | 'open'; onPress: () => void }> | null;
+    /** The source action's access is still being checked: its slot is reserved, never drawn. */
+    sourceActionPending?: boolean;
     invocations: readonly WorkflowRunInvocationIndexV1[];
     invocationsLoaded: boolean;
     /** True only after the unfiltered history cursor is exhausted. */
@@ -529,8 +534,8 @@ export function WorkflowRunContent(props: WorkflowRunContentProps): React.ReactE
         [props.definition, props.frozenChildren, structureProgressById, props.invocationStructure, props.invocations],
     );
     const attentionRows = React.useMemo(
-        () => props.invocations.filter((entry) => isWorkflowAttentionInvocation(entry.lifecycle, derivedStructure.get(entry.id)?.coverageKind, props.run.state)),
-        [derivedStructure, props.invocations, props.run.state],
+        () => props.invocations.filter((entry) => isWorkflowAttentionInvocation(entry.lifecycle, derivedStructure.get(entry.id)?.coverageKind, props.run.state, props.cancelRequested)),
+        [derivedStructure, props.invocations, props.run.state, props.cancelRequested],
     );
     const attentionCount = attentionRows.length;
     // The index draws one row per held step: a For-each's held items share it, ordered as the items
@@ -572,8 +577,9 @@ export function WorkflowRunContent(props: WorkflowRunContentProps): React.ReactE
         kindsByInvocationId: new Map([...derivedStructure].map(([id, entry]) => [id, entry.coverageKind])),
         historyComplete: props.invocationsLoaded && props.invocationHistoryComplete,
         runState: props.run.state,
+        cancelRequested: props.cancelRequested,
         knownFailure: props.firstFailedInvocationId != null,
-    }), [derivedStructure, props.firstFailedInvocationId, props.invocationHistoryComplete, props.invocations, props.invocationsLoaded, props.run.state]);
+    }), [derivedStructure, props.firstFailedInvocationId, props.invocationHistoryComplete, props.invocations, props.invocationsLoaded, props.run.state, props.cancelRequested]);
 
     /**
      * Row identity comes from the authored definition, not from whether the
@@ -693,6 +699,10 @@ export function WorkflowRunContent(props: WorkflowRunContentProps): React.ReactE
      * failed row — rather than to "the latest row". When the Run is terminal and
      * no selected final result exists, the absence is stated instead of implied.
      */
+    const stopPending = isWorkflowRunStopPending({ ...props.run, cancelRequested: props.cancelRequested });
+    const invocationStatusContext = React.useMemo(() => ({ runStopPending: stopPending,
+        machineReachable: props.machineReachable, machineName: props.machineName ?? props.run.machineId }),
+    [stopPending, props.machineReachable, props.machineName, props.run.machineId]);
     const terminalOutcome = React.useMemo((): Readonly<{
         kind: 'open_result'; invocationId: string;
     } | {
@@ -701,6 +711,8 @@ export function WorkflowRunContent(props: WorkflowRunContentProps): React.ReactE
         kind: 'result_absent';
     }> | null => {
         if (!isTerminalWorkflowRunState(props.run.state)) return null;
+        // A Stop still being carried out is not an outcome yet: no settled-Run actions beside it (DESIGN-17 R2).
+        if (stopPending) return null;
         if (props.firstFailedInvocationResolution !== 'resolved') return null;
         if (props.firstFailedInvocationId !== null) {
             return { kind: 'see_failures', invocationId: props.firstFailedInvocationId };
@@ -718,7 +730,7 @@ export function WorkflowRunContent(props: WorkflowRunContentProps): React.ReactE
         return props.finalOutputInvocationId === undefined || props.finalOutputInvocationId === null
             ? null
             : { kind: 'open_result', invocationId: props.finalOutputInvocationId };
-    }, [props.definition, props.finalOutputInvocationId, props.firstFailedInvocationId, props.firstFailedInvocationResolution, props.resultLabel, props.run.state]);
+    }, [props.definition, props.finalOutputInvocationId, props.firstFailedInvocationId, props.firstFailedInvocationResolution, props.resultLabel, props.run.state, stopPending]);
 
     /**
      * One dominant action per state (UX §1, §3.3).
@@ -763,6 +775,8 @@ export function WorkflowRunContent(props: WorkflowRunContentProps): React.ReactE
         state: props.run.state,
         workflowCustodyState: props.run.workflowCustodyState,
         cancelRequested: props.cancelRequested,
+        machineReachable: props.machineReachable,
+        machineName: props.machineName ?? props.run.machineId,
         coverage,
         historyComplete: props.invocationHistoryComplete,
         inAttentionWindow: props.run.attentionRequired === true || attentionRows.length > 0,
@@ -826,16 +840,20 @@ export function WorkflowRunContent(props: WorkflowRunContentProps): React.ReactE
     const currentWork = React.useMemo(() => {
         if (isTerminalWorkflowRunState(props.run.state)) return null;
         const executableRows = props.invocations.filter((row) => derivedStructure.get(row.id)?.coverageKind === 'executable');
-        return executableRows.find((row) => isWorkflowAttentionInvocation(row.lifecycle, derivedStructure.get(row.id)?.coverageKind, props.run.state))
+        return executableRows.find((row) => isWorkflowAttentionInvocation(row.lifecycle, derivedStructure.get(row.id)?.coverageKind, props.run.state, props.cancelRequested))
             ?? executableRows.find((row) => describeWorkflowInvocationLifecycle(row.lifecycle).marker.kind === 'activity')
             ?? null;
-    }, [derivedStructure, props.invocations, props.run.state]);
+    }, [derivedStructure, props.invocations, props.run.state, props.cancelRequested]);
     const recovery = React.useMemo(() => {
         const projected = projectWorkflowInvocationRecovery({
             run: props.run,
             invocation: selectedInvocation,
             progress: props.selectedInvocationProgress ?? null,
             recoveryAvailability: props.selectedInvocationRecoveryAvailability ?? null,
+            ...(props.machineReachable === undefined ? {} : { machine: {
+                name: props.machineName ?? props.run.machineId, reachable: props.machineReachable,
+                lastSeenAt: props.machineLastSeenAt ?? null,
+            } }),
             machineHomeDirectory: props.workspaceHomeDirectory ?? null,
             invocations: props.invocations,
             invocationHistoryComplete: props.invocationHistoryComplete,
@@ -843,7 +861,7 @@ export function WorkflowRunContent(props: WorkflowRunContentProps): React.ReactE
         return props.preparedRecovery === undefined
             ? projected
             : { ...projected, preparedRecovery: props.preparedRecovery };
-    }, [props.invocationHistoryComplete, props.invocations, props.preparedRecovery, props.run, selectedInvocation, props.selectedInvocationProgress, props.selectedInvocationRecoveryAvailability, props.workspaceHomeDirectory]);
+    }, [props.invocationHistoryComplete, props.invocations, props.machineLastSeenAt, props.machineName, props.machineReachable, props.preparedRecovery, props.run, selectedInvocation, props.selectedInvocationProgress, props.selectedInvocationRecoveryAvailability, props.workspaceHomeDirectory]);
     const selectedWorkspace = recovery.workspace;
     const workspaceSourceBlockLabel = selectedWorkspace?.sourceBlockId === null
         || selectedWorkspace?.sourceBlockId === undefined
@@ -996,6 +1014,9 @@ export function WorkflowRunContent(props: WorkflowRunContentProps): React.ReactE
                 <View style={styles.outcomeLine}>
                     <WorkflowRunStateMark
                         state={props.run.state}
+                        context={{ workflowCustodyState: props.run.workflowCustodyState,
+                            cancelRequested: props.cancelRequested, machineReachable: props.machineReachable,
+                            machineName: props.machineName ?? props.run.machineId }}
                         inAttentionWindow={(props.run.attentionRequired === true || attentionRows.length > 0) && !isTerminalWorkflowRunState(props.run.state)}
                         testID={`${testIDPrefix}-outcome-mark`}
                     />
@@ -1017,7 +1038,9 @@ export function WorkflowRunContent(props: WorkflowRunContentProps): React.ReactE
                 </Text> : null}
                 {/* Contact loss is all that is known; resume choices come from
                     the recovery owner once the current state is. */}
-                {props.machineReachable === false && (!props.machineStatus || props.machineStatus.bucket === 'offline') && !isTerminalWorkflowRunState(props.run.state) ? (
+                {props.machineReachable === false && (!props.machineStatus || props.machineStatus.bucket === 'offline') && !isTerminalWorkflowRunState(props.run.state)
+                    // A selected step that stopped says when its choices appear, in its recovery card (DESIGN-17 R1).
+                    && !(selectedInvocation?.lifecycle === 'failed' || selectedInvocation?.lifecycle === 'outcome_uncertain') ? (
                     <Text testID={`${testIDPrefix}-machine-unavailable`} style={styles.provenance}>
                         {t('workflows.run.machineUnavailableBody')}
                     </Text>
@@ -1054,7 +1077,8 @@ export function WorkflowRunContent(props: WorkflowRunContentProps): React.ReactE
                         })}
                     </Text>
                 ) : null}
-                {props.deleteBlockedByCustody ? (
+                {/* While the Stop is pending the outcome line already says so; the custody mechanism is not repeated. */}
+                {props.deleteBlockedByCustody && !stopPending ? (
                     <Text testID={`${testIDPrefix}-custody-pending`} style={styles.provenance}>
                         {t('workflows.recovery.waitingForStop')}
                     </Text>
@@ -1180,7 +1204,12 @@ export function WorkflowRunContent(props: WorkflowRunContentProps): React.ReactE
                         testID={`${testIDPrefix}-${props.sourceAction.kind}-workflow`}
                         label={props.sourceAction.kind === 'edit' ? t('workflows.run.editWorkflow') : t('workflows.run.openWorkflow')}
                         size="md" onPress={props.sourceAction.onPress}
-                    /> : props.hasSource !== true && props.onSaveAsWorkflow ? <ToolbarButton
+                    /> : props.sourceActionPending === true ? (
+                        <View testID={`${testIDPrefix}-source-action-reserved`} style={styles.reservedSlot}
+                            aria-hidden accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+                            <ToolbarButton label={t('workflows.run.editWorkflow')} size="md" disabled onPress={() => {}} />
+                        </View>
+                    ) : props.hasSource !== true && props.onSaveAsWorkflow ? <ToolbarButton
                         testID={`${testIDPrefix}-save-as-workflow`}
                         label={t('workflows.run.saveAsWorkflow')} size="md"
                         onPress={props.onSaveAsWorkflow} disabled={props.saveAsWorkflowPending === true}
@@ -1250,6 +1279,10 @@ export function WorkflowRunContent(props: WorkflowRunContentProps): React.ReactE
             waitPrompt: selectedDetail.waitPrompt,
             workspaceSourceLabel,
             cause: selectedInvocationCause,
+            machine: props.machineReachable === undefined ? null : {
+                name: props.machineName ?? props.run.machineId,
+                reachable: props.machineReachable,
+            },
             operationPending,
             testIDPrefix,
             ...(props.selectedContentUnavailable === undefined
@@ -1320,6 +1353,9 @@ export function WorkflowRunContent(props: WorkflowRunContentProps): React.ReactE
         selectedDetail.waitPrompt,
         selectedInvocation?.lifecycle,
         selectedInvocationCause,
+        props.machineName,
+        props.machineReachable,
+        props.run.machineId,
         selectedRecoveryText,
         selectInvocation,
         setSelectedRecoveryText,
@@ -1412,6 +1448,7 @@ export function WorkflowRunContent(props: WorkflowRunContentProps): React.ReactE
             contentContainerStyle={[styles.root, props.contentContainerStyle]}>
             {header}
             <View style={styles.pageSection}><WorkflowRunSteps runId={props.run.id} machineId={props.run.machineId} serverId={props.serverId}
+                invocationStatusContext={invocationStatusContext}
                 definition={props.definition} invocations={props.invocations} structure={derivedStructure}
                 progressById={structureProgressById}
                 frozenChildren={props.frozenChildren}
@@ -1425,6 +1462,7 @@ export function WorkflowRunContent(props: WorkflowRunContentProps): React.ReactE
         </ScrollView>
     ) : props.view === 'activity' || flowProjection === null ? (
         <WorkflowInvocationList
+            invocationStatusContext={invocationStatusContext}
             listRef={activityListRef}
             onScroll={captureActivityScroll}
             testIDPrefix={`${testIDPrefix}-invocations`}
@@ -1472,6 +1510,7 @@ export function WorkflowRunContent(props: WorkflowRunContentProps): React.ReactE
             )}
             {/* The map shares the header's text edge, so mark, outcome, tabs and cards line up (lab run-A). */}
             <View style={styles.pageSection}><WorkflowFlowView
+                invocationStatusContext={invocationStatusContext}
                 testIDPrefix={`${testIDPrefix}-flow`}
                 projection={flowProjection}
                 selectedNodeId={props.selectedInvocationId === null

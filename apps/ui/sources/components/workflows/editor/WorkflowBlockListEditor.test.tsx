@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Platform, StyleSheet as NativeStyleSheet } from 'react-native';
+import { StyleSheet as NativeStyleSheet } from 'react-native';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 
@@ -121,6 +121,33 @@ function buildDraft(harness: Harness, blocks?: Parameters<Harness['createWorkflo
 
 type AddStep = SelectionListStep;
 
+/** The shared dropdown opens after the press and commits after its overlay closes. */
+async function openBlockActionsMenu(
+    screen: Awaited<ReturnType<typeof renderScreen>>,
+    menuTestID: string,
+    availableActionTestID: string,
+): Promise<void> {
+    await screen.pressByTestIdAsync(menuTestID);
+    await vi.waitFor(async () => {
+        await act(async () => {});
+        expect(screen.findByTestId(availableActionTestID)).not.toBeNull();
+    });
+}
+
+async function chooseBlockAction(
+    screen: Awaited<ReturnType<typeof renderScreen>>,
+    menuTestID: string,
+    actionTestID: string,
+    assertCommitted: () => void,
+): Promise<void> {
+    await openBlockActionsMenu(screen, menuTestID, actionTestID);
+    await screen.pressByTestIdAsync(actionTestID);
+    await vi.waitFor(async () => {
+        await act(async () => {});
+        assertCommitted();
+    });
+}
+
 /** Opens a scope's Add menu and returns the step the canonical popover was handed. */
 async function openAddMenu(screen: Awaited<ReturnType<typeof renderScreen>>, addTestID: string): Promise<AddStep> {
     await screen.pressByTestIdAsync(addTestID);
@@ -196,41 +223,89 @@ it('shows editable names on every kind and evaluator without replacing catalog A
     }
 });
 
-it('edits run when on the connector and preserves an independent only-when condition', async () => {
-    // Exercise the real Popover on native. This renderer has no browser DOM;
-    // changing only the platform boundary keeps the connector and menu real.
-    const platformOSDescriptor = Object.getOwnPropertyDescriptor(Platform, 'OS');
-    Object.defineProperty(Platform, 'OS', { configurable: true, writable: true, value: 'ios' });
-    let screen: Awaited<ReturnType<typeof renderScreen>> | undefined;
-    try {
-        const harness = await loadHarness();
-        const onlyWhen = { kind: 'exists' as const, value: { kind: 'literal' as const, value: true } };
-        const agent = { kind: 'step' as const, id: 'work', document: { text: 'Work', references: [], attachments: [] }, input: [], result: { kind: 'text' as const } };
-        const draft = buildDraft(harness, [agent, { ...agent, id: 'next', onlyWhen }]);
-        let updated = draft;
-        const rendered = await renderList(harness, { draft, onChange: next => { updated = next as typeof draft; } });
-        screen = rendered;
-        await rendered.pressByTestIdAsync('workflow-editor-next-run-when');
-        await rendered.pressByTestIdAsync('workflow-editor-next-run-when-choice:failure');
-        expect(updated.blocks[1]).toMatchObject({ runWhen: 'failure', onlyWhen });
-        await act(async () => rendered.update(React.createElement(harness.WorkflowBlockListEditor, {
-            draft: updated, list: { kind: 'root' }, blocks: updated.blocks, depth: 0,
-            composerScope: MACHINE_COMPOSER_SCOPE, composerCustody: harness.createWorkflowAuthoringComposerCustody(updated.draftId),
-            selectedBlockId: null, validation: harness.validateWorkflowEditorDraft(updated), onChange: () => {}, onSelect: () => {}, onCustomize: () => {},
-            presentation: { editable: false },
-        })));
-        expect(rendered.getTextContent()).toContain('workflows.runWhen.ifFailure');
-        expect(rendered.findByTestId('workflow-editor-next-run-when')?.props.onPress).toBeUndefined();
-    } finally {
-        // Unmount while the same platform is still selected so overlay cleanup
-        // follows the lifecycle under which it was mounted.
-        try {
-            await screen?.unmount();
-        } finally {
-            if (platformOSDescriptor) Object.defineProperty(Platform, 'OS', platformOSDescriptor);
-            else Reflect.deleteProperty(Platform, 'OS');
-        }
-    }
+/** Step options for one block: the inspector content the editor anchors beside the step (lab editor-L1). */
+async function renderStepOptions(harness: Harness, options: Readonly<{
+    draft: ReturnType<typeof buildDraft>;
+    blockId: string;
+    onChange?: (next: ReturnType<typeof buildDraft>) => void;
+    documentEditable?: boolean;
+}>) {
+    const { WorkflowInspector } = await import('./WorkflowInspector');
+    return renderScreen(React.createElement(WorkflowInspector, {
+        subject: { kind: 'block', blockId: options.blockId }, presentation: 'popover',
+        draft: options.draft, onChange: (next) => options.onChange?.(next as ReturnType<typeof buildDraft>),
+        ...(options.documentEditable === undefined ? {} : { documentEditable: options.documentEditable }),
+        machineName: null, testIDPrefix: 'workflow-editor-inspector',
+    }));
+}
+
+it('keeps the default run-when edge quiet and names only a non-default one in the gap, as text', async () => {
+    const harness = await loadHarness();
+    const agent = { kind: 'step' as const, id: 'work', document: { text: 'Work', references: [], attachments: [] }, input: [], result: { kind: 'text' as const } };
+    const draft = buildDraft(harness, [agent, { ...agent, id: 'next' }, { ...agent, id: 'rescue', runWhen: 'failure' as const }]);
+    const screen = await renderList(harness, { draft });
+    // "If it succeeds" is the document's reading order: nothing is drawn for it (lab E1).
+    expect(screen.getTextContent()).not.toContain('workflows.runWhen.ifSuccess');
+    expect(screen.findHostByTestId('workflow-editor-next-run-when')).toBeNull();
+    // A step that runs after a failure says so in its gap, as a caption rather than a floating control.
+    const caption = screen.findByTestId('workflow-editor-rescue-run-when');
+    expect(screen.getTextContent()).toContain('workflows.runWhen.ifFailure');
+    expect(caption?.props.onPress).toBeUndefined();
+});
+
+it('edits run when in Step options and preserves an independent only-when condition', async () => {
+    const harness = await loadHarness();
+    const onlyWhen = { kind: 'exists' as const, value: { kind: 'literal' as const, value: true } };
+    const agent = { kind: 'step' as const, id: 'work', document: { text: 'Work', references: [], attachments: [] }, input: [], result: { kind: 'text' as const } };
+    const draft = buildDraft(harness, [agent, { ...agent, id: 'next', onlyWhen }]);
+    let updated = draft;
+    const options = await renderStepOptions(harness, { draft, blockId: 'next', onChange: (next) => { updated = next; } });
+    await options.pressByTestIdAsync('workflow-editor-inspector-run-when:failure');
+    expect(updated.blocks[1]).toMatchObject({ runWhen: 'failure', onlyWhen });
+    await options.unmount();
+    // Back to the default deletes the field rather than writing the default.
+    const reset = await renderStepOptions(harness, { draft: updated, blockId: 'next', onChange: (next) => { updated = next; } });
+    await reset.pressByTestIdAsync('workflow-editor-inspector-run-when:success');
+    expect(updated.blocks[1]).not.toHaveProperty('runWhen');
+    await reset.unmount();
+    // The first block has no previous step, so there is no edge to choose.
+    const first = await renderStepOptions(harness, { draft, blockId: 'work' });
+    expect(first.findByTestId('workflow-editor-inspector-run-when:failure')).toBeNull();
+});
+
+it('says a block condition once: the Notify me card carries no options of its own', async () => {
+    const harness = await loadHarness();
+    const reported = { kind: 'result' as const, producer: { blockId: 'check', scope: { kind: 'current' as const } }, path: ['reported'] };
+    const draft = buildDraft(harness, [
+        { kind: 'step', id: 'check', name: 'Quiet check', document: { text: 'Check', references: [], attachments: [] }, input: [],
+            result: { kind: 'json', schema: { type: 'object', properties: { reported: { type: 'boolean' } } } } },
+        { kind: 'action', id: 'notify', actionId: 'notifications.notify_me', input: { message: { kind: 'literal', value: 'Reported' } },
+            onlyWhen: { kind: 'compare', operator: 'eq', left: reported, right: { kind: 'literal', value: true } } },
+    ]);
+    const screen = await renderList(harness, { draft });
+    expect(screen.getTextContent().split('workflows.page.inspector.onlyWhenSentence').length - 1).toBe(1);
+    // Step-level settings live in Step options (owner, 2026-10-11): the card has no inline offer.
+    expect(screen.findByTestId('workflow-editor-action-notify-only-reported')).toBeNull();
+    expect(screen.findByTestId('workflow-editor-action-notify-options-label')?.props.children).toBe('workflows.condition.onlyWhen');
+});
+
+it('reads an existing "agent reported" condition as the quiet Notify me offer, and turning it off removes that condition', async () => {
+    const harness = await loadHarness();
+    const reported = { kind: 'result' as const, producer: { blockId: 'check', scope: { kind: 'current' as const } }, path: ['reported'] };
+    const report = { kind: 'compare' as const, operator: 'eq' as const, left: reported, right: { kind: 'literal' as const, value: true } };
+    const draft = buildDraft(harness, [
+        { kind: 'step', id: 'check', document: { text: 'Check', references: [], attachments: [] }, input: [],
+            result: { kind: 'json', schema: { type: 'object', properties: { reported: { type: 'boolean' } } } } },
+        { kind: 'action', id: 'notify', actionId: 'notifications.notify_me', input: { message: { kind: 'literal', value: 'Reported' } }, onlyWhen: report },
+    ]);
+    let updated = draft;
+    const options = await renderStepOptions(harness, { draft, blockId: 'notify', onChange: (next) => { updated = next; } });
+    const toggle = options.findByTestId('workflow-editor-inspector-only-reported');
+    // One owner, one state: the switch is the Only run when condition's reading.
+    expect(toggle?.props.value).toBe(true);
+    expect(toggle?.props.disabled).toBe(false);
+    await act(async () => { toggle?.props.onValueChange(false); });
+    expect(updated.blocks[1]).not.toHaveProperty('onlyWhen');
 });
 
 it('makes Notify me quiet using the Agent text result while preserving a custom condition', async () => {
@@ -240,19 +315,18 @@ it('makes Notify me quiet using the Agent text result while preserving a custom 
     const agent = { kind: 'step' as const, id: 'inspect', document: { text: 'Inspect', references: [], attachments: [] }, input: [], result: { kind: 'text' as const } };
     const draft = buildDraft(harness, [agent, { kind: 'action', id: 'notify', actionId: 'notifications.notify_me', input: { message: report }, onlyWhen: custom }]);
     let updated = draft;
-    const screen = await renderList(harness, { draft, onChange: next => { updated = next as typeof draft; } });
-    const toggle = screen.findByTestId('workflow-editor-action-notify-only-reported');
-    expect(toggle).not.toBeNull();
+    const options = await renderStepOptions(harness, { draft, blockId: 'notify', onChange: (next) => { updated = next; } });
+    const toggle = options.findByTestId('workflow-editor-inspector-only-reported');
     expect(toggle?.props.value).toBe(false);
     await act(async () => { toggle?.props.onValueChange(true); });
     const quiet = { kind: 'compare', operator: 'neq', left: report, right: { kind: 'literal', value: '' } };
     expect(updated.blocks[1]).toMatchObject({ input: { message: report }, onlyWhen: { kind: 'all', conditions: [custom, quiet] } });
     expect(harness.validateWorkflowEditorDraft(updated).valid).toBe(true);
-    await screen.unmount();
+    await options.unmount();
 
-    const enabled = await renderList(harness, { draft: updated, onChange: next => { updated = next as typeof draft; } });
-    expect(enabled.findByTestId('workflow-editor-action-notify-only-reported')?.props.value).toBe(true);
-    await act(async () => { enabled.findByTestId('workflow-editor-action-notify-only-reported')?.props.onValueChange(false); });
+    const enabled = await renderStepOptions(harness, { draft: updated, blockId: 'notify', onChange: (next) => { updated = next; } });
+    expect(enabled.findByTestId('workflow-editor-inspector-only-reported')?.props.value).toBe(true);
+    await act(async () => { enabled.findByTestId('workflow-editor-inspector-only-reported')?.props.onValueChange(false); });
     expect(updated.blocks[1]).toMatchObject({ onlyWhen: custom, input: { message: report } });
 });
 
@@ -266,18 +340,19 @@ it('explains quiet Notify me prerequisites without inventing a report source', a
         { kind: 'step', id: 'later', document: { text: 'Later', references: [], attachments: [] }, input: [], result: { kind: 'text' } },
     ]);
     const onChange = vi.fn();
-    const screen = await renderList(harness, { draft, onChange });
     for (const id of ['literal', 'json', 'forward']) {
-        const toggle = screen.findByTestId(`workflow-editor-action-${id}-only-reported`);
+        const options = await renderStepOptions(harness, { draft, blockId: id, onChange });
+        const toggle = options.findByTestId('workflow-editor-inspector-only-reported');
         expect(toggle, id).not.toBeNull();
         expect(toggle?.props.disabled).toBe(true);
         expect(toggle?.props.onValueChange).toBeUndefined();
+        expect(options.getTextContent()).toContain('sessionWork.scheduled.notifyOnlyReportedNeedsResult');
+        await options.unmount();
     }
-    expect(screen.getTextContent()).toContain('sessionWork.scheduled.notifyOnlyReportedNeedsResult');
     expect(onChange).not.toHaveBeenCalled();
 });
 
-it('removes a quiet-only Notify me condition and keeps the control read-only when the document is', async () => {
+it('removes a quiet-only Notify me condition through Step options', async () => {
     const harness = await loadHarness();
     const report = { kind: 'result' as const, producer: { blockId: 'inspect', scope: { kind: 'current' as const } }, path: [] };
     const draft = buildDraft(harness, [
@@ -287,16 +362,24 @@ it('removes a quiet-only Notify me condition and keeps the control read-only whe
         } },
     ]);
     let updated = draft;
-    const screen = await renderList(harness, { draft, onChange: next => { updated = next as typeof draft; } });
-    await act(async () => { screen.findByTestId('workflow-editor-action-notify-only-reported')?.props.onValueChange(false); });
+    const options = await renderStepOptions(harness, { draft, blockId: 'notify', onChange: (next) => { updated = next; } });
+    await act(async () => { options.findByTestId('workflow-editor-inspector-only-reported')?.props.onValueChange(false); });
     expect(updated.blocks[1]).not.toHaveProperty('onlyWhen');
     expect(updated.blocks[1]).toMatchObject({ input: { message: report } });
-    await screen.unmount();
-    const readOnly = await renderList(harness, { draft, presentation: { editable: false } });
-    const toggle = readOnly.findByTestId('workflow-editor-action-notify-only-reported');
-    expect(toggle?.props.value).toBe(true);
-    expect(toggle?.props.disabled).toBe(true);
-    expect(toggle?.props.onValueChange).toBeUndefined();
+});
+
+it('names a continued Session by its title, keeping its id only for a Session this device cannot read', async () => {
+    const harness = await loadHarness();
+    const { getStorage } = await import('@/sync/domains/state/storageStore');
+    const { createSessionFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
+    const step = (id: string, sessionId: string) => ({ kind: 'step' as const, id, document: { text: 'Check', references: [], attachments: [] }, input: [],
+        result: { kind: 'text' as const }, execution: { conversation: { kind: 'existing_session' as const, sessionId, machineId: 'machine-1' } } });
+    getStorage().setState({ sessions: { 'session-named': createSessionFixture({ id: 'session-named',
+        metadata: { path: '/repo', host: 'host', machineId: 'machine-1', summary: { text: 'Nightly quiet check', updatedAt: 1 } } as never }) } });
+    const screen = await renderList(harness, { draft: buildDraft(harness, [step('named', 'session-named'), step('gone', 'session-gone')]) });
+    expect(screen.findByTestId('workflow-editor-step-named-inheritance')?.props.children).toContain('Nightly quiet check');
+    expect(screen.findByTestId('workflow-editor-step-named-inheritance')?.props.children).not.toContain('session-named');
+    expect(screen.findByTestId('workflow-editor-step-gone-inheritance')?.props.children).toContain('session-gone');
 });
 
 it('keeps repair hints and source facts available while editing a heading', async () => {
@@ -375,7 +458,7 @@ it('reads a step role by its display name and keeps a read-only step input on it
     expect(footer?.findAll((node) => node.props?.testID === 'workflow-editor-step-check-input-0').length).toBeGreaterThan(0);
 });
 
-it('reads a compound condition as a lead and one line per arm, and leaves an empty Otherwise out of a reading document', async () => {
+it('reads a compound condition as one compact sentence, and leaves an empty Otherwise out of a reading document', async () => {
     const harness = await loadHarness();
     const screen = await renderList(harness, {
         draft: buildDraft(harness, [{ kind: 'if', id: 'gate',
@@ -391,10 +474,10 @@ it('reads a compound condition as a lead and one line per arm, and leaves an emp
     // The heading line carries the compound's own words, not its arms run together.
     const textOf = (node: typeof summary): string => node === null || node === undefined ? ''
         : node.children.map((child) => typeof child === 'string' ? child : textOf(child)).join('');
-    expect(textOf(summary)).toContain('workflows.page.inspector.conditionAny');
-    expect(textOf(summary)).not.toContain('workflows.condition.exists');
-    const arms = screen.findByTestId('workflow-editor-if-gate-summary-arms');
-    expect(textOf(arms).split('workflows.condition.exists').length - 1).toBe(2);
+    // Its first arm and how many more (lab E1 reads one line); every arm is in Step options.
+    expect(textOf(summary).split('workflows.condition.exists').length - 1).toBe(1);
+    expect(textOf(summary)).toContain('workflows.page.inspector.conditionMore:');
+    expect(screen.findByTestId('workflow-editor-if-gate-summary-arms')).toBeNull();
     expect(screen.getTextContent()).not.toContain('workflows.editor.otherwise');
 });
 
@@ -423,9 +506,8 @@ it('duplicates a nested block with fresh identities and keeps its internal refer
     const changed = vi.fn();
     const selected = vi.fn();
     const screen = await renderList(harness, { draft, onChange: changed, onSelect: selected });
-    await screen.pressByTestIdAsync('workflow-editor-parallel-group-actions');
-    expect(screen.findByTestId('workflow-editor-parallel-group-actions-duplicate')).not.toBeNull();
-    await screen.pressByTestIdAsync('workflow-editor-parallel-group-actions-duplicate');
+    await chooseBlockAction(screen, 'workflow-editor-parallel-group-actions',
+        'workflow-editor-parallel-group-actions-duplicate', () => expect(changed).toHaveBeenCalled());
     const next = changed.mock.calls.at(-1)?.[0] as typeof draft;
     expect(next.blocks).toHaveLength(2);
     expect(next.blocks[0]).toBe(draft.blocks[0]);
@@ -673,11 +755,14 @@ describe('workflow block list editor', () => {
         const screen = await renderList(harness, { draft, onChange: (next) => changes.push(next as ReturnType<typeof buildDraft>) });
 
         // Action: one row per declared field, bound or not.
-        for (const id of ['action-notify', 'workflow-review', 'wait-check']) {
+        // An unnamed typed card's heading carries its card's identity, mark included; a Wait's
+        // heading is its number and name (lab .uwe-sh), its kind said by its own footer line.
+        for (const id of ['action-notify', 'workflow-review']) {
             const mark = screen.findHostByTestId(`workflow-editor-${id}-label-kind-mark`);
             expect(mark, id).not.toBeNull();
             expect(mark?.props.accessibilityElementsHidden).toBe(true);
         }
+        expect(screen.findHostByTestId('workflow-editor-wait-check-label-kind-mark')).toBeNull();
         for (const field of ['message', 'title', 'channels']) {
             expect(screen.findHostByTestId(`workflow-editor-action-notify-field-${field}`), field).not.toBeNull();
         }
@@ -833,8 +918,8 @@ describe('workflow block list editor', () => {
         const changes: unknown[] = [];
         const screen = await renderList(harness, { draft, onChange: (next) => changes.push(next) });
 
-        await screen.pressByTestIdAsync('workflow-editor-step-b-actions');
-        await screen.pressByTestIdAsync('workflow-editor-step-b-actions-moveUp');
+        await chooseBlockAction(screen, 'workflow-editor-step-b-actions',
+            'workflow-editor-step-b-actions-moveUp', () => expect(changes).toHaveLength(1));
 
         const next = changes[0] as ReturnType<typeof buildDraft>;
         expect(next.blocks.map((block) => block.id)).toEqual(['b', 'a']);
@@ -848,7 +933,7 @@ describe('workflow block list editor', () => {
         ]);
         const screen = await renderList(harness, { draft });
 
-        await screen.pressByTestIdAsync('workflow-editor-step-a-actions');
+        await openBlockActionsMenu(screen, 'workflow-editor-step-a-actions', 'workflow-editor-step-a-actions-moveDown');
         expect(screen.findByTestId('workflow-editor-step-a-actions-moveUp')).toBeNull();
         expect(screen.findByTestId('workflow-editor-step-a-actions-moveDown')).not.toBeNull();
     });
@@ -867,8 +952,8 @@ describe('workflow block list editor', () => {
             onSelect: (id) => selections.push(id),
         });
 
-        await screen.pressByTestIdAsync('workflow-editor-step-a-actions');
-        await screen.pressByTestIdAsync('workflow-editor-step-a-actions-remove');
+        await chooseBlockAction(screen, 'workflow-editor-step-a-actions',
+            'workflow-editor-step-a-actions-remove', () => expect(changes).toHaveLength(1));
 
         expect(selections).toEqual(['b']);
         expect((changes[0] as ReturnType<typeof buildDraft>).blocks.map((block) => block.id)).toEqual(['b']);
@@ -933,8 +1018,8 @@ describe('workflow block list editor', () => {
         // No always-visible "+" for an empty Otherwise, so it can never stack on the gap's own inserter.
         expect(screen.findHostByTestId('workflow-editor-add-ifOtherwise')).toBeNull();
         expect(screen.findHostByTestId(`workflow-editor-if-${conditional.id}-otherwise-label`)).toBeNull();
-        await screen.pressByTestIdAsync(`workflow-editor-if-${conditional.id}-actions`);
-        await screen.pressByTestIdAsync(`workflow-editor-if-${conditional.id}-actions-addOtherwise`);
+        await chooseBlockAction(screen, `workflow-editor-if-${conditional.id}-actions`,
+            `workflow-editor-if-${conditional.id}-actions-addOtherwise`, () => expect(changes).toHaveLength(1));
 
         const next = changes[0]!;
         expect(next.blocks[0]).toMatchObject({
@@ -1084,9 +1169,8 @@ describe('workflow block list editor', () => {
         } as never);
         const screen = await renderScreen(element);
 
-        await screen.pressByTestIdAsync('workflow-editor-step-analyze-actions');
-        await screen.pressByTestIdAsync('workflow-editor-step-analyze-actions-remove');
-        await act(async () => {});
+        await chooseBlockAction(screen, 'workflow-editor-step-analyze-actions',
+            'workflow-editor-step-analyze-actions-remove', () => expect(removals).toHaveLength(1));
 
         expect(removals).toEqual([{
             list: { kind: 'root' },
@@ -1220,21 +1304,24 @@ describe('workflow block list editor', () => {
                 : block
         ));
         const changes: ReturnType<typeof buildDraft>[] = [];
-        const screen = await renderList(harness, { draft: withInput, onChange: (next) => changes.push(next as ReturnType<typeof buildDraft>) });
+        // A step's binding editors show while it is selected (DESIGN-13).
+        const rootScreen = await renderList(harness, { draft: withInput, selectedBlockId: 'root-step' });
+        const screen = await renderList(harness, { draft: withInput, selectedBlockId: inside, onChange: (next) => changes.push(next as ReturnType<typeof buildDraft>) });
 
         // The source select offers exactly the kinds valid where the step sits.
-        const sourceKinds = (stepId: string) => {
-            const select = screen.findAll((node) => node.props?.testID === `workflow-editor-step-${stepId}-input-0-kind`
-                && typeof node.props?.onSelect === 'function')[0];
-            if (select === undefined) throw new Error(`No source select for ${stepId}`);
-            return select as unknown as { props: { items: ReadonlyArray<{ id: string }>; onSelect: (id: string) => void } };
+        const fieldSelect = (root: typeof screen, testID: string) => {
+            const select = root.findAll((node) => node.props?.testID === testID && typeof node.props?.onSelect === 'function')[0];
+            if (select === undefined) throw new Error(`No field select ${testID}`);
+            return select as unknown as { props: { items: ReadonlyArray<{ id: string }>; selectedId: string | null; onSelect: (id: string) => void } };
         };
+        const sourceKinds = (root: typeof screen, stepId: string) => fieldSelect(root, `workflow-editor-step-${stepId}-input-0-kind`);
         // The root step is outside every loop: no item or round facts.
-        expect(sourceKinds('root-step').props.items.map((item) => item.id)).not.toContain('item');
-        expect(sourceKinds('root-step').props.items.map((item) => item.id)).not.toContain('iteration');
+        expect(sourceKinds(rootScreen, 'root-step').props.items.map((item) => item.id)).not.toContain('item');
+        expect(sourceKinds(rootScreen, 'root-step').props.items.map((item) => item.id)).not.toContain('iteration');
+        await rootScreen.unmount();
         // The body step of a for-each loop can author both.
-        expect(sourceKinds(inside).props.items.map((item) => item.id)).toEqual(expect.arrayContaining(['item', 'iteration']));
-        await act(async () => { sourceKinds(inside).props.onSelect('item'); });
+        expect(sourceKinds(screen, inside).props.items.map((item) => item.id)).toEqual(expect.arrayContaining(['item', 'iteration']));
+        await act(async () => { sourceKinds(screen, inside).props.onSelect('item'); });
         const readInput = () => harness.findWorkflowBlock(changes.at(-1)!, inside) as { input: unknown[] };
         expect(readInput().input[0]).toEqual({ kind: 'item', field: 'value' });
 
@@ -1243,11 +1330,12 @@ describe('workflow block list editor', () => {
         const authored = harness.updateWorkflowBlock(withInput, inside, (block) => (
             block.kind === 'step' ? { ...block, input: [{ kind: 'iteration', field: 'index' }] } : block
         ));
-        const fields = await renderList(harness, { draft: authored, onChange: (next) => changes.push(next as ReturnType<typeof buildDraft>) });
-        for (const field of ['index', 'position', 'count', 'stopReason']) {
-            expect(fields.findByTestId(`workflow-editor-step-${inside}-input-0-iteration-field-${field}`), field).not.toBeNull();
-        }
-        await fields.pressByTestIdAsync(`workflow-editor-step-${inside}-input-0-iteration-field-stopReason`);
+        const fields = await renderList(harness, { draft: authored, selectedBlockId: inside, onChange: (next) => changes.push(next as ReturnType<typeof buildDraft>) });
+        // Which round fact is one field select, like the binding's other parts (07 control table).
+        const roundField = fieldSelect(fields, `workflow-editor-step-${inside}-input-0-iteration-field`);
+        expect(roundField.props.items.map((item) => item.id)).toEqual(['index', 'position', 'count', 'stopReason']);
+        expect(roundField.props.selectedId).toBe('index');
+        await act(async () => { roundField.props.onSelect('stopReason'); });
         expect(readInput().input[0]).toEqual({ kind: 'iteration', field: 'stopReason' });
         expect(harness.validateWorkflowEditorDraft(changes.at(-1)!).valid).toBe(true);
     });
@@ -1257,10 +1345,15 @@ describe('workflow block list editor', () => {
         const draft = buildDraft(harness, [
             { kind: 'step', id: 'root-step', document: { text: 'Root', references: [], attachments: [] }, input: [{ kind: 'item', field: 'count' }], result: { kind: 'text' } },
         ]);
-        const screen = await renderList(harness, { draft });
-        // A value choice announces checked (D14A radio semantics, owned by the data editor).
-        expect(screen.findByTestId('workflow-editor-step-root-step-input-0-item-field-count')?.props.accessibilityState)
-            .toMatchObject({ checked: true });
+        // Selected, its editor shows the authored choice even where the validator rejects it.
+        const screen = await renderList(harness, { draft, selectedBlockId: 'root-step' });
+        const itemField = screen.findAll((node) => node.props?.testID === 'workflow-editor-step-root-step-input-0-item-field'
+            && typeof node.props?.onSelect === 'function')[0] as unknown as { props: { selectedId: string | null } } | undefined;
+        expect(itemField?.props.selectedId).toBe('count');
+        await screen.unmount();
+        // At rest it stays on the page as its token, with the validator's issue beside it.
+        const resting = await renderList(harness, { draft });
+        expect(resting.findHostByTestId('workflow-editor-step-root-step-input-0')).not.toBeNull();
         const validation = harness.validateWorkflowEditorDraft(draft);
         expect(validation.issues.map((issue) => issue.code), JSON.stringify(validation.issues))
             .toContain('invalid_reference_scope');
@@ -1329,13 +1422,13 @@ describe('document anatomy (DESIGN-4)', () => {
         // Lanes are named on the rail; Remove is in each lane's menu, not a word at rest.
         expect(screen.findHostByTestId('workflow-editor-parallel-panel-branch-one-label')?.props.placeholder).toBe('workflows.page.inspector.lane:{"position":1}');
         expect(screen.findByTestId('workflow-editor-parallel-panel-branch-one-remove')).toBeNull();
-        await screen.pressByTestIdAsync('workflow-editor-parallel-panel-branch-one-actions');
-        await screen.pressByTestIdAsync('workflow-editor-parallel-panel-branch-one-actions-remove');
+        await chooseBlockAction(screen, 'workflow-editor-parallel-panel-branch-one-actions',
+            'workflow-editor-parallel-panel-branch-one-actions-remove', () => expect(changes).toHaveLength(1));
         expect(changes.at(-1)?.blocks[0]).toMatchObject({ branches: [{ id: 'two' }] });
         // Add a lane lives in the group's own menu.
         expect(screen.findByTestId('workflow-editor-parallel-panel-add-branch')).toBeNull();
-        await screen.pressByTestIdAsync('workflow-editor-parallel-panel-actions');
-        await screen.pressByTestIdAsync('workflow-editor-parallel-panel-actions-addBranch');
+        await chooseBlockAction(screen, 'workflow-editor-parallel-panel-actions',
+            'workflow-editor-parallel-panel-actions-addBranch', () => expect(changes).toHaveLength(2));
         const grown = changes.at(-1)?.blocks[0];
         expect(grown?.kind === 'parallel' ? grown.branches : []).toHaveLength(3);
         // A literal reads as the value itself: "Repeat 2 times", no reference token.
@@ -1562,6 +1655,27 @@ describe('document anatomy (DESIGN-4)', () => {
         expect(screen.findHostByTestId('workflow-editor-action-named-label')?.props.value).toBe('Announce it');
         expect(screen.findByTestId('workflow-editor-action-named-card-title')).not.toBeNull();
         expect(screen.findHostByTestId('workflow-editor-action-named-label-source')).toBeNull();
+    });
+
+    it('reads an Agent step\'s inputs as tokens until the step is selected, then edits them (DESIGN-13)', async () => {
+        const harness = await loadHarness();
+        const draft = buildDraft(harness, [
+            { kind: 'step', id: 'gather', name: 'Gather changes', document: { text: 'List the changes', references: [], attachments: [] }, input: [], result: { kind: 'text' } },
+            { kind: 'step', id: 'write', name: 'Write changelog', document: { text: 'Write the changelog', references: [], attachments: [] },
+                input: [{ kind: 'result', producer: { blockId: 'gather', scope: { kind: 'current' } }, path: [] }], result: { kind: 'text' } },
+        ] as never);
+        const selections: (string | null)[] = [];
+        const resting = await renderList(harness, { draft, onSelect: (id) => selections.push(id) });
+        // At rest the step reads like the document it is: its input is a token on the footer line, no form controls.
+        expect(resting.findHostByTestId('workflow-editor-step-write-input-0-kind-trigger')).toBeNull();
+        expect(resting.findHostByTestId('workflow-editor-step-write-input-0')).not.toBeNull();
+        // Pressing the inputs selects the step, as pressing a typed card's value does.
+        await resting.pressByTestIdAsync('workflow-editor-step-write-inputs-edit');
+        expect(selections).toContain('write');
+        await resting.unmount();
+        const selected = await renderList(harness, { draft, selectedBlockId: 'write' });
+        expect(selected.findHostByTestId('workflow-editor-step-write-input-0-kind-trigger')).not.toBeNull();
+        await selected.unmount();
     });
 
     it('reads a typed card\'s set values as values until its step is selected, then edits them (DESIGN-6 N5)', async () => {

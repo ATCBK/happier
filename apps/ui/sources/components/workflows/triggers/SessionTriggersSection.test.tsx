@@ -47,7 +47,7 @@ const GROUPS: Groups = [
 
 /** The sheet's drawn group separators: unlabelled lines (labelled row elements can report the same role under the test renderer). */
 function separators(screen: Awaited<ReturnType<typeof renderScreen>>) {
-    return screen.findAll((node) => typeof node.type === 'string' && node.props.role === 'separator' && !('accessibilityLabel' in node.props));
+    return screen.findAll((node) => typeof node.type === 'string' && node.props.role === 'separator' && node.props.accessibilityLabel == null);
 }
 
 describe('SessionTriggersSectionView', () => {
@@ -67,32 +67,46 @@ describe('SessionTriggersSectionView', () => {
             pendingKeys={new Set()} onToggle={vi.fn()} onOpen={vi.fn()} onAdd={vi.fn()} onRetry={vi.fn()} />);
         expect(screen.getTextContent()).toContain('nextMinutes(count=2)');
         expect(screen.getTextContent()).toContain('minutesAgoShort(count=1)');
-        await act(async () => { vi.advanceTimersByTime(30_001); });
+        // The age wake must commit before React registers the countdown's next one-ms wake.
+        await act(async () => { vi.advanceTimersByTime(30_000); });
+        await act(async () => { vi.advanceTimersByTime(1); });
         expect(screen.getTextContent()).toContain('nextMinutes(count=1)');
         expect(screen.getTextContent()).toContain('minutesAgoShort(count=2)');
         expect(vi.getTimerCount()).toBe(1);
     });
-    it('keeps history behind the habit row rather than a second control line', async () => {
+    it('puts History, Run now and the switch on the habit row\'s own actions line (lab b-habit T)', async () => {
         const history = vi.fn();
+        const runNow = vi.fn();
         const onOpen = vi.fn();
-        const screen = await renderScreen(<SessionTriggersSectionView groups={GROUPS} status="ready"
-            pendingKeys={new Set()} onToggle={vi.fn()} onOpen={onOpen} onAdd={vi.fn()} onRetry={vi.fn()}
-            onHistory={history} />);
-        expect(screen.findByTestId('session-work-trigger:ci:t3-history')).toBeNull();
-        expect(screen.findByTestId('session-work-trigger:ci:t3-runNow')).toBeNull();
-        screen.pressByTestId('session-work-trigger:ci:t3');
-        expect(onOpen).toHaveBeenCalledWith(GROUPS[1]!.rows[0], expect.anything());
-    });
-    it('keeps a paused habit last result and its directly usable row-end toggle', async () => {
         const toggle = vi.fn();
         const screen = await renderScreen(<SessionTriggersSectionView groups={GROUPS} status="ready"
-            pendingKeys={new Set()} onToggle={toggle} onOpen={vi.fn()} onAdd={vi.fn()} onRetry={vi.fn()}
-            onHistory={vi.fn()} />);
-        expect(screen.getTextContent()).toContain('Failed');
+            pendingKeys={new Set()} onToggle={toggle} onOpen={onOpen} onAdd={vi.fn()} onRetry={vi.fn()}
+            onHistory={history} onRunNow={runNow} />);
+        const row = GROUPS[1]!.rows[0]!;
         const actions = screen.findByTestId('session-work-trigger:ci:t3-actions');
-        expect(actions).toBeNull();
+        expect(actions).not.toBeNull();
+        // The switch is the line's last control, not a second one beside the title.
+        const inActions = (testID: string) => actions!.findAll((node) => node.props.testID === testID).length > 0;
+        expect(inActions('session-work-trigger:ci:t3-history')).toBe(true);
+        expect(inActions('session-work-trigger:ci:t3-runNow')).toBe(true);
+        expect(inActions('session-work-trigger:ci:t3-switch')).toBe(true);
+        screen.pressByTestId('session-work-trigger:ci:t3-history');
+        expect(history).toHaveBeenCalledWith(row);
+        screen.pressByTestId('session-work-trigger:ci:t3-runNow');
+        expect(runNow).toHaveBeenCalledWith(row);
         screen.findByTestId('session-work-trigger:ci:t3-switch')?.props.onValueChange(true);
-        expect(toggle).toHaveBeenCalledWith(GROUPS[1]!.rows[0], true);
+        expect(toggle).toHaveBeenCalledWith(row, true);
+        screen.pressByTestId('session-work-trigger:ci:t3');
+        expect(onOpen).toHaveBeenCalledWith(row, expect.anything());
+    });
+    it('keeps a paused habit last result and offers no Run now for a row that cannot run', async () => {
+        const screen = await renderScreen(<SessionTriggersSectionView
+            groups={[{ ...GROUPS[1]!, rows: [{ ...GROUPS[1]!.rows[0]!, sourceUnavailable: true }] }]} status="ready"
+            pendingKeys={new Set()} onToggle={vi.fn()} onOpen={vi.fn()} onAdd={vi.fn()} onRetry={vi.fn()}
+            onHistory={vi.fn()} onRunNow={vi.fn()} />);
+        expect(screen.getTextContent()).toContain('Failed');
+        expect(screen.findByTestId('session-work-trigger:ci:t3-history')).not.toBeNull();
+        expect(screen.findByTestId('session-work-trigger:ci:t3-runNow')).toBeNull();
     });
     it('offers PR-link Retry while keeping ordinary trigger rows usable', async () => {
         const retry = vi.fn();

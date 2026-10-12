@@ -1,7 +1,7 @@
 import * as React from 'react';
 import NodeModule from 'node:module';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
-import { HappierInputField, HappierSelect, type HappierInputPickerPort } from '@happier-dev/plugin-ui/presentation';
+import { HappierInputField, type HappierInputPickerPort } from '@happier-dev/plugin-ui/presentation';
 import type { WorkflowInputDefinition } from '@happier-dev/protocol/workflows/workflowV1';
 import type { RenderContext } from '@happier-dev/plugin-sdk/ui';
 import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
@@ -85,6 +85,14 @@ const inputs: readonly WorkflowInputDefinition[] = [
 ];
 const reply = { actionId: null, fieldPath: null, optionsSourceId: 'notifications.channels.available',
     options: [{ value: 'push', label: 'Phone' }] };
+
+// The compact choice field names its reading and opens its rows in place.
+type RenderedScreen = Awaited<ReturnType<typeof renderScreen>>;
+const choiceTriggers = (screen: RenderedScreen) => screen.findAllByType('Pressable')
+    .filter(node => (node.props.accessibilityRole ?? node.props.role) === 'button' && /^[^:]+: /.test(String(node.props.accessibilityLabel ?? '')));
+const choiceRowLabels = (screen: RenderedScreen) => screen.findAllByType('Pressable')
+    .filter(node => ['checkbox', 'radio'].includes(node.props.accessibilityRole ?? node.props.role))
+    .map(node => String(node.props.accessibilityLabel));
 
 function publishMachine(serverId: string, machine: ReturnType<typeof createMachineFixture>): void {
     const row = {
@@ -184,7 +192,8 @@ describe('Workflow inputs through real Action option resolution', () => {
         const failure = card.findByType(SurfaceStateCard);
         expect(failure.props.diagnosticCode).toBe('action_disabled');
         expect(failure.props.action?.onPress).toEqual(expect.any(Function));
-        expect(card.findByType(HappierSelect)!.props.disabled).toBe(true);
+        expect(choiceTriggers(card).every(trigger => trigger.props.disabled)).toBe(true);
+        expect(choiceTriggers(card).length).toBeGreaterThan(0);
         const { resolveSessionActionDraftHeightBearingPaint } = await import('@/components/sessions/actions/sessionActionDraftPresentation');
         const paint = resolveSessionActionDraftHeightBearingPaint({ draft, sessionId: 'session-1', resolveFieldOptions: options.getCurrent() });
         expect(paint.fields.find(entry => entry.field.path === 'channels')?.options).toEqual([{ label: 'common.error' }]);
@@ -197,8 +206,9 @@ describe('Workflow inputs through real Action option resolution', () => {
         expect(composer.findByTestId('workflow-run-inputs-run')!.props.disabled).toBe(true);
         const chip = composer.findByType(AgentInput).props.extraActionChips.find((entry: { controlId?: string }) => entry.controlId === 'workflowInputs');
         const panel = await renderScreen(chip.collapsedContentPopover.renderContent);
-        expect(panel.findAllByType(HappierSelect)).toHaveLength(2);
-        expect(panel.findAllByType(HappierSelect).map((select) => select.props.options)).toEqual([reply.options, reply.options]);
+        expect(choiceTriggers(panel)).toHaveLength(2);
+        for (const trigger of choiceTriggers(panel)) await pressTestInstanceAsync(trigger);
+        expect(choiceRowLabels(panel)).toEqual(reply.options.concat(reply.options).map(option => option.label));
         expect(rpc.machine).toHaveBeenCalledWith(expect.objectContaining({
             method: 'input-relay:action.options.resolve',
             params: { actionId: 'notifications.notify_me', fieldPath: 'channels' },
@@ -213,13 +223,14 @@ describe('Workflow inputs through real Action option resolution', () => {
         const chip = composer.findByType(AgentInput).props.extraActionChips.find((entry: { controlId?: string }) => entry.controlId === 'workflowInputs');
         const panel = await renderScreen(chip.collapsedContentPopover.renderContent);
         const { SurfaceStateCard } = await import('@/components/ui/surfaces');
-        expect(panel.findAllByType(HappierSelect).every((select) => select.props.disabled)).toBe(true);
+        expect(choiceTriggers(panel).every(trigger => trigger.props.disabled)).toBe(true);
         const error = panel.findAllByType(SurfaceStateCard)[0]!;
         expect(error.props.diagnosticCode).toBe('target_unavailable');
         rpc.machine.mockResolvedValue(reply);
         const { act } = await import('react-test-renderer');
         await act(async () => { error.props.action.onPress(); });
-        expect(panel.findAllByType(HappierSelect)[0]!.props.options).toEqual(reply.options);
+        await pressTestInstanceAsync(choiceTriggers(panel)[0]);
+        expect(choiceRowLabels(panel)).toEqual(reply.options.map(option => option.label));
     });
 
     it.each([false, true])('offers a typed input’s declared picker with descriptor-scoped options (picker-only=%s)', async (pickerOnly) => {

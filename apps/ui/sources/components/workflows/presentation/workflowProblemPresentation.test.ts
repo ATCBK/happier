@@ -26,6 +26,30 @@ function actionError(rawCode: string | null, message = 'server-internal reason')
  * never reach a person as prose the server chose or as the identifier itself.
  */
 describe('workflowProblemPresentation', () => {
+    it('presents the precise conversation check from the typed refusal', () => {
+        const error = new WorkflowActionError({ rawCode: 'workflow_conversation_unavailable', message: 'private diagnostics',
+            failure: { ok: false, errorCode: 'workflow_conversation_unavailable', error: 'workflow_conversation_unavailable',
+                details: { code: 'workflow_conversation_unavailable', reason: 'agentTarget', expected: { kind: 'agent' }, observed: { kind: 'unset' } } } });
+        expect(resolveWorkflowProblemPresentation(error)).toMatchObject({ message: 'workflows.problem.conversationChecks.agentTarget', repair: 'none' });
+    });
+    it('presents the exact-machine Agent probe repair rather than an opaque target refusal', () => {
+        const error = new WorkflowActionError({ rawCode: 'target_unavailable', message: 'private diagnostics',
+            failure: { ok: false, errorCode: 'target_unavailable', error: 'target_unavailable',
+                details: { code: 'target_unavailable', reason: 'agent_probe_failed', agentId: 'claude', errorCode: 'cli-detection-failed' } } });
+        expect(resolveWorkflowProblemPresentation(error)).toMatchObject({
+            code: 'target_unavailable', message: 'machineAgents.unknown', repair: 'retry', accessibilitySemantics: 'alert',
+        });
+    });
+    it('distinguishes unsupported architecture from a failed probe without sending install repairs to Account settings', () => {
+        const unsupported = new WorkflowActionError({ rawCode: 'target_unavailable', message: 'private diagnostics',
+            failure: { ok: false, errorCode: 'target_unavailable', error: 'target_unavailable',
+                details: { code: 'target_unavailable', reason: 'platform_unsupported', platformReason: 'arch' } } });
+        expect(resolveWorkflowProblemPresentation(unsupported)).toMatchObject({ message: 'machineAgents.unsupportedArch', repair: 'none' });
+        const missing = new WorkflowActionError({ rawCode: 'target_unavailable', message: 'private diagnostics',
+            failure: { ok: false, errorCode: 'target_unavailable', error: 'target_unavailable',
+                details: { code: 'target_unavailable', reason: 'agent_not_installed' } } });
+        expect(resolveWorkflowProblemPresentation(missing)).toMatchObject({ message: 'machineAgents.notInstalled', repair: 'none' });
+    });
     it('keeps unreadable history, encryption setup, key waiting and storage recovery distinct', () => {
         const states = [
             ['history_not_readable', 'none', 'alert'],
@@ -108,6 +132,12 @@ describe('workflowProblemPresentation', () => {
         // Nothing the person can press changes an access decision.
         expect(resolveWorkflowProblemPresentation(actionError('run_access_denied')))
             .toMatchObject({ repair: 'none', repairLabel: null });
+    });
+
+    it('says a Run moved on for a Run control conflict, never the editor\'s kept-local-work reassurance (DESIGN-14 D9)', () => {
+        expect(resolveWorkflowProblemPresentation(actionError('currentness_conflict'), 'run'))
+            .toMatchObject({ message: 'workflows.problem.runMovedOn', repair: 'refresh', repairLabel: 'common.refresh' });
+        expect(resolveWorkflowProblemPresentation(actionError('currentness_conflict')).message).toBe('workflows.problem.conflict');
     });
 
     it('keeps an unrecognized transport failure generic instead of inventing a workflow code', () => {

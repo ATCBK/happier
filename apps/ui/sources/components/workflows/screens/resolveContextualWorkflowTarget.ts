@@ -2,6 +2,7 @@ import type { WorkflowProjectTargetV1 } from '@happier-dev/protocol/workflows';
 
 import { resolvePreferredLaunchMachineId } from '@/components/settings/pickers/resolvePreferredMachineId';
 import type { Machine } from '@/sync/domains/state/storageTypes';
+import type { MachineReachabilityScope } from '@/sync/domains/machines/reachability/machineReachability';
 import { resolveDefaultDirectoryForMachine } from '@/utils/sessions/machineDefaultDirectory';
 
 /**
@@ -22,12 +23,14 @@ type RecentMachinePath = Readonly<{ machineId?: string | null; path?: string | n
 
 export function resolveContextualWorkflowProjectTarget(params: Readonly<{
     machines: readonly Machine[];
+    scope?: MachineReachabilityScope | null;
     recentMachinePaths: readonly RecentMachinePath[];
     /** A captured Session's machine, when the draft was opened from one. */
     preferredMachineId?: string | null;
 }>): WorkflowProjectTargetV1 | null {
     const machineId = resolvePreferredLaunchMachineId({
         machines: params.machines,
+        scope: params.scope,
         recentMachinePaths: params.recentMachinePaths,
         preferredMachineId: params.preferredMachineId ?? null,
     });

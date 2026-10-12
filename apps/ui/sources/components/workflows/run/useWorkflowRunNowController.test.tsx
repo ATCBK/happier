@@ -1,39 +1,59 @@
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { WorkflowRunStartRequestV1Schema } from '@happier-dev/protocol/workflows/actionsV1';
 
-import { createDeferred, renderHook, standardCleanup } from '@/dev/testkit';
+import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
+import { renderHook } from '@/dev/testkit/hooks/renderHook';
+import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
-import { storage } from '@/sync/domains/state/storageStore';
-import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
-import { WorkflowActionError } from '@/sync/domains/workflows/workflowActionError';
-import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 
 import type { WorkflowRunNowRequest } from './useWorkflowRunNowController';
 
-const executeMock = vi.hoisted(() => vi.fn());
+const executeMock = vi.hoisted(() => vi.fn<(
+    request: Parameters<typeof import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc').machineRpcWithServerScope>[0],
+) => Promise<unknown>>());
 const modalAlertSpy = vi.hoisted(() => vi.fn(async () => {}));
 
-const accountHost = vi.hoisted(() => ({ serverId: 'server-a', available: true }));
-
-vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', () => ({
-    createFrontDoorActionExecute: () => executeMock,
-}));
-vi.mock('@/modal', () => ({ Modal: { alert: modalAlertSpy } }));
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () => {
+    const { createServerScopedMachineRpcBoundaryMock } = await import('@/dev/testkit/mocks/serverScopedRpc');
+    return createServerScopedMachineRpcBoundaryMock(executeMock);
+});
+vi.mock('@/modal', async () => {
+    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+    return createModalModuleMock({ spies: { alert: modalAlertSpy } }).module;
+});
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return createTextModuleMock({ translate: (key: string) => key });
 });
-vi.mock('@/sync/runtime/orchestration/connectionManager', () => ({
-    getAppliedActiveServerSnapshot: () => ({ serverId: accountHost.serverId }),
-    isAppliedActiveServerRuntimeAvailable: () => accountHost.available,
-}));
+
+const homes = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(homes);
+installDisconnectedServerSocketBoundary();
+const { storage } = await import('@/sync/domains/state/storageStore');
+const { retireActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+const { publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+const { setActiveServerId } = await import('@/sync/domains/server/serverProfiles');
+const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
+let homeA: string;
+let homeB: string;
+
+function startInput(index = 0) {
+    return WorkflowRunStartRequestV1Schema.parse(executeMock.mock.calls[index]?.[0].payload);
+}
 
 function setAccountScope(scope: { serverId: string; accountId: string } | null): void {
     // Model the host reset using the real lifetime owner, not a fake generation.
     retireActiveServerAccountScopeLifetime();
-    accountHost.serverId = scope?.serverId ?? '';
-    accountHost.available = scope !== null;
-    storage.setState({ profileScope: scope });
+    const serverId = scope?.serverId === 'server-b' ? homeB : homeA;
+    if (scope) setActiveServerId(serverId);
+    publishAppliedActiveServerSnapshot(getActiveServerSnapshot(), scope !== null);
+    storage.setState({ profileScope: scope ? { ...scope, serverId } : null });
 }
 
 /** The one Run UUID the caller allocates for an explicit admission attempt. */
@@ -48,11 +68,8 @@ const source: WorkflowRunNowRequest['source'] = {
 
 function admitted(admission: 'created' | 'existing') {
     return {
-        ok: true,
-        result: {
-            run: createWorkflowRunSummaryFixture({ id: RUN_ID, origin: { kind: 'direct' } }),
-            admission,
-        },
+        run: createWorkflowRunSummaryFixture({ id: RUN_ID, ownerAccountId: 'account-a', origin: { kind: 'direct' } }),
+        admission,
     };
 }
 
@@ -65,11 +82,14 @@ describe('useWorkflowRunNowController', () => {
         await act(async () => {
             await hook.getCurrent().runNow({ runId: RUN_ID, source, roleOverrides });
         });
-        expect(executeMock.mock.calls[0]?.[1]).toMatchObject({ roleOverrides });
+        expect(executeMock.mock.calls[0]?.[0].payload).toMatchObject({ roleOverrides });
     });
-    beforeEach(() => {
+    beforeEach(async () => {
+        homeA = await homes.addHome({ name: 'A', serverUrl: 'https://workflow-a.test', accountId: 'account-a', currentAccount: true });
+        homeB = await homes.addHome({ name: 'B', serverUrl: 'https://workflow-b.test', accountId: 'account-b', currentAccount: true, active: false });
+        homes.answer(homeA, '/v1/features', { body: createRootLayoutFeaturesResponse({ features: { workflows: { enabled: true } } }) });
         setAccountScope({ serverId: 'server-a', accountId: 'account-a' });
-        storage.setState({ workflowRunsById: {} });
+        storage.setState({ workflowRunsById: {}, machines: { 'machine-1': createMachineFixture({ activeAt: 0 }) } });
     });
 
     afterEach(() => {
@@ -78,6 +98,7 @@ describe('useWorkflowRunNowController', () => {
         modalAlertSpy.mockClear();
         setAccountScope(null);
         storage.setState({ workflowRunsById: {} });
+        homes.reset();
         standardCleanup();
     });
 
@@ -94,9 +115,9 @@ describe('useWorkflowRunNowController', () => {
 
         expect(outcome!?.run.id).toBe(RUN_ID);
         expect(outcome!?.admission).toBe('created');
-        expect(executeMock.mock.calls[0]?.[0]).toBe('workflow.run.start');
-        expect((executeMock.mock.calls[0]?.[1] as { runId: string }).runId).toBe(RUN_ID);
-        expect(executeMock.mock.calls[0]?.[1]).toMatchObject({ metadata: { title: 'Frozen title' } });
+        expect(executeMock.mock.calls[0]?.[0].method).toBe('workflow.run.start');
+        expect(startInput().runId).toBe(RUN_ID);
+        expect(executeMock.mock.calls[0]?.[0].payload).toMatchObject({ metadata: { title: 'Frozen title' } });
         // The admitted Run reaches the one Account-scoped row map keyed by runId,
         // so the exact route can open it without any list being loaded.
         expect(storage.getState().workflowRunsById[RUN_ID]?.summary?.id).toBe(RUN_ID);
@@ -112,26 +133,26 @@ describe('useWorkflowRunNowController', () => {
 
     it('owns an ordinary start identity until admission settles, then permits a new explicit start', async () => {
         const reply = createDeferred<unknown>();
-        executeMock.mockImplementation(async (_action: string, input: { runId: string }) =>
-            input.runId === RUN_ID ? admitted('created') : reply.promise);
+        executeMock.mockImplementation(async ({ payload }) =>
+            WorkflowRunStartRequestV1Schema.parse(payload).runId === RUN_ID ? admitted('created') : reply.promise);
         const { useWorkflowRunNowController } = await import('./useWorkflowRunNowController');
         const hook = await renderHook(() => useWorkflowRunNowController());
         let first!: Promise<unknown>;
         await act(async () => { first = hook.getCurrent().runNow({ source }); });
-        const firstId = executeMock.mock.calls[0]?.[1].runId;
+        const firstId = startInput().runId;
         expect(firstId).toBeTypeOf('string');
         expect(hook.getCurrent().pendingRunId).toBe(firstId);
         await act(async () => { expect(await hook.getCurrent().runNow({ source })).toBeNull(); });
         expect(executeMock).toHaveBeenCalledTimes(1);
         await act(async () => {
-            reply.resolve({ ok: true, result: { admission: 'created', run: createWorkflowRunSummaryFixture({ id: firstId, origin: { kind: 'direct' } }) } });
+            reply.resolve({ admission: 'created', run: createWorkflowRunSummaryFixture({ id: firstId, ownerAccountId: 'account-a', origin: { kind: 'direct' } }) });
             await first;
         });
         expect(hook.getCurrent().pendingRunId).toBeNull();
-        executeMock.mockImplementation(async (_action: string, input: { runId: string }) => ({ ok: true,
-            result: { admission: 'created', run: createWorkflowRunSummaryFixture({ id: input.runId, origin: { kind: 'direct' } }) } }));
+        executeMock.mockImplementation(async ({ payload }) => ({
+            admission: 'created', run: createWorkflowRunSummaryFixture({ id: WorkflowRunStartRequestV1Schema.parse(payload).runId, ownerAccountId: 'account-a', origin: { kind: 'direct' } }) }));
         await act(async () => { await hook.getCurrent().runNow({ source }); });
-        expect(executeMock.mock.calls[1]?.[1].runId).not.toBe(firstId);
+        expect(startInput(1).runId).not.toBe(firstId);
     });
 
     it('releases its owned identity after a confirmed refusal without affecting explicit recovery IDs', async () => {
@@ -139,12 +160,12 @@ describe('useWorkflowRunNowController', () => {
         const { useWorkflowRunNowController } = await import('./useWorkflowRunNowController');
         const hook = await renderHook(() => useWorkflowRunNowController());
         await act(async () => { await hook.getCurrent().runNow({ source }); });
-        const refusedId = executeMock.mock.calls[0]?.[1].runId;
+        const refusedId = startInput().runId;
         expect(hook.getCurrent().pendingRunId).toBeNull();
         await act(async () => { await hook.getCurrent().runNow({ source }); });
-        expect(executeMock.mock.calls[1]?.[1].runId).not.toBe(refusedId);
+        expect(startInput(1).runId).not.toBe(refusedId);
         await act(async () => { await hook.getCurrent().runNow({ runId: RUN_ID, source }); });
-        expect(executeMock.mock.lastCall?.[1].runId).toBe(RUN_ID);
+        expect(startInput(2).runId).toBe(RUN_ID);
     });
 
     it('keeps a known refusal for the composer instead of interrupting with an alert', async () => {
@@ -158,6 +179,25 @@ describe('useWorkflowRunNowController', () => {
         executeMock.mockResolvedValue(admitted('created'));
         await act(async () => { await hook.getCurrent().runNow({ runId: RUN_ID, source, refusal: 'inline' }); });
         expect(hook.getCurrent().refusal).toBeNull();
+    });
+
+    it('settles a proved unsent setup failure as a typed refusal without waiting for a missing Run', async () => {
+        const { markRpcRequestDisposition } = await import('@happier-dev/sync-client');
+        executeMock.mockRejectedValueOnce(markRpcRequestDisposition(
+            Object.assign(new Error('Machine setup failed'), { code: 'MACHINE_RPC_TIMEOUT' }),
+            'notSent',
+        ));
+        const { useWorkflowRunNowController } = await import('./useWorkflowRunNowController');
+        const hook = await renderHook(() => useWorkflowRunNowController());
+        await act(async () => {
+            expect(await hook.getCurrent().runNow({ source, refusal: 'inline' })).toBeNull();
+        });
+        const runId = startInput().runId;
+        expect(hook.getCurrent().pendingRunId).toBeNull();
+        expect(hook.getCurrent().isPending(runId)).toBe(false);
+        expect(hook.getCurrent().refusal?.code).toBe('target_unavailable');
+        expect(homes.requests.filter((request) => request.path === '/v3/automations/runs/workflow-storage')).toHaveLength(0);
+        expect(executeMock).toHaveBeenCalledTimes(1);
     });
 
     it('stamps the selected project into host context rather than Action input', async () => {
@@ -178,9 +218,9 @@ describe('useWorkflowRunNowController', () => {
             await hook.getCurrent().runNow({ runId: RUN_ID, source, project });
         });
 
-        expect(executeMock.mock.calls[0]?.[1]).not.toHaveProperty('project');
-        expect(executeMock.mock.calls[0]?.[2]).toEqual(expect.objectContaining({
-            surface: 'ui', externalActionTarget: {
+        expect(executeMock.mock.calls[0]?.[0].payload).toEqual({
+            v: 1, kind: 'targeted_action_rpc',
+            input: { runId: RUN_ID, source }, target: {
                 kind: 'machine', machineId: project.machineId,
                 project: {
                     machineId: project.machineId,
@@ -188,32 +228,39 @@ describe('useWorkflowRunNowController', () => {
                     workspaceRefId: project.workspaceRefId,
                 },
             },
-        }));
+        });
     });
 
     it('retires an unresolved admission observer when its Account changes', async () => {
         vi.useFakeTimers();
-        executeMock.mockRejectedValueOnce(new WorkflowActionError({ message: 'response lost', rawCode: 'workflow_outcome_unresolved' }));
-        executeMock.mockResolvedValue({ ok: false, errorCode: 'run_not_found', error: 'run_not_found' });
+        // The real Action owner classifies a lost network reply as unresolved;
+        // its subsequent exact-Run observation is Account HTTP, not another RPC.
+        executeMock.mockRejectedValueOnce(new Error('response lost'));
+        homes.answer(homeA, '/v3/automations/runs/workflow-storage', { status: 404, body: { error: 'run_not_found' } });
+        const observations = () => homes.requests.filter((request) => request.path === '/v3/automations/runs/workflow-storage');
         const { useWorkflowRunNowController } = await import('./useWorkflowRunNowController');
         const hook = await renderHook(() => useWorkflowRunNowController());
         let pending!: Promise<unknown>;
         await act(async () => {
             pending = hook.getCurrent().runNow({ source });
         });
-        const runId = executeMock.mock.calls[0]?.[1].runId;
+        const runId = startInput().runId;
         expect(hook.getCurrent().pendingRunId).toBe(runId);
         expect(hook.getCurrent().stateFor(runId)).toBe('reconciling');
-        expect(executeMock).toHaveBeenCalledTimes(2);
+        expect(executeMock).toHaveBeenCalledTimes(1);
+        expect(observations()).toHaveLength(1);
+        expect(observations()[0]?.input).toMatchObject({ runId });
         await act(async () => {
             vi.advanceTimersByTime(60_000);
-            publishHomeAccountChange('server-a', ['workflow-run:another-run']);
+            publishHomeAccountChange(homeA, ['workflow-run:another-run']);
         });
-        expect(executeMock).toHaveBeenCalledTimes(2);
+        expect(executeMock).toHaveBeenCalledTimes(1);
+        expect(observations()).toHaveLength(1);
         await act(async () => { setAccountScope({ serverId: 'server-b', accountId: 'account-b' }); await pending; });
         expect(hook.getCurrent().pendingRunId).toBeNull();
-        publishHomeAccountChange('server-a', [`workflow-run:${runId}`]);
-        expect(executeMock).toHaveBeenCalledTimes(2);
+        publishHomeAccountChange(homeA, [`workflow-run:${runId}`]);
+        expect(executeMock).toHaveBeenCalledTimes(1);
+        expect(observations()).toHaveLength(1);
         expect(modalAlertSpy).not.toHaveBeenCalled();
         expect(storage.getState().workflowRunsById[runId]).toBeUndefined();
     });
@@ -275,8 +322,7 @@ describe('useWorkflowRunNowController', () => {
     it('rejects a malformed admission response instead of navigating to it', async () => {
         // A partially migrated owner answering with a Run body but no admission.
         executeMock.mockResolvedValueOnce({
-            ok: true,
-            result: { run: createWorkflowRunSummaryFixture({ id: RUN_ID }) },
+            run: createWorkflowRunSummaryFixture({ id: RUN_ID, ownerAccountId: 'account-a' }),
         });
         const { useWorkflowRunNowController } = await import('./useWorkflowRunNowController');
         const hook = await renderHook(() => useWorkflowRunNowController());
@@ -306,7 +352,7 @@ describe('useWorkflowRunNowController', () => {
             });
         });
 
-        expect(executeMock.mock.calls[0]?.[1]).toEqual({
+        expect(executeMock.mock.calls[0]?.[0].payload).toEqual({
             runId: RUN_ID,
             source,
             inputs: { branch: 'main' },
@@ -334,12 +380,12 @@ describe('useWorkflowRunNowController', () => {
             });
         });
 
-        expect(executeMock.mock.calls[0]?.[1]).toEqual({
+        expect(executeMock.mock.calls[0]?.[0].payload).toEqual({
             runId: RUN_ID,
             source,
             executionTarget: { kind: 'detached_run' },
         });
-        expect(executeMock.mock.calls[1]?.[1]).not.toHaveProperty('executionTarget');
+        expect(executeMock.mock.calls[1]?.[0].payload).not.toHaveProperty('executionTarget');
     });
 
     it('does not dispatch without an active Account', async () => {

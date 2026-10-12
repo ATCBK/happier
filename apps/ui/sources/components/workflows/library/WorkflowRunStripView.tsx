@@ -47,11 +47,13 @@ const styles = StyleSheet.create((theme) => ({
         alignItems: 'center',
         justifyContent: 'flex-end',
     },
+    // An empty slot is a whisper of ink (the divider weight), so the strip reads as one quiet object of
+    // eight places on any sheet; a surface fill vanished on the light sheet and left stray bars (lab `nav-N1`).
     none: {
         width: BAR_WIDTH,
         height: BAR_HEIGHT,
         borderRadius: BAR_WIDTH / 2,
-        backgroundColor: theme.colors.surface.pressedOverlay,
+        backgroundColor: theme.colors.border.subtle,
     },
     ok: {
         width: BAR_WIDTH,

@@ -1,8 +1,7 @@
 import * as React from 'react';
 import type { WorkflowTriggerListRequestV1, WorkflowTriggerSetV1 } from '@happier-dev/protocol';
 
-import { getStorage } from '@/sync/domains/state/storage';
-import { captureActiveServerAccountScopeCurrentness } from '@/sync/domains/scope/activeServerAccountScope';
+import { getStorage, useActiveServerAccountScopeLifetime } from '@/sync/domains/state/storage';
 import { serverAccountScopeKeySuffix, type ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { createWorkflowTriggerChangeSelector, createWorkflowTriggerSetSelector } from '@/sync/store/domains/automations';
 import { listWorkflowTriggerSets } from '@/sync/domains/workflows/workflowTriggerActions';
@@ -14,8 +13,9 @@ const EMPTY_SETS: readonly WorkflowTriggerSetV1[] = [];
 /** Read lifecycle only; the existing Account Automation projection remains the row owner. */
 export function useWorkflowTriggerSets(request: WorkflowTriggerListRequestV1 | null, accountLifetime?: ServerAccountScopeLifetime | null) {
     const addressed = accountLifetime !== undefined;
-    const scope = getStorage()(React.useCallback(state => addressed ? accountLifetime?.scope ?? null : state.profileScope ?? null,
-        [addressed, accountLifetime]));
+    const activeLifetime = useActiveServerAccountScopeLifetime();
+    const lifetime = addressed ? accountLifetime ?? null : activeLifetime;
+    const scope = lifetime?.scope ?? null;
     const scopeKey = scope ? serverAccountScopeKeySuffix(scope) : null;
     const workflow = request && 'workflow' in request ? request.workflow : null;
     const requestedScope = request && 'scope' in request ? request.scope : 'account_inline';
@@ -23,7 +23,7 @@ export function useWorkflowTriggerSets(request: WorkflowTriggerListRequestV1 | n
     // The semantic query, not a caller's object allocation, owns the read lifetime.
     const readRequest = React.useMemo<WorkflowTriggerListRequestV1 | null>(() => queryKey === '' ? null
         : workflow === null ? { scope: requestedScope } : { workflow }, [queryKey, workflow, requestedScope]);
-    const identity = React.useMemo(() => ({}), [queryKey, scopeKey, accountLifetime]);
+    const identity = React.useMemo(() => ({}), [queryKey, scopeKey, lifetime]);
     const selector = React.useMemo(() => addressed ? () => EMPTY_SETS
         : createWorkflowTriggerSetSelector(queryKey, workflow !== null), [addressed, queryKey, workflow]);
     const sets = getStorage()(selector);
@@ -39,8 +39,11 @@ export function useWorkflowTriggerSets(request: WorkflowTriggerListRequestV1 | n
     }), [accountLifetime]);
     React.useEffect(() => {
         if (readRequest === null || (addressed && !accountLifetime?.isCurrent())) return;
+        if (!lifetime) {
+            setState({ identity, status: 'failed' });
+            return;
+        }
         const controller = new AbortController();
-        const lifetime = accountLifetime ?? captureActiveServerAccountScopeCurrentness();
         const retirement = lifetime.onRetire(() => { controller.abort(); setState({ identity, status: 'failed' }); });
         // A settled read keeps its answer while it refreshes (a change signal or a retry after
         // success): the store still holds the last-known sets, so nothing reverts to loading.
@@ -56,7 +59,7 @@ export function useWorkflowTriggerSets(request: WorkflowTriggerListRequestV1 | n
             }));
         });
         return () => { controller.abort(); retirement.dispose(); };
-    }, [attempt, changeSignal, identity, readRequest, addressed, accountLifetime]);
+    }, [attempt, changeSignal, identity, readRequest, addressed, accountLifetime, lifetime]);
     const retry = React.useCallback(() => setAttempt((value) => value + 1), []);
     return { sets: request === null ? EMPTY_SETS : addressed ? state.identity === identity && accountLifetime?.isCurrent()
         ? state.sets ?? EMPTY_SETS : EMPTY_SETS : sets, status: request === null ? 'ready' as const

@@ -1,3 +1,4 @@
+import type { WorkflowInvocationLifecycleV1 } from '@happier-dev/protocol';
 import * as React from 'react';
 import { Platform, View } from 'react-native';
 import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
@@ -12,9 +13,12 @@ import { t } from '@/text';
 import { WORKFLOW_BLOCK_KIND_GLYPH } from '@/components/workflows/presentation/workflowBlockKindGlyph';
 import { formatWorkflowAgentStatusLabel } from '@/components/workflows/presentation/workflowStatusLabel';
 import { WorkflowLifecycleStatus } from '@/components/workflows/presentation/WorkflowLifecycleStatus';
+import { MeterBar } from '@/components/ui/lists/MeterBar';
+import { formatWorkflowInvocationElapsedLabel } from '@/components/workflows/presentation/workflowUsagePresentation';
 import {
     describeWorkflowInvocationAttempt,
     describeWorkflowInvocationLifecycle,
+    type WorkflowInvocationLifecycleContext,
 } from '@/components/workflows/presentation/workflowLifecyclePresentation';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
@@ -58,25 +62,57 @@ const styles = StyleSheet.create((theme) => ({
         minHeight: MINIMUM_TARGET_SIZE,
         justifyContent: 'center',
     },
+    // The map owns where a state sits: trailing on a full-width card, under the name in a narrow lane
+    // (lab `run-A` lane cards), so these never push themselves to an edge.
     meta: {
-        ...Typography.default('regular'),
+        ...Typography.rowMeta(),
         color: theme.colors.text.tertiary,
-        marginLeft: 'auto',
     },
-    trailingStatus: {
-        marginLeft: 'auto',
+    metaTabular: {
+        ...Typography.rowMeta(),
+        ...Typography.tabular(),
+        color: theme.colors.text.tertiary,
+    },
+    statusRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: theme.margins.sm,
+        // A sentence-long state wraps inside the card's status slot rather than overflowing it.
+        flexShrink: 1,
+        minWidth: 0,
+    },
+    loopProgress: {
+        gap: theme.margins.xs,
+        minWidth: 0,
     },
     occurrenceList: {
         gap: theme.margins.xs,
         marginLeft: theme.margins.lg,
     },
+    // An item reads as a compact map row: its name leading, its state's mark on the trailing edge in
+    // the same status presenter (and tone) the map's cards use, so a held item is amber like its card.
     occurrenceRow: {
         borderWidth: 1,
         borderColor: 'transparent',
         minHeight: MINIMUM_TARGET_SIZE,
-        justifyContent: 'center',
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: theme.margins.sm,
         paddingHorizontal: theme.margins.sm,
         borderRadius: theme.borderRadius.md,
+    },
+    occurrenceLabel: {
+        ...Typography.rowMeta(),
+        color: theme.colors.text.secondary,
+        flexShrink: 1,
+        minWidth: 0,
+    },
+    occurrenceState: {
+        marginLeft: 'auto',
+        flexShrink: 0,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: theme.margins.xs,
     },
     occurrenceSelected: {
         backgroundColor: theme.colors.surface.selected,
@@ -84,10 +120,6 @@ const styles = StyleSheet.create((theme) => ({
     /** The same pressed-overlay role the map's node rows use. */
     occurrencePressed: {
         backgroundColor: theme.colors.surface.pressedOverlay,
-    },
-    occurrenceMeta: {
-        ...Typography.default('regular'),
-        color: theme.colors.text.tertiary,
     },
     incomplete: {
         ...Typography.default('regular'),
@@ -102,17 +134,18 @@ const styles = StyleSheet.create((theme) => ({
         ...Typography.rowMeta(),
         color: theme.colors.text.secondary,
     },
-    /** The step's ordinal rides the mark's corner, as the editor numbers the same block. */
+    leadingRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: theme.margins.sm,
+    },
+    /** The step's ordinal numbers the block as the editor does, set before its mark. */
     ordinal: {
-        position: 'absolute',
-        left: -theme.margins.xs,
-        top: -theme.margins.xs,
         minWidth: theme.margins.lg,
         paddingHorizontal: theme.margins.xs,
         borderRadius: theme.borderRadius.md,
         borderWidth: StyleSheet.hairlineWidth,
         borderColor: theme.colors.border.default,
-        backgroundColor: theme.colors.surface.base,
         alignItems: 'center',
     },
     ordinalText: {
@@ -154,6 +187,9 @@ const FLOW_NODE_LAYOUT: Readonly<Record<WorkflowFlowNode['kind'], HappierWorkMap
     observedPhase: { appearance: 'group' },
 };
 
+/** A lane group states only how it ended; while it runs its lanes say what is happening. */
+const PARALLEL_SETTLED_LIFECYCLES: ReadonlySet<WorkflowInvocationLifecycleV1> = new Set(['completed', 'failed', 'cancelled', 'outcome_uncertain', 'skipped', 'superseded']);
+
 /**
  * The structural context a node's accessible name has to carry.
  *
@@ -174,6 +210,7 @@ function describeNodeStructure(
 }
 
 export function WorkflowFlowView(props: Readonly<{
+    invocationStatusContext?: WorkflowInvocationLifecycleContext;
     projection: WorkflowFlowProjection;
     selectedNodeId: string | null;
     onSelectNode?: (nodeId: string) => void;
@@ -195,6 +232,11 @@ export function WorkflowFlowView(props: Readonly<{
      * lane captions, without ordinals, result lines or run facts. Its size is the caller's `density`.
      */
     preview?: boolean;
+    /**
+     * A live Run's map says what has not begun ("Not started", lab `run-A`): the label for an executable step
+     * that has no occurrence yet. Omitted for a settled Run and for authoring/preview maps.
+     */
+    notStartedLabel?: string;
     /** The Agent mark of a step's accepted selection, when the caller knows it; else a neutral mark. */
     agentMarkForNode?: (node: WorkflowFlowNode) => React.ReactNode | null;
 }>): React.ReactElement {
@@ -223,7 +265,7 @@ export function WorkflowFlowView(props: Readonly<{
         const runState = runStateOf(node);
         return runState === undefined
             ? (node.observedStatus === undefined ? null : formatWorkflowAgentStatusLabel(node.observedStatus))
-            : describeWorkflowInvocationLifecycle(runState.lifecycle, { blockKind: node.kind }).label;
+            : describeWorkflowInvocationLifecycle(runState.lifecycle, { ...props.invocationStatusContext, blockKind: node.kind }).label;
     };
 
     return (
@@ -249,17 +291,19 @@ export function WorkflowFlowView(props: Readonly<{
             renderLeading={(node) => {
                 if (!FLOW_MARKED_KINDS.has(node.kind)) return null;
                 const glyph = FLOW_KIND_GLYPH[node.kind];
+                const ordinal = quiet || node.observed || node.stepOrdinal === undefined ? null : (
+                    <View testID={`${testIDPrefix}-node-${node.nodeId}-ordinal`} style={styles.ordinal}>
+                        <Text style={styles.ordinalText}>{node.stepOrdinal}</Text>
+                    </View>
+                );
+                // The ordinal is set apart, ahead of the mark, so a logo drawn without a tile is never covered.
                 return (
-                    <>
+                    <View style={styles.leadingRow}>
+                        {ordinal}
                         {glyph !== undefined
                             ? <Icon name={glyph} size={compact ? ICON_SIZE.xs : ICON_SIZE.sm} color={theme.colors.text.secondary} />
                             : props.agentMarkForNode?.(node) ?? <ExecutionRunAgentMark agentId={null} size={compact ? 22 : 28} />}
-                        {quiet || node.observed || node.stepOrdinal === undefined ? null : (
-                            <View testID={`${testIDPrefix}-node-${node.nodeId}-ordinal`} style={styles.ordinal}>
-                                <Text style={styles.ordinalText}>{node.stepOrdinal}</Text>
-                            </View>
-                        )}
-                    </>
+                    </View>
                 );
             }}
             renderSubtitle={(node) => {
@@ -276,7 +320,8 @@ export function WorkflowFlowView(props: Readonly<{
                 // INT I3: the ring and tint come from the shared status tone, never a local colour rule.
                 const { tone } = resolveWorkStatusTone({
                     kind: 'workflow_step',
-                    facts: { lifecycle: runState.lifecycle, word: describeWorkflowInvocationLifecycle(runState.lifecycle, { blockKind: node.kind }).label },
+                    facts: { ...props.invocationStatusContext, lifecycle: runState.lifecycle,
+                        word: describeWorkflowInvocationLifecycle(runState.lifecycle, { ...props.invocationStatusContext, blockKind: node.kind }).label },
                 });
                 return { ...layout, tone };
             }}
@@ -295,9 +340,12 @@ export function WorkflowFlowView(props: Readonly<{
             renderStatus={(node) => {
                 const runState = runStateOf(node);
                 const stateLabel = stateLabelOf(node);
+                const elapsed = formatWorkflowInvocationElapsedLabel(runState?.timing);
                 return (
                     <>
-                        {!quiet && node.maxConcurrent === undefined && (node.kind === 'parallel' || node.repetition?.kind === 'items') ? (
+                        {/* An authoring fact; a Run's Map shows what is happening, not unset configuration. */}
+                        {!quiet && props.runStates === undefined && node.maxConcurrent === undefined
+                            && (node.kind === 'parallel' || node.repetition?.kind === 'items') ? (
                             <Text testID={`${testIDPrefix}-node-${node.nodeId}-no-limit`} style={styles.meta}>
                                 {t('workflows.loop.noWorkflowLimit')}
                             </Text>
@@ -305,18 +353,35 @@ export function WorkflowFlowView(props: Readonly<{
                         {runState === undefined || runState.occurrenceLabel === undefined ? null : (
                             <Text style={styles.meta}>{runState.occurrenceLabel}</Text>
                         )}
-                        {runState !== undefined ? (
-                            <View style={styles.trailingStatus}>
-                                {/* Healthy finished work is quiet: its mark alone; the node's name says the word. */}
-                                <WorkflowLifecycleStatus
+                        {runState?.loopProgress !== undefined ? (
+                            // A repeat-for-each reads as its progress (lab run-A `For each issue`): items done of
+                            // all, how many at a time, and the bar; the items themselves carry their own states.
+                            <View testID={`${testIDPrefix}-node-${node.nodeId}-loop-progress`} style={styles.loopProgress}>
+                                <Text style={styles.metaTabular}>{[
+                                    `${runState.loopProgress.completed} / ${runState.loopProgress.total}`,
+                                    runState.loopProgress.maxConcurrent === undefined ? null
+                                        : t('workflows.page.inspector.atATime', { count: runState.loopProgress.maxConcurrent }),
+                                ].filter(Boolean).join(' \u00b7 ')}</Text>
+                                <MeterBar tone="neutral" height={4} fillColor={theme.colors.text.secondary}
+                                    fillFraction={runState.loopProgress.total === 0 ? 0 : runState.loopProgress.completed / runState.loopProgress.total} />
+                            </View>
+                        ) : runState !== undefined ? (
+                            <View style={styles.statusRow}>
+                                {elapsed === null ? null : <Text style={styles.metaTabular}>{elapsed}</Text>}
+                                {/* Healthy finished work is quiet: its mark alone; the node's name says the word. Lanes
+                                    that are still going speak for themselves, so their group adds no word of its own
+                                    (DESIGN-17 R7; lab run-A shows none). */}
+                                {node.kind === 'parallel' && !PARALLEL_SETTLED_LIFECYCLES.has(runState.lifecycle) ? null : <WorkflowLifecycleStatus
                                     testID={`${testIDPrefix}-node-${node.nodeId}-state`}
                                     lifecycle={runState.lifecycle}
                                     blockKind={node.kind}
+                                    context={props.invocationStatusContext}
                                     chrome="plain"
                                     markerOnly={runState.lifecycle === 'completed'}
-                                />
+                                />}
                             </View>
-                        ) : stateLabel === null ? null : (
+                        ) : stateLabel === null ? (props.notStartedLabel !== undefined && props.runStates !== undefined && FLOW_MARKED_KINDS.has(node.kind) && !node.observed && occurrencesOf(node).length === 0
+                            ? <Text testID={`${testIDPrefix}-node-${node.nodeId}-not-started`} style={styles.meta}>{props.notStartedLabel}</Text> : null) : (
                             <Text testID={`${testIDPrefix}-node-${node.nodeId}-state`} style={styles.meta}>
                                 {stateLabel}
                             </Text>
@@ -327,6 +392,7 @@ export function WorkflowFlowView(props: Readonly<{
             renderDetail={(node) => {
                 const occurrences = occurrencesOf(node);
                 if (!selectsOccurrence || occurrences.length <= 1) return null;
+                const retried = occurrences.some((occurrence) => (occurrence.attempt ?? '0') !== '0');
                 return (
                     <View
                         testID={`${testIDPrefix}-node-${node.nodeId}-occurrences`}
@@ -336,11 +402,15 @@ export function WorkflowFlowView(props: Readonly<{
                     >
                         {occurrences.map((occurrence) => {
                             const occurrenceSelected = occurrence.invocationId === props.selectedInvocationId;
-                            const occurrenceState = describeWorkflowInvocationLifecycle(occurrence.lifecycle, { blockKind: node.kind }).label;
-                            const attemptLabel = describeWorkflowInvocationAttempt(occurrence.attempt ?? '0').label;
-                            const label = occurrence.occurrenceLabel === undefined
-                                ? `${attemptLabel} \u00b7 ${occurrenceState}`
-                                : `${occurrence.occurrenceLabel} \u00b7 ${attemptLabel} \u00b7 ${occurrenceState}`;
+                            const elapsed = formatWorkflowInvocationElapsedLabel(occurrence.timing);
+                            const occurrenceState = describeWorkflowInvocationLifecycle(occurrence.lifecycle, { ...props.invocationStatusContext, blockKind: node.kind }).label;
+                            // Attempts are named only where a retry exists to tell apart; otherwise the
+                            // first attempt is implied and "Attempt 1" on every item is noise.
+                            const attempt = occurrence.attempt ?? '0';
+                            const name = [occurrence.occurrenceLabel,
+                                retried ? describeWorkflowInvocationAttempt(attempt).label : undefined,
+                            ].filter(Boolean).join(' \u00b7 ');
+                            const label = [name, occurrenceState].filter(Boolean).join(' \u00b7 ');
                             return (
                                 <View
                                     key={occurrence.invocationId}
@@ -361,7 +431,23 @@ export function WorkflowFlowView(props: Readonly<{
                                             focusRingStyle({ focused, color: theme.colors.border.focus }),
                                         ]}
                                     >
-                                        <Text style={styles.occurrenceMeta}>{label}</Text>
+                                        <Text style={styles.occurrenceLabel} numberOfLines={1}>{name}</Text>
+                                        <View style={styles.occurrenceState}>
+                                            {elapsed !== null ? (
+                                                <Text style={styles.metaTabular}>{elapsed}</Text>
+                                            ) : null}
+                                            <WorkflowLifecycleStatus
+                                                testID={`${testIDPrefix}-node-${node.nodeId}-occurrence-${occurrence.invocationId}-state`}
+                                                lifecycle={occurrence.lifecycle}
+                                                blockKind={node.kind}
+                                                context={props.invocationStatusContext}
+                                                chrome="plain"
+                                                // The mark alone: in a lane the state's words would take the
+                                                // row from the item's own name (DESIGN-15 R2); the card above
+                                                // and the row's label already say it.
+                                                markerOnly
+                                            />
+                                        </View>
                                     </HappierPressable>
                                 </View>
                             );

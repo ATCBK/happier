@@ -20,7 +20,7 @@ import { formatPathRelativeToHome } from '@/utils/sessions/formatPathRelativeToH
 import {
     describeWorkflowRunState,
     isTerminalWorkflowRunState,
-    isWorkflowRunStopping,
+    isWorkflowRunStopPending,
     type WorkflowRunCoverage,
 } from '@/components/workflows/presentation/workflowLifecyclePresentation';
 
@@ -116,6 +116,16 @@ export type WorkflowInvocationWorkspacePresentation = Readonly<{
 }>;
 
 export type WorkflowInvocationRecoveryPresentation = Readonly<{
+    /** Opened owner evidence, without attributing a workspace/admission refusal to the Agent. */
+    failureCause?: Readonly<{
+        kind: 'reported_failure';
+        blockKind: WorkflowProgressEnvelopeV1['blockKind'];
+        code: string;
+        message: string | null;
+        at: string | null;
+    }> | Readonly<{ kind: 'lost_contact'; machine: string; lastSeenAt: number | null }> | null;
+    /** Connectivity is separate from the recorded failure and exact recovery eligibility. */
+    unavailableMachine?: Readonly<{ name: string; lastSeenAt: number | null }> | null;
     canInspectExecution: boolean;
     canReattach: boolean;
     canRetrySameConversation: boolean;
@@ -177,6 +187,7 @@ export function projectWorkflowInvocationRecovery(params: Readonly<{
     invocations?: readonly WorkflowRunInvocationIndexV1[];
     invocationHistoryComplete?: boolean;
     recoveryAvailability?: WorkflowInvocationRecoveryAvailabilityV1 | null;
+    machine?: Readonly<{ name: string; reachable: boolean; lastSeenAt?: number | null }>;
 }>): WorkflowInvocationRecoveryPresentation {
     const workspaceUnavailable = params.progress?.reason?.code !== undefined
         && WORKSPACE_UNAVAILABLE_REASON_CODES.has(params.progress.reason.code);
@@ -227,8 +238,23 @@ export function projectWorkflowInvocationRecovery(params: Readonly<{
             && params.recoveryAvailability?.continueFreshAgent.kind === 'available';
 
     const canRestoreWorkspace = params.recoveryAvailability?.restoreWorkspace.kind === 'available';
+    const lastSeenAt = params.machine?.lastSeenAt;
+    const unavailableMachine = params.machine?.reachable === false
+        ? { name: params.machine.name, lastSeenAt: typeof lastSeenAt === 'number' && Number.isFinite(lastSeenAt) && lastSeenAt > 0
+            ? lastSeenAt : null } : null;
+    const failed = invocation?.lifecycle === 'failed' || invocation?.lifecycle === 'needs_attention'
+        || invocation?.lifecycle === 'outcome_uncertain';
+    const failureCause: WorkflowInvocationRecoveryPresentation['failureCause'] = failed && params.progress?.reason
+        ? { kind: 'reported_failure', blockKind: params.progress.blockKind, code: params.progress.reason.code,
+            message: params.progress.reason.message ?? null, at: params.progress.timing?.finishedAt ?? null }
+        : invocation !== null && (failed || POSSIBLY_ACTIVE_INVOCATION_LIFECYCLES.has(invocation.lifecycle))
+            && params.run.state === 'interrupted' && unavailableMachine
+            ? { kind: 'lost_contact', machine: unavailableMachine.name, lastSeenAt: unavailableMachine.lastSeenAt }
+            : null;
 
     return {
+        failureCause,
+        unavailableMachine,
         canInspectExecution: params.run.availability.inspectExecution
             && params.progress?.execution !== undefined,
         canReattach: canOfferWorkflowInvocationReattach(params),
@@ -390,18 +416,19 @@ export function formatWorkflowRunOutcomeSentence(params: Readonly<{
     /** Exact failed occurrence, named from the frozen definition rather than selection. */
     failure?: Readonly<{ step: string }> | null;
     /**
-     * The Run's exact Machine as the machine owner currently sees it. An active
-     * Run whose Machine is known unreachable says it lost contact — no more:
-     * whether its work survived is the recovery owner's fact, not this one's.
+     * The exact Machine observation qualifies pending Stop custody only.
+     * Contact and recovery details never replace the persisted Run outcome.
      */
     machine?: Readonly<{ name: string; reachable: boolean; status?: WorkStatusPresentation }>;
 }>): string {
     const { run, coverage } = params;
-    if (isWorkflowRunStopping({ ...run, cancelRequested: params.cancelRequested })) return t('workflows.run.stopping');
-    if (params.machine?.reachable === false && !isTerminalWorkflowRunState(run.state)) {
-        if (params.machine.status && params.machine.status.bucket !== 'offline') return `${params.machine.name} · ${params.machine.status.word}`;
-        return t('workflows.run.machineUnavailable', { machine: params.machine.name });
+    if (isWorkflowRunStopPending({ ...run, cancelRequested: params.cancelRequested })) {
+        return describeWorkflowRunState(run.state, { workflowCustodyState: run.workflowCustodyState,
+            cancelRequested: params.cancelRequested, machineReachable: params.machine?.reachable,
+            machineName: params.machine?.name }).label;
     }
+    // The accepted Run and its opened result own outcomes. A live Machine
+    // observation owns contact/recovery, never a replacement outcome sentence.
     if (run.state === 'failed') {
         return params.failure
             ? t('workflows.run.failedStepSentence', { step: params.failure.step })
@@ -485,6 +512,8 @@ export function formatWorkflowRunOutcomeLabel(params: Readonly<{
     historyComplete?: boolean;
     cancelRequested?: boolean;
     workflowCustodyState?: WorkflowRunSummaryV1['workflowCustodyState'];
+    machineReachable?: boolean;
+    machineName?: string | null;
     /** Membership in the canonical attention window, independent of its step kinds. */
     inAttentionWindow?: boolean;
     /**
@@ -493,7 +522,7 @@ export function formatWorkflowRunOutcomeLabel(params: Readonly<{
      */
     waitingOnlyForYou?: boolean;
 }>): string {
-    if (isWorkflowRunStopping(params)) return t('workflows.run.stopping');
+    if (isWorkflowRunStopPending(params)) return describeWorkflowRunState(params.state, params).label;
     if (params.state === 'succeeded' && params.coverage.knownFailure) {
         return t('workflows.runState.completed_with_failures');
     }

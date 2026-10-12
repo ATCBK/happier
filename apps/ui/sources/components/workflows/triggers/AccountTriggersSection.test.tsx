@@ -26,7 +26,9 @@ vi.mock('@/components/ui/popover', () => ({
     Popover: ({ children }: { children: (size: { maxHeight: number }) => React.ReactNode }) => children({ maxHeight: 640 }),
 }));
 
-const { AccountTriggersSection } = await import('./AccountTriggersSection');
+const { AccountTriggersSection, NewAccountTriggerPopover } = await import('./AccountTriggersSection');
+const { TriggerPopover } = await import('./TriggerPopover');
+const { buildTriggerDefinition } = await import('./sessionTriggerForm');
 const project = { machineId: 'm1', directory: '/repo' };
 function trigger(id: string, hour = 9) {
     return { id, revision: 1, enabled: true, createdAt: 1, updatedAt: 1, kind: 'schedule',
@@ -36,7 +38,9 @@ function trigger(id: string, hour = 9) {
 function fixture(legacy = false, triggers = [trigger('t1')]) {
     return WorkflowTriggerSetV1Schema.parse({ automationId: 'digest', revision: 1, enabled: true,
         health: 'available', project, ...(legacy ? { legacy: { editable: false, reason: 'created_in_0_2' } } : {}),
-        target: { kind: 'inline', definition: { version: 1, blocks: [{ kind: 'step', id: 'first',
+        target: { kind: 'inline', definition: { version: 1,
+            defaults: { engine: { agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } } } },
+            blocks: [{ kind: 'step', id: 'first', name: 'Morning digest',
             document: { text: 'Morning digest', references: [], attachments: [] }, input: [], result: { kind: 'text' } }] } },
         triggers });
 }
@@ -73,11 +77,51 @@ function serve(set: ReturnType<typeof fixture>) {
 function writes() { return transport.mock.calls.filter(([id]) => id === 'workflow.trigger.update').map(([, input]) => input); }
 
 describe('Account trigger editing', () => {
+    it('settles acknowledged trigger creation while the unrelated Automation listing refresh is pending', async () => {
+        const { createSecretSettingsTestHarness } = await import('@/components/settings/secrets/secretSettingsTestHarness');
+        const account = await createSecretSettingsTestHarness();
+        const revalidation = createDeferred<void>();
+        const originalRequest = account.request.getMockImplementation()!;
+        let listingRequested = false;
+        account.request.mockImplementation(async (input, init) => {
+            if (new URL(String(input)).pathname === '/v3/automations') {
+                listingRequested = true;
+                await revalidation.promise;
+                return Response.json({ automations: [], nextCursor: null });
+            }
+            return originalRequest(input, init);
+        });
+        const set = fixture();
+        serve(set);
+        const screen = await renderScreen(<NewAccountTriggerPopover anchorRef={React.createRef()} onRequestClose={() => undefined} />);
+        let operation!: Promise<void>;
+        let settled = false;
+        try {
+            await act(async () => screen.findByType(TriggerRunsOnRow).props.onChange(project));
+            const value = { enabled: true, when: { kind: 'schedule' as const, schedule: null, expression: '0 9 * * *', timezone: null },
+                then: { kind: 'sendPrompt' as const, prompt: 'Morning digest' } };
+            await act(async () => {
+                operation = screen.findByType(TriggerPopover).props.onSubmit(value, {
+                    target: set.target!, trigger: buildTriggerDefinition(value), inputs: {},
+                }).then(() => { settled = true; });
+            });
+            await vi.waitFor(() => expect(listingRequested).toBe(true));
+            expect(storage.getState().workflowTriggerSetsById.digest).toMatchObject({ revision: 2 });
+            await act(async () => { await Promise.resolve(); });
+            expect(settled).toBe(true);
+        } finally {
+            revalidation.resolve();
+            await operation;
+            await screen.unmount();
+            await account.dispose();
+        }
+    });
+
     it('leaves the trigger count unknown until the first read succeeds', async () => {
         const read = createDeferred<unknown>();
         transport.mockImplementation(async (action: string) => action === 'workflow.trigger.list' ? read.promise
             : { ok: true, result: { definitions: [], nextCursor: null } });
-        const screen = await renderScreen(<AccountTriggersSection />);
+        const screen = await renderScreen(<AccountTriggersSection first />);
         const headingText = () => screen.findByTestId('workflows-column:group:triggers')!
             .findAll(node => typeof node.type === 'string')
             .flatMap(node => node.children.filter(child => typeof child === 'string' || typeof child === 'number').map(String));
@@ -86,6 +130,16 @@ describe('Account trigger editing', () => {
         await act(async () => read.resolve({ ok: true, result: { sets: [fixture()] } }));
         expect(headingText()).toContain('1');
         expect(screen.findByTestId('account-triggers-read')).toBeNull();
+    });
+    it('draws nothing between other sections until it is known that triggers exist (DESIGN-14 D12)', async () => {
+        const read = createDeferred<unknown>();
+        transport.mockImplementation(async (action: string) => action === 'workflow.trigger.list' ? read.promise
+            : { ok: true, result: { definitions: [], nextCursor: null } });
+        const screen = await renderScreen(<AccountTriggersSection />);
+        expect(screen.findByTestId('workflows-column:group:triggers')).toBeNull();
+        expect(screen.findByTestId('account-triggers-read')).toBeNull();
+        await act(async () => read.resolve({ ok: true, result: { sets: [fixture()] } }));
+        expect(screen.findByTestId('workflows-column:group:triggers')).not.toBeNull();
     });
     it.each([true, false])('keeps a retained encrypted trigger paused until its device review is explicitly saved (trigger enabled: %s)', async (triggerEnabled) => {
         const retained = fixture(true, [{ ...trigger('t1'), enabled: triggerEnabled }]);
@@ -251,6 +305,19 @@ describe('Account trigger editing', () => {
         expect(writes()).toHaveLength(1);
         expect(writes()[0]).not.toHaveProperty('triggerId');
         expect(writes()[0].patch).not.toHaveProperty('trigger');
+    });
+    it('deletes a manual set with no triggers through whole-set removal and refreshes', async () => {
+        const set = fixture(false, []); serve(set);
+        const screen = await renderScreen(<AccountTriggersSection />);
+        await screen.pressByTestIdAsync('workflows-column:trigger:digest');
+        const remove = screen.findByTestId('workflows-column-trigger-popover-delete');
+        expect(remove).not.toBeNull();
+        expect(screen.getTextContent()).toContain('workflows.triggers.popover.deleteTriggerSet');
+        const listsBefore = transport.mock.calls.filter(([id]) => id === 'workflow.trigger.list').length;
+        await screen.pressByTestIdAsync('workflows-column-trigger-popover-delete');
+        expect(transport.mock.calls.filter(([id]) => id === 'workflow.trigger.remove').map(([, input]) => input))
+            .toEqual([{ automationId: 'digest' }]);
+        expect(transport.mock.calls.filter(([id]) => id === 'workflow.trigger.list').length).toBeGreaterThan(listsBefore);
     });
     it('opens a legacy deep link without writing and retains an opened draft across refreshes', async () => {
         const set = fixture(true); serve(set);

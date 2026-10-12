@@ -4,14 +4,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { WorkflowRunStartRequestV1Schema, WorkflowMaterializedLeafV1Schema, type WorkflowRunStartResultV1 } from '@happier-dev/protocol';
 import { createWorkflowAccountRunActionOwner } from '@happier-dev/protocol/actions';
-import { WorkflowRunGetResultV1Schema, WorkflowRunRecipientCensusResponseV1Schema, type RoleArtifactV1 } from '@happier-dev/protocol';
+import { WorkflowRunGetResultV1Schema, WorkflowRunRecipientCensusResponseV1Schema, type RoleArtifactV1, type WorkflowInvocationGetResultV1 } from '@happier-dev/protocol';
 import { Modal, ModalProvider } from '@/modal';
 import { getStorage } from '@/sync/domains/state/storageStore';
+import { workflowRunRowFromSummary } from '@/sync/store/domains/workflowRuns';
 import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { DestinationInstanceHost } from '@/components/appShell/workspace/DestinationInstanceHost';
+import { WorkflowActionError } from '@/sync/domains/workflows/workflowActionError';
 
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { renderScreen, invokeTestInstanceHandler } from '@/dev/testkit/render/renderScreen';
@@ -23,8 +25,14 @@ import {
     createWorkflowInvocationIndexFixture as createInvocationFixture,
     createWorkflowRunSummaryFixture as createRunFixture,
 } from '@/dev/testkit/fixtures/workflowRunFixtures';
-import { readWorkflowReviewedRunSeed } from '@/sync/domains/workflows/workflowReviewedRunSeed';
+import { buildWorkflowReviewedRunSeed, readWorkflowReviewedRunSeed, storeWorkflowReviewedRunSeed } from '@/sync/domains/workflows/workflowReviewedRunSeed';
+import { readWorkflowDefinitionDraftSeed, storeWorkflowDefinitionDraftSeed } from '@/sync/domains/workflows/workflowDefinitionDraftSeed';
+import { buildWorkflowEditorDraftFromDefinition } from '@/sync/domains/workflows/workflowAuthoring';
+import { readNewSessionAutomationHandoffSeed, storeNewSessionAutomationHandoffSeed } from '@/sync/domains/workflows/newSessionAutomationHandoffSeed';
+import { readTriggerWorkflowSeed, storeTriggerWorkflowSeed } from '../triggers/triggerWorkflowSeed';
 import { WorkflowRunScreen } from './WorkflowRunScreen';
+import { WorkflowEditorHostScreen, type WorkflowEditorSource } from './WorkflowEditorHostScreen';
+import { WorkflowEditorBody } from './WorkflowEditorBody';
 import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
 
 // These Run fixtures do not stream Markdown; keep its external web adapter at the boundary.
@@ -103,6 +111,8 @@ const storeState = {
         const machine = createMachineFixture({ metadata: { ...base.metadata!, homeDir: '/Users/me' } });
         getStorage().setState({
             profileScope: { serverId: 'server-a', accountId: 'account-a' },
+            // The real editor waits for the repository's first draft hydration.
+            isSessionDraftsReady: true,
             machines: { [machine.id]: machine }, machineListByServerId: {},
             workflowRunsById: {}, workflowRunInvocationsByRunId: {}, workflowRunListWindows: {},
             artifacts: {},
@@ -214,6 +224,27 @@ const ACCEPTED_CONTEXT = {
     origin: { kind: 'direct' as const },
 };
 
+type UnsavedSeedKind = 'new-session' | 'trigger' | 'definition-copy' | 'reviewed-run';
+
+function createUnsavedEditorSource(kind: UnsavedSeedKind, name: string): Extract<WorkflowEditorSource, { kind: 'new' }> {
+    const definition = { ...DEFINITION, blocks: DEFINITION.blocks.map((block) => ({ ...block, name })) };
+    switch (kind) {
+        case 'new-session': return { kind: 'new', newSessionDraftSeedId: storeNewSessionAutomationHandoffSeed({
+            name, description: name, enabled: true,
+            draft: buildWorkflowEditorDraftFromDefinition({ draftId: name, name, definition }),
+            project: ACCEPTED_CONTEXT.workspaceTarget.project, triggers: [],
+        }) };
+        case 'trigger': return { kind: 'new', triggerWorkflowSeedId: storeTriggerWorkflowSeed({
+            definition, retarget: { scope: 'account', automationId: '00000000-0000-4000-8000-000000000009', expectedRevision: 1 },
+        }) };
+        case 'definition-copy': return { kind: 'new', definitionDraftSeedId: storeWorkflowDefinitionDraftSeed({ name, definition }) };
+        case 'reviewed-run': return { kind: 'new', reviewedRunSeedId: storeWorkflowReviewedRunSeed(buildWorkflowReviewedRunSeed({
+            run: createWorkflowRunSummaryFixture(), definition,
+            acceptedContext: { ...ACCEPTED_CONTEXT, metadata: { title: name } },
+        })) };
+    }
+}
+
 function invocationPage(invocations: readonly unknown[]) {
     return { invocations, parentRevision: 1 };
 }
@@ -224,6 +255,22 @@ function runStartCalls() {
 
 function createRunScreenElement() {
     return <AppPaneProvider><ModalProvider><WorkflowRunScreen /></ModalProvider></AppPaneProvider>;
+}
+
+async function openEditorAfterRouteHydration(screen: Awaited<ReturnType<typeof renderScreen>>, source: WorkflowEditorSource) {
+    const hydration = createDeferred<void>();
+    let hydrated = false;
+    // React's route hydration can discard a rendered tree before commit;
+    // no seed may be consumed by that speculative render.
+    function RouteHydrationBoundary() {
+        if (!hydrated) throw hydration.promise;
+        return null;
+    }
+    await screen.update(<React.StrictMode><AppPaneProvider><React.Suspense fallback={null}>
+        <WorkflowEditorHostScreen source={source} />
+        <RouteHydrationBoundary />
+    </React.Suspense></AppPaneProvider></React.StrictMode>);
+    await act(async () => { hydrated = true; hydration.resolve(); });
 }
 
 async function reviewRunAgain(screen: Awaited<ReturnType<typeof renderScreen>>) {
@@ -298,6 +345,7 @@ async function renderSelectedPermissionRequests(contentRevision = '0') {
 async function renderRunScreen(overrides: Readonly<{
     run?: ReturnType<typeof createWorkflowRunSummaryFixture>;
     invocations?: readonly unknown[];
+    invocationDetails?: readonly WorkflowInvocationGetResultV1['invocation'][];
     failedInvocation?: unknown;
     definition?: unknown;
     result?: unknown;
@@ -312,6 +360,7 @@ async function renderRunScreen(overrides: Readonly<{
     const run = overrides.run ?? createWorkflowRunSummaryFixture({
         id: '11111111-1111-4111-8111-111111111111',
         state: 'succeeded',
+        workflowCustodyState: 'settled',
         origin: { kind: 'direct' },
         availability: { cancel: false, pause: false },
     });
@@ -331,11 +380,12 @@ async function renderRunScreen(overrides: Readonly<{
             : { finalOutputInvocationId: overrides.finalOutputInvocationId }),
     });
     if (overrides.invocationListFailure === undefined) {
-        detailActions.listInvocations.mockImplementation(async (input: Readonly<{ lifecycles?: readonly string[] }>) => (
+        detailActions.listInvocations.mockImplementation(async (input: Readonly<{ lifecycles?: readonly string[]; includeContent?: boolean }>) => (
             input.lifecycles?.length === 1 && input.lifecycles[0] === 'failed'
                 ? invocationPage(overrides.failedInvocation === undefined ? [] : [overrides.failedInvocation])
                 : {
                     ...invocationPage(invocations),
+                    ...(input.includeContent && overrides.invocationDetails ? { invocationDetails: overrides.invocationDetails } : {}),
                     ...(input.lifecycles === undefined && overrides.historyNextCursor !== undefined
                         ? { nextCursor: overrides.historyNextCursor }
                         : {}),
@@ -424,6 +474,20 @@ afterEach(async () => {
 });
 
 describe('WorkflowRunScreen', () => {
+    it('publishes paged occurrence timing for unselected rows through the shared fact owner', async () => {
+        const root = createWorkflowInvocationIndexFixture({ id: '33333333-3333-4333-8333-333333333333' });
+        const index = createWorkflowInvocationIndexFixture({ id: '44444444-4444-4444-8444-444444444444',
+            parentRecordId: root.id, memberOrdinal: '0', sequence: '1', lifecycle: 'completed' });
+        const progress: WorkflowInvocationGetResultV1['invocation']['progress'] = {
+            kind: 'happier.workflow-progress.v1', blockKind: 'step', attempt: index.attempt,
+            logicalInvocationRecordId: index.id, invocationPath: { blockId: 'analyze', scope: [] },
+            timing: { startedAt: '2026-10-11T10:00:00.000Z', finishedAt: '2026-10-11T10:02:00.000Z' },
+        };
+        await renderRunScreen({ invocations: [root, index], invocationDetails: [{ index, progress, parentRevision: 1 }] });
+        expect(latestContentProps?.invocationProgressById?.get(index.id)?.timing).toEqual(progress.timing);
+        expect(storeState.state.workflowRunInvocationsByRunId[index.runId]?.factsById[index.id]?.opened?.progress.timing).toEqual(progress.timing);
+        expect(detailActions.getInvocation).not.toHaveBeenCalled();
+    });
     it('opens the Run on Map and closes a query-selected step back to that exact Run', async () => {
         Object.assign(platformViewport, { width: 390, height: 844 });
         const replace = vi.fn();
@@ -447,7 +511,7 @@ describe('WorkflowRunScreen', () => {
         expect(latestContentProps?.view).toBe('flow');
     });
 
-    it('uses the exact Run as the phone step header Back fallback', async () => {
+    it('uses the exact Run as the phone step header close fallback', async () => {
         Object.assign(platformViewport, { width: 390, height: 844 });
         const replace = vi.fn();
         routeState.invocationId = '44444444-4444-4444-8444-444444444444';
@@ -456,7 +520,7 @@ describe('WorkflowRunScreen', () => {
             pathname="/workflows/runs/11111111-1111-4111-8111-111111111111" focused visible phone navigation={{ ...routerSpy, replace, canGoBack: () => false }}>
             {body}
         </DestinationInstanceHost> });
-        await screen.pressByTestIdAsync('workflow-run-back');
+        await screen.pressByTestIdAsync('workflow-run-selected-header.close');
         expect(replace).toHaveBeenCalledWith('/workflows/runs/11111111-1111-4111-8111-111111111111');
     });
 
@@ -572,7 +636,9 @@ describe('WorkflowRunScreen', () => {
         }));
         expect(screen.findByTestId('workflow-run-inputs-run')?.props.disabled).toBe(false);
         act(() => invokeTestInstanceHandler(screen.findByProps({ testID: 'workflow-run-another-agent-field' }), 'onChange', {
-            agentTargetKey: 'backend:unresolved-acp:configured:unresolved-acp',
+            // An unresolved routing id, not a configured ACP definition: the
+            // latter now normalizes to a valid canonical custom ACP Agent.
+            agentTargetKey: 'backend:unresolved-acp',
         }));
         expect(screen.findByTestId('workflow-run-inputs-run')?.props.disabled).toBe(true);
         act(() => invokeTestInstanceHandler(screen.findByProps({ testID: 'workflow-run-another-agent-field' }), 'onChange', {
@@ -673,6 +739,69 @@ describe('WorkflowRunScreen', () => {
         expect(latestContentProps?.sourceAction).toBeNull();
     });
 
+    it('keeps the saved source action through an ordinary refresh with a pending access read', async () => {
+        sourceAccessResponse.mockResolvedValue(sourceGrantReply('owner'));
+        await renderRunScreen({ run: createWorkflowRunSummaryFixture({ sourceArtifactId }), invocationListFailure: new Error('offline') });
+        expect(latestContentProps?.sourceAction?.kind).toBe('edit');
+        const refresh = createDeferred<ReturnType<typeof sourceGrantReply>>();
+        sourceAccessResponse.mockReturnValue(refresh.promise);
+        await act(async () => latestContentProps?.onReload?.());
+        expect(latestContentProps?.sourceAction?.kind).toBe('edit');
+        act(() => latestContentProps?.sourceAction?.onPress());
+        expect(routerSpy.push).toHaveBeenCalledWith(`/workflows/${sourceArtifactId}`);
+        await act(async () => refresh.resolve(sourceGrantReply('view')));
+        expect(latestContentProps?.sourceAction?.kind).toBe('open');
+    });
+    it('keeps confirmed source access while the same source revision gains its opened body', async () => {
+        const artifact = sourceArtifact();
+        getStorage().getState().updateArtifact(artifact);
+        sourceAccessResponse.mockResolvedValue(sourceGrantReply('owner'));
+        await renderRunScreen({ run: createWorkflowRunSummaryFixture({ sourceArtifactId }) });
+        const edit = latestContentProps?.sourceAction;
+        expect(edit?.kind).toBe('edit');
+        const refresh = createDeferred<ReturnType<typeof sourceGrantReply>>();
+        sourceAccessResponse.mockReturnValue(refresh.promise);
+        // Opening/hydrating already-current content does not change the source or its grant.
+        await act(async () => getStorage().getState().updateArtifact({ ...artifact, body: 'Opened source body' }));
+        expect(latestContentProps?.sourceAction?.kind).toBe('edit');
+        act(() => edit?.onPress());
+        expect(routerSpy.push).toHaveBeenCalledWith(`/workflows/${sourceArtifactId}`);
+        await act(async () => refresh.resolve(sourceGrantReply('view')));
+        expect(latestContentProps?.sourceAction?.kind).toBe('open');
+    });
+    it('retains confirmed source access through Artifact revisions until a definitive grant answer', async () => {
+        const artifact = sourceArtifact();
+        getStorage().getState().updateArtifact(artifact);
+        sourceAccessResponse.mockResolvedValue(sourceGrantReply('owner'));
+        await renderRunScreen({ run: createWorkflowRunSummaryFixture({ sourceArtifactId }) });
+        const edit = latestContentProps?.sourceAction;
+        const refresh = createDeferred<ReturnType<typeof sourceGrantReply>>();
+        sourceAccessResponse.mockReturnValue(refresh.promise);
+        await act(async () => getStorage().getState().updateArtifact({ ...artifact, updatedAt: 2, seq: 2 }));
+        expect(latestContentProps?.sourceAction).toBe(edit);
+        act(() => edit?.onPress());
+        expect(routerSpy.push).toHaveBeenCalledWith(`/workflows/${sourceArtifactId}`);
+        routerSpy.push.mockClear();
+        await act(async () => refresh.resolve(sourceGrantReply('view')));
+        expect(latestContentProps?.sourceAction?.kind).toBe('open');
+        act(() => edit?.onPress());
+        expect(routerSpy.push).not.toHaveBeenCalled();
+    });
+    it('retains confirmed source access after transport failure but withdraws it after source removal', async () => {
+        const artifact = sourceArtifact();
+        getStorage().getState().updateArtifact(artifact);
+        sourceAccessResponse.mockResolvedValue(sourceGrantReply('owner'));
+        await renderRunScreen({ run: createWorkflowRunSummaryFixture({ sourceArtifactId }) });
+        const edit = latestContentProps?.sourceAction;
+        sourceAccessResponse.mockResolvedValue({ ok: false, errorCode: 'network_error', error: 'Offline' });
+        await act(async () => getStorage().getState().updateArtifact({ ...artifact, updatedAt: 2, seq: 2 }));
+        expect(latestContentProps?.sourceAction).toBe(edit);
+        sourceAccessResponse.mockResolvedValue({ ok: false, errorCode: 'artifact_not_found', error: 'Missing' });
+        await act(async () => getStorage().getState().deleteArtifact(sourceArtifactId));
+        expect(latestContentProps?.sourceAction).toBeNull();
+        act(() => edit?.onPress());
+        expect(routerSpy.push).not.toHaveBeenCalled();
+    });
     it('invalidates source actions on source updates/deletion and rejects retained callbacks', async () => {
         const artifact = sourceArtifact();
         getStorage().setState({ artifacts: { [sourceArtifactId]: artifact } });
@@ -916,8 +1045,9 @@ describe('WorkflowRunScreen', () => {
         expect(routerSpy.push).not.toHaveBeenCalled();
     });
 
-    it('opens Save as workflow as a reviewed unsaved draft without creating an Artifact', async () => {
-        await renderRunScreen({ acceptedContext: { ...ACCEPTED_CONTEXT, metadata: { title: 'Release review', description: 'Accepted description' } } });
+    it.each([1440, 390])('opens Save as workflow in the real editor under StrictMode at %i without writing', async (width) => {
+        platformViewport.width = width;
+        const screen = await renderRunScreen({ acceptedContext: { ...ACCEPTED_CONTEXT, metadata: { title: 'Release review', description: 'Accepted description' } } });
         const saveAsWorkflow = latestContentProps?.onSaveAsWorkflow;
 
         act(() => { saveAsWorkflow?.(); });
@@ -927,14 +1057,110 @@ describe('WorkflowRunScreen', () => {
         } | undefined;
         expect(route).toEqual({ pathname: '/workflows/new', params: { reviewedRunSeedId: expect.any(String) } });
         if (route === undefined) throw new Error('Expected the unsaved review route');
-        expect(readWorkflowReviewedRunSeed(route.params.reviewedRunSeedId)).toMatchObject({
-            definition: DEFINITION,
-            name: 'Release review', description: 'Accepted description',
-            project: ACCEPTED_CONTEXT.workspaceTarget.project,
-            inputs: ACCEPTED_CONTEXT.inputs,
-        });
         expect(machineRpcSpy).not.toHaveBeenCalled();
         expect(latestContentProps?.saveAsWorkflowPending).toBe(false);
+        await openEditorAfterRouteHydration(screen, { kind: 'new', reviewedRunSeedId: route.params.reviewedRunSeedId });
+        expect(screen.findByTestId('workflow-editor-reviewed-run-missing') === null).toBe(true);
+        expect(screen.findByType(WorkflowEditorBody).props).toMatchObject({
+            draft: { name: 'Release review', blocks: DEFINITION.blocks },
+            description: 'Accepted description',
+            projectTarget: ACCEPTED_CONTEXT.workspaceTarget.project,
+        });
+        expect(readWorkflowReviewedRunSeed(route.params.reviewedRunSeedId)).toBeNull();
+        expect(actionTransport.mock.calls.some(([id]) => id === 'workflow.definition.create')).toBe(false);
+    });
+
+    it.each(['new-session', 'trigger', 'definition-copy', 'reviewed-run'] as const)('adopts the next %s seed on the same mounted editor', async (kind) => {
+        const screen = await renderRunScreen();
+        const first = createUnsavedEditorSource(kind, 'First draft');
+        const second = createUnsavedEditorSource(kind, 'Second draft');
+        const draw = (source: WorkflowEditorSource) => <AppPaneProvider><WorkflowEditorHostScreen source={source} /></AppPaneProvider>;
+        await screen.update(draw(first));
+        expect(screen.findByType(WorkflowEditorBody).props.draft.blocks[0].name).toBe('First draft');
+        await screen.update(draw(second));
+        expect(screen.findByType(WorkflowEditorBody).props.draft.blocks[0].name).toBe('Second draft');
+        // A committed intake consumes B's original handle, not the already-consumed A handle.
+        if (second.kind !== 'new') throw new Error('Expected the unsaved replacement source');
+        const secondId = second.reviewedRunSeedId ?? second.newSessionDraftSeedId ?? second.triggerWorkflowSeedId ?? second.definitionDraftSeedId;
+        if (secondId === undefined) throw new Error('Expected the replacement seed handle');
+        const read = kind === 'new-session' ? readNewSessionAutomationHandoffSeed : kind === 'trigger' ? readTriggerWorkflowSeed
+            : kind === 'definition-copy' ? readWorkflowDefinitionDraftSeed : readWorkflowReviewedRunSeed;
+        expect(read(secondId)).toBeNull();
+    });
+
+    it.each(['new-session', 'trigger', 'definition-copy', 'reviewed-run'] as const)('withdraws the mounted %s seed on same-Account lifetime retirement', async (kind) => {
+        const screen = await renderRunScreen();
+        const source = createUnsavedEditorSource(kind, 'Private draft');
+        await screen.update(<AppPaneProvider><WorkflowEditorHostScreen source={source} /></AppPaneProvider>);
+        expect(screen.findByType(WorkflowEditorBody).props.draft.blocks[0].name).toBe('Private draft');
+        await act(async () => retireActiveServerAccountScopeLifetime());
+        expect(screen.findByTestId('workflow-editor-account-changed')).not.toBeNull();
+        expect(actionTransport.mock.calls.some(([id]) => id === 'workflow.definition.create' || id === 'workflow.trigger.update')).toBe(false);
+    });
+
+    it('retains a definition copy through speculative editor rendering and refuses reuse after commit', async () => {
+        const screen = await renderRunScreen();
+        const seedId = storeWorkflowDefinitionDraftSeed({
+            name: 'Copied workflow', description: 'Copied description', definition: DEFINITION,
+        });
+        await openEditorAfterRouteHydration(screen, { kind: 'new', definitionDraftSeedId: seedId });
+        expect(screen.findByTestId('workflow-editor-draft-unavailable') === null).toBe(true);
+        expect(screen.findByType(WorkflowEditorBody).props).toMatchObject({
+            draft: { name: 'Copied workflow', blocks: DEFINITION.blocks }, description: 'Copied description',
+        });
+        expect(readWorkflowDefinitionDraftSeed(seedId)).toBeNull();
+        await screen.unmount();
+        const reopened = await renderScreen(<AppPaneProvider>
+            <WorkflowEditorHostScreen source={{ kind: 'new', definitionDraftSeedId: seedId }} />
+        </AppPaneProvider>);
+        expect(reopened.findByTestId('workflow-editor-draft-unavailable')).not.toBeNull();
+        expect(actionTransport.mock.calls.some(([id]) => id === 'workflow.definition.create')).toBe(false);
+    });
+
+    it.each(['new-session', 'trigger'] as const)('retains the %s unsaved seed through speculative editor rendering', async (kind) => {
+        const screen = await renderRunScreen();
+        const seedId = kind === 'new-session'
+            ? storeNewSessionAutomationHandoffSeed({
+                name: 'Captured session', description: 'Session description', enabled: true,
+                draft: buildWorkflowEditorDraftFromDefinition({ draftId: 'captured-session', name: 'Captured session', definition: DEFINITION }),
+                project: ACCEPTED_CONTEXT.workspaceTarget.project, triggers: [],
+            })
+            : storeTriggerWorkflowSeed({
+                definition: DEFINITION,
+                retarget: { scope: 'account', automationId: 'automation-1', expectedRevision: 1 },
+            });
+        const source: WorkflowEditorSource = kind === 'new-session'
+            ? { kind: 'new', newSessionDraftSeedId: seedId }
+            : { kind: 'new', triggerWorkflowSeedId: seedId };
+        await openEditorAfterRouteHydration(screen, source);
+        expect(screen.findByType(WorkflowEditorBody).props.draft.blocks).toEqual(DEFINITION.blocks);
+        if (kind === 'new-session') {
+            expect(screen.findByType(WorkflowEditorBody).props).toMatchObject({
+                draft: { name: 'Captured session' }, description: 'Session description',
+                projectTarget: ACCEPTED_CONTEXT.workspaceTarget.project,
+            });
+            expect(readNewSessionAutomationHandoffSeed(seedId)).toBeNull();
+        } else {
+            expect(readTriggerWorkflowSeed(seedId)).toBeNull();
+        }
+        expect(actionTransport.mock.calls.some(([id]) => id === 'workflow.definition.create' || id === 'workflow.trigger.update')).toBe(false);
+    });
+
+    it.each(['new-session', 'trigger'] as const)('refuses the %s handoff after its Account lifetime retires', async (kind) => {
+        await renderRunScreen();
+        const seedId = kind === 'new-session'
+            ? storeNewSessionAutomationHandoffSeed({
+                name: 'Captured session', description: null, enabled: true,
+                draft: buildWorkflowEditorDraftFromDefinition({ draftId: 'captured-session', name: 'Captured session', definition: DEFINITION }),
+                project: null, triggers: [],
+            })
+            : storeTriggerWorkflowSeed({
+                definition: DEFINITION, retarget: { scope: 'account', automationId: 'automation-1', expectedRevision: 1 },
+            });
+        const read = kind === 'new-session' ? readNewSessionAutomationHandoffSeed : readTriggerWorkflowSeed;
+        expect(readWorkflowReviewedRunSeed(seedId)).toBeNull();
+        await act(async () => retireActiveServerAccountScopeLifetime());
+        expect(read(seedId) === null).toBe(true);
     });
 
     /**
@@ -1338,6 +1564,45 @@ describe('WorkflowRunScreen', () => {
      * mutex at this command owner admits exactly one at a time; the others are
      * refused at issuance, not merely greyed out after a render.
      */
+    it.each([false, true])('rereads and retries Stop once on a revision conflict (second conflict: %s)', async (again) => {
+        const run = createWorkflowRunSummaryFixture({ id: routeState.runId, state: 'running', revision: 3 });
+        await renderRunScreen({ run });
+        const reply = await detailActions.getRun.mock.results[0]!.value;
+        detailActions.getRun.mockResolvedValue({ ...reply, run: { ...run, revision: 4 } });
+        detailActions.cancelRun.mockResolvedValue({ run: { ...run, revision: 5 }, intent: 'cancel_requested' });
+        detailActions.cancelRun.mockRejectedValueOnce(new WorkflowActionError({ message: 'Moved', rawCode: 'currentness_conflict' }));
+        if (again) detailActions.cancelRun.mockRejectedValueOnce(new WorkflowActionError({ message: 'Moved again', rawCode: 'currentness_conflict' }));
+        await act(async () => latestContentProps?.onCancel?.());
+        await vi.waitFor(() => expect(detailActions.cancelRun.mock.calls.map(([input]) => input.expectedRevision)).toEqual([3, 4]));
+        await act(async () => {});
+        expect(latestContentProps?.pendingControl).toBeNull();
+        expect(again ? latestContentProps?.errorLabel : latestContentProps?.cancelRequested).toBeTruthy();
+    });
+    it('withholds settled Run actions while accepted Stop custody is pending', async () => {
+        const run = createWorkflowRunSummaryFixture({ state: 'cancelled', workflowCustodyState: 'pending',
+            availability: { cancel: false, pause: false } });
+        await renderRunScreen({ run });
+        expect(latestContentProps?.onRunAgain).toBeUndefined();
+        expect(latestContentProps?.onDelete).toBeUndefined();
+        await act(async () => getStorage().getState().upsertWorkflowRuns([workflowRunRowFromSummary({ ...run,
+            revision: run.revision + 1, workflowCustodyState: 'settled' })]));
+        expect(latestContentProps?.onRunAgain).toBeDefined();
+        expect(latestContentProps?.onDelete).toBeDefined();
+    });
+    it('does not retry Stop when the Account retires during its conflict reread', async () => {
+        const run = createWorkflowRunSummaryFixture({ id: routeState.runId, state: 'running', revision: 3 });
+        await renderRunScreen({ run });
+        const reply = await detailActions.getRun.mock.results[0]!.value;
+        const reread = createDeferred<typeof reply>();
+        detailActions.getRun.mockImplementationOnce(() => reread.promise);
+        detailActions.cancelRun.mockRejectedValueOnce(new WorkflowActionError({ message: 'Moved', rawCode: 'currentness_conflict' }));
+        let stopping: void | undefined;
+        await act(async () => { stopping = latestContentProps?.onCancel?.(); });
+        await vi.waitFor(() => expect(detailActions.getRun).toHaveBeenCalledTimes(2));
+        await act(async () => retireActiveServerAccountScopeLifetime());
+        await act(async () => { reread.resolve({ ...reply, run: { ...run, revision: 4 } }); await stopping; });
+        expect(detailActions.cancelRun.mock.calls.map(([input]) => input.expectedRevision)).toEqual([3]);
+    });
     it('issues exactly one durable Run operation at a time and refuses the rest until it settles', async () => {
         const invocations = [
             createWorkflowInvocationIndexFixture({ id: '33333333-3333-4333-8333-333333333333', parentRecordId: null, memberOrdinal: '0', sequence: '0' }),
@@ -1833,6 +2098,48 @@ describe('WorkflowRunScreen', () => {
      * that lost its race is ignored rather than published.
      */
     describe('Run summary freshness on an invocation wake', () => {
+        it('shows current held work when the opened admission detail still records queued revision zero', async () => {
+            const queued = createWorkflowRunSummaryFixture({ state: 'queued', revision: 0, origin: { kind: 'direct' } });
+            const definition = createWorkflowDefinitionFixture({ defaults: {}, blocks: [{ kind: 'wait', id: 'confirm',
+                document: { text: 'Enter READY, then continue.', references: [], attachments: [] }, result: { kind: 'text' } }] });
+            await renderRunScreen({ run: queued, definition });
+            expect(latestContentProps?.run.state).toBe('queued');
+            const waiting = { ...queued, state: 'waiting_for_review' as const, revision: 12 };
+            const root = createWorkflowInvocationIndexFixture({ id: '33333333-3333-4333-8333-333333333333', parentRecordId: null });
+            const held = createWorkflowInvocationIndexFixture({ id: '44444444-4444-4444-8444-444444444444',
+                parentRecordId: root.id, sequence: '1', lifecycle: 'waiting_for_review', contentRevision: '1' });
+            detailActions.listRuns.mockResolvedValue({ runs: [waiting], metadataByRunId: {} });
+            detailActions.listInvocations.mockResolvedValue({ invocations: [root, held], parentRevision: 12,
+                invocationDetails: [{ index: held, parentRevision: 12, progress: {
+                    kind: 'happier.workflow-progress.v1', blockKind: 'wait', invocationPath: { blockId: 'confirm', scope: [] },
+                    attempt: '0', logicalInvocationRecordId: held.id, resultContract: { kind: 'text' },
+                } }] });
+
+            await act(async () => publishHomeAccountChange('server-a', [`workflow-run:${queued.id}`]));
+            await act(async () => {});
+
+            expect(storeState.state.workflowRunsById[queued.id]?.detail?.run.revision).toBe(0);
+            expect(latestContentProps?.run.state).toBe('waiting_for_review');
+            expect(latestContentProps?.run.revision).toBe(12);
+            expect(latestContentProps?.invocationProgressById?.get(held.id)?.resultContract).toEqual({ kind: 'text' });
+        });
+        it('opens current detail when an interrupted Run is later stopped', async () => {
+            const interrupted = createWorkflowRunSummaryFixture({ state: 'interrupted', revision: 17, workflowCustodyState: 'pending', origin: { kind: 'direct' } });
+            await renderRunScreen({ run: interrupted });
+            await vi.waitFor(() => expect(latestContentProps?.run.state).toBe('interrupted'));
+            const earlierDetail = await detailActions.getRun.mock.results[0]!.value;
+            const stopped = { ...interrupted, state: 'cancelled' as const, revision: 19,
+                workflowCustodyState: 'settled' as const };
+            detailActions.listRuns.mockResolvedValue({ runs: [stopped], metadataByRunId: {} });
+            detailActions.getRun.mockResolvedValue({ ...earlierDetail, run: stopped });
+
+            await act(async () => publishHomeAccountChange('server-a', [`workflow-run:${interrupted.id}`]));
+            await act(async () => {});
+
+            expect(latestContentProps?.run.state).toBe('cancelled');
+            expect(storeState.state.workflowRunsById[interrupted.id]?.detail?.run.revision).toBe(19);
+            expect(storeState.state.workflowRunsById[interrupted.id]?.detail?.run.workflowCustodyState).toBe('settled');
+        });
         it('renews exact detail and its wake subscription on same-Account restore', async () => {
             const run = createWorkflowRunSummaryFixture({ state: 'claimed', revision: 1 });
             await renderRunScreen({ run });
@@ -1898,6 +2205,28 @@ describe('WorkflowRunScreen', () => {
         function openRequestResponse(index: ReturnType<typeof createWorkflowInvocationIndexFixture>, parentRevision: number) {
             return permissionInvocationResponse({ index, requestIds: ['permission-1'], parentRevision });
         }
+
+        it('keeps page-opened content while the first exact read is pending', async () => {
+            const invocations = selectedRows();
+            const response = openRequestResponse(invocations[1]!, 1);
+            const exactRead = createDeferred<unknown>();
+            detailActions.getInvocation.mockReturnValue(exactRead.promise);
+            const screen = await renderRunScreen({
+                run: createWorkflowRunSummaryFixture({ state: 'running', revision: 1 }),
+                invocations,
+                invocationDetails: [response.invocation],
+            });
+            await act(async () => latestContentProps?.onSelectInvocation(invocations[1]!.id));
+            expect(latestContentProps?.selectedInvocationProgress).toEqual(response.invocation.progress);
+            expect(screen.findByTestId('workflow-run-read-pending')).toBeNull();
+            // A read in flight is not stale evidence: no warning beside a hold that just opened (DESIGN-15 R7).
+            expect(screen.findByTestId('workflow-run-read-freshness')).toBeNull();
+            expect(latestContentProps?.onRespondToRequest).toBeUndefined();
+            exactRead.resolve(response);
+            await act(async () => {});
+            expect(latestContentProps?.selectedContentUnavailable).toBe(false);
+            expect(screen.findByTestId('workflow-run-read-freshness')).toBeNull();
+        });
 
         it('does not confirm a stale row blob when its parent revision is unchanged', async () => {
             const invocations = selectedRows();
@@ -2003,7 +2332,7 @@ describe('WorkflowRunScreen', () => {
                 return reads === 1 ? firstRead.promise : secondRead.promise;
             });
             const { getStorage } = await import('@/sync/domains/state/storage');
-            await renderRunScreen({
+            const screen = await renderRunScreen({
                 run: createWorkflowRunSummaryFixture({
                     id: '11111111-1111-4111-8111-111111111111', state: 'running', machineId: 'machine-1', origin: { kind: 'direct' },
                 }),
@@ -2040,6 +2369,8 @@ describe('WorkflowRunScreen', () => {
             expect(latestContentProps?.selectedInvocationProgress).toMatchObject({
                 execution: { kind: 'detached_run', runId: 'exec-1' },
             });
+            expect(screen.findByTestId('workflow-run-read-pending')).toBeNull();
+            expect(screen.findByTestId('workflow-run-read-freshness')).toBeNull();
 
             secondRead.resolve(openRequestResponse(newerIndex, 1));
             await act(async () => {});

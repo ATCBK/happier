@@ -23,6 +23,7 @@ import { WorkflowLifecycleStatus } from '@/components/workflows/presentation/Wor
 import {
     describeWorkflowInvocationAttempt,
     describeWorkflowInvocationLifecycle,
+    type WorkflowInvocationLifecycleContext,
 } from '@/components/workflows/presentation/workflowLifecyclePresentation';
 
 /**
@@ -126,6 +127,7 @@ const styles = StyleSheet.create((theme) => ({
 }));
 
 export type WorkflowInvocationListProps = Readonly<{
+    invocationStatusContext?: WorkflowInvocationLifecycleContext;
     invocations: readonly WorkflowRunInvocationIndexV1[];
     selectedInvocationId: string | null;
     /** The press event travels so the caller can return focus to this row later. */
@@ -155,10 +157,12 @@ export function WorkflowInvocationList(props: WorkflowInvocationListProps): Reac
     const { theme } = useUnistyles();
     const testIDPrefix = props.testIDPrefix ?? 'workflow-invocations';
     const keyExtractor = React.useCallback((invocation: WorkflowRunInvocationIndexV1) => invocation.id, []);
+    const extraData = React.useMemo(() => ({ selectedInvocationId: props.selectedInvocationId,
+        invocationStatusContext: props.invocationStatusContext }), [props.selectedInvocationId, props.invocationStatusContext]);
     const renderInvocation = React.useCallback(({ item: invocation }: { item: WorkflowRunInvocationIndexV1 }) => {
         const selected = props.selectedInvocationId === invocation.id;
         const blockKind = props.resolveInvocationBlockKind?.(invocation) ?? null;
-        const stateLabel = describeWorkflowInvocationLifecycle(invocation.lifecycle, { blockKind }).label;
+        const stateLabel = describeWorkflowInvocationLifecycle(invocation.lifecycle, { ...props.invocationStatusContext, blockKind }).label;
         const attempt = describeWorkflowInvocationAttempt(invocation.attempt);
         const displayLabel = props.resolveInvocationLabel?.(invocation) ?? t('workflows.contentUnavailable');
         return (
@@ -191,11 +195,12 @@ export function WorkflowInvocationList(props: WorkflowInvocationListProps): Reac
                         testID={`${testIDPrefix}-state-${invocation.id}`}
                         lifecycle={invocation.lifecycle}
                         blockKind={blockKind}
+                        context={props.invocationStatusContext}
                     />
                 </View>
             </HappierPressable>
         );
-    }, [props.onSelectInvocation, props.resolveInvocationBlockKind, props.resolveInvocationLabel, props.selectedInvocationId, testIDPrefix, theme.colors.border.focus]);
+    }, [props.invocationStatusContext, props.onSelectInvocation, props.resolveInvocationBlockKind, props.resolveInvocationLabel, props.selectedInvocationId, testIDPrefix, theme.colors.border.focus]);
 
     const pagingFooter = props.onLoadMore === undefined ? null : (
         <View style={styles.footer}>
@@ -245,6 +250,7 @@ export function WorkflowInvocationList(props: WorkflowInvocationListProps): Reac
                 data={props.invocations}
                 keyExtractor={keyExtractor}
                 renderItem={renderInvocation}
+                extraData={extraData}
                 contentContainerStyle={[styles.list, props.contentContainerStyle]}
                 onScroll={props.onScroll}
                 scrollEventThrottle={32}

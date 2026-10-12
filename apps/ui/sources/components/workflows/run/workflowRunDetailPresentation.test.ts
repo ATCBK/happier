@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { WorkflowProgressEnvelopeV1Schema, WorkflowDefinitionV1Schema } from '@happier-dev/protocol';
+import { WorkflowProgressEnvelopeV1Schema, WORKFLOW_RUN_STATES_V1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
+import { WorkflowDefinitionV1Schema } from '@happier-dev/protocol/workflows/workflowV1';
 import type { WorkflowRunInvocationIndexV1 } from '@happier-dev/protocol';
 import { projectWorkflowInvocationStructure } from './workflowInvocationStructure';
 
@@ -30,6 +31,39 @@ import {
 } from './workflowRunDetailPresentation';
 
 describe('managed workflow Run presentation', () => {
+    it('keeps every persisted outcome stable across competing Machine observations', () => {
+        const coverage = { observedLeafCounts: { completed: 0, failed: 0, attention: 0 }, coverage: 'complete' as const, knownFailure: false };
+        for (const state of WORKFLOW_RUN_STATES_V1) {
+            const run = createWorkflowRunSummaryFixture({ state, workflowCustodyState: 'settled' });
+            const sentence = formatWorkflowRunOutcomeSentence({ run, coverage });
+            for (const reachable of [false, true, false, true]) {
+                expect(formatWorkflowRunOutcomeSentence({ run, coverage, machine: { name: 'Build box', reachable } })).toBe(sentence);
+            }
+        }
+    });
+    it('exposes reported failure and lost-contact time without inventing recovery choices', () => {
+        const run = createWorkflowRunSummaryFixture({ state: 'interrupted' });
+        const invocation = createWorkflowInvocationIndexFixture({ lifecycle: 'failed' });
+        const progress = WorkflowProgressEnvelopeV1Schema.parse({ kind: 'happier.workflow-progress.v1', blockKind: 'step',
+            invocationPath: { blockId: 'a', scope: [] }, attempt: '0', logicalInvocationRecordId: invocation.id,
+            timing: { startedAt: '2026-10-10T12:00:00.000Z', finishedAt: '2026-10-10T12:01:00.000Z' },
+            reason: { code: 'agent_failed', message: 'Agent exited before producing a result' } });
+        const recovery = projectWorkflowInvocationRecovery({ run, invocation, progress, machineHomeDirectory: null,
+            machine: { name: 'Build box', reachable: false, lastSeenAt: 1791633660000 } });
+        expect(recovery).toMatchObject({
+            failureCause: { kind: 'reported_failure', blockKind: 'step', code: 'agent_failed', message: 'Agent exited before producing a result', at: '2026-10-10T12:01:00.000Z' },
+            unavailableMachine: { name: 'Build box', lastSeenAt: 1791633660000 },
+            canReattach: false, canRetrySameConversation: false, canRetryFreshAgent: false, canContinuePrepared: false,
+        });
+        expect(projectWorkflowInvocationRecovery({ run, invocation, progress: { ...progress, reason: undefined }, machineHomeDirectory: null,
+            machine: { name: 'Build box', reachable: false, lastSeenAt: 1791633660000 } }).failureCause)
+            .toMatchObject({ kind: 'lost_contact', machine: 'Build box', lastSeenAt: 1791633660000 });
+        expect(projectWorkflowInvocationRecovery({ run, invocation: { ...invocation, lifecycle: 'completed' }, progress,
+            machineHomeDirectory: null, machine: { name: 'Build box', reachable: false } }).failureCause).toBeNull();
+        expect(projectWorkflowInvocationRecovery({ run, invocation, progress, machineHomeDirectory: null,
+            machine: { name: 'Build box', reachable: false, lastSeenAt: 0 } }).unavailableMachine)
+            .toEqual({ name: 'Build box', lastSeenAt: null });
+    });
     it('keeps Stop pending until physical custody settles, even after the parent is cancelled', () => {
         const coverage = { observedLeafCounts: { completed: 1, failed: 0, attention: 5 }, coverage: 'complete' as const, knownFailure: false };
         const run = createWorkflowRunSummaryFixture({ state: 'cancelled', workflowCustodyState: 'pending', stepProgress: { completed: 1, total: 5 } });
@@ -673,12 +707,12 @@ describe('managed workflow Run presentation', () => {
         })).toBeNull();
     });
 
-    it('says an active Run lost contact only while its Machine is known unreachable', () => {
+    it('keeps Machine availability separate from the canonical Run outcome', () => {
         const coverage = summarizeWorkflowInvocationCoverage([], { kindsByInvocationId: new Map(), historyComplete: false });
         const running = createWorkflowRunSummaryFixture({ state: 'running' });
         expect(formatWorkflowRunOutcomeSentence({
             run: running, coverage, machine: { name: 'Mac Studio', reachable: false },
-        })).toBe(t('workflows.run.machineUnavailable', { machine: 'Mac Studio' }));
+        })).toBe(formatWorkflowRunOutcomeSentence({ run: running, coverage }));
         expect(formatWorkflowRunOutcomeSentence({
             run: running, coverage, machine: { name: 'Mac Studio', reachable: true },
         })).toBe(formatWorkflowRunOutcomeSentence({ run: running, coverage }));

@@ -8,8 +8,7 @@ import {
     type CollectionAnatomy,
     type CollectionRowActions,
 } from '@happier-dev/plugin-ui';
-import type { HappierCollectionWindow } from '@happier-dev/plugin-ui/presentation';
-import type { WorkflowPluginSourceV1 } from '@happier-dev/protocol/workflows';
+import { HAPPIER_PAGE_METRICS, type HappierCollectionWindow } from '@happier-dev/plugin-ui/presentation';
 import { countWorkflowStepsV1 } from '@happier-dev/protocol/workflows/workflowDefinitionEditV1';
 
 import { useIsFocused, useRouter } from '@/components/appShell/workspace/destinationRoute';
@@ -17,9 +16,11 @@ import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { EmptyState } from '@/components/ui/empty/EmptyState';
 import { Icon } from '@/components/ui/icons/Icon';
 import { PageHeader } from '@/components/ui/layout/PageHeader';
-import { useLayoutMaxWidthStyle } from '@/components/ui/layout/layout';
+import { useNavigationTitleChromeShowsTitle } from '@/components/ui/layout/navigationTitleChrome';
+import { PageContentColumn } from '@/components/ui/lists/PageContentColumn';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
+import { CompactSearchField } from '@/components/ui/forms/CompactSearchField';
 import { CoreCollectionScope } from '@/components/ui/lists/collection/CoreCollectionScope';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
@@ -55,19 +56,17 @@ import { buildWorkflowAgentAuthoringSeed } from '@/sync/domains/workflows/workfl
 import { formatTriggerSetSummary } from '../triggers/formatTriggerSummary';
 import { formatWorkflowDefinitionContentUnavailableReason, formatWorkflowDefinitionLibraryTitle } from '../presentation/workflowProblemPresentation';
 import { AccountTriggersSection } from '../triggers/AccountTriggersSection';
+import { useWorkflowLibraryView, workflowLibraryRowTitle as rowTitle, type WorkflowLibraryRow as LibraryRow,
+    type WorkflowLibraryView as LibraryView } from './useWorkflowLibraryView';
 
-/** A library longer than this gets its search field (the collection columns' shared convention). */
-const SEARCH_THRESHOLD = 8;
 /** The narrowest readable row at normal text size. */
 const LIBRARY_MIN_WIDTH_PX = 320;
 
-type LibraryRow = Readonly<{
-    key: string;
-    group: 'library' | 'sharedWithYou';
-    definition: WorkflowLibraryDefinition;
-}> | Readonly<{ key: string; group: 'fromPlugins'; plugin: WorkflowPluginSourceV1 }>;
-
-const rowTitle = (row: LibraryRow) => row.group === 'fromPlugins' ? row.plugin.title : formatWorkflowDefinitionLibraryTitle(row.definition);
+const LIBRARY_VIEW_LABEL: Readonly<Record<LibraryView, () => string>> = {
+    all: () => t('workflows.destination.views.all'),
+    triggered: () => t('workflows.destination.views.triggered'),
+    running: () => t('workflows.destination.sections.running'),
+};
 
 type LibraryRowCommands = Readonly<{
     deleting: ReadonlySet<string>;
@@ -109,6 +108,7 @@ export function WorkflowsLibraryHome(props: Readonly<{ includeAccountTriggers?: 
     const router = useRouter();
     const openAgent = useWorkflowAgentAuthoring();
     const columnOwnsCreation = useWorkflowsColumnOwnsCreation();
+    const phone = useNavigationTitleChromeShowsTitle();
     const library = useWorkflowDefinitionLibrary();
     const focused = useIsFocused();
     React.useEffect(() => {
@@ -119,23 +119,16 @@ export function WorkflowsLibraryHome(props: Readonly<{ includeAccountTriggers?: 
     const libraryIsEmpty = library.definitions.length === 0 && library.pluginWorkflows.length === 0;
     // Only an empty library needs history to distinguish first visit from returning to it.
     const history = useWorkflowRunWindow('all', { enabled: library.status === 'loaded' && libraryIsEmpty });
-    const [query, setQuery] = React.useState('');
-    const [view, setView] = React.useState<'all' | 'triggered'>('all');
     const split = React.useMemo(() => splitLibraryDefinitions(library.definitions, library.pluginWorkflows), [library.definitions, library.pluginWorkflows]);
     const rows = React.useMemo((): readonly LibraryRow[] => [
         ...split.library.map((definition) => ({ key: definition.definitionId, group: 'library' as const, definition })),
         ...split.sharedWithYou.map((definition) => ({ key: definition.definitionId, group: 'sharedWithYou' as const, definition })),
         ...split.fromPlugins.map((plugin) => ({ key: plugin.workflow, group: 'fromPlugins' as const, plugin })),
     ], [split.library, split.sharedWithYou, split.fromPlugins]);
-    const hasTriggers = rows.some((row) => row.group !== 'fromPlugins' && row.definition.triggers.length > 0);
-    const activeView = hasTriggers ? view : 'all';
-    React.useEffect(() => { if (!hasTriggers) setView('all'); }, [hasTriggers]);
-    const needle = query.trim().toLocaleLowerCase();
-    const filter = React.useCallback(
-        (row: LibraryRow) => (activeView === 'all' || (row.group !== 'fromPlugins' && row.definition.triggers.length > 0))
-            && (needle.length === 0 || rowTitle(row).toLocaleLowerCase().includes(needle)),
-        [needle, activeView],
-    );
+    const summaryIds = React.useMemo(() => rows.flatMap((row) => row.group === 'fromPlugins' ? [] : [row.definition.definitionId]), [rows]);
+    const summaries = useWorkflowLibrarySummaries(summaryIds);
+    const libraryView = useWorkflowLibraryView(rows, summaries, focused);
+    const { filter, visibleKeys, needle, searchQuery: query, view: activeView } = libraryView;
     const window = React.useMemo((): HappierCollectionWindow => (library.hasMore ? {
         kind: 'partial',
         continuations: [{
@@ -157,10 +150,7 @@ export function WorkflowsLibraryHome(props: Readonly<{ includeAccountTriggers?: 
         openKey: null,
         onOpenChange: openDefinition,
     });
-    const summaryIds = React.useMemo(() => rows.flatMap((row) => row.group === 'fromPlugins' ? [] : [row.definition.definitionId]), [rows]);
-    const summaries = useWorkflowLibrarySummaries(summaryIds);
     const anatomy = useLibraryAnatomy(summaries);
-    const visibleKeys = React.useMemo(() => rows.filter(filter).map(readRowKey), [rows, filter]);
     const commands = useLibraryRowCommands(summaries, library.deletedDefinitionId);
     const deleted = library.deletedDefinitionId !== null;
     const visibleKeysRef = React.useRef(visibleKeys);
@@ -229,17 +219,27 @@ export function WorkflowsLibraryHome(props: Readonly<{ includeAccountTriggers?: 
         {deleted ? <View testID="workflows-home:deleted-focus">
             <SurfaceStateCard testID="workflows-home:deleted" size="line" kind="success" title={t('common.deleted')} accessibilitySemantics="status" />
         </View> : null}
-        {hasTriggers ? <SegmentedTabBar
-            testIDPrefix="workflows-home:filter"
-            accessibilityLabel={t('workflows.destination.views.libraryAccessibility')}
-            tabs={[{ id: 'all', label: t('workflows.destination.views.all') }, { id: 'triggered', label: t('workflows.destination.views.triggered') }]}
-            activeTabId={activeView} onSelectTab={setView} segmentSizing="content" presentation="pills"
-        /> : null}
+        {/* The control line under the header (lab `nav-N1`): the view switch, then the search, on the sheets' edge. */}
+        {rows.length > 0 ? <View style={styles.controlLine}>
+            {libraryView.offeredViews.length > 1 ? <SegmentedTabBar
+                testIDPrefix="workflows-home:filter"
+                accessibilityLabel={t('workflows.destination.views.libraryAccessibility')}
+                tabs={libraryView.offeredViews.map((id) => ({ id, label: LIBRARY_VIEW_LABEL[id]() }))}
+                activeTabId={activeView} onSelectTab={libraryView.setView} segmentSizing="content" presentation="pills"
+            /> : null}
+            <View style={styles.controlLineGrow} />
+            <CompactSearchField testID="workflows-home:search" accessibilityLabel={t('workflows.destination.searchPlaceholder')}
+                placeholder={t('workflows.destination.searchPlaceholder')} value={query} onChangeText={libraryView.setSearchQuery} style={phone ? styles.searchPhone : styles.search} />
+        </View> : null}
     </>);
 
     const empty = library.status === 'failed' && library.definitions.length === 0 ? (
+        // Only the saved library failed; Built-in and the examples below still work, so the failure is one
+        // line where the Library rows would be (lab `nav-N5` "Couldn't load"), not a page-sized state. It sits
+        // in the Collection's empty slot on the rows' edge, as the search's no-match line does.
         <SurfaceStateCard
             testID="workflows-home:failed"
+            size="line"
             kind="error"
             title={t('workflows.loadFailedTitle')}
             reason={t('workflows.loadFailedBody')}
@@ -283,15 +283,6 @@ export function WorkflowsLibraryHome(props: Readonly<{ includeAccountTriggers?: 
                     preferredListRatio={1}
                     useRowActions={useLibraryRowActions}
                     {...(focusRequest === undefined ? {} : { selection: { focusRequest } })}
-                    {...(rows.length > SEARCH_THRESHOLD ? {
-                        search: {
-                            label: t('workflows.destination.searchPlaceholder'),
-                            placeholder: t('workflows.destination.searchPlaceholder'),
-                            value: query,
-                            onValueChange: setQuery,
-                            testID: 'workflows-home:search',
-                        },
-                    } : {})}
                     empty={empty}
                 />
             </CoreCollectionScope>
@@ -302,11 +293,6 @@ export function WorkflowsLibraryHome(props: Readonly<{ includeAccountTriggers?: 
 }
 
 /** The page's content column, so the header and the rows share one edge. */
-function LibraryPageColumn(props: Readonly<{ children?: React.ReactNode }>) {
-    const maxWidthStyle = useLayoutMaxWidthStyle();
-    return <View style={[styles.pageColumn, maxWidthStyle]}>{props.children}</View>;
-}
-
 /**
  * The page header is drawn by the page scroller; Collection owns its page-list inset, sharing
  * the content edge with the sections below it (07 S2: one edge for every section).
@@ -322,13 +308,14 @@ function LibraryPageHeaderSlot() {
 function renderLibraryPageScroller(children: React.ReactNode): React.ReactNode {
     return (
         <ItemList pageColumn="wide">
-            <LibraryPageColumn>
+            <PageContentColumn>
                 <LibraryPageHeaderSlot />
                 {children}
                 <LibraryAccountTriggersSlot />
                 <WorkflowBuiltinsSection />
-                <WorkflowExamplesSection />
-            </LibraryPageColumn>
+                {/* Secondary on a returning library: one compact row, the whole catalog one press away. */}
+                <WorkflowExamplesSection presentation="strip" />
+            </PageContentColumn>
         </ItemList>
     );
 }
@@ -340,7 +327,8 @@ function LibraryAccountTriggersSlot() {
 function useLibraryAnatomy(summaries: ReadonlyMap<string, WorkflowLibraryRunSummary> | null): CollectionAnatomy<LibraryRow> {
     const { theme } = useUnistyles();
     return React.useMemo(() => ({
-        glyph: () => <Icon name="tree-structure" size={18} color={theme.colors.text.secondary} />,
+        // The page row's one icon size, as on the Built-in and every other sheet below it.
+        glyph: () => <Icon name="tree-structure" size={HAPPIER_PAGE_METRICS.rowIconGlyphPx} color={theme.colors.text.secondary} />,
         title: rowTitle,
         where: (row) => {
             if (row.group === 'fromPlugins') return [
@@ -372,15 +360,19 @@ function useLibraryRowActions(row: LibraryRow): CollectionRowActions {
     const unavailable = row.group !== 'fromPlugins' && row.definition.contentStatus === 'unavailable';
     const summary = row.group === 'fromPlugins' ? undefined : commands?.summaries?.get(row.definition.definitionId);
     const needsYouRunId = summary?.needsYouRunId ?? null;
+    // A phone recomposes the row like the Sessions list's (lab `convo-N6b`): the state word stays on the
+    // title line and the history strip, a wide-screen enrichment, is left out rather than wrapped beneath.
+    const phone = useNavigationTitleChromeShowsTitle();
+    const showStrip = !phone && summary !== undefined && summary.recent.length > 0;
     return {
         busy: commands?.deleting.has(row.key) === true,
-        accessoryWraps: needsYouRunId !== null || (summary?.recent.length ?? 0) > 0,
+        accessoryWraps: !phone && (needsYouRunId !== null || showStrip),
         // The row's end (07 S2, lab `nav-N1`): the neutral run strip, **Needs you** when a run waits
         // (navigation only: the run's own page answers, M3). The row itself is the navigation target;
         // the shared Collection supplies its one trailing overflow control.
         accessory: (
             <View style={styles.rowAccessory}>
-                {summary === undefined || summary.recent.length === 0 ? null : (
+                {!showStrip || summary === undefined ? null : (
                     <WorkflowRunStripView testID={`workflows-home:row:${row.key}:strip`} strip={projectWorkflowRunStrip(summary)} />
                 )}
                 {needsYouRunId === null || commands === null ? null : (
@@ -507,7 +499,7 @@ async function exportDefinition(definitionId: string): Promise<void> {
 function WorkflowsFirstVisit(props: Readonly<{ onNewWorkflow: () => void; onImport: () => void; onCreateWithAgent: () => void; includeAccountTriggers?: boolean }>) {
     return (
         <ItemList pageColumn="wide">
-            <LibraryPageColumn>
+            <PageContentColumn>
                 <EmptyState
                     testID="workflows-home:firstVisit"
                     layout="page"
@@ -530,15 +522,33 @@ function WorkflowsFirstVisit(props: Readonly<{ onNewWorkflow: () => void; onImpo
                         onPress={props.onImport}
                     />
                 </View>
-            </LibraryPageColumn>
+            </PageContentColumn>
         </ItemList>
     );
 }
 
 const styles = StyleSheet.create((theme) => ({
-    pageColumn: {
-        width: '100%',
-        alignSelf: 'center',
+    controlLine: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        alignItems: 'center',
+        gap: theme.margins.sm,
+        paddingTop: HAPPIER_PAGE_METRICS.sectionHeaderGapPx,
+        paddingHorizontal: HAPPIER_PAGE_METRICS.sheetInsetPx,
+    },
+    controlLineGrow: {
+        flexGrow: 1,
+    },
+    // As on the Artifacts toolbar: the search gives up width first and takes its own line on a phone.
+    search: {
+        flexGrow: 1,
+        flexShrink: 1,
+        flexBasis: 160,
+        maxWidth: 280,
+    },
+    // A phone gives the search its own full line under the views, on the sheets' edge (lab `phone-P*` search rows).
+    searchPhone: {
+        flexBasis: '100%',
     },
     rowAccessory: {
         flexDirection: 'row',

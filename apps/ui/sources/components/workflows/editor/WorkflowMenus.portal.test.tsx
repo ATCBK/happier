@@ -47,7 +47,7 @@ async function mountMenu(actions: readonly WorkflowBlockAction[], trigger?: 'car
         },
         async open() {
             const button = document.querySelector<HTMLElement>('[data-testid="workflow-actions"]')!;
-            button.focus();
+            await act(async () => button.focus());
             await act(async () => button.click());
             await vi.waitFor(async () => {
                 await act(async () => {});
@@ -78,7 +78,7 @@ describe('Workflow block menu at the real modal/menu boundary', () => {
         try {
             const button = await menu.open();
             const duplicate = menu.element('workflow-actions-duplicate');
-            duplicate.focus();
+            await act(async () => duplicate.focus());
             await menu.key('ArrowDown');
             expect(document.activeElement).toBe(menu.element('workflow-actions-moveDown'));
             await menu.key('ArrowUp');

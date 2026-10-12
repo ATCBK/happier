@@ -114,6 +114,8 @@ type WorkflowProjectTargetControlProps = Readonly<{
     machineName: string | null;
     /** Supplying both makes the target editable; a host that omits them shows it read-only. */
     machines?: readonly Machine[];
+    /** Home directory for a frozen/read-only target whose machine inventory is not editable. */
+    machineHomeDir?: string | null;
     onChange?: (target: WorkflowAuthoringTarget) => void;
     /**
      * `chip`: the editor header's chip ("MacBook Pro / ~/src/happier", or the
@@ -146,7 +148,7 @@ export const WorkflowProjectTargetControl = React.forwardRef<
     const machine = target === undefined || target === null
         ? undefined
         : props.machines?.find((candidate) => candidate.id === target.machineId);
-    const machineHomeDir = machine?.metadata?.homeDir;
+    const machineHomeDir = machine?.metadata?.homeDir ?? props.machineHomeDir ?? undefined;
     const editable = props.machines !== undefined && props.onChange !== undefined;
     const [pickerOpen, setPickerOpen] = React.useState(false);
     React.useImperativeHandle(ref, () => ({
@@ -402,15 +404,14 @@ function EditableProjectTarget(props: Readonly<{
         <>
             <MachineSelector
                 purpose={props.purpose}
+                serverId={serverId}
                 machines={machines}
                 selectedMachine={machine ?? null}
                 onSelect={selectMachine}
-                presentation="dropdown"
+                presentation="list"
                 showFavorites={false}
                 showRecent={false}
                 showCliGlyphs={false}
-                dropdownTitle={t('workflows.editor.whereTitle')}
-                dropdownTestID={`${testIDPrefix}-machine`}
                 testIdPrefix={`${testIDPrefix}-machine`}
             />
             {target === null || directoryLabel === null ? null : (

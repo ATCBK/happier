@@ -39,9 +39,13 @@ export const workflowRunStyles = StyleSheet.create((theme) => ({
         alignSelf: 'center',
         width: '100%',
     },
+    // The page frame's column rule (`PageFrame`, the editor body): capped by the layout width and
+    // centred in a wide pane, so a Run sits where the library and editor do (DESIGN-15 R3).
     outline: {
         flex: 1,
         minWidth: 0,
+        width: '100%',
+        alignSelf: 'center',
     },
     inspector: {
         flexBasis: 360,
@@ -77,14 +81,29 @@ export const workflowRunStyles = StyleSheet.create((theme) => ({
         gap: theme.margins.sm,
         paddingHorizontal: HAPPIER_PAGE_METRICS.pageTextInsetPx,
     },
+    // A phone gives the view switch the full width (lab phone-P1); the view's own actions sit under it.
     viewSwitchPhone: {
         flexDirection: 'column',
-        alignItems: 'flex-start',
+        alignItems: 'stretch',
     },
+    // The row reserves its action's target height, so the source action resolving late never pushes the view down.
     viewActions: {
         flexDirection: 'row',
         flexWrap: 'wrap',
+        alignItems: 'center',
         gap: theme.margins.sm,
+        minHeight: MINIMUM_TARGET_SIZE,
+    },
+    /** Wide: the view's own actions close the tab row at its trailing edge (lab run-A); phones stack them. */
+    viewActionsTrailing: {
+        marginLeft: 'auto',
+    },
+    viewActionsPhone: {
+        justifyContent: 'space-between',
+        alignItems: 'center',
+    },
+    sheetBody: {
+        padding: theme.margins.lg,
     },
     pageSection: {
         paddingHorizontal: HAPPIER_PAGE_METRICS.pageTextInsetPx,
@@ -115,9 +134,17 @@ export const workflowRunStyles = StyleSheet.create((theme) => ({
         gap: theme.margins.sm,
     },
     outcomeSentence: {
-        ...Typography.default('semiBold'),
+        ...Typography.default('regular'),
         color: theme.colors.text.primary,
         flexShrink: 1,
+    },
+    /** The state word that leads the outcome line; the rest of the line is prose. */
+    outcomeWord: {
+        ...Typography.default('semiBold'),
+        color: theme.colors.text.primary,
+    },
+    outcomeWordFailed: {
+        color: theme.colors.state.danger.foreground,
     },
     provenance: {
         ...Typography.default('regular'),
@@ -128,6 +155,18 @@ export const workflowRunStyles = StyleSheet.create((theme) => ({
         alignItems: 'center',
         gap: theme.margins.md,
         flexWrap: 'wrap',
+    },
+    /** A problem sentence and its repair on one line (wrapping under it when narrow), never a full-width bar. */
+    problemLine: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        alignItems: 'center',
+        columnGap: theme.margins.md,
+        rowGap: theme.margins.xs,
+    },
+    problemText: {
+        flexShrink: 1,
+        minWidth: 0,
     },
     actionTarget: {
         minHeight: MINIMUM_TARGET_SIZE,
@@ -182,39 +221,6 @@ export const workflowRunStyles = StyleSheet.create((theme) => ({
         ...Typography.tabular(),
         color: theme.colors.text.secondary,
     },
-    /** The Needs-you rows share one card; the ring and tint come from the Work status owner. */
-    attentionCard: {
-        borderRadius: theme.borderRadius.lg,
-        overflow: 'hidden',
-    },
-    attentionRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: theme.margins.md,
-        paddingVertical: theme.margins.sm,
-        paddingHorizontal: theme.margins.md,
-        minHeight: MINIMUM_TARGET_SIZE,
-    },
-    attentionRowDivided: {
-        borderTopWidth: StyleSheet.hairlineWidth,
-        borderTopColor: theme.colors.border.subtle,
-    },
-    attentionRowSelected: {
-        backgroundColor: theme.colors.surface.pressedOverlay,
-    },
-    attentionText: {
-        flex: 1,
-        minWidth: 0,
-        gap: theme.margins.xs,
-    },
-    attentionLabel: {
-        ...Typography.rowTitle(),
-        color: theme.colors.text.primary,
-    },
-    attentionMeta: {
-        ...Typography.rowMeta(),
-        color: theme.colors.text.secondary,
-    },
     detailRow: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -228,6 +234,17 @@ export const workflowRunStyles = StyleSheet.create((theme) => ({
         ...Typography.mono(),
         color: theme.colors.text.primary,
         flexShrink: 1,
+    },
+    /** A value that is prose (a text result, a typed answer) reads as text; mono stays for structured values. */
+    detailProse: {
+        ...Typography.default('regular'),
+        color: theme.colors.text.primary,
+        flexShrink: 1,
+    },
+    /** Holds a control's place while its availability is still being read; nothing of it shows. */
+    reservedSlot: {
+        opacity: 0,
+        pointerEvents: 'none',
     },
     metric: {
         ...Typography.default('regular'),

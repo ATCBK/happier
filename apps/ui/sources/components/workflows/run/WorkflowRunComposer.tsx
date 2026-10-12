@@ -8,6 +8,8 @@ import { validateWorkflowDefinition } from '@happier-dev/protocol/workflows/work
 import type { InputOptionsConsumerV1 } from '@happier-dev/protocol/inputs';
 import { actionInputOptionValueKey, isSameActionInputOptionValue, readActionInputOptionValue, type ActionInputOptionValue } from '@happier-dev/protocol/actions/actionInputHintsRuntime';
 import { AgentInput } from '@/components/sessions/agentInput';
+import { registerComposerFocusTarget, requestRegisteredComposerFocus } from '@/components/sessions/presentation/sessionComposerPresentationTargets';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import type { AgentInputExtraActionChip } from '@/components/sessions/agentInput/agentInputContracts';
 import { createExecutionRunStartContentChip } from '@/components/sessions/runs/launcher/executionRunStartChips';
 import { useInputFieldOptions } from '@/components/sessions/actions/useInputFieldOptions';
@@ -37,11 +39,12 @@ import { countWorkflowStepsV1, walkWorkflowBlocks } from '@happier-dev/protocol/
 
 const styles = StyleSheet.create((theme) => ({
     root: { minWidth: 0 },
-    footer: { flexDirection: 'row', alignItems: 'flex-end', gap: theme.margins.sm, padding: theme.margins.md, paddingTop: theme.margins.sm },
+    // The composer's text edge is the card's: the title, the summary, the chips and Start share it.
+    footer: { flexDirection: 'row', alignItems: 'flex-end', gap: theme.margins.sm, paddingHorizontal: theme.margins.lg, paddingBottom: theme.margins.md, paddingTop: theme.margins.sm },
     status: { flex: 1, minWidth: 0, minHeight: theme.margins.lg, justifyContent: 'center', gap: theme.margins.xs },
     hostedPanel: { borderWidth: 0, borderTopWidth: 0, borderBottomWidth: 0, borderRadius: 0 },
-    summary: { ...Typography.rowMeta(), color: theme.colors.text.secondary, padding: theme.margins.md, paddingBottom: theme.margins.sm },
-    mainLabel: { ...Typography.rowMeta(), color: theme.colors.text.primary, paddingHorizontal: theme.margins.md, paddingTop: theme.margins.md },
+    summary: { ...Typography.rowMeta(), color: theme.colors.text.secondary, paddingHorizontal: theme.margins.lg, paddingVertical: theme.margins.md, paddingBottom: theme.margins.sm },
+    mainLabel: { ...Typography.rowMeta(), color: theme.colors.text.primary, paddingHorizontal: theme.margins.lg, paddingTop: theme.margins.md },
     start: { alignItems: 'flex-end', gap: theme.margins.xs },
     shortcut: { flexDirection: 'row', alignItems: 'center', gap: theme.margins.xs },
     keyHint: { ...Typography.keyHint(), color: theme.colors.text.secondary },
@@ -81,6 +84,8 @@ export type WorkflowRunComposerProps = Readonly<{
      */
     startProblem?: string | null;
     startDisabled?: boolean;
+    /** The opening launcher requests focus once its caller input and Start are ready. */
+    autoFocusComposer?: boolean;
     testIDPrefix?: string;
     workflowName?: string;
     preview?: string;
@@ -140,6 +145,31 @@ export function WorkflowRunComposer(props: WorkflowRunComposerProps): React.Reac
     const blocked = fields.find((field) => field.blocking) ?? null;
     const disabled = props.pending === true || props.startDisabled === true || blocked !== null || definitionIssue !== null
         || (!acceptedRepeat && roleDraft.status !== 'ready') || visibility.status !== 'ready' || !visibility.resolution.ok;
+    const hasMainInput = main !== null;
+    const presented = useLayoutPresentationActive();
+    const [focusRef] = React.useState(() => Symbol('workflow-run-input'));
+    const focusRequestRef = React.useRef<(() => void) | null>(null);
+    const focusCurrentRef = React.useRef(false);
+    focusCurrentRef.current = hasMainInput && props.pending !== true && presented;
+    const onComposerFocusRequestChange = React.useCallback((request: (() => void) | null) => {
+        focusRequestRef.current = request;
+    }, []);
+    React.useEffect(() => {
+        if (!hasMainInput) return;
+        return registerComposerFocusTarget(focusRef, {
+            isCurrent: () => focusCurrentRef.current,
+            focusComposer: () => {
+                if (!focusCurrentRef.current || !focusRequestRef.current) return false;
+                focusRequestRef.current();
+                return true;
+            },
+        });
+    }, [focusRef, hasMainInput]);
+    const initialFocusApplied = React.useRef(false);
+    React.useEffect(() => {
+        if (!props.autoFocusComposer || disabled || !presented || !hasMainInput || initialFocusApplied.current) return;
+        initialFocusApplied.current = requestRegisteredComposerFocus(focusRef);
+    }, [disabled, focusRef, hasMainInput, presented, props.autoFocusComposer]);
     const reason = blocked === null ? (!acceptedRepeat && roleDraft.status !== 'ready'
         ? roleDraft.status === 'failed' ? t('workflows.start.rolesPrefillFailed') : t('common.loading')
         : definitionIssue !== null ? describeWorkflowCommandBlockedReason({ reason: 'definition_invalid', blockingIssue: definitionIssue })
@@ -178,8 +208,9 @@ export function WorkflowRunComposer(props: WorkflowRunComposerProps): React.Reac
     // The sheet header already names the workflow; the fixed chip identifies its saved definition.
     const workflowLabel = [t('workflows.start.workflow'),
         ...(props.sourceArtifactId && !props.includesUnsavedEdits ? [t('workflows.page.saveStatus.saved')] : [])].join(' · ');
-    const startLabel = props.reconciling ? t('workflows.start.stillStarting')
-        : props.pending ? t('workflows.start.starting') : t('workflows.start.start');
+    // Start keeps its own word while it works: the spinner replaces it in place and the line beside it
+    // says "Starting…", so the pressed button never changes width (DESIGN-16 D11).
+    const startLabel = t('workflows.start.start');
     const chips = React.useMemo<readonly AgentInputExtraActionChip[]>(() => [
         ...(props.workflowChip ? [props.workflowChip] : [createExecutionRunStartContentChip({
             key: 'workflow-start-definition', icon: 'git-branch', label: workflowLabel,
@@ -231,8 +262,9 @@ export function WorkflowRunComposer(props: WorkflowRunComposerProps): React.Reac
         })]),
         ...(props.materializedLeaves === undefined ? [] : [createExecutionRunStartContentChip({
             key: 'workflow-start-targets', icon: 'stack',
+            // The chip names what the steps run in, beside "Workflow" ("A session" said nothing there, DESIGN-15 R11).
             label: [...new Set(props.materializedLeaves.map((leaf) => leaf.executionTarget.kind === 'session'
-                ? t('workflows.page.sections.aSession') : t('workflows.page.sections.aBackgroundRun')))].join(' · '),
+                ? t('workflows.start.targetsSessions') : t('workflows.start.targetsBackground')))].join(' · '),
             title: t('workflows.start.targetsTitle'),
             testID: `${prefix}-targets-chip`, renderContent: <View style={styles.fields}>{props.materializedLeaves.map((leaf) => {
                 const block = leaf.sourceKey === '$root' && props.definition
@@ -273,6 +305,7 @@ export function WorkflowRunComposer(props: WorkflowRunComposerProps): React.Reac
                         inputAccessibilityLabel={main === null ? t('workflows.start.preview') : inputTitle(main.definition)}
                         inputAccessibilityHint={main?.blocking ? reason ?? undefined : undefined}
                         disabled={props.pending === true}
+                        onComposerFocusRequestChange={onComposerFocusRequestChange}
                         voiceAffordance="none"
                         autocompleteKinds={EMPTY_AUTOCOMPLETE_KINDS}
                         autocompleteSuggestions={EMPTY_AUTOCOMPLETE_SUGGESTIONS}
@@ -314,7 +347,9 @@ export function WorkflowRunComposer(props: WorkflowRunComposerProps): React.Reac
                         accessibilityLabel={startLabel}
                         leading={<Icon name="play" size={ICON_SIZE.xs}
                             color={disabled ? theme.colors.text.tertiary : theme.colors.button.primary.tint} />}
-                        disabled={disabled} loading={props.pending}
+                        // A pending Start keeps the primary look under its spinner (as the hold card's does);
+                        // `submit` ignores presses until it settles.
+                        disabled={disabled && props.pending !== true} loading={props.pending}
                         accessibilityHint={reason ?? visibilityHint} onPress={submit} />
                     {runShortcut ? <View testID={`${prefix}-shortcut`} style={styles.shortcut}
                         accessibilityElementsHidden importantForAccessibility="no-hide-descendants">

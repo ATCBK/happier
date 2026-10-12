@@ -25,6 +25,8 @@ import type { WorkflowEditorDraft } from '@/sync/domains/workflows/workflowEdito
 import { t } from '@/text';
 
 import {
+    findWorkflowBlockListRef,
+    getWorkflowBlockList,
     setWorkflowBlockOnlyWhen,
     setWorkflowLeafPauseForReview,
     setWorkflowStepExecutionField,
@@ -36,8 +38,10 @@ import type {
     WorkflowBlock,
     WorkflowLeafExecutionTargetV1,
     WorkflowResultContract,
+    WorkflowRunWhenV1,
     WorkflowStep,
 } from '@happier-dev/protocol/workflows/workflowV1';
+import type { WorkflowActionLeafV1 } from '@happier-dev/protocol/workflows/workflowLeafV1';
 import type { WorkflowCondition } from '@happier-dev/protocol/workflows/workflowReferenceV1';
 import { WORKFLOW_SESSION_AUTHORING_SELECTION_FIELD_IDS } from '@happier-dev/protocol/workflows/workflowV1';
 import { SessionAuthoringControls } from '@/components/sessions/authoring/controls/SessionAuthoringControls';
@@ -54,6 +58,12 @@ import { WorkflowStepInspector, WorkflowStepTimeoutField } from './WorkflowStepI
 import { useWorkflowStepFieldControlRenderer } from './workflowStepFieldControls';
 import { workflowEditorStyles } from './workflowEditorStyles';
 import { NO_DISCLOSURE, WorkflowInspectorGroup } from './workflowInspectorGroup';
+import { WorkflowRunWhenOption } from './WorkflowRunWhenConnector';
+import {
+    readWorkflowNotifyReportOffer,
+    setWorkflowNotifyReportOffer,
+    WORKFLOW_NOTIFY_ME_ACTION_ID,
+} from './workflowNotifyReportCondition';
 import { withWorkflowAuthoringEngine, withWorkflowAuthoringEngineFields } from '@/sync/domains/workflows/workflowAuthoringEngineSelection';
 
 /**
@@ -193,6 +203,81 @@ export function WorkflowBlockOptions(props: WorkflowInspectorProps & Readonly<{ 
     );
 }
 
+/** Whether a block follows another in its list, so the previous step's outcome can decide it. */
+function followsAnotherBlock(draft: WorkflowEditorDraft, blockId: string): boolean {
+    const ref = findWorkflowBlockListRef(draft, blockId);
+    const list = ref === null ? null : getWorkflowBlockList(draft, ref);
+    return (list?.findIndex((candidate) => candidate.id === blockId) ?? 0) > 0;
+}
+
+/**
+ * When the block runs, in one group: the previous step's outcome (Run when) and its own condition
+ * (Only run when), plus Notify me's "only if the agent reported something" offer over that same
+ * condition. Every row edits the block itself; none keeps a second state.
+ */
+function WhenItRunsGroup(props: Readonly<{
+    draft: WorkflowEditorDraft;
+    block: WorkflowBlock;
+    onChange: (next: WorkflowEditorDraft) => void;
+    onOpenCondition: () => void;
+    testIDPrefix: string;
+    children?: React.ReactNode;
+}>): React.ReactElement {
+    const { draft, block, onChange, testIDPrefix } = props;
+    const runWhen = 'runWhen' in block ? block.runWhen : undefined;
+    const offersRunWhen = block.kind !== 'if' && (runWhen !== undefined || followsAnotherBlock(draft, block.id));
+    return (
+        <ItemGroup>
+            {props.children}
+            {offersRunWhen ? (
+                <WorkflowRunWhenOption
+                    value={runWhen}
+                    testIDPrefix={`${testIDPrefix}-run-when`}
+                    onChange={(next: WorkflowRunWhenV1) => onChange(updateWorkflowBlock(draft, block.id, (current) => {
+                        if (next !== 'success') return { ...current, runWhen: next };
+                        const { runWhen: _dropped, ...rest } = current as WorkflowBlock & { runWhen?: WorkflowRunWhenV1 };
+                        return rest as WorkflowBlock;
+                    }))}
+                />
+            ) : null}
+            <OnlyRunWhenRow draft={draft} block={block} onOpen={props.onOpenCondition} testIDPrefix={testIDPrefix} />
+            {block.kind === 'action' && block.actionId === WORKFLOW_NOTIFY_ME_ACTION_ID
+                ? <NotifyReportRow draft={draft} block={block} onChange={onChange} testIDPrefix={testIDPrefix} /> : null}
+        </ItemGroup>
+    );
+}
+
+/** Notify me's quiet offer (D7): a switch over the Only run when condition, never a state of its own. */
+function NotifyReportRow(props: Readonly<{
+    draft: WorkflowEditorDraft;
+    block: WorkflowActionLeafV1;
+    onChange: (next: WorkflowEditorDraft) => void;
+    testIDPrefix: string;
+}>): React.ReactElement {
+    const { draft, block } = props;
+    const offer = readWorkflowNotifyReportOffer(draft, block);
+    return (
+        <Item
+            testID={`${props.testIDPrefix}-only-reported-row`}
+            title={t('sessionWork.scheduled.notifyOnlyReported')}
+            subtitle={!offer.available ? t('sessionWork.scheduled.notifyOnlyReportedNeedsResult')
+                : offer.canonical !== null ? t('sessionWork.scheduled.notifyOnlyReportedDescription') : undefined}
+            showChevron={false}
+            rightElement={(
+                <Switch
+                    testID={`${props.testIDPrefix}-only-reported`}
+                    accessibilityLabel={t('sessionWork.scheduled.notifyOnlyReported')}
+                    value={offer.on}
+                    disabled={!offer.available}
+                    onValueChange={!offer.available ? undefined : (enabled) => props.onChange(
+                        setWorkflowBlockOnlyWhen(draft, block.id, setWorkflowNotifyReportOffer(draft, block, enabled)),
+                    )}
+                />
+            )}
+        />
+    );
+}
+
 /** "Only run when · Always" or the condition sentence; the chevron pushes the condition editor. */
 function OnlyRunWhenRow(props: Readonly<{
     draft: WorkflowEditorDraft;
@@ -230,9 +315,8 @@ function MainPage(props: WorkflowInspectorProps & Readonly<{
             condition={blockCondition(block)} draft={draft} consumerBlockId={block.id} onChange={() => {}} testIDPrefix={`${testIDPrefix}-condition`} /></SectionContentRow>
     </ItemGroup>;
     const onlyRunWhen = (
-        <ItemGroup>
-            <OnlyRunWhenRow draft={draft} block={block} onOpen={() => props.onOpenPage('condition')} testIDPrefix={testIDPrefix} />
-        </ItemGroup>
+        <WhenItRunsGroup draft={draft} block={block} onChange={onChange}
+            onOpenCondition={() => props.onOpenPage('condition')} testIDPrefix={testIDPrefix} />
     );
 
     switch (block.kind) {
@@ -545,8 +629,9 @@ function StepMainPage(props: WorkflowInspectorProps & Readonly<{
                         current.kind === 'step' ? { ...current, input: [...current.input, { kind: 'literal', value: '' }] } : current
                     )))}
                 />
-                <OnlyRunWhenRow draft={draft} block={step} onOpen={() => props.onOpenPage('condition')} testIDPrefix={testIDPrefix} />
             </ItemGroup>
+            <WhenItRunsGroup draft={draft} block={step} onChange={onChange}
+                onOpenCondition={() => props.onOpenPage('condition')} testIDPrefix={testIDPrefix} />
 
             <AdvancedGroup {...props} block={step} />
         </>

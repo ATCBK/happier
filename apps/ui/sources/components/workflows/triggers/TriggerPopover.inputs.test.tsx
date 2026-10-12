@@ -2,6 +2,7 @@ import * as React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import { act } from 'react-test-renderer';
+import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 import { createDeferred } from '@/dev/testkit';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { getStorage } from '@/sync/domains/state/storageStore';
@@ -57,6 +58,33 @@ const { WorkflowDefinitionV1Schema } = await import('@happier-dev/protocol');
 type ExistingTriggerSubmit = Extract<React.ComponentProps<typeof TriggerPopover>, { creatingSession?: false }>['onSubmit'];
 
 describe('Run a workflow trigger inputs', () => {
+    it('submits a new Account prompt with its selected Agent through the shared form', async () => {
+        const { validateWorkflowDefinition } = await import('@happier-dev/protocol/workflows/workflowValidationV1');
+        const { createDefaultWhen } = await import('./sessionTriggerForm');
+        const { resolveWorkflowStepSelectionV1 } = await import('@happier-dev/protocol/workflows/workflowStepSelectionV1');
+        const agentTarget = { kind: 'agent' as const, identity: { pluginId: 'acme.agents', localId: 'reviewer' } };
+        const connectedServices = { v: 2 as const, bindingsByServiceId: {
+            'acme.accounts/reviewer': { source: 'connected' as const, selection: 'profile' as const, profileId: 'reviewer-account' },
+        } };
+        const submit = vi.fn<ExistingTriggerSubmit>(async () => {});
+        const screen = await renderScreen(<TriggerPopover testID="account-prompt" anchorRef={React.createRef()}
+            onRequestClose={vi.fn()} whenKinds={['schedule']} sessionId={null}
+            initial={{ when: createDefaultWhen('schedule'), enabled: true,
+                then: { kind: 'sendPrompt', prompt: 'Review overnight changes', selection: { agentTarget, connectedServices } } }}
+            workflowOptions={[]} onSubmit={submit} />);
+        // Unresolved Machine facts explain the unavailable control; the Account
+        // prompt must still expose its authentication choice instead of hiding it.
+        expect(screen.findByTestId('account-prompt-agent-connectedServices-unavailable')).toBeTruthy();
+        expect(screen.findByTestId('account-prompt-submit')?.props.disabled).toBe(false);
+        await screen.pressByTestIdAsync('account-prompt-submit');
+        const target = submit.mock.calls[0]?.[1].target;
+        if (target?.kind !== 'inline') throw new Error('expected an inline target');
+        expect(validateWorkflowDefinition(target.definition).valid).toBe(true);
+        expect(resolveWorkflowStepSelectionV1({ defaults: target.definition.defaults, purpose: 'authoring' }).selection.agentTarget)
+            .toEqual(agentTarget);
+        expect(resolveWorkflowStepSelectionV1({ defaults: target.definition.defaults, purpose: 'authoring' }).selection.connectedServices)
+            .toEqual(connectedServices);
+    });
     it('pushes the event step in the same surface and returns without losing the parent draft', async () => {
         const screen = await renderScreen(<TriggerPopover testID="event-step" anchorRef={React.createRef()}
             onRequestClose={vi.fn()} whenKinds={['pluginEvent']} sessionId={null}
@@ -83,11 +111,14 @@ describe('Run a workflow trigger inputs', () => {
                 sourceSelectorId: '11111111-1111-4111-8111-111111111111', sourceContractVersion: 3,
                 observation: { kind: 'socket', watcher: null }, sourceStatus: null, sourceCatalogStatus: null,
                 triggerDefinitionEnvelope: 'sealed-private' }] });
+        const change = vi.fn();
         const screen = await renderScreen(<WorkflowTriggerSection testIDPrefix="event-workflow" set={set}
-            draft={{ adds: [], updates: {}, removes: [] }} onChangeDraft={vi.fn()} status="ready" onRetry={vi.fn()}
+            draft={{ adds: [], updates: {}, removes: [] }} onChangeDraft={change} status="ready" onRetry={vi.fn()}
             runsOn={null} stepsUnsaved={false} whereTarget={null} whereSummary={null} inputs={[]} />);
         await screen.pressByTestIdAsync('event-workflow-trigger:saved:event-row');
         expect(screen.findByTestId('event-workflow-trigger-popover-configure-event')).toBeTruthy();
+        await act(async () => { screen.findByTestId('event-workflow-trigger:saved:event-row-switch')!.props.onValueChange(false); });
+        expect(change).toHaveBeenCalledWith({ adds: [], updates: { 'event-row': { enabled: false } }, removes: [] });
     });
     it('turns off a newly authored Event row without discarding its configured source', async () => {
         const { AutomationTriggerDefinitionInputSchema } = await import('@happier-dev/protocol/automations/automationTriggerDefinition');
@@ -116,7 +147,7 @@ describe('Run a workflow trigger inputs', () => {
     ] as const)('tests a configured trigger against real retained event evidence: %s', async (result, payload, sourceInstanceId, observationReceivedAt, maximumObservationAgeMs, eventLocalId = 'issue-opened', sourceContractVersion = 3) => {
         establishDiagnosticScope();
         const { createActionExecutor } = await import('@happier-dev/protocol');
-        const executor = createActionExecutor({});
+        const executor = createActionExecutor(createActionExecutorBoundaryFixture({}));
         execute.mockImplementation((actionId, input, context) => executor.execute(actionId, input, context));
         const { AutomationTriggerDefinitionInputSchema } = await import('@happier-dev/protocol/automations/automationTriggerDefinition');
         const { AutomationRunPluginEventTriggerEvidenceV1Schema } = await import('@happier-dev/protocol/automations/automationRunExecutionRecipeV1');
@@ -171,7 +202,7 @@ describe('Run a workflow trigger inputs', () => {
                 sourceContractVersion: 3, observationReceivedAt: 100, payload: {}, filter: { version: null, result: 'matched' },
             });
             const deferred = createDeferred<void>();
-            const executor = createActionExecutor({});
+            const executor = createActionExecutor(createActionExecutorBoundaryFixture({}));
             execute.mockImplementation(async (actionId, input, context) => {
                 const result = await executor.execute(actionId, input, context);
                 await deferred.promise;

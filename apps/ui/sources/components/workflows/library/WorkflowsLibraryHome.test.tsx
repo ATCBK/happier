@@ -459,7 +459,6 @@ describe('workflow library page anatomy', () => {
         expect(screen.findByTestId('workflows-column:trigger:digest')).not.toBeNull();
         await vi.waitFor(() => {
             expect(screen.getTextContent()).toContain('workflows.triggers.summary.everyDayAt(time=9:00 AM)');
-            expect(screen.getTextContent()).toContain('Morning digest');
         });
         expect(screen.findHostByTestId('workflows-column:trigger:digest-switch')).not.toBeNull();
         expect(screen.findByTestId('workflows-column:add')).toBeNull();
@@ -523,12 +522,132 @@ describe('workflow library page anatomy', () => {
         expect(saved.findAll((node) => node.props.name === 'caret-right')).toHaveLength(0);
         const { ContextMenu } = await import('@happier-dev/plugin-ui');
         expect(saved.findByType(ContextMenu).props.triggerIcon).toBe('more');
-        await screen.pressByTestIdAsync('workflow-builtins:builtin:plan-with-a-panel:run');
-        expect(routerPush.mock.calls).toEqual([['/workflows/builtin%3Aplan-with-a-panel?intent=run']]);
+        // A built-in row is a quiet destination: its page holds Run now / Choose a session… (lab `nav-N1`).
+        expect(screen.findAllHostsByTestId('workflow-builtins:builtin:plan-with-a-panel:run')).toHaveLength(0);
+        await screen.pressByTestIdAsync('workflow-builtins:builtin:plan-with-a-panel');
+        expect(routerPush.mock.calls).toEqual([['/workflows/builtin%3Aplan-with-a-panel']]);
     });
 });
 
 describe('workflow library summaries and filter', () => {
+    it('uses admitted Library Actions for the displayed membership, query and unavailable views', async () => {
+        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+        const action = createDefaultActionExecutor();
+        const context = { surface: 'agent' as const, serverId: storage.getState().profileScope!.serverId };
+        expect(await action.execute('workflow.library.view.get', {}, context))
+            .toMatchObject({ ok: false, errorCode: 'client_surface_unavailable' });
+        const ids = ['10000000-0000-4000-8000-000000000021', '10000000-0000-4000-8000-000000000022'];
+        execute.mockImplementation(async (actionId: string) => {
+            if (actionId === 'workflow.definition.list') return { ok: true, result: { definitions: ids.map((definitionId, index) => ({
+                kind: 'workflow-definition.v1', definitionId, revision: { headerVersion: 1, bodyVersion: 1 },
+                metadata: { title: index === 0 ? 'Release notes' : 'Dependency review' }, ownerAccountId: 'account-a', access: 'owner',
+                contentStatus: 'available', stepCount: 2, nextRunAt: null,
+                triggers: index === 0 ? [{ kind: 'schedule', schedule: { kind: 'interval', everyMs: 3_600_000, scheduleExpr: null, timezone: null } }] : [],
+            })) } };
+            if (actionId === 'workflow.run.summaries') return { ok: true, result: { remainingSourceArtifactIds: [], summaries: ids.map((sourceArtifactId, index) => ({
+                sourceArtifactId, recent: [{ runId: `run-${index}`, state: index === 0 ? 'succeeded' : 'running' }],
+                lastRun: null, needsYouCount: 0, needsYouRunId: null,
+            })) } };
+            return { ok: false, errorCode: 'unexpected', error: 'unexpected' };
+        });
+        const screen = await renderScreen(<WorkflowsLibraryHome />, { wrapper: Wrapper });
+        await vi.waitFor(() => expect(screen.findHostByTestId('workflows-home:filter:running')).not.toBeNull());
+        expect(await action.execute('workflow.library.view.get', {}, context)).toMatchObject({ ok: true,
+            result: { view: 'all', searchQuery: '', offeredViews: ['all', 'triggered', 'running'], visibleKeys: ids } });
+        const { invokeScopeAction } = await import('@/sync/ops/actions/scopeActionFamily');
+        expect(await invokeScopeAction('workflow.library.view.get', {}, { ...context, runtimeAccountId: 'account-b' }))
+            .toMatchObject({ ok: false, errorCode: 'client_surface_unavailable' });
+        expect(await invokeScopeAction('workflow.library.view.set', { searchQuery: 'foreign' }, { serverId: 'another-home' }))
+            .toMatchObject({ ok: false, errorCode: 'client_surface_unavailable' });
+        await act(async () => {
+            expect(await action.execute('workflow.library.view.set', { view: 'triggered' }, context)).toEqual({ ok: true, result: { ok: true } });
+        });
+        expect(screen.findHostByTestId(`workflows-home:row:${ids[0]}`)).not.toBeNull();
+        expect(screen.findHostByTestId(`workflows-home:row:${ids[1]}`)).toBeNull();
+        await act(async () => {
+            expect(await action.execute('workflow.library.view.set', { view: 'running', searchQuery: '  DEPENDENCY  ' }, context)).toEqual({ ok: true, result: { ok: true } });
+        });
+        expect(screen.findHostByTestId(`workflows-home:row:${ids[0]}`)).toBeNull();
+        expect(screen.findHostByTestId(`workflows-home:row:${ids[1]}`)).not.toBeNull();
+        expect(screen.findHostByTestId('workflows-home:search')!.props.value).toBe('  DEPENDENCY  ');
+        await screen.pressByTestIdAsync('workflows-home:filter:all');
+        expect(await action.execute('workflow.library.view.get', {}, context)).toMatchObject({ ok: true,
+            result: { view: 'all', searchQuery: '  DEPENDENCY  ', visibleKeys: [ids[1]] } });
+        await act(async () => {
+            expect(await action.execute('workflow.library.view.reset', {}, context)).toEqual({ ok: true, result: { ok: true } });
+        });
+        expect(screen.findHostByTestId(`workflows-home:row:${ids[0]}`)).not.toBeNull();
+        expect(screen.findHostByTestId(`workflows-home:row:${ids[1]}`)).not.toBeNull();
+        await screen.unmount();
+        expect(await action.execute('workflow.library.view.set', { searchQuery: 'late' }, context))
+            .toMatchObject({ ok: false, errorCode: 'client_surface_unavailable' });
+        execute.mockImplementation(async (actionId: string) => actionId === 'workflow.definition.list'
+            ? { ok: true, result: { definitions: [] } } : { ok: true, result: { runs: [], metadataByRunId: {} } });
+        (await import('./workflowLibraryReads')).resetWorkflowLibraryReadsForTests();
+        await renderScreen(<WorkflowsLibraryHome />, { wrapper: Wrapper });
+        expect(await action.execute('workflow.library.view.set', { view: 'running', searchQuery: 'atomic' }, context))
+            .toMatchObject({ ok: false, errorCode: 'client_control_unavailable' });
+        expect(await action.execute('workflow.library.view.get', {}, context)).toMatchObject({ ok: true,
+            result: { view: 'all', searchQuery: '', offeredViews: ['all'], visibleKeys: [] } });
+    });
+
+    it('retires Library Actions on retained destination blur and Account lifetime replacement', async () => {
+        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+        const { retireActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+        const action = createDefaultActionExecutor();
+        const context = { surface: 'agent' as const, serverId: storage.getState().profileScope!.serverId };
+        execute.mockImplementation(async (actionId: string) => actionId === 'workflow.definition.list'
+            ? { ok: true, result: { definitions: [] } } : { ok: true, result: { runs: [], metadataByRunId: {} } });
+        const destination = (focused: boolean) => <DestinationInstanceHost tabId="workflows" ref={{ kind: 'workflows', params: {} }}
+            pathname="/workflows" focused={focused} visible={focused} navigation={{ push: routerPush, replace: () => {}, back: () => {} }}>
+            <WorkflowsLibraryHome />
+        </DestinationInstanceHost>;
+        const screen = await renderScreen(destination(true), { wrapper: Wrapper });
+        await act(async () => { await action.execute('workflow.library.view.set', { searchQuery: 'retained' }, context); });
+        await screen.update(destination(false));
+        expect(await action.execute('workflow.library.view.get', {}, context))
+            .toMatchObject({ ok: false, errorCode: 'client_surface_unavailable' });
+        await screen.update(destination(true));
+        expect(await action.execute('workflow.library.view.get', {}, context)).toMatchObject({ ok: true, result: { searchQuery: 'retained' } });
+        // Runtime retirement can occur before React has rendered a replacement Account.
+        const { invokeScopeAction } = await import('@/sync/ops/actions/scopeActionFamily');
+        await act(async () => {
+            retireActiveServerAccountScopeLifetime();
+            expect(await invokeScopeAction('workflow.library.view.set', { searchQuery: 'stale' }, context))
+                .toMatchObject({ ok: false, errorCode: 'client_surface_unavailable' });
+        });
+        const scope = storage.getState().profileScope!;
+        await act(async () => { storage.setState({ profileScope: { ...scope, accountId: 'account-b' } }); });
+        expect(await action.execute('workflow.library.view.get', {}, context)).toMatchObject({ ok: true, result: { view: 'all', searchQuery: '' } });
+        await act(async () => { storage.setState({ profileScope: scope }); });
+        expect(await action.execute('workflow.library.view.get', {}, context)).toMatchObject({ ok: true, result: { view: 'all', searchQuery: '' } });
+    });
+
+    it('offers Running beside Triggered from the one summaries read, and shows only workflows with an unfinished run', async () => {
+        const row = (definitionId: string, title: string) => ({ kind: 'workflow-definition.v1', definitionId, revision: { headerVersion: 1, bodyVersion: 1 },
+            metadata: { title }, ownerAccountId: 'account-a', access: 'owner', contentStatus: 'available', stepCount: 2, triggers: [], nextRunAt: null });
+        execute.mockImplementation(async (actionId: string) => {
+            if (actionId === 'workflow.definition.list') return { ok: true, result: { definitions: [
+                row('10000000-0000-4000-8000-000000000011', 'Release notes'), row('10000000-0000-4000-8000-000000000012', 'Dependency review')] } };
+            if (actionId === 'workflow.run.summaries') return { ok: true, result: { remainingSourceArtifactIds: [], summaries: [
+                { sourceArtifactId: '10000000-0000-4000-8000-000000000011', recent: [{ runId: 'run-live', state: 'running' }],
+                    lastRun: { runId: 'run-live', state: 'running', createdAt: '2026-10-11T08:00:00.000Z', finishedAt: null }, needsYouCount: 0, needsYouRunId: null },
+                { sourceArtifactId: '10000000-0000-4000-8000-000000000012', recent: [{ runId: 'run-done', state: 'succeeded' }],
+                    lastRun: { runId: 'run-done', state: 'succeeded', createdAt: '2026-10-10T08:00:00.000Z', finishedAt: '2026-10-10T08:05:00.000Z' }, needsYouCount: 0, needsYouRunId: null },
+            ] } };
+            if (actionId === 'workflow.run.list') return { ok: true, result: { runs: [], metadataByRunId: {} } };
+            return { ok: false, errorCode: 'unexpected', error: 'unexpected' };
+        });
+        const screen = await renderScreen(<WorkflowsLibraryHome />, { wrapper: Wrapper });
+        await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+        await vi.waitFor(() => expect(screen.tree.findHostByTestId('workflows-home:filter:running')).not.toBeNull());
+        // No saved workflow has a trigger, so that view stays away; Running is offered on its own.
+        expect(screen.tree.findHostByTestId('workflows-home:filter:triggered')).toBeNull();
+        await screen.tree.pressByTestIdAsync('workflows-home:filter:running');
+        expect(screen.tree.findHostByTestId('workflows-home:row:10000000-0000-4000-8000-000000000011')).not.toBeNull();
+        expect(screen.tree.findHostByTestId('workflows-home:row:10000000-0000-4000-8000-000000000012')).toBeNull();
+    });
+
     it('paints count and shared trigger wording, and filters attached triggers without losing manual workflows', async () => {
         let deletedDefinitionId: string | undefined;
         automationDefinitionResponse = async (url, init) => init?.method === 'DELETE'

@@ -137,6 +137,20 @@ function expectNoSessionTransport() {
 }
 
 describe('WorkflowInvocationDetail canonical request cards', () => {
+    it.each(['cancelled', 'cancel_requested'] as const)('keeps a stopped attempt\'s partial result as one card, its status left to the header, for %s (DESIGN-16 D4)', async lifecycle => {
+        const progress: WorkflowProgressEnvelopeV1 = { kind: 'happier.workflow-progress.v1', blockKind: 'action',
+            invocationPath: { blockId: 'inspect', scope: [] }, attempt: '0', logicalInvocationRecordId: 'stopped',
+            timing: { startedAt: '2026-10-12T10:00:00.000Z', finishedAt: '2026-10-12T10:01:00.000Z' }, result: 'Partial findings' };
+        const screen = await renderDetail({ progress, lifecycle });
+        // The pane's subtitle says the state and the time; the body never repeats them.
+        expect(screen.findByTestId('workflow-run-invocation-status')).toBeNull();
+        expect(screen.findByTestId('workflow-run-invocation-elapsed')).toBeNull();
+        expect(screen.get('workflow-run-invocation-result-value').props.children).toBe('Partial findings');
+        // A stopped Wait that was never answered keeps its question, and says it went unanswered.
+        const unanswered = await renderDetail({ progress: null, lifecycle, waitPrompt: 'Does #1482 fix the crash?' });
+        expect(unanswered.getTextContent()).toContain('Does #1482 fix the crash?');
+        expect(unanswered.findByTestId('workflow-run-invocation-unanswered')).not.toBeNull();
+    });
     afterEach(() => {
         standardCleanup();
         for (const op of Object.values(sessionOps)) op.mockReset();

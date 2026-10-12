@@ -189,4 +189,38 @@ describe('Flow readability in the actual browser layout (FF-N3DEEP)', () => {
                 .toBeGreaterThan(layout.rect(`flow-rail-${ancestor.nodeId}`).left);
         }
     });
+
+    it.each([[468, 'stacked'], [760, 'side by side']] as const)('lays three lanes holding a loop out by the map\'s own width (%spx: %s, DESIGN-16 D1)', async (mapWidth, expected) => {
+        const step = (id: string, name: string): WorkflowBlock => ({ kind: 'step', id, name,
+            document: { text: name, references: [], attachments: [] }, input: [], result: { kind: 'text' } });
+        const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: {}, blocks: [{
+            kind: 'parallel', id: 'lanes', failurePolicy: 'collect_outcomes', branches: [
+                { id: 'changelog', blocks: [step('draft', 'Review the changelog draft')] },
+                { id: 'issues', blocks: [{ kind: 'loop', id: 'each', name: 'For each issue',
+                    repetition: { kind: 'count', count: { kind: 'literal', value: 3 } }, body: [step('check', 'Check the fix')] }] },
+                { id: 'tests', blocks: [step('confirm', 'Confirm the test run')] },
+            ] }] };
+        const projection = projectWorkflowFlow(definition);
+        host = document.createElement('div');
+        document.body.appendChild(host);
+        root = createRoot(host);
+        await act(async () => root!.render(<View testID="flow-pane" style={{ width: mapWidth }}>
+            <WorkflowFlowView projection={projection} selectedNodeId={null} testIDPrefix="flow" />
+        </View>));
+        const layout = await measureWebLayout(host, { viewport: { width: 1440, height: 1400 },
+            texts: projection.nodes.map(node => node.label), settle: replay => act(replay) });
+        const pane = layout.rect('flow-pane');
+        const draft = layout.rect('flow-node-draft');
+        const check = layout.rect('flow-node-check');
+        // Side by side, the Issues lane starts right of the Changelog lane; stacked, it sits under it.
+        expect(check.left >= draft.right, 'lanes side by side').toBe(expected === 'side by side');
+        for (const nodeId of ['draft', 'check', 'confirm']) {
+            const card = layout.rect(`flow-node-${nodeId}`);
+            expect(card.width, nodeId).toBeGreaterThanOrEqual(HAPPIER_WORK_MAP_LANE_MIN_WIDTH);
+            expect(card.right, nodeId).toBeLessThanOrEqual(pane.right);
+        }
+        for (const label of ['Review the changelog draft', 'Check the fix', 'Confirm the test run']) {
+            for (const text of layout.textRects(label)) expect(text.clipped, label).toBe(false);
+        }
+    });
 });

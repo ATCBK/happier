@@ -115,18 +115,20 @@ const LANE_LINE = 16;
 async function measureRhythm(width: number) {
     const container = await renderDocument([
         step('gather', 'Gather changes', 'Gather the changes since the last tag.'),
-        step('write', 'Write changelog', 'Write the changelog.'),
+        // A non-default edge names itself in its gap; the default one says nothing (lab E1).
+        { ...step('write', 'Write changelog', 'Write the changelog.'), runWhen: 'always' },
         { kind: 'if', id: 'gate', when: { kind: 'exists', value: { kind: 'result', producer: { blockId: 'write', scope: { kind: 'current' } }, path: [] } },
             then: [step('fix', 'Fix it', 'Fix one thing.')], otherwise: [] },
     ], width);
-    return measureWebLayout(container, { viewport: { width, height: 1600 }, texts: ['If it succeeds'], settle });
+    return measureWebLayout(container, { viewport: { width, height: 1600 }, texts: ['Either way', 'If it succeeds'], settle });
 }
 
 function expectDocumentRhythm(layout: Awaited<ReturnType<typeof measureWebLayout>>, range: Readonly<{ min: number; max: number }>) {
-    const captions = layout.textRects('If it succeeds');
-    for (const [card, next, caption] of [
-        ['composer:gather', 'workflow-editor-step-write-label', captions[0]],
-        ['composer:write', 'workflow-editor-if-gate-label', captions[1]],
+    expect(layout.textRects('If it succeeds')).toHaveLength(0);
+    const [caption] = layout.textRects('Either way');
+    for (const [card, next, edgeCaption] of [
+        ['composer:gather', 'workflow-editor-step-write-label', caption],
+        ['composer:write', 'workflow-editor-if-gate-label', undefined],
     ] as const) {
         const cardBottom = layout.rect(card).bottom;
         const mark = headingMark(layout, next);
@@ -134,10 +136,12 @@ function expectDocumentRhythm(layout: Awaited<ReturnType<typeof measureWebLayout
         // its "Returns" line), not a stacked band per edge (DESIGN-7: 93 px).
         expect(mark.top - cardBottom).toBeGreaterThanOrEqual(range.min);
         expect(mark.top - cardBottom).toBeLessThanOrEqual(range.max);
-        // The edge's caption sits inside that gap, clear of the card and of the heading it leads to.
-        expect(caption).toBeDefined();
-        expect(caption!.top).toBeGreaterThanOrEqual(cardBottom + 2);
-        expect(caption!.bottom).toBeLessThanOrEqual(mark.top);
+        if (edgeCaption === undefined) continue;
+        // The edge's caption sits inside that gap, clear of the card and of the heading it leads to,
+        // on the name column like every other line of the block.
+        expect(edgeCaption.top).toBeGreaterThanOrEqual(cardBottom + 2);
+        expect(edgeCaption.bottom).toBeLessThanOrEqual(mark.top);
+        expect(Math.abs(edgeCaption.left - layout.rect(card).left)).toBeLessThanOrEqual(1);
     }
 }
 
@@ -164,6 +168,37 @@ describe('the document rhythm, as a browser lays it out', () => {
             const layout = await measureRhythm(900);
             expectDocumentRhythm(layout, { min: 20, max: 40 });
             expectHeadingsLevel(layout);
+        } finally {
+            pointer.coarse = true;
+            vi.resetModules();
+        }
+    });
+});
+
+describe('the document grid, as a browser lays it out', () => {
+    it('hangs each ordinal in the gutter so name, card and its lines share one left edge (lab E1)', async () => {
+        pointer.coarse = false;
+        vi.resetModules();
+        try {
+            const container = await renderDocument([
+                { ...step('gather', 'Gather changes', 'Gather the changes.'), result: { kind: 'json', schema: { type: 'object', properties: { issues: { type: 'array' } } } } },
+                { kind: 'action', id: 'notify', name: 'Announce it', actionId: 'notifications.notify_me', input: { message: { kind: 'literal', value: 'Ready' } },
+                    onlyWhen: { kind: 'exists', value: { kind: 'result', producer: { blockId: 'gather', scope: { kind: 'current' } }, path: [] } } },
+                { kind: 'loop', id: 'each', name: 'Each issue', body: [step('fix', 'Fix it', 'Fix it.')],
+                    repetition: { kind: 'items', items: { kind: 'input', name: 'issues' }, execution: 'sequential', failurePolicy: 'fail_stop' } },
+            ], 900);
+            const layout = await measureWebLayout(container, { viewport: { width: 900, height: 1400 }, settle });
+            const nameEdge = layout.rect('composer:gather').left;
+            for (const id of ['workflow-editor-step-gather-label', 'workflow-editor-step-gather-returns',
+                'workflow-editor-action-notify-label', 'workflow-editor-action-notify-card', 'workflow-editor-action-notify-only-when',
+                'workflow-editor-loop-each-label']) {
+                expect(Math.abs(layout.rect(id).left - nameEdge), id).toBeLessThanOrEqual(1);
+            }
+            // The ordinal and a container's mark hang left of that edge, in one gutter column.
+            expect(layout.rect('workflow-editor-step-gather-label-ordinal').right).toBeLessThan(nameEdge);
+            expect(Math.abs(layout.rect('workflow-editor-loop-each-label-ordinal-mark').left - layout.rect('workflow-editor-step-gather-label-ordinal').left)).toBeLessThanOrEqual(1);
+            // A nested list starts on its parent's edge: its ordinal hangs from the loop's name column.
+            expect(Math.abs(layout.rect('workflow-editor-step-fix-label-ordinal').left - nameEdge)).toBeLessThanOrEqual(1);
         } finally {
             pointer.coarse = true;
             vi.resetModules();
@@ -238,28 +273,6 @@ describe('a typed card on a phone, as a browser lays it out', () => {
     });
 });
 
-describe('Notify me\'s reported-only toggle, as a browser lays it out', () => {
-    it('starts on the card\'s label column like every other row (DESIGN-7 N5)', async () => {
-        pointer.coarse = false;
-        vi.resetModules();
-        try {
-            const container = await renderDocument([
-                step('gather', 'Gather', 'Gather the changes.'),
-                { kind: 'action', id: 'notify', name: 'Announce it', actionId: 'notifications.notify_me', input: {
-                    message: { kind: 'result', producer: { blockId: 'gather', scope: { kind: 'current' } }, path: [] } } },
-            ], 900);
-            const layout = await measureWebLayout(container, { viewport: { width: 900, height: 900 }, settle,
-                texts: ['Message', 'Only if the agent reported something'] });
-            const [message] = layout.textRects('Message');
-            const [toggle] = layout.textRects('Only if the agent reported something');
-            expect(Math.abs(toggle!.left - message!.left)).toBeLessThanOrEqual(1);
-        } finally {
-            pointer.coarse = true;
-            vi.resetModules();
-        }
-    });
-});
-
 describe('a container heading on a phone, as a browser lays it out', () => {
     it('moves a long sentence under its name without a leading "·" and never cuts a token (DESIGN-7 N34)', async () => {
         const container = await renderDocument([
@@ -309,9 +322,10 @@ describe('a step with issue lines, as a browser lays it out', () => {
         vi.resetModules();
         try {
             const clearance = async (firstText: string, last: string) => {
-                const container = await renderDocument([step('gather', 'Gather changes', firstText), step('write', 'Write changelog', 'Write it.')], 900);
-                const layout = await measureWebLayout(container, { viewport: { width: 900, height: 900 }, texts: ['If it succeeds'], settle });
-                const caption = layout.textRects('If it succeeds')[0]!;
+                const container = await renderDocument([step('gather', 'Gather changes', firstText),
+                    { ...step('write', 'Write changelog', 'Write it.'), runWhen: 'always' }], 900);
+                const layout = await measureWebLayout(container, { viewport: { width: 900, height: 900 }, texts: ['Either way'], settle });
+                const caption = layout.textRects('Either way')[0]!;
                 const above = (layout.rects.get(last) ?? []).at(-1) ?? layout.rect(last);
                 await act(async () => root?.unmount());
                 root = null;

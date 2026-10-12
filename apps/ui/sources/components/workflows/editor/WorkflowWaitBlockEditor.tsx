@@ -19,8 +19,7 @@ import type { WorkflowBlockAction } from './WorkflowBlockActionsMenu';
 import { WorkflowBlockHeading, type WorkflowBlockNameEditor } from './WorkflowBlockHeading';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { WORKFLOW_BLOCK_KIND_GLYPH } from '@/components/workflows/presentation/workflowBlockKindGlyph';
-import { formatWorkflowConditionSentence } from './WorkflowConditionEditor';
-import { useWorkflowStepOptionsChip } from './WorkflowStepOptionsChip';
+import { formatWorkflowBlockOptionsSummary, useWorkflowStepOptionsChip } from './WorkflowStepOptionsChip';
 import type { WorkflowDocumentStepSlots } from './workflowDocumentPresentation';
 import { workflowEditorStyles } from './workflowEditorStyles';
 
@@ -81,13 +80,10 @@ export function WorkflowWaitBlockEditor(props: Readonly<{
     const displayName = workflowBlockReferenceLabel(block);
     const rowPrefix = `${testIDPrefix}-wait-${block.id}`;
     // Step options is a chip in the composer's own chip row, as on every step (07 S7).
+    const optionsSummary = formatWorkflowBlockOptionsSummary(block);
     const stepOptionsChip = useWorkflowStepOptionsChip({
-        label: block.onlyWhen === undefined
-            ? t('workflows.page.inspector.stepOptions')
-            : t('workflows.page.inspector.onlyWhenSentence', {
-                condition: formatWorkflowConditionSentence(props.draft, block.onlyWhen),
-            }),
-        changed: block.onlyWhen !== undefined,
+        label: optionsSummary.label,
+        changed: optionsSummary.changed,
         onOpen: (anchorRef) => latestRef.current.onOpenOptions?.(anchorRef),
         testID: `${rowPrefix}-options`,
         labelTestID: `${rowPrefix}-options-label`,

@@ -7,7 +7,11 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { sameStrictJsonValue, type JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import type { WorkflowInputDefinition } from '@happier-dev/protocol/workflows/workflowV1';
 
-import { Text, TextInput } from '@/components/ui/text/Text';
+import { IconButton } from '@/components/ui/buttons/IconButton';
+import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
+import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
+import { Switch } from '@/components/ui/forms/Switch';
+import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 
@@ -16,26 +20,28 @@ import {
     describeWorkflowInputValueType,
 } from '@/components/workflows/presentation/workflowBlockedReasonText';
 
+import { WorkflowFieldSelect } from './WorkflowStepDataEditor';
 import { workflowEditorStyles } from './workflowEditorStyles';
 
 const styles = StyleSheet.create((theme) => ({
     root: { gap: theme.margins.sm },
     heading: { flexDirection: 'row', alignItems: 'center', gap: theme.margins.sm },
     title: { ...Typography.default('semiBold'), color: theme.colors.text.primary },
-    add: { ...Typography.default('semiBold'), color: theme.colors.text.primary, marginLeft: 'auto' },
+    // The section's quiet trailing action ("+ Add input"), on the title's line at its end.
+    addTarget: { marginLeft: 'auto', flexDirection: 'row', alignItems: 'center', gap: theme.margins.xs, paddingHorizontal: theme.margins.xs },
+    add: { ...Typography.default('semiBold'), color: theme.colors.text.secondary },
     row: {
         gap: theme.margins.sm,
-        paddingVertical: theme.margins.sm,
-        borderBottomWidth: StyleSheet.hairlineWidth,
-        borderBottomColor: theme.colors.border.default,
+        paddingVertical: theme.margins.md,
+        borderTopWidth: StyleSheet.hairlineWidth,
+        borderTopColor: theme.colors.border.default,
     },
     line: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: theme.margins.sm },
-    input: { ...Typography.default('regular'), color: theme.colors.text.primary, minWidth: 128, flexGrow: 1 },
-    description: { ...Typography.default('regular'), color: theme.colors.text.secondary, minWidth: 180, flexGrow: 1 },
-    option: { ...Typography.default('regular'), color: theme.colors.text.secondary },
-    optionSelected: { ...Typography.default('semiBold'), color: theme.colors.text.link },
-    remove: { ...Typography.default('semiBold'), color: theme.colors.text.destructive },
-    issue: { ...Typography.default('regular'), color: theme.colors.text.destructive },
+    nameField: { flexGrow: 1, flexBasis: 140, minWidth: 0 },
+    defaultInput: { flex: 1, minWidth: 0 },
+    required: { flexDirection: 'row', alignItems: 'center', gap: theme.margins.sm },
+    requiredLabel: { ...Typography.default('regular'), color: theme.colors.text.primary },
+    defaultField: { flexGrow: 1, flexBasis: 200, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: theme.margins.sm },
 }));
 
 const VALUE_TYPES = ['string', 'number', 'boolean', 'json'] as const;
@@ -91,7 +97,6 @@ function WorkflowInputRow(props: Readonly<{
     onRemove: () => void;
     testIDPrefix: string;
 }>): React.ReactElement {
-    const { theme } = useUnistyles();
     const { input } = props;
     const [defaultText, setDefaultText] = React.useState(() => formatDefault(input.default));
     // The draft is the source of truth; the typed text survives only while it
@@ -109,111 +114,97 @@ function WorkflowInputRow(props: Readonly<{
     }, [input.default, input.valueType]);
     const defaultInvalid = !input.required && isUnresolvedDefault(input.default);
     const rowId = `${props.testIDPrefix}-input-${props.index}`;
+    // One input, composed from the page's own field controls (DESIGN-13): its name and type on the
+    // first line, what it is for beneath, then whether a run must supply it (or what it falls back
+    // to). No text tabs or link-coloured words: a choice is a field select, a yes/no is a switch.
     return (
         <View testID={rowId} style={styles.row} accessibilityRole="summary">
             <View style={styles.line}>
-                <TextInput
-                    testID={`${rowId}-name`}
-                    style={styles.input}
-                    value={input.name}
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                    placeholder={t('workflows.inputs.namePlaceholder')}
-                    accessibilityLabel={t('workflows.inputs.namePlaceholder')}
-                    onChangeText={(name) => props.onChange({ ...input, name })}
+                <View style={styles.nameField}>
+                    <FieldTextInput
+                        testID={`${rowId}-name`}
+                        value={input.name}
+                        monospace
+                        placeholder={t('workflows.inputs.namePlaceholder')}
+                        accessibilityLabel={t('workflows.inputs.namePlaceholder')}
+                        onChangeText={(name) => props.onChange({ ...input, name })}
+                    />
+                </View>
+                <WorkflowFieldSelect
+                    testID={`${rowId}-type`}
+                    label={t('workflows.inputs.typeLabel')}
+                    items={VALUE_TYPES.map((valueType) => ({
+                        id: valueType, testID: `${rowId}-type-${valueType}`, title: describeWorkflowInputValueType(valueType),
+                    }))}
+                    selectedId={input.valueType}
+                    onSelect={(id) => {
+                        const valueType = VALUE_TYPES.find((candidate) => candidate === id);
+                        if (valueType === undefined) return;
+                        const nextDefault = parseDefault(valueType, defaultText);
+                        props.onChange({
+                            ...input,
+                            valueType,
+                            ...(nextDefault === undefined ? { default: undefined } : { default: nextDefault }),
+                        });
+                    }}
                 />
-                {VALUE_TYPES.map((valueType) => (
-                    <HappierPressable
-                        key={valueType}
-                        testID={`${rowId}-type-${valueType}`}
-                        accessibilityRole="radio"
-                        checked={input.valueType === valueType}
-                        onPress={() => {
-                            const nextDefault = parseDefault(valueType, defaultText);
-                            props.onChange({
-                                ...input,
-                                valueType,
-                                ...(nextDefault === undefined ? { default: undefined } : { default: nextDefault }),
-                            });
-                        }}
-                        style={(state) => [workflowEditorStyles.actionTarget, state.pressed ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle } : null, focusRingStyle({ focused: state.focused, color: theme.colors.border.focus })]}
-                    >
-                        <Text style={input.valueType === valueType ? styles.optionSelected : styles.option}>
-                            {describeWorkflowInputValueType(valueType)}
-                        </Text>
-                    </HappierPressable>
-                ))}
+                {/* Removing an input is a quiet trailing icon on its name line, not a red word on every row. */}
+                <IconButton
+                    testID={`${rowId}-remove`}
+                    iconName="trash"
+                    variant="plain"
+                    accessibilityLabel={t('workflows.editor.remove')}
+                    tooltip={t('workflows.editor.remove')}
+                    onPress={props.onRemove}
+                />
             </View>
+            <FieldTextInput
+                testID={`${rowId}-description`}
+                value={input.description ?? ''}
+                placeholder={t('workflows.inputs.descriptionPlaceholder')}
+                accessibilityLabel={t('workflows.inputs.descriptionPlaceholder')}
+                onChangeText={(description) => props.onChange({
+                    ...input,
+                    ...(description.length === 0 ? { description: undefined } : { description }),
+                })}
+            />
             <View style={styles.line}>
-                <HappierPressable
-                    testID={`${rowId}-required`}
-                    accessibilityRole="checkbox"
-                    checked={input.required}
-                    onPress={() => props.onChange(input.required
-                        ? { ...input, required: false }
-                        : { ...input, required: true, default: undefined })}
-                    style={(state) => [workflowEditorStyles.actionTarget, state.pressed ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle } : null, focusRingStyle({ focused: state.focused, color: theme.colors.border.focus })]}
-                >
-                    <Text style={input.required ? styles.optionSelected : styles.option}>
-                        {input.required ? t('workflows.inputs.required') : t('workflows.inputs.optional')}
-                    </Text>
-                </HappierPressable>
-                <TextInput
-                    testID={`${rowId}-description`}
-                    style={styles.description}
-                    value={input.description ?? ''}
-                    placeholder={t('workflows.inputs.descriptionPlaceholder')}
-                    accessibilityLabel={t('workflows.inputs.descriptionPlaceholder')}
-                    onChangeText={(description) => props.onChange({
-                        ...input,
-                        ...(description.length === 0 ? { description: undefined } : { description }),
-                    })}
-                />
+                <View style={styles.required}>
+                    <Text style={styles.requiredLabel}>{t('workflows.inputs.required')}</Text>
+                    <Switch
+                        testID={`${rowId}-required`}
+                        accessibilityLabel={t('workflows.inputs.required')}
+                        value={input.required}
+                        onValueChange={(required) => props.onChange(required
+                            ? { ...input, required: true, default: undefined }
+                            : { ...input, required: false })}
+                    />
+                </View>
                 {input.required ? null : (
-                    <TextInput
-                        testID={`${rowId}-default`}
-                        style={styles.input}
-                        value={defaultText}
-                        autoCapitalize="none"
-                        placeholder={t('workflows.inputs.defaultValue')}
-                        accessibilityLabel={t('workflows.inputs.defaultValue')}
-                        // The repair reaches assistive technology on the field
-                        // itself, not only as nearby text.
-                        {...(defaultInvalid
-                            ? { accessibilityHint: describeWorkflowInputRepair({
+                    // An optional input names what it falls back to, so a filled default never reads as an unlabelled value.
+                    <View style={styles.defaultField}>
+                        <Text style={styles.requiredLabel}>{t('workflows.inputs.defaultValue')}</Text>
+                        <FieldTextInput
+                            style={styles.defaultInput}
+                            testID={`${rowId}-default`}
+                            value={defaultText}
+                            placeholder={t('workflows.inputs.defaultValue')}
+                            accessibilityLabel={t('workflows.inputs.defaultValue')}
+                            // The repair reaches assistive technology on the field itself, and is
+                            // shown under it by the field's own error slot.
+                            error={defaultInvalid ? describeWorkflowInputRepair({
                                 valueType: input.valueType,
                                 errorCode: 'invalid_input',
-                            }) ?? undefined }
-                            : {})}
-                        onChangeText={(text) => {
-                            setDefaultText(text);
-                            const value = parseDefault(input.valueType, text);
-                            props.onChange({ ...input, ...(value === undefined ? { default: undefined } : { default: value }) });
-                        }}
-                    />
+                            }) : null}
+                            onChangeText={(text) => {
+                                setDefaultText(text);
+                                const value = parseDefault(input.valueType, text);
+                                props.onChange({ ...input, ...(value === undefined ? { default: undefined } : { default: value }) });
+                            }}
+                        />
+                    </View>
                 )}
-                <HappierPressable
-                    testID={`${rowId}-remove`}
-                    accessibilityRole="button"
-                    accessibilityLabel={t('workflows.editor.remove')}
-                    onPress={props.onRemove}
-                    style={(state) => [workflowEditorStyles.actionTarget, state.pressed ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle } : null, focusRingStyle({ focused: state.focused, color: theme.colors.border.focus })]}
-                >
-                    <Text style={styles.remove}>{t('workflows.editor.remove')}</Text>
-                </HappierPressable>
             </View>
-            {defaultInvalid ? (
-                <Text
-                    testID={`${rowId}-default-error`}
-                    accessibilityRole="alert"
-                    style={styles.issue}
-                >
-                    {describeWorkflowInputRepair({
-                        valueType: input.valueType,
-                        errorCode: 'invalid_input',
-                    })}
-                </Text>
-            ) : null}
         </View>
     );
 }
@@ -237,8 +228,9 @@ export function WorkflowInputsEditor(props: Readonly<{
                         valueType: 'string',
                         required: false,
                     }])}
-                    style={(state) => [workflowEditorStyles.actionTarget, state.pressed ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle } : null, focusRingStyle({ focused: state.focused, color: theme.colors.border.focus })]}
+                    style={(state) => [workflowEditorStyles.actionTarget, styles.addTarget, state.pressed ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle } : null, focusRingStyle({ focused: state.focused, color: theme.colors.border.focus })]}
                 >
+                    <Icon name="plus" size={ICON_SIZE.xs} color={theme.colors.text.secondary} />
                     <Text style={styles.add}>{t('workflows.inputs.addInput')}</Text>
                 </HappierPressable>
             </View>

@@ -96,8 +96,11 @@ export function WorkflowBlockHeading(props: Readonly<{
     ) : (
         <Text testID={`${props.testID}-meta`} numberOfLines={2} style={workflowEditorStyles.headingMeta}
             onLayout={(event) => {
-                const { x, width } = event.nativeEvent.layout;
-                const wrapped = width > 0 && x <= theme.margins.xs + 1;
+                // Beneath the name it starts a line of its own: its top is past half its own height
+                // (beside the name it is centred on the name's line). The vertical test holds whatever
+                // the row's inset, border or density.
+                const { y, height, width } = event.nativeEvent.layout;
+                const wrapped = width > 0 && y > height / 2;
                 setMetaWrapped((current) => (current === wrapped ? current : wrapped));
             }}>
             {metaWrapped ? null : '· '}{props.meta}
@@ -109,8 +112,10 @@ export function WorkflowBlockHeading(props: Readonly<{
         </View>
     );
     const numbered = props.visibleOrdinal !== undefined && props.visibleOrdinal !== null;
-    // A numbered leaf keeps its mark beside its name; a container's mark is its ordinal.
-    const nameMark = numbered ? kindMark : null;
+    // A leaf's heading is its number and name (lab `.uwe-sh`): its card says what runs (the agent in
+    // its composer chip, the Action in its card header). Only a heading that carries its card's
+    // identity keeps the mark; a container's mark is its ordinal.
+    const nameMark = numbered && props.unnamed === 'card' ? kindMark : null;
     const source = props.sourceLabel === undefined ? null
         : <Text testID={`${props.testID}-source`} numberOfLines={1} style={workflowEditorStyles.headingMeta}>{'· '}{props.sourceLabel}</Text>;
     return (

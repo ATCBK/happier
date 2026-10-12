@@ -116,9 +116,10 @@ export function projectSessionTriggerGroups(params: Readonly<{
             : describeTriggerTarget(set.target, params.resolveWorkflowTitle));
         const lastRunAt = params.lastRunAtByAutomationId[set.automationId] ?? null;
         const lastRun = params.lastRunsByAutomationId?.[set.automationId];
-        const lastState = lastRun ? describeWorkflowRunState(lastRun.state) : null;
+        const lastState = lastRun ? describeWorkflowRunState(lastRun.state, { workflowCustodyState: lastRun.workflowCustodyState }) : null;
         const lastTone = lastRun && lastState ? resolveWorkStatusTone({ kind: 'workflow_run', facts: {
             state: lastRun.state, word: lastState.label, inAttentionWindow: lastRun.attentionRequired === true,
+            workflowCustodyState: lastRun.workflowCustodyState,
         } }).tone : null;
         for (const trigger of set.triggers) {
             const group = resolveTriggerEventGroup(trigger);

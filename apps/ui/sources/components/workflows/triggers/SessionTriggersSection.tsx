@@ -5,6 +5,7 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 
+import { useSessionMachineReachability } from '@/components/sessions/model/useSessionMachineReachability';
 import { WorkSection } from '@/components/sessions/work/WorkSection';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { ToolbarButton } from '@/components/ui/buttons/ToolbarButton';
@@ -46,6 +47,11 @@ export type SessionTriggersSectionViewProps = Readonly<{
     groups: readonly SessionTriggerGroupModel[];
     status: 'loading' | 'ready' | 'failed';
     pullRequestLinksUnavailable?: boolean;
+    /**
+     * The session's Machine is offline, which the Work view already says once at its top: a failed read
+     * is then not said a second time here.
+     */
+    machineOffline?: boolean;
     /** Trigger rows whose write is in flight. */
     pendingKeys: ReadonlySet<string>;
     onToggle: (row: SessionTriggerRowModel, next: boolean) => void;
@@ -53,6 +59,8 @@ export type SessionTriggersSectionViewProps = Readonly<{
     onAdd: (anchor: React.RefObject<View | null>) => void;
     onRetry: () => void;
     onHistory?: (row: SessionTriggerRowModel) => void;
+    /** Runs the trigger's workflow once now; offered on rows whose workflow can run. */
+    onRunNow?: (row: SessionTriggerRowModel) => void | Promise<void>;
     historyRowKey?: string;
     history?: React.ReactNode;
     /** The header "+", which also anchors a popover the host opens itself (a bound turn). */
@@ -98,7 +106,7 @@ export const SessionTriggersSectionView = React.memo(function SessionTriggersSec
                 </View>
             )}
         >
-            {props.status === 'failed' ? (
+            {props.status === 'failed' && props.machineOffline !== true ? (
                 <SurfaceFreshnessLine
                     testID="session-work-triggers-failed"
                     tone="warning"
@@ -138,12 +146,12 @@ export const SessionTriggersSectionView = React.memo(function SessionTriggersSec
                         <AnchoredTriggerRow
                             key={row.key}
                             row={row}
-                            glyph={group.glyph}
                             pending={props.pendingKeys.has(row.key)}
                             deepLink={row === deepLinkedRow}
                             onToggle={props.onToggle}
                             onOpen={props.onOpen}
                             onHistory={props.onHistory}
+                            onRunNow={props.onRunNow}
                             history={props.historyRowKey === row.key ? props.history : undefined}
                         />
                     ))}
@@ -156,12 +164,12 @@ export const SessionTriggersSectionView = React.memo(function SessionTriggersSec
 /** A row that anchors its own popover beside it. */
 const AnchoredTriggerRow = React.memo(function AnchoredTriggerRow(props: Readonly<{
     row: SessionTriggerRowModel;
-    glyph: SessionTriggerGroupModel['glyph'];
     pending: boolean;
     deepLink: boolean;
     onToggle: SessionTriggersSectionViewProps['onToggle'];
     onOpen: SessionTriggersSectionViewProps['onOpen'];
     onHistory: SessionTriggersSectionViewProps['onHistory'];
+    onRunNow: SessionTriggersSectionViewProps['onRunNow'];
     history: React.ReactNode;
 }>) {
     const anchorRef = React.useRef<View>(null);
@@ -169,6 +177,16 @@ const AnchoredTriggerRow = React.memo(function AnchoredTriggerRow(props: Readonl
     const openRef = React.useRef(props.onOpen);
     openRef.current = props.onOpen;
     React.useEffect(() => { if (props.deepLink) openRef.current(row, anchorRef); }, [props.deepLink]);
+    // Run now stays busy until the run is admitted (or refused), so a second press cannot start another.
+    const [running, setRunning] = React.useState(false);
+    const onRunNow = props.onRunNow;
+    const runNow = React.useCallback(() => {
+        if (!onRunNow) return;
+        setRunning(true);
+        void Promise.resolve(onRunNow(row)).finally(() => setRunning(false));
+    }, [onRunNow, row]);
+    const canRun = !row.legacy && !row.sourceUnavailable && onRunNow !== undefined;
+    const hasActions = props.onHistory !== undefined || canRun;
     return (
         <View ref={anchorRef} collapsable={false}>
             <TriggerRow
@@ -178,16 +196,21 @@ const AnchoredTriggerRow = React.memo(function AnchoredTriggerRow(props: Readonl
                 qualifier={row.qualifier}
                 qualifierTime={row.qualifierTime}
                 qualifierAccessibilityLabel={row.qualifierAccessibilityLabel}
-                glyph={props.glyph}
+                // The event sub-header carries the glyph; rows start on its text edge (lab `convo-W9`,
+                // `b-habit T`), so a row never repeats its group's mark.
                 multiline={row.legacy}
                 enabled={row.enabled}
                 toggleDisabled={props.pending || row.sourceUnavailable || row.legacy}
                 onToggle={(next) => props.onToggle(row, next)}
                 onPress={() => props.onOpen(row, anchorRef)}
-                actions={(row.legacy || row.sourceUnavailable) && props.onHistory ? <>
+                // The habit's own line (lab `b-habit T`, plan 65 §8): History · Run now, then its switch.
+                actions={hasActions ? <>
                 {props.onHistory ? <ToolbarButton testID={`session-work-trigger:${row.key}-history`}
                     label={t('workflows.destination.history.title')} active={props.history !== undefined}
                     onPress={() => props.onHistory?.(row)} /> : null}
+                {canRun ? <ToolbarButton testID={`session-work-trigger:${row.key}-runNow`}
+                    label={t('workflows.editor.runNow')} busy={running} disabled={running}
+                    onPress={runNow} /> : null}
                 </> : undefined}
             />
             {props.history}
@@ -211,14 +234,19 @@ type OpenPopover = Readonly<{ anchor: React.RefObject<View | null>; row: Session
 export const SessionTriggersSection = React.memo(function SessionTriggersSection(props: Readonly<{ sessionId: string; serverId?: string | null }>) {
     const scope = useActiveServerAccountScope(props.serverId);
     if (scope === null) return null;
-    return <SessionTriggersContent key={`${serverAccountScopeKeySuffix(scope)}:${props.sessionId}`} sessionId={props.sessionId} />;
+    return <SessionTriggersContent key={`${serverAccountScopeKeySuffix(scope)}:${props.sessionId}`} sessionId={props.sessionId} serverId={props.serverId} />;
 });
 
-function SessionTriggersContent(props: Readonly<{ sessionId: string }>) {
+function SessionTriggersContent(props: Readonly<{ sessionId: string; serverId?: string | null }>) {
     const { theme } = useUnistyles();
     const read = useSessionTriggers(props.sessionId);
     const readRef = React.useRef(read);
     readRef.current = read;
+    const { machineReachable } = useSessionMachineReachability(props.sessionId, props.serverId);
+    // A read that failed while the Machine was away is read again when it returns, without a Retry tap.
+    React.useEffect(() => {
+        if (machineReachable && readRef.current.status === 'failed') readRef.current.retry();
+    }, [machineReachable]);
     const openTriggerAsWorkflow = useOpenTriggerAsWorkflow();
     const thenOptions = useTriggerThenOptions();
     const machines = useAllMachines();
@@ -374,12 +402,14 @@ function SessionTriggersContent(props: Readonly<{ sessionId: string }>) {
                 groups={groups}
                 status={lastRuns.failed ? 'failed' : read.status}
                 pullRequestLinksUnavailable={!Array.isArray(read.pullRequestLinks) && read.pullRequestLinks.status === 'unavailable'}
+                machineOffline={!machineReachable}
                 pendingKeys={pendingKeys}
                 onToggle={toggle}
                 onOpen={openRow}
                 onAdd={add}
                 onRetry={retry}
                 onHistory={openHistory}
+                onRunNow={runNow}
                 historyRowKey={historyRowKey}
                 history={history}
                 addAnchorRef={addAnchorRef}
@@ -431,9 +461,8 @@ function SessionTriggersContent(props: Readonly<{ sessionId: string }>) {
                         onSaveAsWorkflow: (target: TriggerTargetV1) => openTriggerAsWorkflow(target, {
                             scope: 'session', sessionId: props.sessionId, triggerId: row.triggerId, expectedRevision: row.revision,
                         }),
+                        // History and Run now are the row's own line here, not a second copy in its popover.
                         onDelete: async () => { await read.remove(row.triggerId); },
-                        onRunNow: async () => { await runNow(row); },
-                        onHistory: () => { openHistory(row); close(); },
                     })}
                 />
             ) : null}

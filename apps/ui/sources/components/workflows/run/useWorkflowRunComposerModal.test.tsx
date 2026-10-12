@@ -59,12 +59,22 @@ describe('useWorkflowRunComposerModal', () => {
     });
 
     it('returns an anchored start surface without opening a second modal card', async () => {
-        const anchorRef = React.createRef<React.ElementRef<typeof View>>();
+        // A mounted trigger (Run now, Run again): the host view the ref points at.
+        const anchorRef: React.RefObject<React.ElementRef<typeof View> | null> = { current: {} as React.ElementRef<typeof View> };
         const hook = await renderHook(() => useWorkflowRunComposerModal({
             open: true, props: sheetProps(), anchorRef,
         }));
         expect(modalMock.show).not.toHaveBeenCalled();
         expect(React.isValidElement(hook.getCurrent())).toBe(true);
+    });
+
+    it('uses the canonical modal when the anchoring trigger is not on screen', async () => {
+        const anchorRef = React.createRef<React.ElementRef<typeof View>>();
+        const hook = await renderHook(() => useWorkflowRunComposerModal({
+            open: true, props: sheetProps(), anchorRef,
+        }));
+        expect(hook.getCurrent()).toBeNull();
+        expect(modalMock.show).toHaveBeenCalled();
     });
 
     it('presents through the canonical modal owner and updates in place instead of stacking', async () => {

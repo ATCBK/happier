@@ -2,7 +2,7 @@ import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback
 import * as React from 'react';
 import { View, type TextInput, type StyleProp, type ViewStyle } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { HappierPressable, HAPPIER_PRESS_FEEDBACK_V1 } from '@happier-dev/plugin-ui/presentation';
+import { HappierPressable, HAPPIER_PAGE_METRICS, HAPPIER_PRESS_FEEDBACK_V1 } from '@happier-dev/plugin-ui/presentation';
 
 import { AppPaneScopeHost, type AppPaneDestinationDetails } from '@/components/appShell/panes/AppPaneScopeHost';
 import { DEFAULT_MAIN_MIN_PX } from '@/components/ui/panels/paneBreakpoints';
@@ -17,11 +17,13 @@ import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Icon } from '@/components/ui/icons/Icon';
 import { SelectionListFilterChip } from '@/components/ui/selectionList/SelectionListFilterChips';
 import { KeyboardAwareScrollView } from '@/components/ui/keyboardAvoidance/KeyboardAwareScrollView';
+import { glassSurfaceBackgroundColor } from '@/components/ui/glass/glassSurfacePaint';
 import { useLayoutMaxWidthStyle } from '@/components/ui/layout/layout';
+import { PAGE_COLUMN_MAX_WIDTH_PX } from '@/components/ui/layout/contentWidthMode';
 import { PageHeader } from '@/components/ui/layout/PageHeader';
 import { NavigationBackChromeProvider, useNavigationBackControl } from '@/components/ui/layout/NavigationBackChrome';
 import { DefaultBackButton } from '@/components/navigation/Header';
-import { PageHeaderMarkSlot } from '@/components/ui/layout/PageHeaderMarkSlot';
+import { PAGE_HEADER_MARK_SLOT_SIZE_PX, PageHeaderMarkSlot } from '@/components/ui/layout/PageHeaderMarkSlot';
 import { PageHeaderMenu, type PageHeaderMenuAction } from '@/components/ui/layout/PageHeaderEntityParts';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
@@ -107,6 +109,7 @@ import { Stack } from '@/components/appShell/workspace/destinationRoute';
 import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
 import { useAppShellColumn } from '@/components/navigation/shell/appRail/appShellColumnContext';
 import { formatWorkflowIssueText } from '../editor/workflowIssueText';
+import { resolveWorkflowDocumentGutterPx } from '../editor/workflowEditorStyles';
 import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerScope';
 
 /**
@@ -149,10 +152,18 @@ function WorkflowEditorBackControl({ style, onBack }: Readonly<{ style: StylePro
 /** The Agent & model chips the header shows; every field is in Workflow settings. */
 const HEADER_ENGINE_FIELDS = ['agentTarget', 'modelSelection'] as const;
 
+/** The page title's left edge from the column's (its text inset, the leading mark, the header's gap). */
+const WORKFLOW_PAGE_TITLE_EDGE_PX = HAPPIER_PAGE_METRICS.pageTextInsetPx
+    + PAGE_HEADER_MARK_SLOT_SIZE_PX.page + HAPPIER_PAGE_METRICS.pageHeaderColumnGapPx;
+
 const styles = StyleSheet.create((theme) => ({
+    /**
+     * The editor is a page: it sits on the paper (`surface.base`, the content material) like every
+     * `ItemList` page, never on the navigation's grey canvas (lab `editor-E1`: a white page).
+     */
     root: {
         flex: 1,
-        backgroundColor: theme.colors.background.canvas,
+        backgroundColor: glassSurfaceBackgroundColor(theme.colors.surface.base, 'content', true),
     },
     pageScroll: {
         flexGrow: 1,
@@ -186,7 +197,10 @@ const styles = StyleSheet.create((theme) => ({
         flexWrap: 'wrap',
         alignItems: 'center',
         gap: theme.margins.sm,
-        paddingHorizontal: theme.margins.lg,
+        // On the title's edge (lab `editor-E1`): the chips, the title and every step name share one
+        // left edge, while the header's mark and the steps' ordinals hang in the gutter beside it.
+        paddingLeft: WORKFLOW_PAGE_TITLE_EDGE_PX,
+        paddingRight: HAPPIER_PAGE_METRICS.pageTextInsetPx,
         paddingBottom: theme.margins.md,
         borderBottomWidth: StyleSheet.hairlineWidth,
         borderBottomColor: theme.colors.border.default,
@@ -199,10 +213,21 @@ const styles = StyleSheet.create((theme) => ({
         flexShrink: 0,
         minWidth: 0,
     },
+    /**
+     * The steps (lab `editor-E1`, `.uwe-doc`): the page's reading column, not the header's width.
+     * Steps hang from the page's text inset and stop at the reading measure, so a card never
+     * stretches across a wide window; the header and its chips keep the page column above it.
+     */
     document: {
-        paddingHorizontal: theme.margins.lg,
+        width: '100%',
+        maxWidth: PAGE_COLUMN_MAX_WIDTH_PX.reading,
+        paddingHorizontal: HAPPIER_PAGE_METRICS.pageTextInsetPx,
         paddingTop: theme.margins.lg,
         gap: theme.margins.lg,
+    },
+    /** Wide: the root list's name column on the title's edge, so its ordinals hang under the mark's gutter. */
+    documentUnderTitle: {
+        paddingLeft: WORKFLOW_PAGE_TITLE_EDGE_PX - resolveWorkflowDocumentGutterPx(theme),
     },
     undoRow: {
         flexDirection: 'row',
@@ -236,7 +261,7 @@ const styles = StyleSheet.create((theme) => ({
         paddingVertical: theme.margins.sm,
         borderTopWidth: StyleSheet.hairlineWidth,
         borderTopColor: theme.colors.border.default,
-        backgroundColor: theme.colors.background.canvas,
+        backgroundColor: glassSurfaceBackgroundColor(theme.colors.surface.base, 'content', true),
     },
     phoneBarSpacer: {
         flex: 1,
@@ -417,6 +442,7 @@ export type WorkflowEditorBodyProps = Readonly<{
     /** Every continuable Session on any Machine (the authoring host's): enables the web Session drop onto a step. */
     sessionDropCandidates?: readonly WorkflowExistingSessionOption[];
     sessionBindingScope?: EntityDragScopeV1 | null;
+    mountedDraftActions?: import('@/sync/ops/actions/workflowAuthoringAction').WorkflowMountedDraftActions;
     /**
      * Where every step prompt addresses reference/file search and portable
      * attachment pickers.
@@ -468,6 +494,7 @@ export function WorkflowEditorBody(props: WorkflowEditorBodyProps): React.ReactE
         ...(props.authoringFacts === undefined ? {} : { facts: props.authoringFacts }),
     });
     const sessionDrop = useWorkflowSessionBinding({
+        draftActions: props.mountedDraftActions,
         context: { scope: props.sessionBindingScope ?? null, draft, editable: documentEditable,
             whereMachineId: props.projectTarget?.machineId ?? null, candidates: props.sessionDropCandidates ?? props.existingSessions ?? [] },
         onChange, whereName: props.machineName,
@@ -555,10 +582,15 @@ export function WorkflowEditorBody(props: WorkflowEditorBodyProps): React.ReactE
         pendingPromptFocusId.current = blockId;
     }, []);
 
-    const { blockIds, hasAgentSteps } = React.useMemo(() => {
+    // The header's Agent & model is the workflow default, so it shows while an Agent step uses that
+    // default (or one is set): steps that each choose their own agent leave nothing to choose here.
+    const { blockIds, showsWorkflowAgent } = React.useMemo(() => {
         const blocks = walkWorkflowBlocks(draft.blocks);
-        return { blockIds: blocks.map((block) => block.id), hasAgentSteps: blocks.some((block) => block.kind === 'step') };
-    }, [draft.blocks]);
+        const steps = blocks.filter((block) => block.kind === 'step');
+        const defaultSet = draft.defaults.agentTarget !== undefined || draft.defaults.engine !== undefined;
+        const inherits = steps.some((step) => step.execution?.agentTarget === undefined && step.execution?.engine === undefined);
+        return { blockIds: blocks.map((block) => block.id), showsWorkflowAgent: steps.length > 0 && (defaultSet || inherits) };
+    }, [draft.blocks, draft.defaults.agentTarget, draft.defaults.engine]);
     /**
      * Custody of every step's live prompt document, held here rather than in the
      * recursive list that re-parents the rows. Moving a block between parents is
@@ -1089,14 +1121,23 @@ export function WorkflowEditorBody(props: WorkflowEditorBodyProps): React.ReactE
             <Text style={styles.actionLabel}>{t('workflows.page.backToRun')}</Text>
         </HappierPressable>
     );
+    // Beside an open pane the header compacts (lab `editor-L1`/`L2`): Edit with an agent keeps its place
+    // as its icon, so the title, its actions and the one primary stay on one line.
+    const headerCompact = !compactLayout && (settingsOpen || flowOpen);
     const pageMenuActions: readonly PageHeaderMenuAction[] = [
-        ...(compactLayout && props.onTestRun !== undefined ? [{ id: 'test-run', title: t('workflows.testRun.title'),
+        // Test run is an occasional check: it lives in `⋯` beside the one primary (lab E1's action set),
+        // and its launcher anchors to that menu.
+        ...(props.onTestRun !== undefined ? [{ id: 'test-run', title: t('workflows.testRun.title'),
             testID: `${testIDPrefix}-test-run`, disabled: props.testRunPending === true || runPending === true,
             onSelect: props.onTestRun }] : []),
         ...(props.menuActions ?? []),
     ];
-    const pageMenu = pageMenuActions.length === 0 ? null : (
+    const pageMenu = pageMenuActions.length === 0 ? null : props.onTestRun === undefined ? (
         <PageHeaderMenu testID={`${testIDPrefix}-menu`} actions={pageMenuActions} />
+    ) : (
+        <View ref={props.testRunAnchorRef} collapsable={false}>
+            <PageHeaderMenu testID={`${testIDPrefix}-menu`} actions={pageMenuActions} />
+        </View>
     );
     const menu = backToRun === null ? pageMenu : <>{backToRun}{pageMenu}</>;
     const runNowButton = props.runNowAction ?? (onRunNow === undefined ? null : (
@@ -1114,16 +1155,6 @@ export function WorkflowEditorBody(props: WorkflowEditorBodyProps): React.ReactE
         />
         </View>
     ));
-    const testRunButton = props.onTestRun === undefined ? null : <View ref={props.testRunAnchorRef} collapsable={false}><RoundButton
-        testID={`${testIDPrefix}-test-run`}
-        size="small"
-        display="secondary"
-        title={t('workflows.testRun.title')}
-        accessibilityLabel={t('workflows.testRun.title')}
-        accessibilityHint={t('workflows.testRun.savedNotice')}
-        disabled={props.testRunPending === true || runPending === true}
-        onPress={props.onTestRun}
-    /></View>;
 
     const identity = (
         <>
@@ -1139,11 +1170,13 @@ export function WorkflowEditorBody(props: WorkflowEditorBodyProps): React.ReactE
             alwaysShowTitle
             meta={documentEditable ? props.headerMeta : undefined}
             {...(compactLayout ? { details: saveStatusNode } : {})}
-            leading={(
+            // A phone's page gives its width to the editable name (lab `editor-P1`: no mark); wide
+            // pages lead with the workflow's mark, its steps' ordinals hanging under it.
+            {...(compactLayout ? {} : { leading: (
                 <PageHeaderMarkSlot>
                     <Icon name="tree-structure" size={22} color={theme.colors.text.secondary} />
                 </PageHeaderMarkSlot>
-            )}
+            ) })}
             {...(!documentEditable ? { description: joinReadOnlyDescription([props.description, ...(props.headerMeta?.map((fact) => fact.text) ?? [])]) } : {})}
             {...(props.showNameField === false || !documentEditable ? {} : {
                 titleEditor: {
@@ -1169,7 +1202,9 @@ export function WorkflowEditorBody(props: WorkflowEditorBodyProps): React.ReactE
             })}
             actions={!hasPageCommands || compactLayout ? menu : (
                     <View style={styles.headerActionRow}>
-                        {props.onEditWithAgent === undefined ? null : (settingsOpen || flowOpen) ? (
+                        {/* Edit with an agent is the labelled secondary (lab editor-E1); beside an open pane it
+                            keeps its place as its icon. */}
+                        {props.onEditWithAgent === undefined ? null : headerCompact ? (
                             <IconButton
                                 testID={`${testIDPrefix}-edit-with-agent`}
                                 accessibilityLabel={t('workflows.authoring.edit')}
@@ -1208,7 +1243,6 @@ export function WorkflowEditorBody(props: WorkflowEditorBodyProps): React.ReactE
                             onPress={() => setSettingsOpen((open) => !open)}
                         />}
                         {duplicateButton}
-                        {testRunButton}
                         {runNowButton}
                     </View>
             )}
@@ -1279,7 +1313,7 @@ export function WorkflowEditorBody(props: WorkflowEditorBodyProps): React.ReactE
                         )}
                         {/* A value row like Where and Triggers (04 §4.10): its value is the chip's own
                             summary, and it opens the settings where the Agent and model field is. */}
-                        {hasAgentSteps ? <Item
+                        {showsWorkflowAgent ? <Item
                             testID={`${testIDPrefix}-agent-row`}
                             title={t('workflows.page.sections.agentTitle')}
                             subtitle={engineSummary}
@@ -1397,7 +1431,7 @@ export function WorkflowEditorBody(props: WorkflowEditorBodyProps): React.ReactE
                     testIDPrefix={testIDPrefix}
                 />
                 </View>
-                {hasAgentSteps ? <View style={styles.engineChip}>
+                {showsWorkflowAgent ? <View style={styles.engineChip}>
                 <SessionAuthoringControls
                     disabled={!documentEditable}
                     fields={HEADER_ENGINE_FIELDS}
@@ -1427,7 +1461,7 @@ export function WorkflowEditorBody(props: WorkflowEditorBodyProps): React.ReactE
                 )}
                 {historyIcons}
             </View>
-            <View testID={`${testIDPrefix}-steps-presentation`} style={styles.document}>
+            <View testID={`${testIDPrefix}-steps-presentation`} style={[styles.document, styles.documentUnderTitle]}>
                 {blockList}
             </View>
             {stepOptionsPopoverNode}

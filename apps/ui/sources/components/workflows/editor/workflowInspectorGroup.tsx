@@ -77,6 +77,9 @@ export function WorkflowInspectorGroup(props: Readonly<{
                         title={props.title}
                         description={expanded ? props.description : props.summary}
                         action={<Icon name={expanded ? 'caret-up' : 'caret-down'} size={14} color={theme.colors.text.secondary} />}
+                        // The disclosure caret is a trailing mark, never a control that drops beneath a
+                        // narrow pane's summary line (live Workflow settings, DESIGN-13).
+                        actionLayout="trailing"
                         surface="none"
                     >{null}</ItemGroup>
                 </HappierPressable>

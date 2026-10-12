@@ -128,8 +128,11 @@ export function formatWorkflowValueReference(draft: WorkflowEditorDraft, referen
     const withPath = (label: string, path: readonly (string | number)[] | undefined) => (
         path === undefined || path.length === 0 ? label : `${label} · ${path.map(part => typeof part === 'number' ? String(part) : formatWorkflowFieldLabel(part)).join(' · ')}`
     );
+    // A step's name already names one step, so a result read from an enclosing list reads as that
+    // step ("Gather changes · Issues", lab E1); only the previous round is another value of it. The
+    // producer select still says each scope (its option subtitles), where the choice is made.
     const producerLabel = (producer: Readonly<{ blockId: string; scope: WorkflowReferenceScope }>) => (
-        producer.scope.kind === 'current' ? blockLabel(producer.blockId) : `${blockLabel(producer.blockId)} · ${scopeLabel(producer.scope)}`
+        producer.scope.kind === 'previous_iteration' ? `${blockLabel(producer.blockId)} · ${scopeLabel(producer.scope)}` : blockLabel(producer.blockId)
     );
     switch (reference.kind) {
         case 'literal':
@@ -201,8 +204,10 @@ export function WorkflowValueReferenceToken(props: Readonly<{ draft: WorkflowEdi
     if (props.reference.kind === 'literal') {
         return <Text testID={props.testID} selectable>{formatWorkflowValueReference(props.draft, props.reference)}</Text>;
     }
-    return <Text testID={props.testID} style={{ color: theme.colors.text.link, backgroundColor: theme.colors.surface.elevated,
-        borderRadius: theme.borderRadius.sm }} selectable>{`↵ ${formatWorkflowValueReference(props.draft, props.reference)}`}</Text>;
+    // A reference reads as the lab's tinted chip (`.uwe-ref`): the accent's own tint behind accent words,
+    // inline in a sentence or on a step's footer line, never a bare link-coloured run of text.
+    return <Text testID={props.testID} style={{ color: theme.colors.state.active.foreground, backgroundColor: theme.colors.state.active.background,
+        borderRadius: theme.borderRadius.sm, paddingHorizontal: theme.margins.xs }} selectable>{`↵ ${formatWorkflowValueReference(props.draft, props.reference)}`}</Text>;
 }
 
 /** Keeps the localized sentence intact while its references use the same token owner. */
@@ -328,10 +333,13 @@ export function WorkflowBindingRow(props: Readonly<{
                 {props.required === true && (binding === undefined || (binding.kind === 'literal' && isBlankWorkflowLiteral(binding.value))) ? (
                     <Text testID={`${props.testID}-required`} style={workflowEditorStyles.actionFieldMarker}>{t('workflows.page.blocks.required')}</Text>
                 ) : null}
-                {props.note === undefined ? null : <Text style={workflowEditorStyles.groupSummary}>{props.note}</Text>}
             </View>
             <View ref={valueRef} style={workflowEditorStyles.actionFieldValue}>
                 {value}
+                {/* How a field binds is help for the one changing it: it shows under the value while the
+                    step is selected, never as a paragraph in the label column of a resting card. */}
+                {props.note === undefined || !editing ? null
+                    : <Text testID={`${props.testID}-note`} style={workflowEditorStyles.kindCardNote}>{props.note}</Text>}
                 {props.issue === undefined || props.issue === null ? null
                     : <Text testID={`${props.testID}-issue`} style={workflowEditorStyles.issueText}>{props.issue}</Text>}
             </View>
@@ -395,11 +403,11 @@ export function formatWorkflowResultSummary(result: WorkflowResultContract | und
 }
 
 /**
- * A field select for one part of a binding (where its value comes from, which input, which
- * step): the canonical `DropdownMenu` drawn as a field box, so a long list of sources never
- * becomes a row of text tabs that runs past the pane (07 §3 control table).
+ * The editor's field select (a binding's source, input, step or field; an input's type): the
+ * canonical `DropdownMenu` drawn as a field box, so a choice set never becomes a row of text tabs
+ * that runs past the pane (07 §3 control table).
  */
-function ReferenceSelect(props: Readonly<{
+export function WorkflowFieldSelect(props: Readonly<{
     testID: string;
     label: string;
     items: readonly DropdownMenuItem[];
@@ -441,18 +449,6 @@ function ReferenceSelect(props: Readonly<{
                     </HappierPressable>
                 )}
             />
-        </View>
-    );
-}
-
-/** One mutually exclusive choice set: a labelled radiogroup row of radio chips. */
-function ChoiceGroup(props: Readonly<{
-    label: string;
-    children: React.ReactNode;
-}>): React.ReactElement {
-    return (
-        <View style={workflowEditorStyles.metaRow} accessibilityRole="radiogroup" accessibilityLabel={props.label}>
-            {props.children}
         </View>
     );
 }
@@ -522,7 +518,7 @@ export function WorkflowValueReferenceEditor(props: Readonly<{
     };
     return (
         <View style={workflowEditorStyles.inlineControl}>
-            {props.literalOnly !== true || reference.kind !== 'literal' ? <ReferenceSelect
+            {props.literalOnly !== true || reference.kind !== 'literal' ? <WorkflowFieldSelect
                 testID={`${rowId}-kind`}
                 label={t('workflows.input.valueKindGroup')}
                 items={kinds.map((kind) => ({ id: kind, testID: `${rowId}-kind-${kind}`, title: referenceKindLabel(kind) }))}
@@ -551,7 +547,7 @@ export function WorkflowValueReferenceEditor(props: Readonly<{
                 />
             ) : null}
             {inputName === undefined ? null : (
-                <ReferenceSelect
+                <WorkflowFieldSelect
                     testID={`${rowId}-input-name`}
                     label={t('workflows.input.inputNameGroup')}
                     items={props.draft.inputs.map((input) => ({ id: input.name, testID: `${rowId}-input-name-${input.name}`, title: formatWorkflowFieldLabel(input.name) }))}
@@ -560,7 +556,7 @@ export function WorkflowValueReferenceEditor(props: Readonly<{
                 />
             )}
             {producerReference === undefined ? null : (
-                <ReferenceSelect
+                <WorkflowFieldSelect
                     testID={`${rowId}-producer`}
                     label={t('workflows.input.producerGroup')}
                     items={producers.map((producer) => ({
@@ -588,68 +584,47 @@ export function WorkflowValueReferenceEditor(props: Readonly<{
                 />
             )}
             {workspaceReference === undefined ? null : (
-                <ChoiceGroup label={t('workflows.input.workspaceFieldGroup')}>
-                    {(['directory', 'checkoutRootPath'] as const).map((field) => (
-                        <HappierPressable
-                            key={field}
-                            testID={`${rowId}-workspace-field-${field}`}
-                            accessibilityRole="radio"
-                            checked={workspaceReference.field === field}
-                            accessibilityLabel={field === 'directory'
-                                ? t('workflows.workspace.title')
-                                : t('workflows.workspace.projectCheckout')}
-                            onPress={() => props.onChange({ ...workspaceReference, field })}
-                            style={(state) => [workflowEditorStyles.actionTarget, state.pressed ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle } : null, focusRingStyle({ focused: state.focused, color: theme.colors.border.focus })]}
-                        >
-                            <Text style={workspaceReference.field === field
-                                ? workflowEditorStyles.metaAction
-                                : workflowEditorStyles.metaText}
-                            >{field === 'directory'
-                                ? t('workflows.workspace.title')
-                                : t('workflows.workspace.projectCheckout')}</Text>
-                        </HappierPressable>
-                    ))}
-                </ChoiceGroup>
+                <WorkflowFieldSelect
+                    testID={`${rowId}-workspace-field`}
+                    label={t('workflows.input.workspaceFieldGroup')}
+                    items={(['directory', 'checkoutRootPath'] as const).map((field) => ({
+                        id: field,
+                        testID: `${rowId}-workspace-field-${field}`,
+                        title: field === 'directory' ? t('workflows.workspace.title') : t('workflows.workspace.projectCheckout'),
+                    }))}
+                    selectedId={workspaceReference.field}
+                    onSelect={(id) => {
+                        if (id === 'directory' || id === 'checkoutRootPath') props.onChange({ ...workspaceReference, field: id });
+                    }}
+                />
             )}
             {itemReference === undefined ? null : (
-                <ChoiceGroup label={t('workflows.input.itemFieldGroup')}>
-                    {ITEM_REFERENCE_FIELDS.map((field) => (
-                        <HappierPressable
-                            key={field}
-                            testID={`${rowId}-item-field-${field}`}
-                            accessibilityRole="radio"
-                            checked={itemReference.field === field}
-                            accessibilityLabel={t(`workflows.input.itemField.${field}`)}
-                            onPress={() => props.onChange({ kind: 'item', field })}
-                            style={(state) => [workflowEditorStyles.actionTarget, state.pressed ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle } : null, focusRingStyle({ focused: state.focused, color: theme.colors.border.focus })]}
-                        >
-                            <Text style={itemReference.field === field
-                                ? workflowEditorStyles.metaAction
-                                : workflowEditorStyles.metaText}
-                            >{t(`workflows.input.itemField.${field}`)}</Text>
-                        </HappierPressable>
-                    ))}
-                </ChoiceGroup>
+                <WorkflowFieldSelect
+                    testID={`${rowId}-item-field`}
+                    label={t('workflows.input.itemFieldGroup')}
+                    items={ITEM_REFERENCE_FIELDS.map((field) => ({
+                        id: field, testID: `${rowId}-item-field-${field}`, title: t(`workflows.input.itemField.${field}`),
+                    }))}
+                    selectedId={itemReference.field}
+                    onSelect={(id) => {
+                        const field = ITEM_REFERENCE_FIELDS.find((candidate) => candidate === id);
+                        if (field !== undefined) props.onChange({ kind: 'item', field });
+                    }}
+                />
             )}
             {iterationReference === undefined ? null : (
-                <ChoiceGroup label={t('workflows.input.iterationFieldGroup')}>
-                    {ITERATION_REFERENCE_FIELDS.map((field) => (
-                        <HappierPressable
-                            key={field}
-                            testID={`${rowId}-iteration-field-${field}`}
-                            accessibilityRole="radio"
-                            checked={iterationReference.field === field}
-                            accessibilityLabel={t(`workflows.input.iterationField.${field}`)}
-                            onPress={() => props.onChange({ kind: 'iteration', field })}
-                            style={(state) => [workflowEditorStyles.actionTarget, state.pressed ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle } : null, focusRingStyle({ focused: state.focused, color: theme.colors.border.focus })]}
-                        >
-                            <Text style={iterationReference.field === field
-                                ? workflowEditorStyles.metaAction
-                                : workflowEditorStyles.metaText}
-                            >{t(`workflows.input.iterationField.${field}`)}</Text>
-                        </HappierPressable>
-                    ))}
-                </ChoiceGroup>
+                <WorkflowFieldSelect
+                    testID={`${rowId}-iteration-field`}
+                    label={t('workflows.input.iterationFieldGroup')}
+                    items={ITERATION_REFERENCE_FIELDS.map((field) => ({
+                        id: field, testID: `${rowId}-iteration-field-${field}`, title: t(`workflows.input.iterationField.${field}`),
+                    }))}
+                    selectedId={iterationReference.field}
+                    onSelect={(id) => {
+                        const field = ITERATION_REFERENCE_FIELDS.find((candidate) => candidate === id);
+                        if (field !== undefined) props.onChange({ kind: 'iteration', field });
+                    }}
+                />
             )}
             {props.onRemove === undefined ? null : (
                 <HappierPressable
@@ -668,13 +643,23 @@ export function WorkflowStepDataEditor(props: Readonly<{
     draft: WorkflowEditorDraft;
     step: WorkflowStep;
     editable?: boolean;
+    /**
+     * Whether the input bindings' editors show: while the step is selected, as a typed card's
+     * values do (`WorkflowBindingRow`). At rest an editable step reads its inputs as the document
+     * reads them, tokens on the footer line, and pressing them selects the step.
+     */
+    editing?: boolean;
+    /** Selects the step so its inputs can be edited (pressing them at rest). */
+    onEdit?: () => void;
     onChangeInput: (input: readonly WorkflowValueReference[]) => void;
     /** A reader's fact that ends the footer line (05's "Open conversation"). */
     footerAccessory?: React.ReactNode;
     testIDPrefix: string;
 }>): React.ReactElement | null {
+    const { theme } = useUnistyles();
     const id = `${props.testIDPrefix}-step-${props.step.id}`;
     const editable = props.editable !== false;
+    const editing = editable && props.editing !== false;
     const textResult = props.step.result === undefined || props.step.result.kind === 'text';
     const namedFields = listWorkflowDeclaredResultFields(props.step.result);
     // The footer says facts only, the same selected or at rest (DESIGN-7 N27): named results
@@ -683,13 +668,16 @@ export function WorkflowStepDataEditor(props: Readonly<{
     // Field names read as words in a sentence ("missing evidence, next step"), never as wire keys.
     const returns = namedFields !== undefined ? t('workflows.page.blocks.returnsFields', { fields: namedFields.map(formatWorkflowResultFieldWord).join(', ') })
         : textResult ? null : formatWorkflowResultSummary(props.step.result);
-    const inputTokens = editable ? [] : props.step.input;
+    const inputTokens = editing ? [] : props.step.input;
     const showsLine = returns !== null || inputTokens.length > 0 || props.footerAccessory != null;
     // Nothing to say renders nothing: an empty line would still take the step's row gap.
-    if (!showsLine && (!editable || props.step.input.length === 0)) return null;
+    if (!showsLine && (!editing || props.step.input.length === 0)) return null;
+    const tokens = inputTokens.map((reference, index) => (
+        <WorkflowValueReferenceToken key={index} draft={props.draft} reference={reference} testID={`${id}-input-${index}`} />
+    ));
     return (
         <View>
-            {!editable ? null : props.step.input.map((reference, index) => (
+            {!editing ? null : props.step.input.map((reference, index) => (
                 <WorkflowValueReferenceEditor
                     key={index}
                     reference={reference}
@@ -709,9 +697,19 @@ export function WorkflowStepDataEditor(props: Readonly<{
             {/* One footer line (07 S7): what the step returns. A reading document has no binding
                 controls, so the step's inputs sit on that line as tokens. */}
             {!showsLine ? null : <View testID={`${id}-footer`} style={workflowEditorStyles.metaRow}>
-                {inputTokens.map((reference, index) => (
-                    <WorkflowValueReferenceToken key={index} draft={props.draft} reference={reference} testID={`${id}-input-${index}`} />
-                ))}
+                {editable && tokens.length > 0 && props.onEdit !== undefined ? (
+                    <HappierPressable
+                        testID={`${id}-inputs-edit`}
+                        accessibilityRole="button"
+                        accessibilityLabel={t('workflows.page.blocks.editInputs')}
+                        onPress={props.onEdit}
+                        style={(state) => [workflowEditorStyles.metaRow, workflowEditorStyles.inputTokensTarget,
+                            state.pressed ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle } : null,
+                            focusRingStyle({ focused: state.focused, color: theme.colors.border.focus })]}
+                    >
+                        {tokens}
+                    </HappierPressable>
+                ) : tokens}
                 {returns === null ? null : <Text testID={`${id}-returns`} style={workflowEditorStyles.groupSummary}>{returns}</Text>}
                 {props.footerAccessory ?? null}
             </View>}

@@ -44,18 +44,18 @@ import { WorkflowStepEditor } from './WorkflowStepEditor';
 import { resolveWorkflowUnnamedHeading, workflowBlockReferenceLabel } from '@/sync/domains/workflows/workflowBlockLabel';
 import { listWorkflowBlockOrdinalsV1 } from '@happier-dev/protocol/workflows/workflowStepLabel';
 import type { WorkflowSessionDrop } from './WorkflowStepSessionDropZone';
-import { formatWorkflowConditionLead, formatWorkflowConditionSentence, WorkflowConditionArmLines } from './WorkflowConditionEditor';
+import { formatWorkflowConditionSentence, resolveWorkflowConditionHeadline } from './WorkflowConditionEditor';
 import { WorkflowContainerBody, WorkflowContainerLane, WorkflowContainerOptionsControl } from './WorkflowContainerBody';
 import { WorkflowReferenceSentence } from './WorkflowStepDataEditor';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { WORKFLOW_BLOCK_KIND_GLYPH } from '@/components/workflows/presentation/workflowBlockKindGlyph';
-import { collectWorkflowConditionValueReferences } from '@happier-dev/protocol/workflows/workflowReferenceV1';
+
 import { WorkflowBlockHeading, type WorkflowBlockNameEditor } from './WorkflowBlockHeading';
 import { duplicateWorkflowBlock } from '@happier-dev/protocol/workflows/workflowDefinitionEditV1';
 import { WORKFLOW_EDITOR_TOUCH_POINTER, workflowEditorStyles } from './workflowEditorStyles';
 import type { WorkflowDocumentPresentation } from './workflowDocumentPresentation';
 import { WorkflowAgentChangeTint } from './WorkflowAgentChangeTint';
-import { WorkflowRunWhenConnector } from './WorkflowRunWhenConnector';
+import { WorkflowRunWhenCaption } from './WorkflowRunWhenConnector';
 
 export type { WorkflowDocumentPresentation, WorkflowDocumentStepSlots } from './workflowDocumentPresentation';
 
@@ -291,23 +291,16 @@ export function WorkflowBlockListEditor(props: WorkflowBlockListEditorProps): Re
                     : (focus: (() => void) | null) => registerPromptRef(block.id, focus);
 
                 const previous = index > 0 ? blocks[index - 1] : undefined;
+                const ifHeadline = block.kind === 'if' ? resolveWorkflowConditionHeadline(draft, block.when) : null;
                 return (
                     <React.Fragment key={block.id}>
-                    {/* The gap before a block is the list's rhythm, one row: the edge's run-when caption on
-                        the name column and, editing, the inserter bound to this exact position (lab: one
-                        Add, no per-list Add). Neither adds a band of its own (DESIGN-7 M2). */}
-                    {previous !== undefined || block.runWhen !== undefined ? (
+                    {/* The gap before a block is the list's rhythm, one row on the name column: a
+                        non-default run-when caption ("If it fails"), and, editing, the inserter bound to
+                        this exact position (lab: one Add, no per-list Add). Neither adds a band of its
+                        own (DESIGN-7 M2); the default edge says nothing (lab E1). */}
+                    {previous !== undefined || (block.runWhen !== undefined && block.runWhen !== 'success') ? (
                         <View testID={`${testIDPrefix}-gap-${block.id}`} style={workflowEditorStyles.blockGap}>
-                            <View style={workflowEditorStyles.blockGapCaption}>
-                                <WorkflowRunWhenConnector
-                                    value={block.runWhen ?? 'success'} editable={editable}
-                                    testID={`${testIDPrefix}-${block.id}-run-when`}
-                                    onChange={runWhen => onChange(updateWorkflowBlock(draft, block.id, current => {
-                                        if (runWhen !== 'success') return { ...current, runWhen };
-                                        const { runWhen: _dropped, ...rest } = current;
-                                        return rest;
-                                    }))} />
-                            </View>
+                            <WorkflowRunWhenCaption value={block.runWhen} testID={`${testIDPrefix}-${block.id}-run-when`} />
                             {editable && previous !== undefined ? (
                                 <View style={workflowEditorStyles.blockGapInserter}>
                                     <WorkflowAddBlockMenu
@@ -333,6 +326,10 @@ export function WorkflowBlockListEditor(props: WorkflowBlockListEditorProps): Re
                             ? { 'aria-posinset': ordinal, 'aria-setsize': blocks.length }
                             : {})}
                     >
+                        {/* The selected leaf's plate sits behind it; a container's selection stays on its mark. */}
+                        {selected && editable && (block.kind === 'step' || block.kind === 'action' || block.kind === 'workflow' || block.kind === 'wait') ? (
+                            <View pointerEvents="none" testID={`${testIDPrefix}-${block.id}-selected`} style={workflowEditorStyles.selectedPlate} />
+                        ) : null}
                         {/* The block and its condition line, one column: a sibling here must
                             never take width from the block's card. A container draws the rail. */}
                         <View style={workflowEditorStyles.blockColumn}>
@@ -592,7 +589,7 @@ export function WorkflowBlockListEditor(props: WorkflowBlockListEditorProps): Re
                             />
                         ) : null}
 
-                        {block.kind === 'if' ? (
+                        {block.kind === 'if' && ifHeadline !== null ? (
                             <View testID={`${testIDPrefix}-if-${block.id}`} style={workflowEditorStyles.blockBody}>
                                 <WorkflowBlockHeading
                                     nameEditor={nameEditorFor(block)}
@@ -605,8 +602,8 @@ export function WorkflowBlockListEditor(props: WorkflowBlockListEditorProps): Re
                                     meta={<Text testID={`${testIDPrefix}-if-${block.id}-sentence`}
                                         accessibilityLabel={t('workflows.page.inspector.ifSentence', { condition: formatWorkflowConditionSentence(draft, block.when) })}>
                                         <WorkflowReferenceSentence draft={draft}
-                                            sentence={t('workflows.page.inspector.ifSentence', { condition: formatWorkflowConditionLead(draft, block.when) })}
-                                            references={collectWorkflowConditionValueReferences(block.when)} />
+                                            sentence={t('workflows.page.inspector.ifSentence', { condition: ifHeadline.sentence })}
+                                            references={ifHeadline.references} />
                                     </Text>}
                                     trailing={<WorkflowContainerOptionsControl
                                         optionsLabel={t('workflows.page.inspector.options')}
@@ -630,7 +627,6 @@ export function WorkflowBlockListEditor(props: WorkflowBlockListEditorProps): Re
                                     testID={`${testIDPrefix}-if-${block.id}-label`}
                                     actionsTestID={`${testIDPrefix}-if-${block.id}-actions`}
                                 />
-                                <WorkflowConditionArmLines draft={draft} condition={block.when} testID={`${testIDPrefix}-if-${block.id}-summary-arms`} />
                                 <WorkflowContainerBody conditional>
                                     <WorkflowContainerLane conditional label={t('workflows.editor.ifTrue')}
                                         labelTestID={`${testIDPrefix}-if-${block.id}-then-label`}>

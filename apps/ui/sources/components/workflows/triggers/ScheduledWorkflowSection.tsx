@@ -1,16 +1,18 @@
 import * as React from 'react';
 import { Platform, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
-import { HAPPIER_WORK_PANE_METRICS, HappierPressable, HappierWorkSummary } from '@happier-dev/plugin-ui/presentation';
-import { WorkRowShell, WORK_ROW_TEXT_INSET } from '@/components/sessions/work/WorkItemRow';
-import { WorkSection } from '@/components/sessions/work/WorkSection';
-import { ExecutionRunAgentMark } from '@/components/sessions/runs/ExecutionRunAgentMark';
-import { useWorkTheme, WORK_HOST } from '@/components/work/map/WorkMapView';
+import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
+import { SessionListGroup } from '@/components/sessions/shell/SessionListGroup';
+import {
+    resolveSessionListItemDensity, resolveSessionListRowTitleTextMetrics, SESSION_LIST_ROW_IDENTITY_METRICS,
+    type SessionListRowDensity,
+} from '@/components/sessions/shell/resolveSessionListDensityViewState';
+import { WORKER_KIND_GLYPHS } from '@/components/sessions/work/workerKindGlyphs';
 import { Avatar } from '@/components/ui/avatar/Avatar';
 import { Item } from '@/components/ui/lists/Item';
 import { Icon } from '@/components/ui/icons/Icon';
 import { SessionListRowSubtitle } from '@/components/sessions/shell/row/SessionListRowPresentation';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
+import { resolveTouchTargetFloorPx } from '@/components/ui/interactiveTargetSize';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { useActiveServerAccountScope, useSessionDisplayNameSource } from '@/sync/domains/state/storage';
@@ -20,7 +22,7 @@ import { workflowBlockReferenceLabel } from '@/sync/domains/workflows/workflowBl
 import { walkWorkflowBlocks } from '@happier-dev/protocol/workflows/workflowDefinitionEditV1';
 import { t } from '@/text';
 import { useSessionListRuntimeDeadlineNowMs } from '@/hooks/session/sessionListRuntimeClock';
-import { formatNextScheduledRun, formatNextScheduledRunAccessibilityLabel, formatTriggerSummary, readNextScheduledRunRefreshAtMs } from './formatTriggerSummary';
+import { formatNextScheduledRun, formatNextScheduledRunAccessibilityLabel, formatNextScheduledRunTime, formatTriggerSummary, readNextScheduledRunRefreshAtMs } from './formatTriggerSummary';
 import { resolveTriggerEventGroup } from './triggerEventGroups';
 import { describeTriggerTarget } from './sessionTriggerGroups';
 import { useTriggerThenOptions } from './useTriggerThenOptions';
@@ -54,9 +56,14 @@ export function useScheduledWorkflowRows(sessionId?: string) {
 
 export type ScheduledWorkflowRowsRead = ReturnType<typeof useScheduledWorkflowRows>;
 
-/** The scheduled rows of one read, then its loading or failure line. Mounted only where rows may show. */
+/**
+ * The scheduled rows of one read, then its failure line. A read in flight draws nothing extra: its
+ * host either keeps the last-known rows or is not drawn yet. Mounted only where rows may show.
+ */
 export const ScheduledWorkflowRows = React.memo(function ScheduledWorkflowRows(props: Readonly<{
     read: ScheduledWorkflowRowsRead; sessionId?: string;
+    /** In the session list: the density of the session rows around the group. */
+    density?: SessionListRowDensity;
 }>) {
     const { read } = props;
     const titles = useTriggerThenOptions({ libraryEnabled: read.available });
@@ -74,42 +81,61 @@ export const ScheduledWorkflowRows = React.memo(function ScheduledWorkflowRows(p
     }, [router, serverId]);
     return <>
         <ScheduledWorkflowSectionView rows={read.rows} onOpen={open} resolveWorkflowTitle={titles.resolveWorkflowTitle}
-            sessionId={props.sessionId} />
-        {read.status !== 'ready' ? <SurfaceFreshnessLine testID="scheduled-workflow-read" tone={read.status === 'failed' ? 'warning' : 'neutral'}
-            reason={t(read.status === 'failed'
-                ? props.sessionId === undefined ? 'workflows.triggers.section.accountLoadFailed' : 'workflows.triggers.section.loadFailed'
-                : 'common.loading')}
-            {...(read.status === 'failed' ? { action: { label: t('workflows.retry'), onPress: read.retry } } : {})} /> : null}
+            sessionId={props.sessionId} density={props.density} />
+        {props.sessionId !== undefined ? <ScheduledWorkflowReadFailure read={read} sessionId={props.sessionId} /> : null}
     </>;
 });
 
-/** The Account's upcoming scheduled work, as its own Work section. */
-export const ScheduledWorkflowSection = React.memo(function ScheduledWorkflowSection() {
-    const read = useScheduledWorkflowRows();
-    if (!read.available || (read.rows.length === 0 && read.status === 'ready')) return null;
-    return <WorkSection testID="workflows-column:group:scheduled"
-        title={t('sessionWork.scheduled.title')} count={read.rows.length}><ScheduledWorkflowRows read={read} /></WorkSection>;
+const ScheduledWorkflowReadFailure = React.memo(function ScheduledWorkflowReadFailure(props: Readonly<{
+    read: ScheduledWorkflowRowsRead; sessionId?: string;
+}>) {
+    if (props.read.status !== 'failed') return null;
+    return <SurfaceFreshnessLine testID="scheduled-workflow-read" tone="warning"
+        reason={t(props.sessionId === undefined ? 'workflows.triggers.section.accountLoadFailed' : 'workflows.triggers.section.loadFailed')}
+        action={{ label: t('workflows.retry'), onPress: props.read.retry }} />;
+});
+
+/** The Account's upcoming scheduled work, as a group of the session list. */
+export const ScheduledWorkflowSection = React.memo(function ScheduledWorkflowSection(props: Readonly<{
+    density?: SessionListRowDensity;
+}>) {
+    return <ScheduledWorkflowGroup read={useScheduledWorkflowRows()} density={props.density} />;
+});
+
+/**
+ * Drawn only once it has rows or a failure to say: the group may not exist, so a read in flight holds
+ * no placeholder that would later collapse and move every session row under it.
+ */
+export const ScheduledWorkflowGroup = React.memo(function ScheduledWorkflowGroup(props: Readonly<{
+    read: ScheduledWorkflowRowsRead; density?: SessionListRowDensity;
+}>) {
+    const { read } = props;
+    if (!read.available || (read.rows.length === 0 && read.status !== 'failed')) return null;
+    return <SessionListGroup testID="workflows-column:group:scheduled" countTestID="workflows-column:group:scheduled-count"
+        title={t('sessionWork.scheduled.title')} count={read.rows.length}
+        footer={<ScheduledWorkflowReadFailure read={read} />}>
+        {read.rows.length > 0 ? <ScheduledWorkflowRows read={read} density={props.density ?? 'default'} /> : null}
+    </SessionListGroup>;
 });
 
 export const ScheduledWorkflowSectionView = React.memo(function ScheduledWorkflowSectionView(props: Readonly<{
     rows: readonly ScheduledWorkflowRow[]; onOpen: (row: ScheduledWorkflowRow) => void;
-    resolveWorkflowTitle?: (ref: string) => string | null; sessionId?: string;
+    resolveWorkflowTitle?: (ref: string) => string | null; sessionId?: string; density?: SessionListRowDensity;
 }>) {
     return <>{props.rows.map(row => <ScheduledRow key={row.key} row={row} onOpen={props.onOpen}
-        resolveWorkflowTitle={props.resolveWorkflowTitle} sessionId={props.sessionId} />)}</>;
+        resolveWorkflowTitle={props.resolveWorkflowTitle} sessionId={props.sessionId} density={props.density} />)}</>;
 });
 
 const ScheduledRow = React.memo(function ScheduledRow(props: Readonly<{
     row: ScheduledWorkflowRow; onOpen: (row: ScheduledWorkflowRow) => void;
-    resolveWorkflowTitle?: (ref: string) => string | null; sessionId?: string;
+    resolveWorkflowTitle?: (ref: string) => string | null; sessionId?: string; density?: SessionListRowDensity;
 }>) {
     const { row } = props;
-    const theme = useWorkTheme();
     const readNextRefresh = React.useCallback((nowMs: number) => readNextScheduledRunRefreshAtMs(row.trigger.nextRunAt, nowMs),
         [row.trigger.nextRunAt]);
     const nowMs = useSessionListRuntimeDeadlineNowMs(readNextRefresh, row.trigger.nextRunAt !== null);
     const title = describeTriggerTarget(row.set.target, props.resolveWorkflowTitle ?? (() => null));
-    const statusLabel = formatNextScheduledRun(row.trigger.nextRunAt, row.set.enabled && row.trigger.enabled, nowMs);
+    const enabled = row.set.enabled && row.trigger.enabled;
     const authoredLeaves = row.set.target?.kind === 'inline'
         ? new Map(walkWorkflowBlocks(row.set.target.definition.blocks).map(block => [block.id, block])) : null;
     const steps = row.set.destinations?.leaves.flatMap(leaf => {
@@ -119,23 +145,35 @@ const ScheduledRow = React.memo(function ScheduledRow(props: Readonly<{
             : t('message.provenanceWorkflow'));
         return stepTitle === title.trim() ? [] : [t('sessionWork.scheduled.step', { ordinal: leaf.ordinal, title: stepTitle })];
     }) ?? [];
-    const facts = [statusLabel, ...steps, formatTriggerSummary(row.trigger)];
-    const label = [title, ...facts, formatNextScheduledRunAccessibilityLabel(row.trigger.nextRunAt)].join('. ');
-    if (props.sessionId !== undefined) return <Item testID={`scheduled-workflow:${row.key}`}
-        title={title} subtitle={facts.join(' · ')}
-        icon={<Icon name={resolveTriggerEventGroup(row.trigger).glyph} />}
+    const label = [title, formatNextScheduledRun(row.trigger.nextRunAt, enabled, nowMs), ...steps, formatTriggerSummary(row.trigger),
+        formatNextScheduledRunAccessibilityLabel(row.trigger.nextRunAt)].join('. ');
+    // One occurrence row for both hosts. The next run is the trailing meta, in the column where Runs
+    // show their state word; the quiet line says which step writes where and on what schedule.
+    // In a Session's "Writes here" the row sits beside the Runs that already write there, so it leads
+    // with the workflow mark (lab lane12-final `b-habit T`); in the session list every row is
+    // scheduled, so the event glyph tells a schedule from an event, and the destinations follow.
+    const destinations = props.sessionId === undefined ? row.set.destinations?.targetSessionIds ?? [] : [];
+    const listDensity = props.sessionId === undefined ? props.density : undefined;
+    // In the session list the row takes the density, mark slot and title size of the session rows around
+    // it, and its trailing time never outweighs the title it qualifies.
+    const listRow = listDensity ? (() => {
+        const metrics = resolveSessionListRowTitleTextMetrics({ density: listDensity, readableNativePhoneMinimal: false });
+        return { density: resolveSessionListItemDensity(listDensity), iconBoxSize: SESSION_LIST_ROW_IDENTITY_METRICS[listDensity].slotSize,
+            titleStyle: metrics, detailStyle: metrics };
+    })() : {};
+    const quiet = [...steps, formatTriggerSummary(row.trigger)].join(' · ');
+    return <Item testID={`scheduled-workflow:${row.key}`}
+        title={title}
+        // The destinations are the quiet line's second line, on the text edge.
+        subtitle={destinations.length > 0 ? <>{quiet}<View style={styles.destinations}>
+            {destinations.map(sessionId => <DestinationChip key={sessionId} sessionId={sessionId} rowKey={row.key} />)}
+        </View></> : quiet}
+        subtitleTestID={`scheduled-workflow:${row.key}-subtitle`}
+        detail={formatNextScheduledRunTime(row.trigger.nextRunAt, enabled, nowMs)}
+        detailTestID={`scheduled-workflow:${row.key}-next`}
+        icon={<Icon name={props.sessionId !== undefined ? WORKER_KIND_GLYPHS.workflow_run : resolveTriggerEventGroup(row.trigger).glyph} />}
+        {...listRow}
         accessibilityLabel={label} showChevron={false} onPress={() => props.onOpen(row)} />;
-    const summary = <HappierWorkSummary testID={`scheduled-workflow:${row.key}-summary`} title={title}
-        phase="finished" facts={facts} accessibilityLabel={label} theme={theme} host={WORK_HOST}
-        mark={<ExecutionRunAgentMark agentId={null} iconName={resolveTriggerEventGroup(row.trigger).glyph} size={30} />} />;
-    return <View>
-        <WorkRowShell testID={`scheduled-workflow:${row.key}`} accessibilityLabel={label} onPress={() => props.onOpen(row)}>
-            {summary}
-        </WorkRowShell>
-        {props.sessionId === undefined && row.set.destinations?.targetSessionIds.length ? <View style={styles.destinations}>
-            {row.set.destinations.targetSessionIds.map(sessionId => <DestinationChip key={sessionId} sessionId={sessionId} rowKey={row.key} />)}
-        </View> : null}
-    </View>;
 });
 
 const DestinationChip = React.memo(function DestinationChip(props: Readonly<{ sessionId: string; rowKey: string }>) {
@@ -153,9 +191,9 @@ const DestinationChip = React.memo(function DestinationChip(props: Readonly<{ se
 });
 
 const styles = StyleSheet.create(theme => ({
-    destination: { minHeight: resolveMinimumInteractiveTargetSize(Platform.OS), flexDirection: 'row', alignItems: 'center',
+    // A precise pointer keeps the quiet line's own height; a finger gets the platform touch floor.
+    destination: { minHeight: resolveTouchTargetFloorPx(Platform.OS) ?? undefined, flexDirection: 'row', alignItems: 'center',
         gap: theme.margins.xs, maxWidth: '100%' },
     destinationLabel: { flexShrink: 1, minWidth: 0 },
-    destinations: { flexDirection: 'row', flexWrap: 'wrap', gap: theme.margins.xs,
-        marginLeft: WORK_ROW_TEXT_INSET, marginRight: HAPPIER_WORK_PANE_METRICS.rowInsetPx, paddingBottom: theme.margins.xs },
+    destinations: { flexDirection: 'row', flexWrap: 'wrap', columnGap: theme.margins.md, marginTop: theme.margins.xs },
 }));

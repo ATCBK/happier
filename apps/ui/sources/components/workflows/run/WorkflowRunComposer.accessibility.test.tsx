@@ -1,5 +1,6 @@
 import * as React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { standardCleanup } from '@/dev/testkit';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { WorkflowRunComposer, type WorkflowRunComposerProps } from './WorkflowRunComposer';
 
@@ -22,6 +23,26 @@ function mount(values: WorkflowRunComposerProps['values'] = {}) {
 }
 
 describe('workflow composer accessibility', () => {
+    afterEach(standardCleanup);
+    it.each([false, true])('focuses a defaulted caller input once when ready (initially blocked: %s)', async (initiallyBlocked) => {
+        const focus = vi.fn();
+        const props: WorkflowRunComposerProps = {
+            inputs: [{ name: 'qa_note', valueType: 'string', required: false, default: 'Ready note' }],
+            values: {}, onChangeValues: () => {}, onRun: () => {}, onCancel: () => {},
+        };
+        // Physical input focus is the platform boundary; AgentInput and the focus registry stay real.
+        const screen = await renderScreen(<WorkflowRunComposer {...props} autoFocusComposer startDisabled={initiallyBlocked} />, {
+            createNodeMock: element => element.type === 'TextInput' || element.type === 'textarea'
+                ? { focus, blur: vi.fn(), setNativeProps: vi.fn() } : null,
+        });
+        expect(screen.findByTestId('new-session-composer-input')?.props.value).toBe('Ready note');
+        expect(focus).toHaveBeenCalledTimes(initiallyBlocked ? 0 : 1);
+        await screen.update(<WorkflowRunComposer {...props} autoFocusComposer />);
+        expect(focus).toHaveBeenCalledTimes(1);
+        await screen.update(<WorkflowRunComposer {...props} autoFocusComposer pending />);
+        await screen.update(<WorkflowRunComposer {...props} autoFocusComposer values={{ qa_note: 'Edited' }} />);
+        expect(focus).toHaveBeenCalledTimes(1);
+    });
     it('keeps admission status inside a permanent footer, separate from the editable chip row', async () => {
         const props: WorkflowRunComposerProps = { inputs: [], values: {}, onChangeValues: () => {}, onRun: () => {}, onCancel: () => {} };
         const screen = await renderScreen(<WorkflowRunComposer {...props} />);

@@ -167,6 +167,16 @@ export function WorkflowTriggerSection(props: WorkflowTriggerSectionProps): Reac
                     testID={`${props.testIDPrefix}-trigger:${item.key}`}
                     row={item}
                     onOpen={(anchor) => setOpen({ row: item, anchor })}
+                    onToggle={(enabled) => {
+                        if (item.kind === 'saved') {
+                            change(editWorkflowTriggerDraft(props.draft, { kind: 'update', triggerId: item.triggerId, enabled }));
+                            return;
+                        }
+                        const add = props.draft.adds.find(candidate => candidate.clientId === item.clientId);
+                        if (add) change(editWorkflowTriggerDraft(props.draft, {
+                            kind: 'add', clientId: item.clientId, trigger: { ...add.trigger, enabled },
+                        }));
+                    }}
                 />
             ))}
             <View ref={addAnchorRef} collapsable={false}>
@@ -268,23 +278,22 @@ const WorkflowTriggerRowView = React.memo(function WorkflowTriggerRowView(props:
     testID: string;
     row: WorkflowTriggerRowModel;
     onOpen: (anchor: React.RefObject<View | null>) => void;
+    onToggle: (enabled: boolean) => void;
 }>) {
     const anchorRef = React.useRef<View>(null);
     const { row } = props;
-    const subtitle = row.kind === 'new'
-        ? t('workflows.triggers.editor.newRow')
-        : row.enabled ? undefined : t('workflows.triggers.row.off');
     // The Event editor opens the exact private source only after the user chooses to edit.
     const editable = row.schedule !== null || row.trigger.kind === 'pluginEvent';
     return (
         <View ref={anchorRef} collapsable={false}>
-            <Item
+            <TriggerRow
                 testID={props.testID}
                 title={formatTriggerSummary(row.trigger)}
-                {...(subtitle === undefined ? {} : { subtitle })}
-                icon={<Icon name={row.trigger.kind === 'schedule' ? 'clock' : 'lightning'} />}
-                showChevron={editable}
-                {...(editable ? { onPress: () => props.onOpen(anchorRef) } : { mode: 'info' as const })}
+                qualifier={row.kind === 'new' ? t('workflows.triggers.editor.newRow') : undefined}
+                glyph={row.trigger.kind === 'schedule' ? 'clock' : 'lightning'}
+                enabled={row.enabled}
+                onToggle={props.onToggle}
+                {...(editable ? { onPress: () => props.onOpen(anchorRef) } : {})}
             />
         </View>
     );

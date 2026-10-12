@@ -17,6 +17,8 @@ import {
 import { type WorkflowEditorDraft } from '@/sync/domains/workflows/workflowEditorDraft';
 import { findWorkflowBlock, walkWorkflowBlocks } from '@happier-dev/protocol/workflows/workflowDefinitionEditV1';
 import { workflowBlockReferenceLabel } from '@/sync/domains/workflows/workflowBlockLabel';
+import { useSessionDisplayNameSource } from '@/sync/store/hooks';
+import { getSessionName } from '@/utils/sessions/sessionUtils';
 import { t } from '@/text';
 
 import { workflowEditorStyles } from './workflowEditorStyles';
@@ -50,11 +52,23 @@ function blockLabelOf(draft: WorkflowEditorDraft, blockId: string): string {
     return block === null ? blockId : workflowBlockReferenceLabel(block);
 }
 
+/**
+ * A continued Session's name through the Session label owner (`getSessionName` over the one
+ * display-name selection), or `null` while this device cannot read that Session.
+ */
+export function useWorkflowContinuedSessionLabel(conversation: WorkflowConversationSelection | undefined): string | null {
+    const sessionId = conversation?.kind === 'existing_session' ? conversation.sessionId : '';
+    const source = useSessionDisplayNameSource(sessionId);
+    return sessionId.length === 0 || source === null ? null : getSessionName(source);
+}
+
 /** One conversation choice in words: the same label in the field, its summary and the settings group line. */
 export function formatWorkflowConversationLabel(params: Readonly<{
     draft: WorkflowEditorDraft;
     conversation: WorkflowConversationSelection | undefined;
     existingSessions?: readonly WorkflowExistingSessionOption[];
+    /** The continued Session's name (`useWorkflowContinuedSessionLabel`). */
+    sessionLabel?: string | null;
 }>): string {
     const conversation = params.conversation ?? { kind: 'shared_run' as const };
     switch (conversation.kind) {
@@ -67,6 +81,7 @@ export function formatWorkflowConversationLabel(params: Readonly<{
                 // A recorded Session this host cannot list (imported, or no longer
                 // offered here) stays visible by its exact identity, never hidden.
                 session: params.existingSessions?.find((option) => option.sessionId === conversation.sessionId)?.label
+                    ?? params.sessionLabel
                     ?? t('workflows.conversation.existingSessionById', { sessionId: conversation.sessionId }),
             });
     }
@@ -203,6 +218,7 @@ export function WorkflowContinuityControls(props: Readonly<{
     const [choosingSession, setChoosingSession] = React.useState(false);
     const [bindingRefusal, setBindingRefusal] = React.useState<string | null>(null);
     const recordedSession = props.conversation?.kind === 'existing_session' ? props.conversation : null;
+    const recordedSessionLabel = useWorkflowContinuedSessionLabel(props.conversation);
     const existingSessionStep = React.useMemo<SelectionListStep>(() => ({
         id: `${testIDPrefix}-conversation-existing-session`,
         inputPlaceholder: t('sessionsList.searchSessionsPlaceholder'),
@@ -259,7 +275,7 @@ export function WorkflowContinuityControls(props: Readonly<{
         id: EXISTING_SESSION_OPTION_ID,
         title: recordedSession === null
             ? t('workflows.page.inspector.aSession')
-            : formatWorkflowConversationLabel({ draft, conversation: recordedSession, existingSessions }),
+            : formatWorkflowConversationLabel({ draft, conversation: recordedSession, existingSessions, sessionLabel: recordedSessionLabel }),
         testID: `${testIDPrefix}-conversation-option-existing`,
         disabled: !existingSessionOffered,
         // The reason reaches the option itself, not only nearby text.

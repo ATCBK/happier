@@ -14,6 +14,7 @@ import { WorkflowRunComposer } from '../run/WorkflowRunComposer';
 import { ModalProvider, type IModal } from '@/modal';
 import type { WorkflowDefinitionGetResultV1 } from '@happier-dev/protocol';
 import type { WorkflowRunNowRequest } from '../run/useWorkflowRunNowController';
+import { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 
 // Entry-intent tests do not stream Markdown; keep the real editor below this vendor boundary.
 vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({
@@ -33,6 +34,8 @@ const modalShowSpy = vi.hoisted(() => vi.fn<IModal['show']>(() => 'workflow-run-
 const modalHideSpy = vi.hoisted(() => vi.fn<IModal['hide']>());
 const modalUpdateSpy = vi.hoisted(() => vi.fn<IModal['update']>());
 let restoreWebGlobals: (() => void) | undefined;
+let previousAppliedSnapshot = getAppliedActiveServerSnapshot();
+let previousRuntimeAvailable = isAppliedActiveServerRuntimeAvailable();
 
 const definitionActions = vi.hoisted(() => ({ get: vi.fn() }));
 const routerMock = vi.hoisted(() => ({ value: null as { spies: { push: ReturnType<typeof vi.fn> } } | null }));
@@ -67,22 +70,6 @@ vi.mock('@/modal', async () => {
         Modal: { ...mock.module.Modal, show: modalShowSpy, hide: modalHideSpy, update: modalUpdateSpy },
     };
 });
-vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/sync/domains/state/storage')>();
-    return {
-        // Preserve the existing Account fixture while exercising real store reads.
-        ...actual,
-        useActiveServerAccountScope: () => ({ serverId: 'server-a', accountId: 'account-a' }),
-    };
-});
-vi.mock('@/sync/domains/scope/activeServerAccountScope', async (importOriginal) => ({
-    ...(await importOriginal<typeof import('@/sync/domains/scope/activeServerAccountScope')>()),
-    captureActiveServerAccountScopeLifetime: () => ({
-        scope: { serverId: 'server-a', accountId: 'account-a' },
-        isCurrent: () => true,
-        onRetire: () => ({ dispose() {} }),
-    }),
-}));
 vi.mock('@/sync/domains/workflows/workflowDefinitionActions', async (importOriginal) => ({
     ...await importOriginal<typeof import('@/sync/domains/workflows/workflowDefinitionActions')>(),
     createWorkflowDefinition: vi.fn(),
@@ -155,8 +142,16 @@ function EditorPaneWrapper({ children }: React.PropsWithChildren) {
 }
 
 beforeEach(() => {
+    previousAppliedSnapshot = getAppliedActiveServerSnapshot();
+    previousRuntimeAvailable = isAppliedActiveServerRuntimeAvailable();
+    publishAppliedActiveServerSnapshot({ serverId: 'server-a', serverUrl: 'https://server-a.example', generation: 0 });
     restoreWebGlobals = withPopoverWebGlobals();
-    storage.setState({ settings: settingsDefaults,
+    // Account lifetime is internal owner state, not a mockable boundary. In
+    // particular, manufacturing a fresh lifetime per snapshot loops React's
+    // external-store subscription before any entry-intent assertion can run.
+    storage.setState({ profileScope: { serverId: 'server-a', accountId: 'account-a' },
+        settingsScope: { serverId: 'server-a', accountId: 'account-a' }, isDataReady: true, isSessionDraftsReady: true,
+        settings: settingsDefaults,
         authoringMemory: { ...authoringMemoryDefaults, recentMachinePaths: [{ machineId: 'machine-1', path: '/repo/project' }] },
         machines: { 'machine-1': createMachineFixture({ id: 'machine-1' }) }, machineListByServerId: {} });
     runNowSpy.mockClear();
@@ -170,6 +165,7 @@ beforeEach(() => {
 
 afterEach(async () => {
     await standardCleanup();
+    publishAppliedActiveServerSnapshot(previousAppliedSnapshot, previousRuntimeAvailable);
     restoreWebGlobals?.();
 });
 

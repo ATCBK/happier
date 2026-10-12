@@ -146,6 +146,25 @@ describe('WorkflowFlowView accessibility structure', () => {
 });
 
 describe('WorkflowFlowView run map anatomy (lab run-A)', () => {
+    it('keeps each repeated occurrence duration with its own attempt without choosing a latest occurrence', async () => {
+        const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: {}, blocks: [step('gather')] };
+        const screen = await renderScreen(React.createElement(WorkflowFlowView, {
+            projection: projectWorkflowFlow(definition), selectedNodeId: null,
+            selectedInvocationId: null, onSelectOccurrence: vi.fn(), testIDPrefix: 'flow',
+            runStates: new Map([['gather', [
+                { nodeId: 'gather', invocationId: 'first', lifecycle: 'completed' as const, occurrenceLabel: 'Item 1',
+                    timing: { startedAt: '2026-10-11T20:54:00.000Z', finishedAt: '2026-10-11T20:54:54.067Z' } },
+                { nodeId: 'gather', invocationId: 'second', lifecycle: 'completed' as const, occurrenceLabel: 'Item 2',
+                    timing: { startedAt: '2026-10-11T20:54:00.000Z', finishedAt: '2026-10-11T20:54:12.000Z' } },
+            ]]]),
+        }));
+        for (const [id, seconds] of [['first', '54'], ['second', '12']]) {
+            const row = screen.findByTestId(`flow-node-gather-occurrence-${id}`);
+            expect(row?.findAll((node) => node.props.children === `tools.common.elapsedSeconds:{"seconds":"${seconds}"}`).length)
+                .toBeGreaterThan(0);
+        }
+    });
+
     it('numbers each step, says what it returns, and keeps a finished step quiet', async () => {
         const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: {}, blocks: [
             step('gather'),

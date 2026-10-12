@@ -1,6 +1,16 @@
-import type { WorkflowUsageV1 } from '@happier-dev/protocol';
+import type { WorkflowProgressEnvelopeV1, WorkflowUsageV1 } from '@happier-dev/protocol';
 
 import { formatTokenCountLong, formatUsageCost } from '@/utils/format/usageNumbers';
+import { formatElapsedDuration } from '@/components/machines/durationWords';
+import { t } from '@/text';
+
+/** Exact completed-attempt timing only; missing finish facts are not inferred from index timestamps. */
+export function formatWorkflowInvocationElapsedLabel(timing: WorkflowProgressEnvelopeV1['timing']): string | null {
+    if (timing?.finishedAt === undefined) return null;
+    const ms = Date.parse(timing.finishedAt) - Date.parse(timing.startedAt);
+    if (!Number.isFinite(ms) || ms < 0) return null;
+    return formatElapsedDuration(ms);
+}
 
 /**
  * Locale-aware presentation for the Workflow usage dimensions currently

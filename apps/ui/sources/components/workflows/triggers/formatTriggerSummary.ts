@@ -17,13 +17,21 @@ function scheduledRunTimeUnits(nextRunAt: number, nowMs: number) {
 /** Scheduler-owned occurrence time, shared by habits and upcoming Work rows. */
 export function formatNextScheduledRun(nextRunAt: number | null, enabled = true, nowMs = Date.now()): string {
     if (nextRunAt === null) return t(enabled ? 'automations.list.nextRunPending' : 'automations.list.noNextRun');
+    return t('workflows.triggers.row.nextRun', { time: formatNextScheduledRunTime(nextRunAt, enabled, nowMs) });
+}
+
+/**
+ * The same occurrence as a bare time ("in 3 h", "tomorrow"), for a trailing meta column whose
+ * position already says "next"; without an occurrence it is the same pending/none sentence.
+ */
+export function formatNextScheduledRunTime(nextRunAt: number | null, enabled = true, nowMs = Date.now()): string {
+    if (nextRunAt === null) return t(enabled ? 'automations.list.nextRunPending' : 'automations.list.noNextRun');
     const { days, minutes } = scheduledRunTimeUnits(nextRunAt, nowMs);
-    const time = days > 0
+    return days > 0
         ? t('workflows.triggers.row.nextDays', { count: days })
         : minutes <= 0 ? formatRelativeTimeShort(nextRunAt, nowMs)
             : minutes < 60 ? t('workflows.triggers.row.nextMinutes', { count: minutes })
                 : t('workflows.triggers.row.nextHours', { count: Math.round(minutes / 60) });
-    return t('workflows.triggers.row.nextRun', { time });
 }
 
 /** The occurrence label's actual calendar, rounded-minute/hour, or elapsed-age boundary. */

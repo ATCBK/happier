@@ -1,6 +1,8 @@
 import type {
     WorkflowOperationErrorCodeV1,
     WorkflowRunAvailabilityV1,
+    WorkflowTargetUnavailableReasonV1,
+    WorkflowConversationUnavailableDetailsV1,
 } from '@happier-dev/protocol/workflows/workflowProgressV1';
 import type { WorkflowDefinitionContentUnavailableReasonV1, WorkflowDefinitionMetadataV1 } from '@happier-dev/protocol/workflows/workflowDefinitionV1';
 
@@ -130,6 +132,20 @@ const WORKFLOW_CONTENT_REASON_KEYS = {
     not_found: 'workflows.contentReasons.notFound',
 } as const satisfies Readonly<Record<WorkflowDefinitionContentUnavailableReasonV1, TranslationKeyNoParams>>;
 
+const WORKFLOW_TARGET_REASON_SHAPES = {
+    machine_check_failed: { messageKey: 'machineAgents.unknown', repair: 'retry' },
+    agent_probe_failed: { messageKey: 'machineAgents.unknown', repair: 'retry' },
+    agent_not_installed: { messageKey: 'machineAgents.notInstalled', repair: 'none' },
+    platform_unsupported: { messageKey: 'machineAgents.unsupportedOs', repair: 'none' },
+    dependency_not_installed: { messageKey: 'machineAgents.blockSetUpToStart', repair: 'none' },
+    session_unavailable: { messageKey: 'workflows.problem.conversationUnavailable', repair: 'none' },
+    action_unavailable: { messageKey: 'workflows.problem.unavailableHere', repair: 'none' },
+    selection_unavailable: { messageKey: 'workflows.problem.targetUnavailable', repair: 'none' },
+    session_creation_unavailable: { messageKey: 'workflows.problem.unavailableHere', repair: 'none' },
+    detached_execution_unavailable: { messageKey: 'workflows.problem.unavailableHere', repair: 'none' },
+    workspace_unavailable: { messageKey: 'projects.open.unsupported', repair: 'none' },
+} as const satisfies Readonly<Record<WorkflowTargetUnavailableReasonV1, Pick<WorkflowProblemShape, 'messageKey' | 'repair'>>>;
+
 export function formatWorkflowDefinitionContentUnavailableReason(reason: WorkflowDefinitionContentUnavailableReasonV1): string {
     return t(WORKFLOW_CONTENT_REASON_KEYS[reason]);
 }
@@ -176,9 +192,29 @@ const GENERIC_SHAPE: WorkflowProblemShape = {
  * `code: null`, because inventing a workflow meaning for it would be the
  * fabricated-code defect rather than the discarded-code one.
  */
-export function resolveWorkflowProblemPresentation(error: unknown): WorkflowProblemPresentation {
+export function resolveWorkflowProblemPresentation(
+    error: unknown,
+    /**
+     * `run`: a control on a Run (Stop, Pause, a hold's answer). A Run has no local work to keep, so a
+     * revision conflict there says the Run moved on rather than the editor's reassurance.
+     */
+    scope?: 'run',
+): WorkflowProblemPresentation {
     const code = error instanceof WorkflowActionError ? error.code : null;
+    if (scope === 'run' && code === 'currentness_conflict') {
+        return present(code, { ...WORKFLOW_PROBLEM_SHAPES.currentness_conflict, messageKey: 'workflows.problem.runMovedOn' });
+    }
     const failure = error instanceof WorkflowActionError ? error.failure : null;
+    if (failure?.errorCode === 'workflow_conversation_unavailable' && failure.details) {
+        return { ...present(code, WORKFLOW_PROBLEM_SHAPES.workflow_conversation_unavailable),
+            message: formatWorkflowConversationProblem(failure.details) };
+    }
+    if (failure?.errorCode === 'target_unavailable' && failure.details && 'reason' in failure.details) {
+        return present(code, { ...WORKFLOW_PROBLEM_SHAPES.target_unavailable,
+            ...WORKFLOW_TARGET_REASON_SHAPES[failure.details.reason],
+            ...(failure.details.reason === 'platform_unsupported' && failure.details.platformReason === 'arch'
+                ? { messageKey: 'machineAgents.unsupportedArch' } : {}) });
+    }
     if (failure?.errorCode === 'content_unavailable' && failure.details !== undefined) {
         return present(code, { ...WORKFLOW_PROBLEM_SHAPES.content_unavailable,
             messageKey: WORKFLOW_CONTENT_REASON_KEYS[failure.details.reason] });
@@ -193,6 +229,11 @@ export function resolveWorkflowProblemPresentation(error: unknown): WorkflowProb
 /** A known private-read reason from the metadata owner uses the same presentation as an Action failure. */
 export function describeWorkflowOperationProblem(code: WorkflowOperationErrorCodeV1): WorkflowProblemPresentation {
     return present(code, WORKFLOW_PROBLEM_SHAPES[code]);
+}
+
+/** The same typed refusal is shown for an Action and a persisted invocation failure. */
+export function formatWorkflowConversationProblem(details: WorkflowConversationUnavailableDetailsV1): string {
+    return t(`workflows.problem.conversationChecks.${details.reason}`);
 }
 
 /** Convenience for the surfaces that show one sentence rather than a state card. */

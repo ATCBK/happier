@@ -22,10 +22,9 @@ import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { resolveWorkflowBuiltinInputPresentation } from '@/components/workflows/presentation/workflowBuiltinInputPresentation';
 import { WORKFLOW_BLOCK_KIND_GLYPH } from '@/components/workflows/presentation/workflowBlockKindGlyph';
 import { createWorkflowDefinitionRoute } from '@/sync/domains/workflows/workflowRunRoute';
-import { formatWorkflowConditionSentence } from './WorkflowConditionEditor';
 import type { WorkflowDocumentStepSlots } from './workflowDocumentPresentation';
 import { WorkflowKindCard } from './WorkflowKindCard';
-import { WorkflowStepOptionsFootChip } from './WorkflowStepOptionsChip';
+import { formatWorkflowBlockOptionsSummary, WorkflowStepOptionsFootChip } from './WorkflowStepOptionsChip';
 import {
     listBuiltinWorkflowReferenceOptions,
     useWorkflowReferenceLibrary,
@@ -159,12 +158,8 @@ export function WorkflowNestedWorkflowBlockEditor(props: Readonly<{
                 note={t('workflows.page.blocks.workflowSub')}
                 footAccessory={props.onOpenOptions === undefined || !editable ? undefined : (
                     <WorkflowStepOptionsFootChip
-                        label={block.onlyWhen === undefined
-                            ? t('workflows.page.blocks.workflowDefaults')
-                            : t('workflows.page.inspector.onlyWhenSentence', {
-                                condition: formatWorkflowConditionSentence(props.draft, block.onlyWhen),
-                            })}
-                        changed={block.onlyWhen !== undefined}
+                        label={formatWorkflowBlockOptionsSummary(block).label}
+                        changed={formatWorkflowBlockOptionsSummary(block).changed}
                         onOpen={props.onOpenOptions}
                         testID={`${rowPrefix}-options`}
                         labelTestID={`${rowPrefix}-options-label`}

@@ -269,6 +269,9 @@ describe('WorkflowStartPicker plugin workflows', () => {
         // Already bound to this Session: no description asks to choose one.
         expect(screen.getTextContent()).toContain(t('workflows.examples.sessionNotifyDescription'));
         expect(screen.getTextContent()).not.toContain(t('workflows.examples.notifyWhenAgentWaits.description'));
+        // Only the example the catalog added recently carries the quiet "New" mark (lab `b-habit T`).
+        expect(screen.findAllByTestId('workflow-examples:memory-upkeep-in-session:new')).not.toHaveLength(0);
+        expect(screen.findAllByTestId('workflow-examples:daily-summary-in-session:new')).toHaveLength(0);
         await screen.pressByTestIdAsync('workflow-examples:daily-summary-in-session:use');
         expect(screen.findAllByType(DropdownMenu)).toHaveLength(0);
         const route = routing.push.mock.calls.at(-1)?.[0] as { pathname: string; params: { definitionDraftSeedId: string } };
@@ -336,15 +339,18 @@ describe('WorkflowStartPicker plugin workflows', () => {
         }
         const screen = await renderScreen(<WorkflowsLibraryHome />);
         await act(async () => { await Promise.resolve(); });
-        for (const example of WORKFLOW_STARTER_EXAMPLES_V1) {
+        // A first visit shows the whole catalog; a returning library one compact row and the rest one press away.
+        const firstVisit = screen.findByTestId('workflows-home:firstVisit') !== null;
+        const shown = firstVisit ? WORKFLOW_STARTER_EXAMPLES_V1 : WORKFLOW_STARTER_EXAMPLES_V1.slice(0, 2);
+        for (const example of shown) {
             expect(screen.findHostByTestId(`workflow-examples:${example.key}`)).not.toBeNull();
             expect(screen.findByTestId(`workflow-examples:${example.key}:use`)).not.toBeNull();
         }
-        for (const builtin of BUILTIN_WORKFLOW_CATALOG_V1) {
-            expect(screen.findByTestId(`workflow-builtins:${builtin.id}:${builtin.requiresOriginSession ? 'session' : 'run'}`)).not.toBeNull();
-        }
-        await screen.pressByTestIdAsync('workflow-examples:morning-digest:use');
-        expect(routing.push).toHaveBeenCalledWith({ pathname: '/workflows/new', params: { example: 'morning-digest' } });
+        expect(screen.findByTestId('workflow-examples:more') !== null).toBe(!firstVisit);
+        for (const builtin of BUILTIN_WORKFLOW_CATALOG_V1) expect(screen.findByTestId(`workflow-builtins:${builtin.id}`)).not.toBeNull();
+        const first = WORKFLOW_STARTER_EXAMPLES_V1[0]!.key;
+        await screen.pressByTestIdAsync(`workflow-examples:${first}:use`);
+        expect(routing.push).toHaveBeenCalledWith({ pathname: '/workflows/new', params: { example: first } });
         expect(writes()).toEqual([]);
         expect(starts()).toEqual([]);
     });

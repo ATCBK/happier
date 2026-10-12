@@ -19,6 +19,7 @@ import { invokeTestInstanceHandler } from '@/dev/testkit';
 import { getStorage } from '@/sync/domains/state/storageStore';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { prepareSessionDraftPersistenceStorage } from '@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { readNewSessionDraftProjectionFromRepository } from '@/components/sessions/composer/newSessionDraftRepositoryAdapter';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createWorkflowDefinitionFixture, createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
@@ -28,6 +29,7 @@ import { getActionSpec } from '@happier-dev/protocol';
 import { buildWorkflowReviewedRunSeed, storeWorkflowReviewedRunSeed } from '@/sync/domains/workflows/workflowReviewedRunSeed';
 import { readWorkflowAgentRevision, storeWorkflowAgentRevision } from '@/sync/domains/workflows/workflowAgentRevision';
 import { storeWorkflowDefinitionDraftSeed } from '@/sync/domains/workflows/workflowDefinitionDraftSeed';
+import { createWeeklyStorageReviewWorkflowSeed } from '@/components/automations/storage/weeklyStorageReviewTemplate';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 // Resolve the real screen/store graph during collection, outside a behavioral
 // test's timeout; Vitest hoists the system-boundary fixture declarations below.
@@ -56,11 +58,12 @@ import { WorkspaceProvider } from '@/components/appShell/workspace/WorkspaceProv
 import { DestinationInstanceHost } from '@/components/appShell/workspace/DestinationInstanceHost';
 import type { WorkspaceNavigationContextValue } from '@/components/appShell/workspace/WorkspaceNavigationContext';
 import { AppShellTitleStrip } from '@/components/navigation/shell/appRail/AppShellTitleStrip';
-
-// This editor/navigation harness does not stream Markdown; the missing vendor leaf is a boundary.
-vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({
-    splitStreamingRevealTextParts: () => { throw new Error('Unexpected vendor Markdown reveal in editor/navigation test'); },
-}));
+import { createAuthoringMemoryHttpBoundary } from '@/dev/testkit/mocks/authoringMemoryHttp';
+import { apiSocket } from '@/sync/api/session/apiSocket';
+import type { AuthCredentials } from '@/auth/storage/tokenStorage';
+import type { AccountSettingsScope } from '@/sync/domains/settings/scope/accountSettingsScope';
+import type { SyncServerTarget } from '@/sync/sync';
+import type { AutomationDefinitionDetail } from '@happier-dev/protocol/automations/automationApiV3';
 
 type WorkflowEditorBodyProps = React.ComponentProps<
     typeof import('./WorkflowEditorBody').WorkflowEditorBody
@@ -73,8 +76,28 @@ const modalAlertSpy = vi.hoisted(() => vi.fn<IModal['alert']>());
 const modalConfirmSpy = vi.hoisted(() => vi.fn<IModal['confirm']>(async () => false));
 let latestBodyProps: WorkflowEditorBodyProps | null = null;
 let renderRealEditorBody = false;
+let useRealDraftActionBoundary = false;
+const realDraftActionFailures: Array<{ actionId: string; errorCode?: string }> = [];
+const draftActionHomeDisposers: Array<() => void> = [];
 let restoreWebGlobals: (() => void) | undefined;
 const focusPromptSpy = vi.fn<(blockId: string) => void>();
+let rejectProjectMemoryWrite = false;
+// As in Sync's owner tests, configure incumbent connection facts without
+// replacing any memory, encryption, persistence or currentness operation.
+type WorkflowMemoryRuntimeTestAccess = { credentials: AuthCredentials | undefined;
+    pendingSettingsScope: AccountSettingsScope | null; appliedServerTarget: SyncServerTarget | null;
+    authoringMemoryRuntime: unknown };
+let memoryRuntime: WorkflowMemoryRuntimeTestAccess;
+let originalMemoryRuntime: WorkflowMemoryRuntimeTestAccess;
+function initializeMemoryRuntime(credentials: AuthCredentials, target: SyncServerTarget, scope: AccountSettingsScope) {
+    Object.assign(memoryRuntime, { credentials, appliedServerTarget: target, pendingSettingsScope: scope, authoringMemoryRuntime: null });
+    getStorage().getState().resetAuthoringMemory();
+}
+function initializePersonalWhereWriter() {
+    const token = `header.${Buffer.from(JSON.stringify({ sub: 'account-a' })).toString('base64url')}.signature`;
+    initializeMemoryRuntime({ token }, { serverId: 'server-a', serverUrl: 'https://happier.invalid', generation: 0 }, { serverId: 'server-a', accountId: 'account-a' });
+    getStorage().setState({ settingsScope: { serverId: 'server-a', accountId: 'account-a' } });
+}
 
 function requireDefined<T>(value: T | undefined, message: string): T {
     if (value === undefined) throw new Error(message);
@@ -87,6 +110,8 @@ function renderRunEditor(element: React.ReactElement) {
         // Physical anchor geometry is the platform boundary; the Popover and composer stay real.
         createNodeMock: () => ({
             focus: () => {}, blur: () => {},
+            // Native selection restoration is an input-platform boundary too.
+            setNativeProps: () => {},
             offsetTop: 0, offsetHeight: 40, offsetWidth: 160,
             getBoundingClientRect: () => ({ left: 600, top: 100, width: 160, height: 40 }),
             addEventListener: () => {}, removeEventListener: () => {},
@@ -202,9 +227,17 @@ vi.mock('@/agents/backendCatalog/useDaemonMergedProjectionInputs', () => ({
             : { phase: 'idle', inputs: null }
     ),
 }));
-vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>(),
-    createFrontDoorActionExecute: () => async (actionId: string, input: unknown, context: ActionExecutorContext) => {
+vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>();
+    const execute = actual.createFrontDoorActionExecute();
+    return { ...actual,
+    createFrontDoorActionExecute: () => async (actionId: import('@happier-dev/protocol').ActionId, input: unknown, context: ActionExecutorContext) => {
+        // New mounted-Action cases use the real front door. Only HTTP/OS boundaries are replaced.
+        if (useRealDraftActionBoundary) {
+            const result = await execute(actionId, input, context);
+            if (!result.ok) realDraftActionFailures.push({ actionId, errorCode: result.errorCode });
+            return result;
+        }
         if (actionId === 'workflow.definition.get') return { ok: true, result: await definitionActions.get(WorkflowDefinitionGetRequestV1Schema.parse(input)) };
         if (actionId === 'workflow.definition.create') return { ok: true, result: await definitionActions.create(WorkflowDefinitionCreateRequestV1Schema.parse(input)) };
         if (actionId === 'workflow.definition.update') return { ok: true, result: await definitionActions.update(WorkflowDefinitionUpdateRequestV1Schema.parse(input)) };
@@ -217,7 +250,8 @@ vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async (importOrigin
         if (writer === null) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
         return { ok: true, result: await writer(input) };
     },
-}));
+    };
+});
 vi.mock('@/sync/domains/workflows/workflowDocumentFile', () => ({
     pickWorkflowDocumentText: workflowDocumentPicker.pick,
     saveWorkflowDocument: vi.fn(),
@@ -264,16 +298,23 @@ vi.mock('./WorkflowEditorBody', async (importOriginal) => {
     };
 });
 
-beforeEach(() => {
+beforeEach(async () => {
+    await loadSyncSingletonForTests();
+    const { sync } = await import('@/sync/sync');
+    memoryRuntime = sync as unknown as WorkflowMemoryRuntimeTestAccess;
+    originalMemoryRuntime = { credentials: memoryRuntime.credentials, pendingSettingsScope: memoryRuntime.pendingSettingsScope,
+        appliedServerTarget: memoryRuntime.appliedServerTarget, authoringMemoryRuntime: memoryRuntime.authoringMemoryRuntime };
     restoreWebGlobals = withPopoverWebGlobals();
     latestBodyProps = null;
     renderRealEditorBody = false;
+    useRealDraftActionBoundary = false;
     detailsPane.available = true;
     focusPromptSpy.mockClear();
     setEditorMachines([]);
     resetAcpCatalogEngineForTests();
     resetAcpCatalogSnapshotsForTests();
-    getStorage().setState({ settings: settingsDefaults, settingsScope: null });
+    getStorage().setState({ settings: settingsDefaults, settingsScope: null, isSessionDraftsReady: true });
+    getStorage().getState().resetAuthoringMemory();
     getStorage().setState({ workflowTriggerSetsById: {}, workflowTriggerSetIdsByQuery: {} });
     guardedDirtyStates.length = 0;
     issuedIds.next = 0;
@@ -305,16 +346,339 @@ beforeEach(() => {
     workflowDocumentPicker.pick.mockReset();
     daemonProjection.resolves = false;
     switchEditorAccountScope({ serverId: 'server-a', accountId: 'account-a' });
+    // The new Save consumer uses the real Account-memory runtime. Supply only
+    // its prepared HTTP persistence boundary, sharing the canonical testkit CAS.
+    rejectProjectMemoryWrite = false;
+    const memory = createAuthoringMemoryHttpBoundary();
+    const prepareRequest = apiSocket.createRequestForPreparedTarget.bind(apiSocket);
+    vi.spyOn(apiSocket, 'createRequestForPreparedTarget').mockImplementation((target) => {
+        const request = prepareRequest(target);
+        return async (path, init) => {
+            if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+            if (path === '/v2/account/settings') return Response.json({ content: null, version: 0 });
+            if (path.startsWith('/v1/account/authoring-memory')) {
+                if (rejectProjectMemoryWrite && init?.method === 'POST' && path.includes('workflowProject')) {
+                    throw new Error('Personal Workflow target persistence unavailable');
+                }
+                return (await memory.handle(new URL(path, target.endpoint), init))!;
+            }
+            return request(path, init);
+        };
+    });
 });
 
 afterEach(async () => {
     await standardCleanup();
+    Object.assign(memoryRuntime, originalMemoryRuntime);
+    for (const dispose of draftActionHomeDisposers.splice(0)) dispose();
     restoreWebGlobals?.();
     restoreWebGlobals = undefined;
     if (nativeRouteBoundary.platform === 'ios') resetServerFeaturesClientForTests();
 });
 
+it('waits for repository hydration before consuming a workflow seed or mounting its editable body', async () => {
+    const seedId = storeWorkflowDefinitionDraftSeed({ name: 'Retained seed', definition: createWorkflowDefinitionFixture() });
+    getStorage().setState({ isDataReady: true, isSessionDraftsReady: false });
+    const screen = await renderRunEditor(<WorkflowEditorHostScreen source={{ kind: 'new', definitionDraftSeedId: seedId }} />);
+    expect(latestBodyProps).toBeNull();
+    await act(async () => { getStorage().setState({ isSessionDraftsReady: true }); });
+    expect(latestBodyProps?.draft.name).toBe('Retained seed');
+    await screen.unmount();
+});
+
+/** A Plain Account HTTP boundary; Workflow admission, codecs and Artifact CAS stay real. */
+async function serveMountedDraftActionHome(definition = createWorkflowDefinitionFixture({ defaults: {
+    agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
+} }), includeSavedArtifact = true) {
+    const [{ serveActionHomes }, { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent },
+        { WorkflowDefinitionArtifactHeaderV1Schema }, { z }, { tryWriteServerEnabledBitInPlace }] = await Promise.all([
+        import('@/dev/testkit/harness/actionHomesHttpHarness'), import('@happier-dev/protocol/storage/artifactStoredContent'),
+        import('@happier-dev/protocol/workflows/workflowDefinitionV1'), import('zod'), import('@happier-dev/protocol'),
+    ]);
+    const artifact = {
+        id: SAVED_TRIGGER_WORKFLOW_ID, ownerAccountId: 'account-a', access: 'owner', encryptionMode: 'plain',
+        header: encodePlainArtifactStoredContent(WorkflowDefinitionArtifactHeaderV1Schema.parse({ kind: 'workflow-definition.v1',
+            definitionId: SAVED_TRIGGER_WORKFLOW_ID, revision: { headerVersion: 1, bodyVersion: 1 },
+            metadata: { title: 'Saved workflow' }, previewSteps: [] })),
+        body: encodePlainArtifactStoredContent({ body: JSON.stringify({ kind: 'workflow-definition.v1', definition }) }),
+        dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1,
+        seq: 1, createdAt: 1, updatedAt: 1,
+    };
+    const features = createRootLayoutFeaturesResponse();
+    if (!tryWriteServerEnabledBitInPlace(features, 'workflows', true)) throw new Error('Undeclared Workflow feature');
+    // This mirrors the HTTP persistence boundary, not the Workflow edit or Save logic.
+    const updateSchema = z.object({ header: z.string(), body: z.string(), expectedHeaderVersion: z.number().int(),
+        expectedBodyVersion: z.number().int() }).passthrough();
+    const updates: Array<ReturnType<typeof updateSchema.parse>> = [];
+    const creates: Array<{ id: string; header: string; body: string }> = [];
+    const automationCreates: unknown[] = [];
+    const automationDetails: AutomationDefinitionDetail[] = [];
+    const artifactCreated = createDeferred<void>();
+    let updateGate: ReturnType<typeof createDeferred<void>> | null = null;
+    let updateIssued: ReturnType<typeof createDeferred<void>> | null = null;
+    const boundary = await serveActionHomes({ homes: [{ key: 'home', serverUrl: 'https://workflow-mcp.test',
+        accountId: 'account-a', currentAccount: true }], route: async request => {
+        if (request.path === '/v1/features' || request.path === '/v1/features/authenticated') return Response.json(features);
+        if (request.path === '/v1/account/encryption/currentness') {
+            const { createPlainAccountEncryptionCurrentnessFixture } = await import('@/dev/testkit/fixtures/accountEncryptionCurrentness');
+            return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+        }
+        if (request.path === `/v1/artifacts/${artifact.id}/access/grants`) return Response.json({
+            artifactId: artifact.id, ownerAccountId: artifact.ownerAccountId, access: artifact.access, grants: [],
+        });
+        if (request.path === '/v3/automations' && request.method === 'GET') {
+            const { AutomationDefinitionListItemSchema } = await import('@happier-dev/protocol/automations/automationApiV3');
+            return Response.json({ automations: automationDetails.map(({ executionRecipe: _recipe, templateCiphertext: _template,
+                triggers, ...definition }) => AutomationDefinitionListItemSchema.parse({ ...definition,
+                    triggers: triggers.map(({ triggerDefinitionEnvelope: _envelope, ...row }) => row),
+                })), nextCursor: null });
+        }
+        if (request.path === '/v3/automations' && request.method === 'POST') {
+            const { AutomationDefinitionCreateRequestSchema, AutomationDefinitionDetailSchema } = await import('@happier-dev/protocol/automations/automationApiV3');
+            const created = AutomationDefinitionCreateRequestSchema.parse(request.body);
+            automationCreates.push(created);
+            const detail = AutomationDefinitionDetailSchema.parse({ id: created.automationId,
+                name: created.name, description: created.description ?? null, enabled: created.enabled,
+                workflowDefinitionId: created.workflowDefinitionId ?? null, scopeSessionId: created.scopeSessionId ?? null,
+                targetType: null, existingSessionId: null, templateVersion: created.executionRecipe.templateVersion,
+                lastRunAt: null, createdAt: 1, updatedAt: 1, executionRecipe: created.executionRecipe,
+                assignments: (created.assignments ?? []).map(row => ({ ...row, enabled: row.enabled ?? true, priority: row.priority ?? 0, updatedAt: 1 })),
+                triggers: created.triggers.map(row => ({ ...row.trigger, id: row.triggerId, revision: 1, createdAt: 1,
+                    updatedAt: 1, nextRunAt: null, triggerDefinitionEnvelope: null })),
+            });
+            automationDetails.push(detail);
+            return Response.json(detail);
+        }
+        if (request.path.startsWith('/v3/automations/') && request.method === 'GET') {
+            const detail = automationDetails.find(row => request.path === `/v3/automations/${row.id}`);
+            return detail ? Response.json(detail) : Response.json({ error: 'not-found' }, { status: 404 });
+        }
+        if (request.path === '/v1/artifacts' && request.method === 'POST') {
+            const created = z.object({ id: z.string(), header: z.string(), body: z.string() }).passthrough().parse(request.body);
+            creates.push(created);
+            artifactCreated.resolve();
+            return Response.json({ ...artifact, ...created });
+        }
+        if (request.path.startsWith('/v1/artifacts/') && request.method === 'GET'
+            && (!includeSavedArtifact || request.path !== `/v1/artifacts/${artifact.id}`)) {
+            const created = creates.find(row => request.path === `/v1/artifacts/${row.id}`);
+            return created ? Response.json({ ...artifact, ...created }) : Response.json({ error: 'not-found' }, { status: 404 });
+        }
+        if (request.path !== `/v1/artifacts/${artifact.id}`) return undefined;
+        if (request.method === 'GET') return Response.json(artifact);
+        if (request.method !== 'POST') return undefined;
+        const update = updateSchema.parse(request.body);
+        updates.push(update);
+        updateIssued?.resolve();
+        updateIssued = null;
+        const gate = updateGate;
+        updateGate = null;
+        await gate?.promise;
+        if (update.expectedHeaderVersion !== artifact.headerVersion || update.expectedBodyVersion !== artifact.bodyVersion) {
+            return Response.json({ success: false, error: 'version-mismatch' });
+        }
+        artifact.header = update.header;
+        artifact.body = update.body;
+        artifact.headerVersion += 1;
+        artifact.bodyVersion += 1;
+        return Response.json({ success: true, headerVersion: artifact.headerVersion, bodyVersion: artifact.bodyVersion });
+    } });
+    const scope = { serverId: boundary.homes.home!.id, accountId: 'account-a' };
+    publishAppliedActiveServerSnapshot({ serverId: scope.serverId, serverUrl: boundary.homes.home!.serverUrl, generation: 1 }, true);
+    getStorage().setState({ profileScope: scope });
+    const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+    const credentials = await TokenStorage.getCredentialsForServerUrl(boundary.homes.home!.serverUrl);
+    if (!credentials) throw new Error('Expected synthetic Home credentials');
+    initializeMemoryRuntime(credentials, { serverId: scope.serverId, serverUrl: boundary.homes.home!.serverUrl, generation: 1 }, scope);
+    getStorage().setState({ profileScope: scope, settingsScope: scope, isSessionDraftsReady: true });
+    primeServerFeaturesSnapshot({ serverId: scope.serverId, snapshot: { status: 'ready', features } });
+    useRealDraftActionBoundary = true;
+    draftActionHomeDisposers.push(boundary.dispose);
+    return { ...boundary, scope, artifact, updates, creates, automationCreates, artifactCreated: artifactCreated.promise, holdNextUpdate: () => {
+        updateGate = createDeferred<void>();
+        updateIssued = createDeferred<void>();
+        return { ...updateGate, issued: updateIssued.promise };
+    } };
+}
+
 describe('WorkflowEditorHostScreen composition', () => {
+    it('retries personal Where after copying fails to persist it, without creating another copy', async () => {
+        const boundary = await serveMountedDraftActionHome();
+        const project = { machineId: 'saved-machine', directory: '/saved-project' };
+        getStorage().getState().applyAuthoringMemory({ workflowProjectTargetsByDefinitionId: { [SAVED_TRIGGER_WORKFLOW_ID]: project } });
+        await renderScreen(<WorkflowEditorHostScreen source={{ kind: 'saved', definitionId: SAVED_TRIGGER_WORKFLOW_ID }} />);
+        rejectProjectMemoryWrite = true;
+        await act(async () => { latestBodyProps!.onSaveAsCopy!(); });
+        expect(boundary.creates).toHaveLength(1);
+        const copiedId = boundary.creates[0]!.id;
+        expect(copiedId).not.toBe(SAVED_TRIGGER_WORKFLOW_ID);
+        expect(latestBodyProps!.saveStatus.kind).toBe('failed');
+        expect(latestBodyProps!.mountedDraftActions!.getSnapshot()!.dirty).toBe(true);
+        rejectProjectMemoryWrite = false;
+        let result: unknown;
+        await act(async () => { result = await latestBodyProps!.mountedDraftActions!.execute('workflow.authoring.draft.save', {}); });
+        expect(result).toMatchObject({ status: 'applied' });
+        expect(getStorage().getState().authoringMemory.workflowProjectTargetsByDefinitionId[copiedId]).toEqual(project);
+        expect(boundary.creates).toHaveLength(1);
+        expect(boundary.updates).toHaveLength(0);
+        expect(latestBodyProps!.mountedDraftActions!.getSnapshot()!.dirty).toBe(false);
+    });
+    it('saves personal Where through the real Account memory writer and retains it on reopen', async () => {
+        initializePersonalWhereWriter();
+        const project = { machineId: 'saved-machine', directory: '/saved-project', workspaceRefId: 'saved-workspace' };
+        const screen = await renderScreen(<WorkflowEditorHostScreen source={{ kind: 'saved', definitionId: SAVED_TRIGGER_WORKFLOW_ID }} />);
+        await act(async () => { latestBodyProps!.onChangeProjectTarget!(project); });
+        expect(latestBodyProps!.mountedDraftActions!.getSnapshot()!.dirty).toBe(true);
+        let result: unknown;
+        await act(async () => { result = await latestBodyProps!.mountedDraftActions!.execute('workflow.authoring.draft.save', {}); });
+        expect(result, JSON.stringify(latestBodyProps!.saveStatus)).toMatchObject({ status: 'applied' });
+        expect(getStorage().getState().authoringMemory.workflowProjectTargetsByDefinitionId[SAVED_TRIGGER_WORKFLOW_ID]).toEqual(project);
+        expect(definitionActions.update).not.toHaveBeenCalled();
+        await screen.unmount();
+        getStorage().getState().applyAuthoringMemory({ recentMachinePaths: [{ machineId: 'recent-machine', path: '/other' }] });
+        setEditorMachines([createMachineFixture({ id: 'recent-machine' })]);
+        await renderScreen(<WorkflowEditorHostScreen source={{ kind: 'saved', definitionId: SAVED_TRIGGER_WORKFLOW_ID }} />);
+        expect(latestBodyProps!.projectTarget).toEqual(project);
+        expect(latestBodyProps!.mountedDraftActions!.getSnapshot()!.dirty).toBe(false);
+    });
+    it('keeps a failed personal Where save unsaved and retries without another definition write', async () => {
+        initializePersonalWhereWriter();
+        await renderScreen(<WorkflowEditorHostScreen source={{ kind: 'saved', definitionId: SAVED_TRIGGER_WORKFLOW_ID }} />);
+        const project = { machineId: 'saved-machine', directory: '/saved-project' };
+        await act(async () => { latestBodyProps!.onChangeProjectTarget!(project); });
+        rejectProjectMemoryWrite = true;
+        let result: unknown;
+        await act(async () => { result = await latestBodyProps!.mountedDraftActions!.execute('workflow.authoring.draft.save', {}); });
+        expect(result).toMatchObject({ status: 'refused', reason: 'save_failed' });
+        expect(latestBodyProps!.saveStatus.kind).toBe('failed');
+        expect(latestBodyProps!.mountedDraftActions!.getSnapshot()!.dirty).toBe(true);
+        expect(getStorage().getState().authoringMemory.workflowProjectTargetsByDefinitionId[SAVED_TRIGGER_WORKFLOW_ID]).toBeUndefined();
+        rejectProjectMemoryWrite = false;
+        await act(async () => { result = await latestBodyProps!.mountedDraftActions!.execute('workflow.authoring.draft.save', {}); });
+        expect(result, JSON.stringify(latestBodyProps!.saveStatus)).toMatchObject({ status: 'applied' });
+        expect(latestBodyProps!.saveStatus.kind).toBe('saved');
+        expect(definitionActions.update).not.toHaveBeenCalled();
+    });
+    it('retains the acknowledged target when clearing personal Where fails, and retries its tombstone', async () => {
+        initializePersonalWhereWriter();
+        await renderScreen(<WorkflowEditorHostScreen source={{ kind: 'saved', definitionId: SAVED_TRIGGER_WORKFLOW_ID }} />);
+        const project = { machineId: 'saved-machine', directory: '/saved-project' };
+        await act(async () => { latestBodyProps!.onChangeProjectTarget!(project); });
+        await act(async () => { await latestBodyProps!.mountedDraftActions!.execute('workflow.authoring.draft.save', {}); });
+        await act(async () => {
+            const snapshot = latestBodyProps!.mountedDraftActions!.getSnapshot()!;
+            expect(await latestBodyProps!.mountedDraftActions!.execute('workflow.authoring.draft.edit', {
+                scope: snapshot.scope, draftId: snapshot.draftId,
+                expectedDraftRevision: snapshot.draftRevision, settings: { projectTarget: null },
+            })).toMatchObject({ status: 'applied' });
+        });
+        rejectProjectMemoryWrite = true;
+        let result: unknown;
+        await act(async () => { result = await latestBodyProps!.mountedDraftActions!.execute('workflow.authoring.draft.save', {}); });
+        expect(result).toMatchObject({ status: 'refused', reason: 'save_failed' });
+        expect(latestBodyProps!.saveStatus.kind).toBe('failed');
+        expect(latestBodyProps!.mountedDraftActions!.getSnapshot()!.dirty).toBe(true);
+        expect(getStorage().getState().authoringMemory.workflowProjectTargetsByDefinitionId[SAVED_TRIGGER_WORKFLOW_ID]).toEqual(project);
+        rejectProjectMemoryWrite = false;
+        await act(async () => { result = await latestBodyProps!.mountedDraftActions!.execute('workflow.authoring.draft.save', {}); });
+        expect(result).toMatchObject({ status: 'applied' });
+        expect(getStorage().getState().authoringMemory.workflowProjectTargetsByDefinitionId[SAVED_TRIGGER_WORKFLOW_ID]).toBeUndefined();
+        expect(latestBodyProps!.mountedDraftActions!.getSnapshot()!.dirty).toBe(false);
+    });
+    it('rehydrates a saved Workflow Where from personal memory instead of unrelated recent Session context', async () => {
+        const project = { machineId: 'saved-machine', directory: '/saved-project', workspaceRefId: 'saved-workspace' };
+        getStorage().setState({ authoringMemory: { ...getStorage().getState().authoringMemory,
+            recentMachinePaths: [{ machineId: 'recent-machine', path: '/recent-session' }],
+            workflowProjectTargetsByDefinitionId: { [SAVED_TRIGGER_WORKFLOW_ID]: project } } });
+        setEditorMachines([createMachineFixture({ id: 'saved-machine' }), createMachineFixture({ id: 'recent-machine' })]);
+        await renderScreen(<WorkflowEditorHostScreen source={{ kind: 'saved', definitionId: SAVED_TRIGGER_WORKFLOW_ID }} />);
+        await act(async () => {});
+        expect(latestBodyProps?.projectTarget).toEqual(project);
+        expect(latestBodyProps?.composerScope).toMatchObject({ kind: 'machine', machineId: 'saved-machine', directory: '/saved-project' });
+    });
+    it('a session Agent MCP Action reaches the real mounted draft through admitted client routing', async () => {
+        renderRealEditorBody = true;
+        const boundary = await serveMountedDraftActionHome();
+        try {
+            const [{ createClientActionReverseDispatcher },
+                { createActionExecutor }, { listActionSpecs }, { RPC_METHODS }, { apiSocket },
+                { ClientActionReverseRuntime }, { selectRpcTarget }] = await Promise.all([
+                import('../../../../../cli/src/session/actions/clientActionReverseDispatch'),
+                import('@happier-dev/protocol/actions/actionExecutor'),
+                import('@happier-dev/protocol/actions/actionSpecs'), import('@happier-dev/protocol/rpc/methods'),
+                import('@/sync/api/session/apiSocket'), import('@/components/appShell/runtime/ClientActionReverseRuntime'),
+                import('../../../../../server/sources/app/api/socket/rpc/rpcTargetSelection'),
+            ]);
+            const { scope } = boundary;
+            getStorage().setState({ profile: { ...getStorage().getState().profile!, id: scope.accountId } });
+            setEditorMachines([createMachineFixture({ id: 'machine-1' })]);
+            type Handler = Parameters<typeof apiSocket.registerMachineScopedRpcHandler>[2];
+            const editorMethods = new Map<string, Handler>();
+            // Only the socket registration/delivery boundary is substituted. The real
+            // mounted owner, runtime registration and server target selector run below.
+            const register = vi.spyOn(apiSocket, 'registerMachineScopedRpcHandler').mockImplementation((_machine, method, handler) => {
+                editorMethods.set(method, handler);
+                return () => { if (editorMethods.get(method) === handler) editorMethods.delete(method); };
+            });
+            const screen = await renderRunEditor(<><ClientActionReverseRuntime />
+                <WorkflowEditorHostScreen source={{ kind: 'saved', definitionId: SAVED_TRIGGER_WORKFLOW_ID }} /></>);
+            const original = latestBodyProps!.draft;
+            const caller = createActionExecutor({ clientActionExecute: createClientActionReverseDispatcher(() => ({
+                hasConnectedClientRpcHandler: method => method === RPC_METHODS.UI_ACTION_EXECUTE || editorMethods.has(method),
+                callConnectedClientRpc: async (method, request, options) => {
+                    const timeout = () => ({ emitWithAck: async () => { throw new Error('Delivery belongs to the socket boundary below'); } });
+                    const driver = { id: 'a-driver-tab', data: {}, timeout };
+                    const editor = { id: 'z-editor-tab', data: {}, timeout };
+                    const selection = selectRpcTarget({ targets: [
+                        ...(method === RPC_METHODS.UI_ACTION_EXECUTE ? [driver] : []),
+                        ...(editorMethods.has(method) ? [editor] : []),
+                    ] });
+                    if (selection.type !== 'target') return { ok: false, errorCode: 'RPC_METHOD_NOT_AVAILABLE' };
+                    options.onIssued();
+                    return { ok: true, result: selection.target.id === driver.id
+                        ? { v: 1, execution: { ok: true, result: { status: 'unavailable' } } }
+                        : await editorMethods.get(method)!(request, { signal: options.signal ?? new AbortController().signal }) };
+                },
+            })) } as unknown as import('@happier-dev/protocol').ActionExecutorDeps);
+            const context = { surface: 'mcp' as const, authority: 'account_automation' as const,
+                actionCaller: { kind: 'session' as const, sessionId: 'session-agent', starterDepth: 0, turnDepth: 0 },
+                defaultSessionId: 'session-agent', serverId: scope.serverId };
+            const tool = listActionSpecs().find(spec => spec.bindings?.mcpToolName === 'workflow_authoring_draft_get')!;
+            const read = await caller.execute(tool.id, { scope, draftId: original.draftId }, context);
+            if (!read.ok) throw new Error(read.error);
+            const { WorkflowDraftGetResultV1Schema } = await import('@happier-dev/protocol/actions/workflowAuthoringAction');
+            const result = WorkflowDraftGetResultV1Schema.parse(read.result);
+            if (result.status !== 'available') throw new Error(`Mounted editor is unavailable; methods: ${[...editorMethods.keys()].join(', ')}`);
+            const editTool = listActionSpecs().find(spec => spec.bindings?.mcpToolName === 'workflow_authoring_draft_edit')!;
+            await act(async () => {
+                expect(await caller.execute(editTool.id, { scope, draftId: original.draftId,
+                    expectedDraftRevision: result.drafts[0]!.draftRevision,
+                    ops: [{ kind: 'set_step_prompt', blockId: original.blocks[0]!.id, text: 'Prepared through the Session MCP route' }] }, context))
+                    .toMatchObject({ ok: true, result: { status: 'applied', changedBlockIds: [original.blocks[0]!.id] } });
+            });
+            expect(latestBodyProps!.draft.blocks[0]).toMatchObject({ document: { text: 'Prepared through the Session MCP route' } });
+            expect(latestBodyProps!.highlightedBlockIds).toEqual([original.blocks[0]!.id]);
+            expect(definitionActions.update).not.toHaveBeenCalled();
+            expect(runStartSpy).not.toHaveBeenCalled();
+            expect(boundary.updates).toEqual([]);
+            await act(async () => { latestBodyProps!.history!.undo(); });
+            expect(latestBodyProps!.draft).toEqual(original);
+            expect(await caller.execute(tool.id, { scope: { ...scope, accountId: 'other-account' }, draftId: original.draftId }, context))
+                .toEqual({ ok: true, result: { status: 'unavailable' } });
+            await act(async () => { screen.update(<><ClientActionReverseRuntime />
+                <WorkflowEditorHostScreen source={{ kind: 'new' }} /></>); });
+            const replacement = latestBodyProps!.draft;
+            expect(replacement.draftId).not.toBe(original.draftId);
+            expect(await caller.execute(tool.id, { scope, draftId: original.draftId }, context))
+                .toEqual({ ok: true, result: { status: 'unavailable' } });
+            expect(await caller.execute(tool.id, { scope, draftId: replacement.draftId }, context))
+                .toMatchObject({ ok: true, result: { status: 'available', drafts: [{ draftId: replacement.draftId }] } });
+            await act(async () => { screen.unmount(); });
+            expect(await caller.execute(tool.id, { scope, draftId: replacement.draftId }, context))
+                .toEqual({ ok: true, result: { status: 'unavailable' } });
+            register.mockRestore();
+        } finally { useRealDraftActionBoundary = false; }
+    });
     it('does not load or create an editor when mounted draft Actions have no answering host', async () => {
         const { invokeWorkflowAuthoringAction } = await import('@/sync/ops/actions/workflowAuthoringAction');
         expect(await invokeWorkflowAuthoringAction({ actionId: 'workflow.authoring.draft.get',
@@ -325,15 +689,16 @@ describe('WorkflowEditorHostScreen composition', () => {
     });
     it('mounted draft Actions edit atomically, tint, refuse stale revisions and share host undo/redo and Save', async () => {
         renderRealEditorBody = true;
+        const boundary = await serveMountedDraftActionHome();
         const { createActionExecutor } = await import('@happier-dev/protocol/actions/actionExecutor');
         const owners = await import('@/sync/ops/actions/workflowAuthoringAction');
         const executor = createActionExecutor({ workflowAuthoringAction: owners.invokeWorkflowAuthoringAction,
             isActionApprovalRequired: () => false } as unknown as import('@happier-dev/protocol').ActionExecutorDeps);
         const context = { surface: 'agent' as const, authority: 'account_automation' as const,
-            serverId: 'server-a', runtimeAccountId: 'account-a' };
+            serverId: boundary.scope.serverId, runtimeAccountId: boundary.scope.accountId };
         await renderRunEditor(<WorkflowEditorHostScreen source={{ kind: 'saved', definitionId: SAVED_TRIGGER_WORKFLOW_ID }} />);
         const original = latestBodyProps!.draft;
-        const address = { scope: { serverId: 'server-a', accountId: 'account-a' }, draftId: original.draftId };
+        const address = { scope: boundary.scope, draftId: original.draftId };
         const get = async () => {
             const result = await executor.execute('workflow.authoring.draft.get', address, context);
             if (!result.ok) throw new Error(result.error);
@@ -341,6 +706,28 @@ describe('WorkflowEditorHostScreen composition', () => {
         };
         const initial = await get();
         expect(initial.status).toBe('available');
+        expect(await executor.execute('workflow.authoring.draft.get', { scope: address.scope }, context))
+            .toMatchObject({ ok: true, result: { status: 'available', drafts: [{ draftId: original.draftId }] } });
+        const retireDuplicate = owners.registerMountedWorkflowDraftOwner({ kind: 'workflow',
+            getContext: () => ({ scope: address.scope, draft: original, editable: true, whereMachineId: null, candidates: [] }),
+            onChange: () => { throw new Error('Ambiguous owner must not receive an edit'); } });
+        try {
+            expect(await executor.execute('workflow.authoring.draft.get', { scope: address.scope }, context))
+                .toEqual({ ok: true, result: { status: 'unavailable' } });
+            expect(await executor.execute('workflow.authoring.draft.edit', { ...address,
+                expectedDraftRevision: initial.drafts[0]!.draftRevision,
+                ops: [{ kind: 'rename', name: 'Must not reach either owner' }] }, context))
+                .toEqual({ ok: true, result: { status: 'unavailable' } });
+        } finally { retireDuplicate(); }
+        await act(async () => {
+            expect(await executor.execute('workflow.authoring.draft.edit', { ...address,
+                expectedDraftRevision: initial.drafts[0]!.draftRevision, ops: [
+                    { kind: 'set_step_prompt', blockId: original.blocks[0]!.id, text: 'Must not be partially applied' },
+                    { kind: 'remove_block', blockId: 'missing-block' },
+                ] }, context)).toMatchObject({ ok: true, result: { status: 'refused', reason: 'unknown_block_id' } });
+        });
+        expect(latestBodyProps!.draft).toEqual(original);
+        expect((await get()).drafts[0]!.draftRevision).toBe(initial.drafts[0]!.draftRevision);
         const edit = { ...address, expectedDraftRevision: initial.drafts[0]!.draftRevision,
             ops: [{ kind: 'set_step_prompt', blockId: original.blocks[0]!.id, text: 'Agent changed this prompt' },
                 { kind: 'rename', name: 'Agent changed the title' }] };
@@ -356,29 +743,407 @@ describe('WorkflowEditorHostScreen composition', () => {
         expect(latestBodyProps!.draft).toEqual(original);
         await act(async () => { await executor.execute('workflow.authoring.draft.redo', address, context); });
         expect(latestBodyProps!.draft.name).toBe('Agent changed the title');
-        const saving = createDeferred<WorkflowDefinitionGetResultV1>();
-        definitionActions.update.mockImplementationOnce(() => saving.promise);
+        const beforeHumanEdit = (await get()).drafts[0]!.draftRevision;
+        await act(async () => { latestBodyProps!.onChange({ ...latestBodyProps!.draft, name: 'Person changed the title' }); });
+        expect(await executor.execute('workflow.authoring.draft.edit', { ...edit, expectedDraftRevision: beforeHumanEdit }, context))
+            .toMatchObject({ ok: true, result: { status: 'refused', reason: 'stale_draft_revision' } });
+        const saving = boundary.holdNextUpdate();
         let settled = false;
         let save: Promise<unknown>;
-        await act(async () => { save = executor.execute('workflow.authoring.draft.save', address, context).then(result => { settled = true; return result; }); });
-        expect(settled).toBe(false);
-        const submitted = definitionActions.update.mock.calls[0]![0];
-        expect(submitted.definition.blocks[0]).toMatchObject({ document: { text: 'Agent changed this prompt' } });
-        await act(async () => { saving.resolve({ definitionId: SAVED_TRIGGER_WORKFLOW_ID, access: 'owner',
-            definition: createWorkflowDefinitionFixture(submitted.definition), metadata: submitted.metadata!, revision: { headerVersion: 2, bodyVersion: 2 } });
+        // Agent edits do not grant child write authority; this Save is person-admitted.
+        await act(async () => { save = executor.execute('workflow.authoring.draft.save', address,
+            { ...context, surface: 'ui', authority: 'present_user' }).then(result => { settled = true; return result; });
+            await saving.issued; });
+        expect(settled ? await save! : undefined).toBeUndefined();
+        const { decodePlainArtifactStoredContent } = await import('@happier-dev/protocol/storage/artifactStoredContent');
+        const { ArtifactBodyEnvelopeV1Schema } = await import('@happier-dev/protocol/artifacts/artifactBinaryV1');
+        const { WorkflowDefinitionArtifactBodyV1ReadSchema } = await import('@happier-dev/protocol/workflows/workflowDefinitionV1');
+        const submitted = boundary.updates[0]!;
+        expect(submitted).toMatchObject({ expectedHeaderVersion: 1, expectedBodyVersion: 1 });
+        const envelope = ArtifactBodyEnvelopeV1Schema.parse(decodePlainArtifactStoredContent(submitted.body));
+        if (typeof envelope.body !== 'string') throw new Error('Workflow Artifact is not a document');
+        const stored = WorkflowDefinitionArtifactBodyV1ReadSchema.parse(JSON.parse(envelope.body));
+        expect(stored.definition.blocks[0]).toMatchObject({ document: { text: 'Agent changed this prompt' } });
+        await act(async () => { saving.resolve();
             expect(await save!).toMatchObject({ ok: true, result: { status: 'applied' } }); });
         expect(runStartSpy).not.toHaveBeenCalled();
         expect(await executor.execute('workflow.authoring.draft.get', { ...address, scope: { ...address.scope, accountId: 'other' } }, context))
             .toMatchObject({ ok: true, result: { status: 'refused', reason: 'workflow_binding_scope_mismatch' } });
+        await act(async () => { latestBodyProps!.onChangeProjectTarget!({ machineId: 'machine-a', directory: '/repo' }); });
+        expect(await executor.execute('workflow.authoring.draft.get', address, context))
+            .toMatchObject({ ok: true, result: { status: 'available', drafts: [{ settings: {
+                projectTarget: { machineId: 'machine-a', directory: '/repo' },
+            } }] } });
+    });
+
+    it('mounted settings edit shares the new unsaved draft, atomic refusal, revision, history and Save', async () => {
+        renderRealEditorBody = true;
+        const definition = createWorkflowDefinitionFixture({ defaults: {
+            agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
+        } });
+        const boundary = await serveMountedDraftActionHome(definition, false);
+        const seed = storeWorkflowDefinitionDraftSeed({ name: 'Review changes', definition });
+        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+        const owners = await import('@/sync/ops/actions/workflowAuthoringAction');
+        const executor = createDefaultActionExecutor();
+        const context = { surface: 'agent' as const, authority: 'account_automation' as const,
+            serverId: boundary.scope.serverId, runtimeAccountId: boundary.scope.accountId };
+        await renderRunEditor(<WorkflowEditorHostScreen source={{ kind: 'new', definitionDraftSeedId: seed }} />);
+        const address = { scope: boundary.scope, draftId: latestBodyProps!.draft.draftId };
+        const read = async () => {
+            const result = await owners.invokeWorkflowAuthoringAction({ actionId: 'workflow.authoring.draft.get', input: address, context });
+            if (result.status !== 'available') throw new Error('Mounted draft unavailable');
+            return result.drafts[0]!;
+        };
+        const initial = await read();
+        const settings = { description: 'Review the changes in this project',
+            projectTarget: { machineId: 'machine-a', directory: '/repo' }, executionTarget: 'detached_run' as const,
+            triggers: { rows: [{ identity: { clientId: 'daily-review' }, enabled: true,
+                trigger: { kind: 'schedule' as const, enabled: true,
+                    schedule: { kind: 'interval' as const, everyMs: 86400000, scheduleExpr: null, timezone: null } } }],
+                project: null, inputs: {} },
+        };
+        await act(async () => {
+            expect(await executor.execute('workflow.authoring.draft.edit', { ...address,
+                expectedDraftRevision: initial.draftRevision, settings,
+                ops: [{ kind: 'remove_block', blockId: 'missing-block' }] }, context))
+                .toMatchObject({ ok: true, result: { status: 'refused', reason: 'unknown_block_id' } });
+        });
+        expect(await read()).toEqual(initial);
+        await act(async () => {
+            expect(await executor.execute('workflow.authoring.draft.edit', { ...address,
+                expectedDraftRevision: initial.draftRevision, settings }, context))
+                .toMatchObject({ ok: true, result: { status: 'applied' } });
+        });
+        const changed = await read();
+        expect(changed.settings).toEqual(settings);
+        expect(changed.dirty).toBe(true);
+        expect(changed.draftRevision).toBeGreaterThan(initial.draftRevision);
+        expect(boundary.creates).toHaveLength(0);
+        expect(boundary.updates).toHaveLength(0);
+        expect(await executor.execute('workflow.authoring.draft.edit', { ...address,
+            expectedDraftRevision: initial.draftRevision, settings: { description: 'Stale change' } }, context))
+            .toMatchObject({ ok: true, result: { status: 'refused', reason: 'stale_draft_revision' } });
+        expect(await read()).toEqual(changed);
+        await act(async () => {
+            expect(await executor.execute('workflow.authoring.draft.edit', { ...address,
+                expectedDraftRevision: changed.draftRevision,
+                ops: [{ kind: 'rename', name: 'Must stay unchanged' }], settings: { description: 'Must stay unchanged',
+                    triggers: { rows: [{ identity: { clientId: 'unavailable-event' }, trigger: null, enabled: true }], project: null, inputs: {} } } }, context))
+                .toMatchObject({ ok: true, result: { status: 'refused', reason: 'workflow_trigger_restore_requires_setup' } });
+        });
+        expect(await read()).toEqual(changed);
+        await act(async () => { await executor.execute('workflow.authoring.draft.undo', address, context); });
+        expect((await read()).settings).toEqual(initial.settings);
+        await act(async () => { await executor.execute('workflow.authoring.draft.redo', address, context); });
+        expect((await read()).settings).toEqual(settings);
+        const beforeNoop = await read();
+        await act(async () => { expect(await executor.execute('workflow.authoring.draft.edit', { ...address,
+            expectedDraftRevision: beforeNoop.draftRevision, settings }, context))
+            .toMatchObject({ ok: true, result: { status: 'unchanged', draftRevision: beforeNoop.draftRevision } }); });
+        // Removing the unsaved trigger keeps Save at the real Artifact HTTP boundary.
+        await act(async () => { await executor.execute('workflow.authoring.draft.edit', { ...address,
+            expectedDraftRevision: beforeNoop.draftRevision, settings: { triggers: initial.settings.triggers } }, context); });
+        await act(async () => { expect(await executor.execute('workflow.authoring.draft.save', address,
+            { ...context, surface: 'ui', authority: 'present_user' }))
+            .toEqual({ ok: true, result: { status: 'applied' } }); });
+        expect(boundary.creates, JSON.stringify(boundary.requests.map(request => ({ path: request.path, method: request.method })))).toHaveLength(1);
+        const { decodePlainArtifactStoredContent } = await import('@happier-dev/protocol/storage/artifactStoredContent');
+        const { WorkflowDefinitionArtifactHeaderV1Schema } = await import('@happier-dev/protocol/workflows/workflowDefinitionV1');
+        expect(WorkflowDefinitionArtifactHeaderV1Schema.parse(decodePlainArtifactStoredContent(boundary.creates[0]!.header)).metadata)
+            .toMatchObject({ title: 'Review changes', description: settings.description });
+        expect(latestBodyProps!.projectTarget).toEqual(settings.projectTarget);
+        expect(getStorage().getState().authoringMemory.workflowProjectTargetsByDefinitionId[boundary.creates[0]!.id])
+            .toEqual(settings.projectTarget);
+        expect(latestBodyProps!.executionTarget).toBe(settings.executionTarget);
+        expect(runStartSpy).not.toHaveBeenCalled();
+        // Native controls enter the same revision/history owner, including staged description input.
+        for (const change of [
+            () => latestBodyProps!.onChangeDescription!('Person changed the description'),
+            () => latestBodyProps!.onChangeProjectTarget!({ machineId: 'machine-b', directory: '/other' }),
+            () => latestBodyProps!.onChangeExecutionTarget!('session'),
+            () => {
+                const section = latestBodyProps!.triggersSection;
+                if (!React.isValidElement<React.ComponentProps<typeof import('../triggers/WorkflowTriggerSection').WorkflowTriggerSection>>(section)) {
+                    throw new Error('Missing native trigger editor');
+                }
+                section.props.onChangeDraft({ adds: [{ clientId: 'daily-review', trigger: settings.triggers.rows[0]!.trigger }], updates: {}, removes: [] });
+            },
+        ]) {
+            const before = await read();
+            await act(async () => { change(); });
+            expect((await read()).draftRevision).toBeGreaterThan(before.draftRevision);
+            expect(await executor.execute('workflow.authoring.draft.edit', { ...address,
+                expectedDraftRevision: before.draftRevision, settings: { description: 'Stale native overwrite' } }, context))
+                .toMatchObject({ ok: true, result: { status: 'refused', reason: 'stale_draft_revision' } });
+            await act(async () => { await executor.execute('workflow.authoring.draft.undo', address, context); });
+            expect((await read()).settings).toEqual(before.settings);
+        }
+    });
+
+    it('decoded mounted trigger settings retain Save identity through Undo/Redo without another trigger write', async () => {
+        renderRealEditorBody = true;
+        const boundary = await serveMountedDraftActionHome();
+        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+        const { WorkflowDraftGetResultV1Schema, WorkflowDraftTriggerSnapshotV1Schema } = await import('@happier-dev/protocol/actions/workflowAuthoringAction');
+        const executor = createDefaultActionExecutor();
+        const context = { surface: 'agent' as const, authority: 'account_automation' as const,
+            serverId: boundary.scope.serverId, runtimeAccountId: boundary.scope.accountId };
+        await renderRunEditor(<WorkflowEditorHostScreen source={{ kind: 'saved', definitionId: SAVED_TRIGGER_WORKFLOW_ID }} />);
+        const address = { scope: boundary.scope, draftId: latestBodyProps!.draft.draftId };
+        const read = async () => {
+            const response = await executor.execute('workflow.authoring.draft.get', address, context);
+            if (!response.ok) throw new Error(response.error);
+            const result = WorkflowDraftGetResultV1Schema.parse(response.result);
+            if (result.status !== 'available') throw new Error('Mounted draft unavailable');
+            return result.drafts[0]!;
+        };
+        const initial = await read();
+        const decoded = WorkflowDraftTriggerSnapshotV1Schema.parse({ rows: [{ identity: { clientId: 'daily-review' }, enabled: true,
+            trigger: { kind: 'schedule', enabled: true,
+                schedule: { kind: 'interval', everyMs: 86400000, scheduleExpr: null, timezone: null } } }],
+            project: { machineId: 'machine-a', directory: '/repo' }, inputs: {} });
+        await act(async () => {
+            expect(await executor.execute('workflow.authoring.draft.edit', { ...address,
+                expectedDraftRevision: initial.draftRevision, settings: { triggers: decoded } }, context))
+                .toMatchObject({ ok: true, result: { status: 'applied' } });
+        });
+        const saveFromNativeControl = async () => {
+            await act(async () => {
+                latestBodyProps!.onSave!();
+                await vi.waitFor(() => {
+                    expect(boundary.automationCreates).toHaveLength(1);
+                    expect(latestBodyProps!.savePending).toBe(false);
+                });
+            });
+        };
+        await saveFromNativeControl();
+        const acknowledged = await read();
+        const triggerId = acknowledged.settings.triggers.rows[0]!.identity.triggerId;
+        expect(triggerId).toBeTruthy();
+        expect(acknowledged.dirty).toBe(false);
+        await act(async () => {
+            expect(await executor.execute('workflow.authoring.draft.undo', address, context))
+                .toMatchObject({ ok: true, result: { status: 'applied' } });
+        });
+        expect((await read()).settings.triggers.rows).toEqual([]);
+        await act(async () => {
+            expect(await executor.execute('workflow.authoring.draft.redo', address, context))
+                .toMatchObject({ ok: true, result: { status: 'applied' } });
+        });
+        const redone = await read();
+        expect(redone.settings.triggers.rows).toMatchObject([{ identity: { clientId: 'daily-review', triggerId } }]);
+        expect(redone.dirty).toBe(false);
+        await saveFromNativeControl();
+        expect((await read()).settings.triggers.rows).toHaveLength(1);
+        expect(boundary.requests.filter(request => request.path.startsWith('/v3/automations') && request.method !== 'GET'))
+            .toHaveLength(1);
+    });
+
+    it.each(['trigger', 'definition'] as const)('mounted Agent Save preserves %s child approval while native Save uses its UI admission', async (child) => {
+        realDraftActionFailures.length = 0;
+        renderRealEditorBody = true;
+        const boundary = await serveMountedDraftActionHome();
+        const { adoptHomeProfile } = await import('@/sync/domains/server/serverProfiles');
+        await adoptHomeProfile({ descriptor: { serverUrl: boundary.homes.home!.serverUrl, homeServerIdentityId: 'workflow-approval-home' }, source: 'manual' });
+        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+        const { ActionsSettingsV1Schema } = await import('@happier-dev/protocol');
+        const { DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1 } = await import('@happier-dev/protocol/account/settings/sessionAgentSpawnPolicyV1');
+        // Real scoped Account policy, not a caller-authored approval override.
+        getStorage().setState(state => ({ settings: { ...state.settings,
+            actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, actions: {
+                'workflow.definition.update': { approvalRequiredSurfaces: ['agent'] },
+            } }),
+        } }));
+        const executor = createDefaultActionExecutor();
+        const context = { surface: 'agent' as const, authority: 'account_automation' as const,
+            serverId: boundary.scope.serverId, serverIdentityId: 'workflow-approval-home',
+            runtimeAccountId: boundary.scope.accountId, expectedAccountId: boundary.scope.accountId,
+            callerPermissionMode: 'yolo', sessionAgentSpawnPolicyV1: DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1,
+            actionCaller: { kind: 'session', sessionId: 'authoring-session', starterDepth: 0, turnDepth: 0 },
+            defaultSessionId: 'authoring-session',
+            // Host-admitted start facts are required before durable child approval.
+            agentStartContext: { caller: { kind: 'session', sessionId: 'authoring-session', starterDepth: 0, turnDepth: 0 },
+                baseline: { machineId: 'machine-a', directory: '/repo' }, roles: {},
+                callerPermissionCeiling: 'yolo', ledSubtreeSessionIds: [], workDepthLimit: 4 },
+            actionRequestId: 'mounted-parent-save',
+            bypassApprovals: true,
+            presentUserConfirmation: { actionId: 'workflow.authoring.draft.save' as const } } satisfies ActionExecutorContext;
+        await renderRunEditor(<WorkflowEditorHostScreen source={{ kind: 'saved', definitionId: SAVED_TRIGGER_WORKFLOW_ID }} />);
+        const snapshot = latestBodyProps!.mountedDraftActions!.getSnapshot()!;
+        const address = { scope: boundary.scope, draftId: snapshot.draftId };
+        const triggers = { rows: [{ identity: { clientId: 'daily-review' }, enabled: true,
+            trigger: { kind: 'schedule' as const, enabled: true,
+                schedule: { kind: 'interval' as const, everyMs: 86400000, scheduleExpr: null, timezone: null } } }],
+            project: { machineId: 'machine-a', directory: '/repo' }, inputs: {} };
+        await act(async () => { expect(await executor.execute('workflow.authoring.draft.edit', { ...address,
+            expectedDraftRevision: snapshot.draftRevision,
+            settings: child === 'trigger' ? { triggers } : { description: 'Review this project every day' } }, context))
+            .toMatchObject({ ok: true, result: { status: 'applied' } }); });
+        const controller = new AbortController();
+        let settled = false;
+        const saving = executor.execute('workflow.authoring.draft.save', address, { ...context, signal: controller.signal })
+            .then(result => { settled = true; return result; });
+        try {
+            // This Action uses canonical deferred approval custody, not a blocking waiter.
+            await act(async () => { await saving; });
+            expect(boundary.automationCreates).toHaveLength(0);
+            const { decodePlainArtifactStoredContent } = await import('@happier-dev/protocol/storage/artifactStoredContent');
+            const { ArtifactBodyEnvelopeV1Schema } = await import('@happier-dev/protocol/artifacts/artifactBinaryV1');
+            const { ApprovalRequestSchema } = await import('@happier-dev/protocol/approvals/approvalRequestV1');
+            expect(boundary.creates, JSON.stringify({ settled, result: settled ? await saving : undefined, childFailures: realDraftActionFailures,
+                saveStatus: latestBodyProps!.saveStatus,
+                requests: boundary.requests.map(request => ({ path: request.path, method: request.method })),
+            })).toHaveLength(1);
+            const envelope = ArtifactBodyEnvelopeV1Schema.parse(decodePlainArtifactStoredContent(boundary.creates[0]!.body));
+            if (typeof envelope.body !== 'string') throw new Error('Approval Artifact did not contain its request');
+            const approval = ApprovalRequestSchema.parse(JSON.parse(envelope.body));
+            expect(approval).toMatchObject({
+                actionId: child === 'trigger' ? 'workflow.trigger.add' : 'workflow.definition.update', status: 'open',
+                executionOriginV1: { surface: 'agent', authority: 'account_automation' } });
+            if (approval.v !== 2) throw new Error('Child approval did not retain its execution origin');
+            expect(approval.executionOriginV1.requestId).not.toBe(context.actionRequestId);
+            expect(settled).toBe(true);
+            expect(boundary.updates).toHaveLength(0);
+        } finally {
+            await act(async () => { controller.abort(); await saving; });
+        }
+        const result = await saving;
+        if (result.ok) expect(result.result).toMatchObject({ status: 'refused' });
+        else expect(result.errorCode).toBeTruthy();
+        expect(latestBodyProps!.mountedDraftActions!.getSnapshot()!.settings.triggers.rows).toHaveLength(child === 'trigger' ? 1 : 0);
+        // The person-owned Save executes the retained delta through native UI policy.
+        await act(async () => {
+            latestBodyProps!.onSave!();
+            await vi.waitFor(() => {
+                expect(boundary.automationCreates).toHaveLength(child === 'trigger' ? 1 : 0);
+                expect(boundary.updates).toHaveLength(child === 'definition' ? 1 : 0);
+                expect(latestBodyProps!.savePending).toBe(false);
+            });
+        });
+        expect(boundary.automationCreates).toHaveLength(child === 'trigger' ? 1 : 0);
+        expect(boundary.updates).toHaveLength(child === 'definition' ? 1 : 0);
+        expect(boundary.creates).toHaveLength(1);
+        expect(latestBodyProps!.savePending).toBe(false);
+    });
+
+    it('mounted settings preserve a view recipient’s personal target and trigger authority without definition writes', async () => {
+        renderRealEditorBody = true;
+        const boundary = await serveMountedDraftActionHome();
+        boundary.artifact.access = 'view';
+        boundary.artifact.ownerAccountId = 'other-account';
+        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+        const executor = createDefaultActionExecutor();
+        const context = { surface: 'agent' as const, authority: 'account_automation' as const,
+            serverId: boundary.scope.serverId, runtimeAccountId: boundary.scope.accountId };
+        await renderRunEditor(<WorkflowEditorHostScreen source={{ kind: 'saved', definitionId: SAVED_TRIGGER_WORKFLOW_ID }} />);
+        expect(latestBodyProps!.onChangeDescription).toBeUndefined();
+        const snapshot = () => latestBodyProps!.mountedDraftActions!.getSnapshot()!;
+        const initial = snapshot();
+        const address = { scope: boundary.scope, draftId: initial.draftId };
+        const settings = { projectTarget: { machineId: 'machine-a', directory: '/repo' }, executionTarget: 'detached_run' as const,
+            triggers: { rows: [{ identity: { clientId: 'daily-review' }, enabled: true,
+                trigger: { kind: 'schedule' as const, enabled: true,
+                    schedule: { kind: 'interval' as const, everyMs: 86400000, scheduleExpr: null, timezone: null } } }],
+                project: null, inputs: {} } };
+        await act(async () => { expect(await executor.execute('workflow.authoring.draft.edit', { ...address,
+            expectedDraftRevision: initial.draftRevision, settings }, context))
+            .toMatchObject({ ok: true, result: { status: 'applied' } }); });
+        const changed = snapshot();
+        expect(changed.settings).toMatchObject(settings);
+        for (const mutation of [{ settings: { description: 'Cannot edit the definition metadata' } },
+            { ops: [{ kind: 'rename', name: 'Cannot rename' }], settings: { executionTarget: 'session' } }]) {
+            expect(await executor.execute('workflow.authoring.draft.edit', { ...address,
+                expectedDraftRevision: changed.draftRevision, ...mutation }, context))
+                .toMatchObject({ ok: true, result: { status: 'refused', reason: 'workflow_draft_read_only' } });
+            expect(snapshot()).toEqual(changed);
+        }
+        await act(async () => { latestBodyProps!.onChangeProjectTarget!({ machineId: 'machine-b', directory: '/other' }); });
+        expect(snapshot().draftRevision).toBeGreaterThan(changed.draftRevision);
+        expect(await executor.execute('workflow.authoring.draft.edit', { ...address,
+            expectedDraftRevision: changed.draftRevision, settings: { executionTarget: 'session' } }, context))
+            .toMatchObject({ ok: true, result: { status: 'refused', reason: 'stale_draft_revision' } });
+        expect(boundary.updates).toHaveLength(0);
+        expect(boundary.creates).toHaveLength(0);
+    });
+
+    it.each(['action', 'native'] as const)('retains an order-only schema edit through %s, undo/redo and Save', async (entry) => {
+        const definition = createWorkflowDefinitionFixture({ defaults: {
+            agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
+        }, blocks: [{ kind: 'step', id: 'gather',
+            document: { text: 'Gather changes', references: [], attachments: [] }, input: [],
+            result: { kind: 'json', schema: { type: 'object', properties: {
+                issues: { type: 'string' }, commits: { type: 'string' },
+            } } } }] });
+        const boundary = await serveMountedDraftActionHome(definition);
+        await renderRunEditor(<WorkflowEditorHostScreen source={{ kind: 'saved', definitionId: SAVED_TRIGGER_WORKFLOW_ID }} />);
+        const original = latestBodyProps!.draft;
+        const block = original.blocks[0]!;
+        if (block.kind !== 'step') throw new Error('Expected the schema-bearing step');
+        const reordered = { ...block, result: { kind: 'json' as const, schema: { type: 'object' as const,
+            properties: { commits: { type: 'string' as const }, issues: { type: 'string' as const } } } } };
+        const fieldOrder = () => {
+            const current = latestBodyProps!.draft.blocks[0]!;
+            if (current.kind !== 'step' || current.result?.kind !== 'json') throw new Error('Missing result schema');
+            return Object.keys(current.result.schema.properties ?? {});
+        };
+        await act(async () => { await latestBodyProps!.onSave?.(); });
+        expect(boundary.updates).toHaveLength(0);
+        if (entry === 'action') {
+            const owner = latestBodyProps!.mountedDraftActions!;
+            const before = owner.getSnapshot()!;
+            let result: unknown;
+            await act(async () => { result = await owner.execute('workflow.authoring.draft.edit', {
+                scope: before.scope, draftId: before.draftId, expectedDraftRevision: before.draftRevision,
+                ops: [{ kind: 'replace_block', blockId: block.id, block: reordered }],
+            }); });
+            expect(result).toMatchObject({ status: 'applied' });
+        } else {
+            // Stage and commit as a native input does; pending history must retain order too.
+            await act(async () => { latestBodyProps!.onChange({ ...original, blocks: [reordered] }, 'Reorder fields', false); });
+            await act(async () => { latestBodyProps!.onCommitChange?.(); });
+        }
+        expect(fieldOrder()).toEqual(['commits', 'issues']);
+        expect(latestBodyProps!.saveStatus?.kind).toBe('unsaved');
+        expect(latestBodyProps!.mountedDraftActions!.getSnapshot()!.dirty).toBe(true);
+        expect(latestBodyProps!.history?.undoLabel).not.toBeNull();
+        const sameOrderOwner = latestBodyProps!.mountedDraftActions!;
+        const beforeNoop = sameOrderOwner.getSnapshot()!;
+        let noop: unknown;
+        await act(async () => { noop = await sameOrderOwner.execute('workflow.authoring.draft.edit', {
+            scope: beforeNoop.scope, draftId: beforeNoop.draftId, expectedDraftRevision: beforeNoop.draftRevision,
+            // Reordering schema keywords is semantic-only; declared properties retain their order.
+            ops: [{ kind: 'replace_block', blockId: block.id, block: { ...reordered,
+                result: { schema: { properties: reordered.result.schema.properties, type: 'object' }, kind: 'json' } } }],
+        }); });
+        expect(noop).toMatchObject({ status: 'unchanged', draftRevision: beforeNoop.draftRevision });
+        await act(async () => { latestBodyProps!.history!.undo(); });
+        expect(fieldOrder()).toEqual(['issues', 'commits']);
+        expect(latestBodyProps!.saveStatus?.kind).toBe('saved');
+        await act(async () => { latestBodyProps!.history!.redo(); });
+        expect(fieldOrder()).toEqual(['commits', 'issues']);
+        expect(latestBodyProps!.saveStatus?.kind).toBe('unsaved');
+        await act(async () => { await latestBodyProps!.onSave?.(); });
+        expect(boundary.updates).toHaveLength(1);
+        const { decodePlainArtifactStoredContent } = await import('@happier-dev/protocol/storage/artifactStoredContent');
+        const { ArtifactBodyEnvelopeV1Schema } = await import('@happier-dev/protocol/artifacts/artifactBinaryV1');
+        const { WorkflowDefinitionArtifactBodyV1ReadSchema } = await import('@happier-dev/protocol/workflows/workflowDefinitionV1');
+        const envelope = ArtifactBodyEnvelopeV1Schema.parse(decodePlainArtifactStoredContent(boundary.updates[0]!.body));
+        if (typeof envelope.body !== 'string') throw new Error('Workflow Artifact is not a document');
+        const savedBlock = WorkflowDefinitionArtifactBodyV1ReadSchema.parse(JSON.parse(envelope.body)).definition.blocks[0]!;
+        if (savedBlock.kind !== 'step' || savedBlock.result?.kind !== 'json') throw new Error('Missing saved result schema');
+        expect(Object.keys(savedBlock.result.schema.properties ?? {})).toEqual(['commits', 'issues']);
+        expect(latestBodyProps!.saveStatus?.kind).toBe('saved');
     });
 
     it('mounted draft discard respects the existing human confirmation and preserves undo', async () => {
         renderRealEditorBody = true;
+        const boundary = await serveMountedDraftActionHome();
         const { invokeWorkflowAuthoringAction } = await import('@/sync/ops/actions/workflowAuthoringAction');
         await renderRunEditor(<WorkflowEditorHostScreen source={{ kind: 'saved', definitionId: SAVED_TRIGGER_WORKFLOW_ID }} />);
         const original = latestBodyProps!.draft;
-        const address = { scope: { serverId: 'server-a', accountId: 'account-a' }, draftId: original.draftId };
-        const context = { serverId: 'server-a', runtimeAccountId: 'account-a' };
+        const address = { scope: boundary.scope, draftId: original.draftId };
+        const context = { serverId: boundary.scope.serverId, runtimeAccountId: boundary.scope.accountId };
         await act(async () => { latestBodyProps!.onChange({ ...original, name: 'Keep my edits' }); });
         expect(await invokeWorkflowAuthoringAction({ actionId: 'workflow.authoring.draft.discard', input: address, context }))
             .toMatchObject({ status: 'refused', reason: 'cancelled' });
@@ -389,6 +1154,80 @@ describe('WorkflowEditorHostScreen composition', () => {
         expect(latestBodyProps!.draft).toEqual(original);
         await act(async () => { latestBodyProps!.history!.undo(); });
         expect(latestBodyProps!.draft.name).toBe('Keep my edits');
+    });
+    it.each([
+        ['unsaved', 'route'], ['unsaved', 'import'], ['saved', 'route'], ['saved', 'import'],
+    ] as const)('mounted draft discard cannot confirm against a replacement %s source (%s)', async (kind, replacement) => {
+        renderRealEditorBody = true;
+        const boundary = await serveMountedDraftActionHome();
+        const { invokeWorkflowAuthoringAction } = await import('@/sync/ops/actions/workflowAuthoringAction');
+        const screen = await renderRunEditor(<WorkflowEditorHostScreen source={kind === 'saved'
+            ? { kind: 'saved', definitionId: SAVED_TRIGGER_WORKFLOW_ID } : { kind: 'new' }} />);
+        await act(async () => { latestBodyProps!.onChange({ ...latestBodyProps!.draft, name: 'Source A edits' }); });
+        const address = { scope: boundary.scope, draftId: latestBodyProps!.draft.draftId };
+        const picked = replacement === 'import' ? createDeferred<string | null>() : null;
+        if (picked) {
+            workflowDocumentPicker.pick.mockReturnValueOnce(picked.promise);
+            await act(async () => { latestBodyProps!.onImportJson?.(); });
+        }
+        const confirmation = kind === 'saved' ? createDeferred<boolean>() : null;
+        if (confirmation) modalConfirmSpy.mockReturnValueOnce(confirmation.promise);
+        let discard: ReturnType<typeof invokeWorkflowAuthoringAction>;
+        await act(async () => { discard = invokeWorkflowAuthoringAction({ actionId: 'workflow.authoring.draft.discard', input: address,
+            context: { serverId: boundary.scope.serverId, runtimeAccountId: boundary.scope.accountId } }); });
+        if (confirmation) expect(modalConfirmSpy).toHaveBeenCalled();
+        else expect(modalAlertSpy).toHaveBeenCalledOnce();
+        const confirmOldDraft = confirmation ? () => confirmation.resolve(true)
+            : () => modalAlertSpy.mock.lastCall![2]!.find(button => button.style === 'destructive')!.onPress?.();
+        if (picked) {
+            await act(async () => { picked.resolve(JSON.stringify({ kind: 'happier.workflow', version: 1,
+                definition: createWorkflowDefinitionFixture({ defaults: {
+                    agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
+                } }) })); });
+            expect(latestBodyProps!.draft.draftId).not.toBe(address.draftId);
+        } else {
+            await screen.update(<WorkflowEditorHostScreen source={{ kind: 'new', builtinId: 'builtin:plan-with-a-panel' }} />);
+            await act(async () => { latestBodyProps!.onChange({ ...latestBodyProps!.draft, name: 'Source B edits must remain' }); });
+        }
+        const replacementDraft = latestBodyProps!.draft;
+        const replacementAddress = { scope: boundary.scope, draftId: replacementDraft.draftId };
+        const context = { serverId: boundary.scope.serverId, runtimeAccountId: boundary.scope.accountId };
+        const replacementSnapshot = await invokeWorkflowAuthoringAction({ actionId: 'workflow.authoring.draft.get',
+            input: replacementAddress, context });
+        await act(async () => { confirmOldDraft();
+            expect(await discard!).toMatchObject({ status: 'refused', ...(kind === 'saved' ? { reason: 'draft_retired' } : {}) }); });
+        expect(latestBodyProps!.draft).toEqual(replacementDraft);
+        expect(await invokeWorkflowAuthoringAction({ actionId: 'workflow.authoring.draft.get',
+            input: replacementAddress, context })).toEqual(replacementSnapshot);
+        expect(routerSpy.replace).not.toHaveBeenCalled();
+    });
+    it('mounted draft Actions read an incomplete group as a draft with validation issues', async () => {
+        renderRealEditorBody = true;
+        const boundary = await serveMountedDraftActionHome();
+        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+        const owners = await import('@/sync/ops/actions/workflowAuthoringAction');
+        const executor = createDefaultActionExecutor();
+        const context = { surface: 'agent' as const, authority: 'account_automation' as const,
+            serverId: boundary.scope.serverId, runtimeAccountId: boundary.scope.accountId };
+        await renderRunEditor(<WorkflowEditorHostScreen source={{ kind: 'saved', definitionId: SAVED_TRIGGER_WORKFLOW_ID }} />);
+        const address = { scope: boundary.scope, draftId: latestBodyProps!.draft.draftId };
+        const initial = await owners.invokeWorkflowAuthoringAction({ actionId: 'workflow.authoring.draft.get', input: address, context });
+        if (initial.status !== 'available') throw new Error('Mounted draft unavailable');
+        await act(async () => { expect(await executor.execute('workflow.authoring.draft.edit', { ...address,
+            expectedDraftRevision: initial.drafts[0]!.draftRevision, settings: { description: 'Incomplete but undoable draft' }, ops: [
+                { kind: 'insert_block', list: { kind: 'root' }, block: { kind: 'loop', id: 'group',
+                    repetition: { kind: 'count', count: { kind: 'literal', value: 2 } }, body: [{ kind: 'step', id: 'group-child',
+                        document: { text: 'Remove this child', references: [], attachments: [] }, input: [], result: { kind: 'text' } }] } },
+                { kind: 'remove_block', blockId: 'group-child' },
+            ] }, context)).toMatchObject({ ok: true, result: { status: 'applied' } }); });
+        expect(await executor.execute('workflow.authoring.draft.get', address, context)).toMatchObject({ ok: true,
+            result: { status: 'available', drafts: [{ dirty: true, definition: { blocks: expect.arrayContaining([
+                expect.objectContaining({ kind: 'loop', id: 'group', body: [] }),
+            ]) }, settings: { description: 'Incomplete but undoable draft' },
+            validationIssues: expect.arrayContaining([expect.objectContaining({ severity: 'error' })]) }] } });
+        await act(async () => { expect(await executor.execute('workflow.authoring.draft.save', address, context))
+            .toMatchObject({ ok: true, result: { status: 'refused', reason: 'invalid_workflow' } }); });
+        expect(boundary.updates).toHaveLength(0);
     });
     it.each([false, true])('delivers Delete from the real editor overflow after it closes (phone=%s, R17a)', async phone => {
         renderRealEditorBody = true;
@@ -505,6 +1344,9 @@ describe('WorkflowEditorHostScreen composition', () => {
 
     it.each([
         { kind: 'new' as const, definitionDraftSeedId: 'lost-on-reload' },
+        { kind: 'new' as const, newSessionDraftSeedId: 'lost-on-reload' },
+        { kind: 'new' as const, triggerWorkflowSeedId: 'lost-on-reload' },
+        { kind: 'new' as const, reviewedRunSeedId: 'lost-on-reload' },
         { kind: 'saved' as const, definitionId: SAVED_TRIGGER_WORKFLOW_ID, agentRevisionSeedId: 'lost-on-reload' },
     ])('explains a $kind seed lost on reload without claiming an Account change (DESIGN-11 N56)', async source => {
         renderRealEditorBody = true;
@@ -912,6 +1754,7 @@ describe('WorkflowEditorHostScreen composition', () => {
         await screen.unmount();
     });
     it('lets a Can-use recipient save personal triggers without editing the definition', async () => {
+        initializePersonalWhereWriter();
         definitionActions.get.mockImplementationOnce(async ({ definitionId }) => ({ definitionId, access: 'view',
             definition: createWorkflowDefinitionFixture(), revision: { headerVersion: 1, bodyVersion: 1 }, metadata: { title: 'Shared workflow' } }));
         triggerActions.add.mockImplementationOnce(async () => { throw new Error('target_unavailable'); });
@@ -1445,6 +2288,25 @@ describe('WorkflowEditorHostScreen composition', () => {
             await screen.unmount();
         });
 
+        it('hydrates the weekly storage review seed and keeps the selected Machine’s contextual Agent', async () => {
+            const scope = { serverId: 'server-a', accountId: 'account-a' };
+            getStorage().setState({ settingsScope: scope });
+            applyAcpCatalogSnapshot(scope, { status: 'ready', record: { v: 1, definitions: [] }, revision: 1 }, true);
+            daemonProjection.resolves = true;
+            const definitionDraftSeedId = storeWorkflowDefinitionDraftSeed(createWeeklyStorageReviewWorkflowSeed({ name: 'Weekly storage review' }));
+            const screen = await renderScreen(<WorkflowEditorHostScreen source={{ kind: 'new', definitionDraftSeedId }} />);
+
+            await selectMachine();
+            await act(async () => {});
+
+            expect(latestBodyProps?.draft.name).toBe('Weekly storage review');
+            expect(latestBodyProps?.draft.defaults.agentTarget).toEqual(latestBodyProps?.authoringFacts?.contextualDefaultAgentTarget);
+            expect(latestBodyProps?.draft.blocks[0]).not.toHaveProperty('execution.engine');
+            const { validateWorkflowEditorDraft } = await import('@/sync/domains/workflows/workflowAuthoring');
+            expect(validateWorkflowEditorDraft(latestBodyProps!.draft).valid).toBe(true);
+            await screen.unmount();
+        });
+
         it('leaves the draft honestly unresolved when no projection can name an Agent', async () => {
             daemonProjection.resolves = false;
             const { validateWorkflowEditorDraft } = await import('@/sync/domains/workflows/workflowAuthoring');
@@ -1635,8 +2497,111 @@ describe('WorkflowEditorHostScreen composition', () => {
      * must not surface in the next one.
      */
     describe('source-local state and slower publications', () => {
+        it.each([
+            ['new-session', 'render'], ['trigger', 'render'],
+            ['new-session', 'readiness'], ['trigger', 'readiness'],
+            ['new-session', 'retirement'], ['trigger', 'retirement'],
+        ] as const)('keeps second %s seed custody correct after commit consumption and delayed %s', async (kind, publication) => {
+            renderRealEditorBody = true;
+            const { buildWorkflowEditorDraftFromDefinition } = await import('@/sync/domains/workflows/workflowAuthoring');
+            const { storeNewSessionAutomationHandoffSeed, readNewSessionAutomationHandoffSeed } = await import('@/sync/domains/workflows/newSessionAutomationHandoffSeed');
+            const { storeTriggerWorkflowSeed, readTriggerWorkflowSeed } = await import('../triggers/triggerWorkflowSeed');
+            const { authoringComposerSeedFromSnapshot } = await import('@/components/sessions/authoring/authoringComposerCustody');
+            const { retireActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+            const makeSource = (text: string) => {
+                const definition = createWorkflowDefinitionFixture({ defaults: {
+                    agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
+                }, blocks: [{ kind: 'step', id: 'prompt', document: { text, references: [], attachments: [] },
+                    input: [], result: { kind: 'text' } }] });
+                if (kind === 'trigger') {
+                    const id = storeTriggerWorkflowSeed({ definition, retarget: { scope: 'account', automationId: TRIGGER_SET_ID,
+                        triggerId: text, expectedRevision: 8 } });
+                    return { source: { kind: 'new' as const, triggerWorkflowSeedId: id }, consumed: () => readTriggerWorkflowSeed(id) === null };
+                }
+                const draft = buildWorkflowEditorDraftFromDefinition({ draftId: `handoff-${text}`, name: text, definition });
+                const id = storeNewSessionAutomationHandoffSeed({ name: text, description: text, enabled: true,
+                    draft, project: null, triggers: [], composer: authoringComposerSeedFromSnapshot('prompt', {
+                        text, references: [], attachments: [], selection: { start: text.length, end: text.length },
+                    }) });
+                return { source: { kind: 'new' as const, newSessionDraftSeedId: id }, consumed: () => readNewSessionAutomationHandoffSeed(id) === null };
+            };
+            const first = makeSource('FIRST');
+            const editor = (source: ReturnType<typeof makeSource>['source']) => <React.StrictMode>
+                <WorkflowEditorHostScreen source={source} />
+            </React.StrictMode>;
+            const screen = await renderRunEditor(editor(first.source));
+            expect(first.consumed()).toBe(true);
+            const second = makeSource('SECOND');
+            await screen.update(editor(second.source));
+            expect(second.consumed()).toBe(true);
+            const acceptedId = latestBodyProps!.draft.draftId;
+            const assertSecond = () => {
+                expect(latestBodyProps!.draft).toMatchObject({ draftId: acceptedId, blocks: [{ document: { text: 'SECOND' } }] });
+                expect(screen.findByType(AgentInput).props.value).toBe('SECOND');
+            };
+            assertSecond();
+            await act(async () => latestBodyProps!.onChange({ ...latestBodyProps!.draft, name: 'Keep my second seed edit' }));
+            const retainedInput = screen.findByType(AgentInput);
+            // The route's next publication occurs after intake's passive effect,
+            // not in the same act/render that first displays the replacement.
+            vi.useFakeTimers();
+            try {
+                await act(async () => {
+                    setTimeout(() => {
+                        if (publication === 'retirement') retireActiveServerAccountScopeLifetime();
+                        getStorage().setState(publication !== 'render'
+                            ? { isSessionDraftsReady: false } : { workflowTriggerSetsById: {} });
+                    }, 60_000);
+                    await vi.advanceTimersByTimeAsync(61_000);
+                });
+                if (publication !== 'render') {
+                    if (publication === 'retirement') expect(screen.findByTestId('session-drafts-hydrating')).not.toBeNull();
+                    else {
+                        expect(screen.findByTestId('session-drafts-hydrating')).toBeNull();
+                        expect(screen.findByType(AgentInput)).toBe(retainedInput);
+                        assertSecond();
+                    }
+                    await act(async () => getStorage().setState({ isSessionDraftsReady: true }));
+                }
+                await screen.update(editor({ ...second.source }));
+                if (publication === 'retirement') {
+                    // After a remount the handle is missing: it cannot prove why
+                    // custody ended, and must not invent an Account-change claim.
+                    expect(screen.findByTestId('workflow-editor-draft-unavailable')).not.toBeNull();
+                    expect(screen.findByTestId('workflow-editor-account-changed')).toBeNull();
+                    expect(screen.findByTestId('workflow-editor-body')).toBeNull();
+                    return;
+                }
+                assertSecond();
+                await screen.update(editor({ ...second.source }));
+                assertSecond();
+                expect(latestBodyProps!.draft.name).toBe('Keep my second seed edit');
+            } finally {
+                vi.useRealTimers();
+            }
+        });
+
+        it('does not consume a seed from an abandoned editor render', async () => {
+            const { storeTriggerWorkflowSeed, readTriggerWorkflowSeed } = await import('../triggers/triggerWorkflowSeed');
+            const definition = createWorkflowDefinitionFixture();
+            const seedId = storeTriggerWorkflowSeed({ definition,
+                retarget: { scope: 'account', automationId: TRIGGER_SET_ID, triggerId: 'replayed', expectedRevision: 1 } });
+            const pending = createDeferred<void>();
+            function PendingSibling(): React.ReactNode { throw pending.promise; }
+            const screen = await renderRunEditor(<React.Suspense fallback={<React.Fragment />}>
+                <WorkflowEditorHostScreen source={{ kind: 'new', triggerWorkflowSeedId: seedId }} />
+                <PendingSibling />
+            </React.Suspense>);
+            expect(readTriggerWorkflowSeed(seedId)).not.toBeNull();
+            await screen.update(<WorkflowEditorHostScreen source={{ kind: 'new', triggerWorkflowSeedId: seedId }} />);
+            expect(latestBodyProps!.draft.blocks).toEqual(definition.blocks);
+            expect(readTriggerWorkflowSeed(seedId)).toBeNull();
+        });
+
         it('starts fresh history when import opens a different review document', async () => {
-            const screen = await renderScreen(<WorkflowEditorHostScreen source={{ kind: 'new' }} />);
+            renderRealEditorBody = true;
+            await serveMountedDraftActionHome();
+            const screen = await renderRunEditor(<WorkflowEditorHostScreen source={{ kind: 'new' }} />);
             const original = latestBodyProps!.draft;
             await act(async () => latestBodyProps!.onChange({ ...original, name: 'Previous document' }, 'Rename'));
             expect(latestBodyProps!.history?.undoLabel).toBe('Rename');
@@ -1839,6 +2804,7 @@ describe('WorkflowEditorHostScreen composition', () => {
         });
 
         it('saves the definition first, then the trigger delta, and keeps the edits when the trigger write fails', async () => {
+            initializePersonalWhereWriter();
             const order: string[] = [];
             definitionActions.create.mockImplementationOnce(async (request) => {
                 order.push('definition');
@@ -1888,7 +2854,7 @@ describe('WorkflowEditorHostScreen composition', () => {
             await screen.unmount();
         });
 
-        it('Save as workflow: the first Save writes the definition, then points the trigger at it, with the partial state when that fails', async () => {
+        it('Save as workflow: source replacement retargets the new trigger and retains its partial-save retry', async () => {
             const { storeTriggerWorkflowSeed } = await import('../triggers/triggerWorkflowSeed');
             definitionActions.create.mockImplementation(async (request) => ({ definitionId: SAVED_TRIGGER_WORKFLOW_ID,
                 access: 'owner', revision: { headerVersion: 1, bodyVersion: 1 }, definition: WorkflowDefinitionV1Schema.parse(request.definition), metadata: request.metadata }));
@@ -1904,6 +2870,11 @@ describe('WorkflowEditorHostScreen composition', () => {
             });
             const { WorkflowEditorHostScreen } = await import('./WorkflowEditorHostScreen');
             const screen = await renderScreen(<WorkflowEditorHostScreen source={{ kind: 'new', triggerWorkflowSeedId: seedId }} />);
+            const replacementSeedId = storeTriggerWorkflowSeed({
+                definition: WorkflowDefinitionV1Schema.parse(definition),
+                retarget: { scope: 'account', automationId: TRIGGER_SET_ID, triggerId: 'trigger-2', expectedRevision: 8 },
+            });
+            await screen.update(<WorkflowEditorHostScreen source={{ kind: 'new', triggerWorkflowSeedId: replacementSeedId }} />);
             // The trigger's own steps open as the draft; nothing is written yet.
             expect(latestBodyProps?.draft.blocks[0]).toMatchObject({ id: 'digest' });
             expect(triggerActions.update).not.toHaveBeenCalled();
@@ -1914,7 +2885,7 @@ describe('WorkflowEditorHostScreen composition', () => {
             await act(async () => latestBodyProps?.onSave?.());
             await act(async () => {});
             const retarget = {
-                automationId: TRIGGER_SET_ID, triggerId: 'trigger-1', expectedRevision: 3,
+                automationId: TRIGGER_SET_ID, triggerId: 'trigger-2', expectedRevision: 8,
                 patch: { target: { kind: 'workflow', ref: SAVED_TRIGGER_WORKFLOW_ID } },
             };
             expect(triggerActions.update).toHaveBeenCalledWith(retarget);

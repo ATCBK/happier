@@ -11,7 +11,9 @@ import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemGroupColumn, ItemGroupColumns } from '@/components/ui/lists/ItemGroupColumns';
-import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
+import { SectionActionButton } from '@/components/ui/lists/SectionActionButton';
+import { ListPresentationProvider } from '@/components/ui/lists/listPresentation';
+import { StatusPill } from '@/components/ui/status/StatusPill';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { getPreferredLanguage, t, tLoose } from '@/text';
@@ -23,6 +25,7 @@ import { useWorkflowExistingSessionOptions } from '../screens/useWorkflowExistin
 import { readDeviceTimeZone } from '../triggers/sessionTriggerForm';
 import { WorkflowFlowView } from '../flow/WorkflowFlowView';
 import { projectWorkflowFlow } from '../flow/workflowFlowProjection';
+import { WorkflowExamplesPopover } from './WorkflowExamplesPopover';
 
 /**
  * Inside a Session the example is already bound to it, so a description that begins "Choose a session…"
@@ -36,6 +39,15 @@ const SESSION_DESCRIPTION_KEYS: Partial<Record<WorkflowStarterExampleKeyV1, 'wor
     'test-after-every-turn': 'workflows.examples.sessionTestDescription',
 };
 
+/** Examples the catalog added recently carry a quiet "New" mark wherever they are offered (lab `b-habit T`). */
+const NEW_EXAMPLE_KEYS: ReadonlySet<WorkflowStarterExampleKeyV1> = new Set(['memory-upkeep-in-session']);
+
+function ExampleNewTag(props: Readonly<{ example: WorkflowStarterExampleV1 }>) {
+    if (!NEW_EXAMPLE_KEYS.has(props.example.key)) return null;
+    return <StatusPill testID={`workflow-examples:${props.example.key}:new`} variant="info" hideDot
+        label={t('workflows.examples.newTag')} />;
+}
+
 /** The same read-only examples everywhere. Selection itself never writes or starts a Run. */
 export function WorkflowExamplesSection(props: Readonly<{
     onUse?: (example: WorkflowStarterExampleSelection) => void;
@@ -47,8 +59,13 @@ export function WorkflowExamplesSection(props: Readonly<{
      * and supply the current Session to the existing materializer, with no chooser.
      */
     session?: WorkflowStarterSessionTarget;
-    /** `list`: a Session's compact one-line-per-example picker (with `session`); `cards` draws each with its map. */
-    presentation?: 'cards' | 'list';
+    /**
+     * `list`: a Session's compact one-line-per-example picker (with `session`); `cards` draws each with its map;
+     * `strip`: the returning library's secondary row (lab `nav-N1`), two compact cards and the rest one press away.
+     */
+    presentation?: 'cards' | 'list' | 'strip';
+    /** A phone sheet already names the picker in its header. */
+    hideTitle?: boolean;
 }>): React.ReactElement {
     const router = useRouter();
     const [choice, setChoice] = React.useState<Readonly<{ key: string; lifetime: ActiveServerAccountScopeLifetime | null }> | null>(null);
@@ -74,28 +91,67 @@ export function WorkflowExamplesSection(props: Readonly<{
     };
     if (session !== undefined && props.presentation === 'list') {
         // A Session's own picker (lab `b-habit T`): the full catalog, one line each, and never a Session chooser.
-        return <ItemGroup title={t('workflows.examples.title')} description={t('workflows.examples.sessionDescription')}>
+        // Read as a small configuration page, like the trigger popover beside it: what the picker does sits under
+        // its title at the top, and the rows lie on the picker itself.
+        return <ListPresentationProvider value="page"><ItemGroup surface="none"
+            title={props.hideTitle ? undefined : t('workflows.examples.title')} description={t('workflows.examples.sessionDescription')}>
             {examples.map((example) => {
                 const sessionDescriptionKey = SESSION_DESCRIPTION_KEYS[example.key];
                 return <Item key={example.key} testID={`workflow-examples:${example.key}`}
-                    title={tLoose(example.titleKey)} subtitle={sessionDescriptionKey ? t(sessionDescriptionKey) : tLoose(example.descriptionKey)} subtitleLines={0}
+                    title={tLoose(example.titleKey)} titleAccessory={<ExampleNewTag example={example} />}
+                    subtitle={sessionDescriptionKey ? t(sessionDescriptionKey) : tLoose(example.descriptionKey)} subtitleLines={0}
                     showChevron={false} mode="info"
                     rightElement={<RoundButton testID={`workflow-examples:${example.key}:use`} size="small" display="secondary"
                         title={t('workflows.examples.use')} accessibilityLabel={`${t('workflows.examples.use')}: ${tLoose(example.titleKey)}`}
                         onPress={() => choose(example)} />} />;
             })}
-        </ItemGroup>;
+        </ItemGroup></ListPresentationProvider>;
     }
-    return <ItemGroup title={t('workflows.examples.title')} surface="none"
+    if (props.presentation === 'strip') return <ExamplesStrip examples={examples} choose={choose} choice={choice}
+        onCloseChoice={() => setChoice(null)} onUse={useExample} />;
+    return <ItemGroup title={props.hideTitle ? undefined : t('workflows.examples.title')} surface="none"
         {...(props.opensDraft === false ? {} : { description: t('workflows.examples.description') })}>
-        <SectionContentRow showDivider={false}>
-            <ItemGroupColumns columns={2} paddingHorizontal={0} paddingVertical={0}>
-                {examples.map((example) => <ItemGroupColumn key={example.key} style={styles.cell}>
-                    <ExampleCard example={example} onUse={() => choose(example)} useControl={choice?.key === example.key ? <ExampleSessionChooser example={example} lifetime={choice.lifetime}
-                        onClose={() => setChoice(null)} onUse={useExample} /> : undefined} />
-                </ItemGroupColumn>)}
-            </ItemGroupColumns>
-        </SectionContentRow>
+        {/* Tiles in a sheetless section share the sheets' edge (as `SelectionTiles` do); a content row's
+            inset would push the cards a row inset inside every other section on the page. */}
+        <ItemGroupColumns columns={2} paddingHorizontal={0} paddingVertical={0}>
+            {examples.map((example) => <ItemGroupColumn key={example.key} style={styles.cell}>
+                <ExampleCard example={example} onUse={() => choose(example)} useControl={choice?.key === example.key ? <ExampleSessionChooser example={example} lifetime={choice.lifetime}
+                    onClose={() => setChoice(null)} onUse={useExample} /> : undefined} />
+            </ItemGroupColumn>)}
+        </ItemGroupColumns>
+    </ItemGroup>;
+}
+
+/** How many examples the returning library shows before "more": one row of the two-column grid. */
+const STRIP_EXAMPLE_COUNT = 2;
+
+/**
+ * The returning library's examples (lab `nav-N1`): one row of compact cards under the section title, and the whole
+ * catalog one press away in the same picker the column's "+" › From an example opens. The first visit keeps the
+ * full cards with their maps (lab `nav-N3`).
+ */
+function ExamplesStrip(props: Readonly<{
+    examples: readonly WorkflowStarterExampleV1[];
+    choose: (example: WorkflowStarterExampleV1) => void;
+    choice: Readonly<{ key: string; lifetime: ActiveServerAccountScopeLifetime | null }> | null;
+    onCloseChoice: () => void;
+    onUse: (example: WorkflowStarterExampleSelection) => void;
+}>) {
+    const [pickerOpen, setPickerOpen] = React.useState(false);
+    const anchorRef = React.useRef<View>(null);
+    const rest = props.examples.length - STRIP_EXAMPLE_COUNT;
+    return <ItemGroup title={t('workflows.examples.title')} description={t('workflows.examples.description')} surface="none"
+        action={rest > 0 ? <View ref={anchorRef} collapsable={false}><SectionActionButton testID="workflow-examples:more"
+            icon="tree-structure" title={t('common.more', { count: rest })} expanded={pickerOpen}
+            onPress={() => setPickerOpen(true)} /></View> : undefined}>
+        <ItemGroupColumns columns={2} paddingHorizontal={0} paddingVertical={0}>
+            {props.examples.slice(0, STRIP_EXAMPLE_COUNT).map((example) => <ItemGroupColumn key={example.key} style={styles.cell}>
+                <ExampleCard example={example} compact onUse={() => props.choose(example)}
+                    useControl={props.choice?.key === example.key ? <ExampleSessionChooser example={example} lifetime={props.choice.lifetime}
+                        onClose={props.onCloseChoice} onUse={props.onUse} /> : undefined} />
+            </ItemGroupColumn>)}
+        </ItemGroupColumns>
+        {pickerOpen ? <WorkflowExamplesPopover anchorRef={anchorRef} onRequestClose={() => setPickerOpen(false)} /> : null}
     </ItemGroup>;
 }
 
@@ -132,7 +188,7 @@ function ExampleSessionChooser(props: Readonly<{
  * One example (lab `nav-N3`): what it does, the thing itself as the small map under it, and a footer
  * with the one fact that sizes it and its bordered **Use this**.
  */
-function ExampleCard(props: Readonly<{ example: WorkflowStarterExampleV1; onUse: () => void; useControl?: React.ReactNode }>) {
+function ExampleCard(props: Readonly<{ example: WorkflowStarterExampleV1; onUse: () => void; useControl?: React.ReactNode; compact?: boolean }>) {
     const { example } = props;
     const { theme } = useUnistyles();
     const language = getPreferredLanguage();
@@ -150,15 +206,18 @@ function ExampleCard(props: Readonly<{ example: WorkflowStarterExampleV1; onUse:
         colors={{ sheet: theme.colors.surface.base, sheetBorder: theme.colors.border.default,
             rowDivider: theme.colors.border.subtle, groupDivider: theme.colors.border.subtle }}><View style={styles.card}>
         <View style={styles.copy}>
-            <Text style={styles.title}>{tLoose(example.titleKey)}</Text>
-            <Text style={styles.description}>{tLoose(example.descriptionKey)}</Text>
+            <View style={styles.titleRow}>
+                <Text style={styles.title}>{tLoose(example.titleKey)}</Text>
+                <ExampleNewTag example={example} />
+            </View>
+            <Text style={styles.description} numberOfLines={props.compact ? 1 : undefined}>{tLoose(example.descriptionKey)}</Text>
         </View>
-        <View testID={`workflow-examples:${example.key}:preview`} style={styles.preview}>
+        {props.compact ? null : <View testID={`workflow-examples:${example.key}:preview`} style={styles.preview}>
             {/* The one map at its small size (lab nav-N3 `uwMap(…, { sm: true })`): one-line labels on
                 the card's own paper, so a short example leaves quiet space, not an empty well (DESIGN-7 P5). */}
             <WorkflowFlowView projection={projection} selectedNodeId={null} preview density="compact"
                 testIDPrefix={`workflow-examples:${example.key}:flow`} />
-        </View>
+        </View>}
         <View style={styles.footer}>
             <Text style={styles.meta}>{[t('workflows.examples.stepCount', { count: stepCount }), shape].filter(Boolean).join(' · ')}</Text>
             {props.useControl ?? <RoundButton testID={`workflow-examples:${example.key}:use`} size="small" display="secondary"
@@ -174,6 +233,7 @@ const styles = StyleSheet.create((theme) => ({
     sheet: { flexGrow: 1, minWidth: 0, overflow: 'hidden' },
     card: { flexGrow: 1, minWidth: 0 },
     copy: { gap: theme.margins.xs, padding: theme.margins.md },
+    titleRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: theme.margins.xs },
     title: { ...Typography.default('semiBold'), color: theme.colors.text.primary },
     description: { ...Typography.default(), color: theme.colors.text.secondary },
     // The example itself, on the card's paper (lab nav-N3); the footer's hairline closes it. A short map

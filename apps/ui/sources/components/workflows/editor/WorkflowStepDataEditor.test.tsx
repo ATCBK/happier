@@ -5,11 +5,11 @@ import { act, type ReactTestInstance } from 'react-test-renderer';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 
 import type { WorkflowStep } from '@happier-dev/protocol/workflows/workflowV1';
-import type { WorkflowValueReference } from '@happier-dev/protocol/workflows/workflowReferenceV1';
+import type { WorkflowReferenceScope, WorkflowValueReference } from '@happier-dev/protocol/workflows/workflowReferenceV1';
 import { setWorkflowInputs } from '@happier-dev/protocol/workflows/workflowDefinitionEditV1';
 import { createWorkflowEditorDraft } from '@/sync/domains/workflows/workflowEditorDraft';
 // Load the real owner during collection, not against the first interaction's timeout.
-import { formatWorkflowValueReference, WorkflowStepDataEditor } from './WorkflowStepDataEditor';
+import { formatWorkflowValueReference, WorkflowBindingRow, WorkflowStepDataEditor } from './WorkflowStepDataEditor';
 import { formatWorkflowConditionSentence } from './WorkflowConditionEditor';
 import { formatWorkflowLoopSentence } from './WorkflowLoopEditor';
 import { getBuiltinWorkflowCatalogV1 } from '@happier-dev/protocol';
@@ -90,6 +90,17 @@ describe('WorkflowStepDataEditor field selects', () => {
         expect(formatWorkflowValueReference(draft, { kind: 'result', producer: { blockId: producer.id, scope: { kind: 'current' } }, path: ['expectedServerRevision'] }))
             .not.toContain('expectedServerRevision');
         expect(formatWorkflowValueReference(draft, { kind: 'literal', value: { sessionId: 'bound session' } })).not.toContain('sessionId');
+    });
+    it('reads a result from an enclosing list by its step alone, keeping only the previous-round scope (DESIGN-13)', () => {
+        const producer = stepBlock('gather', []);
+        const draft = createWorkflowEditorDraft({ draftId: 'scoped-references', name: 'Release', blocks: [producer] });
+        const read = (scope: WorkflowReferenceScope) =>
+            formatWorkflowValueReference(draft, { kind: 'result', producer: { blockId: producer.id, scope }, path: ['issues'] });
+        // "Gather changes · Issues", lab E1: a step name already names one step; "Parent scope" is structure, not meaning.
+        expect(read({ kind: 'outer', levels: 1 })).toBe(read({ kind: 'current' }));
+        expect(read({ kind: 'outer', levels: 2 })).toBe(read({ kind: 'current' }));
+        // The previous round is a different value of the same step, so it keeps its words.
+        expect(read({ kind: 'previous_iteration', loopBlockId: 'rounds' })).toContain('workflows.input.scopePreviousIteration');
     });
     it('reads declared execution values as words without rewriting arbitrary authored strings', () => {
         const draft = createWorkflowEditorDraft({ draftId: 'execution-values', name: 'Plan' });
@@ -191,5 +202,20 @@ describe('WorkflowStepDataEditor field selects', () => {
             expect.objectContaining({ id: 'producer-a:current', title: 'workflows.editor.addStep', subtitle: 'workflows.input.scopeCurrent' }),
         ]);
         expect(select.props.selectedId).toBe('producer-a:current');
+    });
+});
+
+describe('WorkflowBindingRow help (DESIGN-13)', () => {
+    it('keeps a field\'s binding note out of a resting card and shows it while the step is edited', async () => {
+        const draft = createWorkflowEditorDraft({ draftId: 'note' });
+        const row = (editing: boolean) => (
+            <WorkflowBindingRow label="Command" note="Values go in as environment variables." binding={{ kind: 'literal', value: 'yarn test' }}
+                draft={draft} editable editing={editing} onEdit={() => {}} renderEditor={() => null} testID="row" />
+        );
+        const resting = await renderScreen(row(false));
+        expect(resting.findByTestId('row-note')).toBeNull();
+        expect(resting.getTextContent()).not.toContain('Values go in as environment variables.');
+        const editing = await renderScreen(row(true));
+        expect(editing.findByTestId('row-note')).not.toBeNull();
     });
 });

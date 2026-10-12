@@ -73,8 +73,9 @@ function CatalogDefinition(props: Readonly<{ plugin: WorkflowPluginSourceV1 | Bu
     const router = useRouter();
     const machines = useAllMachines();
     const recentMachinePaths = useAuthoringMemoryField('recentMachinePaths');
-    const [target, setTarget] = React.useState<WorkflowAuthoringTarget | null>(() => resolveContextualWorkflowProjectTarget({ machines, recentMachinePaths }));
     const [lifetime] = React.useState(captureActiveServerAccountScopeLifetime);
+    const [target, setTarget] = React.useState<WorkflowAuthoringTarget | null>(() => resolveContextualWorkflowProjectTarget({ machines, recentMachinePaths,
+        scope: lifetime?.isCurrent() ? lifetime.scope : null }));
     const mounted = useMountedRef();
     const isCurrent = React.useCallback(() => mounted.current && lifetime?.isCurrent() === true, [lifetime, mounted]);
     const [open, setOpen] = React.useState(props.intent === 'run' && !sessionBound);

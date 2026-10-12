@@ -143,38 +143,26 @@ function formatConditionValue(draft: WorkflowEditorDraft, value: WorkflowValueRe
 }
 
 /**
- * A condition as the lead of a container sentence: a compound condition's own words ("any of these
- * holds:"), whose arms then read as {@link WorkflowConditionArmLines}; any other condition whole.
- * A heading never runs into a paragraph of tokens (E1), and the words are the sentence's own.
+ * A condition as a container heading reads it (lab `editor-E1`: "If ↵ Check the fix · fixed is No"):
+ * one compact sentence with its references as tokens. A compound condition reads as its first arm
+ * and how many more, never a paragraph of arms under the heading; every arm is in Step options'
+ * condition editor, and the accessible label carries the whole sentence.
  */
-export function formatWorkflowConditionLead(draft: WorkflowEditorDraft, authored: WorkflowCondition): string {
+export function resolveWorkflowConditionHeadline(draft: WorkflowEditorDraft, authored: WorkflowCondition): Readonly<{
+    sentence: string;
+    references: readonly WorkflowValueReference[];
+}> {
     const condition = foldWorkflowConditionGuards(authored);
-    if (condition.kind !== 'all' && condition.kind !== 'any') return formatWorkflowConditionSentence(draft, condition);
-    return `${condition.kind === 'all' ? t('workflows.page.inspector.conditionAll') : t('workflows.page.inspector.conditionAny')}:`;
-}
-
-/** A compound condition's arms, one quiet line each, nested compounds indented beneath their lead. */
-export function WorkflowConditionArmLines(props: Readonly<{
-    draft: WorkflowEditorDraft;
-    condition: WorkflowCondition;
-    testID?: string;
-}>): React.ReactElement | null {
-    const condition = foldWorkflowConditionGuards(props.condition);
-    if (condition.kind !== 'all' && condition.kind !== 'any') return null;
-    return (
-        <View testID={props.testID} style={workflowEditorStyles.conditionArms}>
-            {condition.conditions.map((arm, index) => (
-                <React.Fragment key={index}>
-                    <Text style={workflowEditorStyles.groupSummary}>
-                        <WorkflowReferenceSentence draft={props.draft}
-                            sentence={formatWorkflowConditionLead(props.draft, arm)}
-                            references={arm.kind === 'all' || arm.kind === 'any' ? [] : collectWorkflowConditionValueReferences(arm)} />
-                    </Text>
-                    <WorkflowConditionArmLines draft={props.draft} condition={arm} />
-                </React.Fragment>
-            ))}
-        </View>
-    );
+    if (condition.kind !== 'all' && condition.kind !== 'any') {
+        return { sentence: formatWorkflowConditionSentence(draft, condition), references: collectWorkflowConditionValueReferences(condition) };
+    }
+    const [first, ...rest] = condition.conditions;
+    if (first === undefined) {
+        return { sentence: condition.kind === 'all' ? t('workflows.page.inspector.conditionAll') : t('workflows.page.inspector.conditionAny'), references: [] };
+    }
+    const head = resolveWorkflowConditionHeadline(draft, first);
+    return rest.length === 0 ? head
+        : { sentence: `${head.sentence} · ${t('workflows.page.inspector.conditionMore', { count: rest.length })}`, references: head.references };
 }
 
 /**

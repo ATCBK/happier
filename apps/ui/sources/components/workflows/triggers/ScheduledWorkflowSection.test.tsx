@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { WorkflowTriggerSetV1Schema } from '@happier-dev/protocol';
-import { ScheduledWorkflowSectionView } from './ScheduledWorkflowSection';
+import { ScheduledWorkflowGroup, ScheduledWorkflowSectionView } from './ScheduledWorkflowSection';
 import { projectScheduledWorkflowRows } from './scheduledWorkflowRows';
 
 // Native Markdown SDK boundary, not schedule projection or presentation logic.
@@ -28,6 +28,65 @@ describe('Scheduled Work rows', () => {
         await act(async () => { vi.advanceTimersByTime(30_001); });
         expect(screen.getTextContent()).toContain('nextMinutes(count=1)');
         expect(vi.getTimerCount()).toBe(1);
+    });
+    it('puts a Writes-here occurrence\'s next run in the trailing meta column, beside the Runs\' state words', async () => {
+        // Lab lane12-final `b-habit T`: the quiet line says which step writes here; when is the row's meta.
+        const now = new Date(2026, 9, 10, 10).getTime();
+        vi.useFakeTimers();
+        vi.setSystemTime(now);
+        const set = WorkflowTriggerSetV1Schema.parse({ automationId: 'habit', revision: 1, enabled: true, health: 'available',
+            target: { kind: 'inline', definition: { version: 1, inputs: [], blocks: [{ kind: 'step', id: 'notes', name: 'Weekly release notes',
+                document: { text: 'Draft', references: [], attachments: [] }, input: [], result: { kind: 'text' } }] } },
+            destinations: { targetSessionIds: ['session-one'], usesOriginSession: false, unresolvedWorkflowRefs: [],
+                leaves: [{ sourceKey: '$root', blockId: 'notes', sessionIds: ['session-one'], ordinal: 2, name: 'Draft the notes' }] },
+            triggers: [{ id: 'timer', revision: 1, enabled: true, kind: 'schedule', nextRunAt: now + 3 * 3_600_000,
+                createdAt: now, updatedAt: now, triggerDefinitionEnvelope: null,
+                schedule: { kind: 'interval', everyMs: 86_400_000, scheduleExpr: null, timezone: null } }] });
+        const screen = await renderScreen(<ScheduledWorkflowSectionView rows={projectScheduledWorkflowRows([set])}
+            onOpen={() => {}} sessionId="session-one" />);
+        expect(screen.findByTestId('scheduled-workflow:habit:timer-next')?.props.children).toContain('nextHours(count=3)');
+        const subtitle = screen.findByTestId('scheduled-workflow:habit:timer-subtitle');
+        expect(JSON.stringify(subtitle?.props.children)).toContain('sessionWork.scheduled.step(ordinal=2,title=Draft the notes)');
+        expect(JSON.stringify(subtitle?.props.children)).not.toContain('nextHours');
+    });
+    it('keeps the Account Scheduled group out of the session list until it has rows, and says a failed read once', async () => {
+        // The group may not exist: drawing a loading strip that later turns into a group (or vanishes)
+        // moves every session row under it. Last-known rows stay put while a read refreshes.
+        const set = WorkflowTriggerSetV1Schema.parse({ automationId: 'habit', revision: 1, enabled: true, health: 'available',
+            target: { kind: 'inline', definition: { version: 1, blocks: [{ kind: 'step', id: 'review',
+                document: { text: 'Review code', references: [], attachments: [] }, input: [], result: { kind: 'text' } }] } },
+            triggers: [{ id: 'timer', revision: 1, enabled: true, kind: 'schedule', nextRunAt: 1234,
+                createdAt: 1, updatedAt: 1, triggerDefinitionEnvelope: null,
+                schedule: { kind: 'interval', everyMs: 60_000, scheduleExpr: null, timezone: null } }] });
+        const rows = projectScheduledWorkflowRows([set]);
+        const retry = vi.fn();
+        const read = (status: 'loading' | 'ready' | 'failed', withRows: boolean) => ({ available: true,
+            rows: withRows ? rows : [], status, retry, serverId: null });
+        const screen = await renderScreen(<ScheduledWorkflowGroup read={read('loading', false)} />);
+        expect(screen.findByTestId('workflows-column:group:scheduled')).toBeNull();
+        expect(screen.findByTestId('scheduled-workflow-read')).toBeNull();
+        await screen.update(<ScheduledWorkflowGroup read={read('loading', true)} />);
+        expect(screen.findByTestId('scheduled-workflow:habit:timer')).not.toBeNull();
+        expect(screen.findByTestId('scheduled-workflow-read')).toBeNull();
+        await screen.update(<ScheduledWorkflowGroup read={read('failed', false)} />);
+        expect(screen.findByTestId('workflows-column:group:scheduled')).not.toBeNull();
+        expect(screen.findByTestId('scheduled-workflow-read')).not.toBeNull();
+    });
+    it('gives an Account occurrence the same trailing next-run column as a Writes-here one', async () => {
+        const now = new Date(2026, 9, 10, 10).getTime();
+        vi.useFakeTimers();
+        vi.setSystemTime(now);
+        const set = WorkflowTriggerSetV1Schema.parse({ automationId: 'habit', revision: 1, enabled: true, health: 'available',
+            target: { kind: 'inline', definition: { version: 1, inputs: [], blocks: [{ kind: 'step', id: 'notes', name: 'Weekly release notes',
+                document: { text: 'Draft', references: [], attachments: [] }, input: [], result: { kind: 'text' } }] } },
+            destinations: { targetSessionIds: ['session-one'], usesOriginSession: false, unresolvedWorkflowRefs: [],
+                leaves: [{ sourceKey: '$root', blockId: 'notes', sessionIds: ['session-one'], ordinal: 2, name: 'Draft the notes' }] },
+            triggers: [{ id: 'timer', revision: 1, enabled: true, kind: 'schedule', nextRunAt: now + 3 * 3_600_000,
+                createdAt: now, updatedAt: now, triggerDefinitionEnvelope: null,
+                schedule: { kind: 'interval', everyMs: 86_400_000, scheduleExpr: null, timezone: null } }] });
+        const screen = await renderScreen(<ScheduledWorkflowSectionView rows={projectScheduledWorkflowRows([set])} onOpen={() => {}} />);
+        expect(screen.findByTestId('scheduled-workflow:habit:timer-next')?.props.children).toContain('nextHours(count=3)');
+        expect(screen.getTextContent().split('nextHours').length - 1).toBe(1);
     });
     it('opens the scheduled workflow separately from its Session destination, retaining authored step context', async () => {
         const set = WorkflowTriggerSetV1Schema.parse({ automationId: 'habit', revision: 1, enabled: true, health: 'available',

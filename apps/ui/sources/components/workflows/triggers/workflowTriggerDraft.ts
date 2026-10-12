@@ -5,6 +5,7 @@ import type { WorkflowProjectTargetV1 } from '@happier-dev/protocol/workflows/wo
 import type { WorkflowTriggerAddRequestV1, WorkflowTriggerRemoveRequestV1, WorkflowTriggerSetV1, WorkflowTriggerUpdateRequestV1 } from '@happier-dev/protocol/workflows/triggers/workflowTriggerActionsV1';
 
 import type { WorkflowTriggerWriteResult } from '@/sync/domains/workflows/workflowTriggerActions';
+import type { WorkflowDraftTriggerSnapshotV1 } from '@happier-dev/protocol/actions/workflowAuthoringAction';
 
 import type { TriggerSummarySource } from './formatTriggerSummary';
 
@@ -38,15 +39,8 @@ export const EMPTY_WORKFLOW_TRIGGER_DRAFT: WorkflowTriggerDraft = { adds: [], up
 
 /** Local row identity shared by history snapshots; only Save updates the persisted id. */
 export type WorkflowTriggerSnapshotIdentity = { clientId: string; triggerId?: AutomationTriggerId };
-export type WorkflowTriggerSnapshot = Readonly<{
-    rows: readonly Readonly<{
-        identity: WorkflowTriggerSnapshotIdentity;
-        /** Event projections do not expose the private configuration needed to recreate them. */
-        trigger: AutomationTriggerDefinitionInput | null;
-        enabled: boolean;
-    }>[];
-    project: WorkflowProjectTargetV1 | null;
-    inputs: Readonly<Record<string, JsonValue>>;
+export type WorkflowTriggerSnapshot = Readonly<Omit<WorkflowDraftTriggerSnapshotV1, 'rows'> & {
+    rows: readonly Readonly<WorkflowDraftTriggerSnapshotV1['rows'][number]>[];
 }>;
 
 export class WorkflowTriggerSnapshotRestoreError extends Error {

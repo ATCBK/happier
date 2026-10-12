@@ -28,7 +28,7 @@ function WorkflowRunComposerModal(
     // The modal's own close control dismisses it (`onRequestClose`); the composer has no Cancel row.
     const { keyboardContext, ...composerProps } = props;
     return <KeyboardShortcutContextBridge snapshot={keyboardContext}>
-        <WorkflowRunComposer {...composerProps} />
+        <WorkflowRunComposer {...composerProps} autoFocusComposer={composerProps.autoFocusComposer ?? true} />
     </KeyboardShortcutContextBridge>;
 }
 
@@ -45,7 +45,9 @@ export function useWorkflowRunComposerModal(params: Readonly<{
 }>): React.ReactElement | null {
     const { width } = useWindowDimensions();
     const keyboardContext = useKeyboardShortcutContextSnapshot();
-    const anchored = params.anchorRef !== undefined && !isMobileLayoutWidth(width);
+    // An entry point whose trigger is not on screen (a step's "run with another agent" while the
+    // header's Run again is withdrawn) has nothing to anchor to and uses the canonical modal.
+    const anchored = params.anchorRef !== undefined && params.anchorRef.current != null && !isMobileLayoutWidth(width);
     const hostedIntentRef = React.useRef(false);
     hostedIntentRef.current = params.open && !anchored && params.props !== null;
     const onRunRef = React.useRef(params.props?.onRun);
@@ -91,7 +93,7 @@ export function useWorkflowRunComposerModal(params: Readonly<{
             {({ maxHeight, maxWidth }) => (
                 <FloatingOverlay maxHeight={maxHeight} surfaceChrome="theme"
                     containerStyle={{ width: Math.min(maxWidth, 520) }}>
-                    <WorkflowRunComposer {...composerProps} />
+                    <WorkflowRunComposer {...composerProps} autoFocusComposer={composerProps.autoFocusComposer ?? true} />
                 </FloatingOverlay>
             )}
         </Popover>

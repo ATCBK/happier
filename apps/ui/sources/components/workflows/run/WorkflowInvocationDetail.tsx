@@ -7,6 +7,7 @@ import { View } from 'react-native';
 import type {
     WorkflowInvocationRecoveryV1,
     WorkflowProgressEnvelopeV1,
+    WorkflowInvocationLifecycleV1,
 } from '@happier-dev/protocol';
 
 import { PermissionPromptCard } from '@/components/tools/shell/permissions/PermissionPromptCard';
@@ -15,7 +16,12 @@ import type {
     ExecutionRunPromptResponseTarget,
 } from '@/components/tools/shell/permissions/executionRunPromptResponseTarget';
 import { UserActionPromptCard } from '@/components/tools/shell/userActions/UserActionPromptCard';
+import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
 import { ToolbarButton } from '@/components/ui/buttons/ToolbarButton';
+import { Switch } from '@/components/ui/forms/Switch';
+import { Item } from '@/components/ui/lists/Item';
+import { workStatusSurfaceStyle } from '@/components/work/status/workStatusTreatment';
 import { Text } from '@/components/ui/text/Text';
 import { t } from '@/text';
 
@@ -23,6 +29,11 @@ import { MultiTextInput } from '@/components/ui/forms/MultiTextInput';
 
 import { describeWorkflowInvocationAttempt } from '@/components/workflows/presentation/workflowLifecyclePresentation';
 import { formatWorkflowUsageLabel } from '@/components/workflows/presentation/workflowUsagePresentation';
+import { WorkflowResultContractSchema } from '@happier-dev/protocol/workflows/workflowV1';
+import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
+import { ListPresentationProvider } from '@/components/ui/lists/listPresentation';
+import { WorkflowReviewValue } from './WorkflowReviewCard';
 
 import { workflowRunStyles as styles } from './workflowRunStyles';
 import type {
@@ -59,6 +70,8 @@ function WorkflowRunPromptSource(props: Readonly<{ runId: string; children: Reac
 export type WorkflowInvocationDetailProps = Readonly<{
     /** The authorized opened progress for the selected row, when it has been read. */
     progress: WorkflowProgressEnvelopeV1 | null;
+    /** Status is the exact index fact, including stopped attempts without execution content. */
+    lifecycle?: WorkflowInvocationLifecycleV1 | null;
     recovery: WorkflowInvocationRecoveryPresentation;
     /**
      * The workspace's source block label, already resolved against the frozen
@@ -120,6 +133,10 @@ export type WorkflowInvocationDetailProps = Readonly<{
     onChangeContinuationText: (next: string) => void;
     replacementText: string | undefined;
     onChangeReplacementText: (next: string) => void;
+    /** The Run's Machine as the machine owner sees it; an unreachable one heads the recovery card. */
+    machine?: Readonly<{ name: string; reachable: boolean }> | null;
+    /** The selected Wait's authored question, when the selection is a Wait in the frozen definition. */
+    waitPrompt?: string | null;
     testIDPrefix: string;
 }>;
 
@@ -243,23 +260,84 @@ export function WorkflowInvocationDetail(props: WorkflowInvocationDetailProps): 
         }
     ), [detachedExecutionRunId, pendingRequestIds, respondToRequest]);
     const attempt = props.progress === null ? null : describeWorkflowInvocationAttempt(props.progress.attempt);
+    const stopped = props.lifecycle === 'cancelled' || props.lifecycle === 'cancel_requested';
+    const resultContract = React.useMemo(() => {
+        const parsed = WorkflowResultContractSchema.safeParse(props.progress?.resultContract);
+        return parsed.success ? parsed.data : undefined;
+    }, [props.progress?.resultContract]);
     const previousAttemptRecordId = props.progress?.previousAttemptRecordId;
     // A step that executed and reported no usage is explicitly unavailable
     // (UX-26), never zero and never silently absent. A container frame runs no
     // agent of its own, so it has no usage row; an unopened row has nothing to
     // say yet.
+    const usageUnavailable = props.progress?.blockKind === 'step' && props.progress.usage === undefined;
     const usageLabel = props.progress === null || props.progress.blockKind !== 'step'
         ? null
         : props.progress.usage === undefined
-            ? t('workflows.run.usageUnavailable')
+            ? '\u2014'
             : formatWorkflowUsageLabel(props.progress.usage, {
                 tokens: t('usage.tokens'),
                 input: t('usage.tokenMix.input'),
                 output: t('usage.tokenMix.output'),
             });
 
+    // The choices this attempt really has: the recovery projection's answer, joined with the host's wiring.
+    const preparedOffered = recovery.canContinuePrepared && prepared !== null && props.onContinuePrepared !== undefined;
+    const reattachOffered = recovery.canReattach && props.onReattach !== undefined;
+    const retrySameOffered = recovery.canRetrySameConversation && props.onRetrySameConversation !== undefined;
+    const retryFreshOffered = recovery.canRetryFreshAgent && props.onRetryFreshAgent !== undefined;
+    const replacementOffered = (recovery.canRetrySameConversation || recovery.canRetryFreshAgent)
+        && props.onRetryWithReplacement !== undefined;
+    const restoreOffered = recovery.workspaceUnavailable && recovery.canRestoreWorkspace
+        && props.onRestoreWorkspace !== undefined;
+    const reviewedNewRunOffered = recovery.workspaceUnavailable && recovery.canStartReviewedNewRun
+        && props.onStartReviewedNewRun !== undefined;
+    const anotherAgentOffered = recovery.canRunWithAnotherAgent && props.onRunWithAnotherAgent !== undefined;
+    // One primary: the first offered choice, in the order the lab ranks them; the rest stay secondary.
+    const offeredChoices = ([
+        ['prepared', preparedOffered], ['reattach', reattachOffered], ['same', retrySameOffered],
+        ['fresh', retryFreshOffered], ['restore', restoreOffered], ['reviewed', reviewedNewRunOffered],
+        ['another', anotherAgentOffered],
+    ] as const).filter(([, offered]) => offered).map(([choice]) => choice);
+    const choiceDisplay = (choice: (typeof offeredChoices)[number]) => offeredChoices[0] === choice ? 'default' as const : 'secondary' as const;
+    const choiceOffered = offeredChoices.length > 0 || replacementOffered;
+    // What happened comes from the recovery owner's typed cause (FF-D17FUNC): a reported failure in the
+    // provider's words, or lost contact with its Machine and when.
+    const failureCause = recovery.failureCause ?? null;
+    const unavailableMachine = recovery.unavailableMachine
+        ?? (props.machine?.reachable === false ? { name: props.machine.name, lastSeenAt: null } : null);
+    const showRecoveryCard = choiceOffered || recovery.workspaceUnavailable || failureCause !== null
+        || props.lifecycle === 'failed' || props.lifecycle === 'outcome_uncertain';
+    const lostContactHeadline = (machine: string, lastSeenAt: number | null) => lastSeenAt === null
+        ? t('workflows.recovery.lostContact', { machine })
+        : t('workflows.recovery.lostContactAt', { machine, time: formatAsOfTime(lastSeenAt) });
+    // A failure reported in words leads with them. Without words, an unreachable Machine is the cause the
+    // person can act on ("Lost contact with … at 14:58"), never a bare reason code.
+    const reportedMessage = failureCause?.kind === 'reported_failure' ? failureCause.message : null;
+    const causeHeadline = reportedMessage
+        ?? (failureCause?.kind === 'lost_contact' ? lostContactHeadline(failureCause.machine, failureCause.lastSeenAt) : null)
+        ?? props.cause ?? props.progress?.reason?.message
+        ?? (unavailableMachine !== null ? lostContactHeadline(unavailableMachine.name, unavailableMachine.lastSeenAt) : null)
+        ?? t('workflows.recovery.didNotFinish');
+    // With choices, the description says what they keep; without, the one sentence saying when they
+    // appear is the sheet's content, so the card never draws an empty tinted sheet under its title.
+    const recoveryDescription = choiceOffered ? t('workflows.recovery.keptBody') : undefined;
+    const noChoicesLine = choiceOffered || recovery.workspaceUnavailable || recovery.waitingForStop
+        || (recovery.remainingNotStartedSiblingCount ?? 0) > 0 ? null
+        : unavailableMachine !== null
+            ? t('workflows.recovery.choicesOnReconnect', { machine: unavailableMachine.name })
+            : t('workflows.recovery.noChoices');
+    // An interruption needs you; only a reported failure reads as failed (lab run-A_failed / _interrupted).
+    const recoveryTone = reportedMessage === null && (failureCause?.kind === 'lost_contact' || unavailableMachine !== null)
+        || props.lifecycle !== 'failed' ? 'attention' as const : 'danger' as const;
+    const sessionLink = (execution?.kind === 'session' || execution?.kind === 'session_ready')
+        && recovery.canInspectExecution && props.onOpenSession !== undefined ? execution.sessionId : null;
+    const executionLink = execution?.kind === 'detached_run'
+        && recovery.canInspectExecution && props.onOpenExecutionRun !== undefined ? execution.runId : null;
+
     return (
         <View testID={`${testIDPrefix}-selected-detail`} style={styles.section}>
+            {/* The state and the time are the pane's subtitle (DESIGN-16 D5); the body says what happened. */}
             {props.contentUnavailable === true ? props.contentReadState !== undefined ? props.contentReadState : (
                 <Text
                     testID={`${testIDPrefix}-content-unavailable`}
@@ -290,12 +368,12 @@ export function WorkflowInvocationDetail(props: WorkflowInvocationDetailProps): 
                     <Text style={styles.action}>{t('workflows.review.previousAttempt')}</Text>
                 </HappierPressable>
             )}
-            {props.cause === undefined || props.cause === null ? null : (
+            {showRecoveryCard || props.cause === undefined || props.cause === null ? null : (
                 <Text testID={`${testIDPrefix}-invocation-cause`} style={styles.provenance}>
                     {props.cause}
                 </Text>
             )}
-            {props.progress?.reason?.message === undefined ? null : (
+            {showRecoveryCard || props.progress?.reason?.message === undefined ? null : (
                 <Text style={styles.provenance}>{props.progress.reason.message}</Text>
             )}
             {executionRunTarget === null || pendingRequests.length === 0 ? null : (
@@ -333,7 +411,335 @@ export function WorkflowInvocationDetail(props: WorkflowInvocationDetailProps): 
                 </View>
                 </WorkflowRunPromptSource>
             )}
-            {recovery.remainingNotStartedSiblingCount === null
+            {/*
+              * Recovery leads the pane (lab run-A_failed / run-A_interrupted, DESIGN-17 R1): one card in the
+              * hold card's anatomy, headed by what happened, then only the choices the recovery projection
+              * offers, each with its consequence and one primary. With none, the card says when they appear.
+              */}
+            {!showRecoveryCard ? null : (
+                <View testID={`${testIDPrefix}-recovery-card`}><ListPresentationProvider value="page">
+                    <ItemGroup
+                        title={causeHeadline}
+                        description={recoveryDescription}
+                        containerStyle={workStatusSurfaceStyle(recoveryTone)}
+                    >
+                        {noChoicesLine === null ? null : (
+                            <SectionContentRow testID={`${testIDPrefix}-recovery-unavailable`}>
+                                <Text style={styles.provenance}>{noChoicesLine}</Text>
+                            </SectionContentRow>
+                        )}
+                        {recovery.remainingNotStartedSiblingCount === null
+                            || recovery.remainingNotStartedSiblingCount === 0 ? null : (
+                                <SectionContentRow>
+                                    <Text testID={`${testIDPrefix}-remaining-not-started`} style={styles.provenance}>
+                                        {t('workflows.recovery.remainingNotStarted', {
+                                            count: recovery.remainingNotStartedSiblingCount,
+                                        })}
+                                    </Text>
+                                </SectionContentRow>
+                            )}
+                        {/*
+                          * Uncertain prior effects are acknowledged for this exact attempt, above the choices
+                          * they gate — never as a blanket setting and never inherited from a sibling selection.
+                          */}
+                        {recovery.requiresUncertaintyAcknowledgement
+                            && props.onAcknowledgeUncertainPriorEffects !== undefined ? (
+                                <Item
+                                    testID={`${testIDPrefix}-uncertain-effects`}
+                                    title={t('workflows.recovery.acknowledgeEffects')}
+                                    subtitle={t('workflows.recovery.uncertainEffects', {
+                                        block: props.workspaceSourceLabel ?? t('workflows.run.untitled'),
+                                    })}
+                                    showChevron={false}
+                                    rightElementOutsidePressable
+                                    rightElement={(
+                                        <Switch
+                                            testID={`${testIDPrefix}-acknowledge-uncertain`}
+                                            accessibilityLabel={t('workflows.recovery.acknowledgeEffects')}
+                                            value={props.uncertaintyAcknowledged === true}
+                                            onValueChange={() => props.onAcknowledgeUncertainPriorEffects?.()}
+                                        />
+                                    )}
+                                />
+                            ) : null}
+                        {/*
+                          * A prepared continuation: the execution owner already resolved the objective, result
+                          * contract and recorded context, so continuing is one press. Editing it is disclosed.
+                          */}
+                        {preparedOffered && prepared !== null ? (
+                            <View testID={`${testIDPrefix}-prepared-recovery`}>
+                                <Item
+                                    title={prepared.conversation === 'same_conversation'
+                                        ? t('workflows.recovery.sameConversationTitle')
+                                        : t('workflows.recovery.freshAgent')}
+                                    subtitle={prepared.conversation === 'same_conversation'
+                                        ? t('workflows.recovery.resumeSameConversationExplain', {
+                                            block: props.workspaceSourceLabel ?? t('workflows.run.untitled'),
+                                        })
+                                        : t('workflows.recovery.freshAgentExplain')}
+                                    showChevron={false}
+                                    rightElementOutsidePressable
+                                    rightElement={(
+                                        <RoundButton
+                                            testID={`${testIDPrefix}-continue-prepared`}
+                                            size="small"
+                                            display={choiceDisplay('prepared')}
+                                            loading={operationPending}
+                                            disabled={!continuationSubmittable}
+                                            title={prepared.conversation === 'same_conversation'
+                                                ? t('workflows.recovery.resumeSameConversation')
+                                                : t('workflows.recovery.startFresh')}
+                                            onPress={() => {
+                                                if (!continuationSubmittable) return;
+                                                props.onContinuePrepared?.({
+                                                    conversation: prepared.conversation,
+                                                    document: continuation.document,
+                                                    input: continuation.input,
+                                                });
+                                            }}
+                                        />
+                                    )}
+                                />
+                                <Item
+                                    testID={`${testIDPrefix}-edit-continuation`}
+                                    title={t('workflows.recovery.editContinuation')}
+                                    accessibilityRole="button"
+                                    accessibilityExpanded={continuation.open}
+                                    showChevron={false}
+                                    onPress={continuation.toggle}
+                                />
+                                {continuation.open ? (
+                                    <SectionContentRow>
+                                        <MultiTextInput
+                                            testID={`${testIDPrefix}-continuation-input`}
+                                            value={continuation.text}
+                                            onChangeText={continuation.setText}
+                                            placeholder={t('workflows.recovery.continuationPlaceholder')}
+                                            accessibilityLabel={t('workflows.recovery.continuationPlaceholder')}
+                                            submitBehavior="newline"
+                                        />
+                                    </SectionContentRow>
+                                ) : null}
+                            </View>
+                        ) : null}
+                        {reattachOffered ? (
+                            <Item
+                                title={t('workflows.recovery.reattach')}
+                                subtitle={t('workflows.recovery.reattachExplain')}
+                                showChevron={false}
+                                rightElementOutsidePressable
+                                rightElement={(
+                                    <RoundButton
+                                        testID={`${testIDPrefix}-reattach`}
+                                        size="small"
+                                        display={choiceDisplay('reattach')}
+                                        loading={operationPending}
+                                        disabled={operationPending}
+                                        title={t('workflows.recovery.reattach')}
+                                        onPress={props.onReattach}
+                                    />
+                                )}
+                            />
+                        ) : null}
+                        {retrySameOffered ? (
+                            <Item
+                                title={t('workflows.recovery.sameConversationTitle')}
+                                subtitle={t('workflows.recovery.resumeSameConversationExplain', {
+                                    block: props.workspaceSourceLabel ?? t('workflows.run.untitled'),
+                                })}
+                                showChevron={false}
+                                rightElementOutsidePressable
+                                rightElement={(
+                                    <RoundButton
+                                        testID={`${testIDPrefix}-retry-same`}
+                                        size="small"
+                                        display={choiceDisplay('same')}
+                                        loading={operationPending}
+                                        disabled={!retryable}
+                                        title={t('workflows.recovery.resumeSameConversation')}
+                                        onPress={() => {
+                                            if (!retryable) return;
+                                            props.onRetrySameConversation?.();
+                                        }}
+                                    />
+                                )}
+                            />
+                        ) : null}
+                        {retryFreshOffered ? (
+                            <Item
+                                title={t('workflows.recovery.freshAgent')}
+                                subtitle={t('workflows.recovery.freshAgentBody')}
+                                showChevron={false}
+                                rightElementOutsidePressable
+                                rightElement={(
+                                    <RoundButton
+                                        testID={`${testIDPrefix}-retry-fresh`}
+                                        size="small"
+                                        display={choiceDisplay('fresh')}
+                                        loading={operationPending}
+                                        disabled={!retryable}
+                                        title={t('workflows.recovery.startFresh')}
+                                        onPress={() => {
+                                            if (!retryable) return;
+                                            props.onRetryFreshAgent?.();
+                                        }}
+                                    />
+                                )}
+                            />
+                        ) : null}
+                        {/* Retry distinguishes repeating the original input from an inspected replacement. */}
+                        {replacementOffered ? (
+                            <View testID={`${testIDPrefix}-retry-replacement`}>
+                                <Item
+                                    testID={`${testIDPrefix}-use-replacement-input`}
+                                    title={t('workflows.recovery.useReplacementInput')}
+                                    accessibilityRole="button"
+                                    accessibilityExpanded={replacement.open}
+                                    showChevron={false}
+                                    onPress={replacement.toggle}
+                                />
+                                {replacement.open ? (
+                                    <SectionContentRow>
+                                        <MultiTextInput
+                                            testID={`${testIDPrefix}-replacement-input`}
+                                            value={replacement.text}
+                                            onChangeText={replacement.setText}
+                                            placeholder={t('workflows.recovery.continuationPlaceholder')}
+                                            accessibilityLabel={t('workflows.recovery.continuationPlaceholder')}
+                                            submitBehavior="newline"
+                                        />
+                                        <View style={styles.actions}>
+                                            {replacementConversationChoices.length < 2 ? null : (
+                                                <View
+                                                    accessibilityRole="radiogroup"
+                                                    accessibilityLabel={t('workflows.conversation.title')}
+                                                    style={styles.actions}
+                                                >
+                                                    {replacementConversationChoices.map((choice) => (
+                                                        <HappierPressable
+                                                            key={choice}
+                                                            testID={`${testIDPrefix}-replacement-conversation-${choice}`}
+                                                            accessibilityRole="radio"
+                                                            checked={effectiveReplacementConversation === choice}
+                                                            accessibilityLabel={choice === 'same_conversation'
+                                                                ? t('workflows.recovery.resumeSameConversation')
+                                                                : t('workflows.recovery.freshAgent')}
+                                                            onPress={() => setReplacementConversation(choice)}
+                                                            style={(state) => [styles.actionTarget, styles.focusTarget, state.pressed ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle } : null, focusRingStyle({ focused: state.focused, color: theme.colors.border.focus })]}
+                                                        >
+                                                            <Text style={effectiveReplacementConversation === choice
+                                                                ? styles.action
+                                                                : styles.provenance}
+                                                            >
+                                                                {choice === 'same_conversation'
+                                                                    ? t('workflows.recovery.resumeSameConversation')
+                                                                    : t('workflows.recovery.freshAgent')}
+                                                            </Text>
+                                                        </HappierPressable>
+                                                    ))}
+                                                </View>
+                                            )}
+                                            <RoundButton
+                                                testID={`${testIDPrefix}-submit-replacement`}
+                                                size="small"
+                                                loading={operationPending}
+                                                disabled={!replacementSubmittable}
+                                                title={t('workflows.run.retryStep')}
+                                                onPress={() => {
+                                                    if (!replacementSubmittable) return;
+                                                    props.onRetryWithReplacement?.({
+                                                        conversation: effectiveReplacementConversation,
+                                                        document: replacement.document,
+                                                        input: replacement.input,
+                                                    });
+                                                }}
+                                            />
+                                        </View>
+                                    </SectionContentRow>
+                                ) : null}
+                            </View>
+                        ) : null}
+                        {/*
+                          * Exactly one of D4's arms is reachable, so the row names that one. Restoring keeps
+                          * this Run's completed work; only the reviewed new Run can repeat it.
+                          */}
+                        {restoreOffered ? (
+                            <Item
+                                title={t('workflows.workspace.restore')}
+                                subtitle={t('workflows.workspace.unavailableRestoreBody')}
+                                subtitleTestID={`${testIDPrefix}-workspace-unavailable-body`}
+                                showChevron={false}
+                                rightElementOutsidePressable
+                                rightElement={(
+                                    <RoundButton
+                                        testID={`${testIDPrefix}-restore-workspace`}
+                                        size="small"
+                                        display={choiceDisplay('restore')}
+                                        loading={operationPending}
+                                        disabled={operationPending}
+                                        title={t('workflows.workspace.restore')}
+                                        onPress={props.onRestoreWorkspace}
+                                    />
+                                )}
+                            />
+                        ) : null}
+                        {reviewedNewRunOffered ? (
+                            <Item
+                                title={t('workflows.recovery.startReviewedRun')}
+                                subtitle={recovery.workspaceUnavailable
+                                    ? t('workflows.workspace.unavailableNewRunBody')
+                                    : t('workflows.recovery.repeatedEffectWarning')}
+                                subtitleTestID={recovery.workspaceUnavailable ? `${testIDPrefix}-workspace-unavailable-body` : undefined}
+                                showChevron={false}
+                                rightElementOutsidePressable
+                                rightElement={(
+                                    <RoundButton
+                                        testID={`${testIDPrefix}-start-reviewed-new-run`}
+                                        size="small"
+                                        display={choiceDisplay('reviewed')}
+                                        title={t('workflows.recovery.startReviewedRun')}
+                                        onPress={props.onStartReviewedNewRun}
+                                    />
+                                )}
+                            />
+                        ) : null}
+                        {anotherAgentOffered ? (
+                            <Item
+                                title={t('workflows.start.runWithAnotherAgent')}
+                                subtitle={t('workflows.recovery.repeatedEffectWarning')}
+                                showChevron={false}
+                                rightElementOutsidePressable
+                                rightElement={(
+                                    <RoundButton
+                                        testID={`${testIDPrefix}-run-another-agent`}
+                                        size="small"
+                                        display={choiceDisplay('another')}
+                                        loading={operationPending}
+                                        disabled={operationPending}
+                                        title={t('workflows.start.runWithAnotherAgent')}
+                                        onPress={props.onRunWithAnotherAgent}
+                                    />
+                                )}
+                            />
+                        ) : null}
+                        {recovery.workspaceUnavailable && !restoreOffered && !reviewedNewRunOffered ? (
+                            <SectionContentRow>
+                                <Text testID={`${testIDPrefix}-workspace-unavailable-body`} style={styles.provenance}>
+                                    {t('workflows.workspace.unavailableBody')}
+                                </Text>
+                            </SectionContentRow>
+                        ) : null}
+                        {recovery.waitingForStop ? (
+                            <SectionContentRow>
+                                <Text testID={`${testIDPrefix}-recovery-waiting-for-stop`} style={styles.provenance}>
+                                    {t('workflows.recovery.waitingForStop')}
+                                </Text>
+                            </SectionContentRow>
+                        ) : null}
+                    </ItemGroup>
+                </ListPresentationProvider></View>
+            )}
+            {showRecoveryCard || recovery.remainingNotStartedSiblingCount === null
                 || recovery.remainingNotStartedSiblingCount === 0 ? null : (
                     <Text testID={`${testIDPrefix}-remaining-not-started`} style={styles.provenance}>
                         {t('workflows.recovery.remainingNotStarted', {
@@ -341,370 +747,134 @@ export function WorkflowInvocationDetail(props: WorkflowInvocationDetailProps): 
                         })}
                     </Text>
                 )}
-            {props.progress?.input === undefined ? null : (
-                <View style={styles.section}>
-                    <Text style={styles.sectionLabel}>{t('workflows.input.label')}</Text>
-                    <Text testID={`${testIDPrefix}-invocation-input`} style={styles.detailValue} selectable>
-                        {typeof props.progress.input === 'string'
-                            ? props.progress.input
-                            : JSON.stringify(props.progress.input, null, 2)}
-                    </Text>
-                </View>
-            )}
-            {props.progress?.result === undefined ? null : (
-                <View style={styles.section}>
-                    <Text style={styles.sectionLabel}>{t('workflows.finalOutput.title')}</Text>
-                    <Text testID={`${testIDPrefix}-invocation-result`} style={styles.detailValue} selectable>
-                        {typeof props.progress.result === 'string'
-                            ? props.progress.result
-                            : JSON.stringify(props.progress.result, null, 2)}
-                    </Text>
-                </View>
-            )}
-            {usageLabel === null ? null : (
-                <View style={styles.section}>
-                    <Text style={styles.sectionLabel}>{t('usage.tokens')}</Text>
-                    <Text testID={`${testIDPrefix}-invocation-usage`} style={styles.detailValue}>
-                        {usageLabel}
-                    </Text>
-                </View>
-            )}
-            {recovery.workspaceUnavailable ? (
-                <View style={styles.section}>
-                    {/*
-                      * Exactly one of D4's arms is reachable, so the copy names
-                      * that one. Restoring keeps this Run's completed work;
-                      * only the reviewed new Run can repeat it, and saying so
-                      * unconditionally warned people away from the recovery
-                      * that loses nothing.
-                      */}
-                    <Text testID={`${testIDPrefix}-workspace-unavailable-body`} style={styles.provenance}>
-                        {recovery.canRestoreWorkspace
-                            ? t('workflows.workspace.unavailableRestoreBody')
-                            : recovery.canStartReviewedNewRun
-                                ? t('workflows.workspace.unavailableNewRunBody')
-                                : t('workflows.workspace.unavailableBody')}
-                    </Text>
-                    {!recovery.canRestoreWorkspace || props.onRestoreWorkspace === undefined ? null : (
-                        <HappierPressable
-                            testID={`${testIDPrefix}-restore-workspace`}
-                            accessibilityRole="button"
-                            busy={operationPending}
-                            disabled={operationPending}
-                            onPress={props.onRestoreWorkspace}
-                            style={(state) => [styles.actionTarget, styles.focusTarget, state.pressed ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle } : null, focusRingStyle({ focused: state.focused, color: theme.colors.border.focus })]}
-                        >
-                            <Text style={styles.action}>{t('workflows.workspace.restore')}</Text>
-                        </HappierPressable>
-                    )}
-                    {!recovery.canStartReviewedNewRun || props.onStartReviewedNewRun === undefined ? null : (
-                        <HappierPressable
-                            testID={`${testIDPrefix}-start-reviewed-new-run`}
-                            accessibilityRole="button"
-                            onPress={props.onStartReviewedNewRun}
-                            style={(state) => [styles.actionTarget, styles.focusTarget, state.pressed ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle } : null, focusRingStyle({ focused: state.focused, color: theme.colors.border.focus })]}
-                        >
-                            <Text style={styles.action}>{t('workflows.recovery.startReviewedRun')}</Text>
-                        </HappierPressable>
-                    )}
-                </View>
-            ) : null}
-            {workspace === null ? null : (
-                <View testID={`${testIDPrefix}-workspace`} style={styles.section}>
-                    <Text style={styles.sectionLabel}>{t('workflows.workspace.title')}</Text>
-                    <Text
-                        testID={`${testIDPrefix}-workspace-path`}
-                        style={styles.detailValue}
-                        selectable
-                    >
-                        {workspace.displayDirectory}
-                    </Text>
-                    {workspace.checkoutRootPath === workspace.directory ? null : (
-                        <Text testID={`${testIDPrefix}-workspace-checkout-root`} style={styles.provenance}>
-                            {t('workflows.workspace.projectCheckout')}: {workspace.displayCheckoutRootPath}
-                        </Text>
-                    )}
-                    {workspace.branchName === null ? null : (
-                        <Text testID={`${testIDPrefix}-workspace-branch`} style={styles.provenance}>
-                            {t('workflows.editor.branch')}: {workspace.branchName}
-                        </Text>
-                    )}
-                    {props.workspaceSourceLabel === null ? null : (
-                        <Text testID={`${testIDPrefix}-workspace-source`} style={styles.provenance}>
-                            {t('workflows.workspace.fromStep', { block: props.workspaceSourceLabel })}
-                        </Text>
-                    )}
-                    <View style={styles.actions}>
-                        {props.onCopyWorkspace === undefined ? null : (
-                            <ToolbarButton
-                                testID={`${testIDPrefix}-copy-workspace`}
-                                label={t('files.repositoryTree.actions.copyPath')}
-                                onPress={() => props.onCopyWorkspace?.(workspace.directory)}
-                                size="md"
-                                style={styles.actionTarget}
-                            />
-                        )}
-                        {workspace.workspaceRefId === null || props.onOpenWorkspace === undefined ? null : (
-                            <ToolbarButton
-                                testID={`${testIDPrefix}-open-workspace`}
-                                label={t('sessionInfo.openWorkspaceTitle')}
-                                onPress={() => props.onOpenWorkspace?.(
-                                    workspace.workspaceRefId!,
-                                    workspace.directory,
-                                )}
-                                size="md"
-                                style={styles.actionTarget}
-                            />
-                        )}
-                    </View>
-                </View>
-            )}
-            {(execution?.kind === 'session' || execution?.kind === 'session_ready')
-                && recovery.canInspectExecution
-                && props.onOpenSession !== undefined ? (
-                    <HappierPressable
-                        testID={`${testIDPrefix}-open-session`}
-                        accessibilityRole="link"
-                        onPress={() => props.onOpenSession?.(execution.sessionId)}
-                        style={(state) => [styles.actionTarget, styles.focusTarget, state.pressed ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle } : null, focusRingStyle({ focused: state.focused, color: theme.colors.border.focus })]}
-                    >
-                        <Text style={styles.action}>{t('workflows.run.openSourceSession')}</Text>
-                    </HappierPressable>
-                ) : null}
-            {execution !== undefined
-                && recovery.canInspectExecution
-                && execution.kind === 'detached_run'
-                && props.onOpenExecutionRun !== undefined ? (
-                    <HappierPressable
-                        testID={`${testIDPrefix}-open-execution-run`}
-                        accessibilityRole="link"
-                        onPress={() => props.onOpenExecutionRun?.(execution.runId)}
-                        style={(state) => [styles.actionTarget, styles.focusTarget, state.pressed ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle } : null, focusRingStyle({ focused: state.focused, color: theme.colors.border.focus })]}
-                    >
-                        <Text style={styles.action}>{t('workflows.run.openExecution')}</Text>
-                    </HappierPressable>
-                ) : null}
-            {!recovery.canReattach || props.onReattach === undefined ? null : (
-                <View style={styles.section}>
-                    <HappierPressable
-                        testID={`${testIDPrefix}-reattach`}
-                        accessibilityRole="button"
-                        busy={operationPending}
-                        disabled={operationPending}
-                        onPress={props.onReattach}
-                        style={(state) => [styles.actionTarget, styles.focusTarget, state.pressed ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle } : null, focusRingStyle({ focused: state.focused, color: theme.colors.border.focus })]}
-                    >
-                        <Text style={styles.action}>{t('workflows.recovery.reattach')}</Text>
-                    </HappierPressable>
-                    <Text style={styles.provenance}>{t('workflows.recovery.reattachExplain')}</Text>
-                </View>
-            )}
-
-            {/*
-              * Uncertain prior effects are acknowledged for this exact attempt,
-              * beside the operation they gate — never as a blanket setting and
-              * never inherited from a sibling selection.
-              */}
-            {recovery.canRunWithAnotherAgent && props.onRunWithAnotherAgent ? (
-                <HappierPressable testID={`${testIDPrefix}-run-another-agent`} accessibilityRole="button"
-                    busy={operationPending} disabled={operationPending}
-                    onPress={props.onRunWithAnotherAgent} style={(state) => [styles.actionTarget, styles.focusTarget, state.pressed ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle } : null, focusRingStyle({ focused: state.focused, color: theme.colors.border.focus })]}>
-                    <Text style={styles.action}>{t('workflows.start.runWithAnotherAgent')}</Text>
-                </HappierPressable>
-            ) : null}
-            {recovery.requiresUncertaintyAcknowledgement
-                && props.onAcknowledgeUncertainPriorEffects !== undefined ? (
-                    <View testID={`${testIDPrefix}-uncertain-effects`} style={styles.section}>
-                        <Text style={styles.provenance}>
-                            {t('workflows.recovery.uncertainEffects', {
-                                block: props.workspaceSourceLabel ?? t('workflows.run.untitled'),
-                            })}
-                        </Text>
-                        <HappierPressable
-                            testID={`${testIDPrefix}-acknowledge-uncertain`}
-                            accessibilityRole="checkbox"
-                            checked={props.uncertaintyAcknowledged === true}
-                            accessibilityLabel={t('workflows.recovery.acknowledgeEffects')}
-                            onPress={props.onAcknowledgeUncertainPriorEffects}
-                            style={(state) => [styles.actionTarget, styles.focusTarget, state.pressed ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle } : null, focusRingStyle({ focused: state.focused, color: theme.colors.border.focus })]}
-                        >
-                            <Text style={styles.action}>{t('workflows.recovery.acknowledgeEffects')}</Text>
-                        </HappierPressable>
-                    </View>
-                ) : null}
-
-            {/*
-              * A prepared continuation: the execution owner already resolved the
-              * objective, result contract and recorded context, so Continue is
-              * one press. Editing it is the disclosed advanced path.
-              */}
-            {recovery.canContinuePrepared
-                && prepared !== null
-                && props.onContinuePrepared !== undefined ? (
-                    <View testID={`${testIDPrefix}-prepared-recovery`} style={styles.section}>
-                        <Text style={styles.provenance}>
-                            {prepared.conversation === 'same_conversation'
-                                ? t('workflows.recovery.resumeSameConversationExplain', {
-                                    block: props.workspaceSourceLabel ?? t('workflows.run.untitled'),
-                                })
-                                : t('workflows.recovery.freshAgentExplain')}
-                        </Text>
-                        <HappierPressable
-                            testID={`${testIDPrefix}-edit-continuation`}
-                            accessibilityRole="button"
-                            expanded={continuation.open}
-                            onPress={continuation.toggle}
-                            style={(state) => [styles.actionTarget, styles.focusTarget, state.pressed ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle } : null, focusRingStyle({ focused: state.focused, color: theme.colors.border.focus })]}
-                        >
-                            <Text style={styles.action}>{t('workflows.recovery.editContinuation')}</Text>
-                        </HappierPressable>
-                        {continuation.open ? (
-                            <MultiTextInput
-                                testID={`${testIDPrefix}-continuation-input`}
-                                value={continuation.text}
-                                onChangeText={continuation.setText}
-                                placeholder={t('workflows.recovery.continuationPlaceholder')}
-                                accessibilityLabel={t('workflows.recovery.continuationPlaceholder')}
-                                submitBehavior="newline"
-                            />
-                        ) : null}
-                        <HappierPressable
-                            testID={`${testIDPrefix}-continue-prepared`}
-                            accessibilityRole="button"
-                            busy={operationPending}
-                            disabled={!continuationSubmittable}
-                            onPress={() => {
-                                if (!continuationSubmittable) return;
-                                props.onContinuePrepared?.({
-                                    conversation: prepared.conversation,
-                                    document: continuation.document,
-                                    input: continuation.input,
-                                });
-                            }}
-                            style={(state) => [styles.actionTarget, styles.focusTarget, state.pressed ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle } : null, focusRingStyle({ focused: state.focused, color: theme.colors.border.focus })]}
-                        >
-                            <Text style={continuationSubmittable ? styles.action : styles.provenance}>
-                                {prepared.conversation === 'same_conversation'
-                                    ? t('workflows.recovery.resumeSameConversation')
-                                    : t('workflows.recovery.freshAgent')}
-                            </Text>
-                        </HappierPressable>
-                    </View>
-                ) : null}
-
-            {recovery.canRetrySameConversation && props.onRetrySameConversation !== undefined ? (
-                <HappierPressable
-                    testID={`${testIDPrefix}-retry-same`}
-                    accessibilityRole="button"
-                    busy={operationPending}
-                    disabled={!retryable}
-                    onPress={() => {
-                        if (!retryable) return;
-                        props.onRetrySameConversation?.();
-                    }}
-                    style={(state) => [styles.actionTarget, styles.focusTarget, state.pressed ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle } : null, focusRingStyle({ focused: state.focused, color: theme.colors.border.focus })]}
-                >
-                    <Text style={retryable ? styles.action : styles.provenance}>
-                        {t('workflows.recovery.resumeSameConversation')}
-                    </Text>
-                </HappierPressable>
-            ) : null}
-            {recovery.canRetryFreshAgent && props.onRetryFreshAgent !== undefined ? (
-                <HappierPressable
-                    testID={`${testIDPrefix}-retry-fresh`}
-                    accessibilityRole="button"
-                    busy={operationPending}
-                    disabled={!retryable}
-                    onPress={() => {
-                        if (!retryable) return;
-                        props.onRetryFreshAgent?.();
-                    }}
-                    style={(state) => [styles.actionTarget, styles.focusTarget, state.pressed ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle } : null, focusRingStyle({ focused: state.focused, color: theme.colors.border.focus })]}
-                >
-                    <Text style={retryable ? styles.action : styles.provenance}>
-                        {t('workflows.recovery.freshAgent')}
-                    </Text>
-                </HappierPressable>
-            ) : null}
-            {/* Retry distinguishes repeating the original input from an inspected replacement. */}
-            {(recovery.canRetrySameConversation || recovery.canRetryFreshAgent)
-                && props.onRetryWithReplacement !== undefined ? (
-                    <View testID={`${testIDPrefix}-retry-replacement`} style={styles.section}>
-                        <HappierPressable
-                            testID={`${testIDPrefix}-use-replacement-input`}
-                            accessibilityRole="button"
-                            expanded={replacement.open}
-                            onPress={replacement.toggle}
-                            style={(state) => [styles.actionTarget, styles.focusTarget, state.pressed ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle } : null, focusRingStyle({ focused: state.focused, color: theme.colors.border.focus })]}
-                        >
-                            <Text style={styles.action}>{t('workflows.recovery.useReplacementInput')}</Text>
-                        </HappierPressable>
-                        {replacement.open ? (
-                            <>
-                                <MultiTextInput
-                                    testID={`${testIDPrefix}-replacement-input`}
-                                    value={replacement.text}
-                                    onChangeText={replacement.setText}
-                                    placeholder={t('workflows.recovery.continuationPlaceholder')}
-                                    accessibilityLabel={t('workflows.recovery.continuationPlaceholder')}
-                                    submitBehavior="newline"
-                                />
-                                {replacementConversationChoices.length < 2 ? null : (
-                                    <View
-                                        accessibilityRole="radiogroup"
-                                        accessibilityLabel={t('workflows.conversation.title')}
-                                        style={styles.actions}
-                                    >
-                                        {replacementConversationChoices.map((choice) => (
-                                            <HappierPressable
-                                                key={choice}
-                                                testID={`${testIDPrefix}-replacement-conversation-${choice}`}
-                                                accessibilityRole="radio"
-                                                checked={effectiveReplacementConversation === choice}
-                                                accessibilityLabel={choice === 'same_conversation'
-                                                    ? t('workflows.recovery.resumeSameConversation')
-                                                    : t('workflows.recovery.freshAgent')}
-                                                onPress={() => setReplacementConversation(choice)}
-                                                style={(state) => [styles.actionTarget, styles.focusTarget, state.pressed ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle } : null, focusRingStyle({ focused: state.focused, color: theme.colors.border.focus })]}
-                                            >
-                                                <Text style={effectiveReplacementConversation === choice
-                                                    ? styles.action
-                                                    : styles.provenance}
-                                                >
-                                                    {choice === 'same_conversation'
-                                                        ? t('workflows.recovery.resumeSameConversation')
-                                                        : t('workflows.recovery.freshAgent')}
-                                                </Text>
-                                            </HappierPressable>
-                                        ))}
-                                    </View>
-                                )}
-                                <HappierPressable
-                                    testID={`${testIDPrefix}-submit-replacement`}
-                                    accessibilityRole="button"
-                                    busy={operationPending}
-                                    disabled={!replacementSubmittable}
-                                    onPress={() => {
-                                        if (!replacementSubmittable) return;
-                                        props.onRetryWithReplacement?.({
-                                            conversation: effectiveReplacementConversation,
-                                            document: replacement.document,
-                                            input: replacement.input,
-                                        });
-                                    }}
-                                    style={(state) => [styles.actionTarget, styles.focusTarget, state.pressed ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle } : null, focusRingStyle({ focused: state.focused, color: theme.colors.border.focus })]}
-                                >
-                                    <Text style={styles.action}>{t('workflows.run.retryStep')}</Text>
-                                </HappierPressable>
-                            </>
-                        ) : null}
-                    </View>
-                ) : null}
-            {recovery.waitingForStop ? (
+            {showRecoveryCard || !recovery.waitingForStop ? null : (
                 <Text testID={`${testIDPrefix}-recovery-waiting-for-stop`} style={styles.provenance}>
                     {t('workflows.recovery.waitingForStop')}
                 </Text>
+            )}
+            {props.progress?.input === undefined ? null : (
+                // What the step was given reads in the same card anatomy as what it returned.
+                <View testID={`${testIDPrefix}-invocation-input`}><ListPresentationProvider value="page">
+                    <ItemGroup title={t('workflows.input.label')}>
+                        <WorkflowReviewValue value={props.progress.input} contract={undefined}
+                            testIDPrefix={`${testIDPrefix}-invocation-input`} />
+                    </ItemGroup>
+                </ListPresentationProvider></View>
+            )}
+            {props.progress?.result !== undefined || (props.waitPrompt != null && stopped) ? (
+                // The answer reads as the card it was typed in: the Wait's question heads it and the value
+                // sits in the review card's own rows (DESIGN-16 D4, D5). Any other step's own result heads
+                // "Result"; "Final output" is the Run's, and only one step carries it.
+                <View testID={`${testIDPrefix}-invocation-result`}><ListPresentationProvider value="page">
+                    <ItemGroup title={props.waitPrompt ?? t('workflows.input.result')}>
+                        {props.progress?.result !== undefined ? (
+                            <WorkflowReviewValue value={props.progress.result} contract={resultContract}
+                                testIDPrefix={`${testIDPrefix}-invocation-result`} />
+                        ) : (
+                            <SectionContentRow testID={`${testIDPrefix}-invocation-unanswered`}>
+                                <Text style={styles.provenance}>{t('workflows.run.notAnswered')}</Text>
+                            </SectionContentRow>
+                        )}
+                    </ItemGroup>
+                </ListPresentationProvider></View>
             ) : null}
+            {/*
+              * The quiet facts in one meta block (DESIGN-17 R1): usage, where the step worked, and where
+              * to inspect it. Unknown usage is an em dash with its meaning spoken, never a mono word.
+              */}
+            {usageLabel === null && workspace === null && sessionLink === null && executionLink === null ? null : (
+                <View testID={`${testIDPrefix}-invocation-meta`}><ListPresentationProvider value="page">
+                    <ItemGroup header="none">
+                        {usageLabel === null ? null : (
+                            <Item
+                                title={t('usage.tokens')}
+                                showChevron={false}
+                                mode="info"
+                                rightElement={(
+                                    <Text
+                                        testID={`${testIDPrefix}-invocation-usage`}
+                                        style={styles.metric}
+                                        accessibilityLabel={usageUnavailable ? t('workflows.run.usageUnavailable') : undefined}
+                                    >
+                                        {usageLabel}
+                                    </Text>
+                                )}
+                            />
+                        )}
+                        {workspace === null ? null : (
+                            <Item
+                                testID={`${testIDPrefix}-workspace`}
+                                title={t('workflows.workspace.title')}
+                                subtitle={workspace.displayDirectory}
+                                subtitleTestID={`${testIDPrefix}-workspace-path`}
+                                subtitleStyle={styles.detailValue}
+                                showChevron={false}
+                                mode="info"
+                                bottomElementInset="text"
+                                bottomElement={(
+                                    <View style={styles.section}>
+                                        {workspace.checkoutRootPath === workspace.directory ? null : (
+                                            <Text testID={`${testIDPrefix}-workspace-checkout-root`} style={styles.provenance}>
+                                                {t('workflows.workspace.projectCheckout')}: {workspace.displayCheckoutRootPath}
+                                            </Text>
+                                        )}
+                                        {workspace.branchName === null ? null : (
+                                            <Text testID={`${testIDPrefix}-workspace-branch`} style={styles.provenance}>
+                                                {t('workflows.editor.branch')}: {workspace.branchName}
+                                            </Text>
+                                        )}
+                                        {props.workspaceSourceLabel === null ? null : (
+                                            <Text testID={`${testIDPrefix}-workspace-source`} style={styles.provenance}>
+                                                {t('workflows.workspace.fromStep', { block: props.workspaceSourceLabel })}
+                                            </Text>
+                                        )}
+                                        {props.onCopyWorkspace === undefined
+                                            && (workspace.workspaceRefId === null || props.onOpenWorkspace === undefined) ? null : (
+                                                <View style={styles.actions}>
+                                                    {props.onCopyWorkspace === undefined ? null : (
+                                                        <ToolbarButton
+                                                            testID={`${testIDPrefix}-copy-workspace`}
+                                                            label={t('files.repositoryTree.actions.copyPath')}
+                                                            onPress={() => props.onCopyWorkspace?.(workspace.directory)}
+                                                            size="md"
+                                                        />
+                                                    )}
+                                                    {workspace.workspaceRefId === null || props.onOpenWorkspace === undefined ? null : (
+                                                        <ToolbarButton
+                                                            testID={`${testIDPrefix}-open-workspace`}
+                                                            label={t('sessionInfo.openWorkspaceTitle')}
+                                                            onPress={() => props.onOpenWorkspace?.(
+                                                                workspace.workspaceRefId!,
+                                                                workspace.directory,
+                                                            )}
+                                                            size="md"
+                                                        />
+                                                    )}
+                                                </View>
+                                            )}
+                                    </View>
+                                )}
+                            />
+                        )}
+                        {sessionLink === null ? null : (
+                            <Item
+                                testID={`${testIDPrefix}-open-session`}
+                                title={t('workflows.run.openSourceSession')}
+                                accessibilityRole="link"
+                                onPress={() => props.onOpenSession?.(sessionLink)}
+                            />
+                        )}
+                        {executionLink === null ? null : (
+                            <Item
+                                testID={`${testIDPrefix}-open-execution-run`}
+                                title={t('workflows.run.openExecution')}
+                                accessibilityRole="link"
+                                onPress={() => props.onOpenExecutionRun?.(executionLink)}
+                            />
+                        )}
+                    </ItemGroup>
+                </ListPresentationProvider></View>
+            )}
         </View>
     );
 }

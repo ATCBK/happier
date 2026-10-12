@@ -1,13 +1,15 @@
 import { normalizeWorkflowIngress } from '@happier-dev/protocol/workflows/workflowValidationV1';
+import { resolveWorkflowStepSelectionV1 } from '@happier-dev/protocol/workflows/workflowStepSelectionV1';
 import { SessionInitialTriggerDefinitionV1Schema, type WorkflowTriggerSetV1, type SessionInitialTriggerDefinitionV1 } from '@happier-dev/protocol/workflows/triggers/workflowTriggerActionsV1';
 import type { AutomationSessionLifecycleEvent } from '@happier-dev/protocol/automations/automationSessionLifecycle';
 import type { AutomationTriggerDefinitionInput } from '@happier-dev/protocol/automations/automationTriggerDefinition';
 import type { JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import type { TriggerTargetV1 } from '@happier-dev/protocol/workflows/triggers/triggerTargetV1';
-import type { WorkflowBlock, WorkflowDefinitionV1 } from '@happier-dev/protocol/workflows/workflowV1';
+import type { WorkflowBlock, WorkflowDefinitionV1, WorkflowSessionAuthoringSelection } from '@happier-dev/protocol/workflows/workflowV1';
 
 import { readSessionLifecycleKind } from './formatTriggerSummary';
 import { buildSimpleScheduleCron, parseSimpleSchedule, type SimpleSchedule } from './triggerSchedule';
+import { withWorkflowAuthoringEngineFields } from '@/sync/domains/workflows/workflowAuthoringEngineSelection';
 
 /**
  * What a session or Account trigger's popover edits (FIN 04 §5.4–§5.5; 07 S16, S16b): **When** and
@@ -63,7 +65,8 @@ export type TriggerRunsIn =
 
 export type TriggerThenValue =
     | Readonly<{ kind: 'sendPrompt'; prompt: string; runsIn?: TriggerRunsIn;
-        /** The compact form edits text and Runs in, not the retained step's other settings. */
+        selection?: WorkflowSessionAuthoringSelection;
+        /** Keep retained settings that the compact prompt and Agent controls do not edit. */
         sourceDefinition?: WorkflowDefinitionV1 }>
     /** One Action step with literal field values, its fields drawn from the Action's own input hints. */
     | Readonly<{ kind: 'doAction'; actionId: string | null; input: Readonly<Record<string, unknown>> }>
@@ -199,12 +202,27 @@ export function buildTriggerTarget(then: TriggerThenValue, scope: 'session' | 'a
                 : then.runsIn?.kind === 'session'
                     ? { kind: 'existing_session', sessionId: then.runsIn.sessionId, machineId: then.runsIn.machineId }
                     : { kind: 'fresh' };
+            const selection = then.selection;
+            let defaults = source?.defaults ?? {};
+            let execution = only?.kind === 'step' ? only.execution : undefined;
+            if (selection !== undefined) {
+                if (execution?.engine !== undefined || execution?.agentTarget !== undefined) {
+                    execution = withWorkflowAuthoringEngineFields(execution, selection);
+                } else {
+                    defaults = withWorkflowAuthoringEngineFields(defaults, selection);
+                }
+            }
+            const effective = resolveWorkflowStepSelectionV1({ defaults, step: execution, purpose: 'authoring' }).selection;
+            if (scope === 'account' && conversation.kind === 'fresh' && effective.agentTarget == null
+                && execution?.engine === undefined && defaults.engine === undefined) return null;
             const definition = normalizeInline(source && only?.kind === 'step'
-                ? { ...source, defaults: { ...source.defaults, conversation }, blocks: [{ ...only,
+                ? { ...source, defaults: { ...defaults, conversation }, blocks: [{ ...only,
                     document: { ...only.document, text: prompt },
-                    ...(only.execution?.conversation ? { execution: { ...only.execution, conversation } } : {}),
+                    ...(execution ? { execution: { ...execution,
+                        ...(execution.conversation ? { conversation } : {}),
+                    } } : {}),
                 }] }
-                : { version: 1, defaults: { conversation }, blocks: [prompt] });
+                : { version: 1, defaults: { ...defaults, conversation }, blocks: [prompt] });
             return definition === null ? null : { kind: 'inline', definition };
         }
         case 'doAction': {

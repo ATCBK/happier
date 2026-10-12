@@ -24,6 +24,10 @@ import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { t } from '@/text';
 import { useViewportClass } from '@/utils/platform/useViewportClass';
 import { ActionInputFields } from '@/components/sessions/actions/ActionInputFields';
+import { SessionAuthoringControls } from '@/components/sessions/authoring/controls/SessionAuthoringControls';
+import { useSessionAuthoringControlFacts } from '@/components/sessions/authoring/controls/useSessionAuthoringControlFacts';
+import { resolveWorkflowStepSelectionV1 } from '@happier-dev/protocol/workflows/workflowStepSelectionV1';
+import { withWorkflowAuthoringEngineFields } from '@/sync/domains/workflows/workflowAuthoringEngineSelection';
 import { useActionFieldOptionsForMachine } from '@/components/sessions/actions/useSessionActionFieldOptions';
 import { findWorkflowActionSpec } from '@/components/workflows/presentation/workflowActionCatalog';
 import { useWorkflowActionCatalog } from '@/components/workflows/presentation/useWorkflowActionCatalog';
@@ -87,7 +91,7 @@ type TriggerPopoverBaseProps = Readonly<{
     submitNotice?: string;
     /** Explicit consent uses Save rather than the usual Done. */
     submitLabel?: string;
-    /** A retained manual Automation has no firing definition; saving must not invent one. */
+    /** A retained manual Automation has no firing definition; saving must not invent one, and Delete removes the whole set. */
     manual?: boolean;
     onRunNow?: () => Promise<void>;
     onHistory?: () => void;
@@ -98,6 +102,7 @@ type TriggerPopoverBaseProps = Readonly<{
      * or the trigger set's Runs on Machine.
      */
     machineId?: string | null;
+    directory?: string | null;
     serverId?: string | null;
     /** The exact saved row, whose private source configuration is read only when editing it. */
     eventEdit?: Readonly<{ automationId: string; triggerId: string }>;
@@ -165,8 +170,13 @@ const REPEATS: readonly SimpleScheduleRepeat[] = ['daily', 'weekdays', 'weekly']
 const REPEAT_LABEL_KEYS = { daily: 'everyDay', weekdays: 'weekdays', weekly: 'weekly' } as const;
 
 // The form is narrow even on desktop. Its layout follows the window, not the list's page breakpoint.
+/**
+ * A phone stacks every field beneath its label. Elsewhere a field stays beside its label while the
+ * row's own adaptive rule says it fits, and moves beneath it when it does not (a select sized to its
+ * longest choice is wider than the half of this popover's row that an inline control is held to).
+ */
 function useTriggerFieldLayout() {
-    return useViewportClass() === 'compact' ? 'stacked' as const : 'inline' as const;
+    return useViewportClass() === 'compact' ? 'stacked' as const : 'adaptive' as const;
 }
 
 function whenDescription(kind: SessionTriggerWhenKind, sessionScoped: boolean): string | undefined {
@@ -376,7 +386,7 @@ export function TriggerPopover(props: TriggerPopoverProps): React.ReactElement {
                                         <View style={styles.footEnd}>
                                             <RoundButton size="small" display="destructive"
                                                 testID={`${props.testID}-delete`}
-                                                title={t('workflows.triggers.popover.deleteTrigger')}
+                                                title={t(props.manual ? 'workflows.triggers.popover.deleteTriggerSet' : 'workflows.triggers.popover.deleteTrigger')}
                                                 disabled={pending}
                                                 onPress={() => run(props.onDelete!)}
                                             />
@@ -454,6 +464,7 @@ export function TriggerPopover(props: TriggerPopoverProps): React.ReactElement {
                                         scope={sessionScoped ? 'session' : 'account'}
                                         machineId={props.machineId ?? null}
                                         serverId={props.serverId ?? null}
+                                        directory={props.directory ?? null}
                                         workflowFields={inputFields}
                                         inputPresentation={inputPresentation}
                                         rawInputText={rawInputText}
@@ -586,6 +597,7 @@ function ThenRows(props: Readonly<{
     scope: 'session' | 'account';
     machineId: string | null;
     serverId: string | null;
+    directory: string | null;
     workflowFields: readonly WorkflowRunInputFieldState[];
     inputPresentation: React.ComponentProps<typeof WorkflowRunInputs>['presentation'];
     rawInputText: Readonly<Record<string, string>>;
@@ -607,6 +619,10 @@ function ThenRows(props: Readonly<{
                             serverId={props.serverId}
                             onChange={(runsIn) => props.onChange({ ...then, runsIn })}
                         />
+                    ) : null}
+                    {props.scope === 'account' && then.runsIn?.kind !== 'session' ? (
+                        <PromptAgentRows testID={props.testID} then={then} onChange={props.onChange}
+                            machineId={props.machineId} serverId={props.serverId} directory={props.directory} />
                     ) : null}
                     <FieldItem label={t('workflows.triggers.then.promptLabel')}>
                         <FieldTextInput
@@ -683,6 +699,37 @@ function ThenRows(props: Readonly<{
                 onChangeValue={props.onChangeInputValue} pending={props.pending} machineId={props.machineId}
                 serverId={props.serverId} prefix={`${props.testID}-input`} />;
     }
+}
+
+/** Uses the editor/New Session catalog and picker only while authoring a new Agent session. */
+function PromptAgentRows(props: Readonly<{
+    testID: string;
+    then: Extract<TriggerThenValue, { kind: 'sendPrompt' }>;
+    onChange: (next: TriggerThenValue) => void;
+    machineId: string | null;
+    serverId: string | null;
+    directory: string | null;
+}>) {
+    const activeScope = useActiveServerAccountScope();
+    const facts = useSessionAuthoringControlFacts({ machineId: props.machineId,
+        serverId: props.serverId ?? activeScope?.serverId ?? null, directory: props.directory });
+    const source = props.then.sourceDefinition;
+    const only = source?.blocks.length === 1 ? source.blocks[0] : undefined;
+    const retained = resolveWorkflowStepSelectionV1({ defaults: source?.defaults ?? {},
+        step: only?.kind === 'step' ? only.execution : undefined, purpose: 'authoring' });
+    const values = props.then.selection === undefined ? retained.selection
+        : resolveWorkflowStepSelectionV1({ defaults: withWorkflowAuthoringEngineFields(retained.selection, props.then.selection), purpose: 'authoring' }).selection;
+    const retainedEngine = only?.kind === 'step' ? only.execution?.engine ?? source?.defaults.engine : source?.defaults.engine;
+    const defaultAgentTarget = facts.contextualDefaultAgentTarget;
+    React.useEffect(() => {
+        if (values.agentTarget != null || retainedEngine !== undefined || defaultAgentTarget == null) return;
+        props.onChange({ ...props.then, selection: { ...props.then.selection, agentTarget: defaultAgentTarget } });
+    }, [values.agentTarget, retainedEngine, defaultAgentTarget, props.then, props.onChange]);
+    return <SessionAuthoringControls presentation="fields" fields={['agentTarget', 'connectedServices']} values={values}
+        facts={facts} testIDPrefix={`${props.testID}-agent`}
+        onChangeFields={(fields) => props.onChange({ ...props.then, selection: { ...props.then.selection, ...fields } })}
+        onChangeField={(field, value) => props.onChange({ ...props.then,
+            selection: { ...props.then.selection, [field]: value } })} />;
 }
 
 const RUNS_IN_KINDS = ['newSession', 'session', 'backgroundRun'] as const;

@@ -38,6 +38,20 @@ const LANE_LINE = Number(Typography.rowMeta().lineHeight);
 const HEADING_LINE = TOUCH_TARGET_FLOOR ?? ORDINAL_SIZE;
 
 /**
+ * The document's grid (lab `editor-E1`, `editor-P1`): every block's ordinal (or a container's kind
+ * mark) hangs in a gutter column, and its name, card, "Returns …" and "Only when …" lines share one
+ * left edge, the column after it. A nested list starts on its parent's edge, so its ordinals hang
+ * from that edge and its rail runs through the parent's mark.
+ */
+const ordinalColumn = (gap: number) => ORDINAL_SIZE + gap;
+
+/**
+ * The document's gutter: from a list's edge to its name column (the ordinal and the gap after it).
+ * A page that lines its steps' names up under its title subtracts this from the title's edge.
+ */
+export const resolveWorkflowDocumentGutterPx = (theme: Readonly<{ margins: Readonly<{ md: number }> }>): number => ordinalColumn(theme.margins.md);
+
+/**
  * Shared editor rhythm.
  *
  * The execution rail — one quiet leading hairline that connects ordered work and
@@ -65,30 +79,33 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
     blockList: {
         minWidth: 0,
     },
-    /** A reading document's note above its first block. */
+    /** A reading document's note above its first block, on the name column its blocks' words share. */
     listNote: {
         marginBottom: theme.margins.lg,
+        paddingLeft: ordinalColumn(theme.margins.md),
     },
     /** The root's end row (Add · Start from an example), one gap below the last block. */
     listEnd: {
         paddingTop: theme.margins.xl,
     },
     /**
-     * The one gap between two blocks (lab `editor-P1`, `editor-E1`): a fixed row holding the edge's
-     * run-when caption and, editing, the inserter. Its height is the document's rhythm; touch targets
-     * inside it overflow evenly into the neighbours' padding instead of growing it (DESIGN-7 M2).
+     * The one gap between two blocks (lab `editor-P1`, `editor-E1`): a fixed row on the name column
+     * holding, editing, the inserter, and the edge's run-when caption when it is not the default.
+     * Its height is the document's rhythm; touch targets inside it overflow evenly into the
+     * neighbours' padding instead of growing it (DESIGN-7 M2).
      */
     blockGap: {
         flexDirection: 'row',
         alignItems: 'center',
+        gap: theme.margins.sm,
         height: theme.margins.xl + theme.margins.sm,
+        paddingLeft: ordinalColumn(theme.margins.md),
     },
-    /**
-     * The caption's place on the name column. The run-when control carries its own trailing margin
-     * (its standalone placement); cancelling it here centres the caption in the gap.
-     */
+    /** A non-default run-when ("If it fails", "Either way"): a quiet word on the name column, as the lab's lane captions read. */
     blockGapCaption: {
-        marginBottom: -theme.margins.sm,
+        ...Typography.rowMeta(),
+        ...Typography.default('semiBold'),
+        color: theme.colors.text.tertiary,
     },
     /** The inserter takes the rest of the gap's row, so its hairline runs from the caption's end. */
     blockGapInserter: {
@@ -105,12 +122,11 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
      */
     containerBody: {
         position: 'relative',
-        paddingLeft: ORDINAL_SIZE + theme.margins.sm,
         minWidth: 0,
     },
     containerRail: {
         position: 'absolute',
-        left: ORDINAL_SIZE / 2,
+        left: -(ordinalColumn(theme.margins.md) - ORDINAL_SIZE / 2),
         top: 0,
         bottom: theme.margins.sm,
         borderLeftWidth: 1,
@@ -134,8 +150,8 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
     laneTick: {
         position: 'absolute',
         top: theme.margins.sm + LANE_LINE / 2,
-        left: -(ORDINAL_SIZE / 2 + theme.margins.sm),
-        width: ORDINAL_SIZE / 2 + theme.margins.sm - theme.margins.xs,
+        left: -(ordinalColumn(theme.margins.md) - ORDINAL_SIZE / 2),
+        width: ordinalColumn(theme.margins.md) - ORDINAL_SIZE / 2 - theme.margins.xs,
         borderTopWidth: 1,
         borderColor: theme.colors.border.default,
     },
@@ -151,12 +167,17 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
         justifyContent: 'center',
         marginLeft: -theme.margins.sm,
     },
-    /** A heading's trailing consequence select: quiet words and a caret (lab `.uwe-cm`). */
+    /**
+     * A heading's trailing consequence select: quiet words and a caret (lab `.uwe-cm`). Its press frame
+     * reaches into the gap before it, so when a narrow line wraps it beneath the name its words start
+     * on the name column rather than a padding's width inside it.
+     */
     trailingControl: {
         flexDirection: 'row',
         alignItems: 'center',
         gap: theme.margins.xs,
         paddingHorizontal: theme.margins.sm,
+        marginLeft: -theme.margins.sm,
         minWidth: TOUCH_TARGET_FLOOR,
         borderRadius: theme.borderRadius.md,
         flexShrink: 1,
@@ -176,12 +197,27 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
         color: theme.colors.text.tertiary,
         flexShrink: 1,
     },
-    /** A list item's content beside its rail: the block, then its "Only when" line. */
+    /**
+     * The selected step's plate (lab `editor-L1`, `.uwe-sel`): a quiet ink tint behind its number, card
+     * and lines, so the step Step options is editing reads as one object beside the popover. It is
+     * absolutely placed, so selecting moves nothing (DESIGN-7 N27), and concentric with the card.
+     */
+    selectedPlate: {
+        position: 'absolute',
+        top: -theme.margins.sm,
+        bottom: -theme.margins.sm,
+        left: -theme.margins.sm,
+        right: -theme.margins.sm,
+        borderRadius: theme.parts.composer.radius + theme.margins.sm,
+        backgroundColor: theme.colors.surface.selected,
+    },
+    /** A list item's content on the name column (its ordinal hangs in the gutter): the block, then its "Only when" line. */
     blockColumn: {
         flexGrow: 1,
         flexShrink: 1,
         minWidth: 0,
         gap: theme.margins.xs,
+        paddingLeft: ordinalColumn(theme.margins.md),
     },
     blockBody: {
         flex: 1,
@@ -195,7 +231,9 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
     heading: {
         flexDirection: 'row',
         alignItems: 'flex-start',
-        gap: theme.margins.sm,
+        gap: theme.margins.md,
+        // The ordinal hangs in the gutter, so the name starts on the column the card and its lines share.
+        marginLeft: -ordinalColumn(theme.margins.md),
     },
     /** The ordinal and `⋯` columns, centred on the heading's first line. */
     headingLine: {
@@ -266,6 +304,9 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
     },
     /** The block name as the control that selects the block. */
     headingButton: {
+        // Its meta measures its own wrap against this box (react-native-web reports a child's layout
+        // from its offset parent), so the separator drops only when the meta is really beneath.
+        position: 'relative',
         flexDirection: 'row',
         // A narrow line puts the meta beneath the name before either truncates (DESIGN-6 N1 residual).
         flexWrap: 'wrap',
@@ -280,6 +321,8 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
         // the heading's first line so it reads level with the ordinal and `⋯` (DESIGN-7 N28).
         alignContent: 'center',
         paddingHorizontal: theme.margins.xs,
+        // The press frame keeps its inset; the words start on the name column.
+        marginLeft: -theme.margins.xs,
         borderRadius: theme.borderRadius.md,
     },
     /** A leaf's name (no meta, no consequence) takes the whole line, as a field does. */
@@ -332,16 +375,23 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
         gap: theme.margins.xs,
         paddingBottom: theme.margins.xs,
     },
-    /** A compound condition's arms under its lead: one indented line each, on a hairline. */
-    conditionArms: {
-        gap: theme.margins.xs,
-        paddingLeft: theme.margins.md,
-        borderLeftWidth: StyleSheet.hairlineWidth,
-        borderLeftColor: theme.colors.border.default,
-    },
     groupSummary: {
         ...Typography.default('regular'),
         color: theme.colors.text.tertiary,
+    },
+    /**
+     * An editable step's inputs at rest (its tokens on the footer line): one press target that
+     * selects the step, with the touch floor under a finger and a reserved border for the ring.
+     */
+    inputTokensTarget: {
+        // A row item of the footer line that still wraps its own tokens at the line's width (phone).
+        flexShrink: 1,
+        minWidth: 0,
+        maxWidth: '100%',
+        minHeight: TOUCH_TARGET_FLOOR,
+        borderWidth: 1,
+        borderColor: 'transparent',
+        borderRadius: theme.borderRadius.sm,
     },
     /** A quiet action on a block's footer line ("Add input", "Add named results"). */
     footAction: {
@@ -408,7 +458,6 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
         paddingTop: 0,
         paddingBottom: 0,
         paddingHorizontal: 0,
-        backgroundColor: theme.colors.surface.base,
         minWidth: 0,
     },
     /** The card's header (lab `.uwe-khd`): mark, name, provenance, then its one action. */
@@ -470,15 +519,6 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
         borderColor: 'transparent',
         borderRadius: theme.borderRadius.md,
     },
-    /** A switch row in a card (Notify me's "Only if the agent reported something"): words, then the switch. */
-    kindCardToggleRow: {
-        flexWrap: 'nowrap',
-    },
-    kindCardToggleText: {
-        flex: 1,
-        minWidth: 0,
-        gap: theme.margins.xs,
-    },
     /** A pair that is one press target ("+ Set", a default, a value to edit) keeps the touch floor. */
     actionFieldRowTarget: {
         minHeight: TOUCH_TARGET_FLOOR,
@@ -499,8 +539,9 @@ export const workflowEditorStyles = StyleSheet.create((theme) => ({
         flexBasis: 220,
         minWidth: 0,
     },
+    /** The label reads at the value's size, quiet (lab S6 `.uwe-kr`), so a card keeps the prompt cards' rhythm. */
     actionFieldLabel: {
-        ...Typography.rowMeta(),
+        ...Typography.default('regular'),
         color: theme.colors.text.secondary,
     },
     /** "Required" on an unset field: a quiet marker on the label's line, not a second label. */

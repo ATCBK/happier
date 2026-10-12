@@ -2,8 +2,28 @@ import { describe, expect, it } from 'vitest';
 import { PluginProjectionV2Schema } from '@happier-dev/protocol';
 import { listActionSpecs } from '@happier-dev/protocol/actions/actionSpecs';
 import { listWorkflowStepActionSpecs } from './workflowActionCatalog';
+import { getPreferredLanguage, preloadTranslations, setPreferredLanguageFromSettings, t } from '@/text';
 
 describe('workflow executing-machine Action catalog', () => {
+    it('localizes declared host setup prompts without rewriting plugin-authored questions or noun titles', async () => {
+        const previousLanguage = getPreferredLanguage();
+        await preloadTranslations('fr');
+        setPreferredLanguageFromSettings('fr');
+        try {
+            const action = { id: 'example.tools/select', pluginId: 'example.tools', occurrenceId: 'occurrence-a',
+                title: 'Select', scopes: ['global'], surfaces: ['agent'], execution: { target: 'daemon' },
+                dangerLevel: 'safe', available: true,
+                inputHints: { fields: [{ path: 'project', title: 'Plugin project', prompt: 'Which project?', widget: 'text' }] } };
+            const projection = PluginProjectionV2Schema.parse({ v: 2, generation: 1, familiesById: {}, actionsById: { [action.id]: action } });
+            const specs = listWorkflowStepActionSpecs(projection);
+            expect(specs.find(spec => spec.id === 'projects.context.update')?.inputHints?.fields.find(field => field.path === 'target'))
+                .toMatchObject({ title: 'Qualified Project', prompt: t('widgetAdd.prompts.project') });
+            expect(specs.find(spec => spec.id === 'example.tools/actions/select')?.inputHints?.fields[0])
+                .toMatchObject({ title: 'Plugin project', prompt: 'Which project?' });
+        } finally {
+            setPreferredLanguageFromSettings(previousLanguage);
+        }
+    });
     it('offers host Actions by their execution-placement metadata, excluding client UI and composition controls', () => {
         const specs = listWorkflowStepActionSpecs();
         const eligible = listActionSpecs().filter((spec) => spec.surfaces.agent

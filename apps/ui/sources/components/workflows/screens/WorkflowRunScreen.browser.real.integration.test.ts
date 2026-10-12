@@ -12,7 +12,8 @@ let origin: string;
 const server = createWorkspaceBrowserServer(() => script);
 beforeAll(async () => {
     script = await buildWorkspaceHistoryBrowser({ entryFile: 'sources/dev/testkit/render/workflowRunBrowserApp.tsx', lazy: false,
-        boundaryFiles: { 'sources/modal/index.ts': 'sources/dev/testkit/render/workflowRunBrowserModalBoundary.ts' },
+        boundaryFiles: { 'sources/modal/index.ts': 'sources/dev/testkit/render/workflowRunBrowserModalBoundary.ts',
+            'sources/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc.ts': 'sources/dev/testkit/render/workflowRunBrowserMachineRpcBoundary.ts' },
         boundaryModules: { '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc':
             'sources/dev/testkit/render/workflowRunBrowserMachineRpcBoundary.ts',
             '@/sync/domains/state/browserRecordStorage': 'sources/dev/testkit/render/workflowRunBrowserRecordBoundary.ts' } });
@@ -21,9 +22,13 @@ beforeAll(async () => {
     if (!address || typeof address === 'string') throw new Error('Run browser HTTP boundary did not bind');
     origin = `http://127.0.0.1:${address.port}`;
 }, 600_000);
-afterAll(async () => { if (server.listening) await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); });
+afterAll(async () => {
+    try {
+        if (server.listening) await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    } finally { script = ''; }
+});
 
-export type RunBrowserApp = { ready: () => boolean; themeName: () => string | undefined; surfaceColor: () => string;
+export type RunBrowserApp = { ready: () => boolean; themeName: () => string | undefined; canvasColor: () => string;
     open: (href: string) => void; runHref: string; holdId: string;
     diagnostics: () => { selected: { serverId: string; serverUrl: string; generation: number };
         applied: { serverId: string; serverUrl: string; generation: number };
@@ -32,7 +37,7 @@ export type RunBrowserApp = { ready: () => boolean; themeName: () => string | un
         reads: Array<{ operation: string; state: string; revision: number }> };
     operations: () => string[]; startRunId: () => string | null; settleStart: (refused?: boolean) => void;
     storedRunState: () => string | null; setRunState: (state: string) => void; setCompleted: () => void; setCompletedLeaves: () => void };
-export type RunBrowserHarness = { runHarness: { mount: (phone: boolean, theme: 'light' | 'dark', state?: string, defaultWaitName?: boolean, requiredAnswer?: boolean, seams?: boolean) => Promise<RunBrowserApp> }; app: RunBrowserApp };
+export type RunBrowserHarness = { runHarness: { mount: (phone: boolean, theme: 'light' | 'dark', state?: string, defaultWaitName?: boolean, requiredAnswer?: boolean, seams?: boolean, columnProject?: boolean, scene?: 'hold' | 'release' | 'release-failed' | 'release-review') => Promise<RunBrowserApp & { reviewId: string }> }; app: RunBrowserApp & { reviewId: string } };
 function reportFailureModules(errors: readonly string[]) {
     const bundleLines = script.split('\n');
     const failureFrames = [...(errors[0] ?? '').matchAll(/bundle\.js:(\d+):\d+/g)].slice(0, 4).map(match => Number(match[1]));
@@ -85,6 +90,7 @@ export async function captureRunBrowser(page: Page, name: string, prefix: 'hold'
         return true;
     }))).toBe(true);
     await mkdir(output, { recursive: true });
+    await page.mouse.move(0, 0);
     await page.screenshot({ path: path.join(output, `${prefix}-${process.env.HAPPIER_RUN_BROWSER_CAPTURE_PHASE}-${name}.png`), fullPage: false });
     const styles = await page.evaluate(() => {
         const primary = document.querySelector('[data-testid="workflow-review-use"]');
@@ -105,26 +111,137 @@ export async function captureRunBrowser(page: Page, name: string, prefix: 'hold'
 }
 
 describe('real Run Hold and leaf navigation in Chromium (DESIGN-12)', () => {
+    it('FF-HARNESSD8 opens the design hold, published review and phone hold with readable content', async () => {
+        const browser = await chromium.launch({ executablePath: resolveChromiumExecutable() });
+        try {
+            for (const [phone, scene] of [[false, 'release'], [false, 'release-review'], [true, 'release']] as const) {
+                const page = await browser.newPage({ viewport: { width: phone ? 390 : 1440, height: phone ? 844 : 1000 } });
+                const errors: string[] = [];
+                page.on('pageerror', error => errors.push(error.stack ?? error.message));
+                try {
+                    await page.goto(origin);
+                    await page.addScriptTag({ url: `${origin}/bundle.js` });
+                    await page.evaluate(async ({ phone, scene }) => {
+                        const h = window as unknown as RunBrowserHarness;
+                        h.app = await h.runHarness.mount(phone, 'light', 'running', false, false, true, false, scene);
+                    }, { phone, scene });
+                    await expect.poll(() => page.evaluate(() => (window as unknown as RunBrowserHarness).app.ready())).toBe(true);
+                    await page.evaluate(() => { const h = window as unknown as RunBrowserHarness; h.app.open(h.app.runHref); });
+                    await page.getByTestId('workflow-run-outcome').waitFor();
+                    const invocationId = await page.evaluate(review => {
+                        const h = window as unknown as RunBrowserHarness;
+                        return review ? h.app.reviewId : h.app.holdId;
+                    }, scene === 'release-review');
+                    await page.getByTestId(`workflow-run-needs-you-${invocationId}`).click();
+                    await page.getByTestId('workflow-review-use').waitFor();
+                    expect(await page.locator('body').innerText()).not.toContain('Private content is unavailable');
+                    expect(await page.getByTestId('workflow-review-use').isVisible()).toBe(true);
+                    if (scene === 'release-review') expect(await page.locator('body').innerText()).toContain('0.3.0');
+                    await captureRunBrowser(page, `harnessd8-${phone ? 'phone' : scene}`);
+                    expect(errors).toEqual([]);
+                } catch (cause) {
+                    throw new Error(`FF-HARNESSD8 ${scene} ${phone ? 'phone' : 'desktop'}: ${JSON.stringify({
+                        body: await page.locator('body').innerText(), errors,
+                        operations: await page.evaluate(() => (window as unknown as RunBrowserHarness).app.operations()),
+                    })}`, { cause });
+                } finally { await page.close(); }
+            }
+        } finally { await browser.close(); }
+    }, 600_000);
+    it.each(['light', 'dark'] as const)('FF-INTSEAMS N5 Run column uses its filter summary, accepted project and full-width rows (%s)', async theme => {
+        const browser = await chromium.launch({ executablePath: resolveChromiumExecutable() });
+        try {
+            for (const phone of [false, true]) {
+                const page = await browser.newPage({ viewport: { width: phone ? 390 : 1440, height: phone ? 844 : 1000 } });
+                const errors: string[] = [];
+                page.on('pageerror', error => errors.push(error.stack ?? error.message));
+                try {
+                    await page.goto(origin);
+                    await page.addScriptTag({ url: `${origin}/bundle.js` });
+                    await page.evaluate(async ({ phone, theme }) => {
+                        const h = window as unknown as RunBrowserHarness;
+                        h.app = await h.runHarness.mount(phone, theme, undefined, false, false, true, true);
+                    }, { phone, theme });
+                    await expect.poll(() => page.evaluate(() => (window as unknown as RunBrowserHarness).app.ready())).toBe(true);
+                    await page.evaluate(() => (window as unknown as RunBrowserHarness).app.open('/workflows/runs'));
+                    await page.getByTestId('workflows-column:view:runs').click();
+                    const row = page.getByTestId('workflow-run-row:11111111-1111-4111-8111-111111111111');
+                    await row.waitFor();
+                    expect.soft(await page.getByTestId('session-list-filter-trigger').getAttribute('aria-label')).toContain('Runs ·');
+                    await page.getByTestId('session-list-filter-trigger').click();
+                    await page.getByTestId('session-list-filter:started-by:triggers').click();
+                    // The retained filter publication may already retire the editor host.
+                    // Clicking its existing destination tab also dismisses any still-open popover.
+                    await page.getByTestId('workflows-column:view:runs').click();
+                    await expect.poll(() => page.getByTestId('session-list-filter-trigger').getAttribute('aria-label')).toBe('Runs · You, Triggers');
+                    await expect.poll(() => page.getByTestId('session-list-filter-editor-surface').count()).toBe(0);
+                    await captureRunBrowser(page, `column-n5-${phone ? 'phone' : 'desktop'}-${theme}`, 'run');
+                    expect.soft(await page.getByTestId('session-list-filter-summary-reset').isVisible()).toBe(true);
+                    expect.soft(await page.getByTestId('workflows-column').innerText()).toContain('happier');
+                    expect.soft(await row.innerText()).toContain('0 of 1 steps');
+                    const column = await page.getByTestId('workflows-column').boundingBox();
+                    const list = await page.getByTestId('session-list-content').boundingBox();
+                    expect(column).not.toBeNull();
+                    expect(list).not.toBeNull();
+                    // The list fills its host; this is a geometry contract, not a guessed pixel width.
+                    expect.soft(Math.round(list!.width)).toBe(Math.round(column!.width));
+                    const sheet = await page.getByTestId('workflow-run-sheet:11111111-1111-4111-8111-111111111111').evaluate(element => {
+                        const style = getComputedStyle(element);
+                        return { width: element.getBoundingClientRect().width,
+                            marginLeft: Number.parseFloat(style.marginLeft), marginRight: Number.parseFloat(style.marginRight) };
+                    });
+                    expect.soft(Math.round(sheet.width + sheet.marginLeft + sheet.marginRight)).toBe(Math.round(column!.width));
+                    const status = await page.getByTestId('workflow-run-row:11111111-1111-4111-8111-111111111111:status').evaluate(element => {
+                        const parent = element.parentElement!;
+                        const style = getComputedStyle(parent);
+                        return { right: element.getBoundingClientRect().right, rowRight: parent.getBoundingClientRect().right,
+                            paddingRight: Number.parseFloat(style.paddingRight), borderRight: Number.parseFloat(style.borderRightWidth) };
+                    });
+                    expect.soft(Math.round(status.right + status.paddingRight + status.borderRight)).toBe(Math.round(status.rowRight));
+                    await page.getByTestId('session-list-filter-summary-reset').click();
+                    await expect.poll(() => page.getByTestId('session-list-filter-trigger').getAttribute('aria-label')).toBe('Runs · You');
+                    await row.click();
+                    await page.getByTestId('workflow-run-outcome').waitFor();
+                    expect(page.url()).toContain('/workflows/runs/11111111-1111-4111-8111-111111111111');
+                    expect(errors).toEqual([]);
+                } finally { await page.close(); }
+            }
+        } finally { await browser.close(); }
+    }, 600_000);
     it.each([true, false])('FF-INTSEAMS opens the held invocation, or the Run for non-hold attention (%s)', async held => {
         const browser = await chromium.launch({ executablePath: resolveChromiumExecutable() });
         try {
             const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+            const errors: string[] = [];
+            page.on('pageerror', error => errors.push(error.stack ?? error.message));
             await page.goto(origin);
             await page.addScriptTag({ url: `${origin}/bundle.js` });
             await page.evaluate(async held => {
                 const h = window as unknown as RunBrowserHarness;
                 h.app = await h.runHarness.mount(false, 'light', undefined, false, false, true);
                 if (!held) { h.app.setCompletedLeaves(); h.app.setRunState('failed'); }
-                h.app.open('/inbox');
             }, held);
+            await expect.poll(() => page.evaluate(() => (window as unknown as RunBrowserHarness).app.ready())).toBe(true);
+            await page.evaluate(() => (window as unknown as RunBrowserHarness).app.open('/inbox'));
             const row = page.getByTestId('inbox.run.11111111-1111-4111-8111-111111111111');
             await row.waitFor();
             expect(await page.evaluate(() => (window as unknown as RunBrowserHarness).app.operations()
                 .filter(operation => operation === 'invocations.list'))).toEqual([]);
             await row.click();
             if (held) {
-                await expect.poll(() => page.url()).toContain('invocationId=33333333-3333-4333-8333-333333333333');
+                try {
+                    await expect.poll(() => page.url()).toContain('invocationId=33333333-3333-4333-8333-333333333333');
+                } catch (cause) {
+                    throw new Error(JSON.stringify({ errors, body: await page.locator('body').innerText(),
+                        operations: await page.evaluate(() => (window as unknown as RunBrowserHarness).app.operations()),
+                        diagnostics: await page.evaluate(() => (window as unknown as RunBrowserHarness).app.diagnostics()) }), { cause });
+                }
                 await page.getByTestId('workflow-review-use').waitFor();
+                const holdHeader = page.locator('[data-testid$="-selected-header"]');
+                await expect.poll(() => holdHeader.count()).toBe(1);
+                expect(await holdHeader.innerText()).toContain('Check the release');
+                expect(await holdHeader.getByTestId('inbox.detail.open').count()).toBe(1);
+                expect(await holdHeader.getByTestId('inbox.detail.close').count()).toBe(1);
             } else {
                 await page.getByTestId('workflow-run-outcome').waitFor();
                 expect(page.url()).not.toContain('invocationId=');
@@ -148,11 +265,19 @@ describe('real Run Hold and leaf navigation in Chromium (DESIGN-12)', () => {
         const browser = await chromium.launch({ executablePath: resolveChromiumExecutable() });
         try {
             const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
-            await openRunBrowser(page, false, 'light', undefined, false, false, true);
+            const errors = await openRunBrowser(page, false, 'light', undefined, false, false, true);
             await page.evaluate(() => (window as unknown as RunBrowserHarness).app.setCompleted());
             await page.getByTestId('workflow-run-run-again').click();
             await page.getByTestId('workflow-run-inputs-run').click();
-            await expect.poll(() => page.evaluate(() => (window as unknown as RunBrowserHarness).app.startRunId())).not.toBeNull();
+            await expect.poll(async () => (await page.getByTestId('workflow-run-inputs-starting').count())
+                + (await page.getByTestId('workflow-run-inputs-reconciling').count())).toBe(1);
+            try {
+                await expect.poll(() => page.evaluate(() => (window as unknown as RunBrowserHarness).app.startRunId())).not.toBeNull();
+            } catch (cause) {
+                throw new Error(JSON.stringify({ errors, body: await page.locator('body').innerText(),
+                    operations: await page.evaluate(() => (window as unknown as RunBrowserHarness).app.operations()),
+                    startDisabled: await page.getByTestId('workflow-run-inputs-run').getAttribute('aria-disabled') }), { cause });
+            }
             await expect.poll(() => page.getByTestId('workflow-run-inputs-starting').innerText()).toContain('Starting');
             await page.getByTestId('modal-card-close').click();
             await page.getByTestId('workflow-run-again-pending').waitFor();
@@ -171,7 +296,6 @@ describe('real Run Hold and leaf navigation in Chromium (DESIGN-12)', () => {
 
     it.each(['light', 'dark'] as const)('proves FF-INTSEAMS through the real column, Inbox, Run and start controller (%s)', async theme => {
         const browser = await chromium.launch({ executablePath: resolveChromiumExecutable() });
-        const after = process.env.HAPPIER_RUN_BROWSER_CAPTURE_PHASE === 'after';
         const failures: string[] = [];
         try {
             for (const phone of [false, true]) {
@@ -191,39 +315,48 @@ describe('real Run Hold and leaf navigation in Chromium (DESIGN-12)', () => {
                 await page.getByTestId('workflows-column:view:runs').click();
                 await page.getByText('Release review', { exact: true }).first().waitFor();
                 await captureRunBrowser(page, `column-${frame}`, 'run');
-                if (after) expect(await page.getByTestId('session-drafts-section').count()).toBe(0);
+                expect(await page.getByTestId('session-drafts-section').count()).toBe(0);
+                await page.getByTestId('workflow-run-row:11111111-1111-4111-8111-111111111111').click();
+                await page.getByTestId('workflow-run-outcome').waitFor();
+                expect(page.url()).toContain('/workflows/runs/11111111-1111-4111-8111-111111111111');
 
                 await page.evaluate(() => (window as unknown as RunBrowserHarness).app.open('/inbox'));
                 const inboxRow = page.getByTestId('inbox.run.11111111-1111-4111-8111-111111111111');
                 await inboxRow.waitFor();
+                const approvalRow = page.getByTestId('inbox.approval.44444444-4444-4444-8444-444444444444');
+                await approvalRow.waitFor();
+                expect(await approvalRow.innerText()).not.toContain('session.spawn_new');
+                expect(await approvalRow.innerText()).not.toContain('session-opaque-approval-fixture');
                 await captureRunBrowser(page, `inbox-${frame}`, 'run');
                 await inboxRow.click();
-                if (after) await page.getByTestId('workflow-review-use').waitFor();
-                else await page.getByTestId('workflow-run-outcome').waitFor();
+                await page.getByTestId('workflow-review-use').waitFor();
+                expect(page.url()).toContain('invocationId=33333333-3333-4333-8333-333333333333');
                 await captureRunBrowser(page, `inbox-open-${frame}`, 'run');
 
                 await page.evaluate(() => { const h = window as unknown as RunBrowserHarness; h.app.open(h.app.runHref); });
                 await page.getByTestId('workflow-run-outcome').waitFor();
+                await expect.poll(() => page.locator('[data-happy-modal-card-boundary="true"]').count()).toBe(0);
                 await page.getByTestId('notify-run-terminal:11111111-1111-4111-8111-111111111111').waitFor();
                 await captureRunBrowser(page, `controls-${frame}`, 'run');
-                if (after) expect(await page.getByRole('switch').count()).toBe(2);
+                expect(await page.getByRole('switch').count()).toBe(2);
                 await page.evaluate(() => (window as unknown as RunBrowserHarness).app.setCompleted());
-                await expect.poll(() => page.getByTestId('workflow-run-outcome').innerText()).toContain('Completed');
+                await expect.poll(() => page.getByTestId('workflow-run-outcome').innerText()).toContain('1 step completed');
                 await captureRunBrowser(page, `completed-${frame}`, 'run');
+                if (phone) await page.getByTestId('page-header-actions.trigger').click();
                 await page.getByTestId('workflow-run-run-again').click();
                 await page.getByTestId('workflow-run-inputs-run').waitFor();
+                if (phone) await page.getByTestId('workflow-run-run-again').waitFor({ state: 'hidden' });
                 await captureRunBrowser(page, `composer-${frame}`, 'run');
-                if (after) {
-                    expect(await page.getByTestId('workflow-run-inputs-targets-chip').getAttribute('aria-label')).toContain('A session');
-                    expect(await page.getByTestId('workflow-start-where-chip').getAttribute('aria-label')).toContain(' / ~');
-                }
+                expect(await page.getByTestId('workflow-run-inputs-targets-chip').getAttribute('aria-label')).toContain('A session');
+                expect(await page.getByTestId('workflow-start-where-chip').getAttribute('aria-label')).toContain(' / ~');
                 await page.getByTestId('workflow-run-inputs-run').click();
                 await expect.poll(() => page.evaluate(() => (window as unknown as RunBrowserHarness).app.startRunId())).not.toBeNull();
                 await captureRunBrowser(page, `starting-${frame}`, 'run');
-                if (after) expect(await page.getByTestId('workflow-run-inputs-starting').innerText()).toContain('Starting');
+                expect(await page.getByTestId('workflow-run-inputs-starting').innerText()).toContain('Starting');
                 await page.getByTestId('modal-card-close').click();
+                await expect.poll(() => page.locator('[data-happy-modal-card-boundary="true"]').count()).toBe(0);
                 await captureRunBrowser(page, `dismissed-${frame}`, 'run');
-                if (after) expect(await page.getByTestId('workflow-run-again-pending').isVisible()).toBe(true);
+                expect(await page.getByTestId('workflow-run-again-pending').isVisible()).toBe(true);
                 const receipt = await page.evaluate(() => (window as unknown as RunBrowserHarness).app.startRunId());
                 await page.evaluate(() => (window as unknown as RunBrowserHarness).app.settleStart());
                 await expect.poll(() => page.url()).toContain(`/workflows/runs/${receipt}`);
@@ -268,8 +401,8 @@ describe('real Run Hold and leaf navigation in Chromium (DESIGN-12)', () => {
                         context.fillRect(0, 0, 1, 1);
                         return [...context.getImageData(0, 0, 1, 1).data];
                     };
-                    return { expected: colorPixel((window as unknown as RunBrowserHarness).app.surfaceColor()),
-                        actual: colorPixel(getComputedStyle(document.getElementById('open-run')!.parentElement!).backgroundColor) };
+                    return { expected: colorPixel((window as unknown as RunBrowserHarness).app.canvasColor()),
+                        actual: colorPixel(getComputedStyle(document.documentElement).backgroundColor) };
                 });
                 expect(paint.actual).toEqual(paint.expected);
                 expect(errors).toEqual([]);

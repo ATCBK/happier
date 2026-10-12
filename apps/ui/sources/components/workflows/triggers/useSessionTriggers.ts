@@ -1,9 +1,8 @@
 import * as React from 'react';
 import type { SessionTriggerAddRequestV1, SessionTriggerUpdateRequestV1, SessionTriggerPullRequestLinksV1, WorkflowTriggerSetV1 } from '@happier-dev/protocol';
 
-import { getStorage, useActiveServerAccountScope } from '@/sync/domains/state/storage';
+import { getStorage, useActiveServerAccountScopeLifetime } from '@/sync/domains/state/storage';
 import { serverAccountScopedResourceKey } from '@/sync/domains/scope/serverAccountScope';
-import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { watchActivePluginCollectionChanges } from '@/sync/api/plugins/data/pluginCollectionChangeWatch';
 import { createWorkflowTriggerChangeSelector, createWorkflowTriggerSetSelector } from '@/sync/store/domains/automations';
 import {
@@ -39,7 +38,8 @@ export type SessionTriggersRead = Readonly<{
  * each row its last outcome.
  */
 export function useSessionTriggers(sessionId: string): SessionTriggersRead {
-    const scope = useActiveServerAccountScope();
+    const accountLifetime = useActiveServerAccountScopeLifetime();
+    const scope = accountLifetime?.scope ?? null;
     const linkScopeKey = scope ? serverAccountScopedResourceKey(scope, sessionId) : null;
     const selector = React.useMemo(() => createWorkflowTriggerSetSelector(`session:${sessionId}`), [sessionId]);
     const sets = getStorage()(selector);
@@ -66,30 +66,31 @@ export function useSessionTriggers(sessionId: string): SessionTriggersRead {
 
     React.useEffect(() => {
         if (linkScopeKey === null) return;
-        const accountLifetime = captureActiveServerAccountScopeLifetime();
         if (!accountLifetime) return;
         const watch = watchActivePluginCollectionChanges({
             pluginId: 'happier.channels', collectionId: 'channel-state', accountLifetime,
             onInvalidated: () => setAttempt((value) => value + 1),
         });
         return () => watch?.dispose();
-    }, [linkScopeKey]);
+    }, [accountLifetime, linkScopeKey]);
 
     React.useEffect(() => {
+        if (!accountLifetime) return;
         const controller = new AbortController();
+        const retirement = accountLifetime.onRetire(() => controller.abort());
         setState((current) => (current.scopeKey === linkScopeKey ? current : { scopeKey: linkScopeKey, status: 'loading' }));
         listSessionTriggers({ sessionId }, { ...options(), signal: controller.signal })
             .then((result) => {
-                if (!controller.signal.aborted) {
+                if (!controller.signal.aborted && accountLifetime.isCurrent()) {
                     setLinks({ scopeKey: linkScopeKey, value: result.pullRequestLinks });
                     setState({ scopeKey: linkScopeKey, status: 'ready' });
                 }
             })
             .catch(() => {
-                if (!controller.signal.aborted) setState({ scopeKey: linkScopeKey, status: 'failed' });
+                if (!controller.signal.aborted && accountLifetime.isCurrent()) setState({ scopeKey: linkScopeKey, status: 'failed' });
             });
-        return () => controller.abort();
-    }, [attempt, changeSignal, linkScopeKey, options, sessionId]);
+        return () => { controller.abort(); retirement.dispose(); };
+    }, [accountLifetime, attempt, changeSignal, linkScopeKey, options, sessionId]);
 
     const applyWrite = React.useCallback((result: WorkflowTriggerWriteResult) => {
         setAttempt((value) => value + 1);

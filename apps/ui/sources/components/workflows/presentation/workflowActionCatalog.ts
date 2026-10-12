@@ -6,6 +6,7 @@ import { resolvePluginProjectedActionPresentation } from '@/sync/domains/plugins
 import type { PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
 import { resolveWorkflowActionDescription, resolveWorkflowActionTitle } from '@/sync/domains/workflows/workflowActionPresentation';
 import { t } from '@/text';
+import { localizeBuiltinInputHints } from '@/text/builtinInputPrompts';
 import type { IconName } from '@/components/ui/icons/Icon';
 
 export type WorkflowActionSpec = Readonly<Pick<ActionSpec, 'title' | 'description' | 'inputHints'> & {
@@ -31,7 +32,7 @@ export function listWorkflowStepActionSpecs(projection?: PluginProjectionV2 | nu
         .map((spec): WorkflowActionSpec => ({ id: spec.id, title: resolveWorkflowActionTitle(spec.id, spec),
             ...resolveHostActionPickerPresentation(spec.id),
             ...(spec.description === undefined ? {} : { description: resolveWorkflowActionDescription(spec.id, spec) }),
-            ...(spec.inputHints === undefined ? {} : { inputHints: spec.inputHints }) }));
+            ...(spec.inputHints === undefined ? {} : { inputHints: localizeBuiltinInputHints(spec.inputHints) }) }));
     const contributed = Object.values(projection?.actionsById ?? {}).flatMap((action): WorkflowActionSpec[] => {
         const identity = parseQualifiedPluginContributionKey(action.id);
         // Workflows execute on the daemon, not inside a mounted client plugin surface.

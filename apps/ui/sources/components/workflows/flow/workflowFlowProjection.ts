@@ -5,7 +5,7 @@ import type {
   WorkflowMaxIterationsV1,
   WorkflowRepetition,
 } from '@happier-dev/protocol/workflows/workflowV1';
-import type { WorkflowInvocationLifecycleV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
+import type { WorkflowInvocationLifecycleV1, WorkflowProgressEnvelopeV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
 import type { SessionWorkflowAgentStatusV1, SessionWorkflowRunSnapshotV1 } from '@happier-dev/protocol';
 import { listWorkflowBlockOrdinalsV1 } from '@happier-dev/protocol/workflows/workflowStepLabel';
 import { t } from '@/text';
@@ -411,6 +411,10 @@ export type WorkflowFlowNodeRunState = Readonly<{
   /** Scoped occurrence identity, e.g. the current item or iteration. */
   occurrenceLabel?: string;
   attempt?: string;
+  /** Worker-recorded timing of this exact physical attempt, absent for unopened/older rows. */
+  timing?: WorkflowProgressEnvelopeV1['timing'];
+  /** Exact completed item pipelines; concurrency is the frozen author's choice. */
+  loopProgress?: Readonly<{ completed: number; total: number; maxConcurrent?: number }>;
 }>;
 
 export function indexWorkflowFlowRunStates(

@@ -1,6 +1,8 @@
 import * as React from 'react';
 import { View } from 'react-native';
+import { useUnistyles } from 'react-native-unistyles';
 
+import { GlassSurface } from '@/components/ui/glass/GlassSurface';
 import { Text } from '@/components/ui/text/Text';
 
 import { WorkflowKindCardLabelTrack } from './WorkflowStepDataEditor';
@@ -34,6 +36,7 @@ export function WorkflowKindCard(props: Readonly<{
 }>): React.ReactElement {
     // One label track for every row of this card: the widest label's natural width (bounded by the
     // row's own min/max), so values start on one column (lab S6).
+    const { theme } = useUnistyles();
     const [trackWidth, setTrackWidth] = React.useState<number | null>(null);
     const reported = React.useRef(new Map<string, number>());
     const track = React.useMemo(() => ({
@@ -46,7 +49,11 @@ export function WorkflowKindCard(props: Readonly<{
     }), [trackWidth]);
     return (
         <WorkflowKindCardLabelTrack.Provider value={track}>
-        <View testID={props.testID} style={workflowEditorStyles.kindCard}>
+        {/* Painted by the document composer's own material (AgentInput's `panelPresentation="document"`:
+            the card group, the composer finish, its input fill), so an Action card and an Agent step's
+            card are one surface, not a white card beside a tinted one. */}
+        <GlassSurface testID={props.testID} surfaceGroup="card" nested solidColor={theme.colors.input.background}
+            finishRole="composer" style={workflowEditorStyles.kindCard}>
             {props.header === false ? null : <View style={workflowEditorStyles.kindCardHeader}>
                 <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">{props.mark}</View>
                 <Text testID={`${props.testID}-title`} numberOfLines={1} style={workflowEditorStyles.headingName}>{props.title}</Text>
@@ -60,7 +67,7 @@ export function WorkflowKindCard(props: Readonly<{
                 <Text style={workflowEditorStyles.kindCardNote}>{props.note}</Text>
                 {props.footAccessory ?? null}
             </View>
-        </View>
+        </GlassSurface>
         </WorkflowKindCardLabelTrack.Provider>
     );
 }

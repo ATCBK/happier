@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { validateWorkflowDefinition } from '@happier-dev/protocol/workflows/workflowValidationV1';
+import { resolveWorkflowStepSelectionV1 } from '@happier-dev/protocol/workflows/workflowStepSelectionV1';
 
 import {
     buildTriggerDefinition,
@@ -9,9 +11,42 @@ import {
     readTriggerWhen,
 } from './sessionTriggerForm';
 
+const selection = { agentTarget: { kind: 'agent' as const, identity: { pluginId: 'happier.agent.claude', localId: 'claude' } } };
+
 describe('session trigger form', () => {
+    it.each(['session', 'account'] as const)('authors the selected Agent on a new %s prompt trigger', (scope) => {
+        const agentTarget = { kind: 'agent' as const, identity: { pluginId: 'acme.agents', localId: 'reviewer' } };
+        const then = { kind: 'sendPrompt' as const, prompt: 'Review the changes', selection: { agentTarget } };
+        const target = buildTriggerTarget(then, scope);
+        if (target?.kind !== 'inline') throw new Error('expected an inline target');
+        expect(validateWorkflowDefinition(target.definition).valid).toBe(true);
+        expect(target.definition.defaults.engine).toMatchObject({ agentTarget });
+        expect(readTriggerThen(target)).toMatchObject({ sourceDefinition: { defaults: { engine: { agentTarget } } } });
+    });
+    it('keeps a new Account prompt incomplete until its contextual Agent is selected', () => {
+        expect(buildTriggerTarget({ kind: 'sendPrompt', prompt: 'Review the changes' }, 'account')).toBeNull();
+    });
+    it('changes a retained step Agent through the canonical engine arm without losing other settings', () => {
+        const created = buildTriggerTarget({ kind: 'sendPrompt', prompt: 'Review', selection }, 'account');
+        if (created?.kind !== 'inline') throw new Error('expected an inline target');
+        const target = { ...created, definition: { ...created.definition, blocks: created.definition.blocks.map(block =>
+            block.kind === 'step' ? { ...block, execution: { engine: created.definition.defaults.engine,
+                permissionMode: 'read-only' as const } } : block) } };
+        const original = readTriggerThen(target);
+        expect(buildTriggerTarget(original, 'account')).toEqual(target);
+        if (original.kind !== 'sendPrompt') throw new Error('expected a prompt form');
+        const agentTarget = { kind: 'agent' as const, identity: { pluginId: 'happier.agent.codex', localId: 'codex' } };
+        const changed = buildTriggerTarget({ ...original, selection: { agentTarget } }, 'account');
+        if (changed?.kind !== 'inline') throw new Error('expected an inline target');
+        const step = changed.definition.blocks[0];
+        if (step?.kind !== 'step') throw new Error('expected an Agent step');
+        expect(resolveWorkflowStepSelectionV1({ defaults: changed.definition.defaults, step: step.execution,
+            purpose: 'authoring' }).selection).toMatchObject({ agentTarget, permissionMode: 'read-only' });
+        expect(step.execution).not.toHaveProperty('agentTarget');
+        expect(validateWorkflowDefinition(changed.definition).valid).toBe(true);
+    });
     it('keeps an inputless predecessor Session start intact when reviewing its trigger', () => {
-        const target = buildTriggerTarget({ kind: 'sendPrompt', prompt: 'seed' }, 'account');
+        const target = buildTriggerTarget({ kind: 'sendPrompt', prompt: 'seed', selection }, 'account');
         if (target?.kind !== 'inline') throw new Error('expected an inline target');
         const inputless = { ...target, definition: { ...target.definition,
             blocks: target.definition.blocks.map((block) => block.kind === 'step'
@@ -21,7 +56,7 @@ describe('session trigger form', () => {
         expect(buildTriggerTarget(then, 'account')).toEqual(inputless);
     });
     it('preserves the exact retained prompt when Save changes only the trigger configuration', () => {
-        const target = buildTriggerTarget({ kind: 'sendPrompt', prompt: 'seed' }, 'account');
+        const target = buildTriggerTarget({ kind: 'sendPrompt', prompt: 'seed', selection }, 'account');
         if (target?.kind !== 'inline') throw new Error('expected an inline target');
         const retained = { ...target, definition: { ...target.definition,
             blocks: target.definition.blocks.map((block) => block.kind === 'step'
@@ -50,7 +85,7 @@ describe('session trigger form', () => {
             .toBeNull();
     });
     it('keeps the original prompt step and execution defaults while editing a legacy prompt', () => {
-        const created = buildTriggerTarget({ kind: 'sendPrompt', prompt: 'Before' }, 'account');
+        const created = buildTriggerTarget({ kind: 'sendPrompt', prompt: 'Before', selection }, 'account');
         if (created?.kind !== 'inline') throw new Error('expected an inline target');
         const target = { ...created, definition: { ...created.definition,
             defaults: { ...created.definition.defaults, profileId: 'reviewed-profile', permissionMode: 'read-only' },
@@ -104,7 +139,7 @@ describe('session trigger form', () => {
         expect(target.definition.defaults.conversation).toEqual({ kind: 'origin_session' });
         expect(readTriggerThen(target)).toMatchObject({ kind: 'sendPrompt', prompt: 'Summarize overnight CI' });
         // An Account trigger has no session to continue: its prompt starts a new one.
-        const account = buildTriggerTarget({ kind: 'sendPrompt', prompt: 'Morning digest' }, 'account');
+        const account = buildTriggerTarget({ kind: 'sendPrompt', prompt: 'Morning digest', selection }, 'account');
         expect(account?.kind === 'inline' ? account.definition.defaults.conversation : null).toEqual({ kind: 'fresh' });
         // An empty prompt is not a target yet.
         expect(buildTriggerTarget({ kind: 'sendPrompt', prompt: '   ' })).toBeNull();
@@ -188,7 +223,7 @@ describe('session trigger form', () => {
         expect(existing.definition.defaults.conversation).toEqual({ kind: 'existing_session', sessionId: 's-1', machineId: 'm-1' });
         expect(readTriggerThen(existing)).toMatchObject({ runsIn: { kind: 'session', sessionId: 's-1', machineId: 'm-1' } });
 
-        const background = { kind: 'sendPrompt', prompt: 'Triage', runsIn: { kind: 'backgroundRun' } } as const;
+        const background = { kind: 'sendPrompt', prompt: 'Triage', runsIn: { kind: 'backgroundRun' }, selection } as const;
         expect(buildTriggerExecutionTarget(background)).toEqual({ kind: 'detached_run' });
         const written = buildTriggerTarget(background, 'account');
         if (written?.kind !== 'inline') throw new Error('expected an inline target');

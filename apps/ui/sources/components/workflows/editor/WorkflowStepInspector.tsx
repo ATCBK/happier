@@ -52,16 +52,24 @@ const styles = StyleSheet.create((theme) => ({
         ...Typography.default('semiBold'),
         color: theme.colors.text.secondary,
     },
+    /**
+     * A field's name, its state and its reset on one line while they fit; in a narrow popover the
+     * reset wraps beneath rather than squeezing each into a two-line column (DESIGN-13, live).
+     */
     fieldRow: {
         flexDirection: 'row',
+        flexWrap: 'wrap',
         alignItems: 'center',
-        gap: theme.margins.sm,
+        columnGap: theme.margins.sm,
+        rowGap: 0,
         paddingVertical: theme.margins.xs,
     },
     fieldName: {
         ...Typography.default('regular'),
         color: theme.colors.text.primary,
-        flexShrink: 1,
+    },
+    resetTarget: {
+        marginLeft: 'auto',
     },
     inheritedBadge: {
         ...Typography.default('regular'),
@@ -74,7 +82,6 @@ const styles = StyleSheet.create((theme) => ({
     resetAction: {
         ...Typography.default('semiBold'),
         color: theme.colors.button.secondary.tint,
-        marginLeft: 'auto',
     },
     control: {
         paddingBottom: theme.margins.sm,
@@ -222,6 +229,7 @@ export function WorkflowStepInspector(props: Readonly<{
                                         ? props.onResetEngine?.() : props.onResetField(field)}
                                     style={(state) => [
                                         workflowEditorStyles.actionTarget,
+                                        styles.resetTarget,
                                         state.pressed ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle } : null, focusRingStyle({ focused: state.focused, color: theme.colors.border.focus }),
                                     ]}
                                 >

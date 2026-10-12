@@ -12,21 +12,20 @@ import type { WorkspaceNavigationContextValue } from '@/components/appShell/work
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { teamSummaryFixture, teamCapabilitiesFixture } from '@/dev/testkit/fixtures/teamFixtures';
 import { resetTeamsSnapshotsForTests } from '@/sync/store/teams/teamsSnapshots';
+import { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 
 const transport = vi.hoisted(() => vi.fn());
 const viewport = vi.hoisted(() => ({ width: 1280 }));
 const appliedHome = vi.hoisted(() => ({ serverId: 'server-a', serverUrl: 'https://server-a.example', generation: 0 }));
+const routeBoundary = vi.hoisted(() => ({ params: {} as Record<string, string>, platform: 'ios', credentials: null as { token: string } | null }));
 vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async (importOriginal) => ({
     ...(await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>()),
     createFrontDoorActionExecute: () => transport,
 }));
-vi.mock('@/sync/runtime/orchestration/connectionManager', async (importOriginal) => {
-    const { createConnectionManagerModuleMock } = await import('@/dev/testkit/mocks/connectionManager');
-    return createConnectionManagerModuleMock(importOriginal, { getSnapshot: () => appliedHome });
-});
 vi.mock('react-native', async () => {
     const { createReactNativeNativeMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeNativeMock({ platformOS: 'ios' }, {
+        Platform: { get OS() { return routeBoundary.platform; }, select: (values: Record<string, unknown>) => values[routeBoundary.platform] ?? values.default },
         useWindowDimensions: () => ({ width: viewport.width, height: 844, scale: 1, fontScale: 1 }),
     });
 });
@@ -37,9 +36,9 @@ vi.mock('react-native-unistyles', async () => {
 // Expo navigation and authentication are the platform/network boundaries; workspace state and guards stay real.
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
-    return createExpoRouterMock({ pathname: '/workflows/new' }).module;
+    return createExpoRouterMock({ pathname: '/workflows/new', params: () => routeBoundary.params }).module;
 });
-vi.mock('@/auth/context/AuthContext', () => ({ useOptionalAuth: () => null }));
+vi.mock('@/auth/context/AuthContext', () => ({ useOptionalAuth: () => routeBoundary.credentials ? { credentials: routeBoundary.credentials } : null, useAuth: () => ({ isAuthenticated: true }) }));
 vi.mock('expo-crypto', async () => ({ randomUUID: (await import('node:crypto')).randomUUID }));
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
@@ -59,14 +58,336 @@ const { WorkflowTriggerSection } = await import('../triggers/WorkflowTriggerSect
 const { editWorkflowTriggerDraft } = await import('../triggers/workflowTriggerDraft');
 const { WorkspaceProvider } = await import('@/components/appShell/workspace/WorkspaceProvider');
 const { DestinationInstanceHost } = await import('@/components/appShell/workspace/DestinationInstanceHost');
+const { WorkspaceRouteEntry } = await import('@/components/appShell/workspace/createWorkspaceRouteEntry');
+const { useDestinationParams } = await import('@/components/appShell/workspace/DestinationInstanceHost');
 const { SplitCanvasLeafFrame } = await import('@/components/appShell/splitCanvas/components/SplitCanvasLeafFrame');
 const { resolveCompactAppDestinations } = await import('@/components/appShell/destinations/compactAppDestinationCatalog');
 const { clearActiveUnsavedChangesGuard } = await import('@/utils/navigation/runGuardedNavigation');
 const { resetTeamsDirectoryEngineForTests } = await import('@/sync/engine/teams/teamsDirectoryEngine');
 const { getStorage } = await import('@/sync/domains/state/storageStore');
 const { ModalProvider } = await import('@/modal');
+let previousAppliedSnapshot = getAppliedActiveServerSnapshot();
+let previousRuntimeAvailable = isAppliedActiveServerRuntimeAvailable();
 
 describe('editor workflow composer', () => {
+    it.each([
+        { kind: 'new-session', admission: 'readiness' }, { kind: 'trigger', admission: 'readiness' },
+        { kind: 'new-session', admission: 'shell' }, { kind: 'trigger', admission: 'shell' },
+        { kind: 'new-session', admission: 'remote' }, { kind: 'trigger', admission: 'remote' },
+        { kind: 'new-session', admission: 'route' }, { kind: 'trigger', admission: 'route' },
+    ] as const)('retains the second pinned $kind handoff through $admission admission and readiness settlement', async ({ kind, admission }) => {
+        const { storeNewSessionAutomationHandoffSeed, readNewSessionAutomationHandoffSeed } = await import('@/sync/domains/workflows/newSessionAutomationHandoffSeed');
+        const { storeTriggerWorkflowSeed, readTriggerWorkflowSeed } = await import('../triggers/triggerWorkflowSeed');
+        const { buildWorkflowEditorDraftFromDefinition } = await import('@/sync/domains/workflows/workflowAuthoring');
+        const { authoringComposerSeedFromSnapshot } = await import('@/components/sessions/authoring/authoringComposerCustody');
+        const { WorkflowEditorBody } = await import('./WorkflowEditorBody');
+        const { createWorkspaceState } = await import('@/components/appShell/workspace/workspaceState');
+        const { useWorkspacePresentation } = await import('@/components/appShell/workspace/useWorkspaceShellEnabled');
+        const { beginOnboardingJourneySession, endOnboardingJourneySession } = await import('@/components/onboarding/tour/state/journeySession');
+        const { workspaceLayoutScopeKey, serializeWorkspaceLayout } = await import('@/components/appShell/workspace/workspacePersistence');
+        const param = kind === 'new-session' ? 'newSessionDraftSeedId' : 'triggerWorkflowSeedId';
+        const seed = (text: string) => {
+            const definition = createWorkflowDefinitionFixture({ blocks: [{ kind: 'step', id: 'prompt',
+                document: { text, references: [], attachments: [] }, input: [], result: { kind: 'text' } }] });
+            return kind === 'new-session'
+                ? storeNewSessionAutomationHandoffSeed({ name: text, description: null, enabled: true,
+                    draft: buildWorkflowEditorDraftFromDefinition({ draftId: `workspace-${text}`, name: text, definition }), project: null, triggers: [],
+                    composer: authoringComposerSeedFromSnapshot('prompt', { text, references: [], attachments: [] }) })
+                : storeTriggerWorkflowSeed({ definition, retarget: { scope: 'account', automationId: '00000000-0000-4000-8000-000000000294',
+                    triggerId: 'trigger', expectedRevision: 1 } });
+        };
+        if (admission === 'remote') {
+            appliedHome.serverUrl = 'https://workspace-peer.test';
+            appliedHome.serverId = await home.addHome({ name: 'Workspace peer', serverUrl: appliedHome.serverUrl, accountId: 'account-a' });
+            publishAppliedActiveServerSnapshot({ ...appliedHome });
+            const token = home.findByServerUrl(appliedHome.serverUrl)?.token;
+            if (!token) throw new Error('Missing synthetic Account credential');
+            routeBoundary.credentials = { token };
+            getStorage().setState({ profileScope: { serverId: appliedHome.serverId, accountId: 'account-a' },
+                settingsScope: { serverId: appliedHome.serverId, accountId: 'account-a' } });
+        }
+        const first = seed('FIRST');
+        routeBoundary.params = { [param]: first };
+        const catalog = resolveCompactAppDestinations({ pages: [], builtins: { workflows: true, inbox: false, friends: false, externalSessions: false } });
+        const { resolveDestinationRefFromHref } = await import('@/components/appShell/destinations/compactAppDestinationCatalog');
+        const target = resolveDestinationRefFromHref(catalog, `/workflows/new?${param}=${first}`);
+        if (!target) throw new Error('Workflow seed route was not admitted');
+        const pinned = { id: 'pinned-editor', target, pinned: true, preview: false };
+        let remoteRecord: import('@/components/appShell/workspace/workspaceSyncedTabs').SharedWorkspaceTabs = {
+            v: 1, order: [pinned.id], tabsById: { [pinned.id]: pinned }, pairs: [],
+        };
+        let remoteVersion = 1;
+        let kvWrites = 0;
+        if (admission === 'remote') {
+            const { encodeBase64StoredJsonContentEnvelope, decodeBase64StoredJsonContentEnvelope } = await import('@/sync/encryption/base64StoredJsonContent');
+            home.answer(appliedHome.serverId, '/v1/account/encryption/currentness', { body: {
+                mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+            } });
+            home.answer(appliedHome.serverId, 'GET /v1/kv/workspace%3Atabs%3Av1', { select: () => ({ body: {
+                key: 'workspace:tabs:v1', value: encodeBase64StoredJsonContentEnvelope({ t: 'plain', v: remoteRecord }), version: remoteVersion,
+            } }) });
+            home.answer(appliedHome.serverId, 'POST /v1/kv', { select: input => {
+                const parsed = (input as { mutations: { key: string; value: string }[] }).mutations[0];
+                const opened = decodeBase64StoredJsonContentEnvelope(parsed.value);
+                if (parsed.key !== 'workspace:tabs:v1' || opened?.t !== 'plain') throw new Error('Unexpected KV fixture write');
+                remoteRecord = opened.v as typeof remoteRecord;
+                kvWrites++;
+                return { body: { success: true, results: [{ key: parsed.key, version: ++remoteVersion }] } };
+            } });
+        }
+        if (admission === 'shell' || admission === 'route') {
+            if (admission === 'shell') beginOnboardingJourneySession();
+            routeBoundary.platform = 'web';
+            const url = new URL(admission === 'route' ? '/new' : `/workflows/new?${param}=${first}`, 'https://happier.invalid');
+            const location = { pathname: url.pathname, search: url.search, hash: '' };
+            const history = { state: null as unknown,
+                replaceState: (state: unknown, _unused: string, href?: string | URL | null) => {
+                    history.state = state;
+                    if (!href) return;
+                    const next = new URL(href, 'https://happier.invalid');
+                    location.pathname = next.pathname; location.search = next.search; location.hash = next.hash;
+                },
+                pushState: (state: unknown, unused: string, href: string) => history.replaceState(state, unused, href), go: () => {},
+            };
+            const events = new EventTarget();
+            vi.stubGlobal('window', { location, history, sessionStorage: { getItem: () => 'main' },
+                addEventListener: events.addEventListener.bind(events), removeEventListener: events.removeEventListener.bind(events),
+                dispatchEvent: events.dispatchEvent.bind(events) });
+        }
+        const scopeKey = workspaceLayoutScopeKey({ serverId: appliedHome.serverId, accountId: 'account-a', windowId: 'main' });
+        getStorage().setState({ isDataReady: admission === 'shell', localSettings: { ...getStorage().getState().localSettings,
+            workspaceLayoutV1: { [scopeKey]: serializeWorkspaceLayout(createWorkspaceState(pinned)) } } });
+        let workspace: WorkspaceNavigationContextValue | undefined;
+        function Body() {
+            const params = useDestinationParams<Record<string, string>>();
+            return <WorkflowEditorHostScreen source={{ kind: 'new', [param]: params[param] }} />;
+        }
+        let openExpoEntry: (() => void) | undefined;
+        function ExpoScene() {
+            const [open, setOpen] = React.useState(admission !== 'route');
+            openExpoEntry = () => setOpen(true);
+            return open ? <WorkspaceRouteEntry Body={Body} /> : null;
+        }
+        function Host() {
+            const presentation = useWorkspacePresentation();
+            return <AppPaneProvider><WorkspaceProvider enabled={admission !== 'shell' || presentation === 'shell'}
+                deferred={presentation === 'deferred'} catalog={catalog}>{navigation => {
+            workspace = navigation;
+            return <>
+                <ExpoScene />
+                {navigation.active ? Object.values(navigation.state.tabs).filter(tab => tab.target.params[param]).map(tab => <DestinationInstanceHost key={tab.id}
+                    tabId={tab.id} ref={tab.target} pathname="/workflows/new" focused visible navigation={navigation.navigationForTab(tab.id)}>
+                    <WorkspaceRouteEntry Body={Body} />
+                </DestinationInstanceHost>) : null}
+            </>;
+            }}</WorkspaceProvider></AppPaneProvider>;
+        }
+        const screen = await renderScreen(<Host />);
+        if (admission === 'route') {
+            // Expo can commit its new scene before its browser-history mirror.
+            // The parent still projects the preceding unhosted /new location.
+            expect(workspace?.ownsRoute).toBe(false);
+            await act(async () => openExpoEntry?.());
+        }
+        // Cold restoration must not lend seed custody to a temporary Expo body.
+        expect(screen.root.findAllByType(WorkflowEditorBody)).toHaveLength(0);
+        expect(kind === 'new-session' ? readNewSessionAutomationHandoffSeed(first) : readTriggerWorkflowSeed(first)).not.toBeNull();
+        await act(async () => {
+            if (admission === 'route') window.history.pushState({}, '', `/workflows/new?${param}=${first}`);
+            endOnboardingJourneySession();
+            getStorage().setState({ isDataReady: true });
+        });
+        expect(screen.root.findByType(AgentInput).props.value).toBe('FIRST');
+        expect(workspace?.state.tabs['pinned-editor'].pinned).toBe(true);
+        if (admission === 'remote') await vi.waitFor(() => expect(workspace?.tabSyncStatus).toBe('synced'));
+        const second = seed('SECOND');
+        await act(async () => {
+            workspace?.navigationForTab('pinned-editor').setParams?.({ [param]: second });
+            // The Expo boundary mirrors the URL committed by the real workspace
+            // adapter; settlement must not feed it the superseded FIRST route.
+            routeBoundary.params = { [param]: second };
+        });
+        const input = screen.root.findByType(AgentInput);
+        expect(input.props.value).toBe('SECOND');
+        expect(kind === 'new-session' ? readNewSessionAutomationHandoffSeed(second) : readTriggerWorkflowSeed(second)).toBeNull();
+        await act(async () => {
+            const body = screen.root.findByType(WorkflowEditorBody);
+            body.props.onChange({ ...body.props.draft, name: 'Keep my workspace edit' });
+        });
+        const draftId = screen.root.findByType(WorkflowEditorBody).props.draft.draftId;
+        if (admission === 'remote') {
+            // Finish this client's accepted handoff write before delivering the
+            // peer's later navigation; otherwise its pending intent masks F2.
+            await vi.waitFor(() => expect(kvWrites).toBeGreaterThan(0));
+            const writesBeforeImport = kvWrites;
+            const { dispatchKvBatchUpdate } = await import('@/sync/engine/socket/kvUpdateDispatcher');
+            const peerTarget = { kind: 'workflows', params: { workspacePathname: '/workflows/new', [param]: 'peer-only-consumed-seed' } };
+            for (const peerId of ['pinned-editor', 'peer-singleton']) {
+                remoteRecord = { v: 1, order: [peerId], pairs: [], tabsById: {
+                    [peerId]: { id: peerId, target: peerTarget, pinned: true },
+                } };
+                remoteVersion++;
+                await act(async () => dispatchKvBatchUpdate({ kvUpdate: { changes: [{ key: 'workspace:tabs:v1', value: null, version: remoteVersion }] },
+                    credentials: routeBoundary.credentials!, shouldContinue: () => true, applyTodoSocketUpdates: async () => {},
+                    invalidateTodosSync: () => {}, log: { log: () => {} } }));
+                await vi.waitFor(() => expect(workspace?.sharedTabs?.order).toEqual([peerId]));
+                expect(screen.root.findByType(AgentInput)).toBe(input);
+                expect(workspace?.state.groups['group:1'].activeTabId).toBe('pinned-editor');
+                expect(workspace?.state.tabs['pinned-editor'].target.params[param]).toBe(second);
+                expect(input.props.value).toBe('SECOND');
+                expect(screen.root.findByType(WorkflowEditorBody).props.draft).toMatchObject({ draftId, name: 'Keep my workspace edit' });
+            }
+            expect(kvWrites).toBe(writesBeforeImport);
+        }
+        // A late persisted-layout publication must not replace an admitted editor.
+        await act(async () => getStorage().setState({ localSettings: { ...getStorage().getState().localSettings,
+            workspaceLayoutV1: { [scopeKey]: serializeWorkspaceLayout(createWorkspaceState(pinned)) } } }));
+        expect(screen.root.findByType(AgentInput)).toBe(input);
+        expect(input.props.value).toBe('SECOND');
+        const lifetime = captureActiveServerAccountScopeLifetime();
+        await act(async () => getStorage().setState({ isDataReady: false }));
+        expect(captureActiveServerAccountScopeLifetime()).toBe(lifetime);
+        expect(lifetime?.isCurrent()).toBe(true);
+        expect(screen.root.findByType(AgentInput)).toBe(input);
+        await act(async () => getStorage().setState({ isDataReady: true }));
+        expect(screen.root.findByType(AgentInput)).toBe(input);
+        expect(input.props.value).toBe('SECOND');
+        expect(screen.root.findByType(WorkflowEditorBody).props.draft).toMatchObject({ draftId, name: 'Keep my workspace edit' });
+        await screen.unmount();
+    });
+
+    it.each([
+        ['new-session', 'first hydration'], ['trigger', 'first hydration'],
+        ['new-session', 'refresh'], ['trigger', 'refresh'],
+    ] as const)('retains adopted %s bytes and edits when real repository %s completes', async (kind, phase) => {
+        const { createDeferred } = await import('@/dev/testkit');
+        const repository = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
+        const { canonicalSessionDraftAddressV2, createSessionDraftPrivatePayloadV2 } = await import('@happier-dev/protocol');
+        const { storeNewSessionAutomationHandoffSeed, readNewSessionAutomationHandoffSeed } = await import('@/sync/domains/workflows/newSessionAutomationHandoffSeed');
+        const { storeTriggerWorkflowSeed, readTriggerWorkflowSeed } = await import('../triggers/triggerWorkflowSeed');
+        const { buildWorkflowEditorDraftFromDefinition } = await import('@/sync/domains/workflows/workflowAuthoring');
+        const { authoringComposerSeedFromSnapshot } = await import('@/components/sessions/authoring/authoringComposerCustody');
+        const { WorkflowEditorBody } = await import('./WorkflowEditorBody');
+        const scope = { serverId: 'server-a', accountId: 'account-a' };
+        const address = { kind: 'newSession' as const, draftId: '00000000-0000-4000-8000-000000000292' };
+        const records = new Map<string, import('@happier-dev/protocol').SessionDraftRecordV2>();
+        const listStarted = createDeferred<void>();
+        const release = createDeferred<void>();
+        let holdList = false;
+        // Network and encryption are system boundaries. Repository reconciliation,
+        // seed custody, lifetime, host and composer remain their real implementations.
+        const transport: import('@/sync/ops/sessionDrafts/sessionDraftRepository').SessionDraftRepositoryTransport = {
+            list: async () => {
+                if (holdList) { listStarted.resolve(); await release.promise; }
+                return { items: [], nextAfter: undefined };
+            },
+            read: async (requested) => {
+                const record = records.get(canonicalSessionDraftAddressV2(requested));
+                return !record ? { status: 'absent' } : record.content === null ? { status: 'deleted', record } : { status: 'present', record };
+            },
+            mutate: async (request) => {
+                const key = canonicalSessionDraftAddressV2(request.address);
+                const previous = records.get(key);
+                if (request.expectedRevision !== (previous?.revision ?? 'absent')) {
+                    return { status: 'conflict', current: previous ?? { status: 'absent' } };
+                }
+                const record = { address: request.address, revision: (previous?.revision ?? -1) + 1,
+                    content: request.content, createdAt: 1, updatedAt: 2 };
+                records.set(key, record);
+                return { status: 'updated', record };
+            },
+        };
+        repository.configureSessionDraftRepository({ scope, syncEnabled: true, transport, cipher: {
+            seal: async (target, document) => ({ t: 'plain', v: createSessionDraftPrivatePayloadV2(target, document) }),
+            open: async (_target, content) => content.t === 'plain' ? content.v.document : null,
+        } });
+        let screen: Awaited<ReturnType<typeof renderScreen>> | null = null;
+        let hydration: Promise<void> | null = null;
+        try {
+            if (phase === 'refresh') await repository.ensureSessionDraftRepositoryHydrated(scope);
+            const lifetime = captureActiveServerAccountScopeLifetime();
+            holdList = true;
+            hydration = repository.ensureSessionDraftRepositoryHydrated(scope);
+            await listStarted.promise;
+            repository.writeNewSessionDraft({ scope, draftId: address.draftId, patch: { text: 'source prompt' }, materializationIntent: 'userEdit' });
+            const definition = createWorkflowDefinitionFixture({ blocks: [{ kind: 'step', id: 'prompt',
+                document: { text: 'SECOND', references: [], attachments: [] }, input: [], result: { kind: 'text' } }] });
+            const draft = buildWorkflowEditorDraftFromDefinition({ draftId: 'hydrating-handoff', name: 'SECOND', definition });
+            const id = kind === 'new-session'
+                ? storeNewSessionAutomationHandoffSeed({ name: 'SECOND', description: null, enabled: true, draft, project: null, triggers: [],
+                    composer: authoringComposerSeedFromSnapshot('prompt', { text: 'SECOND', references: [], attachments: [] }) })
+                : storeTriggerWorkflowSeed({ definition, retarget: { scope: 'account', automationId: '00000000-0000-4000-8000-000000000293',
+                    triggerId: 'trigger', expectedRevision: 1 } });
+            const source = kind === 'new-session' ? { kind: 'new' as const, newSessionDraftSeedId: id }
+                : { kind: 'new' as const, triggerWorkflowSeedId: id };
+            screen = await renderScreen(<AppPaneProvider><WorkflowEditorHostScreen source={source} /></AppPaneProvider>);
+            const input = screen.root.findByType(AgentInput);
+            expect(input.props.value).toBe('SECOND');
+            expect(kind === 'new-session' ? readNewSessionAutomationHandoffSeed(id) : readTriggerWorkflowSeed(id)).toBeNull();
+            const adoptedId = screen.root.findByType(WorkflowEditorBody).props.draft.draftId;
+            await act(async () => {
+                const body = screen!.root.findByType(WorkflowEditorBody);
+                body.props.onChange({ ...body.props.draft, name: 'Keep my edit' });
+                repository.writeNewSessionDraft({ scope, draftId: address.draftId, patch: { text: 'source edit during hydration' }, materializationIntent: 'userEdit' });
+            });
+            await act(async () => {
+                release.resolve();
+                await hydration;
+                getStorage().setState({ isSessionDraftsReady: true });
+                // Completing a same-Account generation publication is not a
+                // lifetime retirement or a change of the editor's address.
+                publishAppliedActiveServerSnapshot({ ...appliedHome, generation: appliedHome.generation + 1 });
+            });
+            const document = repository.getSessionDraftSnapshot(scope, address)?.document;
+            expect(document && 'composer' in document ? document.composer.text.value : undefined).toBe('source edit during hydration');
+            expect(captureActiveServerAccountScopeLifetime()).toBe(lifetime);
+            expect(lifetime?.isCurrent()).toBe(true);
+            expect(screen.root.findByType(AgentInput)).toBe(input);
+            expect(input.props.value).toBe('SECOND');
+            expect(screen.root.findByType(WorkflowEditorBody).props.draft).toMatchObject({ draftId: adoptedId, name: 'Keep my edit' });
+        } finally {
+            release.resolve();
+            await hydration;
+            await screen?.unmount();
+            repository.configureSessionDraftRepository({ syncEnabled: false });
+        }
+    });
+
+    it('renews a pending saved-document hydration but preserves an already opened draft after same-Account retirement', async () => {
+        const { createDeferred } = await import('@/dev/testkit');
+        const { retireActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+        const { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+        const previousApplied = getAppliedActiveServerSnapshot();
+        const previousAvailable = isAppliedActiveServerRuntimeAvailable();
+        publishAppliedActiveServerSnapshot({ ...appliedHome });
+        let screen: Awaited<ReturnType<typeof renderScreen>> | null = null;
+        try {
+            const pending = createDeferred<unknown>();
+            let reads = 0;
+            const definitionId = '00000000-0000-4000-8000-000000000001';
+            transport.mockImplementation((action: string) => {
+                if (action === 'workflow.definition.get') {
+                    if (reads++ === 0) return pending.promise;
+                    return Promise.resolve({ ok: true, result: { definitionId, definition: createWorkflowDefinitionFixture(),
+                        access: 'owner', revision: { headerVersion: 3, bodyVersion: 3 }, metadata: { title: 'Restored document' } } });
+                }
+                return Promise.resolve({ ok: true, result: { sets: [] } });
+            });
+            const { WorkflowEditorBody } = await import('./WorkflowEditorBody');
+            screen = await renderScreen(<AppPaneProvider><WorkflowEditorHostScreen source={{ kind: 'saved', definitionId }} /></AppPaneProvider>);
+            expect(screen.root.findAllByType(WorkflowEditorBody)).toHaveLength(0);
+            expect(transport.mock.calls.some(([action]) => action === 'workflow.definition.get')).toBe(true);
+            await act(async () => retireActiveServerAccountScopeLifetime());
+            const draft = screen.root.findByType(WorkflowEditorBody).props.draft;
+            expect(draft.name).toBe('Restored document');
+            await act(async () => retireActiveServerAccountScopeLifetime());
+            expect(screen.root.findByType(WorkflowEditorBody).props.draft).toBe(draft);
+        } finally {
+            await screen?.unmount();
+            publishAppliedActiveServerSnapshot(previousApplied, previousAvailable);
+        }
+    });
+
     it('keeps the loop card status on its executable container rather than its latest iteration frame', async () => {
         const { selectWorkflowTestStep } = await import('../editor/useWorkflowTestRunPresentation');
         const definition = createWorkflowDefinitionFixture({ blocks: [{ kind: 'loop', id: 'items',
@@ -81,14 +402,20 @@ describe('editor workflow composer', () => {
     });
 
     beforeEach(async () => {
+        routeBoundary.params = {};
+        routeBoundary.platform = 'ios';
+        routeBoundary.credentials = null;
+        previousAppliedSnapshot = getAppliedActiveServerSnapshot();
+        previousRuntimeAvailable = isAppliedActiveServerRuntimeAvailable();
         installHomeGovernanceBoundaries(home);
         resetTeamsDirectoryEngineForTests(); resetTeamsSnapshotsForTests();
         await home.reset();
         appliedHome.serverId = 'server-a';
         appliedHome.serverUrl = 'https://server-a.example';
+        publishAppliedActiveServerSnapshot({ ...appliedHome });
         viewport.width = 1280;
         const machine = createMachineFixture();
-        getStorage().setState({ profileScope: { serverId: 'server-a', accountId: 'account-a' }, isDataReady: true,
+        getStorage().setState({ profileScope: { serverId: 'server-a', accountId: 'account-a' }, isDataReady: true, isSessionDraftsReady: true,
             machines: { [machine.id]: machine }, machineListByServerId: {} });
         transport.mockReset();
         transport.mockImplementation(async (action: string, input: unknown) => {
@@ -105,7 +432,14 @@ describe('editor workflow composer', () => {
                 : { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
         });
     });
-    afterEach(() => { clearActiveUnsavedChangesGuard(); standardCleanup(); vi.restoreAllMocks(); });
+    afterEach(async () => {
+        (await import('@/components/onboarding/tour/state/journeySession')).endOnboardingJourneySession();
+        clearActiveUnsavedChangesGuard();
+        await standardCleanup();
+        vi.unstubAllGlobals();
+        publishAppliedActiveServerSnapshot(previousAppliedSnapshot, previousRuntimeAvailable);
+        vi.restoreAllMocks();
+    });
 
     it('requires session context before opening a habit from a direct example route', async () => {
         const screen = await renderScreen(<AppPaneProvider><WorkflowEditorHostScreen source={{ kind: 'new',
@@ -226,10 +560,15 @@ describe('editor workflow composer', () => {
             } }] });
             changeWhere({ machineId: 'machine-1', directory: '/repo' });
         });
-        expect(screen.findByTestId('workflow-editor-test-run')).not.toBeNull();
+        // Test run lives in the page's `⋯` (DESIGN-13 header, lab E1's action set); its item is the
+        // menu's own action, chosen as the menu would.
+        const pageMenu = screen.root.findAll((node) => node.props?.testID === 'workflow-editor-menu' && Array.isArray(node.props.actions))[0];
+        const testRun = (pageMenu?.props.actions as ReadonlyArray<{ id: string; disabled?: boolean; onSelect: () => void }> | undefined)
+            ?.find((action) => action.id === 'test-run');
+        expect(testRun?.disabled).not.toBe(true);
         const { router } = await import('expo-router');
         vi.mocked(router.push).mockClear();
-        await screen.pressByTestIdAsync('workflow-editor-test-run');
+        await act(async () => { testRun!.onSelect(); });
         await vi.waitFor(() => expect(screen.findByTestId('workflow-run-inputs-run')?.props.disabled).toBe(false));
         await screen.pressByTestIdAsync('workflow-run-inputs-run');
         expect(transport.mock.calls.filter(([action]) => action === 'workflow.run.start')[0]?.[1]).toMatchObject({
@@ -251,6 +590,7 @@ describe('editor workflow composer', () => {
     it('runs the reviewed saved draft with its granted Team without saving or substituting saved contents', async () => {
         appliedHome.serverUrl = 'https://workflow.example';
         appliedHome.serverId = await home.addHome({ name: 'Workflow Home', serverUrl: 'https://workflow.example', accountId: 'account-a' });
+        publishAppliedActiveServerSnapshot({ ...appliedHome });
         getStorage().setState({ profileScope: { serverId: appliedHome.serverId, accountId: 'account-a' } });
         home.answer(appliedHome.serverId, '/v1/teams/get', { body: teamSummaryFixture({ id: 'team-a', name: 'Builders',
             viewerRole: 'member', capabilities: teamCapabilitiesFixture({}) }) });

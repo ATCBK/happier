@@ -17,6 +17,7 @@ import {
     describeWorkflowInvocationLifecycle,
     describeWorkflowRunState,
     summarizeWorkflowInvocationCoverage,
+    isWorkflowAttentionInvocation,
 } from './workflowLifecyclePresentation';
 import { createWorkflowInvocationIndexFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
 
@@ -29,17 +30,40 @@ import { createWorkflowInvocationIndexFixture } from '@/dev/testkit/fixtures/wor
  * three claims.
  */
 describe('describeWorkflowInvocationLifecycle', () => {
+    it('withdraws held attention as soon as the canonical Stop receipt is accepted', () => {
+        expect(isWorkflowAttentionInvocation('waiting_for_review', 'executable', 'running', true)).toBe(false);
+        expect(isWorkflowAttentionInvocation('waiting_for_review', 'executable', 'running', false)).toBe(true);
+        expect(summarizeWorkflowInvocationCoverage([createWorkflowInvocationIndexFixture({ id: 'held', lifecycle: 'waiting_for_review' })], {
+            kindsByInvocationId: new Map([['held', 'executable']]), historyComplete: true,
+            runState: 'running', cancelRequested: true,
+        }).observedLeafCounts.attention).toBe(0);
+    });
     it('presents every canonical Run state, including an unsettled review wait', () => {
         for (const state of WORKFLOW_RUN_STATES_V1) {
-            expect(describeWorkflowRunState(state)).toMatchObject({ state, label: `workflows.runState.${state}` });
+            expect(describeWorkflowRunState(state)).toMatchObject({ state, label: state === 'waiting_for_review'
+                ? 'workStatus.buckets.needs_you' : `workflows.runState.${state}` });
         }
         expect(describeWorkflowRunState('waiting_for_review')).toMatchObject({ terminal: false, variant: 'attention' });
+    });
+    it('says Needs you, in the attention tone, for a live Run that waits on the person (DESIGN-13)', () => {
+        // A list row shows one word in amber; "Running" in amber says work is fine and urgent at once.
+        expect(describeWorkflowRunState('running', { inAttentionWindow: true })).toMatchObject({
+            label: 'workStatus.buckets.needs_you', variant: 'attention' });
+        expect(describeWorkflowRunState('claimed', { inAttentionWindow: true }).label).toBe('workStatus.buckets.needs_you');
+        // A held Run uses the same short attention word even before window membership arrives.
+        expect(describeWorkflowRunState('waiting_for_review').label).toBe('workStatus.buckets.needs_you');
+        expect(describeWorkflowRunState('waiting_for_review', { inAttentionWindow: true }).label)
+            .toBe('workStatus.buckets.needs_you');
+        expect(describeWorkflowRunState('failed', { inAttentionWindow: true }).label).toBe('workflows.runState.failed');
+        // An explicit composed word (the Run page headline) stays the caller's.
+        expect(describeWorkflowRunState('running', { inAttentionWindow: true, word: 'Running' }).label).toBe('Running');
     });
     it('covers every canonical lifecycle the Protocol declares', () => {
         for (const lifecycle of WORKFLOW_INVOCATION_LIFECYCLES_V1) {
             const presentation = describeWorkflowInvocationLifecycle(lifecycle);
             expect(presentation.lifecycle).toBe(lifecycle);
-            expect(presentation.label).toBe(`workflows.invocationState.${lifecycle}`);
+            expect(presentation.label).toBe(lifecycle === 'cancel_requested'
+                ? 'workflows.run.stopping' : `workflows.invocationState.${lifecycle}`);
         }
     });
 

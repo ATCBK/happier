@@ -4,7 +4,7 @@ import type { EntityDragItemV1, EntityDragScopeV1, EntityDropAdmissionV1, Entity
 import { resolveWorkflowSessionBinding, type WorkflowSessionBindingContext } from '@/sync/domains/workflows/workflowAuthoringSessionBinding';
 import { findWorkflowBlock } from '@happier-dev/protocol/workflows/workflowDefinitionEditV1';
 import { workflowBlockReferenceLabel } from '@/sync/domains/workflows/workflowBlockLabel';
-import { registerWorkflowConversationBindingOwner } from '@/sync/ops/actions/workflowAuthoringAction';
+import { registerMountedWorkflowDraftOwner, type WorkflowMountedDraftActions } from '@/sync/ops/actions/workflowAuthoringAction';
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { t } from '@/text';
 
@@ -32,14 +32,21 @@ export function useWorkflowSessionBinding(input: Readonly<{
     onChange: (draft: WorkflowSessionBindingContext['draft']) => void;
     whereName: string | null;
     machineName: (id: string) => string;
+    draftActions?: WorkflowMountedDraftActions;
 }>): WorkflowSessionDrop | undefined {
     const latest = React.useRef(input);
     latest.current = input;
     const executeAction = React.useMemo(() => createFrontDoorActionExecute(), []);
-    React.useLayoutEffect(() => registerWorkflowConversationBindingOwner({
+    React.useLayoutEffect(() => registerMountedWorkflowDraftOwner({
+        kind: 'workflow',
         getContext: () => latest.current.context,
         onChange: draft => latest.current.onChange(draft),
-    }), []);
+        actions: {
+            getSnapshot: () => latest.current.draftActions?.getSnapshot() ?? null,
+            execute: async (actionId, input, signal, caller) => latest.current.draftActions
+                ? await latest.current.draftActions.execute(actionId, input, signal, caller) : { status: 'unavailable' },
+        },
+    }), [input.context.scope?.serverId, input.context.scope?.accountId, input.context.draft.draftId]);
     const scope = input.context.scope;
     return React.useMemo(() => {
         if (!scope) return undefined;

@@ -9,28 +9,23 @@ import { useInputFieldOptions } from '@/components/sessions/actions/useInputFiel
 import { parseQualifiedPluginActionId } from '@happier-dev/protocol/actions';
 import type { EffectiveActionInputField } from '@happier-dev/protocol/actions/actionInputHintsRuntime';
 import type { WorkflowActionFieldBindingV1, WorkflowActionLeafV1 } from '@happier-dev/protocol/workflows/workflowLeafV1';
-import type { WorkflowCondition, WorkflowValueReference } from '@happier-dev/protocol/workflows/workflowReferenceV1';
+import type { WorkflowValueReference } from '@happier-dev/protocol/workflows/workflowReferenceV1';
 import { isWorkflowActionLiteralFieldV1 } from '@happier-dev/protocol/workflows/stepActionsV1';
-import { findWorkflowBlock } from '@happier-dev/protocol/workflows/workflowDefinitionEditV1';
-import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 
 import { ActionInputFields } from '@/components/sessions/actions/ActionInputFields';
 import { findWorkflowActionSpec } from '@/components/workflows/presentation/workflowActionCatalog';
 import type { ResolveSessionActionFieldOptions } from '@/components/sessions/actions/sessionActionFieldOptions';
 import { Text } from '@/components/ui/text/Text';
-import { Switch } from '@/components/ui/forms/Switch';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { WORKFLOW_BLOCK_KIND_GLYPH } from '@/components/workflows/presentation/workflowBlockKindGlyph';
 import { resolvePluginContributedActionIconName } from '@/components/plugins/actions/pluginContributedActionPresentation';
 import type { WorkflowEditorDraft } from '@/sync/domains/workflows/workflowEditorDraft';
 import { t } from '@/text';
 import { resolveWorkflowUnnamedHeading, workflowBlockReferenceLabel } from '@/sync/domains/workflows/workflowBlockLabel';
-import { listWorkflowProducerOptions } from '@/sync/domains/workflows/workflowAuthoring';
 
 import type { WorkflowBlockAction } from './WorkflowBlockActionsMenu';
 import { WorkflowBlockHeading, type WorkflowBlockNameEditor } from './WorkflowBlockHeading';
-import { formatWorkflowConditionSentence } from './WorkflowConditionEditor';
-import { WorkflowStepOptionsFootChip } from './WorkflowStepOptionsChip';
+import { formatWorkflowBlockOptionsSummary, WorkflowStepOptionsFootChip } from './WorkflowStepOptionsChip';
 import type { WorkflowDocumentStepSlots } from './workflowDocumentPresentation';
 import { workflowEditorStyles } from './workflowEditorStyles';
 import { WorkflowKindCard } from './WorkflowKindCard';
@@ -64,7 +59,7 @@ function resolveActionFieldRows(spec: WorkflowActionSpec | null, input: Workflow
         seen.add(field.path);
         rows.push({
             key: field.path,
-            label: formatWorkflowFieldLabel(field.path, field.title),
+            label: field.prompt ?? formatWorkflowFieldLabel(field.path, field.title),
             ...(field.description === undefined ? {} : { description: field.description }),
             required: field.required === true,
             hint: { ...field, title: formatWorkflowFieldLabel(field.path, field.title) },
@@ -76,35 +71,6 @@ function resolveActionFieldRows(spec: WorkflowActionSpec | null, input: Workflow
         rows.push({ key, label: formatWorkflowFieldLabel(key), required: false, hint: null });
     }
     return rows;
-}
-
-/** The exact text result uses '' for a completed Agent turn with no final text. */
-function notifyReportCondition(draft: WorkflowEditorDraft, block: WorkflowActionLeafV1): WorkflowCondition | null {
-    const message = block.input.message;
-    if (message?.kind !== 'result' || message.path.length !== 0) return null;
-    const source = findWorkflowBlock(draft, message.producer.blockId);
-    if (source?.kind !== 'step' || source.result.kind !== 'text') return null;
-    if (!listWorkflowProducerOptions(draft, block.id).some(option => (
-        !option.isBranch && option.blockId === message.producer.blockId
-        && sameStrictJsonValue(option.scope, message.producer.scope)
-    ))) return null;
-    return { kind: 'compare', operator: 'neq', left: message, right: { kind: 'literal', value: '' } };
-}
-
-function hasNotifyReportCondition(condition: WorkflowCondition | undefined, report: WorkflowCondition): boolean {
-    return sameStrictJsonValue(condition, report)
-        || (condition?.kind === 'all' && condition.conditions.some(part => sameStrictJsonValue(part, report)));
-}
-
-/** Only this conjunct changes; independently authored conditions retain their exact shape. */
-function setNotifyReportCondition(condition: WorkflowCondition | undefined, report: WorkflowCondition, enabled: boolean): WorkflowCondition | undefined {
-    if (enabled) return hasNotifyReportCondition(condition, report) ? condition
-        : condition === undefined ? report : { kind: 'all', conditions: [condition, report] };
-    if (sameStrictJsonValue(condition, report)) return undefined;
-    if (condition?.kind !== 'all') return condition;
-    const remaining = condition.conditions.filter(part => !sameStrictJsonValue(part, report));
-    return remaining.length === condition.conditions.length ? condition
-        : remaining.length === 0 ? undefined : remaining.length === 1 ? remaining[0] : { ...condition, conditions: remaining };
 }
 
 /**
@@ -158,8 +124,7 @@ export function WorkflowActionBlockEditor(props: Readonly<{
     // Unnamed, the heading carries the card's identity and the card shows only its rows.
     const headingCarriesCard = resolveWorkflowUnnamedHeading(block) === 'card';
     const actionSource = spec?.plugin?.title ?? (spec === null ? t('workflows.contentUnavailable') : 'Happier');
-    const reportCondition = block.actionId === 'notifications.notify_me' ? notifyReportCondition(props.draft, block) : null;
-    const onlyReported = reportCondition !== null && hasNotifyReportCondition(block.onlyWhen, reportCondition);
+    const optionsSummary = formatWorkflowBlockOptionsSummary(block);
 
     const setBinding = (key: string, binding: WorkflowActionFieldBindingV1 | undefined) => {
         const { [key]: _previous, ...rest } = block.input;
@@ -197,12 +162,8 @@ export function WorkflowActionBlockEditor(props: Readonly<{
                     : t('workflows.page.blocks.actionSub')}
                 footAccessory={props.onOpenOptions === undefined || !editable ? undefined : (
                     <WorkflowStepOptionsFootChip
-                        label={block.onlyWhen === undefined
-                            ? t('workflows.page.blocks.workflowDefaults')
-                            : t('workflows.page.inspector.onlyWhenSentence', {
-                                condition: formatWorkflowConditionSentence(props.draft, block.onlyWhen),
-                            })}
-                        changed={block.onlyWhen !== undefined}
+                        label={optionsSummary.label}
+                        changed={optionsSummary.changed}
                         onOpen={props.onOpenOptions}
                         testID={`${rowPrefix}-options`}
                         labelTestID={`${rowPrefix}-options-label`}
@@ -297,29 +258,6 @@ export function WorkflowActionBlockEditor(props: Readonly<{
                     />
                 );
             })}
-            {block.actionId === 'notifications.notify_me' ? (
-                // A card row like the others (label column, then its control), not a list Item with
-                // its own inset (DESIGN-7 N5).
-                <View testID={`${rowPrefix}-only-reported-row`} style={[workflowEditorStyles.actionFieldRow, workflowEditorStyles.kindCardToggleRow]}>
-                    <View style={workflowEditorStyles.kindCardToggleText}>
-                        <Text style={workflowEditorStyles.actionFieldText}>{t('sessionWork.scheduled.notifyOnlyReported')}</Text>
-                        <Text style={workflowEditorStyles.groupSummary}>{t(reportCondition === null
-                            ? 'sessionWork.scheduled.notifyOnlyReportedNeedsResult'
-                            : 'sessionWork.scheduled.notifyOnlyReportedDescription')}</Text>
-                    </View>
-                    <Switch
-                        testID={`${rowPrefix}-only-reported`}
-                        accessibilityLabel={t('sessionWork.scheduled.notifyOnlyReported')}
-                        value={onlyReported}
-                        disabled={!editable || reportCondition === null}
-                        onValueChange={!editable || reportCondition === null ? undefined : enabled => {
-                            const onlyWhen = setNotifyReportCondition(block.onlyWhen, reportCondition, enabled);
-                            const { onlyWhen: _previous, ...rest } = block;
-                            props.onChangeBlock(onlyWhen === undefined ? rest : { ...rest, onlyWhen });
-                        }}
-                    />
-                </View>
-            ) : null}
             </WorkflowKindCard>
             {props.slots?.reviewedCard ?? null}
             {props.slots?.footer ?? null}

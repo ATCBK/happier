@@ -2,6 +2,10 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { WorkflowResultContractSchema, type WorkflowDefinitionV1 } from '@happier-dev/protocol/workflows/workflowV1';
 import type { JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
+import { WorkflowReviewDraftSetInputV1Schema } from '@happier-dev/protocol/actions/workflowAuthoringAction';
+import { classifyWorkflowHoldV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
+import { decodeExecutionRunResultObservation } from '@happier-dev/protocol/execution/runs/resultContract';
+import { registerMountedWorkflowDraftOwner } from '@/sync/ops/actions/workflowAuthoringAction';
 import type { WorkflowProgressEnvelopeV1, WorkflowRunInvocationIndexV1, WorkflowRunSummaryV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
 import type { WorkflowRunAcceptedContextV1, WorkflowRunGetResultV1 } from '@happier-dev/protocol/workflows/actionsV1';
 import { matchesWorkflowAcceptedDefinitionV1 } from '@happier-dev/protocol/workflows/workflowValidationV1';
@@ -10,15 +14,14 @@ import { workflowRunDetailActions } from '@/sync/domains/workflows/workflowRunDe
 import { buildWorkflowPlanReviewSeed, deriveWorkflowPlanRunId, readWorkflowPlanResult,
     validateWorkflowPlanProposal } from '@/sync/domains/workflows/workflowPlanReview';
 import type { WorkflowReviewedRunSeed } from '@/sync/domains/workflows/workflowReviewedRunSeed';
-import { Text } from '@/components/ui/text/Text';
-import { resolveWorkflowProblemPresentation } from '../presentation/workflowProblemPresentation';
+import { resolveWorkflowProblemPresentation, type WorkflowProblemPresentation } from '../presentation/workflowProblemPresentation';
 import { WorkflowFlowView } from '../flow/WorkflowFlowView';
 import { projectWorkflowFlow } from '../flow/workflowFlowProjection';
 import { t } from '@/text';
 import { workflowBlockReferenceLabel } from '@/sync/domains/workflows/workflowBlockLabel';
 import { useMountedRef } from '@/hooks/ui/useMountedRef';
 import { requiresUncertainPriorEffectsAcknowledgement } from './workflowRunDetailPresentation';
-import { WorkflowReviewCard, decodeWorkflowReviewDraft, type WorkflowReviewChoice,
+import { WorkflowReviewCard, decodeWorkflowReviewDraft, serializeWorkflowReviewValue, type WorkflowReviewChoice,
     type WorkflowReviewDraft, type WorkflowReviewReading } from './WorkflowReviewCard';
 import { resolveWorkflowInvocationBlock } from './workflowInvocationStructure';
 
@@ -94,7 +97,57 @@ export function WorkflowInvocationReview(props: Readonly<{
     const earlierPlanRunId = recovered && proposal && !startedPlanRunId ? recovered.id : null;
     const [pending, setPending] = React.useState(false);
     const busy = React.useRef(false);
-    const [error, setError] = React.useState<string | null>(null);
+    // An accepted answer stays busy until the hold itself moves on (its lifecycle or content changes),
+    // so the primary shows one continuous pending state from the press to the answer (DESIGN-15 R8)
+    // instead of going idle while the Run catches up.
+    const awaitingHoldChange = React.useRef(false);
+    React.useEffect(() => {
+        if (!awaitingHoldChange.current) return;
+        awaitingHoldChange.current = false;
+        setPending(false);
+    }, [invocation.lifecycle, props.contentRevision]);
+    const [error, setError] = React.useState<WorkflowProblemPresentation | null>(null);
+    const changeDraft = React.useCallback((next: WorkflowReviewDraft | undefined) => {
+        if (next) buffers.drafts.set(invocation.id, next); else buffers.drafts.delete(invocation.id);
+        setDraft(next);
+    }, [buffers, invocation.id]);
+    const draftOwner = React.useRef({ props, contract, contractResult, changeDraft });
+    draftOwner.current = { props, contract, contractResult, changeDraft };
+    React.useLayoutEffect(() => {
+        const lifetime = captureActiveServerAccountScopeLifetime();
+        if (!lifetime) return;
+        return registerMountedWorkflowDraftOwner({
+            kind: 'review',
+            getAddress: () => {
+                const current = draftOwner.current.props;
+                // Preparing the displayed buffer has no durable effect. Exact-read
+                // confirmation still gates publishing and accepting this hold.
+                return lifetime.isCurrent() && current.active && current.current()
+                    && classifyWorkflowHoldV1({ lifecycle: current.invocation.lifecycle, isCurrent: true, progress: current.progress }) !== 'resolved'
+                    ? { scope: lifetime.scope, draftId: current.invocation.id } : null;
+            },
+            execute: async (actionId, input, signal) => {
+                if (actionId !== 'workflow.run.review.draft.set') return { status: 'unavailable' };
+                if (signal?.aborted) return { status: 'refused', reason: 'cancelled' };
+                if (!lifetime.isCurrent()) return { status: 'unavailable' };
+                const latest = draftOwner.current;
+                const parsed = WorkflowReviewDraftSetInputV1Schema.safeParse(input);
+                if (!parsed.success) return { status: 'refused', reason: 'invalid_parameters' };
+                if (parsed.data.runId !== latest.props.run.id) return { status: 'unavailable' };
+                if (!latest.props.callerAccess.canEdit) return { status: 'refused', reason: 'workflow_draft_read_only' };
+                if (busy.current) return { status: 'refused', reason: 'review_pending' };
+                if (parsed.data.expectedContentRevision !== latest.props.contentRevision) return { status: 'refused', reason: 'stale_content_revision' };
+                if (latest.props.progress.resultContract !== undefined && !latest.contractResult.success) return { status: 'refused', reason: 'invalid_review_contract' };
+                const decoded = decodeExecutionRunResultObservation({ encoding: 'typed', value: parsed.data.value }, latest.contract);
+                if (!decoded.ok) return { status: 'refused', reason: decoded.reason };
+                const next = { text: serializeWorkflowReviewValue(decoded.value, latest.contract), contentRevision: parsed.data.expectedContentRevision };
+                const before = latest.props.buffers.drafts.get(latest.props.invocation.id);
+                if (before?.text === next.text && before.contentRevision === next.contentRevision) return { status: 'unchanged' };
+                latest.changeDraft(next);
+                return { status: 'applied' };
+            },
+        });
+    }, [props.run.id, invocation.id, props.active, invocation.lifecycle]);
 
     React.useEffect(() => {
         if (!props.active || plan === null || shown === undefined) return;
@@ -103,7 +156,7 @@ export function WorkflowInvocationReview(props: Readonly<{
         void validateWorkflowPlanProposal(shown, controller.signal).then((definition) => {
             if (current && props.current()) setValidated({ value: shown, proposal: definition });
         }).catch((cause: unknown) => {
-            if (current && props.current()) setError(resolveWorkflowProblemPresentation(cause).message);
+            if (current && props.current()) setError(resolveWorkflowProblemPresentation(cause));
         });
         return () => { current = false; controller.abort(); };
     }, [props.active, props.current, plan !== null, shown]);
@@ -141,8 +194,8 @@ export function WorkflowInvocationReview(props: Readonly<{
         setPending(true);
         setError(null);
         try { await operation(current); }
-        catch (cause) { if (current()) setError(resolveWorkflowProblemPresentation(cause).message); }
-        finally { busy.current = false; if (current()) setPending(false); }
+        catch (cause) { if (current()) setError(resolveWorkflowProblemPresentation(cause)); }
+        finally { busy.current = false; if (current() && !awaitingHoldChange.current) setPending(false); }
     };
     const complete = async (choice: WorkflowReviewChoice) => perform(async (current) => {
         if (choice.mode === 'generate' && (!canGenerate || (uncertaintyAcknowledgementRequired
@@ -152,7 +205,10 @@ export function WorkflowInvocationReview(props: Readonly<{
             ...(choice.mode === 'generate' && uncertaintyAcknowledgementRequired ? { acknowledgeUncertainPriorEffects: true as const } : {}),
             ...(choice.mode === 'use_result' && startedPlanRunId ? { followUp: { kind: 'run_started' as const, runId: startedPlanRunId } } : {}),
         });
-        if (current()) props.onSettled(result.run);
+        if (!current()) return;
+        // `use_result` on a hold that is already completed (a plan result) leaves its lifecycle as it is.
+        awaitingHoldChange.current = invocation.lifecycle !== 'completed';
+        props.onSettled(result.run);
     });
     const editPlan = async (value: JsonValue, revision: string) => perform(async (current) => {
         const seed = buildWorkflowPlanReviewSeed({ value, proposal, run: props.run, acceptedContext: props.acceptedContext });
@@ -177,21 +233,17 @@ export function WorkflowInvocationReview(props: Readonly<{
             waitIdentity={waitIdentity}
             contentRevision={props.contentRevision} lifecycle={invocation.lifecycle} isCurrent={invocation.lifecycle !== 'superseded'}
             reading={reading} onChangeReading={(next) => { buffers.readings.set(invocation.id, next); setReading(next); }}
-            draft={draft} onChangeDraft={(next) => {
-                if (next) buffers.drafts.set(invocation.id, next); else buffers.drafts.delete(invocation.id);
-                setDraft(next);
-            }} onComplete={complete} onDiscuss={props.onDiscuss} onEditPlan={editPlan} onRunPlan={runPlan}
+            draft={draft} onChangeDraft={changeDraft} onComplete={complete} onDiscuss={props.onDiscuss} onEditPlan={editPlan} onRunPlan={runPlan}
             startedPlanRunId={startedPlanRunId} earlierPlanRunId={earlierPlanRunId}
             onOpenPlanRun={props.onOpenRun} planProposalValid={proposal !== null}
             resultSourceLabel={resultSourceLabel}
             planProposalPreview={proposalMap ? <WorkflowFlowView projection={proposalMap} selectedNodeId={null} density="compact" /> : undefined}
             canGenerate={canGenerate} primaryActionPlacement={props.compact ? 'footer' : 'inline'}
-            pending={pending} disabled={!props.confirmed || !props.active || !props.current()}
+            pending={pending} problem={error} disabled={!props.confirmed || !props.active || !props.current()}
             readOnly={!props.callerAccess.canEdit || invocation.lifecycle === 'superseded'
                 || (progress.resultContract !== undefined && !contractResult.success)}
             parentPaused={props.run.state === 'paused' || props.run.state === 'pause_requested'}
             machineName={props.machineName} machineReachable={props.machineReachable} />
-        {error ? <Text accessibilityRole="alert" testID="workflow-review-action-error">{error}</Text> : null}
         {props.readState}
     </View>;
 }

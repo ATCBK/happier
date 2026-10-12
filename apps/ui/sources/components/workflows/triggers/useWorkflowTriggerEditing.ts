@@ -26,19 +26,14 @@ import {
     type WorkflowTriggerWriter,
 } from './workflowTriggerDraft';
 import { useWorkflowTriggerSets } from './useWorkflowTriggerSets';
-
-const WORKFLOW_TRIGGER_WRITER: WorkflowTriggerWriter = {
-    add: (request) => addWorkflowTrigger(request),
-    update: (request) => updateWorkflowTrigger(request),
-    remove: (request) => removeWorkflowTrigger(request),
-};
+import type { WorkflowActionCallerContext } from '@/sync/domains/workflows/callWorkflowAction';
 
 export type WorkflowTriggerEditing = Readonly<{
     set: WorkflowTriggerSetV1 | null;
     draft: WorkflowTriggerDraft;
     setDraft: (next: WorkflowTriggerDraft) => void;
     captureSnapshot: (draftOverride?: WorkflowTriggerDraft) => WorkflowTriggerSnapshot;
-    restoreSnapshot: (snapshot: WorkflowTriggerSnapshot) => void;
+    restoreSnapshot: (snapshot: WorkflowTriggerSnapshot) => WorkflowTriggerSnapshot | null;
     dirty: boolean;
     status: 'loading' | 'ready' | 'failed';
     retry: () => void;
@@ -48,7 +43,7 @@ export type WorkflowTriggerEditing = Readonly<{
      * Writes the pending trigger delta after the definition was saved (03 §5.3 "Save ordering").
      * `failed` keeps exactly the edits that were not applied.
      */
-    save: (workflow: string, isCurrent: () => boolean) => Promise<'saved' | 'failed' | 'stale'>;
+    save: (workflow: string, isCurrent: () => boolean, caller?: WorkflowActionCallerContext) => Promise<'saved' | 'failed' | 'stale'>;
 }>;
 
 /**
@@ -101,18 +96,23 @@ export function useWorkflowTriggerEditing(params: Readonly<{
         return captureWorkflowTriggerSnapshot(latest.set, draftOverride ?? latest.draft, identify);
     }, [identify]);
     const restoreSnapshot = React.useCallback((snapshot: WorkflowTriggerSnapshot) => {
-        if (identityRef.current !== identity) return;
+        if (identityRef.current !== identity) return null;
         const pending = pendingSave.current;
         if (pending?.identity === identity && snapshot.rows.some((row) => row.trigger === null
             && row.identity.triggerId !== undefined && pending.draft.removes.includes(row.identity.triggerId))) {
             throw new WorkflowTriggerSnapshotRestoreError();
         }
-        setDraft(restoreWorkflowTriggerSnapshot(stateRef.current.set, snapshot));
-    }, [identity, setDraft]);
+        const latest = stateRef.current;
+        const restored = restoreWorkflowTriggerSnapshot(latest.set, snapshot);
+        setDraft(restored);
+        // A decoded Action snapshot must retain the same row identities as native
+        // history, so Save acknowledgements bind its later Undo/Redo to saved rows.
+        return captureWorkflowTriggerSnapshot(latest.set, restored, identify);
+    }, [identity, identify, setDraft]);
     const identitiesRef = React.useRef({ rowIdentities, identify });
     identitiesRef.current = { rowIdentities, identify };
 
-    const save = React.useCallback<WorkflowTriggerEditing['save']>(async (workflow, isCurrent) => {
+    const save = React.useCallback<WorkflowTriggerEditing['save']>(async (workflow, isCurrent, caller) => {
         const captured = stateRef.current;
         const capturedIdentities = identitiesRef.current;
         const lifetime = captureActiveServerAccountScopeCurrentness();
@@ -122,12 +122,20 @@ export function useWorkflowTriggerEditing(params: Readonly<{
         let previousSet = captured.set;
         const pending = { identity: captured.identity, draft: captured.draft };
         pendingSave.current = pending;
+        // Bind this invocation's admitted caller to the existing trigger writer.
+        // Parent approval/confirmation is absent; each child Action owns its policy.
+        const options = caller === undefined ? {} : { context: caller, signal: caller.signal };
+        const writer: WorkflowTriggerWriter = {
+            add: (request) => addWorkflowTrigger(request, options),
+            update: (request) => updateWorkflowTrigger(request, options),
+            remove: (request) => removeWorkflowTrigger(request, options),
+        };
         const outcome = await saveWorkflowTriggerDraft({
             workflow,
             project: captured.projectTarget,
             set: captured.set,
             draft: captured.draft,
-            writer: WORKFLOW_TRIGGER_WRITER,
+            writer,
             isCurrent: current,
             onAcknowledged: (edit, triggerId, acknowledgedSet) => {
                 if (!current()) return;

@@ -33,6 +33,30 @@ beforeEach(() => {
 afterEach(() => { standardCleanup(); storage.setState(previous); publishAppliedActiveServerSnapshot(previousAppliedSnapshot, previousRuntimeAvailable); });
 
 describe('workflow trigger editing lifetime', () => {
+    it('renews a pending Session-trigger read after same-Account retirement', async () => {
+        const { useSessionTriggers } = await import('./useSessionTriggers');
+        const retired = createDeferred<unknown>();
+        const reply = { ok: true, result: { sessionId: 'session-a', sets: [], pullRequestLinks: [] } };
+        transport.mockReturnValueOnce(retired.promise).mockResolvedValue(reply);
+        const hook = await renderHook(() => useSessionTriggers('session-a'));
+        expect(hook.getCurrent().status).toBe('loading');
+        await act(async () => (await import('@/sync/domains/scope/activeServerAccountScope')).retireActiveServerAccountScopeLifetime());
+        expect(hook.getCurrent().status).toBe('ready');
+        expect(hook.getCurrent().pullRequestLinks).toEqual([]);
+        transport.mockRejectedValue(new Error('Replacement collection unavailable'));
+        await act(async () => (await import('@/sync/api/plugins/data/pluginCollectionChangeWatch')).resetActivePluginCollectionChanges());
+        expect(hook.getCurrent().status).toBe('failed');
+    });
+
+    it('renews a mounted Workflow-trigger collection after same-Account retirement', async () => {
+        transport.mockResolvedValue({ ok: true, result: { sets: [set] } });
+        const hook = await renderHook(() => useWorkflowTriggerSets({ workflow: definitionId }));
+        expect(hook.getCurrent().status).toBe('ready');
+        await act(async () => (await import('@/sync/domains/scope/activeServerAccountScope')).retireActiveServerAccountScopeLifetime());
+        expect(hook.getCurrent().status).toBe('ready');
+        expect(hook.getCurrent().sets).toEqual([set]);
+    });
+
     it('loads a new Account’s session triggers without claiming the previous Account’s settled status', async () => {
         const { useSessionTriggers } = await import('./useSessionTriggers');
         const reply = { ok: true, result: { sessionId: 'session-a', sets: [], pullRequestLinks: [] } };

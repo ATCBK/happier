@@ -1,12 +1,7 @@
 import * as React from 'react';
 import { View } from 'react-native';
-import { useUnistyles } from 'react-native-unistyles';
-import { AgentIcon } from '@/agents/registry/AgentIcon';
-import { hasAgentIconMark } from '@/agents/catalog/catalog';
 import { resolveSessionAuthoringAgentId } from '@/components/sessions/authoring/controls/sessionAuthoringFieldControls';
 import { useSessionAuthoringEngineSummary } from '@/components/sessions/authoring/controls/SessionAuthoringControls';
-import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
-import { WORKFLOW_BLOCK_KIND_GLYPH } from '@/components/workflows/presentation/workflowBlockKindGlyph';
 
 import { Text } from '@/components/ui/text/Text';
 import {
@@ -42,10 +37,10 @@ import {
 import type { WorkflowBlockAction } from './WorkflowBlockActionsMenu';
 import { WorkflowBlockHeading, type WorkflowBlockNameEditor } from './WorkflowBlockHeading';
 import { workflowEditorStyles } from './workflowEditorStyles';
-import { formatWorkflowConversationLabel, formatWorkflowWorkspaceLabel } from './WorkflowContinuityControls';
+import { formatWorkflowConversationLabel, formatWorkflowWorkspaceLabel, useWorkflowContinuedSessionLabel } from './WorkflowContinuityControls';
 import { WorkflowStepDataEditor } from './WorkflowStepDataEditor';
 import { formatWorkflowIssueText } from './workflowIssueText';
-import { useWorkflowStepOptionsChip } from './WorkflowStepOptionsChip';
+import { formatWorkflowBlockOptionsSummary, useWorkflowStepOptionsChip } from './WorkflowStepOptionsChip';
 import { WorkflowStepSessionDropZone, type WorkflowSessionDrop } from './WorkflowStepSessionDropZone';
 import type { WorkflowDocumentStepSlots } from './workflowDocumentPresentation';
 
@@ -214,19 +209,21 @@ export function WorkflowStepEditor(props: Readonly<{
     // The Step options chip reads "Workflow defaults" or what differs ("Fresh",
     // "A background run", "Reviews before continuing"), D-7. An engine change is the
     // engine chip's to show (bordered there), so it adds no words here.
+    const continuedSessionLabel = useWorkflowContinuedSessionLabel(step.execution?.conversation);
     const stepDifferences = [
         ...(step.execution?.conversation === undefined
             ? []
-            : [formatWorkflowConversationLabel({ draft: props.draft, conversation: step.execution.conversation })]),
+            : [formatWorkflowConversationLabel({ draft: props.draft, conversation: step.execution.conversation, sessionLabel: continuedSessionLabel })]),
         ...(step.execution?.workspace === undefined ? [] : [formatWorkflowWorkspaceLabel(props.draft, step.execution.workspace)]),
         ...(step.execution?.executionTarget?.kind === 'detached_run' ? [t('workflows.page.sections.aBackgroundRun')] : []),
         ...(step.pauseForReview === true ? [t('workflows.page.inspector.reviewsBeforeContinuing')] : []),
     ];
     const latestCustomizeRef = React.useRef(onCustomize);
     latestCustomizeRef.current = onCustomize;
+    const optionsSummary = formatWorkflowBlockOptionsSummary(step, stepDifferences);
     const stepOptionsChip = useWorkflowStepOptionsChip({
-        label: stepDifferences.length === 0 ? t('workflows.page.blocks.workflowDefaults') : stepDifferences.join(' · '),
-        changed: stepDifferences.length > 0,
+        label: optionsSummary.label,
+        changed: optionsSummary.changed,
         onOpen: (anchorRef) => latestCustomizeRef.current(anchorRef),
         testID: `${testIDPrefix}-step-${step.id}-customize`,
         labelTestID: `${testIDPrefix}-step-${step.id}-inheritance`,
@@ -235,10 +232,7 @@ export function WorkflowStepEditor(props: Readonly<{
     // inherits and bordered once the step sets its own (04 §4.3). It is keyed on the step's own
     // engine facts, not the whole draft, so typing elsewhere never re-renders this composer.
     const effective = resolveEffectiveWorkflowStepExecution(props.draft, step);
-    const { theme } = useUnistyles();
     const agentId = resolveSessionAuthoringAgentId({ agentTarget: effective.agentTarget, facts: props.authoringFacts });
-    const kindMark = agentId !== null && hasAgentIconMark(agentId, theme)
-        ? <AgentIcon agentId={agentId} size={ICON_SIZE.sm} /> : <Icon name={WORKFLOW_BLOCK_KIND_GLYPH.step} size={ICON_SIZE.sm} />;
     const engine = step.execution?.engine ?? props.draft.defaults.engine;
     const engineChangeRef = React.useRef({ fields: props.onChangeExecutionFields, engine: props.onChangeEngine });
     engineChangeRef.current = { fields: props.onChangeExecutionFields, engine: props.onChangeEngine };
@@ -288,7 +282,6 @@ export function WorkflowStepEditor(props: Readonly<{
         >
             <WorkflowBlockHeading
                 nameEditor={props.nameEditor}
-                kindMark={kindMark}
                 ordinal={ordinal}
                 selected={props.selected}
                 unnamed={resolveWorkflowUnnamedHeading(step)}
@@ -343,6 +336,8 @@ export function WorkflowStepEditor(props: Readonly<{
                 draft={props.draft}
                 step={step}
                 editable={editable}
+                editing={props.selected === true}
+                onEdit={onSelect}
                 {...(!editable && props.slots?.footer ? { footerAccessory: props.slots.footer } : {})}
                 onChangeInput={props.onChangeInput}
                 testIDPrefix={testIDPrefix}

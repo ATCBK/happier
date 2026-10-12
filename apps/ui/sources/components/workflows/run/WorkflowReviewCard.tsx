@@ -1,11 +1,12 @@
 import * as React from 'react';
 import { ScrollView, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { classifyWorkflowHoldV1, type WorkflowInvocationLifecycleV1, type WorkflowProgressEnvelopeV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
+import { classifyWorkflowHoldV1, WorkflowAuthoredInputV1Schema, type WorkflowInvocationLifecycleV1, type WorkflowProgressEnvelopeV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
 import { sameStrictJsonValue, StrictJsonValueSchema, type JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import type { WorkflowResultContract } from '@happier-dev/protocol/workflows/workflowV1';
 import type { PluginJsonSchemaV2 } from '@happier-dev/protocol/plugins/contributions/jsonSchema';
 import { decodeExecutionRunResultObservation } from '@happier-dev/protocol/execution/runs/resultContract';
+import { resolveHappierChoiceControl, resolveHappierStateAnnouncement } from '@happier-dev/plugin-ui/presentation';
 import { MarkdownView } from '@/components/markdown/MarkdownView';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
@@ -23,6 +24,7 @@ import { projectWorkflowRunInputFields } from '@/sync/domains/workflows/workflow
 import { formatWorkflowInputValue, parseWorkflowInputTextDraft } from '@/sync/domains/workflows/workflowInputText';
 import { readWorkflowPlanResult } from '@/sync/domains/workflows/workflowPlanReview';
 import { t } from '@/text';
+import type { WorkflowProblemPresentation } from '../presentation/workflowProblemPresentation';
 import { useWorkflowCardModal } from './useWorkflowCardModal';
 
 export type WorkflowReviewDraft = Readonly<{ text: string; contentRevision: string }>;
@@ -59,6 +61,7 @@ export type WorkflowReviewCardProps = Readonly<{
     lifecycle?: WorkflowInvocationLifecycleV1;
     isCurrent?: boolean;
     pending?: boolean;
+    problem?: WorkflowProblemPresentation | null;
     canGenerate?: boolean;
     readOnly?: boolean;
     /** Edit authority remains, but the exact evidence is not confirmed yet. */
@@ -75,7 +78,10 @@ const styles = StyleSheet.create((theme) => ({
     root: { minWidth: 0 },
     filled: { flex: 1, minHeight: 0 },
     actions: { gap: theme.margins.sm, alignItems: 'stretch' },
+    head: { gap: theme.margins.xs },
     secondary: { color: theme.colors.text.secondary },
+    /** A value read back (a step's input, a published result): primary ink in both themes. */
+    value: { color: theme.colors.text.primary },
     error: { color: theme.colors.text.destructive },
     /** The primary's consequence and its one blocked reason sit centred under it (lab H1). */
     footnote: { textAlign: 'center' },
@@ -100,7 +106,7 @@ export function decodeWorkflowReviewDraft(text: string, contract: WorkflowResult
         return parsed.success ? parsed.data : undefined;
     } catch { return undefined; }
 }
-function serialize(value: JsonValue | undefined, contract: WorkflowResultContract | undefined): string {
+export function serializeWorkflowReviewValue(value: JsonValue | undefined, contract: WorkflowResultContract | undefined): string {
     return value === undefined ? contract?.kind === 'json' ? '{}' : ''
         : !contract || contract.kind === 'text' ? typeof value === 'string' ? value : JSON.stringify(value, null, 2)
             : JSON.stringify(value, null, 2);
@@ -116,24 +122,48 @@ function simpleFields(contract: WorkflowResultContract | undefined): Readonly<Re
     return fields;
 }
 
+/** A string field is long text when its schema allows a paragraph or its current value already is one. */
+function isLongTextField(schema: PluginJsonSchemaV2, value: unknown): boolean {
+    return (schema.maxLength ?? 0) > 200 || (typeof value === 'string' && (value.includes('\n') || value.length > 80));
+}
+
 type ReviewValueProps = Readonly<{ value: JsonValue; contract: WorkflowResultContract | undefined; testIDPrefix: string }>;
 
-/** Both the bounded reading and full inspection render the same exact value with the established viewers. */
-function WorkflowReviewValue({ value, contract, testIDPrefix: prefix }: ReviewValueProps): React.ReactElement {
+/**
+ * Both the bounded reading and full inspection render the same exact value with the established viewers;
+ * a settled or stopped attempt's detail reads its answer through the same rows (DESIGN-16 D5).
+ */
+export function WorkflowReviewValue({ value, contract, testIDPrefix: prefix }: ReviewValueProps): React.ReactElement {
+    // A step's authored input reads as the words it was given, never as its wire envelope (DESIGN-17 R1).
+    const authored = contract === undefined ? WorkflowAuthoredInputV1Schema.safeParse(value) : null;
+    if (authored?.success) {
+        const text = authored.data.renderedText ?? authored.data.document.text;
+        return <>
+            <SectionContentRow><Text selectable style={styles.value} testID={`${prefix}-value`}>{text}</Text></SectionContentRow>
+            {authored.data.input.map((entry, index) => <SectionContentRow key={index}>
+                <Text selectable style={styles.value} testID={`${prefix}-value-input-${index}`}>{formatWorkflowInputValue(entry)}</Text>
+            </SectionContentRow>)}
+        </>;
+    }
     const plan = contract?.kind === 'json' ? readWorkflowPlanResult(value) : null;
     const fields = objectValue(value);
+    // Read authored fields in declaration order, then retain any additional published values.
+    const fieldNames = fields ? [...new Set([
+        ...Object.keys(contract?.kind === 'json' ? contract.schema.properties ?? {} : {}),
+        ...Object.keys(fields),
+    ])].filter(name => Object.hasOwn(fields, name)) : [];
     return plan ? <SectionContentRow><MarkdownView testID={`${prefix}-plan-document`} markdown={plan.document} /></SectionContentRow>
-        : fields ? <>{Object.entries(fields).map(([name, fieldValue]) =>
+        : fields ? <>{fieldNames.map(name =>
             <Item key={name} title={(contract?.kind === 'json' ? contract.schema.properties?.[name]?.title : undefined) ?? name}
                 showChevron={false} accessoryLayout="stacked"
-                rightElement={<Text selectable testID={`${prefix}-value-${name}`}>{formatWorkflowInputValue(fieldValue)}</Text>} />)}</>
-            : <SectionContentRow><Text selectable testID={`${prefix}-value`}>{serialize(value, contract)}</Text></SectionContentRow>;
+                rightElement={<Text selectable style={styles.value} testID={`${prefix}-value-${name}`}>{formatWorkflowInputValue(fields[name])}</Text>} />)}</>
+            : <SectionContentRow><Text selectable style={styles.value} testID={`${prefix}-value`}>{serializeWorkflowReviewValue(value, contract)}</Text></SectionContentRow>;
 }
 
 function WorkflowReviewFullValue(props: ReviewValueProps): React.ReactElement {
     return <View testID={`${props.testIDPrefix}-value`}><ListPresentationProvider value="page"><ItemGroup>
         <WorkflowReviewValue {...props} />
-        <Item testID={`${props.testIDPrefix}-copy`} title={t('common.copy')} copy={serialize(props.value, props.contract)} showChevron={false} />
+        <Item testID={`${props.testIDPrefix}-copy`} title={t('common.copy')} copy={serializeWorkflowReviewValue(props.value, props.contract)} showChevron={false} />
     </ItemGroup></ListPresentationProvider></View>;
 }
 
@@ -177,6 +207,8 @@ export function WorkflowReviewCard(props: WorkflowReviewCardProps): React.ReactE
         isCurrent: props.isCurrent ?? true, progress: props.progress });
     const held = readiness !== 'resolved';
     const fields = simpleFields(props.contract);
+    // A hold that asks for one value speaks of one (DESIGN-17 R10); a decision or plain value is one too.
+    const singleField = fields === null || Object.keys(fields).length === 1;
     const editing = supplied || (props.waitForYou && !noValueNeeded && held && !props.readOnly);
     const changed = props.contentRevision !== revision;
     const plan = !props.waitForYou && props.contract?.kind === 'json' && shown !== undefined ? readWorkflowPlanResult(shown) : null;
@@ -200,7 +232,7 @@ export function WorkflowReviewCard(props: WorkflowReviewCardProps): React.ReactE
         if (blocked || !held || props.waitForYou || props.canGenerate === false) return;
         await props.onComplete({ mode: 'generate', expectedContentRevision: revision });
     };
-    const seedEdit = () => { if (!blocked) updateText(serialize(reading.value, props.contract)); };
+    const seedEdit = () => { if (!blocked) updateText(serializeWorkflowReviewValue(reading.value, props.contract)); };
     const valueObject = objectValue(shown) ?? {};
     const definitions = fields === null ? [] : Object.entries(fields).map(([name, schema]) => ({ name,
         valueType: schema.type === 'integer' ? 'number' as const : schema.type as 'string' | 'number' | 'boolean',
@@ -230,7 +262,7 @@ export function WorkflowReviewCard(props: WorkflowReviewCardProps): React.ReactE
     // One message per state: the field names its own problem; the primary says only why it is blocked.
     const hasFieldError = fieldForm ? projected.some((field) => fieldErrorOf(field) !== null) : valueError !== null;
     const validationReadout = editing && !valid && !noValueNeeded
-        ? hasFieldError ? t('workflows.review.invalid') : props.waitForYou ? t('workflows.review.enterValues') : null
+        ? hasFieldError ? t('workflows.review.invalid') : props.waitForYou ? t(singleField ? 'workflows.review.enterValue' : 'workflows.review.enterValues') : null
         : null;
     const decisionEditor = decisionChoices === null ? null : decisionChoices.length >= 2 && decisionChoices.length <= 4
         ? <SegmentedChoiceItem title={t('workflows.input.result')} subtitle={valueError ?? undefined} disabled={blocked}
@@ -244,8 +276,9 @@ export function WorkflowReviewCard(props: WorkflowReviewCardProps): React.ReactE
     const primaryAction = held && !props.readOnly ? <SectionContentRow testID={`${prefix}-primary`} showDivider={false}>
         <View style={styles.actions}>
             <RoundButton testID={`${prefix}-${generatePrimary ? 'generate' : 'use'}`} size="normal"
-                disabled={blocked || (!generatePrimary && !valid && !noValueNeeded)} loading={props.pending} titleNumberOfLines="complete"
-                title={generatePrimary ? t('workflows.review.generate') : props.waitForYou ? noValueNeeded ? t('workflows.review.continue') : t('workflows.review.useValues')
+                // Pending is busy, not unavailable: the primary keeps its look with the spinner in it.
+                disabled={props.pending !== true && (blocked || (!generatePrimary && !valid && !noValueNeeded))} loading={props.pending} titleNumberOfLines="complete"
+                title={generatePrimary ? t('workflows.review.generate') : props.waitForYou ? noValueNeeded ? t('workflows.review.continue') : t(singleField ? 'workflows.review.useValue' : 'workflows.review.useValues')
                     : plan ? t('workflows.review.usePlan') : t('workflows.review.useResult')}
                 onPress={generatePrimary ? generate : use} />
             {validationReadout ? <Text testID={`${prefix}-validation`} style={[hasFieldError ? styles.error : styles.secondary, styles.footnote]}
@@ -265,9 +298,10 @@ export function WorkflowReviewCard(props: WorkflowReviewCardProps): React.ReactE
             : editing ? t('workflows.review.editsBody') : held ? t('workflows.review.heldBody') : undefined}
             containerStyle={held ? workStatusSurfaceStyle('attention') : undefined}>
             {props.waitForYou && props.waitIdentity ? <SectionContentRow>
-                <View style={styles.actions}>
-                    <Text style={styles.secondary}>{t('workflows.review.waitBody')}</Text>
+                {/* The card's head, as the lab's hold header reads: what is asked first, then what waiting means. */}
+                <View style={styles.head}>
                     {props.waitIdentity.prompt ? <MarkdownView testID={`${prefix}-wait-prompt`} markdown={props.waitIdentity.prompt} /> : null}
+                    <Text style={styles.secondary}>{t('workflows.review.waitBody')}</Text>
                 </View>
             </SectionContentRow> : null}
             {changed && (!supplied || keptNewerRevision !== props.contentRevision) ? <SectionContentRow testID={`${prefix}-newer`}>
@@ -299,7 +333,7 @@ export function WorkflowReviewCard(props: WorkflowReviewCardProps): React.ReactE
                     onChange={(value) => changeField(field.definition.name, value === 'unset' ? undefined : value === 'true')} />;
                 if (schema.enum && schema.enum.every((value) => typeof value === 'string')) {
                     const choices = schema.enum.filter((value): value is string => typeof value === 'string');
-                    if (choices.length >= 2 && choices.length <= 4) return <SegmentedChoiceItem key={field.definition.name}
+                    if (resolveHappierChoiceControl({ kind: 'select', value: field.value, multiple: false }, choices.map((value) => ({ label: value }))) === 'segmented') return <SegmentedChoiceItem key={field.definition.name}
                         title={label} subtitle={fieldError ?? schema.description} disabled={blocked}
                         value={typeof field.value === 'string' ? field.value : ''} testIDPrefix={id}
                         options={choices.map((value) => ({ id: value, label: value }))}
@@ -317,14 +351,15 @@ export function WorkflowReviewCard(props: WorkflowReviewCardProps): React.ReactE
                     accessoryLayout="stacked" rightElement={<FieldTextInput testID={id}
                         value={formatWorkflowInputValue(valueObject[field.definition.name])}
                         accessibilityLabel={label} error={fieldError} editable={!blocked}
-                        multiline={field.definition.valueType === 'string'}
+                        // Sized to its content: a one-line value is one line; only long text asks for room.
+                        multiline={field.definition.valueType === 'string' && isLongTextField(schema, valueObject[field.definition.name])}
                         keyboardType={field.definition.valueType === 'number' ? 'numeric' : undefined}
                         onChangeText={(text) => {
                             const parsed = parseWorkflowInputTextDraft(field.definition, text);
                             changeField(field.definition.name, parsed.invalid ? text : field.definition.valueType === 'string' ? text : parsed.value);
                         }} />} />;
             }) : <Item title={t('workflows.input.result')} showChevron={false} accessoryLayout="stacked"
-                rightElement={<FieldTextInput testID={`${prefix}-editor`} value={props.draft?.text ?? serialize(reading.value, props.contract)}
+                rightElement={<FieldTextInput testID={`${prefix}-editor`} value={props.draft?.text ?? serializeWorkflowReviewValue(reading.value, props.contract)}
                     onChangeText={(text) => { if (!blocked) { touch(VALUE_FIELD); updateText(text); } }} accessibilityLabel={t('workflows.input.result')}
                     error={valueError} editable={!blocked} multiline monospace={props.contract !== undefined && props.contract.kind !== 'text'} />} />)
                 : shown !== undefined ? <>
@@ -341,7 +376,7 @@ export function WorkflowReviewCard(props: WorkflowReviewCardProps): React.ReactE
                         onPress={() => setFullValue({ value: shown, contract: props.contract, testIDPrefix: `${prefix}-full` })} />
                 </> : null}
             {shown !== undefined && !editing ? <Item testID={`${prefix}-copy`} title={t('common.copy')}
-                subtitle={props.resultSourceLabel} copy={serialize(shown, props.contract)} showChevron={false} /> : null}
+                subtitle={props.resultSourceLabel} copy={serializeWorkflowReviewValue(shown, props.contract)} showChevron={false} /> : null}
             {plan?.proposal !== undefined && props.planProposalPreview ? <SectionContentRow>
                 <Text>{t('workflows.review.proposal')}</Text>{props.planProposalPreview}
             </SectionContentRow> : null}
@@ -353,6 +388,10 @@ export function WorkflowReviewCard(props: WorkflowReviewCardProps): React.ReactE
                     testID={`${prefix}-open-plan-run`} size="small" display="secondary" titleNumberOfLines="complete"
                     title={t('workflows.review.openEarlierPlanRun')}
                     onPress={() => { if (props.earlierPlanRunId) props.onOpenPlanRun?.(props.earlierPlanRunId); }} /> : undefined} /> : null}
+            {props.problem ? <SectionContentRow>
+                <Text testID={`${prefix}-action-error`} style={styles.error}
+                    {...resolveHappierStateAnnouncement(props.problem.accessibilitySemantics)}>{props.problem.message}</Text>
+            </SectionContentRow> : null}
             {props.primaryActionPlacement !== 'footer' ? primaryAction : null}
             {!props.readOnly && held && !editing && !props.waitForYou ? <Item title={t('workflows.review.editResult')} showChevron={false}
                 rightElement={<RoundButton testID={`${prefix}-edit`} title={t('common.edit')} size="small" display="secondary" disabled={blocked} onPress={seedEdit} />} /> : null}

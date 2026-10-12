@@ -3,6 +3,7 @@ import {
     type WorkflowInvocationLifecycleV1,
     type WorkflowRunStateV1,
     type WorkflowRunInvocationIndexV1,
+    type WorkflowRunSummaryV1,
 } from '@happier-dev/protocol/workflows/workflowProgressV1';
 
 import type { IconName } from '@/components/ui/icons/Icon';
@@ -10,12 +11,14 @@ import type { StatusPillVariant } from '@/components/ui/status/StatusPill';
 import {
     isTerminalWorkflowInvocationLifecycle,
     isTerminalWorkflowRunState,
+    isWorkflowRunStopping,
+    isWorkflowRunStopPending,
     resolveWorkStatusTone,
     WORK_STATUS_PILL_VARIANT,
 } from '@/components/work/status/resolveWorkStatusTone';
 import { t } from '@/text';
 
-export { isTerminalWorkflowRunState };
+export { isTerminalWorkflowRunState, isWorkflowRunStopping, isWorkflowRunStopPending };
 
 /**
  * The one neutral presenter for the managed Workflow invocation lifecycle.
@@ -94,9 +97,10 @@ const WORKFLOW_LIFECYCLE_SHAPES: Readonly<Record<WorkflowInvocationLifecycleV1, 
     completed: { marker: icon('check-circle') },
     failed: { marker: icon('x-circle') },
     skipped: { marker: icon('minus-circle') },
-    // Stopping is not stopped: a durable stop request is not proof the work ended.
+    // Stopping is not yet stopped, but it is the same concept: like pause, the request and its end share
+    // the ended mark and the word tells them apart. An outline square read as an empty checkbox (DESIGN-14 D6).
     cancel_requested: { marker: icon('stop-circle') },
-    cancelled: { marker: icon('stop') },
+    cancelled: { marker: icon('stop-circle') },
     outcome_uncertain: { marker: icon('question') },
     superseded: { marker: icon('arrow-clockwise') },
 };
@@ -107,7 +111,12 @@ const WORKFLOW_LIFECYCLE_SHAPES: Readonly<Record<WorkflowInvocationLifecycleV1, 
  * "Waiting for you", and "Waiting for your review" stays reserved for review
  * holds. Tone, marker and attention are the lifecycle's and do not change.
  */
-export type WorkflowInvocationLifecycleContext = Readonly<{ blockKind?: string | null }>;
+export type WorkflowInvocationLifecycleContext = Readonly<{
+    blockKind?: string | null;
+    machineReachable?: boolean;
+    machineName?: string | null;
+    runStopPending?: boolean;
+}>;
 
 export function isWorkflowWaitForYouHold(
     lifecycle: WorkflowInvocationLifecycleV1,
@@ -125,13 +134,13 @@ export function describeWorkflowInvocationLifecycle(
         ? t('workflows.review.waitTitle')
         : t(`workflows.invocationState.${lifecycle}`);
     const attention = WORKFLOW_ATTENTION_LIFECYCLES.includes(lifecycle);
-    const status = resolveWorkStatusTone({ kind: 'workflow_step', facts: { lifecycle, word: label, inAttentionWindow: attention } });
+    const status = resolveWorkStatusTone({ kind: 'workflow_step', facts: { ...context, lifecycle, word: label, inAttentionWindow: attention } });
     return {
         lifecycle,
         label: status.word,
         variant: WORK_STATUS_PILL_VARIANT[status.tone],
         marker: shape.marker,
-        attention,
+        attention: status.bucket === 'needs_you',
         terminal: isTerminalWorkflowInvocationLifecycle(lifecycle),
     };
 }
@@ -150,6 +159,8 @@ export type WorkflowRunStatePresentation = Readonly<{
     variant: StatusPillVariant;
     marker: WorkflowLifecycleMarker;
     terminal: boolean;
+    /** A known parent hold, or neutral attention when its reason is not projected. */
+    attentionLabel: string | null;
 }>;
 
 const WORKFLOW_RUN_STATE_SHAPES: Readonly<Record<
@@ -161,7 +172,7 @@ const WORKFLOW_RUN_STATE_SHAPES: Readonly<Record<
     running: { marker: ACTIVITY },
     succeeded: { marker: icon('check-circle') },
     failed: { marker: icon('x-circle') },
-    cancelled: { marker: icon('stop') },
+    cancelled: { marker: icon('stop-circle') },
     pause_requested: { marker: icon('pause-circle') },
     paused: { marker: icon('pause-circle') },
     interrupted: { marker: icon('warning-circle') },
@@ -175,13 +186,23 @@ const WORKFLOW_RUN_STATE_SHAPES: Readonly<Record<
 
 export function describeWorkflowRunState(
     state: WorkflowRunStateV1,
-    context?: Readonly<{ word?: string; inAttentionWindow?: boolean }>,
+    context?: Readonly<{ word?: string; inAttentionWindow?: boolean; workflowCustodyState?: WorkflowRunSummaryV1['workflowCustodyState']; cancelRequested?: boolean; machineReachable?: boolean; machineName?: string | null }>,
 ): WorkflowRunStatePresentation {
     const shape = WORKFLOW_RUN_STATE_SHAPES[state];
+    // A live Run that waits on the person says so in the one attention word ("Needs you"): its
+    // own state word ("Running") in the attention tone would claim healthy and urgent at once.
+    // A held Run uses that same short word before attention membership catches up. A terminal
+    // Run reports its outcome; an explicit composed headline stays the caller's.
+    const needsYou = context?.word === undefined && (state === 'waiting_for_review'
+        || context?.inAttentionWindow === true && !isTerminalWorkflowRunState(state));
     const status = resolveWorkStatusTone({ kind: 'workflow_run', facts: {
         state,
-        word: context?.word ?? t(`workflows.runState.${state}`),
+        word: context?.word ?? (needsYou ? t('workStatus.buckets.needs_you') : t(`workflows.runState.${state}`)),
         inAttentionWindow: context?.inAttentionWindow,
+        workflowCustodyState: context?.workflowCustodyState,
+        cancelRequested: context?.cancelRequested,
+        machineReachable: context?.machineReachable,
+        machineName: context?.machineName,
     } });
     return {
         state,
@@ -192,7 +213,9 @@ export function describeWorkflowRunState(
         marker: context?.inAttentionWindow === true && (state === 'queued' || state === 'claimed')
             ? WORKFLOW_RUN_STATE_SHAPES.waiting_for_review.marker
             : shape.marker,
-        terminal: isTerminalWorkflowRunState(state),
+        terminal: isTerminalWorkflowRunState(state) && !isWorkflowRunStopPending({ state, ...context }),
+        attentionLabel: state === 'waiting_for_review' ? t('workflows.review.waitTitle')
+            : status.bucket === 'needs_you' ? t('workStatus.buckets.needs_you') : null,
     };
 }
 
@@ -220,6 +243,16 @@ export function describeWorkflowInvocationAttempt(attempt: string): Readonly<{
 /** Classification comes from the frozen definition/opened runtime structure owner. */
 export type WorkflowInvocationCoverageKind = 'executable' | 'structural' | 'unknown';
 
+/** Structural stop custody is not a request for the person to review a step. */
+export function isWorkflowAttentionInvocation(
+    lifecycle: WorkflowInvocationLifecycleV1,
+    coverageKind: WorkflowInvocationCoverageKind | undefined,
+    runState?: WorkflowRunStateV1,
+    cancelRequested?: boolean,
+): boolean {
+    return cancelRequested !== true && runState !== 'cancelled' && coverageKind === 'executable' && WORKFLOW_ATTENTION_LIFECYCLES.includes(lifecycle);
+}
+
 /** Observed leaf counts are not totals until the read and classification are complete. */
 export type WorkflowRunCoverage = Readonly<{
     observedLeafCounts: Readonly<{ completed: number; failed: number; attention: number }>;
@@ -233,6 +266,7 @@ export function summarizeWorkflowInvocationCoverage(
         kindsByInvocationId: ReadonlyMap<string, WorkflowInvocationCoverageKind>;
         historyComplete: boolean;
         runState?: WorkflowRunStateV1;
+        cancelRequested?: boolean;
         knownFailure?: boolean;
     }>,
 ): WorkflowRunCoverage {
@@ -257,7 +291,7 @@ export function summarizeWorkflowInvocationCoverage(
         if (kind !== 'executable') continue;
         if (invocation.lifecycle === 'completed') completed += 1;
         if (invocation.lifecycle === 'failed') failed += 1;
-        if (WORKFLOW_ATTENTION_LIFECYCLES.includes(invocation.lifecycle)) attention += 1;
+        if (isWorkflowAttentionInvocation(invocation.lifecycle, kind, evidence.runState, evidence.cancelRequested)) attention += 1;
     }
     return { observedLeafCounts: { completed, failed, attention }, coverage, knownFailure };
 }

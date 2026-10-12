@@ -23,6 +23,7 @@ import { withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
 import { installShippedNativeFrameScheduler } from '@/dev/testkit/legend/shippedNativeLegendRuntime';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 import { workflowRunDetailActions } from '@/sync/domains/workflows/workflowRunDetailActions';
 import { storage, useSession } from '@/sync/domains/state/storage';
 import { isSessionAccessOwner } from '@/sync/engine/sessions/normalizeSessionAccessProjection';
@@ -39,6 +40,8 @@ import { storeWorkflowReviewedRunSeed } from '@/sync/domains/workflows/workflowR
 
 // Only HTTP, Machine transport, credentials and rendering/platform loaders are replaced.
 // Account scope, stores, feature/policy decisions, Action owners and codecs remain real.
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 installDisconnectedServerSocketBoundary();
 const routerMock = await vi.hoisted(async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
@@ -113,7 +116,7 @@ afterEach(async () => {
 });
 afterAll(() => { vi.unstubAllGlobals(); });
 
-async function harness(options: Readonly<{ runScreen?: boolean; runReadError?: 'history_not_readable' | 'encryption_setup_required'; compact?: boolean; access?: 'owner' | 'edit' | 'view'; wait?: boolean; fieldlessWait?: boolean; exactRead?: 'pending' | 'failed'; confirmed?: boolean; plan?: boolean; admittedPlan?: boolean; planProposal?: boolean; uncertainPriorEffects?: boolean; acknowledged?: boolean; ownedOrigin?: boolean }> = {}) {
+async function harness(options: Readonly<{ runScreen?: boolean; runReadError?: 'history_not_readable' | 'encryption_setup_required'; compact?: boolean; access?: 'owner' | 'edit' | 'view'; wait?: boolean; fieldlessWait?: boolean; exactRead?: 'pending' | 'failed'; confirmed?: boolean; plan?: boolean; admittedPlan?: boolean; planProposal?: boolean; planValidationUnavailable?: boolean; uncertainPriorEffects?: boolean; acknowledged?: boolean; ownedOrigin?: boolean }> = {}) {
     installShippedNativeFrameScheduler();
     const restorePlatform = withPopoverWebGlobals();
     disposals.push(async () => { restorePlatform(); });
@@ -164,7 +167,7 @@ async function harness(options: Readonly<{ runScreen?: boolean; runReadError?: '
     insert(rootId, true); insert(heldId, false);
     const operations: Readonly<Record<string, unknown>>[] = [];
     const events: string[] = [];
-    const boundary = { refuse: false, loseResponse: false, admittedPlan: options.admittedPlan === true, access: options.access ?? 'owner', exactRead: options.exactRead as 'pending' | 'failed' | undefined };
+    const boundary = { refuse: false, failSubmit: false, loseResponse: false, workflowsEnabled: true, admittedPlan: options.admittedPlan === true, access: options.access ?? 'owner', exactRead: options.exactRead as 'pending' | 'failed' | undefined };
     let runReadError: typeof options.runReadError;
     const exactRead = createDeferred<void>();
     const planRunId = deriveWorkflowPlanRunId(runId, heldId);
@@ -172,7 +175,7 @@ async function harness(options: Readonly<{ runScreen?: boolean; runReadError?: '
     const account = await restoreServerAccountForTest({ serverUrl: `https://review-${crypto.randomUUID()}.test`, accountId: actorAccountId, request: async (url, init) => {
         const path = new URL(String(url)).pathname;
         if (path === '/health') return json({});
-        if (path === '/v1/features') return json({ features: { automations: { enabled: true }, workflows: { enabled: true } }, capabilities: {
+        if (path === '/v1/features') return json({ features: { automations: { enabled: true }, workflows: { enabled: boundary.workflowsEnabled } }, capabilities: {
             accountStoredContentCompatibility: { v: 1, minimumProtocolVersion: CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION,
                 currentProtocolVersion: CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION, declarationTransport: 'http-header-and-socket-auth-v1' },
         } });
@@ -202,7 +205,8 @@ async function harness(options: Readonly<{ runScreen?: boolean; runReadError?: '
             const listed = operation.runId === runId ? [...rows.values()].filter(row => (operation.parentRecordId === undefined || row.index.parentRecordId === operation.parentRecordId)
                 && (!Array.isArray(operation.lifecycles) || operation.lifecycles.includes(row.index.lifecycle))) : [];
             return json({ invocations: listed.map(row => row.index), parentRevision: run.revision,
-                ...(operation.progressEnvelopes === true ? { progressEnvelopesByInvocationId: Object.fromEntries(listed.map(row => [row.index.id, row.contentEnvelope])) } : {}) });
+                ...(operation.progressEnvelopes === true ? { keyCensus,
+                    progressEnvelopesByInvocationId: Object.fromEntries(listed.map(row => [row.index.id, row.contentEnvelope])) } : {}) });
         }
         if (operation.operation === 'invocations.get') {
             if (boundary.exactRead === 'pending') await exactRead.promise;
@@ -212,6 +216,7 @@ async function harness(options: Readonly<{ runScreen?: boolean; runReadError?: '
         if (operation.operation === 'invocations.current') return json({ invocation: rows.get(heldId), parentRevision: run.revision });
         if (operation.operation === 'invocations.publish_draft' || operation.operation === 'invocations.complete_review') {
             const row = rows.get(String(operation.invocationId));
+            if (boundary.failSubmit) throw new Error('ERR_SOCKS_CONNECTION_FAILED');
             if (!row || boundary.refuse || row.index.contentRevision !== operation.expectedContentRevision) return json({ error: 'currentness_conflict' }, 409);
             events.push(String(operation.operation));
             row.contentEnvelope = String(operation.contentEnvelope);
@@ -229,6 +234,12 @@ async function harness(options: Readonly<{ runScreen?: boolean; runReadError?: '
         storage.getState().applySessions([createSessionFixture({ id: originSessionId, access: createSessionAccessFixture('owner') })]);
     }
     const detail = await workflowRunDetailActions.getRun(runId);
+    if (options.planValidationUnavailable) {
+        // Withdraw the external Home capability after the initial successful read,
+        // so the real validation Action (rather than harness setup) is refused.
+        boundary.workflowsEnabled = false;
+        resetServerFeaturesClientForTests();
+    }
     runReadError = options.runReadError;
     let callerAccess = detail.callerAccess;
     const readProgress = () => {
@@ -304,6 +315,17 @@ const admissions = () => machineRpc.mock.calls.filter(([request]) =>
     TargetedActionRpcRequestV1Schema.safeParse(request.payload).success);
 
 describe('Review through the real Account Action owner and HTTP storage boundary', () => {
+    it('presents Plan validation failure with the card message and announcement semantics', async () => {
+        const h = await harness({ plan: true, planProposal: true, planValidationUnavailable: true });
+        await vi.waitFor(() => expect(h.screen.findHostByTestId('workflow-review-action-error')).not.toBeNull());
+        const problem = h.screen.findHostByTestId('workflow-review-action-error')!;
+        expect(typeof problem.props.children).toBe('string');
+        expect(problem.props.children.length).toBeGreaterThan(0);
+        expect(problem.props.accessibilityRole).toBe('alert');
+        expect(h.screen.findHostByTestId('workflow-review')!.findAll(node => node.props.testID === 'workflow-review-action-error').length).toBeGreaterThan(0);
+        expect(h.onSettled).not.toHaveBeenCalled();
+        expect(h.operations.filter(op => op.operation === 'invocations.complete_review')).toHaveLength(0);
+    });
     it('mounted review draft Action changes the displayed human buffer without accepting and preserves newer-result choice', async () => {
         const h = await harness();
         const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
@@ -317,7 +339,7 @@ describe('Review through the real Account Action owner and HTTP storage boundary
                 { surface: 'agent', authority: 'account_automation', serverId: scope.serverId }))
                 .toEqual({ ok: true, result: { status: 'applied' } });
         });
-        expect(h.operations).toEqual([]);
+        expect(h.operations.every(operation => operation.operation === 'get' || operation.operation === 'invocations.list')).toBe(true);
         expect(h.screen.findByTestId('workflow-review-field-summary')!.props.value).toBe('Agent prepared my edit');
         expect(await executor.execute('workflow.run.review.draft.set', { ...input, expectedContentRevision: '6' },
             { surface: 'agent', authority: 'account_automation', serverId: scope.serverId }))
@@ -360,11 +382,38 @@ describe('Review through the real Account Action owner and HTTP storage boundary
         expect(h.operations.filter(op => op.operation === 'invocations.complete_review')).toHaveLength(0);
         expect(h.rows.get(heldId)?.index.lifecycle).toBe('waiting_for_review');
     });
+    it('registers the visible Wait buffer while its exact read is pending without enabling acceptance', async () => {
+        routerMock.module.router.setParams({ invocationId: heldId });
+        const h = await harness({ runScreen: true, wait: true, exactRead: 'pending' });
+        await vi.waitFor(() => expect(h.screen.findHostByTestId('workflow-review-use')?.props.disabled).toBe(true));
+        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+        const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+        const { getMountedWorkflowDraftAddresses } = await import('@/sync/ops/actions/workflowAuthoringAction');
+        const scope = { serverId: getActiveServerSnapshot().serverId, accountId };
+        expect(getMountedWorkflowDraftAddresses()).toContainEqual({ scope, draftId: heldId });
+        await act(async () => {
+            expect(await createDefaultActionExecutor().execute('workflow.run.review.draft.set', {
+                scope, draftId: heldId, runId, expectedContentRevision: '7', value: { summary: 'Prepared while reading', approved: true },
+            }, { surface: 'agent', authority: 'account_automation', serverId: scope.serverId }))
+                .toEqual({ ok: true, result: { status: 'applied' } });
+        });
+        expect(h.screen.findByTestId('workflow-review-field-summary')!.props.value).toBe('Prepared while reading');
+        expect(h.screen.findHostByTestId('workflow-review-use')?.props.disabled).toBe(true);
+        await h.screen.pressByTestIdAsync('workflow-review-use');
+        expect(h.operations.filter(op => op.operation === 'invocations.complete_review' || op.operation === 'invocations.publish_draft')).toHaveLength(0);
+        h.boundary.exactRead = undefined;
+        await act(async () => h.settleExactRead());
+        await vi.waitFor(() => expect(h.screen.findHostByTestId('workflow-review-use')?.props.disabled).toBe(false));
+        expect(h.screen.findByTestId('workflow-review-field-summary')!.props.value).toBe('Prepared while reading');
+    });
     it('keeps a first-open fieldless Wait visible through a pending and failed exact read, then retries before Continue', async () => {
         routerMock.module.router.setParams({ invocationId: heldId });
         const h = await harness({ runScreen: true, wait: true, fieldlessWait: true, exactRead: 'pending' });
         await vi.waitFor(() => expect(h.screen.findHostByTestId('workflow-review-use')?.props.disabled).toBe(true));
-        expect(h.screen.findByTestId('workflow-run-read-pending')).not.toBeNull();
+        // The initial page now opens its exact progress in the same authorized
+        // batch. Keep that last confirmed card quiet while its later exact read waits.
+        expect(h.screen.findByTestId('workflow-review')).not.toBeNull();
+        expect(h.screen.findByTestId('workflow-run-read-pending')).toBeNull();
         expect(h.screen.getTextContent()).not.toContain(t('workflows.contentUnavailable'));
         await h.screen.pressByTestIdAsync('workflow-review-use');
         expect(h.operations.filter(op => op.operation === 'invocations.complete_review')).toHaveLength(0);
@@ -564,6 +613,22 @@ describe('Review through the real Account Action owner and HTTP storage boundary
         expect(h.readProgress().review?.decision).toBeUndefined();
         expect(h.onSettled).not.toHaveBeenCalled();
         expect(machineRpc).not.toHaveBeenCalled();
+    });
+    it.each([false, true])('keeps failed Wait values and shows the problem within the card (compact: %s)', async (compact) => {
+        const h = await harness({ wait: true, compact });
+        await change(h.screen, 'workflow-review-field-summary', 'Human answer');
+        await h.screen.pressByTestIdAsync('workflow-review-field-approved:true');
+        h.boundary.failSubmit = true;
+        await h.screen.pressByTestIdAsync('workflow-review-use');
+        await vi.waitFor(() => expect(h.screen.findHostByTestId('workflow-review-action-error')).not.toBeNull());
+        const card = h.screen.findHostByTestId('workflow-review')!;
+        expect(card.findAll(node => node.props.testID === 'workflow-review-action-error').length).toBeGreaterThan(0);
+        expect(h.screen.findByTestId('workflow-review-field-summary')?.props.value).toBe('Human answer');
+        expect(h.onSettled).not.toHaveBeenCalled();
+        h.boundary.failSubmit = false;
+        await h.screen.pressByTestIdAsync('workflow-review-use');
+        await vi.waitFor(() => expect(h.onSettled).toHaveBeenCalled());
+        expect(h.readProgress().result).toMatchObject({ summary: 'Human answer', approved: true });
     });
     it('accepts typed Wait values with human attribution and offers neither Generate nor Discuss', async () => {
         const h = await harness({ wait: true });

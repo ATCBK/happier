@@ -5,7 +5,8 @@ import {
     updateWorkflowTrigger,
 } from '@/sync/domains/workflows/workflowTriggerActions';
 import { readMachineControlTargetForSession } from '@/sync/ops/sessionMachineTarget';
-import { getTempData, storeTempData } from '@/utils/sessions/tempDataStore';
+import { readWorkflowEditorDraftSeed, storeWorkflowEditorDraftSeed } from '@/sync/domains/workflows/workflowEditorDraftSeed';
+import type { WorkflowActionCallerContext } from '@/sync/domains/workflows/callWorkflowAction';
 
 /**
  * Save as workflow (F1; 04 §5.4; 07 S16b): a trigger that holds its own steps opens them as an
@@ -25,25 +26,23 @@ export type TriggerWorkflowSeed = Readonly<{
 
 const TRIGGER_WORKFLOW_SEED_KIND = 'trigger-workflow-seed.v1';
 
-type StoredSeed = Readonly<{ kind: typeof TRIGGER_WORKFLOW_SEED_KIND; seed: TriggerWorkflowSeed }>;
-
 /** The draft seed for an inline target, or null for a target that already names a workflow. */
 export function buildTriggerWorkflowSeed(target: TriggerTargetV1, retarget: TriggerRetarget): TriggerWorkflowSeed | null {
     return target.kind === 'inline' ? { definition: target.definition, retarget } : null;
 }
 
 export function storeTriggerWorkflowSeed(seed: TriggerWorkflowSeed): string {
-    return storeTempData({ kind: TRIGGER_WORKFLOW_SEED_KIND, seed } satisfies StoredSeed);
+    return storeWorkflowEditorDraftSeed(TRIGGER_WORKFLOW_SEED_KIND, seed);
 }
 
-/** Read once: returning through history never reseeds a draft over edited work. */
+/** Read safely during render; committed intake consumes the handle against history reuse. */
 export function readTriggerWorkflowSeed(id: string): TriggerWorkflowSeed | null {
-    const stored = getTempData<StoredSeed>(id);
-    return stored !== null && stored.kind === TRIGGER_WORKFLOW_SEED_KIND ? stored.seed : null;
+    return readWorkflowEditorDraftSeed(TRIGGER_WORKFLOW_SEED_KIND, id);
 }
 
 /** Points the originating trigger at the saved workflow, through that trigger's own Action. */
-export async function retargetTriggerToWorkflow(retarget: TriggerRetarget, workflowRef: string): Promise<void> {
+export async function retargetTriggerToWorkflow(retarget: TriggerRetarget, workflowRef: string,
+    caller?: WorkflowActionCallerContext): Promise<void> {
     const target = { kind: 'workflow', ref: workflowRef } as const;
     if (retarget.scope === 'account') {
         await updateWorkflowTrigger({
@@ -51,7 +50,7 @@ export async function retargetTriggerToWorkflow(retarget: TriggerRetarget, workf
             ...(retarget.triggerId === undefined ? {} : { triggerId: retarget.triggerId }),
             expectedRevision: retarget.expectedRevision,
             patch: { target },
-        });
+        }, caller === undefined ? {} : { context: caller, signal: caller.signal });
         return;
     }
     const machineId = readMachineControlTargetForSession(retarget.sessionId)?.machineId;
@@ -60,5 +59,8 @@ export async function retargetTriggerToWorkflow(retarget: TriggerRetarget, workf
         triggerId: retarget.triggerId,
         expectedRevision: retarget.expectedRevision,
         patch: { target },
-    }, machineId ? { context: { externalActionTarget: { kind: 'machine', machineId } } } : {});
+    }, {
+        ...(caller === undefined ? {} : { signal: caller.signal }),
+        context: { ...caller, ...(machineId ? { externalActionTarget: { kind: 'machine', machineId } as const } : {}) },
+    });
 }

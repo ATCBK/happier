@@ -12,6 +12,7 @@ import {
     indexWorkflowFlowRunStates,
     resolveWorkflowFlowScopedNodeId,
     type WorkflowFlowNodeRunState,
+    type WorkflowFlowProjection,
 } from '@/components/workflows/flow/workflowFlowProjection';
 
 /**
@@ -34,7 +35,7 @@ import {
 export type WorkflowOccurrenceCoordinate =
     | Readonly<{ kind: 'branch'; blockId: string; branchId: string }>
     | Readonly<{ kind: 'workflow'; blockId: string }>
-    | Readonly<{ kind: 'item'; blockId: string; index: number }>
+    | Readonly<{ kind: 'item'; blockId: string; index: number; displayLabel?: string }>
     | Readonly<{ kind: 'iteration'; blockId: string; index: number }>;
 
 export type WorkflowInvocationStructureEntry = Readonly<{
@@ -318,17 +319,20 @@ function describeOccurrence(
     scope: Scope,
     loopsById: ReadonlyMap<string, LoopBlock>,
     frameHint?: WorkflowProgressEnvelopeV1['frame'],
+    itemLabels?: ReadonlyMap<string, string>,
 ): readonly WorkflowOccurrenceCoordinate[] {
     const workflowPath: string[] = [];
-    return scope.map((entry) => {
+    return scope.map((entry, position) => {
         if (entry.kind === 'workflow') workflowPath.push(entry.blockId);
         if (entry.kind === 'branch' || entry.kind === 'workflow') return entry;
         const loop = loopsById.get(resolveWorkflowFlowScopedNodeId(entry.blockId, workflowPath));
         const isItem = loop !== undefined
             ? loop.repetition.kind === 'items'
             : frameHint?.ownerBlockId === entry.blockId && frameHint.source.kind === 'item';
+        const displayLabel = isItem ? itemLabels?.get(JSON.stringify(scope.slice(0, position + 1))) : undefined;
         return isItem
-            ? { kind: 'item' as const, blockId: entry.blockId, index: entry.index }
+            ? { kind: 'item' as const, blockId: entry.blockId, index: entry.index,
+                ...(displayLabel === undefined ? {} : { displayLabel }) }
             : { kind: 'iteration' as const, blockId: entry.blockId, index: entry.index };
     });
 }
@@ -339,6 +343,8 @@ export function projectWorkflowInvocationStructure(params: Readonly<{
     invocations: readonly WorkflowRunInvocationIndexV1[];
     /** Exact rows already opened through the authorized Action; authoritative when present. */
     progressByInvocationId?: ReadonlyMap<string, WorkflowProgressEnvelopeV1>;
+    /** Exact opened tokens qualify additional private labels; stale retained content cannot disclose them. */
+    invocationEvidenceById?: ReadonlyMap<string, Readonly<{ index: WorkflowRunInvocationIndexV1; progress: WorkflowProgressEnvelopeV1 }>>;
 }>): ReadonlyMap<string, WorkflowInvocationStructureEntry> {
     const entries = new Map<string, WorkflowInvocationStructureEntry>();
     const definition = params.definition;
@@ -349,6 +355,23 @@ export function projectWorkflowInvocationStructure(params: Readonly<{
     collectWorkflowBlocksById(definition.blocks, blocksById, frozenChildren);
     const loopsById = new Map<string, LoopBlock>();
     for (const [key, block] of blocksById) if (block.kind === 'loop') loopsById.set(key, block);
+    const invocationById = new Map(params.invocations.map(invocation => [invocation.id, invocation]));
+    const itemLabelsById = new Map<string, Readonly<{ scopeKey: string; label: string }>>();
+    for (const invocation of params.invocations) {
+        const opened = params.invocationEvidenceById?.get(invocation.id);
+        if (!opened || opened.index.id !== invocation.id || opened.index.runId !== invocation.runId
+            || opened.index.attempt !== invocation.attempt || opened.index.contentRevision !== invocation.contentRevision
+            || opened.progress.attempt !== invocation.attempt) continue;
+        const { progress } = opened;
+        const frame = progress.frame;
+        if (progress.blockKind !== 'loop' || frame?.ownerBlockId !== progress.invocationPath.blockId
+            || frame.source.kind !== 'item' || frame.source.displayLabel === undefined) continue;
+        const scope = progress.invocationPath.scope;
+        const coordinate = scope[scope.length - 1];
+        if (coordinate?.kind !== 'iteration' || coordinate.blockId !== frame.ownerBlockId
+            || String(coordinate.index) !== frame.source.index) continue;
+        itemLabelsById.set(invocation.id, { scopeKey: JSON.stringify(scope), label: frame.source.displayLabel });
+    }
 
     const record = (
         invocationId: string,
@@ -359,11 +382,22 @@ export function projectWorkflowInvocationStructure(params: Readonly<{
         // An opened row states its own kind, including inside a called workflow.
         // The parent definition can explain only unopened parent-definition rows.
         const blockKind = resolved.blockKind ?? block?.kind;
+        // A replacement can reuse the same scope. Its leaf may name only its own
+        // loaded item-frame ancestry, never an older frame with matching coordinates.
+        const itemLabels = new Map<string, string>();
+        const seen = new Set<string>();
+        let ancestorId: string | null = invocationId;
+        while (ancestorId !== null && !seen.has(ancestorId)) {
+            seen.add(ancestorId);
+            const label = itemLabelsById.get(ancestorId);
+            if (label && !itemLabels.has(label.scopeKey)) itemLabels.set(label.scopeKey, label.label);
+            ancestorId = invocationById.get(ancestorId)?.parentRecordId ?? null;
+        }
         entries.set(invocationId, {
             invocationId,
             nodeId: block === undefined ? null : resolveWorkflowFlowNodeIdForInvocation(resolved),
             blockId: resolved.blockId,
-            occurrence: describeOccurrence(resolved.scope, loopsById, frameHint),
+            occurrence: describeOccurrence(resolved.scope, loopsById, frameHint, itemLabels),
             isFrame: resolved.isFrame,
             coverageKind: resolved.isFrame || resolved.blockId === '$root'
                 ? 'structural'
@@ -447,6 +481,26 @@ export function projectWorkflowInvocationStructure(params: Readonly<{
 }
 
 /**
+ * Orders two occurrences of one block as their items and rounds are numbered (item 1 before item 3),
+ * whatever order they were dispatched or indexed in. Occurrences outside a repetition compare equal,
+ * so a stable sort keeps their recorded order.
+ */
+export function compareWorkflowOccurrences(
+    left: readonly WorkflowOccurrenceCoordinate[],
+    right: readonly WorkflowOccurrenceCoordinate[],
+): number {
+    const indexes = (occurrence: readonly WorkflowOccurrenceCoordinate[]) => occurrence
+        .flatMap((coordinate) => coordinate.kind === 'item' || coordinate.kind === 'iteration' ? [coordinate.index] : []);
+    const a = indexes(left);
+    const b = indexes(right);
+    for (let i = 0; i < Math.min(a.length, b.length); i += 1) {
+        const difference = (a[i] ?? 0) - (b[i] ?? 0);
+        if (difference !== 0) return difference;
+    }
+    return a.length - b.length;
+}
+
+/**
  * The run state Flow draws on each authored node: exactly the lifecycles the
  * invocation owner supplied, placed by this structure owner. It never derives a
  * lifecycle from structure or timing, and structural frames are scopes, not
@@ -456,20 +510,33 @@ export function projectWorkflowInvocationStructure(params: Readonly<{
 export function projectWorkflowFlowRunStates(params: Readonly<{
     invocations: readonly WorkflowRunInvocationIndexV1[];
     structure: ReadonlyMap<string, WorkflowInvocationStructureEntry>;
+    progressByInvocationId?: ReadonlyMap<string, WorkflowProgressEnvelopeV1>;
+    projection?: WorkflowFlowProjection;
     /** Names a row's occurrence ("Item 3"); omitted where only the state is drawn. */
     formatOccurrence?: (occurrence: readonly WorkflowOccurrenceCoordinate[]) => string | undefined;
 }>): ReadonlyMap<string, readonly WorkflowFlowNodeRunState[]> {
     const states: WorkflowFlowNodeRunState[] = [];
-    for (const invocation of params.invocations) {
+    // A For-each's items read in their own order (DESIGN-15 R2/R6), not the order they were dispatched in.
+    const ordered = [...params.invocations].sort((left, right) => compareWorkflowOccurrences(
+        params.structure.get(left.id)?.occurrence ?? [], params.structure.get(right.id)?.occurrence ?? []));
+    for (const invocation of ordered) {
         const entry = params.structure.get(invocation.id);
         if (entry === undefined || entry.nodeId === null || entry.isFrame) continue;
         const occurrenceLabel = params.formatOccurrence?.(entry.occurrence);
+        const opened = params.progressByInvocationId?.get(invocation.id);
+        const progress = opened?.attempt === invocation.attempt ? opened : undefined;
+        const repetition = params.projection?.nodesById.get(entry.nodeId)?.repetition;
+        const maxConcurrent = repetition?.kind === 'items'
+            ? repetition.itemExecution === 'sequential' ? 1 : repetition.maxConcurrent : undefined;
         states.push({
             nodeId: entry.nodeId,
             invocationId: invocation.id,
             lifecycle: invocation.lifecycle,
             attempt: invocation.attempt,
             ...(occurrenceLabel === undefined ? {} : { occurrenceLabel }),
+            ...(progress?.timing ? { timing: progress.timing } : {}),
+            ...(progress?.loopProgress && repetition?.kind === 'items'
+                ? { loopProgress: { ...progress.loopProgress, ...(maxConcurrent === undefined ? {} : { maxConcurrent }) } } : {}),
         });
     }
     return indexWorkflowFlowRunStates(states);

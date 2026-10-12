@@ -10,14 +10,11 @@ import { resolveRoleSelectionV1 } from '@happier-dev/protocol';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { teamSummaryFixture, teamPolicyFixture, teamCapabilitiesFixture } from '@/dev/testkit/fixtures/teamFixtures';
 import { resetTeamsSnapshotsForTests } from '@/sync/store/teams/teamsSnapshots';
+import { publishAppliedActiveServerRuntimeAvailability, publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 
 const executeMock = vi.hoisted(() => vi.fn());
 const appliedHome = vi.hoisted(() => ({ serverId: 'server-a', serverUrl: 'https://server-a.example' }));
 vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', () => ({ createFrontDoorActionExecute: () => executeMock }));
-vi.mock('@/sync/runtime/orchestration/connectionManager', () => ({
-    getAppliedActiveServerSnapshot: () => appliedHome,
-    isAppliedActiveServerRuntimeAvailable: () => true,
-}));
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -44,6 +41,7 @@ async function offerTeams(teamIds: readonly string[], required = false) {
     appliedHome.serverUrl = 'https://workflow.example';
     appliedHome.serverId = await home.addHome({ name: 'Workflow Home', serverUrl: 'https://workflow.example', accountId: 'account-a' });
     getStorage().setState({ profileScope: { serverId: appliedHome.serverId, accountId: 'account-a' } });
+    publishAppliedActiveServerSnapshot({ ...appliedHome, generation: 1 });
     home.answer(appliedHome.serverId, '/v1/teams/get', { select: (input) => {
         const teamId = (input as { teamId: string }).teamId;
         return teamIds.includes(teamId) ? { body: teamSummaryFixture({ id: teamId,
@@ -86,9 +84,14 @@ describe('workflow composer admission', () => {
         appliedHome.serverUrl = 'https://server-a.example';
         restorePopoverGlobals = withPopoverWebGlobals();
         getStorage().setState({ profileScope: { serverId: 'server-a', accountId: 'account-a' } });
+        publishAppliedActiveServerSnapshot({ ...appliedHome, generation: 1 });
         executeMock.mockReset();
     });
-    afterEach(() => { standardCleanup(); restorePopoverGlobals?.(); });
+    afterEach(() => {
+        standardCleanup();
+        publishAppliedActiveServerRuntimeAvailability(false);
+        restorePopoverGlobals?.();
+    });
     it('renders and opens a custom Where control in the wrapped composer', async () => {
         const where = { ...createExecutionRunStartContentChip({ key: 'review-where', icon: 'folder',
             label: 'Builder · /repo', title: 'Where', testID: 'review-where-chip',
@@ -362,6 +365,31 @@ describe('workflow composer admission', () => {
         onRun.mockClear();
         await screen.update(content(false));
         await act(async () => { executeCommand('workflow.run'); });
+        expect(onRun).not.toHaveBeenCalled();
+    });
+
+    it('focuses the defaulted Test-run input through the real hosted modal only when Start becomes ready', async () => {
+        const focus = vi.fn();
+        const onRun = vi.fn();
+        function Presenter({ open, ready }: Readonly<{ open: boolean; ready: boolean }>) {
+            return useWorkflowRunComposerModal({ open, props: {
+                inputs: [{ name: 'qa_note', valueType: 'string', required: false, default: 'Saved note' }],
+                values: {}, onChangeValues: () => {}, onRun, onCancel: () => {}, startDisabled: !ready,
+            } });
+        }
+        const content = (open: boolean, ready: boolean) => <ModalProvider><Presenter open={open} ready={ready} /></ModalProvider>;
+        const screen = await renderScreen(content(false, false), {
+            createNodeMock: element => element.type === 'TextInput' || element.type === 'textarea'
+                ? { focus, blur: vi.fn(), setNativeProps: vi.fn() } : null,
+        });
+        await screen.update(content(true, false));
+        expect(screen.findByTestId('new-session-composer-input')?.props.value).toBe('Saved note');
+        expect(focus).not.toHaveBeenCalled();
+        await screen.update(content(true, true));
+        expect(focus).toHaveBeenCalledTimes(1);
+        await screen.update(content(true, false));
+        await screen.update(content(true, true));
+        expect(focus).toHaveBeenCalledTimes(1);
         expect(onRun).not.toHaveBeenCalled();
     });
 });

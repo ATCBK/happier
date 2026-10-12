@@ -7,7 +7,9 @@ import {
   type WorkflowTriggerSetV1,
 } from '@happier-dev/protocol';
 
-import { renderScreen } from '@/dev/testkit';
+import { createMachineFixture, createSessionFixture, renderScreen } from '@/dev/testkit';
+import { activateStorageAccountScope } from '@/dev/testkit/mocks/storage';
+import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { getStorage } from '@/sync/domains/state/storage';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -60,25 +62,6 @@ vi.mock('@/text', async () => {
   const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
   return createTextModuleMock();
 });
-
-vi.mock(
-  '@/sync/domains/scope/activeServerAccountScope',
-  async (importOriginal) => ({
-    ...(await importOriginal<
-      typeof import('@/sync/domains/scope/activeServerAccountScope')
-    >()),
-    captureActiveServerAccountScopeLifetime: () => ({
-      scope: { serverId: 'server-a', accountId: 'account-a' },
-      isCurrent: () => true,
-      onRetire: () => ({ dispose() {} }),
-    }),
-  }),
-);
-
-vi.mock('@/sync/domains/state/storage', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/sync/domains/state/storage')>()),
-  useAutomations: () => [],
-}));
 
 // The session's Machine comes from the persisted session/machine state (a store boundary).
 vi.mock('@/sync/ops/sessionMachineTarget', () => ({
@@ -167,14 +150,13 @@ async function settle() {
   });
 }
 
-const previousProfileScope = getStorage().getState().profileScope;
-beforeEach(() => {
-  getStorage().setState({
-    profileScope: { serverId: 'server-a', accountId: 'account-a' },
-  });
+let accountScope: Awaited<ReturnType<typeof activateStorageAccountScope>>;
+beforeEach(async () => {
+  accountScope = await activateStorageAccountScope({ serverId: 'server-a', accountId: 'account-a' });
 });
 afterEach(() => {
-  getStorage().setState({ profileScope: previousProfileScope });
+  standardCleanup();
+  act(() => accountScope.dispose());
   routeParams.current = {};
   executeMock.mockReset();
   automationWrites.pause.mockReset();
@@ -349,6 +331,48 @@ describe('the Work tab Triggers section', () => {
         policy: { kind: 'currentTurn', sourceTurnId: 'turn-7' },
       },
       target: { kind: 'inline' },
+    });
+  });
+  describe('when the session Machine is offline', () => {
+    function seedSessionMachine(machineActive: boolean) {
+      const machine = createMachineFixture({ id: 'machine-a', active: machineActive, activeAt: machineActive ? Date.now() : 1 });
+      const session = createSessionFixture({ id: 'session-1', active: true, metadata: { machineId: 'machine-a', path: '/repo', host: 'host-a' } });
+      act(() => getStorage().setState({ sessions: { 'session-1': session }, machines: { 'machine-a': machine },
+        machineListByServerId: { 'server-a': [machine] } }));
+      return machine;
+    }
+    function failReads() {
+      executeMock.mockImplementation(async () => ({ ok: false, error: 'machine unreachable', errorCode: 'unreachable' }));
+    }
+
+    it('leaves the unreachable Machine to the Work view\'s own offline line instead of saying the read failed again', async () => {
+      seedSessionMachine(false);
+      failReads();
+      const screen = await renderScreen(<SessionWorkViewWithTriggers sessionId="session-1" scopeId="scope-1" />);
+      await settle();
+      expect(screen.findByTestId('session-work-triggers-failed')).toBeNull();
+    });
+
+    it('still says a failed read when the Machine is reachable', async () => {
+      seedSessionMachine(true);
+      failReads();
+      const screen = await renderScreen(<SessionWorkViewWithTriggers sessionId="session-1" scopeId="scope-1" />);
+      await settle();
+      expect(screen.findByTestId('session-work-triggers-failed')).not.toBeNull();
+    });
+
+    it('reads again by itself when the offline Machine returns', async () => {
+      const offline = seedSessionMachine(false);
+      failReads();
+      const screen = await renderScreen(<SessionWorkViewWithTriggers sessionId="session-1" scopeId="scope-1" />);
+      await settle();
+      expect(screen.findByTestId('session-work-trigger:set-1:trig-1-switch')).toBeNull();
+      answer([triggerSet([lifecycleTrigger('trig-1', true)])]);
+      const online = { ...offline, active: true, activeAt: Date.now() };
+      await act(async () => getStorage().setState({ machines: { 'machine-a': online },
+        machineListByServerId: { 'server-a': [online] } }));
+      await settle();
+      expect(screen.findByTestId('session-work-trigger:set-1:trig-1-switch')).not.toBeNull();
     });
   });
 });

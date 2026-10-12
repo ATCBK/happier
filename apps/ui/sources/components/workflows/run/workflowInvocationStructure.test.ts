@@ -38,6 +38,49 @@ function child(overrides: Readonly<{ id: string; parentRecordId: string; memberO
 }
 
 describe('projectWorkflowInvocationStructure', () => {
+    it('names leaf occurrences from their exact opened item frame and drops stale frame labels', () => {
+        const definition = definitionOf([{ kind: 'loop', id: 'files', repetition: { kind: 'items',
+            items: { kind: 'literal', value: [] }, execution: 'parallel', failurePolicy: 'collect_outcomes' }, body: [step('inspect')] }]);
+        const loop = child({ id: 'loop', parentRecordId: root.id, memberOrdinal: '0', sequence: '1' });
+        const frame = child({ id: 'frame', parentRecordId: loop.id, memberOrdinal: '0', sequence: '2' });
+        const leaf = child({ id: 'leaf', parentRecordId: frame.id, memberOrdinal: '0', sequence: '3' });
+        const progress: WorkflowProgressEnvelopeV1 = { kind: 'happier.workflow-progress.v1', blockKind: 'loop', attempt: '0',
+            logicalInvocationRecordId: frame.id, invocationPath: { blockId: 'files', scope: [{ kind: 'iteration', blockId: 'files', index: 0 }] },
+            frame: { ownerBlockId: 'files', source: { kind: 'item', index: '0', displayLabel: '#1482' } } };
+        const project = (contentRevision: string) => projectWorkflowInvocationStructure({ definition, invocations: [root, loop, frame, leaf],
+            progressByInvocationId: new Map([[frame.id, progress]]),
+            invocationEvidenceById: new Map([[frame.id, { progress, index: { ...frame, contentRevision } }]]) });
+        expect(project(frame.contentRevision).get(leaf.id)?.occurrence).toEqual([{ kind: 'item', blockId: 'files', index: 0, displayLabel: '#1482' }]);
+        expect(project('999').get(leaf.id)?.occurrence).toEqual([{ kind: 'item', blockId: 'files', index: 0 }]);
+        const newerFrame = { ...frame, id: 'new-frame', attempt: '1' };
+        expect(projectWorkflowInvocationStructure({ definition, invocations: [root, loop, frame, newerFrame,
+            { ...leaf, parentRecordId: newerFrame.id }], progressByInvocationId: new Map([[frame.id, progress]]),
+            invocationEvidenceById: new Map([[frame.id, { progress, index: frame }]]) }).get(leaf.id)?.occurrence)
+            .toEqual([{ kind: 'item', blockId: 'files', index: 0 }]);
+    });
+    it('exposes recorded occurrence timing and resolved item progress with the authored concurrency', () => {
+        const definition = definitionOf([{ kind: 'loop', id: 'batch', repetition: { kind: 'items',
+            items: { kind: 'literal', value: [] }, execution: 'parallel', failurePolicy: 'collect_outcomes', maxConcurrent: 6 }, body: [step('check')] }]);
+        const loop = child({ id: 'loop-row', parentRecordId: root.id, memberOrdinal: '0', sequence: '1' });
+        const progress = { kind: 'happier.workflow-progress.v1' as const, blockKind: 'loop' as const,
+            invocationPath: { blockId: 'batch', scope: [] }, attempt: '0', logicalInvocationRecordId: loop.id,
+            timing: { startedAt: '2026-10-11T10:00:00.000Z', finishedAt: '2026-10-11T10:02:00.000Z' },
+            loopProgress: { completed: 214, total: 500 } };
+        const invocations = [root, loop];
+        const structure = projectWorkflowInvocationStructure({ definition, invocations });
+        const project = (progressByInvocationId = new Map([[loop.id, progress]])) => projectWorkflowFlowRunStates({
+            invocations, structure, progressByInvocationId, projection: projectWorkflowFlow(definition),
+        });
+        expect(project().get('batch')?.[0]).toMatchObject({ invocationId: loop.id, timing: progress.timing,
+            loopProgress: { completed: 214, total: 500, maxConcurrent: 6 } });
+        expect(project(new Map()).get('batch')?.[0]).not.toHaveProperty('timing');
+        expect(project(new Map([[loop.id, { ...progress, attempt: '1' }]])).get('batch')?.[0]).not.toHaveProperty('loopProgress');
+        const cappedLoop = definition.blocks[0]!;
+        if (cappedLoop.kind !== 'loop') throw new Error('loop_missing');
+        const uncapped = definitionOf([{ ...cappedLoop, repetition: { ...cappedLoop.repetition, maxConcurrent: undefined } }]);
+        expect(projectWorkflowFlowRunStates({ invocations, structure, progressByInvocationId: new Map([[loop.id, progress]]),
+            projection: projectWorkflowFlow(uncapped) }).get('batch')?.[0]?.loopProgress).toEqual({ completed: 214, total: 500 });
+    });
     it('joins nested, repeated child occurrences and held Wait rows to their own Flow nodes from frozen children', () => {
         const nested = (id: string, workflowRef: string) => ({ kind: 'workflow', id, workflowRef, input: {} });
         const definition = definitionOf([step('same'), nested('call', 'builtin:review')]);

@@ -795,7 +795,8 @@ describe('workflow editor body', () => {
                 result: { kind: 'text' as const },
             }],
         };
-        const screen = await renderBody(harness, { draft, onChange: changed });
+        // The binding editors show on the selected step (DESIGN-13).
+        const screen = await renderBody(harness, { draft, onChange: changed, selectedBlockId: 'implement' });
 
         const source = dropdownField(screen, 'workflow-editor-step-implement-input-0-kind');
         await act(async () => { source.props.onSelect('workspace'); });
@@ -1507,7 +1508,8 @@ describe('workflow editor body', () => {
 
         expect(Number.isNaN(draft.inputs[0]?.default)).toBe(true);
         expect(screen.findByTestId('workflow-editor-input-0-default')?.props.value).toBe('many');
-        expect(screen.findByTestId('workflow-editor-input-0-default-error')?.props.accessibilityRole).toBe('alert');
+        // The repair is the field's own error, under it and announced (the canonical field owner).
+        expect(screen.findByTestId('workflow-editor-input-0-default.error')?.props.accessibilityRole).toBe('alert');
         registeredHandlers['workflow.save']!();
         registeredHandlers['workflow.run']!();
         expect(handlers.onSave).not.toHaveBeenCalled();
@@ -1755,13 +1757,13 @@ describe('workflow editor body', () => {
     it('retires mounted conversation binding before passive editor cleanup', async () => {
         const harness = await loadHarness();
         const scope = await bindingHome();
-        const { invokeWorkflowConversationBinding } = await import('@/sync/ops/actions/workflowAuthoringAction');
+        const { invokeWorkflowAuthoringAction } = await import('@/sync/ops/actions/workflowAuthoringAction');
         const draft = buildDraft(harness);
         const changed = vi.fn();
-        let result: ReturnType<typeof invokeWorkflowConversationBinding> | undefined;
+        let result: ReturnType<typeof invokeWorkflowAuthoringAction> | undefined;
         function Host({ shown }: { shown: boolean }) {
             React.useLayoutEffect(() => {
-                if (!shown) result = invokeWorkflowConversationBinding({
+                if (!shown) result = invokeWorkflowAuthoringAction({ actionId: 'workflow.authoring.conversation.bind',
                     input: { scope, draftId: draft.draftId, stepId: 'analyze', address: { serverId: scope.serverId, sessionId: 'session' } },
                     context: { serverId: scope.serverId, runtimeAccountId: scope.accountId },
                 });

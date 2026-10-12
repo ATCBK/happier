@@ -73,6 +73,18 @@ async function changeText(screen: Awaited<ReturnType<typeof renderScreen>>, id: 
 }
 
 describe('WorkflowReviewCard', () => {
+    it('reads declared result fields in schema order while keeping undeclared output values', async () => {
+        const { screen } = await mount({ contract: { kind: 'json', schema: { type: 'object', properties: {
+            version: { type: 'string', title: 'Version' }, summary: { type: 'string', title: 'Summary' },
+        } } }, progress: progress({ result: { extra: 'Retained', summary: 'Ready to ship', version: '0.3.0' } }) });
+        const text = screen.getTextContent();
+        expect(text).toContain('Version');
+        expect(text).toContain('Summary');
+        expect(text).toContain('extra');
+        expect(text.indexOf('Version')).toBeLessThan(text.indexOf('Summary'));
+        expect(text.indexOf('Summary')).toBeLessThan(text.indexOf('extra'));
+        expect(text).toContain('Retained');
+    });
     it('retains fieldless Wait Continue while exact evidence is unconfirmed without treating edit access as revoked', async () => {
         const { screen, onComplete } = await mount({ waitForYou: true, contract: undefined,
             progress: progress({ blockKind: 'wait', result: undefined }), disabled: true });

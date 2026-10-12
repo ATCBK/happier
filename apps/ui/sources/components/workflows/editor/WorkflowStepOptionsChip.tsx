@@ -12,8 +12,28 @@ import { Icon } from '@/components/ui/icons/Icon';
 import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback';
 import { Text } from '@/components/ui/text/Text';
 import { t } from '@/text';
+import type { WorkflowBlock } from '@happier-dev/protocol/workflows/workflowV1';
 
 import { workflowEditorStyles } from './workflowEditorStyles';
+
+/**
+ * What a block's Step options chip reads (D-7): "Workflow defaults", or the names of the options
+ * this block changes ("Fresh · Only run when"). The chip names options; their values read in the
+ * document once (the condition sentence under the card, a run-when caption in the gap above it).
+ */
+export function formatWorkflowBlockOptionsSummary(
+    block: WorkflowBlock,
+    ownDifferences: readonly string[] = [],
+): Readonly<{ label: string; changed: boolean }> {
+    const differences = [
+        ...ownDifferences,
+        ...(block.kind !== 'if' && block.onlyWhen !== undefined ? [t('workflows.condition.onlyWhen')] : []),
+    ];
+    return {
+        label: differences.length === 0 ? t('workflows.page.blocks.workflowDefaults') : differences.join(' · '),
+        changed: differences.length > 0,
+    };
+}
 
 type StepOptionsChipProps = Readonly<{
     /** "Workflow defaults", or what this step changes ("Fresh · Reviews before continuing"). */
@@ -32,6 +52,20 @@ const styles = StyleSheet.create((theme) => ({
     chipFrame: {
         borderWidth: 1,
         borderColor: 'transparent',
+        flexShrink: 1,
+        minWidth: 0,
+    },
+    /**
+     * The chip yields before it overflows: on a narrow card its label ends with an ellipsis inside the
+     * card instead of running past its edge (phone, a long "Separate conversations · A background run").
+     */
+    chipAnchor: {
+        flexShrink: 1,
+        minWidth: 0,
+        maxWidth: '100%',
+    },
+    chipLabel: {
+        flexShrink: 1,
     },
     footChip: {
         flexDirection: 'row',
@@ -92,7 +126,7 @@ function StepOptionsComposerChip(props: StepOptionsChipProps & Readonly<{
     const { theme } = useUnistyles();
     const anchorRef = React.useRef<View>(null);
     return (
-        <View ref={anchorRef} collapsable={false}>
+        <View ref={anchorRef} collapsable={false} style={styles.chipAnchor}>
             <HappierPressable
                 testID={props.testID}
                 accessibilityRole="button"
@@ -108,7 +142,7 @@ function StepOptionsComposerChip(props: StepOptionsChipProps & Readonly<{
             >
                 <Icon name="sliders-horizontal" size={AGENT_INPUT_CHIP_ICON_SIZE_PX} color={props.iconColor} />
                 {props.showLabel ? (
-                    <Text testID={props.labelTestID} numberOfLines={1} style={props.textStyle as never}>{props.label}</Text>
+                    <Text testID={props.labelTestID} numberOfLines={1} style={[props.textStyle as never, styles.chipLabel]}>{props.label}</Text>
                 ) : null}
             </HappierPressable>
         </View>
@@ -120,7 +154,7 @@ export function WorkflowStepOptionsFootChip(props: StepOptionsChipProps): React.
     const { theme } = useUnistyles();
     const anchorRef = React.useRef<View>(null);
     return (
-        <View ref={anchorRef} collapsable={false}>
+        <View ref={anchorRef} collapsable={false} style={styles.chipAnchor}>
             <HappierPressable
                 testID={props.testID}
                 accessibilityRole="button"
@@ -135,7 +169,7 @@ export function WorkflowStepOptionsFootChip(props: StepOptionsChipProps): React.
                 ]}
             >
                 <Icon name="sliders-horizontal" size={AGENT_INPUT_CHIP_ICON_SIZE_PX} color={theme.colors.text.secondary} />
-                <Text testID={props.labelTestID} numberOfLines={1} style={workflowEditorStyles.metaText}>{props.label}</Text>
+                <Text testID={props.labelTestID} numberOfLines={1} style={[workflowEditorStyles.metaText, styles.chipLabel]}>{props.label}</Text>
             </HappierPressable>
         </View>
     );

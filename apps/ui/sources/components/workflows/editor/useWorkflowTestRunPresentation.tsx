@@ -15,7 +15,7 @@ import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { storage } from '@/sync/domains/state/storageStore';
-import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { useActiveServerAccountScopeLifetime } from '@/sync/domains/state/storage';
 import { workflowRunDetailActions } from '@/sync/domains/workflows/workflowRunDetailActions';
 import { subscribeVisibleWorkflowRunListInvalidation } from '@/sync/domains/workflows/workflowRunListInvalidation';
 import { formatWorkflowProblemMessage } from '@/components/workflows/presentation/workflowProblemPresentation';
@@ -91,6 +91,7 @@ function WorkflowTestStepOutput(props: StepProps): React.ReactElement | null {
 
 /** In-place results consume the same paged Action, fact store and Home wake as Run detail. */
 export function useWorkflowTestRunPresentation(input: Readonly<{ runId: string | null; definition: WorkflowDefinitionV1 | null; editable: boolean }>): WorkflowDocumentPresentation {
+    const lifetime = useActiveServerAccountScopeLifetime();
     const visible = useDestinationVisibility();
     const activelyViewed = useHostActivelyViewed();
     const [refresh, setRefresh] = React.useState(0);
@@ -99,7 +100,6 @@ export function useWorkflowTestRunPresentation(input: Readonly<{ runId: string |
     React.useEffect(() => {
         const runId = input.runId;
         if (runId === null || !visible || !activelyViewed) return;
-        const lifetime = captureActiveServerAccountScopeLifetime();
         if (lifetime === null) return;
         const controller = new AbortController();
         const isCurrent = () => !controller.signal.aborted && lifetime.isCurrent();
@@ -123,7 +123,7 @@ export function useWorkflowTestRunPresentation(input: Readonly<{ runId: string |
         })().catch((error: unknown) => { if (isCurrent()) setFailure(error); })
             .finally(() => { if (isCurrent()) setPending(false); });
         return () => { controller.abort(); retirement.dispose(); unsubscribe(); };
-    }, [activelyViewed, input.runId, refresh, visible]);
+    }, [activelyViewed, input.runId, lifetime, refresh, visible]);
 
     return React.useMemo(() => ({
         editable: input.editable,
