@@ -26,7 +26,7 @@ const correspondence = {
     agentModeId: null,
     configuration: null,
     connectedServices: null,
-    mcpSelection: null,
+    capabilitySelection: null,
     transcriptStorage: null,
     terminal: null,
     agentSessionStartupInstructionsMarkerV1: null,

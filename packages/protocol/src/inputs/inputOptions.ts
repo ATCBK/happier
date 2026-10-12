@@ -8,6 +8,7 @@ import { DaemonProviderModelProjectionResponseV1Schema } from '../rpc/providers.
 import { AgentExecutionTargetV1Schema } from '../agents/executionTargetV1.js';
 import { BackendTargetKeyV2InputSchema } from '../backends/targets/backendTargetRefV2.js';
 import { SessionDirectoryIntentV1Schema } from '../sessions/creation/sessionDirectoryIntentV1.js';
+import { readCapabilitySelectionCarrierV1 } from '../reach/sessionCapabilitySelectionV1.js';
 import { resolveReviewNarratorPolicy, ReviewEngineCapabilitiesSchema } from '../reviews/reviewEngines.js';
 import { resolveActionBackendTargetSelection, resolveExecutionBackendTargetSelectionForValue, type ActionBackendTargetSelection } from '../actions/resolveActionBackendTargetSelection.js';
 import { readRecord, readRecordListProperty, readNonEmptyString, isRecord, hasOwn } from './inputRecords.js';
@@ -594,7 +595,7 @@ export async function resolveInputOptions(params: Readonly<{
       ...(machineId === undefined ? {} : { machineId }),
       ...(directory ? { directory } : {}),
       ...(actionId === 'session.spawn_new'
-        ? (hasOwn(input, 'mcpSelection') ? { selection: input.mcpSelection } : {})
+        ? (hasOwn(input, 'capabilitySelection') ? { selection: readCapabilitySelectionCarrierV1(input)?.mcp } : {})
         : (hasOwn(input, 'selection') ? { selection: input.selection } : {})),
       ...(typeof input.limit === 'number' ? { limit: input.limit } : {}),
     });

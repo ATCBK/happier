@@ -29,6 +29,7 @@ import { InputTypeReferenceV1Schema } from '../inputs/inputTypes.js';
 import { createStoredReadSchema, defineStoredReadProjection } from '../json/storedReadSchema.js';
 import { isWorkflowActionLiteralFieldV1 } from './stepActionsV1.js';
 import { AgentLaunchEnvironmentV1Schema, AgentSessionProviderResumeV1Schema } from '../runtime/agentSessionV1.js';
+import { readCapabilitySelectionCarrierV1 } from '../reach/sessionCapabilitySelectionV1.js';
 
 export {
   WorkflowStepComposerDocumentSchema,
@@ -124,7 +125,7 @@ const WORKFLOW_SESSION_AUTHORING_SELECTION_SHAPE = {
   permissionMode: SessionAuthoringSelectionFieldsV1.permissionMode.optional(),
   acpSessionModeId: SessionAuthoringSelectionFieldsV1.acpSessionModeId.optional(),
   sessionConfigOptionOverrides: SessionAuthoringSelectionFieldsV1.sessionConfigOptionOverrides.optional(),
-  mcpSelection: SessionAuthoringSelectionFieldsV1.mcpSelection.optional(),
+  capabilitySelection: SessionAuthoringSelectionFieldsV1.capabilitySelection.optional(),
   // Portable definitions normalize supported V1 persistence into the strict
   // current selection so native/profile/group/team-resource intent survives
   // without carrying unknown fields into exported JSON.
@@ -162,6 +163,23 @@ export const WorkflowStepExecutionSelectionSchema = lazyZodSchema(() => Workflow
 }).strict());
 export type WorkflowStepExecutionSelection = z.infer<typeof WorkflowStepExecutionSelectionSchema>;
 
+function projectStoredCapabilitySelection(raw: unknown): unknown {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
+  const { mcpSelection, ...canonical } = raw as Record<string, unknown>;
+  const capabilitySelection = readCapabilitySelectionCarrierV1(raw);
+  return { ...canonical,
+    ...(capabilitySelection ? { capabilitySelection } : canonical.capabilitySelection === undefined && mcpSelection != null
+      ? { capabilitySelection: { mcp: mcpSelection } } : {}),
+  };
+}
+
+defineStoredReadProjection(WorkflowSessionAuthoringSelectionSchema, () => z.preprocess(
+  projectStoredCapabilitySelection, createStoredReadSchema(WorkflowSessionAuthoringSelectionSchema.strip()),
+));
+defineStoredReadProjection(WorkflowStepExecutionSelectionSchema, () => z.preprocess(
+  projectStoredCapabilitySelection, createStoredReadSchema(WorkflowStepExecutionSelectionSchema.strip()),
+));
+
 export const WorkflowLeafExecutionTargetV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('session') }).strict(),
   z.object({ kind: z.literal('detached_run') }).strict(),
@@ -186,6 +204,9 @@ export const WorkflowStepSelectionV1Schema = lazyZodSchema(() => WorkflowStepExe
   }
 }));
 export type WorkflowStepSelectionV1 = z.infer<typeof WorkflowStepSelectionV1Schema>;
+defineStoredReadProjection(WorkflowStepSelectionV1Schema, () => z.preprocess(
+  projectStoredCapabilitySelection, createStoredReadSchema(WorkflowStepSelectionV1Schema.strip()),
+));
 
 /** An authored block title; blank input restores the derived presentation label. */
 export const WorkflowBlockNameV1Schema = lazyZodSchema(() => z.string().trim().transform((name) => name || undefined).optional());

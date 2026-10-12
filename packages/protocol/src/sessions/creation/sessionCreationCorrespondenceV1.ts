@@ -4,9 +4,10 @@ import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 import { AgentExecutionTargetV1Schema } from '../../agents/executionTargetV1.js';
 import { ConnectedServiceBindingsV2IngressSchema } from '../../connect/connectedServiceBindings.js';
-import { SessionMcpSelectionV1Schema } from '../../mcp/servers/sessionSelectionV1.js';
+import { SessionCapabilitySelectionAuthoringV1Schema } from '../../reach/sessionCapabilitySelectionV1.js';
 import { SessionModelSelectionV1Schema } from '../../providers/selection/v1.js';
 import { AgentSessionConfigurationSnapshotV1Schema } from '../../runtime/agentSessionV1.js';
+import { AgentSessionToolPolicyShapeV1 } from '../../runtime/permissionIntentV1.js';
 import { AgentSessionStartupInstructionsMarkerV1Schema } from '../../runtime/agentSessionStartupInstructionsV1.js';
 import { SessionAuthoringTerminalV1Schema } from '../authoring/creationFieldsV1.js';
 import { SessionCreationTagV1Schema } from './sessionCreationIdentityV1.js';
@@ -26,6 +27,7 @@ export const SessionManagedCreationV1Schema = lazyZodSchema(() => z.object({
 export type SessionManagedCreationV1 = z.infer<typeof SessionManagedCreationV1Schema>;
 
 export const SessionCreationImmutableRecipeV1Schema = lazyZodSchema(() => z.object({
+  ...AgentSessionToolPolicyShapeV1,
   execution: z.object({
     machineId: z.string().trim().min(1),
     directory: SessionDirectoryIntentV1Schema,
@@ -43,7 +45,7 @@ export const SessionCreationImmutableRecipeV1Schema = lazyZodSchema(() => z.obje
   agentModeId: z.string().trim().min(1).nullable(),
   configuration: AgentSessionConfigurationSnapshotV1Schema.nullable(),
   connectedServices: ConnectedServiceBindingsV2IngressSchema.nullable(),
-  mcpSelection: SessionMcpSelectionV1Schema.nullable(),
+  capabilitySelection: SessionCapabilitySelectionAuthoringV1Schema.nullable(),
   transcriptStorage: z.enum(['persisted', 'direct']).nullable(),
   terminal: SessionAuthoringTerminalV1Schema.nullable(),
   agentSessionStartupInstructionsMarkerV1:

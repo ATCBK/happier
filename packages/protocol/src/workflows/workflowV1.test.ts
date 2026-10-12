@@ -1096,19 +1096,19 @@ describe('workflow declared inputs', () => {
 describe('workflow authoring selection round trip', () => {
   it('rejects malformed and unknown-field MCP selections in executable definitions', () => {
     expect(WorkflowSessionAuthoringSelectionSchema.safeParse({
-      mcpSelection: 'managed',
+      capabilitySelection: { mcp: 'managed' },
     }).success).toBe(false);
     expect(WorkflowSessionAuthoringSelectionSchema.safeParse({
-      mcpSelection: [],
+      capabilitySelection: { mcp: [] },
     }).success).toBe(false);
     expect(WorkflowSessionAuthoringSelectionSchema.safeParse({
-      mcpSelection: {
+      capabilitySelection: { mcp: {
         v: 1,
         managedServersEnabled: true,
         forceIncludeServerIds: [],
         forceExcludeServerIds: [],
         unexpectedPolicy: true,
-      },
+      } },
     }).success).toBe(false);
   });
 
@@ -1128,8 +1128,8 @@ describe('workflow authoring selection round trip', () => {
       },
     ]) {
       expect(WorkflowSessionAuthoringSelectionSchema.parse({
-        mcpSelection: selection,
-      })).toEqual({ mcpSelection: selection });
+        capabilitySelection: { mcp: selection },
+      })).toEqual({ capabilitySelection: { mcp: selection } });
     }
   });
 
@@ -1175,7 +1175,7 @@ describe('workflow authoring selection round trip', () => {
         },
       },
       transcriptStorage: 'direct' as const,
-      mcpSelection: { v: 1 as const, managedServersEnabled: false, forceIncludeServerIds: ['a'], forceExcludeServerIds: [] },
+      capabilitySelection: { mcp: { v: 1 as const, managedServersEnabled: false, forceIncludeServerIds: ['a'], forceExcludeServerIds: [] } },
       connectedServices: {
         v: 1 as const,
         bindingsByServiceId: {

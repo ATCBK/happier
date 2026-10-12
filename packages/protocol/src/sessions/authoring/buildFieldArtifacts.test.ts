@@ -12,6 +12,22 @@ import {
 } from './index.js';
 
 describe('sessionAuthoring field artifacts', () => {
+  it('round-trips both capability kinds through the current synchronized draft catalog', () => {
+    const capabilitySelection = {
+      mcp: { v: 1, managedServersEnabled: true, forceIncludeServerIds: ['tools'], forceExcludeServerIds: [] },
+      skills: { v: 1, forceIncludeSkillIds: ['lint'], forceExcludeSkillIds: ['review'], excludeNativeSkillNames: ['native'] },
+    };
+    const syncedDefaults = Object.fromEntries(Object.entries(SESSION_AUTHORING_FIELD_DESCRIPTORS)
+      .filter(([, definition]) => definition.draftStorage === 'sync')
+      .map(([key, definition]) => [key, definition.default]));
+    const parsed = SyncedSessionAuthoringValueV2Schema.safeParse({
+      ...syncedDefaults, targetType: 'new_session', directory: '/repo', capabilitySelection,
+    });
+    expect(parsed.success ? [] : parsed.error.issues).toEqual([]);
+    if (parsed.success) expect(parsed.data).toMatchObject({ capabilitySelection });
+    expect(SYNCED_SESSION_AUTHORING_FIELD_IDS_V2).toContain('capabilitySelection');
+    expect(SYNCED_SESSION_AUTHORING_FIELD_IDS_V2).not.toContain('mcpSelection');
+  });
   it('derives synchronized draft fields from explicit safe catalog dispositions', () => {
     expect(SYNCED_SESSION_AUTHORING_FIELD_IDS_V2).toEqual(
       SESSION_AUTHORING_FIELD_IDS.filter((fieldId) => (
@@ -120,11 +136,11 @@ describe('sessionAuthoring field artifacts', () => {
           modelId: 'gpt-5',
         },
       },
-      mcpSelection: {
+      capabilitySelection: { mcp: {
         managedServersEnabled: true,
         forceIncludeServerIds: ['mcp-a'],
         forceExcludeServerIds: [],
-      },
+      } },
       connectedServices: {
         v: 1,
         bindingsByServiceId: {
@@ -220,7 +236,7 @@ describe('sessionAuthoring field artifacts', () => {
       permissionModeUpdatedAt: null,
       modelId: null,
       modelUpdatedAt: null,
-      mcpSelection: null,
+      capabilitySelection: null,
       connectedServices: null,
       agentTarget: {
         kind: 'agent',
@@ -323,7 +339,7 @@ describe('sessionAuthoring field artifacts', () => {
       permissionMode: null,
       permissionModeUpdatedAt: null,
       modelSelection: null,
-      mcpSelection: null,
+      capabilitySelection: null,
       connectedServices: null,
       windowsRemoteSessionLaunchMode: null,
       windowsRemoteSessionConsole: null,

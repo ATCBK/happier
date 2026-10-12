@@ -7,7 +7,7 @@ export function projectInputOptionsDependencies(input: Readonly<Record<string, u
   // arbitrary typed fields can be option dependencies; the built-in Action shortlist cannot name them.
   if (consumer?.kind === 'widget') return { ...input };
   const keys = ['sessionId', 'machineId', 'machine', 'agentId', 'backendTargetKey', 'backendTargetKeys', 'executionTarget',
-    'agentTarget', 'modelId', 'modelSelection', 'configuration', 'directory', 'path', 'selection', 'mcpSelection',
+    'agentTarget', 'modelId', 'modelSelection', 'configuration', 'directory', 'path', 'selection', 'capabilitySelection',
     'includeDisabled', 'includeUnavailable', 'limit', 'selectedPaths', 'selectedFiles', 'fieldPath', 'consumer',
     'query', 'period', 'agents', 'machines', 'projects', 'sources', 'session', 'costBasis', 'breakdown'] as const;
   return Object.fromEntries(keys.filter((key) => hasOwn(input, key)).map((key) => [key, input[key]]));

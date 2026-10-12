@@ -450,12 +450,12 @@ describe('workflow progress v1', () => {
         updatedAt: 43,
         overrides: { reasoning: { value: 'high', updatedAt: 42 } },
       },
-      mcpSelection: {
+      capabilitySelection: { mcp: {
         v: 1,
         managedServersEnabled: false,
         forceIncludeServerIds: ['review'],
         forceExcludeServerIds: [],
-      },
+      } },
       connectedServices: {
         v: 1,
         bindingsByServiceId: {
@@ -487,12 +487,12 @@ describe('workflow progress v1', () => {
         updatedAt: 43,
         overrides: { reasoning: { value: 'high', updatedAt: 42 } },
       },
-      mcpSelection: {
+      capabilitySelection: { mcp: {
         v: 1,
         managedServersEnabled: false,
         forceIncludeServerIds: ['review'],
         forceExcludeServerIds: [],
-      },
+      } },
       connectedServices: {
         v: 2,
         bindingsByServiceId: {

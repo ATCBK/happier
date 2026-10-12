@@ -4,12 +4,12 @@ import { asProtocolZod } from "../../plugins/actions/internalProtocolZodAdapter.
 
 import { AgentExecutionTargetV1Schema } from '../../agents/executionTargetV1.js';
 import { ConnectedServiceBindingsV2IngressSchema } from '../../connect/connectedServiceBindings.js';
-import { SessionMcpSelectionV1Schema } from '../../mcp/servers/sessionSelectionV1.js';
+import { SessionCapabilitySelectionAuthoringV1Schema } from '../../reach/sessionCapabilitySelectionV1.js';
 import { SessionModelSelectionV1Schema } from '../../providers/selection/v1.js';
 import {
   AgentSessionConfigurationSnapshotV1Schema,
 } from '../../runtime/agentSessionV1.js';
-import { AgentPermissionIntentV1Schema } from '../../runtime/permissionIntentV1.js';
+import { AgentPermissionIntentV1Schema, AgentSessionToolPolicyShapeV1 } from '../../runtime/permissionIntentV1.js';
 import {
   AgentSessionStartupInstructionsV1Schema,
 } from '../../runtime/agentSessionStartupInstructionsV1.js';
@@ -39,6 +39,8 @@ import { SessionInitialTriggerV1Schema } from '../../workflows/triggers/workflow
 import { SessionIdentityAdditionsV1Schema } from '../identity/sessionBotV1.js';
 import { SessionPromptStackV1Schema } from '../context/sessionContextV1.js';
 import { SessionManagedCreationV1Schema } from './sessionCreationCorrespondenceV1.js';
+import { SessionAttestedContextV1Schema } from './sessionAttestedContextV1.js';
+export { SessionAttestedContextV1Schema, type SessionAttestedContextV1 } from './sessionAttestedContextV1.js';
 
 /**
  * One Message-owned input admitted before the new Session runtime may start.
@@ -64,6 +66,7 @@ export type SessionSpawnNewInitialInputV1 = z.infer<typeof SessionSpawnNewInitia
  * second canonical creation vocabulary.
  */
 export const SessionSpawnNewInputV2BaseSchema = lazyZodSchema(() => z.object({
+  ...AgentSessionToolPolicyShapeV1,
   creationKey: SessionCreationKeyV1Schema.optional(),
   executionTarget: SessionExecutionTargetV1Schema,
   placementOrigin: MachinePoolSelectionOriginV1Schema.optional(),
@@ -79,13 +82,15 @@ export const SessionSpawnNewInputV2BaseSchema = lazyZodSchema(() => z.object({
   agentModeId: z.string().trim().min(1).optional(),
   configuration: AgentSessionConfigurationSnapshotV1Schema.optional(),
   connectedServices: ConnectedServiceBindingsV2IngressSchema.optional(),
-  mcpSelection: SessionMcpSelectionV1Schema.optional(),
+  capabilitySelection: SessionCapabilitySelectionAuthoringV1Schema.optional(),
   transcriptStorage: z.enum(['persisted', 'direct']).optional(),
   terminal: SessionAuthoringTerminalV1Schema.optional(),
   checkoutCreationDraft: SessionAuthoringCheckoutCreationDraftV1Schema.nullable().optional(),
   title: z.string().trim().min(1).optional(),
   /** Host-owned identity facts persisted at ordinary Session birth. */
   identity: SessionIdentityAdditionsV1Schema.optional(),
+  /** Plugin-only, immutable integrator facts; never authored by an Agent or token. */
+  attestedContext: SessionAttestedContextV1Schema.optional(),
   /** Host-verified resource this Session was created with; never current Controller authority. */
   managedCreation: SessionManagedCreationV1Schema.optional(),
   /** Admitted kind preference or explicit draft choice; omission uses the birth kind default. */
@@ -130,9 +135,10 @@ export const SessionServerStartSpawnDraftV1Schema = lazyZodSchema(() => SessionS
   creationKey: true,
   initialInput: true,
   environmentVariables: true,
+  attestedContext: true,
 }).strict().superRefine(refineSessionDirectoryIntentCheckoutV1));
 
 export type SessionServerStartSpawnDraftV1 = Omit<
   SessionSpawnNewInputV2,
-  'creationKey' | 'initialInput' | 'environmentVariables'
+  'creationKey' | 'initialInput' | 'environmentVariables' | 'attestedContext'
 >;

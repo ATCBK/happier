@@ -392,6 +392,22 @@ export const SESSION_AUTHORING_FIELD_CATALOG = defineSessionAuthoringFields({
     },
     default: null,
   },
+  allowedTools: {
+    schema: SessionAuthoringSelectionFieldsV1.allowedTools,
+    description: 'Tool rules that seed the Session permission allowlist.',
+    storageClass: 'template', draftStorage: 'sync', contexts: [...ALL_AUTHORING_CONTEXTS],
+    defaultSurface: 'section',
+    defaultEditabilityByContext: { newSession: 'editable', liveSession: 'hidden',
+      automationNewSession: 'editable', automationExistingSession: 'hidden' },
+  },
+  unlistedTools: {
+    schema: SessionAuthoringSelectionFieldsV1.unlistedTools,
+    description: 'Ask for unlisted tools by default, or deny them without a prompt.',
+    storageClass: 'template', draftStorage: 'sync', contexts: [...ALL_AUTHORING_CONTEXTS],
+    defaultSurface: 'section',
+    defaultEditabilityByContext: { newSession: 'editable', liveSession: 'hidden',
+      automationNewSession: 'editable', automationExistingSession: 'hidden' },
+  },
   modelSelection: {
     schema: SessionModelSelectionV1Schema.nullable().default(null),
     description: 'Explicit target-bound model selection; null means the agent default/automatic model.',
@@ -435,9 +451,9 @@ export const SESSION_AUTHORING_FIELD_CATALOG = defineSessionAuthoringFields({
       automationExistingSession: 'hidden',
     },
   },
-  mcpSelection: {
-    schema: SessionAuthoringSelectionFieldsV1.mcpSelection,
-    description: 'Managed/unmanaged MCP selection authored for the session.',
+  capabilitySelection: {
+    schema: SessionAuthoringSelectionFieldsV1.capabilitySelection,
+    description: 'Skill and MCP selection authored for the session.',
     storageClass: 'template',
     draftStorage: 'sync',
     contexts: [...ALL_AUTHORING_CONTEXTS],
