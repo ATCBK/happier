@@ -3,7 +3,7 @@ import type { MachineProvisionerCheckResultV1 } from '@happier-dev/plugin-sdk/ma
 import type { UiTranslationBundle } from '@happier-dev/plugin-sdk/ui';
 
 export const MACHINE_PRESENTATION_LABELS = {
-  "en": {"kind":"Droplet","description":"A cloud Droplet with your chosen size, image and region.","ready":"Account connected","unavailable":"Account unavailable"},
+  "en": {"kind":"droplet","description":"A cloud Droplet with your chosen size, image and region.","ready":"Account connected","unavailable":"Account unavailable"},
   "de": {"kind":"Droplet","description":"Ein Cloud-Droplet mit deiner Wahl von Größe, Image und Region.","ready":"Konto verbunden","unavailable":"Konto nicht verfügbar"},
   "ru": {"kind":"Droplet","description":"Облачный Droplet с выбранными размером, образом и регионом.","ready":"Аккаунт подключён","unavailable":"Аккаунт недоступен"},
   "pl": {"kind":"Droplet","description":"Droplet z wybranym rozmiarem, obrazem i regionem.","ready":"Konto połączone","unavailable":"Konto niedostępne"},

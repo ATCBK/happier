@@ -262,9 +262,9 @@ export const CRABBOX_UI_TRANSLATIONS = Object.freeze({
     'machineCrabbox.expiry': 'Este arrendamiento nativo puede terminar antes de tu política Keep. Comprueba su vencimiento abajo.',
   }),
   fr: Object.freeze({
-    'machineCrabbox.sync.unsupported': 'Ce backend copierait automatiquement votre espace de travail. Vérifiez la configuration prise en charge.',
+    'machineCrabbox.sync.unsupported': 'Ce backend copierait automatiquement ton espace de travail. Vérifie la configuration prise en charge.',
     'machineCrabbox.release.consequence': 'Mettre fin à cette instance libère sa ressource native.',
-    'machineCrabbox.expiry': 'Ce bail natif peut se terminer avant votre politique Keep. Vérifiez son expiration ci-dessous.',
+    'machineCrabbox.expiry': 'Ce bail natif peut se terminer avant ta politique Keep. Vérifie son expiration ci-dessous.',
   }),
   it: Object.freeze({
     'machineCrabbox.sync.unsupported': 'Questo backend copierebbe automaticamente il tuo spazio di lavoro. Verifica la configurazione supportata.',

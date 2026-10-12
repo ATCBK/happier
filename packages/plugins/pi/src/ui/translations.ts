@@ -37,7 +37,7 @@ export const PI_UI_TRANSLATIONS = Object.freeze({
   fr: Object.freeze({
     'settingsAgents.plugins.pi.title': 'Pi',
     'settingsAgents.plugins.pi.fields.piAgentDir.title': 'Répertoire de l’agent',
-    'settingsAgents.plugins.pi.fields.piAgentDir.subtitle': 'Racine de données Pi facultative. Laissez vide pour utiliser ~/.pi/agent.',
+    'settingsAgents.plugins.pi.fields.piAgentDir.subtitle': 'Racine de données Pi facultative. Laisse vide pour utiliser ~/.pi/agent.',
     'settingsAgents.plugins.pi.sections.storage.title': 'Stockage',
     'settingsAgents.plugins.pi.sections.storage.footer': 'Ce répertoire sert uniquement aux sessions Pi lancées ou découvertes par Happier.',
   }),

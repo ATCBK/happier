@@ -37,7 +37,7 @@ export const OH_MY_PI_UI_TRANSLATIONS = Object.freeze({
   fr: Object.freeze({
     'settingsAgents.plugins.ohmypi.title': 'Oh My Pi',
     'settingsAgents.plugins.ohmypi.fields.ohMyPiAgentDir.title': 'Répertoire de l’agent',
-    'settingsAgents.plugins.ohmypi.fields.ohMyPiAgentDir.subtitle': 'Racine de données Oh My Pi facultative. Laissez vide pour utiliser ~/.omp/agent.',
+    'settingsAgents.plugins.ohmypi.fields.ohMyPiAgentDir.subtitle': 'Racine de données Oh My Pi facultative. Laisse vide pour utiliser ~/.omp/agent.',
     'settingsAgents.plugins.ohmypi.sections.storage.title': 'Stockage',
     'settingsAgents.plugins.ohmypi.sections.storage.footer': 'Ce répertoire sert uniquement aux sessions Oh My Pi lancées ou découvertes par Happier.',
   }),

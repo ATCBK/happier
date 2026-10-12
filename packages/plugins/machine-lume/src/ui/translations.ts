@@ -58,7 +58,7 @@ export const LUME_CONFIGURATION_LABELS = {
     publishedImage: 'Image publiée', nativeReference: 'Référence d’image native', publishedReference: 'Référence d’image publiée',
     nativeDescription: 'Une image au format Lume avec une étiquette ou une empreinte, préparée pour cet invité.',
     privateCarrier: 'Connexion privée préparée',
-    privateDescription: 'Sélectionnez uniquement une image vérifiée et préparée pour SSH natif Lume avec le mot de passe par défaut.',
+    privateDescription: 'Sélectionne uniquement une image vérifiée et préparée pour SSH natif Lume avec le mot de passe par défaut.',
     preparedSsh: 'Préparée pour SSH natif Lume', guestOs: 'Système invité préparé', user: 'Utilisateur SSH préparé',
     userDescription: 'Le compte explicitement préparé dans cette image ; il n’est jamais déduit du système invité.', customSize: 'Taille personnalisée',
   },

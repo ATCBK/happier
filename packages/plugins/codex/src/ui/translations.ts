@@ -27,7 +27,7 @@ export const CODEX_UI_TRANSLATIONS = Object.freeze({
   fr: Object.freeze({
     'agentInput.connectedServiceLabel.codex': 'OpenAI Codex',
     'settingsVoice.mode.codexRealtime': 'Codex Live',
-    'settingsVoice.mode.codexRealtimeSubtitle': 'Parlez directement avec la session active de l’agent Codex.',
+    'settingsVoice.mode.codexRealtimeSubtitle': 'Parle directement avec la session active de l’agent Codex.',
   }),
   it: Object.freeze({
     'agentInput.connectedServiceLabel.codex': 'OpenAI Codex',

@@ -45,7 +45,7 @@ export const FLY_CONFIGURATION_LABELS = {
   },
   fr: {
     appOwnership: 'Application', createApp: 'Créer une application', existingApp: 'Utiliser une application existante', appName: 'Nom de l’application',
-    organization: 'Organisation', organizationDescription: 'Utilisez l’organisation configurée pour le compte Fly sélectionné.',
+    organization: 'Organisation', organizationDescription: 'Utilise l’organisation configurée pour le compte Fly sélectionné.',
     region: 'Code de région', image: 'Image', imageDescription: 'Facultatif ; Ubuntu 24.04 est utilisé si aucune image n’est indiquée.',
     cpuKind: 'Type de CPU', shared: 'Partagé', performance: 'Haute performance', cpus: 'Nombre de CPU', memory: 'Mémoire (Mo)',
     volumeKind: 'Volume persistant', createVolume: 'Créer un volume', attachVolume: 'Connecter un volume existant',
@@ -104,7 +104,7 @@ const lifecycleMessages = {
   ru: ['При возобновлении возможен холодный запуск. Храните важные данные на томе.', 'Остановка сбрасывает корневую файловую систему. Том сохраняется.'],
   pl: ['Wznowienie może wymagać zimnego startu. Ważne dane przechowuj na woluminie.', 'Zatrzymanie resetuje główny system plików. Wolumin zostaje zachowany.'],
   es: ['Al reanudar puede ser necesario un arranque en frío. Guarda los datos importantes en el volumen.', 'Al detener se restablece el sistema de archivos raíz. El volumen se conserva.'],
-  fr: ['La reprise peut nécessiter un démarrage à froid. Gardez les données importantes sur le volume.', 'L’arrêt réinitialise le système de fichiers racine. Le volume est conservé.'],
+  fr: ['La reprise peut nécessiter un démarrage à froid. Garde les données importantes sur le volume.', 'L’arrêt réinitialise le système de fichiers racine. Le volume est conservé.'],
   it: ['La ripresa potrebbe richiedere un avvio a freddo. Conserva i dati importanti sul volume.', 'L’arresto reimposta il file system radice. Il volume viene conservato.'],
   pt: ['Ao retomar, pode ser necessária uma inicialização a frio. Guarde dados importantes no volume.', 'A parada redefine o sistema de arquivos raiz. O volume é preservado.'],
   ca: ['En reprendre pot caldre una arrencada en fred. Desa les dades importants al volum.', 'En aturar es restableix el sistema de fitxers arrel. El volum es conserva.'],
