@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 
 import { z } from 'zod';
+import { withHostProcessOwnerEnvironment } from '@/processes/ownerTag';
 
 
 const StdioMcpServerLauncherConfigSchema = z.object({
@@ -45,7 +46,7 @@ export async function runStdioMcpServerLauncher(): Promise<void> {
 
   const child = spawn(config.command, config.args, {
     cwd: config.cwd,
-    env: { ...process.env, ...config.env },
+    env: withHostProcessOwnerEnvironment({ ...process.env, ...config.env }),
     stdio: ['pipe', 'pipe', 'pipe'],
     shell: false,
   });

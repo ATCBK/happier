@@ -4,10 +4,12 @@ import type {
   DaemonMcpServersPreviewResponse,
   DetectedMcpServerV1,
   McpServersSettingsV1,
-  SessionMcpSelectionV1,
+  SessionCapabilitySelectionV1,
 } from '@happier-dev/protocol';
 
-import { resolveManagedSessionMcpSelectionForDirectory } from '@/mcp/servers/resolveManagedSessionMcpSelectionForDirectory';
+import { resolveSessionCapabilitiesForDirectory } from '@/mcp/servers/resolveSessionCapabilitiesForDirectory';
+import { agentReceivesUserMcpServersV1 } from '@happier-dev/protocol/plugins/contributions/v2';
+import { resolveAgentToolsDelivery } from '@/agent/tools/happierTools/runtime/resolveAgentToolsDelivery';
 
 import { buildManagedMcpPreviewEntries } from './buildManagedMcpPreviewEntries';
 import { resolveDetectedMcpPreviewEntries } from './resolveDetectedMcpPreviewEntries';
@@ -37,15 +39,17 @@ export function resolveSessionMcpPreview(params: Readonly<{
   machineId: string;
   directory: string;
   agentId: string;
-  selection?: SessionMcpSelectionV1 | null;
+  capabilitySelection?: SessionCapabilitySelectionV1 | null;
   detectedServers: ReadonlyArray<DetectedMcpServerV1>;
   detectedWarnings?: ReadonlyArray<DaemonMcpServersDetectWarningV1>;
 }>): Extract<DaemonMcpServersPreviewResponse, { ok: true }> {
-  const managedSelection = resolveManagedSessionMcpSelectionForDirectory({
+  const managedSelection = resolveSessionCapabilitiesForDirectory({
     settings: params.settings,
     machineId: params.machineId,
     directory: params.directory,
-    selection: params.selection ?? null,
+    selection: params.capabilitySelection ?? {},
+    agentId: params.agentId,
+    agentAcceptsUserMcp: agentReceivesUserMcpServersV1(resolveAgentToolsDelivery(params.agentId)),
   });
 
   const builtIn = [createBuiltInMcpPreviewEntry()];

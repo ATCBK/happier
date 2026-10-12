@@ -25,7 +25,7 @@ export function resolveDetectedMcpPreviewEntries(params: Readonly<{
   const provider = resolveAgentDetectedProvider(params.agentId);
   if (!provider) return [];
 
-  const filtered = params.servers.filter((server) => server.provider === provider);
+  const filtered = params.servers.filter((server) => server.provider === provider && server.loadedInHappierSessions !== false);
   const winnersByName = new Map<string, DetectedMcpServerV1>();
   for (const server of filtered) {
     winnersByName.set(server.name, server);

@@ -20,7 +20,9 @@ export async function probeMcpStdioServerTools(params: Readonly<{
   baseEnv?: NodeJS.ProcessEnv;
   connectTimeoutMs?: number;
   listToolsTimeoutMs?: number;
+  signal?: AbortSignal;
 }>): Promise<ReadonlyArray<ToolInfo>> {
+  params.signal?.throwIfAborted();
   const baseEnv = params.baseEnv ?? process.env;
   const env = params.config.env ? { ...resolveEnvRecord(baseEnv), ...params.config.env } : resolveEnvRecord(baseEnv);
 
@@ -31,21 +33,35 @@ export async function probeMcpStdioServerTools(params: Readonly<{
   });
 
   const client = new Client({ name: 'happier-mcp-test', version: '1.0.0' }, { capabilities: {} });
+  let abortedClose: Promise<void> | null = null;
+  const onAbort = () => {
+    abortedClose = client.close().catch(() => {});
+  };
+  params.signal?.addEventListener('abort', onAbort, { once: true });
 
   try {
-    await withMcpTimeout(client.connect(transport), {
+    await withMcpTimeout(client.connect(transport, { signal: params.signal }), {
       timeoutMs: params.connectTimeoutMs ?? 15_000,
       label: 'mcp_connect_timeout',
     });
-    const tools = await withMcpTimeout(client.listTools(), {
-      timeoutMs: params.listToolsTimeoutMs ?? 15_000,
-      label: 'mcp_list_tools_timeout',
-    });
-    const list = Array.isArray((tools as any)?.tools) ? (((tools as any).tools as any[]) ?? []) : [];
-    return list
-      .map((tool) => (typeof tool?.name === 'string' ? { name: tool.name } : null))
-      .filter((tool): tool is ToolInfo => Boolean(tool));
+    const tools: ToolInfo[] = [];
+    let cursor: string | undefined;
+    do {
+      params.signal?.throwIfAborted();
+      const page = await withMcpTimeout(client.listTools(
+        cursor === undefined ? undefined : { cursor },
+        { signal: params.signal },
+      ), {
+        timeoutMs: params.listToolsTimeoutMs ?? 15_000,
+        label: 'mcp_list_tools_timeout',
+      });
+      params.signal?.throwIfAborted();
+      tools.push(...page.tools.map(tool => ({ name: tool.name })));
+      cursor = page.nextCursor;
+    } while (cursor !== undefined);
+    return tools;
   } finally {
-    await client.close().catch(() => {});
+    params.signal?.removeEventListener('abort', onAbort);
+    await (abortedClose ?? client.close().catch(() => {}));
   }
 }

@@ -7,7 +7,7 @@
  */
 
 import { expandEnvironmentVariables } from '@/utils/expandEnvVars';
-import type { McpValueRefV1 } from '@happier-dev/protocol';
+import type { McpValueRefV1, SessionAttestedContextV1 } from '@happier-dev/protocol';
 import type {
   SavedSecretMaterializerV1,
   SavedSecretResolutionFailureStatusV1,
@@ -21,13 +21,21 @@ export {
 export type McpValueRefPlaintextResolution =
   | Readonly<{ status: 'ready'; value: string }>
   | Readonly<{ status: 'literal_unavailable' }>
+  | Readonly<{ status: 'session_attested_unavailable' }>
   | Readonly<{ status: SavedSecretResolutionFailureStatusV1 }>;
 
 export function resolveMcpValueRefPlaintext(params: Readonly<{
   valueRef: McpValueRefV1;
   savedSecretMaterializer?: SavedSecretMaterializerV1;
   processEnv: NodeJS.ProcessEnv;
+  session?: Readonly<{ sessionId: string; attestedContext?: SessionAttestedContextV1 }>;
 }>): McpValueRefPlaintextResolution {
+  if (params.valueRef.t === 'sessionAttested') {
+    const value = params.valueRef.field === 'sessionId' ? params.session?.sessionId
+      : params.session?.attestedContext?.[params.valueRef.field];
+    return typeof value === 'string' && value.length > 0
+      ? { status: 'ready', value } : { status: 'session_attested_unavailable' };
+  }
   if (params.valueRef.t === 'literal') {
     const expanded = expandEnvironmentVariables({ __VALUE__: params.valueRef.v }, params.processEnv, { warnOnUndefined: false })
       .__VALUE__;

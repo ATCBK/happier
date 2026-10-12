@@ -7,9 +7,29 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { configuration } from '@/configuration';
 
-import { registerHappierMcpBuiltInTools } from './registerHappierMcpBuiltInTools';
+import { prepareHappierMcpToolInventory, registerHappierMcpBuiltInTools } from './registerHappierMcpBuiltInTools';
+import { ActionJsonSchemaProjectionError } from '@happier-dev/protocol/actions/actionInputJsonSchema';
+import { createHappierToolInventory } from '@/agent/tools/happierTools/listBuiltInHappierTools';
+import { projectExecutablePluginToolCatalog } from '@/plugins/runtime/toolCatalog';
+import { createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
+import { compilePluginJsonSchema } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
 
 describe('registerHappierMcpBuiltInTools', () => {
+  it('keeps tools available when optional output metadata is unrepresentable while refusing unrepresentable inputs', () => {
+    const inputSchema = z.object({ value: z.string() }).strict();
+    const outputSchema = z.object({ data: z.custom<unknown>() }).strict();
+    const tool = { name: 'opaque_result', title: 'Opaque result', description: 'Read an opaque result', inputSchema, outputSchema };
+    const inventory = { tools: [tool, { ...tool, name: 'representable_result', outputSchema: inputSchema }], actionToolNameToId: new Map<string, string>() };
+    const prepared = prepareHappierMcpToolInventory({ inventory, sessionId: 'sess-1' });
+    expect(prepared.registrations.map(entry => entry.tool.name)).toEqual(['opaque_result', 'representable_result']);
+    expect(prepared.registrations[0].meta).not.toHaveProperty('outputSchema');
+    expect(prepared.registrations[1].meta).toHaveProperty('outputSchema');
+    expect(() => prepareHappierMcpToolInventory({
+      inventory: { ...inventory, tools: [{ ...tool, inputSchema: outputSchema }] }, sessionId: 'sess-1',
+    })).toThrow(ActionJsonSchemaProjectionError);
+  });
+
   it('projects admitted native capture pixels for the host Session and refuses missing or substituted media', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'happier-native-mcp-'));
     const daemonRoot = Object.getOwnPropertyDescriptor(configuration, 'happyHomeDir')!;
@@ -110,34 +130,75 @@ describe('registerHappierMcpBuiltInTools', () => {
     vi.useRealTimers();
   });
 
-  it('registers only MCP-presentable schemas for the complete built-in catalog', () => {
-    const registrations: Array<Readonly<{
-      name: string;
-      meta: { inputSchema?: z.ZodType; outputSchema?: z.ZodType };
-    }>> = [];
+  it('registers only MCP-presentable schemas for the real Action and plugin tool inventories', async () => {
+    const pluginId = 'acme.mcp-inventory';
+    const inputSchema = {
+      type: 'object', properties: { label: { type: 'string', minLength: 1 } },
+      required: ['label'], additionalProperties: false,
+    };
+    // The plugin is physically installed and admitted by the canonical fixture;
+    // no registry, activation, policy or projection logic is mocked.
+    const fixture = await createAuthoredAdmittedPluginRuntimeFixture({ plugins: [{
+      manifest: createPluginManifestV2Fixture({ id: pluginId, contributes: {
+        actions: [{ id: 'read', title: 'Read label', scopes: ['global'], surfaces: ['mcp'],
+          execution: { target: 'daemon' }, dangerLevel: 'safe', inputSchema }],
+        tools: [{ id: 'read-tool', name: 'qa_inventory_read', title: 'Read label',
+          action: 'read', surfaces: ['mcp'], inputSchema, outputSchema: inputSchema }],
+      } }),
+      files: { 'daemon.mjs': 'export function activate(api) { api.actions.register("read", async input => input); }' },
+    }] });
+    try {
+      const runtime = fixture.registry;
+      await runtime.activateContributionsOnDemand([{ pluginId, family: 'actions', localId: 'read' }]);
+      const pluginToolCatalog = projectExecutablePluginToolCatalog(runtime);
+      expect(pluginToolCatalog.length).toBeGreaterThan(0);
+      const inventory = createHappierToolInventory({
+        surface: 'mcp', registry: runtime.contributes, pluginToolCatalog,
+        isActionEnabled: () => true, actionsSettings: null,
+      });
+      expect(inventory.tools).toContainEqual(expect.objectContaining({
+        name: 'qa_inventory_read', actionId: `${pluginId}/actions/read`,
+      }));
+      // Exercise each eager input with its real Action mapping and plugin context.
+      // The assertion names the inventory entry that would abort MCP initialize.
+      for (const tool of inventory.tools) {
+        expect(() => prepareHappierMcpToolInventory({
+          inventory: { ...inventory, tools: [tool] }, sessionId: '', pluginToolCatalog,
+        }), `${tool.name} (${tool.actionId ?? 'manual'})`).not.toThrow();
+      }
+      const toolInventory = prepareHappierMcpToolInventory({ inventory, sessionId: '', pluginToolCatalog });
+      const registrations: Array<Readonly<{
+        name: string;
+        meta: { inputSchema?: z.ZodType; outputSchema?: z.ZodType };
+      }>> = [];
 
-    registerHappierMcpBuiltInTools({
-      registerTool: (name, meta) => registrations.push({
-        name,
-        meta: meta as { inputSchema?: z.ZodType; outputSchema?: z.ZodType },
-      }),
-    }, {
-      sessionId: 'sess-1',
-      surface: 'mcp',
-      deps: {
-        changeTitle: async () => ({ success: true }),
-        executeActionByToolName: async () => ({ ok: true as const, result: {} }),
-      },
-    });
+      registerHappierMcpBuiltInTools({
+        registerTool: (name, meta) => registrations.push({
+          name,
+          meta: meta as { inputSchema?: z.ZodType; outputSchema?: z.ZodType },
+        }),
+      }, {
+        sessionId: '',
+        surface: 'mcp',
+        pluginToolCatalog,
+        toolInventory,
+        deps: {
+          changeTitle: async () => ({ success: true }),
+          executeActionByToolName: async () => ({ ok: true as const, result: {} }),
+        },
+      });
 
-    expect(registrations.length).toBeGreaterThan(0);
-    for (const registration of registrations) {
-      expect(() => registration.meta.inputSchema
-        ? z.toJSONSchema(registration.meta.inputSchema, { target: 'draft-7', io: 'input' })
-        : null, registration.name).not.toThrow();
-      expect(() => registration.meta.outputSchema
-        ? z.toJSONSchema(registration.meta.outputSchema, { target: 'draft-7', io: 'output' })
-        : null, registration.name).not.toThrow();
+      expect(registrations.length).toBeGreaterThan(0);
+      for (const registration of registrations) {
+        expect(() => registration.meta.inputSchema
+          ? z.toJSONSchema(registration.meta.inputSchema, { target: 'draft-7', io: 'input' })
+          : null, registration.name).not.toThrow();
+        expect(() => registration.meta.outputSchema
+          ? z.toJSONSchema(registration.meta.outputSchema, { target: 'draft-7', io: 'output' })
+          : null, registration.name).not.toThrow();
+      }
+    } finally {
+      await fixture.dispose();
     }
   });
 
@@ -254,7 +315,7 @@ describe('registerHappierMcpBuiltInTools', () => {
       surface: 'mcp',
       pluginToolCatalog: [{
         toolId: 'acme.review.plugin/review-tool',
-        actionId: 'acme.review.plugin/review-start',
+        actionId: 'acme.review.plugin/actions/review-start',
         name: 'acme_review_start',
         title: 'Acme Review Start',
         description: 'Start a plugin-defined review workflow',
@@ -268,8 +329,10 @@ describe('registerHappierMcpBuiltInTools', () => {
         },
         outputSchema: {
           type: 'object',
+          definitions: { completion: { type: 'boolean' } },
           properties: {
-            completed: { type: 'boolean' },
+            completed: { $ref: '#/definitions/completion' },
+            literal: { const: { $ref: '#/definitions/literal-data' } },
           },
           required: ['completed'],
           additionalProperties: false,
@@ -311,19 +374,36 @@ describe('registerHappierMcpBuiltInTools', () => {
       required: ['scope'],
       additionalProperties: false,
     });
-    expect(meta?.outputSchema ? z.toJSONSchema(meta.outputSchema, { target: 'draft-7' }) : null).toMatchObject({
+    const advertisedOutput = meta?.outputSchema ? z.toJSONSchema(meta.outputSchema, { target: 'draft-7' }) : null;
+    expect(advertisedOutput).toMatchObject({
       type: 'object',
-      properties: {
-        completed: { type: 'boolean' },
-      },
-      required: ['completed'],
-      additionalProperties: false,
+      anyOf: [
+        { properties: { completed: { $ref: '#/anyOf/0/definitions/completion' },
+          literal: { const: { $ref: '#/definitions/literal-data' } } }, required: ['completed'], additionalProperties: false },
+        { properties: { kind: { const: 'approval_request_created' } }, required: ['kind', 'artifactId', 'actionId'], additionalProperties: false },
+      ],
     });
+    if (!advertisedOutput) throw new Error('Expected advertised output schema');
+    const validateAdvertisedOutput = compilePluginJsonSchema(JSON.parse(JSON.stringify(advertisedOutput)));
+    expect(validateAdvertisedOutput({ completed: true, literal: { $ref: '#/definitions/literal-data' } })).toBe(true);
+    expect(validateAdvertisedOutput({ completed: 'true' })).toBe(false);
+    expect(validateAdvertisedOutput({ kind: 'approval_request_created', artifactId: 'approval',
+      actionId: 'acme.review.plugin/actions/review-start' })).toBe(true);
+    expect(validateAdvertisedOutput({ kind: 'approval_request_created', artifactId: '',
+      actionId: 'acme.review.plugin/actions/review-start' })).toBe(false);
+    expect(meta?.outputSchema?.safeParse({ completed: true }).success).toBe(true);
+    expect(meta?.outputSchema?.safeParse({ completed: 'true' }).success).toBe(false);
+    expect(meta?.outputSchema?.safeParse({ kind: 'approval_request_created', artifactId: 'approval',
+      actionId: 'acme.review.plugin/actions/review-start' }).success).toBe(true);
+    expect(meta?.outputSchema?.safeParse({ kind: 'approval_request_created', artifactId: '',
+      actionId: 'acme.review.plugin/actions/review-start' }).success).toBe(false);
+    expect(meta?.outputSchema?.safeParse({ kind: 'approval_request_created', artifactId: 'approval',
+      actionId: 'acme.review.plugin/actions/review-start', completed: true }).success).toBe(false);
     expect(meta?.annotations).toEqual({ destructiveHint: true });
     expect(meta?._meta).toEqual({
       'happier.dev/pluginTool': {
         toolId: 'acme.review.plugin/review-tool',
-        actionId: 'acme.review.plugin/review-start',
+        actionId: 'acme.review.plugin/actions/review-start',
         safety: 'danger',
         inputHints: {
           fields: [{

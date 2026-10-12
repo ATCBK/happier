@@ -44,6 +44,28 @@ function resolveLauncherInvocation(options: Readonly<{ forceSource?: boolean }> 
 }
 
 describe('stdioMcpServerLauncher', () => {
+  it('keeps host ownership when MCP config supplies a forged owner', async () => {
+    const tmp = await mkdtemp(join(tmpdir(), 'happier-mcp-owner-'));
+    try {
+      const configPath = join(tmp, 'config.json');
+      const hostTag = 'v1.0123456789ab.run.run-mcp';
+      await writeFile(configPath, JSON.stringify({ command: process.execPath,
+        args: ['-e', 'process.stdout.write(process.env.HAPPIER_PROCESS_OWNER || "absent")'],
+        env: { HAPPIER_PROCESS_OWNER: 'forged-mcp' } }), { mode: 0o600 });
+      const invocation = resolveLauncherInvocation({ forceSource: true });
+      const child = spawn(invocation.command, invocation.args, { env: { ...resolveEnvRecord(), ...invocation.env,
+        HAPPIER_PROCESS_OWNER: hostTag, HAPPIER_MCP_STDIO_LAUNCHER_CONFIG_FILE: configPath }, stdio: ['ignore', 'pipe', 'pipe'] });
+      let output = '';
+      let stderr = '';
+      child.stdout.on('data', chunk => { output += String(chunk); });
+      child.stderr.on('data', chunk => { stderr += String(chunk); });
+      const code = await new Promise<number | null>((resolve, reject) => {
+        child.once('error', reject); child.once('close', resolve);
+      });
+      expect({ code, stderr }).toEqual({ code: 0, stderr: '' });
+      expect(output).toBe(hostTag);
+    } finally { await rm(tmp, { recursive: true, force: true }); }
+  });
   it('preserves the writer-owned config for relaunch until its owner cleans up', async () => {
     const prefix = 'happier-mcp-stdio-launcher';
     const configPath = await writeSecureMcpRuntimeConfigFile({

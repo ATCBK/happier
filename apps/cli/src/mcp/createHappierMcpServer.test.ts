@@ -3,6 +3,7 @@ import fastify from 'fastify';
 import { z } from 'zod';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { accountSettingsParse, deriveSessionCreationTagV1, FeaturesResponseSchema, SessionCreationCorrespondenceV1Schema, SessionInputRequestSchema } from '@happier-dev/protocol';
 import { encrypt, decrypt, encodeBase64 } from '@/api/encryption';
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
@@ -18,6 +19,9 @@ import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValu
 import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
 import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
 import * as daemonControlClient from '@/daemon/controlClient';
+import { restartSessionRunnerOnCurrentRuntime } from '@/daemon/plannedRunnerRestart/restartSessionRunnerOnCurrentRuntime';
+import { requestPlannedRunnerRestart } from '@/daemon/plannedRunnerRestart/requestPlannedRunnerRestart';
+import type { TrackedSession } from '@/daemon/types';
 
 const env = process.env;
 
@@ -97,6 +101,129 @@ describe('createHappierMcpServer real host admission', () => {
   beforeEach(resetEnvironment);
   afterEach(unmockCaseModules);
   afterEach(() => vi.restoreAllMocks());
+
+  it('publishes client-compilable tools before the successor runner has a turn witness', async () => {
+    const sessionId = 'c444444444444444444444444';
+    const runtime = createHappierMcpServer({
+      sessionId,
+      getServerBinding: getTestServerBinding,
+      rpcHandlerManager: new RpcHandlerManager({ scopePrefix: sessionId, encryptionMode: 'plain' }),
+      updateMetadata() {},
+      getMetadataSnapshot: () => createTestMetadata(),
+    });
+    const client = new Client({ name: 'successor-runner-discovery', version: '1' }, { capabilities: {} });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    try {
+      await runtime.mcp.connect(serverTransport);
+      await client.connect(clientTransport);
+      // The SDK compiles every advertised output schema, as the stdio bridge does.
+      const tools = await client.listTools();
+      expect(tools.tools.map(tool => tool.name)).toContain('action_spec_get');
+      await expect(runtime.executeTool({ toolName: 'action_spec_get', args: { id: 'session.board.get' } }))
+        .resolves.toMatchObject({ ok: false, errorCode: 'target_unavailable' });
+    } finally {
+      await client.close();
+      await runtime.mcp.close();
+    }
+  });
+
+  it('re-attaches discoverable Happier MCP through the real planned runner restart and bridge factory', async () => {
+    // Daemon IPC and process signalling are genuine external boundaries. All
+    // restart guards, bridge resolution, MCP factories and SDK discovery stay real.
+    vi.spyOn(daemonControlClient, 'readDaemonPluginCatalog').mockResolvedValue({ kind: 'available', plugins: [], tools: [] });
+    const sessionId = 'c555555555555555555555555';
+    const app = fastify();
+    const restoreHttp = installAxiosFastifyAdapter({ app, origin: getTestServerBinding().serverUrl });
+    const metadata = createTestMetadata({ machineId: 'machine-1', path: '/repo' });
+    const secret = new Uint8Array(32).fill(17);
+    const credentials = { token: 'successor-input-account', encryption: { type: 'legacy' as const, secret } };
+    app.get('/v1/account/encryption/currentness', async () => createAccountEncryptionCurrentnessFixture({ mode: 'e2ee' }));
+    app.get('/v2/sessions/:sessionId', async () => ({ session: createSessionRecordFixture({
+      id: sessionId, active: true, encryptionMode: 'e2ee', metadata: encodeBase64(encrypt(secret, 'legacy', metadata)),
+    }) }));
+    const admitted: Parameters<NonNullable<import('@/api/session/sessionClient').ApiSessionClientOptions['machineAdmissionTransport']>>[0][] = [];
+    const machineAdmissionTransport = async (request: typeof admitted[number]) => {
+      admitted.push(request);
+      return { status: 'accepted' as const, localId: request.localId };
+    };
+    const session = {
+      sessionId,
+      getServerBinding: getTestServerBinding,
+      rpcHandlerManager: new RpcHandlerManager({ scopePrefix: sessionId, encryptionMode: 'plain' }),
+      updateMetadata() {},
+      getMetadataSnapshot: () => metadata,
+      getPermissionMode: () => 'yolo' as const,
+      getCurrentSessionLocation: () => ({ machineId: 'machine-1', path: '/repo' }),
+      getServerFeaturesSnapshot: () => ({ status: 'ready' as const, provenance: 'authenticated' as const,
+        features: FeaturesResponseSchema.parse({ features: { sessions: { enabled: true, board: { enabled: true } } }, capabilities: {} }) }),
+    };
+    const tracked: TrackedSession = {
+      startedBy: 'daemon', pid: 4242, happySessionId: sessionId,
+      processCommandHash: 'predecessor-command', processStartTimeMs: 12345,
+      processCommand: 'node /Users/alice/.happier/cli-dev/versions/0.2.10/package-dist/index.mjs claude --happy-starting-mode remote --started-by daemon',
+      vendorResumeId: 'claude-thread-1',
+      spawnOptions: { directory: '/repo', resume: 'claude-thread-1',
+        backendTarget: { kind: 'backend', backendId: 'claude', sourceKind: 'built_in' } },
+    };
+    const launch = () => resolveRunnerMcpServers({
+      session, credentials,
+      accountCredentials: null, accountSettings: null, machineId: 'machine-1', directory: '/repo',
+    });
+    let bridge = await launch();
+    const discover = async () => {
+      const client = new Client({ name: 'restart-discovery', version: '1' }, { capabilities: {} });
+      try {
+        await client.connect(new StreamableHTTPClientTransport(new URL(bridge.happierMcpServer.url)));
+        const tools = await client.listTools();
+        expect(tools.tools.map(tool => tool.name)).toEqual(expect.arrayContaining(['action_spec_get', 'session_board_item_upsert']));
+        const refused = await client.callTool({ name: 'session_board_get', arguments: {} });
+        expect(refused).toMatchObject({ isError: true });
+        expect(refused.content).toContainEqual({ type: 'text', text: expect.stringContaining('target_unavailable') });
+        // CLI is an independent Account producer, not the Session runner's
+        // authority. Exercise its actual executor and E2EE Machine admission.
+        const cli = createCliActionExecutorFromCredentials({ credentials, ...getTestServerBinding(),
+          serverApiUrl: getTestServerBinding().serverUrl, machineAdmissionTransport,
+          pluginActionExecutionOwner: 'current_process',
+          actionsSettingsProvider: createActionSettingsProvider({ accountSettings: accountSettingsParse({}) }),
+          resolveServerFeaturesSnapshot: session.getServerFeaturesSnapshot,
+        });
+        const sent = await cli.execute('session.message.send',
+          { sessionId, message: 'successor input', localId: 'successor-input' },
+          { surface: 'cli', actionCaller: { kind: 'host' } });
+        expect(sent).toMatchObject({ ok: true, result: { status: 'accepted', localId: 'successor-input' } });
+        expect(admitted).toEqual([expect.objectContaining({ sessionId, targetMachineId: 'machine-1', localId: 'successor-input' })]);
+        const content = admitted[0]?.content;
+        if (content?.t !== 'encrypted') throw new Error('Expected protected E2EE input');
+        expect(decrypt(secret, 'legacy', Uint8Array.from(Buffer.from(content.c, 'base64')))).toMatchObject({
+          content: { type: 'text', text: 'successor input' },
+          meta: { happierProvenanceV1: { kind: 'cli' } },
+        });
+      } finally { await client.close(); }
+    };
+    try {
+      const previousUrl = bridge.happierMcpServer.url;
+      const result = await restartSessionRunnerOnCurrentRuntime({
+        request: { sessionId, mode: 'if_stale', reason: 'daemon_restart_session_runners_command' },
+        tracked,
+        currentIdentity: { status: 'known', source: 'launch_spec', comparableId: 'version:0.2.11', entrypointVersion: '0.2.11' },
+        requestRestart: input => requestPlannedRunnerRestart({
+          ...input, deferral: { kind: 'none' }, restartRequestedPids: new Set(),
+          pidToTrackedSession: new Map([[tracked.pid, tracked]]),
+          isProcessSafeToSignal: async () => true,
+          requestSignal: async request => {
+            if (!await request.shouldSignal()) return { status: 'skipped_stale_owner' };
+            bridge.happierMcpServer.stop();
+            bridge = await launch();
+            return { status: 'requested' };
+          },
+        }),
+      });
+      expect(result).toMatchObject({ ok: true, status: 'restarted', sessionId });
+      expect(bridge.happierMcpServer.url).not.toBe(previousUrl);
+      expect(bridge.mcpServers.happier.args).toContain(bridge.happierMcpServer.url);
+      await discover();
+    } finally { bridge.happierMcpServer.stop(); restoreHttp(); await app.close(); }
+  });
 
   it('keeps descriptive catalog reads at the bound Session host policy owner', async () => {
     delete process.env.HAPPIER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_FILE;
@@ -201,6 +328,7 @@ describe('createHappierMcpServer real host admission', () => {
     });
     const runtime = createHappierMcpServer({ sessionId: 'bound-session', rpcHandlerManager: manager,
       updateMetadata() {}, getServerBinding: getTestServerBinding,
+      ...catalogHostTurn,
       getCurrentSessionLocation: () => ({ machineId: 'machine-1', path: '/repo' }),
     }, { credentials: null, accountSettings: accountSettingsParse({ actionsSettingsV1: { v: 1, actions: {
       'memory.get_window': { toolExposureModes: { agent: 'direct' } },
@@ -229,6 +357,7 @@ describe('createHappierMcpServer real host admission', () => {
     const runtime = createHappierMcpServer({
       sessionId: 'bound-session', rpcHandlerManager: manager, updateMetadata() {},
       getServerBinding: getTestServerBinding,
+      ...catalogHostTurn,
       getCurrentSessionLocation: () => ({ machineId: 'machine-1', path: '/repo' }),
     }, { credentials: null, accountSettings: accountSettingsParse({ actionsSettingsV1: { v: 1, actions: {
       'memory.search': { toolExposureModes: { agent: 'direct' } },
@@ -298,7 +427,7 @@ describe('createHappierMcpServer real host admission', () => {
           agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
           modelSelection: null, profileId: null, requestedPermissionMode: null,
           agentModeId: null, configuration: null, connectedServices: null,
-          mcpSelection: null, transcriptStorage: null, terminal: null,
+          capabilitySelection: null, transcriptStorage: null, terminal: null,
           agentSessionStartupInstructionsMarkerV1: null, checkout: null,
         },
       }),
@@ -661,6 +790,7 @@ describe('createHappierMcpServer', () => {
     const runtime = createHappierMcpServer({
       sessionId: 'runner-session',
       getServerBinding: () => ({ serverId: 'runner-home', serverUrl: 'http://runner-home.test' }),
+      ...catalogHostTurn,
       rpcHandlerManager: { invokeLocal: async () => ({}) },
       updateMetadata: () => {},
       // The live Session client already holds this Session's key.

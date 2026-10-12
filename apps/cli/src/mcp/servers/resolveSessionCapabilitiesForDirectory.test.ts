@@ -6,9 +6,9 @@ import { describe, expect, it } from 'vitest';
 
 import { McpServersSettingsV1Schema } from '@happier-dev/protocol/mcp/servers/settingsV1';
 
-import { resolveManagedSessionMcpSelectionForDirectory } from './resolveManagedSessionMcpSelectionForDirectory';
+import { resolveSessionCapabilitiesForDirectory } from './resolveSessionCapabilitiesForDirectory';
 
-describe('resolveManagedSessionMcpSelectionForDirectory', () => {
+describe('resolveSessionCapabilitiesForDirectory', () => {
   it('supports manual include resolution under symlinked workspaces', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'happier-mcp-selection-realpath-'));
     try {
@@ -45,16 +45,16 @@ describe('resolveManagedSessionMcpSelectionForDirectory', () => {
         ],
       });
 
-      const resolved = resolveManagedSessionMcpSelectionForDirectory({
+      const resolved = resolveSessionCapabilitiesForDirectory({
         settings,
         machineId: 'machine-1',
         directory: realSub,
-        selection: {
+        selection: { mcp: {
           v: 1,
           managedServersEnabled: true,
           forceIncludeServerIds: ['server-1'],
           forceExcludeServerIds: [],
-        },
+        } },
       });
 
       expect(resolved.selectedServersByName.playwright?.bindingId).toBe('binding-1');

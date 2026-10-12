@@ -60,6 +60,7 @@ export type HappyMcpSessionClient = {
     sessionId: string;
     getServerBinding(): SessionClientServerBinding;
     getMachineAdmissionTransport?: import('@/api/session/sessionClient').ApiSessionClient['getMachineAdmissionTransport'];
+    getMcpRequestAuthPort?: import('@/api/session/sessionClient').ApiSessionClient['getMcpRequestAuthPort'];
     rpcHandlerManager: RpcHandlerManagerLike;
     updateMetadata(updater: (metadata: Metadata) => Metadata): void | Promise<void>;
     enqueueRegisteredSessionStateFieldMutation?: import('@/api/session/sessionClient').ApiSessionClient['enqueueRegisteredSessionStateFieldMutation'];

@@ -54,6 +54,7 @@ describe('detectProviderMcpServers', () => {
             definition: {
               id: 'config',
               title: 'Pi MCP discovery',
+              loadedInHappierSessions: false,
               metadata: { agentId: 'pi' },
             },
           }],
@@ -81,6 +82,7 @@ describe('detectProviderMcpServers', () => {
     expect(result.servers).toEqual([expect.objectContaining({
       provider: 'pi',
       name: 'docs',
+      loadedInHappierSessions: false,
     })]);
   });
 
@@ -225,8 +227,8 @@ describe('detectProviderMcpServers', () => {
       providers: ['pi'],
       env: {},
       mcpDiscoverySources: [
-        { pluginId: 'happier.agent.pi', provider: 'pi', registration: piDiscovery },
-        { pluginId: 'happier.agent.opencode', provider: 'opencode', registration: openCodeDiscovery },
+        { pluginId: 'happier.agent.pi', provider: 'pi', loadedInHappierSessions: true, registration: piDiscovery },
+        { pluginId: 'happier.agent.opencode', provider: 'opencode', loadedInHappierSessions: true, registration: openCodeDiscovery },
       ],
     };
     const result = await detectProviderMcpServers(params);
@@ -235,6 +237,7 @@ describe('detectProviderMcpServers', () => {
     expect(result.warnings).toEqual([]);
     expect(result.servers).toEqual([{
       provider: 'pi',
+      loadedInHappierSessions: true,
       name: 'docs',
       transport: 'http',
       remote: {
@@ -268,7 +271,7 @@ describe('detectProviderMcpServers', () => {
       providers: ['pi'],
       env: {},
       mcpDiscoverySources: [
-        { pluginId: 'happier.agent.pi', provider: 'pi', registration: piDiscovery },
+        { pluginId: 'happier.agent.pi', provider: 'pi', loadedInHappierSessions: true, registration: piDiscovery },
       ],
     });
 
@@ -307,13 +310,14 @@ describe('detectProviderMcpServers', () => {
         {
           pluginId: 'happier.agent.pi',
           provider: 'pi',
+          loadedInHappierSessions: true,
           registration: piDiscovery,
           discover: async (_input, signal) => {
             timedOutSignal = signal;
             return await new Promise(() => {});
           },
         },
-        { pluginId: 'happier.agent.opencode', provider: 'opencode', registration: openCodeDiscovery },
+        { pluginId: 'happier.agent.opencode', provider: 'opencode', loadedInHappierSessions: true, registration: openCodeDiscovery },
       ],
     });
 
@@ -325,6 +329,7 @@ describe('detectProviderMcpServers', () => {
     expect(timedOutSignal?.aborted).toBe(true);
     expect(result.servers).toEqual([{
       provider: 'opencode',
+      loadedInHappierSessions: true,
       name: 'workspace',
       transport: 'sse',
       remote: {
@@ -367,7 +372,7 @@ describe('detectProviderMcpServers', () => {
       providers: ['pi'],
       env: {},
       mcpDiscoverySources: [
-        { pluginId: 'happier.agent.pi', provider: 'pi', registration: piDiscovery },
+        { pluginId: 'happier.agent.pi', provider: 'pi', loadedInHappierSessions: true, registration: piDiscovery },
       ],
     });
 
@@ -400,7 +405,7 @@ describe('detectProviderMcpServers', () => {
       providers: ['pi'],
       env: {},
       mcpDiscoverySources: [
-        { pluginId: 'happier.agent.pi', provider: 'pi', registration: piDiscovery },
+        { pluginId: 'happier.agent.pi', provider: 'pi', loadedInHappierSessions: true, registration: piDiscovery },
       ],
     });
 

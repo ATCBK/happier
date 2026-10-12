@@ -12,12 +12,23 @@ function createDetected(overrides: Partial<DetectedMcpServerV1>): DetectedMcpSer
     stdio: { command: 'npx', args: ['-y', '@upstash/context7-mcp@latest'] },
     envKeys: [],
     enabled: true,
+    loadedInHappierSessions: true,
     source: { kind: 'user', path: '/Users/test/.codex/config.toml' },
     ...overrides,
   };
 }
 
 describe('resolveDetectedMcpPreviewEntries', () => {
+  it('omits native servers whose discovery source declares they are not loaded in Happier sessions', () => {
+    expect(resolveDetectedMcpPreviewEntries({
+      agentId: 'codex',
+      servers: [createDetected({ loadedInHappierSessions: false })],
+    })).toEqual([]);
+    expect(resolveDetectedMcpPreviewEntries({
+      agentId: 'claude',
+      servers: [createDetected({ provider: 'claude', loadedInHappierSessions: true })],
+    })).toHaveLength(1);
+  });
   it('returns read-only preview entries for the selected native backend', () => {
     const entries = resolveDetectedMcpPreviewEntries({
       agentId: 'codex',
@@ -74,5 +85,17 @@ describe('resolveDetectedMcpPreviewEntries', () => {
     });
 
     expect(entries).toEqual([]);
+  });
+  it('does not let an unloaded source shadow the same-name server from a loaded source', () => {
+    const entries = resolveDetectedMcpPreviewEntries({
+      agentId: 'claude',
+      servers: [
+        createDetected({ provider: 'claude' }),
+        createDetected({ provider: 'claude', loadedInHappierSessions: false,
+          source: { kind: 'project', path: '/repo/unloaded.json' } }),
+      ],
+    });
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.sourcePath).toBe('/Users/test/.codex/config.toml');
   });
 });

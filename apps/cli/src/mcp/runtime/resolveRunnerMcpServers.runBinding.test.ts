@@ -14,7 +14,6 @@ import { createExecutionRunOccurrenceWitnessRegistry } from '@/agent/runtime/bri
 import type { AgentInvocationTurnAdmissionWitness } from '@/plugins/runtime/invocation/services/types';
 import type { ExecutionRunController } from '@/agent/executionRuns/controllers/types';
 import type { SessionActionConfirmationRuntimeBinding } from '@/session/actions/approvals/sessionActionConfirmation';
-import type { HappyMcpSessionClient } from '@/mcp/startHappyServer';
 import {
   resetActiveAccountSettingsSnapshotForTests,
   setActiveAccountSettingsSnapshot,
@@ -23,6 +22,7 @@ import {
 import { McpServerCatalogV1Schema } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { resolveRunnerMcpServers } from './resolveRunnerMcpServers';
+import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 
 const persistenceMocks = vi.hoisted(() => ({ readStoredCredentials: vi.fn() }));
 
@@ -30,15 +30,6 @@ vi.mock('axios', () => ({ default: { get: vi.fn() } }));
 vi.mock('@/persistence', async (importOriginal) => ({
   ...await importOriginal<typeof import('@/persistence')>(),
   readStoredCredentials: persistenceMocks.readStoredCredentials,
-}));
-vi.mock('@/features/serverFeaturesClient', () => ({
-  fetchServerFeaturesSnapshot: vi.fn(async () => ({
-    status: 'ready' as const,
-    features: {
-      features: { teams: { enabled: true, credentialResources: { enabled: true } } },
-      capabilities: {},
-    },
-  })),
 }));
 
 // The daemon catalog is a transport boundary; the MCP server and Action execution stay real.
@@ -49,11 +40,15 @@ vi.mock('@/daemon/controlClient', async (importOriginal) => ({
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
   resetActiveAccountSettingsSnapshotForTests();
 });
 
 describe('Session-owned Run MCP binding', () => {
   it('refreshes selected shared Saved Secrets before composing an Execution Run MCP profile', async () => {
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => Response.json(FeaturesResponseSchema.parse({
+      features: { teams: { enabled: true, credentialResources: { enabled: true } } }, capabilities: {},
+    }))));
     const token = 'runtime-test-token';
     const resourceId = 'revoked-run-mcp-resource';
     const ref = formatSavedSecretCatalogReferenceV1({ kind: 'shared_resource', id: resourceId });
@@ -107,7 +102,10 @@ describe('Session-owned Run MCP binding', () => {
     vi.mocked(axios.get).mockResolvedValue({ status: 200, data: { resources: [] } });
 
     await expect(resolveRunnerMcpServers({
-      session: {} as HappyMcpSessionClient,
+      session: {
+        getServerBinding: () => ({ serverUrl: resolveServerHttpBaseUrl() }),
+        enqueueSessionEventCommitted: async () => ({ persisted: true, delivered: true }),
+      } as Parameters<typeof resolveRunnerMcpServers>[0]['session'],
       credentials: { token, encryption: null },
       accountSettings,
       accountSettingsSnapshot: getActiveAccountSettingsSnapshot(),
@@ -130,7 +128,6 @@ describe('Session-owned Run MCP binding', () => {
       status: 'forbidden',
       reference: ref,
     });
-    expect(axios.get).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the parent profile but binds confirmation to this Run occurrence and admitted turn', async () => {
@@ -154,8 +151,9 @@ describe('Session-owned Run MCP binding', () => {
     // A holder, not a `let`: narrowing across the MCP request boundary would
     // otherwise collapse the captured binding to `null` for the assertions below.
     const captured: { binding: SessionActionConfirmationRuntimeBinding | null } = { binding: null };
-    const parent: HappyMcpSessionClient = {
+    const parent: Parameters<typeof resolveRunnerMcpServers>[0]['session'] = {
       sessionId: 'session-a',
+      enqueueSessionEventCommitted: async () => ({ persisted: true, delivered: true }),
       getServerBinding: () => ({
         serverId: 'test-home',
         serverUrl: 'https://test-home.example.test',

@@ -5,6 +5,17 @@ import { resolveSpawnMcpServersPreviewInventory } from '@/session/actions/cliAct
 import { resolveSessionMcpPreview } from './resolveSessionMcpPreview';
 
 describe('resolveSessionMcpPreview detection warnings', () => {
+  it('applies the generic carrier MCP override through the canonical preview producer', () => {
+    const settings = McpServersSettingsV1Schema.parse({ v: 1, servers: [{
+      id: 'server-a', name: 'example', transport: 'stdio', stdio: { command: 'example', args: [] }, env: {}, createdAt: 1, updatedAt: 1,
+    }], bindings: [{ id: 'everywhere', serverId: 'server-a', enabled: true, target: { t: 'allMachines' }, createdAt: 1, updatedAt: 1 }] });
+    const preview = resolveSessionMcpPreview({ settings, machineId: 'machine-1', directory: '/repo', agentId: 'codex',
+      capabilitySelection: { mcp: { v: 1, managedServersEnabled: true, forceIncludeServerIds: [], forceExcludeServerIds: ['server-a'] },
+        skills: { v: 1, forceIncludeSkillIds: ['lint'], forceExcludeSkillIds: [], excludeNativeSkillNames: [] } },
+      detectedServers: [],
+    });
+    expect(preview.managed).toEqual([expect.objectContaining({ serverId: 'server-a', selected: false, reasonCode: 'forced_excluded' })]);
+  });
   it('projects admitted managed options without disclosing env or header material', async () => {
     const settings = McpServersSettingsV1Schema.parse({ v: 1, strictMode: true, servers: [{
       id: 'remote', name: 'remote-tools', transport: 'http', remote: { url: 'https://mcp.example.test',

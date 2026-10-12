@@ -134,7 +134,7 @@ describe('createExternalMcpServer plugin tools', () => {
         surface: 'mcp',
         defaultSessionId: 'cli-global',
         expectedContributorOccurrenceId: 'occurrence-g',
-      }, expect.objectContaining({ timeoutMs: 300_000 }));
+      }, expect.objectContaining({ timeoutMs: null, mutation: true, signal: expect.any(AbortSignal) }));
     } finally {
       await client.close();
       await mcp.close();

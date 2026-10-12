@@ -65,7 +65,7 @@ export function createSessionMcpToolInventory(params: Readonly<{
                 const connectionEpoch = params.client.getEphemeralStreamConnectionEpoch?.();
                 const signalReady = params.client.isDaemonPluginCatalogSignalReady?.() === true;
                 readingCatalog = (async () => {
-                    const response = await readDaemonPluginCatalog().catch(() => ({ kind: 'unavailable' as const }));
+                    const response = await readDaemonPluginCatalog({ selection: 'tools' }).catch(() => ({ kind: 'unavailable' as const }));
                     if (response.kind !== 'available') throw new DaemonPluginToolCatalogUnavailableError();
                     const parsed = DaemonPluginCatalogProjectionSchema.safeParse(response.projection);
                     const projection = parsed.success ? parsed.data : undefined;

@@ -33,7 +33,7 @@ import { resolvePermissionIntentFromMetadataSnapshot } from '@/agent/runtime/per
 import { resolveExecutionRunPublicBackendId } from '@/agent/runtime/bridges/executionRun/backendTargets';
 import { PromptRegistryInstallRequestV1Schema, PromptRegistryInstallResponseV1Schema } from '@happier-dev/protocol/prompts/library/promptRegistriesV1';
 import { AgentStartSessionCallerV1Schema } from '@happier-dev/protocol/account/settings/admitAgentStartV1';
-import type { ActionId, AccountSettings, ActionExecutorDeps, BackendTargetRefV2 } from '@happier-dev/protocol';
+import type { ActionId, AccountSettings, ActionExecutorContext, ActionExecutorDeps, BackendTargetRefV2 } from '@happier-dev/protocol';
 import { getActionSpec, isActionSpecSurfacedOn } from '@happier-dev/protocol/actions/actionSpecs';
 import { normalizeServerIdentityIdCapability } from '@happier-dev/protocol/features/payload/capabilities/serverIdentityCapabilities';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
@@ -560,9 +560,18 @@ export function createHappierMcpServer(
       starterDepth: client.getWorkDepth?.(), turnDepth: resolveLiveClientTurnWorkDepth(client) });
     return caller.success ? caller.data : null;
   };
+  // Built-in Session effects and contributed Actions consume the same live
+  // host caller. The plugin adapter alone stamps only its remote requests.
+  const sessionActionExecutor = {
+    execute: async (actionId: ActionId, input: unknown, context?: ActionExecutorContext) => {
+      const actionCaller = getInitiatingActionCaller();
+      if (!actionCaller) return { ok: false as const, errorCode: 'target_unavailable', error: 'target_unavailable' };
+      return await harness.executor.execute(actionId, input, { ...context, actionCaller });
+    },
+  };
   const localExecutor = scopedPluginRuntimeRegistryLease
     ? createPluginActionExecutor({
-        base: harness.executor,
+        base: sessionActionExecutor,
         getInitiatingActionCaller,
         ...(boundCallerSessionId ? { startedBy: 'agent' as const } : {}),
         requestPluginActionExecution: async (request, options) => {
@@ -589,7 +598,7 @@ export function createHappierMcpServer(
           });
         },
       })
-    : createDaemonPluginActionExecutor({ base: harness.executor,
+    : createDaemonPluginActionExecutor({ base: sessionActionExecutor,
         getInitiatingActionCaller,
         ...(boundCallerSessionId ? { startedBy: 'agent' } : {}),
       });

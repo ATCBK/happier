@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-import { McpServersSettingsV1Schema, resolveEffectiveServersV1 } from '@happier-dev/protocol';
+import { McpServersSettingsV1Schema, resolveSessionCapabilitiesV1, projectMcpServerMaterializationV1 } from '@happier-dev/protocol';
 import { resolveCliTsxTsconfigPath, resolveTsxImportHookPath } from '@/utils/spawnHappyCLI';
 
 import { probeMcpStdioServerTools } from './probeMcpStdioServerTools';
@@ -103,7 +103,8 @@ describe.runIf(process.platform !== 'win32')('materializeMcpServerConfigRecord p
         bindings: [{ id: 'b1', serverId: 's1', enabled: true, target: { t: 'allMachines' }, createdAt: 0, updatedAt: 0 }],
       });
 
-      const resolved = resolveEffectiveServersV1(settings, { machineId: 'm1', directory: badCwd });
+      const resolved = projectMcpServerMaterializationV1(resolveSessionCapabilitiesV1({ context: { machineId: 'm1', directory: badCwd,
+        machinePlatform: null, projectKey: null, agentId: null }, mcp: settings, skills: null, selection: {}, agentAcceptsUserMcp: true }), badCwd);
       const materialized = await materializeMcpServerConfigRecord({
         resolved,
         processEnv: { HOME: goodHome, HAPPIER_PNPM_BIN: fakePnpmPath },

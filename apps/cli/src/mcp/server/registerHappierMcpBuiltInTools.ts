@@ -1,7 +1,9 @@
 import { createHappierToolInventory, type HappierToolInventory, type BuiltInHappierToolsSurface } from '@/agent/tools/happierTools/listBuiltInHappierTools';
 import { dispatchBuiltInHappierTool } from '@/agent/tools/happierTools/dispatchBuiltInHappierTool';
 import { createPluginJsonSchemaZodObjectAdapter } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
-import { zodSchemaToJsonSchemaObject } from '@happier-dev/protocol/actions/actionInputJsonSchema';
+import { zodSchemaToJsonSchemaObject, type JsonSchemaObject } from '@happier-dev/protocol/actions/actionInputJsonSchema';
+import { projectActionOutputJsonSchema } from '@happier-dev/protocol/actions/actionCatalog';
+import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { ActionId, ActionsSettingsV1, ApprovalRequestOriginV1, BrowserScreenshotMediaReferenceV1 } from '@happier-dev/protocol';
 import { BrowserScreenshotMediaReferenceV1Schema } from '@happier-dev/protocol/browser/context/v1';
 import { SessionImageMediaReferenceV1Schema } from '@happier-dev/protocol/sessions/media/imageReferenceV1';
@@ -122,7 +124,35 @@ function toMcpToolInputSchema(params: Readonly<{
     return toMcpToolObjectSchema(contextualInputSchema, 'inputSchema');
 }
 
-function toMcpToolObjectSchema(schema: unknown, field: 'inputSchema' | 'outputSchema'): z.ZodType {
+function toMcpToolObjectSchema(schema: unknown, field: 'inputSchema'): z.ZodType;
+function toMcpToolObjectSchema(schema: unknown, field: 'outputSchema'): z.ZodType | undefined;
+function toMcpToolObjectSchema(schema: unknown, field: 'inputSchema' | 'outputSchema'): z.ZodType | undefined {
+    if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
+        throw new Error(`Plugin tool ${field} must be a JSON Schema object`);
+    }
+    if (field === 'outputSchema') {
+        const completed = schema instanceof z.ZodType
+            ? schema
+            : createPluginJsonSchemaZodObjectAdapter(schema);
+        const completedJsonSchema = projectActionOutputJsonSchema(completed, { target: 'draft-7' });
+        if (completedJsonSchema === undefined) return undefined;
+        const completedMcpJsonSchema = nestMcpOutputJsonSchema(completedJsonSchema);
+        // Approval creation is an execution outcome, not a completed Action
+        // output. Every approval-capable tool shares the protocol envelope.
+        const output = z.union([completed, ActionApprovalRequestCreatedResultSchema]);
+        const adapter = z.object({}).passthrough().superRefine((value, ctx) => {
+            if (!output.safeParse(value).success) {
+                ctx.addIssue({ code: 'custom', message: 'Value does not match the Action outputSchema' });
+            }
+        });
+        adapter._zod.processJSONSchema = (_ctx, json) => {
+            Object.assign(json, {
+                type: 'object',
+                anyOf: [completedMcpJsonSchema, zodSchemaToJsonSchemaObject(ActionApprovalRequestCreatedResultSchema, { target: 'draft-7' })],
+            });
+        };
+        return adapter;
+    }
     if (schema instanceof z.ZodType) {
         // Action schemas are executable parser contracts and can contain
         // normalization transforms that the MCP SDK cannot render. Present
@@ -131,6 +161,7 @@ function toMcpToolObjectSchema(schema: unknown, field: 'inputSchema' | 'outputSc
         // to the original schema, while dispatch retains the authoritative
         // parse/normalization rather than receiving MCP-transformed input.
         const jsonSchema = zodSchemaToJsonSchemaObject(schema, { target: 'draft-7' });
+        if (jsonSchema === undefined) return undefined;
         const adapter = z.object({}).passthrough().superRefine((value, ctx) => {
             if (!schema.safeParse(value).success) {
                 ctx.addIssue({
@@ -145,15 +176,38 @@ function toMcpToolObjectSchema(schema: unknown, field: 'inputSchema' | 'outputSc
         };
         return adapter;
     }
-    if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
-        throw new Error(`Plugin tool ${field} must be a JSON Schema object`);
-    }
-
     // External plugin declarations use the protocol-owned bounded JSON Schema
     // vocabulary. The MCP SDK accepts Zod at registration, so use the protocol
     // owner's presentation adapter; daemon action execution remains the
     // authoritative validation and dispatch owner.
     return createPluginJsonSchemaZodObjectAdapter(schema);
+}
+
+/** Document-local references still belong to the completed output after nesting it in anyOf. */
+function nestMcpOutputJsonSchema(schema: JsonSchemaObject): JsonSchemaObject {
+    const nested: Record<string, unknown> = { ...schema };
+    if (typeof schema.$ref === 'string' && schema.$ref.startsWith('#')) {
+        nested.$ref = `#/anyOf/0${schema.$ref.slice(1)}`;
+    }
+    // Visit schema positions only: const/default/enum objects may contain literal $ref data.
+    for (const key of ['properties', 'definitions', '$defs']) {
+        const entries = schema[key];
+        if (entries && typeof entries === 'object' && !Array.isArray(entries)) {
+            nested[key] = Object.fromEntries(Object.entries(entries as Readonly<Record<string, JsonSchemaObject>>).map(([name, child]) =>
+                [name, nestMcpOutputJsonSchema(child)]));
+        }
+    }
+    for (const key of ['items', 'additionalProperties', 'propertyNames', 'not']) {
+        const child = schema[key];
+        if (child && typeof child === 'object' && !Array.isArray(child)) {
+            nested[key] = nestMcpOutputJsonSchema(child as JsonSchemaObject);
+        }
+    }
+    for (const key of ['anyOf', 'oneOf', 'allOf']) {
+        const children = schema[key];
+        if (Array.isArray(children)) nested[key] = (children as readonly JsonSchemaObject[]).map(nestMcpOutputJsonSchema);
+    }
+    return nested;
 }
 
 function buildPluginToolMcpMeta(tool: HappierBuiltInToolDefinition): Record<string, unknown> | undefined {
@@ -213,12 +267,14 @@ export function prepareHappierMcpToolInventory(params: Readonly<{
     sessionMachineId?: string | null;
     pluginToolCatalog?: readonly ProjectedPluginToolCatalogEntry[];
 }>): HappierMcpToolInventory {
-    return {
-        ...params.inventory,
-        registrations: params.inventory.tools.map(tool => {
+    const registrations = params.inventory.tools.flatMap(tool => {
+        try {
             const actionId = params.inventory.actionToolNameToId.get(tool.name) ?? null;
             const pluginToolMcpMeta = buildPluginToolMcpMeta(tool);
             const annotations = resolveMcpToolAnnotations(tool);
+            const outputSchema = tool.outputSchema === undefined
+                ? undefined
+                : toMcpToolObjectSchema(tool.outputSchema, 'outputSchema');
             const meta = {
                 description: tool.description,
                 title: tool.title,
@@ -226,14 +282,35 @@ export function prepareHappierMcpToolInventory(params: Readonly<{
                     actionId, inputSchema: tool.inputSchema, sessionId: params.sessionId,
                     sessionMachineId: params.sessionMachineId, pluginToolCatalog: params.pluginToolCatalog,
                 }),
-                ...(tool.outputSchema === undefined ? {} : {
-                    outputSchema: toMcpToolObjectSchema(tool.outputSchema, 'outputSchema'),
-                }),
+                ...(outputSchema === undefined ? {} : { outputSchema }),
                 ...(annotations === undefined ? {} : { annotations }),
                 ...(pluginToolMcpMeta === undefined ? {} : { _meta: pluginToolMcpMeta }),
             };
-            return { tool, actionId, meta };
-        }),
+            return [{ tool, actionId, meta }];
+        } catch (error) {
+            // Match contribution projection policy: a malformed plugin entry
+            // is unavailable, while healthy entries retain their real schemas.
+            // Host Action/parser failures remain strict and identify their owner.
+            if (!tool.toolId) {
+                if (error instanceof Error) {
+                    error.message = `MCP tool '${tool.name}' (${tool.actionId ?? 'manual'}): ${error.message}`;
+                    throw error;
+                }
+                throw new Error(`MCP tool '${tool.name}' (${tool.actionId ?? 'manual'}) schema preparation failed`, { cause: error });
+            }
+            logger.warnLocalFile('[happierMCP] Plugin tool unavailable', {
+                code: 'action_schema_invalid', toolId: tool.toolId,
+                actionId: tool.actionId, name: tool.name,
+                reason: error instanceof Error ? error.message : 'Schema preparation failed',
+            });
+            return [];
+        }
+    });
+    return {
+        ...params.inventory,
+        tools: registrations.map(({ tool }) => tool),
+        actionToolNameToId: new Map(registrations.flatMap(({ tool, actionId }) => actionId ? [[tool.name, actionId] as const] : [])),
+        registrations,
     };
 }
 

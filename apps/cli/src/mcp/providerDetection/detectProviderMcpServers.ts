@@ -19,6 +19,7 @@ export type PluginMcpDiscoverySourceEntry = Readonly<{
    * undeclared source is reported as unresolvable instead of borrowing one.
    */
   provider: McpDetectedProviderV1;
+  loadedInHappierSessions: boolean;
   registration: Readonly<{
     id: string;
     discover(
@@ -135,6 +136,7 @@ async function acquireDiscoverySources(
           ? [Object.freeze({
               pluginId,
               provider,
+              loadedInHappierSessions: contribution.definition.loadedInHappierSessions,
               registration: Object.freeze({
                 id: contribution.definition.id,
                 discover: async () => Object.freeze({ endpoints: Object.freeze([]) }),
@@ -263,6 +265,7 @@ function assertDiscoveredMcpEndpointSafeForDetection(endpoint: PluginMcpDiscover
 
 function normalizeDiscoveredEndpoint(params: Readonly<{
   provider: McpDetectedProviderV1;
+  loadedInHappierSessions: boolean;
   registrationId: string;
   directory: string | null;
   endpoint: PluginMcpDiscoveredEndpoint;
@@ -274,6 +277,7 @@ function normalizeDiscoveredEndpoint(params: Readonly<{
 
   return {
     provider: params.provider,
+    loadedInHappierSessions: params.loadedInHappierSessions,
     name: params.endpoint.name,
     transport: params.endpoint.kind,
     remote: {
@@ -375,6 +379,7 @@ export async function detectProviderMcpServers(params: Readonly<{
           }
           servers.push(normalizeDiscoveredEndpoint({
             provider,
+            loadedInHappierSessions: entry.loadedInHappierSessions,
             registrationId: entry.registration.id,
             directory,
             endpoint,

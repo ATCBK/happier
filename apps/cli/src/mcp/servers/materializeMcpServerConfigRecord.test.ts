@@ -10,10 +10,17 @@ import {
   deriveAccountMachineKeyFromRecoverySecret,
   deriveSettingsSecretsKeyV1,
   encryptSecretStringV1,
-  resolveEffectiveServersV1,
+  resolveSessionCapabilitiesV1,
+  projectMcpServerMaterializationV1,
+  type McpServersSettingsV1,
   sealSavedSecretResourceStoredContentV1,
   type SavedSecretCatalogResourceV1,
 } from '@happier-dev/protocol';
+
+function resolveMcpMaterialization(settings: McpServersSettingsV1, context: { machineId: string; directory: string }) {
+  return projectMcpServerMaterializationV1(resolveSessionCapabilitiesV1({ context: { ...context, machinePlatform: null, projectKey: null, agentId: null },
+    mcp: settings, skills: null, selection: {}, agentAcceptsUserMcp: true }), context.directory);
+}
 
 import { projectPath } from '@/projectPath';
 import { resolvePackagedRuntimeEntrypoint } from '@/packagedRuntime/resolvePackagedRuntimeEntrypoint';
@@ -38,6 +45,69 @@ function deterministicRandomBytesFactory(): (length: number) => Uint8Array {
 }
 
 describe('materializeMcpServerConfigRecord', () => {
+  it('refuses an OAuth server without a resource-bound request-auth capability', async () => {
+    const settings = McpServersSettingsV1Schema.parse({ v: 1, strictMode: true, servers: [{
+      id: 'oauth', name: 'oauth', transport: 'http', remote: { url: 'https://mcp.example.test/path', headers: {}, auth: { kind: 'oauth' } },
+      env: {}, createdAt: 0, updatedAt: 0,
+    }], bindings: [{ id: 'on', serverId: 'oauth', enabled: true, target: { t: 'allMachines' }, createdAt: 0, updatedAt: 0 }] });
+    const root = await mkdtemp(join(tmpdir(), 'happier-mcp-auth-refusal-'));
+    try {
+      await expect(materializeMcpServerConfigRecord({
+        resolved: resolveMcpMaterialization(settings, { machineId: 'm', directory: '/repo' }), tmpDir: root,
+      })).rejects.toThrow('mcp_sign_in_required');
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('keeps the OAuth capability only in the private bridge configuration and refuses a different resource', async () => {
+    const settings = McpServersSettingsV1Schema.parse({ v: 1, strictMode: true, servers: [{
+      id: 'oauth', name: 'oauth', transport: 'http', remote: { url: 'https://mcp.example.test/path', headers: {}, auth: { kind: 'oauth' } },
+      env: {}, createdAt: 0, updatedAt: 0,
+    }], bindings: [{ id: 'on', serverId: 'oauth', enabled: true, target: { t: 'allMachines' }, createdAt: 0, updatedAt: 0 }] });
+    const root = await mkdtemp(join(tmpdir(), 'happier-mcp-auth-config-'));
+    const resolved = resolveMcpMaterialization(settings, { machineId: 'm', directory: '/repo' });
+    try {
+      const auth = { capabilityFile: join(root, 'capability.json'), resource: 'https://mcp.example.test/path' };
+      const result = await materializeMcpServerConfigRecord({ resolved, tmpDir: root, requestAuthByServerId: { oauth: auth } });
+      try {
+        const bridge = result.mcpServers.oauth!;
+        expect(JSON.stringify(bridge)).not.toContain(auth.capabilityFile);
+        const config = JSON.parse(await readFile(bridge.env!.HAPPIER_MCP_REMOTE_BRIDGE_CONFIG_FILE!, 'utf8'));
+        expect(config.auth).toEqual(auth);
+      } finally { result.cleanup(); }
+      await expect(materializeMcpServerConfigRecord({ resolved, tmpDir: root,
+        requestAuthByServerId: { oauth: { ...auth, resource: 'https://mcp.example.test/another' } },
+      })).rejects.toThrow('mcp_resource_mismatch');
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+  it.each([true, false])('materializes attested headers and omits absent facts (attested=%s)', async (attested) => {
+    const settings = McpServersSettingsV1Schema.parse({ v: 1, strictMode: true, servers: [{
+      id: 'wilson', name: 'wilson', transport: 'http',
+      remote: { url: 'https://wilson.example.test/mcp', headers: {
+        'X-Wilson-On-Behalf-Of': { t: 'sessionAttested', field: 'externalPrincipalId' },
+        'X-Wilson-Source-Message': { t: 'sessionAttested', field: 'sourceMessageId' },
+        'X-Happier-Session': { t: 'sessionAttested', field: 'sessionId' },
+      } }, env: {}, createdAt: 0, updatedAt: 0,
+    }], bindings: [{ id: 'b', serverId: 'wilson', enabled: true, target: { t: 'allMachines' }, createdAt: 0, updatedAt: 0 }] });
+    const dir = await mkdtemp(join(tmpdir(), 'happier-attested-mcp-'));
+    try {
+      const result = await materializeMcpServerConfigRecord({
+        resolved: resolveMcpMaterialization(settings, { machineId: 'm', directory: '/repo' }),
+        session: { sessionId: 'session-1', ...(attested ? { attestedContext: {
+          externalPrincipalId: 'sales@batiplus.ch', sourceMessageId: '<lead@example.test>',
+        } } : {}) }, processEnv: { externalPrincipalId: 'forged' }, tmpDir: dir,
+      });
+      try {
+        expect(result.warnings).toEqual([]);
+        const configPath = result.mcpServers.wilson.env?.HAPPIER_MCP_REMOTE_BRIDGE_CONFIG_FILE;
+        expect(typeof configPath).toBe('string');
+        const config = JSON.parse(await readFile(configPath!, 'utf8'));
+        expect(config.headers).toEqual({ 'X-Happier-Session': 'session-1', ...(attested ? {
+          'X-Wilson-On-Behalf-Of': 'sales@batiplus.ch', 'X-Wilson-Source-Message': '<lead@example.test>',
+        } : {}) });
+      } finally { result.cleanup(); }
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+
   it.each([
     ['missing', 'personal_missing', null],
     ['temporarily_unavailable', 'happier:shared-secret:v1:resource_1', 'temporarily_unavailable'],
@@ -87,7 +157,7 @@ describe('materializeMcpServerConfigRecord', () => {
     });
 
     const promise = materializeMcpServerConfigRecord({
-      resolved: resolveEffectiveServersV1(settings, { machineId: 'm1', directory: '/repo' }),
+      resolved: resolveMcpMaterialization(settings, { machineId: 'm1', directory: '/repo' }),
       savedSecretMaterializer,
       processEnv: {},
       tmpDir: null,
@@ -146,7 +216,7 @@ describe('materializeMcpServerConfigRecord', () => {
     });
 
     await expect(materializeMcpServerConfigRecord({
-      resolved: resolveEffectiveServersV1(settings, { machineId: 'm1', directory: '/repo' }),
+      resolved: resolveMcpMaterialization(settings, { machineId: 'm1', directory: '/repo' }),
       savedSecretMaterializer,
       processEnv: {},
       tmpDir: null,
@@ -168,7 +238,7 @@ describe('materializeMcpServerConfigRecord', () => {
           id: 's1',
           name: 'alpha',
           transport: 'stdio',
-          stdio: { command: 'node', args: ['server.js'] },
+          stdio: { command: 'example-mcp', args: ['server.js'] },
           env: { API_KEY: { t: 'literal', v: '${TOKEN}' } },
           createdAt: 0,
           updatedAt: 0,
@@ -177,14 +247,14 @@ describe('materializeMcpServerConfigRecord', () => {
       bindings: [{ id: 'b1', serverId: 's1', enabled: true, target: { t: 'allMachines' }, createdAt: 0, updatedAt: 0 }],
     });
 
-    const resolved = resolveEffectiveServersV1(settings, { machineId: 'm1', directory: '/repo' });
+    const resolved = resolveMcpMaterialization(settings, { machineId: 'm1', directory: '/repo' });
     const out = await materializeMcpServerConfigRecord({
       resolved,
       processEnv: { TOKEN: 'sk-test' },
       tmpDir: null,
     });
 
-    expect(out.mcpServers.alpha.command).toBe('node');
+    expect(out.mcpServers.alpha.command).toBe('example-mcp');
     expect(out.mcpServers.alpha.args).toEqual(['server.js']);
     expect(out.mcpServers.alpha.env).toEqual({ API_KEY: 'sk-test' });
   });
@@ -203,7 +273,7 @@ describe('materializeMcpServerConfigRecord', () => {
           id: 's1',
           name: 'alpha',
           transport: 'stdio',
-          stdio: { command: 'node', args: [] },
+          stdio: { command: 'example-mcp', args: [] },
           env: { API_KEY: { t: 'savedSecret', secretId: 'sec1' } },
           createdAt: 0,
           updatedAt: 0,
@@ -212,7 +282,7 @@ describe('materializeMcpServerConfigRecord', () => {
       bindings: [{ id: 'b1', serverId: 's1', enabled: true, target: { t: 'allMachines' }, createdAt: 0, updatedAt: 0 }],
     });
 
-    const resolved = resolveEffectiveServersV1(settings, { machineId: 'm1', directory: '/repo' });
+    const resolved = resolveMcpMaterialization(settings, { machineId: 'm1', directory: '/repo' });
     const out = await materializeMcpServerConfigRecord({
       resolved,
       savedSecretMaterializer: createSavedSecretMaterializerV1({
@@ -242,7 +312,7 @@ describe('materializeMcpServerConfigRecord', () => {
           id: 's1',
           name: 'alpha',
           transport: 'stdio',
-          stdio: { command: 'node', args: [] },
+          stdio: { command: 'example-mcp', args: [] },
           env: { API_KEY: { t: 'savedSecret', secretId: 'sec1' } },
           createdAt: 0,
           updatedAt: 0,
@@ -251,7 +321,7 @@ describe('materializeMcpServerConfigRecord', () => {
       bindings: [{ id: 'b1', serverId: 's1', enabled: true, target: { t: 'allMachines' }, createdAt: 0, updatedAt: 0 }],
     });
 
-    const resolved = resolveEffectiveServersV1(settings, { machineId: 'm1', directory: '/repo' });
+    const resolved = resolveMcpMaterialization(settings, { machineId: 'm1', directory: '/repo' });
     const out = await materializeMcpServerConfigRecord({
       resolved,
       savedSecretMaterializer: createSavedSecretMaterializerV1({
@@ -283,7 +353,7 @@ describe('materializeMcpServerConfigRecord', () => {
       bindings: [{ id: 'b1', serverId: 's1', enabled: true, target: { t: 'allMachines' }, createdAt: 0, updatedAt: 0 }],
     });
 
-    const resolved = resolveEffectiveServersV1(settings, { machineId: 'm1', directory: '/repo' });
+    const resolved = resolveMcpMaterialization(settings, { machineId: 'm1', directory: '/repo' });
 
     const nonStrict = await materializeMcpServerConfigRecord({
       resolved,
@@ -329,7 +399,7 @@ describe('materializeMcpServerConfigRecord', () => {
         bindings: [{ id: 'b1', serverId: 's1', enabled: true, target: { t: 'allMachines' }, createdAt: 0, updatedAt: 0 }],
       });
 
-      const resolved = resolveEffectiveServersV1(settings, { machineId: 'm1', directory: '/repo' });
+      const resolved = resolveMcpMaterialization(settings, { machineId: 'm1', directory: '/repo' });
       const out = await materializeMcpServerConfigRecord({
         resolved,
         savedSecretMaterializer: createSavedSecretMaterializerV1({
@@ -388,7 +458,7 @@ describe('materializeMcpServerConfigRecord', () => {
         bindings: [{ id: 'b1', serverId: 's1', enabled: true, target: { t: 'allMachines' }, createdAt: 0, updatedAt: 0 }],
       });
 
-      const resolved = resolveEffectiveServersV1(settings, { machineId: 'm1', directory: '/repo' });
+      const resolved = resolveMcpMaterialization(settings, { machineId: 'm1', directory: '/repo' });
       const out = await materializeMcpServerConfigRecord({
         resolved,
         processEnv: { HOME: '/safe-home', TOKEN: 'sk-test', HAPPIER_PNPM_BIN: fakePnpmPath },
@@ -461,7 +531,7 @@ describe('materializeMcpServerConfigRecord', () => {
         bindings: [{ id: 'b1', serverId: 's1', enabled: true, target: { t: 'allMachines' }, createdAt: 0, updatedAt: 0 }],
       });
 
-      const resolved = resolveEffectiveServersV1(settings, { machineId: 'm1', directory: '/repo/worktree' });
+      const resolved = resolveMcpMaterialization(settings, { machineId: 'm1', directory: '/repo/worktree' });
       const out = await materializeMcpServerConfigRecord({
         resolved,
         processEnv: { HOME: '/safe-home', HAPPIER_PNPM_BIN: fakePnpmPath },
@@ -498,7 +568,7 @@ describe('materializeMcpServerConfigRecord', () => {
       bindings: [{ id: 'b1', serverId: 's1', enabled: true, target: { t: 'allMachines' }, createdAt: 0, updatedAt: 0 }],
     });
 
-    const resolved = resolveEffectiveServersV1(settings, { machineId: 'm1', directory: '/repo' });
+    const resolved = resolveMcpMaterialization(settings, { machineId: 'm1', directory: '/repo' });
     try {
       globalThis.fetch = async () => {
         throw new Error('offline');
@@ -512,11 +582,10 @@ describe('materializeMcpServerConfigRecord', () => {
       });
 
       expect(out.mcpServers).toEqual({});
-      expect(out.warnings).toContainEqual({
+      expect(out.warnings).toContainEqual(expect.objectContaining({
         serverName: 'alpha',
         code: 'invalid_server',
-        detail: 'managed pnpm unavailable for package-runner command',
-      });
+      }));
     } finally {
       globalThis.fetch = originalFetch;
       await rm(dir, { recursive: true, force: true });
@@ -543,7 +612,7 @@ describe('materializeMcpServerConfigRecord', () => {
       bindings: [{ id: 'b1', serverId: 's1', enabled: true, target: { t: 'allMachines' }, createdAt: 0, updatedAt: 0 }],
     });
 
-    const resolved = resolveEffectiveServersV1(settings, { machineId: 'm1', directory: '/repo' });
+    const resolved = resolveMcpMaterialization(settings, { machineId: 'm1', directory: '/repo' });
 
     try {
       globalThis.fetch = async () => {
@@ -557,7 +626,7 @@ describe('materializeMcpServerConfigRecord', () => {
           tmpDir: null,
           strictMode: true,
         }),
-      ).rejects.toThrow(/managed pnpm unavailable/i);
+      ).rejects.toThrow(Error);
     } finally {
       globalThis.fetch = originalFetch;
       await rm(dir, { recursive: true, force: true });

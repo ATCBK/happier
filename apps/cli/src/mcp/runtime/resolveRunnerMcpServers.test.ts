@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
 import { Server } from 'node:http';
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { accountSettingsParse, FeaturesResponseSchema, formatSavedSecretCatalogReferenceV1,
   sealSavedSecretResourceStoredContentV1, type McpServerCatalogEntryV1 } from '@happier-dev/protocol';
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
@@ -35,20 +38,173 @@ function snapshot(servers: McpServerCatalogEntryV1[] = []): ActiveAccountSetting
       catalog: { v: 1, servers, bindings: servers.map(entry => ({ id: `binding-${entry.id}`, serverId: entry.id,
         enabled: true, target: { t: 'allMachines' }, createdAt: 1, updatedAt: 1 })) } } };
 }
-function session(): HappyMcpSessionClient {
+function session(): HappyMcpSessionClient & Required<Pick<HappyMcpSessionClient, 'enqueueSessionEventCommitted'>> {
   return { sessionId: 'session-1', getServerBinding: () => ({ serverId: 'test-home', serverUrl: 'https://test-home.example.test' }),
     rpcHandlerManager: new RpcHandlerManager({ scopePrefix: 'session-1', encryptionMode: 'plain' }),
-    updateMetadata: () => undefined };
+    updateMetadata: () => undefined,
+    enqueueSessionEventCommitted: async () => ({ persisted: true, delivered: true }) };
 }
-function resolve(input: Readonly<{ snapshot: ActiveAccountSettingsSnapshot | null; accountCredentials?: null }>) {
+function resolve(input: Readonly<{ snapshot: ActiveAccountSettingsSnapshot | null; accountCredentials?: null; includeHappierMcpServer?: boolean }>) {
   vi.stubEnv('HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT', '1');
   return resolveRunnerMcpServers({ session: session(), credentials,
     ...(input.accountCredentials === null ? { accountCredentials: null } : {}),
     accountSettings: input.snapshot?.settings ?? accountSettingsParse({}), accountSettingsSnapshot: input.snapshot,
-    machineId: 'machine-1', directory: '/tmp/repo', env: {}, tmpDir: null });
+    machineId: 'machine-1', directory: '/tmp/repo', env: {}, tmpDir: null,
+    includeHappierMcpServer: input.includeHappierMcpServer });
 }
 
 describe('resolveRunnerMcpServers catalog admission', () => {
+  it('keeps other servers available when non-strict OAuth capability admission fails', async () => {
+    const captured = snapshot([server('static'), { id: 'oauth', name: 'oauth', transport: 'http', remote: { url: 'https://mcp.example.test/path', headers: {}, auth: { kind: 'oauth' } }, env: {}, createdAt: 1, updatedAt: 1 }]);
+    const nonStrict = { ...captured, settings: accountSettingsParse({ mcpServersStrictMode: false }) };
+    const result = await resolveRunnerMcpServers({ session: { ...session(), getMcpRequestAuthPort: () => ({
+      open: async () => { throw new Error('daemon_unavailable'); }, close: async () => undefined,
+    }) }, credentials, accountSettings: nonStrict.settings, accountSettingsSnapshot: nonStrict,
+    machineId: 'machine-1', directory: '/repo', tmpDir: null, includeHappierMcpServer: false });
+    try { expect(Object.keys(result.mcpServers)).toEqual(['static']); } finally { result.happierMcpServer.stop(); }
+  });
+  it('opens a per-server OAuth capability through the admitted Session port and closes it with the MCP profile', async () => {
+    const resource = 'https://mcp.example.test/path';
+    const captured = snapshot([{ id: 'oauth', name: 'oauth', transport: 'http', remote: { url: resource, headers: {}, auth: { kind: 'oauth' } }, env: {}, createdAt: 1, updatedAt: 1 }]);
+    const root = await mkdtemp(join(tmpdir(), 'happier-mcp-runner-auth-'));
+    const opened: Array<Parameters<import('./mcpRequestAuth').McpRequestAuthPort['open']>[0]> = [];
+    const closed: string[] = [];
+    // The authenticated daemon channel is the system boundary; runner selection and materialization stay real.
+    const port: import('./mcpRequestAuth').McpRequestAuthPort = {
+      async open(input) { opened.push(input); return { capabilityFile: join(root, 'capability.json'), resource }; },
+      async close(input) { closed.push(input.materializationId); },
+    };
+    let resolved: Awaited<ReturnType<typeof resolveRunnerMcpServers>> | undefined;
+    try {
+      resolved = await resolveRunnerMcpServers({
+        session: { ...session(), getMcpRequestAuthPort: () => port }, credentials,
+        accountSettings: captured.settings, accountSettingsSnapshot: captured, machineId: 'machine-1', directory: '/repo', tmpDir: root,
+        includeHappierMcpServer: false,
+      });
+      expect(opened).toHaveLength(1);
+      expect(opened[0]).toMatchObject({ serverId: 'oauth', resource });
+      const config = JSON.parse(await readFile(resolved.mcpServers.oauth!.env!.HAPPIER_MCP_REMOTE_BRIDGE_CONFIG_FILE!, 'utf8'));
+      expect(config.auth).toEqual({ capabilityFile: join(root, 'capability.json'), resource });
+      resolved.happierMcpServer.stop();
+      expect(closed).toEqual([opened[0]!.materializationId]);
+    } finally { resolved?.happierMcpServer.stop(); await rm(root, { recursive: true, force: true }); }
+  });
+  it('materializes selected user servers without a built-in bridge for extension delivery and releases their files', async () => {
+    vi.stubEnv('HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT', '1');
+    const captured = snapshot([
+      { ...server('selected'), env: { USER_VALUE: { t: 'literal', v: 'materialized-value' } } },
+      server('excluded'),
+      { id: 'remote', name: 'remote', transport: 'http',
+        remote: { url: 'https://remote.example.test/mcp', headers: {} }, env: {}, createdAt: 1, updatedAt: 1 },
+    ]);
+    const dir = await mkdtemp(join(tmpdir(), 'happier-extension-runner-'));
+    // An OS listener spy distinguishes user-only resolution from starting a bridge.
+    const listen = vi.spyOn(Server.prototype, 'listen');
+    const resolved = await resolveRunnerMcpServers({
+      session: session(), credentials, accountSettings: captured.settings, accountSettingsSnapshot: captured,
+      machineId: 'machine-1', directory: '/repo', env: {}, tmpDir: dir,
+      sessionMetadata: { mcpSelectionV1: { v: 1, forceExcludeServerIds: ['excluded'] } },
+      includeHappierMcpServer: false,
+    });
+    const configPath = resolved.mcpServers.remote?.env?.HAPPIER_MCP_REMOTE_BRIDGE_CONFIG_FILE;
+    try {
+      expect(Object.keys(resolved.mcpServers).sort()).toEqual(['remote', 'selected']);
+      expect(resolved.mcpServers.selected?.env?.USER_VALUE).toBe('materialized-value');
+      expect(listen).not.toHaveBeenCalled();
+      expect(configPath).toBeDefined();
+      expect(JSON.parse(await readFile(configPath!, 'utf8')).url).toBe('https://remote.example.test/mcp');
+    } finally {
+      resolved.happierMcpServer.stop();
+      if (configPath) await expect(stat(configPath)).rejects.toMatchObject({ code: 'ENOENT' });
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([true, false])('publishes skipped-server notices with built-in bridge delivery %s', async (includeHappierMcpServer) => {
+    const captured = { ...snapshot([
+      { ...server('linear'), env: { LINEAR_API_KEY: { t: 'literal' as const, v: '${LINEAR_API_KEY}' } } },
+      server('docs'),
+    ]), settings: accountSettingsParse({ mcpServersStrictMode: false }) };
+    const enqueueSessionEventCommitted = vi.fn(async () => ({ persisted: true, delivered: true }));
+    vi.stubEnv('HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT', '1');
+    const resolved = await resolveRunnerMcpServers({
+      session: { ...session(), enqueueSessionEventCommitted }, credentials,
+      accountSettings: captured.settings, accountSettingsSnapshot: captured,
+      machineId: 'machine-1', directory: '/tmp/repo', env: {},
+      includeHappierMcpServer,
+    });
+    try {
+      expect(resolved.mcpServers.linear).toBeUndefined();
+      expect(resolved.mcpServers.docs).toBeDefined();
+      expect(enqueueSessionEventCommitted.mock.calls).toEqual([[expect.objectContaining({
+        type: 'message', message: expect.stringContaining('linear'),
+        capabilityNoticeV1: { v: 1, items: [{
+          kind: 'mcp_server', name: 'linear', itemId: 'linear', code: 'missing_value_ref', detail: 'env:LINEAR_API_KEY',
+        }] },
+      })]]);
+    } finally { resolved.happierMcpServer.stop(); }
+  });
+  it('does not claim a supplied runtime server was skipped because its Account config could not materialize', async () => {
+    const captured = { ...snapshot([
+      { ...server('linear'), env: { LINEAR_API_KEY: { t: 'literal' as const, v: '${LINEAR_API_KEY}' } } },
+    ]), settings: accountSettingsParse({ mcpServersStrictMode: false }) };
+    const enqueueSessionEventCommitted = vi.fn(async () => ({ persisted: true, delivered: true }));
+    vi.stubEnv('HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT', '1');
+    const supplied = { command: 'echo', args: ['supplied'] };
+    const resolved = await resolveRunnerMcpServers({
+      session: { ...session(), enqueueSessionEventCommitted }, credentials,
+      accountSettings: captured.settings, accountSettingsSnapshot: captured,
+      machineId: 'machine-1', directory: '/tmp/repo', env: {}, resolvedMcpServers: { linear: supplied },
+    });
+    try {
+      expect(resolved.mcpServers.linear).toEqual(supplied);
+      expect(enqueueSessionEventCommitted.mock.calls).toEqual([]);
+    } finally { resolved.happierMcpServer.stop(); }
+  });
+  it('refuses materialized Account config if its scope retires while publishing a notice', async () => {
+    vi.stubEnv('HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT', '1');
+    vi.spyOn(persistence, 'readStoredCredentials').mockResolvedValue(credentials);
+    const serverHttpBaseUrl = session().getServerBinding().serverUrl;
+    const captured = runWithServerHttpBaseUrl(serverHttpBaseUrl, () => ({ ...snapshot([
+      { ...server('linear'), env: { LINEAR_API_KEY: { t: 'literal' as const, v: '${LINEAR_API_KEY}' } } },
+      server('docs'),
+    ]), settings: accountSettingsParse({ mcpServersStrictMode: false }) }));
+    setActiveAccountSettingsSnapshot(captured);
+    const admittedSnapshot = getActiveAccountSettingsSnapshot();
+    if (!admittedSnapshot) throw new Error('Expected admitted Account snapshot');
+    const pending = runWithServerHttpBaseUrl(serverHttpBaseUrl, () => resolveRunnerMcpServers({
+      session: { ...session(), enqueueSessionEventCommitted: async () => {
+        clearActiveAccountSettingsSnapshot();
+        return { persisted: true, delivered: true };
+      } }, credentials, accountSettings: admittedSnapshot.settings, accountSettingsSnapshot: admittedSnapshot,
+      machineId: 'machine-1', directory: '/tmp/repo', env: {},
+    })).then(result => { result.happierMcpServer.stop(); return result; });
+    await expect(pending).rejects.toMatchObject({ code: 'mcp_catalog_unavailable', reason: 'scope-retired' });
+  });
+  it('uses the Session owner snapshot for attested headers, never launch hints or environment', async () => {
+    const captured = snapshot([{ id: 'wilson', name: 'wilson', transport: 'http',
+      remote: { url: 'https://wilson.example.test/mcp', headers: {
+        'X-Wilson-On-Behalf-Of': { t: 'sessionAttested', field: 'externalPrincipalId' },
+        'X-Wilson-Source-Message': { t: 'sessionAttested', field: 'sourceMessageId' },
+        'X-Happier-Session': { t: 'sessionAttested', field: 'sessionId' },
+      } }, env: {}, createdAt: 1, updatedAt: 1 }]);
+    const dir = await mkdtemp(join(tmpdir(), 'happier-attested-runner-'));
+    vi.stubEnv('HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT', '1');
+    const resolved = await resolveRunnerMcpServers({
+      session: { ...session(), getMetadataSnapshot: () => ({ attestedContext: {
+        externalPrincipalId: 'sales@batiplus.ch', sourceMessageId: '<lead@example.test>',
+      } }) }, credentials, accountSettings: captured.settings, accountSettingsSnapshot: captured,
+      machineId: 'machine-1', directory: '/repo', env: { externalPrincipalId: 'forged-env' }, tmpDir: dir,
+      sessionMetadata: { attestedContext: { externalPrincipalId: 'forged-hint', sourceMessageId: 'forged' } },
+    });
+    try {
+      const configPath = resolved.mcpServers.wilson.env?.HAPPIER_MCP_REMOTE_BRIDGE_CONFIG_FILE;
+      const config = JSON.parse(await readFile(configPath!, 'utf8'));
+      expect(config.headers).toEqual({ 'X-Wilson-On-Behalf-Of': 'sales@batiplus.ch',
+        'X-Wilson-Source-Message': '<lead@example.test>', 'X-Happier-Session': 'session-1' });
+    } finally { resolved.happierMcpServer.stop(); await rm(dir, { recursive: true, force: true }); }
+  });
+
   it('returns identities from the actual selected and materialized catalog entries', async () => {
     const captured = snapshot([{ ...server('docs'), updatedAt: 10 }]);
     if (captured.mcpServerCatalog?.status !== 'ready') throw new Error('Expected ready fixture');
@@ -143,9 +299,9 @@ describe('resolveRunnerMcpServers catalog admission', () => {
       mcpServerCatalog: { status: 'unavailable', reason: 'unreachable' } } })).rejects.toMatchObject({ code: 'mcp_catalog_unavailable' });
   });
 
-  it('keeps restricted Session authority independent from Account catalog availability', async () => {
-    const result = await resolve({ snapshot: { ...snapshot(), mcpServerCatalog: { status: 'unavailable', reason: 'forbidden' } }, accountCredentials: null });
-    try { expect(Object.keys(result.mcpServers)).toEqual(['happier']); }
+  it.each([true, false])('keeps restricted Session authority independent from Account catalog availability (built-in bridge: %s)', async includeHappierMcpServer => {
+    const result = await resolve({ snapshot: { ...snapshot(), mcpServerCatalog: { status: 'unavailable', reason: 'forbidden' } }, accountCredentials: null, includeHappierMcpServer });
+    try { expect(Object.keys(result.mcpServers)).toEqual(includeHappierMcpServer ? ['happier'] : []); }
     finally { result.happierMcpServer.stop(); }
   });
 

@@ -1,7 +1,11 @@
 import { Session } from 'node:inspector/promises';
 import { performance } from 'node:perf_hooks';
+import { EventEmitter } from 'node:events';
+import type { Socket } from 'socket.io-client';
+import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { getDefaultEnvironment, StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { afterEach, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { AccountSettingsSchema, type AccountSettings } from '@happier-dev/protocol';
@@ -34,9 +38,34 @@ function bootstrap(accountSettings: AccountSettings | null = null, session = cre
         accountCredentials: null,
         accountSettings,
         ...(accountSettings ? { actionsSettingsProvider: createActionSettingsProvider({ accountSettings }) } : {}),
-        machineId: 'offline-machine', directory: '/tmp/offline-child-bootstrap', env: {},
+        machineId: 'offline-machine', directory: '/tmp/offline-child-bootstrap', env: { NODE_ENV: 'test' },
     });
 }
+
+it('exposes the Session Action inventory through the actual Agent stdio bridge', async () => {
+    daemonCatalogBoundary.read.mockResolvedValue({ kind: 'available', plugins: [], tools: [] });
+    const runtime = await bootstrap();
+    const server = runtime.mcpServers.happier!;
+    const transport = new StdioClientTransport({
+        command: server.command,
+        args: server.args,
+        env: { ...getDefaultEnvironment(), ...server.env },
+        stderr: 'pipe',
+    });
+    let stderr = '';
+    transport.stderr?.on('data', chunk => { stderr += String(chunk); });
+    const client = new Client({ name: 'session-agent-bridge', version: '1.0.0' });
+    try {
+        await client.connect(transport);
+        const tools = await client.listTools();
+        expect(tools.tools.map(tool => tool.name), stderr).toEqual(expect.arrayContaining([
+            'action_execute', 'action_spec_get',
+        ]));
+    } finally {
+        await client.close();
+        runtime.happierMcpServer.stop();
+    }
+});
 
 it('reads the daemon catalog only on projection changes or a missed-signal reconnect', async () => {
     let epoch = 1;
@@ -48,7 +77,7 @@ it('reads the daemon catalog only on projection changes or a missed-signal recon
         },
     });
     const projection = { runtimeId: 'offline-daemon', contributionRegistryProjectionRevision: 1 };
-    const tool = { toolId: 'acme.example/echo', actionId: 'acme.example/echo', name: 'acme_echo',
+    const tool = { toolId: 'acme.example/echo', actionId: 'acme.example/actions/echo', name: 'acme_echo',
         title: 'Echo', description: 'Echo', inputSchema: { type: 'object', properties: {} },
         surfaces: ['mcp', 'agent'] as const, expectedContributorOccurrenceId: 'occurrence-one' };
     let tools = [tool];
@@ -134,25 +163,57 @@ it('applies catalog signals to native tools and refuses an unavailable refresh w
 }, 180_000);
 
 it('keeps per-request reads until the existing relay acknowledges the signal handler', async () => {
-    let ready = false;
+    let readReady = () => false;
+    let epoch = 1;
     const session = createMutableApiSessionClientFixture({
         sessionId: 'offline-signal-registration', metadataPermissionMode: 'default',
         overrides: {
             getServerBinding: () => ({ serverId: 'test-home', serverUrl: 'https://test-home.example.test' }),
-            isDaemonPluginCatalogSignalReady: () => ready,
+            isDaemonPluginCatalogSignalReady: () => readReady(),
+            getEphemeralStreamConnectionEpoch: () => epoch,
         },
     });
-    daemonCatalogBoundary.read.mockResolvedValue({ kind: 'available', plugins: [], tools: [],
-        projection: { runtimeId: 'offline-daemon', contributionRegistryProjectionRevision: 1 } });
+    const method = 'session.pluginCatalog.invalidate.v1';
+    readReady = () => session.rpcHandlerManager.isHandlerRegistrationAcknowledged(method);
+    // Only Socket.IO delivery is substituted at this system boundary; the
+    // registration acknowledgement, local RPC and signal owners stay real.
+    const transportEvents = new EventEmitter();
+    const socketBoundary = {
+        auth: { clientType: 'session-scoped' },
+        on: (event: string, listener: (payload: unknown) => void) => { transportEvents.on(event, listener); },
+        emit: () => {},
+    };
+    const socket = socketBoundary as unknown as Socket;
+    session.rpcHandlerManager.onSocketConnect(socket);
+    const projection = { runtimeId: 'offline-daemon', contributionRegistryProjectionRevision: 1 };
+    daemonCatalogBoundary.read.mockImplementation(async () => ({ kind: 'available', plugins: [], tools: [], projection: { ...projection } }));
     registerHappierSessionAgentToolRpc(session);
     const call = () => session.rpcHandlerManager.invokeLocal('session.agentTool.call.v1', {
         toolName: 'change_title', args: { title: 'Registration readiness' },
     });
-    await call(); await call();
-    expect(daemonCatalogBoundary.read).toHaveBeenCalledTimes(2);
-    ready = true;
-    await call(); await call();
-    expect(daemonCatalogBoundary.read).toHaveBeenCalledTimes(3);
+    try {
+        await call(); await call();
+        expect(daemonCatalogBoundary.read).toHaveBeenCalledTimes(2);
+        transportEvents.emit(SOCKET_RPC_EVENTS.REGISTERED, { method: `${session.sessionId}:${method}` });
+        await call(); await call();
+        expect(daemonCatalogBoundary.read).toHaveBeenCalledTimes(3);
+        expect(daemonCatalogBoundary.read).toHaveBeenLastCalledWith({ selection: 'tools' });
+        projection.contributionRegistryProjectionRevision += 1;
+        await session.rpcHandlerManager.invokeLocal(method, projection);
+        await call(); await call();
+        expect(daemonCatalogBoundary.read).toHaveBeenCalledTimes(4);
+        session.rpcHandlerManager.onSocketDisconnect();
+        epoch += 1;
+        await call(); await call();
+        expect(daemonCatalogBoundary.read).toHaveBeenCalledTimes(6);
+        session.rpcHandlerManager.onSocketConnect(socket);
+        transportEvents.emit(SOCKET_RPC_EVENTS.REGISTERED, { method: `${session.sessionId}:${method}` });
+        await call(); await call();
+        expect(daemonCatalogBoundary.read).toHaveBeenCalledTimes(7);
+    } finally {
+        session.rpcHandlerManager.onSocketDisconnect();
+        transportEvents.removeAllListeners();
+    }
 }, 180_000);
 
 it('keeps absent optional Action policy as cheap as explicit defaults through Session MCP bootstrap', async () => {

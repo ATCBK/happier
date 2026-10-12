@@ -4,26 +4,32 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { McpServersSettingsV1Schema } from '@happier-dev/protocol/mcp/servers/settingsV1';
+import { McpServersSettingsV1Schema, type McpServersSettingsV1 } from '@happier-dev/protocol/mcp/servers/settingsV1';
+import { projectMcpServerMaterializationV1 } from '@happier-dev/protocol/reach/resolveSessionCapabilitiesV1';
 
-import { resolveEffectiveMcpServersForDirectory } from './resolveEffectiveMcpServersForDirectory';
+import { resolveSessionCapabilitiesForDirectory } from './resolveSessionCapabilitiesForDirectory';
 
-describe('resolveEffectiveMcpServersForDirectory', () => {
+function resolveMcpMaterializationForDirectory(input: { settings: McpServersSettingsV1; machineId: string; directory: string }) {
+  return projectMcpServerMaterializationV1(resolveSessionCapabilitiesForDirectory(input), input.directory);
+}
+
+describe('resolveSessionCapabilitiesForDirectory configuration projection', () => {
   it.each([
     { workspaceRoot: 'C:\\work\\repo', directory: 'C:\\work/repo\\nested' },
     { workspaceRoot: '\\\\host\\share\\repo', directory: '\\\\host\\share/repo\\nested' },
-  ])('matches Windows workspace $workspaceRoot and retains nullable binding overrides', ({ workspaceRoot, directory }) => {
+  ])('matches Windows workspace $workspaceRoot and retains nullable configuration overrides', ({ workspaceRoot, directory }) => {
     const settings = McpServersSettingsV1Schema.parse({ v: 1, strictMode: true, servers: [{
       id: 'server', name: 'remote', transport: 'http', remote: { url: 'https://example.test/mcp',
         headers: { Authorization: { t: 'literal', v: 'remove' }, Keep: { t: 'literal', v: 'base' } } },
       env: { REMOVE: { t: 'literal', v: 'remove' } }, createdAt: 1, updatedAt: 1,
+      configOverrides: [{ target: { t: 'workspace', machineId: 'machine', workspaceRoot }, envPatch: { REMOVE: null }, remote: { headersPatch: {
+        Authorization: null, Keep: { t: 'literal', v: 'overridden' },
+      } } }],
     }], bindings: [{ id: 'workspace', serverId: 'server', enabled: true,
       target: { t: 'workspace', machineId: 'machine', workspaceRoot },
-      overrides: { envPatch: { REMOVE: null }, remote: { headersPatch: {
-        Authorization: null, Keep: { t: 'literal', v: 'overridden' },
-      } } }, createdAt: 1, updatedAt: 1,
+      createdAt: 1, updatedAt: 1,
     }] });
-    const resolved = resolveEffectiveMcpServersForDirectory({ settings, machineId: 'machine', directory });
+    const resolved = resolveMcpMaterializationForDirectory({ settings, machineId: 'machine', directory });
     expect(resolved.serversByName.remote).toMatchObject({ enabled: true, bindingId: 'workspace', config: {
       transport: 'http', env: {}, remote: { headers: { Keep: { t: 'literal', v: 'overridden' } } },
     } });
@@ -66,7 +72,7 @@ describe('resolveEffectiveMcpServersForDirectory', () => {
         ],
       });
 
-      const resolved = resolveEffectiveMcpServersForDirectory({ settings, machineId: 'm1', directory: realSub });
+      const resolved = resolveMcpMaterializationForDirectory({ settings, machineId: 'm1', directory: realSub });
       expect(resolved.serversByName.alpha.bindingId).toBe('ws');
       expect(resolved.serversByName.alpha.enabled).toBe(true);
     } finally {

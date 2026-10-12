@@ -1,8 +1,8 @@
-import { readSessionMcpSelectionV1FromMetadata } from '@happier-dev/protocol/mcp/servers/sessionSelectionV1';
+import { readSessionCapabilitySelectionFromMetadataV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
 import type { AccountSettings, McpServerCatalogEntryV1, PluginExecutionScopeV1, ResolvedMcpServerV1, SessionMcpSelectionV1 } from '@happier-dev/protocol';
 import { readMcpServersSettingsFromAccountSettings } from './readMcpServersSettingsFromAccountSettings';
 import type { ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
-import { resolveManagedSessionMcpSelectionForDirectory } from './resolveManagedSessionMcpSelectionForDirectory';
+import { resolveSessionCapabilitiesForDirectory } from './resolveSessionCapabilitiesForDirectory';
 import type {
   McpSessionResolutionInput,
   ResolvedSessionMcpScope,
@@ -16,6 +16,8 @@ export type ResolvePluginMcpServersForSessionParams = Readonly<{
   accountSettingsSnapshot?: ActiveAccountSettingsSnapshot | null;
   machineId: string;
   directory: string;
+  agentId?: string | null;
+  agentAcceptsUserMcp?: boolean;
   sessionMetadata?: unknown;
   /** Explicit Run-owned selection; avoids fabricating Session metadata for detached Runs. */
   selection?: SessionMcpSelectionV1 | null;
@@ -97,13 +99,15 @@ export function resolvePluginMcpServersForSession(
 
   const settings = readMcpServersSettingsFromAccountSettings(params.accountSettingsSnapshot ?? null);
   const selection = params.selection === undefined
-    ? readSessionMcpSelectionV1FromMetadata(params.sessionMetadata)
+    ? readSessionCapabilitySelectionFromMetadataV1(params.sessionMetadata).mcp
     : params.selection;
-  const resolvedSelection = resolveManagedSessionMcpSelectionForDirectory({
+  const resolvedSelection = resolveSessionCapabilitiesForDirectory({
     settings,
     machineId,
     directory,
-    selection,
+    selection: selection ? { mcp: selection } : {},
+    agentId: params.agentId,
+    agentAcceptsUserMcp: params.agentAcceptsUserMcp,
   });
 
   const resolved: ResolvedSessionMcpServer[] = [];
@@ -123,11 +127,13 @@ export function resolvePluginMcpServersForExecutionScope(
   if (!params.accountSettings || !directory || !machineId) return Object.freeze([]);
 
   const settings = readMcpServersSettingsFromAccountSettings(params.accountSettingsSnapshot ?? null);
-  const resolvedSelection = resolveManagedSessionMcpSelectionForDirectory({
+  const resolvedSelection = resolveSessionCapabilitiesForDirectory({
     settings,
     machineId,
     directory,
-    selection: params.selection ?? null,
+    selection: params.selection ? { mcp: params.selection } : {},
+    agentId: params.agentId,
+    agentAcceptsUserMcp: params.agentAcceptsUserMcp,
   });
   const scope = Object.freeze({ ...params.scope, directory });
   const resolved: ResolvedPluginMcpServerForExecutionScope[] = [];
