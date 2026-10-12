@@ -13,7 +13,7 @@ import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
-import { formatByteSize } from '@/utils/files/formatByteSize';
+import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
 
 import { presentAgentInstallJobFailure } from '@/agents/machineAgents/installJobs/presentAgentInstallJobFailure';
 import { resolveAgentSetupPhase, type AgentSetupPhase } from './machineAgentPresentation';
@@ -74,7 +74,7 @@ function buildJobSteps(agent: MachineAgent, testIDPrefix: string): SetupStep[] {
     return (agent.job?.steps ?? []).map((step) => {
         const state = step.state === 'running' || step.state === 'done' || step.state === 'failed' ? step.state : 'upcoming';
         const detail = step.state === 'running' && step.bytesDone !== null && step.bytesTotal
-            ? t('machineAgents.progress', { done: formatByteSize(step.bytesDone), total: formatByteSize(step.bytesTotal) })
+            ? t('machineAgents.progress', { done: formatHappierDataBytes(step.bytesDone, { kind: 'storage' }), total: formatHappierDataBytes(step.bytesTotal, { kind: 'storage' }) })
             : null;
         return {
             key: step.stepId,
@@ -113,7 +113,7 @@ function PhaseBody(props: AgentSetupFormViewProps & Readonly<{ phase: AgentSetup
             const also = missing.length > 0
                 ? ` ${t('machineAgents.installAlsoDownloads', {
                     what: missing.map((dependency) => dependency.title).join(', ')
-                        + (agent.install.sizeBytes ? ` (${formatByteSize(agent.install.sizeBytes)})` : ''),
+                        + (agent.install.sizeBytes ? ` (${formatHappierDataBytes(agent.install.sizeBytes, { kind: 'storage' })})` : ''),
                 })}`
                 : '';
             return (
@@ -327,10 +327,10 @@ function SuccessLine(props: Readonly<{ title: string; detail: string | null }>) 
 const styles = StyleSheet.create((theme) => ({
     body: {
         gap: 14,
-        paddingBottom: 16,
+        paddingBottom: theme.space.s16,
     },
     bodyCompact: {
-        gap: 12,
+        gap: theme.space.s12,
     },
     lead: {
         ...Typography.default(),
@@ -343,7 +343,7 @@ const styles = StyleSheet.create((theme) => ({
         borderWidth: 1,
         borderColor: theme.colors.border.default,
         overflow: 'hidden',
-        paddingHorizontal: 12,
+        paddingHorizontal: theme.space.s12,
     },
     log: {
         ...Typography.mono(),
@@ -354,7 +354,7 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         flexWrap: 'wrap',
-        gap: 8,
+        gap: theme.space.s8,
     },
     grow: {
         flexGrow: 1,
@@ -367,7 +367,7 @@ const styles = StyleSheet.create((theme) => ({
     success: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
     },
     successText: {
         ...Typography.default(),

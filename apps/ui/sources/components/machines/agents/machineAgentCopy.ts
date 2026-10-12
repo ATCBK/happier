@@ -1,6 +1,6 @@
 import { presentAgentInstallJobFailure } from '@/agents/machineAgents/installJobs/presentAgentInstallJobFailure';
 import { t } from '@/text';
-import { formatByteSize } from '@/utils/files/formatByteSize';
+import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
 
 import type { MachineAgentRowAction, MachineAgentStatus } from './machineAgentPresentation';
 
@@ -18,13 +18,13 @@ export function formatMachineAgentStatus(status: MachineAgentStatus): string {
         case 'notInstalled':
             if (status.manual) return t('machineAgents.installYourself');
             return status.sizeBytes
-                ? `${t('machineAgents.notInstalled')} · ${t('machineAgents.downloadSize', { size: formatByteSize(status.sizeBytes) })}`
+                ? `${t('machineAgents.notInstalled')} · ${t('machineAgents.downloadSize', { size: formatHappierDataBytes(status.sizeBytes, { kind: 'storage' }) })}`
                 : t('machineAgents.notInstalled');
         case 'unsupported': return status.reason === 'arch' ? t('machineAgents.unsupportedArch') : t('machineAgents.unsupportedOs');
         case 'installing': {
             const step = status.stepLabel ?? t('machineAgents.installing');
             if (status.bytesDone !== null && status.bytesTotal) {
-                return `${step} · ${t('machineAgents.progress', { done: formatByteSize(status.bytesDone), total: formatByteSize(status.bytesTotal) })}`;
+                return `${step} · ${t('machineAgents.progress', { done: formatHappierDataBytes(status.bytesDone, { kind: 'storage' }), total: formatHappierDataBytes(status.bytesTotal, { kind: 'storage' }) })}`;
             }
             return step;
         }
