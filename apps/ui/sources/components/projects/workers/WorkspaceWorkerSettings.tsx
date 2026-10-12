@@ -269,7 +269,7 @@ export function WorkspaceWorkerSettings(
 
   if (state.kind !== 'ready' || !value) {
     return (
-      <View testID={testID} style={styles.page}>
+      <View testID={testID}>
         {header}
         <SurfaceStateCard
           testID={`${testID}.state`}
@@ -309,7 +309,7 @@ export function WorkspaceWorkerSettings(
   ] as const;
 
   return (
-    <View testID={testID} style={styles.page}>
+    <View testID={testID}>
       {header}
       {notice ? (
         <AttentionBanner
@@ -383,6 +383,7 @@ export function WorkspaceWorkerSettings(
             }
             showChevron={false}
             accessoryLayout="adaptive"
+            fieldAccessory
             disabled={disabled}
             accessibilityExpanded={pickerOpen}
             onPress={() => setPickerOpen(true)}
@@ -397,6 +398,8 @@ export function WorkspaceWorkerSettings(
               ),
               placeholder: t('common.choose'),
               placeholderColor: theme.colors.input.placeholder,
+              // The same column the group's other selects use.
+              fieldSpan: 'column',
             })}
           />
         </View>
