@@ -1,4 +1,4 @@
-import Color from 'color';
+import { resolveThemeColor } from '@/theme/parseThemeColor';
 import * as React from 'react';
 import { Platform, Pressable, View, type LayoutChangeEvent, useWindowDimensions } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
@@ -129,7 +129,7 @@ export function SessionViewLayout(props: SessionViewLayoutProps) {
                         width: 44,
                         height: 44,
                         borderRadius: 22,
-                        backgroundColor: Color(theme.colors.chrome.header.background).alpha(0.9).rgb().string(),
+                        backgroundColor: resolveThemeColor(theme.colors.chrome.header.background).alpha(0.9).rgb().string(),
                         alignItems: 'center',
                         justifyContent: 'center',
                         ...shadowLevelStyle(theme.colors.shadowLevels[4]),
