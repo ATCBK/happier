@@ -38,6 +38,25 @@ import {
 } from './executionRunLifecycleV1.js';
 import { OperationUpdateRequiredV1Schema } from '../../compat/operationUpdateRequiredV1.js';
 import { ReviewWalkthroughObservationSchema } from '../../reviews/reviewNarration.js';
+import { ProviderAgentTargetKeySchema } from '../../providers/ids.js';
+import { ProviderBoundModelRefSchema } from '../../providers/selection/v1.js';
+
+/** A refusal offers choices, never credential material or permission to use a route. */
+export const ExecutionRunChildChoiceV1Schema = lazyZodSchema(() => z.object({
+  v: z.literal(1), agentTargetKey: ProviderAgentTargetKeySchema,
+  parentRouteCompatibility: z.enum(['incompatible', 'unverified']),
+  parentModelSelection: ProviderBoundModelRefSchema.nullable(),
+  options: z.tuple([z.literal('agentDefault'), z.literal('explicitModel')]),
+}).strict());
+export type ExecutionRunChildChoiceV1 = z.infer<typeof ExecutionRunChildChoiceV1Schema>;
+export function projectExecutionRunChildChoiceV1(input: Readonly<{
+  agentTargetKey: string; parentModelSelection?: z.infer<typeof ProviderBoundModelRefSchema> | null;
+  parentRouteCompatibility?: 'incompatible' | 'unverified';
+}>): ExecutionRunChildChoiceV1 {
+  return ExecutionRunChildChoiceV1Schema.parse({ v: 1, agentTargetKey: input.agentTargetKey,
+    parentModelSelection: input.parentModelSelection ?? null, parentRouteCompatibility: input.parentRouteCompatibility ?? 'incompatible',
+    options: ['agentDefault', 'explicitModel'] });
+}
 
 // Canonical, stable error code vocabulary for RPC `errorCode` and MCP `error.code`.
 // Keep this pinned and deterministic; clients should branch on these strings.
@@ -55,6 +74,9 @@ export const ExecutionRunTransportErrorCodeSchema = lazyZodSchema(() => z.enum([
   'execution_run_protocol_unsupported',
   'execution_run_target_not_selected',
   'execution_run_target_unavailable',
+  'execution_run_child_choice_required',
+  'execution_run_child_default_unavailable',
+  'execution_run_parent_selection_unavailable',
   'execution_run_start_ambiguous',
   'execution_run_scope_mismatch',
   'execution_run_connected_service_generation_refresh_required',
@@ -80,6 +102,7 @@ const ExecutionRunStartFailureEvidenceV1Schema = lazyZodSchema(() => z.object({
 export const ExecutionRunStartFailureDetailsV1Schema = lazyZodSchema(() => z.object({
   executionRunStart: ExecutionRunStartFailureEvidenceV1Schema,
   updateRequired: OperationUpdateRequiredV1Schema.optional(),
+  childChoice: ExecutionRunChildChoiceV1Schema.optional(),
 }).strict());
 export type ExecutionRunStartFailureDetailsV1 = z.infer<typeof ExecutionRunStartFailureDetailsV1Schema>;
 
@@ -100,9 +123,12 @@ export function withExecutionRunStartFailureDetails(
         (details as Readonly<Record<string, unknown>>).updateRequired,
       )
     : null;
+  const childChoice = ExecutionRunChildChoiceV1Schema.safeParse(details && typeof details === 'object'
+    && 'childChoice' in details ? details.childChoice : undefined);
   return {
     executionRunStart: { v: 1, runCreation },
     ...(updateRequired?.success ? { updateRequired: updateRequired.data } : {}),
+    ...(childChoice.success ? { childChoice: childChoice.data } : {}),
   };
 }
 

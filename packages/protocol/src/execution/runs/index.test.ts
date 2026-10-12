@@ -204,12 +204,12 @@ describe('executionRuns protocol', () => {
       backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
       instructions: 'Implement the change.',
       cwd: '/workspace/repo',
-      mcpSelection: {
+      capabilitySelection: { mcp: {
         v: 1,
         managedServersEnabled: false,
         forceIncludeServerIds: ['repo-tools'],
         forceExcludeServerIds: [],
-      },
+      } },
       localInputId: 'workflow-input-1',
       resultContract: { kind: 'text' },
       intentInput: {
@@ -225,7 +225,7 @@ describe('executionRuns protocol', () => {
       ioMode: 'streaming',
     })).toMatchObject({
       intent: 'agent',
-      mcpSelection: { v: 1, forceIncludeServerIds: ['repo-tools'] },
+      capabilitySelection: { mcp: { v: 1, forceIncludeServerIds: ['repo-tools'] } },
     });
 
     expect(ExecutionRunStartRequestSchema.safeParse({

@@ -17,7 +17,7 @@ import {
 import { ProviderBoundModelRefSchema } from '../../providers/selection/v1.js';
 import { ConnectedServiceBindingsV2IngressSchema } from '../../connect/connectedServiceBindings.js';
 import { AcpConfigOptionOverridesV1Schema } from '../../sessions/metadata/metadataOverridesV1.js';
-import { SessionMcpSelectionV1Schema } from '../../mcp/servers/sessionSelectionV1.js';
+import { SessionCapabilitySelectionAuthoringV1Schema } from '../../reach/sessionCapabilitySelectionV1.js';
 import { hasLegacyCustomAcpConcreteBackendId, isLegacyCustomAcpId } from '../../backends/targets/compat/customAcp.js';
 import { HappierReplayStrategySchema } from '../../sessions/continueWithReplay.js';
 import {
@@ -44,6 +44,7 @@ import { TeamCredentialProviderModelSelectionV1Schema } from '../../teams/creden
 import { SecretReferenceOverlayV1Schema } from '../../profiles/secretReferenceOverlayV1.js';
 import { HappierStructuredInputV1Schema } from '../../runtime/input/structuredInputV1.js';
 import { PluginSourceCustodyV1Schema } from '../../plugins/runtime/sourceCustody.js';
+import { AgentSessionToolPolicyShapeV1 } from '../../runtime/permissionIntentV1.js';
 
 export const ExecutionRunTeamCredentialSessionBindingConsentV1Schema = lazyZodSchema(() => z.object({
   v: z.literal(1),
@@ -386,6 +387,7 @@ export function normalizeExecutionRunStartBackendTargetInput(input: unknown): un
 }
 
 export const ExecutionRunStartRequestBaseSchema = lazyZodSchema(() => z.object({
+  ...AgentSessionToolPolicyShapeV1,
   kind: ExecutionRunKindSchema.optional(),
   roleId: z.string().trim().min(1).optional(),
   /** Launch Profile selection; profileId remains the plugin execution Profile. */
@@ -421,8 +423,8 @@ export const ExecutionRunStartRequestBaseSchema = lazyZodSchema(() => z.object({
   resultContract: ExecutionRunResultContractV1Schema.optional(),
   /** Authored execution cwd; the daemon validates and binds it before start. */
   cwd: z.string().trim().min(1).optional(),
-  /** Canonical managed MCP selection bound to this Run's working location. */
-  mcpSelection: SessionMcpSelectionV1Schema.optional(),
+  /** Canonical capability selection bound to this Run's working location. */
+  capabilitySelection: SessionCapabilitySelectionAuthoringV1Schema.optional(),
   /**
    * Optional model selection for the run backend, reusing the SAME canonical `modelId` vocabulary
    * as session spawn (`SessionSpawnNewInputSchema.modelId`). Attached omission is resolved
@@ -438,6 +440,10 @@ export const ExecutionRunStartRequestBaseSchema = lazyZodSchema(() => z.object({
    * Explicit null requests native settings; omission permits attached inheritance.
    */
   modelSelection: ProviderBoundModelRefSchema.nullable().optional(),
+  /** Explicit Account-default choice after attached inheritance requires a decision. */
+  childSelection: z.literal('agentDefault').optional(),
+  /** Account snapshots are supplied by host admission, never authored Run input. */
+  accountSettings: z.never().optional(),
   /**
    * Exact recipient-safe Team resource/model selection for this Run. This is
    * mutually exclusive with an Account-local Provider selection and is
