@@ -208,7 +208,9 @@ export const ProjectScriptRow = React.memo(function ProjectScriptRow(
         <RowSource
           badge={props.badge}
           portable={props.portable}
-          compact={props.compact}
+          // The phone row keeps the source badge only; the Run control names where it runs.
+          // The phone row keeps the source badge only; the Run control names where it runs.
+          compact={props.compact || phone}
         />
       }
       subtitle={

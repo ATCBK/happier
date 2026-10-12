@@ -25,9 +25,36 @@ vi.mock('@/modal', async () =>
   (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ spies: { show: modal.show } }).module,
 );
 
+// The device class is a platform adapter boundary; only the phone case sets it.
+const device = vi.hoisted(() => ({ current: null as 'phone' | null }));
+vi.mock('@/utils/platform/responsive', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/utils/platform/responsive')>();
+  return { ...actual, useDeviceType: () => device.current ?? actual.useDeviceType() };
+});
+
 import { ProjectScriptRow } from './ProjectScriptRow';
 
-afterEach(() => { standardCleanup(); modal.show.mockClear(); });
+afterEach(() => { standardCleanup(); modal.show.mockClear(); device.current = null; });
+
+describe('Script row title line', () => {
+  const workspace: WorkspaceAddressV1 = { serverId: 'home', machineId: 'machine', workspaceId: 'ws', rootPath: '/repo' };
+  const row = () => <ProjectScriptRow testID="script" workspace={workspace} name="test" badge="package.json" command="yarn test"
+    portable idleText="Not run" pending={false} failureCode={null} compact={false} onRun={() => {}} />;
+
+  it('names the worker pool beside a portable script on a wide page', async () => {
+    const screen = await renderScreen(row());
+    expect(screen.getTextContent()).toContain('projects.scripts.anyWorker');
+    await screen.unmount();
+  });
+
+  it('leaves the phone row to its name and source badge, so the name never wraps by letter', async () => {
+    device.current = 'phone';
+    const screen = await renderScreen(row());
+    expect(screen.getTextContent()).toContain('package.json');
+    expect(screen.getTextContent()).not.toContain('projects.scripts.anyWorker');
+    await screen.unmount();
+  });
+});
 
 describe('Script output before a terminal exists', () => {
   it('shows the observed queue/copy/setup stage and actual target instead of empty output', async () => {
