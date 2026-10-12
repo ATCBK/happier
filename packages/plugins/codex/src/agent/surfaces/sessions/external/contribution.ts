@@ -12,7 +12,7 @@ import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { discoverAgentAccountingJsonlSource } from '@happier-dev/plugin-sdk/sessions/file-stores';
 import { getAgentExternalSessionsInvocationFailure } from '@happier-dev/plugin-sdk/sessions/external';
-import { readCodexNativeAccounting } from '../../../usage/nativeAccounting.js';
+import { CODEX_NATIVE_ACCOUNTING_SOURCE, readCodexNativeAccounting } from '../../../usage/nativeAccounting.js';
 
 import {
   canonicalizeCodexHomePath,
@@ -304,6 +304,7 @@ export function createCodexExternalSessionsContribution(params: Readonly<{
           source: validation.value.publicSource,
           transcriptMediaReadRoots: mediaReadRoots.value,
           accountingSource: {
+            accountingSources: [CODEX_NATIVE_ACCOUNTING_SOURCE],
             ...(mediaReadRoots.value.length === 1 ? { rootPath: mediaReadRoots.value[0], rootField: 'homePath' } : {}),
             resourceKey: `codex:accounting:${createHash('sha256').update(JSON.stringify(roots)).digest('base64url')}`,
             changeObservation: 'watch_file_changes' as const,

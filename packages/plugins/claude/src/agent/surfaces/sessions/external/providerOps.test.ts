@@ -1147,6 +1147,38 @@ describe('Claude native External Sessions contribution', () => {
         expect(JSON.stringify(visible)).not.toContain('agent-tool');
     });
 
+    it('proves explicit terminal classification for historical and live native prompt rows', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'happier-claude-explicit-terminal-'));
+        roots.push(root);
+        const configDir = join(root, '.claude');
+        const remoteSessionId = 'explicit-terminal';
+        const source = { kind: 'claudeConfig', configDir, projectId: 'terminal-project' };
+        const transcriptPath = await createTranscript({ configDir, projectId: source.projectId, remoteSessionId, title: 'same prompt' });
+        const contribution = createClaudeExternalSessionsContribution({ env: { CLAUDE_CONFIG_DIR: configDir } });
+        const history = await contribution.pageTranscript({ ...invocation(), source, remoteSessionId,
+            direction: 'older', projection: 'terminal', maxItems: 50 });
+        if (!history.ok || !history.value.tailCursor) throw new Error('Expected ordered history');
+        expect(history.value.items.filter(item => item.raw.role === 'user')).toEqual([
+            expect.objectContaining({ userProjection: 'source_fact', localId: expect.any(String) }),
+        ]);
+        const rows = [
+            { type: 'user', uuid: 'host-echo', timestamp: '2026-06-08T00:02:00.000Z', message: { content: 'same prompt' } },
+            { type: 'user', uuid: 'terminal-input', timestamp: '2026-06-08T00:02:01.000Z', message: { content: 'same prompt' } },
+            { type: 'user', uuid: 'sidechain-input', isSidechain: true, timestamp: '2026-06-08T00:02:03.000Z', message: { content: 'child context' } },
+            { type: 'user', uuid: 'meta-input', isMeta: true, timestamp: '2026-06-08T00:02:04.000Z', message: { content: 'internal context' } },
+        ];
+        await appendFile(transcriptPath, rows.map(row => JSON.stringify(row)).join('\n') + '\n');
+        const live = await contribution.readAfterTranscript({ ...invocation(), source, remoteSessionId,
+            cursor: history.value.tailCursor, projection: 'terminal', maxItems: 50 });
+        if (!live.ok || live.value.outcome !== 'advanced') throw new Error('Expected ordered live rows');
+        // Prompt acceptance and echo matching belong to the native runtime, never text equality.
+        expect(live.value.items.filter(item => item.raw.role === 'user')).toEqual([]);
+        expect(live.value.items.filter(item => item.raw.role === 'source_observation').map(item => item.raw.content)).toEqual(rows);
+        expect(live.value.items.filter(item => item.raw.role === 'agent')).toEqual([]);
+        expect(await contribution.readAfterTranscript({ ...invocation(), source, remoteSessionId,
+            cursor: live.value.nextCursor, projection: 'terminal', maxItems: 50 })).toEqual({ ok: true, value: { outcome: 'already_current' } });
+    });
+
     it.each([false, true])('preserves ordered native observations only for terminal reads (bounded: %s)', async (bounded) => {
         const root = await mkdtemp(join(tmpdir(), 'happier-claude-terminal-observations-'));
         roots.push(root);

@@ -1,6 +1,8 @@
 import { estimateUsageModelCost } from '@happier-dev/protocol';
 import type { ClaudeUsageModelSource, ClaudeUsageObservation } from './types.js';
 
+export const CLAUDE_SDK_RESULT_USAGE_SOURCE = 'claude-sdk-result';
+
 function asFiniteNonNegativeNumber(value: unknown): number | null {
     return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
 }
@@ -119,7 +121,7 @@ export function buildClaudeSdkResultUsageObservation(params: Readonly<{
             : null;
     return {
         provider: 'claude',
-        source: 'claude-sdk-result',
+        source: CLAUDE_SDK_RESULT_USAGE_SOURCE,
         scope: 'session_final',
         key: 'claude-session',
         ...(typeof result.uuid === 'string' && result.uuid.length > 0 ? { nativeRecordId: result.uuid } : {}),

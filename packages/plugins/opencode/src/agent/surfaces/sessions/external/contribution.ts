@@ -37,7 +37,7 @@ import {
   resolveOpenCodeExternalSessionsManagedService,
 } from './managedServer.js';
 import { pageOpenCodeTranscript } from './pageTranscript.js';
-import { readOpenCodeNativeAccounting } from '../../../usage/nativeAccounting.js';
+import { OPENCODE_NATIVE_ACCOUNTING_SOURCE, readOpenCodeNativeAccounting } from '../../../usage/nativeAccounting.js';
 import { describeOpenCodeAccountingSource } from './observation.js';
 import {
   readAfterOpenCodeTranscript,
@@ -371,7 +371,8 @@ export function createOpenCodeExternalSessionsContribution(params: Readonly<{
       return bounded(
         request,
         validation.ok ? ok({ source: validation.value.agentSource,
-          accountingSource: describeOpenCodeAccountingSource(validation.value.agentSource, readEnv()) }) : validation,
+          accountingSource: { ...describeOpenCodeAccountingSource(validation.value.agentSource, readEnv()),
+            accountingSources: [OPENCODE_NATIVE_ACCOUNTING_SOURCE] } }) : validation,
         'OpenCode source result exceeds the host byte bound.',
       );
     },

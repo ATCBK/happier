@@ -5,6 +5,8 @@ import type {
     ClaudeUsageObservation,
 } from './types.js';
 
+export const CLAUDE_ASSISTANT_USAGE_SOURCE = 'claude-assistant-usage';
+
 function asFiniteNonNegativeNumber(value: unknown): number | null {
     return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
 }
@@ -49,7 +51,7 @@ export function buildClaudeAssistantUsageObservation(params: Readonly<{
 
     return {
         provider: 'claude',
-        source: 'claude-assistant-usage',
+        source: CLAUDE_ASSISTANT_USAGE_SOURCE,
         scope: 'turn_delta',
         key: 'claude-session',
         ...(params.nativeRecordId ? { nativeRecordId: params.nativeRecordId } : {}),

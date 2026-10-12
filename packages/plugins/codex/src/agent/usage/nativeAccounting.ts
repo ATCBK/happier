@@ -8,6 +8,8 @@ import type { CodexExternalSessionSource } from '../surfaces/sessions/external/m
 import { normalizeCodexTokenUsage } from './tokenCountMessage.js';
 import { estimateUsageModelCost, resolveUsageTokenCategories } from '@happier-dev/protocol';
 
+export const CODEX_NATIVE_ACCOUNTING_SOURCE = 'codex-native-accounting';
+
 export async function readCodexNativeAccounting(request: AgentExternalSessionsReadAccountingRequest, source: CodexExternalSessionSource, env: NodeJS.ProcessEnv) {
   const homes = await homeEntries({ source, env, signal: request.signal, deadlineAtMs: request.deadlineAtMs });
   const roots = homes.flatMap(({ codexHome }) => [join(codexHome, 'sessions'), join(codexHome, 'archived_sessions')]);
@@ -43,7 +45,7 @@ export async function readCodexNativeAccounting(request: AgentExternalSessionsRe
         accounting: { inputIncludesCache: true, outputIncludesReasoning: true },
         ...(inferenceId ? { inferenceId } : {}),
         ...(state.parentSessionId ? { parentNativeSessionId: state.parentSessionId } : {}),
-        observation: { provider: 'codex', source: 'codex-native-accounting', scope,
+        observation: { provider: 'codex', source: CODEX_NATIVE_ACCOUNTING_SOURCE, scope,
           key: inferenceId ?? `${createHash('sha256').update(filePath).digest('base64url')}:${recordOffsetBytes}:${createHash('sha256').update(JSON.stringify(record)).digest('base64url')}`, modelId, tokens,
           cost: estimate ? { reportedUsd: 0, estimatedUsd: estimate.estimatedUsd, currency: 'USD', billingContext: 'unknown', costSource: 'pricing_estimate',
             ...(estimate.breakdown ? { breakdown: estimate.breakdown } : {}) } : null,

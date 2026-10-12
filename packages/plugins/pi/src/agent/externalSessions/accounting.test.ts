@@ -33,6 +33,8 @@ describe('Pi source accounting through the external-session contribution', () =>
       + line(message('paid-a', null, 10)) + line(message('off-branch-paid', null, 20)) + line(message('child-new', null, 30)));
     const initial = await contribution.readAccounting?.(request);
     if (!initial?.ok || initial.value.outcome !== 'advanced') throw new Error('Accounting setup failed');
+    expect(await contribution.resolveSource?.(request)).toMatchObject({ ok: true, value: { accountingSource: { accountingSources: ['pi-native-accounting'] } } });
+    expect(initial.value.observations[0].observation.source).toBe('pi-native-accounting');
     await rm(file);
     await appendFile(child, line(message('child-after-cleanup', 'child-new', 40)));
     const appended = await contribution.readAccounting?.({ ...request, cursor: initial.value.nextCursor });

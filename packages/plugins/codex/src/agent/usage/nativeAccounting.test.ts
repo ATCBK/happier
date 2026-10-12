@@ -20,6 +20,9 @@ it('retains separate legacy records when a rewritten source reuses a native Sess
   await writeFile(file, snapshot(100, '2026-01-01T00:00:02.000Z'));
   const initial = await contribution.readAccounting?.(request);
   if (!initial?.ok || initial.value.outcome !== 'advanced') throw new Error('Initial accounting failed');
+  const metadata = await contribution.resolveSource?.(request);
+  expect(metadata).toMatchObject({ ok: true, value: { accountingSource: { accountingSources: ['codex-native-accounting'] } } });
+  expect(initial.value.observations[0].observation.source).toBe('codex-native-accounting');
   await writeFile(file, snapshot(10, '2026-01-01T00:00:03.000Z'));
   expect(await contribution.readAccounting?.({ ...request, cursor: initial.value.nextCursor }))
     .toEqual({ ok: true, value: { outcome: 'gap_or_cursor_expired' } });

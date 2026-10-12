@@ -24,6 +24,8 @@ import {
     listClaudeExternalSessionCandidates as listClaudeJsonlSessionCandidates,
 } from './candidates.js';
 import { readClaudeNativeAccounting } from '../../../usage/nativeAccounting.js';
+import { CLAUDE_ASSISTANT_USAGE_SOURCE } from '../../../usage/buildAssistantObservation.js';
+import { CLAUDE_SDK_RESULT_USAGE_SOURCE } from '../../../usage/buildSdkResultObservation.js';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { discoverAgentAccountingJsonlSource } from '@happier-dev/plugin-sdk/sessions/file-stores';
@@ -277,6 +279,7 @@ export function createClaudeExternalSessionsContribution(params: Readonly<{
             const rootPath = resolveClaudeConfigDir({ source: validation.value.legacySource, env: readEnv() });
             const inventory = await discoverAgentAccountingJsonlSource([join(rootPath, 'projects')], request.signal);
             return ok({ source: validation.value.publicSource, accountingSource: {
+                accountingSources: [CLAUDE_ASSISTANT_USAGE_SOURCE, CLAUDE_SDK_RESULT_USAGE_SOURCE],
                 rootPath, rootField: 'configDir', resourceKey: `claude:accounting:${createHash('sha256').update(rootPath).digest('base64url')}`,
                 changeObservation: 'watch_file_changes' as const,
                 watchFileChanges: { files: [...inventory.files], topologyDirectories: [...inventory.topologyDirectories] },

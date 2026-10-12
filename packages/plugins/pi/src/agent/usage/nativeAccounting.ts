@@ -4,6 +4,8 @@ import type { AgentExternalSessionsReadAccountingRequest } from '@happier-dev/pl
 import { resolvePiExternalSessionSource } from '../externalSessions/source.js';
 import { normalizePiPaidUsage } from './paidUsage.js';
 
+export const PI_NATIVE_ACCOUNTING_SOURCE = 'pi-native-accounting';
+
 export async function readPiNativeAccounting(request: AgentExternalSessionsReadAccountingRequest, env: NodeJS.ProcessEnv) {
   const source = resolvePiExternalSessionSource({ source: request.source, env });
   if (!source) return { ok: false as const, code: 'source_invalid' as const, message: 'Pi accounting source is invalid.' };
@@ -47,7 +49,7 @@ export async function readPiNativeAccounting(request: AgentExternalSessionsReadA
         ...(state[`project:${nativeSessionId}`] ? { project: { rootPath: state[`project:${nativeSessionId}`]! } } : {}),
         accounting: { inputIncludesCache: false, outputIncludesReasoning: false },
         ...(state.parentSessionId && nativeSessionId === state.sessionId ? { parentNativeSessionId: state.parentSessionId } : {}),
-        observation: { provider: 'pi', source: 'pi-native-accounting', scope: 'turn_delta', key: inferenceId, modelId,
+        observation: { provider: 'pi', source: PI_NATIVE_ACCOUNTING_SOURCE, scope: 'turn_delta', key: inferenceId, modelId,
           tokens: usage.tokens, cost: usage.cost, contextUsedTokens: null, contextWindowTokens: null } }],
         ...(modelId === null ? { incomplete: true } : {}) };
     },

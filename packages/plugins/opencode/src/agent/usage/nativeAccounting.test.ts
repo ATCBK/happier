@@ -19,9 +19,10 @@ it('uses retained assistant API accounting once, including paid compaction, with
     deadlineAtMs: Date.now() + 30_000, maxSerializedBytes: 100_000, managedEndpointRead };
   const contribution = createOpenCodeExternalSessionsContribution({ env: {} });
   const result = await contribution.readAccounting?.(request);
+  expect(await contribution.resolveSource?.(request)).toMatchObject({ ok: true, value: { accountingSource: { accountingSources: ['opencode-native-accounting'] } } });
   expect(result).toMatchObject({ ok: true, value: { outcome: 'advanced', observations: [{ nativeSessionId: 'oc-session', inferenceId: 'oc-paid',
     project: { rootPath: '/native/opencode-project' },
-    observation: { cost: { estimatedUsd: 0.25, costSource: 'pricing_estimate' }, tokens: { total: 22, input: 10, output: 5, reasoning: 2, cacheRead: 3, cacheWrite: 4 } } }] } });
+    observation: { source: 'opencode-native-accounting', cost: { estimatedUsd: 0.25, costSource: 'pricing_estimate' }, tokens: { total: 22, input: 10, output: 5, reasoning: 2, cacheRead: 3, cacheWrite: 4 } } }] } });
   if (!result?.ok || result.value.outcome !== 'advanced') return;
   expect(await contribution.readAccounting?.({ ...request, cursor: result.value.nextCursor, changedNativeSessionIds: [] })).toEqual({ ok: true, value: { outcome: 'unchanged' } });
   completed = 201;

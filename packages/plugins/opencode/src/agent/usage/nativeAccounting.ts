@@ -11,6 +11,8 @@ import type { OpenCodeServerDialect } from '../runtime/server/dialect.js';
 import { readNonBlankOpaqueIdentifier } from '../runtime/server/openCodeParsing.js';
 import { normalizeOpenCodePaidUsage } from './paidUsage.js';
 
+export const OPENCODE_NATIVE_ACCOUNTING_SOURCE = 'opencode-native-accounting';
+
 const hash = (value: string) => createHash('sha256').update(value).digest('base64url');
 const number = (value: unknown): number | null => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
 
@@ -86,7 +88,7 @@ export async function readOpenCodeNativeAccounting(request: AgentExternalSession
               ...(typeof raw.directory === 'string' && raw.directory.length > 0 ? { project: { rootPath: raw.directory } } : {}),
               accounting: { inputIncludesCache: usage.inputIncludesCache, outputIncludesReasoning: usage.outputIncludesReasoning },
               ...(typeof raw.parentID === 'string' ? { parentNativeSessionId: raw.parentID } : {}),
-              observation: { provider: 'opencode', source: 'opencode-native-accounting', scope: 'turn_delta', key: inferenceId,
+              observation: { provider: 'opencode', source: OPENCODE_NATIVE_ACCOUNTING_SOURCE, scope: 'turn_delta', key: inferenceId,
                 modelId: typeof info.modelID === 'string' ? info.modelID : null,
                 tokens: usage.tokens, cost: usage.cost, contextUsedTokens: null, contextWindowTokens: null } };
             const fingerprint = hash(JSON.stringify(observation));
