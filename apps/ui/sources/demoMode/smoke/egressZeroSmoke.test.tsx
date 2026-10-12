@@ -577,7 +577,7 @@ describe('demo mode egress-zero smoke', () => {
 
     it('mounts the machines settings surface without network egress', async () => {
         routerState.pathname = '/settings/machines';
-        const { MachinesSettingsView } = await import('@/components/settings/machines/MachinesSettingsView');
+        const { AllMachinesIndex: MachinesSettingsView } = await import('@/components/machines/index/AllMachinesIndex');
 
         // Opening the seeded machine (a navigation) is the interaction; the "+" menu opens a DOM popover.
         let machineRowTestId = '';

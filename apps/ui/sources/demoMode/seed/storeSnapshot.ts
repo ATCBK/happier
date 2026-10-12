@@ -22,6 +22,7 @@ export type DemoProfileKey = 'connectedServicesV2' | 'connectedAccountsV4' | 'co
 export type StoreSnapshot = Readonly<{
     artifacts: StorageState['artifacts'];
     artifactsLoaded: StorageState['artifactsLoaded'];
+    isSessionDraftsReady: StorageState['isSessionDraftsReady'];
     sessions: StorageState['sessions'];
     sessionListRowsByServerId: StorageState['sessionListRowsByServerId'];
     ordinarySessionListMembershipByServerId: StorageState['ordinarySessionListMembershipByServerId'];
@@ -46,6 +47,7 @@ export function takeStoreSnapshot(state: StorageState): StoreSnapshot {
     return {
         artifacts: cloneData(state.artifacts),
         artifactsLoaded: state.artifactsLoaded,
+        isSessionDraftsReady: state.isSessionDraftsReady,
         sessions: cloneData(state.sessions),
         sessionListRowsByServerId: cloneData(state.sessionListRowsByServerId),
         ordinarySessionListMembershipByServerId: cloneData(state.ordinarySessionListMembershipByServerId),
@@ -195,6 +197,7 @@ export function buildStoreStateAfterDemoRestore(params: Readonly<{
     return {
         artifacts: restoreRecordByOwnedIds(params.current.artifacts, params.snapshot.artifacts, params.artifactIds),
         artifactsLoaded: params.snapshot.artifactsLoaded,
+        isSessionDraftsReady: params.snapshot.isSessionDraftsReady,
         sessions: restoreRecordByOwnedIds(params.current.sessions, params.snapshot.sessions, params.sessionIds),
         sessionListRowsByServerId: restoreSessionListRows(
             params.current.sessionListRowsByServerId,

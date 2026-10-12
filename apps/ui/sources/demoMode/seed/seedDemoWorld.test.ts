@@ -55,6 +55,14 @@ describe('seedDemoWorld and clearDemoWorld', () => {
         vi.restoreAllMocks();
     });
 
+    it('exposes seeded demo draft surfaces without remote hydration and restores their prior readiness on exit', async () => {
+        storage.setState({ isSessionDraftsReady: false });
+        await seedDemoWorld();
+        expect(storage.getState().isSessionDraftsReady).toBe(true);
+        await clearDemoWorld();
+        expect(storage.getState().isSessionDraftsReady).toBe(false);
+    });
+
     it('seeds canonical role documents in memory and restores only demo-owned Artifacts', async () => {
         const durableRoles = structuredClone(settingsParse(loadSettings().settings).rolesV1);
         const roleArtifact = buildDemoWorld().artifacts[0];

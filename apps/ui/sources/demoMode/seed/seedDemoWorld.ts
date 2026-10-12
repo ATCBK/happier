@@ -204,6 +204,8 @@ export async function seedDemoWorld(options: SeedDemoWorldOptions = {}): Promise
             },
         }));
     }
+    // Demo content is already seeded locally; it has no remote draft collection.
+    storage.setState({ isSessionDraftsReady: true });
     state.applyReady();
 
     startDemoRuntimeResidueTracking(residueModeForPolicy(residuePolicy));
