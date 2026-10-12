@@ -7,10 +7,38 @@ import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
-import { expoExec, expoSpawn, resolveExpoBin } from './command.mjs';
+import { expoExec, expoSpawn, resolveExpoBin, hasUsableExpoWorkspaceLastGreen, ensureExpoWorkspacePrepared } from './command.mjs';
 import { withDependencyRefresh } from '../proc/dependency_refresh.mjs';
 
 const execFileAsync = promisify(execFile);
+
+test('a new Metro consumer serves the retained plugin UI inventory while preparation fails', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'hs-expo-retained-inventory-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const uiDir = join(root, 'apps/ui');
+  await mkdir(join(uiDir, 'scripts'), { recursive: true });
+  const retained = join(root, 'last-green-inventory.js');
+  await writeFile(retained, 'export const BUNDLED_PLUGIN_UI_APP_ARTIFACTS = {};');
+  await writeFile(join(uiDir, 'scripts/ensureWorkspacePackagesBuilt.mjs'), `
+    import * as generator from ${JSON.stringify(new URL('../../../../ui/scripts/generateBundledPluginUiArtifacts.mjs', import.meta.url).href)};
+    export const retainBundledPluginUiArtifactsInventory = options => generator.retainBundledPluginUiArtifactsInventory(options);
+    export function resolveUiWorkspaceStartupOutputs({env}) {
+      return [env.HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY || ${JSON.stringify(retained)}];
+    }
+    export async function ensureUiWorkspacePackagesBuilt({env}) {
+      throw new Error('Missing bundled internal workspace dependencies: @happier-dev/email-transports-protocol');
+    }
+  `);
+  const requested = join(root, 'new-consumer/inventory.js');
+  const env = { HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY: requested };
+  const admitted = await ensureExpoWorkspacePrepared({ projectDir: uiDir, env, startup: true });
+  assert.equal(admitted.lastGreen, true);
+  assert.equal(env.HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY, requested,
+    'Metro must watch its own admitted inventory so successful background preparation is consumed');
+  assert.equal(await readFile(requested, 'utf8'), await readFile(retained, 'utf8'));
+  await assert.rejects(admitted.refresh, /Missing bundled internal/);
+  assert.equal(await readFile(retained, 'utf8'), 'export const BUNDLED_PLUGIN_UI_APP_ARTIFACTS = {};');
+});
 
 async function writeJson(path, value) {
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, 'utf-8');
