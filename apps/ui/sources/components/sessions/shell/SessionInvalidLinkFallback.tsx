@@ -1,23 +1,25 @@
 import * as React from 'react';
 import { View } from 'react-native';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
-import { StyleSheet } from 'react-native-unistyles';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { Text } from '@/components/ui/text/Text';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
+import { PageHeader } from '@/components/ui/layout/PageHeader';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { SelectionList } from '@/components/ui/selectionList/SelectionList';
 import type { SelectionListStep } from '@/components/ui/selectionList/_types';
 import { useLayoutMaxWidthStyle } from '@/components/ui/layout/layout';
 import { useNavigateToSession } from '@/hooks/session/useNavigateToSession';
 import { useServerProfilesGeneration } from '@/hooks/server/useServerProfilesGeneration';
 import { getServerProfileById, listServerProfiles, resolveServerProfileScopeId } from '@/sync/domains/server/serverProfiles';
+import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
 import { t } from '@/text';
 
-const styles = StyleSheet.create((theme) => ({
-    chooser: { flex: 1, width: '100%', alignSelf: 'center', paddingHorizontal: 16 },
-    description: { color: theme.colors.text.secondary, marginVertical: 12 },
-    back: { marginVertical: 12 },
+const styles = StyleSheet.create(() => ({
+    chooser: { flex: 1, width: '100%', alignSelf: 'center' },
+    back: { marginVertical: 12, alignSelf: 'center' },
 }));
 
 function SessionHomeChooser(props: Readonly<{
@@ -30,6 +32,8 @@ function SessionHomeChooser(props: Readonly<{
     const insets = useSafeAreaInsets();
     const maxWidthStyle = useLayoutMaxWidthStyle();
     const profilesGeneration = useServerProfilesGeneration();
+    const { theme } = useUnistyles();
+    const homeMark = theme.colors.text.secondary;
     const step = React.useMemo<SelectionListStep>(() => ({
         id: 'homes',
         title: t('session.whichHomeTitle'),
@@ -38,18 +42,22 @@ function SessionHomeChooser(props: Readonly<{
             id: 'homes',
             options: props.candidateServerIds.map((serverId) => {
                 const profile = getServerProfileById(serverId);
+                const label = resolveHomeDisplayLabel(profile, serverId);
+                const address = profile?.serverUrl;
                 return {
                     id: serverId,
-                    label: profile?.name || serverId,
-                    subtitle: profile?.serverUrl || serverId,
+                    label,
+                    // Each candidate is a Home the person can open: its mark, its name, then its address.
+                    icon: () => <Icon name="house" size={ICON_SIZE.lg} color={homeMark} />,
+                    ...(address && address !== label ? { subtitle: address } : {}),
                 };
             }),
         }],
-    }), [props.candidateServerIds, profilesGeneration]);
+    }), [props.candidateServerIds, profilesGeneration, homeMark]);
     const backToSessions = React.useCallback(() => router.replace('/'), [router]);
     return (
         <View testID="session-home-chooser" style={[styles.chooser, maxWidthStyle, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
-            <Text style={styles.description}>{t(props.descriptionKey)}</Text>
+            <PageHeader title={t('session.whichHomeTitle')} description={t(props.descriptionKey)} testID="session-home-chooser.header" />
             <SelectionList
                 rootStep={step}
                 selectedOptionId={null}
@@ -77,15 +85,11 @@ function UnknownSessionHomeChooser(props: Readonly<{ sessionId: string }>) {
     return <SessionHomeChooser sessionId={props.sessionId} candidateServerIds={savedServerIds} descriptionKey="session.whichHomeUnknownDescription" />;
 }
 
+/** A link that names no Session is a page-sized error state through the one state owner. */
 function SessionInvalidLinkMessage() {
     return (
-        <View testID="session-invalid-link" style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16 }}>
-            <Text style={{ textAlign: 'center', marginBottom: 8 }}>
-                {t('session.invalidLinkTitle')}
-            </Text>
-            <Text style={{ textAlign: 'center' }}>
-                {t('session.invalidLinkDescription')}
-            </Text>
+        <View testID="session-invalid-link" style={{ flex: 1 }}>
+            <SurfaceStateCard kind="error" size="page" title={t('session.invalidLinkTitle')} reason={t('session.invalidLinkDescription')} />
         </View>
     );
 }

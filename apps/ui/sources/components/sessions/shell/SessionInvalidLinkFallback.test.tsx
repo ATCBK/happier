@@ -4,14 +4,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { installSettingsViewCommonModuleMocks } from '@/components/settings/settingsViewTestHelpers';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { InjectedAuthProvider } from '@/auth/context/AuthContext';
-import { SessionInvalidLinkFallback } from './SessionInvalidLinkFallback';
-import { primeServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 
 installSettingsViewCommonModuleMocks({ storage: 'real' });
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
+const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+const { SessionInvalidLinkFallback } = await import('./SessionInvalidLinkFallback');
+const { primeServerFeaturesSnapshot } = await import("@/sync/api/capabilities/serverFeaturesClient");
 
 beforeEach(async () => { await homes.reset(); });
 afterEach(standardCleanup);
