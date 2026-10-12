@@ -1,14 +1,14 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 
-// Device class is the platform boundary; everything beneath it stays real.
-let device: 'phone' | 'desktop' = 'phone';
-vi.mock('@/utils/platform/responsive', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/utils/platform/responsive')>()),
-  useDeviceType: () => device,
-}));
+// Browser hardware and native viewport measurements are the boundaries; classification stays real.
+const viewport = vi.hoisted(() => ({ width: 390, height: 844, scale: 1, fontScale: 1 }));
+vi.mock('react-native', async () =>
+  (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({
+    useWindowDimensions: () => viewport,
+  }));
 
 const { SelectionListFilterChip } =
   await import('@/components/ui/selectionList/SelectionListFilterChips');
@@ -17,9 +17,14 @@ const { SelectionList } =
 const { UsageFilterBar } = await import('./UsageFilterBar');
 const { USAGE_SCOPE_FILTER_ALL } = await import('./useUsageWidgetPageFilters');
 
+beforeEach(() => {
+  Object.assign(viewport, { width: 390, height: 844 });
+  vi.stubGlobal('navigator', { userAgent: 'Mozilla/5.0 (iPhone)', maxTouchPoints: 1 });
+});
+
 afterEach(() => {
   standardCleanup();
-  device = 'phone';
+  vi.unstubAllGlobals();
 });
 
 type Bar = React.ComponentProps<typeof UsageFilterBar>;
@@ -106,7 +111,8 @@ describe('UsageFilterBar', () => {
   });
 
   it("keeps one chip per scope on a wide screen, opening from the chip's leading edge", async () => {
-    device = 'desktop';
+    Object.assign(viewport, { width: 1280, height: 900 });
+    vi.stubGlobal('navigator', { userAgent: 'Mozilla/5.0 (X11; Linux x86_64)', maxTouchPoints: 0 });
     const screen = await renderBar([]);
     const chips = screen
       .findAllByType(SelectionListFilterChip)
