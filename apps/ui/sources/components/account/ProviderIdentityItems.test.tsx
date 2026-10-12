@@ -2,16 +2,11 @@ import React from 'react';
 import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen as renderTestkitScreen, standardCleanup } from '@/dev/testkit';
-import { Item } from '@/components/ui/lists/Item';
 import { profileDefaults } from '@/sync/domains/profiles/profile';
 import { installAccountCommonModuleMocks } from './accountTestHelpers';
-import { storage } from '@/sync/domains/state/storageStore';
-import { getActiveServerSnapshot, setActiveServer, upsertAndActivateServer } from '@/sync/domains/server/serverRuntime';
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
-import { resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { FeaturesResponseSchema } from '@happier-dev/protocol';
-import { TokenStorage } from '@/auth/storage/tokenStorage';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -48,9 +43,10 @@ installAccountCommonModuleMocks({
         const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
         return createModalModuleMock({ confirmResult: true }).module;
     },
-    router: () => ({
-        useRouter: () => ({ push: shared.routerPush }),
-    }),
+    router: async () => {
+        const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
+        return createExpoRouterMock({ router: { push: shared.routerPush } }).module;
+    },
     text: async () => {
         const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
         return createTextModuleMock();
@@ -69,7 +65,9 @@ async function renderScreen(...args: Parameters<typeof renderTestkitScreen>) {
 }
 
 function itemProps() {
-    return mountedScreen?.root.findAllByType(Item).map((item) => item.props) ?? [];
+    // React 19's renderer exposes a memo component's underlying function in the tree.
+    const renderedType = (Item as unknown as { type: React.ElementType }).type;
+    return mountedScreen?.root.findAllByType(renderedType).map((item) => item.props) ?? [];
 }
 
 function inlineActionProps(node: React.ReactNode) {
@@ -80,6 +78,15 @@ function inlineActionProps(node: React.ReactNode) {
     }
     return props;
 }
+
+const { Item } = await import('@/components/ui/lists/Item');
+await import('@/sync/syncEngine');
+await import('./ProviderIdentityItems');
+const { storage } = await import('@/sync/domains/state/storageStore');
+const { getActiveServerSnapshot, setActiveServer, upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
+const { resetServerFeaturesClientForTests, getServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+const { disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
 
 describe('ProviderIdentityItems', () => {
     const initialStorageState = storage.getState();
@@ -97,6 +104,8 @@ describe('ProviderIdentityItems', () => {
         shared.pendingConnectAtRequest = null;
         setRuntimeFetch(async (input, init) => {
             const path = new URL(String(input)).pathname;
+            if (path === '/health') return Response.json({ status: 'ok' });
+            if (path === '/v1/auth/ping') return Response.json({});
             if (path === '/v1/auth/entry') {
                 const result = await shared.fetchHomeAuthEntry({ signal: init?.signal });
                 return result.kind === 'ready'
@@ -122,9 +131,10 @@ describe('ProviderIdentityItems', () => {
         storage.setState({ profile: profileDefaults });
     });
 
-    afterEach(() => {
+    afterEach(async () => {
         vi.useRealTimers();
-        standardCleanup();
+        await standardCleanup();
+        await disconnectActiveServerConnection();
         resetRuntimeFetch();
         resetServerFeaturesClientForTests();
         storage.setState(initialStorageState, true);
@@ -364,7 +374,7 @@ describe('ProviderIdentityItems', () => {
         shared.authEntryResult.current = { kind: 'unsupported' };
         shared.featuresSnapshot.current = {
             status: 'ready',
-            features: {
+            features: createRootLayoutFeaturesResponse({
                 capabilities: {
                     auth: {
                         providers: {
@@ -378,9 +388,10 @@ describe('ProviderIdentityItems', () => {
                         },
                     },
                 },
-            },
-        } as any;
+            }),
+        };
 
+        await getServerFeaturesSnapshot({ force: true });
         const { ProviderIdentityItems } = await import('./ProviderIdentityItems');
         await renderScreen(
             <ProviderIdentityItems
@@ -571,12 +582,14 @@ describe('ProviderIdentityItems', () => {
         // Drive the genuine clock boundary while the real HTTP/OAuth owners
         // exhaust their existing retry policies; do not shorten those policies.
         vi.useFakeTimers();
-        const connecting = act(async () => { await connect(); });
-        await vi.runAllTimersAsync();
-        await connecting;
+        await act(async () => {
+            const connecting = connect();
+            await vi.runAllTimersAsync();
+            await connecting;
+        });
         expect(Modal.alert).toHaveBeenLastCalledWith(
             'common.error',
-            'identityAdministration.error',
+            'errors.operationFailed',
         );
         const presented = vi.mocked(Modal.alert).mock.calls.flat().join('\n');
         expect(presented).not.toContain('Internal Server Error');

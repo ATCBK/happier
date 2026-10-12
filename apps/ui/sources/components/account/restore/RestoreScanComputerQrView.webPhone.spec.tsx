@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { flushHookEffects, renderScreen } from '@/dev/testkit';
+import { findAllHostTestInstances, flushHookEffects, renderScreen } from '@/dev/testkit';
 import type { AuthQrStartResult, QRAuthKeyPair } from '@/auth/flows/qrStart';
 import type { AuthQrWaitOptions, AuthQrWaitResult } from '@/auth/flows/qrWait';
 import type {
@@ -230,7 +230,8 @@ vi.mock('@/auth/context/AuthContext', () => ({
     useAuth: () => ({ loginWithCredentials: restoreScanSuccessState.loginSpy, refreshFromActiveServer: authRefreshSpy }),
 }));
 
-vi.mock('@/sync/domains/server/serverProfiles', () => ({
+vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@/sync/domains/server/serverProfiles')>(),
     loadHomeViewState: () => null,
     getActiveServerSnapshot: () => ({
         serverId: 'profile-home-b',
@@ -285,7 +286,8 @@ vi.mock('@/sync/domains/server/serverProfiles', () => ({
     }),
 }));
 
-vi.mock('@/auth/storage/tokenStorage', () => ({
+vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@/auth/storage/tokenStorage')>(),
     subscribeHomeCredentialMutations: () => () => {},
     getHomeCredentialsUnderMutationAuthority: (
         _authority: unknown,
@@ -440,9 +442,14 @@ function createReverseInvite(pairId: string) {
     };
 }
 
+// Install the shared boundaries before loading the owner, outside behavior deadlines.
+const {
+    RestoreScanComputerQrView,
+    classifyScannedHomeEnrollmentPartialCommit,
+} = await import('./RestoreScanComputerQrView');
+
 describe('RestoreScanComputerQrView (web phone)', () => {
     beforeEach(() => {
-        vi.resetModules();
         resetRestoreScanComputerQrViewCommonModuleMockState();
         navigationState.isFocused = true;
         featureDecisionState.focusedDecision = { state: 'enabled', blockedBy: null };
@@ -498,7 +505,6 @@ describe('RestoreScanComputerQrView (web phone)', () => {
 
     it('renders the QR scanner in idle state on web', async () => {
         const onOpenPairingLinkEntry = vi.fn();
-        const { RestoreScanComputerQrView } = await import('./RestoreScanComputerQrView');
 
         const screen = await renderScreen(
             <RestoreScanComputerQrView
@@ -521,7 +527,6 @@ describe('RestoreScanComputerQrView (web phone)', () => {
     it('does not let focused Home A disable scanning a feature-enabled Home B invite', async () => {
         featureDecisionState.focusedDecision = { state: 'disabled', blockedBy: 'server' };
 
-        const { RestoreScanComputerQrView } = await import('./RestoreScanComputerQrView');
         const screen = await renderScreen(<RestoreScanComputerQrView entryIntent="add_home" />);
 
         expect(screen.findByProps({ 'data-testid': 'QrCodeScannerView' })).toBeTruthy();
@@ -531,7 +536,6 @@ describe('RestoreScanComputerQrView (web phone)', () => {
         const { buildHomeQrInviteDeepLink } = await import('@/auth/pairing/pairingUrl');
         featureDecisionState.targetEnabled = false;
 
-        const { RestoreScanComputerQrView } = await import('./RestoreScanComputerQrView');
         const screen = await renderScreen(<RestoreScanComputerQrView entryIntent="add_home" />);
         await act(async () => {
             await lastScannerProps.onScan(buildHomeQrInviteDeepLink({ invite: createHomeBInvite() }));
@@ -552,7 +556,6 @@ describe('RestoreScanComputerQrView (web phone)', () => {
         const { buildHomeQrInviteDeepLink } = await import('@/auth/pairing/pairingUrl');
         transportResolutionState.browserIroh = true;
 
-        const { RestoreScanComputerQrView } = await import('./RestoreScanComputerQrView');
         const screen = await renderScreen(<RestoreScanComputerQrView entryIntent="add_home" />);
         await act(async () => {
             await lastScannerProps.onScan(buildHomeQrInviteDeepLink({ invite: createHomeBInvite() }));
@@ -568,7 +571,6 @@ describe('RestoreScanComputerQrView (web phone)', () => {
     it('marks the QR scanner inactive when the restore route is covered by another screen', async () => {
         navigationState.isFocused = false;
 
-        const { RestoreScanComputerQrView } = await import('./RestoreScanComputerQrView');
 
         const screen = await renderScreen(<RestoreScanComputerQrView entryIntent="add_home" />);
 
@@ -587,7 +589,6 @@ describe('RestoreScanComputerQrView (web phone)', () => {
             credentials: { token: 'tok_home_b' },
             homeServerIdentityId: 'srv_home_b',
         });
-        const { RestoreScanComputerQrView } = await import('./RestoreScanComputerQrView');
 
         await renderScreen(<RestoreScanComputerQrView entryIntent="add_home" initialPairingLink={initialPairingLink} />);
         await flushHookEffects({ cycles: 4, turns: 2 });
@@ -604,7 +605,6 @@ describe('RestoreScanComputerQrView (web phone)', () => {
             buttons?.find((button: { text?: string }) => button.text === 'connect.showQrInstead')?.onPress?.();
         });
         const onShowQrInstead = vi.fn();
-        const { RestoreScanComputerQrView } = await import('./RestoreScanComputerQrView');
 
         await renderScreen(<RestoreScanComputerQrView entryIntent="add_home" embedded onShowQrInstead={onShowQrInstead} />);
         await act(async () => {
@@ -620,7 +620,6 @@ describe('RestoreScanComputerQrView (web phone)', () => {
     });
 
     it('does not offer "Show QR instead" for an account-connect QR when this surface cannot show one', async () => {
-        const { RestoreScanComputerQrView } = await import('./RestoreScanComputerQrView');
 
         await renderScreen(<RestoreScanComputerQrView entryIntent="add_home" embedded />);
         await act(async () => {
@@ -644,7 +643,6 @@ describe('RestoreScanComputerQrView (web phone)', () => {
             homeServerIdentityId: 'srv_home_b',
         });
 
-        const { RestoreScanComputerQrView } = await import('./RestoreScanComputerQrView');
 
         const screen = await renderScreen(<RestoreScanComputerQrView entryIntent="add_home" />);
         await act(async () => {
@@ -713,7 +711,6 @@ describe('RestoreScanComputerQrView (web phone)', () => {
             homeServerIdentityId: invite.home.homeServerIdentityId,
         });
 
-        const { RestoreScanComputerQrView } = await import('./RestoreScanComputerQrView');
         const screen = await renderScreen(<RestoreScanComputerQrView entryIntent="add_home" />);
         await act(async () => {
             await lastScannerProps.onScan(buildHomeQrInviteDeepLink({ invite }));
@@ -783,7 +780,6 @@ describe('RestoreScanComputerQrView (web phone)', () => {
             },
         });
         const { buildHomeQrInviteDeepLink } = await import('@/auth/pairing/pairingUrl');
-        const { RestoreScanComputerQrView } = await import('./RestoreScanComputerQrView');
         const onInviteDirectionChange = vi.fn();
         const screen = await renderScreen(
             <RestoreScanComputerQrView entryIntent="add_home" onInviteDirectionChange={onInviteDirectionChange} />,
@@ -880,7 +876,6 @@ describe('RestoreScanComputerQrView (web phone)', () => {
                     },
                 });
             const { buildHomeQrInviteDeepLink } = await import('@/auth/pairing/pairingUrl');
-            const { RestoreScanComputerQrView } = await import('./RestoreScanComputerQrView');
             const screen = await renderScreen(<RestoreScanComputerQrView entryIntent="add_home" />);
 
             await act(async () => {
@@ -953,7 +948,6 @@ describe('RestoreScanComputerQrView (web phone)', () => {
             resolveCompletion = () => resolve('completed');
         }));
         const { buildHomeQrInviteDeepLink } = await import('@/auth/pairing/pairingUrl');
-        const { RestoreScanComputerQrView } = await import('./RestoreScanComputerQrView');
         const screen = await renderScreen(<RestoreScanComputerQrView entryIntent="add_home" />);
 
         let scanPromise!: Promise<void>;
@@ -978,7 +972,6 @@ describe('RestoreScanComputerQrView (web phone)', () => {
             resolveStart = resolve;
         }));
         const { buildHomeQrInviteDeepLink } = await import('@/auth/pairing/pairingUrl');
-        const { RestoreScanComputerQrView } = await import('./RestoreScanComputerQrView');
         const screen = await renderScreen(<RestoreScanComputerQrView entryIntent="add_home" />);
 
         let scanPromise!: Promise<void>;
@@ -1033,7 +1026,6 @@ describe('RestoreScanComputerQrView (web phone)', () => {
             resolveStatus = resolve;
         }));
         const { buildHomeQrInviteDeepLink } = await import('@/auth/pairing/pairingUrl');
-        const { RestoreScanComputerQrView } = await import('./RestoreScanComputerQrView');
         const screen = await renderScreen(<RestoreScanComputerQrView entryIntent="add_home" />);
 
         let scanPromise!: Promise<void>;
@@ -1087,7 +1079,6 @@ describe('RestoreScanComputerQrView (web phone)', () => {
         });
         restoreScanSuccessState.pairingStatusSpy.mockImplementation(() => new Promise<PairingStatusResult>(() => {}));
         const { buildHomeQrInviteDeepLink } = await import('@/auth/pairing/pairingUrl');
-        const { RestoreScanComputerQrView } = await import('./RestoreScanComputerQrView');
         const screen = await renderScreen(<RestoreScanComputerQrView entryIntent="add_home" />);
 
         await act(async () => {
@@ -1117,7 +1108,6 @@ describe('RestoreScanComputerQrView (web phone)', () => {
                 .mockResolvedValueOnce({ ok: true, data: { state: 'requested' } });
             restoreScanSuccessState.authQRWaitSpy.mockResolvedValue({ ok: false, reason: 'cancelled' });
 
-            const { RestoreScanComputerQrView } = await import('./RestoreScanComputerQrView');
             const screen = await renderScreen(<RestoreScanComputerQrView entryIntent="add_home" />);
 
             let scanPromise!: Promise<void>;
@@ -1158,7 +1148,6 @@ describe('RestoreScanComputerQrView (web phone)', () => {
             });
             restoreScanSuccessState.authQRWaitSpy.mockResolvedValue({ ok: false, reason: 'cancelled' });
 
-            const { RestoreScanComputerQrView } = await import('./RestoreScanComputerQrView');
             const screen = await renderScreen(<RestoreScanComputerQrView entryIntent="add_home" />);
 
             let scanPromise!: Promise<void>;
@@ -1194,7 +1183,6 @@ describe('RestoreScanComputerQrView (web phone)', () => {
             const { buildHomeQrInviteDeepLink } = await import('@/auth/pairing/pairingUrl');
             featureDecisionState.targetProbeMode = targetProbeMode;
 
-            const { RestoreScanComputerQrView } = await import('./RestoreScanComputerQrView');
             const screen = await renderScreen(<RestoreScanComputerQrView entryIntent="add_home" />);
             await act(async () => {
                 await lastScannerProps.onScan(buildHomeQrInviteDeepLink({ invite: createHomeBInvite() }));
@@ -1215,7 +1203,6 @@ describe('RestoreScanComputerQrView (web phone)', () => {
         const { buildHomeQrInviteDeepLink } = await import('@/auth/pairing/pairingUrl');
         featureDecisionState.targetProbeMode = 'network_error';
         const { invite } = createReverseInvite('pair-reverse-probe-offline');
-        const { RestoreScanComputerQrView } = await import('./RestoreScanComputerQrView');
         const screen = await renderScreen(<RestoreScanComputerQrView entryIntent="add_home" />);
         await act(async () => {
             await lastScannerProps.onScan(buildHomeQrInviteDeepLink({ invite }));
@@ -1230,7 +1217,6 @@ describe('RestoreScanComputerQrView (web phone)', () => {
         const { buildHomeQrInviteDeepLink } = await import('@/auth/pairing/pairingUrl');
         featureDecisionState.targetProbeMode = 'invalid_payload';
         const { invite } = createReverseInvite('pair-reverse-unsupported');
-        const { RestoreScanComputerQrView } = await import('./RestoreScanComputerQrView');
         const screen = await renderScreen(<RestoreScanComputerQrView entryIntent="add_home" />);
         await act(async () => {
             await lastScannerProps.onScan(buildHomeQrInviteDeepLink({ invite }));
@@ -1244,7 +1230,6 @@ describe('RestoreScanComputerQrView (web phone)', () => {
         const { buildHomeQrInviteDeepLink } = await import('@/auth/pairing/pairingUrl');
         featureDecisionState.targetProbeMode = 'bad_request';
         const { invite } = createReverseInvite('pair-reverse-bad-request');
-        const { RestoreScanComputerQrView } = await import('./RestoreScanComputerQrView');
         const screen = await renderScreen(<RestoreScanComputerQrView entryIntent="add_home" />);
         await act(async () => {
             await lastScannerProps.onScan(buildHomeQrInviteDeepLink({ invite }));
@@ -1260,7 +1245,6 @@ describe('RestoreScanComputerQrView (web phone)', () => {
             const { buildHomeQrInviteDeepLink } = await import('@/auth/pairing/pairingUrl');
             featureDecisionState.targetProbeMode = 'bad_request';
             const invite = { ...createHomeBInvite(), expiresAtMs: Date.now() + 1_000 };
-            const { RestoreScanComputerQrView } = await import('./RestoreScanComputerQrView');
             const screen = await renderScreen(<RestoreScanComputerQrView entryIntent="add_home" />);
             let scanPromise!: Promise<void>;
             await act(async () => {
@@ -1290,7 +1274,6 @@ describe('RestoreScanComputerQrView (web phone)', () => {
             resolveWait = resolve;
         }));
 
-        const { RestoreScanComputerQrView } = await import('./RestoreScanComputerQrView');
 
         const screen = await renderScreen(<RestoreScanComputerQrView entryIntent="add_home" />);
         let scanPromise!: Promise<void>;
@@ -1324,7 +1307,6 @@ describe('RestoreScanComputerQrView (web phone)', () => {
         });
         restoreScanSuccessState.authQRWaitSpy.mockResolvedValue({ ok: false, reason: 'expired' });
 
-        const { RestoreScanComputerQrView } = await import('./RestoreScanComputerQrView');
 
         const screen = await renderScreen(<RestoreScanComputerQrView entryIntent="add_home" />);
         await act(async () => {
@@ -1356,7 +1338,6 @@ describe('RestoreScanComputerQrView (web phone)', () => {
             });
             restoreScanSuccessState.authQRWaitSpy.mockResolvedValue({ ok: false, reason });
 
-            const { RestoreScanComputerQrView } = await import('./RestoreScanComputerQrView');
             const screen = await renderScreen(<RestoreScanComputerQrView entryIntent="add_home" />);
             await act(async () => {
                 await lastScannerProps.onScan(buildHomeQrInviteDeepLink({ invite: createHomeBInvite() }));
@@ -1384,7 +1365,6 @@ describe('RestoreScanComputerQrView (web phone)', () => {
             options?.onProgress?.(3);
         }));
 
-        const { RestoreScanComputerQrView } = await import('./RestoreScanComputerQrView');
         const screen = await renderScreen(<RestoreScanComputerQrView entryIntent="add_home" />);
         let scanPromise!: Promise<void>;
         await act(async () => {
@@ -1393,7 +1373,7 @@ describe('RestoreScanComputerQrView (web phone)', () => {
         });
         await vi.waitFor(() => expect(screen.getTextContent()).toContain('connect.securingCredentials'));
         expect(screen.getTextContent()).not.toContain('connect.waitingForApproval');
-        expect(screen.findAllByProps({ accessibilityLiveRegion: 'polite' })).toHaveLength(1);
+        expect(findAllHostTestInstances(screen.root, (node) => node.props.accessibilityLiveRegion === 'polite')).toHaveLength(1);
 
         await act(async () => {
             resolveWait({ ok: false, reason: 'cancelled' });
@@ -1409,7 +1389,6 @@ describe('RestoreScanComputerQrView (web phone)', () => {
         });
         restoreScanSuccessState.authQRWaitSpy.mockResolvedValue({ ok: false, reason: 'cancelled' });
 
-        const { RestoreScanComputerQrView } = await import('./RestoreScanComputerQrView');
 
         const screen = await renderScreen(<RestoreScanComputerQrView entryIntent="add_home" />);
         await act(async () => {
@@ -1431,7 +1410,6 @@ describe('RestoreScanComputerQrView (web phone)', () => {
             resolveWait = resolve;
         }));
 
-        const { RestoreScanComputerQrView } = await import('./RestoreScanComputerQrView');
         const screen = await renderScreen(<RestoreScanComputerQrView entryIntent="add_home" />);
 
         let firstAttempt!: Promise<void>;
@@ -1484,7 +1462,6 @@ describe('RestoreScanComputerQrView (web phone)', () => {
             });
         }));
 
-        const { RestoreScanComputerQrView } = await import('./RestoreScanComputerQrView');
         const screen = await renderScreen(<RestoreScanComputerQrView entryIntent="add_home" />);
 
         let attempt!: Promise<void>;
@@ -1535,7 +1512,6 @@ describe('RestoreScanComputerQrView (web phone)', () => {
             focusMutationState.setActiveServerAndSwitchSpy.mockResolvedValue(switchResult);
             authRefreshSpy.mockClear();
 
-            const { RestoreScanComputerQrView } = await import('./RestoreScanComputerQrView');
             await renderScreen(<RestoreScanComputerQrView entryIntent="enter_home" />);
             await act(async () => {
                 await lastScannerProps.onScan(buildHomeQrInviteDeepLink({ invite: createHomeBInvite() }));
@@ -1576,7 +1552,6 @@ describe('RestoreScanComputerQrView (web phone)', () => {
             buttons?.find((button) => button.text === 'common.open')?.onPress?.();
         });
 
-        const { RestoreScanComputerQrView } = await import('./RestoreScanComputerQrView');
         await renderScreen(<RestoreScanComputerQrView entryIntent="enter_home" />);
         await act(async () => {
             await lastScannerProps.onScan(buildHomeQrInviteDeepLink({ invite: createHomeBInvite() }));
@@ -1622,7 +1597,6 @@ describe('RestoreScanComputerQrView (web phone)', () => {
         });
         focusMutationState.setActiveServerAndSwitchSpy.mockRejectedValueOnce(new Error('switch failed'));
 
-        const { RestoreScanComputerQrView } = await import('./RestoreScanComputerQrView');
         await renderScreen(<RestoreScanComputerQrView entryIntent="enter_home" />);
         await act(async () => {
             await lastScannerProps.onScan(buildHomeQrInviteDeepLink({ invite: createHomeBInvite() }));
@@ -1658,7 +1632,6 @@ describe('RestoreScanComputerQrView (web phone)', () => {
             homeServerIdentityId: 'srv_home_b',
         });
 
-        const { RestoreScanComputerQrView } = await import('./RestoreScanComputerQrView');
         const screen = await renderScreen(<RestoreScanComputerQrView entryIntent="add_home" />);
         await act(async () => {
             await lastScannerProps.onScan(buildHomeQrInviteDeepLink({ invite: createHomeBInvite() }));
@@ -1707,7 +1680,6 @@ describe('RestoreScanComputerQrView (web phone)', () => {
         };
         featureDecisionState.publishedDescriptor = movedInvite.home;
 
-        const { RestoreScanComputerQrView } = await import('./RestoreScanComputerQrView');
         const screen = await renderScreen(<RestoreScanComputerQrView entryIntent="add_home" />);
         await act(async () => {
             await lastScannerProps.onScan(buildHomeQrInviteDeepLink({ invite: movedInvite }));
@@ -1731,7 +1703,6 @@ describe('RestoreScanComputerQrView (web phone)', () => {
             resolvePairingRequest = resolve;
         }));
 
-        const { RestoreScanComputerQrView } = await import('./RestoreScanComputerQrView');
         const screen = await renderScreen(<RestoreScanComputerQrView entryIntent="add_home" />);
         let scanPromise!: Promise<void>;
         await act(async () => {
@@ -1762,7 +1733,6 @@ describe('RestoreScanComputerQrView (web phone)', () => {
         restoreScanSuccessState.adoptHomeProfileSpy.mockRejectedValueOnce(new Error('profile adoption failed'));
         restoreScanSuccessState.rollbackCredentialWriteSpy.mockResolvedValueOnce(false);
 
-        const { RestoreScanComputerQrView } = await import('./RestoreScanComputerQrView');
         const screen = await renderScreen(<RestoreScanComputerQrView entryIntent="add_home" />);
         await act(async () => {
             await lastScannerProps.onScan(buildHomeQrInviteDeepLink({ invite: createHomeBInvite() }));
@@ -1776,7 +1746,6 @@ describe('RestoreScanComputerQrView (web phone)', () => {
     });
 
     it('preserves the exact partial-commit target, original failure, and rollback outcome for its forward caller', async () => {
-        const { classifyScannedHomeEnrollmentPartialCommit } = await import('./RestoreScanComputerQrView');
         const { HomeProfileAdoptionPartialCommitError } = await import('@/sync/domains/server/adoptHomeProfile');
         const adoptionError = new Error('profile adoption failed');
         const rollbackError = new Error('credential cleanup failed');
@@ -1818,7 +1787,6 @@ describe('RestoreScanComputerQrView (web phone)', () => {
         ];
         let serializedConsoleCalls: string[] = [];
         try {
-            const { RestoreScanComputerQrView } = await import('./RestoreScanComputerQrView');
 
             await renderScreen(<RestoreScanComputerQrView entryIntent="add_home" />);
             await act(async () => {
@@ -1876,7 +1844,6 @@ describe('RestoreScanComputerQrView (web phone)', () => {
             homeServerIdentityId: null,
         });
 
-        const { RestoreScanComputerQrView } = await import('./RestoreScanComputerQrView');
         await renderScreen(<RestoreScanComputerQrView entryIntent="add_home" />);
         await act(async () => {
             await lastScannerProps.onScan('happier:///pair?v=1&pairId=p&secret=s&server=https%3A%2F%2Funbound-v1.test');
@@ -1898,7 +1865,6 @@ describe('RestoreScanComputerQrView (web phone)', () => {
             homeServerIdentityId: 'srv_malformed',
         });
 
-        const { RestoreScanComputerQrView } = await import('./RestoreScanComputerQrView');
         const screen = await renderScreen(<RestoreScanComputerQrView entryIntent="add_home" />);
         await act(async () => {
             // A /pair deep link missing its bound pairId fails closed as unknown input.
@@ -1931,7 +1897,6 @@ describe('RestoreScanComputerQrView (web phone)', () => {
             reason: 'update_required',
         });
 
-        const { RestoreScanComputerQrView } = await import('./RestoreScanComputerQrView');
 
         const screen = await renderScreen(<RestoreScanComputerQrView entryIntent="add_home" />);
         await act(async () => {

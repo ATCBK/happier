@@ -8,6 +8,9 @@ import { installLocalStorageMock, installWebLockManagerMock } from '@/auth/stora
 import { renderScreen } from '@/dev/testkit';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createDirectoryHttpFixture } from '@/sync/ops/accountDirectory/accountDirectoryTestFixtures';
+import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import {
     adoptHomeProfile,
     adoptPersonalHomeProfileAndComplete,
@@ -40,8 +43,10 @@ vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).creat
 let screen: Awaited<ReturnType<typeof renderScreen>> | undefined;
 let restoreStorage: (() => void) | undefined;
 let restoreLocks: (() => void) | undefined;
+let restoreExecutor: (() => void) | undefined;
 afterEach(async () => {
     await screen?.unmount();
+    restoreExecutor?.();
     restoreLocks?.();
     restoreStorage?.();
     vi.unstubAllGlobals();
@@ -58,6 +63,8 @@ it('Back before service authentication preserves an offered empty Personal Home 
     vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: vi.fn(), removeEventListener: vi.fn() });
     boundary.request.mockReset();
     boundary.startSystemTask.mockReset();
+    await loadSyncSingletonForTests();
+    restoreExecutor = await installRealActionExecutorModuleLoader();
 
     const fixture = createDirectoryHttpFixture();
     const personal = await adoptPersonalHomeProfileAndComplete({
@@ -80,7 +87,16 @@ it('Back before service authentication preserves an offered empty Personal Home 
         if (path === '/v1/home/emptiness/get') return json({ isEmpty: true });
         if (path === '/health') return json({ status: 'ok' });
         if (path === '/v1/auth/ping') return json({ ok: true });
-        if (path === '/v1/features') return json(createRootLayoutFeaturesResponse({ capabilities: {
+        if (path === '/v1/account/encryption') return json({ mode: 'plain', updatedAt: 1 });
+        if (path === '/v1/account/encryption/currentness') return json(createPlainAccountEncryptionCurrentnessFixture());
+        if (path === '/v2/account/settings') return json({ content: { t: 'plain', v: {} }, version: 1 });
+        if ((path === '/v1/features' || path === '/v1/features/authenticated') && (endpoint === personal.serverUrl || endpoint === other.serverUrl)) {
+            return json(createRootLayoutFeaturesResponse({ capabilities: {
+                serverIdentity: { serverIdentityId: endpoint === personal.serverUrl ? personal.serverIdentityId! : other.serverIdentityId! },
+                server: { canonicalServerUrl: endpoint },
+            } }));
+        }
+        if (path === '/v1/features' || path === '/v1/features/authenticated') return json(createRootLayoutFeaturesResponse({ capabilities: {
             auth: { keyChallenge: { v2: true }, methods: [{ id: 'key_challenge', actions: [{ id: 'login', enabled: true, mode: 'keyed' }] }] },
             accountDirectory: fixture.service.capability,
             serverIdentity: { serverIdentityId: fixture.service.serverIdentityId },

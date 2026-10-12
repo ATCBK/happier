@@ -2,7 +2,6 @@ import * as React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol';
 
-import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { initializeTerminalRouteRuntimeForTests } from '@/__tests__/routes/(app)/terminal/terminalRouteTestHelpers';
@@ -11,7 +10,6 @@ import { getActiveServerSnapshot, upsertAndActivateServer } from '@/sync/domains
 import { listServerProfiles } from '@/sync/domains/server/serverProfiles';
 import { setRuntimeFetch } from '@/utils/system/runtimeFetch';
 import { installRestoreScanComputerQrViewCommonModuleMocks } from './restoreScanComputerQrViewTestHelpers';
-import { RestoreScanComputerQrView } from './RestoreScanComputerQrView';
 
 const modalAlertAsyncSpy = vi.hoisted(() => vi.fn(async () => {}));
 installRestoreScanComputerQrViewCommonModuleMocks({
@@ -29,6 +27,9 @@ vi.mock('expo-camera', () => ({ CameraView: 'CameraView', useCameraPermissions: 
 vi.mock('expo-device', () => ({ isDevice: false }));
 vi.mock('expo-constants', () => ({ default: { deviceName: 'Test iPhone' } }));
 vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
+
+const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+const { RestoreScanComputerQrView } = await import('./RestoreScanComputerQrView');
 
 await initializeTerminalRouteRuntimeForTests();
 afterEach(async () => { await standardCleanup(); resetServerFeaturesClientForTests(); });
