@@ -50,13 +50,14 @@ function setup(decision: { kind: 'idle'; since: number } | { kind: 'busy' | 'unk
     rebuildResult?: ReturnType<typeof MachineProvisionerRebuildResultV1Schema.parse>, recoverRebuild = false,
     cleanupObservation?: { kind: 'confirmed' | 'retryable' } | { kind: 'unknown'; code?: string }) {
     const effects: string[] = [];
+    const nativeInputs: unknown[] = [];
     const native = fixture({ privateNative: true, supportedIntents: [intent], ...(recoverRebuild ? { reconciliation: true, reconciliationResource: true } : {}),
         ...(cleanupObservation ? { cleanupObservation } : {}),
         nativeRoleResults: { destroy: nativeResult, power: nativeResult,
         ...(recoverRebuild && rebuildResult ? { reconcile: rebuildResult } : {}),
         ...(intent === 'rebuild' ? { rebuild: rebuildResult ?? { kind: 'unknown', recovery: { reference: 'old-native', reason: 'native_rebuild_unknown' } } } : {}),
-        ...(inspectObservation ? { inspect: inspectObservation } : {}) }, onNativeRole: role => {
-            onNativeEffect?.(); effects.push(role);
+        ...(inspectObservation ? { inspect: inspectObservation } : {}) }, onNativeRole: (role, input) => {
+            onNativeEffect?.(); effects.push(role); nativeInputs.push(input);
         } });
     const homeId = 'srv_managed_intent';
     const controller = { machineId: 'controller', installationId: 'installation' };
@@ -141,7 +142,7 @@ function setup(decision: { kind: 'idle'; since: number } | { kind: 'busy' | 'unk
     const run = (signal?: AbortSignal) => driver.execute('machines.managed.delete', { homeId, managedId: machine.id,
         ...machine.desiredWhen === 'after-idle' ? { when: 'after-idle', intent: 'delete', afterMs: machine.desiredAfterMs } : { when: 'now', intent: 'delete', expectedRevision: machine.intentRevision },
         reviewedDependencies: true }, { ...options, ...(signal ? { signal } : {}) });
-    return { effects, reports, post, readActivity, confirmIdle, reopen, waitForChange, run, driver, options, installationKeys,
+    return { effects, nativeInputs, reports, post, readActivity, confirmIdle, reopen, waitForChange, run, driver, options, installationKeys,
         readMachine: () => machine,
         setMachine: (update: Partial<typeof machine>) => { machine = { ...machine, ...update }; },
     };
@@ -169,6 +170,21 @@ async function finScopeAuthorization(test: ReturnType<typeof setup>, isSourceCur
 }
 
 describe('managed native intent through the accepted Action', () => {
+    it('re-supplies retained native destroy custody instead of replaying resource deletion', async () => {
+        const test = setup(undefined, { kind: 'confirmed' }, 'delete', undefined, undefined, undefined, true);
+        const machine = test.readMachine();
+        test.setMachine({ nativeOperationRef: { contributionRef: machine.resource!.contributionRef,
+            schemaVersion: machine.resource!.schemaVersion, value: {} },
+            submittedNativeEffect: { intentRevision: machine.intentRevision, requestId: 'control', intent: 'delete',
+                controller: machine.controller } });
+
+        await expect(test.driver.execute('machines.managed.inspect', { homeId: machine.homeId, managedId: machine.id }, test.options))
+            .resolves.toMatchObject({ machine: { allocation: 'confirmed-absent' } });
+        expect(test.effects).toEqual(['destroy']);
+        expect(test.nativeInputs).toEqual([{ nativeOperation: {} }]);
+        expect(test.reports).toEqual([expect.objectContaining({ result: { kind: 'confirmed' },
+            observation: expect.objectContaining({ availability: 'absent' }) })]);
+    });
     it.each(['inspect', 'delete'] as const)('settles lost pending cleanup through %s without binding compute or replaying Delete', async action => {
         const test = setup(undefined, { kind: 'unknown' }, 'delete', { observedAt: 123, availability: 'absent' }, undefined,
             { kind: 'unknown', recovery: { reference: 'owned-volume', reason: 'native_cleanup_unknown' } }, true, { kind: 'confirmed' });

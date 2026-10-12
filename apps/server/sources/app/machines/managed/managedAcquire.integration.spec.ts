@@ -525,6 +525,60 @@ describe("managed acquisition durable authority", () => {
         return { homeId, account, controller, controllerKeys, manifest, declaration, input, request, launch, native };
     }
 
+    it('retains an accepted native destroy operation until the provisioner confirms deletion', async () => {
+        const { homeId, account, controller, manifest, request, launch, native } = await createManagedComputeFixture('destroy-custody',
+            { location: 'cloud', stoppedBilling: 'billed' });
+        const nativeOperation = defineProtocolObject({ operationId: defineProtocolString({ minLength: 1 }) }, { policy: 'closed' });
+        const reconciliation = defineMachineProvisionerReconciliationSchemas({ launch, resource: native, nativeOperation });
+        const declarationManifest = PluginManifestV2Schema.parse({ ...manifest, contributes: { ...manifest.contributes,
+            machineProvisioners: manifest.contributes.machineProvisioners!.map(provider => ({ ...provider,
+                reconciliation: { action: 'reconcile', nativeOperationSchema: nativeOperation.jsonSchema } })),
+            actions: [...manifest.contributes.actions!.map(action => action.id === 'acquire'
+                ? { ...action, resultSchema: reconciliation.result.jsonSchema }
+                : action.id === 'destroy'
+                    ? { ...action, inputSchema: reconciliation.destroyInput.jsonSchema, resultSchema: reconciliation.destroyResult.jsonSchema }
+                    : action),
+                { id: 'reconcile', title: 'Reconcile', inputSchema: reconciliation.input.jsonSchema,
+                    resultSchema: reconciliation.result.jsonSchema, execution: { target: 'daemon' }, surfaces: ['plugin'],
+                    scopes: ['global'], dangerLevel: 'safe' }],
+        } });
+        const declaration = createReleaseLessDeclarationV1(declarationManifest);
+        await db.accountPluginIntent.update({ where: { accountId_pluginId: { accountId: account.id, pluginId: manifest.id } },
+            data: { releaseLessDeclaration: declaration } });
+        await db.pluginMachineMaterialization.updateMany({ where: { accountId: account.id, pluginId: manifest.id },
+            data: { archiveDigestSha256: declaration.manifestDigestSha256 } });
+
+        const created = await admitManagedAcquire(request);
+        const acquireCorrelation = { homeId, managedId: created.machine.id, expectedIntentRevision: 0,
+            requestId: request.input.requestId, controller };
+        const resource = { contributionRef: request.input.input.selection.launch.provider, schemaVersion: 1,
+            value: { id: 'destroy-custody-resource' } };
+        await submitManagedAcquire(acquireCorrelation);
+        await reportManagedAcquire({ ...acquireCorrelation, result: { kind: 'bound', resource } });
+        await admitManagedControl({ actorAccountId: account.id, custodianAccountId: account.id, input: {
+            action: 'machines.managed.delete', requestId: 'destroy-custody-delete', input: { homeId,
+                managedId: created.machine.id, expectedRevision: 0, when: 'now', intent: 'delete', reviewedDependencies: true },
+        } });
+        const destroyCorrelation = { ...acquireCorrelation, expectedIntentRevision: 1, requestId: 'destroy-custody-delete' };
+        await submitManagedIntent(destroyCorrelation);
+        const nativeOperationRef = { contributionRef: resource.contributionRef, schemaVersion: 1,
+            value: { operationId: 'delete-operation-1' } };
+
+        await expect(reportManagedIntent({ ...destroyCorrelation, result: { kind: 'accepted', nativeOperationRef: {
+            ...nativeOperationRef, contributionRef: { pluginId: 'fixture.other', localId: 'compute' },
+        } } })).rejects.toMatchObject({ code: 'resource_mismatch' });
+        expect(await reportManagedIntent({ ...destroyCorrelation, result: { kind: 'accepted', nativeOperationRef } })).toMatchObject({
+            machine: { allocation: 'bound', resource, nativeOperationRef, cleanup: { disposition: 'pending' },
+                submittedNativeEffect: { intent: 'delete' } },
+        });
+        const settled = await reportManagedIntent({ ...destroyCorrelation, result: { kind: 'confirmed' }, observation: {
+            observedAt: 100, availability: 'absent',
+        } });
+        expect(settled).toMatchObject({ machine: { allocation: 'confirmed-absent' } });
+        expect(settled.machine.nativeOperationRef).toBeUndefined();
+        expect(settled.machine.submittedNativeEffect).toBeUndefined();
+    });
+
     it('admits an offline-controller Move through the destination route while preserving exact resource and pending native effect custody', async () => {
         const { homeId, account, controller, manifest, declaration, request } = await createManagedComputeFixture('offline-move',
             { location: 'cloud', stoppedBilling: 'billed' });
