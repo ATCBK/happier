@@ -20,12 +20,16 @@ export type SessionAwarenessPresentationStateV1 =
 /** One precedence for localized Session words, Work buckets and tones. No lifecycle is changed. */
 export function readSessionAwarenessPresentationV1(awareness: SessionAwarenessPresentationFactsV1): SessionAwarenessPresentationStateV1 {
   if (awareness.lifecycle === 'archived') return 'archived';
+  // List hydration has no content verdict yet, but the Home's public inactive fact is known.
+  if (awareness.encryption === 'unknown' && awareness.runtime === 'offline') return 'disconnected';
   if (awareness.encryption !== undefined && !isSessionAwarenessContentReadableV1(awareness.encryption)) return awareness.encryption;
   if (awareness.operational.reasons?.includes('runtime_unservable')) return 'recoverable_unservable';
   if (awareness.operational.reasons?.includes('resuming')) return 'resuming';
   if (awareness.runtime === 'offline') return 'disconnected';
-  if (awareness.runtime === 'unknown') return 'unknown';
   if (awareness.freshness === 'stale') return 'stale';
+  // Operational evidence and runtime reachability are orthogonal: an active turn or pending
+  // request stays meaningful without a presence channel, while no operational fact stays unknown.
+  if (awareness.runtime === 'unknown' && awareness.operational.primary === 'none') return 'unknown';
   return awareness.operational.primary === 'none'
     ? awareness.runtime === 'background_active' ? 'background_active' : 'waiting'
     : awareness.operational.primary === 'working' ? 'thinking' : awareness.operational.primary;

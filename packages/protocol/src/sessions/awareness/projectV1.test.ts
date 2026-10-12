@@ -124,6 +124,28 @@ describe('projectSessionAwarenessV1 — operational semantics', () => {
     expect(unknown.availability).toBe('partial');
   });
 
+  it('reads a durably detached runtime as offline when no device presence was observed', () => {
+    // An HTTP-hydrated row carries the presence owner's durable `active: false` but no
+    // device-observed presence. That is evidence the runtime is gone, not an unknown runtime.
+    const detached = projectSessionAwarenessV1(input({
+      runtime: {
+        presence: 'unknown',
+        active: false,
+        lastObservedAtMs: NOW - SESSION_AWARENESS_RUNTIME_STALE_SIGNAL_MS - 1_000,
+      },
+    }));
+    expect(detached.runtime).toBe('offline');
+    expect(detached.freshness).toBe('offline');
+    expect(detached.operational.reasons).toContain('runtime_offline');
+
+    // Durable `active: true` still never manufactures reachability.
+    const attachedElsewhere = projectSessionAwarenessV1(input({
+      runtime: { presence: 'unknown', active: true },
+    }));
+    expect(attachedElsewhere.runtime).toBe('unknown');
+    expect(attachedElsewhere.freshness).toBe('unknown');
+  });
+
   it('reports a runtime that claims to be online but stopped reporting as stale', () => {
     const projection = projectSessionAwarenessV1(input({
       runtime: {
@@ -221,6 +243,20 @@ describe('projectSessionAwarenessV1 — operational semantics', () => {
     expect(replaced.operational.primary).toBe('permission_required');
   });
 
+  it('keeps an unanswered permission actionable throughout its live turn', () => {
+    const facts = input({
+      lifecycle: { latestTurnStatus: 'in_progress' },
+      pending: {
+        hasPendingPermissionRequests: true,
+        pendingRequestObservedAtMs: NOW - SESSION_AWARENESS_RUNTIME_STALE_SIGNAL_MS - 1,
+      },
+    });
+    expect(projectSessionAwarenessV1(facts).operational.primary).toBe('permission_required');
+    expect(projectSessionAwarenessV1({ ...facts, pending: {
+      ...facts.pending, hasPendingPermissionRequests: false,
+    } }).operational.primary).toBe('working');
+  });
+
   it('drops permission and action evidence once the runtime is not live', () => {
     const projection = projectSessionAwarenessV1(input({
       runtime: { presence: 'offline', active: false, lastObservedAtMs: NOW - 1_000 },
@@ -316,6 +352,7 @@ describe('projectSessionAwarenessV1 — operational semantics', () => {
   it('retains concurrent operational reasons beside the single primary', () => {
     const projection = projectSessionAwarenessV1(input({
       lifecycle: { latestTurnStatus: 'failed', latestTurnStatusObservedAtMs: NOW - 1_000 },
+      runtime: { presence: 'online', active: true, activityState: 'active', activityActiveCount: 2 },
       pending: {
         hasPendingPermissionRequests: true,
         pendingRequestObservedAtMs: NOW - 1_000,
@@ -325,7 +362,7 @@ describe('projectSessionAwarenessV1 — operational semantics', () => {
 
     expect(projection.operational.primary).toBe('failed');
     expect(projection.operational.reasons).toEqual(
-      expect.arrayContaining(['failed', 'permission_required', 'pending_input']),
+      expect.arrayContaining(['failed', 'permission_required', 'pending_input', 'background_activity']),
     );
   });
 

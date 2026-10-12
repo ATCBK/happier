@@ -201,6 +201,10 @@ export function projectSessionAwarenessRuntimeV1(
   const runtime: SessionRuntimeAwarenessInputV1 = runtimeEvidenceUnavailable
     ? { presence: 'unknown' }
     : input.runtime;
+  // Presence is device-observed, so durable `active: true` never manufactures it. Durable
+  // `active: false` is different: the presence owner writes it when the runtime detaches, so a row
+  // hydrated without a device observation still knows its runtime is gone rather than unknown.
+  const presence = runtime.presence === 'unknown' && runtime.active === false ? 'offline' : runtime.presence;
 
   const archived = normalizeAwarenessTimestampV1(lifecycle.archivedAtMs) !== null;
   const hasTerminalPrimaryTurnProjection = hasTerminalPrimaryTurnStatusV1(lifecycle.latestTurnStatus);
@@ -260,7 +264,7 @@ export function projectSessionAwarenessRuntimeV1(
     && (working || hasFreshPendingRequest);
   const freshPermissionRequired = pending.hasPendingPermissionRequests === true
     && potentiallyLive
-    && hasFreshPendingRequest;
+    && (working || hasFreshPendingRequest);
 
   const runtimeObservedAtMs = normalizeAwarenessTimestampV1(runtime.lastObservedAtMs);
   const currentnessObservedAtMs = normalizeAwarenessTimestampV1(input.currentnessObservedAtMs);
@@ -280,8 +284,8 @@ export function projectSessionAwarenessRuntimeV1(
 
   const runtimeState = ((): SessionAwarenessRuntimeV1 => {
     if (unservable) return 'offline';
-    if (runtimeEvidenceUnavailable || runtime.presence === 'unknown') return 'unknown';
-    if (runtime.presence === 'offline') return 'offline';
+    if (runtimeEvidenceUnavailable || presence === 'unknown') return 'unknown';
+    if (presence === 'offline') return 'offline';
     if (working) return 'working';
     if (backgroundActive) return 'background_active';
     if (freshPermissionRequired || freshActionRequired) return 'waiting';
@@ -291,8 +295,8 @@ export function projectSessionAwarenessRuntimeV1(
   const freshness = ((): SessionAwarenessFreshnessV1 => {
     if (runtimeEvidenceUnavailable) return 'unknown';
     if (unservable) return 'offline';
-    if (runtime.presence === 'unknown') return 'unknown';
-    if (runtime.presence === 'offline' || !live) {
+    if (presence === 'unknown') return 'unknown';
+    if (presence === 'offline' || !live) {
       if (lostSinceMs !== null) return 'offline';
       return lastObservedAtMs === null ? 'unknown' : 'stale';
     }
