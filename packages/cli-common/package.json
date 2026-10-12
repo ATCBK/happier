@@ -76,6 +76,10 @@
       "import": "./workspaceBundleLock.mjs",
       "default": "./workspaceBundleLock.mjs"
     },
+    "./fileChangeObserver": {
+      "import": "./fileChangeObserver.mjs",
+      "default": "./fileChangeObserver.mjs"
+    },
     "./workspaceChildBuildEnv": {
       "types": "./workspaceChildBuildEnv.d.mts",
       "import": "./workspaceChildBuildEnv.mjs",
