@@ -51,7 +51,4 @@ export function installCardCommonModuleMocks(
         Text: ({ children, ...props }: any) => React.createElement('Text', props, children),
     }));
 
-    vi.mock('@/constants/Typography', () => ({
-        Typography: { default: () => ({}) },
-    }));
 }

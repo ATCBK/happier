@@ -19,19 +19,19 @@ function setBlurSettings(enabled: boolean, intensity: 'light' | 'regular' | 'str
 }
 
 describe('useGlassBlurSetting', () => {
-    it('resolves the intensity enum to a blur radius and passes enabled through', async () => {
+    it('uses Strong for the default floating preset regardless of the global intensity', async () => {
         const { useGlassBlurSetting } = await import('./useGlassBlurSetting');
 
         setBlurSettings(true, 'light');
         expect((await renderHook(() => useGlassBlurSetting())).getCurrent()).toEqual({
             blurEnabled: true,
-            blurIntensity: 25,
+            blurIntensity: 80,
         });
 
         setBlurSettings(true, 'regular');
         expect((await renderHook(() => useGlassBlurSetting())).getCurrent()).toEqual({
             blurEnabled: true,
-            blurIntensity: 50,
+            blurIntensity: 80,
         });
 
         setBlurSettings(true, 'strong');

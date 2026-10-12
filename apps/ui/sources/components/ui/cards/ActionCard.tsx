@@ -94,23 +94,21 @@ const stylesheet = StyleSheet.create((theme) => ({
         width: '100%',
     },
     iconRow: {
-        marginBottom: 12,
+        marginBottom: theme.space.s12,
     },
     quietIconRow: {
         alignItems: 'center',
-        marginBottom: 18,
+        marginBottom: theme.space.s16,
     },
     title: {
-        ...Typography.default('semiBold'),
-        fontSize: 16,
-        lineHeight: 22,
+
+        ...Typography.variant('heading'),
+
         color: theme.colors.text.primary,
     },
     description: {
-        ...Typography.default('regular'),
-        fontSize: 14,
-        lineHeight: 20,
-        marginTop: 4,
+        ...Typography.variant('reading'),
+        marginTop: theme.space.s4,
         color: theme.colors.text.secondary,
     },
     quietTitle: {
@@ -126,13 +124,13 @@ const stylesheet = StyleSheet.create((theme) => ({
         textAlign: 'center',
         fontSize: 15,
         lineHeight: 22,
-        marginTop: 8,
+        marginTop: theme.space.s8,
     },
     buttonRow: {
         flexDirection: 'row',
         flexWrap: 'wrap',
-        gap: 12,
-        marginTop: 16,
+        gap: theme.space.s12,
+        marginTop: theme.space.s16,
     },
     button: {
         maxWidth: '100%',
@@ -141,7 +139,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         width: '100%',
         justifyContent: 'center',
         alignItems: 'center',
-        marginTop: 24,
+        marginTop: theme.space.s24,
     },
     quietButton: {
         alignSelf: 'center',

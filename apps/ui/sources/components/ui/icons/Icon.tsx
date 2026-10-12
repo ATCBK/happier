@@ -8,6 +8,7 @@ import { HugeiconsIcon } from '@hugeicons/react-native';
 import { ICON_REGISTRY, type IconName } from './iconRegistry.generated';
 import { HUGE_ICON_REGISTRY, type HugeIconName } from './iconRegistryHuge.generated';
 import { useIconFamily, useIconStrokeWidth } from './iconFamily';
+import { useGlassBackedInk } from '@/components/ui/glass/glassBackedInk';
 import { resolveHappierIconSize } from '@happier-dev/plugin-ui/presentation';
 
 export type { IconName };
@@ -147,7 +148,8 @@ export const Icon = React.memo((props: IconProps) => {
     const { theme } = useUnistyles();
     const family = useIconFamily();
     const strokeWidth = useIconStrokeWidth();
-
+    // Faint glyphs take the containing material's stronger step on glass with a picture behind it.
+    const color = useGlassBackedInk()(props.color ?? theme.colors.text.secondary);
 
     const Glyph = ICON_REGISTRY[props.name];
     const nominal = props.size ?? DEFAULT_SIZE_PX;
@@ -178,7 +180,7 @@ export const Icon = React.memo((props: IconProps) => {
             <HugeiconsIcon
                 icon={hugeGlyph}
                 size={Math.round(nominal * scale)}
-                color={props.color ?? theme.colors.text.secondary}
+                color={color}
                 strokeWidth={hugeStrokeUnitsForSize(strokeWidth, Math.round(nominal * scale))}
                 testID={props.testID}
                 {...accessibilityProps}
@@ -203,7 +205,7 @@ export const Icon = React.memo((props: IconProps) => {
     const glyph = (
         <Glyph
             size={Math.round(nominal * scale)}
-            color={props.color ?? theme.colors.text.secondary}
+            color={color}
             weight={props.weight ?? ICON_DEFAULT_WEIGHT[props.name] ?? 'regular'}
             mirrored={props.mirrored}
             style={rotation === undefined ? props.style : { transform: [{ rotate: `${rotation}deg` }] }}

@@ -142,27 +142,27 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     column: {
         width: PATH_COLUMN_WIDTH_PX,
-        gap: 2,
-        paddingVertical: 16,
-        paddingHorizontal: 10,
+        gap: theme.space.s2,
+        paddingVertical: theme.space.s16,
+        paddingHorizontal: theme.space.s10,
         backgroundColor: theme.colors.surface.sectionTint,
         borderRightWidth: StyleSheet.hairlineWidth,
         borderRightColor: theme.colors.border.default,
     },
     columnTitle: {
-        ...Typography.default('semiBold'),
-        fontSize: 14,
-        lineHeight: 20,
+
+        ...Typography.variant('label', 'semiBold'),
+
         color: theme.colors.text.primary,
-        paddingHorizontal: 8,
-        marginBottom: 10,
+        paddingHorizontal: theme.space.s8,
+        marginBottom: theme.space.s10,
     },
     path: {
         flexDirection: 'row',
         alignItems: 'flex-start',
-        gap: 10,
-        paddingVertical: 9,
-        paddingHorizontal: 10,
+        gap: theme.space.s10,
+        paddingVertical: theme.space.s8,
+        paddingHorizontal: theme.space.s10,
         borderRadius: 10,
     },
     pathSelected: {
@@ -183,46 +183,46 @@ const stylesheet = StyleSheet.create((theme) => ({
         minWidth: 0,
     },
     pathTitle: {
-        ...Typography.default('medium'),
-        fontSize: 13,
-        lineHeight: 18,
+
+        ...Typography.variant('body', 'medium'),
+
         color: theme.colors.text.primary,
     },
     pathSubtitle: {
-        ...Typography.default(),
-        fontSize: 12,
-        lineHeight: 16,
+
+        ...Typography.variant('meta'),
+
         color: theme.colors.text.secondary,
         marginTop: 1,
     },
     foot: {
         marginTop: 'auto',
-        paddingTop: 12,
-        paddingHorizontal: 8,
+        paddingTop: theme.space.s12,
+        paddingHorizontal: theme.space.s8,
     },
     top: {
-        gap: 12,
+        gap: theme.space.s12,
         paddingTop: 18,
         paddingHorizontal: 18,
-        paddingRight: 48,
+        paddingRight: theme.space.s48,
     },
     topTitle: {
-        ...Typography.default('semiBold'),
-        fontSize: 16,
-        lineHeight: 22,
+
+        ...Typography.variant('heading'),
+
         color: theme.colors.text.primary,
     },
     chips: {
         flexDirection: 'row',
         flexWrap: 'wrap',
-        gap: 8,
+        gap: theme.space.s8,
     },
     chip: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
         minHeight: 32,
-        paddingHorizontal: 12,
+        paddingHorizontal: theme.space.s12,
         borderRadius: 999,
         borderWidth: 1,
         borderColor: theme.colors.border.default,
@@ -234,17 +234,17 @@ const stylesheet = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.surface.pressed,
     },
     chipLabel: {
-        ...Typography.default('medium'),
-        fontSize: 13,
-        lineHeight: 18,
+
+        ...Typography.variant('body', 'medium'),
+
         color: theme.colors.text.secondary,
     },
     chipLabelSelected: {
         color: theme.colors.text.primary,
     },
     pane: {
-        paddingVertical: 20,
-        paddingHorizontal: 24,
+        paddingVertical: theme.space.s20,
+        paddingHorizontal: theme.space.s24,
         minWidth: 0,
     },
     paneSide: {

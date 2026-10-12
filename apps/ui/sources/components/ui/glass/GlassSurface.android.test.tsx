@@ -78,7 +78,11 @@ describe('Android material fallback', () => {
 
     it('keeps floating glass translucent as a tint when there is no blur target', async () => {
         const { GlassSurface } = await import('./GlassSurface');
-        const screen = await renderScreen(<GlassSurface testID="android-material" solidColor="#ffffff"><></></GlassSurface>);
+        const { GlassRuntimeEnvironmentProvider } = await import('./glassRuntimeEnvironment');
+        // Native renderers intentionally retain the stored Medium coat, without web backdrop tone.
+        const screen = await renderScreen(<GlassRuntimeEnvironmentProvider value={{ nativeRenderer: true }}>
+            <GlassSurface testID="android-material" solidColor="#ffffff"><></></GlassSurface>
+        </GlassRuntimeEnvironmentProvider>);
         expect(flattenTestStyle(screen.findByTestId('android-material')?.props.style).backgroundColor)
             .toBe('rgba(255, 255, 255, 0.02)');
     });

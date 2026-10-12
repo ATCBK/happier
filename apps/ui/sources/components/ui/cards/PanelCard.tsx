@@ -22,39 +22,37 @@ type PanelCardProps = Readonly<{
 
 const styles = StyleSheet.create((theme) => ({
     card: {
-        gap: 14,
+        gap: theme.space.s12,
         minWidth: 0,
     },
     header: {
         flexDirection: 'row',
         alignItems: 'flex-start',
         justifyContent: 'space-between',
-        gap: 12,
+        gap: theme.space.s12,
         minWidth: 0,
     },
     headerText: {
         flex: 1,
         minWidth: 0,
-        gap: 4,
+        gap: theme.space.s4,
     },
     eyebrow: {
-        ...Typography.default('semiBold'),
-        fontSize: 13,
-        lineHeight: 16,
+
+        ...Typography.variant('body', 'semiBold'),
+
         color: theme.colors.text.secondary,
-        letterSpacing: -0.08,
+
     },
     title: {
-        ...Typography.default('semiBold'),
-        fontSize: 28,
-        lineHeight: 34,
-        letterSpacing: -0.6,
+
+        ...Typography.variant('display'),
+
+
         color: theme.colors.text.primary,
     },
     subtitle: {
-        ...Typography.default(),
-        fontSize: 14,
-        lineHeight: 20,
+        ...Typography.variant('reading'),
         color: theme.colors.text.secondary,
     },
 }));

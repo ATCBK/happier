@@ -1,5 +1,6 @@
 import * as React from 'react';
 import type { StyleProp, ViewStyle } from 'react-native';
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation';
 
 import { ItemGroupColumn, ItemGroupColumns, type ItemGroupColumnProps } from '@/components/ui/lists/ItemGroupColumns';
 
@@ -29,8 +30,8 @@ export function CardGrid(props: CardGridProps): React.ReactElement {
         columns = 2,
         minColumnWidthPx = CARD_GRID_COLUMN_MIN_WIDTH_PX,
         style,
-        columnGap = 12,
-        rowGap = 12,
+        columnGap = HAPPIER_PAGE_METRICS.cardGapPx,
+        rowGap = HAPPIER_PAGE_METRICS.cardGapPx,
     } = props;
 
     return (

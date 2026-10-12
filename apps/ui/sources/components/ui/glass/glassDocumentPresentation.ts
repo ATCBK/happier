@@ -1,21 +1,22 @@
 import { GLASS_BLUR_RADIUS_PX, GLASS_SURFACE_GROUPS, resolveGlassSurfaceMaterial, type GlassMaterialEnvironment, type GlassMaterialSettings } from './glassMaterial';
+import { resolveGlassSurfacePlaneMaterial } from './glassSurfacePaint';
 
 /** Unistyles publishes authored web colors as root custom properties. */
-export function readGlassDocumentColor(document: Document, color: string): string | null {
-    const variable = /^var\((--[\w-]+)\)$/u.exec(color.trim())?.[1];
-    if (!variable) return null;
-    const value = document.defaultView?.getComputedStyle(document.documentElement).getPropertyValue(variable).trim();
-    return value && !value.startsWith('var(') ? value : null;
-}
+export { readGlassDocumentColor } from './glassMaterial';
 
 /** The document and static preview scopes share the same effective material projection. */
 export function resolveGlassPresentationVariables(settings: GlassMaterialSettings, environment: GlassMaterialEnvironment): Record<string, string> {
     return Object.fromEntries(GLASS_SURFACE_GROUPS.flatMap(group => {
         const { material } = resolveGlassSurfaceMaterial(settings, group, environment);
+        const plane = resolveGlassSurfacePlaneMaterial(settings, group, environment);
         return [
             [`--happier-glass-${group}-opacity`, `${material.opacity * 100}%`],
             [`--happier-glass-${group}-nested-opacity`, material.opacity < 1 ? '0%' : '100%'],
             [`--happier-glass-${group}-blur`, `${GLASS_BLUR_RADIUS_PX[material.blur as keyof typeof GLASS_BLUR_RADIUS_PX]}px`],
+            ...(group === 'content' ? [
+                [`--happier-glass-content-plane-opacity`, `${plane.opacity * 100}%`],
+                [`--happier-glass-content-nested-plane-opacity`, plane.opacity < 1 ? '0%' : '100%'],
+            ] : []),
         ];
     }));
 }

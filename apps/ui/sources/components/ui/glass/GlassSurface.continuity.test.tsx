@@ -50,6 +50,26 @@ function DraftInput() {
 }
 
 describe('native material child continuity', () => {
+    it('paints nested Elements with one tint and finish, without per-card native SDK views, preserving the draft', async () => {
+        const { GlassRuntimeEnvironmentProvider } = await import('./glassRuntimeEnvironment');
+        liquid.available = true;
+        // The runtime marks native renderers, which keep the stored Elements coat.
+        const scene = (atmosphereBehind: 'wallpaper' | 'none') => <GlassRuntimeEnvironmentProvider value={{ atmosphereBehind, nativeRenderer: true }}>
+            <GlassSurface testID="card" surfaceGroup="card" finishRole="card" solidColor="#221c1c">
+                <GlassSurface testID="inner-card" surfaceGroup="card" nested finishRole="card" solidColor="#221c1c"><DraftInput /></GlassSurface>
+            </GlassSurface>
+        </GlassRuntimeEnvironmentProvider>;
+        const screen = await renderScreen(scene('wallpaper'));
+        expect(screen.findAllByType('NativeGlassView')).toHaveLength(0);
+        expect(screen.findAllByType('NativeBlurView')).toHaveLength(0);
+        expect(screen.findAllByType('Rect')).toHaveLength(1);
+        expect(flattenTestStyle(screen.findHostByTestId('card')?.props.style).backgroundColor).toBe('rgba(34, 28, 28, 0.25)');
+        expect(flattenTestStyle(screen.findHostByTestId('inner-card')?.props.style).backgroundColor).toBe('transparent');
+        await act(async () => { screen.changeTextByTestId('draft', 'keep the card draft'); });
+        await screen.update(scene('none'));
+        expect(flattenTestStyle(screen.findHostByTestId('card')?.props.style).backgroundColor).toBe('#221c1c');
+        expect(screen.findHostByTestId('draft')?.props.value).toBe('keep the card draft');
+    });
     it('preserves a native opaque toolbar color and its action through Clear and Solid', async () => {
         const { ToolbarButton } = await import('@/components/ui/buttons/ToolbarButton');
         // iOS PlatformColor emits this opaque object at the OS boundary (PlatformColorValueTypes.ios).

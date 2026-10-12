@@ -7,10 +7,10 @@ import { isDesktopOverlayWindowContext } from '@/desktop/window/isDesktopOverlay
 import { applyDesktopGlassMaterial, subscribeDesktopGlassState, type DesktopGlassState } from '@/utils/platform/desktopGlassMaterial';
 import { useWebRootCanvasPresentation } from '@/theme/useWebRootCanvasPresentation';
 
-import { GLASS_SURFACE_GROUPS, readGlassMaterials } from './glassMaterial';
+import { GLASS_SURFACE_GROUPS, readGlassMaterials, type GlassMaterialEnvironment } from './glassMaterial';
 import { useGlassMaterialSettings } from './useGlassMaterialSettings';
 import { applyGlassDocumentPresentation, shouldRevealNativeGlassCanvas } from './glassDocumentPresentation';
-import { GlassRuntimeEnvironmentProvider } from './glassRuntimeEnvironment';
+import { GlassRuntimeEnvironmentProvider, GlassAtmosphereBehindSetterProvider } from './glassRuntimeEnvironment';
 export { useGlassRuntimeEnvironment } from './glassRuntimeEnvironment';
 
 /** One narrow settings subscriber owns desktop application and web presentation variables. */
@@ -19,12 +19,15 @@ export function GlassMaterialRuntime(props: Readonly<{ children: React.ReactNode
     const reduceTransparency = useReduceTransparency();
     const desktopWindow = Platform.OS === 'web' && isDesktopHost() && !isDesktopOverlayWindowContext();
     const [nativeState, setNativeState] = React.useState<DesktopGlassState | null>(null);
+    const [atmosphereBehind, setAtmosphereBehind] = React.useState<NonNullable<GlassMaterialEnvironment['atmosphereBehind']>>('none');
     const environment = React.useMemo(() => ({
         desktopWindow,
         nativeWindowMaterialLive: nativeState?.materialLive === true,
         reduceTransparency: reduceTransparency || nativeState?.reduceTransparency === true,
         windowActive: nativeState?.windowActive ?? true,
-    }), [desktopWindow, nativeState?.materialLive, nativeState?.reduceTransparency, nativeState?.windowActive, reduceTransparency]);
+        atmosphereBehind,
+        nativeRenderer: Platform.OS !== 'web',
+    }), [desktopWindow, nativeState?.materialLive, nativeState?.reduceTransparency, nativeState?.windowActive, reduceTransparency, atmosphereBehind]);
     useWebRootCanvasPresentation(shouldRevealNativeGlassCanvas(environment));
 
     React.useEffect(() => {
@@ -42,7 +45,7 @@ export function GlassMaterialRuntime(props: Readonly<{ children: React.ReactNode
         const materials = readGlassMaterials(settings);
         // macOS/Windows expose one window material, owned by chrome. Other
         // groups retain their renderer filters; floating never changes the backing.
-        const enabled = GLASS_SURFACE_GROUPS.some(group => group !== 'floating'
+        const enabled = GLASS_SURFACE_GROUPS.some(group => group !== 'floating' && group !== 'card'
             && (materials[group].blur !== 'off' || materials[group].opacity < 1));
         let current = true;
         void applyDesktopGlassMaterial({ enabled, blur: materials.chrome.blur }).then(state => {
@@ -56,5 +59,7 @@ export function GlassMaterialRuntime(props: Readonly<{ children: React.ReactNode
         return applyGlassDocumentPresentation(document, settings, environment);
     }, [environment, settings]);
 
-    return <GlassRuntimeEnvironmentProvider value={environment}>{props.children}</GlassRuntimeEnvironmentProvider>;
+    return <GlassAtmosphereBehindSetterProvider value={setAtmosphereBehind}>
+        <GlassRuntimeEnvironmentProvider value={environment}>{props.children}</GlassRuntimeEnvironmentProvider>
+    </GlassAtmosphereBehindSetterProvider>;
 }

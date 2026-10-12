@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { Animated, Easing, Pressable, View, useWindowDimensions, type GestureResponderEvent } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import Color from 'color';
+import { resolveThemeColor } from '@/theme/parseThemeColor';
 
 import { hapticsLight } from '@/components/ui/theme/haptics';
 import { shadowLevelStyle } from '@/shadowElevation';
@@ -158,7 +158,7 @@ export const TerminalArrowPad = React.memo(function TerminalArrowPad(props: Read
     }, [fadeIn, placement, savePlacement]);
 
     if (props.area.width <= 0 || props.area.height <= 0) return null;
-    const keyFill = Color(theme.dark ? theme.colors.surface.elevated : theme.colors.surface.base).alpha(theme.dark ? 0.6 : 0.56).rgb().string();
+    const keyFill = resolveThemeColor(theme.dark ? theme.colors.surface.elevated : theme.colors.surface.base).alpha(theme.dark ? 0.6 : 0.56).rgb().string();
     const testId = (suffix: string) => (props.testIdPrefix ? `${props.testIdPrefix}-${suffix}` : undefined);
 
     if (placement?.tucked) {

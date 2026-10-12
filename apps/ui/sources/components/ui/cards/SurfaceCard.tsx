@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { type StyleProp, type ViewStyle } from 'react-native';
-import { HappierSurface, type HappierMaterialSurfaceRender, type HappierSurfaceProps } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_PAGE_METRICS, HappierSurface, type HappierMaterialSurfaceRender, type HappierSurfaceProps } from '@happier-dev/plugin-ui/presentation';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { shadowLevelStyle } from '@/shadowElevation';
@@ -35,9 +35,10 @@ export const SURFACE_CARD_PADDING_PX: Readonly<Record<
     Readonly<{ horizontal: number; vertical: number }>
 >> = Object.freeze({
     none: Object.freeze({ horizontal: 0, vertical: 0 }),
-    sm: Object.freeze({ horizontal: 14, vertical: 12 }),
-    md: Object.freeze({ horizontal: 18, vertical: 16 }),
-    lg: Object.freeze({ horizontal: 22, vertical: 20 }),
+    // `md` is the card role (the sheet rows' inset); `sm` and `lg` are the steps either side of it.
+    sm: Object.freeze({ horizontal: 12, vertical: 12 }),
+    md: Object.freeze({ horizontal: HAPPIER_PAGE_METRICS.cardPaddingPx, vertical: HAPPIER_PAGE_METRICS.cardPaddingPx }),
+    lg: Object.freeze({ horizontal: 20, vertical: 20 }),
 });
 
 type SurfaceCardProps = Readonly<{
@@ -157,7 +158,7 @@ export const SurfaceCard = React.memo(function SurfaceCard(props: SurfaceCardPro
         <HappierSurface
             testID={testID}
             onPress={onPress}
-            materialRole="content"
+            materialRole="card"
             gradient={tone === 'flat' ? null : resolveThemeSurfaceFinish(theme, 'card')}
             renderMaterialSurface={renderMaterialSurface}
             frameStyle={props.fill ? FILL_STYLE : undefined}

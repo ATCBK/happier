@@ -19,7 +19,7 @@ import { TextLinkButton } from '@/components/ui/buttons/TextLinkButton';
 import { t } from '@/text';
 import { useUnistyles } from 'react-native-unistyles';
 import { Typography } from '@/constants/Typography';
-import Color from 'color';
+import { resolveThemeColor } from '@/theme/parseThemeColor';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 
 export const HappierUnifiedDiffViewer = React.memo<UnifiedDiffViewerProps>((props) => {
@@ -95,13 +95,7 @@ export const HappierUnifiedDiffViewer = React.memo<UnifiedDiffViewerProps>((prop
         return map;
     }, [folded.regions]);
 
-    const openedBandColor = React.useMemo(() => {
-        try {
-            return Color(theme.colors.find.matchCurrent).alpha(0.1).rgb().string();
-        } catch {
-            return theme.colors.surface.inset;
-        }
-    }, [theme.colors.find.matchCurrent, theme.colors.surface.inset]);
+    const openedBandColor = React.useMemo(() => resolveThemeColor(theme.colors.find.matchCurrent).alpha(0.1).rgb().string(), [theme.colors]);
     const renderAfterLine = React.useCallback((line: CodeLine) => {
         // The fold Find opened (Find lab F1d): a faint band in the current-match tint, the reason on the left
         // where the fold toggle sits, and the way back at the row's end.

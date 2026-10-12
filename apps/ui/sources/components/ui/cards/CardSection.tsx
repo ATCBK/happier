@@ -16,32 +16,32 @@ type CardSectionProps = Readonly<{
 
 const styles = StyleSheet.create((theme) => ({
     section: {
-        gap: 12,
-        paddingHorizontal: 16,
-        paddingBottom: 16,
+        gap: theme.space.s12,
+        paddingHorizontal: theme.space.s16,
+        paddingBottom: theme.space.s16,
     },
     header: {
         flexDirection: 'row',
         alignItems: 'flex-start',
         justifyContent: 'space-between',
-        gap: 12,
+        gap: theme.space.s12,
     },
     headerTextBlock: {
         flex: 1,
-        gap: 2,
+        gap: theme.space.s2,
         minWidth: 0,
     },
     title: {
-        ...Typography.default('semiBold'),
-        fontSize: 15,
-        lineHeight: 20,
-        letterSpacing: -0.2,
+
+        ...Typography.variant('heading'),
+
+
         color: theme.colors.text.primary,
     },
     subtitle: {
-        ...Typography.default(),
-        fontSize: 13,
-        lineHeight: 18,
+
+        ...Typography.variant('body'),
+
         color: theme.colors.text.secondary,
     },
 }));

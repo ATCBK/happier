@@ -28,20 +28,20 @@ type MetricCardProps = Readonly<{
 const styles = StyleSheet.create((theme) => ({
     content: {
         minWidth: 0,
-        gap: 8,
+        gap: theme.space.s8,
     },
     header: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
     },
     label: {
         flex: 1,
-        ...Typography.default('semiBold'),
-        fontSize: 11,
-        lineHeight: 14,
+
+        ...Typography.variant('micro', 'semiBold'),
+
         color: theme.colors.text.secondary,
-        letterSpacing: 0.24,
+
         textTransform: 'uppercase',
     },
     labelHero: {
@@ -62,10 +62,10 @@ const styles = StyleSheet.create((theme) => ({
         letterSpacing: -1.2,
     },
     valueCompact: {
-        ...Typography.default('semiBold'),
-        fontSize: 28,
-        lineHeight: 34,
-        letterSpacing: -0.45,
+
+        ...Typography.variant('display'),
+
+
         color: theme.colors.text.primary,
     },
     valueCompactHero: {
@@ -74,9 +74,7 @@ const styles = StyleSheet.create((theme) => ({
         letterSpacing: -0.72,
     },
     subtitle: {
-        ...Typography.default(),
-        fontSize: 14,
-        lineHeight: 20,
+        ...Typography.variant('reading'),
         color: theme.colors.text.secondary,
     },
     subtitleHero: {
@@ -84,8 +82,8 @@ const styles = StyleSheet.create((theme) => ({
         lineHeight: 22,
     },
     footer: {
-        marginTop: 4,
-        gap: 10,
+        marginTop: theme.space.s4,
+        gap: theme.space.s10,
     },
 }));
 

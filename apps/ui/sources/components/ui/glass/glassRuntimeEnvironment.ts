@@ -5,6 +5,14 @@ const DEFAULT_ENVIRONMENT: GlassMaterialEnvironment = Object.freeze({});
 const GlassRuntimeEnvironment = React.createContext<GlassMaterialEnvironment>(DEFAULT_ENVIRONMENT);
 
 export const GlassRuntimeEnvironmentProvider = GlassRuntimeEnvironment.Provider;
+type AtmosphereBehind = NonNullable<GlassMaterialEnvironment['atmosphereBehind']>;
+const GlassAtmosphereBehindSetter = React.createContext<(value: AtmosphereBehind) => void>(() => {});
+export const GlassAtmosphereBehindSetterProvider = GlassAtmosphereBehindSetter.Provider;
+
+/** The one shell atmosphere layer sets its covered layout and clears it on unmount. */
+export function useSetGlassAtmosphereBehind() {
+    return React.useContext(GlassAtmosphereBehindSetter);
+}
 
 /** Lightweight presentation input; subscribing does not import the runtime driver. */
 export function useGlassRuntimeEnvironment(): GlassMaterialEnvironment {

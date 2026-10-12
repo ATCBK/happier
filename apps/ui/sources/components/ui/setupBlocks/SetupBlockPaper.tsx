@@ -4,6 +4,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
 
 import { IconButton } from '@/components/ui/buttons/IconButton';
+import { GlassSurface } from '@/components/ui/glass/GlassSurface';
 import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
 
 export type SetupBlockLayout = 'card' | 'row' | 'wide';
@@ -42,18 +43,9 @@ export function SetupBlockPaper(props: Readonly<{
     const { theme } = useUnistyles();
     const materialColor = useHappierMaterialColorResolver();
     const paperColor = props.appearance === 'dashed' ? 'transparent' : props.appearance === 'tile' ? theme.colors.surface.sectionTint : theme.colors.surface.base;
-    return (
-        <View
-            testID={props.testID}
-            accessibilityLabel={props.accessibilityLabel}
-            style={[
-                card ? styles.card : props.layout === 'wide' ? styles.wide : styles.row,
-                props.appearance === 'dashed' ? styles.dashed : null,
-                props.appearance === 'tile' ? styles.tile : null,
-                props.appearance === 'tile' && props.highlighted ? styles.tileHighlighted : null,
-                { backgroundColor: materialColor(paperColor) },
-            ]}
-        >
+    const shape = card ? styles.card : props.layout === 'wide' ? styles.wide : styles.row;
+    const body = (
+        <>
             {props.children}
             {props.dismiss ? (
                 <View style={card ? styles.dismissCard : styles.dismissRow}>
@@ -70,6 +62,28 @@ export function SetupBlockPaper(props: Readonly<{
                     />
                 </View>
             ) : null}
+        </>
+    );
+    // A block's own paper is a card: the Elements material owns its paint and finish (glass over a backdrop,
+    // the card fill with nothing behind), like every Element on the page. A dashed note and a choice inside
+    // an open block stay inner paint.
+    if (props.appearance !== 'dashed' && props.appearance !== 'tile') {
+        return <GlassSurface testID={props.testID} accessibilityLabel={props.accessibilityLabel} surfaceGroup="card" nested finishRole="card"
+            solidColor={theme.colors.edge.cardFill} style={shape}>{body}</GlassSurface>;
+    }
+    return (
+        <View
+            testID={props.testID}
+            accessibilityLabel={props.accessibilityLabel}
+            style={[
+                shape,
+                props.appearance === 'dashed' ? styles.dashed : null,
+                props.appearance === 'tile' ? styles.tile : null,
+                props.appearance === 'tile' && props.highlighted ? styles.tileHighlighted : null,
+                { backgroundColor: materialColor(paperColor) },
+            ]}
+        >
+            {body}
         </View>
     );
 }
@@ -88,16 +102,16 @@ const styles = StyleSheet.create((theme) => {
             position: 'relative',
             minHeight: 152,
             padding: 14,
-            gap: 10,
+            gap: theme.space.s10,
         },
         row: {
             ...paper,
             flexDirection: 'row',
             alignItems: 'center',
-            gap: 12,
-            paddingVertical: 12,
+            gap: theme.space.s12,
+            paddingVertical: theme.space.s12,
             paddingLeft: 14,
-            paddingRight: 8,
+            paddingRight: theme.space.s8,
         },
         wide: {
             ...paper,
@@ -105,8 +119,8 @@ const styles = StyleSheet.create((theme) => {
             alignItems: 'center',
             gap: 14,
             paddingVertical: 14,
-            paddingLeft: 16,
-            paddingRight: 10,
+            paddingLeft: theme.space.s16,
+            paddingRight: theme.space.s10,
         },
         dashed: {
             borderStyle: 'dashed',

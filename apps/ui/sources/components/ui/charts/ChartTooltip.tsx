@@ -49,14 +49,14 @@ const styles = StyleSheet.create((theme) => ({
     },
     tooltipContent: {
         minWidth: 156,
-        gap: 6,
-        paddingHorizontal: 12,
-        paddingVertical: 10,
+        gap: theme.space.s6,
+        paddingHorizontal: theme.space.s12,
+        paddingVertical: theme.space.s10,
     },
     tooltipTitleRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
     },
     tooltipDot: {
         width: 8,
@@ -65,21 +65,21 @@ const styles = StyleSheet.create((theme) => ({
     },
     tooltipTitle: {
         flex: 1,
-        ...Typography.default('semiBold'),
-        fontSize: 13,
-        lineHeight: 18,
+
+        ...Typography.variant('body', 'semiBold'),
+
         color: theme.colors.text.primary,
     },
     tooltipSubtitle: {
-        ...Typography.default(),
-        fontSize: 12,
-        lineHeight: 16,
+
+        ...Typography.variant('meta'),
+
         color: theme.colors.text.secondary,
     },
     tooltipValue: {
-        ...Typography.default('semiBold'),
-        fontSize: 16,
-        lineHeight: 20,
+
+        ...Typography.variant('heading'),
+
         color: theme.colors.text.primary,
     },
 }));

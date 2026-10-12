@@ -1,26 +1,98 @@
 import { Platform } from 'react-native';
+import Color from 'color';
+import { parseThemeColor } from '@/theme/parseThemeColor';
 import { happierMaterialBackgroundColor } from '@happier-dev/plugin-ui/presentation';
-import { readGlassPreset, resolveGlassSurfaceMaterial, type GlassMaterialSettings, type GlassMaterialEnvironment, type GlassSurfaceGroup } from './glassMaterial';
+import { createBackdropWebStyle } from '@/components/ui/overlays/createBackdropLayerStyle';
+import { GLASS_BLUR_RADIUS_PX, readGlassPreset, resolveGlassBackdropMap, resolveGlassBackdropTone, resolveGlassSurfaceMaterial, type GlassMaterialSettings, type GlassMaterialEnvironment, type GlassSurfaceGroup, type GlassSurfaceMaterial } from './glassMaterial';
 
-/** Named dark floating coats use low-alpha ink; custom and solid retain their authored color. */
-export function glassSurfaceTintColor(input: Readonly<{ color: string; ink: string; dark: boolean; settings: GlassMaterialSettings; group: GlassSurfaceGroup; environment?: GlassMaterialEnvironment }>): string {
+/** Clear only the page coat. Functional surfaces still resolve their own material and accessibility overrides. */
+export type AtmosphereContentCoat = 'opaque' | 'reading';
+
+export function resolveGlassSurfacePlaneMaterial(settings: GlassMaterialSettings, group: GlassSurfaceGroup, environment: GlassMaterialEnvironment = {}, coat?: AtmosphereContentCoat, dark = false): GlassSurfaceMaterial {
+    if (group === 'content' && coat) {
+        const material = resolveGlassSurfaceMaterial(settings, group, environment).material;
+        if (coat === 'opaque') return { blur: 'off', opacity: 1 };
+        if (material.opacity === 1 || readGlassPreset(settings) === 'custom') return material;
+        return { ...material, opacity: dark ? 0.66 : 0.56 };
+    }
+    if (group === 'content' && (environment.atmosphereBehind === 'band' || environment.atmosphereBehind === 'wallpaper')) {
+        return { blur: 'off', opacity: 0 };
+    }
+    return resolveGlassSurfaceMaterial(settings, group, environment).material;
+}
+
+/** Shell filters are inert siblings of the content, never properties of its ancestors. */
+export function glassSurfacePlaneBackdropStyle(settings: GlassMaterialSettings, group: GlassSurfaceGroup, dark: boolean, environment: GlassMaterialEnvironment, coat?: AtmosphereContentCoat) {
+    const reading = group === 'content' && coat === 'reading'
+        && (environment.atmosphereBehind === 'band' || environment.atmosphereBehind === 'wallpaper');
+    if (!reading && (environment.atmosphereBehind !== 'wallpaper' || (group !== 'chrome' && group !== 'sidebar'))) return null;
+    const material = resolveGlassSurfacePlaneMaterial(settings, group, environment, coat, dark);
+    if (material.blur === 'off' || material.opacity === 1) return null;
+    return createBackdropWebStyle({
+        backgroundColor: 'transparent',
+        surfaceGroup: group,
+        blurPx: GLASS_BLUR_RADIUS_PX[material.blur],
+        backdropTone: resolveGlassBackdropTone(settings, group, dark, environment),
+    });
+}
+
+/**
+ * The coat colour of a glass surface. On web, named-preset Elements and floating surfaces take the
+ * fixed-point coat of `resolveGlassBackdropMap`, so over the plain `page` the glass equals its solid
+ * paint. Native renderers have no backdrop tone: named dark floating coats use low-alpha ink there.
+ * Custom and solid retain their authored color.
+ */
+export function glassSurfaceTintColor(input: Readonly<{ color: string; ink: string; dark: boolean; settings: GlassMaterialSettings; group: GlassSurfaceGroup; environment?: GlassMaterialEnvironment; page?: string; dialog?: boolean }>): string {
+    if (Platform.OS === 'web' && input.page !== undefined) {
+        const color = parseThemeColor(input.color);
+        const page = parseThemeColor(input.page);
+        if (color === null || page === null) return input.color;
+        const coat = resolveGlassBackdropMap(input.settings, input.group, input.dark, input.environment, {
+            page: page.rgb().string(), solid: color.rgb().string(),
+        }, input.dialog === true)?.coat;
+        // Keep the authored spelling when the coat is the paint itself.
+        if (coat) return coat === color.rgb().round().string() ? input.color : coat;
+    }
     return input.dark && input.group === 'floating' && readGlassPreset(input.settings) !== 'custom'
         && resolveGlassSurfaceMaterial(input.settings, input.group, input.environment).material.opacity < 1
         ? input.ink : input.color;
 }
 
+/**
+ * A translucent Elements fill (a page sheet's whisper of tint) stands for that tint over the page. As glass
+ * the page under it is gone, so its coat keeps the page it stands for; opaque and unresolved fills pass.
+ */
+export function glassElementsCoatColor(authored: string, authoredPage: string): string {
+    const fill = parseThemeColor(authored);
+    const ground = parseThemeColor(authoredPage);
+    if (fill === null || ground === null) return authored;
+    const alpha = fill.alpha();
+    // Opaque fills are already the paper; a fully clear fill draws no paper to keep.
+    if (alpha >= 1 || alpha === 0) return authored;
+    const [r, g, b] = fill.rgb().array();
+    const [pr, pg, pb] = ground.rgb().array();
+    return Color.rgb(pr + (r - pr) * alpha, pg + (g - pg) * alpha, pb + (b - pb) * alpha).round().string();
+}
+
 /** Shared presentation owner changes only paint alpha, never foreground opacity. */
-export function glassSurfaceBackgroundColor(color: string, group: GlassSurfaceGroup, nested = false): string {
+export function glassSurfaceBackgroundColor(color: string, group: GlassSurfaceGroup, nested = false, plane = nested, coatOpacity?: number): string {
+    if (Platform.OS === 'web' && coatOpacity !== undefined) {
+        return `color-mix(in srgb, ${color} ${coatOpacity * 100}%, transparent)`;
+    }
+    if (Platform.OS === 'web' && group === 'content' && plane) {
+        const prefix = `--happier-glass-content-${nested ? 'nested-' : ''}`;
+        return `var(${prefix}plane-background-color, color-mix(in srgb, ${color} var(${prefix}plane-opacity, var(${prefix}opacity, 100%)), transparent))`;
+    }
     return happierMaterialBackgroundColor(color, group, Platform.OS === 'web', nested);
 }
 
 /**
  * The shell owns one coat plane per group; inner paints only inherit it. A plane lies on the window
- * canvas, so there is nothing behind it a CSS blur could reach (a desktop window's blur is its native
- * material). It paints the tint only: a `backdrop-filter` here would make the plane a backdrop root and
+ * canvas, with the atmosphere beneath it when mounted. It paints the tint only: a `backdrop-filter`
+ * on the content ancestor would make the plane a backdrop root and
  * cut every floating surface opened inside it (a column's menus and popovers) off the page behind.
  * A plane that floats over content (the column peek) paints through `GlassSurface` instead.
  */
 export function glassSurfacePlaneStyle(color: string, group: GlassSurfaceGroup): Readonly<{ backgroundColor: string }> {
-    return { backgroundColor: glassSurfaceBackgroundColor(color, group) };
+    return { backgroundColor: glassSurfaceBackgroundColor(color, group, false, true) };
 }

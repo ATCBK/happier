@@ -118,20 +118,43 @@ describe('SetupBlockGrid', () => {
                     </AppShellMaterialFrame>
                 </GlassMaterialSettingsProvider>
             </GlassRuntimeEnvironmentProvider>);
-            const paper = StyleSheet.flatten(screen.findHostByTestId('material-setup-paper')!.props.style).backgroundColor;
+            // A setup card is an Element: its paint lies on the material layer under its content.
+            const paperHost = screen.findHostByTestId('material-setup-paper')!;
+            const paper = StyleSheet.flatten(paperHost.findAll(node => typeof node.type === 'string' && node.props.dataSet?.happyGlassBackdrop === 'true')[0]!.props.style).backgroundColor;
             const frame = StyleSheet.flatten(screen.findHostByTestId('material-setup.panel')!.props.style).backgroundColor;
             const column = screen.findAllByType('View').map(node => StyleSheet.flatten(node.props.style)).find(style => style?.width === 264)!.backgroundColor;
             if (reduceTransparency) {
-                expect(Color(paper).hexa()).toBe(Color(theme.colors.surface.base).hexa());
+                expect(Color(paper).hexa()).toBe(Color(theme.colors.edge.cardFill).hexa());
                 expect(Color(frame).hexa()).toBe(Color(theme.colors.surface.base).hexa());
                 expect(Color(column).hexa()).toBe(Color(theme.colors.surface.sectionTint).hexa());
             } else {
-                expect(Color(paper).alpha()).toBeLessThan(1);
+                expect(paper).toContain('--happier-glass-card-background-color');
                 expect(Color(frame).alpha()).toBe(0);
                 expect(Color(column).alpha()).toBeLessThan(1);
             }
             standardCleanup();
         }
+    });
+    it('gives a setup card the Elements material over a backdrop and its exact paper with nothing behind', async () => {
+        const { GlassMaterialSettingsProvider } = await import('@/components/ui/glass/useGlassMaterialSettings');
+        const { GlassRuntimeEnvironmentProvider } = await import('@/components/ui/glass/glassRuntimeEnvironment');
+        const { glassPresetMaterials } = await import('@/components/ui/glass/glassMaterial');
+        const { SetupBlockPaper } = await import('./SetupBlockPaper');
+        const { useUnistyles } = await import('react-native-unistyles');
+        const { theme } = useUnistyles();
+        const scene = (atmosphereBehind: 'wallpaper' | 'none') => <GlassRuntimeEnvironmentProvider value={{ atmosphereBehind }}>
+            <GlassMaterialSettingsProvider value={{ glassSurfaceMaterials: glassPresetMaterials('auto') }}>
+                <SetupBlockPaper testID="backdrop-setup-paper" layout="card"><Text>Set up voice</Text></SetupBlockPaper>
+            </GlassMaterialSettingsProvider>
+        </GlassRuntimeEnvironmentProvider>;
+        const paints = (screen: Awaited<ReturnType<typeof renderScreen>>) => screen.findAllByType('View').map(node => StyleSheet.flatten(node.props.style) ?? {});
+        const screen = await renderScreen(scene('wallpaper'));
+        expect(paints(screen).some(style => typeof style.backdropFilter === 'string' && style.backdropFilter.includes('blur'))).toBe(true);
+        await screen.update(scene('none'));
+        expect(paints(screen).some(style => typeof style.backdropFilter === 'string' && style.backdropFilter.includes('blur'))).toBe(false);
+        // The same card fill and finish as every other Element on the page.
+        expect(paints(screen).some(style => typeof style.backgroundColor === 'string' && Color(style.backgroundColor).hexa() === Color(theme.colors.edge.cardFill).hexa())).toBe(true);
+        expect(paints(screen).some(style => typeof style.backgroundImage === 'string' && style.backgroundImage.includes('gradient'))).toBe(true);
     });
     it('grows the pressed tile into its panel over the row, keeping every tile in its slot underneath', async () => {
         const lifecycle: string[] = [];

@@ -4,6 +4,15 @@ import { resolveGlassCapability } from './resolveGlassCapability';
 import { glassPresetMaterials } from './glassMaterial';
 
 describe('resolveGlassCapability', () => {
+    it('uses tint for native Elements even with both SDK materials available, while web Elements can blur', () => {
+        const input = { liquidGlassAvailable: true, blurAvailable: true, reduceTransparency: false,
+            atmosphereBehind: 'wallpaper' as const, surfaceGroup: 'card' as const,
+            settings: { glassSurfaceMaterials: glassPresetMaterials('auto') } };
+        expect(resolveGlassCapability(input)).toBe('tint');
+        expect(resolveGlassCapability({ ...input, webBlurAvailable: true })).toBe('webBlur');
+        expect(resolveGlassCapability({ ...input, reduceTransparency: true })).toBe('solid');
+        expect(resolveGlassCapability({ ...input, atmosphereBehind: 'none' })).toBe('solid');
+    });
     it('lets Liquid Glass adapt named floating presets while honoring authored Strong blur', () => {
         const input = { liquidGlassAvailable: true, blurAvailable: true, reduceTransparency: false, surfaceGroup: 'floating' as const };
         for (const preset of ['auto', 'everywhere', 'clear'] as const) {

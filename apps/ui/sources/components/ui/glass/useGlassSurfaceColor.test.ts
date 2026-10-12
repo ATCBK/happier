@@ -1,12 +1,43 @@
 import { describe, expect, it } from 'vitest';
+import Color from 'color';
 
-import { glassPresetMaterials } from './glassMaterial';
+import { glassPresetMaterials, resolveGlassBackdropMap } from './glassMaterial';
 import { resolveGlassSurfaceColor } from './useGlassSurfaceColor';
 
 const liveDesktop = { desktopWindow: true, nativeWindowMaterialLive: true };
 const settings = { glassSurfaceMaterials: glassPresetMaterials('everywhere') };
 
 describe('glass renderer paint', () => {
+    it('carries a feasible saturated coat into independent paint while nested and solid paint keep their decisions', () => {
+        const settings = { glassSurfaceMaterials: glassPresetMaterials('auto'), glassTintIntensity: 'medium' as const };
+        const map = resolveGlassBackdropMap(settings, 'floating', true, {}, { page: 'rgb(20,10,10)', solid: 'rgb(100,20,20)' });
+        expect(map?.opacity).toBeGreaterThan(0.02);
+        const color = resolveGlassSurfaceColor(map!.coat!, 'floating', settings, {}, true, false, undefined, false, map!.opacity);
+        expect(Color(color).alpha()).toBeCloseTo(map!.opacity!, 2);
+        expect(Color(resolveGlassSurfaceColor(map!.coat!, 'floating', settings, {}, true, true, undefined, false, map!.opacity)).alpha()).toBe(0);
+        expect(resolveGlassSurfaceColor('rgb(100,20,20)', 'floating', settings, { reduceTransparency: true }, true, false, undefined, false, map!.opacity)).toBe('rgb(100,20,20)');
+    });
+    it('clears only the content plane over atmosphere while retaining surface materials and solid fallback decisions', () => {
+        for (const preset of ['solid', 'auto', 'everywhere', 'clear', 'custom'] as const) {
+            const settings = { glassSurfaceMaterials: preset === 'custom'
+                ? { ...glassPresetMaterials('everywhere'), content: { blur: 'off' as const, opacity: 0.347 } }
+                : glassPresetMaterials(preset) };
+            for (const overrides of [{}, { windowActive: false }, { reduceTransparency: true }]) {
+                const environment = { ...liveDesktop, ...overrides };
+                const ordinary = resolveGlassSurfaceColor('#112233', 'content', settings, environment, true, false);
+                expect(resolveGlassSurfaceColor('#112233', 'content', settings, { ...environment, atmosphereBehind: 'none' }, true, false, undefined, true)).toBe(ordinary);
+                for (const atmosphereBehind of ['band', 'wallpaper'] as const) {
+                    const behind = { ...environment, atmosphereBehind };
+                    expect(resolveGlassSurfaceColor('#112233', 'content', settings, behind, true, false, undefined, true)).toBe('transparent');
+                    // Renderer-owned terminal/editor page grounds inherit the same clear coat.
+                    expect(resolveGlassSurfaceColor('#112233', 'content', settings, behind, true)).toBe('transparent');
+                    expect(resolveGlassSurfaceColor('#112233', 'content', settings, behind, true, false)).toBe(ordinary);
+                    expect(resolveGlassSurfaceColor('#112233', 'sidebar', settings, behind, true, false, undefined, true))
+                        .toBe(resolveGlassSurfaceColor('#112233', 'sidebar', settings, environment, true, false));
+                }
+            }
+        }
+    });
     it('keeps descendant ink paint translucent in every glass group and restores exact solid paint', () => {
         for (const group of ['chrome', 'sidebar', 'content', 'floating'] as const) {
             expect(resolveGlassSurfaceColor('#112233', group, settings, liveDesktop, true, true, 'rgba(235, 230, 225, 0.1)')).toBe('rgba(235, 230, 225, 0.1)');

@@ -81,19 +81,19 @@ const stylesheet = StyleSheet.create(() => ({
         alignItems: 'baseline',
     },
     label: {
-        ...Typography.default('regular'),
-        fontSize: 13,
-        lineHeight: 18,
+
+        ...Typography.variant('body'),
+
     },
     value: {
-        ...Typography.default('semiBold'),
-        fontSize: 13,
-        lineHeight: 18,
+
+        ...Typography.variant('body', 'semiBold'),
+
     },
     separator: {
-        ...Typography.default('regular'),
-        fontSize: 13,
-        lineHeight: 18,
+
+        ...Typography.variant('body'),
+
     },
     chevron: {
         marginLeft: 8,

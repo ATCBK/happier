@@ -101,7 +101,7 @@ const styles = StyleSheet.create((theme) => ({
         minWidth: 0,
     },
     rowActions: {
-        marginTop: 8,
+        marginTop: theme.space.s8,
     },
     title: {
         ...Typography.default('semiBold'),
@@ -114,7 +114,7 @@ const styles = StyleSheet.create((theme) => ({
     subtitle: {
         ...Typography.default(),
         ...happierPageTextMetrics('rowDescription'),
-        marginTop: 2,
+        marginTop: theme.space.s2,
         color: theme.colors.text.secondary,
     },
     subtitleCard: {
@@ -122,8 +122,8 @@ const styles = StyleSheet.create((theme) => ({
         minHeight: 36,
     },
     progress: {
-        marginTop: 6,
-        marginBottom: 4,
+        marginTop: theme.space.s6,
+        marginBottom: theme.space.s4,
     },
     footer: {
         marginTop: 'auto',
@@ -132,6 +132,6 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         flexWrap: 'wrap',
-        gap: 6,
+        gap: theme.space.s6,
     },
 }));

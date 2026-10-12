@@ -1,9 +1,10 @@
 import * as React from 'react';
 import { View, type StyleProp, type ViewStyle } from 'react-native';
-import { StyleSheet } from 'react-native-unistyles';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
+import { parseThemeColor } from '@/theme/parseThemeColor';
 
 export type KeyHintProps = Readonly<{
     label: string;
@@ -37,8 +38,8 @@ const stylesheet = StyleSheet.create((theme) => ({
         minWidth: 22,
         alignItems: 'center',
         justifyContent: 'center',
-        paddingHorizontal: 6,
-        paddingVertical: 2,
+        paddingHorizontal: theme.space.s6,
+        paddingVertical: theme.space.s2,
         borderRadius: 4,
         borderWidth: 1,
         borderColor: theme.colors.border.strong,
@@ -61,10 +62,25 @@ const stylesheet = StyleSheet.create((theme) => ({
         color: theme.colors.state.attention.foreground,
     },
     onFillLabel: { color: theme.colors.surface.base },
-    onFillContainer: { backgroundColor: theme.colors.surface.pressedOverlay },
 }));
 
+/**
+ * A well of the label's own ink over the fill (not an opaque surface), so the key reads on any fill in
+ * either theme: light keys on the light-labelled fill, dark keys on the dark-labelled one. Derived from
+ * the resolved theme at render: on web a stylesheet sees theme colours as CSS variables, which `Color`
+ * cannot read.
+ */
+function useOnFillWell(enabled: boolean): ViewStyle | null {
+    const { theme } = useUnistyles();
+    const base = theme.colors.surface.base;
+    return React.useMemo(() => {
+        if (!enabled) return null;
+        return { backgroundColor: parseThemeColor(base)?.alpha(0.22).rgb().string() ?? base };
+    }, [base, enabled]);
+}
+
 export function KeyHint(props: KeyHintProps): React.ReactElement | null {
+    const onFillWell = useOnFillWell(props.tone === 'onFill');
     if (props.enabled === false) return null;
     const styles = stylesheet;
 
@@ -73,7 +89,7 @@ export function KeyHint(props: KeyHintProps): React.ReactElement | null {
             testID={props.testID}
             accessibilityLabel={props.label}
             style={[styles.container, props.tone !== undefined && props.tone !== 'neutral' ? styles.attentionContainer : null,
-                props.tone === 'onFill' ? styles.onFillContainer : null, props.style]}
+                onFillWell, props.style]}
         >
             <Text
                 testID={props.testID ? `${props.testID}:label` : undefined}

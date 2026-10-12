@@ -22,6 +22,30 @@ vi.mock('@/utils/platform/desktopHost', () => ({
 afterEach(() => { standardCleanup(); vi.clearAllMocks(); });
 
 describe('desktop window material projection', () => {
+    it('propagates the one atmosphere setter through runtime paint without changing native window material', async () => {
+        const { GlassMaterialRuntime } = await import('./GlassMaterialRuntime');
+        const { useGlassRuntimeEnvironment, useSetGlassAtmosphereBehind } = await import('./glassRuntimeEnvironment');
+        const { resolveGlassPresentationVariables } = await import('./glassDocumentPresentation');
+        const { useGlassMaterialSettings } = await import('./useGlassMaterialSettings');
+        host.invoke.mockResolvedValue({ supported: true, materialLive: true, reduceTransparency: false, highContrast: false, windowActive: true });
+        function Probe() {
+            const environment = useGlassRuntimeEnvironment();
+            const setAtmosphere = useSetGlassAtmosphereBehind();
+            const settings = useGlassMaterialSettings();
+            return React.createElement('Probe', { testID: 'atmosphere-probe', environment, setAtmosphere,
+                variables: resolveGlassPresentationVariables(settings, environment) });
+        }
+        const screen = await renderScreen(<GlassMaterialRuntime><Probe /></GlassMaterialRuntime>);
+        const probe = () => screen.findHostByTestId('atmosphere-probe')!;
+        expect(probe().props.environment.atmosphereBehind).toBe('none');
+        host.invoke.mockClear();
+        for (const atmosphereBehind of ['band', 'wallpaper', 'none'] as const) {
+            await act(async () => probe().props.setAtmosphere(atmosphereBehind));
+            expect(probe().props.environment.atmosphereBehind).toBe(atmosphereBehind);
+            if (atmosphereBehind !== 'none') expect(probe().props.variables['--happier-glass-content-plane-opacity']).toBe('0%');
+            expect(host.invoke.mock.calls.filter(([name]) => name === 'desktop_apply_glass_material')).toEqual([]);
+        }
+    });
     it('uses chrome for the single window material and preserves floating changes in their own group', async () => {
         const { storage } = await import('@/sync/domains/state/storage');
         const { GlassMaterialRuntime } = await import('./GlassMaterialRuntime');

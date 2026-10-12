@@ -1,27 +1,161 @@
 import { describe, expect, it } from 'vitest';
+import Color from 'color';
 import { GlassSurfaceMaterialsSchema } from '@happier-dev/protocol';
+import { darkTheme, lightTheme } from '@/theme';
+import { applyGlassBackdropFilter, glassContrastRatio, renderGlassOver } from '@/dev/testkit/glassBackdrop';
 
 import {
     GLASS_SURFACE_GROUPS, glassPresetMaterials, readGlassMaterials, readGlassPreset, resolveGlassPresetSettingsDelta,
     resolveGlassSurfaceMaterial, resolveGlassSurfaceSettingsDelta, resolveGlassIntensitySettingsDelta, resolveGlassBackdropTone,
+    resolveGlassBackdropMap, GLASS_BACKDROP_COMPRESSION, readGlassTintedMaterials,
 } from './glassMaterial';
 
 describe('glass material Account owner', () => {
-    it('preserves a visible black-to-white backdrop band and does not desaturate enabled floating defaults', () => {
-        for (const dark of [false, true]) {
-            const tone = resolveGlassBackdropTone({}, 'floating', dark);
-            const contrast = Number(/contrast\(([^)]+)\)/.exec(tone)?.[1]);
-            const brightness = Number(/brightness\(([^)]+)\)/.exec(tone)?.[1]);
-            const saturation = Number(/saturate\(([^)]+)\)/.exec(tone)?.[1]);
-            // This is the owner-approved material range, not an incidental CSS spelling.
-            const clamp = (value: number) => Math.min(1, Math.max(0, value));
-            const curve = (value: number) => clamp(clamp(0.5 + (value - 0.5) * contrast) * brightness);
-            expect((curve(1) - curve(0)) * (1 - glassPresetMaterials('auto').floating.opacity)).toBeGreaterThanOrEqual(0.25);
-            expect(saturation).toBeGreaterThanOrEqual(1);
-            // Owner-approved final curve makes the own-page lift subtler without narrowing its band.
-            expect(contrast).toBe(0.55);
-            expect(brightness).toBe(0.5);
+    it('keeps Elements solid without backing and uses the card coat over atmosphere or a live translucent Window', () => {
+        const settings = { glassSurfaceMaterials: glassPresetMaterials('auto') };
+        const solid = { blur: 'off', opacity: 1 } as const;
+        expect(resolveGlassSurfaceMaterial(settings, 'card').material).toEqual(solid);
+        expect(resolveGlassSurfaceMaterial(settings, 'card', { atmosphereBehind: 'none' }).material).toEqual(solid);
+        expect(resolveGlassSurfaceMaterial(settings, 'card', { desktopWindow: true }).material).toEqual(solid);
+        for (const atmosphereBehind of ['band', 'wallpaper'] as const) {
+            expect(resolveGlassSurfaceMaterial(settings, 'card', { atmosphereBehind }).material).toEqual(readGlassTintedMaterials(settings).card);
+            // Native renderers have no backdrop tone or card blur: they keep the stored coat, not the tint's hair.
+            expect(resolveGlassSurfaceMaterial(settings, 'card', { atmosphereBehind, nativeRenderer: true }).material).toEqual(settings.glassSurfaceMaterials.card);
+            expect(resolveGlassSurfaceMaterial(settings, 'card', { atmosphereBehind, reduceTransparency: true }).material).toEqual(solid);
+            expect(resolveGlassSurfaceMaterial(settings, 'card', { atmosphereBehind, windowActive: false }).material).toEqual(solid);
         }
+        expect(resolveGlassSurfaceMaterial(settings, 'card', { desktopWindow: true, nativeWindowMaterialLive: true }).material)
+            .toEqual(readGlassTintedMaterials(settings).card);
+        const windowSolid = { glassSurfaceMaterials: { ...glassPresetMaterials('everywhere'), content: solid } };
+        expect(resolveGlassSurfaceMaterial(windowSolid, 'card', { desktopWindow: true, nativeWindowMaterialLive: true }).material).toEqual(solid);
+        const elementsSolid = { glassSurfaceMaterials: { ...glassPresetMaterials('auto'), card: solid } };
+        expect(resolveGlassSurfaceMaterial(elementsSolid, 'card', { atmosphereBehind: 'wallpaper' }).material).toEqual(solid);
+        for (const preset of ['auto', 'everywhere', 'clear'] as const) {
+            const choices = { glassSurfaceMaterials: glassPresetMaterials(preset) };
+            expect(resolveGlassSurfaceMaterial(choices, 'content').material).toEqual(solid);
+            expect(resolveGlassSurfaceMaterial(choices, 'card').material).toEqual(solid);
+            expect(resolveGlassSurfaceMaterial(choices, 'card', { atmosphereBehind: 'band' }).material).toEqual(readGlassTintedMaterials(choices).card);
+        }
+    });
+    it('keeps cards and composer material opaque under Solid and Reduce Transparency even over a background', () => {
+        for (const atmosphereBehind of ['band', 'wallpaper'] as const) {
+            for (const preset of ['solid', 'clear'] as const) {
+                const settings = { glassSurfaceMaterials: glassPresetMaterials(preset) };
+                const environment = { atmosphereBehind, reduceTransparency: preset === 'clear' };
+                // Cards and composer consume surface material, not the cleared page plane.
+                for (const group of GLASS_SURFACE_GROUPS) {
+                    expect(resolveGlassSurfaceMaterial(settings, group, environment).material).toEqual({ blur: 'off', opacity: 1 });
+                }
+            }
+        }
+    });
+    it('applies a dimming tone without a contrast lift to wallpaper chrome and sidebar, retaining solid/custom and ordinary window treatment', () => {
+        for (const group of ['chrome', 'sidebar'] as const) {
+            const settings = { glassSurfaceMaterials: glassPresetMaterials('clear') };
+            expect(resolveGlassBackdropTone(settings, group, true)).toBe('');
+            expect(resolveGlassBackdropTone(settings, group, true, { atmosphereBehind: 'band' })).toBe('');
+            const tone = resolveGlassBackdropTone(settings, group, true, { atmosphereBehind: 'wallpaper' });
+            expect(tone).toMatch(/brightness\(/);
+            expect(tone).not.toMatch(/contrast\(/);
+            expect(applyGlassBackdropFilter(tone, [0, 0, 0])).toEqual([0, 0, 0]);
+            expect(resolveGlassBackdropTone(settings, group, true, { atmosphereBehind: 'wallpaper', reduceTransparency: true })).toBe('');
+            const custom = { glassSurfaceMaterials: { ...settings.glassSurfaceMaterials, [group]: { blur: 'off' as const, opacity: 0.13 } } };
+            expect(resolveGlassBackdropTone(custom, group, true, { atmosphereBehind: 'wallpaper' })).toBe('');
+        }
+    });
+    describe('fixed point: glass over the plain page lands on its own paint at every tint', () => {
+        type Tint = 'subtle' | 'medium' | 'strong';
+        const rgb = (value: string) => Color(value).rgb().array().slice(0, 3) as unknown as [number, number, number];
+        const sky: [number, number, number] = [193, 146, 143];
+        const render = (theme: typeof darkTheme, group: 'card' | 'floating', preset: 'auto' | 'everywhere' | 'clear', atmosphereBehind: 'none' | 'band' | 'wallpaper', backdrop: [number, number, number], tint: Tint) => {
+            const settings = { glassSurfaceMaterials: glassPresetMaterials(preset), glassTintIntensity: tint };
+            const environment = { atmosphereBehind };
+            const solid = group === 'card' ? theme.colors.edge.cardFill : theme.colors.edge.floatingFill;
+            const map = resolveGlassBackdropMap(settings, group, theme.dark, environment, { page: theme.colors.surface.base, solid });
+            const opacity = map?.opacity ?? resolveGlassSurfaceMaterial(settings, group, environment).material.opacity;
+            expect(map?.coat).toBeTruthy();
+            // Every tint lands on the surface's solid paint over the plain page, warm hue included (owner, 13:34).
+            const paint = rgb(solid);
+            return { map: map!, opacity, paint, out: renderGlassOver({ filter: map!.tone, coat: rgb(map!.coat!), opacity, backdrop }) };
+        };
+        it('lands Medium floating glass on a saturated authored fill without clamping an infeasible coat', () => {
+            const settings = { glassSurfaceMaterials: glassPresetMaterials('auto'), glassTintIntensity: 'medium' as const };
+            const map = resolveGlassBackdropMap(settings, 'floating', true, {}, { page: 'rgb(20,10,10)', solid: 'rgb(100,20,20)' });
+            expect(map?.coat).toBeTruthy();
+            const opacity = map?.opacity ?? resolveGlassSurfaceMaterial(settings, 'floating').material.opacity;
+            const out = renderGlassOver({ filter: map!.tone, coat: rgb(map!.coat!), opacity, backdrop: [20, 10, 10] });
+            out.forEach((value, channel) => expect(Math.abs(value - [100, 20, 20][channel]!)).toBeLessThanOrEqual(1));
+        });
+        for (const tint of ['subtle', 'medium', 'strong'] as const) {
+            for (const theme of [darkTheme, lightTheme]) {
+                for (const group of ['card', 'floating'] as const) {
+                    for (const preset of ['auto', 'everywhere', 'clear'] as const) {
+                        for (const atmosphereBehind of group === 'card' ? ['band', 'wallpaper'] as const : ['none', 'band'] as const) {
+                            it(`${tint} ${theme.dark ? 'dark' : 'light'} ${group} ${preset} over ${atmosphereBehind}`, () => {
+                                const { map, paint, out } = render(theme, group, preset, atmosphereBehind, rgb(theme.colors.surface.base), tint);
+                                out.forEach((value, channel) => expect(Math.abs(value - paint[channel]!)).toBeLessThanOrEqual(1));
+                                // contrast() pivots at mid-grey and lifts a dark page into a grey slab.
+                                expect(map.tone).not.toMatch(/contrast\(/);
+                                // DESIGN forbids desaturating glass.
+                                expect(map.tone).toMatch(/saturate\(1\.05\)/);
+                            });
+                        }
+                    }
+                }
+            }
+            it(`${tint}: compresses a bright picture under dark glass so primary ink stays legible, keeping its hue`, () => {
+                for (const group of ['card', 'floating'] as const) {
+                    const page = rgb(darkTheme.colors.surface.base);
+                    const k = GLASS_BACKDROP_COMPRESSION[tint].picture[group].dark;
+                    const { paint, out } = render(darkTheme, group, 'auto', 'band', sky, tint);
+                    // out = k·X + c with c fixed by the page: the sky maps to the compressed value.
+                    out.forEach((value, channel) => expect(Math.abs(value - (paint[channel]! + k * (sky[channel]! - page[channel]!)))).toBeLessThanOrEqual(2));
+                    expect(out[0]).toBeGreaterThan(out[2]! + 15);
+                    expect(glassContrastRatio(out, rgb(darkTheme.colors.text.primary))).toBeGreaterThanOrEqual(4.5);
+                }
+            });
+            it(`${tint}: keeps light glass hanging from white, so the darkest backdrop still carries primary ink`, () => {
+                for (const group of ['card', 'floating'] as const) {
+                    const { out } = render(lightTheme, group, 'auto', 'band', [0, 0, 0], tint);
+                    expect(glassContrastRatio(out, rgb(lightTheme.colors.text.primary))).toBeGreaterThanOrEqual(4.5);
+                }
+            });
+        }
+        it('lets an ordinary page show through Subtle and Medium dark floating glass unchanged, like the monocode reference', () => {
+            const page = rgb(darkTheme.colors.surface.base);
+            const row: [number, number, number] = [60, 54, 52];
+            for (const tint of ['subtle', 'medium'] as const) {
+                const { out: overPage } = render(darkTheme, 'floating', 'auto', 'none', page, tint);
+                const { out: overRow } = render(darkTheme, 'floating', 'auto', 'none', row, tint);
+                overRow.forEach((value, channel) => expect(Math.abs((value - overPage[channel]!) - (row[channel]! - page[channel]!))).toBeLessThanOrEqual(1.5));
+            }
+        });
+        it('carries Subtle dark glass in a thin warm coat with no neutral lift, instead of a neutral ink hair', () => {
+            for (const group of ['card', 'floating'] as const) {
+                const { map, opacity } = render(darkTheme, group, 'auto', 'band', sky, 'subtle');
+                const [r, g] = rgb(map.coat!);
+                expect(r).toBeGreaterThan(g!);
+                // A neutral lift (invert/brightness) would grey the dark parts of the picture.
+                expect(map.tone).not.toMatch(/invert/);
+                expect(opacity).toBeLessThanOrEqual(0.12);
+            }
+        });
+    });
+    it('leaves unbacked, solid, Reduce Transparency and authored Elements and floating surfaces untoned', () => {
+        const ground = { page: darkTheme.colors.surface.base, solid: darkTheme.colors.edge.cardFill };
+        for (const preset of ['auto', 'everywhere', 'clear'] as const) {
+            const settings = { glassSurfaceMaterials: glassPresetMaterials(preset) };
+            expect(resolveGlassBackdropMap(settings, 'card', true, {}, ground)).toBeNull();
+            expect(resolveGlassBackdropMap(settings, 'card', true, { atmosphereBehind: 'wallpaper', reduceTransparency: true }, ground)).toBeNull();
+            expect(resolveGlassBackdropMap(settings, 'floating', false, { reduceTransparency: true }, ground)).toBeNull();
+        }
+        expect(resolveGlassBackdropMap({ glassSurfaceMaterials: glassPresetMaterials('solid') }, 'card', true, { atmosphereBehind: 'wallpaper' }, ground)).toBeNull();
+        // An authored table (not a named preset) keeps its exact material, untoned.
+        const auto = { glassSurfaceMaterials: glassPresetMaterials('auto') };
+        const custom = { ...auto, ...resolveGlassSurfaceSettingsDelta(auto, 'card', { opacity: 0.33 }) };
+        expect(resolveGlassSurfaceMaterial(custom, 'card', { atmosphereBehind: 'wallpaper' }).material.opacity).toBe(0.33);
+        expect(resolveGlassBackdropMap(custom, 'card', true, { atmosphereBehind: 'wallpaper' }, ground)).toBeNull();
+        expect(resolveGlassBackdropMap(custom, 'floating', true, {}, ground)).toBeNull();
     });
     it('selects Clear with strong blur and low coats, round-trips through existing settings and preserves exact custom values', () => {
         const settings = { glassBlurIntensity: 'regular' as const };
@@ -32,7 +166,7 @@ describe('glass material Account owner', () => {
             const material = readGlassMaterials(clear)[group];
             expect(material.blur).toBe('strong');
             expect(material.opacity).toBeGreaterThan(0);
-            expect(material.opacity).toBeLessThanOrEqual(0.1);
+            expect(material.opacity).toBeLessThanOrEqual(group === 'card' ? 0.5 : 0.1);
         }
         expect(readGlassMaterials(clear).floating.opacity).toBe(0.02);
         const custom = { ...clear, ...resolveGlassSurfaceSettingsDelta(clear, 'floating', { opacity: 0.013 }) };
@@ -123,7 +257,8 @@ describe('glass material Account owner', () => {
                 const settings = { glassBlurIntensity: intensity, ...resolveGlassPresetSettingsDelta({ glassBlurIntensity: intensity }, preset) };
                 const updated = { ...settings, ...resolveGlassIntensitySettingsDelta(settings, intensity) };
                 expect(readGlassPreset(updated)).toBe(preset);
-                expect(resolveGlassSurfaceMaterial(updated, 'floating').material).toEqual({ blur: 'strong', opacity: 0.02 });
+                // The floating coat follows the tint (Subtle by default); the frost stays Strong.
+                expect(resolveGlassSurfaceMaterial(updated, 'floating').material).toEqual({ blur: 'strong', opacity: readGlassTintedMaterials(updated).floating.opacity });
                 expect(readGlassMaterials(updated).chrome.blur).toBe(intensity);
             }
         }

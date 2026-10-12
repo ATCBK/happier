@@ -12,6 +12,7 @@ export function useGlassMaterialSettings(): GlassMaterialSettings {
     const select = React.useCallback((settings: Settings): GlassMaterialSettings => draft ?? {
         glassBlurEnabled: settings.glassBlurEnabled,
         glassBlurIntensity: settings.glassBlurIntensity,
+        glassTintIntensity: settings.glassTintIntensity,
         glassSurfaceMaterials: settings.glassSurfaceMaterials,
     }, [draft]);
     return useSettingsSelector(select);

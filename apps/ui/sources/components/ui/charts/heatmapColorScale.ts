@@ -1,4 +1,4 @@
-import Color from 'color';
+import { resolveThemeColor } from '@/theme/parseThemeColor';
 
 type HeatmapToneInput = Readonly<{
     value: number;
@@ -44,7 +44,7 @@ export function resolveHeatmapColor(input: HeatmapToneInput): string {
     const toneMixRatios = [0.78, 0.62, 0.46, 0.24, 0.06] as const;
     const mixRatio = toneMixRatios[toneIndex];
 
-    return Color(baseColor)
-        .mix(Color(emptyColor), mixRatio)
+    return resolveThemeColor(baseColor)
+        .mix(resolveThemeColor(emptyColor), mixRatio)
         .hex();
 }

@@ -1,5 +1,5 @@
 /** @vitest-environment jsdom */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { applyGlassDocumentPresentation, shouldRevealNativeGlassCanvas } from './glassDocumentPresentation';
 import { applyWebRootCanvasPresentation } from '@/theme/useWebRootCanvasPresentation';
@@ -7,8 +7,82 @@ import { glassPresetMaterials } from './glassMaterial';
 import { applyThemeRuntimeSelection, type ThemeRuntimeUnistylesAdapter } from '@/theme/profiles/themeProfileRuntime';
 import { darkTheme, lightTheme } from '@/theme';
 import { resolveGlassSurfaceColor } from './useGlassSurfaceColor';
+import { glassSurfaceTintColor } from './glassSurfacePaint';
+
+// Only the web platform boundary is mocked; document resolution and glass paint stay real.
+vi.mock('react-native', async () => {
+    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    return createReactNativeWebMock();
+});
 
 describe('live document material boundary', () => {
+    it('resolves live page and surface variables into the same fixed-point coat as concrete colors', () => {
+        const pageVariable = '--fix-glass-page';
+        const fillVariable = '--fix-glass-fill';
+        const input = {
+            color: `var(${fillVariable})`, page: `var(${pageVariable})`, ink: 'rgba(235, 230, 225, 0.1)',
+            dark: true, group: 'card' as const,
+            settings: { glassSurfaceMaterials: glassPresetMaterials('everywhere') },
+            environment: { atmosphereBehind: 'wallpaper' as const },
+        };
+        try {
+            document.documentElement.style.setProperty(pageVariable, '#141212');
+            for (const fill of ['#221c1c', '#302424']) {
+                document.documentElement.style.setProperty(fillVariable, fill);
+                const expected = glassSurfaceTintColor({ ...input, color: fill, page: '#141212' });
+                expect(expected).not.toBe(fill);
+                expect(glassSurfaceTintColor(input)).toBe(expected);
+            }
+        } finally {
+            document.documentElement.style.removeProperty(pageVariable);
+            document.documentElement.style.removeProperty(fillVariable);
+        }
+    });
+
+    it('keeps authored paint when either ground variable is unresolved instead of substituting page or ink', () => {
+        const input = {
+            ink: 'rgba(235, 230, 225, 0.1)', dark: true,
+            settings: { glassSurfaceMaterials: glassPresetMaterials('everywhere') },
+            environment: { atmosphereBehind: 'wallpaper' as const },
+        };
+        for (const group of ['card', 'floating'] as const) {
+            for (const ground of [
+                { color: 'var(--fix-glass-undefined)', page: '#141212' },
+                { color: '#221c1c', page: 'var(--fix-glass-undefined)' },
+                { color: 'var(--fix-glass-undefined)', page: 'var(--fix-glass-undefined)' },
+            ]) {
+                expect(glassSurfaceTintColor({ ...input, ...ground, group })).toBe(ground.color);
+            }
+        }
+    });
+
+    it('keeps authored web paint when no document can resolve its variables', () => {
+        vi.stubGlobal('document', undefined);
+        try {
+            const color = 'var(--colors-edge-card-fill)';
+            expect(glassSurfaceTintColor({
+                color, page: '#141212', ink: 'rgba(235, 230, 225, 0.1)', dark: true, group: 'floating',
+                settings: { glassSurfaceMaterials: glassPresetMaterials('everywhere') },
+                environment: { atmosphereBehind: 'wallpaper' },
+            })).toBe(color);
+        } finally {
+            vi.unstubAllGlobals();
+        }
+    });
+
+    it('publishes a transparent content-plane projection over atmosphere without changing the resolved surface recipe', () => {
+        const doc = document.implementation.createHTMLDocument();
+        for (const preset of ['solid', 'auto', 'everywhere', 'clear'] as const) {
+            for (const atmosphereBehind of ['band', 'wallpaper'] as const) {
+                const stop = applyGlassDocumentPresentation(doc, { glassSurfaceMaterials: glassPresetMaterials(preset) }, { atmosphereBehind, reduceTransparency: true });
+                expect(doc.documentElement.style.getPropertyValue('--happier-glass-content-plane-opacity')).toBe('0%');
+                expect(doc.documentElement.style.getPropertyValue('--happier-glass-content-nested-plane-opacity')).toBe('0%');
+                expect(doc.documentElement.style.getPropertyValue('--happier-glass-content-opacity')).toBe('100%');
+                stop();
+                expect(doc.documentElement.style.getPropertyValue('--happier-glass-content-plane-opacity')).toBe('');
+            }
+        }
+    });
     it('resolves an authored web field variable before alpha inspection and keeps solid and translucent authoring exact', () => {
         const variable = '--colors-input-background';
         const color = `var(${variable})`;
@@ -92,7 +166,7 @@ describe('live document material boundary', () => {
         const doc = document.implementation.createHTMLDocument();
         const stop = applyGlassDocumentPresentation(doc, {
             glassSurfaceMaterials: { ...glassPresetMaterials('everywhere'), content: { blur: 'strong', opacity: 0 } },
-        }, {});
+        }, { desktopWindow: true, nativeWindowMaterialLive: true });
         expect(doc.documentElement.style.getPropertyValue('--happier-glass-content-opacity')).toBe('0%');
         expect(doc.documentElement.style.getPropertyValue('--happier-glass-content-nested-opacity')).toBe('0%');
         expect(doc.documentElement.style.getPropertyValue('--happier-glass-content-blur')).toBe('24px');

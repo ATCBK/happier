@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import { parseOauthCallbackUrl, generatePkceCodes, generateOauthState, type PkceCodes } from '@/utils/auth/oauthCore';
 import * as React from 'react';
 import { Platform, TouchableOpacity, View } from 'react-native';
@@ -41,7 +42,7 @@ const styles = StyleSheet.create((theme) => ({
         zIndex: 1000,
     },
     loadingText: {
-        marginTop: 16,
+        marginTop: theme.space.s16,
         fontSize: 16,
         color: theme.colors.text.primary,
     },
@@ -49,49 +50,48 @@ const styles = StyleSheet.create((theme) => ({
         flex: 1,
         justifyContent: 'center',
         alignItems: 'center',
-        padding: 20,
+        padding: theme.space.s20,
         backgroundColor: theme.colors.surface.base,
     },
     errorText: {
         fontSize: 16,
         color: theme.colors.state.danger.foreground,
         textAlign: 'center',
-        marginBottom: 20,
+        marginBottom: theme.space.s20,
     },
     retryButton: {
-        paddingHorizontal: 20,
-        paddingVertical: 10,
+        paddingHorizontal: theme.space.s20,
+        paddingVertical: theme.space.s10,
         backgroundColor: theme.colors.accent.blue,
         borderRadius: 8,
     },
     retryButtonText: {
         color: theme.colors.button.primary.tint,
-        fontSize: 16,
-        fontWeight: '600',
+        ...Typography.variant('heading'),
+
     },
     unsupportedContainer: {
         flex: 1,
         justifyContent: 'center',
         alignItems: 'center',
-        padding: 20,
+        padding: theme.space.s20,
         backgroundColor: theme.colors.surface.base,
     },
     unsupportedTitle: {
-        fontSize: 18,
-        fontWeight: '600',
+        ...Typography.variant('heading'),
         color: theme.colors.text.primary,
-        marginBottom: 20,
+        marginBottom: theme.space.s20,
     },
     unsupportedText: {
         fontSize: 14,
         color: theme.colors.text.secondary,
         textAlign: 'center',
-        marginBottom: 24,
+        marginBottom: theme.space.s24,
     },
     terminalContainer: {
         backgroundColor: theme.colors.surface.inset,
         borderRadius: 8,
-        padding: 16,
+        padding: theme.space.s16,
         minWidth: 280,
         borderWidth: 1,
         borderColor: theme.colors.border.modal,

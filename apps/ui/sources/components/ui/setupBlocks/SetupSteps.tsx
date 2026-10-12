@@ -112,7 +112,7 @@ const styles = StyleSheet.create((theme) => ({
   detail: {
     ...Typography.default(),
     ...happierPageTextMetrics('rowDescription'),
-    marginTop: 2,
+    marginTop: theme.space.s2,
     color: theme.colors.text.secondary,
   },
   meta: {
