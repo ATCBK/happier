@@ -21,6 +21,7 @@ export const SessionAgentSpawnPolicyV1StrictSchema = lazyZodSchema(() => z.objec
   allowProfileOverride: z.boolean().default(true),
   allowEnvironmentVariables: z.boolean().default(true),
   allowConnectedServicesOverride: z.boolean().default(true),
+  /** Released key; governs the complete skill and MCP session selection. */
   allowMcpSelectionOverride: z.boolean().default(true),
   allowTranscriptStorageOverride: z.boolean().default(true),
   permissionCeiling: SessionAgentSpawnPermissionCeilingV1Schema,
@@ -52,7 +53,7 @@ export type SessionAgentStartOverridesV1 = Readonly<{
   profileId?: boolean;
   environmentVariables?: boolean;
   connectedServices?: boolean;
-  mcpSelection?: boolean;
+  capabilitySelection?: boolean;
   transcriptStorage?: boolean;
   requiredPermissionMode?: unknown;
 }>;

@@ -29,7 +29,7 @@ function readSessionAgentStartPolicyDeniedField(
   if (!policy.allowProfileOverride && overrides.profileId) return 'profileId';
   if (!policy.allowEnvironmentVariables && overrides.environmentVariables) return 'environmentVariables';
   if (!policy.allowConnectedServicesOverride && overrides.connectedServices) return 'connectedServices';
-  if (!policy.allowMcpSelectionOverride && overrides.mcpSelection) return 'mcpSelection';
+  if (!policy.allowMcpSelectionOverride && overrides.capabilitySelection) return 'capabilitySelection';
   if (!policy.allowTranscriptStorageOverride && overrides.transcriptStorage) return 'transcriptStorage';
   if (policy.permissionCeiling !== null && overrides.requiredPermissionMode !== undefined
     && (typeof overrides.requiredPermissionMode !== 'string'
@@ -51,11 +51,11 @@ type AgentStartConfigurationV1 = Readonly<{
   configOptions?: NonNullable<SessionSpawnNewInputV2['configuration']>['options'];
   profileId?: string;
   connectedServices?: SessionSpawnNewInputV2['connectedServices'];
-  mcpSelection?: SessionSpawnNewInputV2['mcpSelection'];
+  capabilitySelection?: SessionSpawnNewInputV2['capabilitySelection'];
   transcriptStorage?: SessionSpawnNewInputV2['transcriptStorage'];
 }>;
 
-type AgentStartClearFieldV1 = 'modelSelection' | 'agentModeId' | 'configOptions' | 'profileId' | 'connectedServices' | 'mcpSelection';
+type AgentStartClearFieldV1 = 'modelSelection' | 'agentModeId' | 'configOptions' | 'profileId' | 'connectedServices' | 'capabilitySelection';
 export type AgentStartFactsV1 = Readonly<{
   /** New compute is a known cross-Machine placement before enrollment assigns an id. */
   machineId?: string | Unresolved | Readonly<{ kind: 'new_machine' }>;
@@ -184,7 +184,7 @@ function deriveOverrides(facts: AgentStartFactsV1, baseline: AgentStartBaselineV
     profileId: differs(facts.profileId, configuration?.profileId),
     environmentVariables: facts.hasEnvironmentVariables === true || isUnresolved(facts.hasEnvironmentVariables),
     connectedServices: differs(facts.connectedServices, configuration?.connectedServices),
-    mcpSelection: differs(facts.mcpSelection, configuration?.mcpSelection),
+    capabilitySelection: differs(facts.capabilitySelection, configuration?.capabilitySelection),
     transcriptStorage: differs(facts.transcriptStorage, configuration?.transcriptStorage),
     requiredPermissionMode: facts.permissionMode ?? configuration?.permissionMode,
   };

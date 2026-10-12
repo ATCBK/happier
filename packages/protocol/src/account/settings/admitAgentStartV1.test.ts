@@ -36,13 +36,31 @@ const modelSelection = { agentTargetKey: engine.agentTargetKey, providerConnecti
 const role: ResolvedRoleV1 = { roleId: 'builder', name: 'Builder', instructions: 'Build', engine, runsAs: { kind: 'session' }, workspaceWrites: 'allow', secondOpinion: 'off', enabled: true };
 const baseline: AgentStartContextV1 = {
   caller: { kind: 'session', sessionId: 'lead', starterDepth: 0, turnDepth: 0 },
-  baseline: { machineId: 'machine', directory: '/workspace', configuration: { agentTarget: target, modelSelection, permissionMode: 'default', agentModeId: 'code', configOptions: { effort: { value: 'medium', updatedAtMs: 1 } }, profileId: 'profile', connectedServices: { v: 2, bindingsByServiceId: {} }, mcpSelection: { v: 1, managedServersEnabled: true, forceIncludeServerIds: [], forceExcludeServerIds: [] }, transcriptStorage: 'persisted' } },
+  baseline: { machineId: 'machine', directory: '/workspace', configuration: { agentTarget: target, modelSelection, permissionMode: 'default', agentModeId: 'code', configOptions: { effort: { value: 'medium', updatedAtMs: 1 } }, profileId: 'profile', connectedServices: { v: 2, bindingsByServiceId: {} }, capabilitySelection: { mcp: { v: 1, managedServersEnabled: true, forceIncludeServerIds: [], forceExcludeServerIds: [] } }, transcriptStorage: 'persisted' } },
   ledSubtreeSessionIds: ['worker'], workDepthLimit: 4, roles: { builder: role }, callerPermissionCeiling: 'default',
 };
 const leaf = (facts: AgentStartFactsV1 = {}): MaterializedWorkflowLeafV1 => ({ blockId: 'block', kind: 'session', engine, runsAs: { kind: 'session' }, workspaceWrites: 'allow', facts });
 const spawn = (facts: AgentStartFactsV1 = {}): AgentStartRequestV1 => ({ kind: 'spawn_new', facts });
 
 describe('admitAgentStartV1', () => {
+  it('applies the released MCP override policy to the whole capability selection', () => {
+    const policy = { ...DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1, allowMcpSelectionOverride: false };
+    const capabilitySelection = {
+      skills: { v: 1 as const, forceIncludeSkillIds: ['lint'], forceExcludeSkillIds: [], excludeNativeSkillNames: [] },
+    };
+    const context = { ...baseline, baseline: { ...baseline.baseline, configuration: {
+      ...baseline.baseline.configuration, capabilitySelection,
+    } } };
+    expect(admitAgentStartV1(policy, spawn({ capabilitySelection }), context)).toMatchObject({ ok: true });
+    expect(admitAgentStartV1(policy, spawn({ capabilitySelection: { skills: {
+      ...capabilitySelection.skills, forceIncludeSkillIds: ['review'],
+    } } }), context)).toMatchObject({
+      ok: false, refusal: { code: 'policy_denied_field', field: 'capabilitySelection' },
+    });
+    expect(admitAgentStartV1(policy, spawn({ capabilitySelection: null }), context)).toMatchObject({
+      ok: false, refusal: { code: 'policy_denied_field', field: 'capabilitySelection' },
+    });
+  });
   it('keeps host caller identity within the canonical Session storage contract without rewriting it', () => {
     const caller = { kind: 'session', starterDepth: 0, turnDepth: 0 };
     const sessionId = 's'.repeat(SessionIndexedIdentifierMaxLengthV1);
@@ -323,7 +341,7 @@ describe('admitAgentStartV1', () => {
     ['allowConfigOptionOverrides', 'configuration.options', { configOptions: { effort: { value: 'high', updatedAtMs: 1 } } }, { configOptions: { kind: 'unresolved' } }],
     ['allowProfileOverride', 'profileId', { profileId: 'different' }, { profileId: { kind: 'unresolved' } }],
     ['allowConnectedServicesOverride', 'connectedServices', { connectedServices: { v: 2, bindingsByServiceId: { 'happier.service.codex/subscription': { source: 'native' } } } }, { connectedServices: { kind: 'unresolved' } }],
-    ['allowMcpSelectionOverride', 'mcpSelection', { mcpSelection: { v: 1, managedServersEnabled: false, forceIncludeServerIds: [], forceExcludeServerIds: [] } }, { mcpSelection: { kind: 'unresolved' } }],
+    ['allowMcpSelectionOverride', 'capabilitySelection', { capabilitySelection: { mcp: { v: 1, managedServersEnabled: false, forceIncludeServerIds: [], forceExcludeServerIds: [] } } }, { capabilitySelection: { kind: 'unresolved' } }],
     ['allowTranscriptStorageOverride', 'transcriptStorage', { transcriptStorage: 'direct' }, { transcriptStorage: { kind: 'unresolved' } }],
   ] satisfies ReadonlyArray<readonly [keyof typeof DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1, string, AgentStartFactsV1, AgentStartFactsV1]>;
   it.each(restrictions)('checks authoring %s facts and unresolved selections per leaf', (flag, field, changed, unresolved) => {

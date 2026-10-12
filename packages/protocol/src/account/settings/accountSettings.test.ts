@@ -27,6 +27,7 @@ import { MAX_PLUGIN_IDENTIFIER_BYTES } from '../../plugins/pluginId.js';
 import { AccountSettingsPersistedObjectSchema } from './accountSettingsPersistedObject.js';
 import { readRetainedConnectedAccountCatalogRecordV1 } from '../../connect/connectedAccountCatalogV1.js';
 import { readAcpCatalogTransferSourceV2 } from '../../acp/catalog/transferAcpCatalogV2.js';
+import { applyAccountSettingMutationV1 } from './accountSettingMutationV1.js';
 
 type ActionSurface = NonNullable<ActionEnablementContext['surface']>;
 
@@ -48,6 +49,65 @@ function readRetainedEntitySources(raw: Record<string, unknown>): Record<string,
 }
 
 describe('accountSettings', () => {
+  it('reads every catalog preference through its stored projection without changing mutation admission', () => {
+    const retained = { machineIds: ['machine-a'], retired: true };
+    expect(accountSettingsParse({ machineOfflineAlertsV1: retained }).machineOfflineAlertsV1)
+      .toEqual({ machineIds: ['machine-a'] });
+    expect(ACCOUNT_SETTING_DEFINITIONS.machineOfflineAlertsV1.parseMutationValue(retained).success).toBe(false);
+    expect(accountSettingsParse({ machineOfflineAlertsV1: { machineIds: [7], retired: true } }).machineOfflineAlertsV1)
+      .toEqual({ machineIds: [] });
+  });
+
+  it('applies stored value budgets to the projected known fields while mutations measure the raw input', () => {
+    const definition = accountCatalogDefinition(z.object({ enabled: z.boolean() }).strict(), { enabled: false }, {
+      semanticDomain: 'stored projection bounds', classification: 'preference', maximumSerializedValueBytes: 32,
+    });
+    const retained = { enabled: true, retired: 'x'.repeat(65_537) };
+    expect(definition.parseStoredValue(retained)).toEqual({ success: true, data: { enabled: true } });
+    expect(definition.parseMutationValue(retained)).toMatchObject({ success: false, reason: 'tooLarge' });
+  });
+  it('keeps valid stored target preferences when an unresolved container key is present', () => {
+    const stored = { 'agent:happier.agent.claude/claude': false, 'agent:claude': true, 'acpBackend:review-agent': true,
+      'backend:custom-acp': true, 'agent:happier.agent.custom-acp/custom-acp': true };
+    const parsed = accountSettingsParse({ backendEnabledByTargetKey: stored });
+    expect(parsed.backendEnabledByTargetKey).toEqual({ 'agent:happier.agent.claude/claude': false,
+      'agent:happier.agent.custom-acp/custom-acp:definition:review-agent': true });
+    expect(readAccountSettingValueForBackendTarget(parsed, 'backendEnabledByTargetKey', 'backend:custom-acp')).toBeUndefined();
+    expect(readAccountSettingValueForBackendTarget(parsed, 'backendEnabledByTargetKey', 'agent:claude')).toBe(false);
+    expect(ACCOUNT_SETTING_DEFINITIONS.backendEnabledByTargetKey.parseMutationValue({ 'backend:custom-acp': true }).success).toBe(false);
+    const defaults = accountSettingsParse({
+      backendCliSourcePreferenceByTargetKey: { 'backend:custom-acp': 'managed-first', 'acpBackend:review-agent': 'system-first' },
+      sessionDefaultPermissionModeByTargetKey: { 'backend:custom-acp': 'yolo', 'agent:claude': 'read-only' },
+      newSessionDefaultPersistenceModeByTargetKeyV1: { 'backend:custom-acp': 'direct', 'agent:claude': 'persisted' },
+    });
+    expect(defaults.backendCliSourcePreferenceByTargetKey).toEqual({
+      'agent:happier.agent.custom-acp/custom-acp:definition:review-agent': 'system-first',
+    });
+    expect(defaults.sessionDefaultPermissionModeByTargetKey).toEqual({ 'agent:happier.agent.claude/claude': 'read-only' });
+    expect(defaults.newSessionDefaultPersistenceModeByTargetKeyV1).toEqual({ 'agent:happier.agent.claude/claude': 'persisted' });
+  });
+
+  it('defaults agent HTML network pre-approval to allowed but recovers malformed persisted values to ask', () => {
+    expect(accountSettingsParse({})).toHaveProperty('agentHtmlNetworkPolicy', 'allowed');
+    for (const policy of ['allowed', 'ask', 'off']) {
+      const raw = AccountSettingsPersistedObjectSchema.parse(JSON.parse(JSON.stringify({ agentHtmlNetworkPolicy: policy })));
+      expect(accountSettingsParse(raw)).toHaveProperty('agentHtmlNetworkPolicy', policy);
+    }
+    for (const malformed of ['open', null, true, { network: 'allowed' }]) {
+      expect(accountSettingsParse({ agentHtmlNetworkPolicy: malformed })).toHaveProperty('agentHtmlNetworkPolicy', 'ask');
+    }
+  });
+  it('owns the Home atmosphere default and tolerantly opens authored preferences', () => {
+    const defaults = accountSettingsParse({});
+    expect(defaults).toHaveProperty('homeAtmosphere.source', 'planet');
+    expect(defaults).toHaveProperty('homeAtmosphere.planet', { placement: 'corner', style: 'balanced', digits: true });
+    const value = { source: 'picture', planet: { placement: 'rise', style: 'rich', digits: false },
+      picture: { ref: { kind: 'user', localId: 'device-picture' }, layout: 'wallpaper' },
+      looks: { 'device-picture': { strength: 1.8, look: 'original', dissolve: 'ordered' } },
+      behindSessions: true, moments: { send: false } };
+    expect(accountSettingsParse({ homeAtmosphere: { ...value, future: true,
+      planet: { ...value.planet, future: true }, looks: { 'device-picture': { ...value.looks['device-picture'], fade: -0.2 } } } })).toHaveProperty('homeAtmosphere', value);
+  });
   it('retains only explicitly chosen night hours and rejects an empty or invalid window', () => {
     expect(accountSettingsParse({}).usageNightHoursV1).toBeNull();
     const window = { startHour: 23, endHour: 7 };
@@ -73,9 +133,15 @@ describe('accountSettings', () => {
       { evidenceKey: 'coach:evidence-a', kind: 'dismissed' },
       { evidenceKey: 'coach:evidence-b', kind: 'snoozed', untilMs: 900 },
     ] };
-    expect(accountSettingsParse({ usageCoachPreferencesV1: preferences }).usageCoachPreferencesV1).toEqual(preferences);
-    expect(accountSettingsParse({ usageCoachPreferencesV1: { ...preferences, digestCadence: 'weekly' } }).usageCoachPreferencesV1).toEqual(preferences);
-    expect(accountSettingsParse({}).usageCoachPreferencesV1).toEqual({ v: 1, suppressions: [] });
+    const defaults = { disabledChecks: [], modelSuggestion: 'suggest_with_estimates' };
+    expect(accountSettingsParse({ usageCoachPreferencesV1: preferences }).usageCoachPreferencesV1).toEqual({ ...preferences, ...defaults });
+    expect(accountSettingsParse({ usageCoachPreferencesV1: { ...preferences, digestCadence: 'weekly' } }).usageCoachPreferencesV1).toEqual({ ...preferences, ...defaults });
+    expect(accountSettingsParse({}).usageCoachPreferencesV1).toEqual({ v: 1, suppressions: [], ...defaults });
+    const configured = { ...preferences, disabledChecks: ['mcp_overhead', 'outside_usage'], modelSuggestion: 'complete_only' };
+    const admitted = ACCOUNT_SETTING_DEFINITIONS.usageCoachPreferencesV1.parseMutationValue(configured);
+    expect(admitted.success).toBe(true);
+    expect(accountSettingsParse({ usageCoachPreferencesV1: configured }).usageCoachPreferencesV1).toEqual(configured);
+    expect(ACCOUNT_SETTING_DEFINITIONS.usageCoachPreferencesV1.parseMutationValue({ ...configured, disabledChecks: ['invented'] }).success).toBe(false);
     expect(ACCOUNT_SETTING_DEFINITIONS.usageCoachPreferencesV1.parseMutationValue({ ...preferences, digestCadence: 'weekly' }).success).toBe(false);
   });
   it('keeps quota advice opt-in and round-trips authored personal and qualified pool targets without changing recovery policy', () => {
@@ -139,7 +205,7 @@ describe('accountSettings', () => {
     expect(persisted).toEqual(raw);
     expect(readAcpCatalogTransferSourceV2({ rawSettings: persisted, sourceSettingsVersion: 7 }))
       .toMatchObject({ status: 'ready', sourceSettingsVersion: 7,
-        definitions: [expect.objectContaining({ id: 'review-bot', command: 'review-bot' })],
+        definitions: [expect.objectContaining({ id: 'review-bot', launch: { kind: 'command', command: 'review-bot', args: [] } })],
         references: [{ path: 'backends[0].env.TOKEN', secretId: 'personal-token' }] });
     expect(persisted).toEqual(raw);
   });
@@ -155,8 +221,8 @@ describe('accountSettings', () => {
     const ordinaryDefaults = { v: 1, bindingsByAgentId: { codex: { v: 1, bindingsByServiceId: {
       'openai-codex': { source: 'connected', selection: 'group', groupId: 'codex-main' },
     } } } };
-    const additionalDefaults = { v: 1, bindingsByAgentId: { agy: { v: 1, bindingsByServiceId: {
-      antigravity: { source: 'connected', selection: 'profile', profileId: 'google-work' },
+    const additionalDefaults = { v: 1, futureCarrier: true, bindingsByAgentId: { agy: { v: 1, futureAgent: true, bindingsByServiceId: {
+      antigravity: { source: 'connected', selection: 'profile', profileId: 'google-work', futureSelection: true },
     } } } };
     const raw = { connectedAccountServiceConfigurationsV1: configurations,
       connectedAccountPurposeBindingsV1: purposes, connectedServicesDefaultAuthByAgentIdV1: ordinaryDefaults,
@@ -183,9 +249,11 @@ describe('accountSettings', () => {
     });
     expect(parsed.connectedServicesAdditionalDefaultAuthByAgentIdV1).toEqual({
       v: 1, bindingsByAgentId: { antigravity: { v: 1, bindingsByServiceId: {
-        'happier.agent.antigravity/antigravity-account': additionalDefaults.bindingsByAgentId.agy.bindingsByServiceId.antigravity,
+        'happier.agent.antigravity/antigravity-account': { source: 'connected', selection: 'profile', profileId: 'google-work' },
       } } },
     });
+    expect(ACCOUNT_SETTING_DEFINITIONS.connectedServicesAdditionalDefaultAuthByAgentIdV1.parseStoredValue(additionalDefaults).success).toBe(true);
+    expect(ACCOUNT_SETTING_DEFINITIONS.connectedServicesAdditionalDefaultAuthByAgentIdV1.parseMutationValue(additionalDefaults).success).toBe(false);
     expect(persisted).toEqual(raw);
   });
 
@@ -372,6 +440,7 @@ describe('accountSettings', () => {
     expect(LegacyRecentMachinePathsSchema.parse(recentMachinePaths)).toEqual([
       { machineId: 'machine-1', path: '/workspace/project' },
       { machineId: 'machine-2', path: '/workspace/secondary' },
+      { machineId: 'machine-4', path: 'x'.repeat(16 * 1024 + 1) },
     ]);
     expect(LegacyRecentMachinePathsSchema.parse('not-an-array')).toEqual([]);
   });
@@ -518,7 +587,11 @@ describe('accountSettings', () => {
         sourcePayload: { bearerToken: 'do-not-persist' },
       },
     });
-    expect(invalidSecret.sessionHandoffDefaultsV1.ignoredIncludeGlobs).toEqual([]);
+    expect(invalidSecret.sessionHandoffDefaultsV1.ignoredIncludeGlobs).toEqual(['safe/**/*']);
+    expect(invalidSecret.sessionHandoffDefaultsV1).not.toHaveProperty('sourcePayload');
+    const authoredSecret = { ignoredIncludeGlobs: ['safe/**/*'], sourcePayload: { bearerToken: 'do-not-persist' } };
+    expect(SessionHandoffDefaultsV1Schema.safeParse(authoredSecret).success).toBe(false);
+    expect(ACCOUNT_SETTING_DEFINITIONS.sessionHandoffDefaultsV1.parseMutationValue(authoredSecret).success).toBe(false);
   });
 
   it('reads but does not rewrite retired UI-owned workspace relationship identity', () => {
@@ -847,6 +920,32 @@ describe('accountSettings', () => {
       configMode: 'copied',
       stateMode: 'isolated',
     });
+  });
+
+  it('preserves predecessor Antigravity isolation and privacy choices through the current Agent identity', () => {
+    const parsed = accountSettingsParse({
+      connectedServicesProviderStateSharingSettingsV1: {
+        v: 1,
+        defaults: { configMode: 'linked', stateMode: 'shared' },
+        byAgentId: { agy: { configMode: 'isolated', stateMode: 'isolated' } },
+        acknowledgedRisksByAgentId: { agy: { sharedStatePrivacy: true, symlinkUnavailable: true } },
+      },
+    });
+    expect(resolveConnectedServicesProviderStateSharingPolicyV1(
+      parsed.connectedServicesProviderStateSharingSettingsV1, 'antigravity',
+    )).toEqual({ configMode: 'isolated', stateMode: 'isolated' });
+    expect(parsed.connectedServicesProviderStateSharingSettingsV1.acknowledgedRisksByAgentId)
+      .toEqual({ antigravity: { sharedStatePrivacy: true, symlinkUnavailable: true } });
+    expect(parsed.connectedServicesProviderStateSharingSettingsV1.byAgentId).not.toHaveProperty('agy');
+
+    const current = accountSettingsParse({
+      connectedServicesProviderStateSharingSettingsV1: {
+        byAgentId: { antigravity: { stateMode: 'shared' }, agy: { stateMode: 'isolated' } },
+      },
+    });
+    expect(resolveConnectedServicesProviderStateSharingPolicyV1(
+      current.connectedServicesProviderStateSharingSettingsV1, 'antigravity',
+    ).stateMode).toBe('shared');
   });
 
   it('falls back to provider state sharing defaults when the setting is malformed', () => {
@@ -1242,11 +1341,11 @@ describe('accountSettings', () => {
 
     expect(parsed.backendEnabledByTargetKey).toEqual({
       'agent:happier.agent.claude/claude': true,
-      'backend:team-review:configured:team-review': false,
+      'agent:happier.agent.custom-acp/custom-acp:definition:team-review': false,
     });
     expect(parsed.backendCliSourcePreferenceByTargetKey).toEqual({
       'agent:happier.agent.claude/claude': 'system-first',
-      'backend:team-review:configured:team-review': 'managed-first',
+      'agent:happier.agent.custom-acp/custom-acp:definition:team-review': 'managed-first',
     });
     expect(readAccountSettingValueForBackendTarget(parsed, 'backendEnabledByTargetKey', {
       kind: 'builtInAgent', agentId: 'claude',
@@ -1419,6 +1518,41 @@ describe('accountSettings', () => {
     });
   });
 
+  it('rejects malformed agent admission policy mutations while preserving stored-read recovery', () => {
+    const malformedPolicies = [
+      { key: 'sessionAgentStartAllowListsV1', value: { v: 1, allowedRoleIds: [''], allowedAgentTargetKeys: null } },
+      { key: 'sessionAgentStartAllowListsV1', value: { v: 1, allowedRoleIds: [false], allowedAgentTargetKeys: null } },
+      { key: 'sessionAgentStartAllowListsV1', value: { v: 1, allowedRoleIds: ['builder'], allowedAgentTargetKeys: ['agent:happier.agent.codex/codex'], futurePolicy: true } },
+      { key: 'sessionAgentSpawnPolicyV1', value: { v: 1, allowCustomDirectory: false, permissionCeiling: 'not-a-real-mode' } },
+    ] as const;
+    for (const { key, value } of malformedPolicies) {
+      expect(ACCOUNT_SETTING_DEFINITIONS[key].parseMutationValue(value).success, key).toBe(false);
+      expect(applyAccountSettingMutationV1({ showLineNumbers: true }, {
+        operations: [{ op: 'set', key, value }],
+      })).toEqual({ status: 'invalid', reason: 'invalidValue' });
+    }
+
+    const stored = accountSettingsParse({
+      sessionAgentSpawnPolicyV1: { v: 1, allowCustomDirectory: false, permissionCeiling: 'not-a-real-mode' },
+      sessionAgentStartAllowListsV1: { v: 1, allowedRoleIds: [''], allowedAgentTargetKeys: null },
+    });
+    expect(stored.sessionAgentSpawnPolicyV1).toMatchObject({ allowCustomDirectory: false, permissionCeiling: null });
+    expect(stored.sessionAgentStartAllowListsV1).toEqual({ v: 1, allowedRoleIds: [], allowedAgentTargetKeys: null });
+
+    expect(accountSettingsParse({
+      sessionAgentStartAllowListsV1: {
+        v: 1,
+        allowedRoleIds: ['builder'],
+        allowedAgentTargetKeys: ['agent:happier.agent.codex/codex'],
+        futurePolicy: true,
+      },
+    }).sessionAgentStartAllowListsV1).toEqual({
+      v: 1,
+      allowedRoleIds: ['builder'],
+      allowedAgentTargetKeys: ['agent:happier.agent.codex/codex'],
+    });
+  });
+
   it('preserves valid Action policy when one known persisted override is malformed', () => {
     const parsed = accountSettingsParse({
       actionsSettingsV1: {
@@ -1525,7 +1659,7 @@ describe('accountSettings', () => {
     expectActionSurfaceEnabled('session.stop', parsed.actionsSettingsV1, 'agent', false);
   });
 
-  it('adds the forward-compatible attention delivery policy while preserving unknown settings fields', () => {
+  it('projects the typed attention policy while preserving opaque unknown Account settings fields', () => {
     const parsed = accountSettingsParse({
       attentionDeliveryPolicyV1: {
         v: 1,
@@ -1539,7 +1673,7 @@ describe('accountSettings', () => {
     });
 
     expect(parsed.attentionDeliveryPolicyV1.v).toBe(1);
-    expect(parsed.attentionDeliveryPolicyV1.futureNestedField).toEqual({ keep: true });
+    expect(parsed.attentionDeliveryPolicyV1).not.toHaveProperty('futureNestedField');
     expect(parsed.futureAccountField).toEqual({ keep: true });
   });
 
@@ -1767,7 +1901,7 @@ describe('isExpoPushNotificationChannelEnabled', () => {
 
 });
 
-it('keeps Classic validation errors at root and generated definition boundaries', () => {
+it('keeps Classic validation errors at generated definition and handoff boundaries', () => {
  const definition=accountCatalogDefinition(z.string().trim().min(1),' default ',{semanticDomain:'test preference',classification:'preference',maximumSerializedValueBytes:1024,recoverMalformed:false});
  expect(definition.default).toBe('default');
  expect(definition.schema.parse(undefined)).toBe('default');
@@ -1775,7 +1909,6 @@ it('keeps Classic validation errors at root and generated definition boundaries'
   expect(result.success).toBe(false);
   if(!result.success)expect(result.error).toBeInstanceOf(z.ZodError);
  }
- expect(()=>accountSettingsParse({sessionAgentSpawnPolicyV1:{v:99}})).toThrow(z.ZodError);
 });
 it('keeps preference bounds distinct from size-tolerant legacy reads', () => {
  const read=createStoredReadSchema(AccountSettingsSchema);
@@ -1784,10 +1917,11 @@ it('keeps preference bounds distinct from size-tolerant legacy reads', () => {
  expect(read.parse({favoriteModelSelectionsV1:atLimit}).favoriteModelSelectionsV1).toEqual(atLimit);
  const parsed=read.parse({favoriteModelSelectionsV1:overLimit,profiles:overLimit});
  expect(parsed.favoriteModelSelectionsV1).toEqual([]);
- expect(parsed.profiles).toEqual(overLimit);
- expect(ACCOUNT_SETTING_DEFINITIONS.profiles.schema.parse(overLimit)).toEqual(overLimit);
+ expect(parsed).not.toHaveProperty('profiles');
+ expect(parseRetainedAccountSettingsEntitySourceV1('profiles',overLimit)).toMatchObject({success:true,data:overLimit});
  expect(ACCOUNT_SETTING_DEFINITIONS.favoriteModelSelectionsV1.schema.parse([undefined])).toEqual([]);
- expect(()=>read.parse({profiles:[undefined]})).toThrow(z.ZodError);
+ const malformedSource=parseRetainedAccountSettingsEntitySourceV1('profiles',[undefined]);
+ expect(malformedSource).toMatchObject({success:false,reason:'invalidValue'});
  for(const target of ['draft-7','draft-2020-12'] as const)for(const io of ['input','output'] as const) {
   expect(z.toJSONSchema(read,{target,io,unrepresentable:'any'})).toHaveProperty(['properties','favoriteModelSelectionsV1','anyOf',1,'maxItems'],256);
  }

@@ -33,6 +33,16 @@ import { ConnectedConfigurationCatalogV1Schema } from '../../connect/connectedAc
 import { NotificationChannelCatalogRecordV1Schema } from './notificationChannelSchemasV1.js';
 import { SecretStringV1Schema } from '../../crypto/settingsSecretStringSchemasV1.js';
 
+describe('Session-attested MCP reference census', () => {
+  it('retains symbolic facts in an inactive MCP source without classifying them as credentials', () => {
+    const settings = { mcpServersSettingsV1: { v: 1, servers: [{ id: 'integrator', name: 'integrator',
+      transport: 'http', remote: { url: 'https://example.test/mcp', headers: {
+        Sender: { t: 'sessionAttested', field: 'externalPrincipalId', retainedLabel: 'sender' },
+      } }, env: {}, createdAt: 1, updatedAt: 1 }], bindings: [] } };
+    expect(listAccountSettingsSavedSecretReferences(settings, 'unrelated', { profileRecords: [] })).toEqual([]);
+  });
+});
+
 describe('notification signing-secret source identity', () => {
   it('uses the exact Account and stable channel identity for resource preparation', () => {
     const first = savedSecretOwner.deriveSavedSecretImportResourceIdV1({ accountId: 'owner',
@@ -359,7 +369,7 @@ describe('classified legacy credential import', () => {
         remote: { url: 'https://example.test/mcp', headers: {} }, env: { TOKEN: { t: 'savedSecret', secretId: sharedSecretRef } },
         createdAt: 1, updatedAt: 1 }], bindings: [] });
       const acp = AcpCatalogRecordV1Schema.parse({ v: 1, definitions: [{ id: 'configured', name: 'configured', title: 'Configured',
-        command: 'agent', env: { TOKEN: { t: 'savedSecret', secretId: sharedSecretRef } }, createdAt: 1, updatedAt: 1 }] });
+        launch: { kind: 'command' as const, command: 'agent', args: [] }, env: { TOKEN: { t: 'savedSecret', secretId: sharedSecretRef } }, createdAt: 1, updatedAt: 1 }] });
       const providerConnections = ProviderConnectionsCatalogV1Schema.parse({ ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1,
         connections: [{ v: 1, id: 'connection', source: { kind: 'contribution', contributionKey: 'happier.provider.fixture/default' },
           role: 'default', displayName: 'Fixture', displayNameMode: 'automatic', deployment: { kind: 'external' },
