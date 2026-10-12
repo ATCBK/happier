@@ -2,7 +2,7 @@
 /**
  * Convert the GitHub social preview image to the website's og:image format.
  * 
- * Source: uploads/gh-social_d1a0.png (3072x1500, 2.048:1)
+ * Source: scripts/assets/social-preview-source.png (3072x1500, 2.048:1)
  * Design: 'Start coding anywhere. Continue everywhere.' with desktop and phones
  * Target: public/images/og.png (1200x630, 1.905:1)
  * 
@@ -17,8 +17,8 @@ import sharp from 'sharp';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
-// Use the uploaded GitHub social preview (the current design with 'Start coding anywhere. Continue everywhere.')
-const SOURCE = path.resolve(ROOT, '..', '..', 'uploads', 'gh-social_d1a0.png');
+// Use the current GitHub social preview as source
+const SOURCE = path.join(HERE, 'assets', 'social-preview-source.png');
 const OUTPUT = path.join(ROOT, 'public', 'images', 'og.png');
 
 const TARGET_WIDTH = 1200;
