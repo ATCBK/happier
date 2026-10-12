@@ -4,8 +4,7 @@ import { Platform } from 'react-native';
 import { useBrowserSessionAgentIdentity } from '@/components/browser/copresence/BrowserShellPresence';
 import { noteSessionComputerMachine } from '@/sync/domains/computer/sessionComputerMachines';
 import { useSessionViewerSourceAccountLifetime } from '@/components/sessions/viewer/SessionViewerSourceAccountScope';
-import { useMachine } from '@/sync/store/hooks';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import { useMachinePresenceSummary } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
 
 import type { ComputerScreenViewerProps } from './ComputerScreenViewer';
 import { computerTargetKey } from './ComputerTargetPicker';
@@ -78,8 +77,8 @@ export function useSessionComputerScreen(props: Readonly<{
 
     const agent = React.useMemo(() => ({ agentId: identity.agentId, name: identity.name }), [identity.agentId, identity.name]);
     // The machine's presence, when this client holds its row: an unreachable machine is a cause to say.
-    const machineRow = useMachine(props.machineId, enabled);
-    const machineOnline = machineRow ? isMachineOnline(machineRow) : undefined;
+    const machinePresence = useMachinePresenceSummary(serverId, enabled ? props.machineId : null);
+    const machineOnline = machinePresence.reachability === 'unknown' ? undefined : machinePresence.reachability === 'reachable';
     const selectedTarget = control.selection?.selectedTarget ?? null;
     const { applySelection, refresh } = control;
     const pickerParams = React.useCallback(() => ({

@@ -26,6 +26,7 @@ import {
     type ComputerTargetEntry,
 } from './ComputerTargetPicker';
 import { useComputerTargetPicker } from './useComputerTargetPicker';
+import { useComputerDriverRepair } from './useComputerDriverRepair';
 
 const stylesheet = StyleSheet.create((theme) => ({
     machine: {
@@ -80,7 +81,7 @@ export type PickerModalProps = CustomModalInjectedProps & Readonly<{
     /** The agent's suggestion while approving its `computer.target.select` (W15 `requestedTarget`). */
     requestedTarget?: string | null;
     /**
-     * Approval mode: the pick goes back to the approval (W15 `approval.request.decide.computerTarget`)
+     * Approval mode: the pick goes back through `approval.request.decide.narrowedInput`.
      * instead of being shared directly; approving is what shares it, with the agent's provenance.
      */
     onChosen?: (entry: ComputerTargetEntry, access: ComputerAccessV1) => void;
@@ -102,6 +103,7 @@ export function ComputerTargetPickerModal(props: PickerModalProps): React.ReactE
         ? borrowedLifetime ?? (props.execute ? undefined : null) : props.accountLifetime;
     const execute = props.execute ?? (frontDoorExecute ??= createFrontDoorActionExecute());
     const picker = useComputerTargetPicker({ ...props, execute, accountLifetime });
+    const driverRepair = useComputerDriverRepair(props.scope, accountLifetime, picker.retry);
     // The person's own Ask-first preferences for the agent (the existing Actions approval owner).
     const asksBeforeScreenshots = getStorage()((current) => isActionApprovalRequiredInState(current, 'computer.capture', { surface: 'agent' }));
     const asksBeforeInput = getStorage()((current) => isActionApprovalRequiredInState(current, 'computer.input', { surface: 'agent' }));
@@ -127,6 +129,8 @@ export function ComputerTargetPickerModal(props: PickerModalProps): React.ReactE
             onStopSharing={picker.stopSharing}
             onCancel={props.onClose}
             onRetry={picker.retry}
+            onRepairDriver={driverRepair.repair}
+            repairingDriver={driverRepair.repairing}
             onOpenSettings={picker.requestSettings}
             openSettings={picker.openSettings}
             agentName={props.agentName}
