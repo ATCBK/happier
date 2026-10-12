@@ -1,0 +1,95 @@
+import type { TrackedSession } from '../types';
+import type { LiveWorkInventoryV1 } from '../lifecycle/managedActivity';
+import { buildInactiveSessionResumeSpawnOptions, type BuildInactiveSessionResumeSpawnOptionsParams } from '../sessions/runtimeSnapshot/buildInactiveSessionResumeSpawnOptions';
+import type { SessionDraftPresence } from '@/session/drafts/readSessionDraftPresence';
+import type { SpawnSessionOptions } from '@/session/shared/spawnSessionContract';
+import { readSessionDraftPresence } from '@/session/drafts/readSessionDraftPresence';
+import { withTrackedSessionRpc } from '../sessionEncryption/withTrackedSessionRpc';
+import { tryDecryptSessionOwnerMetadataView } from '@/session/transport/encryption/sessionEncryptionContext';
+import { createSessionLiveWorkProducer } from '../lifecycle/sessionLiveWorkProducer';
+import { requestSessionInputLiveWork } from '@/agent/runtime/session/input/sessionProviderInputAdmissionRpc';
+
+export type SessionEligibilityReason = Readonly<{
+  kind: 'working' | 'waiting_for_you' | 'subagents_running' | 'unsent_draft' | 'draft_unknown'
+    | 'not_resumable' | 'kill_protected' | 'activity_unknown';
+  count?: number;
+}>;
+export type SessionEligibility = Readonly<
+  | { eligible: true; settledAt: number; resumeOptions: SpawnSessionOptions }
+  | { eligible: false; reasons: readonly SessionEligibilityReason[] }
+>;
+
+/** Exact runner facts; aggregate Machine coverage belongs to Machine retention. */
+export function readSessionActivityEligibility(tracked: TrackedSession, inventory: LiveWorkInventoryV1): Readonly<
+  { eligible: true; settledAt: number } | { eligible: false; reasons: readonly SessionEligibilityReason[] }
+> {
+  const items = inventory.items.filter(item => item.ownerRef === tracked);
+  const settledAt = items.find(item => item.category === 'session')?.settledAt;
+  const reasons: SessionEligibilityReason[] = [];
+  if (items.some(item => item.state === 'unknown') || settledAt === undefined
+    || !Number.isSafeInteger(settledAt) || settledAt < 0) reasons.push({ kind: 'activity_unknown' });
+  for (const item of items) {
+    if (item.state !== 'active') continue;
+    const reason: SessionEligibilityReason = item.category === 'attention' ? { kind: 'waiting_for_you' }
+      : item.category === 'agents' ? { kind: 'subagents_running', ...(item.activeCount !== undefined ? { count: item.activeCount } : {}) }
+      : { kind: 'working' };
+    if (!reasons.some(existing => existing.kind === reason.kind)) reasons.push(reason);
+  }
+  return reasons.length || settledAt === undefined ? { eligible: false, reasons } : { eligible: true, settledAt };
+}
+
+export async function readCurrentSessionEligibility(input: Readonly<{
+  access: Parameters<typeof withTrackedSessionRpc>[0];
+}>): Promise<SessionEligibility> {
+  const unavailable = { eligible: false, reasons: [{ kind: 'not_resumable' }] } as const;
+  try {
+    return await withTrackedSessionRpc(input.access, async (callRpc, access) => {
+      // This stop concerns one runner. Unavailable Sync/Service/other-Session
+      // coverage cannot replace its own fresh input, subagent and attention facts.
+      const activity = createSessionLiveWorkProducer({
+        readSessions: () => input.access.isTrackedCurrent() ? [input.access.tracked] : [],
+        readActivity: () => requestSessionInputLiveWork({ callRpc }),
+      });
+      const metadata = tryDecryptSessionOwnerMetadataView({ credentials: access.credentials,
+        accountEncryptionMode: access.accountEncryptionMode, rawSession: access.rawSession });
+      if (!metadata) return unavailable;
+      const resume = { sessionId: access.sessionId, rawSession: access.rawSession, metadata,
+        fallbackMachineId: input.access.machineId };
+      const preliminary = evaluateSessionEligibility({ tracked: input.access.tracked,
+        inventory: await activity.read(), resume, draft: { status: 'absent' } });
+      if (!preliminary.eligible) return preliminary;
+      const draft = await readSessionDraftPresence({ sessionId: access.sessionId, signal: input.access.signal,
+        requester: { token: access.credentials.token, serverHttpBaseUrl: access.serverHttpBaseUrl,
+          isCurrent: access.isCurrent } });
+      const inventory = await activity.read();
+      return evaluateSessionEligibility({ tracked: input.access.tracked, inventory, resume, draft });
+    }) ?? unavailable;
+  } catch { return { eligible: false, reasons: [{ kind: 'draft_unknown' }] }; }
+}
+
+/** The one automatic-stop predicate. Callers supply fresh inventory/draft facts, not idle guesses. */
+export function evaluateSessionEligibility(input: Readonly<{
+  tracked: TrackedSession;
+  inventory: LiveWorkInventoryV1;
+  draft: SessionDraftPresence;
+  resume: BuildInactiveSessionResumeSpawnOptionsParams;
+}>): SessionEligibility {
+  const { tracked, inventory, draft } = input;
+  const reasons: SessionEligibilityReason[] = [];
+  const add = (reason: SessionEligibilityReason) => { if (!reasons.some(existing => existing.kind === reason.kind)) reasons.push(reason); };
+  const activity = readSessionActivityEligibility(tracked, inventory);
+  const settledAt = activity.eligible ? activity.settledAt : undefined;
+  if (inventory.coverage !== 'complete') add({ kind: 'activity_unknown' });
+  if (!activity.eligible) for (const reason of activity.reasons) add(reason);
+  if (tracked.reattachedFromDiskMarker) add({ kind: 'kill_protected' });
+  if (tracked.stopRequestedAtMs !== undefined) add({ kind: 'working' });
+  if (draft.status === 'present') add({ kind: 'unsent_draft' });
+  else if (draft.status === 'unknown') add({ kind: 'draft_unknown' });
+  let resumeOptions: SpawnSessionOptions | null = null;
+  if (tracked.happySessionId === input.resume.sessionId) {
+    try { resumeOptions = buildInactiveSessionResumeSpawnOptions(input.resume); } catch { /* Unproven recovery cannot authorize an automatic stop. */ }
+  }
+  if (resumeOptions === null) add({ kind: 'not_resumable' });
+  if (reasons.length || settledAt === undefined || resumeOptions === null) return { eligible: false, reasons };
+  return { eligible: true, settledAt: Math.max(settledAt, draft.status === 'absent' ? draft.updatedAt ?? 0 : 0), resumeOptions };
+}
