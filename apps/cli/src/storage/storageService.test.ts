@@ -1,0 +1,797 @@
+import { execFile } from 'node:child_process';
+import { link, lstat, mkdir, mkdtemp, readFile, realpath, rm, utimes, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { promisify } from 'node:util';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { CLI_BINARY_TARGETS, resolveCurrentBinaryTarget, stageProcessCustodyRuntime } from '@happier-dev/cli-common/componentArtifacts';
+import { managedAcpInstallId } from '@happier-dev/cli-common/agents';
+import { createStorageService, type StorageOperationActor, type StorageService } from './storageService';
+import { createDaemonStorageRoutes, registerDaemonStorageRpcHandlers } from '@/rpc/handlers/storage';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import type { RpcHandlerMap, RpcHandlerContext, RpcHandlerRegistrar } from '@/api/rpc/types';
+import { createHappierTempDir, getHappierTempRoot } from '@happier-dev/cli-common/tempDirs';
+import { createActivityLog } from '@/daemon/guard/activityLog';
+import { createMachineResourceSummary } from '@/daemon/resources/machineResourceSummary';
+import { createMachineVitalsSampler } from '@/daemon/vitals/createMachineVitalsSampler';
+import { createMinuteHistoryStore } from '@/daemon/vitals/history/minuteHistoryStore';
+import { MachineStoragePolicyV1Schema, STORAGE_CHART_MAX_DRAWABLE_NODES } from '@happier-dev/protocol/storage/storageV1';
+import { createGitScmBackendRuntimeRegistration } from '../../../../packages/plugins/scm-git/src/backend';
+import { createRegisteredScmBackendAdapter } from '@/scm/pluginBackends/registeredScmBackendAdapter';
+import { createScmBackendRegistry } from '@/scm/registry';
+import { createHostScmHostingProviderRuntimeServices } from '@/scm/hostingProviders/runtimeServices';
+import { readStorageWorktrees } from '@/daemon/resources/readStorageWorktrees';
+import { createStorageWorktreeOperations } from './worktrees/storageWorktreeOperations';
+
+const execute = promisify(execFile);
+const originalExecutable = Object.getOwnPropertyDescriptor(process, 'execPath')!;
+let scratch: string;
+
+/** The mounted watch surface has one outstanding read; native record notifications are coalesced. */
+async function waitForStorageScan(service: StorageService, scanId: string, actor: StorageOperationActor): Promise<void> {
+    await new Promise<void>((done, reject) => {
+        let reading = false; let changed = true; let settled = false;
+        const off = service.subscribe(() => { changed = true; void check(); });
+        async function check() {
+            if (reading || settled) return;
+            reading = true;
+            try {
+                do {
+                    changed = false;
+                    const current = await service.scanGet({ machineId: 'machine', scanId }, { actor });
+                    if (current.state?.status === 'complete') { settled = true; off(); done(); }
+                    else if (current.state?.status === 'failed' || current.state?.status === 'interrupted' || current.state?.status === 'cancelled') {
+                        settled = true; off(); reject(new Error(`Fixture scan did not complete: ${JSON.stringify(current.state)}`));
+                    }
+                } while (changed && !settled);
+            } catch (error) { settled = true; off(); reject(error); }
+            finally { reading = false; }
+        }
+        void check();
+    });
+}
+
+describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('storage service with the actual native helper', () => {
+    beforeAll(async () => {
+        scratch = await realpath(await mkdtemp(join(tmpdir(), 'happier-storage-service-')));
+        const payload = join(scratch, 'payload');
+        await stageProcessCustodyRuntime({ repoRoot: resolve('../..'), payloadDir: payload,
+            target: resolveCurrentBinaryTarget({ availableTargets: CLI_BINARY_TARGETS }),
+            runCommand: async (command, args, options) => { await execute(command, args, { cwd: options?.cwd, env: options?.env }); },
+        });
+        Object.defineProperty(process, 'execPath', { ...originalExecutable, value: join(payload, 'happier') });
+    });
+    afterAll(async () => {
+        Object.defineProperty(process, 'execPath', originalExecutable);
+        if (scratch) await rm(scratch, { recursive: true, force: true });
+    });
+
+    it('removes orphaned ACP installs through their owner and refuses ancestor, descendant and live-session bypasses', async () => {
+        const home = join(scratch, 'acp-installs-home'); const server = join(home, 'servers', 'fixture');
+        const root = join(home, 'tools', `dep.${managedAcpInstallId({ accountId: 'owner', definitionId: 'removed', version: '1.0' })}`); const current = join(root, 'current');
+        const bytes = join(current, 'agent');
+        await mkdir(current, { recursive: true }); await mkdir(server, { recursive: true });
+        await writeFile(bytes, 'fixture executable');
+        await writeFile(join(current, '.happier-managed-version'), JSON.stringify({ definitionId: 'removed', title: 'Fixture agent', kind: 'archive', version: '1.0' }));
+        let running = true;
+        const sampler = createMachineVitalsSampler({ readers: { read: async () => ({ state: 'unavailable', reason: 'helper_missing' }) },
+            historyStore: await createMinuteHistoryStore({ directory: join(server, 'history') }) });
+        const resourceSummary = createMachineResourceSummary({ sampler, readNearlyFull: () => null, onError: error => { throw error; } });
+        const actor = { accountId: 'owner', kind: 'person' as const, custodianAccountId: 'owner', assertCurrentAuthority: async () => {} };
+        const service = createStorageService({ machineId: 'machine', homeDir: scratch,
+            activityLog: await createActivityLog({ activeServerDir: server, resourceSummary }),
+            catalog: { happyHomeDir: home, activeServerDir: server, tempRoot: join(scratch, 'acp-no-temp'),
+                readProjects: () => ({ status: 'ready', projects: [] }), readInUsePaths: () => ({ reliable: true, paths: [] }),
+                acpAccountId: 'owner', readAcpCatalog: () => ({ status: 'ready', revision: 1, record: { v: 1, definitions: [] } }),
+                isAcpDefinitionInUse: () => running },
+            readPolicy: () => MachineStoragePolicyV1Schema.parse({ wholeDiskEnabled: true }),
+            readVolumes: () => [{ id: 'fixture', label: 'Fixture', mount: scratch, totalBytes: 1_000_000, availableBytes: 500_000 }],
+        });
+        try {
+            const item = (await service.categoryList('caches')).items.find(item => item.path === root)!;
+            expect(item).toMatchObject({ title: 'Fixture agent · removed agent', reason: { code: 'in_use' } });
+            const scan = await service.scanStart({ machineId: 'machine', target: { folderPath: join(home, 'tools') } }, { actor });
+            await waitForStorageScan(service, scan.scanId, actor);
+            for (const path of [join(home, 'tools'), bytes]) {
+                const review = await service.itemsCheck([{ itemId: path, path }], { actor });
+                expect(review.items.every(item => item.verdict === 'forbidden')).toBe(true);
+                expect(review.staying[0]?.reason.code).toMatch(/unsupported|happier_data|contains_forbidden/);
+                const removed = await service.deleteNow({ machineId: 'machine', items: review.items.map(value => ({
+                    ref: value.ref, expect: value.expect, claimedVerdict: value.verdict,
+                })) }, { actor });
+                expect(removed.outcomes.every(outcome => outcome.status !== 'deleted')).toBe(true);
+                await expect(lstat(bytes)).resolves.toBeDefined();
+            }
+            const collected = await service.pileSet({ machineId: 'machine', add: [{ itemId: item.itemId, path: root }] }, { actor });
+            let reviewed = await service.itemsCheck(collected.items, { actor });
+            const live = await service.deleteNow({ machineId: 'machine', items: reviewed.items.map(value => ({ ref: value.ref, expect: value.expect, claimedVerdict: value.verdict })) }, { actor });
+            expect(live.outcomes[0]?.status).toBe('failed');
+            await expect(lstat(bytes)).resolves.toBeDefined();
+            running = false; reviewed = await service.itemsCheck(collected.items, { actor });
+            const removed = await service.deleteNow({ machineId: 'machine', items: reviewed.items.map(value => ({ ref: value.ref, expect: value.expect, claimedVerdict: value.verdict })) }, { actor });
+            expect(removed.outcomes[0]?.status).toBe('deleted');
+            await expect(lstat(root)).rejects.toMatchObject({ code: 'ENOENT' });
+        } finally { service.dispose(); resourceSummary.stop(); await sampler.stop(); }
+    });
+
+    it('sizes the home union once, attributes nested categories and preserves revision after a read', async () => {
+        const home = join(scratch, 'home');
+        const server = join(home, 'servers', 'fixture');
+        await mkdir(join(home, 'cache'), { recursive: true });
+        await mkdir(server, { recursive: true });
+        const shared = join(home, 'cache', 'cache.bin');
+        await writeFile(shared, Buffer.alloc(8192, 1));
+        await link(shared, join(server, 'retained.bin'));
+        await writeFile(join(home, 'retained.bin'), Buffer.alloc(4096, 2));
+        const tempRoot = join(scratch, 'owned-temp');
+        const temporary = createHappierTempDir({ root: tempRoot, purpose: 'service-fixture' });
+        await writeFile(join(temporary, 'bytes'), Buffer.alloc(4096, 6));
+        const uidRoot = getHappierTempRoot(tempRoot);
+        let availableBytes = 800_000;
+        let availableIncludingPurgeableBytes: number | undefined = 850_000;
+        let volumeChanged = () => {};
+        let projectsReported = false;
+        const service = createStorageService({ catalog: { happyHomeDir: home, activeServerDir: server,
+            tempRoot, bootedAt: Date.now(),
+            readProjects: () => projectsReported ? { status: 'ready', projects: [] } : { status: 'unavailable' } },
+            readVolumes: () => [{ id: 'fixture-volume', label: 'Fixture', mount: scratch, totalBytes: 1_000_000, availableBytes, availableIncludingPurgeableBytes }],
+            subscribeVolumeChanges(listener) { volumeChanged = listener; return () => { volumeChanged = () => {}; }; },
+        });
+        try {
+            const { stdout } = await execute('du', process.platform === 'linux' ? ['-s', '--block-size=1', home] : ['-sk', home]);
+            const tempAllocation = await execute('du', process.platform === 'linux' ? ['-s', '--block-size=1', uidRoot] : ['-sk', uidRoot]);
+            const actualAllocation = (Number(stdout.trim().split(/\s/u)[0]) + Number(tempAllocation.stdout.trim().split(/\s/u)[0]))
+                * (process.platform === 'darwin' ? 1024 : 1);
+            const summary = await service.summary();
+            expect(summary.volumes[0]).toMatchObject({ freeBytes: 800_000, availableIncludingPurgeableBytes: 850_000 });
+            expect(summary.volumes[0]?.happierBytes).toBe(actualAllocation);
+            expect(summary.categories.reduce((sum, category) => sum + category.size.allocatedBytes, 0)).toBe(actualAllocation);
+            expect(summary.categories.find(category => category.categoryId === 'caches')?.size.allocatedBytes)
+                .toBeGreaterThanOrEqual((await lstat(shared)).blocks * 512);
+            expect(summary.categories.map(category => category.categoryId).sort())
+                .toEqual(['agentHomes', 'caches', 'logs', 'modelPacks', 'ownData', 'recordings', 'sessionFolders', 'temporary', 'trash', 'worktrees'].sort());
+            const ownData = await service.categoryList('ownData');
+            expect(summary.categories.find(category => category.categoryId === 'worktrees')?.size.atLeast).toBe(true);
+            expect(ownData.items.every(item => !item.collectable && item.verdict === 'forbidden')).toBe(true);
+            expect(ownData.items.some(item => item.path === uidRoot)).toBe(true);
+            expect((await service.summary()).revision).toBe(summary.revision);
+            await writeFile(join(home, 'cache', 'new.bin'), Buffer.alloc(8192, 3));
+            availableBytes = 700_000;
+            availableIncludingPurgeableBytes = undefined;
+            volumeChanged();
+            const capacityOnly = await service.summary();
+            expect(capacityOnly.volumes[0]?.freeBytes).toBe(700_000);
+            expect(capacityOnly.volumes[0]?.availableIncludingPurgeableBytes).toBeUndefined();
+            expect(capacityOnly.volumes[0]?.happierBytes).toBe(summary.volumes[0]?.happierBytes);
+            expect(capacityOnly.sizedAt).toBe(summary.sizedAt);
+            let notified = false;
+            availableIncludingPurgeableBytes = 0;
+            const unsubscribe = service.subscribe(() => { notified = true; });
+            projectsReported = true;
+            const refreshed = await service.refresh();
+            expect(refreshed.volumes[0]).toMatchObject({ freeBytes: 700_000, availableIncludingPurgeableBytes: 0 });
+            unsubscribe();
+            expect(refreshed.revision).toBeGreaterThan(summary.revision);
+            expect(notified).toBe(true);
+            expect(refreshed.volumes[0]?.happierBytes).toBeGreaterThan(summary.volumes[0]!.happierBytes);
+            expect((await service.categoryList('caches')).revision).toBe(refreshed.revision);
+            expect(refreshed.categories.find(category => category.categoryId === 'worktrees')?.size.atLeast).toBe(false);
+            await expect(service.categoryList('caches', { cursor: 'not-issued' })).rejects.toMatchObject({ code: 'invalid_storage_cursor' });
+            const aborted = new AbortController();
+            aborted.abort();
+            await expect(service.summary({ signal: aborted.signal })).rejects.toMatchObject({ name: 'AbortError' });
+        } finally { service.dispose(); }
+    });
+
+    it('reports verified-Safe reclaimable unions per volume and retains them across capacity-only edges', async () => {
+        const home = join(scratch, 'volume-can-go-home');
+        const cache = join(home, 'cache');
+        const secondary = join(home, 'tools', 'secondary');
+        const oldLog = join(home, 'logs', 'old.log');
+        const caution = join(cache, 'caution');
+        const kept = join(cache, 'kept');
+        const unknown = join(home, '.runner-snapshots', 'unknown');
+        const safe = join(cache, 'safe');
+        await mkdir(cache, { recursive: true });
+        await mkdir(secondary, { recursive: true });
+        await mkdir(join(home, 'logs'), { recursive: true });
+        await mkdir(unknown, { recursive: true });
+        await writeFile(safe, Buffer.alloc(8192, 1));
+        await link(safe, oldLog);
+        await utimes(oldLog, new Date(1_700_000_000_000), new Date(1_700_000_000_000));
+        await writeFile(join(secondary, 'bytes'), Buffer.alloc(16384, 2));
+        await writeFile(caution, Buffer.alloc(32768, 3));
+        await writeFile(kept, Buffer.alloc(65536, 4));
+        await writeFile(join(unknown, 'bytes'), Buffer.alloc(8192, 5));
+        let free = 500_000;
+        let volumeChanged = () => {};
+        const service = createStorageService({ homeDir: join(scratch, 'volume-can-go-person'),
+            catalog: { happyHomeDir: home, activeServerDir: home, tempRoot: join(scratch, 'volume-can-go-no-temp'),
+                readProjects: () => ({ status: 'ready', projects: [] }),
+                readInUsePaths: () => ({ reliable: true, paths: [kept] }) },
+            readStorageProtectionFacts: () => ({ cloudSyncedFolders: [caution] }),
+            readVolumes: () => [
+                { id: 'main', label: 'Main', mount: scratch, totalBytes: 1_000_000, availableBytes: free },
+                { id: 'secondary', label: 'Secondary', mount: join(home, 'tools'), totalBytes: 1_000_000, availableBytes: free },
+                { id: 'empty', label: 'Empty', mount: join(scratch, 'empty-volume'), totalBytes: 1_000_000, availableBytes: free },
+            ],
+            subscribeVolumeChanges(listener) { volumeChanged = listener; return () => {}; },
+        });
+        try {
+            const summary = await service.summary();
+            const mainBytes = (await lstat(safe)).blocks * 512;
+            const secondaryBytes = ((await lstat(secondary)).blocks + (await lstat(join(secondary, 'bytes'))).blocks) * 512;
+            expect(summary.suggestionsTop.find(item => item.path === caution)?.verdict).toBe('caution');
+            expect(summary.suggestionsTop.some(item => item.path === kept || item.path === unknown)).toBe(false);
+            expect(summary.volumes).toMatchObject([{ canGoBytes: mainBytes }, { canGoBytes: secondaryBytes }, { canGoBytes: 0 }]);
+            free = 400_000; volumeChanged();
+            const capacityOnly = await service.summary();
+            expect(capacityOnly.sizedAt).toBe(summary.sizedAt);
+            expect(capacityOnly.volumes).toMatchObject([
+                { freeBytes: free, canGoBytes: mainBytes }, { freeBytes: free, canGoBytes: secondaryBytes }, { canGoBytes: 0 },
+            ]);
+        } finally { service.dispose(); }
+    });
+
+    it('returns canonical stopped and recent category groups with policy thresholds and recipient-scoped membership', async () => {
+        const home = join(scratch, 'groups-home');
+        const workspace = join(scratch, 'groups-workspace');
+        const now = 100 * 86_400_000;
+        const sessions = [{ sessionId: 'old', cwd: workspace, running: false, stoppedAt: now - 7 * 86_400_000 },
+            { sessionId: 'recent', cwd: workspace, running: false, stoppedAt: now - 6 * 86_400_000 },
+            { sessionId: 'running', cwd: workspace, running: true, stoppedAt: now - 10 * 86_400_000 }];
+        for (const session of sessions) {
+            const path = join(workspace, '.happier', 'uploads', 'images', session.sessionId);
+            await mkdir(path, { recursive: true }); await writeFile(join(path, 'bytes'), 'attachment');
+        }
+        const oldLog = join(home, 'logs', 'old.log'); const recentLog = join(home, 'logs', 'recent.log');
+        await mkdir(join(home, 'logs'), { recursive: true });
+        await writeFile(oldLog, 'old'); await writeFile(recentLog, 'recent');
+        await utimes(oldLog, new Date(now - 14 * 86_400_000), new Date(now - 14 * 86_400_000));
+        await utimes(recentLog, new Date(now - 13 * 86_400_000), new Date(now - 13 * 86_400_000));
+        const service = createStorageService({ homeDir: join(scratch, 'groups-person'), nowMs: () => now,
+            catalog: { happyHomeDir: home, activeServerDir: home, now: () => now, tempRoot: join(scratch, 'groups-no-temp'),
+                readProjects: () => ({ status: 'ready', projects: [] }), readTrackedSessions: () => sessions,
+                readPolicy: () => ({ suggestUnusedAfterDays: 7 }) },
+            readVolumes: () => [{ id: 'fixture-volume', label: 'Fixture', mount: scratch, totalBytes: 1_000_000, availableBytes: 500_000 }] });
+        try {
+            const category = await service.categoryList('sessionFolders');
+            const id = (sessionId: string) => category.items.find(item => item.path.endsWith(`/${sessionId}`))!.itemId;
+            expect(category.groups).toEqual([{ id: 'stopped', olderThanDays: 7, itemIds: [id('old')] },
+                { id: 'recent', itemIds: expect.arrayContaining([id('recent'), id('running')]) }]);
+            expect(category.groups![1]!.itemIds).toHaveLength(2);
+            const recipient = await service.categoryList('sessionFolders', { sessionIds: new Set(['old']) });
+            expect(recipient.groups).toEqual([{ id: 'stopped', olderThanDays: 7, itemIds: [id('old')] }]);
+            const logs = await service.categoryList('logs');
+            expect(logs.groups).toEqual([{ id: 'old', olderThanDays: 14, itemIds: [logs.items.find(item => item.path === oldLog)!.itemId] },
+                { id: 'recent', itemIds: [logs.items.find(item => item.path === recentLog)!.itemId] }]);
+        } finally { service.dispose(); }
+    });
+
+    it('projects the current whole-disk opt-in after policy edges instead of a hard-coded disabled snapshot', async () => {
+        const home = join(scratch, 'policy-edge-home');
+        await mkdir(home, { recursive: true });
+        let policy = MachineStoragePolicyV1Schema.parse({ wholeDiskEnabled: true });
+        let changed = () => {};
+        const service = createStorageService({ catalog: { happyHomeDir: home, activeServerDir: home,
+            tempRoot: join(scratch, 'policy-edge-absent-temp') }, readPolicy: () => policy,
+            subscribeChanges(listener) { changed = listener; return () => { changed = () => {}; }; },
+            readVolumes: () => [{ id: 'policy-edge', label: 'Policy', mount: scratch, totalBytes: 1_000_000, availableBytes: 500_000 }],
+        });
+        try {
+            expect((await service.summary()).wholeDisk.enabled).toBe(true);
+            policy = MachineStoragePolicyV1Schema.parse({ wholeDiskEnabled: false });
+            changed();
+            expect((await service.summary()).wholeDisk).toEqual({ enabled: false, scans: [] });
+        } finally { service.dispose(); }
+    });
+
+    it('owns opted-in native folder scans, exposes folded files to queries and purges indexes when disabled', async () => {
+        const home = join(scratch, 'scan-service-home');
+        const fixture = join(scratch, 'scan-service-fixture');
+        await mkdir(home, { recursive: true });
+        await mkdir(fixture, { recursive: true });
+        const otherVolume = join(home, 'cache'); const otherCache = join(otherVolume, 'other-volume-cache');
+        await mkdir(otherCache, { recursive: true }); await writeFile(join(otherCache, 'bytes'), Buffer.alloc(32768, 3));
+        await writeFile(join(fixture, 'tiny.bin'), Buffer.alloc(1, 2));
+        const largeBytes = Math.max(65536, (await lstat(join(fixture, 'tiny.bin'))).blocks * 512 * (STORAGE_CHART_MAX_DRAWABLE_NODES + 1));
+        await writeFile(join(fixture, 'large.bin'), Buffer.alloc(largeBytes, 1));
+        const bytePath = Buffer.concat([Buffer.from(`${fixture}/`), Buffer.from([0xff]), Buffer.from('-bytes')]);
+        if (process.platform === 'linux') {
+            await writeFile(bytePath, 'native-exact-bytes'); await writeFile(bytePath.toString('utf8'), 'replacement-twin');
+        }
+        let policy = MachineStoragePolicyV1Schema.parse({});
+        let changed = () => {};
+        const actor = { accountId: 'owner', kind: 'person' as const, custodianAccountId: 'owner', assertCurrentAuthority: async () => {} };
+        const sampler = createMachineVitalsSampler({ readers: { read: async () => ({ state: 'unavailable', reason: 'helper_missing' }) },
+            historyStore: await createMinuteHistoryStore({ directory: join(home, 'history') }) });
+        const resourceSummary = createMachineResourceSummary({ sampler, readNearlyFull: () => null, onError: error => { throw error; } });
+        const service = createStorageService({ machineId: 'machine', homeDir: home,
+            activityLog: await createActivityLog({ activeServerDir: home, resourceSummary }),
+            catalog: { happyHomeDir: home, activeServerDir: home, tempRoot: join(scratch, 'scan-service-no-temp'),
+                readInUsePaths: () => ({ reliable: true, paths: [join(fixture, 'tiny.bin')],
+                    sessions: [{ path: join(fixture, 'tiny.bin'), sessionId: 'holding-session' }] }) },
+            readPolicy: () => policy,
+            subscribeChanges(listener) { changed = listener; return () => { changed = () => {}; }; },
+            readVolumes: () => [{ id: 'scan-volume', label: 'Scan', mount: scratch, totalBytes: 1_000_000, availableBytes: 500_000 },
+                { id: 'other-volume', label: 'Other', mount: otherVolume, totalBytes: 1_000_000, availableBytes: 500_000 }],
+        });
+        try {
+            const request = { machineId: 'machine', target: { folderPath: fixture } };
+            await expect(service.scanStart(request, { actor })).rejects.toMatchObject({ code: 'storage_whole_disk_disabled' });
+            await expect(service.scanStart(request, { actor: { ...actor, accountId: 'recipient', sessionIds: new Set<string>() } }))
+                .rejects.toMatchObject({ code: 'unauthorized' });
+            policy = MachineStoragePolicyV1Schema.parse({ wholeDiskEnabled: true }); changed();
+            const state = await service.scanStart(request, { actor });
+            await waitForStorageScan(service, state.scanId, actor);
+            const large = await service.scanGet({ machineId: 'machine', scanId: state.scanId,
+                view: { tab: 'large' as const, depth: 1 as const, minBytes: 0 } }, { actor });
+            expect(large.nodes.filter(node => node.name === 'large.bin' || node.name === 'tiny.bin').map(node => node.name).sort()).toEqual(['large.bin', 'tiny.bin']);
+            expect(large.nodes.find(node => node.name === 'tiny.bin')?.flags).toMatchObject({ inUse: true, protection: 'keep' });
+            const folded = await service.scanGet({ machineId: 'machine', scanId: state.scanId }, { actor });
+            expect(folded).toHaveProperty('root', expect.objectContaining({ nodeId: fixture,
+                size: expect.objectContaining({ allocatedBytes: folded.state?.progress.sizedBytes }) }));
+            const small = folded.nodes.find(node => node.kind === 'small-items')!;
+            expect(small).toBeDefined();
+            expect(small.flags).toMatchObject({ protection: 'keep', inUse: true });
+            expect(small.loses).toContainEqual({ code: 'in_use', detail: { path: join(fixture, 'tiny.bin'), sessionId: 'holding-session' } });
+            const scannedFile = large.nodes.find(node => node.name === 'large.bin')!;
+            const ref = { itemId: scannedFile.nodeId, path: join(fixture, 'large.bin') };
+            const inventedReview = await service.itemsCheck([{ ...ref, itemId: 'unknown-index-id' }], { actor });
+            expect(inventedReview.items).toEqual([]);
+            expect(inventedReview.staying).toEqual([{ item: { ...ref, itemId: 'unknown-index-id' }, reason: { code: 'facts_unavailable' } }]);
+            const directReview = await service.itemsCheck([ref], { actor });
+            expect(directReview.staying).toEqual([]);
+            expect(directReview.items).toEqual([expect.objectContaining({ ref: expect.objectContaining(ref), expect: expect.any(String) })]);
+            expect((await service.pileGet({ actor })).items).toEqual([]);
+            await expect(service.pileSet({ machineId: 'machine', add: [{ ...ref, itemId: 'unknown-index-id' }] }, { actor }))
+                .rejects.toMatchObject({ code: 'storage_item_not_collectable' });
+            const collected = await service.pileSet({ machineId: 'machine', add: [ref] }, { actor });
+            await expect(service.pileSet({ machineId: 'machine', add: [ref] },
+                { actor: { ...actor, accountId: 'recipient', sessionIds: new Set<string>() } })).rejects.toMatchObject({ code: 'unauthorized' });
+            const review = await service.itemsCheck(collected.items.map(({ itemId, path }) => ({ itemId, path })), { actor });
+            expect(review.items).toHaveLength(1);
+            const moved = await service.trashMove({ machineId: 'machine', items: [{ ref: collected.items[0]!, expect: review.items[0]!.expect,
+                claimedVerdict: review.items[0]!.verdict }] }, { actor });
+            expect(moved.outcomes).toEqual([{ itemId: ref.itemId, status: 'moved' }]);
+            await expect(lstat(ref.path)).rejects.toMatchObject({ code: 'ENOENT' });
+            const otherItem = (await service.categoryList('caches')).items.find(item => item.path === otherCache)!;
+            const otherCollected = await service.pileSet({ machineId: 'machine', add: [{ ...ref, itemId: otherItem.itemId, path: otherCache }] }, { actor });
+            const otherReview = await service.itemsCheck(otherCollected.items, { actor });
+            const otherMoved = await service.trashMove({ machineId: 'machine', items: otherReview.items.map(item => ({ ref: item.ref,
+                expect: item.expect, claimedVerdict: item.verdict })) }, { actor });
+            expect(otherMoved.outcomes[0]?.status).toBe('moved');
+            expect((await service.scanGet({ machineId: 'machine', scanId: state.scanId,
+                view: { tab: 'insights', depth: 1 } }, { actor })).insights?.trashBytes).toBe(moved.inTrashBytes);
+            await service.trashRestore({ machineId: 'machine', batchId: otherMoved.batchId }, { actor });
+            expect((await service.trashRestore({ machineId: 'machine', batchId: moved.batchId }, { actor })).outcomes)
+                .toEqual([expect.objectContaining({ status: 'restored', path: ref.path })]);
+            expect((await lstat(ref.path)).size).toBe(largeBytes);
+            if (process.platform === 'linux') {
+                const byteId = `bytes:${bytePath.toString('base64')}`;
+                expect(large.nodes.find(node => node.nodeId === byteId)?.nameBytes).toBe(Buffer.concat([Buffer.from([0xff]), Buffer.from('-bytes')]).toString('base64'));
+                const bytesCollected = await service.pileSet({ machineId: 'machine', add: [{ ...ref, itemId: byteId, path: byteId }] }, { actor });
+                const bytesReview = await service.itemsCheck(bytesCollected.items, { actor });
+                const bytesMoved = await service.trashMove({ machineId: 'machine', items: bytesReview.items.map(item => ({ ref: item.ref,
+                    expect: item.expect, claimedVerdict: item.verdict })) }, { actor });
+                expect(bytesMoved.outcomes).toEqual([{ itemId: byteId, status: 'moved' }]);
+                await expect(lstat(bytePath)).rejects.toMatchObject({ code: 'ENOENT' });
+                expect((await service.trashRestore({ machineId: 'machine', batchId: bytesMoved.batchId }, { actor })).outcomes[0]?.status).toBe('restored');
+                expect(await readFile(bytePath, 'utf8')).toBe('native-exact-bytes');
+                const recollected = await service.pileSet({ machineId: 'machine', add: [{ ...ref, itemId: byteId, path: byteId }] }, { actor });
+                const finalReview = await service.itemsCheck(recollected.items, { actor });
+                expect((await service.deleteNow({ machineId: 'machine', items: finalReview.items.map(item => ({ ref: item.ref,
+                    expect: item.expect, claimedVerdict: item.verdict })) }, { actor })).outcomes).toEqual([{ itemId: byteId, status: 'deleted' }]);
+                await expect(lstat(bytePath)).rejects.toMatchObject({ code: 'ENOENT' });
+                expect(await readFile(bytePath.toString('utf8'), 'utf8')).toBe('replacement-twin');
+            }
+            expect((await service.summary()).wholeDisk.scans.some(scan => scan.scanId === state.scanId)).toBe(true);
+            policy = MachineStoragePolicyV1Schema.parse({ wholeDiskEnabled: false }); changed();
+            expect((await service.scanGet({ machineId: 'machine', scanId: state.scanId }, { actor })).state).toBeNull();
+        } finally { service.dispose(); resourceSummary.stop(); await sampler.stop(); }
+    });
+
+    it('uses filesystem cleanup for indexed worktree contents and SCM ownership for the exact indexed worktree', async () => {
+        const home = join(scratch, 'indexed-worktree-home'); const repo = join(scratch, 'indexed-worktree-repo');
+        const worktree = join(repo, '.dev', 'worktree', 'cleanup'); const modules = join(worktree, 'node_modules');
+        await mkdir(home); await mkdir(repo);
+        await execute('git', ['init', repo]);
+        await execute('git', ['-C', repo, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--allow-empty', '-m', 'fixture']);
+        await execute('git', ['-C', repo, 'worktree', 'add', '-b', 'fixture-cleanup', worktree]);
+        await mkdir(modules); await writeFile(join(modules, 'dependency'), 'dependency');
+        await writeFile(join(worktree, 'package.json'), '{}');
+        const registration = createGitScmBackendRuntimeRegistration();
+        const registry = createScmBackendRegistry([createRegisteredScmBackendAdapter({ definition: { id: 'git', kind: 'git' },
+            qualifiedId: 'happier.scm.git/git', executableDefinition: registration.runtime!, registration,
+            hostingProviderRuntimeServices: createHostScmHostingProviderRuntimeServices({ contributes: {}, scmHostingProvidersById: new Map() }) })]);
+        const sampler = createMachineVitalsSampler({ readers: { read: async () => ({ state: 'unavailable', reason: 'helper_missing' }) },
+            historyStore: await createMinuteHistoryStore({ directory: join(home, 'history') }) });
+        const resourceSummary = createMachineResourceSummary({ sampler, readNearlyFull: () => null, onError: error => { throw error; } });
+        const actor = { accountId: 'owner', kind: 'person' as const, custodianAccountId: 'owner', assertCurrentAuthority: async () => {} };
+        const service = createStorageService({ machineId: 'machine', homeDir: home, scmRegistry: registry,
+            activityLog: await createActivityLog({ activeServerDir: home, resourceSummary }),
+            readPolicy: () => MachineStoragePolicyV1Schema.parse({ wholeDiskEnabled: true }),
+            catalog: { happyHomeDir: home, activeServerDir: home, tempRoot: join(scratch, 'indexed-worktree-no-temp'),
+                readProjects: () => ({ status: 'ready', projects: [{ repositoryRoot: repo }] }),
+                readInUsePaths: () => ({ reliable: true, paths: [] }),
+                readWorktrees: () => readStorageWorktrees({ cwds: [repo], happyHomeDir: home, registry }),
+                worktreeOperations: createStorageWorktreeOperations({ happyHomeDir: home, registry }) },
+            readVolumes: () => [{ id: 'fixture', label: 'Fixture', mount: scratch, totalBytes: 1_000_000, availableBytes: 500_000 }] });
+        try {
+            const scan = await service.scanStart({ machineId: 'machine', target: { folderPath: repo } }, { actor });
+            await waitForStorageScan(service, scan.scanId, actor);
+            const ref = (path: string) => ({ itemId: path, path, identity: { dev: 'ignored', ino: 'ignored', kind: 'directory' as const },
+                collectedAt: 0, collectedBy: { accountId: 'owner', kind: 'person' as const } });
+            const contents = await service.pileSet({ machineId: 'machine', add: [ref(modules)] }, { actor });
+            const reviewed = await service.itemsCheck(contents.items, { actor });
+            expect(reviewed.items[0]?.verdict).toBe('keep');
+            const moved = await service.trashMove({ machineId: 'machine', items: [{ ref: contents.items[0]!, expect: reviewed.items[0]!.expect,
+                claimedVerdict: reviewed.items[0]!.verdict }] }, { actor });
+            expect(moved.outcomes).toEqual([{ itemId: modules, status: 'moved' }]);
+            expect((await execute('git', ['-C', repo, 'worktree', 'list', '--porcelain'])).stdout).toContain(`worktree ${worktree}`);
+            expect((await execute('git', ['-C', worktree, 'rev-parse', '--is-inside-work-tree'])).stdout.trim()).toBe('true');
+            await service.trashRestore({ machineId: 'machine', batchId: moved.batchId }, { actor });
+            const exact = await service.pileSet({ machineId: 'machine', add: [ref(worktree)] }, { actor });
+            const exactReview = await service.itemsCheck(exact.items, { actor });
+            const retired = await service.trashMove({ machineId: 'machine', items: [{ ref: exact.items[0]!, expect: exactReview.items[0]!.expect,
+                claimedVerdict: exactReview.items[0]!.verdict }] }, { actor });
+            expect(retired.outcomes).toEqual([{ itemId: worktree, status: 'moved' }]);
+            const registrationAfter = (await execute('git', ['-C', repo, 'worktree', 'list', '--porcelain'])).stdout;
+            expect(registrationAfter).not.toContain(`worktree ${worktree}\n`);
+            expect(registrationAfter).toContain('locked');
+            expect((await service.trashRestore({ machineId: 'machine', batchId: retired.batchId }, { actor })).outcomes[0]?.status).toBe('restored');
+            expect((await execute('git', ['-C', worktree, 'rev-parse', '--is-inside-work-tree'])).stdout.trim()).toBe('true');
+        } finally { service.dispose(); resourceSummary.stop(); await sampler.stop(); }
+    });
+
+    it('reviews an exact scanned Keep container, rejects changed and Forbidden children, and restores nested SCM owners on batch Undo', async () => {
+        const home = join(scratch, 'keep-container-home'); const repo = join(scratch, 'keep-container-repo');
+        const container = join(repo, '.dev', 'worktree'); const worktree = join(container, 'outer');
+        const nested = join(worktree, '.dev', 'worktree', 'inner');
+        await mkdir(home); await mkdir(repo);
+        await execute('git', ['init', repo]);
+        await writeFile(join(repo, '.gitignore'), '.dev/\n');
+        await execute('git', ['-C', repo, 'add', '.gitignore']);
+        await execute('git', ['-C', repo, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'fixture']);
+        await execute('git', ['-C', repo, 'worktree', 'add', '-b', 'container-outer', worktree]);
+        await execute('git', ['-C', repo, 'worktree', 'add', '-b', 'container-inner', nested]);
+        await writeFile(join(worktree, 'changed.txt'), 'outer changes');
+        await writeFile(join(nested, 'changed.txt'), 'inner changes');
+        const registration = createGitScmBackendRuntimeRegistration();
+        const registry = createScmBackendRegistry([createRegisteredScmBackendAdapter({ definition: { id: 'git', kind: 'git' },
+            qualifiedId: 'happier.scm.git/git', executableDefinition: registration.runtime!, registration,
+            hostingProviderRuntimeServices: createHostScmHostingProviderRuntimeServices({ contributes: {}, scmHostingProvidersById: new Map() }) })]);
+        const activityLog = await createActivityLog({ activeServerDir: home, resourceSummary: { reportAutomaticAction() {} } });
+        let systemPaths: string[] = [];
+        const actor: StorageOperationActor = { accountId: 'owner', kind: 'person', custodianAccountId: 'owner', assertCurrentAuthority: async () => {} };
+        const service = createStorageService({ machineId: 'machine', homeDir: home, scmRegistry: registry, activityLog,
+            readPolicy: () => MachineStoragePolicyV1Schema.parse({ wholeDiskEnabled: true }),
+            readStorageProtectionFacts: () => ({ systemPaths }),
+            catalog: { happyHomeDir: home, activeServerDir: home, tempRoot: join(scratch, 'keep-container-no-temp'),
+                readProjects: () => ({ status: 'ready', projects: [{ repositoryRoot: repo }] }),
+                readTrackedSessions: () => [{ sessionId: 'container-session', cwd: repo, running: false, stoppedAt: 1 }],
+                readInUsePaths: () => ({ reliable: true, paths: [] }),
+                readWorktrees: () => readStorageWorktrees({ cwds: [repo], happyHomeDir: home, registry }),
+                worktreeOperations: createStorageWorktreeOperations({ happyHomeDir: home, registry }) },
+            readVolumes: () => [{ id: 'fixture', label: 'Fixture', mount: scratch, totalBytes: 1_000_000, availableBytes: 500_000 }] });
+        try {
+            const scan = await service.scanStart({ machineId: 'machine', target: { folderPath: container } }, { actor });
+            await waitForStorageScan(service, scan.scanId, actor);
+            const disk = await service.scanGet({ machineId: 'machine', scanId: scan.scanId }, { actor });
+            expect(disk.root?.flags.protection).toBe('keep');
+            expect(disk.nodes.find(node => node.nodeId === worktree)?.flags.protection).toBe('keep');
+            const selected = { itemId: container, path: container };
+            const collected = await service.pileSet({ machineId: 'machine', add: [selected] }, { actor });
+            const checked = await service.itemsCheck(collected.items, { actor });
+            expect(checked.staying).toEqual([]);
+            expect(checked.items[0]).toMatchObject({ verdict: 'keep', reason: { code: 'contains' } });
+            expect(checked.items[0]?.absorbs).toHaveLength(2);
+            await writeFile(join(nested, 'changed.txt'), 'edited after review');
+            const changed = await service.trashMove({ machineId: 'machine', items: checked.items.map(item => ({ ref: item.ref, expect: item.expect, claimedVerdict: item.verdict })) }, { actor });
+            expect(changed.outcomes).toEqual([{ itemId: container, status: 'skipped', reason: { code: 'changed_since_review' } }]);
+            expect(await service.trashEntries()).toEqual([]);
+            const approved = await service.itemsCheck(collected.items, { actor });
+            systemPaths = [nested];
+            const forbidden = await service.trashMove({ machineId: 'machine', items: approved.items.map(item => ({ ref: item.ref, expect: item.expect, claimedVerdict: item.verdict })) }, { actor });
+            expect(forbidden.outcomes).toEqual([{ itemId: container, status: 'refused', reason: expect.objectContaining({ code: 'contains_forbidden' }) }]);
+            expect(await readFile(join(nested, 'changed.txt'), 'utf8')).toBe('edited after review');
+            systemPaths = [];
+            const current = await service.itemsCheck(collected.items, { actor });
+            const moved = await service.trashMove({ machineId: 'machine', items: current.items.map(item => ({ ref: item.ref, expect: item.expect, claimedVerdict: item.verdict })) }, { actor });
+            expect(moved.outcomes.map(outcome => outcome.status)).toEqual(['moved', 'moved', 'moved']);
+            await expect(lstat(container)).rejects.toMatchObject({ code: 'ENOENT' });
+            await execute('git', ['-C', repo, 'worktree', 'prune']);
+            expect((await execute('git', ['-C', repo, 'worktree', 'list', '--porcelain'])).stdout.match(/locked/gu)).toHaveLength(2);
+            const restored = await service.trashRestore({ machineId: 'machine', batchId: moved.batchId }, { actor });
+            expect(restored.outcomes.map(outcome => outcome.status)).toEqual(['restored', 'restored', 'restored']);
+            expect(restored.outcomes[0]?.path).toBe(container);
+            expect(await readFile(join(worktree, 'changed.txt'), 'utf8')).toBe('outer changes');
+            expect(await readFile(join(nested, 'changed.txt'), 'utf8')).toBe('edited after review');
+            for (const [path, branch] of [[worktree, 'container-outer'], [nested, 'container-inner']]) {
+                expect((await execute('git', ['-C', path!, 'branch', '--show-current'])).stdout.trim()).toBe(branch);
+                expect((await execute('git', ['-C', path!, 'status', '--porcelain'])).stdout).toContain('changed.txt');
+            }
+            const upload = join(repo, '.happier', 'uploads', 'attachments', 'container-session');
+            const attachment = join(upload, 'attachment.bin');
+            await mkdir(upload, { recursive: true }); await writeFile(attachment, 'retained attachment');
+            const mainScan = await service.scanStart({ machineId: 'machine', target: { folderPath: repo } }, { actor });
+            await waitForStorageScan(service, mainScan.scanId, actor);
+            const partial = await service.itemsCheck([{ itemId: attachment, path: attachment }], { actor });
+            expect(partial.staying).toMatchObject([{ reason: { code: 'unsupported',
+                detail: { cause: 'owner_requires_whole_item', categoryId: 'sessionFolders', path: upload } } }]);
+            expect(await readFile(attachment, 'utf8')).toBe('retained attachment');
+            const mainRef = { itemId: repo, path: repo };
+            const limited = await service.itemsCheck([mainRef], { actor });
+            expect(limited.items).toEqual([]);
+            expect(limited.staying).toMatchObject([{ reason: { code: 'unsupported',
+                detail: { cause: 'main_checkout_lifecycle_unsupported', owner: 'scm', path: repo } } }]);
+            const refusedDelete = await service.deleteNow({ machineId: 'machine', items: [{ ref: { ...mainRef,
+                identity: { dev: String((await lstat(repo)).dev), ino: String((await lstat(repo)).ino), kind: 'directory' },
+                collectedAt: 0, collectedBy: { accountId: 'owner', kind: 'person' } }, expect: 'unreviewed' }] }, { actor });
+            expect(refusedDelete.outcomes).toMatchObject([{ status: 'skipped', reason: { code: 'unsupported',
+                detail: { cause: 'main_checkout_lifecycle_unsupported' } } }]);
+            expect((await execute('git', ['-C', repo, 'worktree', 'list', '--porcelain'])).stdout).toContain(`worktree ${nested}`);
+        } finally { service.dispose(); }
+        // Observed composed native/SCM replay: 80 s under concurrent remote-host validation.
+    }, 120_000);
+
+    it('cancels one reader without cancelling another and recovers after the last reader cancels', async () => {
+        const home = join(scratch, 'readers');
+        await mkdir(join(home, 'cache'), { recursive: true });
+        await writeFile(join(home, 'cache', 'bytes'), Buffer.alloc(8192, 4));
+        const service = createStorageService({ catalog: { happyHomeDir: home, activeServerDir: home,
+            tempRoot: join(scratch, 'reader-absent-temp') },
+            readVolumes: () => [{ id: 'readers', label: 'Readers', mount: scratch, totalBytes: 1_000_000, availableBytes: 500_000 }],
+        });
+        try {
+            const first = new AbortController();
+            const second = new AbortController();
+            const cancelled = service.summary({ signal: first.signal });
+            const retained = service.summary({ signal: second.signal });
+            first.abort();
+            await expect(cancelled).rejects.toMatchObject({ name: 'AbortError' });
+            const good = await retained;
+            expect(good.volumes[0]?.happierBytes).toBeGreaterThan(0);
+            const last = new AbortController();
+            const cancelledRefresh = service.refresh({ signal: last.signal });
+            last.abort();
+            await expect(cancelledRefresh).rejects.toMatchObject({ name: 'AbortError' });
+            expect((await service.summary()).volumes[0]?.happierBytes).toBe(good.volumes[0]?.happierBytes);
+            service.dispose();
+            await expect(service.summary()).rejects.toMatchObject({ name: 'AbortError' });
+        } finally { service.dispose(); }
+    });
+
+    it('filters worktrees by canonical Project anchor without leaking private bindings', async () => {
+        const home = join(scratch, 'project-filter-home');
+        const firstRoot = join(scratch, 'project-first');
+        const secondRoot = join(scratch, 'project-second');
+        const firstPath = join(firstRoot, '.dev', 'worktree', 'first');
+        const secondPath = join(secondRoot, '.dev', 'worktree', 'second');
+        await Promise.all([home, firstPath, secondPath].map(path => mkdir(path, { recursive: true })));
+        const actor = { accountId: 'owner', kind: 'person' as const, custodianAccountId: 'owner', assertCurrentAuthority: async () => {} };
+        const service = createStorageService({ catalog: { happyHomeDir: home, activeServerDir: home,
+            tempRoot: join(scratch, 'project-filter-no-temp'),
+            readProjects: () => ({ status: 'ready', projects: [{ projectId: 'first', repositoryRoot: firstRoot },
+                { projectId: 'second', repositoryRoot: secondRoot }] }),
+            readWorktrees: () => [{ path: firstPath, repositoryRoot: firstRoot }, { path: secondPath, repositoryRoot: secondRoot }] },
+            readVolumes: () => [{ id: 'projects', label: 'Projects', mount: scratch, totalBytes: 1_000_000, availableBytes: 500_000 }] });
+        try {
+            const page = await service.worktreesList({ machineId: 'machine', projectId: 'first' }, { actor });
+            expect(page.items.map(item => item.path)).toEqual([firstPath]);
+            expect(page.items[0]).not.toHaveProperty('projectIds');
+            expect((await service.worktreesList({ machineId: 'machine', projectId: 'unknown' }, { actor })).items).toEqual([]);
+        } finally { service.dispose(); }
+    });
+
+    it('collects trusted refs, permits approved Keep, measures growth and records reversible Trash in the incumbent Activity log', async () => {
+        const home = join(scratch, 'cleanup-home');
+        const server = join(home, 'servers', 'fixture');
+        const cache = join(home, 'cache', 'approved-keep');
+        const protectedCache = join(home, 'cache', 'protected');
+        await mkdir(cache, { recursive: true });
+        await mkdir(protectedCache, { recursive: true });
+        await writeFile(join(protectedCache, 'bytes'), Buffer.alloc(4096, 9));
+        await mkdir(server, { recursive: true });
+        await writeFile(join(cache, 'bytes'), Buffer.alloc(4096, 7));
+        const sampler = createMachineVitalsSampler({
+            // The absent OS reader is the only substituted system boundary; these
+            // real storage/Activity owners must not publish an automatic Guard dot.
+            readers: { read: async () => ({ state: 'unavailable', reason: 'helper_missing' }) },
+            historyStore: await createMinuteHistoryStore({ directory: join(server, 'history') }),
+        });
+        const resourceSummary = createMachineResourceSummary({ sampler, readNearlyFull: () => null, onError: error => { throw error; } });
+        const activityLog = await createActivityLog({ activeServerDir: server, resourceSummary });
+        const actor = { accountId: 'owner', kind: 'person' as const, custodianAccountId: 'owner', assertCurrentAuthority: async () => {} };
+        const service = createStorageService({ catalog: { happyHomeDir: home, activeServerDir: server,
+            tempRoot: join(scratch, 'cleanup-absent-temp'), readProjects: () => ({ status: 'ready', projects: [] }),
+            readInUsePaths: () => ({ reliable: true, paths: [cache] }) },
+            activityLog, machineId: 'machine', custodianAccountId: 'owner', homeDir: scratch,
+            readPolicy: () => MachineStoragePolicyV1Schema.parse({ protectedFolders: [{ path: protectedCache, addedAt: 1 }] }),
+            readVolumes: () => [{ id: 'fixture-volume', label: 'Fixture', mount: scratch, totalBytes: 1_000_000, availableBytes: 500_000 }],
+        });
+        try {
+            const category = await service.categoryList('caches');
+            const protectedItem = category.items.find(item => item.path === protectedCache)!;
+            expect(protectedItem).toMatchObject({ verdict: 'keep', collectable: true, reason: { code: 'user_protected' },
+                loses: [expect.objectContaining({ code: 'user_protected' })] });
+            const protectedRef = { itemId: protectedItem.itemId, path: protectedCache };
+            expect((await service.pileSet({ machineId: 'machine', add: [protectedRef] }, { actor })).items).toHaveLength(1);
+            await service.pileSet({ machineId: 'machine', clear: true }, { actor });
+            const item = category.items.find(item => item.path === cache)!;
+            expect(item.verdict).toBe('keep');
+            expect((await service.summary()).suggestionsTop.some(item => item.path === protectedCache)).toBe(false);
+            const served = { itemId: item.itemId, path: cache };
+            const collected = await service.pileSet({ machineId: 'machine', add: [served] }, { actor });
+            expect(collected.items[0]).toMatchObject({ collectedBy: { accountId: 'owner', kind: 'person' } });
+            expect(collected.items[0]!.identity.dev).toBe(String((await lstat(cache, { bigint: true })).dev));
+            expect((await service.summary({ actor })).pile.count).toBe(1);
+            const review = await service.itemsCheck(collected.items.map(({ itemId, path }) => ({ itemId, path })), { actor });
+            expect(review.items[0]?.verdict).toBe('keep');
+            expect(review.items[0]?.ref).toMatchObject({ identity: collected.items[0]!.identity,
+                collectedBy: { accountId: 'owner', kind: 'person' } });
+            const unavailable = { itemId: 'missing-ref', path: join(scratch, 'missing-ref') };
+            expect((await service.itemsCheck([unavailable], { actor })).staying).toEqual([
+                { item: unavailable, reason: { code: 'facts_unavailable' } },
+            ]);
+            expect((await service.itemsCheck([{ ...served, path: protectedCache }], { actor })).items).toEqual([]);
+            await writeFile(join(cache, 'grew'), Buffer.alloc(32768, 8));
+            const applied = await service.trashMove({ machineId: 'machine', items: [{ ref: collected.items[0]!,
+                expect: review.items[0]!.expect, claimedVerdict: 'safe' }] }, { actor });
+            expect(applied.outcomes).toEqual([{ itemId: item.itemId, status: 'moved' }]);
+            expect(applied.inTrashBytes).toBeGreaterThan(review.items[0]!.size.allocatedBytes);
+            await expect(lstat(cache)).rejects.toMatchObject({ code: 'ENOENT' });
+            expect((await service.pileGet({ actor })).items).toEqual([]);
+            const receipts = await activityLog.list({ range: 'today' });
+            const moved = receipts.entries.find(entry => entry.kind === 'trash_moved')!;
+            expect(moved.wayBack?.[0]?.input).toMatchObject({ machineId: 'machine', entryIds: [expect.any(String)] });
+            expect(resourceSummary.getSummary()?.lastAutomaticAction).toBeUndefined();
+            const restored = await service.trashRestore({ machineId: 'machine', batchId: applied.batchId }, { actor });
+            expect(restored.outcomes).toEqual([expect.objectContaining({ status: 'restored', path: cache })]);
+            expect((await lstat(join(cache, 'grew'))).size).toBe(32768);
+        } finally { service.dispose(); resourceSummary.stop(); await sampler.stop(); }
+    });
+
+    it('projects physical protection into category flags and refuses collecting a cache containing the running executable', async () => {
+        const home = join(scratch, 'forbidden-cache-home'); const server = join(home, 'servers', 'fixture');
+        const cache = join(home, 'cache', 'contains-runtime'); const executable = join(cache, 'active-runtime');
+        await mkdir(executable, { recursive: true }); await mkdir(server, { recursive: true }); await writeFile(join(executable, 'happier.exe'), Buffer.alloc(4096, 1));
+        const sampler = createMachineVitalsSampler({ readers: { read: async () => ({ state: 'unavailable', reason: 'helper_missing' }) },
+            historyStore: await createMinuteHistoryStore({ directory: join(server, 'history') }) });
+        const resourceSummary = createMachineResourceSummary({ sampler, readNearlyFull: () => null, onError: error => { throw error; } });
+        const activityLog = await createActivityLog({ activeServerDir: server, resourceSummary });
+        const actor = { accountId: 'owner', kind: 'person' as const, custodianAccountId: 'owner', assertCurrentAuthority: async () => {} };
+        const service = createStorageService({ catalog: { happyHomeDir: home, activeServerDir: server, installDir: executable,
+            tempRoot: join(scratch, 'forbidden-absent-temp'), readProjects: () => ({ status: 'ready', projects: [] }),
+            readInUsePaths: () => ({ reliable: true, paths: [] }) }, homeDir: scratch, machineId: 'machine', activityLog,
+            readVolumes: () => [{ id: 'fixture', label: 'Fixture', mount: scratch, totalBytes: 1_000_000, availableBytes: 500_000 }] });
+        try {
+            const item = (await service.categoryList('caches')).items.find(item => item.path === cache)!;
+            const ref = { itemId: item.itemId, path: cache, identity: { dev: 'fake', ino: 'fake', kind: 'directory' as const },
+                collectedAt: 0, collectedBy: { accountId: 'owner', kind: 'person' as const } };
+            await expect(service.pileSet({ machineId: 'machine', add: [ref] }, { actor })).rejects.toMatchObject({ code: 'storage_item_not_collectable' });
+            expect(item).toMatchObject({ verdict: 'forbidden', collectable: false, reason: { code: 'contains_forbidden' } });
+            expect((await service.summary()).categories.find(category => category.categoryId === 'caches')?.canGoBytes).toBe(0);
+            expect((await service.pileGet({ actor })).items).toEqual([]);
+        } finally { service.dispose(); resourceSummary.stop(); await sampler.stop(); }
+    });
+
+    it('declines the current descendant timestamp from the same real review measurement, not a cached snapshot', async () => {
+        const home = join(scratch, 'decline-home');
+        const server = join(home, 'servers', 'fixture');
+        const cache = join(home, 'cache', 'unused');
+        const bytes = join(cache, 'bytes');
+        await mkdir(cache, { recursive: true }); await mkdir(server, { recursive: true });
+        await writeFile(bytes, Buffer.alloc(4096, 1));
+        const before = new Date(Date.now() - 10 * 86_400_000);
+        await utimes(bytes, before, before); await utimes(cache, before, before);
+        const sampler = createMachineVitalsSampler({ readers: { read: async () => ({ state: 'unavailable', reason: 'helper_missing' }) },
+            historyStore: await createMinuteHistoryStore({ directory: join(server, 'history') }) });
+        const resourceSummary = createMachineResourceSummary({ sampler, readNearlyFull: () => null, onError: error => { throw error; } });
+        const activityLog = await createActivityLog({ activeServerDir: server, resourceSummary });
+        const actor = { accountId: 'owner', kind: 'person' as const, custodianAccountId: 'owner', assertCurrentAuthority: async () => {} };
+        const service = createStorageService({ catalog: { happyHomeDir: home, activeServerDir: server,
+            tempRoot: join(scratch, 'decline-absent-temp'), readProjects: () => ({ status: 'ready', projects: [] }),
+            readInUsePaths: () => ({ reliable: true, paths: [] }) }, activityLog, machineId: 'machine', homeDir: scratch,
+            readVolumes: () => [{ id: 'fixture', label: 'Fixture', mount: scratch, totalBytes: 1_000_000, availableBytes: 500_000 }] });
+        try {
+            const cached = (await service.categoryList('caches')).items.find(item => item.path === cache)!;
+            const forged = { itemId: cached.itemId, path: cache, identity: { dev: 'fake', ino: 'fake', kind: 'directory' as const },
+                collectedAt: 0, collectedBy: { accountId: 'owner', kind: 'person' as const } };
+            const collected = await service.pileSet({ machineId: 'machine', add: [forged] }, { actor });
+            await service.summary();
+            const changed = new Date(Date.now() + 86_400_000);
+            await utimes(bytes, changed, changed);
+            const reviewed = await service.itemsCheck(collected.items, { actor });
+            const suggestion = (await service.suggestionsList({ machineId: 'machine' }, { actor })).items.find(item => item.itemId === cached.itemId)!;
+            expect(suggestion.title).toBe(cached.title);
+            expect(collected.items[0]).toHaveProperty('title', suggestion.title);
+            expect(reviewed.items[0]).toHaveProperty('title', suggestion.title);
+            expect(reviewed.items[0]?.ref).toHaveProperty('title', suggestion.title);
+            const declined = await service.suggestionsDecline({ machineId: 'machine', items: reviewed.items.map(item => ({ ref: item.ref, expect: item.expect })) }, { actor });
+            expect(declined.declinedCount).toBe(1);
+            expect((await service.suggestionsList({ machineId: 'machine' }, { actor: { ...actor, kind: 'agent' } })).items.some(item => item.path === cache)).toBe(false);
+            expect((await service.suggestionsList({ machineId: 'machine' }, { actor })).items.some(item => item.path === cache)).toBe(true);
+        } finally { service.dispose(); resourceSummary.stop(); await sampler.stop(); }
+    });
+
+    it('consumes the completed native whole-disk index and verifies build outputs through the real SCM owner', async () => {
+        const home = join(scratch, 'suggestions-home'); const repo = join(scratch, 'suggestions-repo');
+        await mkdir(home); await mkdir(repo);
+        await execute('git', ['init', repo]);
+        await writeFile(join(repo, 'package.json'), '{}'); await writeFile(join(repo, '.gitignore'), 'dist/\n');
+        for (const name of ['dist', 'build']) { await mkdir(join(repo, name)); await writeFile(join(repo, name, 'bytes'), Buffer.alloc(4096, 1)); }
+        const actor = { accountId: 'owner', kind: 'person' as const, custodianAccountId: 'owner', assertCurrentAuthority: async () => {} };
+        const registration = createGitScmBackendRuntimeRegistration();
+        const scmRegistry = createScmBackendRegistry([createRegisteredScmBackendAdapter({ definition: { id: 'git', kind: 'git' },
+            qualifiedId: 'happier.scm.git/git', executableDefinition: registration.runtime!, registration,
+            hostingProviderRuntimeServices: createHostScmHostingProviderRuntimeServices({ contributes: {}, scmHostingProvidersById: new Map() }) })]);
+        const service = createStorageService({ catalog: { happyHomeDir: home, activeServerDir: home, tempRoot: join(scratch, 'scan-absent-temp'),
+            readProjects: () => ({ status: 'ready', projects: [{ repositoryRoot: repo }] }), readInUsePaths: () => ({ reliable: true, paths: [] }) }, homeDir: scratch, scmRegistry,
+            readPolicy: () => MachineStoragePolicyV1Schema.parse({ wholeDiskEnabled: true }),
+            readVolumes: () => [{ id: 'fixture', label: 'Fixture', mount: repo, totalBytes: 1_000_000, availableBytes: 500_000 }],
+            readStorageProtectionFacts: () => ({ cloudSyncedFolders: [repo] }),
+        });
+        try {
+            expect((await service.suggestionsList({ machineId: 'machine', group: 'outside-happier' }, { actor })).items).toEqual([]);
+            const scan = await service.scanStart({ machineId: 'machine', target: { volumeId: 'fixture' } }, { actor });
+            await waitForStorageScan(service, scan.scanId, actor);
+            const listed = await service.suggestionsList({ machineId: 'machine', group: 'outside-happier' }, { actor });
+            expect(listed.items.filter(item => ['dist', 'build'].some(name => item.path === join(repo, name))).map(item => item.path))
+                .toEqual([join(repo, 'dist')]);
+            expect(listed.items.find(item => item.path === join(repo, 'dist')))
+                .toMatchObject({ itemId: join(repo, 'dist'), verdict: 'caution', reason: { detail: { cloudSynced: true } }, evidence: expect.arrayContaining(['scm_ignored']) });
+        } finally { service.dispose(); }
+    });
+
+    it('serves real sized RPC snapshots while restricting a recipient to proven Session folders', async () => {
+        const home = join(scratch, 'rpc-home');
+        const server = join(home, 'servers', 'home');
+        const workspace = join(scratch, 'workspace');
+        for (const sessionId of ['own-session', 'other-session']) {
+            const directory = join(workspace, '.happier', 'uploads', 'messages', sessionId);
+            await mkdir(directory, { recursive: true });
+            await writeFile(join(directory, 'attachment'), Buffer.alloc(4096, 5));
+        }
+        await mkdir(server, { recursive: true });
+        const identity = { serverId: 'home', machineId: 'machine', installationId: 'install', custodianAccountId: 'owner' };
+        // The canonical transport map erases payload types; real registered routes validate schemas.
+        const handlers: RpcHandlerMap = new Map();
+        const registrar: RpcHandlerRegistrar = { registerHandler(method, handler) { handlers.set(method, handler); } };
+        const routes = createDaemonStorageRoutes({ target: () => identity,
+            deps: () => ({ catalog: { happyHomeDir: home, activeServerDir: server, tempRoot: join(scratch, 'rpc-absent-temp'),
+                readTrackedSessions: () => ['own-session', 'other-session'].map(sessionId => ({ sessionId, cwd: workspace, running: true })) },
+                readVolumes: () => [{ id: 'fixture', label: 'Fixture', mount: scratch, totalBytes: 1_000_000, availableBytes: 500_000 }] }),
+            readOwnSessionIds: accountId => new Set(accountId === 'recipient' ? ['own-session'] : []),
+        });
+        registerDaemonStorageRpcHandlers(registrar, routes);
+        const context = (actorAccountId: string, role: 'use' | 'manage'): RpcHandlerContext => ({
+            signal: new AbortController().signal,
+            machineAdmission: { ...identity, actorAccountId, role, encryptionMode: 'plain' },
+            verifyMachineAdmissionCurrent: async () => true,
+        });
+        const invoke = (method: string, input: object, actorAccountId = 'owner', role: 'use' | 'manage' = 'manage') =>
+            handlers.get(method)!({ machineId: 'machine', ...input }, context(actorAccountId, role));
+        try {
+            const full = await invoke(RPC_METHODS.DAEMON_STORAGE_SUMMARY_GET, {});
+            expect(full).toMatchObject({ volumes: [{ happierBytes: expect.any(Number), canGoBytes: expect.any(Number) }],
+                categories: expect.arrayContaining([expect.objectContaining({ categoryId: 'sessionFolders', count: 2 })]) });
+            const shared = await invoke(RPC_METHODS.DAEMON_STORAGE_SUMMARY_GET, {}, 'recipient', 'use');
+            expect(shared).toMatchObject({ categories: [], suggestionsTop: [] });
+            expect(JSON.stringify(shared)).not.toContain('"canGoBytes"');
+            const own = await invoke(RPC_METHODS.DAEMON_STORAGE_CATEGORY_LIST, { categoryId: 'sessionFolders' }, 'recipient', 'use');
+            expect(own).toMatchObject({ items: [expect.objectContaining({ path: join(workspace, '.happier', 'uploads', 'messages', 'own-session'),
+                size: expect.objectContaining({ allocatedBytes: expect.any(Number) }) })] });
+            expect(JSON.stringify(own)).not.toContain('other-session');
+            expect(JSON.stringify(own)).not.toContain('"sessionId"');
+            await expect(invoke(RPC_METHODS.DAEMON_STORAGE_SIZE_REFRESH, {}, 'recipient', 'use'))
+                .rejects.toMatchObject({ rpcErrorCode: 'RPC_FORBIDDEN' });
+            const service = await routes.getService(identity);
+            const first = await service.summary();
+            const changed = invoke(RPC_METHODS.DAEMON_STORAGE_WATCH, { sinceRevision: first.revision }, 'recipient', 'use');
+            await new Promise<void>(resolve => setImmediate(resolve));
+            service.invalidate();
+            expect(await changed).toMatchObject({ changed: true, summary: { categories: [], revision: expect.any(Number) } });
+        } finally { routes.dispose(); }
+    });
+});

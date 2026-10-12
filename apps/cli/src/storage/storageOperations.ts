@@ -1,0 +1,378 @@
+import { homedir } from 'node:os';
+import {
+    MachineStoragePolicyV1Schema,
+    type MachineStoragePileSetInputV1, type MachineStoragePileResultV1, type MachineStorageTrashMoveInputV1,
+    type MachineStorageDeleteNowInputV1, type MachineStorageTrashEmptyInputV1, type MachineStorageTrashRestoreInputV1,
+    type MachineStorageWorktreesListInputV1, type MachineStorageSuggestionsListInputV1,
+    type MachineStorageSuggestionsDeclineInputV1, type PileItemRefV1, type StorageItemV1, type HappierStorageSummaryV1,
+    type DiskNodeV1, type StorageItemRefV1, type PileReviewV1,
+} from '@happier-dev/protocol/storage/storageV1';
+import { storagePathsEqual as canonicalAbsolutePathsEqual, storagePathContains,
+    physicalStoragePathWithoutFollowingLeaf as physicalPathWithoutFollowingLeaf } from './storagePath';
+import type { StorageOperationActor, StorageServiceDeps } from './storageService';
+import type { createStorageCategoryCatalog, StorageCategoryItem } from './categoryCatalog';
+import { foldStorageDescendantVerdicts, publicStorageItem } from './categoryCatalog';
+import { createPileStore } from './pileStore';
+import { PileFactError, reviewPile, type PileReviewDeps } from './reviewPile';
+import { applyPile } from './applyPile';
+import { measureNativeDisk } from './measure/nativeDiskMeasure';
+import type { JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
+import { createTrashStore, resolveTrashOsUserId, type TrashStore } from './trash/trashStore';
+import { readStoragePathIdentity } from './trash/removeStoragePath';
+import { classifyPath, type StorageProtectionFacts } from './protection/protectedPaths';
+import { createStorageSuggestions, recognizeStorageCandidate } from './suggestions/recognizers';
+import { readStorageIgnoredPaths } from './worktrees/readStorageIgnoredPaths';
+import type { StorageCategoryVerdict, StorageCleanupItem } from './categories/types';
+
+type ActorOptions = Readonly<{ actor: StorageOperationActor; signal?: AbortSignal }>;
+type Catalog = ReturnType<typeof createStorageCategoryCatalog>;
+type SizedItem = StorageItemV1 & Pick<StorageCategoryItem, 'sessionId' | 'projectIds'>;
+
+/** The lazy service composes the catalog, pile and Trash owners; Actions do not own cleanup policy. */
+export function createStorageOperations(input: Readonly<{
+    deps: StorageServiceDeps; catalog: Catalog; readSizedItems(signal?: AbortSignal): Promise<readonly SizedItem[]>;
+    setTrashRoots(paths: readonly string[]): void;
+    revision(): number; invalidate(): void;
+}>) {
+    const { deps, catalog } = input;
+    const pile = createPileStore({ activeServerDir: deps.catalog.activeServerDir, now: deps.nowMs });
+    const policy = () => deps.readPolicy?.() ?? MachineStoragePolicyV1Schema.parse({});
+    let trash: Promise<TrashStore> | undefined;
+    let unsubscribeTrash: (() => void) | undefined;
+    let disposed = false;
+    const lifecycle = new AbortController();
+    const assertActive = () => { if (disposed) throw Object.assign(new Error('Storage owner retired'), { name: 'AbortError' }); };
+    const contains = storagePathContains;
+    const permitted = (item: Readonly<{ sessionId?: string }>, actor: StorageOperationActor) => actor.sessionIds === undefined
+        || item.sessionId !== undefined && actor.sessionIds.has(item.sessionId);
+    async function assertActor(actor: StorageOperationActor) { assertActive(); await actor.assertCurrentAuthority(); assertActive(); }
+    async function protectionSnapshot() {
+        const [projects, use, discovered, environment] = await Promise.all([
+            deps.catalog.readProjects?.(), deps.catalog.readInUsePaths?.(), catalog.discover(), deps.readStorageProtectionFacts?.(),
+        ]);
+        const trashRoots = trash ? (await (await trash).roots()).map(root => root.path) : [];
+        const facts: StorageProtectionFacts = { ...environment, homeDir: deps.homeDir ?? homedir(),
+            dataHomes: [deps.catalog.happyHomeDir, deps.catalog.activeServerDir],
+            installPaths: deps.catalog.installDir ? [deps.catalog.installDir] : [],
+            volumeRoots: deps.readVolumes().map(volume => volume.mount), trashRoots,
+            mainCheckouts: projects?.projects?.map(project => project.repositoryRoot) ?? [],
+            inUsePaths: use?.paths ?? [], inUseSessions: use?.sessions ?? [], userProtectedFolders: policy().protectedFolders.map(folder => folder.path),
+            agentHomes: discovered.filter(item => item.categoryId === 'agentHomes' && item.verdict === 'keep').map(item => item.path),
+            cloudSyncedFolders: [...(environment?.cloudSyncedFolders ?? []), process.env.OneDrive, process.env.OneDriveConsumer, process.env.OneDriveCommercial]
+                .filter((path): path is string => !!path),
+        };
+        return { facts, discovered };
+    }
+    async function protectionFacts(): Promise<StorageProtectionFacts> { return (await protectionSnapshot()).facts; }
+    async function classifyItem(item: StorageCleanupItem, path = item.path, facts?: StorageProtectionFacts): Promise<StorageCategoryVerdict> {
+        const classification = await classifyPath(path, { ...(facts ?? await protectionFacts()),
+            ...(item.categoryId === undefined ? {} : { managedItemPath: item.path }) });
+        const verdict = item.verdict === 'forbidden' || classification.tier === 'forbidden' ? 'forbidden'
+            : item.verdict === 'keep' || classification.tier === 'keep' ? 'keep'
+            : item.verdict === 'check' ? 'check' : classification.tier === 'caution' ? 'caution' : item.verdict;
+        return { verdict, reason: classification.tier === verdict ? classification.reason! : item.reason,
+            collectable: item.collectable && verdict !== 'forbidden',
+            ...(classification.loses === undefined && item.loses === undefined ? {}
+                : { loses: [...(item.loses ?? []), ...(classification.loses ?? [])] }) };
+    }
+    function getTrash(): Promise<TrashStore> {
+        assertActive();
+        if (!deps.activityLog || !deps.machineId) throw Object.assign(new Error('Trash owner is unavailable'), { code: 'storage_owner_unavailable' });
+        if (!trash) {
+            trash = (async () => {
+                const store = createTrashStore({ happyHomeDir: deps.catalog.happyHomeDir, osUserId: await resolveTrashOsUserId(),
+                    target: { machineId: deps.machineId!, ...(deps.serverId === undefined ? {} : { serverId: deps.serverId }) }, readVolumes: deps.readVolumes, activityLog: deps.activityLog!,
+                    attributionFor: deps.attributionFor ?? (() => ({ kind: 'unknown' })),
+                    readEmptyAfterDays: () => policy().trashEmptyAfterDays,
+                    classifyRestorePath: async path => {
+                        const classification = await classifyPath(path, { ...await protectionFacts(), managedItemPath: path });
+                        return classification.tier === 'forbidden' ? classification.reason! : null;
+                    },
+                    resolveOwnerAdapter: catalog.adapterForEntry, nowMs: deps.nowMs,
+                });
+                unsubscribeTrash = store.subscribe(input.invalidate);
+                input.setTrashRoots((await store.roots()).map(root => root.path));
+                // Recover a rename/deletion interrupted after its existing manifest commit point.
+                await store.reconcile({ canRunOwnerOperation: deps.canRunStorageOwnerOperation, beforeEffect: async () => { assertActive(); } });
+                return store;
+            })();
+            void trash.catch(() => { trash = undefined; unsubscribeTrash?.(); unsubscribeTrash = undefined; });
+        }
+        return trash;
+    }
+    async function resolveRef(ref: StorageItemRefV1, actor: StorageOperationActor, snapshot?: Awaited<ReturnType<typeof protectionSnapshot>>) {
+        await assertActor(actor);
+        const discovered = snapshot?.discovered ?? await catalog.discover();
+        await assertActor(actor);
+        if (actor.sessionIds !== undefined && !discovered.some(item => item.itemId === ref.itemId && permitted(item, actor))) {
+            throw Object.assign(new Error('Storage item is not owned by this Account'), { code: 'unauthorized' });
+        }
+        const physical = await physicalPathWithoutFollowingLeaf(ref.path);
+        for (const item of discovered) {
+            if (item.itemId === ref.itemId && canonicalAbsolutePathsEqual(await physicalPathWithoutFollowingLeaf(item.path), physical)) {
+                if (!permitted(item, actor)) throw Object.assign(new Error('Storage item is not owned by this Account'), { code: 'unauthorized' });
+                return { item, fingerprint: item.fingerprint, fingerprintRequired: item.fingerprintRequired,
+                    ownFingerprint: item.ownFingerprint,
+                    retirementChildren: discovered.filter(child => !canonicalAbsolutePathsEqual(item.path, child.path) && contains(item.path, child.path)) };
+            }
+        }
+        // Global disk refs have no Session scope proof, even when their spelling overlaps a Session.
+        if (actor.sessionIds !== undefined) throw Object.assign(new Error('Disk item is custodian-only'), { code: 'unauthorized' });
+        const indexed = await deps.readIndexedStorageItem?.(ref);
+        await assertActor(actor);
+        if (!indexed || !indexed.complete || indexed.node.nodeId !== ref.itemId
+            || !canonicalAbsolutePathsEqual(await physicalPathWithoutFollowingLeaf(indexed.path), physical)) return null;
+        const exact = discovered.find(item => canonicalAbsolutePathsEqual(item.path, physical));
+        if (exact) return { item: { ...exact, itemId: ref.itemId, canonicalItemId: exact.itemId },
+            fingerprint: exact.fingerprint, fingerprintRequired: exact.fingerprintRequired, ownFingerprint: exact.ownFingerprint,
+            retirementChildren: discovered.filter(child => !canonicalAbsolutePathsEqual(exact.path, child.path) && contains(exact.path, child.path)) };
+        const retirementChildren = discovered.filter(item => contains(physical, item.path));
+        const enclosing = discovered.filter(item => contains(item.path, physical)).sort((left, right) => right.path.length - left.path.length);
+        const limitation = catalog.descendantCleanupLimitation(physical, discovered);
+        if (limitation) throw new PileFactError('facts_unavailable', limitation);
+        const worktree = enclosing.find(item => item.categoryId === 'worktrees');
+        if (worktree && !worktree.collectable) throw new PileFactError('facts_unavailable');
+        const protection = snapshot?.facts ?? await protectionFacts();
+        const recognized = await recognizeStorageCandidate({ path: physical, size: indexed.node.size,
+            ...(worktree ? { repositoryRoot: worktree.path, repositoryInUse: worktree.reason.code === 'in_use' } : {}) },
+            { protection, now: deps.nowMs?.() ?? Date.now(), suggestUnusedAfterDays: policy().suggestUnusedAfterDays,
+                readIgnoredPaths: repositoryRoot => readStorageIgnoredPaths({ repositoryRoot, happyHomeDir: deps.catalog.happyHomeDir, registry: deps.scmRegistry }) });
+        const item: StorageCleanupItem = { itemId: ref.itemId, path: physical,
+            title: indexed.node.name, kind: 'disk-node',
+            verdict: recognized?.verdict ?? 'caution', reason: recognized?.reason ?? { code: 'not_rebuildable' },
+            evidence: ['trusted_disk_index', ...(recognized?.evidence ?? [])], collectable: true,
+            ...(worktree && worktree.verdict !== 'safe' ? { verdict: worktree.verdict, reason: worktree.reason, loses: worktree.loses } : {}) };
+        return { item: { ...item, ...foldStorageDescendantVerdicts(item, retirementChildren) }, retirementChildren };
+    }
+    async function reviewDeps(actor: StorageOperationActor): Promise<PileReviewDeps> {
+        const store = await getTrash();
+        return { resolve: ref => resolveRef(ref, actor), measure: request => measureNativeDisk(request, { signal: lifecycle.signal }),
+            cleanupLimitation: (path, items) => catalog.cleanupLimitation(path, items),
+            freshFacts: async () => {
+                await assertActor(actor);
+                const snapshot = await protectionSnapshot();
+                await assertActor(actor);
+                return { resolve: (ref: PileItemRefV1) => resolveRef(ref, actor, snapshot),
+                    classify: async (path: string, item: StorageCleanupItem) => classifyItem(item, path, snapshot.facts),
+                    cleanupLimitation: (path: string, items: readonly StorageCleanupItem[]) => catalog.cleanupLimitation(path, items) };
+            },
+            trashAvailability: store.availability,
+            classify: async (path, item) => {
+                const projected = await classifyItem(item, path);
+                return { verdict: projected.verdict, reason: projected.reason,
+                    ...(projected.loses === undefined ? {} : { loses: projected.loses }) };
+            },
+        };
+    }
+    async function pileProjection(actor: StorageOperationActor) {
+        const state = await pile.get(actor.accountId);
+        if (state.droppedSinceLastView.length) input.invalidate();
+        const visible: PileItemRefV1[] = [];
+        const bindings: StorageCleanupItem[] = [];
+        for (const ref of state.items) {
+            try {
+                const resolved = await resolveRef(ref, actor);
+                if (resolved && permitted(resolved.item, actor)) { visible.push({ ...ref, title: resolved.item.title }); bindings.push(resolved.item); }
+            }
+            catch (error) {
+                if (!(error !== null && typeof error === 'object' && 'code' in error && error.code === 'unauthorized')) throw error;
+            }
+        }
+        const review = visible.length ? await reviewPile(visible, await reviewDeps(actor)) : null;
+        await assertActor(actor);
+        // Native review can await OS/SCM facts while current Session custody changes.
+        // Never disclose the earlier projection after its private scope proof expired.
+        if (bindings.some(item => !permitted(item, actor))) {
+            throw Object.assign(new Error('Storage item is not owned by this Account'), { code: 'unauthorized' });
+        }
+        const result: MachineStoragePileResultV1 = { revision: input.revision(), items: visible,
+            summary: { count: visible.length, freesBytes: review?.totalFreesBytes ?? 0,
+                // Missing refs have no current Session scope proof; their paths stay custodian-only.
+                droppedSinceLastView: actor.sessionIds === undefined ? state.droppedSinceLastView : [] } };
+        return { result, review };
+    }
+    async function pileResult(actor: StorageOperationActor) { return (await pileProjection(actor)).result; }
+    async function suggestions(actor?: StorageOperationActor, request: Pick<MachineStorageSuggestionsListInputV1, 'group' | 'quickestForVolume'> = {},
+        suppliedItems?: readonly SizedItem[]) {
+        const owner = createStorageSuggestions({
+            readCatalogItems: async () => (suppliedItems ?? await input.readSizedItems())
+                .filter(item => !actor || permitted(item, actor)).map(publicStorageItem),
+            readProtectionFacts: protectionFacts, now: deps.nowMs, suggestUnusedAfterDays: () => policy().suggestUnusedAfterDays,
+            readCompletedScan: !actor || actor.sessionIds === undefined ? deps.readCompletedStorageScan : undefined,
+            readIgnoredPaths: repositoryRoot => readStorageIgnoredPaths({ repositoryRoot, happyHomeDir: deps.catalog.happyHomeDir, registry: deps.scmRegistry }),
+            volumeForPath: path => deps.readVolumes().filter(volume => contains(volume.mount, path)).sort((a, b) => b.mount.length - a.mount.length)[0]?.id,
+            isDeclined: actor ? async item => pile.isDeclined(actor.accountId, { ref: {
+                itemId: item.itemId, path: await physicalPathWithoutFollowingLeaf(item.path), identity: await readStoragePathIdentity(item.path),
+                collectedAt: deps.nowMs?.() ?? Date.now(), collectedBy: { accountId: actor.accountId, kind: actor.kind },
+            }, size: item.size, lastChangedAt: item.lastChangedAt }) : undefined,
+        });
+        return owner.list({ callerKind: actor?.kind ?? 'person', ...request });
+    }
+    function entryAuthority(actor: StorageOperationActor) {
+        return async (entry: Readonly<{ categoryId?: StorageCategoryItem['categoryId']; movedBy: Readonly<{ accountId: string }> }>, ownerData?: JsonValue) => {
+            await assertActor(actor);
+            if (actor.sessionIds === undefined) return;
+            if (entry.categoryId !== 'sessionFolders' || ownerData === undefined || entry.movedBy.accountId !== actor.accountId) {
+                throw Object.assign(new Error('Storage entry is not owned by this Account'), { code: 'unauthorized' });
+            }
+            const adapter = await catalog.adapterForEntry(entry.categoryId, ownerData);
+            await assertActor(actor);
+            if (!adapter.sessionId || !actor.sessionIds.has(adapter.sessionId)) {
+                throw Object.assign(new Error('Session folder is not owned by this Account'), { code: 'unauthorized' });
+            }
+        };
+    }
+    return {
+        /** Only the returned index page is projected; the scan never acquires per-file TS identities. */
+        async projectDiskNodes(nodes: readonly DiskNodeV1[]): Promise<DiskNodeV1[]> {
+            const { facts, discovered } = await protectionSnapshot();
+            return Promise.all(nodes.map(async node => {
+                const virtual = node.kind === 'small-items' || node.kind === 'hidden-space' || node.kind === 'reserved';
+                const source = virtual ? node.parentId : node.nodeId;
+                if (!source) return node;
+                // A synthetic ID is presentation only; only its producer-bound parent supplies path facts.
+                const path = await physicalPathWithoutFollowingLeaf(source);
+                const owner = discovered.find(item => canonicalAbsolutePathsEqual(item.path, path));
+                const classification = await classifyPath(path, { ...facts,
+                    ...(owner ? { managedItemPath: owner.path } : {}) });
+                const enclosing = discovered.filter(item => item.categoryId === 'worktrees' && contains(item.path, path));
+                const losses = [...(owner?.loses ?? []), ...enclosing.flatMap(item => item.loses ?? []), ...(classification.loses ?? [])];
+                const children = await Promise.all(discovered.filter(item => !canonicalAbsolutePathsEqual(path, item.path) && contains(path, item.path))
+                    .map(async item => ({ ...item, ...await classifyItem(item, item.path, facts) })));
+                const projected = foldStorageDescendantVerdicts({ verdict: classification.tier ?? owner?.verdict
+                    ?? (enclosing.some(item => item.verdict === 'keep') ? 'keep' : 'caution'),
+                    reason: classification.reason ?? owner?.reason ?? { code: 'not_rebuildable' }, collectable: true, loses: losses }, children);
+                const forbidden = node.flags.protection === 'forbidden' || projected.verdict === 'forbidden';
+                const keep = projected.verdict === 'keep';
+                return { ...node,
+                    ...(classification.reason || owner || children.length ? { reason: projected.reason } : {}),
+                    ...(projected.loses?.length ? { loses: projected.loses } : {}), flags: { ...node.flags,
+                    happier: catalog.dataRoots().some(root => contains(root, path))
+                        || discovered.some(item => contains(item.path, path) || contains(path, item.path)),
+                    protection: forbidden ? 'forbidden' : keep ? 'keep' : 'none',
+                    inUse: (facts.inUsePaths ?? []).some(live => contains(live, path) || contains(path, live)),
+                } };
+            }));
+        },
+        async projectCatalogItems<T extends StorageCategoryItem>(items: readonly T[]): Promise<readonly (Omit<T, keyof StorageCategoryVerdict> & StorageCategoryVerdict)[]> {
+            const facts = await protectionFacts();
+            return Promise.all(items.map(async item => ({ ...item, ...await classifyItem(item, item.path, facts) })));
+        },
+        async pileGet({ actor }: ActorOptions) { await assertActor(actor); return pileResult(actor); },
+        async pileSet(request: MachineStoragePileSetInputV1, { actor }: ActorOptions) {
+            await assertActor(actor);
+            for (const ref of request.add ?? []) {
+                const resolved = await resolveRef(ref, actor);
+                if (!resolved || !(await classifyItem(resolved.item)).collectable) {
+                    throw Object.assign(new Error('Storage item cannot be collected'), { code: 'storage_item_not_collectable' });
+                }
+            }
+            await pile.set(actor.accountId, request, { accountId: actor.accountId, kind: actor.kind }, async ref => (await resolveRef(ref, actor))?.fingerprint);
+            await assertActor(actor); input.invalidate(); return pileResult(actor);
+        },
+        async itemsCheck(refs: readonly StorageItemRefV1[], { actor }: ActorOptions) {
+            await assertActor(actor);
+            const fresh: PileItemRefV1[] = [];
+            const unavailable: PileReviewV1['staying'] = [];
+            for (const ref of refs) {
+                let title: string | undefined;
+                try {
+                    const resolved = await resolveRef(ref, actor);
+                    if (!resolved) throw new PileFactError('facts_unavailable');
+                    title = resolved.item.title;
+                    const path = await physicalPathWithoutFollowingLeaf(resolved.item.path);
+                    fresh.push({ itemId: ref.itemId, path, title: resolved.item.title, identity: await readStoragePathIdentity(path),
+                        collectedAt: deps.nowMs?.() ?? Date.now(), collectedBy: { accountId: actor.accountId, kind: actor.kind } });
+                } catch (error) {
+                    const code = error !== null && typeof error === 'object' && 'code' in error ? error.code : undefined;
+                    if (code === 'unauthorized') throw error;
+                    unavailable.push({ item: { itemId: ref.itemId, path: ref.path, ...(title === undefined ? {} : { title }) }, reason: error instanceof PileFactError && error.reason ? error.reason : { code:
+                        code === 'ENOENT' ? 'missing'
+                            : error instanceof PileFactError && error.code !== 'storage_forbidden' ? error.code : 'facts_unavailable' } });
+                }
+            }
+            const result = await reviewPile(fresh, await reviewDeps(actor));
+            result.staying.push(...unavailable);
+            await assertActor(actor); return result;
+        },
+        async trashMove(request: MachineStorageTrashMoveInputV1, { actor }: ActorOptions) {
+            await assertActor(actor);
+            const result = await applyPile({ items: request.items, mode: 'trash', actor: { accountId: actor.accountId, kind: actor.kind },
+                custodianAccountId: actor.custodianAccountId, emptyAfter: request.emptyAfter, assertCurrentAuthority: () => assertActor(actor) },
+                { ...await reviewDeps(actor), trashStore: await getTrash(), resolveAdapter: catalog.resolveAdapter, removeActed: pile.removeActed });
+            input.invalidate(); return result;
+        },
+        async deleteNow(request: MachineStorageDeleteNowInputV1, { actor }: ActorOptions) {
+            await assertActor(actor);
+            const result = await applyPile({ items: request.items, mode: 'delete', actor: { accountId: actor.accountId, kind: actor.kind },
+                custodianAccountId: actor.custodianAccountId, assertCurrentAuthority: () => assertActor(actor) },
+                { ...await reviewDeps(actor), trashStore: await getTrash(), resolveAdapter: catalog.resolveAdapter, removeActed: pile.removeActed });
+            input.invalidate(); return result;
+        },
+        async trashEmpty(request: MachineStorageTrashEmptyInputV1, { actor }: ActorOptions) {
+            await assertActor(actor); const store = await getTrash();
+            const result = await store.empty({ entryIds: request.entryIds, batchId: request.batchId, volumeId: request.volume },
+                { actorAccountId: actor.accountId, custodianAccountId: actor.custodianAccountId, assertCurrentAuthority: () => assertActor(actor),
+                    assertEntryAuthority: entryAuthority(actor) });
+            input.invalidate(); return result;
+        },
+        async trashRestore(request: MachineStorageTrashRestoreInputV1, { actor }: ActorOptions) {
+            await assertActor(actor); const store = await getTrash();
+            const result = await store.restore({ entryIds: request.entryIds, batchId: request.batchId },
+                { actorAccountId: actor.accountId, custodianAccountId: actor.custodianAccountId, beside: request.beside,
+                    assertCurrentAuthority: () => assertActor(actor), assertEntryAuthority: entryAuthority(actor) });
+            input.invalidate(); return result;
+        },
+        async worktreesList(request: MachineStorageWorktreesListInputV1, { actor, signal }: ActorOptions) {
+            await assertActor(actor);
+            const current = (await input.readSizedItems(signal)).filter(item => item.categoryId === 'worktrees' && permitted(item, actor)
+                && (!request.projectId || item.projectIds?.includes(request.projectId))
+                && (!request.filter || item.verdict === request.filter));
+            await assertActor(actor); return { revision: input.revision(), items: current.map(publicStorageItem) };
+        },
+        async suggestionsList(request: MachineStorageSuggestionsListInputV1, { actor }: ActorOptions) {
+            await assertActor(actor); const result = await suggestions(actor, request); await assertActor(actor);
+            return { revision: input.revision(), ...result };
+        },
+        async suggestionsDecline(request: MachineStorageSuggestionsDeclineInputV1, { actor }: ActorOptions) {
+            await assertActor(actor);
+            const review = await reviewDeps(actor);
+            const changedAt = new Map<string, number | undefined>();
+            const reviewed = await reviewPile(request.items.map(item => item.ref), { ...review, measure: async request => {
+                const measured = await review.measure(request);
+                for (const path of measured.perPath) changedAt.set(path.path, path.lastChangedAtMs);
+                return measured;
+            } });
+            await pile.decline(actor.accountId, reviewed.items.filter(item => request.items.some(chosen => chosen.ref.itemId === item.ref.itemId
+                && chosen.expect === item.expect)).map(item => ({ ref: item.ref, size: item.size,
+                lastChangedAt: changedAt.get(item.ref.path) })));
+            await assertActor(actor); input.invalidate();
+            return { revision: input.revision(), declinedCount: (await suggestions({ ...actor, kind: 'agent' })).declinedCount };
+        },
+        async prepareRead() {
+            if (!deps.activityLog || !deps.machineId) return;
+            input.setTrashRoots((await (await getTrash()).roots()).map(root => root.path));
+        },
+        async trashEntries() { return deps.activityLog && deps.machineId ? (await getTrash()).list() : []; },
+        async summarySuggestions(candidates: readonly SizedItem[]) { return (await suggestions(undefined, {}, candidates)).items; },
+        async summaryForActor(current: HappierStorageSummaryV1, actor: StorageOperationActor): Promise<HappierStorageSummaryV1> {
+            const projection = await pileProjection(actor);
+            const volumes = deps.readVolumes();
+            const byVolume = new Map<string, number>();
+            for (const item of projection.review?.items ?? []) {
+                const volume = volumes.filter(volume => contains(volume.mount, item.ref.path)).sort((a, b) => b.mount.length - a.mount.length)[0];
+                if (volume) byVolume.set(volume.id, (byVolume.get(volume.id) ?? 0) + item.size.allocatedBytes);
+            }
+            return { ...current, revision: input.revision(), pile: projection.result.summary,
+                suggestionsTop: (await suggestions(actor)).items,
+                volumes: current.volumes.map(volume => {
+                    const { canGoBytes, ...sharedVolume } = volume;
+                    return { ...sharedVolume, ...(actor.sessionIds === undefined && canGoBytes !== undefined ? { canGoBytes } : {}),
+                        pileBytes: byVolume.get(volume.volume.volumeId) ?? 0 };
+                }) };
+        },
+        dispose() { disposed = true; lifecycle.abort(); unsubscribeTrash?.(); },
+        readProtectionFacts: protectionFacts,
+        maintenanceTrash: getTrash,
+    };
+}
