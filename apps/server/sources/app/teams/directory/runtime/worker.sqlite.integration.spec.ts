@@ -43,6 +43,7 @@ describe("enterprise identity sync worker", () => {
                 ownerTeamId: team.id,
                 kind: "workos_sso",
                 displayName: "WorkOS",
+                enabled: true,
                 config: { v: 1, kind: "workos_sso" },
             },
         });

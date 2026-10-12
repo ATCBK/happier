@@ -47,7 +47,7 @@ import {
 import { createWorkosAdministrationAdapter } from "@/app/integrations/workos/workosAdministrationAdapter";
 import {
     readHomeGovernancePolicyInTx,
-    resolveTeamProviderKindPolicy,
+    resolveIdentityConnectionProviderKindPolicy,
 } from "@/app/home/governance/governancePolicy";
 import { inTx, type Tx } from "@/storage/inTx";
 import {
@@ -349,7 +349,7 @@ export async function createTeamIdentityConnectionForActor(
             const authority = await authorizeTeamIdentityAdministrationInTx(tx, input);
             if (!authority.ok) return authority;
             const home = await readHomeGovernancePolicyInTx(tx);
-            const policy = resolveTeamProviderKindPolicy(home, input.externalReference.kind);
+            const policy = resolveIdentityConnectionProviderKindPolicy(home, identityConnectionOwner(input.teamId), input.externalReference.kind);
             if (policy !== "allowed") return { ok: false, error: "identity_provider_unavailable" };
             const teamProvider = await readIdentityProviderInstanceInTx(tx, {
                 id: input.providerInstanceId,
@@ -421,7 +421,7 @@ export async function createTeamIdentityConnectionForActor(
                         ? "identity_provider_unavailable"
                         : "identity_connection_invalid",
             );
-        });
+        }, { isolationLevel: "Serializable" /* Connection creation composes Home policy, provider namespace and current Team admission. */ });
     } catch (error) {
         if (error instanceof TeamIdentityConnectionCreateAbort) return { ok: false, error: error.code };
         throw error;
@@ -448,7 +448,7 @@ export async function updateTeamIdentityConnectionSettingsForActor(
             actorAccountId: input.actorAccountId, action: "identity_provider.update",
         });
         return { ok: true, value: await projectCurrentTeamIdentityConnectionV1InTx(tx, { env: input.env, teamId: input.teamId, connection: result.connection }) };
-    });
+    }, { isolationLevel: "Serializable" /* Connection settings participate in current Team policy and alternate-login viability. */ });
 }
 
 type WorkosUpstreamObservation =
@@ -589,7 +589,7 @@ export async function setTeamIdentityConnectionEnabledForActor(
                 actorAccountId: input.actorAccountId, action: "identity_provider.enable",
             });
             return { ok: true, value: await projectCurrentTeamIdentityConnectionV1InTx(tx, { env: input.env, teamId: input.teamId, connection: result.connection }) };
-        });
+        }, { isolationLevel: "Serializable" /* Connection enablement combines WorkOS observation, policy and alternate-login viability. */ });
     }
 
     return await inTx(async (tx) => {
@@ -608,7 +608,7 @@ export async function setTeamIdentityConnectionEnabledForActor(
             return { ok: true, value: await projectCurrentTeamIdentityConnectionV1InTx(tx, { env: input.env, teamId: input.teamId, connection: result.connection }) };
         }
         return { ok: false, error: mapLifecycleError(result.status) };
-    });
+    }, { isolationLevel: "Serializable" /* Connection enablement combines policy and alternate-login viability across connection rows. */ });
 }
 
 export async function removeTeamIdentityConnectionForActor(
@@ -714,7 +714,7 @@ export async function removeTeamIdentityConnectionForActor(
         }
         if (result.status === "blocked") return { ok: false as const, error: "identity_provider_in_use" as const };
         return { ok: false as const, error: mapLifecycleError(result.status) };
-    });
+    }, { isolationLevel: "Serializable" /* Connection removal checks alternate login routes and directory/binding consumers before mutation. */ });
     if (!prepared.ok) return prepared;
     if (prepared.kind === "complete") return { ok: true, value: prepared.value };
 
@@ -768,7 +768,7 @@ export async function removeTeamIdentityConnectionForActor(
         }
         if (removed.status === "not_found") return { ok: true, value: { outcome: "already_absent" } };
         return { ok: false, error: mapLifecycleError(removed.status) };
-    });
+    }, { isolationLevel: "Serializable" /* WorkOS removal rechecks alternate login routes and retained connection consumers. */ });
 }
 
 export async function consumeTeamIdentityConnectionTestForActor(
@@ -829,7 +829,7 @@ export async function consumeTeamIdentityConnectionTestForActor(
             };
         }
         return { ok: false, error: "identity_connection_test_invalid" };
-    });
+    }, { isolationLevel: "Serializable" /* Test consumption merges connection evidence with current provider and policy facts. */ });
 }
 
 function mapLifecycleError(status: string): TeamIdentityErrorCodeV1 {

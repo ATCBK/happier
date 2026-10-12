@@ -152,7 +152,7 @@ async function resolveAuthenticatedAccountPresentationInTx(
 const AUTH_ENTRY_UTF8_ENCODER = new TextEncoder();
 
 export function projectUnavailableHomeAuthEntry(
-    reason: 'not_account_service' | 'authentication_policy_unavailable',
+    reason: 'not_account_service' | 'authentication_policy_unavailable' | 'entry_not_available',
 ): AuthEntryProjectionV1 {
     return AuthEntryProjectionV1Schema.parse({
         v: 1,
@@ -361,17 +361,17 @@ function projectHomeAuthEntryProjection(
 /** An email hint narrows choices; it never proves identity or admits an Account. */
 async function resolveHomeCompanyChoicesByEmail(
     email: string,
-    env: NodeJS.ProcessEnv,
-    emailDeliveryReady: boolean,
+    request: HomeActionRequestContext,
     homeMethods: Extract<EffectiveHomeAuthMethodsResult, { status: 'ready' }>,
 ): Promise<EffectiveHomeAuthMethodsResult> {
     const mailbox = normalizeVerifiedEmail(email);
     if (!mailbox) return { status: 'unavailable' };
     const domain = mailbox.normalizedEmail.slice(mailbox.normalizedEmail.lastIndexOf('@') + 1);
-    const publishedIds = new Set(homeMethods.decisions
-        .filter((decision) => decision.ui?.providerKind === 'workos_sso'
-            && decision.actions.some((action) => action.enabled))
-        .map((decision) => decision.id));
+    // Domain discovery earns exactly the actions this caller can see. In
+    // particular, anonymous callers cannot discover a connect-only company.
+    const publishedIds = new Set(projectHomeAuthenticationActions(homeMethods, request)
+        .filter((action) => action.presentation.providerKind === 'workos_sso')
+        .map((action) => action.methodId));
     const connections = await inTx(async (tx) =>
         (await listTeamIdentityConnectionsInTx(tx, { teamId: null }))
             .filter((connection) => connection.state === 'connected'
@@ -381,7 +381,7 @@ async function resolveHomeCompanyChoicesByEmail(
                 && connection.externalReference.connectionId !== null
                 && publishedIds.has(connection.providerInstanceId)));
     if (connections.length === 0) return { status: 'unavailable' };
-    const platform = resolveWorkosPlatformConfig(env);
+    const platform = resolveWorkosPlatformConfig(request.env);
     if (!platform.available) return { status: 'unavailable' };
     const adapter = createWorkosAdministrationAdapter(platform.client);
     try {
@@ -407,11 +407,11 @@ async function resolveHomeCompanyChoicesByEmail(
                     return { status: 'unavailable' };
                 }
             }
-            const effective = await resolveEffectiveHomeAuthMethodsInTx(tx, { env, emailDeliveryReady });
+            const effective = await resolveEffectiveHomeAuthMethodsInTx(tx, { env: request.env, emailDeliveryReady: request.emailDeliveryReady });
             if (effective.status !== 'ready') return effective;
             const matchedIds = new Set(matches.map((connection) => connection.providerInstanceId));
             const decisions = effective.decisions.filter((decision) => matchedIds.has(decision.id));
-            if (!decisions.some((decision) => decision.actions.some((action) => action.enabled))) {
+            if (projectHomeAuthenticationActions({ ...effective, decisions }, request).length === 0) {
                 return { status: 'unavailable' };
             }
             return { ...effective, decisions };
@@ -853,15 +853,16 @@ export async function resolveAuthEntry(
     if (homeMethods.status !== 'ready') {
         return projectUnavailableHomeAuthEntry('authentication_policy_unavailable');
     }
-    const email = input.scope.kind === 'home' ? input.email : undefined;
-    if (email !== undefined) {
-        homeMethods = await resolveHomeCompanyChoicesByEmail(email, context.env, emailDeliveryReady, homeMethods);
-        if (homeMethods.status !== 'ready') return projectUnavailableHomeAuthEntry('entry_not_available');
-    }
-    return projectHomeAuthEntryProjection(homeMethods, {
+    const email = input.scope.kind === 'home' && 'email' in input ? input.email : undefined;
+    const request: HomeActionRequestContext = {
         env: context.env,
         principal: context.principal ?? null,
         ...(context.requestIp === undefined ? {} : { requestIp: context.requestIp }),
         emailDeliveryReady,
-    }, email === undefined);
+    };
+    if (email !== undefined) {
+        homeMethods = await resolveHomeCompanyChoicesByEmail(email, request, homeMethods);
+        if (homeMethods.status !== 'ready') return projectUnavailableHomeAuthEntry('entry_not_available');
+    }
+    return projectHomeAuthEntryProjection(homeMethods, request, email === undefined);
 }

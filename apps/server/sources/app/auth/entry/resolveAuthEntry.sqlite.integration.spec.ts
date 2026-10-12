@@ -1,8 +1,12 @@
 import { AuthEntryRequestV1Schema, FEATURES_RESPONSE_MAX_UTF8_BYTES_V1 } from '@happier-dev/protocol';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { Prisma } from '@prisma/client';
+import Fastify from 'fastify';
+import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { db } from '@/storage/db';
+import { auth } from '@/app/auth/auth';
+import { registerAuthEntryRoute } from '@/app/api/routes/auth/registerAuthEntryRoute';
 import { createLightSqliteHarness, type LightSqliteHarness } from '@/testkit/lightSqliteHarness';
 import { inTx } from '@/storage/inTx';
 import { createTeamInvitationInTx } from '@/app/teams/invitations/invitationLifecycle';
@@ -55,13 +59,15 @@ describe('resolveAuthEntry', () => {
     beforeAll(async () => {
         harness = await createLightSqliteHarness({
             tempDirPrefix: 'happier-auth-entry-',
-            initAuth: false,
+            initAuth: true,
             initEncrypt: true,
             initFiles: false,
+            env: { AUTH_REQUIRED_LOGIN_PROVIDERS: '', HAPPIER_FEATURE_TEAMS__ENABLED: 'true' },
         });
     }, 180_000);
 
     afterEach(async () => {
+        harness.restoreEnv();
         await db.teamDirectorySource.deleteMany({});
         await db.teamIdentityConnection.deleteMany({});
         await db.identityProviderInstance.deleteMany({});
@@ -112,6 +118,79 @@ describe('resolveAuthEntry', () => {
         }));
         return team;
     }
+
+    function routeApp() {
+        const app = Fastify({ logger: false }).withTypeProvider<ZodTypeProvider>();
+        app.setValidatorCompiler(validatorCompiler);
+        app.setSerializerCompiler(serializerCompiler);
+        registerAuthEntryRoute(app, { isEmailDeliveryReady: () => true });
+        return app;
+    }
+
+    it('serves anonymous no-store entry and applies provisioning restrictions to the requesting address', async () => {
+        harness.resetEnv({
+            HAPPIER_FEATURE_AUTH_LOGIN__KEY_CHALLENGE_ENABLED: 'true',
+            AUTH_ANONYMOUS_SIGNUP_ENABLED: 'true',
+            HAPPIER_AUTH_PUBLIC_PROVISION_DENY_METHODS: 'key_challenge',
+            HAPPIER_AUTH_PUBLIC_PROVISION_DENY_MODES: '*',
+            HAPPIER_AUTH_PUBLIC_PROVISION_DENY_IP_CLASSES: 'public',
+        });
+        const app = routeApp();
+        try {
+            const entry = (remoteAddress: string) => app.inject({
+                method: 'POST', url: '/v1/auth/entry', remoteAddress,
+                payload: { v: 1, scope: { kind: 'home' } },
+            });
+            const privateEntry = await entry('127.0.0.1');
+            expect(privateEntry.statusCode, privateEntry.body).toBe(200);
+            expect(privateEntry.headers['cache-control']).toBe('no-store');
+            expect(privateEntry.json()).toMatchObject({ state: 'ready', scope: { kind: 'home' } });
+            expect(privateEntry.json().actions).toContainEqual(expect.objectContaining({ methodId: 'key_challenge', action: 'provision' }));
+            const publicEntry = await entry('203.0.113.9');
+            expect(publicEntry.statusCode, publicEntry.body).toBe(200);
+            expect(publicEntry.json().actions).not.toContainEqual(expect.objectContaining({ methodId: 'key_challenge', action: 'provision' }));
+        } finally {
+            await app.close();
+        }
+    });
+
+    it('discloses membership only to an eligible ordinary Account bearer through the real public route', async () => {
+        const team = await db.team.create({ data: { name: 'Private membership' } });
+        const account = await member(team.id);
+        await db.account.update({ where: { id: account.id }, data: { terminalPresentUserPolicy: 'disallowed' } });
+        const ordinary = await auth.createToken(account.id, undefined, { kind: 'account', authority: 'present_user' });
+        const restricted = [
+            await auth.createToken(account.id, undefined, { kind: 'account_directory', authority: 'present_user' }),
+            await auth.createToken(account.id, undefined, { kind: 'terminal', authority: 'account_automation' }),
+            (await auth.createApiToken({ accountId: account.id, tokenId: crypto.randomUUID(), label: 'Restricted entry' })).token,
+            'invalid-bearer',
+        ];
+        const app = routeApp();
+        try {
+            const entry = (token?: string) => app.inject({
+                method: 'POST', url: '/v1/auth/entry',
+                ...(token ? { headers: { authorization: `Bearer ${token}` } } : {}),
+                payload: { v: 1, scope: { kind: 'team', teamId: team.id } },
+            });
+            const admitted = await entry(ordinary);
+            expect(admitted.statusCode, admitted.body).toBe(200);
+            expect(admitted.json()).toMatchObject({ state: 'already_member' });
+            const anonymous = await entry();
+            expect(anonymous.statusCode, anonymous.body).toBe(200);
+            expect(anonymous.json().state).not.toBe('already_member');
+            for (const token of restricted) {
+                const result = await entry(token);
+                expect(result.statusCode, result.body).toBe(200);
+                expect(result.json()).toEqual(anonymous.json());
+            }
+            await db.account.update({ where: { id: account.id }, data: { status: 'disabled' } });
+            const disabled = await entry(ordinary);
+            expect(disabled.statusCode, disabled.body).toBe(200);
+            expect(disabled.json()).toEqual(anonymous.json());
+        } finally {
+            await app.close();
+        }
+    });
 
     it('projects an immutable Team target from current Team and Home policy in one server owner', async () => {
         const team = await db.team.create({

@@ -52,6 +52,7 @@ describe("connectRoutes (GitHub callback)", () => {
         harness = await createLightSqliteHarness({
             tempDirPrefix: "happier-connect-gh-callback-",
             initAuth: true,
+            initEncrypt: true,
         });
     }, 120_000);
     afterEach(async () => {
@@ -139,7 +140,7 @@ describe("connectRoutes (GitHub callback)", () => {
         await app.close();
     });
 
-    it("completes an in-flight connect callback when the retired master env is turned off", async () => {
+    it("returns an in-flight connect callback's pending finalization when the retired master env is turned off", async () => {
         applyGithubConnectCallbackEnv(harness);
 
         const u1 = await db.account.create({
@@ -194,6 +195,8 @@ describe("connectRoutes (GitHub callback)", () => {
         expect(redirect.searchParams.get("status")).toBe("connected");
         expect(redirect.searchParams.get("login")).toBe("octocat");
         expect(redirect.searchParams.has("error")).toBe(false);
+        expect(redirect.searchParams.get("pending")).toMatch(/^oauth_pending_/);
+        expect(await db.accountIdentity.count({ where: { accountId: u1.id } })).toBe(0);
 
         await app.close();
     });

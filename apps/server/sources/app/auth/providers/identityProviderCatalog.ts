@@ -39,7 +39,7 @@ import {
 import { resolveManagedIdentityNetworkPolicy } from "@/app/auth/providers/managed/managedIdentityNetworkPolicy";
 import {
     readHomeGovernancePolicyInTx,
-    resolveTeamProviderKindPolicy,
+    resolveIdentityConnectionProviderKindPolicy,
 } from "@/app/home/governance/governancePolicy";
 import {
     computeTeamWorkosConnectionRuntimeFingerprint,
@@ -162,7 +162,7 @@ export async function listEligibleTeamIdentityProvidersInTx(
         if (!provider.enabled && !explicitlyBindableTeamGitHubCandidate) {
             return unavailableEligibleProvider(base, "provider_disabled");
         }
-        const policy = context.kind === "home" ? "allowed" : resolveTeamProviderKindPolicy(home, provider.kind);
+        const policy = resolveIdentityConnectionProviderKindPolicy(home, context, provider.kind);
         if (policy === "unavailable") return unavailableEligibleProvider(base, "home_policy_unavailable");
         if (policy === "prohibited") return unavailableEligibleProvider(base, "home_policy_prohibited");
         if (provider.kind === "workos_sso" && !platform.available) {
@@ -238,7 +238,7 @@ export async function listEligibleTeamIdentityProvidersInTx(
             owner: context.kind,
             displayName: null,
         };
-        const policy = context.kind === "home" ? "allowed" : resolveTeamProviderKindPolicy(home, providerKind);
+        const policy = resolveIdentityConnectionProviderKindPolicy(home, context, providerKind);
         if (policy === "unavailable") return unavailableEligibleProvider(base, "home_policy_unavailable");
         if (policy === "prohibited") return unavailableEligibleProvider(base, "home_policy_prohibited");
         const deployment = resolveTeamProviderKindDeploymentAvailability(input.env, providerKind);
@@ -413,10 +413,10 @@ function projectTeamManagedProviderDescriptor(input: Readonly<{
 }>): ProviderDescriptorResolution | null {
     const { connection, provider } = input;
     if (
-        !connection.enabled
+        connection.state !== "connected"
         || !provider.enabled
         || input.snapshot.references.has(normalizeProviderId(provider.id))
-        || (input.context.kind === "team" && resolveTeamProviderKindPolicy(input.home, provider.kind) !== "allowed")
+        || resolveIdentityConnectionProviderKindPolicy(input.home, input.context, provider.kind) !== "allowed"
     ) return null;
     const id = normalizeProviderId(provider.id);
     if (
@@ -788,10 +788,9 @@ async function resolveManagedModuleWithReferenceInTx(
     }
     if (resolved.status !== "ready") return null;
     const home = await readHomeGovernancePolicyInTx(tx);
-    // The Home's Team provider ceiling is decided once, here: the descriptor
-    // list already omits a prohibited kind, and the runtime that would start,
-    // complete or finalize a Team flow refuses it for the same reason.
-    if (context.kind === "team" && resolveTeamProviderKindPolicy(home, resolved.instance.kind) !== "allowed") {
+    // Publication and execution share the scoped policy owner: Team-kind
+    // narrowing never governs a Home sign-in binding.
+    if (resolveIdentityConnectionProviderKindPolicy(home, context, resolved.instance.kind) !== "allowed") {
         return null;
     }
     if (resolved.instance.kind === "oidc") {
@@ -853,7 +852,7 @@ async function resolveTeamWorkosModuleWithReferenceInTx(
         ...(purpose === "identity_connection_test" ? { includeDisabled: true } : {}),
     });
     if (runtime.status !== "ready") return null;
-    if (context.kind === "team" && resolveTeamProviderKindPolicy(await readHomeGovernancePolicyInTx(tx), "workos_sso") !== "allowed") return null;
+    if (resolveIdentityConnectionProviderKindPolicy(await readHomeGovernancePolicyInTx(tx), context, "workos_sso") !== "allowed") return null;
     const publicServerUrl = resolveConfiguredPublicServerUrl(env);
     if (!publicServerUrl) return null;
     return {

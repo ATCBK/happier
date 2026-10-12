@@ -237,6 +237,13 @@ describe("managed GitHub App registration lifecycle", () => {
             },
         });
 
+        await db.teamIdentityConnection.create({ data: {
+            teamId: null,
+            providerInstanceId: provider.id,
+            externalReference: { v: 1, kind: "github_app_identity", installationId: installation.id },
+            settings: { v: 1, kind: "github_app_identity", organizationLogin: "SharedHome" },
+        } });
+
         const listed = await listGitHubAppRegistrations({
             actorAccountId,
             owner: { kind: "home" },

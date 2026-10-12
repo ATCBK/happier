@@ -96,7 +96,8 @@ describe("managed identity-provider catalog source", () => {
         const otherTeam = await db.team.create({ data: { name: "Unrelated Team" } });
         const otherConnection = await db.teamIdentityConnection.create({ data: {
             teamId: otherTeam.id, providerInstanceId: provider.id, enabled: true, revision: 4,
-            externalReference: { v: 1, kind: "workos_sso", organizationId: "org_team", connectionId: "conn_team" },
+            // The shared provider namespace stays valid; only the local scope is wrong.
+            externalReference: { v: 1, kind: "workos_sso", organizationId: "org_home", connectionId: "conn_home" },
             settings: { v: 1, kind: "workos_sso" },
         } });
         await expect(resolveOAuthSecurityBinding({ env, providerId: provider.id,

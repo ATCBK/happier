@@ -23,6 +23,7 @@ import { listTeamIdentityConnectionsForActor } from "./teamIdentityConnectionAdm
 import { setTeamIdentityConnectionEnabledInTx, updateTeamIdentityConnectionInTx } from "./teamIdentityConnectionLifecycle";
 import { inTx } from "@/storage/inTx";
 import { TEAM_CHANGE_ENTITY_ID } from "../teamChanges";
+import { listProviderDescriptors, resolveOAuthRuntimeById } from "@/app/auth/providers/identityProviderCatalog";
 
 describe("Team WorkOS administration", () => {
     let harness: LightSqliteHarness;
@@ -852,6 +853,51 @@ describe("Team WorkOS administration", () => {
                 },
             },
         });
+    });
+
+    it("applies allowed Team provider kinds only to Team bindings across administration, projection and auth", async () => {
+        await db.homeGovernancePolicy.create({ data: {
+            id: "home", teamProviderPolicy: {
+                v: 1, allowedTeamProviderKinds: ["oidc"], teamJitAllowed: false, approvedGitHubEnterpriseOrigins: [],
+            },
+        } });
+        try {
+            const owner = await db.account.create({ data: { homeRole: "owner" } });
+            const provider = await db.identityProviderInstance.create({ data: {
+                kind: "workos_sso", displayName: "Home policy SSO", enabled: true,
+                config: { v: 1, kind: "workos_sso" },
+            } });
+            const connection = await db.teamIdentityConnection.create({ data: {
+                teamId: null, providerInstanceId: provider.id, enabled: true, firstEnabledAt: new Date(),
+                externalReference: { v: 1, kind: "workos_sso", organizationId: "org_policy", connectionId: "conn_policy" },
+                settings: { v: 1, kind: "workos_sso" },
+            } });
+            const env = {
+                WORKOS_API_KEY: "sk_test", WORKOS_CLIENT_ID: "client_test",
+                HAPPIER_PUBLIC_SERVER_URL: "https://home.example.test", HAPPIER_WEBAPP_URL: "https://app.example.test",
+            };
+            expect(await listTeamIdentityConnectionsForActor({ teamId: null, actorAccountId: owner.id, env }))
+                .toMatchObject({ ok: true, value: { items: expect.arrayContaining([expect.objectContaining({
+                    id: connection.id, state: "connected", allowedActions: expect.arrayContaining(["home.identity.connections.test.start"]),
+                })]) } });
+            const generateLink = vi.fn(async () => ({ link: "https://setup.workos.test/portal" }));
+            const dependencies = platform({ adminPortal: { generateLink } } as unknown as WorkOS);
+            expect(await createTeamWorkosAdminPortalLink({
+                ...interactiveAuthentication, actorAccountId: owner.id, teamId: null,
+                connectionId: connection.id, intent: "sso", env,
+            }, dependencies)).toMatchObject({ ok: true });
+            expect((await listProviderDescriptors(env)).some(({ reference }) => reference.id === provider.id)).toBe(true);
+            expect(await resolveOAuthRuntimeById(env, provider.id)).not.toBeNull();
+
+            const team = await createFixture({ organizationId: "org_team_policy", connectionId: "conn_team_policy" });
+            expect(await createTeamWorkosAdminPortalLink({
+                ...interactiveAuthentication, actorAccountId: team.actor.id, teamId: team.team.id,
+                connectionId: team.connection.id, intent: "sso", env,
+            }, dependencies)).toEqual({ ok: false, error: "team_identity_not_allowed" });
+            expect(await resolveOAuthRuntimeById(env, team.provider.id, { kind: "team", teamId: team.team.id })).toBeNull();
+        } finally {
+            await db.homeGovernancePolicy.deleteMany({});
+        }
     });
 
     it("starts one non-mutating test attempt bound to the exact connection revision", async () => {

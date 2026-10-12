@@ -42,7 +42,7 @@ function envWith(...entries: Record<string, unknown>[]): NodeJS.ProcessEnv {
     return { AUTH_PROVIDERS_CONFIG_JSON: JSON.stringify(entries) } as NodeJS.ProcessEnv;
 }
 
-describe("identityProviderCatalog runtime resolution", () => {
+describe("identityProviderCatalog runtime resolution (SQLite integration)", () => {
     it("enumerates surviving built-in and deployment runtimes from the canonical catalog", async () => {
         const runtimes = await listProviderDescriptors(envWith(
             oidcEntry("acme"),

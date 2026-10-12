@@ -205,6 +205,13 @@ describe("Home managed identity-provider routes", () => {
             }),
         ]);
 
+        await db.teamIdentityConnection.create({ data: {
+            teamId: null,
+            providerInstanceId: provider.id,
+            externalReference: { v: 1, kind: "github_app_identity", installationId: installation.id },
+            settings: { v: 1, kind: "github_app_identity", organizationLogin: "Acme" },
+        } });
+
         const listed = await post(app, "/v1/identity/providers/list", owner.token, {});
 
         expect(listed.statusCode, listed.body).toBe(200);

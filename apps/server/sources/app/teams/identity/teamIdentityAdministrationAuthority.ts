@@ -22,14 +22,30 @@ export function identityConnectionOwner(teamId: string | null): ProviderCatalogC
     return teamId === null ? HOME_PROVIDER_CONTEXT : { kind: "team", teamId };
 }
 
+type IdentityAdministrationInput = Partial<TeamOperationAuthenticationContext> & Readonly<{
+    teamId: string | null;
+    actorAccountId: string;
+}>;
+
+type IdentityAdministrationAuthorityResult<ErrorCode> =
+    | Readonly<{ ok: true; canMutate: boolean }>
+    | Readonly<{ ok: false; error: ErrorCode }>;
+
+export function authorizeTeamIdentityAdministrationInTx(
+    tx: Tx,
+    input: IdentityAdministrationInput & Readonly<{ teamId: string }>,
+    operation?: "view" | "mutate",
+): Promise<IdentityAdministrationAuthorityResult<Exclude<TeamIdentityAdministrationAuthorityError, "home_forbidden">>>;
+export function authorizeTeamIdentityAdministrationInTx(
+    tx: Tx,
+    input: IdentityAdministrationInput,
+    operation?: "view" | "mutate",
+): Promise<IdentityAdministrationAuthorityResult<TeamIdentityAdministrationAuthorityError>>;
 export async function authorizeTeamIdentityAdministrationInTx(
     tx: Tx,
-    input: Partial<TeamOperationAuthenticationContext> & Readonly<{
-        teamId: string | null;
-        actorAccountId: string;
-    }>,
+    input: IdentityAdministrationInput,
     operation: "view" | "mutate" = "mutate",
-): Promise<Readonly<{ ok: true; canMutate: boolean }> | Readonly<{ ok: false; error: TeamIdentityAdministrationAuthorityError }>> {
+): Promise<IdentityAdministrationAuthorityResult<TeamIdentityAdministrationAuthorityError>> {
     if (input.teamId === null) {
         const authorization = await authorizeHomeGovernanceMutationInTx(tx, {
             actorAccountId: input.actorAccountId,
@@ -39,7 +55,7 @@ export async function authorizeTeamIdentityAdministrationInTx(
             ? { ok: true, canMutate: authorization.authority.manageAuthentication }
             : { ok: false, error: "home_forbidden" };
     }
-    const actor = await resolveTeamActorContextInTx(tx, input);
+    const actor = await resolveTeamActorContextInTx(tx, { ...input, teamId: input.teamId });
     // Identity and directory administration are Team-only surfaces. Home's
     // manageAllTeams projection deliberately grants detail/metadata/lifecycle
     // authority, but must not reveal these surfaces to a non-member.

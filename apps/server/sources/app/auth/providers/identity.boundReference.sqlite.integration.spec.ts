@@ -58,7 +58,7 @@ function connectionParams(reference: ProviderReference, providerId = "acme") {
     };
 }
 
-describe("prepareExternalIdentityConnection provider binding", () => {
+describe("prepareExternalIdentityConnection provider binding (SQLite integration)", () => {
     it("refuses to link when the bound runtime configuration changed after authorization", async () => {
         const reference = await boundReference();
         process.env.AUTH_PROVIDERS_CONFIG_JSON = deploymentConfig("rotated");

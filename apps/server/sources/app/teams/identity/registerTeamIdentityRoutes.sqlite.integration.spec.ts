@@ -121,6 +121,34 @@ describe("Team identity WorkOS routes", () => {
         expect(unavailable.json()).toEqual({ error: "team_authentication_unavailable" });
     });
 
+    it("refuses a Home binding at the Team mutation boundary through the scoped lifecycle reader", async () => {
+        const owner = await db.account.create({ data: {} });
+        const team = await db.team.create({ data: { name: "Team scope refusal" } });
+        await db.teamMembership.create({ data: { teamId: team.id, accountId: owner.id, role: "owner" } });
+        const provider = await db.identityProviderInstance.create({ data: {
+            kind: "workos_sso", displayName: "Home scope", config: { v: 1, kind: "workos_sso" },
+        } });
+        const connection = await db.teamIdentityConnection.create({ data: {
+            teamId: null, providerInstanceId: provider.id,
+            externalReference: { v: 1, kind: "workos_sso", organizationId: null, connectionId: null },
+            settings: { v: 1, kind: "workos_sso" },
+        } });
+        try {
+            const response = await app.inject({
+                method: "POST", url: "/v1/teams/identity/connections/enable",
+                headers: { "x-test-user-id": owner.id },
+                payload: { v: 1, teamId: team.id, connectionId: connection.id, expectedRevision: 1 },
+            });
+            expect(response.statusCode).toBe(404);
+            expect(response.json()).toEqual({ error: "identity_connection_not_found" });
+            expect(await db.teamIdentityConnection.findUniqueOrThrow({ where: { id: connection.id } }))
+                .toMatchObject({ teamId: null, enabled: false, revision: 1 });
+        } finally {
+            await db.teamIdentityConnection.delete({ where: { id: connection.id } });
+            await db.identityProviderInstance.delete({ where: { id: provider.id } });
+        }
+    });
+
     it("creates one Team-owned WorkOS provider and draft connection idempotently", async () => {
         const owner = await db.account.create({ data: {} });
         const team = await db.team.create({ data: { name: "Setup WorkOS" } });

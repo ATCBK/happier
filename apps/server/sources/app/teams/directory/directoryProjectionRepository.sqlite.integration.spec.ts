@@ -493,6 +493,7 @@ describe("directoryProjectionRepository", () => {
                 ownerTeamId: team.id,
                 kind: "workos_sso",
                 displayName: "WorkOS mixed lifecycle",
+                enabled: true,
                 config: { v: 1, kind: "workos_sso" },
             },
         });
@@ -650,7 +651,7 @@ describe("directoryProjectionRepository", () => {
             },
         });
         const provider = await db.identityProviderInstance.create({
-            data: { ownerTeamId: team.id, kind: "workos_sso", displayName: "Archived Team WorkOS", config: { v: 1, kind: "workos_sso" } },
+            data: { ownerTeamId: team.id, kind: "workos_sso", displayName: "Archived Team WorkOS", enabled: true, config: { v: 1, kind: "workos_sso" } },
         });
         const connection = await db.teamIdentityConnection.create({
             data: { teamId: team.id, providerInstanceId: provider.id, externalReference: { v: 1 }, settings: { v: 1 } },
@@ -741,7 +742,7 @@ describe("directoryProjectionRepository", () => {
     it("suppresses a new directory contribution while its mapped Group is archived without rolling back retained offboarding", async () => {
         const team = await db.team.create({ data: { name: "Archived Group directory suppression" } });
         const provider = await db.identityProviderInstance.create({
-            data: { ownerTeamId: team.id, kind: "workos_sso", displayName: "Archived Group WorkOS", config: { v: 1, kind: "workos_sso" } },
+            data: { ownerTeamId: team.id, kind: "workos_sso", displayName: "Archived Group WorkOS", enabled: true, config: { v: 1, kind: "workos_sso" } },
         });
         const connection = await db.teamIdentityConnection.create({
             data: { teamId: team.id, providerInstanceId: provider.id, externalReference: { v: 1 }, settings: { v: 1 } },
@@ -889,6 +890,7 @@ describe("directoryProjectionRepository", () => {
                 ownerTeamId: team.id,
                 kind: "workos_sso",
                 displayName: "WorkOS",
+                enabled: true,
                 config: { v: 1, kind: "workos_sso" },
             },
         });
@@ -1237,7 +1239,7 @@ describe("directoryProjectionRepository", () => {
     it("contributes Group rosters for a person whose Team lifetime another owner holds, without parking the source", async () => {
         const team = await db.team.create({ data: { name: "Natively seeded Team" } });
         const provider = await db.identityProviderInstance.create({
-            data: { ownerTeamId: team.id, kind: "workos_sso", displayName: "WorkOS", config: { v: 1, kind: "workos_sso" } },
+            data: { ownerTeamId: team.id, kind: "workos_sso", displayName: "WorkOS", enabled: true, config: { v: 1, kind: "workos_sso" } },
         });
         const connection = await db.teamIdentityConnection.create({
             data: {
@@ -1363,7 +1365,7 @@ describe("directoryProjectionRepository", () => {
     it("withdraws an inactive person's source contribution without touching a Team lifetime another owner keeps", async () => {
         const team = await db.team.create({ data: { name: "Offboarding Team" } });
         const provider = await db.identityProviderInstance.create({
-            data: { ownerTeamId: team.id, kind: "workos_sso", displayName: "WorkOS", config: { v: 1, kind: "workos_sso" } },
+            data: { ownerTeamId: team.id, kind: "workos_sso", displayName: "WorkOS", enabled: true, config: { v: 1, kind: "workos_sso" } },
         });
         const connection = await db.teamIdentityConnection.create({
             data: {

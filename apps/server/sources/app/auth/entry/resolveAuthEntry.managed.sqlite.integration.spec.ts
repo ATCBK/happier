@@ -5,6 +5,10 @@ import { db } from "@/storage/db";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 
 import { resolveAuthEntry } from "./resolveAuthEntry";
+import { inTx } from "@/storage/inTx";
+import { resolveEffectiveHomeAuthMethodsInTx } from "@/app/auth/methods/effectiveHomeAuthMethods";
+import { resolveOAuthRuntimeById } from "@/app/auth/providers/identityProviderCatalog";
+import { HOME_PROVIDER_CONTEXT } from "@/app/auth/providers/providerReference";
 
 const workosBoundary = vi.hoisted(() => ({ getOrganization: vi.fn() }));
 // WorkOS is the network/SDK boundary. Catalog, policy, binding and routing remain real.
@@ -116,6 +120,68 @@ describe("resolveAuthEntry managed Home providers (SQLite integration)", () => {
             }] };
         });
         expect(await routeByEmail("person@acme.example")).toMatchObject({ state: "unavailable", autoRedirect: null });
+    });
+
+    it("withdraws unusable Home bindings from effective methods, ordinary entry and OAuth while keeping repair Test", async () => {
+        const target = await createHomeWorkos("Lifecycle company");
+        await db.homeGovernancePolicy.create({ data: { id: "home", authenticationPolicy: { v: 1, admission: "self_service" } } });
+        for (const status of ["active", "missing", "inactive", "active"]) {
+            await db.teamIdentityConnection.update({ where: { id: target.connection.id }, data: {
+                lastObservation: { v: 1, kind: "workos_sso", presentation: {
+                    displayName: "Lifecycle company", strategy: "SAML", status, lastCheckedAt: "2026-10-11T00:00:00.000Z",
+                }, successfulTest: null },
+            } });
+            const methods = await inTx((tx) => resolveEffectiveHomeAuthMethodsInTx(tx, { env: workosEnv }));
+            expect(methods.status).toBe("ready");
+            if (methods.status !== "ready") throw new Error("expected methods");
+            expect(methods.decisions.some((decision) => decision.id === target.provider.id && decision.actions.some((action) => action.enabled)))
+                .toBe(status === "active");
+            const entry = await resolveAuthEntry({ v: 1, scope: { kind: "home" } }, {
+                env: workosEnv, principal: null, emailDeliveryReady: false,
+            });
+            expect(entry.state).toBe("ready");
+            if (entry.state !== "ready") throw new Error("expected entry");
+            expect(entry.actions.some((action) => action.methodId === target.provider.id)).toBe(status === "active");
+            expect((await resolveOAuthRuntimeById(workosEnv, target.provider.id)) !== null).toBe(status === "active");
+            expect(await resolveOAuthRuntimeById(workosEnv, target.provider.id, HOME_PROVIDER_CONTEXT, "identity_connection_test"))
+                .not.toBeNull();
+        }
+    });
+
+    it("returns identical anonymous responses without resolving inaccessible company domains", async () => {
+        const target = await createHomeWorkos("Private company");
+        workosBoundary.getOrganization.mockResolvedValue({
+            id: target.organizationId, name: "Private company", domains: [{
+                organizationId: target.organizationId, domain: "acme.example", state: "verified",
+            }],
+        });
+        const anonymous = (email: string) => resolveAuthEntry({ v: 1, scope: { kind: "home" }, email }, {
+            env: workosEnv, principal: null, emailDeliveryReady: false,
+        });
+        // Inherited admission and no keyless login leaves only authenticated connect.
+        for (const state of ["connect_only", "disabled", "unusable", "policy_excluded"]) {
+            await db.homeGovernancePolicy.upsert({ where: { id: "home" },
+                create: { id: "home" }, update: { authenticationPolicy: state === "connect_only" ? null : {
+                    v: 1, admission: "self_service", ...(state === "policy_excluded" ? { enabledMethodIds: ["key_challenge"] } : {}),
+                } },
+            });
+            await db.teamIdentityConnection.update({ where: { id: target.connection.id }, data: {
+                enabled: state !== "disabled", lastObservation: { v: 1, kind: "workos_sso", presentation: {
+                    displayName: "Private company", strategy: "SAML", status: state === "unusable" ? "missing" : "active",
+                    lastCheckedAt: "2026-10-11T00:00:00.000Z",
+                }, successfulTest: null },
+            } });
+            workosBoundary.getOrganization.mockClear();
+            const match = await anonymous("person@acme.example");
+            const nonmatch = await anonymous("person@other.example");
+            expect(match).toEqual(nonmatch);
+            expect(match).toMatchObject({ state: "unavailable", reason: "entry_not_available" });
+            expect(workosBoundary.getOrganization).not.toHaveBeenCalled();
+        }
+        await db.homeGovernancePolicy.update({ where: { id: "home" }, data: { authenticationPolicy: { v: 1, admission: "self_service" } } });
+        const publicMatch = await anonymous("person@acme.example");
+        expect(publicMatch).toMatchObject({ state: "ready", actions: expect.arrayContaining([expect.objectContaining({ methodId: target.provider.id })]) });
+        expect(await anonymous("person@other.example")).toMatchObject({ state: "unavailable", reason: "entry_not_available" });
     });
 
     afterAll(async () => {

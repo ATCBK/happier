@@ -179,6 +179,12 @@ describe("Home authentication method admission", () => {
             HAPPIER_PUBLIC_SERVER_URL: "https://home.example.test",
             WORKOS_API_KEY: "sk_test", WORKOS_CLIENT_ID: "client_test",
             AUTH_ANONYMOUS_SIGNUP_ENABLED: "false",
+            AUTH_SIGNUP_PROVIDERS: "",
+            AUTH_PROVIDERS_CONFIG_JSON: JSON.stringify([{
+                id: "deployment-company", type: "oidc", displayName: "Deployment company",
+                issuer: "https://issuer.example.test", clientId: "client-id", clientSecret: "client-secret",
+                redirectUrl: "https://home.example.test/v1/oauth/deployment-company/callback",
+            }]),
             HAPPIER_FEATURE_E2EE__KEYLESS_ACCOUNTS_ENABLED: "1",
             HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: "optional",
             HAPPIER_FEATURE_AUTH_OAUTH__KEYLESS_ENABLED: "1",
@@ -197,6 +203,21 @@ describe("Home authentication method admission", () => {
         const selfService = { v: 1, admission: "self_service" };
         expect((await read(selfService)).actions.filter((action) => action.id === "provision")
             .every((action) => action.enabled)).toBe(true);
+        // The deployment signup allowlist has no authority over console-managed
+        // company admission; the same effective Home owner still enforces it for
+        // the independently contributed deployment provider.
+        for (const signupProviders of ["", "deployment-company"]) {
+            expect((await read(selfService, { AUTH_SIGNUP_PROVIDERS: signupProviders })).actions
+                .find((action) => action.id === "provision" && action.mode === "keyed")?.enabled).toBe(true);
+            const methods = await inTx((tx) => resolveEffectiveHomeAuthMethodsInTx(tx, {
+                env: { ...env, AUTH_SIGNUP_PROVIDERS: signupProviders },
+            }));
+            expect(methods.status).toBe("ready");
+            if (methods.status !== "ready") throw new Error("expected methods");
+            expect(methods.decisions.find((decision) => decision.id === "deployment-company")?.actions
+                .find((action) => action.id === "provision" && action.mode === "keyed")?.enabled)
+                .toBe(signupProviders === "deployment-company");
+        }
         for (const admission of [null, "closed", "invitation_only"] as const) {
             const decision = await read(admission ? { v: 1, admission } : null);
             expect(decision.actions.filter((action) => action.id === "provision").every((action) => !action.enabled)).toBe(true);

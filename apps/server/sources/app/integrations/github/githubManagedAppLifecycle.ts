@@ -392,7 +392,7 @@ export async function createGitHubAppRegistration(params: GitHubAppManagementAut
             detail: { action: "github_app.create", summary: { name: gitHubAppAuditName(row) } },
         });
         return { status: "created", registration: projectRegistration(row, secrets) };
-    });
+    }, { isolationLevel: "Serializable" /* App creation participates in current Home host policy and provider/directory admission. */ });
 }
 
 export async function createHomeGitHubAppRegistration(params: Readonly<{
@@ -573,7 +573,7 @@ export async function updateGitHubAppRegistration(params: GitHubAppManagementAut
         return updated.count === 0
             ? { status: "revision_conflict", registration: projectRegistration(latest, latestSecrets) }
             : { status: "updated", registration: projectRegistration(latest, latestSecrets) };
-    });
+    }, { isolationLevel: "Serializable" /* App configuration participates in current Home host policy and provider/directory admission. */ });
 }
 
 export async function updateHomeGitHubAppRegistration(
@@ -686,7 +686,7 @@ function projectGitHubAppTeamConsumers(input: Readonly<{
         connections: readonly Readonly<{
             id: string;
             enabled: boolean;
-            team: Readonly<{ id: string; name: string }>;
+            team: Readonly<{ id: string; name: string }> | null;
         }>[];
     }>[];
     directorySources: readonly Readonly<{
@@ -696,7 +696,7 @@ function projectGitHubAppTeamConsumers(input: Readonly<{
     }>[];
 }>): readonly ManagedGitHubAppTeamConsumerV1[] {
     const consumers: ManagedGitHubAppTeamConsumerV1[] = [
-        ...input.identityProviderInstances.flatMap((provider) => provider.connections.map((connection) => ({
+        ...input.identityProviderInstances.flatMap((provider) => provider.connections.flatMap((connection) => connection.team === null ? [] : [{
             team: connection.team,
             binding: {
                 kind: "identity_connection" as const,
@@ -704,7 +704,7 @@ function projectGitHubAppTeamConsumers(input: Readonly<{
                 providerInstanceId: provider.id,
                 enabled: connection.enabled,
             },
-        }))),
+        }])),
         ...input.directorySources.map((source) => ({
             team: source.team,
             binding: {
@@ -1155,7 +1155,7 @@ async function verifyGitHubAppInstallationWithAdministrator(params: GitHubAppMan
             registration: projectRegistration(registration, prepared.secrets),
             installation,
         };
-    });
+    }, { isolationLevel: "Serializable" /* Installation verification checks identity and directory state before id-only binding writes. */ });
 }
 
 export async function verifyGitHubAppInstallation(params: GitHubAppManagementAuthorizationInput & Readonly<{
@@ -1252,7 +1252,7 @@ export async function removeGitHubAppInstallation(params: GitHubAppManagementAut
             });
         }
         return { status: removed.count === 1 ? "removed" : "revision_conflict" };
-    });
+    }, { isolationLevel: "Serializable" /* Installation removal participates in provider/directory source and binding admission. */ });
 }
 
 export async function removeHomeGitHubAppInstallation(params: Readonly<{

@@ -12,7 +12,7 @@ import {
 } from "@/app/auth/providers/managed/identityProviderInstanceLifecycle";
 import {
     readHomeGovernancePolicyInTx,
-    resolveTeamProviderKindPolicy,
+    resolveIdentityConnectionProviderKindPolicy,
 } from "@/app/home/governance/governancePolicy";
 import { createWorkosAdministrationAdapter } from "@/app/integrations/workos/workosAdministrationAdapter";
 import {
@@ -60,12 +60,6 @@ type WorkosConnectionPreflight = Readonly<{
     }>;
 }>;
 
-function workosAllowedByHomePolicy(
-    policy: Awaited<ReturnType<typeof readHomeGovernancePolicyInTx>>,
-): boolean {
-    return resolveTeamProviderKindPolicy(policy, "workos_sso") === "allowed";
-}
-
 async function preflightWorkosConnectionInTx(
     tx: Tx,
     input: Partial<TeamOperationAuthenticationContext> & Readonly<{
@@ -91,7 +85,9 @@ async function preflightWorkosConnectionInTx(
             : Promise.resolve(null),
     ]);
     if (input.teamId !== null && !team) return { ok: false, error: "team_not_found" };
-    if (!workosAllowedByHomePolicy(home)) return { ok: false, error: "team_identity_not_allowed" };
+    if (resolveIdentityConnectionProviderKindPolicy(home, identityConnectionOwner(input.teamId), "workos_sso") !== "allowed") {
+        return { ok: false, error: "team_identity_not_allowed" };
+    }
     if (resolved.status === "not_found") return { ok: false, error: "identity_connection_not_found" };
     if (resolved.status !== "ready") return { ok: false, error: "identity_connection_invalid" };
     if (
@@ -141,7 +137,7 @@ export async function createTeamWorkosConnection(
             input.teamId === null ? Promise.resolve(null) : tx.team.findUnique({ where: { id: input.teamId }, select: { name: true, updatedAt: true } }),
         ]);
         if (input.teamId !== null && !team) return { ok: false, error: "team_not_found" };
-        if (!workosAllowedByHomePolicy(home)) {
+        if (resolveIdentityConnectionProviderKindPolicy(home, identityConnectionOwner(input.teamId), "workos_sso") !== "allowed") {
             return { ok: false, error: "team_identity_not_allowed" };
         }
         if (!resolvePlatform(input.env, dependencies)) {
@@ -246,7 +242,7 @@ export async function createTeamWorkosConnection(
             return { ok: true, value: await projectCurrentTeamIdentityConnectionV1InTx(tx, { env: input.env, teamId: input.teamId, connection: created.connection }) };
         }
         return { ok: false, error: "identity_connection_invalid" };
-    });
+    }, { isolationLevel: "Serializable" /* Home draft uniqueness and Team provider admission span provider and connection rows. */ });
 }
 
 function mapConnectionMutationError(status: string): TeamIdentityErrorCodeV1 {
@@ -326,7 +322,7 @@ export async function createTeamWorkosAdminPortalLink(
             return updated.status === "applied"
                 ? { ok: true as const, value: { ...current.value, connection: updated.connection as WorkosConnectionPreflight["connection"] } }
                 : { ok: false as const, error: mapConnectionMutationError(updated.status) };
-        });
+        }, { isolationLevel: "Serializable" /* WorkOS configuration participates in the connection observation and policy family. */ });
         if (!persisted.ok) return persisted;
         preflight = persisted;
         organizationId = organization.id;
@@ -502,7 +498,7 @@ export async function reconcileTeamWorkosConnection(
             return result.status === "applied"
                 ? { ok: true as const, value: await projectCurrentTeamIdentityConnectionV1InTx(tx, { env: input.env, teamId: input.teamId, connection: result.connection }) }
                 : { ok: false as const, error: mapConnectionMutationError(result.status) };
-        });
+        }, { isolationLevel: "Serializable" /* WorkOS observation merges JSON from a previously read connection without advancing its revision. */ });
         return observed.ok
             ? {
                 ok: true,
@@ -530,7 +526,7 @@ export async function reconcileTeamWorkosConnection(
             actorAccountId: input.actorAccountId, action: "identity_provider.update",
         });
         return result;
-    });
+    }, { isolationLevel: "Serializable" /* WorkOS candidate recording merges previously read connection observations and policy. */ });
     return recorded.ok
         ? {
             ok: true,
@@ -587,5 +583,5 @@ export async function setTeamWorkosConnection(
             actorAccountId: input.actorAccountId, action: "identity_provider.update",
         });
         return result;
-    });
+    }, { isolationLevel: "Serializable" /* WorkOS candidate activation combines the observed connection with current policy and login routes. */ });
 }

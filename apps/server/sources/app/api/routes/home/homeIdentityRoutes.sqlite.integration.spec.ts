@@ -11,7 +11,7 @@ describe("Home company-sign-in transport", () => {
     let harness: LightSqliteHarness;
     let app: ReturnType<typeof createAuthenticatedTestApp>;
     const generateLink = vi.fn(async () => ({ link: "https://setup.workos.test/portal" }));
-    const createOrganization = vi.fn(async () => ({ id: "org_home", domains: [] }));
+    const createOrganization = vi.fn(async () => ({ id: "org_home", name: "Portal company", domains: [] }));
 
     beforeAll(async () => {
         harness = await createLightSqliteHarness({

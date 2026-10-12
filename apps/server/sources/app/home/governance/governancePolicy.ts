@@ -34,6 +34,7 @@ import {
 } from "./homeAuthenticationPolicyEnv";
 import { readEncryptionFeatureEnv } from "@/app/features/catalog/readFeatureEnv";
 import type { EffectiveAuthMethodDecision } from "@/app/auth/methods/effectiveAuthMethods";
+import type { ProviderCatalogContext } from "@/app/auth/providers/providerReference";
 
 /**
  * The Home database holds exactly one governance policy. There is no separate
@@ -137,6 +138,15 @@ export function resolveTeamProviderKindPolicy(
     return policy.teamProviders.policy.allowedTeamProviderKinds.includes(kind)
         ? "allowed"
         : "prohibited";
+}
+
+/** Team-kind narrowing governs Team bindings; Home sign-in uses its authentication policy. */
+export function resolveIdentityConnectionProviderKindPolicy(
+    policy: HomeGovernancePolicyRecord,
+    context: ProviderCatalogContext,
+    kind: ManagedIdentityProviderKindV1,
+): "allowed" | "prohibited" | "unavailable" {
+    return context.kind === "home" ? "allowed" : resolveTeamProviderKindPolicy(policy, kind);
 }
 
 export type HomeGovernancePolicySetResult =

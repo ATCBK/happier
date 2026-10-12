@@ -52,6 +52,7 @@ describe("external Group binding administration", () => {
                 ownerTeamId: team.id,
                 kind: "workos_sso",
                 displayName: "WorkOS",
+                enabled: true,
                 config: { v: 1, kind: "workos_sso" },
             },
         });
@@ -411,6 +412,7 @@ describe("external Group binding administration", () => {
                     ownerTeamId: team.id,
                     kind: "workos_sso",
                     displayName: `WorkOS ${index}`,
+                    enabled: true,
                     config: { v: 1, kind: "workos_sso" },
                 },
             });

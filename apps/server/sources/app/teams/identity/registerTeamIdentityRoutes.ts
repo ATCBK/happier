@@ -154,13 +154,13 @@ export function registerScopedIdentityRoutes(
             ...readTeamOperationAuthenticationFromRequest(request, await readRequestHomeEnv(request)),
         });
         if (!result.ok) return sendError(reply, result.error);
-        if (request.body.teamId === null) return reply.send({
+        if (request.body.teamId === null) return reply.send(home.HomeIdentityConnectionListResultV1Schema.parse({
             items: result.value.items, eligibleProviders: result.value.eligibleProviders,
-        });
-        return reply.send({
+        }));
+        return reply.send(TeamIdentityConnectionListResultV1Schema.parse({
             ...result.value,
             memberSignInUrl: await renderMemberSignInUrl(request.body.teamId),
-        });
+        }));
     });
 
     app.post(paths("teams.identity.connections.create"), {
@@ -175,7 +175,7 @@ export function registerScopedIdentityRoutes(
             actorAccountId: request.userId,
             ...readTeamOperationAuthenticationFromRequest(request, await readRequestHomeEnv(request)),
         });
-        return result.ok ? reply.send({ connection: result.value }) : sendError(reply, result.error);
+        return result.ok ? reply.send(schemas.mutationResult.parse({ connection: result.value })) : sendError(reply, result.error);
     });
 
     app.post(paths("teams.identity.connections.settings.update"), {
@@ -190,7 +190,7 @@ export function registerScopedIdentityRoutes(
             actorAccountId: request.userId,
             ...readTeamOperationAuthenticationFromRequest(request, await readRequestHomeEnv(request)),
         });
-        return result.ok ? reply.send({ connection: result.value }) : sendError(reply, result.error);
+        return result.ok ? reply.send(schemas.mutationResult.parse({ connection: result.value })) : sendError(reply, result.error);
     });
 
     for (const [path, enabled] of [
@@ -210,7 +210,7 @@ export function registerScopedIdentityRoutes(
                 enabled,
                 ...readTeamOperationAuthenticationFromRequest(request, await readRequestHomeEnv(request)),
             }, workosDependencies);
-            return result.ok ? reply.send({ connection: result.value }) : sendError(reply, result.error);
+            return result.ok ? reply.send(schemas.mutationResult.parse({ connection: result.value })) : sendError(reply, result.error);
         });
     }
 
@@ -241,7 +241,7 @@ export function registerScopedIdentityRoutes(
             actorAccountId: request.userId,
             ...readTeamOperationAuthenticationFromRequest(request, await readRequestHomeEnv(request)),
         });
-        return result.ok ? reply.send(result.value) : sendError(reply, result.error);
+        return result.ok ? reply.send(schemas.removalPreflight.parse(result.value)) : sendError(reply, result.error);
     });
 
     app.post(paths("teams.identity.connections.test.consume"), {
@@ -257,7 +257,7 @@ export function registerScopedIdentityRoutes(
             ...readTeamOperationAuthenticationFromRequest(request, await readRequestHomeEnv(request)),
         });
         reply.header("Cache-Control", "no-store");
-        return result.ok ? reply.send(result.value) : sendError(reply, result.error);
+        return result.ok ? reply.send(schemas.testConsumeResult.parse(result.value)) : sendError(reply, result.error);
     });
 
     app.post(paths("teams.identity.connections.test.start"), {
@@ -305,7 +305,7 @@ export function registerScopedIdentityRoutes(
             actorAccountId: request.userId,
             ...readTeamOperationAuthenticationFromRequest(request, await readRequestHomeEnv(request)),
         }, workosDependencies);
-        return result.ok ? reply.send({ connection: result.value }) : sendError(reply, result.error);
+        return result.ok ? reply.send(schemas.mutationResult.parse({ connection: result.value })) : sendError(reply, result.error);
     });
 
     app.post(paths("teams.identity.workos.reconcile"), {
@@ -320,7 +320,7 @@ export function registerScopedIdentityRoutes(
             actorAccountId: request.userId,
             ...readTeamOperationAuthenticationFromRequest(request, await readRequestHomeEnv(request)),
         }, workosDependencies);
-        return result.ok ? reply.send(result.value) : sendError(reply, result.error);
+        return result.ok ? reply.send(schemas.reconcileResult.parse(result.value)) : sendError(reply, result.error);
     });
 
     app.post(paths("teams.identity.workos.connection.set"), {
@@ -335,6 +335,6 @@ export function registerScopedIdentityRoutes(
             actorAccountId: request.userId,
             ...readTeamOperationAuthenticationFromRequest(request, await readRequestHomeEnv(request)),
         }, workosDependencies);
-        return result.ok ? reply.send({ connection: result.value }) : sendError(reply, result.error);
+        return result.ok ? reply.send(schemas.mutationResult.parse({ connection: result.value })) : sendError(reply, result.error);
     });
 }

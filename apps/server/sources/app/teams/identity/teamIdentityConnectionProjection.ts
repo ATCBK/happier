@@ -6,7 +6,7 @@ import type {
 
 import { resolveTeamAuthenticationPolicyInTx } from "@/app/auth/entry/resolveTeamAuthenticationPolicy";
 import { resolveOAuthRuntimeByIdInTx } from "@/app/auth/providers/identityProviderCatalog";
-import { readHomeGovernancePolicyInTx, resolveTeamProviderKindPolicy } from "@/app/home/governance/governancePolicy";
+import { readHomeGovernancePolicyInTx, resolveIdentityConnectionProviderKindPolicy } from "@/app/home/governance/governancePolicy";
 import { resolveWorkosPlatformRuntimeMetadata } from "@/app/integrations/workos/workosPlatform";
 import type { Tx } from "@/storage/inTx";
 
@@ -106,7 +106,7 @@ export async function resolveTeamIdentityConnectionCurrentnessInTx(
     return {
         currentness: {
             runtimeAvailable: runtime !== null,
-            providerAllowedByHome: resolveTeamProviderKindPolicy(shared.home, input.connection.providerKind) === "allowed",
+            providerAllowedByHome: resolveIdentityConnectionProviderKindPolicy(shared.home, identityConnectionOwner(input.teamId), input.connection.providerKind) === "allowed",
             policyStatus: shared.policyStatusFor(input.connection.id),
             workosPlatformAvailable: shared.workosPlatformAvailable,
         },

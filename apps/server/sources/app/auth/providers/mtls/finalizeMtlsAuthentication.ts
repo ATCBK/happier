@@ -10,6 +10,7 @@ import { linkIdentityInTx } from "@/app/auth/providers/accountIdentityLifecycle"
 import type { MtlsIdentity } from "@/app/auth/providers/mtls/mtlsIdentity";
 import { provisionFreshAccountInTx } from "@/app/auth/provisionFreshAccountInTx";
 import { readAuthMtlsFeatureEnv } from "@/app/features/catalog/readFeatureEnv";
+import { readHomeConfigEnvInTx } from "@/app/home/settings/homeSettings";
 import { shouldDenyPublicSignupProvisioningAction } from "@/app/integrations/publicUrl/publicSignupProvisioningPolicy";
 import { requireTeamInvitationFreshAccountAdmissionReferenceInTx } from "@/app/teams/invitations/freshAccountAdmission";
 import { readActiveTeamInvitationAdmissionReferenceInTx } from "@/app/teams/invitations/invitationLifecycle";
@@ -44,7 +45,7 @@ export async function isMtlsAcceptedByCurrentTeamPolicyInTx(
 ): Promise<boolean> {
     try {
         const policy = await resolveTeamAuthenticationPolicyInTx(tx, {
-            env: process.env,
+            env: await readHomeConfigEnvInTx(tx),
             teamId: team.id,
             policy: team.authenticationPolicy,
             ...(invitation ? { admission: { kind: "team_invitation" as const } } : {}),
@@ -76,7 +77,8 @@ export async function finalizeMtlsAuthenticationInTx(
     teamId?: string;
     teamInvitationContinuation?: TeamInvitationPostAuthContinuationV1;
 }>> {
-    if (params.team?.invitation && !await isTeamMembershipAdmissionEnabled({ tx })) abort("not-eligible");
+    const env = await readHomeConfigEnvInTx(tx);
+    if (params.team?.invitation && !await isTeamMembershipAdmissionEnabled({ tx, env })) abort("not-eligible");
     const team = params.team
         ? await tx.team.findUnique({
             where: { id: params.team.teamId },
@@ -93,7 +95,7 @@ export async function finalizeMtlsAuthenticationInTx(
     let accountId: string;
     if (existingIdentity) {
         if (!await isEffectiveHomeAuthMethodActionEnabledInTx(tx, {
-            env: process.env,
+            env,
             methodId: "mtls",
             actionId: "login",
             mode: "keyless",
@@ -117,21 +119,21 @@ export async function finalizeMtlsAuthenticationInTx(
         accountId = existingIdentity.accountId;
     } else {
         const invitation = params.team?.invitation;
-        if (!readAuthMtlsFeatureEnv(process.env).autoProvision
+        if (!readAuthMtlsFeatureEnv(env).autoProvision
             || !await isEffectiveHomeAuthMethodActionEnabledInTx(tx, {
-                env: process.env,
+                env,
                 methodId: "mtls",
                 actionId: "provision",
                 mode: "keyless",
                 ...(invitation ? { admission: { kind: "team_invitation" as const } } : {}),
             })
             || (!invitation && shouldDenyPublicSignupProvisioningAction({
-                env: process.env,
+                env,
                 requestIp: params.requestIp,
                 methodId: "mtls",
                 mode: "keyless",
             }))) abort("not-eligible");
-        const eligibility = resolveKeylessAutoProvisionEligibility(process.env);
+        const eligibility = resolveKeylessAutoProvisionEligibility(env);
         if (!eligibility.ok) abort(eligibility.error);
         accountId = randomUUID();
         await provisionFreshAccountInTx(tx, {
@@ -153,7 +155,7 @@ export async function finalizeMtlsAuthenticationInTx(
 
     if (team && !params.team?.invitation) {
         const qualification = await qualifyTeamAuthenticationInTx(tx, {
-            env: process.env,
+            env,
             team,
             accountId,
             verifiedCredentialEvidence: [{ kind: "home_method", methodId: "mtls" }],

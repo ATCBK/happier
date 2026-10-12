@@ -25,7 +25,7 @@ type WorkosOrganizationExternalReference = Omit<
 
 type TeamWorkosRuntimeUnavailableResult =
     Readonly<{
-        status: "connection_not_found" | "connection_disabled" | "provider_unavailable" | "unreadable" | "not_configured" | "platform_unavailable";
+        status: "connection_not_found" | "connection_disabled" | "connection_unavailable" | "provider_unavailable" | "unreadable" | "not_configured" | "platform_unavailable";
     }>;
 
 type TeamWorkosRuntimeReadyResult<
@@ -169,6 +169,13 @@ export async function resolveTeamWorkosConnectionRuntimeInTx(
     const connectionId = row.externalReference.connectionId;
     if (organizationId === null || (purpose === "sso" && connectionId === null)) {
         return { status: "not_configured" };
+    }
+
+    // Ordinary sign-in consumes lifecycle usability. Repair Test deliberately
+    // includes disabled/draft bindings and must also reach an inactive selection.
+    // Directory runtime needs only its organization, independently of SSO state.
+    if (purpose === "sso" && input.includeDisabled !== true && row.state !== "connected") {
+        return { status: "connection_unavailable" };
     }
 
     const platform = dependencies.resolvePlatform

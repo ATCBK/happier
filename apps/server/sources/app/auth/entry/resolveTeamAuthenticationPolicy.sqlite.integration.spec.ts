@@ -880,7 +880,10 @@ describe("Team authentication policy catalog resolution (SQLite integration)", (
             },
             { id: "batch-malformed", authenticationPolicy: { v: 99, mode: "restricted" } },
         ];
-        const env = { HAPPIER_FEATURE_AUTH_LOGIN__KEY_CHALLENGE_ENABLED: "1" };
+        const env = {
+            HAPPIER_FEATURE_AUTH_LOGIN__KEY_CHALLENGE_ENABLED: "1",
+            HAPPIER_FEATURE_AUTH_EMAIL_PASSWORD__ENABLED: "0",
+        };
         const current = await inTx((tx) => qualifyTeamAuthenticationsInTx(tx, {
             env,
             teams,
