@@ -147,7 +147,7 @@ describe('useDaemonMergedProjectionInputs', () => {
         const { usePluginUiProjectionCurrentness } = await import('@/sync/domains/plugins/ui/usePluginUiProjectionCurrentness');
         const { parseToken } = await import('@/utils/auth/parseToken');
         const { isMachineOnline } = await import('@/utils/sessions/machineUtils');
-        const { resolveServerScopedMachine } = await import('@/sync/store/domains/machines/resolveServerScopedMachine');
+        const { resolveServerScopedMachine } = await import('@/sync/domains/machines/resolveServerScopedMachine');
         const { readCachedDaemonMergedProjectionCacheEntry } = await import('./loadDaemonMergedProjectionInputs');
         const { getMachineContributionRegistryProjectionRevision } = await import('@/sync/ops/machineContributionRegistryProjectionRevision');
         await prepareWarmCacheEncryptionKey();
@@ -287,7 +287,7 @@ describe('useDaemonMergedProjectionInputs', () => {
         const { usePluginUiProjectionCurrentness } = await import('@/sync/domains/plugins/ui/usePluginUiProjectionCurrentness');
         const { parseToken } = await import('@/utils/auth/parseToken');
         const { isMachineOnline } = await import('@/utils/sessions/machineUtils');
-        const { resolveServerScopedMachine } = await import('@/sync/store/domains/machines/resolveServerScopedMachine');
+        const { resolveServerScopedMachine } = await import('@/sync/domains/machines/resolveServerScopedMachine');
         await prepareWarmCacheEncryptionKey();
         storage.getState().activateProfileScope({ serverId, accountId: 'account-a' });
         const machineA = createMachineFixture({ id: 'focused-machine-a', active: true, activeAt: 0 });

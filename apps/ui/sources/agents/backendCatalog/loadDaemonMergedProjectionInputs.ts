@@ -10,7 +10,7 @@ import {
 import { areServerAccountScopesEqual, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { readRegisteredStorageState } from '@/sync/domains/state/storageStateReaderBridge';
-import { resolveServerScopedMachine } from '@/sync/store/domains/machines/resolveServerScopedMachine';
+import { resolveServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachine';
 import { machineContributionRegistryProjectionScopeKey } from '@/sync/ops/machineContributionRegistryProjectionRevision';
 import {
     forgetPluginUiProjectionAdmissionSnapshot,

@@ -11,7 +11,7 @@ import { getStorage } from '@/sync/domains/state/storage';
 import { getPersistenceStorage } from '@/sync/domains/state/persistenceStorage';
 import { loadAccountProfile } from '@/sync/domains/state/accountProfilePersistence';
 import { profileDefaults } from '@/sync/domains/profiles/profile';
-import { resolveServerScopedMachine } from '@/sync/store/domains/machines/resolveServerScopedMachine';
+import { resolveServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachine';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { serverAccountScopedResourceKey, areServerAccountScopesEqual, type ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { useServerFeaturesSnapshotForServerId } from '@/sync/domains/features/featureDecisionRuntime';

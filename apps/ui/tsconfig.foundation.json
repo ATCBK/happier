@@ -2781,7 +2781,6 @@
     "sources/sync/store/domains/feed.ts",
     "sources/sync/store/domains/machinePools.ts",
     "sources/sync/store/domains/machines/resolveMachinesForActiveServerFromState.ts",
-    "sources/sync/store/domains/machines/resolveServerScopedMachine.ts",
     "sources/sync/store/domains/pending.ts",
     "sources/sync/store/domains/pets.ts",
     "sources/sync/store/domains/realtime.ts",

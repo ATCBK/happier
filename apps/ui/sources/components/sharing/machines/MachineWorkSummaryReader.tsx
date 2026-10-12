@@ -7,7 +7,7 @@ import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/ser
 import { serverAccountScopedResourceKey, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { parseToken } from '@/utils/auth/parseToken';
 import { storage } from '@/sync/domains/state/storage';
-import { resolveServerScopedMachine } from '@/sync/store/domains/machines/resolveServerScopedMachine';
+import { resolveServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachine';
 
 import { MachineWorkSummarySection, type MachineWorkSummaryState } from './MachineWorkSummarySection';
 

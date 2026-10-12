@@ -13,7 +13,7 @@ import { writeExistingSessionDraft } from '@/sync/ops/sessionDrafts/sessionDraft
 import { ScmDiffSummaryModelPicker } from '@/components/settings/sourceControl/ScmDiffSummaryModelPicker';
 import { applySavedScmDiffSummaryResult } from '@/sync/ops/scmDiffSummary/generate';
 import { getStorage } from '@/sync/domains/state/storage';
-import { resolveServerScopedMachine } from '@/sync/store/domains/machines/resolveServerScopedMachine';
+import { resolveServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachine';
 import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
 import { formatWithCachedDateTimeFormatter } from '@/utils/datetime/cachedIntlFormatters';
 

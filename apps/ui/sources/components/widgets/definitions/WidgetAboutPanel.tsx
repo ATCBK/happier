@@ -12,7 +12,7 @@ import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
 import { readPluginUiContributionOrigin } from '@/sync/domains/plugins/ui/projectionUnion';
-import { resolveServerScopedMachine } from '@/sync/store/domains/machines/resolveServerScopedMachine';
+import { resolveServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachine';
 import { storage, useArtifact } from '@/sync/domains/state/storage';
 import { t } from '@/text';
 import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';

@@ -4,7 +4,7 @@ import { supportsMachineSessionFollowContextV1 } from '@happier-dev/protocol/mac
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import { encodeBase64 } from '@/encryption/base64';
-import { resolveServerScopedMachine } from '@/sync/store/domains/machines/resolveServerScopedMachine';
+import { resolveServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachine';
 import { storage } from '@/sync/domains/state/storage';
 import { readSessionListRowForServerId } from '@/sync/domains/session/listing/sessionListRowStateLookup';
 import { resolveSessionMachineId } from '@/sync/domains/session/external/resolveSessionMachineId';
