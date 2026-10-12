@@ -32,6 +32,49 @@ source.
 
 ## Everyday target and contributor authors
 
+### Email transports in 0.3 development source
+
+The Email Channels plugin owns MIME parsing, sender authentication, thread
+identity, content shaping, and reply composition. An email transport supplies
+raw RFC 5322 messages and delivery facts through its `transports` point. This
+contract is development source; verify that your installed toolchain includes
+the Email Channels package before depending on it.
+
+Import `EmailTransportsContributionProtocolV1` from
+`@happier-dev/email-transports-protocol/v1`, then contribute to
+`happier.channel.email` at `transports` with the same `.contribute()` and
+`.bind()` pattern below. Declare each Action using the corresponding operation's
+`.declaration`, so its input, result, surfaces, and danger level stay in sync.
+The public protocol package exports the operation schemas and inferred types
+for handlers; `/testing/v1` supplies declarative conformance assertions.
+
+Every operation receives a selected `credentialRef` and transport-owned `config`.
+Credentials belong in Connected Accounts. `listSince` receives the opaque
+checkpoint, requested `waitMs`, and batch `limit`; it returns message references
+and `checkpointAfterBatch`, or a typed history gap when continuity is lost.
+`fetchRaw` returns `mimeBase64` for a reference. It must also accept an RFC
+Message-ID reference, including angle brackets, so replies and lazy attachment
+fetches can read the same message after a process restart. It searches the
+configured mailbox, including sent messages needed for reply context.
+
+`submitRaw` receives `mimeBase64`, the composed `messageId`, and an explicit
+SMTP `envelope` (`from` and `to`). Send those bytes and recipients unchanged:
+the email owner already composed the headers and resolved the audience through
+Channels. Submission returns the existing Channels delivery result; an
+ambiguous result must stay ambiguous. `connectionTest` verifies access and
+returns the authenticated mailbox address. Optional `findSent` searches by
+Message-ID and returns `found` or `notFound`; absence of that operation, or a
+missing sent copy, leaves ambiguous delivery for Channels' existing resolution
+flow. It never authorizes an automatic resend.
+
+Transport Actions are plugin-only, and `submitRaw` declares `writesRemote`.
+Accept only the host-stamped `happier.channel.email` caller. The target selects
+an admitted contribution through the existing platform service and executes
+the original opaque operation handle; transports need no private registration
+or routing API. The first-party IMAP/SMTP transport uses this same contract.
+
+### Channels provider bindings
+
 Channels publishes its provider protocol as a feature-owned value. An ordinary
 target calls `.point()` on that value:
 

@@ -139,13 +139,29 @@ connects one repository at a time: setup verifies the selected repository
 against your GitHub Connected Account credential. Each conversation is a single
 issue or pull request in that repository — you point a binding at it by number.
 Comments on that issue or pull request arrive as channel messages, and replies
-are posted back as comments on it. The provider splits a reply across several
-comments once it exceeds Happier's provider safety ceiling of 65,536 UTF-8
-bytes per comment. GitHub has no webhook delivery in this preview: inbound
+are posted back as comments on it. The provider sends one mention-neutralized
+comment; GitHub's API decides whether to accept it, without a guessed local
+byte ceiling splitting one answer into several comments. GitHub has no webhook delivery in this preview: inbound
 messages arrive through checkpointed polling, so a connected machine needs to
 wake up for the poll to advance.
 
 ### The history baseline
+
+New connections start with their provider's recommended freshness value:
+24 hours for Telegram, whose [pending updates expire after that interval](https://core.telegram.org/bots/api#getting-updates),
+and 30 days for GitHub and Discord. Those latter defaults are Happier provider
+policy, not promises of provider retention or durable replay: GitHub offers
+[comment history](https://docs.github.com/en/rest/issues/comments#list-issue-comments-for-a-repository),
+while Discord's [Gateway replay depends on its current session](https://docs.discord.com/developers/events/gateway#resuming).
+You can change the freshness value during setup.
+
+The current development source has no fixed connection/binding count, generic
+message-text or chunk-count ceiling, five-attempt delivery budget, or five-second
+debounce cap. Storage and transport envelopes and each provider's native limits
+still apply. Known-no-effect delivery failures remain visible while retrying
+with increasing backoff (positive provider Retry-After first; a zero wait uses
+the growing fallback); accepted, partial, and unknown effects never resend
+automatically.
 
 When a connection starts, Happier does not swallow everything said in that
 conversation before you arrived. It offers a **history baseline** for you to
@@ -166,8 +182,11 @@ model are about failure rather than success:
 
 What Happier keeps is bounded to what recovery still needs. Inbound message
 content is retained while its admission obligations are live, then reduced to
-a compact replay-evidence shell and deleted once the transport's replay window
-has passed. An outbound delivery that reaches a terminal state is kept for a
+a compact replay-evidence shell. An accepted Session input keeps that shell's
+exact message relation until its reply has terminal delivery custody and its
+transcript frontier has passed, or the binding no longer targets that Session.
+Other settled ingress evidence is deleted once its replay window has passed.
+An outbound delivery that reaches a terminal state is kept for a
 thirty-day recovery window so a failure can be resolved; an ambiguous partial
 delivery keeps only a fingerprint of its content but stays visible until you
 resolve it, and delivered content is deleted when its window elapses.
@@ -197,6 +216,13 @@ Channels-specific result-size ceiling. Failed and cancelled Runs settle the same
 handoff truthfully instead of leaving a conversation waiting forever.
 
 ## Approvals and questions
+
+An allowlisted person can send `/stop` as an original message to cancel the
+bound Session's active turn immediately, without the input debounce or stopping
+the Session itself. It never becomes Agent input, and replaying the same message
+does not cancel another turn. Forwarded, via-bot, and permitted bot messages are
+ordinary text instead; Automation bindings refuse this command. If cancellation
+cannot be confirmed, send a new `/stop` only if a turn is still active.
 
 For a Session binding, the owner can allow people in the connected conversation
 to approve or deny the Agent's current permission request. Happier sends the
