@@ -1,10 +1,9 @@
 import { createHash } from 'node:crypto';
-import { existsSync, realpathSync } from 'node:fs';
-import { lstat, readdir, readlink } from 'node:fs/promises';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { join, resolve, relative } from 'node:path';
 
-import { resolveWorkspaceBundlesFromPackageJson } from '@happier-dev/cli-common/workspaces';
-import { isDevRuntimeReloadIgnoredPath } from '../dev/watchSignature.mjs';
+import { readBundledWorkspacePackageNames, resolveInternalWorkspacePackageNameClosure, resolveWorkspaceSourceDir, resolveWorkspaceBundlesFromPackageJson } from '@happier-dev/cli-common/workspaces';
+import { isDevRuntimeReloadIgnoredPath, readWatchSourcePath } from '../dev/watchSignature.mjs';
 import { forgetCachedFileDigest, readCachedFileDigest } from '../fs/cached_file_digest.mjs';
 import { createWorkspaceBuildInputIgnorePath, resolveWorkspaceBuildInputWatchPaths } from '../fs/workspaceBuildInputs.mjs';
 
@@ -17,9 +16,13 @@ export function collectHappyCliRuntimePackageDirs({
   cliDir,
   repoRoot = resolve(cliDir, '..', '..'),
 }) {
-  return resolveWorkspaceBundlesFromPackageJson({ repoRoot, hostPackageDir: cliDir }).map((bundle) => ({
-    id: bundle.packageName.split('/')[1] ?? bundle.packageName,
-    dir: bundle.srcDir,
+  // Input observation is not publication admission. Watch the complete closure
+  // even while a new dependency has not yet joined bundledDependencies.
+  const manifest = JSON.parse(readFileSync(join(cliDir, 'package.json'), 'utf8'));
+  return resolveInternalWorkspacePackageNameClosure({ repoRoot,
+    packageNames: readBundledWorkspacePackageNames(manifest) }).map(packageName => ({
+    id: packageName.split('/')[1] ?? packageName,
+    dir: resolveWorkspaceSourceDir({ repoRoot, packageName }),
   }));
 }
 
@@ -37,10 +40,16 @@ export function resolveHappyCliRuntimeInputGroups({
     // Descriptor construction also supports not-yet-materialized fixture paths.
   }
   const repoRoot = resolve(resolvedCliDir, '..', '..');
-  const runtimePackages = collectHappyCliRuntimePackageDirs({
-    cliDir: resolvedCliDir,
-    repoRoot,
-  });
+  let runtimePackages = [];
+  let observeWorkspaceRoot = false;
+  try {
+    runtimePackages = collectHappyCliRuntimePackageDirs({ cliDir: resolvedCliDir, repoRoot });
+  } catch (error) {
+    // A partially edited manifest is a build failure, not an observation
+    // failure. Keep corrections observable while a retained process serves.
+    observeWorkspaceRoot = true;
+    console.warn(`[local] CLI input discovery failed; observing workspace corrections. ${error.message}`);
+  }
   const groups = [
     {
       id: 'daemon:cli',
@@ -72,6 +81,7 @@ export function resolveHappyCliRuntimeInputGroups({
       target: 'daemon',
       paths: resolveWorkspaceBuildInputWatchPaths(dir, { existsSyncImpl, includeShippedFiles, excludeGeneratedPluginArtifacts }),
     })),
+    ...(observeWorkspaceRoot ? [{ id: 'shared:workspace-observation', target: 'shared', paths: [join(repoRoot, 'packages')] }] : []),
   ];
 
   return groups
@@ -90,6 +100,9 @@ export async function readHappyCliRuntimeInputFreshness(cliDir, {
   inputEntries,
 } = {}) {
   const repoRoot = resolve(cliDir, '..', '..');
+  // Build freshness still validates publication inputs; descriptor discovery
+  // must not make that decision before last-green runtime admission.
+  resolveWorkspaceBundlesFromPackageJson({ repoRoot, hostPackageDir: cliDir });
   const ignorePath = includeShippedFiles
     ? createHappyCliRuntimeInputIgnorePath({ cliDir, includeShippedFiles, excludeGeneratedPluginArtifacts })
     : isDevRuntimeReloadIgnoredPath;
@@ -98,8 +111,11 @@ export async function readHappyCliRuntimeInputFreshness(cliDir, {
   const visit = async (path) => {
     if (ignorePath(path)) return;
     let fileStat;
+    let observation;
     try {
-      fileStat = await lstat(path, { bigint: true });
+      observation = await readWatchSourcePath(path);
+      fileStat = observation?.stats;
+      if (!fileStat) return;
     } catch {
       forgetCachedFileDigest(path);
       return;
@@ -127,7 +143,7 @@ export async function readHappyCliRuntimeInputFreshness(cliDir, {
       record();
       let names;
       try {
-        names = (await readdir(path)).sort((left, right) => left.localeCompare(right));
+        names = [...observation.names].sort((left, right) => left.localeCompare(right));
       } catch {
         return;
       }
@@ -143,7 +159,7 @@ export async function readHappyCliRuntimeInputFreshness(cliDir, {
     // Source transfer preserves link contents, not filesystem timestamps.
     // Ordinary development freshness retains its existing metadata behavior.
     if (includeShippedFiles && fileStat.isSymbolicLink()) {
-      append(await readlink(path));
+      append(observation.link);
       record();
       return;
     }
