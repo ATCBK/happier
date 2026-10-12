@@ -101,6 +101,11 @@
       "import": "./processInstance.mjs",
       "default": "./processInstance.mjs"
     },
+    "./tempDirOwnership": {
+      "types": "./tempDirOwnership.d.mts",
+      "import": "./tempDirOwnership.mjs",
+      "default": "./tempDirOwnership.mjs"
+    },
     "./links": {
       "happier-source": "./src/links.ts",
       "types": "./dist/links.d.ts",
@@ -256,6 +261,18 @@
       "types": "./dist/fs/windowsProtectedAcl.d.ts",
       "import": "./dist/fs/windowsProtectedAcl.js",
       "default": "./dist/fs/windowsProtectedAcl.js"
+    },
+    "./fs/writeSecureFileSync": {
+      "happier-source": "./src/fs/writeSecureFileSync.ts",
+      "types": "./dist/fs/writeSecureFileSync.d.ts",
+      "import": "./dist/fs/writeSecureFileSync.js",
+      "default": "./dist/fs/writeSecureFileSync.js"
+    },
+    "./tempDirs": {
+      "happier-source": "./src/tempDirs/index.ts",
+      "types": "./dist/tempDirs/index.d.ts",
+      "import": "./dist/tempDirs/index.js",
+      "default": "./dist/tempDirs/index.js"
     },
     "./componentArtifacts": {
       "happier-source": "./src/componentArtifacts/index.ts",
