@@ -4,6 +4,7 @@ import { RemoteHostRecordV1Schema, type RemoteHostRecordV1 } from './remoteHostS
 import { SharedSavedSecretCreateInputV1Schema, SavedSecretCatalogReferenceCensusV1Schema } from '../account/settings/savedSecretResourceActionsV1.js';
 import { formatSharedSavedSecretRefV1 } from '../account/settings/savedSecretReferenceV1.js';
 import { RelayAccessConfigV1Schema } from '../system/tasks/relayAccessConfigV1.js';
+import { SystemTaskResultSchema } from '../system/tasks/spec.js';
 
 import type { RemoteHostActionIdV1 } from './remoteHostActionIdsV1.js';
 export { REMOTE_HOST_ACTION_IDS_V1, isRemoteHostActionIdV1, type RemoteHostActionIdV1 } from './remoteHostActionIdsV1.js';
@@ -83,6 +84,8 @@ const OpenedResult = lazyZodSchema(() => z.union([Refusal,
 ]));
 const TaskResult = lazyZodSchema(() => z.union([Refusal,
   z.object({ status: z.literal('task_started'), taskId: Id }).strict(),
+  z.object({ status: z.literal('completed'), taskId: Id, result: SystemTaskResultSchema }).strict(),
+  z.object({ status: z.literal('outcome_unknown'), taskId: Id }).strict(),
   z.object({ status: z.literal('connected') }).strict(),
 ]));
 export const REMOTE_HOST_ACTION_OUTPUT_SCHEMAS_V1 = {
@@ -115,8 +118,8 @@ export const REMOTE_HOST_ACTION_OUTPUT_SCHEMAS_V1 = {
     z.object({ status: z.literal('listed'), keys: z.array(TrustedKey) }).strict()])),
   'remote_hosts.trusted_keys.remove': lazyZodSchema(() => z.union([Refusal, z.object({ status: z.literal('removed') }).strict()])),
   'remote_hosts.trusted_keys.clear': lazyZodSchema(() => z.union([Refusal, z.object({ status: z.literal('removed') }).strict()])),
-  'remote_hosts.tunnel.stop': lazyZodSchema(() => z.union([Refusal,
-    z.object({ status: z.literal('task_started'), taskId: Id }).strict(), z.object({ status: z.literal('released') }).strict()])),
+  'remote_hosts.tunnel.stop': lazyZodSchema(() => z.union([TaskResult,
+    z.object({ status: z.literal('released') }).strict()])),
 } as const;
 export type RemoteHostActionInputByIdV1 = {
   readonly [Id in RemoteHostActionIdV1]: z.output<(typeof REMOTE_HOST_ACTION_INPUT_SCHEMAS_V1)[Id]>;
