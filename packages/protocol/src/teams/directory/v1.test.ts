@@ -136,7 +136,7 @@ describe('Team directory V1 contracts', () => {
         memberCount: 3,
         boundAccountCount: 1,
         unboundPeopleCount: 1,
-        mapping: { state: 'bound', bindingId: 'binding_1', mode: 'native_target', teamGroupId: 'team_group_1' },
+        mapping: { state: 'bound', bindingId: 'binding_1', mode: 'native_target', teamGroupId: 'team_group_1', teamGroupName: 'Platform Engineering' },
         lastCompleteObservationAt: '2026-09-06T10:00:00.000Z',
         sourceLabel: 'Primary directory',
       }],

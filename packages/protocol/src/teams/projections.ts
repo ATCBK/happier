@@ -64,21 +64,24 @@ export function resolveTeamAdmissionProjectionV1(): TeamAdmissionProjectionV1 {
  * its own Team-owned strict schema at the media boundary.
  */
 /**
- * The Team Overview summary counts, qualified by the viewer's projected
- * capabilities: the whole object is `null` unless the viewer may read the Team
- * (`viewTeam`), and `waitingInvitations` is `null` unless the viewer may read
- * the invitation list (`manageInvitations`). A count is never disclosed to a
- * viewer the corresponding list would refuse.
+ * The Team summary counts, qualified by the viewer's projected capabilities:
+ * the whole object is `null` without `viewTeam`. Coarse membership totals are
+ * readable by Home administrators without granting roster access. Group counts
+ * are `null` without `viewRoster`, and waiting invitations are `null` without
+ * qualified membership `manageInvitations`.
  *
  * - `members`: every membership (active and suspended), the roster's `all` set.
  * - `suspendedMembers`: memberships currently suspended.
+ *   Active membership is `members - suspendedMembers`, not another count field.
  * - `groups`: Groups that are not archived.
+ * - `archivedGroups`: archived Groups; omitted by older projections.
  * - `waitingInvitations`: invitations that are neither accepted, revoked nor expired.
  */
 export const TeamSummaryCountsV1Schema = lazyZodSchema(() => z.object({
   members: z.number().int().min(0),
   suspendedMembers: z.number().int().min(0),
-  groups: z.number().int().min(0),
+  groups: z.number().int().min(0).nullable(),
+  archivedGroups: z.number().int().min(0).nullable().optional(),
   waitingInvitations: z.number().int().min(0).nullable(),
 }).strict());
 export type TeamSummaryCountsV1 = z.infer<typeof TeamSummaryCountsV1Schema>;
@@ -98,6 +101,11 @@ export const TeamSummaryV1Schema = lazyZodSchema(() => z.object({
   capabilities: TeamCapabilitiesV1Schema,
   admission: TeamAdmissionProjectionV1Schema,
   counts: TeamSummaryCountsV1Schema.nullable(),
+  /** Member-readable presentation only. Omission by an older server is unknown, not absent. */
+  directoryMembership: z.object({
+    providerDisplayName: z.string(),
+    state: z.enum(['syncing', 'healthy', 'needs_attention']),
+  }).strict().nullable().optional(),
 }).strict());
 export type TeamSummaryV1 = z.infer<typeof TeamSummaryV1Schema>;
 

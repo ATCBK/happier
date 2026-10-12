@@ -1,7 +1,9 @@
 import { lazyDefinition, lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod';
-import { TEAM_CREDENTIAL_ACTION_IDS_V1, type TeamCredentialActionIdV1 } from './actionIdsV1.js';
-export { TEAM_CREDENTIAL_ACTION_IDS_V1, type TeamCredentialActionIdV1 } from './actionIdsV1.js';
+import { TEAM_CREDENTIAL_ACTION_IDS_V1, TEAM_CREDENTIAL_HOME_ACTION_IDS_V1,
+  type TeamCredentialActionIdV1, type TeamCredentialHomeActionIdV1 } from './actionIdsV1.js';
+export { TEAM_CREDENTIAL_ACTION_IDS_V1, TEAM_CREDENTIAL_HOME_ACTION_IDS_V1,
+  type TeamCredentialActionIdV1, type TeamCredentialHomeActionIdV1 } from './actionIdsV1.js';
 
 import {
   TeamCredentialResourceAudienceInputV1Schema,
@@ -48,6 +50,8 @@ import {
   TeamCredentialSourceResourceListOutputV1Schema,
 } from './sourceCandidatesV1.js';
 import { TeamCredentialResourceReadinessV1Schema } from './readinessV1.js';
+import { TeamCredentialUsageExportInputV1Schema } from './usageExportV1.js';
+import { UsageFileResultSchema } from '../../usage/usageExport.js';
 
 export const TeamCredentialTestActionInputV1Schema = lazyZodSchema(() => z.object({
   teamId: z.string().min(1).max(256),
@@ -62,9 +66,29 @@ export const TeamCredentialTestActionOutputV1Schema = lazyZodSchema(() => z.obje
 }).strict());
 export type TeamCredentialTestActionOutputV1 = z.infer<typeof TeamCredentialTestActionOutputV1Schema>;
 
+/** A user/Agent observation, never the daemon's recipient or envelope census. */
+export const TeamCredentialPreparationInputV1Schema = lazyZodSchema(() => z.object({
+  teamId: z.string().min(1).max(256),
+  resourceId: z.string().min(1).max(256),
+  view: z.literal('readiness').default('readiness'),
+}).strict());
+export type TeamCredentialPreparationInputV1 = z.infer<typeof TeamCredentialPreparationInputV1Schema>;
+
+export const TeamCredentialPreparationOutputV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
+  z.object({
+    status: z.literal('ready'),
+    reason: z.null(),
+    counts: z.object({ pending: z.literal(0) }).strict(),
+  }).strict(),
+  z.object({
+    status: z.literal('not_ready'),
+    reason: z.literal('preparation_pending'),
+    counts: z.object({ pending: z.number().int().positive() }).strict(),
+  }).strict(),
+]));
+export type TeamCredentialPreparationOutputV1 = z.infer<typeof TeamCredentialPreparationOutputV1Schema>;
+
 export const TeamCredentialActionIdV1Schema = lazyZodSchema(() => z.enum(TEAM_CREDENTIAL_ACTION_IDS_V1));
-export const TEAM_CREDENTIAL_HOME_ACTION_IDS_V1 = TEAM_CREDENTIAL_ACTION_IDS_V1;
-export type TeamCredentialHomeActionIdV1 = typeof TEAM_CREDENTIAL_HOME_ACTION_IDS_V1[number];
 
 export const TEAM_CREDENTIAL_ACTION_PATHS_V1: Readonly<Record<TeamCredentialHomeActionIdV1, string>> = {
   'teams.credentials.list': '/v1/teams/credential-resources/list',
@@ -78,6 +102,7 @@ export const TEAM_CREDENTIAL_ACTION_PATHS_V1: Readonly<Record<TeamCredentialHome
   'teams.credentials.audience.set': '/v1/teams/credential-resources/audience/set',
   'teams.credentials.delete': '/v1/teams/credential-resources/delete',
   'teams.credentials.test': '/v1/teams/credential-resources/test',
+  'teams.credentials.preparation.get': '/v2/teams/:teamId/credential-resources/:resourceId/direct-material',
   'teams.credentials.activity.list': '/v1/teams/credential-resources/activity/list',
   'teams.credentials.limits.list': '/v1/teams/credential-resources/limits/list',
   'teams.credentials.limits.upsert': '/v1/teams/credential-resources/limits/upsert',
@@ -102,11 +127,13 @@ export const TEAM_CREDENTIAL_ACTION_INPUT_SCHEMAS_V1 = lazyDefinition(() => ({
   'teams.credentials.audience.set': TeamCredentialResourceAudienceInputV1Schema,
   'teams.credentials.delete': TeamCredentialResourceDeleteInputV1Schema,
   'teams.credentials.test': TeamCredentialTestActionInputV1Schema,
+  'teams.credentials.preparation.get': TeamCredentialPreparationInputV1Schema,
   'teams.credentials.activity.list': TeamCredentialResourceActivityReadInputV1Schema,
   'teams.credentials.limits.list': TeamCredentialUsageLimitListInputV1Schema,
   'teams.credentials.limits.upsert': TeamCredentialUsageLimitUpsertInputV1Schema,
   'teams.credentials.limits.delete': TeamCredentialUsageLimitDeleteInputV1Schema,
   'teams.credentials.usage.query': TeamCredentialUsageQueryInputV1Schema,
+  'teams.credentials.usage.export': TeamCredentialUsageExportInputV1Schema,
   'teams.credentials.externalKeys.create': TeamCredentialExternalApiKeyCreateInputV1Schema,
   'teams.credentials.externalKeys.authorize': TeamCredentialExternalApiKeyAuthorizeInputV1Schema,
   'teams.credentials.externalKeys.list': TeamCredentialExternalApiKeyListInputV1Schema,
@@ -126,11 +153,13 @@ export const TEAM_CREDENTIAL_ACTION_OUTPUT_SCHEMAS_V1 = lazyDefinition(() => ({
   'teams.credentials.audience.set': TeamCredentialResourceMutationResultV1Schema,
   'teams.credentials.delete': TeamCredentialResourceMutationResultV1Schema,
   'teams.credentials.test': TeamCredentialTestActionOutputV1Schema,
+  'teams.credentials.preparation.get': TeamCredentialPreparationOutputV1Schema,
   'teams.credentials.activity.list': TeamCredentialResourceActivityPageV1Schema,
   'teams.credentials.limits.list': TeamCredentialUsageLimitListOutputV1Schema,
   'teams.credentials.limits.upsert': TeamCredentialUsageLimitUpsertOutputV1Schema,
   'teams.credentials.limits.delete': TeamCredentialResourceMutationResultV1Schema,
   'teams.credentials.usage.query': TeamCredentialUsageQueryResultV1Schema,
+  'teams.credentials.usage.export': UsageFileResultSchema,
   'teams.credentials.externalKeys.create': TeamCredentialExternalApiKeyCreateOutputV1Schema,
   'teams.credentials.externalKeys.authorize': TeamCredentialExternalApiKeyAuthorizeOutputV1Schema,
   'teams.credentials.externalKeys.list': TeamCredentialExternalApiKeyListOutputV1Schema,
@@ -138,7 +167,7 @@ export const TEAM_CREDENTIAL_ACTION_OUTPUT_SCHEMAS_V1 = lazyDefinition(() => ({
   'teams.credentials.externalKeys.revokeAll': TeamCredentialExternalApiKeyRevokeAllOutputV1Schema,
 } as const satisfies Readonly<Record<TeamCredentialActionIdV1, z.ZodTypeAny>>));
 
-export const TEAM_CREDENTIAL_ACTION_METHODS_V1: Readonly<Record<TeamCredentialHomeActionIdV1, 'POST'>> = {
+export const TEAM_CREDENTIAL_ACTION_METHODS_V1: Readonly<Record<TeamCredentialHomeActionIdV1, 'POST' | 'GET'>> = {
   'teams.credentials.list': 'POST',
   'teams.credentials.sources.list': 'POST',
   'teams.credentials.requestPolicySupport.get': 'POST',
@@ -150,6 +179,7 @@ export const TEAM_CREDENTIAL_ACTION_METHODS_V1: Readonly<Record<TeamCredentialHo
   'teams.credentials.audience.set': 'POST',
   'teams.credentials.delete': 'POST',
   'teams.credentials.test': 'POST',
+  'teams.credentials.preparation.get': 'GET',
   'teams.credentials.activity.list': 'POST',
   'teams.credentials.limits.list': 'POST',
   'teams.credentials.limits.upsert': 'POST',

@@ -181,3 +181,17 @@ export const TeamCredentialUsageQueryResultV1Schema = lazyZodSchema(() => z.obje
   limits: z.array(TeamCredentialUsageLimitV1Schema),
 }).strict());
 export type TeamCredentialUsageQueryResultV1 = z.infer<typeof TeamCredentialUsageQueryResultV1Schema>;
+
+/** UI and file exports retain the same ranked identities and latest Home totals across pages. */
+export function mergeTeamCredentialUsagePages(
+  previous: TeamCredentialUsageQueryResultV1,
+  next: TeamCredentialUsageQueryResultV1,
+): TeamCredentialUsageQueryResultV1 {
+  const series = new Map(previous.series.map(entry => [`${entry.bucketStartMs}:${entry.bucketEndMs}`, entry] as const));
+  for (const entry of next.series) series.set(`${entry.bucketStartMs}:${entry.bucketEndMs}`, entry);
+  const breakdown = new Map((previous.breakdown ?? []).map(entry => [entry.key, entry] as const));
+  for (const entry of next.breakdown ?? []) breakdown.set(entry.key, entry);
+  return Object.freeze({ ...next, series: [...series.values()],
+    ...(previous.breakdown !== undefined || next.breakdown !== undefined ? { breakdown: [...breakdown.values()] } : {}),
+  });
+}

@@ -1,5 +1,6 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod';
+import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 import {
   computeCanonicalDomainSeparatedDigest,
@@ -175,6 +176,7 @@ export const TeamCredentialDirectMaterialRouteParamsV1Schema = lazyZodSchema(() 
 }).strict());
 
 export const TeamCredentialDirectMaterialReadQueryV1Schema = lazyZodSchema(() => z.discriminatedUnion('view', [
+  z.object({ view: z.literal('readiness') }).strict(),
   z.object({
     view: z.literal('preparation'),
     sourceMemberKey: SourceVersionSchema,
@@ -245,7 +247,7 @@ export const TeamCredentialDirectMaterialMineResponseV1Schema = lazyZodSchema(()
   z.object({
     status: z.literal('ready'),
     recipientMode: z.enum(['plain', 'e2ee']),
-    stored: TeamCredentialDirectMaterialStoredV1Schema,
+    stored: createStoredReadSchema(TeamCredentialDirectMaterialStoredV1Schema),
     expected: TeamCredentialDirectMaterialExpectedV1Schema,
   }).strict(),
   z.object({
@@ -538,7 +540,7 @@ export function openTeamCredentialDirectMaterialV1(params: Readonly<{
   const opened = openBoxBundle({ bundle, recipientSecretKeyOrSeed: params.recipientSecretKeyOrSeed });
   if (!opened || opened.byteLength > MAX_DIRECT_MATERIAL_PLAINTEXT_BYTES) return null;
   try {
-    const parsed = TeamCredentialDirectMaterialPayloadV1Schema.parse(JSON.parse(new TextDecoder().decode(opened)));
+    const parsed = createStoredReadSchema(TeamCredentialDirectMaterialPayloadV1Schema).parse(JSON.parse(new TextDecoder().decode(opened)));
     return expectedMatches(parsed, params.expected) ? parsed : null;
   } catch {
     return null;
@@ -546,7 +548,7 @@ export function openTeamCredentialDirectMaterialV1(params: Readonly<{
 }
 
 export function parseTeamCredentialDirectMaterialStoredV1(input: unknown): TeamCredentialDirectMaterialStoredV1 {
-  return TeamCredentialDirectMaterialStoredV1Schema.parse(input);
+  return createStoredReadSchema(TeamCredentialDirectMaterialStoredV1Schema).parse(input);
 }
 
 export function materializeTeamCredentialDirectMaterialV1(params: Readonly<{

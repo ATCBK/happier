@@ -1,6 +1,7 @@
 export * from './resourceV1.js';
 export * from './actionsV1.js';
 export * from './usageV1.js';
+export * from './usageExportV1.js';
 export * from './directMaterialV1.js';
 export * from './externalApiKeyV1.js';
 export * from './externalProviderApiV1.js';

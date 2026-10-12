@@ -203,6 +203,12 @@ describe('Team summary projection', () => {
   it('round-trips and rejects undeclared fields', () => {
     expect(TeamSummaryV1Schema.parse(summary)).toEqual(summary);
     expect(TeamSummaryV1Schema.safeParse({ ...summary, memberCount: 12 }).success).toBe(false);
+    const directoryMembership = { providerDisplayName: 'Okta via WorkOS', state: 'healthy' };
+    expect(TeamSummaryV1Schema.parse({ ...summary, directoryMembership }).directoryMembership).toEqual(directoryMembership);
+    expect(TeamSummaryV1Schema.parse({ ...summary, directoryMembership: null }).directoryMembership).toBeNull();
+    expect(TeamSummaryV1Schema.safeParse({
+      ...summary, directoryMembership: { ...directoryMembership, sourceId: 'private-source-id' },
+    }).success).toBe(false);
   });
 
   it('carries viewer-qualified Overview counts as a closed object', () => {

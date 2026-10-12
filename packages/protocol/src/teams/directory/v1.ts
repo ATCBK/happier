@@ -132,6 +132,8 @@ const TeamDirectoryGroupMappingV1Schema = lazyZodSchema(() => z.discriminatedUni
     bindingId: DirectoryIdSchema,
     mode: z.enum(['directory_created', 'native_target']),
     teamGroupId: DirectoryIdSchema,
+    /** Display-only, projected by the authorized reader. Null explicitly means not visible. */
+    teamGroupName: z.string().nullable(),
   }).strict(),
 ]));
 

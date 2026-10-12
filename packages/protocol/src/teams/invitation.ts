@@ -4,6 +4,7 @@ import { hmac } from '@noble/hashes/hmac';
 import { sha256 } from '@noble/hashes/sha2';
 
 import { ImageRefSchema } from '../common/imageRef.js';
+import { AccountDisplayProfileV1Schema } from '../account/accountDisplayProfileV1.js';
 import { decodeBase64, encodeBase64 } from '../crypto/base64.js';
 import {
   SessionHistoryAccessSchema,
@@ -120,6 +121,10 @@ export const TeamInvitationRowV1Schema = lazyZodSchema(() => z.object({
   createdAt: z.number().int(),
   createdByAccountId: z.string().nullable(),
   acceptedByAccountId: z.string().nullable(),
+  /** Terminal instant; omission by an older projection is unknown, never creation time. */
+  finishedAt: z.number().int().nullable().optional(),
+  /** Neutral display facts for the terminal actor, when the stored provenance resolves. */
+  finishedByAccount: AccountDisplayProfileV1Schema.nullable().optional(),
   lastEmailDelivery: TeamInvitationEmailDeliveryV1Schema.nullable(),
 }).strict());
 export type TeamInvitationRowV1 = z.infer<typeof TeamInvitationRowV1Schema>;

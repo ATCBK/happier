@@ -26,7 +26,7 @@ import {
   teamErrorHttpStatusV1,
 } from './index.js';
 
-const PROFILE = { firstName: 'Alice', lastName: 'Martin', username: 'alice', avatarUrl: null };
+const PROFILE = { name: 'Alice Martin', firstName: 'Alice Martin', lastName: null, username: 'alice', avatarUrl: null };
 
 const MEMBER = {
   v: 1 as const,

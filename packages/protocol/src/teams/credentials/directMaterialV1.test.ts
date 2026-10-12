@@ -1,5 +1,7 @@
 import tweetnacl from 'tweetnacl';
 import { describe, expect, it } from 'vitest';
+import { encodeBase64 } from '../../crypto/base64.js';
+import { sealBoxBundle } from '../../crypto/boxBundle.js';
 
 import {
   matchesTeamCredentialSourceVersionBasisV1,
@@ -54,6 +56,22 @@ function payload(): TeamCredentialDirectMaterialPayloadV1 {
 }
 
 describe('Team credential direct material v1', () => {
+  it('projects retired stored fields in plain and encrypted material without weakening recipient binding', () => {
+    const original = payload();
+    const retained = { ...original, retired: true, sourceMember: { ...original.sourceMember, retired: true } };
+    const expected = { homeServerIdentityId: original.homeServerIdentityId, teamId: original.teamId,
+      resourceId: original.resourceId, resourceRevision: original.resourceRevision, recipientAccountId: original.recipientAccountId,
+      sourceVersion: original.sourceVersion, sourceMemberKey: computeTeamCredentialSourceMemberKeyV1(original.sourceMember) };
+    expect(materializeTeamCredentialDirectMaterialV1({ stored: { t: 'plain', v: retained, retired: true },
+      recipientMode: 'plain', expected })).toEqual(original);
+    const secret = new Uint8Array(32).fill(7);
+    const envelope = encodeBase64(sealBoxBundle({ plaintext: new TextEncoder().encode(JSON.stringify(retained)),
+      recipientPublicKey: tweetnacl.box.keyPair.fromSecretKey(secret).publicKey, randomBytes: randomBytesFactory() }), 'base64');
+    expect(openTeamCredentialDirectMaterialV1({ envelope, recipientSecretKeyOrSeed: secret, expected })).toEqual(original);
+    expect(openTeamCredentialDirectMaterialV1({ envelope, recipientSecretKeyOrSeed: secret,
+      expected: { ...expected, recipientAccountId: 'another-account' } })).toBeNull();
+    expect(() => createTeamCredentialDirectMaterialStoredV1({ payload: retained, recipientMode: 'plain' })).toThrow();
+  });
   it('versions private service configuration for both accounts and Pool members without changing the Home basis', () => {
     const source = {
       sourceAccountId: 'source-account-1',
@@ -202,11 +220,9 @@ describe('Team credential direct material v1', () => {
     expect(openTeamCredentialDirectMaterialV1({ envelope, recipientSecretKeyOrSeed: secret })).toBeNull();
   });
 
-  it('keeps connected-account configuration a strict, fully resolved secret snapshot', () => {
+  it('projects retired configuration fields on read while keeping fully resolved material writes strict', () => {
     const candidate = payload();
-    expect(() => parseTeamCredentialDirectMaterialStoredV1({
-      t: 'plain',
-      v: {
+    const retained = {
         ...candidate,
         material: {
           ...candidate.material,
@@ -216,8 +232,13 @@ describe('Team credential direct material v1', () => {
             secretRefs: { clientSecret: 'saved-secret-id' },
           },
         },
-      },
-    })).toThrow();
+      };
+    const stored = parseTeamCredentialDirectMaterialStoredV1({ t: 'plain', v: retained });
+    expect(stored).not.toHaveProperty('v.material.configuration.secretRefs');
+    expect(stored).toMatchObject({ v: { material: { configuration: {
+      values: { region: 'us-east' }, secretValues: { clientSecret: 'resolved-secret' },
+    } } } });
+    expect(() => createTeamCredentialDirectMaterialStoredV1({ payload: retained, recipientMode: 'plain' })).toThrow();
   });
 
   it('derives source versions from every source-kind currentness fact', () => {
