@@ -53,6 +53,7 @@ export {
 } from './machineStoredContent.js';
 
 export * from './machineFinitePolicyV1.js';
+export * from './machineReachabilityV1.js';
 export * from './machineContentKeyTransitionV1.js';
 
 export {
