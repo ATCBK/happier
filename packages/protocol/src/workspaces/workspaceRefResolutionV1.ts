@@ -22,14 +22,32 @@ export function resolveWorkspacePathBasenameV1(path: string): string | null {
 }
 
 /** Comparable target-platform spelling only; never expands a remote home on this machine. */
-export function normalizeWorkspaceRootPathV1(value: unknown): string | null {
+export function normalizeWorkspaceRootPathV1(value: unknown, platform?: 'win32' | 'posix' | null): string | null {
   if (typeof value !== 'string' || !value.trim()) return null;
   const path = value.trim().replace(/\\/g, '/');
   const device = /^\/\/\?\/unc\//i.test(path) ? `//${path.slice(8)}` : path.replace(/^\/\/\?\//, '');
   const unc = device.startsWith('//');
   const collapsed = unc ? `//${device.slice(2).replace(/\/{2,}/g, '/')}` : device.replace(/\/{2,}/g, '/');
   const trimmed = collapsed.replace(/\/+$/, '') || collapsed;
-  return /^[a-z]:\//i.test(collapsed) || unc ? trimmed.toLowerCase() : trimmed;
+  const caseInsensitive = platform === 'win32' || (platform == null && (/^[a-z]:\//i.test(collapsed) || unc));
+  return caseInsensitive ? trimmed.toLowerCase() : trimmed;
+}
+
+/** Absolute-root admission shares normalization, including drive roots and device prefixes. */
+export function isAbsoluteWorkspaceRootPathV1(value: unknown): boolean {
+  const normalized = normalizeWorkspaceRootPathV1(value);
+  if (normalized === null || typeof value !== 'string') return false;
+  return normalized.startsWith('/') || /^[a-z]:\//i.test(normalized)
+    || /^[a-z]:$/i.test(normalized) && /[\\/]$/.test(value.trim());
+}
+
+/** Comparison only: roots and display values retain their original spelling. */
+export function isWorkspacePathWithinRootV1(directory: string, root: string, platform?: 'win32' | 'posix' | null): boolean {
+  const normalizedDirectory = normalizeWorkspaceRootPathV1(directory, platform);
+  const normalizedRoot = normalizeWorkspaceRootPathV1(root, platform);
+  if (!normalizedDirectory || !normalizedRoot) return false;
+  return normalizedDirectory === normalizedRoot
+    || normalizedDirectory.startsWith(normalizedRoot.endsWith('/') ? normalizedRoot : `${normalizedRoot}/`);
 }
 
 /** One exact checkout decision. An unqualified id preserves all Homes as candidates. */
@@ -42,7 +60,7 @@ export function resolveWorkspaceRefV1<T extends WorkspaceRefV1>(
   const id = 'workspaceId' in target ? target.workspaceId.trim() : 'id' in target ? target.id.trim() : null;
   const serverId = target.serverId === undefined ? null : server(target.serverId);
   const hasRoot = 'rootPath' in target;
-  const normalizeRoot = context.normalizeRootPath ?? normalizeWorkspaceRootPathV1;
+  const normalizeRoot = context.normalizeRootPath ?? ((path: string) => normalizeWorkspaceRootPathV1(path));
   const rootPath = hasRoot ? normalizeRoot(target.rootPath) : null;
   const machineId = hasRoot ? target.machineId.trim() : null;
   if ((id !== null && !id) || (target.serverId !== undefined && !serverId)

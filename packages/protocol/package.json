@@ -5754,6 +5754,18 @@
       "types": "./dist/mcp/servers/resolveManagedSessionMcpSelectionV1.d.ts",
       "default": "./dist/mcp/servers/resolveManagedSessionMcpSelectionV1.js"
     },
+    "./reach/reachPlaceV1": {
+      "happier-source": "./src/reach/reachPlaceV1.ts", "types": "./dist/reach/reachPlaceV1.d.ts", "default": "./dist/reach/reachPlaceV1.js"
+    },
+    "./reach/reachRuleV1": {
+      "happier-source": "./src/reach/reachRuleV1.ts", "types": "./dist/reach/reachRuleV1.d.ts", "default": "./dist/reach/reachRuleV1.js"
+    },
+    "./reach/resolveReachV1": {
+      "happier-source": "./src/reach/resolveReachV1.ts", "types": "./dist/reach/resolveReachV1.d.ts", "default": "./dist/reach/resolveReachV1.js"
+    },
+    "./reach/projectReachV1": {
+      "happier-source": "./src/reach/projectReachV1.ts", "types": "./dist/reach/projectReachV1.d.ts", "default": "./dist/reach/projectReachV1.js"
+    },
     "./activity/agentRequestNotificationContent": {
       "happier-source": "./src/activity/agentRequestNotificationContent.ts",
       "types": "./dist/activity/agentRequestNotificationContent.d.ts",
