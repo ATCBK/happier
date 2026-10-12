@@ -159,7 +159,7 @@ export const TIPTAP_WEBVIEW_CSS = ${JSON.stringify(css)};
     return { wrote, outFile, bundleBytes: Buffer.byteLength(js, 'utf8'), cssBytes: Buffer.byteLength(css, 'utf8') };
 }
 
-if (import.meta.url === url.pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === url.pathToFileURL(process.argv[1]).href) {
     const toolsDir = path.dirname(fs.realpathSync(url.fileURLToPath(import.meta.url)));
     const expoAppDir = path.resolve(toolsDir, '..', '..');
     const repoRootDir = findRepoRoot(expoAppDir);

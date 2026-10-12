@@ -23,6 +23,7 @@ test('UI postinstall builds its real password worker before Protocol dist exists
         // Execute current producer bytes against an actual source-only checkout
         // boundary, without moving any shared workspace dist or dependencies.
         await cp(join(uiDir, 'tools/password/buildPasswordKdfWorker.mjs'), join(fixtureUi, 'tools/password/buildPasswordKdfWorker.mjs'));
+        await cp(join(uiDir, 'tools/sourceAsset.mjs'), join(fixtureUi, 'tools/sourceAsset.mjs'));
         await cp(join(uiDir, 'sources/auth/password/passwordKdf.worker.ts'), join(fixtureUi, 'sources/auth/password/passwordKdf.worker.ts'));
         const protocolDir = join(directory, 'packages/protocol');
         await mkdir(protocolDir, { recursive: true });
@@ -56,6 +57,12 @@ test('UI postinstall builds its real password worker before Protocol dist exists
         } });
         assert.equal(replies[0].ok, true);
         assert.equal(replies[0].key.byteLength, 32);
+        const lastGreen = await readFile(outputFile, 'utf8');
+        await writeFile(join(protocolDir, 'src/auth/accountPasswordCredential.ts'), 'export const broken = ;\n');
+        const retained = await producer.buildPasswordKdfWorker({ retainLastGreen: true });
+        assert.equal(retained.retained, true, 'source compilation failure must retain the independent last-green worker');
+        assert.equal(await readFile(outputFile, 'utf8'), lastGreen);
+        await assert.rejects(producer.buildPasswordKdfWorker(), 'strict source artifact preparation must report the broken source');
     } finally {
         await rm(directory, { recursive: true, force: true });
     }
