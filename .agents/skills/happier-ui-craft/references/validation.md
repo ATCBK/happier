@@ -318,17 +318,20 @@ Labs are good because one designer composes a whole page in one pass, at one sca
 
 ## A live render path that shows source edits
 
-Source-runtime QA stacks (`--runtime=source`) serve a **frozen web export** built at start. Their
-UI does not change when you edit source, and a restart takes many minutes. Lanes there judged UI
-from code or from an older build. Before a UI lane starts, give it a path where a browser reload
-shows current source:
+Source-runtime QA stacks (`--runtime=source`) borrow the dev stack's Expo by default; a browser
+reload shows current UI source. If dev Expo is down, park UI/QA-UI with `Expo READY` as the resume
+trigger; server/daemon starts and reloads continue normally. Stack info shows UI `waiting for dev Expo`
+and detects recovery without a consumer restart. Never start a competing Metro or export as fallback.
 
 - Borrow the checkout's running Metro (the dev stack's Expo), pointed at the QA stack's own server:
   `http://<qa-stack-host>:<producer Expo port>/?server=http://<qa-stack-host>:<qa server port>&happier_hmr=0`.
-  This is the stack's own `--ui=borrowed` mode (`apps/stack/scripts/runtime/shared/borrowed_expo.mjs`).
+  This is the stack's default borrowed mode (`apps/stack/scripts/runtime/shared/borrowed_expo.mjs`).
   It only consumes the producer's bundle and never starts, stops or reloads the producer.
+  Server and Account/stack URLs remain runtime parameters, outside the bundle URL/identity.
 - Record which UI each capture came from (frozen export id, or borrowed Metro plus the time). A pair
   taken from the frozen export verifies the bytes from its build time, not your edit.
+  Use `--ui=export` only for explicit release/boundary acceptance; unchanged inputs/options reuse
+  the completed export through the existing publication owner.
 
 ## Interaction and motion are part of fidelity
 

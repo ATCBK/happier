@@ -193,8 +193,11 @@ hstack dev-targets qa setup nl1
 ./apps/stack/bin/hstack-exec --target=nl1 -- true
 ```
 
-`--toolchain` reuses the Ubuntu worker provisioning profile: NodeSource Node.js 24, Corepack,
-pinned Yarn, Go (used by CLI test setup), and ripgrep.
+In the 0.3 development checkout, `--toolchain` reuses the Ubuntu worker provisioning profile:
+NodeSource Node.js 24, Corepack, pinned Yarn, Go (used by CLI test setup), ripgrep,
+and `build-essential` plus `pkg-config` for native Rust/Iroh builds. Preparation verifies
+the C/C++ compilers, make, archiver, and package discovery alongside the other tools,
+then prepares the package-pinned Rust compiler under the selected SSH account.
 It checks the installed toolchain first. Use an Ubuntu host supported by that profile rather than
 assuming every Linux distribution has the same package setup.
 
@@ -627,7 +630,9 @@ select the server, but cannot override that Machine pin.
 Defaults are resolved on the next start; changing placement does not move running services.
 In 0.3 development, `stack stop` can finish local cleanup when a remote target's SSH
 connection is unreachable. Its retirement remains recorded as `retirement-pending`
-in the stack's runtime state; remote Sessions are not confirmed stopped. The next
+in the stack's runtime state; remote Sessions are not confirmed stopped.
+`stack info --json` remains degraded with `stop_cleanup_incomplete` until native
+retirement is resolved, even after local completion clears `runtime.stopRequest`. The next
 start on that host retires its previous runtime before recreating forwards. You can
 stop locally, change the daemon pin to a healthy host, and start there while the
 old host's retirement remains owed. This selects a different Machine; it does not
@@ -847,13 +852,43 @@ Run `dev-targets qa setup <target> --stack=<qa>` for idempotent QA tools, scratc
 preparation. Run `dev-targets browser start <lane-session> --stack=<qa> --url=<qa-ui-url>` in a retained foreground
 handle to start Chromium on the QA pool host with the most actually available memory after live
 reservations, without initializing or changing daemon placement. It uses
-`HAPPIER_STACK_QA_DAEMON_TARGETS`, defaulting to the configured members of nl1, nl2, linux3, linux2,
+`HAPPIER_STACK_QA_BROWSER_TARGETS` when nonempty, otherwise `HAPPIER_STACK_QA_DAEMON_TARGETS`,
+defaulting to the configured members of nl1, nl2, linux3, linux2,
 linux1, in that order. Explicit candidate lists remain exact and reject unknown targets; an empty default pool
 fails without a controller-local browser. Windows1 remains excluded while outer Windows C: disk
 health is unverified. Browser selection is only for that foreground
 lifetime and writes no persistent pin. Use the returned local CDP endpoint with agent-browser
 or Playwright on the controller, opening the returned browser-facing `url` with lane-owned ports.
 Dedicated QA-host Chromium uses `--no-sandbox` under the approved policy for Happier's own QA app.
+In current 0.3 development, request a headed GPU browser on a specific configured POSIX target
+with an active graphical login/display and hardware GPU:
+
+```bash
+node ./apps/stack/scripts/repo_local.mjs dev-targets browser start design-gpu --stack=agent-qa-example --url=<qa-ui-url> --target=mac-host --gpu
+```
+
+`--target` selects only that host for the browser lifetime, without changing the Machine pin or
+falling back to another host. `--gpu` requires `--target`, opens both Chromium launches headed,
+and disables software rasterization. It retains the same reverse SOCKS route, temporary profile,
+CDP forward and Ctrl+C cleanup. A target without an active GPU display is not suitable for this recipe.
+Before accepting blur or motion evidence, attach to the returned CDP endpoint and inspect
+`SystemInfo.getInfo` on the browser session: confirm the hardware device and enabled GPU compositing,
+not SwiftShader. A headed window alone is not proof of hardware acceleration.
+
+For short animations, use CDP
+[`Page.startScreencast`](https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-startScreencast)
+with `everyNthFrame: 1` and acknowledge each `Page.screencastFrame` immediately through
+`Page.screencastFrameAck`, before writing the image. Keep the page foregrounded and record frame
+timestamps; CDP transport does not guarantee 60 fps. If capture gaps hide the transition, use
+Chrome's Performance trace with screenshots and report the measured cadence rather than inferring
+motion from an open/closed pair. Keep raw frames and traces outside the checkout; retain only selected
+final screenshots or frame strips in the approved evidence directory.
+
+In current 0.3 development, add `--fake-audio=packages/tests/fixtures/voice/phrases/short-command.24k.wav`
+to supply the checked-in “Open the project settings” speech through a fake microphone; the path is read
+on the controller and its bytes are copied into the remote worker's temporary profile, which is removed
+with the browser. Bare `--fake-audio` supplies Chromium's synthetic device. Both forms retain the normal
+permission prompt; allow microphone access through the browser's existing permission controls.
 Existing supervisor forwards carry the consumer server and borrowed
 Expo; interrupt the exact browser handle to remove its browser/profile and forwards after QA.
 In current 0.3 development source, controller loss also closes the remote browser through its
@@ -1065,7 +1100,11 @@ Admission diagnostics expose both reservations; there is no separate service-hos
 Fitting small jobs can backfill a blocked larger queue head. Backfill stops after consuming that
 head's existing class envelope or when one candidate envelope would bridge its capacity gap.
 Only successful starts consume this allowance, not retries or readiness probes. This protects the
-older job from starvation without adding a timeout.
+older job from starvation without adding a timeout. Equal-or-larger queued classes cannot backfill;
+the owner rejects them before resource observation, avoiding serialized process scans that cannot
+admit those requests.
+Contended capacity-lock acquisitions wait in the existing kernel lock; `--no-wait` stays nonblocking.
+The existing retry cadence applies after an actual queue or resource-pressure decision.
 
 Explicit `--local --allow-local-compilation` changes compilation placement and uses the same Linux admission owner: heavyweight work
 waits for local memory to recover, while light commands run immediately. A class that cannot fit

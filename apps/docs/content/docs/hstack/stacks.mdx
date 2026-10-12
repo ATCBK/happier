@@ -291,7 +291,7 @@ node ./apps/stack/scripts/repo_local.mjs stack new agent-qa-17 --qa --repo=/abso
 # Set the policy explicitly when adopting a retained QA stack.
 node ./apps/stack/scripts/repo_local.mjs stack env agent-qa-17 set HAPPIER_STACK_RUNTIME_MODE=source-snapshot
 
-# Default to the repository stack's existing Expo/Metro process.
+# Configure the repository stack's existing Expo/Metro provider.
 node ./apps/stack/scripts/repo_local.mjs stack env agent-qa-17 set HAPPIER_STACK_EXPO_SOURCE_STACK=<repository-stack>
 
 # Verify that a human-approved source actually has reusable auth before copying.
@@ -301,7 +301,7 @@ node ./apps/stack/scripts/repo_local.mjs stack auth <approved-auth-source> -- st
 node ./apps/stack/scripts/repo_local.mjs stack auth agent-qa-17 -- copy-from <approved-auth-source>
 
 # Bundle and start on the actual runtime hosts; borrow the existing Expo endpoint.
-node ./apps/stack/scripts/repo_local.mjs tui stack start agent-qa-17 --runtime=source --mobile
+node ./apps/stack/scripts/repo_local.mjs tui stack start agent-qa-17 --runtime=source --ui=borrowed --mobile
 ```
 
 `stack new` normally inherits auth from `main` for convenience. `--no-copy-auth` is mandatory for a controlled stack: it keeps credential provenance under the later human approval rather than silently copying a machine identity. `--non-interactive` is part of that controlled command contract, so a terminal does not reopen the ordinary stack-creation wizard. Continue only when the source status reports `auth.ok: true`; otherwise stop and obtain human direction to reauthenticate that source or select another one. Auth seeding never copies or shares a source database; a SQLite source is read without reconciling its migration ledger.
@@ -318,7 +318,7 @@ node ./apps/stack/scripts/repo_local.mjs stack auth agent-qa-17 -- copy-from <ap
 
 Source bundles resolve first-party source exports without workspace dist preparation or typecheck. Each runtime host reuses its own installed dependencies and native support. Configure QA hosts on the [dev-targets page](/hstack/dev-targets#choose-where-work-runs): retained local data stays local and a remote server stays on its authoritative data host. Moving local data requires the explicit `dev-targets move-server` handoff, not a placement write alone.
 
-To load current server or daemon source, restart only the remembered QA stack:
+To refresh the server or the complete source stack, restart only the remembered QA stack:
 
 ```bash
 node ./apps/stack/scripts/repo_local.mjs stack start agent-qa-17 --background --runtime=source --restart --no-browser
@@ -327,7 +327,20 @@ node ./apps/stack/scripts/repo_local.mjs stack info agent-qa-17 --json
 
 Require each requested role's nonempty `runtime.sourceRuntimeIdentities.<role>.selected` to equal `.loaded`, and verify that role is actually running on its configured host. Moving source edits do not change the already emitted code. `stack happier agent-qa-17 --runtime=source -- <args>` uses the retained source CLI bundle rather than requesting publication.
 
-Source QA also exports the current web source once on the server host and serves those frozen files through the QA server. Plugin UI projection is prepared privately, without a native build or shared generated-output writes. Expo's transform cache stays under the stack's stable source state, separate from each fresh export; cached transforms do not make the served files live. No Metro process or hot reload remains. An explicit source restart rebuilds this UI as well as the server and daemon.
+During source-reload preparation, `stack info` reports `runtime.sourceReload` and the health issue `runtime_preparing`. After selection, `runtime_identity_pending` remains until the replacement identity is loaded. A healthy response from the incumbent alone cannot confirm the replacement. Lost remote daemon transport reports `daemon_unknown`, retains the recorded loaded identity, and exposes the target's lifecycle phase until readiness or retirement is confirmed.
+
+For daemon-only changes in 0.3 development, use the narrower reload:
+
+```bash
+node ./apps/stack/scripts/repo_local.mjs stack daemon agent-qa-17 restart --runtime=source --json
+node ./apps/stack/scripts/repo_local.mjs stack info agent-qa-17 --json
+```
+
+It synchronizes and bundles on the observed daemon host, then requests authenticated `/restart` with an empty body to retain Session runners. Server and UI stay running. Require the daemon's selected source identity to equal its loaded identity and actual readiness. The incumbent must already include the source-selection resolver; older loaded daemons need one owner-controlled initial load before they can consume the selected bundle through `/restart`.
+
+Source QA also serves a completed web export on the server host. In 0.3 development, matching captured inputs and build options reuse the same read-only export across stacks; changed inputs or options construct a replacement. Each stack owns its serving path, so reloading one stack does not modify another stack's export. Plugin UI projection is prepared privately, without a native build or shared generated-output writes. Expo's transform cache stays separate from each fresh input view and preserves its project-root partitioning; cached transforms do not make the served files live. No Metro process or hot reload remains. An explicit source restart adopts matching completed output or rebuilds changed components. Explicit executable app-local configuration stays private rather than sharing an export whose input closure was not captured.
+
+In 0.3 development source exports, developer routes are enabled by default, including the labelled changes specimens. Set the QA stack's `EXPO_PUBLIC_DEBUG=0` before its next source restart to disable them. Ordinary built web and Tauri exports always disable developer routes.
 
 For explicitly selected built UI, use the same checkout-local launcher:
 
@@ -366,6 +379,14 @@ The server and daemon bundle their respective host mirrors; controller CLI login
 
 For browser QA, provision eligible hosts with `dev-targets qa setup <target> --stack=<qa>`, then retain the foreground `dev-targets browser start <lane-session> --stack=<qa> --url=<qa-ui-url>` command. Chromium runs on the selected QA pool host; use its returned loopback CDP endpoint from controller-local agent-browser or Playwright and open the returned browser-facing `url`. The existing origin-preserving reverse SOCKS route keeps the QA Home and borrowed Expo addresses reachable after Account restore. Do not rewrite the Home origin or add lane-specific proxy flags. Interrupt that exact handle after QA and verify cleanup before stopping the stack. An unusable pool or unavailable selected host fails closed without a controller-local browser. The paired daemon materializes connected-service credentials; never copy user Agent credentials during provisioning.
 
+In 0.3 development, set `HAPPIER_STACK_QA_BROWSER_TARGETS` to choose a browser pool independently of the fixed daemon host:
+
+```bash
+node ./apps/stack/scripts/repo_local.mjs stack env agent-qa-shared set HAPPIER_STACK_QA_BROWSER_TARGETS=linux3,linux2
+```
+
+The next browser launch compares current unreserved memory among those configured hosts without changing daemon placement. An absent or empty setting retains the existing daemon-pool/default selection.
+
 Dedicated QA-host browsers launch with `--no-sandbox` under the approved policy for Happier's own QA app. Keep browser lifetime and cleanup with the foreground owner handle; controller automation attaches to the returned CDP endpoint.
 
 If the development schema advances beyond loaded QA code, known missing tables or columns report `shared_qa_schema_mismatch` with a reload instruction. Explicitly restart only the QA stack to rebundle current source. QA never migrates the shared database. Stop the remembered QA stack when it is idle:
@@ -374,9 +395,9 @@ If the development schema advances beyond loaded QA code, known missing tables o
 node ./apps/stack/scripts/repo_local.mjs stack stop agent-qa-shared --json
 ```
 
-### Explicit browser QA with the repository Expo server
+### Default browser QA with the repository Expo server
 
-Source QA defaults to its own frozen web export. To explicitly borrow moving Expo/Metro while keeping its source-bundled server and daemon:
+Source QA borrows dev Expo/Metro by default while keeping its source-bundled server and daemon. New QA stacks record their checkout's repository producer; configure it explicitly when adopting a retained stack:
 
 ```bash
 node ./apps/stack/scripts/repo_local.mjs stack list
@@ -386,7 +407,7 @@ node ./apps/stack/scripts/repo_local.mjs tui stack start agent-qa-17 --runtime=s
 
 The TUI reports Expo as borrowed, displays the producer's Expo logs in the Expo pane, and routes the browser or development client to the consumer stack's server. Even with `--mobile`, the consumer does not start, own, restart, or stop Expo; the producer is its sole lifecycle owner. Browser URLs use the consumer's named `.localhost` origin, include its `server` URL, and set `happier_hmr=0`; the tab stays on its currently loaded UI until you reload it manually. On reload it receives the producer's latest development bundle, so this is intentionally controlled-live rather than immutable.
 
-The producer reference alone does not opt source QA into moving UI. Explicitly restart without `--ui=borrowed` to return to its one-shot source export; use `--no-ui` for headless workers. `happier_hmr=0` is web-only; an installed native development client can use the producer's advertised/tunnelled Metro URL, but its native Fast Refresh behavior is unchanged.
+Borrowers share the producer's bundle per platform: server and Account/stack URLs are runtime parameters, outside its bundle identity. If Expo is down, server/daemon starts and reloads continue normally; park only UI/QA-UI until `Expo READY`. Stack info shows UI `waiting for dev Expo` and detects recovery without a consumer restart. Never start Metro or a fresh export as fallback. Use `--ui=export` only for explicit release/boundary acceptance; unchanged captured inputs/options reuse the completed validated export through the same publication owner, with independent serving paths. Use `--no-ui` for headless workers. `happier_hmr=0` is web-only; an installed native development client can use the producer's advertised/tunnelled Metro URL, but its native Fast Refresh behavior is unchanged.
 
 Doctor:
 

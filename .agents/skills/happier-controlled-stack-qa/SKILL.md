@@ -130,9 +130,9 @@ The shared preset retains the server's data host and the daemon's fixed Machine.
 
 ## Select the UI provider
 
-Source QA defaults to a one-shot source web export on its server host, served by that server. The canonical plugin UI projection is prepared privately from source, without native publication or shared generated-output writes. The existing Expo cache/state owner uses the stable Stack source root, while each export gets a fresh private output; cache reuse never mutates a previous frozen web output. There is no resident Metro or hot reload; an explicit Stack restart rebuilds the export. Use the reported QA UI URL, not the producer's Expo URL.
+Source QA defaults to borrowed dev Expo. New QA stacks record their checkout's repository producer; retained stacks can set it below. Use the reported consumer UI URL: its `server` and Account/stack URLs are runtime parameters, never bundle inputs, so borrowers share the producer's bundle per platform.
 
-Borrow moving Expo only when explicitly requested with `--ui=borrowed`. A configured producer reference alone does not select it. `--no-ui` requests a headless source worker.
+`--ui=export` opts into a finite frozen web export only for explicit release/boundary acceptance. Unchanged captured inputs/options reuse the validated export through the existing source-bundle publication owner; each stack retains its own serving path. Executable app-local configuration remains private because its inputs are not captured. `--no-ui` requests a headless source worker.
 
 The producer stack is human-owned infrastructure. Unless the human explicitly asks you to operate that producer, never run `dev`, `start`, `stop`, or `restart` against it. If its required server, daemon, or Expo endpoint is unavailable, report the producer prerequisite and continue only the consumer work that remains valid; do not recover the producer by taking over its lifecycle.
 
@@ -144,7 +144,7 @@ node ./apps/stack/scripts/repo_local.mjs stack info <producer-stack> --json
 node ./apps/stack/scripts/repo_local.mjs stack env <qa-stack> set HAPPIER_STACK_EXPO_SOURCE_STACK=<producer-stack>
 ```
 
-If an explicitly borrowed producer is unreachable or has no Expo endpoint, report that prerequisite; do not silently start a competing local Expo or change UI modes. The source export default does not depend on that producer.
+If dev Expo is unreachable or has no endpoint, start/reload the server and daemon normally; stack info shows UI `waiting for dev Expo`. Park only UI/QA-UI work until `Expo READY`. The UI becomes usable when Expo returns, without a stack restart. Never start a competing Metro or a fresh export as fallback; `--no-ui` remains optional for headless workers.
 
 ## Start direct source QA
 
@@ -154,7 +154,7 @@ The `start` process remains the stack's long-lived lifecycle owner. It synchroni
 node ./apps/stack/scripts/repo_local.mjs stack start <qa-stack> --background --runtime=source --no-browser
 ```
 
-Use `node ./apps/stack/scripts/repo_local.mjs tui stack start <qa-stack> --runtime=source` for an interactive TUI, adding `--ui=borrowed --mobile` only for explicitly borrowed Expo. Do not stop or restart a human-owned TUI. A still-running foreground start is expected; it is not evidence of readiness or a hang.
+Use `node ./apps/stack/scripts/repo_local.mjs tui stack start <qa-stack> --runtime=source` for an interactive TUI, adding `--mobile` for native dev clients. Do not stop or restart a human-owned TUI. A still-running foreground start is expected; it is not evidence of readiness or a hang.
 
 Before relying on QA results, inspect:
 
@@ -192,7 +192,7 @@ When the human asks to test an existing built runtime, use `stack runtime <qa-st
 
 ## Operate the UI mode
 
-### Explicit option: controlled-live Expo
+### Default: controlled-live Expo
 
 With the producer reference already configured, use the detached source start above. For an interactive TUI, use:
 
@@ -206,14 +206,16 @@ For browser QA, use the generated consumer-origin URL with its consumer `server`
 
 Installed native development clients may use the advertised or tunnelled producer Metro endpoint, but `happier_hmr=0` does not disable native Fast Refresh.
 
-If borrowed Expo is degraded, diagnose the producer and consumer. Do not create a competing local Expo. Return to the source export default only through an explicit restart without `--ui=borrowed`, or report the blocked UI prerequisite.
+If borrowed Expo is degraded, park only UI/QA-UI until `Expo READY`; server/daemon starts and reloads continue normally. Do not create a competing Metro or export as fallback.
 
 Server and daemon run from retained source bundles (or explicitly selected built output) and never hot-reload. Borrowed UI has a weaker, moving-source boundary:
 1. Open the consumer URL with `happier_hmr=0` once.
 2. Keep that tab for the whole QA round, and warm the routes you will exercise: lazy chunks come from the producer's Metro, so a route opened for the first time while producer Expo restarts can fail.
 3. Reload deliberately only when you want the producer's newer UI, then record it.
 
-Source QA's default server, daemon and one-shot web export remain unchanged until explicit restart. Borrowed Expo is explicitly moving UI, including lazy chunks; HMR off is not proof of frozen UI. The source export path prepares its own canonical plugin UI projection and does not build or select a native runtime snapshot.
+Source QA's server and daemon remain unchanged until explicit restart. Borrowed Expo is moving UI, including lazy chunks; HMR off is not proof of frozen UI.
+
+For explicit release/boundary acceptance, use the same source start with `--ui=export`; matching inputs/options reuse its completed export. This path prepares the canonical plugin UI projection without building or selecting a native runtime snapshot.
 
 ### Explicit strict snapshot UI
 
