@@ -116,6 +116,7 @@ function redactQuotedCredentialAssignments(input: string): string {
     }
 
     let separator = keyEnd;
+    if ((previous === '"' || previous === "'") && input[separator] === previous) separator += 1;
     while (separator < input.length && isSpacing(input[separator]!)) separator += 1;
     if (input[separator] !== ':' && input[separator] !== '=') {
       index = keyEnd;

@@ -95,6 +95,17 @@ describe('runtime diagnostic sensitive-value leases', () => {
 });
 
 describe('constructible credential shapes in diagnostic text', () => {
+  it('redacts auth key material in quoted and unquoted diagnostics without hiding public facts', () => {
+    for (const key of ['recovery_secret', 'recoveryKey', 'machineKey', 'secretKey', 'claimSecret', 'pairingSecret']) {
+      const secret = `private-material-for-${key}`;
+      expect(redactBugReportSensitiveText(`${key}=${secret}`)).not.toContain(secret);
+      expect(redactBugReportSensitiveText(JSON.stringify({ [key]: secret }))).not.toContain(secret);
+    }
+    // Count fields are not credential values; public terminal keys stay readable.
+    expect(redactBugReportSensitiveText('publicKey=public-terminal-key tokenCount=2 secretary=contact'))
+      .toBe('publicKey=public-terminal-key tokenCount=2 secretary=contact');
+  });
+
   it('redacts npm registry auth tokens by prefix and by npmrc assignment', () => {
     const token = 'npm_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8';
 
