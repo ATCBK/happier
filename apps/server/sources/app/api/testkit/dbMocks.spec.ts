@@ -1,12 +1,24 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createDbMocks, createDbTransactionMock, installDbModuleMock, installPrismaModuleMock } from "./dbMocks";
+import { createDbMocks, createDbTransactionMock, installDbModuleMock, installPrismaModuleMock, matchesDbMockWhere } from "./dbMocks";
 
 describe("dbMocks", () => {
     afterEach(() => {
         vi.doUnmock("@/storage/db");
         vi.doUnmock("@/storage/prisma");
         vi.resetModules();
+    });
+
+    it("evaluates nested claim/custody predicates without accepting terminal or wrong-Machine rows", () => {
+        const where = { AND: [{ OR: [{ workflowCustodyState: { not: null } }, { originKind: "automation" }] }],
+            OR: [{ state: "queued" }, { state: "claimed", leaseExpiresAt: { lt: new Date(10) } }],
+            assignments: { some: { machineId: "machine" } } };
+        const row = { state: "queued", workflowCustodyState: "pending", assignments: [{ machineId: "machine" }] };
+        expect(matchesDbMockWhere(row, where)).toBe(true);
+        expect(matchesDbMockWhere({ ...row, state: "cancelled" }, where)).toBe(false);
+        expect(matchesDbMockWhere({ ...row, assignments: [{ machineId: "other" }] }, where)).toBe(false);
+        expect(matchesDbMockWhere({ ...row, state: "claimed", leaseExpiresAt: new Date(10) }, where)).toBe(false);
+        expect(matchesDbMockWhere({ ...row, state: "claimed", leaseExpiresAt: new Date(9) }, where)).toBe(true);
     });
 
     it("creates nested Prisma-like delegates and resets their state", async () => {
@@ -54,7 +66,7 @@ describe("dbMocks", () => {
         expect((prisma as Record<string, unknown>).testMarker).toBe("prisma");
     });
 
-    it("wraps db delegates with a reusable transaction mock", async () => {
+    it("supplies fixture delegates to primary transactions and SQLite read snapshots", async () => {
         const txState = { sessionShare: { update: vi.fn().mockResolvedValue({ id: "share-1" }) } };
         const transactionMock = createDbTransactionMock(() => txState);
         const wrappedDb = transactionMock.wrapDb({
@@ -66,5 +78,11 @@ describe("dbMocks", () => {
         expect(transactionMock.transaction).toHaveBeenCalledTimes(1);
         expect(txState.sessionShare.update).toHaveBeenCalledWith({ where: { id: "share-1" } });
         expect(result).toEqual({ id: "share-1" });
+
+        await expect(transactionMock.readSnapshot(async (tx) =>
+            await tx.sessionShare.update({ where: { id: "share-1" } }),
+        )).resolves.toEqual(result);
+        const readFailure = new Error("fixture read failed");
+        await expect(transactionMock.readSnapshot(async () => { throw readFailure; })).rejects.toBe(readFailure);
     });
 });

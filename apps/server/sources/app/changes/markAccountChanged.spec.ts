@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { installDbModuleMock } from "../api/testkit/dbMocks";
 
@@ -8,6 +8,8 @@ installDbModuleMock(() => ({
         $transaction: transaction,
     },
 }));
+// Module transformation belongs to suite collection, outside per-test hooks.
+const { eventRouter } = await import("../events/eventRouter");
 
 type MarkAccountChangedParams = Parameters<typeof import("./markAccountChanged").markAccountChanged>[1];
 type MarkAccountsChangedParams = Parameters<typeof import("./markAccountChanged").markAccountsChanged>[1];
@@ -35,12 +37,6 @@ async function runMarkAccountsChanged(
 
 describe("markAccountChanged", () => {
     const originalDbProvider = process.env.HAPPIER_DB_PROVIDER;
-    let eventRouter: typeof import("../events/eventRouter").eventRouter;
-
-    beforeEach(async () => {
-        ({ eventRouter } = await import("../events/eventRouter"));
-    });
-
     afterEach(() => {
         process.env.HAPPIER_DB_PROVIDER = originalDbProvider;
         eventRouter.clearIo();
@@ -278,6 +274,37 @@ describe("markAccountChanged", () => {
 
         expect(tx.account.update).not.toHaveBeenCalled();
         expect(tx.accountChange.upsert).not.toHaveBeenCalled();
+    });
+
+    it("preserves each Session recipient hint and foreign key in an ordered audience", async () => {
+        process.env.HAPPIER_DB_PROVIDER = "sqlite";
+        const changes: Array<{ accountId: string; sessionId: string; hint: unknown; cursor: number }> = [];
+        const tx = {
+            account: {
+                update: vi.fn(async ({ where }: { where: { id: string } }) => ({ seq: where.id === "a1" ? 11 : 24 })),
+                updateMany: vi.fn(async () => ({ count: 2 })),
+                findMany: vi.fn(async () => [{ id: "a1", seq: 11 }, { id: "a2", seq: 24 }]),
+            },
+            accountChange: {
+                findMany: vi.fn(async () => []),
+                deleteMany: vi.fn(async () => ({ count: 0 })),
+                createMany: vi.fn(async ({ data }: { data: typeof changes }) => { changes.push(...data); }),
+                upsert: vi.fn(async ({ create }: { create: typeof changes[number] }) => { changes.push(create); }),
+            },
+        };
+
+        const cursors = await runMarkAccountsChanged(tx, {
+            accountIds: ["a2", "a1", "a2"],
+            kind: "session",
+            entityId: "session-1",
+            hintForAccount: accountId => ({ sharedMetadataVersion: accountId === "a1" ? 3 : 5 }),
+        });
+
+        expect(cursors).toEqual([{ accountId: "a1", cursor: 11 }, { accountId: "a2", cursor: 24 }]);
+        expect(changes).toEqual([
+            expect.objectContaining({ accountId: "a1", sessionId: "session-1", hint: { sharedMetadataVersion: 3 }, cursor: 11 }),
+            expect.objectContaining({ accountId: "a2", sessionId: "session-1", hint: { sharedMetadataVersion: 5 }, cursor: 24 }),
+        ]);
     });
 
     it("publishes one Account projection change to a recipient set with bounded database operations", async () => {

@@ -151,6 +151,9 @@ async function readFrozenSelection(input: Readonly<{
             return displayFacts
                 ? { status: "resolved", value: stored.data, displayFacts } as const
                 : { status: "unavailable", reason: "activation_unavailable" } as const;
+        }, {
+            // Creator fencing does not cover foreign Team/resource entitlement and broker bindings.
+            isolationLevel: "Serializable",
         });
     } catch (error) {
         if (error instanceof AccountSessionOwnerMetadataFenceAccountNotFoundError) {
@@ -253,6 +256,9 @@ async function freezeSelection(input: Readonly<{
             return displayFacts
                 ? { v: 1, status: "resolved", credentialSelectionBinding: stored.binding, displayFacts } as const
                 : { v: 1, status: "unavailable", reason: "activation_unavailable" } as const;
+        }, {
+            // Freeze one coherent foreign Team/resource entitlement and broker selection.
+            isolationLevel: "Serializable",
         });
     } catch (error) {
         if (error instanceof AccountSessionOwnerMetadataFenceAccountNotFoundError) {
@@ -434,6 +440,9 @@ async function readCurrentSelection(input: Readonly<{
                 source: source.data,
                 allowedModelIds: policy.data?.allowedModelIds ?? null,
             } } as const;
+        }, {
+            // Resource policy and entitlement must describe the same broker selection snapshot.
+            isolationLevel: "Serializable",
         });
     } catch (error) {
         if (error instanceof AccountSessionOwnerMetadataFenceAccountNotFoundError) {

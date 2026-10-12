@@ -1953,5 +1953,8 @@ export async function cancelAutomationRun(params: {
             results: [result],
         });
         return result.run;
+    }, {
+        // Cancellation retires Session pending input and participates in Workflow lifecycle watcher admission.
+        isolationLevel: "Serializable",
     });
 }

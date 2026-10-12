@@ -107,6 +107,9 @@ export async function admitManagedAcquire(params: Readonly<{
         } });
         await invalidateManagedMachineInTx(tx, row);
         return { machine: projectManagedMachine(row, declaration), replayed: false };
+    }, {
+        // Preset capacity count and current recipe admission precede distinct allocation insertion.
+        isolationLevel: "Serializable",
     });
     try { return await execute(); }
     catch (error) {

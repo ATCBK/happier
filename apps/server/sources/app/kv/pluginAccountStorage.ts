@@ -76,7 +76,7 @@ export async function readPluginAccountStorageInTx(
 export async function readPluginAccountStorage(
     input: Readonly<{ accountId: string; pluginId: string }>,
 ): Promise<PluginAccountStorageReadResult> {
-    return await inTx(async (tx) => await readPluginAccountStorageInTx(tx, input), { readOnly: true });
+    return await inTx(async (tx) => await readPluginAccountStorageInTx(tx, input), { /* Account mode and catalog content must share one capture. */ isolationLevel: "Serializable", readOnly: true });
 }
 
 export async function mutatePluginAccountStorageInTx(

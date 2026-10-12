@@ -387,7 +387,7 @@ export function registerExternalAuthFinalizeKeylessRoute(app: Fastify) {
                         ? { teamInvitationContinuation: claimedInvitation.continuation }
                         : {}),
                 };
-            });
+            }, { isolationLevel: "Serializable" /* Keyless identity linking composes current provider policy, Team admission and directory preferences. */ });
             if (!finalized) {
                 return reply.code(400).send({ error: "invalid-pending" });
             }
@@ -526,7 +526,7 @@ export function registerExternalAuthFinalizeKeylessRoute(app: Fastify) {
                     authenticationEvidence,
                 });
                 return { token };
-            });
+            }, { isolationLevel: "Serializable" /* Keyless provisioning composes current provider policy, Team admission and directory preferences. */ });
             if (!account) return reply.code(400).send({ error: "invalid-pending" });
             return reply.send({ success: true, token: account.token });
         } catch (error) {

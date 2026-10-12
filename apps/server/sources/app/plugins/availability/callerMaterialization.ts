@@ -68,5 +68,5 @@ export async function authenticateCurrentPluginMaterializationCallerV1(params: R
                 : {}),
         });
         return current.kind === "current" ? { pluginId: row.pluginId } : null;
-    });
+    }, { /* Installation identity and claimable materialization must share one capture. */ isolationLevel: "Serializable" });
 }

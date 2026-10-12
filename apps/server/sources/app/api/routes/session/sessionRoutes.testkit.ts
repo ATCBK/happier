@@ -540,8 +540,6 @@ vi.mock("@/app/session/agentTransition/applySessionAgentTransitionCutover", () =
 }));
 export const markAccountChanged = vi.fn(async () => 1);
 vi.mock("@/app/changes/markAccountChanged", () => ({ markAccountChanged }));
-export const markAccountChangedAfterCommit = vi.fn(async () => 1);
-vi.mock("@/app/changes/markAccountChangedAfterCommit", () => ({ markAccountChangedAfterCommit }));
 vi.mock("@/app/account/profile/accountDisplayProfile", async (importOriginal) => ({
     ...(await importOriginal<typeof import("@/app/account/profile/accountDisplayProfile")>()),
     ACCOUNT_DISPLAY_PROFILE_SELECT: {},
@@ -722,7 +720,6 @@ export function resetSessionRouteMocks(): void {
     });
     txSessionSystemRecordUpdateMany.mockResolvedValue({ count: 0 });
     txSessionSystemRecordDeleteMany.mockResolvedValue({ count: 0 });
-    markAccountChangedAfterCommit.mockResolvedValue(1);
 }
 
 let sessionRoutesModulePromise: Promise<typeof import("./sessionRoutes")> | null = null;

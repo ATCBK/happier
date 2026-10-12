@@ -315,7 +315,7 @@ export async function mutateProfileRowsInTx(tx: Tx, input: ProfileRowsMutationIn
 }
 
 export async function mutateProfileRows(input: Parameters<typeof mutateProfileRowsInTx>[1]): Promise<ProfileRowsMutationResult> {
-    try { return await inTx(tx => mutateProfileRowsInTx(tx, input)); }
+    try { return await inTx(tx => mutateProfileRowsInTx(tx, input), { /* Shared Artifact and Secret revision/access captures precede profile writes. */ isolationLevel: "Serializable" }); }
     catch (error) { if (error instanceof ProfileRowTransactionAbort) return error.result; throw error; }
 }
 
@@ -369,6 +369,6 @@ export async function convertProfileProvidersInTx(tx: Tx, input: Readonly<{
 }
 
 export async function convertProfileProviders(input: Parameters<typeof convertProfileProvidersInTx>[1]): Promise<ProfileProviderConversionResponseV1> {
-    try { return await inTx(tx => convertProfileProvidersInTx(tx, input)); }
+    try { return await inTx(tx => convertProfileProvidersInTx(tx, input), { /* Shared Artifact and Secret revision/access captures precede profile writes. */ isolationLevel: "Serializable" }); }
     catch (error) { if (error instanceof ProfileProviderConversionTransactionAbort) return error.result; throw error; }
 }

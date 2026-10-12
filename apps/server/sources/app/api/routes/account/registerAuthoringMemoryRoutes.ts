@@ -45,7 +45,7 @@ export function registerAuthoringMemoryRoutes(app: Fastify): void {
         },
     }, async (request, reply) => {
         try {
-            const result = await inTx(tx => readAuthoringMemoryInTx(tx, { accountId: request.userId, key: request.params.key }), { readOnly: true });
+            const result = await inTx(tx => readAuthoringMemoryInTx(tx, { accountId: request.userId, key: request.params.key }), { /* Account mode and catalog content must share one capture. */ isolationLevel: "Serializable", readOnly: true });
             const response = readResponse(result);
             if (response === null) return reply.code(503).send(unavailable());
             return reply.send(response);
@@ -88,7 +88,7 @@ export function registerAuthoringMemoryRoutes(app: Fastify): void {
         } },
     }, async (request, reply) => {
         try {
-            const result = await inTx(tx => listAuthoringMemoryInTx(tx, { accountId: request.userId }), { readOnly: true });
+            const result = await inTx(tx => listAuthoringMemoryInTx(tx, { accountId: request.userId }), { /* Account mode and catalog content must share one capture. */ isolationLevel: "Serializable", readOnly: true });
             if (result.status !== "listed") return reply.code(503).send({ error: "authoring_memory_storage_unavailable" });
             return reply.send({ rows: [...result.rows] });
         } catch {

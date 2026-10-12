@@ -36,5 +36,5 @@ export async function createNativePasswordFirstKeyStepUp(params: Readonly<{
                 proofHash: createHash("sha256").update(proof, "utf8").digest("hex"), requestDigest: params.requestDigest }),
         } });
         return { provider: "email_password", pending, proof };
-    });
+    }, { isolationLevel: "Serializable" /* Native credential proof and current Home login policy must agree when issuing first-key evidence. */ });
 }

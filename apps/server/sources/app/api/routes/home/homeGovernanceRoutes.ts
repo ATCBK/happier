@@ -171,7 +171,7 @@ export function homeGovernanceRoutes(app: Fastify): void {
                 env: requestHomeEnv,
                 ...(request.body.cursor !== undefined ? { cursor: request.body.cursor } : {}),
                 ...(request.body.limit !== undefined ? { limit: request.body.limit } : {}),
-            }));
+            }), { isolationLevel: "Serializable" /* The ordered Account ids and their projected rows must come from the same listing snapshot. */ });
             if (listing.status === "rejected") {
                 return await reply.code(homeGovernanceErrorHttpStatusV1(listing.code)).send({ error: listing.code });
             }

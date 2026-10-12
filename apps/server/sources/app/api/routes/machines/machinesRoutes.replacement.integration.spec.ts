@@ -11,7 +11,6 @@ vi.mock("@/utils/logging/log", () => ({ log: vi.fn() }));
 
 const markAccountChanged = vi.fn(async (_tx: unknown, params: { entityId: string }) => params.entityId === "m1" ? 122 : 123);
 vi.mock("@/app/changes/markAccountChanged", () => ({ markAccountChanged }));
-vi.mock("@/app/changes/markAccountChangedAfterCommit", () => ({ markAccountChangedAfterCommit: vi.fn(async () => 123) }));
 
 const emitUpdate = vi.fn();
 const getConnections = vi.fn(() => new Set());

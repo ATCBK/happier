@@ -20,7 +20,7 @@ import { isEffectiveTeamGroupMembership } from '@/app/teams/groups/effectiveGrou
 import { deriveAccountRecipientEnvelopeReadinessFromRow } from '@/app/encryption/accountRecipientEnvelopeReadiness';
 import { projectRecipientContentKey, RECIPIENT_READINESS_SELECT } from '@/app/session/encryption/sessionDataKeyRecipientProjection';
 import { resolveAccountDisplayLabelV1, ACCOUNT_DISPLAY_PROFILE_SELECT } from '@/app/account/profile/accountDisplayProfile';
-import { markAccountChanged } from '@/app/changes/markAccountChanged';
+import { markAccountsChanged } from '@/app/changes/markAccountChanged';
 import { resolveEffectiveAccountEncryptionModeFromAccountRow } from '@/app/encryption/accountEncryptionMode';
 
 type MachineActor = Readonly<{ actorAccountId: string; machineId: string }>;
@@ -417,7 +417,7 @@ export async function commitMachineRecipientKeyEnvelopesInTx(tx: Tx, input: Mach
         const data = { encryptedDataKey: envelope.encryptedDataKey, machineOwnerEnvelopeFingerprint: fingerprint, recipientContentPublicKeyFingerprint: envelope.recipientContentPublicKeyFingerprint };
         await tx.machineKeyEnvelope.upsert({ where: { machineId_recipientAccountId: { machineId: row.id, recipientAccountId: envelope.recipientAccountId } },
             create: { machineId: row.id, recipientAccountId: envelope.recipientAccountId, ...data }, update: data });
-        await markAccountChanged(tx, { accountId: envelope.recipientAccountId, kind: 'machine', entityId: row.id });
     }
+    await markAccountsChanged(tx, { accountIds: prepared.map(envelope => envelope.recipientAccountId), kind: 'machine', entityId: row.id });
     return { appliedRecipientAccountIds: prepared.map(envelope => envelope.recipientAccountId), skippedRecipientAccountIds: [] };
 }

@@ -6,7 +6,7 @@ import {
 } from "@happier-dev/protocol/machines/machineContentKeyTransitionV1";
 import { machineStoredContentMatchesAccountMode, parseEncryptedDataKeyEnvelopeV1 } from "@happier-dev/protocol";
 import { deriveAccountEncryptionCurrentnessFromRow } from "@/app/encryption/accountContentKeyAdmission";
-import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { markAccountsChanged } from "@/app/changes/markAccountChanged";
 import { afterTx, type Tx } from "@/storage/inTx";
 import { buildUpdateMachineUpdate, eventRouter } from "@/app/events/eventRouter";
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
@@ -81,13 +81,13 @@ export async function transitionMachineContentKeyInTx(params: Readonly<{
     }
     const committed = await tx.machine.findUniqueOrThrow({ where: { id: machine.id } });
     const devcontainerChild = await readMachineDevcontainerChildInTx(tx, machine.id);
-    const cursor = await markAccountChanged(tx, { accountId, kind: "machine", entityId: machine.id });
     // Recipient tuples are bound to the retired owner wrapping. Wake their
     // existing row readers without publishing the new owner-only wrapping as a
     // caller-openable key; C41 will project pending until delivery is current.
-    for (const recipientAccountId of await resolveCurrentMachineRecipientAccountIdsInTx(tx, machine.id)) {
-        if (recipientAccountId !== accountId) await markAccountChanged(tx, { accountId: recipientAccountId, kind: "machine", entityId: machine.id });
-    }
+    const cursors = await markAccountsChanged(tx, { accountIds: [accountId,
+        ...await resolveCurrentMachineRecipientAccountIdsInTx(tx, machine.id)], kind: "machine", entityId: machine.id });
+    const cursor = cursors.find(recipient => recipient.accountId === accountId)?.cursor;
+    if (cursor === undefined) throw new Error("Machine owner is missing from its publication audience");
     afterTx(tx, () => {
         eventRouter.emitUpdate({
             userId: accountId,

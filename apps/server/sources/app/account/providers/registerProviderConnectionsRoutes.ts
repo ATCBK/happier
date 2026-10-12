@@ -17,7 +17,7 @@ export function registerProviderConnectionsRoutes(app: Fastify): void {
   app.get(PROVIDER_CONNECTIONS_ROWS_ROUTE_V1, { preHandler: app.authenticate, config,
     schema: { response: { 200: asServerProtocolZod(ProviderConnectionsRowReadResponseV1Schema), 500: internal } },
   }, async (request, reply) => {
-    try { return reply.send(await inTx(tx => readProviderConnectionsRowInTx(tx, { accountId: request.userId }), { readOnly: true })); }
+    try { return reply.send(await inTx(tx => readProviderConnectionsRowInTx(tx, { accountId: request.userId }), { /* Account mode and catalog content must share one capture. */ isolationLevel: "Serializable", readOnly: true })); }
     catch { return reply.code(500).send({ error: 'internal' }); }
   });
   app.post(PROVIDER_CONNECTIONS_ROWS_ROUTE_V1, { preHandler: app.authenticate, config,
@@ -26,7 +26,7 @@ export function registerProviderConnectionsRoutes(app: Fastify): void {
   }, async (request, reply) => {
     try { return reply.send(await inTx(tx => mutateProviderConnectionsRowInTx(tx, {
       accountId: request.userId, authentication: readTeamOperationAuthenticationFromRequest(request), ...request.body,
-    }))); }
+    }), { /* Shared Secret revisions and Team-derived access precede catalog writes. */ isolationLevel: "Serializable" })); }
     catch { return reply.code(500).send({ error: 'internal' }); }
   });
 }

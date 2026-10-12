@@ -132,6 +132,9 @@ export async function readEphemeralRunnerEndpointProjection(params: Readonly<{
             },
         );
         return { status: "materialized", activation, runtimeToken, sealedBootstrap: bootstrap.content };
+    }, {
+        // Runtime-token disclosure combines creator and foreign broker/authentication currentness.
+        isolationLevel: "Serializable",
     }).catch((error: unknown) => {
         if (error instanceof AccountSessionOwnerMetadataFenceAccountNotFoundError) {
             return { status: "unavailable", reason: "creator_unavailable" };

@@ -152,7 +152,7 @@ export function registerTeamRoutes(
             requestKey: request.body.requestKey,
             env,
             authentication: readTeamOperationAuthenticationFromRequest(request, env),
-        }));
+        }), { isolationLevel: "Serializable" /* Team creation composes Home admission policy, initial-owner eligibility and membership admission. */ });
         if (!result.ok) return sendTeamError(reply, result.error);
         return reply.send(result.team);
     });
@@ -171,7 +171,7 @@ export function registerTeamRoutes(
             ...(request.body.description === undefined ? {} : { description: request.body.description }),
             env,
             authentication: readTeamOperationAuthenticationFromRequest(request, env),
-        }));
+        }), { isolationLevel: "Serializable" /* Team mutation authority composes actor membership, Account status and Team authentication policy. */ });
         if (!result.ok) return sendTeamError(reply, result.error);
         return reply.send(result.team);
     });
@@ -189,7 +189,7 @@ export function registerTeamRoutes(
             env,
             authentication: readTeamOperationAuthenticationFromRequest(request, env),
             ...request.body,
-        }));
+        }), { isolationLevel: "Serializable" /* Team policy viability spans current memberships, identity connections and credential authority. */ });
         if (!result.ok) return sendTeamError(reply, result.error, result.details);
         return reply.send(result.team);
     });
@@ -206,7 +206,7 @@ export function registerTeamRoutes(
             teamId: request.body.teamId,
             env,
             authentication: readTeamOperationAuthenticationFromRequest(request, env),
-        }));
+        }), { isolationLevel: "Serializable" /* Team archive participates in membership, directory and credential admission predicates. */ });
         if (!result.ok) return sendTeamError(reply, result.error);
         return reply.send(result.team);
     });
@@ -223,7 +223,7 @@ export function registerTeamRoutes(
             teamId: request.body.teamId,
             env,
             authentication: readTeamOperationAuthenticationFromRequest(request, env),
-        }));
+        }), { isolationLevel: "Serializable" /* Team restoration participates in membership, directory and credential admission predicates. */ });
         if (!result.ok) return sendTeamError(reply, result.error);
         return reply.send(result.team);
     });

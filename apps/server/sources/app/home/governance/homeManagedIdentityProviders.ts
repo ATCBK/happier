@@ -175,7 +175,7 @@ export async function createHomeManagedOidcProvider(input: Readonly<{
             });
         }
         return result;
-    });
+    }, { isolationLevel: "Serializable" /* Provider creation participates in Home-policy and final-login viability admission. */ });
 }
 
 export async function updateHomeManagedIdentityProvider(input: Readonly<{
@@ -205,7 +205,7 @@ export async function updateHomeManagedIdentityProvider(input: Readonly<{
             action: "identity_provider.update",
         });
         return result;
-    });
+    }, { isolationLevel: "Serializable" /* Provider configuration participates in Home-policy and final-login viability admission. */ });
 }
 
 export async function replaceHomeManagedIdentityProviderSecret(input: Readonly<{
@@ -233,7 +233,7 @@ export async function replaceHomeManagedIdentityProviderSecret(input: Readonly<{
             action: "identity_provider.secret.replace",
         });
         return result;
-    });
+    }, { isolationLevel: "Serializable" /* Provider secret revision participates in current runtime and final-login viability admission. */ });
 }
 
 export async function setHomeManagedIdentityProviderEnabled(input: Readonly<{
@@ -288,7 +288,7 @@ export async function setHomeManagedIdentityProviderEnabled(input: Readonly<{
                 action: "identity_provider.enable",
             });
             return result;
-        });
+        }, { isolationLevel: "Serializable" /* Provider availability changes participate in the final-login viability family. */ });
     }
     return await inTx(async (tx) => {
         const denied = await authorizeProviderOwnerInTx(tx, input);
@@ -311,7 +311,7 @@ export async function setHomeManagedIdentityProviderEnabled(input: Readonly<{
             action: "identity_provider.disable",
         });
         return result;
-    });
+    }, { isolationLevel: "Serializable" /* Provider availability changes participate in the final-login viability family. */ });
 }
 
 type HomeManagedIdentityProviderRuntimeValidationResult =
@@ -515,7 +515,7 @@ export async function consumeHomeManagedIdentityProviderTest(input: Readonly<{
             diagnostics: result.diagnostics,
             testedAt: result.testedAt,
         };
-    });
+    }, { isolationLevel: "Serializable" /* Successful provider test evidence participates in runtime availability and login-viability admission. */ });
 }
 
 export async function preflightDeleteHomeManagedIdentityProvider(input: Readonly<{
@@ -561,5 +561,5 @@ export async function deleteHomeManagedIdentityProvider(input: Readonly<{
             ...(removing ? { displayName: removing.displayName } : {}),
         });
         return result;
-    });
+    }, { isolationLevel: "Serializable" /* Provider deletion checks surviving login routes across identities, passwords and Home owners. */ });
 }

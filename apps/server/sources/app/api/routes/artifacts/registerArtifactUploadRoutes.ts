@@ -36,7 +36,7 @@ async function admitDestination(accountId: string, metadata: ArtifactBlobUploadI
         const matches = (access.encryptionMode === 'plain') === (metadata.t === 'plain');
         return matches === (metadata.kind !== 'encryption-conversion') ? null
             : { statusCode: 400, body: { error: 'artifact_account_mode_mismatch' } };
-    });
+    }, { /* Artifact upload admission captures mode and effective access together. */ isolationLevel: "Serializable" });
     if (refusal) throw new UploadRefusal(refusal);
 }
 

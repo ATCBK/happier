@@ -1,3 +1,5 @@
+import type { Prisma } from '@prisma/client';
+
 export type AfterTxCallback = () => void | Promise<void>;
 export type TxWithAfterTxCallbacks = {
     __afterTxCallbacks: AfterTxCallback[];
@@ -56,6 +58,10 @@ export function createSessionTransactionModel<TRow extends SessionTransactionRow
     const session = {
         findFirst: async (args: { where?: unknown } = {}): Promise<TRow | null> =>
             row && sessionRowMatchesWhere(row, args.where) ? { ...row } : null,
+        findUnique: async (args: { where?: unknown } = {}): Promise<TRow | null> =>
+            row && sessionRowMatchesWhere(row, args.where) ? { ...row } : null,
+        findMany: async (args: { where?: unknown } = {}): Promise<TRow[]> =>
+            row && sessionRowMatchesWhere(row, args.where) ? [{ ...row }] : [],
         updateMany: async (args: { where?: unknown; data?: unknown }): Promise<{ count: number }> => {
             if (!row || !sessionRowMatchesWhere(row, args.where)) return { count: 0 };
             const data = isRecord(args.data) ? args.data : {};
@@ -130,5 +136,63 @@ export function createInTxHarness<TTx extends object>(createTxState: () => TTx) 
 export function createEmptySessionFollowEdgeTransactionModel() {
     return {
         findMany: async (): Promise<never[]> => [],
+    };
+}
+
+/** Empty ReportsTo storage boundary for transactions without authored relations. */
+export function createEmptySessionReportsToTransactionModel() {
+    return {
+        findMany: async (): Promise<never[]> => [],
+        findUnique: async (): Promise<null> => null,
+    };
+}
+
+/**
+ * PostgreSQL raw cursor storage boundary. The real publication/lock owners run
+ * above it; SQL effects are represented by the same Account/AccountChange
+ * delegates used by the transaction fixture's ordinary Prisma path.
+ */
+export function createAccountCursorRawQueryTransactionModel(params: Readonly<{
+    account: { update: (args: {
+        where: { id: string };
+        data: { seq: { increment: number } };
+        select: { seq: true };
+    }) => Promise<{ seq: number }> };
+    accountChange: { upsert: (args: Prisma.AccountChangeUpsertArgs) => Promise<unknown> };
+}>) {
+    return async (query: string, ...values: unknown[]): Promise<unknown[]> => {
+        if (query.startsWith('SELECT "id" FROM "Account"')) {
+            const ids = values[0];
+            if (!Array.isArray(ids) || ids.some(id => typeof id !== 'string')) {
+                throw new Error('Account cursor lock query requires Account ids');
+            }
+            return ids.map(id => ({ id }));
+        }
+        if (!query.trimStart().startsWith('WITH next AS (')) {
+            throw new Error('Unsupported raw query in Account cursor transaction fixture');
+        }
+        const [accountId, kind, entityId, changedAt, hintJson, sessionId, machineId, artifactId, accountPetPackageId] = values;
+        if (typeof accountId !== 'string' || typeof kind !== 'string' || typeof entityId !== 'string'
+            || !(changedAt instanceof Date) || !(hintJson === null || typeof hintJson === 'string')
+            || ![sessionId, machineId, artifactId, accountPetPackageId].every(value => value === null || typeof value === 'string')) {
+            throw new Error('Invalid Account cursor raw query values');
+        }
+        const { seq: cursor } = await params.account.update({
+            where: { id: accountId }, data: { seq: { increment: 1 } }, select: { seq: true },
+        });
+        // JSON parsing is the genuine SQL-driver boundary for the encoded JSON column.
+        const hint: Prisma.InputJsonValue | undefined = hintJson === null ? undefined : JSON.parse(hintJson);
+        const foreignKeys = {
+            ...(typeof sessionId === 'string' ? { sessionId } : {}),
+            ...(typeof machineId === 'string' ? { machineId } : {}),
+            ...(typeof artifactId === 'string' ? { artifactId } : {}),
+            ...(typeof accountPetPackageId === 'string' ? { accountPetPackageId } : {}),
+        };
+        await params.accountChange.upsert({
+            where: { accountId_kind_entityId: { accountId, kind, entityId } },
+            create: { accountId, kind, entityId, changedAt, cursor, hint, ...foreignKeys },
+            update: { changedAt, cursor, hint, ...foreignKeys },
+        });
+        return [{ cursor }];
     };
 }

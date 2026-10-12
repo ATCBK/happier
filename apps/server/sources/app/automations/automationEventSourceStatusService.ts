@@ -488,6 +488,9 @@ export async function reportAutomationEventSourceStatusV1(params: Readonly<{
             callerVersion: caller.version,
             input,
         });
+    }, {
+        // Status counters and catalog revision are read before absolute status upserts.
+        isolationLevel: "Serializable",
     });
     return {};
 }

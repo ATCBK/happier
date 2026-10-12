@@ -2,6 +2,7 @@ import { inTx, afterTx, type Tx } from "@/storage/inTx";
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
 import { eventRouter, buildKVBatchUpdateUpdate } from "@/app/events/eventRouter";
 import * as privacyKit from "privacy-kit";
+import { z } from 'zod';
 import { markAccountChanged } from "@/app/changes/markAccountChanged";
 import {
     assertAccountJsonKvAccountEncryptionTransitionStoredContent,
@@ -19,6 +20,15 @@ export interface KVMutation {
     value: string | null; // null = delete (sets value to null but keeps record)
     version: number; // Always required, use -1 for new keys
 }
+
+/** Shared by HTTP validation and delegated native-effect admission. */
+export const KvMutationRequestSchema = z.object({
+    mutations: z.array(z.object({
+        key: z.string(),
+        value: z.string().nullable(),
+        version: z.number(),
+    })).min(1).max(100),
+});
 
 export interface KVMutateResult {
     success: boolean;
@@ -184,7 +194,7 @@ export async function kvMutate(
             ctx,
             mutations,
             storedContentAdmission,
-        ),
+        ), { /* Expected KV versions are checked before blind writes to the same keys. */ isolationLevel: "Serializable" }
     );
 }
 

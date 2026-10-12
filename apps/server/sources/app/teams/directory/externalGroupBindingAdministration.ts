@@ -352,7 +352,7 @@ export async function setExternalGroupBindingForActor(
                 await publishTeamChangedInTx(tx, { teamId: input.teamId });
                 return { ok: true, value: projectBinding(binding) };
             });
-        });
+        }, { isolationLevel: "Serializable" /* Binding replacement must observe the complete native/external contribution union. */ });
     } catch (error) {
         if (isPrismaErrorCode(error, "P2002")) {
             return { ok: false, error: "directory_group_mapping_invalid" };
@@ -375,5 +375,5 @@ export async function removeExternalGroupBindingForActor(
             ok: true,
             value: { v: 1, outcome: removed.status === "removed" ? "removed" : "already_absent" },
         };
-    });
+    }, { isolationLevel: "Serializable" /* Binding removal must agree with the remaining native/external contribution union. */ });
 }

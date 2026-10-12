@@ -518,7 +518,7 @@ export function registerMtlsAuthRoutes(app: Fastify): void {
                         requestIp: request.ip,
                         ...(invitation ? { team: { teamId: invitation.teamId, invitation } } : {}),
                     });
-                });
+                }, { isolationLevel: "Serializable" /* mTLS finalization composes Account creation/currentness with invitation and Team-policy admission. */ });
                 return reply.send({
                     success: true,
                     token: finalized.token,
@@ -577,7 +577,7 @@ export function registerMtlsAuthRoutes(app: Fastify): void {
                             },
                         } : {}),
                     });
-                });
+                }, { isolationLevel: "Serializable" /* mTLS claim consumption, Account currentness and Team admission form one finalization. */ });
                 return reply.send({
                     success: true,
                     token: finalized.token,

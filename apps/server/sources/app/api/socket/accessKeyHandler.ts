@@ -39,7 +39,7 @@ export function accessKeyHandler(userId: string, socket: Socket, connection: Cli
                     return { admitted: false } as const;
                 }
                 return { admitted: true, accessKey: await readSessionMachineAccessKeyInTx(tx, binding) } as const;
-            });
+            }, { isolationLevel: "Serializable" /* Current Machine/Session binding and the disclosed AccessKey must share one snapshot. */ });
             if (!result.admitted) {
                 if (callback) {
                     callback({

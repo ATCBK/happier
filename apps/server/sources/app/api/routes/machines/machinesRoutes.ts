@@ -207,7 +207,10 @@ export function machinesRoutes(app: Fastify) {
         }
         return reply.send(await inTx((tx) => transitionMachineContentKeyInTx({
             tx, accountId: request.userId, input: parsed.data,
-        })));
+        }), {
+            // Machine key transition participates in mode, grant and recipient-envelope admission.
+            isolationLevel: "Serializable",
+        }));
     });
 
     app.post('/v1/machines', {
@@ -627,6 +630,9 @@ export function machinesRoutes(app: Fastify) {
 
                     if (managedEnrollment) await linkManagedEnrollmentInTx(tx, managedEnrollment, userId, updatedMachine.id);
                     return updatedMachine;
+                }, {
+                    // Installation fill-if-empty and replacement/enrollment read predicates precede id-only writes.
+                    isolationLevel: "Serializable",
                 });
             } catch (error) {
                 if (error instanceof ManagedMachineError) return reply.code(409).send({ error: "invalid-params", reason: error.code });
@@ -714,6 +720,9 @@ export function machinesRoutes(app: Fastify) {
                     managedEnrollment,
                     });
                     return registered;
+                }, {
+                    // Registration composes controller replacement and managed-enrollment admission.
+                    isolationLevel: "Serializable",
                 });
                 newMachine = created.machine;
                 machineReplacement = created.machineReplacement;
@@ -760,6 +769,9 @@ export function machinesRoutes(app: Fastify) {
                                             replacesMachineId: verifiedInstallationIdentity.replacesMachineId, reason: automaticReplacementReason });
                                     }
                                     return winningMachine;
+                                }, {
+                                    // Rejoin fill-if-empty and managed replacement admission precede id-only writes.
+                                    isolationLevel: "Serializable",
                                 });
                             } catch (error) {
                                 if (error instanceof ManagedMachineError) return reply.code(409).send({ error: "invalid-params", reason: error.code });
@@ -831,6 +843,9 @@ export function machinesRoutes(app: Fastify) {
             return revoked.ok
                 ? { kind: 'ok' as const, machine: revoked.machine }
                 : { kind: 'not_found' as const };
+        }, {
+            // Revocation participates in Machine grant, replacement and managed-controller admission.
+            isolationLevel: "Serializable",
         });
 
         if (result.kind === 'not_found') {
@@ -878,6 +893,9 @@ export function machinesRoutes(app: Fastify) {
                 if (result) projections.push(result);
             }
             return projections;
+        }, {
+            // Capture Machine access, content mode and caller envelopes from one snapshot.
+            isolationLevel: "Serializable",
         });
         if (isApiTokenCaller) {
             // A Runner is also selectable by the exact Session it was activated
@@ -955,6 +973,9 @@ export function machinesRoutes(app: Fastify) {
                 if (!current || current.installationId !== guestProof.installationId) return null;
             }
             return projection;
+        }, {
+            // Capture Machine access, content mode and caller envelopes from one snapshot.
+            isolationLevel: "Serializable",
         });
 
         if (!result) {

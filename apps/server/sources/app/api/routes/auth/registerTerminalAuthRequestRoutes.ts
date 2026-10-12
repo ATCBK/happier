@@ -213,7 +213,7 @@ export function registerTerminalAuthRequestRoutes(
                     authority: "account_automation",
                     ...(resolved.evidence.length > 0 ? { authenticationEvidence: resolved.evidence } : {}),
                 }) } as const;
-            });
+            }, { isolationLevel: "Serializable" /* Approved authentication evidence and the token epoch must come from the same Account snapshot. */ });
             if (tokenResult.status === "evidence_unavailable") {
                 return reply.code(409).send({ error: "credential_authentication_evidence_unavailable" as const });
             }
@@ -378,7 +378,7 @@ export function registerTerminalAuthRequestRoutes(
                 authority: "account_automation",
                 ...(resolved.evidence.length > 0 ? { authenticationEvidence: resolved.evidence } : {}),
             }) } as const;
-        });
+        }, { isolationLevel: "Serializable" /* Approved authentication evidence and the token epoch must come from the same Account snapshot. */ });
         if (tokenResult.status === "evidence_unavailable") {
             return reply.code(409).send({ error: "credential_authentication_evidence_unavailable" as const });
         }

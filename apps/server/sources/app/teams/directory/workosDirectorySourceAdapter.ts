@@ -79,6 +79,7 @@ export async function beginWorkosDirectoryRead(params: Readonly<{
             case "source_mismatch":
             case "connection_not_found":
             case "connection_disabled":
+            case "connection_unavailable":
             case "provider_unavailable":
             case "unreadable":
                 return { ok: false, code: "directory_source_identity_mismatch" };

@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { machineAliveEventsCounter, websocketEventsCounter } from "@/app/monitoring/metrics/index";
 import { activityCache } from "@/app/presence/sessionCache";
 import { buildMachineActivityEphemeral, buildUpdateMachineUpdate, eventRouter } from "@/app/events/eventRouter";
@@ -8,6 +9,7 @@ import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
 import { afterTx, inTx } from "@/storage/inTx";
 import { markAccountChanged } from "@/app/changes/markAccountChanged";
 import { recordMachineAlive } from "@/app/presence/presenceRecorder";
+import { submitMachineRemoteAlerts } from '@/app/activity/remoteAlerts/submitMachineRemoteAlerts';
 import {
     EXTERNAL_SESSION_OPERATION_SOCKET_EVENT_V1,
     ACTION_OPERATION_REVISION_EPHEMERAL_EVENT_V1,
@@ -198,6 +200,9 @@ export function machineUpdateHandler(
                     authenticatedAccountId: userId, authenticatedMachineId: machine.id,
                     externalApiKeyId: parsed.data.externalApiKeyId, operationId: parsed.data.operationId,
                 });
+            }, {
+                // Broker retirement composes current Machine installation with external operation custody.
+                isolationLevel: "Serializable",
             });
             callback?.(result);
         } catch {
@@ -640,10 +645,10 @@ export function machineUpdateHandler(
             if (!isValid) {
                 return;
             }
-            const recipientAccountIds = await inTx(async tx => {
+            const presence = await inTx(async tx => {
                 const machine = await tx.machine.findUnique({
                     where: { id: machineId },
-                    select: { accountId: true, installationId: true, revokedAt: true, replacedByMachineId: true },
+                    select: { accountId: true, installationId: true, revokedAt: true, replacedByMachineId: true, active: true },
                 });
                 if (!machine) return null;
                 if (machine.installationId === null) {
@@ -656,9 +661,10 @@ export function machineUpdateHandler(
                     if (admission.kind !== 'admitted' || admission.custodianAccountId !== userId
                         || !hasCurrentMachineSocketInstallation(socket, admission.installationId)) return null;
                 }
-                return await resolveCurrentMachineRecipientAccountIdsInTx(tx, machineId);
+                return { recipientAccountIds: await resolveCurrentMachineRecipientAccountIdsInTx(tx, machineId),
+                    wasOffline: !machine.active };
             });
-            if (!recipientAccountIds) {
+            if (!presence) {
                 activityCache.invalidateMachine(machineId);
                 return;
             }
@@ -667,12 +673,17 @@ export function machineUpdateHandler(
             await recordMachineAlive({ accountId: userId, machineId, timestamp: t });
 
             const machineActivity = buildMachineActivityEphemeral(machineId, true, t);
-            for (const accountId of recipientAccountIds) {
+            for (const accountId of presence.recipientAccountIds) {
                 eventRouter.emitEphemeral({
                     userId: accountId,
                     payload: machineActivity,
                     recipientFilter: { type: 'user-scoped-only' },
                 });
+            }
+            if (presence.wasOffline) {
+                // Presence writes remain batched. Repeated admitted alive may
+                // repeat this content-free, idempotent dismissal until flush.
+                await submitMachineRemoteAlerts({ machines: [{ machineId, accountId: userId }], phase: 'recovered' });
             }
         } catch {
             log(
@@ -836,6 +847,7 @@ export function machineUpdateHandler(
                 const machine = await tx.machine.findFirst({
                     where: { accountId: admission.custodianAccountId, id: machineId, installationId: admission.installationId },
                     select: {
+                        operationProtocolCapabilities: true,
                         operationProtocolCapabilitiesRevision: true,
                         revokedAt: true,
                         replacedByMachineId: true,
@@ -850,6 +862,17 @@ export function machineUpdateHandler(
                     return null;
                 }
                 const expectedRevision = machine.operationProtocolCapabilitiesRevision;
+                if (expectedRevision !== null && expectedRevision > 0
+                    && isDeepStrictEqual(machine.operationProtocolCapabilities, parsed.data.capabilities)) {
+                    // A full refresh rejoins the current projection without
+                    // changing its revision or invalidating Account readers.
+                    afterTx(tx, () => callback?.({
+                        v: 1,
+                        result: 'success',
+                        revision: expectedRevision,
+                    }));
+                    return null;
+                }
                 const nextRevision = (expectedRevision ?? 0) + 1;
                 const { count } = await tx.machine.updateMany({
                     where: {
@@ -890,6 +913,9 @@ export function machineUpdateHandler(
                     revision: nextRevision,
                 }));
                 return null;
+            }, {
+                // Capability publication composes Account admission with current Machine installation.
+                isolationLevel: "Serializable",
             });
         } catch {
             log(
@@ -1055,6 +1081,9 @@ export function machineUpdateHandler(
                 }
                 afterTx(tx, () => callback?.({ result: 'success', version: expectedVersion + 1, metadata }));
                 return null;
+            }, {
+                // Metadata validation reads daemon state and access outside the metadata-version CAS.
+                isolationLevel: "Serializable",
             });
         } catch {
             log(
@@ -1225,6 +1254,9 @@ export function machineUpdateHandler(
                 }
                 afterTx(tx, () => callback?.({ result: 'success', version: expectedVersion + 1, daemonState }));
                 return null;
+            }, {
+                // Daemon-state validation reads metadata and Account mode outside the state-version CAS.
+                isolationLevel: "Serializable",
             });
         } catch {
             log(

@@ -887,7 +887,7 @@ export async function createQualifiedConnectedAccountGroup(
             service: parsed.service,
             groupId: parsed.group.groupId,
         });
-    });
+    }, { /* Group membership/active-source and usage-source insertion/removal must remain coordinated. */ isolationLevel: "Serializable" });
 }
 
 export async function patchQualifiedConnectedAccountGroup(
@@ -1067,7 +1067,7 @@ export async function patchQualifiedConnectedAccountGroup(
             service: patch.service,
             groupId: patch.groupId,
         });
-    });
+    }, { /* Group membership/active-source and usage-source insertion/removal must remain coordinated. */ isolationLevel: "Serializable" });
 }
 
 export async function deleteQualifiedConnectedAccountGroup(
@@ -1157,7 +1157,7 @@ export async function deleteQualifiedConnectedAccountGroup(
             accountId: params.accountId,
         });
         return { status: "deleted" };
-    });
+    }, { /* Group membership/active-source and usage-source insertion/removal must remain coordinated. */ isolationLevel: "Serializable" });
 }
 
 export async function patchQualifiedConnectedAccountGroupRuntimeState(
@@ -1277,7 +1277,7 @@ export async function patchQualifiedConnectedAccountGroupRuntimeState(
             service: patch.service,
             groupId: patch.groupId,
         });
-    });
+    }, { /* Group membership/active-source and usage-source insertion/removal must remain coordinated. */ isolationLevel: "Serializable" });
 }
 
 async function mutateQualifiedGroupMember(
@@ -1510,7 +1510,7 @@ async function mutateQualifiedGroupMember(
                 service: mutation.group.service,
                 groupId: mutation.group.groupId,
             });
-        });
+        }, { /* Group membership/active-source and usage-source insertion/removal must remain coordinated. */ isolationLevel: "Serializable" });
     } catch (error) {
         if (error instanceof QualifiedGroupMemberCasConflictError) {
             return await settleQualifiedGroupMemberCasConflict({
@@ -1670,7 +1670,7 @@ export async function deleteQualifiedConnectedAccountGroupMember(
                 service: mutation.group.service,
                 groupId: mutation.group.groupId,
             });
-        });
+        }, { /* Group membership/active-source and usage-source insertion/removal must remain coordinated. */ isolationLevel: "Serializable" });
     } catch (error) {
         if (!(error instanceof QualifiedGroupMemberCasConflictError)) {
             throw error;
@@ -1821,5 +1821,5 @@ export async function setQualifiedConnectedAccountGroupActiveAccount(
             service: mutation.group.service,
             groupId: mutation.group.groupId,
         });
-    });
+    }, { /* Group membership/active-source and usage-source insertion/removal must remain coordinated. */ isolationLevel: "Serializable" });
 }

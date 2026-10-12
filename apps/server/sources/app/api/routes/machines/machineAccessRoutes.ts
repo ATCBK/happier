@@ -41,7 +41,10 @@ export function registerMachineAccessRoutes(app: Fastify) {
         schema: { params, body: setBody, response: { 200: MachineAccessMutationResultV1Schema } },
     }, async (request) => inTx((tx) => setMachineAccessGrantInTx(tx, {
         actorAccountId: request.userId, machineId: request.params.id, ...request.body,
-    })));
+    }), {
+        // Grant readiness and effective-recipient census precede distinct grant writes.
+        isolationLevel: "Serializable",
+    }));
 
     app.delete('/v1/machines/:id/access', {
         preHandler: app.authenticate,
@@ -52,7 +55,10 @@ export function registerMachineAccessRoutes(app: Fastify) {
         ...('principal' in request.body
             ? { principal: request.body.principal }
             : { principal: { kind: 'account' as const, accountId: request.userId }, leave: true as const }),
-    })));
+    }), {
+        // Alternative-grant removal and effective-loss census must serialize across grant writers.
+        isolationLevel: "Serializable",
+    }));
 
     app.get('/v1/machines/:id/data-key-envelopes', {
         preHandler: app.authenticate,
@@ -63,7 +69,10 @@ export function registerMachineAccessRoutes(app: Fastify) {
         },
     }, async (request) => inTx((tx) => readMachineRecipientCensusInTx(tx, {
         actorAccountId: request.userId, machineId: request.params.id, query: request.query,
-    })));
+    }), {
+        // Capture holder access, content and recipient key bindings coherently.
+        isolationLevel: "Serializable",
+    }));
 
     app.patch('/v1/machines/:id/data-key-envelopes', {
         preHandler: app.authenticate,
@@ -74,5 +83,8 @@ export function registerMachineAccessRoutes(app: Fastify) {
         },
     }, async (request) => inTx((tx) => commitMachineRecipientKeyEnvelopesInTx(tx, {
         actorAccountId: request.userId, machineId: request.params.id, ...request.body,
-    })));
+    }), {
+        // Recipient mode/key and current grant checks precede envelope upserts.
+        isolationLevel: "Serializable",
+    }));
 }

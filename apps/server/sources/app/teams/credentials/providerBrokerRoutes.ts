@@ -134,7 +134,7 @@ export function registerTeamCredentialProviderBrokerRoutes(app: Fastify, persona
                 authenticatedBrokerAccountId: request.userId,
                 request: external.data,
                 observedAt: new Date(),
-            }));
+            }), { isolationLevel: "Serializable" /* External model disclosure composes key authority, entitlement and resource currentness. */ });
             return reply.send(ProviderBrokerModelCatalogAuthorizationResponseV1Schema.parse(result));
         }
         const broker = ProviderBrokerModelCatalogAuthorizationV1Schema.parse(parsed.data);
@@ -179,7 +179,7 @@ export function registerTeamCredentialProviderBrokerRoutes(app: Fastify, persona
                 publicKeyBase64Url: relaySigning.capability.publicKey,
                 expiresAt: relaySigning.capability.expiresAt,
             }],
-        }));
+        }), { isolationLevel: "Serializable" /* Test request admission sums usage limits before inserting a distinct request fact. */ });
         return reply.send(TeamCredentialResourceTestAdmissionResponseV1Schema.parse(result));
     });
     app.post(TEAM_CREDENTIAL_EXTERNAL_PROVIDER_ADMISSION_HTTP_PATH_V1, {
@@ -196,7 +196,7 @@ export function registerTeamCredentialProviderBrokerRoutes(app: Fastify, persona
             authenticatedBrokerAccountId: request.userId,
             request: parsed.data,
             observedAt: new Date(),
-        }));
+        }), { isolationLevel: "Serializable" /* External request admission sums usage limits before inserting a distinct request fact. */ });
         return reply.send(TeamCredentialExternalProviderAdmissionResponseV1Schema.parse(result));
     });
     app.post(TEAM_CREDENTIAL_EXTERNAL_PROVIDER_TERMINAL_USAGE_HTTP_PATH_V1, {
@@ -215,7 +215,7 @@ export function registerTeamCredentialProviderBrokerRoutes(app: Fastify, persona
         const result = await inTx(tx => recordTeamCredentialExternalProviderTerminalUsageInTx(tx, {
             authenticatedBrokerAccountId: request.userId,
             request: parsed.data,
-        }));
+        }), { isolationLevel: "Serializable" /* Terminal usage correction participates in the same resource quota and request-replay family. */ });
         return reply.send(TeamCredentialExternalProviderTerminalUsageResponseV1Schema.parse(result));
     });
     app.post(PROVIDER_BROKER_OPEN_HTTP_PATH_V1, {
@@ -246,7 +246,7 @@ export function registerTeamCredentialProviderBrokerRoutes(app: Fastify, persona
             const runnerSelection = await inTx(tx => verifyRunnerBrokerOpenSelectionInTx(tx, {
                 principal: request.sessionRuntimePrincipal!,
                 request: parsed.data,
-            }));
+            }), { isolationLevel: "Serializable" /* Runner broker selection verification composes frozen selection, entitlement and resource currentness. */ });
             if (!runnerSelection) {
                 return reply.send({ ok: false, reasonCode: 'resource_forbidden' });
             }

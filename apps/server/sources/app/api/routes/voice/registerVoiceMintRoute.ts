@@ -415,7 +415,7 @@ export function registerVoiceMintRoute(
                 }
 
                 return { ok: true as const, leaseId: lease.id, bindingNonce: lease.providerBindingNonce };
-            });
+            }, { /* Voice quota counts completed conversations and pending leases with completion transfer. */ isolationLevel: "Serializable" });
 
             if (!result.ok) {
                 return reply.code(result.statusCode).send({ allowed: false, reason: result.reason });

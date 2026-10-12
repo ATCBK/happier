@@ -201,7 +201,7 @@ export async function movePendingPluginWebhookDeliveriesV1(params: Readonly<{
             nextCursor: hasMore && page.length > 0 ? encodeMoveCursorV1(page[page.length - 1]!.id) : null,
             done: !hasMore,
         };
-    });
+    }, { /* Webhook endpoint and credential authority precedes admission or movement fencing. */ isolationLevel: "Serializable" });
 }
 
 function accountEncryptionMatches(params: Readonly<{
@@ -541,9 +541,9 @@ export async function admitPluginWebhookDeliveryV1(params: Readonly<{
             });
         }
         return { kind: "admitted", deliveryId: created.id };
-        }, transactionDeadlineAtMs === undefined
+        }, { /* Webhook endpoint and credential authority precedes admission or movement fencing. */ isolationLevel: "Serializable", ...(transactionDeadlineAtMs === undefined
             ? undefined
-            : { deadlineAtMs: transactionDeadlineAtMs });
+            : { deadlineAtMs: transactionDeadlineAtMs }) });
     } catch (error) {
         if (!isPrismaErrorCode(error, "P2002")) throw error;
         const duplicate = await inTx(async (tx) => {
@@ -590,7 +590,7 @@ export async function admitPluginWebhookDeliveryV1(params: Readonly<{
                 now,
             });
             return row;
-        });
+        }, { /* Webhook endpoint and credential authority precedes admission or movement fencing. */ isolationLevel: "Serializable" });
         if (!duplicate) throw error;
         return { kind: "duplicate", deliveryId: duplicate.id };
     }

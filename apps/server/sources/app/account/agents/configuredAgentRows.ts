@@ -153,6 +153,6 @@ export async function mutateConfiguredAgentCatalogRowInTx(tx: Tx, input: Mutatio
 }
 
 export async function mutateConfiguredAgentCatalogRow(input: MutationInput): Promise<MutationResult> {
-    try { return await inTx(tx => mutateConfiguredAgentCatalogRowInTx(tx, input)); }
+    try { return await inTx(tx => mutateConfiguredAgentCatalogRowInTx(tx, input), { /* Shared Secret revisions and Team-derived access precede catalog writes. */ isolationLevel: "Serializable" }); }
     catch (error) { if (error instanceof ConfiguredAgentCatalogTransactionAbort) return error.result; throw error; }
 }

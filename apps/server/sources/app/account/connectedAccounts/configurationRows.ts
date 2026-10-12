@@ -118,6 +118,6 @@ export async function mutateConnectedAccountCatalogRowInTx(tx: Tx, input: Mutati
 
 /** Paired Settings and row CAS share the incumbent serializable transaction and rollback on either refusal. */
 export async function mutateConnectedAccountCatalogRow(input: MutationInput): Promise<ConnectedAccountCatalogRowMutationResponseV1> {
-    try { return await inTx(tx => mutateConnectedAccountCatalogRowInTx(tx, input)); }
+    try { return await inTx(tx => mutateConnectedAccountCatalogRowInTx(tx, input), { /* Shared Secret revisions and Team-derived access precede catalog writes. */ isolationLevel: "Serializable" }); }
     catch (error) { if (error instanceof ConnectedAccountCatalogPairedMutationRejected) return error.result; throw error; }
 }

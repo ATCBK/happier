@@ -1274,7 +1274,7 @@ export async function settlePreparedQualifiedConnectedServiceCredentialCreate(
                 });
             }
             return result;
-        });
+        }, { /* Credential mode, group membership and full Account profile projection share this family. */ isolationLevel: "Serializable" });
     } catch (error) {
         if (!isUniqueConstraintError(error)) throw error;
         const current = await readCurrentByQualifiedRef(
@@ -1346,7 +1346,7 @@ export async function mutateQualifiedConnectedServiceCredential(
             });
         }
         return result;
-    });
+    }, { /* Credential mode, group membership and full Account profile projection share this family. */ isolationLevel: "Serializable" });
 }
 
 export async function readQualifiedConnectedAccountConfiguration(params: Readonly<{
@@ -1423,7 +1423,7 @@ export async function readQualifiedConnectedAccountConfiguration(params: Readonl
                 revisionSemantics: "legacy_unfenced" as const,
                 credentialRevision: null,
             };
-    });
+    }, { /* Credential mode, group membership and full Account profile projection share this family. */ isolationLevel: "Serializable" });
 }
 
 export type QualifiedConnectedAccountConfigurationMutationParams = Readonly<{
@@ -1591,7 +1591,7 @@ export async function mutateQualifiedConnectedAccountConfiguration(
             });
         }
         return result;
-    });
+    }, { /* Credential mode, group membership and full Account profile projection share this family. */ isolationLevel: "Serializable" });
 }
 
 type QualifiedConnectedAccountListStorage = Pick<
@@ -1962,7 +1962,7 @@ export async function listQualifiedConnectedAccounts(
     }>,
 ): Promise<QualifiedConnectedAccountProfileV4[]> {
     return await inTx(async (tx) =>
-        await listQualifiedConnectedAccountsInTx(tx, params));
+        await listQualifiedConnectedAccountsInTx(tx, params), { /* Credential mode, group membership and full Account profile projection share this family. */ isolationLevel: "Serializable" });
 }
 
 function withQualifiedCredentialHealthForStoredFormat(params: Readonly<{
@@ -2139,7 +2139,7 @@ export async function mutateQualifiedConnectedServiceCredentialHealth(
             credentialRevision: projection.credentialRevision,
             configurationRevision: current.configurationRevision,
         };
-    });
+    }, { /* Credential mode, group membership and full Account profile projection share this family. */ isolationLevel: "Serializable" });
 }
 
 type QualifiedConnectedServiceCredentialSnapshotBase = Readonly<{
@@ -2411,7 +2411,7 @@ export async function readQualifiedConnectedServiceCredentialForLegacyProjection
         await readQualifiedConnectedServiceCredentialInTx(tx, {
             accountId: params.accountId,
             ref,
-        }));
+        }), { /* Credential mode, group membership and full Account profile projection share this family. */ isolationLevel: "Serializable" });
 }
 
 export async function readQualifiedConnectedServiceCredential(params: Readonly<{
@@ -2423,7 +2423,7 @@ export async function readQualifiedConnectedServiceCredential(params: Readonly<{
         await readQualifiedConnectedServiceCredentialInTx(tx, {
             accountId: params.accountId,
             ref,
-        }));
+        }), { /* Credential mode, group membership and full Account profile projection share this family. */ isolationLevel: "Serializable" });
     if (result.status === "storage_mode_mismatch") {
         return { status: "storage_mode_mismatch" };
     }
@@ -2762,7 +2762,7 @@ export async function deleteQualifiedConnectedServiceCredential(
                 accountId: params.accountId,
             });
             return { status: "deleted" };
-        });
+        }, { /* Credential mode, group membership and full Account profile projection share this family. */ isolationLevel: "Serializable" });
     } catch (error) {
         if (!(error instanceof QualifiedCredentialGroupCasConflictError)) {
             throw error;

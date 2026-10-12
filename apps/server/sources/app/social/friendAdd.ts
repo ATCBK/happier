@@ -5,7 +5,7 @@ import { relationshipSet } from "./relationshipSet";
 import { relationshipGet } from "./relationshipGet";
 import { sendFriendRequestNotification, sendFriendshipEstablishedNotification } from "./friendNotification";
 import { RelationshipStatus } from "@/storage/prisma";
-import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { acquireAccountChangePublicationLocksInTx, markAccountsChanged } from "@/app/changes/markAccountChanged";
 import { resolveFriendsPolicyFromServerFeatures } from "./resolveFriendsPolicyFromServerFeatures";
 import { readHomeEffectiveEnv } from "@/app/features/catalog/serverFeatureGate";
 
@@ -51,7 +51,9 @@ export async function friendAdd(ctx: Context, uid: string): Promise<UserProfile 
         throw new FriendsDisabledError();
     }
 
-    // Update relationship status
+    // Both directional states and notification cooldowns are read before
+    // unconditional tuple writes. A unique relationship key is not a guard
+    // for reciprocal request/accept/remove decisions.
     return await inTx(async (tx) => {
 
         // Read current user objects
@@ -109,10 +111,10 @@ export async function friendAdd(ctx: Context, uid: string): Promise<UserProfile 
             await relationshipSet(tx, currentUser.id, targetUser.id, RelationshipStatus.friend);
 
             // Send friendship established notifications to both users
+            await acquireAccountChangePublicationLocksInTx(tx, [currentUser.id, targetUser.id]);
             await sendFriendshipEstablishedNotification(tx, currentUser.id, targetUser.id);
 
-            await markAccountChanged(tx, { accountId: currentUser.id, kind: 'friends', entityId: 'self' });
-            await markAccountChanged(tx, { accountId: targetUser.id, kind: 'friends', entityId: 'self' });
+            await markAccountsChanged(tx, { accountIds: [currentUser.id, targetUser.id], kind: 'friends', entityId: 'self' });
 
             // Return the target user profile
             const identities = toSocialIdentities(targetUser.AccountIdentity);
@@ -131,10 +133,10 @@ export async function friendAdd(ctx: Context, uid: string): Promise<UserProfile 
             }
 
             // Send friend request notification to the receiver
+            await acquireAccountChangePublicationLocksInTx(tx, [currentUser.id, targetUser.id]);
             await sendFriendRequestNotification(tx, targetUser.id, currentUser.id);
 
-            await markAccountChanged(tx, { accountId: currentUser.id, kind: 'friends', entityId: 'self' });
-            await markAccountChanged(tx, { accountId: targetUser.id, kind: 'friends', entityId: 'self' });
+            await markAccountsChanged(tx, { accountIds: [currentUser.id, targetUser.id], kind: 'friends', entityId: 'self' });
 
             // Return the target user profile
             const identities = toSocialIdentities(targetUser.AccountIdentity);
@@ -146,5 +148,5 @@ export async function friendAdd(ctx: Context, uid: string): Promise<UserProfile 
         const identities = toSocialIdentities(targetUser.AccountIdentity);
         return buildUserProfile(targetUser as any, currentUserRelationship, identities,
             await describeIdentityPresentation(identities));
-    });
+    }, { isolationLevel: "Serializable" });
 }

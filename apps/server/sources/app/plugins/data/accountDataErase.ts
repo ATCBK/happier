@@ -445,7 +445,7 @@ export async function erasePluginAccountData(input: Readonly<{
     pluginId: string;
     managedResourceDispositions?: readonly ManagedResourceDispositionV1[];
 }>): Promise<PluginAccountDataEraseResult> {
-    return await inTx(async (tx) => await erasePluginAccountDataInTx({ tx, ...input }));
+    return await inTx(async (tx) => await erasePluginAccountDataInTx({ tx, ...input }), { /* Erasure dependency and last-owner censuses span Account, Team and managed rows. */ isolationLevel: "Serializable" });
 }
 
 export type DeleteAccountForErasureResult =
@@ -711,7 +711,7 @@ export async function deleteAccountForErasure(input: Readonly<{
             status: "captured" as const,
             locators: await captureAccountErasureBlobLocatorsInTx(tx, input.accountId),
         };
-    });
+    }, { /* Erasure dependency and last-owner censuses span Account, Team and managed rows. */ isolationLevel: "Serializable" });
     if (preflight.status === "already-deleted") return { status: "already-deleted" };
     if (preflight.status === "rejected") {
         if (preflight.code === "account_erasure_managed_resources_review_required") return { status: "failed", code: preflight.code, resources: preflight.resources };

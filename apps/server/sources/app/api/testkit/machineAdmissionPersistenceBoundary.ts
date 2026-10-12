@@ -27,7 +27,7 @@ export function createMachineAdmissionPersistenceBoundary(custodian: string | ((
                     active: true, revokedAt: availability === 'revoked' ? new Date(1) : null,
                     replacedByMachineId: availability === 'replaced' ? 'replacement-machine' : null,
                     metadata: encodePlainMachineStoredContent({ host: 'test-host', platform: 'linux', happyCliVersion: 'test', homeDir: '/home/test', happyHomeDir: '/home/test/.happier' }), metadataVersion: 1,
-                    daemonState: null, daemonStateVersion: 0, dataEncryptionKey: decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER, 'base64'),
+                    daemonState: null, daemonStateVersion: 0, dataEncryptionKey: new Uint8Array(decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER, 'base64')),
                     account: { status: 'active', encryptionMode: 'plain' }, accountGrants: [], teamGrants: [], groupGrants: [],
                 } satisfies PersistedAdmissionMachineRow;
             },

@@ -86,28 +86,49 @@ function scheduleAccountChangeWake(tx: Tx, accountId: string, cursor: number): v
 
 export type AccountChangeCursor = Readonly<{ accountId: string; cursor: number }>;
 
+/** Fence a composed publication's complete audience before its first cursor write. */
+export async function acquireAccountChangePublicationLocksInTx(tx: Tx, recipientAccountIds: readonly string[]): Promise<void> {
+    const accountIds = [...new Set(recipientAccountIds)].sort();
+    if (accountIds.length < 2) return;
+    const provider = getDbProviderFromEnv(process.env, "postgres");
+    if (provider === "sqlite") return;
+    if (provider === "postgres") {
+        await tx.$queryRawUnsafe(
+            'SELECT "id" FROM "Account" WHERE "id" = ANY($1::text[]) ORDER BY "id" FOR NO KEY UPDATE', accountIds,
+        );
+        return;
+    }
+    await tx.$queryRawUnsafe(
+        `SELECT \`id\` FROM \`Account\` WHERE \`id\` IN (${accountIds.map(() => "?").join(", ")}) ORDER BY \`id\` FOR UPDATE`,
+        ...accountIds,
+    );
+}
+
 /**
  * Marks one shared Account projection changed for an explicit recipient set.
  *
  * Team and Home-governance mutations resolve their audiences transactionally.
  * Publishing those audiences one Account at a time makes the transaction grow
- * by two database round trips per viewer. This set-oriented owner performs a
- * fixed number of provider-portable Prisma operations instead: increment every
- * recipient cursor, read the resulting cursors, then replace the one coalesced
- * projection row for each Account. The Account update is still the writer fence
- * and all rows plus their content-free wakes retain the surrounding transaction's
- * commit boundary.
+ * by two database round trips per viewer. This set-oriented owner performs
+ * one PostgreSQL statement, or a fixed number of provider-portable Prisma
+ * operations: increment every recipient cursor, read the resulting cursors,
+ * then replace the one coalesced projection row for each Account. The Account
+ * update is still the writer fence and all rows plus their content-free wakes
+ * retain the surrounding transaction's commit boundary.
  *
- * This deliberately owns only hint-free projection invalidation. The
- * single-recipient writer below remains authoritative for entity foreign keys
- * and merge-sensitive hints such as Collection full rereads.
+ * Hint-bearing changes and other entity kinds take the ordered audience fence
+ * before delegating to the point writer, which retains foreign-key and hint
+ * coalescing ownership. Hint-free Session invalidation keeps the same Session
+ * foreign key and provider-specific omitted-hint semantics as that writer.
  */
 export async function markAccountsChanged(
     tx: Tx,
     params: Readonly<{
         accountIds: readonly string[];
         entityId: string;
-        kind?: "account" | "savedSecretResource";
+        kind?: ChangeKind;
+        hint?: unknown;
+        hintForAccount?: (accountId: string) => unknown;
     }>,
 ): Promise<AccountChangeCursor[]> {
     const accountIds = [...new Set(params.accountIds
@@ -118,6 +139,71 @@ export async function markAccountsChanged(
     if (!entityId) throw new Error("markAccountsChanged: entityId is required");
     if (accountIds.length === 0) return [];
 
+    if (params.hint !== undefined || params.hintForAccount
+        || (kind !== "account" && kind !== "savedSecretResource" && kind !== "session")) {
+        // Project all caller-owned hints before locking any Account. Cursor
+        // allocation and merge-sensitive hints remain solely point-writer-owned.
+        const hints = new Map(accountIds.map(accountId => [accountId,
+            params.hintForAccount ? params.hintForAccount(accountId) : params.hint]));
+        await acquireAccountChangePublicationLocksInTx(tx, accountIds);
+        const cursors: AccountChangeCursor[] = [];
+        for (const accountId of accountIds) {
+            const cursor = await markAccountChanged(tx, { accountId, kind, entityId, hint: hints.get(accountId) });
+            cursors.push({ accountId, cursor });
+        }
+        return cursors;
+    }
+
+    const changedAt = new Date();
+    const sessionId = kind === "session" ? entityId : null;
+    const provider = getDbProviderFromEnv(process.env, "postgres");
+    if (provider === "postgres") {
+        // A locking SELECT cannot inline; its ordered rows fence the UPDATE
+        // without adding another round trip or relying on the UPDATE scan plan.
+        // Existing Account batches advanced updatedAt through Prisma; Session
+        // invalidation retains the PostgreSQL point writer's seq-only mutation.
+        const rows = await tx.$queryRawUnsafe<Array<{ accountId: string; cursor: number | bigint }>>(
+            `WITH locked AS (
+                SELECT "id" FROM "Account"
+                WHERE "id" IN (${accountIds.map((_, index) => `$${index + 5}`).join(", ")})
+                ORDER BY "id" FOR NO KEY UPDATE
+            ), next AS (
+                UPDATE "Account" SET "seq" = "seq" + 1,
+                    "updatedAt" = CASE WHEN $1 = 'session' THEN "updatedAt" ELSE $3 END
+                FROM locked WHERE "Account"."id" = locked."id"
+                RETURNING "Account"."id", "Account"."seq"
+            )
+            INSERT INTO "AccountChange" (
+                "accountId", "kind", "entityId", "cursor", "changedAt", "sessionId"
+            )
+            SELECT next."id", $1, $2, next."seq", $3, $4 FROM next
+            ON CONFLICT ("accountId", "kind", "entityId") DO UPDATE SET
+                "cursor" = EXCLUDED."cursor",
+                "changedAt" = EXCLUDED."changedAt",
+                "hint" = NULL,
+                "sessionId" = EXCLUDED."sessionId",
+                "machineId" = NULL,
+                "artifactId" = NULL,
+                "accountPetPackageId" = NULL
+            RETURNING "accountId", "cursor"`,
+            kind, entityId, changedAt, sessionId, ...accountIds,
+        );
+        if (rows.length !== accountIds.length) {
+            throw new Error("markAccountsChanged: every Account recipient must exist");
+        }
+        const cursorByAccountId = new Map(rows.map(row => [row.accountId, Number(row.cursor)]));
+        const cursors = accountIds.map(accountId => {
+            const cursor = cursorByAccountId.get(accountId);
+            if (cursor === undefined || !Number.isFinite(cursor)) {
+                throw new Error("markAccountsChanged: failed to read every Account cursor");
+            }
+            return { accountId, cursor };
+        });
+        for (const row of cursors) scheduleAccountChangeWake(tx, row.accountId, row.cursor);
+        return cursors;
+    }
+
+    await acquireAccountChangePublicationLocksInTx(tx, accountIds);
     const updated = await tx.account.updateMany({
         where: { id: { in: accountIds } },
         data: { seq: { increment: 1 } },
@@ -135,7 +221,15 @@ export async function markAccountsChanged(
         throw new Error("markAccountsChanged: failed to read every Account cursor");
     }
 
-    const changedAt = new Date();
+    // The point writer's Prisma upsert omits an undefined hint on update.
+    // Preserve those retained Session hints after taking the same Account fence.
+    const retainedSessionHints = kind === "session"
+        ? await tx.accountChange.findMany({
+            where: { accountId: { in: accountIds }, kind, entityId },
+            select: { accountId: true, hint: true },
+        })
+        : [];
+    const hintByAccountId = new Map(retainedSessionHints.map(row => [row.accountId, row.hint]));
     await tx.accountChange.deleteMany({
         where: {
             accountId: { in: accountIds },
@@ -150,6 +244,7 @@ export async function markAccountsChanged(
             entityId,
             cursor: row.seq,
             changedAt,
+            ...(kind === "session" ? { sessionId, hint: hintByAccountId.get(row.id) ?? undefined } : {}),
         })),
     });
 

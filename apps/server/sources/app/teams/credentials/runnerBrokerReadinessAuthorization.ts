@@ -174,5 +174,5 @@ export async function authorizeRunnerBrokerReadiness(input: Readonly<{
             return { ok: true, request: activation.request, credentialSelectionBinding: activation.credentialSelectionBinding, readiness: { kind: "broker_unavailable" } };
         }
         return { ok: true, request: activation.request, credentialSelectionBinding: activation.credentialSelectionBinding, readiness: { kind: "available" } };
-    });
+    }, { isolationLevel: "Serializable" /* Runner readiness captures machine, source, resource and current entitlement together. */ });
 }

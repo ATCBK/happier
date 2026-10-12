@@ -171,7 +171,7 @@ export async function mutateProfileTransferInTx(tx: Tx, input: Readonly<{
 export async function mutateProfileTransfer(input: Readonly<{
     accountId: string; mutation: ProfileTransferMutationV1; authentication?: TeamOperationAuthenticationContext;
 }>): Promise<ProfileTransferMutationResponseV1> {
-    try { return await inTx(tx => mutateProfileTransferInTx(tx, input)); }
+    try { return await inTx(tx => mutateProfileTransferInTx(tx, input), { /* Profile transfer validates shared Artifact and Secret inventory before activation. */ isolationLevel: "Serializable" }); }
     catch (error) {
         if (error instanceof ProfileTransferTransactionAbort) return error.result;
         throw error;

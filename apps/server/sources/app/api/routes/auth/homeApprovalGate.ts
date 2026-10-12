@@ -152,7 +152,7 @@ export function createHomeApprovalGate(env: NodeJS.ProcessEnv = process.env): Ho
                         expiresAtMs: row.expiresAt.getTime(),
                     },
                 };
-            });
+            }, { isolationLevel: "Serializable" /* Matching approval binding lookup and random pairing-row creation must deduplicate together. */ });
         },
     };
 }

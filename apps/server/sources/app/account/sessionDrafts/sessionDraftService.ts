@@ -479,7 +479,7 @@ export async function readSessionDraft(params: Readonly<{
     epoch?: SessionDraftAddressEpoch;
     authentication: SessionAccessAuthentication;
 }>): Promise<SessionDraftReadServiceResult> {
-    return await inTx((tx) => readSessionDraftInTx(tx, params), { readOnly: true });
+    return await inTx((tx) => readSessionDraftInTx(tx, params), { isolationLevel: "Serializable" /* Draft access, storage mode and lifecycle tombstone admission must remain coherent. */, readOnly: true });
 }
 
 /**
@@ -568,7 +568,7 @@ export async function listSessionDrafts(params: Readonly<{
                 ? canonicalSessionDraftAddressV1(last)
                 : canonicalSessionDraftAddressV2(last);
         return { items, ...(nextAfter ? { nextAfter } : {}) };
-    }, { readOnly: true });
+    }, { isolationLevel: "Serializable" /* Draft access, storage mode and lifecycle tombstone admission must remain coherent. */, readOnly: true });
 }
 
 export async function mutateSessionDraft(params: Readonly<{
@@ -636,5 +636,5 @@ export async function mutateSessionDraft(params: Readonly<{
             record,
         });
         return { status: "updated", record };
-    });
+    }, { isolationLevel: "Serializable" /* Draft access, storage mode and lifecycle tombstone admission must remain coherent. */ });
 }

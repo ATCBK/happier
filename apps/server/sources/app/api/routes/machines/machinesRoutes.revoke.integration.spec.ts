@@ -6,7 +6,6 @@ import { createInTxHarness } from "../../testkit/txHarness";
 
 const markAccountChanged = vi.fn(async () => 456);
 vi.mock("@/app/changes/markAccountChanged", () => ({ markAccountChanged }));
-vi.mock("@/app/changes/markAccountChangedAfterCommit", () => ({ markAccountChangedAfterCommit: vi.fn(async () => 456) }));
 
 const emitUpdate = vi.fn();
 const getConnections = vi.fn(() => []);

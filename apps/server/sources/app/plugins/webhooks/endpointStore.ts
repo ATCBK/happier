@@ -322,7 +322,7 @@ export async function ensurePluginWebhookEndpointV1(params: Readonly<{
     };
     if (params.tx) return await persist(params.tx);
     try {
-        return await inTx(persist);
+        return await inTx(persist, { /* Endpoint target/revision mutations participate with webhook authority-before-fence readers. */ isolationLevel: "Serializable" });
     } catch (error) {
         if (error instanceof PluginWebhookEndpointStoreError) throw error;
         if (!isPrismaErrorCode(error, "P2002")) throw error;
@@ -631,7 +631,7 @@ export async function revokePluginWebhookEndpointV1(params: Readonly<{
             });
         }
         return result;
-    });
+    }, { /* Endpoint target/revision mutations participate with webhook authority-before-fence readers. */ isolationLevel: "Serializable" });
 }
 
 export async function retargetPluginWebhookEndpointV1(params: Readonly<{
@@ -759,7 +759,7 @@ export async function retargetPluginWebhookEndpointV1(params: Readonly<{
         });
         return result;
     };
-    return params.tx ? await persist(params.tx) : await inTx(persist);
+    return params.tx ? await persist(params.tx) : await inTx(persist, { /* Endpoint target/revision mutations participate with webhook authority-before-fence readers. */ isolationLevel: "Serializable" });
 }
 
 /**
@@ -846,7 +846,7 @@ export function createPluginWebhookEndpointStoreV1(options: Readonly<{
                         publicBaseUrl,
                         randomBytes: options.randomBytes,
                     });
-                });
+                }, { /* Endpoint target/revision mutations participate with webhook authority-before-fence readers. */ isolationLevel: "Serializable" });
             } catch (error) {
                 if (error instanceof PluginWebhookEndpointStoreError) throw error;
                 if (!isPrismaErrorCode(error, "P2002") || !resolved.value) throw error;
@@ -934,6 +934,6 @@ export function createPluginWebhookEndpointStoreV1(options: Readonly<{
                 idempotencyKey: input.idempotencyKey,
                 target,
             });
-        }),
+        }, { /* Endpoint target/revision mutations participate with webhook authority-before-fence readers. */ isolationLevel: "Serializable" }),
     };
 }

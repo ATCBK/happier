@@ -357,12 +357,24 @@ describe("Machine authority mutations on an established socket", () => {
     it("replaces the complete capability projection, withdraws omitted leaves and rejects unknown fields", async () => {
         const subject = await createEstablishedMachineFixture("capability-projection");
         const event = MACHINE_UPDATE_OPERATION_PROTOCOL_CAPABILITIES_EVENT_V1;
-        const capabilities = { sessionSpawn: { protocolVersions: [1] } };
+        const capabilities = { sessionSpawn: { protocolVersions: [1] }, sessionFollow: { contextV1: true } };
         expect(await emit(subject, event, { machineId: subject.machineId, capabilities }))
             .toHaveBeenCalledWith({ v: 1, result: "success", revision: 1 });
         expect(await db.machine.findUniqueOrThrow({ where: { id: subject.machineId } })).toMatchObject({
             operationProtocolCapabilities: capabilities, operationProtocolCapabilitiesRevision: 1,
         });
+        const accountBeforeRefresh = await db.account.findUniqueOrThrow({
+            where: { id: subject.accountId }, select: { seq: true },
+        });
+        expect(await emit(subject, event, {
+            capabilities: { sessionFollow: { contextV1: true }, sessionSpawn: { protocolVersions: [1] } },
+        })).toHaveBeenCalledWith({ v: 1, result: "success", revision: 1 });
+        expect(await db.machine.findUniqueOrThrow({ where: { id: subject.machineId } })).toMatchObject({
+            operationProtocolCapabilities: capabilities, operationProtocolCapabilitiesRevision: 1,
+        });
+        expect(await db.account.findUniqueOrThrow({
+            where: { id: subject.accountId }, select: { seq: true },
+        })).toEqual(accountBeforeRefresh);
         expect(await emit(subject, event, { capabilities: {} }))
             .toHaveBeenCalledWith({ v: 1, result: "success", revision: 2 });
         expect(await emit(subject, event, {

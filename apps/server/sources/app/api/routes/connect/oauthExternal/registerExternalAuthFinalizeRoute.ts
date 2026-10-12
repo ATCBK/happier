@@ -368,7 +368,7 @@ export function registerExternalAuthFinalizeRoute(app: Fastify) {
                         authenticationEvidence,
                     },
                 );
-            });
+            }, { isolationLevel: "Serializable" /* OAuth runtime/evidence, Account token epoch and same-service directory admission share one snapshot. */ });
             if (!token) {
                 return reply.code(400).send({ error: "invalid-pending" });
             }
@@ -548,7 +548,7 @@ export function registerExternalAuthFinalizeRoute(app: Fastify) {
                         authenticationEvidence,
                     });
                     return { status: "replaced" as const, token };
-                });
+                }, { isolationLevel: "Serializable" /* Provider reset composes replacement ownership, identity transfer and final-login admission. */ });
             } catch (error) {
                 if (error instanceof ProviderResetAccountReplacementRejected) {
                     replacementOutcome = error.rejection;
@@ -687,7 +687,7 @@ export function registerExternalAuthFinalizeRoute(app: Fastify) {
                         authenticationEvidence,
                     });
                     return { status: "written" as const, token };
-                });
+                }, { isolationLevel: "Serializable" /* Fresh OAuth provisioning composes current provider policy, Team admission and directory writes. */ });
             } catch (error) {
                 let recoveredEqualKeyRace = false;
                 if (isPrismaUniqueConstraintError(error) && contentKeyBinding) {
@@ -897,7 +897,7 @@ export function registerExternalAuthFinalizeRoute(app: Fastify) {
                             ? { teamInvitationContinuation: claimedInvitation.continuation }
                             : {}),
                     };
-                });
+                }, { isolationLevel: "Serializable" /* OAuth identity linking and Team/directory admission depend on current provider and Account facts. */ });
             } catch (error) {
                 if (error instanceof Error && error.message === "content_public_key_mismatch") {
                     return reply.code(409).send({ error: "content_public_key_mismatch" });

@@ -341,6 +341,9 @@ export async function materializeEphemeralRunner(params: Readonly<{
                 throw new RunnerMaterializationRollback({ status: "conflict", reason: "binding_mismatch" });
             }
             return { status: "materialized", result: exactResult(row) };
+        }, {
+            // Materialization revalidates foreign Team/resource/broker facts outside the creator fence.
+            isolationLevel: "Serializable",
         });
     } catch (error) {
         if (error instanceof RunnerMaterializationRollback) return error.result;

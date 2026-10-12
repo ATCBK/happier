@@ -1693,7 +1693,7 @@ export function createPluginAvailabilityOperations(options: Readonly<{
                 availabilityCursor: account.seq,
                 facts: releaseFactsFromRow(release),
             });
-        });
+        }, { /* Release, materialization, hosting intent and Artifact projection must share one capture. */ isolationLevel: "Serializable" });
     }
 
     async function publishRelease(params: Readonly<{
@@ -1921,7 +1921,7 @@ export function createPluginAvailabilityOperations(options: Readonly<{
                 await markAvailabilityChangedTx(tx, params.accountId, pluginId);
             }
             return { revision: nextRevision, outcome: "replaced" };
-        });
+        }, { /* Materialization expected revision is read before row replacement and Machine update. */ isolationLevel: "Serializable" });
     }
 
     async function readMaterializations(params: Readonly<{
@@ -1988,7 +1988,7 @@ export function createPluginAvailabilityOperations(options: Readonly<{
                 },
             });
             return { availabilityCursor: account.seq, machines, releaseRows };
-        });
+        }, { /* Release, materialization, hosting intent and Artifact projection must share one capture. */ isolationLevel: "Serializable" });
         const unreadableMachines: Array<Readonly<{
             machineId: string;
             materializationCount: number;
@@ -2072,7 +2072,7 @@ export function createPluginAvailabilityOperations(options: Readonly<{
                 ...(candidates.length > readPluginIds.length
                     ? { nextCursor: readPluginIds.at(-1)! } : {}),
             };
-        }, { readOnly: true });
+        }, { /* Release, materialization, hosting intent and Artifact projection must share one capture. */ isolationLevel: "Serializable", readOnly: true });
         // The caller supplies materialized and previously observed identities.
         // Keep release/link/hosting decisions at the exact read owner rather
         // than building a second projection for Account bootstrap.
@@ -2184,7 +2184,7 @@ export function createPluginAvailabilityOperations(options: Readonly<{
                 return { availabilityCursor: account.seq, intentRow, release, packageAsset,
                     ...(managedResources !== undefined ? { managedResources,
                         managedResourcesReviewed: acceptsManagedResourceDispositions(managedResources, input.managedResourceDispositions) } : {}) };
-            }, { readOnly: true }),
+            }, { /* Release, materialization, hosting intent and Artifact projection must share one capture. */ isolationLevel: "Serializable", readOnly: true }),
         ]);
         const intent = current.intentRow ? intentFromRow(current.intentRow) : null;
         // Releases written before package assets have no immutable descriptor.
@@ -2310,7 +2310,7 @@ export function createPluginAvailabilityOperations(options: Readonly<{
                             : null,
                     },
                 });
-            });
+            }, { /* Hosting intent admission reads Collection activation quota and readiness before promotion fencing. */ isolationLevel: "Serializable" });
             return outcome;
         } catch (error) {
             throw intentTransitionError(error);
@@ -2447,7 +2447,7 @@ export function createPluginAvailabilityOperations(options: Readonly<{
                         releaseLessDeclaration,
                     },
                 });
-            });
+            }, { /* Hosting intent admission reads Collection activation quota and readiness before promotion fencing. */ isolationLevel: "Serializable" });
         } catch (error) {
             throw intentTransitionError(error);
         }
@@ -2591,12 +2591,12 @@ export function createPluginAvailabilityOperations(options: Readonly<{
         };
 
         try {
-            return await inTx(publish);
+            return await inTx(publish, { /* UI/package publishers share aggregate hosting and Artifact storage budgets. */ isolationLevel: "Serializable" });
         } catch (error) {
             if (!isPrismaErrorCode(error, "P2002")) throw error;
             // A uniqueness race rejoins through the same transaction-local
             // release, intent, classification and Account-mode checks.
-            return await inTx((tx) => publish(tx, true));
+            return await inTx((tx) => publish(tx, true), { /* UI/package publishers share aggregate hosting and Artifact storage budgets. */ isolationLevel: "Serializable" });
         }
     }
 
@@ -2655,7 +2655,7 @@ export function createPluginAvailabilityOperations(options: Readonly<{
                     version: release.version,
                     kind: "ui",
                 });
-            });
+            }, { /* Release, materialization, hosting intent and Artifact projection must share one capture. */ isolationLevel: "Serializable" });
         }
         const link = await db.accountPluginUiArtifact.findUnique({
             where: {
@@ -2892,12 +2892,12 @@ export function createPluginAvailabilityOperations(options: Readonly<{
         };
 
         try {
-            return await inTx(publish);
+            return await inTx(publish, { /* UI/package publishers share aggregate hosting and Artifact storage budgets. */ isolationLevel: "Serializable" });
         } catch (error) {
             if (!isPrismaErrorCode(error, "P2002")) throw error;
             // Re-enter the same transaction owner: a uniqueness race grants
             // no exemption from current hosting, Account mode or ID checks.
-            return await inTx(publish);
+            return await inTx(publish, { /* UI/package publishers share aggregate hosting and Artifact storage budgets. */ isolationLevel: "Serializable" });
         }
     }
 
@@ -2997,7 +2997,7 @@ export function createPluginAvailabilityOperations(options: Readonly<{
                     seq: artifact.seq,
                 },
             };
-        });
+        }, { /* Release, materialization, hosting intent and Artifact projection must share one capture. */ isolationLevel: "Serializable" });
     }
 
     /**
@@ -3296,7 +3296,7 @@ export function createPluginAvailabilityOperations(options: Readonly<{
             if (deleted.count !== 1) throw new PluginAvailabilityOperationError("plugin_package_asset_conflict");
             await markAvailabilityChangedTx(tx, params.accountId, release.pluginId);
             return { removed: true, link };
-        });
+        }, { /* Hosted Artifact removal admits Account mode and release links before deletion. */ isolationLevel: "Serializable" });
     }
 
     async function removeUiArtifact(params: Readonly<{
@@ -3389,7 +3389,7 @@ export function createPluginAvailabilityOperations(options: Readonly<{
             }
             await markAvailabilityChangedTx(tx, params.accountId, release.pluginId);
             return { removed: true, link: projected };
-        });
+        }, { /* Hosted Artifact removal admits Account mode and release links before deletion. */ isolationLevel: "Serializable" });
     }
 
     return {

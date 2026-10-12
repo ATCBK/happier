@@ -8,6 +8,39 @@ export interface DbMockShape {
     readonly [key: string]: DbMockValue;
 }
 
+function isDbMockRecord(value: unknown): value is Record<string, unknown> {
+    return value !== null && typeof value === "object" && !Array.isArray(value) && !(value instanceof Date);
+}
+
+/** Evaluates the Prisma where subset used by stateful transaction fixtures. */
+export function matchesDbMockWhere(actual: unknown, expected: unknown): boolean {
+    if (!isDbMockRecord(expected)) return actual instanceof Date && expected instanceof Date
+        ? actual.getTime() === expected.getTime() : actual === expected;
+    for (const [key, value] of Object.entries(expected)) {
+        if (key === "AND" || key === "OR") {
+            const clauses = Array.isArray(value) ? value : [value];
+            if (key === "AND" ? !clauses.every(clause => matchesDbMockWhere(actual, clause)) : !clauses.some(clause => matchesDbMockWhere(actual, clause))) return false;
+        } else if (key === "equals" || key === "is") {
+            if (!matchesDbMockWhere(actual, value)) return false;
+        } else if (key === "not") {
+            if (matchesDbMockWhere(actual, value)) return false;
+        } else if (key === "in" || key === "notIn") {
+            if (!Array.isArray(value)) throw new Error("Invalid database set predicate");
+            if (key === "in" ? !value.includes(actual) : value.includes(actual)) return false;
+        } else if (key === "some" || key === "none") {
+            if (!Array.isArray(actual)) return false;
+            const hasMatch = actual.some(item => matchesDbMockWhere(item, value));
+            if (key === "some" ? !hasMatch : hasMatch) return false;
+        } else if (key === "lt" || key === "lte" || key === "gt") {
+            const left = actual instanceof Date ? actual.getTime() : actual;
+            const right = value instanceof Date ? value.getTime() : value;
+            if ((typeof left !== "number" && typeof left !== "bigint") || (typeof right !== "number" && typeof right !== "bigint")) return false;
+            if (key === "lt" ? !(left < right) : key === "lte" ? !(left <= right) : !(left > right)) return false;
+        } else if (!isDbMockRecord(actual) || !matchesDbMockWhere(actual[key], value)) return false;
+    }
+    return true;
+}
+
 /**
  * Field references (`db.<model>.fields.<column>`) are how Prisma expresses a column-to-column
  * comparison in a `where`, so a mocked delegate has to carry them the way a real one does.
@@ -95,6 +128,7 @@ export function installPrismaModuleMock<TModule extends object>(module: ModuleMo
 
 export function createDbTransactionMock<TTx extends object>(createTxState: () => TTx): {
     transaction: ReturnType<typeof vi.fn>;
+    readSnapshot: <T>(fn: (tx: TTx) => Promise<T>) => Promise<T>;
     wrapDb: <TDb extends object>(db: TDb) => TransactionalDb<TDb, TTx>;
 } {
     const transaction = vi.fn(async <T>(fnOrOperations: ((tx: TTx) => Promise<T>) | readonly unknown[]): Promise<T> => {
@@ -107,6 +141,10 @@ export function createDbTransactionMock<TTx extends object>(createTxState: () =>
 
     return {
         transaction,
+        // SQLite read-only transactions use a separate database adapter. Supply
+        // the same fixture delegates there while keeping inTx/domain logic real.
+        readSnapshot: async <T>(fn: (tx: TTx) => Promise<T>): Promise<T> =>
+            await fn(createTxState()),
         wrapDb<TDb extends object>(db: TDb): TransactionalDb<TDb, TTx> {
             return {
                 ...db,

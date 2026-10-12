@@ -138,6 +138,6 @@ export async function mutateNotificationChannelCatalogInTx(tx: Tx, input: Mutati
 }
 
 export async function mutateNotificationChannelCatalog(input: MutationInput): Promise<MutationResponse> {
-  try { return await inTx(tx => mutateNotificationChannelCatalogInTx(tx, input)); }
+  try { return await inTx(tx => mutateNotificationChannelCatalogInTx(tx, input), { /* Shared Secret revisions and Team-derived access precede catalog writes. */ isolationLevel: "Serializable" }); }
   catch (error) { if (error instanceof NotificationChannelCatalogPairedMutationRejected) return error.result; throw error; }
 }

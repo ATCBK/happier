@@ -557,7 +557,7 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
         try {
             return reply.send(await inTx((tx) => readAutomationAccountEncryptionMigrationInventoryInTx({
                 tx, accountId: request.userId,
-            })));
+            }), { isolationLevel: "Serializable" /* Migration inventory captures definition, source and Run envelopes as one Account-mode snapshot. */ }));
         } catch (error) {
             if (error instanceof InactiveAccountError) throw error;
             return reply.code(500).send({ error: "internal" });
@@ -581,7 +581,7 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
                     return await createReviewCommentAccountEncryptionMigrationPersistenceInTx(
                         tx,
                     ).readInventory(request.userId);
-                }, { readOnly: true });
+                }, { readOnly: true, isolationLevel: "Serializable" /* Review comments and their migration events must describe one inventory epoch. */ });
                 return reply.send(
                     buildReviewCommentAccountEncryptionMigrationInventoryResponse(
                         inventory,
@@ -614,7 +614,7 @@ export function registerAccountEncryptionMigrateRoutes(app: Fastify): void {
                         tx,
                         accountId: request.userId,
                     });
-                }, { readOnly: true }));
+                }, { readOnly: true, isolationLevel: "Serializable" /* Organization rows, envelopes and ordering must describe one migration inventory. */ }));
             } catch (error) {
                 if (error instanceof InactiveAccountError) throw error;
                 return reply.code(500).send({

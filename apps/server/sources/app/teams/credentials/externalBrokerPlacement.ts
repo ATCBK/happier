@@ -201,7 +201,7 @@ export async function resolveTeamCredentialExternalBrokerPlacement(input: Readon
             const winningOperation = winner?.currentBrokerOperationJson
                 ? readExternalBrokerOperation(winner.currentBrokerOperationJson) : null;
             return winningOperation && operationMatches(winningOperation) ? winningOperation : null;
-        });
+        }, { isolationLevel: "Serializable" /* External broker signing composes current key authority, resource and entitlement. */ });
         if (!current) return { ok: false, error: "broker_unavailable" };
         // A concurrent winner may differ from the candidate this request probed.
         // Validate that exact winner; never dispatch the losing candidate.

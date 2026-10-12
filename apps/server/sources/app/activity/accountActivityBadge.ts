@@ -210,7 +210,11 @@ async function computeAccountActivityBadgeCountsForAuthentication(
     accountIds: ReadonlyArray<string>,
     authentication: SessionAccessAuthentication,
 ): Promise<Map<string, number>> {
-    return await inTx(async (tx) => await computeAccountActivityBadgeCountsInTx(tx, accountIds, authentication), { readOnly: true });
+    return await inTx(async (tx) => await computeAccountActivityBadgeCountsInTx(tx, accountIds, authentication), {
+        // Credential-qualified access and protected attention counts share one snapshot.
+        readOnly: true,
+        isolationLevel: "Serializable",
+    });
 }
 
 /**

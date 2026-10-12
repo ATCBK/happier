@@ -241,7 +241,7 @@ export async function mutateConnectedServiceCredential(
             await recordConnectedServiceAccountProfileChange({ tx, accountId: params.accountId });
         }
         return result;
-    });
+    }, { /* Credential mode admission and full connected-services projection precede Account publication. */ isolationLevel: "Serializable" });
 }
 
 export async function mutateConnectedServiceCredentialHealth(params: Readonly<{

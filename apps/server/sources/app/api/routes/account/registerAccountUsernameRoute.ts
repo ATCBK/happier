@@ -6,16 +6,15 @@ import { resolveFriendsPolicyFromServerFeatures } from "@/app/social/resolveFrie
 import { validateUsername } from "@/app/social/usernamePolicy";
 import { type Fastify } from "../../types";
 import { readRequestHomeEnv } from "@/app/home/settings/requestHomeEnv";
+import { AccountUsernameUpdateRequestV1Schema, AccountUsernameUpdateResponseV1Schema } from "@happier-dev/protocol/account/profile";
 
 export function registerAccountUsernameRoute(app: Fastify): void {
     app.post('/v1/account/username', {
         preHandler: app.authenticate,
         schema: {
-            body: z.object({
-                username: z.string(),
-            }),
+            body: AccountUsernameUpdateRequestV1Schema,
             response: {
-                200: z.object({ username: z.string() }),
+                200: AccountUsernameUpdateResponseV1Schema,
                 400: z.object({ error: z.enum(['invalid-username', 'username-disabled', 'friends-disabled']) }),
                 409: z.object({ error: z.literal('username-taken') }),
             },

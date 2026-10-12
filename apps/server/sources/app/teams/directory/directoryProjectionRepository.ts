@@ -333,7 +333,7 @@ export async function commitInitializingWorkosProjectionEvent(
             throw new StaleProjectionRunError();
         }
         return { applied: true };
-    }).catch((error: unknown) => {
+    }, { isolationLevel: "Serializable" /* Projection writes compose current source/run admission with child rows and policy. */ }).catch((error: unknown) => {
         if (error instanceof StaleProjectionRunError) return { applied: false, reason: "stale_run" };
         throw error;
     });
@@ -376,7 +376,7 @@ export async function stageInitializingWorkosGroupMemberEventPage(
             personReconcileRunId: params.reconcileRunId,
         });
         return { applied: true };
-    });
+    }, { isolationLevel: "Serializable" /* A source/run read must remain current throughout staged child projection writes. */ });
 }
 
 export async function stageActiveWorkosGroupMemberEventPage(
@@ -426,7 +426,7 @@ export async function stageActiveWorkosGroupMemberEventPage(
             personReconcileRunId: workosEventStageMarker(eventId, params.attemptId),
         });
         return { applied: true };
-    });
+    }, { isolationLevel: "Serializable" /* Later staged pages must remain in the same active source/run as their child writes. */ });
 }
 
 class StaleProjectionRunError extends Error {}
@@ -455,7 +455,7 @@ export async function commitDirectoryProjectionPage(params: DirectoryProjectionP
         if (!await hasCurrentProjectionRun(tx, params)) return { applied: false, reason: "stale_run" };
         await applyProjectionPageInTx(tx, params);
         return { applied: true };
-    });
+    }, { isolationLevel: "Serializable" /* A source/run read must remain current throughout child projection writes. */ });
 }
 
 export async function finalizeDirectoryProjection(params: Readonly<{
@@ -494,7 +494,7 @@ export async function finalizeDirectoryProjection(params: Readonly<{
             data: { state: "deleted" },
         });
         return { applied: true };
-    });
+    }, { isolationLevel: "Serializable" /* Finalization removes stale child rows only for the observed current source/run. */ });
 }
 
 type NativeDirectoryProjectionContext = Readonly<{
@@ -810,7 +810,7 @@ export async function commitActiveWorkosProjectionEvent(
         // change, not a timer, so wake the Team once for it.
         if (!published) await publishTeamChangedInTx(tx, { teamId: current.teamId });
         return { applied: true };
-    }).catch((error: unknown) => {
+    }, { isolationLevel: "Serializable" /* Active projection publication composes source/run currentness and effective contribution unions. */ }).catch((error: unknown) => {
         if (error instanceof StaleProjectionRunError) return { applied: false, reason: "stale_run" };
         throw error;
     });
@@ -869,7 +869,7 @@ export async function completeActiveWorkosEmptyPoll(params: Readonly<{
             });
         }
         return { applied: true };
-    });
+    }, { isolationLevel: "Serializable" /* Poll completion participates in manual-sync and source/run lifecycle admission. */ });
 }
 
 /**
@@ -977,7 +977,7 @@ export async function completeDirectoryProjection(params: Readonly<{
             });
         }
         return { applied: true };
-    }).catch((error: unknown) => {
+    }, { isolationLevel: "Serializable" /* Projection activation composes manual-sync state and native/external contribution unions. */ }).catch((error: unknown) => {
         if (error instanceof StaleProjectionRunError) return { applied: false, reason: "stale_run" };
         throw error;
     });

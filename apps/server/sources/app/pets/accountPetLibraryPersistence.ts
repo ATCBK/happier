@@ -323,7 +323,7 @@ export function createPrismaAccountPetLibraryPersistence(
                         ok: true,
                         deletedAt,
                     };
-                });
+                }, { /* Pet deletion reads live state before an unconditional versioned retirement. */ isolationLevel: "Serializable" });
             } catch {
                 return { ok: false, error: "internal" };
             }

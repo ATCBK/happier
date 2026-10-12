@@ -125,7 +125,7 @@ export async function setTeamLogo(input: Readonly<{
                 logo,
                 authentication: input.authentication,
             });
-        });
+        }, { isolationLevel: "Serializable" /* Logo mutation admission combines current Team lifecycle, actor membership and authentication policy. */ });
     } catch (error) {
         await deleteTeamLogoObject(input.teamId, path);
         throw error;
@@ -163,7 +163,7 @@ export async function removeTeamLogo(input: Readonly<{
             logo: null,
             authentication: input.authentication,
         });
-    });
+    }, { isolationLevel: "Serializable" /* Logo removal admission combines current Team lifecycle, actor membership and authentication policy. */ });
     if (!committed.ok) return committed;
 
     if (committed.displacedPath !== null) {

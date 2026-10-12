@@ -449,7 +449,7 @@ export async function authorizeTeamCredentialProviderModelCatalog(
             ...(executionRun ? { executionRun } : {}),
         });
         return authorized.ok ? { ok: true } : authorized;
-    });
+    }, { isolationLevel: "Serializable" /* Broker model disclosure composes entitlement, resource revision and current signing authority. */ });
 }
 
 async function readCurrentInitiatorEndpointInTx(
@@ -1081,7 +1081,7 @@ async function openTeamCredentialProviderBrokerWithPrincipal(
         const changed = preparationChangeFailure(preProjection, current);
         if (changed) return changed;
         return finalizePreparedBrokerOpen(input, current, projectionResponse);
-    });
+    }, { isolationLevel: "Serializable" /* Broker signing must observe one current entitlement, source and resource snapshot. */ });
 }
 
 /** Ordinary Session/Run opens select Pool placement at this Home boundary. */
@@ -1147,7 +1147,7 @@ export async function admitTeamCredentialProviderBrokerRequest(
         { ...input, brokerPresence },
         parsed.data,
         executionRun,
-    ));
+    ), { isolationLevel: "Serializable" /* Usage limits are summed before a distinct request fact is admitted. */ });
 }
 
 async function admitTeamCredentialProviderBrokerRequestInTx(

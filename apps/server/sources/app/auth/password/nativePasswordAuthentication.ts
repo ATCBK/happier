@@ -94,7 +94,7 @@ export async function loginWithNativePlainPassword(params: Readonly<{
                 authenticationEvidence: [{ kind: "home_method", methodId: "email_password" }],
             });
             return { ok: true, token } as const;
-        });
+        }, { isolationLevel: "Serializable" /* Policy admission and directory descriptor/preference writes share the credential snapshot. */ });
     } catch (error) {
         if (error instanceof InactiveAccountError) return { ok: false, statusCode: 403, error: "account-disabled" } as const;
         if (error instanceof AccountSessionOwnerMetadataFenceAccountNotFoundError) {
@@ -158,7 +158,7 @@ export async function unlockNativeE2eePassword(params: Readonly<{
                 expectedAccountId: current.account.id,
                 challenge,
             } as const;
-        });
+        }, { isolationLevel: "Serializable" /* Native credential, Home policy and the issued password-evidence challenge share one snapshot. */ });
         if (!result.ok) return result;
         return result;
     } catch (error) {

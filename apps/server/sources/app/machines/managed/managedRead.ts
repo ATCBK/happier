@@ -130,5 +130,8 @@ export async function cancelManagedCreation(params: Readonly<{ actorAccountId: s
         const current = await tx.managedMachine.findUniqueOrThrow({ where: { id: row.id } });
         await invalidateManagedMachineInTx(tx, current);
         return { machine: await projectManagedMachineInTx(tx, current) };
+    }, {
+        // Cleanup is derived from allocation omitted by the cancellation CAS.
+        isolationLevel: "Serializable",
     });
 }

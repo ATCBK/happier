@@ -21,7 +21,7 @@ import type { MachineProvisionerContributionV1 } from "@happier-dev/protocol/plu
 import type { PluginJsonSchemaV2 } from "@happier-dev/protocol/plugins/contributions/jsonSchema";
 import { createPluginJsonSchemaZodValueAdapter } from "@happier-dev/protocol/plugins/actions/json-schema-validation";
 import { pluginJsonValuesEqual } from "@happier-dev/protocol/plugins/actions/protocol-composable-schema";
-import { markAccountChanged, markAccountsChanged } from "@/app/changes/markAccountChanged";
+import { acquireAccountChangePublicationLocksInTx, markAccountsChanged } from "@/app/changes/markAccountChanged";
 import { resolveCurrentMachineRecipientAccountIdsInTx, resolveMachineAccessInTx } from "@/app/machines/machineAccess";
 import { readCurrentServerIdentityId } from "@/app/serverIdentity/serverIdentity";
 import { classifyMachineAvailabilityState } from "@/app/machines/machineStateGuards";
@@ -257,18 +257,23 @@ export function sameManagedInput(left: unknown, right: unknown): boolean {
 
 export async function invalidateManagedMachineInTx(tx: Tx, row: StoredManagedMachine): Promise<void> {
     const accountIds = await resolveCurrentMachineRecipientAccountIdsInTx(tx, row.controllerMachineId);
-    await markAccountsChanged(tx, { accountIds, kind: "account", entityId: row.id });
     const fresh = await tx.managedMachine.findUnique({ where: { id: row.id } });
     const previous = readStoredManagedDevcontainerChild(row);
     const machineIds = new Set([row.enrolledMachineId, fresh?.enrolledMachineId].filter((id): id is string => typeof id === 'string'));
+    const children: Array<{ machineId: string; child: Awaited<ReturnType<typeof readMachineDevcontainerChildInTx>>; accountIds: string[] }> = [];
     for (const machineId of machineIds) {
         const child = await readMachineDevcontainerChildInTx(tx, machineId);
         const before = row.enrolledMachineId === machineId ? previous : null;
         if (managedDevcontainerChildProjectionsEqualV1(before ?? undefined, child ?? undefined)) continue;
-        for (const accountId of await resolveCurrentMachineRecipientAccountIdsInTx(tx, machineId)) {
+        children.push({ machineId, child, accountIds: await resolveCurrentMachineRecipientAccountIdsInTx(tx, machineId) });
+    }
+    await acquireAccountChangePublicationLocksInTx(tx, [...accountIds, ...children.flatMap(child => child.accountIds)]);
+    await markAccountsChanged(tx, { accountIds, kind: "account", entityId: row.id });
+    for (const { machineId, child, accountIds: childAccountIds } of children) {
+        const cursors = await markAccountsChanged(tx, { accountIds: childAccountIds, kind: 'machine', entityId: machineId });
+        for (const { accountId, cursor } of cursors) {
             const access = await resolveMachineAccessInTx(tx, { actorAccountId: accountId, machineId });
             const devcontainerChild = access?.accessState === 'ready' ? child : null;
-            const cursor = await markAccountChanged(tx, { accountId, kind: 'machine', entityId: machineId });
             afterTx(tx, () => eventRouter.emitUpdate({ userId: accountId,
                 payload: buildUpdateMachineUpdate(machineId, cursor, randomKeyNaked(12), undefined, undefined, { devcontainerChild }),
                 recipientFilter: { type: 'machine-scoped-only', machineId } }));

@@ -15,7 +15,7 @@ export function registerProfileTransferRoutes(app: Fastify): void {
         config: { rateLimit: resolveApiHotEndpointRateLimit(process.env, 'account.settings') },
         schema: { response: { 200: asServerProtocolZod(ProfileTransferRowReadResponseV1Schema), 500: z.object({ error: z.literal('internal') }).strict() } },
     }, async (request, reply) => {
-        const result = await inTx(tx => readProfileTransferControlInTx(tx, { accountId: request.userId }), { readOnly: true });
+        const result = await inTx(tx => readProfileTransferControlInTx(tx, { accountId: request.userId }), { /* Account mode and catalog content must share one capture. */ isolationLevel: "Serializable", readOnly: true });
         return reply.send(profileTransferControlReadResponseV1(result));
     });
     app.post(PROFILE_TRANSFER_ROUTE_V1, {

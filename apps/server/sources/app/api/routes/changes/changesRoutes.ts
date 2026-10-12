@@ -121,7 +121,11 @@ export function changesRoutes(app: Fastify) {
                     throughCursor: account.seq,
                     status: access.status,
                 };
-            }, { readOnly: true });
+            }, {
+                // The access witness and throughCursor describe one committed snapshot.
+                readOnly: true,
+                isolationLevel: "Serializable",
+            });
             if (!probe) {
                 changesRequestsCounter.inc({ result: 'account-not-found' });
                 warn({ module: 'changes', userId: userIdRedacted }, 'Authenticated Session access probe missing account row');

@@ -112,7 +112,7 @@ export async function configurePluginWebhookEndpointCredentialV1(params: Readonl
             credentialVersionId: material.credentialVersionId,
             oneTimeGeneratedSecret: material.secret,
         });
-    });
+    }, { /* Endpoint revision and credential rotation/retirement participate with authority readers. */ isolationLevel: "Serializable" });
 }
 
 export async function rotatePluginWebhookEndpointCredentialV1(params: Readonly<{
@@ -174,7 +174,7 @@ export async function rotatePluginWebhookEndpointCredentialV1(params: Readonly<{
             previousAcceptUntilMs: rotated.previousAcceptUntil.getTime(),
             oneTimeGeneratedSecret: rotated.secret,
         });
-    });
+    }, { /* Endpoint revision and credential rotation/retirement participate with authority readers. */ isolationLevel: "Serializable" });
 }
 
 export async function finishPluginWebhookEndpointCredentialRotationV1(params: Readonly<{
@@ -235,7 +235,7 @@ export async function finishPluginWebhookEndpointCredentialRotationV1(params: Re
             webhookEndpointId: params.input.webhookEndpointId,
             revision,
         });
-    });
+    }, { /* Endpoint revision and credential rotation/retirement participate with authority readers. */ isolationLevel: "Serializable" });
 }
 
 async function resolveCurrentWebhookTargetV1(serverIdentityId: string, params: Readonly<{
@@ -386,7 +386,7 @@ export function createPluginWebhookEndpointActionsV1(options: Readonly<{
                 serverIdentityId,
                 accountId: params.accountId,
                 input: params.input,
-            }));
+            }), { /* Endpoint revision and credential rotation/retirement participate with authority readers. */ isolationLevel: "Serializable" });
         },
     };
 }

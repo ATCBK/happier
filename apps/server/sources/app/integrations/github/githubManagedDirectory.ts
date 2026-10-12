@@ -280,7 +280,7 @@ async function refreshOrganizationLogin(
             },
         });
         return true;
-    });
+    }, { isolationLevel: "Serializable" /* Directory refresh compares source currentness before updating the observed directory revision. */ });
 }
 
 export async function beginManagedGitHubDirectoryRead(

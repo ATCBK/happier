@@ -190,7 +190,7 @@ export function registerTeamMemberRoutes(app: Fastify) {
             accountId: request.body.accountId,
             role: request.body.role,
             historyAccess: request.body.historyAccess,
-        }));
+        }), { isolationLevel: "Serializable" /* Member admission and Session-access effects depend on current Team and Account eligibility. */ });
         if (!result.ok) return fail(reply, result.error);
         return reply.send(result.value);
     });
@@ -210,7 +210,7 @@ export function registerTeamMemberRoutes(app: Fastify) {
             authentication: readTeamOperationAuthenticationFromRequest(request),
             membershipId: request.body.membershipId,
             role: request.body.role,
-        }));
+        }), { isolationLevel: "Serializable" /* Owner role changes must preserve the cross-membership surviving-owner count. */ });
         if (!result.ok) return fail(reply, result.error);
         return reply.send(result.value);
     });
@@ -229,7 +229,7 @@ export function registerTeamMemberRoutes(app: Fastify) {
             actorAccountId: request.userId,
             authentication: readTeamOperationAuthenticationFromRequest(request),
             membershipId: request.body.membershipId,
-        }));
+        }), { isolationLevel: "Serializable" /* Member suspension must preserve surviving owners and withdraw the effective contribution union. */ });
         if (!result.ok) return fail(reply, result.error);
         return reply.send(result.value);
     });
@@ -248,7 +248,7 @@ export function registerTeamMemberRoutes(app: Fastify) {
             actorAccountId: request.userId,
             authentication: readTeamOperationAuthenticationFromRequest(request),
             membershipId: request.body.membershipId,
-        }));
+        }), { isolationLevel: "Serializable" /* Member reactivation participates in Team eligibility and directory contribution admission. */ });
         if (!result.ok) return fail(reply, result.error);
         return reply.send(result.value);
     });
@@ -270,7 +270,7 @@ export function registerTeamMemberRoutes(app: Fastify) {
             actorAccountId: request.userId,
             authentication: readTeamOperationAuthenticationFromRequest(request),
             membershipId: request.body.membershipId,
-        }));
+        }), { isolationLevel: "Serializable" /* Member removal must preserve surviving owners and withdraw the effective contribution union. */ });
         if (!result.ok) return fail(reply, result.error);
         return reply.send(result.value);
     });
@@ -285,7 +285,7 @@ export function registerTeamMemberRoutes(app: Fastify) {
             teamId: request.body.teamId,
             actorAccountId: request.userId,
             authentication: readTeamOperationAuthenticationFromRequest(request),
-        }));
+        }), { isolationLevel: "Serializable" /* Leaving the Team must preserve surviving owners and withdraw the effective contribution union. */ });
         if (!result.ok) return fail(reply, result.error);
         return reply.send(result.value);
     });
@@ -305,7 +305,7 @@ export function registerTeamMemberRoutes(app: Fastify) {
             authentication: readTeamOperationAuthenticationFromRequest(request),
             membershipId: request.body.membershipId,
             management: request.body.management,
-        }));
+        }), { isolationLevel: "Serializable" /* Management transfer depends on provisioned identity bindings and current contribution ownership. */ });
         if (!result.ok) return fail(reply, result.error);
         return reply.send(result.value);
     });

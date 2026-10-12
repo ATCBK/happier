@@ -28,7 +28,7 @@ export async function connectGitHubIdentity(params: {
 }): Promise<void> {
     const prepared = await prepareGitHubIdentityConnection(params);
     const { inTx } = await import("@/storage/inTx");
-    await inTx(prepared.connectInTx);
+    await inTx(prepared.connectInTx, { isolationLevel: "Serializable" /* Identity transfer and fill-if-empty Account presentation depend on the observed link and Account. */ });
 }
 
 export async function disconnectGitHubIdentity(ctx: Context): Promise<void> {

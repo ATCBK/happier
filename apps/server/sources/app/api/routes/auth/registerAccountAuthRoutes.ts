@@ -474,7 +474,7 @@ export function registerAccountAuthRoutes(app: Fastify): void {
                 return { status: "success" } as const;
             }
             throw new DirectQrCompletionConflictError();
-        }).catch((error: unknown) => {
+        }, { isolationLevel: "Serializable" /* Pairing response policy, Account credential currentness and token issuance share one snapshot. */ }).catch((error: unknown) => {
             if (!(error instanceof DirectQrCompletionConflictError)) throw error;
             return classifyCurrentCompletion();
         });

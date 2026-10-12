@@ -76,6 +76,9 @@ export function registerMachineReplacementRoutes(app: Fastify): void {
             });
 
             return { kind: "ok" as const, machine: updatedOldMachine };
+        }, {
+            // Reciprocal replacement reads both Machines but writes only the old Machine.
+            isolationLevel: "Serializable",
         });
 
         if (result.kind === "error") {
@@ -133,6 +136,9 @@ export function registerMachineReplacementRoutes(app: Fastify): void {
             });
 
             return { kind: "ok" as const, machine: updatedMachine };
+        }, {
+            // Replacement clearing participates in target availability and reciprocal replacement admission.
+            isolationLevel: "Serializable",
         });
 
         if (result.kind === "upgrade_required") {

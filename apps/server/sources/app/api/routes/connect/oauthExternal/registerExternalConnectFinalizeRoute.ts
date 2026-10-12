@@ -203,7 +203,7 @@ export function registerExternalConnectFinalizeRoute(app: Fastify) {
                     authority: "present_user",
                     ...(authenticationEvidence.length > 0 ? { authenticationEvidence } : {}),
                 });
-            });
+            }, { isolationLevel: "Serializable" /* Identity linking and Team admission must agree with the current provider/runtime binding. */ });
             if (!token) {
                 return reply.code(400).send({ error: "invalid-pending" });
             }

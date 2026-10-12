@@ -7,7 +7,6 @@ import { createSignedAccountContentBinding } from "@/testkit/accountEncryption";
 
 const markAccountChanged = vi.fn(async () => 123);
 vi.mock("@/app/changes/markAccountChanged", () => ({ markAccountChanged }));
-vi.mock("@/app/changes/markAccountChangedAfterCommit", () => ({ markAccountChangedAfterCommit: vi.fn(async () => 123) }));
 
 vi.mock("@/utils/logging/log", () => ({ log: vi.fn() }));
 

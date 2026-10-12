@@ -94,7 +94,7 @@ export function registerSavedSecretResourceRoutes(app: Fastify): void {
                 tx,
                 request.userId,
                 authentication,
-            ), { readOnly: true });
+            ), { /* Secret recipient keys, effective grants and cross-owner reference censuses must stay coherent. */ isolationLevel: "Serializable", readOnly: true });
             return reply.send({ resources: [...resources] });
         } catch {
             return reply.code(500).send({ error: "internal" });
@@ -111,7 +111,7 @@ export function registerSavedSecretResourceRoutes(app: Fastify): void {
                 tx,
                 request.userId,
                 authentication,
-            ), { readOnly: true });
+            ), { /* Secret recipient keys, effective grants and cross-owner reference censuses must stay coherent. */ isolationLevel: "Serializable", readOnly: true });
             return reply.send({
                 resources: rows.map((row) => {
                     if (!("resourceId" in row)) return { entry: row.entry };
@@ -153,7 +153,7 @@ export function registerSavedSecretResourceRoutes(app: Fastify): void {
             resourceId: parsed.data.resourceId,
             cursor: parsed.data.cursor,
             limit: parsed.data.limit,
-        }), { readOnly: true });
+        }), { /* Secret recipient keys, effective grants and cross-owner reference censuses must stay coherent. */ isolationLevel: "Serializable", readOnly: true });
         if (!result.ok) {
             if (result.error === "forbidden") {
                 return reply.code(403).send({ error: result.error });
@@ -191,7 +191,7 @@ export function registerSavedSecretResourceRoutes(app: Fastify): void {
             resourceId: parsed.data.resourceId,
             expectedRevision: parsed.data.expectedRevision,
             keyEnvelopes,
-        }));
+        }), { /* Secret recipient keys, effective grants and cross-owner reference censuses must stay coherent. */ isolationLevel: "Serializable" });
         if (!result.ok) {
             const status = result.error === "forbidden" ? 403
                 : result.error === "resource_not_found" ? 404
@@ -231,7 +231,7 @@ export function registerSavedSecretResourceRoutes(app: Fastify): void {
             teamGrants: body.teamGrants,
             groupGrants: body.groupGrants,
             keyEnvelopes,
-        }));
+        }), { /* Secret recipient keys, effective grants and cross-owner reference censuses must stay coherent. */ isolationLevel: "Serializable" });
         if (!result.ok) {
             const status = result.error === "forbidden" || result.error === "recipient_mode_unsupported" ? 403
                 : result.error === "resource_changed" || result.error === "settings_conflict" ? 409 : 400;
@@ -285,7 +285,7 @@ export function registerSavedSecretResourceRoutes(app: Fastify): void {
                 notificationChannelMutation: body.notificationChannelMutation,
                 additionalSavedSecretResources: additionalResources.filter((resource): resource is NonNullable<typeof resource> => resource !== null),
                 personalSecretPromotions: body.personalSecretPromotions,
-            }));
+            }), { /* Secret recipient keys, effective grants and cross-owner reference censuses must stay coherent. */ isolationLevel: "Serializable" });
         } catch (error) {
             if (error instanceof SavedSecretResourceTransactionAbort) {
                 const status = error.error === "settings_conflict" || error.error === 'references_conflict' || error.error === 'resource_changed' ? 409 : 400;
@@ -328,7 +328,7 @@ export function registerSavedSecretResourceRoutes(app: Fastify): void {
             storedContent: body.storedContent,
             ...(body.toMode ? { toMode: body.toMode } : {}),
             keyEnvelopes,
-        }));
+        }), { /* Secret recipient keys, effective grants and cross-owner reference censuses must stay coherent. */ isolationLevel: "Serializable" });
         if (!result.ok) {
             const status = result.error === "forbidden" || result.error === "recipient_mode_unsupported" ? 403
                 : result.error === "resource_not_found" ? 404
@@ -361,7 +361,7 @@ export function registerSavedSecretResourceRoutes(app: Fastify): void {
             authentication,
             ...body,
             keyEnvelopes,
-        }));
+        }), { /* Secret recipient keys, effective grants and cross-owner reference censuses must stay coherent. */ isolationLevel: "Serializable" });
         if (!result.ok) {
             const status = result.error === "forbidden" ? 403
                 : result.error === "resource_changed" ? 409 : 400;
@@ -395,7 +395,7 @@ export function registerSavedSecretResourceRoutes(app: Fastify): void {
                 expectedSettingsVersion: body.expectedSettingsVersion,
                 referenceCensus: body.referenceCensus,
                 managedResourceDispositions: body.managedResourceDispositions,
-            }));
+            }), { /* Secret recipient keys, effective grants and cross-owner reference censuses must stay coherent. */ isolationLevel: "Serializable" });
         } catch (error) {
             if (error instanceof SavedSecretResourceTransactionAbort) {
                 const status = error.error === 'resource_changed' || error.error === 'references_conflict' || error.error === 'settings_conflict' ? 409 : 400;

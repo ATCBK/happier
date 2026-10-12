@@ -232,7 +232,7 @@ export function registerTeamInvitationRoutes(app: Fastify, deps: TeamInvitationR
             emailDeliveryAvailable,
             requestKey: request.body.requestKey,
             authentication: readTeamOperationAuthenticationFromRequest(request),
-        }));
+        }), { isolationLevel: "Serializable" /* Invitation creation composes current Team policy, actor authority and Account admission. */ });
         if (!result.ok) return sendServiceError(reply, result.error);
 
         // A replayed intent mints nothing and delivers nothing: the mail for this
@@ -314,7 +314,7 @@ export function registerTeamInvitationRoutes(app: Fastify, deps: TeamInvitationR
             actorAccountId: request.userId,
             invitationId: request.body.invitationId,
             authentication: readTeamOperationAuthenticationFromRequest(request),
-        }));
+        }), { isolationLevel: "Serializable" /* Invitation revocation participates in the same single-use Team admission family. */ });
         if (!result.ok) return sendServiceError(reply, result.error);
         return reply.send(result.value);
     });
@@ -357,7 +357,7 @@ export function registerTeamInvitationRoutes(app: Fastify, deps: TeamInvitationR
             requestKey: request.body.requestKey,
             emailDeliveryAvailable,
             authentication: readTeamOperationAuthenticationFromRequest(request),
-        }));
+        }), { isolationLevel: "Serializable" /* Invitation reissue depends on current invitation state and Team admission policy. */ });
         if (!result.ok) return sendServiceError(reply, result.error);
 
         const { token, recipientEmailNormalized } = result.value;
@@ -500,7 +500,7 @@ export function registerTeamInvitationRoutes(app: Fastify, deps: TeamInvitationR
             : acceptTeamInvitationInTx(tx, {
                 token: request.body.token,
                 accountId: request.userId,
-            }));
+            }), { isolationLevel: "Serializable" /* Invitation acceptance composes single-use invitation state, Team policy and membership admission. */ });
         return reply.send(result);
     });
 }

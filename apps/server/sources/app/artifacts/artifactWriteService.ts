@@ -5,7 +5,7 @@ import { db } from '@/storage/db';
 import { deletePrivateFile } from '@/storage/blob/files';
 import type { ArtifactBlobWriteV1 } from '@happier-dev/protocol';
 import { prepareArtifactBlobWrite, admitArtifactBlobWriteInTx, completeArtifactBlobCandidateCustodyInTx, discardArtifactBlobCandidate, cleanupArtifactOrphanBlobs, cleanupRejectedArtifactBlobUploads, artifactBlobRejectedUploadReuseKey, type PreparedArtifactBlobWrite } from './artifactBlobService';
-import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { markAccountChanged, markAccountsChanged } from "@/app/changes/markAccountChanged";
 import {
     deriveAccountEncryptionCurrentnessFromRow,
 } from "@/app/encryption/accountContentKeyAdmission";
@@ -670,7 +670,7 @@ export async function createArtifact(params: {
             provenance: params.provenance,
             provenanceDataEncryptionKey: params.provenanceDataEncryptionKey,
             blob: params.blob, preparedBlob,
-        }));
+        }), { /* Artifact storage budget and head sequence are read before distinct header/body writes. */ isolationLevel: "Serializable" });
         admitted = result.ok && result.didWrite;
         return result;
     } catch {
@@ -969,7 +969,7 @@ export async function updateArtifact(params: {
     let preparedBlob: PreparedArtifactBlobWrite | undefined;
     let admitted = false;
     try {
-        const access = await inTx(tx => resolveArtifactAccessInTx(tx, { actorAccountId: actorUserId, artifactId }));
+        const access = await inTx(tx => resolveArtifactAccessInTx(tx, { actorAccountId: actorUserId, artifactId }), { /* Artifact upload access and owner mode must share one admission capture. */ isolationLevel: "Serializable" });
         if (!access || access.level === 'view') return { ok: false, error: 'not-found' };
         await cleanupArtifactOrphanBlobs(artifactId);
         if (params.blob) {
@@ -987,7 +987,7 @@ export async function updateArtifact(params: {
             provenance: params.provenance,
             provenanceDataEncryptionKey: params.provenanceDataEncryptionKey,
             blob: params.blob, preparedBlob,
-        }));
+        }), { /* Artifact storage budget and head sequence are read before distinct header/body writes. */ isolationLevel: "Serializable" });
         admitted = result.ok;
         if (result.ok) await cleanupArtifactOrphanBlobs(artifactId);
         return result;
@@ -1251,11 +1251,9 @@ export async function updateArtifactTx(
     });
 
     const recipients = await resolveArtifactAudienceInTx(tx, params.artifactId);
-    const recipientCursors = [];
+    const recipientCursors = await markAccountsChanged(tx, { accountIds: recipients, kind: "artifact", entityId: params.artifactId });
     const recipientUpdates = [];
-    for (const accountId of recipients) {
-        const cursor = await markAccountChanged(tx, { accountId, kind: "artifact", entityId: params.artifactId });
-        recipientCursors.push({ accountId, cursor });
+    for (const { accountId, cursor } of recipientCursors) {
         // The access owner projects current recipient custody, never the writer's wrap.
         const read = await readArtifactForCallerInTx(tx, { actorAccountId: accountId, artifactId: params.artifactId });
         if (read.ok) {
@@ -1348,8 +1346,7 @@ export async function deleteArtifact(params: {
             let cursor: Cursor | undefined;
             // Write changes while the FK target still exists; deletion nulls the
             // projection link, retaining the entity id for a removal refresh.
-            for (const accountId of audience) {
-                const recipientCursor = await markAccountChanged(tx, { accountId, kind: "artifact", entityId: artifactId });
+            for (const { accountId, cursor: recipientCursor } of await markAccountsChanged(tx, { accountIds: audience, kind: "artifact", entityId: artifactId })) {
                 if (accountId === actorUserId) cursor = recipientCursor;
             }
             if (cursor === undefined) throw new Error("Artifact owner is missing from its authorized audience");
@@ -1362,7 +1359,7 @@ export async function deleteArtifact(params: {
                 if (retired.count !== 1) throw new ArtifactDeleteVersionConflictError();
             }
             return { ok: true as const, cursor, deletedAt, artifact };
-        });
+        }, { /* Artifact retirement captures Account mode and recipient audience before publication. */ isolationLevel: "Serializable" });
         if (!retirement.ok) return retirement;
         // Retired rows keep exact custody until every idempotent physical delete succeeds.
         for (const blob of retirement.artifact.blobs) {

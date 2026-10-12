@@ -7,7 +7,7 @@ import { Fastify } from "../../types";
 import { kvGet } from "@/app/kv/kvGet";
 import { kvList } from "@/app/kv/kvList";
 import { kvBulkGet } from "@/app/kv/kvBulkGet";
-import { kvMutate } from "@/app/kv/kvMutate";
+import { kvMutate, KvMutationRequestSchema } from "@/app/kv/kvMutate";
 import {
     enforceCurrentAccountStoredContentCompatibilityForHttpRequest,
     readAccountStoredContentCompatibilityForHttpRequest,
@@ -264,13 +264,7 @@ export function kvRoutes(app: Fastify) {
     app.post('/v1/kv', {
         preHandler: app.authenticate,
         schema: {
-            body: z.object({
-                mutations: z.array(z.object({
-                    key: z.string(),
-                    value: z.string().nullable(),
-                    version: z.number()  // Always required, use -1 for new keys
-                })).min(1).max(100)
-            }),
+            body: KvMutationRequestSchema,
             response: {
                 200: z.object({
                     success: z.literal(true),

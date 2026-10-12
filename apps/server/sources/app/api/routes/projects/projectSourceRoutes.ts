@@ -29,21 +29,21 @@ export function projectSourceRoutes(app: Fastify): void {
         let audience: unknown;
         try { audience = request.query.audience === undefined ? undefined : JSON.parse(request.query.audience); }
         catch { return reply.code(400).send({ ok: false, error: 'source_invalid' }); }
-        const result = await inTx(tx => listProjectSourcesInTx(tx, request.userId, { ...request.query, audience }, readTeamOperationAuthenticationFromRequest(request)));
+        const result = await inTx(tx => listProjectSourcesInTx(tx, request.userId, { ...request.query, audience }, readTeamOperationAuthenticationFromRequest(request)), { /* Project source replay and Team/audience/Artifact admission span independent rows. */ isolationLevel: "Serializable" });
         return reply.code(resultStatus(result)).send(result);
     });
     app.get('/v1/projects/sources/:id', { preHandler: app.authenticate, config: { allowApiToken: true }, attachValidation: true, schema: {
         params, querystring: ProjectSourcesReadInputV1Schema.omit({ sourceId: true }), response: readResponse,
     } }, async (request, reply) => {
         if (request.validationError) return reply.code(400).send({ ok: false, error: 'source_invalid' });
-        const result = await inTx(tx => readProjectSourceInTx(tx, request.userId, { serverId: request.query.serverId, sourceId: request.params.id }, readTeamOperationAuthenticationFromRequest(request)));
+        const result = await inTx(tx => readProjectSourceInTx(tx, request.userId, { serverId: request.query.serverId, sourceId: request.params.id }, readTeamOperationAuthenticationFromRequest(request)), { /* Project source replay and Team/audience/Artifact admission span independent rows. */ isolationLevel: "Serializable" });
         return reply.code(resultStatus(result)).send(result);
     });
     app.post('/v1/projects/sources', { preHandler: app.authenticate, config: { allowApiToken: true }, attachValidation: true, schema: {
         body: ProjectSourcesCreateInputV1Schema, response: { ...readResponse, 200: ProjectSourcesCreateOutputV1Schema, 409: ProjectSourcesCreateOutputV1Schema },
     } }, async (request, reply) => {
         if (request.validationError) return reply.code(400).send({ ok: false, error: 'source_invalid' });
-        const result = await inTx(tx => createProjectSourceInTx(tx, request.userId, request.body, readTeamOperationAuthenticationFromRequest(request)));
+        const result = await inTx(tx => createProjectSourceInTx(tx, request.userId, request.body, readTeamOperationAuthenticationFromRequest(request)), { /* Project source replay and Team/audience/Artifact admission span independent rows. */ isolationLevel: "Serializable" });
         return reply.code(resultStatus(result)).send(result);
     });
     app.patch('/v1/projects/sources/:id', { preHandler: app.authenticate, config: { allowApiToken: true }, attachValidation: true, schema: {
@@ -51,7 +51,7 @@ export function projectSourceRoutes(app: Fastify): void {
     } }, async (request, reply) => {
         if (request.validationError) return reply.code(400).send({ ok: false, error: 'source_invalid' });
         if (request.body.sourceId !== request.params.id) return reply.code(400).send({ ok: false, error: 'source_invalid' });
-        const result = await inTx(tx => updateProjectSourceInTx(tx, request.userId, request.body, readTeamOperationAuthenticationFromRequest(request)));
+        const result = await inTx(tx => updateProjectSourceInTx(tx, request.userId, request.body, readTeamOperationAuthenticationFromRequest(request)), { /* Project source replay and Team/audience/Artifact admission span independent rows. */ isolationLevel: "Serializable" });
         return reply.code(resultStatus(result)).send(result);
     });
     app.delete('/v1/projects/sources/:id', { preHandler: app.authenticate, config: { allowApiToken: true }, attachValidation: true, schema: {
@@ -62,7 +62,7 @@ export function projectSourceRoutes(app: Fastify): void {
     } }, async (request, reply) => {
         if (request.validationError) return reply.code(400).send({ ok: false, error: 'source_invalid' });
         if (request.body.sourceId !== request.params.id) return reply.code(400).send({ ok: false, error: 'source_invalid' });
-        const result = await inTx(tx => deleteProjectSourceInTx(tx, request.userId, request.body, readTeamOperationAuthenticationFromRequest(request)));
+        const result = await inTx(tx => deleteProjectSourceInTx(tx, request.userId, request.body, readTeamOperationAuthenticationFromRequest(request)), { /* Project source replay and Team/audience/Artifact admission span independent rows. */ isolationLevel: "Serializable" });
         return reply.code(resultStatus(result)).send(result);
     });
 }

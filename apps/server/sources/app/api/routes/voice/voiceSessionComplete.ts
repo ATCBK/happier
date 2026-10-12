@@ -326,7 +326,7 @@ export async function completeVoiceSession(input: Readonly<{
                 kind: "completed" as const,
                 durationSeconds: existingForConversation?.durationSeconds ?? durationSeconds,
             };
-        });
+        }, { /* Lease-to-conversation transfer participates with the voice mint quota census. */ isolationLevel: "Serializable" });
         if (result === "not_found") {
             return { ok: false, reason: "not_found" as const };
         }

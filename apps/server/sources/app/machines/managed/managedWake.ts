@@ -274,7 +274,7 @@ export async function assertManagedWakeOriginCurrentInTx(tx: Tx, input: Readonly
         const pending = await tx.sessionPendingMessage.findUnique({ where: { sessionId_localId: {
             sessionId: origin.session.sessionId, localId: origin.pendingRequestId }, targetExecutionRunId: null },
             select: { status: true, messageRole: true, deliveryState: true, providerAction: true, inputAdmissionReceipt: true } });
-        const receipt = SessionInputAdmissionReceiptV1Schema.safeParse(pending?.inputAdmissionReceipt);
+        const receipt = createStoredReadSchema(SessionInputAdmissionReceiptV1Schema).safeParse(pending?.inputAdmissionReceipt);
         if (!pending || pending.status !== 'queued' || pending.messageRole !== 'user' || pending.deliveryState !== null || pending.providerAction !== null
             || !receipt.success || !['authenticatedAccount', 'authenticatedMachine'].includes(receipt.data.issuer)
             || (receipt.data.issuer === 'authenticatedAccount'

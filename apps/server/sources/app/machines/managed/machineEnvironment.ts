@@ -78,6 +78,9 @@ export async function resolveMachineEnvironment(params: Readonly<{
         if (source?.accountId !== target.accountId && Object.values(preset.environment.secretRefs?.bindings ?? {})
             .some(binding => parseSavedSecretRefV1(binding.ref).kind === 'personal')) throw new ManagedMachineError('credential_unavailable');
         return { environment: preset.environment };
+    }, {
+        // Capture target access, current preset revision and environment from one snapshot.
+        isolationLevel: "Serializable",
     });
 }
 

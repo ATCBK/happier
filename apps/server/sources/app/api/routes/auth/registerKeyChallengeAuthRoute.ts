@@ -446,7 +446,7 @@ function registerKeyChallengeAuthRoutesForPurpose(
                         authority: AUTH_TOKEN_KIND_AUTHORITIES[tokenKind],
                         authenticationEvidence: [{ kind: "home_method", methodId: verifiedMethodId }],
                     });
-                })
+                }, { isolationLevel: "Serializable" /* Credential proof and current Home login policy must describe one token-admission snapshot. */ })
                 : await auth.createToken(expectedAccount.id, undefined, {
                     kind: tokenKind,
                     authority: AUTH_TOKEN_KIND_AUTHORITIES[tokenKind],
@@ -610,7 +610,7 @@ function registerKeyChallengeAuthRoutesForPurpose(
                         directoryPreparation: sameServiceBootstrapPreparation,
                     });
                     return { account, token: null };
-                });
+                }, { isolationLevel: "Serializable" /* Account provisioning composes Home policy, invitation/Team admission and directory preferences. */ });
                 freshAccount = provisioned.account;
                 freshInvitationToken = provisioned.token;
             } catch (error) {
@@ -713,7 +713,7 @@ function registerKeyChallengeAuthRoutesForPurpose(
                     authority: AUTH_TOKEN_KIND_AUTHORITIES[tokenKind],
                     authenticationEvidence: [{ kind: "home_method", methodId: "key_challenge" }],
                 });
-            })
+            }, { isolationLevel: "Serializable" /* Credential proof and current Home login policy must describe one token-admission snapshot. */ })
             : !freshAccount && sameServiceBootstrapPreparation?.status === "ready"
                     ? await inTx(async (tx) => {
                         await ensureSameServiceHomeEntryInTx(tx, {
@@ -725,7 +725,7 @@ function registerKeyChallengeAuthRoutesForPurpose(
                             authority: AUTH_TOKEN_KIND_AUTHORITIES[tokenKind],
                             authenticationEvidence: [{ kind: "home_method", methodId: "key_challenge" }],
                         });
-                    })
+                    }, { isolationLevel: "Serializable" /* Same-service descriptor revision and preferred-Home admission are part of directory login. */ })
                 : await auth.createToken(
                     user.id,
                     undefined,

@@ -1,21 +1,28 @@
 import { describe, it, expect, vi } from 'vitest';
-import Fastify from 'fastify';
+import Fastify, { type FastifyInstance } from 'fastify';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { get, type IncomingHttpHeaders } from 'node:http';
 import { brotliDecompressSync, gunzipSync } from 'node:zlib';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createServer } from 'node:net';
+import type { ChildProcess, SpawnOptions } from 'node:child_process';
 
 import { applyEnvValues, restoreEnv, snapshotEnv } from "../testkit/env";
 import { createDbTransactionMock } from '../testkit/dbMocks';
 import { enableServeUi } from './enableServeUi';
 
-vi.mock('@/storage/db', () => {
+vi.mock('@/storage/prisma', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/storage/prisma')>();
   const tables = {
     homeSettings: { findUnique: async () => null },
     homeGovernancePolicy: { findUnique: async () => null },
   };
-  return { db: createDbTransactionMock(() => tables).wrapDb(tables) };
+  const database = createDbTransactionMock(() => tables);
+  // Substitute the database boundary for both primary and SQLite snapshot reads;
+  // the Home overlay, transaction selection and serving decisions remain real.
+  return { ...actual, db: database.wrapDb(tables), withSqliteReadSnapshot: database.readSnapshot };
 });
 
 async function withTempDir(prefix: string, run: (dir: string) => Promise<void>) {
@@ -27,7 +34,7 @@ async function withTempDir(prefix: string, run: (dir: string) => Promise<void>) 
   }
 }
 
-async function withApp(run: (app: ReturnType<typeof Fastify>) => Promise<void>) {
+async function withApp(run: (app: FastifyInstance) => Promise<void>) {
   const app = Fastify();
   try {
     await run(app);
@@ -44,6 +51,57 @@ function requestBytes(origin: string, path: string, acceptEncoding: string) {
       response.on('error', reject);
       response.on('end', () => resolve({ status: response.statusCode, headers: response.headers, bytes: Buffer.concat(chunks) }));
     }).on('error', reject);
+  });
+}
+
+async function withUiGateway(backend: string, run: (origin: string) => Promise<void>) {
+  const { spawnTestProcess }: {
+    spawnTestProcess(command: string, args: string[], options: SpawnOptions): ChildProcess;
+  } = await import(new URL('../../../../../stack/scripts/testkit/core/spawn_test_process.mjs', import.meta.url).href);
+  // The executable requires a nonzero port; reserve an OS-selected test port.
+  const reservation = createServer();
+  await new Promise<void>((resolve, reject) => {
+    reservation.once('error', reject);
+    reservation.listen(0, '127.0.0.1', resolve);
+  });
+  const address = reservation.address();
+  await new Promise<void>((resolve, reject) => reservation.close((error) => error ? reject(error) : resolve()));
+  if (!address || typeof address === 'string') throw new Error('Expected a TCP test port');
+
+  await withApp(async (files) => {
+    // Minio is an external HTTP boundary. Preserve its actual path-style contract.
+    files.get('/test-bucket/*', async (request, reply) => {
+      reply.header('cache-control', 'public, max-age=60');
+      return { path: request.url };
+    });
+    const filesOrigin = await files.listen({ host: '127.0.0.1', port: 0 });
+    const child = spawnTestProcess(process.execPath, [
+      fileURLToPath(new URL('../../../../../stack/scripts/ui_gateway.mjs', import.meta.url)),
+      `--port=${address.port}`, `--backend-url=${backend}`,
+      `--minio-port=${new URL(filesOrigin).port}`, '--bucket=test-bucket',
+    ], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let output = '';
+    const closed = new Promise<void>((resolve) => child.once('close', () => resolve()));
+    try {
+      await new Promise<void>((resolve, reject) => {
+        child.once('error', reject);
+        child.once('exit', (code, signal) => reject(new Error(`Gateway exited (${code ?? signal}): ${output}`)));
+        child.stderr?.on('data', (chunk: Buffer) => { output += chunk.toString(); });
+        child.stdout?.on('data', (chunk: Buffer) => {
+          output += chunk.toString();
+          if (output.includes('[ui-gateway] ready')) resolve();
+        });
+      });
+      const origin = `http://127.0.0.1:${address.port}`;
+      const file = await requestBytes(origin, '/files/folder/result.json?download=1', '');
+      expect(file.status).toBe(200);
+      expect(file.headers['cache-control']).toBe('public, max-age=60');
+      expect(JSON.parse(file.bytes.toString())).toEqual({ path: '/test-bucket/folder/result.json?download=1' });
+      await run(origin);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill();
+      await closed;
+    }
   });
 }
 
@@ -226,22 +284,39 @@ describe('enableServeUi (mountRoot)', () => {
     });
   });
 
-  it('does not leak absolute index.html path when NODE_ENV=production', async () => {
+  it.each([
+    { provider: 'sqlite', mountRoot: true, gateway: false }, { provider: 'sqlite', mountRoot: false, gateway: false },
+    { provider: 'sqlite', mountRoot: true, gateway: true }, { provider: 'sqlite', mountRoot: false, gateway: true },
+    { provider: 'postgres', mountRoot: true, gateway: false },
+  ])('does not leak absolute index.html path in production $provider fallback with $mountRoot mountRoot, gateway=$gateway', async ({ provider, mountRoot, gateway }) => {
     const envSnapshot = snapshotEnv();
     await withTempDir('happier-ui-missing-prod-', async (dir) => {
       try {
         applyEnvValues({
           NODE_ENV: 'production',
+          HAPPIER_DB_PROVIDER: provider,
+          HAPPIER_SERVER_UI_DEBUG_PATH: undefined,
         });
         await withApp(async (app) => {
-          enableServeUi(app, { dir, prefix: '/', mountRoot: true, required: false });
-          await app.ready();
-
-          const res = await app.inject({ method: 'GET', url: '/' });
-          expect(res.statusCode).toBe(200);
-          expect(res.headers['content-type']).toMatch(/text\/html/i);
-          expect(res.body).toContain('UI bundle is missing');
-          expect(res.body).not.toContain(join(dir, 'index.html'));
+          const prefix = mountRoot ? '' : '/ui';
+          enableServeUi(app, { dir, prefix: prefix || '/', mountRoot, required: false });
+          const backend = await app.listen({ host: '127.0.0.1', port: 0 });
+          const check = async (origin: string) => {
+            for (const path of [`${prefix}/`, `${prefix}/workflows/run-missing?view=active`, `${prefix}/join/bearer`]) {
+              const res = await requestBytes(origin, path, 'br, gzip');
+              const body = res.bytes.toString();
+              expect(res.status, `${path}: ${body}`).toBe(200);
+              expect(res.headers['content-type']).toMatch(/text\/html/i);
+              expect(res.headers['cache-control']).toBe('no-cache');
+              expect(res.headers['content-security-policy']).toBe("frame-ancestors 'none'");
+              expect(res.headers['referrer-policy']).toBe(path.endsWith('/join/bearer') ? 'no-referrer' : undefined);
+              expect(body).toContain('UI bundle is missing');
+              expect(body).toContain('Welcome to Happier Server!');
+              expect(body).not.toContain(join(dir, 'index.html'));
+            }
+          };
+          if (gateway) await withUiGateway(backend, check);
+          else await check(backend);
         });
       } finally {
         restoreEnv(envSnapshot);
@@ -266,7 +341,10 @@ describe('enableServeUi (mountRoot)', () => {
     });
   });
 
-  it.each([true, false])('serves real exported sidecars and identity over HTTP with mountRoot=%s', async (mountRoot) => {
+  it.each([
+    { mountRoot: true, gateway: false }, { mountRoot: false, gateway: false },
+    { mountRoot: true, gateway: true }, { mountRoot: false, gateway: true },
+  ])('serves real exported sidecars and identity over HTTP with $mountRoot mountRoot, gateway=$gateway', async ({ mountRoot, gateway }) => {
     // Expo is an external tool boundary; staging, precompression, publication,
     // routing and HTTP transport all use their real owners.
     const { exportWebPayloadToArtifactPayloadDir }: {
@@ -300,67 +378,99 @@ describe('enableServeUi (mountRoot)', () => {
       });
       await withApp(async (app) => {
         const prefix = mountRoot ? '' : '/ui';
-        enableServeUi(app, { dir, prefix: prefix || '/', mountRoot, required: true });
-        const origin = await app.listen({ host: '127.0.0.1', port: 0 });
-        const files = [
-          ...assets.map(([name, bytes, mime]) => [`${prefix}/assets/${name}`, bytes, mime, mime.startsWith('text/html') ? 'no-cache' : 'public, max-age=31536000, immutable'] as const),
-          ...(mountRoot ? [['/index.html', Buffer.from(html), 'text/html; charset=utf-8', 'no-cache'] as const] : []),
-        ];
-        for (const [path, original, mime, cache] of files) {
-          for (const encoding of ['br', 'gzip', ''] as const) {
-            const res = await requestBytes(origin, path, encoding);
-            expect(res.status, path).toBe(200);
-            expect(res.headers['content-encoding'], path).toBe(encoding || undefined);
-            expect(res.headers.vary, path).toBe('Accept-Encoding');
-            expect(res.headers['content-type'], path).toBe(mime);
-            expect(res.headers['cache-control'], path).toBe(cache);
-            expect(Number(res.headers['content-length']), path).toBe(res.bytes.length);
-            // The serving owner has no ETag/Last-Modified validators today.
-            expect(res.headers.etag, path).toBeUndefined();
-            expect(res.headers['last-modified'], path).toBeUndefined();
-            const decoded = encoding === 'br' ? brotliDecompressSync(res.bytes) : encoding === 'gzip' ? gunzipSync(res.bytes) : res.bytes;
-            expect(decoded, path).toEqual(original);
-            if (mime.startsWith('text/html')) {
+        for (const path of ['/v1/fixture', '/v2/fixture', '/v3/fixture', '/health', '/ready', '/metrics']) {
+          app.get(path, async (request, reply) => {
+            reply.header('cache-control', 'no-store');
+            return { path: request.url };
+          });
+        }
+        enableServeUi(app, { dir, prefix: prefix || '/', mountRoot, required: true, deploymentId: 'gateway-fixture-deployment' });
+        const backend = await app.listen({ host: '127.0.0.1', port: 0 });
+        const check = async (origin: string) => {
+            const files = [
+              ...assets.map(([name, bytes, mime]) => [`${prefix}/assets/${name}`, bytes, mime, mime.startsWith('text/html') ? 'no-cache' : 'public, max-age=31536000, immutable'] as const),
+              ...(mountRoot ? [['/index.html', Buffer.from(html), 'text/html; charset=utf-8', 'no-cache'] as const] : []),
+            ];
+            for (const [path, original, mime, cache] of files) {
+              for (const encoding of ['br', 'gzip', ''] as const) {
+                const res = await requestBytes(origin, path, encoding);
+                expect(res.status, path).toBe(200);
+                expect(res.headers['content-encoding'], path).toBe(encoding || undefined);
+                expect(res.headers.vary, path).toBe('Accept-Encoding');
+                expect(res.headers['content-type'], path).toBe(mime);
+                expect(res.headers['cache-control'], path).toBe(cache);
+                expect(Number(res.headers['content-length']), path).toBe(res.bytes.length);
+                // The serving owner has no ETag/Last-Modified validators today.
+                expect(res.headers.etag, path).toBeUndefined();
+                expect(res.headers['last-modified'], path).toBeUndefined();
+                const decoded = encoding === 'br' ? brotliDecompressSync(res.bytes) : encoding === 'gzip' ? gunzipSync(res.bytes) : res.bytes;
+                expect(decoded, path).toEqual(original);
+                if (mime.startsWith('text/html')) {
+                  expect(res.headers['content-security-policy'], path).toBe(mountRoot && path.startsWith('/embed/') ? undefined : "frame-ancestors 'none'");
+                  expect(res.headers['referrer-policy'], path).toBe(path.endsWith('/join/bearer') ? 'no-referrer' : undefined);
+                }
+              }
+            }
+            // SPA responses append the server readiness marker consumed by Stack;
+            // they are dynamic documents, distinct from exported HTML asset bytes.
+            for (const path of [`${prefix}/`, `${prefix}/workflows?view=active`, `${prefix}/user.profile`, `${prefix}/embed/preview`, `${prefix}/join/bearer`]) {
+              const res = await requestBytes(origin, path, 'br, gzip');
+              expect(res.status, path).toBe(200);
+              expect(res.headers['content-encoding'], path).toBeUndefined();
+              expect(res.headers['cache-control'], path).toBe('no-cache');
+              expect(res.bytes.toString(), path).toBe(html + '\n<!-- Welcome to Happier Server! -->\n');
               expect(res.headers['content-security-policy'], path).toBe(mountRoot && path.startsWith('/embed/') ? undefined : "frame-ancestors 'none'");
               expect(res.headers['referrer-policy'], path).toBe(path.endsWith('/join/bearer') ? 'no-referrer' : undefined);
             }
-          }
-        }
-        // SPA responses append the server readiness marker consumed by Stack;
-        // they are dynamic documents, distinct from exported HTML asset bytes.
-        for (const path of [`${prefix}/`, `${prefix}/workflows`, `${prefix}/embed/preview`, `${prefix}/join/bearer`]) {
-          const res = await requestBytes(origin, path, 'br, gzip');
-          expect(res.status, path).toBe(200);
-          expect(res.headers['content-encoding'], path).toBeUndefined();
-          expect(res.headers['cache-control'], path).toBe('no-cache');
-          expect(res.bytes.toString(), path).toBe(html + '\n<!-- Welcome to Happier Server! -->\n');
-          expect(res.headers['content-security-policy'], path).toBe(mountRoot && path.startsWith('/embed/') ? undefined : "frame-ancestors 'none'");
-          expect(res.headers['referrer-policy'], path).toBe(path.endsWith('/join/bearer') ? 'no-referrer' : undefined);
-        }
-        const mainPath = `${prefix}/assets/main.js`;
-        for (const [accepted, selected] of [['br;q=0.5, gzip;q=0.9', 'gzip'], ['br, gzip', 'br'], ['br;q=0, gzip;q=0', undefined]] as const) {
-          const res = await requestBytes(origin, mainPath, accepted);
-          expect(res.headers['content-encoding']).toBe(selected);
-          expect(selected === 'br' ? brotliDecompressSync(res.bytes) : selected === 'gzip' ? gunzipSync(res.bytes) : res.bytes).toEqual(assets[0][1]);
-        }
-        const plainImage = await requestBytes(origin, `${prefix}/assets/image.png`, 'br, gzip');
-        expect(plainImage.status).toBe(200);
-        expect(plainImage.headers['content-encoding']).toBeUndefined();
-        expect(plainImage.headers['content-type']).toBe('image/png');
-        expect(plainImage.bytes).toEqual(image);
-        for (const suffix of ['.br', '.gz']) {
-          await expect(readFile(join(dir, `assets/image.png${suffix}`))).rejects.toMatchObject({ code: 'ENOENT' });
-        }
-        await rm(join(dir, 'assets/main.js.br'));
-        const gzipFallback = await requestBytes(origin, mainPath, 'br, gzip');
-        expect(gzipFallback.headers['content-encoding']).toBe('gzip');
-        expect(gunzipSync(gzipFallback.bytes)).toEqual(assets[0][1]);
-        await rm(join(dir, 'assets/main.js.gz'));
-        const fallback = await requestBytes(origin, mainPath, 'br, gzip');
-        expect(fallback.status).toBe(200);
-        expect(fallback.headers['content-encoding']).toBeUndefined();
-        expect(fallback.headers.vary).toBe('Accept-Encoding');
-        expect(fallback.bytes).toEqual(assets[0][1]);
+            for (const path of ['/v1/fixture?value=1', '/v2/fixture', '/v3/fixture', '/health', '/ready', '/metrics']) {
+              const res = await requestBytes(origin, path, '');
+              expect(res.status, path).toBe(200);
+              expect(res.headers['cache-control'], path).toBe('no-store');
+              expect(JSON.parse(res.bytes.toString()), path).toEqual({ path });
+            }
+            for (const path of ['/v1/unknown-route', '/v3/unknown-route', '/v4/unknown-route']) {
+              const res = await requestBytes(origin, path, '');
+              expect(res.status, path).toBe(404);
+              expect(res.headers['content-type'], path).toMatch(/application\/json/i);
+              expect(res.bytes.toString(), path).not.toContain(html);
+            }
+            const deployment = await requestBytes(origin, '/.well-known/happier-ui-deployment', '');
+            expect(deployment.status).toBe(200);
+            expect(deployment.headers['cache-control']).toBe('no-store');
+            expect(JSON.parse(deployment.bytes.toString())).toEqual({ deploymentId: 'gateway-fixture-deployment' });
+            for (const path of mountRoot ? ['/ui', '/ui/', '/ui/assets/main.js'] : ['/ui']) {
+              const expected = await requestBytes(backend, path, '');
+              const actual = await requestBytes(origin, path, '');
+              expect(actual.status, path).toBe(expected.status);
+              expect(actual.headers.location, path).toBe(expected.headers.location);
+            }
+            const mainPath = `${prefix}/assets/main.js`;
+            for (const [accepted, selected] of [['br;q=0.5, gzip;q=0.9', 'gzip'], ['br, gzip', 'br'], ['br;q=0, gzip;q=0', undefined]] as const) {
+              const res = await requestBytes(origin, mainPath, accepted);
+              expect(res.headers['content-encoding']).toBe(selected);
+              expect(selected === 'br' ? brotliDecompressSync(res.bytes) : selected === 'gzip' ? gunzipSync(res.bytes) : res.bytes).toEqual(assets[0][1]);
+            }
+            const plainImage = await requestBytes(origin, `${prefix}/assets/image.png`, 'br, gzip');
+            expect(plainImage.status).toBe(200);
+            expect(plainImage.headers['content-encoding']).toBeUndefined();
+            expect(plainImage.headers['content-type']).toBe('image/png');
+            expect(plainImage.bytes).toEqual(image);
+            for (const suffix of ['.br', '.gz']) {
+              await expect(readFile(join(dir, `assets/image.png${suffix}`))).rejects.toMatchObject({ code: 'ENOENT' });
+            }
+            await rm(join(dir, 'assets/main.js.br'));
+            const gzipFallback = await requestBytes(origin, mainPath, 'br, gzip');
+            expect(gzipFallback.headers['content-encoding']).toBe('gzip');
+            expect(gunzipSync(gzipFallback.bytes)).toEqual(assets[0][1]);
+            await rm(join(dir, 'assets/main.js.gz'));
+            const fallback = await requestBytes(origin, mainPath, 'br, gzip');
+            expect(fallback.status).toBe(200);
+            expect(fallback.headers['content-encoding']).toBeUndefined();
+            expect(fallback.headers.vary).toBe('Accept-Encoding');
+            expect(fallback.bytes).toEqual(assets[0][1]);
+        };
+        if (gateway) await withUiGateway(backend, check);
+        else await check(backend);
       });
     });
   });

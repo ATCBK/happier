@@ -54,6 +54,9 @@ export async function dispatchMachineAccessLossCustody(input: CustodyLoss): Prom
             return null;
         }
         return await readCurrentCustodyInTx(tx, input);
+    }, {
+        // Effective access loss and exact installation custody authorize the same remote cleanup.
+        isolationLevel: "Serializable",
     });
     const response = await forwardMachineAccessCustody(input, { v: 1, subjectAccountId: input.subjectAccountId }, readCurrent);
     if (lossNoLongerCurrent) return { kind: 'settled' };
@@ -72,7 +75,10 @@ export async function recoverMachineAccessLossCustody(input: MachineCustody): Pr
     }));
     const subjects = new Set(bindings.map(binding => binding.accountId));
     const response = await forwardMachineAccessCustody(input, { v: 1, kind: 'requesters' },
-        () => inTx(tx => readCurrentCustodyInTx(tx, input)));
+        () => inTx(tx => readCurrentCustodyInTx(tx, input), {
+            // Capture current Account/key admission and the exact cleanup installation coherently.
+            isolationLevel: "Serializable",
+        }));
     const census = response?.ok ? MachineAccessLossRequesterCensusResponseV1Schema.safeParse(response.result) : null;
     if (census?.success) for (const accountId of census.data.accountIds) subjects.add(accountId);
     if (!census?.success || census.data.coverage !== 'complete') {

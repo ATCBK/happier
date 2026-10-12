@@ -37,7 +37,9 @@ export function artifactUpdateHandler(userId: string, socket: Socket) {
                 return;
             }
 
-            const read = await inTx(tx => readArtifactForCallerInTx(tx, { actorAccountId: userId, artifactId }));
+            const read = await inTx(tx => readArtifactForCallerInTx(tx, { actorAccountId: userId, artifactId }), {
+                isolationLevel: "Serializable" /* Artifact admission, mode/key and disclosed content span multiple rows. */,
+            });
             if (!read.ok) {
                 callback?.({ result: 'error', message: read.error === 'artifact_not_found' ? 'Artifact not found' : 'Internal error' });
                 return;

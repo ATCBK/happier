@@ -57,6 +57,14 @@ export function isRetryableTransactionError(params: Readonly<{ provider: string;
     if (isPrismaErrorCode(params.err, "P2034")) return true;
 
     if (params.provider === "postgres") {
+        // Raw queries wrap PostgreSQL SQLSTATE in P2010 metadata. Classify
+        // that stable code even when the server's diagnostic text varies.
+        if (isPrismaErrorCode(params.err, "P2010") && typeof params.err === "object"
+            && params.err !== null && "meta" in params.err) {
+            const meta = params.err.meta;
+            if (meta && typeof meta === "object" && "code" in meta
+                && (meta.code === "40001" || meta.code === "40P01")) return true;
+        }
         const message = errorMessage(params.err).toLowerCase();
         if (message.includes("could not serialize access")) return true;
         if (message.includes("serialization failure")) return true;
@@ -158,7 +166,7 @@ export async function inTx<T>(fn: (tx: Tx) => Promise<T>, options?: InTxOptions)
                           maxWait: boundedMaxWaitMs,
                       }
                     : {
-                          isolationLevel: options?.isolationLevel ?? "Serializable",
+                          isolationLevel: options?.isolationLevel ?? "ReadCommitted",
                           timeout: boundedTimeoutMs,
                           maxWait: boundedMaxWaitMs,
                       };

@@ -10,7 +10,7 @@ import { listSavedSecretReferenceCatalogRefsV1 } from '@happier-dev/protocol/acc
 import type { Fastify } from '@/app/api/types';
 import { asServerProtocolZod } from '@/app/api/utils/protocolComposableZodAdapter';
 import { resolveApiHotEndpointRateLimit } from '@/app/api/utils/apiRateLimitCatalog';
-import { requirePresentUser } from '@/app/api/utils/requirePresentUser';
+import { PresentUserRequiredResponseSchema, requirePresentUser } from '@/app/api/utils/requirePresentUser';
 import { readTeamOperationAuthenticationFromRequest } from '@/app/teams/actorContext';
 import { inTx, type Tx } from '@/storage/inTx';
 import { acquireAccountEncryptionTransitionFenceInTx } from '@/app/encryption/accountEncryptionTransition';
@@ -91,21 +91,22 @@ export function registerRemoteHostCatalogRoutes(app: Fastify): void {
   const config = { rateLimit: resolveApiHotEndpointRateLimit(process.env, 'account.settings') };
   app.get(REMOTE_HOST_ROWS_ROUTE_V1, { preHandler: app.authenticate, config,
     schema: { response: { 200: asServerProtocolZod(RemoteHostCatalogRowReadResponseV1Schema) } },
-  }, async (request, reply) => reply.send(await inTx(tx => readRemoteHostCatalogRowInTx(tx, { accountId: request.userId }), { readOnly: true })));
+  }, async (request, reply) => reply.send(await inTx(tx => readRemoteHostCatalogRowInTx(tx, { accountId: request.userId }), { /* Account mode and catalog content must share one capture. */ isolationLevel: "Serializable", readOnly: true })));
   app.post(REMOTE_HOST_ROWS_ROUTE_V1, { preHandler: [app.authenticate, async (request, reply) => {
     if (request.body.savedSecretResources?.length) return requirePresentUser(request, reply);
   }], config,
     schema: { body: z.object({ mutation: asServerProtocolZod(RemoteHostCatalogRowMutationV1Schema),
       savedSecretResources: z.array(SharedSavedSecretCreateInputV1Schema).optional(),
       referenceCensus: SavedSecretCatalogReferenceCensusV1Schema.optional() }).strict(),
-      response: { 200: asServerProtocolZod(RemoteHostCatalogRowMutationResponseV1Schema) } },
+      response: { 200: asServerProtocolZod(RemoteHostCatalogRowMutationResponseV1Schema),
+        403: PresentUserRequiredResponseSchema } },
   }, async (request, reply) => {
     const authentication = readTeamOperationAuthenticationFromRequest(request);
     try {
       return reply.send(await inTx(tx => request.body.savedSecretResources?.length
         ? promoteRemoteHostPacketInTx(tx, { accountId: request.userId, authentication,
           mutation: request.body.mutation, resources: request.body.savedSecretResources, referenceCensus: request.body.referenceCensus })
-        : mutateRemoteHostCatalogRowInTx(tx, { accountId: request.userId, authentication, ...request.body.mutation })));
+        : mutateRemoteHostCatalogRowInTx(tx, { accountId: request.userId, authentication, ...request.body.mutation }), { /* Shared Secret revisions and Team-derived access precede catalog writes. */ isolationLevel: "Serializable" }));
     } catch (error) {
       // The canonical batch abort must leave the transaction before mapping its result.
       if (!(error instanceof SavedSecretResourceTransactionAbort)) throw error;

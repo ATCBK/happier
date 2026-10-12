@@ -20,6 +20,7 @@ import { buildSessionAccessProjectionSelect, resolveSessionAccessForOperation } 
 import type { Socket } from "socket.io";
 import { readSessionAccessAuthenticationFromSocket } from "@/app/session/access/sessionAccessAuthentication";
 import { inTx } from "@/storage/inTx";
+import { readSnapshotWithCurrentAdmission } from "@/storage/readSnapshotWithCurrentAdmission";
 import type { SessionBroadcastContainer } from "@happier-dev/protocol";
 import type { VerifiedApiTokenPrincipal } from "@/app/auth/auth";
 import type { forwardRpcCall, RpcForwardResult } from '@/app/api/socket/rpc/forwardRpcCall';
@@ -596,7 +597,7 @@ class EventRouter {
         emit: (socket: S) => boolean;
     }>): Promise<number> {
         if (params.sockets.length === 0) return 0;
-        const qualifiedSockets = await inTx(async tx => {
+        const qualifiedSockets = await readSnapshotWithCurrentAdmission(async tx => {
             const row = await tx.session.findUnique({
                 where: { id: params.sessionId },
                 select: buildSessionAccessProjectionSelect(params.accountId),
@@ -620,7 +621,21 @@ class EventRouter {
                 qualified.push(socket);
             }
             return qualified;
-        }, { readOnly: true });
+        }, async (tx, captured) => {
+            const current: S[] = [];
+            for (const socket of captured) {
+                try {
+                    const decision = await resolveSessionAccessForOperation(tx, {
+                        accountId: params.accountId, sessionId: params.sessionId,
+                        authentication: readSessionAccessAuthenticationFromSocket(socket), capability: "readTranscript",
+                    });
+                    if (decision.status === "allowed") current.push(socket);
+                } catch {
+                    // A stale credential only suppresses its own delivery.
+                }
+            }
+            return current;
+        });
         let deliveredCount = 0;
         for (const socket of qualifiedSockets) {
             if (params.emit(socket)) deliveredCount += 1;

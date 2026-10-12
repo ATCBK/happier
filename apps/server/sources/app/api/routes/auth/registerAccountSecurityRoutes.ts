@@ -384,7 +384,7 @@ export function registerAccountSecurityRoutes(app: Fastify, params: Readonly<{
             await tx.accountPasswordCredential.create({ data: { accountId: request.userId, credential: body.targetCredential } });
             await markAccountChanged(tx, { accountId: request.userId, kind: "account", entityId: "self" });
             return "ok" as const;
-        }).catch((error) => {
+        }, { isolationLevel: "Serializable" /* Password enrollment participates in final-login viability and provider-policy admission. */ }).catch((error) => {
             if (error instanceof PasswordEnrollmentReauthenticationAbort) return "reauthentication" as const;
             if (error instanceof ProviderAlreadyLinkedError || isPrismaUniqueConstraintError(error)) return "conflict" as const;
             throw error;
@@ -438,7 +438,7 @@ export function registerAccountSecurityRoutes(app: Fastify, params: Readonly<{
             if (changed.count !== 1) throw new CredentialMutationConflict();
             await markAccountChanged(tx, { accountId: request.userId, kind: "account", entityId: "self" });
             return "ok" as const;
-        }).catch((error) => {
+        }, { isolationLevel: "Serializable" /* Last-login and last-Home-owner checks span identities, password credentials and provider policy. */ }).catch((error) => {
             if (error instanceof CredentialMutationConflict) return "conflict" as const;
             throw error;
         });
@@ -544,7 +544,7 @@ export function registerAccountSecurityRoutes(app: Fastify, params: Readonly<{
             await upsertVerifiedMailboxEvidenceInTx(tx, { accountId: request.userId, email: verifiedEmail });
             await markAccountChanged(tx, { accountId: request.userId, kind: "account", entityId: "self" });
             return operation.normalizedEmail;
-        }).catch((error) => {
+        }, { isolationLevel: "Serializable" /* Native identity replacement participates in provider-removal and login-viability admission. */ }).catch((error) => {
             if (error instanceof ProviderAlreadyLinkedError
                 || error instanceof AccountSessionOwnerMetadataFenceAccountNotFoundError
                 || isPrismaUniqueConstraintError(error)) return "conflict" as const;

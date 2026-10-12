@@ -529,7 +529,7 @@ export async function claimPluginWebhookDeliveryV1(params: Readonly<{
                     maxClaimUntilMs: maxClaimUntil.getTime(),
                 },
             });
-    });
+    }, { /* Webhook endpoint, credential and contribution authority is read before the Account fence. */ isolationLevel: "Serializable" });
 }
 
 /**
@@ -846,7 +846,7 @@ export async function renewPluginWebhookDeliveryV1(params: Readonly<{
             revision: params.lease.revision + 1,
             expiresAtMs: expiresAt.getTime(),
         });
-    });
+    }, { /* Webhook endpoint, credential and contribution authority is read before the Account fence. */ isolationLevel: "Serializable" });
 }
 
 export async function completePluginWebhookDeliveryV1(params: Readonly<{

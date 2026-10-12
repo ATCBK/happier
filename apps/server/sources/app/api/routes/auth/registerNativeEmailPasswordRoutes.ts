@@ -308,7 +308,7 @@ export function registerNativeEmailPasswordRoutes(app: Fastify, params: Readonly
                 authenticationEvidence: [{ kind: "home_method", methodId: "email_password" }],
             });
             return { accountId: account.id, teamId, token };
-        }).catch((error) => {
+        }, { isolationLevel: "Serializable" /* Native provisioning composes Home policy, invitation admission, identity and directory writes. */ }).catch((error) => {
             if (error instanceof TeamInvitationAcceptanceAbort) return null;
             if (error instanceof TeamInvitationFreshAccountAdmissionAbort) return null;
             if (error instanceof FreshAccountProvisionAbort) return null;

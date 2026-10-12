@@ -1,7 +1,7 @@
 import type { MachineAccessRoleV1 } from "@happier-dev/protocol";
 
 import { readMachineAccessKeySessionBindingsInTx } from "@/app/accessKeys/sessionMachineAccessKeyMutations";
-import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { acquireAccountChangePublicationLocksInTx, markAccountsChanged } from "@/app/changes/markAccountChanged";
 import { eventRouter } from "@/app/events/connectionEventRouter";
 import { afterTx, type Tx } from "@/storage/inTx";
 import { log } from "@/utils/logging/log";
@@ -66,6 +66,7 @@ export async function applyMachineAccessImpactsInTx(
     const after = await resolveEffectiveMachineAccessForMachinesInTx(tx, { machineIds: [...beforeByMachine.keys()], accountIds });
     const changedAccountIds = new Set<string>();
     const revokedAccountIds = new Set<string>();
+    const publications: Array<{ machineId: string; changed: Set<string>; revoked: Set<string> }> = [];
     for (const [machineId, before] of beforeByMachine) {
         const changed = new Set<string>();
         const revoked = new Set<string>();
@@ -86,7 +87,12 @@ export async function applyMachineAccessImpactsInTx(
         const recipientIds = await resolveCurrentMachineRecipientAccountIdsInTx(tx, machineId);
         const current = await resolveEffectiveMachineAccessForMachinesInTx(tx, { machineIds: [machineId], accountIds: recipientIds });
         for (const accountId of recipientIds) if (current.get(machineId)?.get(accountId) === "manage") changed.add(accountId);
-        for (const accountId of changed) await markAccountChanged(tx, { accountId, kind: "machine", entityId: machineId });
+        publications.push({ machineId, changed, revoked });
+    }
+
+    await acquireAccountChangePublicationLocksInTx(tx, publications.flatMap(publication => [...publication.changed]));
+    for (const { machineId, changed, revoked } of publications) {
+        await markAccountsChanged(tx, { accountIds: [...changed], kind: "machine", entityId: machineId });
 
         if (revoked.size === 0) continue;
         const machine = await tx.machine.findUnique({ where: { id: machineId }, select: { accountId: true, installationId: true } });

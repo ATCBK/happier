@@ -125,13 +125,13 @@ export async function removeDirectorySourceForObservedDeletion(input: Readonly<{
         if (!current) return { applied: false, reason: "stale_run" };
         await removeDirectorySourceInTx(tx, input);
         return { applied: true };
-    });
+    }, { isolationLevel: "Serializable" /* Source deletion withdraws membership and Group contribution unions after current-run checks. */ });
 }
 
 export async function createDirectorySource(
     input: CreateDirectorySourceInput,
 ): Promise<CreateDirectorySourceResult> {
-    return await inTx((tx) => createDirectorySourceInTx(tx, input));
+    return await inTx((tx) => createDirectorySourceInTx(tx, input), { isolationLevel: "Serializable" /* Source creation participates in connection/binding admission and directory-run lifecycle. */ });
 }
 
 export async function createDirectorySourceInTx(
@@ -482,7 +482,7 @@ export async function claimDirectorySourceFullReconcile(params: Readonly<{
                 consecutiveFailureCount: current.consecutiveFailureCount,
             },
         } as const;
-    });
+    }, { isolationLevel: "Serializable" /* Run claims must participate in the same source lifecycle as child projection writes. */ });
 }
 
 export async function claimWorkosDirectorySourceIncremental(params: Readonly<{
@@ -570,7 +570,7 @@ export async function claimWorkosDirectorySourceIncremental(params: Readonly<{
                 consecutiveFailureCount: current.consecutiveFailureCount,
             },
         } as const;
-    });
+    }, { isolationLevel: "Serializable" /* Incremental run claims must participate in the same lifecycle as child projection writes. */ });
 }
 
 export async function markActiveWorkosDirectoryPollFailed(params: Readonly<{
@@ -639,7 +639,7 @@ export async function markActiveWorkosDirectoryPollFailed(params: Readonly<{
             after,
         });
         return { applied: true } as const;
-    });
+    }, { isolationLevel: "Serializable" /* Poll-failure recovery participates in source lifecycle and projection-run currentness. */ });
 }
 
 /**
@@ -732,7 +732,7 @@ export async function markDirectorySourceReconcileFailed(params: Readonly<{
             after: { state: "needs_attention", lastErrorCode: params.errorCode },
         });
         return { applied: true } as const;
-    });
+    }, { isolationLevel: "Serializable" /* Reconcile-failure recovery participates in source lifecycle and child-run currentness. */ });
 }
 
 /**
@@ -776,7 +776,7 @@ export async function requestDirectorySourceSync(params: Readonly<{
     now?: Date;
 }>): Promise<DirectorySourceSyncRequestResult> {
     const now = params.now ?? new Date();
-    return await inTx((tx) => requestDirectorySourceSyncInTx(tx, { ...params, now }));
+    return await inTx((tx) => requestDirectorySourceSyncInTx(tx, { ...params, now }), { isolationLevel: "Serializable" /* Manual sync request admission must agree with reconcile completion and source lifecycle. */ });
 }
 
 /**

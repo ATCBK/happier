@@ -164,7 +164,7 @@ export function registerTeamGroupRoutes(app: Fastify) {
                 ? {}
                 : { description: request.body.description }),
             requestKey: request.body.requestKey,
-        }));
+        }), { isolationLevel: "Serializable" /* Group creation depends on current Team lifecycle, actor membership and authentication policy. */ });
         if (!result.ok) return fail(reply, result.error);
         return reply.send(result.value);
     });
@@ -189,7 +189,7 @@ export function registerTeamGroupRoutes(app: Fastify) {
                 ...(request.body.description === undefined
                     ? {}
                     : { description: request.body.description }),
-            }));
+            }), { isolationLevel: "Serializable" /* Group mutation authority composes current Team lifecycle, actor membership and authentication policy. */ });
         } catch (error) {
             // A same-name concurrent rename is detected only by the database.
             // Map it after `inTx` has rolled the transaction back; catching it
@@ -219,7 +219,7 @@ export function registerTeamGroupRoutes(app: Fastify) {
             actorAccountId: request.userId,
             authentication: readTeamOperationAuthenticationFromRequest(request),
             groupId: request.body.groupId,
-        }));
+        }), { isolationLevel: "Serializable" /* Group archival participates in effective native/directory contribution and audience admission. */ });
         if (!result.ok) return fail(reply, result.error);
         return reply.send(result.value);
     });
@@ -238,7 +238,7 @@ export function registerTeamGroupRoutes(app: Fastify) {
             actorAccountId: request.userId,
             authentication: readTeamOperationAuthenticationFromRequest(request),
             groupId: request.body.groupId,
-        }));
+        }), { isolationLevel: "Serializable" /* Group restoration participates in effective native/directory contribution and audience admission. */ });
         if (!result.ok) return fail(reply, result.error);
         return reply.send(result.value);
     });
@@ -286,7 +286,7 @@ export function registerTeamGroupRoutes(app: Fastify) {
             groupId: request.body.groupId,
             accountId: request.body.accountId,
             historyAccess: request.body.historyAccess,
-        }));
+        }), { isolationLevel: "Serializable" /* Native membership and external contributions jointly determine the effective Group membership. */ });
         if (!result.ok) return fail(reply, result.error);
         return reply.send(result.value);
     });
@@ -309,7 +309,7 @@ export function registerTeamGroupRoutes(app: Fastify) {
             authentication: readTeamOperationAuthenticationFromRequest(request),
             groupId: request.body.groupId,
             accountId: request.body.accountId,
-        }));
+        }), { isolationLevel: "Serializable" /* Removing a native contribution must agree with the remaining external contribution union. */ });
         if (!result.ok) return fail(reply, result.error);
         return reply.send(result.value);
     });

@@ -81,7 +81,7 @@ export async function readPluginDeclarativeSettings(
     input: Readonly<{ accountId: string; pluginId: string }>,
 ): Promise<PluginDeclarativeSettingsReadResult> {
     return await inTx(async (tx) =>
-        await readPluginDeclarativeSettingsInTx(tx, input), { readOnly: true });
+        await readPluginDeclarativeSettingsInTx(tx, input), { /* Account mode and catalog content must share one capture. */ isolationLevel: "Serializable", readOnly: true });
 }
 
 export async function mutatePluginDeclarativeSettingsInTx(

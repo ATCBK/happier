@@ -130,7 +130,7 @@ export function registerAccountSettingsHistoryRoutes(app: Fastify): void {
                         byteLength: Buffer.byteLength(snapshot.settingsDbValue ?? "", "utf8"),
                     })),
                 });
-            }, { readOnly: true });
+            }, { readOnly: true, isolationLevel: "Serializable" /* Account key/mode readiness and retained history inventory must share a snapshot. */ });
         } catch (error) {
             const storageUnavailable = resolveAccountSettingsStorageUnavailableRouteError(error);
             if (storageUnavailable) {
@@ -206,7 +206,7 @@ export function registerAccountSettingsHistoryRoutes(app: Fastify): void {
                     version: snapshot.version,
                     createdAt: snapshot.createdAt.toISOString(),
                 });
-            }, { readOnly: true });
+            }, { readOnly: true, isolationLevel: "Serializable" /* Account key/mode admission and the disclosed history envelope must share a snapshot. */ });
         } catch (error) {
             const storageUnavailable = resolveAccountSettingsStorageUnavailableRouteError(error);
             if (storageUnavailable) {

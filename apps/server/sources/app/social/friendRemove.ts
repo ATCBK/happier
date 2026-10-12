@@ -4,9 +4,11 @@ import { inTx } from "@/storage/inTx";
 import { relationshipSet } from "./relationshipSet";
 import { relationshipGet } from "./relationshipGet";
 import { RelationshipStatus } from "@/storage/prisma";
-import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { markAccountChanged, markAccountsChanged } from "@/app/changes/markAccountChanged";
 
 export async function friendRemove(ctx: Context, uid: string): Promise<UserProfile | null> {
+    // Removal shares the bilateral read-then-write invariant with friendAdd;
+    // ordered cursor publication alone does not protect those earlier reads.
     return await inTx(async (tx) => {
 
         // Read current user objects
@@ -44,8 +46,7 @@ export async function friendRemove(ctx: Context, uid: string): Promise<UserProfi
         if (currentUserRelationship === RelationshipStatus.friend) {
             await relationshipSet(tx, currentUser.id, targetUser.id, RelationshipStatus.none);
             await relationshipSet(tx, targetUser.id, currentUser.id, RelationshipStatus.none);
-            await markAccountChanged(tx, { accountId: currentUser.id, kind: 'friends', entityId: 'self' });
-            await markAccountChanged(tx, { accountId: targetUser.id, kind: 'friends', entityId: 'self' });
+            await markAccountsChanged(tx, { accountIds: [currentUser.id, targetUser.id], kind: 'friends', entityId: 'self' });
             return buildUserProfile(targetUser as any, RelationshipStatus.none, identities, presentation);
         }
 
@@ -57,14 +58,11 @@ export async function friendRemove(ctx: Context, uid: string): Promise<UserProfi
                 await relationshipSet(tx, targetUser.id, currentUser.id, RelationshipStatus.none);
                 targetChanged = true;
             }
-            await markAccountChanged(tx, { accountId: currentUser.id, kind: 'friends', entityId: 'self' });
-            if (targetChanged) {
-                await markAccountChanged(tx, { accountId: targetUser.id, kind: 'friends', entityId: 'self' });
-            }
+            await markAccountsChanged(tx, { accountIds: targetChanged ? [currentUser.id, targetUser.id] : [currentUser.id], kind: 'friends', entityId: 'self' });
             return buildUserProfile(targetUser as any, RelationshipStatus.none, identities, presentation);
         }
 
         // Return the target user profile with status none
         return buildUserProfile(targetUser as any, currentUserRelationship, identities, presentation);
-    });
+    }, { isolationLevel: "Serializable" });
 }

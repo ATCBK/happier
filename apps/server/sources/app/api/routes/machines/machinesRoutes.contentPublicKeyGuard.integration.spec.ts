@@ -14,7 +14,6 @@ import { createSignedAccountContentBinding } from "@/testkit/accountEncryption";
 
 vi.mock("@/utils/logging/log", () => ({ log: vi.fn() }));
 vi.mock("@/app/changes/markAccountChanged", () => ({ markAccountChanged: vi.fn(async () => 123) }));
-vi.mock("@/app/changes/markAccountChangedAfterCommit", () => ({ markAccountChangedAfterCommit: vi.fn(async () => 123) }));
 vi.mock("@/app/presence/sessionCache", () => ({ activityCache: { setMachineActive: vi.fn() } }));
 
 // Keep event routing out of scope for this behavior test.

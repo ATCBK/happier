@@ -153,6 +153,9 @@ export async function createMachinePreset(params: PresetContext & Readonly<{ inp
         } });
         await invalidatePresetInTx(tx, row);
         return { kind: "saved", preset: await projectPresetInTx(tx, row) } as const;
+    }, {
+        // Current controller and credential validation precede persisted recipe insertion.
+        isolationLevel: "Serializable",
     });
     try { return await execute(); }
     catch (error) { if (isPrismaUniqueConstraintError(error)) return await execute(); return refusal(error); }
@@ -226,6 +229,9 @@ export async function updateMachinePreset(params: PresetContext & Readonly<{ inp
         if (!result.count) return { kind: "conflict", currentRevision: stored.revision } as const;
         await invalidatePresetInTx(tx, stored);
         return { kind: "saved", preset: await projectPresetInTx(tx, stored) } as const;
+    }, {
+        // Recipe and capacity changes participate in concurrent preset acquisition admission.
+        isolationLevel: "Serializable",
     }); } catch (error) { return refusal(error); }
 }
 
@@ -242,6 +248,9 @@ async function setArchived(params: PresetContext & Readonly<{ input: ManagedMach
         if (!result.count) return { kind: "conflict", currentRevision: current.revision } as const;
         await invalidatePresetInTx(tx, current);
         return { kind: "saved", preset: await projectPresetInTx(tx, current) } as const;
+    }, {
+        // Preset availability must serialize with acquisition reading archivedAt before allocation insertion.
+        isolationLevel: "Serializable",
     }); } catch (error) { return refusal(error); }
 }
 
