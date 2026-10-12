@@ -8,9 +8,9 @@ import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 
 const styles = StyleSheet.create((theme) => ({
-    root: { gap: 14, alignItems: 'center', alignSelf: 'stretch' },
-    message: { ...Typography.default(), color: theme.colors.text.secondary, fontSize: 14, lineHeight: 21, textAlign: 'center' },
-    actions: { flexDirection: 'row', gap: 10, flexWrap: 'wrap', justifyContent: 'center' },
+    root: { gap: theme.space.s12, alignItems: 'center', alignSelf: 'stretch' },
+    message: {  color: theme.colors.text.secondary, ...Typography.variant('reading'),  textAlign: 'center' },
+    actions: { flexDirection: 'row', gap: theme.space.s10, flexWrap: 'wrap', justifyContent: 'center' },
 }));
 
 export const PersonalHomeSetupFailure = React.memo(function PersonalHomeSetupFailure(props: Readonly<{

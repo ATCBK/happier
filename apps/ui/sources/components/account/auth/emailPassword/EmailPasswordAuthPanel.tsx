@@ -640,17 +640,17 @@ export const EmailPasswordAuthPanel = React.memo(function EmailPasswordAuthPanel
 });
 
 const styles = StyleSheet.create((theme) => ({
-    root: { width: '100%', gap: 12 },
-    fieldLabel: { ...Typography.default('medium'), fontSize: 13, lineHeight: 18, letterSpacing: 0, marginBottom: 8 },
-    title: { fontSize: 20, fontWeight: '600', color: theme.colors.text.primary },
+    root: { width: '100%', gap: theme.space.s12 },
+    fieldLabel: {  ...Typography.variant('body', 'medium'),   marginBottom: theme.space.s8 },
+    title: { ...Typography.variant('title'),  color: theme.colors.text.primary },
     hint: { fontSize: 13, color: theme.colors.text.secondary },
     formError: { fontSize: 13 },
-    choices: { gap: 8 },
+    choices: { gap: theme.space.s8 },
     input: {
         borderWidth: 1,
         borderRadius: 12,
-        paddingHorizontal: 12,
-        paddingVertical: 10,
+        paddingHorizontal: theme.space.s12,
+        paddingVertical: theme.space.s10,
         minHeight: 44,
     },
 }));

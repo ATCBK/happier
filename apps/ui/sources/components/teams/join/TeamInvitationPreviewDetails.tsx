@@ -208,7 +208,7 @@ export const TeamInvitationPreviewDetails = React.memo(function TeamInvitationPr
 
 const styles = StyleSheet.create((theme) => ({
     block: {
-        gap: 6,
+        gap: theme.space.s6,
     },
     line: {
         fontSize: 14,
@@ -221,7 +221,7 @@ const styles = StyleSheet.create((theme) => ({
         color: theme.colors.text.secondary,
     },
     refreshFailure: {
-        gap: 6,
+        gap: theme.space.s6,
         alignItems: 'flex-start',
     },
 }));

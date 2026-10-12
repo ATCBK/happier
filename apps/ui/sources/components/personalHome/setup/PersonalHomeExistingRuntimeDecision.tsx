@@ -9,9 +9,9 @@ import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 
 const styles = StyleSheet.create((theme) => ({
-    root: { gap: 14, alignSelf: 'stretch' },
-    body: { ...Typography.default(), color: theme.colors.text.secondary, fontSize: 14, lineHeight: 21, flexShrink: 1, textAlign: 'center' },
-    actions: { gap: 10 },
+    root: { gap: theme.space.s12, alignSelf: 'stretch' },
+    body: {  color: theme.colors.text.secondary, ...Typography.variant('reading'),  flexShrink: 1, textAlign: 'center' },
+    actions: { gap: theme.space.s10 },
 }));
 
 /**

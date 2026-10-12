@@ -323,17 +323,17 @@ export const AccountServicePasswordForm = React.memo(function AccountServicePass
 const styles = StyleSheet.create((theme) => ({
     body: { gap: 14 },
     // Text fields stay a readable width on wide pages instead of spanning the sheet.
-    fields: { gap: 12, maxWidth: 480, width: '100%' },
-    actions: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 },
-    notice: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, maxWidth: 560 },
+    fields: { gap: theme.space.s12, maxWidth: 480, width: '100%' },
+    actions: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: theme.space.s8 },
+    notice: { flexDirection: 'row', alignItems: 'flex-start', gap: theme.space.s8, maxWidth: 560 },
     noticeText: { flex: 1, fontSize: 14, lineHeight: 20, color: theme.colors.text.secondary },
-    fieldError: { fontSize: 12, marginTop: 5 },
+    fieldError: { fontSize: 12, marginTop: theme.space.s4 },
     input: {
         borderWidth: 1,
         borderRadius: 12,
         backgroundColor: theme.colors.surface.base,
-        paddingHorizontal: 12,
-        paddingVertical: 10,
+        paddingHorizontal: theme.space.s12,
+        paddingVertical: theme.space.s10,
         minHeight: Platform.OS === 'android' ? 48 : 44,
     },
 }));

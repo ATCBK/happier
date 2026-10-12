@@ -358,6 +358,6 @@ export const E2eePasswordRecoveryScreen = React.memo(function E2eePasswordRecove
 });
 
 const styles = StyleSheet.create((theme) => ({
-    fields: { gap: 16 },
+    fields: { gap: theme.space.s16 },
     error: { color: theme.colors.status.error },
 }));

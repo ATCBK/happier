@@ -208,27 +208,25 @@ export function presentReconcileHomesSheet(input: Readonly<{ foundCount: number 
 
 const styles = StyleSheet.create((theme) => ({
     body: {
-        paddingBottom: 16,
+        paddingBottom: theme.space.s16,
     },
-    phoneAction: { paddingHorizontal: 20 },
+    phoneAction: { paddingHorizontal: theme.space.s20 },
     footer: {
         flexDirection: 'row',
         flexWrap: 'wrap',
         alignItems: 'center',
-        gap: 12,
-        paddingHorizontal: 20,
-        paddingTop: 8,
+        gap: theme.space.s12,
+        paddingHorizontal: theme.space.s20,
+        paddingTop: theme.space.s8,
     },
     footerNote: {
-        ...Typography.default(),
         flex: 1,
         minWidth: 160,
-        fontSize: 12.5,
-        lineHeight: 17,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     footerActions: {
         flexDirection: 'row',
-        gap: 8,
+        gap: theme.space.s8,
     },
 }));

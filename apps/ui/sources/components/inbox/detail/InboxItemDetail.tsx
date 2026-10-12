@@ -199,8 +199,8 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: 'row',
     justifyContent: 'flex-end',
     alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingTop: 8,
+    gap: theme.space.s4,
+    paddingHorizontal: theme.space.s8,
+    paddingTop: theme.space.s8,
   },
 }));

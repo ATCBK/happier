@@ -125,8 +125,8 @@ export function WidgetPreviewStage(props: Readonly<{
 }
 
 const stylesheet = StyleSheet.create((theme) => ({
-    stage: { flex: 1, minHeight: 160, gap: 8 },
-    captionRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    stage: { flex: 1, minHeight: 160, gap: theme.space.s8 },
+    captionRow: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s6 },
     caption: { ...Typography.default('semiBold'), ...happierPageTextMetrics('meta'), color: theme.colors.text.tertiary },
     // Live is the one state the caption shows in colour.
     liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: theme.colors.state.success.foreground },

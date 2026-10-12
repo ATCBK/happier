@@ -80,13 +80,12 @@ const styles = StyleSheet.create((theme) => ({
     back: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 4,
+        gap: theme.space.s4,
         alignSelf: 'flex-start',
         minHeight: 24,
     },
     backText: {
-        ...Typography.default('medium'),
-        fontSize: 12.5,
+        ...Typography.variant('meta', 'medium'),
         color: theme.colors.text.secondary,
     },
 }));

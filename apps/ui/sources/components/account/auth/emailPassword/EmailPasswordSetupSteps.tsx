@@ -79,12 +79,12 @@ export function EmailPasswordSetupSteps(props: Readonly<{
 }
 
 const styles = StyleSheet.create((theme) => ({
-    setup: { paddingHorizontal: 16, paddingTop: 4, paddingBottom: 10, gap: 8, maxWidth: 560 },
+    setup: { paddingHorizontal: theme.space.s16, paddingTop: theme.space.s4, paddingBottom: theme.space.s10, gap: theme.space.s8, maxWidth: 560 },
     flush: { paddingHorizontal: 0, paddingTop: 0, paddingBottom: 0 },
-    steps: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', rowGap: 6 },
-    step: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-    stepLabel: { ...Typography.default('regular'), fontSize: 13, lineHeight: 18 },
-    stepLabelActive: { ...Typography.default('medium'), fontSize: 13, lineHeight: 18 },
-    stepRule: { width: 16, height: 1, marginHorizontal: 8, backgroundColor: theme.colors.border.default },
+    steps: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', rowGap: theme.space.s6 },
+    step: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s6 },
+    stepLabel: {  ...Typography.variant('body'),  },
+    stepLabelActive: {  ...Typography.variant('body', 'medium'),  },
+    stepRule: { width: 16, height: 1, marginHorizontal: theme.space.s8, backgroundColor: theme.colors.border.default },
     hint: { flex: 1, fontSize: 14, lineHeight: 20, color: theme.colors.text.secondary },
 }));

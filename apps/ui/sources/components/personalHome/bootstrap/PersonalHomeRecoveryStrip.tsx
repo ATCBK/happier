@@ -13,15 +13,15 @@ import type { NormalizedSetupDetail } from './personalHomeBootstrapTypes';
 
 const styles = StyleSheet.create((theme) => ({
     root: {
-        padding: 16,
-        paddingBottom: 20,
-        gap: 10,
+        padding: theme.space.s16,
+        paddingBottom: theme.space.s20,
+        gap: theme.space.s10,
         backgroundColor: theme.colors.background.canvas,
         borderTopWidth: 1,
         borderTopColor: theme.colors.border.default,
     },
-    message: { ...Typography.default(), color: theme.colors.text.secondary, fontSize: 13, lineHeight: 19 },
-    actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+    message: {  color: theme.colors.text.secondary, ...Typography.variant('body'),  },
+    actions: { flexDirection: 'row', flexWrap: 'wrap', gap: theme.space.s10 },
     details: { width: '100%' },
 }));
 

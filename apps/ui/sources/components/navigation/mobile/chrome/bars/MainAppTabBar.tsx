@@ -61,9 +61,8 @@ const styles = StyleSheet.create((theme) => ({
         opacity: 0.05,
     },
     label: {
-        fontSize: 10,
+        ...Typography.variant('micro'),
         marginTop: 3,
-        ...Typography.default(),
     },
     labelActive: {
         color: theme.colors.text.primary,

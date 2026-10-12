@@ -120,14 +120,14 @@ export function RecoveryKeyUnlockModal(props: Props) {
 }
 
 const styles = StyleSheet.create((theme) => ({
-    body: { padding: 16, gap: 14 },
+    body: { padding: theme.space.s16, gap: 14 },
     description: { color: theme.colors.text.secondary, fontSize: 14, lineHeight: 20 },
     input: {
         borderWidth: 1,
         borderRadius: 12,
         backgroundColor: theme.colors.surface.base,
-        paddingHorizontal: 12,
-        paddingVertical: 10,
+        paddingHorizontal: theme.space.s12,
+        paddingVertical: theme.space.s10,
         minHeight: 44,
     },
 }));

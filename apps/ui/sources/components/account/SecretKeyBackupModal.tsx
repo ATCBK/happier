@@ -19,9 +19,9 @@ import { createNativeCacheFileSink, shareNativeCacheFile } from '@/sync/runtime/
 
 const stylesheet = StyleSheet.create((theme) => ({
     body: {
-        paddingHorizontal: 16,
-        paddingVertical: 16,
-        gap: 12,
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s16,
+        gap: theme.space.s12,
     },
     footerContent: {
         alignItems: 'stretch',
@@ -36,10 +36,10 @@ const stylesheet = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.surface.base,
         borderRadius: 12,
         paddingHorizontal: 14,
-        paddingVertical: 12,
+        paddingVertical: theme.space.s12,
         borderWidth: 1,
         borderColor: theme.colors.border.default,
-        marginBottom: 12,
+        marginBottom: theme.space.s12,
     },
     keyText: {
         fontSize: 13,
@@ -52,12 +52,12 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        marginTop: 4,
+        marginTop: theme.space.s4,
     },
     revealToggle: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
     },
     link: {
         fontSize: 14,
@@ -131,7 +131,7 @@ export function SecretKeyBackupModal(props: Props) {
     }, [props.onClose, props.onDefer, props.onSaved]);
 
     const footer = React.useMemo(() => (
-        <View style={[styles.footerContent, { gap: 8 }]}>
+        <View style={[styles.footerContent, { gap: theme.space.s8 }]}>
             <RoundButton testID="recovery-key-saved" title={t('settingsApiTokens.reveal.savedIt')} onPress={() => finish('saved')} size="normal" />
             <RoundButton testID="recovery-key-later" display="inverted" title={t('settingsAccount.nativePassword.recoveryKeyLater')} onPress={() => finish('later')} size="normal" />
         </View>

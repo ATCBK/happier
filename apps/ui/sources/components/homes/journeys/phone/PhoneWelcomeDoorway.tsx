@@ -93,13 +93,13 @@ export function PhoneWelcomeDoorway(props: Readonly<{
 
 const styles = StyleSheet.create((theme) => ({
     signIn: {
-        gap: 8,
+        gap: theme.space.s8,
     },
     serviceLine: {
         flexDirection: 'row',
         justifyContent: 'center',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
     },
     serviceText: {
         ...Typography.default(),
@@ -108,9 +108,7 @@ const styles = StyleSheet.create((theme) => ({
         color: theme.colors.text.secondary,
     },
     changeText: {
-        ...Typography.default('medium'),
-        fontSize: 14,
-        lineHeight: 20,
+        ...Typography.variant('label'),
         color: theme.colors.text.primary,
         textDecorationLine: 'underline',
     },

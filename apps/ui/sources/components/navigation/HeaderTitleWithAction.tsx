@@ -62,11 +62,10 @@ const stylesheet = StyleSheet.create(() => ({
         maxWidth: '100%',
     },
     title: {
-        fontSize: 16,
-        ...Typography.default('semiBold'),
+        ...Typography.variant('heading'),
     },
     titleBlock: { flexShrink: 1, minWidth: 0 },
-    subtitle: { fontSize: 13, marginTop: 2, ...Typography.default() },
+    subtitle: { ...Typography.variant('body'), marginTop: 2,  },
     actionButton: {
         padding: 2,
     },

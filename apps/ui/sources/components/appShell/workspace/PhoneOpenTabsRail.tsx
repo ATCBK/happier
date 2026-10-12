@@ -26,31 +26,30 @@ type RailItem = DocumentTabItem & Readonly<{ source: PhoneWorkspaceTab }>;
 
 const styles = StyleSheet.create((theme) => ({
     root: {
-        paddingTop: 2,
-        paddingBottom: 8,
+        paddingTop: theme.space.s2,
+        paddingBottom: theme.space.s8,
     },
     synced: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 4,
-        paddingLeft: 4,
-        paddingRight: 2,
+        gap: theme.space.s4,
+        paddingLeft: theme.space.s4,
+        paddingRight: theme.space.s2,
     },
     syncedLabel: {
-        fontSize: 11.5,
+        ...Typography.variant('micro'),
         color: theme.colors.text.tertiary,
-        ...Typography.default(),
     },
     pager: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
         minHeight: 34,
-        paddingHorizontal: 20,
+        paddingHorizontal: theme.space.s20,
     },
     dots: {
         flexDirection: 'row',
-        gap: 5,
+        gap: theme.space.s4,
     },
     dot: {
         width: 6,
@@ -62,28 +61,25 @@ const styles = StyleSheet.create((theme) => ({
         backgroundColor: theme.colors.text.secondary,
     },
     pagerPosition: {
-        fontSize: 12.5,
+        ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.text.primary,
         fontVariant: ['tabular-nums'],
-        ...Typography.default('semiBold'),
     },
     pagerTitle: {
         flex: 1,
         minWidth: 0,
-        fontSize: 12.5,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
-        ...Typography.default(),
     },
     pagerNext: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 2,
+        gap: theme.space.s2,
         minHeight: 34,
     },
     pagerNextLabel: {
-        fontSize: 12.5,
+        ...Typography.variant('meta'),
         color: theme.colors.text.link,
-        ...Typography.default(),
     },
 }));
 

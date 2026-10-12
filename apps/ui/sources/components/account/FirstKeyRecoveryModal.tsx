@@ -16,9 +16,9 @@ export type FirstKeyRecoveryActionResult =
 
 const stylesheet = StyleSheet.create((theme) => ({
     body: {
-        paddingHorizontal: 16,
-        paddingVertical: 16,
-        gap: 12,
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s16,
+        gap: theme.space.s12,
     },
     description: {
         color: theme.colors.text.secondary,
@@ -30,12 +30,11 @@ const stylesheet = StyleSheet.create((theme) => ({
         alignItems: 'center',
         justifyContent: 'center',
         minHeight: 44,
-        marginTop: 4,
+        marginTop: theme.space.s4,
     },
     dangerText: {
         color: theme.colors.text.destructive,
-        fontSize: 14,
-        ...Typography.default('semiBold'),
+        ...Typography.variant('label', 'semiBold'),
     },
 }));
 
@@ -95,7 +94,7 @@ export function FirstKeyRecoveryModal(
         await run(props.abandon, 'abandon');
     }, [busy, props.abandon, run]);
     const footer = React.useMemo(() => (
-        <View style={{ gap: 12 }}>
+        <View style={{ gap: theme.space.s12 }}>
             <RoundButton
                 title={tLoose(
                     'settingsAccount.firstKeyRecovery.finish',

@@ -33,8 +33,8 @@ export function SessionNavigationPill(props: Readonly<{
 export const sessionNavigationPillStyles = StyleSheet.create((theme) => ({
     row: {
         flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-        gap: 6, paddingHorizontal: 18, minHeight: 48,
+        gap: theme.space.s6, paddingHorizontal: theme.space.s16, minHeight: 48,
     },
-    label: { fontSize: 14, color: theme.colors.text.secondary, ...Typography.default() },
-    title: { flexShrink: 1, fontSize: 14, color: theme.colors.text.primary, ...Typography.default('semiBold') },
+    label: { ...Typography.variant('label', 'regular'), color: theme.colors.text.secondary },
+    title: { flexShrink: 1, ...Typography.variant('label', 'semiBold'), color: theme.colors.text.primary,  },
 }));

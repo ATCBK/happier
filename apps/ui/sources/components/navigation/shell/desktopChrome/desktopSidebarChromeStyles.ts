@@ -28,7 +28,7 @@ export const desktopSidebarChromeStyles = StyleSheet.create((theme) => ({
         minHeight: DESKTOP_WINDOW_CONTROLS_SLOT_MIN_HEIGHT_PX,
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
     },
     windowDragRegion: {
         ...StyleSheet.absoluteFillObject,
@@ -42,19 +42,19 @@ export const desktopSidebarChromeStyles = StyleSheet.create((theme) => ({
         borderRadius: 8,
         minWidth: 16,
         height: 16,
-        paddingHorizontal: 4,
+        paddingHorizontal: theme.space.s4,
         justifyContent: 'center',
         alignItems: 'center',
     },
     windowControlsButtons: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
     },
     windowControlsButtonsColumn: {
         flexDirection: 'column',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
     },
     windowControlsButton: {
         width: DESKTOP_WINDOW_CONTROLS_SLOT_MIN_HEIGHT_PX,

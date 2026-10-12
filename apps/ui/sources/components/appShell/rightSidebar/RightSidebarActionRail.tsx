@@ -45,7 +45,7 @@ const styles = StyleSheet.create((theme) => ({
     actions: { alignItems: 'center', paddingVertical: RAIL_PADDING, gap: ACTION_GAP },
     separator: {
         alignSelf: 'stretch',
-        marginHorizontal: 10,
+        marginHorizontal: theme.space.s10,
         marginVertical: SEPARATOR_MARGIN,
         height: StyleSheet.hairlineWidth,
         backgroundColor: theme.colors.border.default,

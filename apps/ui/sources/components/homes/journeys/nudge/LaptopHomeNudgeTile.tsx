@@ -72,18 +72,18 @@ const styles = StyleSheet.create((theme) => ({
     description: {
         ...Typography.default(),
         ...happierPageTextMetrics('rowDescription'),
-        marginTop: 2,
+        marginTop: theme.space.s2,
         color: theme.colors.text.secondary,
     },
     actionsNarrow: {
         flexDirection: 'row',
         flexWrap: 'wrap',
-        gap: 6,
+        gap: theme.space.s6,
     },
     actions: {
         flexDirection: 'column',
         alignItems: 'stretch',
-        gap: 4,
+        gap: theme.space.s4,
         width: 164,
     },
 }));

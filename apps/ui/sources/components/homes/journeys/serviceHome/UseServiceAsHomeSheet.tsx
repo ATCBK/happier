@@ -147,17 +147,17 @@ export function presentUseServiceAsHomeSheet(input: Readonly<{ serviceName: stri
 const styles = StyleSheet.create((theme) => ({
     body: {
         gap: 14,
-        paddingHorizontal: 20,
-        paddingTop: 4,
-        paddingBottom: 20,
+        paddingHorizontal: theme.space.s20,
+        paddingTop: theme.space.s4,
+        paddingBottom: theme.space.s20,
     },
     facts: {
-        gap: 12,
+        gap: theme.space.s12,
     },
     fact: {
         flexDirection: 'row',
         alignItems: 'flex-start',
-        gap: 12,
+        gap: theme.space.s12,
     },
     factIcon: {
         width: 20,
@@ -169,27 +169,19 @@ const styles = StyleSheet.create((theme) => ({
         minWidth: 0,
     },
     factTitle: {
-        ...Typography.default('semiBold'),
-        fontSize: 13.5,
-        lineHeight: 19,
+        ...Typography.variant('body', 'semiBold'),
         color: theme.colors.text.primary,
     },
     factDetail: {
-        ...Typography.default(),
-        fontSize: 12.5,
-        lineHeight: 17,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     label: {
-        ...Typography.default('semiBold'),
-        fontSize: 12.5,
-        lineHeight: 17,
+        ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.text.secondary,
     },
     note: {
-        ...Typography.default(),
-        fontSize: 12.5,
-        lineHeight: 17,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
 }));

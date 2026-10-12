@@ -21,6 +21,6 @@ export function WidgetSnapshotNote(): React.ReactElement {
 }
 
 const styles = StyleSheet.create((theme) => ({
-    note: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingTop: 10 },
+    note: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s6, paddingTop: theme.space.s10 },
     text: { ...Typography.default(), ...happierPageTextMetrics('rowDescription'), flexShrink: 1, color: theme.colors.text.tertiary },
 }));

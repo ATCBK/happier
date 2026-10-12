@@ -8,6 +8,7 @@ import { Icon } from '@/components/ui/icons/Icon';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { Text } from '@/components/ui/text/Text';
+import { Typography } from '@/constants/Typography';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { t } from '@/text';
 import type { Session } from '@/sync/domains/state/storageTypes';
@@ -163,7 +164,7 @@ const styles = StyleSheet.create((theme) => ({
         alignItems: 'center',
         justifyContent: 'center',
         backgroundColor: theme.colors.button.primary.background,
-        paddingHorizontal: 12,
+        paddingHorizontal: theme.space.s12,
     },
     swipeActionPressed: {
         opacity: motionTokens.press.opacity,
@@ -172,8 +173,8 @@ const styles = StyleSheet.create((theme) => ({
         opacity: 0.56,
     },
     swipeActionText: {
-        marginTop: 4,
-        fontSize: 12,
+        marginTop: theme.space.s4,
+        ...Typography.variant('meta'),
         color: theme.colors.button.primary.tint,
         textAlign: 'center',
     },

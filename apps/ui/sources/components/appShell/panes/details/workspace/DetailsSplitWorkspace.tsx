@@ -1,3 +1,4 @@
+import { Typography } from '@/constants/Typography';
 import * as React from 'react';
 import { Platform, Pressable, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -70,11 +71,11 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     overlayChrome: {
         minHeight: 46,
-        paddingHorizontal: 10,
-        paddingVertical: 6,
+        paddingHorizontal: theme.space.s10,
+        paddingVertical: theme.space.s6,
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
         borderBottomWidth: 1,
         borderBottomColor: theme.colors.border.default,
         backgroundColor: theme.colors.surface.inset,
@@ -85,13 +86,12 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     overlayAction: {
         borderRadius: 8,
-        paddingHorizontal: 10,
+        paddingHorizontal: theme.space.s10,
         justifyContent: 'center',
     },
     overlayActionText: {
         color: theme.colors.text.secondary,
-        fontSize: 12,
-        fontWeight: '600',
+        ...Typography.variant('meta', 'semiBold'),
     },
     overlayContent: {
         flex: 1,

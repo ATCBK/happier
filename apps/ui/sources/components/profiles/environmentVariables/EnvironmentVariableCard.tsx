@@ -495,7 +495,7 @@ export function EnvironmentVariableCard({
 const stylesheet = StyleSheet.create((theme) => ({
     groupWrapper: {
         // The card spacing between env vars should match other grouped settings lists.
-        marginBottom: 12,
+        marginBottom: theme.space.s12,
     },
     hiddenHeader: {
         paddingTop: 0,
@@ -511,17 +511,16 @@ const stylesheet = StyleSheet.create((theme) => ({
     secretRowRight: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 10,
+        gap: theme.space.s10,
     },
     resetToAutoText: {
         color: theme.colors.button.secondary.tint,
-        fontSize: Platform.select({ ios: 13, default: 12 }),
-        ...Typography.default('semiBold'),
+        ...Typography.variant('meta', 'semiBold'),
     },
     titleRowActions: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.md,
+        gap: theme.space.s12,
     },
     secondaryText: {
         fontSize: Platform.select({ ios: 15, default: 14 }),
@@ -533,7 +532,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         ...Typography.default('regular'),
         backgroundColor: theme.colors.input.background,
         borderRadius: 10,
-        paddingHorizontal: 12,
+        paddingHorizontal: theme.space.s12,
         paddingVertical: Platform.select({ ios: 10, default: 12 }),
         fontSize: Platform.select({ ios: 17, default: 16 }),
         lineHeight: Platform.select({ ios: 22, default: 24 }),
@@ -541,7 +540,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         color: theme.colors.input.text,
     },
     sectionContent: {
-        marginTop: 4,
+        marginTop: theme.space.s4,
     },
     helperText: {
         color: theme.colors.text.secondary,
@@ -550,26 +549,25 @@ const stylesheet = StyleSheet.create((theme) => ({
         fontStyle: 'italic',
     },
     fieldLabel: {
-        ...Typography.default('semiBold'),
-        fontSize: 13,
+        ...Typography.variant('body', 'semiBold'),
         color: theme.colors.text.secondary,
-        marginTop: 10,
-        marginBottom: 6,
+        marginTop: theme.space.s10,
+        marginBottom: theme.space.s6,
     },
     sourceInput: {
         ...Typography.default('regular'),
         backgroundColor: theme.colors.input.background,
         borderRadius: 10,
-        paddingHorizontal: 12,
+        paddingHorizontal: theme.space.s12,
         paddingVertical: Platform.select({ ios: 10, default: 12 }),
         fontSize: Platform.select({ ios: 17, default: 16 }),
         lineHeight: Platform.select({ ios: 22, default: 24 }),
         letterSpacing: Platform.select({ ios: -0.41, default: 0.15 }),
         color: theme.colors.input.text,
-        marginBottom: 2,
+        marginBottom: theme.space.s2,
     },
     valueRowContent: {
-        marginTop: 8,
+        marginTop: theme.space.s8,
     },
     vaultRow: {
         flexDirection: 'row',
@@ -583,13 +581,13 @@ const stylesheet = StyleSheet.create((theme) => ({
     vaultRowRight: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
     },
     vaultRowValue: {
         color: theme.colors.text.secondary,
     },
     machineStatusContainer: {
-        marginTop: 8,
+        marginTop: theme.space.s8,
     },
     machineStatusLoading: {
         color: theme.colors.text.secondary,
@@ -603,10 +601,10 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     machineStatusDiffers: {
         color: theme.colors.text.secondary,
-        marginTop: 2,
+        marginTop: theme.space.s2,
     },
     sessionPreview: {
         color: theme.colors.text.secondary,
-        marginTop: 10,
+        marginTop: theme.space.s10,
     },
 }));

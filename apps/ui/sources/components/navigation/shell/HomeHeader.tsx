@@ -48,12 +48,11 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         alignItems: 'center',
     },
     titleText: {
-        fontSize: 16,
+        ...Typography.variant('heading'),
         color: theme.colors.chrome.header.foreground,
-        ...Typography.default('semiBold'),
     },
     subtitleText: {
-        fontSize: 12,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
         marginTop: -2,
     },
@@ -63,12 +62,10 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         marginTop: -2,
     },
     statusDot: {
-        marginRight: 4,
+        marginRight: theme.space.s4,
     },
     statusText: {
-        fontSize: 11,
-        lineHeight: 16,
-        ...Typography.default(),
+        ...Typography.variant('micro'),
     },
     centeredTitle: {
         textAlign: Platform.OS === 'ios' ? 'center' : 'left',

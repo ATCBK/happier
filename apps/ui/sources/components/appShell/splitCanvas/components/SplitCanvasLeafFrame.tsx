@@ -119,7 +119,7 @@ export const SplitCanvasLeafFrame = React.memo((props: Readonly<{
                             style={{
                                 flexDirection: 'row',
                                 alignItems: 'center',
-                                gap: 6,
+                                gap: theme.space.s6,
                                 padding: CONTROLS_PILL_PADDING_PX,
                                 // A capsule around the shared icon buttons: half its own height.
                                 borderRadius: (HAPPIER_ICON_BUTTON_SIZE + CONTROLS_PILL_PADDING_PX * 2) / 2,

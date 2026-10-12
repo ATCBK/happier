@@ -19,6 +19,7 @@ import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { MeterBar } from '@/components/ui/lists/MeterBar';
 import { Text } from '@/components/ui/text/Text';
+import { Typography } from '@/constants/Typography';
 import { useScannedAuthUrlProcessor } from '@/hooks/auth/useScannedAuthUrlProcessor';
 import { useConnectTerminal } from '@/hooks/session/useConnectTerminal';
 import { Modal } from '@/modal';
@@ -421,25 +422,24 @@ const stylesheet = StyleSheet.create((theme) => ({
     rowActions: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
     },
     headerActions: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
     },
     progress: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: theme.space.s8,
     },
     progressMeter: {
         width: PROGRESS_METER_WIDTH,
     },
     progressLabel: {
         color: theme.colors.text.secondary,
-        fontSize: 12,
-        lineHeight: 16,
+        ...Typography.variant('meta'),
         fontVariant: ['tabular-nums'],
     },
 }));

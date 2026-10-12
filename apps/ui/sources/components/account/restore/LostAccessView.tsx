@@ -64,7 +64,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     container: {
         flex: 1,
         alignItems: 'center',
-        paddingHorizontal: 24,
+        paddingHorizontal: theme.space.s24,
     },
     contentWrapper: {
         width: '100%',
@@ -75,7 +75,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderWidth: 1,
         borderColor: theme.colors.border.default,
         borderRadius: 14,
-        paddingHorizontal: 16,
+        paddingHorizontal: theme.space.s16,
         paddingVertical: 14,
         backgroundColor: theme.colors.surface.base,
     },
@@ -93,7 +93,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     actionButton: {
         width: '100%',
         maxWidth: 360,
-        marginTop: 12,
+        marginTop: theme.space.s12,
     },
     footer: {
         marginTop: 18,

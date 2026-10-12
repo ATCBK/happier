@@ -82,18 +82,16 @@ export const ConnectComputerPanel = React.memo(function ConnectComputerPanel(pro
 
 const styles = StyleSheet.create((theme) => ({
     root: {
-        padding: 14,
-        gap: 12,
+        padding: theme.space.s16,
+        gap: theme.space.s12,
     },
     header: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 10,
+        gap: theme.space.s10,
     },
     title: {
-        ...Typography.default('semiBold'),
-        fontSize: 16,
-        lineHeight: 22,
+        ...Typography.variant('heading'),
         flex: 1,
         color: theme.colors.text.primary,
     },

@@ -20,6 +20,7 @@ import type {
 } from '@happier-dev/protocol';
 
 import { Text, TextInput } from '@/components/ui/text/Text';
+import { Typography } from '@/constants/Typography';
 import { Icon } from '@/components/ui/icons/Icon';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { Modal, type CustomModalInjectedProps, type IModal } from '@/modal';
@@ -27,39 +28,38 @@ import { t } from '@/text';
 import {
     composeAppShellInvocationSignal,
 } from './pluginUiInvocationHost';
-import { PLUGIN_PRESENT_USER_INTERACTION_DEADLINE_MS } from '@/components/plugins/hostApi/interactionLifetime';
 
 const styles = StyleSheet.create((theme) => ({
-    body: { maxHeight: 520, padding: 16, gap: 18 },
-    question: { gap: 8 },
-    prompt: { color: theme.colors.text.primary, fontSize: 15 },
+    body: { maxHeight: 520, padding: theme.space.s16, gap: theme.space.s16 },
+    question: { gap: theme.space.s8 },
+    prompt: { color: theme.colors.text.primary, ...Typography.variant('label', 'regular') },
     choice: {
         minHeight: 44,
         borderWidth: 1,
         borderColor: theme.colors.border.default,
         borderRadius: 10,
-        paddingHorizontal: 12,
-        paddingVertical: 10,
+        paddingHorizontal: theme.space.s12,
+        paddingVertical: theme.space.s10,
         justifyContent: 'center',
     },
-    choiceContent: { alignItems: 'center', flexDirection: 'row', gap: 12 },
+    choiceContent: { alignItems: 'center', flexDirection: 'row', gap: theme.space.s12 },
     choiceCopy: { flex: 1 },
     choiceIndicator: { alignItems: 'center', justifyContent: 'center', width: 20 },
     selected: { borderColor: theme.colors.text.link },
-    choiceLabel: { color: theme.colors.text.primary, fontSize: 14 },
-    choiceDescription: { color: theme.colors.text.secondary, fontSize: 12, marginTop: 2 },
+    choiceLabel: { color: theme.colors.text.primary, ...Typography.variant('label', 'regular') },
+    choiceDescription: { color: theme.colors.text.secondary, ...Typography.variant('meta'), marginTop: theme.space.s2 },
     input: {
         minHeight: 44,
         borderWidth: 1,
         borderColor: theme.colors.border.default,
         borderRadius: 10,
         color: theme.colors.text.primary,
-        paddingHorizontal: 12,
-        paddingVertical: 10,
+        paddingHorizontal: theme.space.s12,
+        paddingVertical: theme.space.s10,
     },
-    actions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10 },
-    action: { minHeight: 44, paddingHorizontal: 16, justifyContent: 'center' },
-    actionText: { color: theme.colors.text.link, fontSize: 14 },
+    actions: { flexDirection: 'row', justifyContent: 'flex-end', gap: theme.space.s10 },
+    action: { minHeight: 44, paddingHorizontal: theme.space.s16, justifyContent: 'center' },
+    actionText: { color: theme.colors.text.link, ...Typography.variant('label') },
     disabled: { opacity: 0.45 },
 }));
 
@@ -553,8 +553,8 @@ export async function presentAppShellTransientInteraction(input: Readonly<{
 
 /**
  * Thin present-user app adapter over the Protocol lifecycle owner. The active
- * app-shell invocation supplies identity, cancellation, currentness and its
- * established deadline; this adapter cannot select a scope or settle a result.
+ * app-shell invocation supplies identity, cancellation and currentness; the
+ * Protocol owner settles the interaction on its lifecycle or the user's answer.
  */
 export function createAppShellTransientInteractions(input: Readonly<{
     requester: InteractionTransientRequesterV1;
@@ -577,7 +577,7 @@ export function createAppShellTransientInteractions(input: Readonly<{
     const owner = createTransientInteractionOwner({
         scope: Object.freeze({ kind: 'app' }),
         isOccurrenceCurrent: input.isCurrent,
-        deadlineMs: PLUGIN_PRESENT_USER_INTERACTION_DEADLINE_MS,
+        deadlineMs: null,
         present: async (request, options) => await presentAppShellTransientInteraction({
             request,
             signal: options.signal,

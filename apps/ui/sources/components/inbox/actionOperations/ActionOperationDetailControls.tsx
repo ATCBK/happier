@@ -63,7 +63,7 @@ export function ActionOperationDetailControls(props: Readonly<{
 const styles = StyleSheet.create((theme) => ({
     container: {
         width: '100%',
-        gap: 8,
+        gap: theme.space.s8,
     },
     feedback: {
         color: theme.colors.text.primary,
@@ -74,7 +74,7 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         justifyContent: 'flex-end',
         alignItems: 'center',
-        gap: 10,
+        gap: theme.space.s10,
         flexWrap: 'wrap',
     },
 }));

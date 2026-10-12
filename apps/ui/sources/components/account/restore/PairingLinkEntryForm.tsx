@@ -28,15 +28,12 @@ const stylesheet = StyleSheet.create((theme) => ({
         maxWidth: 560,
         alignSelf: 'center',
         paddingVertical: 28,
-        gap: 16,
+        gap: theme.space.s16,
     },
     title: {
-        fontSize: 28,
-        lineHeight: 34,
-        letterSpacing: -0.56,
+        ...Typography.variant('display'),
         color: theme.colors.text.primary,
         textAlign: 'center',
-        ...Typography.default('semiBold'),
     },
     description: {
         fontSize: 16,
@@ -46,20 +43,18 @@ const stylesheet = StyleSheet.create((theme) => ({
         ...Typography.default(),
     },
     field: {
-        gap: 8,
+        gap: theme.space.s8,
     },
     label: {
-        fontSize: 14,
-        lineHeight: 20,
+        ...Typography.variant('label', 'semiBold'),
         color: theme.colors.text.primary,
-        ...Typography.default('semiBold'),
     },
     input: {
         minHeight: 54,
         borderWidth: 1,
         borderColor: theme.colors.border.default,
         borderRadius: 14,
-        paddingHorizontal: 16,
+        paddingHorizontal: theme.space.s16,
         paddingVertical: 14,
         backgroundColor: theme.colors.input.background,
         color: theme.colors.input.text,
@@ -74,7 +69,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         ...Typography.default(),
     },
     actions: {
-        gap: 12,
+        gap: theme.space.s12,
     },
 }));
 

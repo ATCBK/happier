@@ -47,9 +47,8 @@ const styles = StyleSheet.create((theme) => ({
         opacity: 0.05,
     },
     label: {
-        marginTop: 4,
-        fontSize: 10,
-        ...Typography.default(),
+        marginTop: theme.space.s4,
+        ...Typography.variant('micro'),
     },
     labelActive: {
         color: theme.colors.text.primary,
@@ -63,7 +62,7 @@ const styles = StyleSheet.create((theme) => ({
         width: StyleSheet.hairlineWidth,
         alignSelf: 'center',
         height: 20,
-        marginHorizontal: 2,
+        marginHorizontal: theme.space.s2,
         backgroundColor: theme.colors.border.default,
     },
     track: {

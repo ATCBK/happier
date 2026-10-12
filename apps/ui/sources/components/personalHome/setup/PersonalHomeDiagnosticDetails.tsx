@@ -10,9 +10,9 @@ import { Typography } from '@/constants/Typography';
 import type { NormalizedSetupDetail } from '../bootstrap/personalHomeBootstrapTypes';
 
 const styles = StyleSheet.create((theme) => ({
-    root: { gap: 10 },
-    code: { ...Typography.mono(), color: theme.colors.text.secondary, fontSize: 12, lineHeight: 18 },
-    message: { ...Typography.default(), color: theme.colors.text.secondary, fontSize: 13, lineHeight: 19 },
+    root: { gap: theme.space.s10 },
+    code: { ...Typography.variant('meta'), ...Typography.mono(), color: theme.colors.text.secondary },
+    message: {  color: theme.colors.text.secondary, ...Typography.variant('body'),  },
 }));
 
 const SENSITIVE_ASSIGNMENT = /\b(authorization(?!\s*[:=]?\s*bearer\b)|bearer|token|seed|secret|password|credential|api[-_]?key)\b(\s*[:=]\s*)([^\s;,]+)/gi;

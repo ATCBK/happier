@@ -1,4 +1,5 @@
 import { HEADER_BAND_HORIZONTAL_PADDING_PX } from '@/components/ui/layout/headerBand';
+import { Typography } from '@/constants/Typography';
 
 /**
  * The measures of a Details tab: the strip its tabs sit on (details lab 2, `dl-strip`) and what
@@ -20,8 +21,8 @@ export const DETAILS_TAB_STRIP_METRICS = Object.freeze({
     tabActionTargetPx: 24,
     tabCloseGlyphPx: 11,
     tabUnsavedDotPx: 7,
-    tabLabel: { fontSize: 12.5, lineHeight: 16 },
-    tabSubtitle: { fontSize: 11.5, lineHeight: 14 },
+    tabLabel: Typography.variant('meta'),
+    tabSubtitle: Typography.variant('micro'),
     actionSizePx: 28,
     actionGlyphPx: 15,
 });
@@ -33,8 +34,8 @@ export const DETAILS_TAB_STRIP_METRICS = Object.freeze({
 type DetailsTabBelowBandStep = Readonly<{
     paddingStartPx: number;
     paddingEndPx: number;
-    meta: Readonly<{ fontSize: number; lineHeight: number }>;
-    body: Readonly<{ fontSize: number; lineHeight: number }>;
+    meta: ReturnType<typeof Typography.variant>;
+    body: ReturnType<typeof Typography.variant>;
 }>;
 
 /** `pane`: a docked column or drawer. `phone`: the pushed Details route. */
@@ -44,13 +45,13 @@ export const DETAILS_TAB_HEADER_METRICS: Readonly<Record<DetailsTabHeaderDensity
     pane: {
         paddingStartPx: HEADER_BAND_HORIZONTAL_PADDING_PX,
         paddingEndPx: HEADER_BAND_HORIZONTAL_PADDING_PX / 2,
-        meta: { fontSize: 12, lineHeight: 16 },
-        body: { fontSize: 12.5, lineHeight: 18 },
+        meta: Typography.variant('meta'),
+        body: Typography.variant('body'),
     },
     phone: {
         paddingStartPx: HEADER_BAND_HORIZONTAL_PADDING_PX,
         paddingEndPx: HEADER_BAND_HORIZONTAL_PADDING_PX,
-        meta: { fontSize: 13, lineHeight: 18 },
-        body: { fontSize: 13.5, lineHeight: 19 },
+        meta: Typography.variant('body'),
+        body: Typography.variant('body'),
     },
 });

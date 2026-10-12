@@ -150,14 +150,14 @@ const styles = StyleSheet.create((theme) => ({
         borderWidth: 1,
         borderRadius: 12,
         backgroundColor: theme.colors.surface.base,
-        paddingLeft: 12,
-        paddingRight: 4,
+        paddingLeft: theme.space.s12,
+        paddingRight: theme.space.s4,
         minHeight: REVEAL_TARGET + 4,
     },
     input: {
         flex: 1,
         minWidth: 0,
-        paddingVertical: 10,
+        paddingVertical: theme.space.s10,
     },
     reveal: {
         width: REVEAL_TARGET,
@@ -168,7 +168,7 @@ const styles = StyleSheet.create((theme) => ({
     pageFrame: {
         flexDirection: 'row',
         alignItems: 'center',
-        paddingRight: 2,
+        paddingRight: theme.space.s2,
     },
     pageInput: {
         fontSize: FIELD_BOX_METRICS.fontSizePx,
@@ -185,10 +185,10 @@ const styles = StyleSheet.create((theme) => ({
     supporting: {
         fontSize: 12,
         color: theme.colors.text.secondary,
-        marginTop: 5,
+        marginTop: theme.space.s4,
     },
     error: {
         fontSize: 12,
-        marginTop: 5,
+        marginTop: theme.space.s4,
     },
 }));

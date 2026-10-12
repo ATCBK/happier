@@ -22,16 +22,16 @@ export type AccountServiceSelectionFormProps = Readonly<{
 }>;
 
 const stylesheet = StyleSheet.create((theme) => ({
-    root: { width: '100%', maxWidth: 560, alignSelf: 'center', gap: 16 },
-    choices: { gap: 10 },
-    field: { gap: 8 },
-    label: { color: theme.colors.text.primary, fontSize: 14, lineHeight: 20, ...Typography.default('semiBold') },
+    root: { width: '100%', maxWidth: 560, alignSelf: 'center', gap: theme.space.s16 },
+    choices: { gap: theme.space.s10 },
+    field: { gap: theme.space.s8 },
+    label: { color: theme.colors.text.primary, ...Typography.variant('label', 'semiBold'),   },
     input: {
         minHeight: 54,
         borderWidth: 1,
         borderColor: theme.colors.border.default,
         borderRadius: 14,
-        paddingHorizontal: 16,
+        paddingHorizontal: theme.space.s16,
         paddingVertical: 14,
         backgroundColor: theme.colors.input.background,
         color: theme.colors.input.text,
@@ -40,7 +40,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         ...Typography.default(),
     },
     error: { color: theme.colors.state.danger.foreground, fontSize: 14, lineHeight: 20, ...Typography.default() },
-    actions: { gap: 12 },
+    actions: { gap: theme.space.s12 },
 }));
 
 /** A choice row: the service's name, else the address that tells it apart (shown beneath too). */

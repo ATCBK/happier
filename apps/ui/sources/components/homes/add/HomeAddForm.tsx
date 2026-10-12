@@ -219,22 +219,20 @@ export function HomeAddForm(props: Readonly<{
 
 const styles = StyleSheet.create((theme) => ({
     page: {
-        gap: 20,
+        gap: theme.space.s20,
     },
     sheet: {
-        paddingHorizontal: 20,
-        paddingTop: 4,
-        paddingBottom: 20,
+        paddingHorizontal: theme.space.s20,
+        paddingTop: theme.space.s4,
+        paddingBottom: theme.space.s20,
     },
     foot: {
         flexDirection: 'row',
         flexWrap: 'wrap',
-        columnGap: 4,
+        columnGap: theme.space.s4,
     },
     footText: {
-        ...Typography.default(),
-        fontSize: 12,
-        lineHeight: 16,
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     pane: {

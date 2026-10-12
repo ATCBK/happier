@@ -90,32 +90,28 @@ export const HomeWhereLine = React.memo(function HomeWhereLine(props: Readonly<{
 
 const styles = StyleSheet.create((theme) => ({
     stack: {
-        gap: 4,
+        gap: theme.space.s4,
         minWidth: 0,
     },
     line: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
+        gap: theme.space.s6,
         minWidth: 0,
     },
     text: {
-        ...Typography.default(),
         flexShrink: 1,
-        fontSize: 13,
-        lineHeight: 18,
+        ...Typography.variant('body'),
         color: theme.colors.text.secondary,
     },
     name: {
-        ...Typography.default('semiBold'),
-        fontSize: 13,
-        lineHeight: 18,
+        ...Typography.variant('body', 'semiBold'),
         color: theme.colors.text.secondary,
     },
     nameLink: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 4,
+        gap: theme.space.s4,
         flexShrink: 0,
         maxWidth: '100%',
     },

@@ -955,13 +955,13 @@ const viewerChoiceStylesheet = StyleSheet.create((theme) => ({
         borderBottomColor: theme.colors.border.default,
         borderBottomWidth: 1,
         backgroundColor: theme.colors.surface.inset,
-        paddingHorizontal: 10,
-        paddingVertical: 6,
+        paddingHorizontal: theme.space.s10,
+        paddingVertical: theme.space.s6,
     },
     choices: {
         alignItems: 'center',
-        gap: 8,
-        paddingRight: 10,
+        gap: theme.space.s8,
+        paddingRight: theme.space.s10,
     },
     choice: {
         maxWidth: 220,
@@ -969,8 +969,8 @@ const viewerChoiceStylesheet = StyleSheet.create((theme) => ({
         borderRadius: 8,
         borderWidth: 1,
         justifyContent: 'center',
-        paddingHorizontal: 10,
-        paddingVertical: 5,
+        paddingHorizontal: theme.space.s10,
+        paddingVertical: theme.space.s4,
     },
     choicePressed: {
         opacity: motionTokens.press.opacitySubtle,

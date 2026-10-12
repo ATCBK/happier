@@ -424,18 +424,18 @@ export const ActionOperationDetailModal = React.memo(function ActionOperationDet
 
 const styles = StyleSheet.create((theme) => ({
     body: {
-        paddingHorizontal: 20,
-        paddingTop: 12,
-        paddingBottom: 20,
-        gap: 14,
+        paddingHorizontal: theme.space.s20,
+        paddingTop: theme.space.s12,
+        paddingBottom: theme.space.s20,
+        gap: theme.space.s12,
     },
     hero: {
         borderRadius: 14,
-        paddingHorizontal: 14,
-        paddingVertical: 12,
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s12,
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 12,
+        gap: theme.space.s12,
         backgroundColor: theme.colors.surface.elevated,
     },
     heroCopy: {
@@ -464,8 +464,8 @@ const styles = StyleSheet.create((theme) => ({
         minHeight: 44,
         flexDirection: 'row',
         alignItems: 'flex-start',
-        gap: 10,
-        padding: 14,
+        gap: theme.space.s10,
+        padding: theme.space.s16,
         borderRadius: 14,
         borderWidth: 1,
         borderColor: theme.colors.state.warning.border,
@@ -475,8 +475,8 @@ const styles = StyleSheet.create((theme) => ({
         minHeight: 44,
         flexDirection: 'row',
         alignItems: 'flex-start',
-        gap: 10,
-        padding: 14,
+        gap: theme.space.s10,
+        padding: theme.space.s16,
         borderRadius: 14,
         backgroundColor: theme.colors.surface.elevated,
     },
@@ -502,8 +502,8 @@ const styles = StyleSheet.create((theme) => ({
         color: theme.colors.text.secondary,
     },
     output: {
-        paddingHorizontal: 12,
-        paddingBottom: 12,
+        paddingHorizontal: theme.space.s12,
+        paddingBottom: theme.space.s12,
     },
     cancelFeedback: {
         color: theme.colors.text.primary,

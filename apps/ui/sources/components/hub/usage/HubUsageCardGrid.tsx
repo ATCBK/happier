@@ -190,7 +190,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     identity: {
         flexDirection: 'row',
         alignItems: 'flex-start',
-        gap: 10,
+        gap: theme.space.s10,
     },
     identityText: {
         flex: 1,
@@ -208,8 +208,8 @@ const stylesheet = StyleSheet.create((theme) => ({
     inUse: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 4,
-        paddingTop: 2,
+        gap: theme.space.s4,
+        paddingTop: theme.space.s2,
     },
     inUseText: {
         ...Typography.default(),
@@ -217,14 +217,14 @@ const stylesheet = StyleSheet.create((theme) => ({
         color: theme.colors.text.tertiary,
     },
     meters: {
-        marginTop: 12,
-        gap: 9,
+        marginTop: theme.space.s12,
+        gap: theme.space.s8,
     },
     signedOutLine: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 6,
-        marginTop: 12,
+        gap: theme.space.s6,
+        marginTop: theme.space.s12,
     },
     signedOutText: {
         ...Typography.default(),
@@ -234,6 +234,6 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     signedOutAction: {
         flexDirection: 'row',
-        marginTop: 10,
+        marginTop: theme.space.s10,
     },
 }));
