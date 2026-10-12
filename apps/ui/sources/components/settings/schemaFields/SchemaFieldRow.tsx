@@ -1,5 +1,5 @@
+import { HAPPIER_SETTING_INPUT_STYLE, HappierSettingStatusLine, HappierSettingValueSlot, type HappierSettingRowLayout } from '@happier-dev/plugin-ui/presentation';
 import * as React from 'react';
-import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 
 import { Item } from '@/components/ui/lists/Item';
@@ -17,7 +17,7 @@ import { Typography } from '@/constants/Typography';
  * a field beneath the label when the row is too narrow for both; `stacked` always places a wide
  * control (a long field with its actions) beneath.
  */
-export type SchemaFieldRowLayout = 'inline' | 'adaptive' | 'stacked';
+export type SchemaFieldRowLayout = HappierSettingRowLayout;
 
 export type SchemaFieldRowProps = Readonly<{
   testID?: string;
@@ -66,8 +66,9 @@ export function SchemaFieldRow(props: SchemaFieldRowProps) {
 }
 
 /**
- * The slot of a typed value: a number is a compact box with its unit beside it; free text and
- * addresses take the width the row leaves.
+ * Core's adapter over the shared value slot (`HappierSettingValueSlot`, public as `SettingValueSlot`):
+ * a number is a compact box with its unit beside it; free text and addresses take the width the row
+ * leaves. Core draws the unit in its own type.
  */
 export function SchemaFieldValueSlot(
   props: Readonly<{
@@ -78,16 +79,19 @@ export function SchemaFieldValueSlot(
   }>,
 ) {
   return (
-    <View style={props.kind === 'number' ? styles.numberSlot : styles.textSlot}>
+    <HappierSettingValueSlot
+      kind={props.kind}
+      unit={props.unit ? <Text style={styles.unit}>{props.unit}</Text> : undefined}
+    >
       {props.children}
-      {props.kind === 'number' && props.unit ? (
-        <Text style={styles.unit}>{props.unit}</Text>
-      ) : null}
-    </View>
+    </HappierSettingValueSlot>
   );
 }
 
-/** A line under a stacked control: what is stored, or why the last change was refused. */
+/**
+ * A line under a stacked control: what is stored, or why the last change was refused. Core's adapter
+ * over the shared status line (`HappierSettingStatusLine`), which owns the refusal's announcement.
+ */
 export function SchemaFieldStatusLine(
   props: Readonly<{
     testID?: string;
@@ -95,42 +99,17 @@ export function SchemaFieldStatusLine(
     children: string;
   }>,
 ) {
-  const refused = props.tone === 'danger';
   return (
-    <Text
-      testID={props.testID}
-      style={[styles.status, refused ? styles.statusDanger : null]}
-      // A refusal arrives after an asynchronous commit and moves nothing else on screen.
-      accessibilityRole={refused ? 'alert' : undefined}
-      accessibilityLiveRegion={refused ? 'assertive' : undefined}
-    >
-      {props.children}
-    </Text>
+    <HappierSettingStatusLine testID={props.testID} tone={props.tone}>
+      <Text style={[styles.status, props.tone === 'danger' ? styles.statusDanger : null]}>{props.children}</Text>
+    </HappierSettingStatusLine>
   );
 }
 
 /** The input a field's control fills inside its slot. */
-export const SCHEMA_FIELD_INPUT_STYLE = {
-  flexGrow: 1,
-  flexShrink: 1,
-  minWidth: 0,
-} as const;
+export const SCHEMA_FIELD_INPUT_STYLE = HAPPIER_SETTING_INPUT_STYLE;
 
 const styles = StyleSheet.create((theme) => ({
-  numberSlot: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    width: 128,
-    justifyContent: 'flex-end',
-  },
-  textSlot: {
-    flexDirection: 'row',
-    flexGrow: 1,
-    flexShrink: 1,
-    minWidth: 200,
-    maxWidth: 360,
-  },
   unit: {
     ...Typography.default('regular'),
     ...ITEM_SUBTITLE_TEXT_METRICS.comfortable,
