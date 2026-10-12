@@ -137,6 +137,7 @@ import { RoleActionInputSchemasV1, RoleActionOutputSchemasV1, isAccountRoleMutat
 import { ARTIFACT_ACCESS_ACTION_IDS_V1, ArtifactAccessActionInputSchemasV1, ArtifactAccessActionOutputSchemasV1, type ArtifactAccessActionIdV1 } from '../artifacts/artifactAccessV1.js';
 import { ARTIFACT_ACTION_IDS_V1, ArtifactActionInputSchemasV1, ArtifactActionOutputSchemasV1, type ArtifactActionIdV1 } from '../artifacts/artifactActionsV1.js';
 import { SessionListQueryV1Schema } from '../sessions/listing/query.js';
+import { QualifiedProjectKeyV1Schema } from '../workspaces/workspaceRefV1.js';
 import { SessionReportsToSetActionInputV1Schema, SessionReportsToSetResultV1Schema } from '../sessions/relations/sessionReportsToV1.js';
 import {
   SetSessionFolderAssignmentRequestSchema, SetSessionFolderAssignmentResponseSchema,
@@ -2639,6 +2640,7 @@ const SessionTrackedTargetsInputSchema = lazyZodSchema(() => z.union([
  * dependency's `SessionListQueryV1` parameter.
  */
 export const SessionListActionInputV1Schema = lazyZodSchema(() => z.object({
+  project: QualifiedProjectKeyV1Schema.optional(),
   query: z.lazy(() => SessionListQueryV1Schema).optional(),
   underSessionId: z.string().trim().min(1).optional(),
   view: SessionListViewV1Schema.optional(),

@@ -3,7 +3,12 @@ import { readVoicePrivacySettings } from '@/sync/domains/settings/readVoicePriva
 import { storage } from '@/sync/domains/state/storage';
 import { buildSessionAwarenessListResultV1, markSessionListQueryResultV1, type SessionListViewV1 } from '@happier-dev/protocol/sessions/awareness/action';
 import type { SessionListQueryV1 } from '@happier-dev/protocol/sessions/listing/query';
-import { matchSessionBotFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
+import { matchSessionBotFilterV1, matchSessionProjectFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
+import type { QualifiedProjectKeyV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
+import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
+import { isSessionAccessOwner } from '@/sync/engine/sessions/normalizeSessionAccessProjection';
+import { readCurrentProjectAccountRows } from '@/sync/store/domains/projectAccountRows';
+import { workspaceRefResolutionContextV1 } from '@/sync/domains/workspaces/workspaceRefs';
 import { fetchSessionListQueryPageForHome, readOrdinarySessionListLifecycle } from '@/sync/domains/session/listing/sessionListQueryRuntime';
 import { findSessionListLookupSession } from '@/sync/domains/session/listing/sessionListLookupState';
 import { projectUiSessionAwareness } from '@/sync/domains/session/awareness/sessionAwareness';
@@ -99,6 +104,7 @@ function readRetainedPreview(state: ReturnType<typeof storage.getState>, serverI
 }
 
 export async function listSessionsForVoiceTool(params: Readonly<{
+  project?: QualifiedProjectKeyV1;
   limit?: number;
   cursor?: string | null;
   includeLastMessagePreview?: boolean;
@@ -107,9 +113,10 @@ export async function listSessionsForVoiceTool(params: Readonly<{
   serverId?: string | null;
   signal?: AbortSignal;
 }>) {
-  if (params.view === 'awareness' || params.query) {
-    const serverId = params.serverId ?? getActiveServerSnapshot().serverId;
+  if (params.view === 'awareness' || params.query || params.project) {
+    const serverId = params.serverId ?? params.project?.serverId ?? getActiveServerSnapshot().serverId;
     const failure = (errorCode: string) => ({ ok: false as const, errorCode, error: errorCode });
+    if (params.project && !areServerProfileIdentifiersEquivalent(params.project.serverId, serverId)) return failure('server_scope_mismatch');
     if (params.signal?.aborted) return failure('tool_cancelled');
     if (params.view === 'awareness' && params.includeLastMessagePreview) return failure('invalid_parameters');
     try {
@@ -134,8 +141,17 @@ export async function listSessionsForVoiceTool(params: Readonly<{
         .map((sessionId) => findSessionListLookupSession(state, { serverId, sessionId })?.session);
       if (rows.some((row) => !row)) return failure('invalid_response');
       let botFilterUnavailableCount = 0;
+      let projectFilterUnavailableCount = 0;
+      const projectRows = readCurrentProjectAccountRows(state);
       const sessions = rows.flatMap((row) => {
         if (!row) return [];
+        if (params.project) {
+          if (!isSessionAccessOwner(row.access, row.accessLevel) || (row.owner && row.owner !== state.profileScope?.accountId)) return [];
+          const projectMatch = matchSessionProjectFilterV1(readSessionOwnerMetadataView(row), serverId, params.project,
+            projectRows?.status === 'ready' && projectRows.coverage === 'complete' ? projectRows.workspaceRefs : undefined, workspaceRefResolutionContextV1);
+          if (projectMatch === 'unavailable') projectFilterUnavailableCount += 1;
+          if (projectMatch !== 'match') return [];
+        }
         const match = matchSessionBotFilterV1(row.metadata, params.query?.bot);
         if (match === 'unavailable') botFilterUnavailableCount += 1;
         return match === 'match' ? [row] : [];
@@ -143,6 +159,7 @@ export async function listSessionsForVoiceTool(params: Readonly<{
       const metadataUpgradeRequiredCount = page.metadataUpgradeRequiredCount ?? 0;
       if (params.view === 'awareness') {
         const pageResult = {
+          ...(params.project ? { project: params.project, projectFilterUnavailableCount } : {}),
           sessions: sessions.map((session) => projectUiSessionAwareness(session, Date.now())),
           nextCursor: page.nextCursor,
           hasNext: page.hasNext,
@@ -162,6 +179,7 @@ export async function listSessionsForVoiceTool(params: Readonly<{
       }
       const privacy = readVoicePrivacySettings(state.settings);
       const result = {
+        ...(params.project ? { project: params.project, projectFilterUnavailableCount } : {}),
         ok: true as const,
         sessions: sessions.map((session) => ({
           id: session.id, active: session.active, presence: session.presence, updatedAt: session.updatedAt,

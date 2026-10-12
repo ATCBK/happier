@@ -27,6 +27,8 @@ export type SessionListRenderableExternalSessionIdentity = Readonly<{
 }>;
 
 export type SessionListRenderableMetadataComparison = Readonly<{
+    projectId?: string | null;
+    workspaceId?: string | null;
     bot?: SessionBotV1;
     name: string | undefined;
     summaryText: string | null;
@@ -49,6 +51,8 @@ export type SessionListRenderableMetadataComparison = Readonly<{
 }>;
 
 type SessionListRenderableMetadataComparisonSnapshot = Readonly<{
+    projectId?: string | null;
+    workspaceId?: string | null;
     bot?: unknown;
     name?: string;
     summaryText: string | null;
@@ -196,6 +200,8 @@ function isSessionListRenderableMetadataComparisonSnapshotEqual(
     nextReadStateV1: SessionListRenderableMetadataComparison['readStateV1'],
 ): boolean {
     return previous.name === snapshot.name
+        && (previous.projectId ?? null) === (snapshot.projectId ?? null)
+        && (previous.workspaceId ?? null) === (snapshot.workspaceId ?? null)
         && (readSessionBotV1(previous.bot)?.kind ?? null) === (readSessionBotV1(snapshot.bot)?.kind ?? null)
         && (previous.summaryText ?? null) === snapshot.summaryText
         && previous.path === snapshot.path
@@ -256,6 +262,8 @@ export function normalizeSessionListRenderableMetadataComparison(
     }
 
     const next: SessionListRenderableMetadataComparison = {
+        ...(normalizedSnapshot.projectId === undefined ? {} : { projectId: normalizedSnapshot.projectId }),
+        ...(normalizedSnapshot.workspaceId === undefined ? {} : { workspaceId: normalizedSnapshot.workspaceId }),
         ...(nextBot ? { bot: previous?.bot ?? nextBot } : {}),
         name: normalizedSnapshot.name,
         summaryText: normalizedSnapshot.summaryText,
@@ -285,6 +293,8 @@ export function readSessionListRenderableMetadataComparison(
     if (metadata.bot !== undefined && readSessionBotV1(metadata.bot) === null) return null;
 
     return normalizeSessionListRenderableMetadataComparison({
+        projectId: metadata.projectId,
+        workspaceId: metadata.workspaceId,
         bot: metadata.bot,
         name: typeof metadata.name === 'string' ? metadata.name : undefined,
         summaryText: readRenderableSummaryText(metadata),
@@ -309,6 +319,8 @@ export function readSessionListRenderableMetadataComparisonFromRenderable(
     if (!metadata) return null;
 
     return normalizeSessionListRenderableMetadataComparison({
+        projectId: metadata.projectId,
+        workspaceId: metadata.workspaceId,
         bot: metadata.bot,
         name: metadata.name,
         summaryText: metadata.summaryText ?? null,
@@ -345,6 +357,8 @@ export function areSessionListRenderableMetadataComparisonsEqual(
     if (!previous || !next) return previous === next;
 
     return previous.name === next.name
+        && (previous.projectId ?? null) === (next.projectId ?? null)
+        && (previous.workspaceId ?? null) === (next.workspaceId ?? null)
         && (previous.bot?.kind ?? null) === (next.bot?.kind ?? null)
         && (previous.summaryText ?? null) === (next.summaryText ?? null)
         && previous.path === next.path

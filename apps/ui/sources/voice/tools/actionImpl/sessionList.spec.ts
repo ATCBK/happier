@@ -73,6 +73,26 @@ function seedSession(privacyOverrides: Record<string, unknown>): void {
 }
 
 describe('listSessionsForVoiceTool privacy', () => {
+  it('narrows Project reads before summary or awareness disclosure and retains pagination', async () => {
+    seedSession({ shareSessionSummary: true });
+    storage.setState({ profileScope: { serverId: 'server-a', accountId: 'viewer' }, sessionListRowsByServerId: {
+      'server-a': {
+        s1: { id: 's1', owner: 'viewer', updatedAt: 100, active: true, metadata: { path: '/repo', projectId: 'anchor' } },
+        other: { id: 'other', owner: 'viewer', updatedAt: 99, active: true, metadata: { path: '/repo', projectId: 'other' } },
+        foreign: { id: 'foreign', owner: 'foreign', updatedAt: 98, active: true, metadata: { path: '/repo', projectId: 'anchor' } },
+        recipient: { id: 'recipient', accessLevel: 'view', updatedAt: 97, active: true, metadata: { path: '/repo', projectId: 'anchor' } },
+        locked: { id: 'locked', owner: 'viewer', updatedAt: 96, active: true, metadata: null },
+      },
+    } } as Partial<ReturnType<typeof storage.getState>>);
+    fetchSessionListQueryPageForHome.mockResolvedValue({ current: true, sessionIds: ['s1', 'other', 'foreign', 'recipient', 'locked'],
+      nextCursor: 'next', hasNext: true, attentionNextCursor: null, attentionHasNext: false });
+    const { listSessionsForVoiceTool } = await import('./sessionList');
+    const project = { serverId: 'server-a', projectKey: 'anchor' };
+    const result = await listSessionsForVoiceTool({ project });
+    expect(result).toMatchObject({ project, sessions: [{ id: 's1' }], nextCursor: 'next', hasNext: true, projectFilterUnavailableCount: 1 });
+    expect(result.sessions).toHaveLength(1);
+    expect(await listSessionsForVoiceTool({ project, serverId: 'foreign-home' })).toMatchObject({ ok: false, errorCode: 'server_scope_mismatch' });
+  });
   it('applies the Bot facet to authorized hydrated rows while reporting locked candidates and continuations', async () => {
     seedSession({ shareSessionSummary: true });
     storage.setState((current) => ({ ...current, sessionListRowsByServerId: {

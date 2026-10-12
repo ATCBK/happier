@@ -1753,6 +1753,16 @@ My work is a scope in that controller. `shell.column.get/set` use the existing
 shell visibility control. Neither family creates a second filter store or
 changes Session access.
 
+In 0.3 development, `session.list` accepts `project: { serverId, projectKey }`
+to narrow the admitted Session corpus to a qualified private Project. It reads
+the viewer's owner metadata: an explicit Project id wins; otherwise a uniquely
+accepted checkout associates the Session. Directory grouping, repository labels,
+Team Source access and a shared dashboard do not grant access to private Sessions.
+Both UI and CLI hosts use the same membership predicate, retain list cursors and
+report unreadable candidates with `projectFilterUnavailableCount`. The response
+echoes the applied `project`; a host that ignores the filter returns
+`session_list_project_filter_unsupported` through the Action executor.
+
 `settings.list/get/set/invoke` discover U4 setting declarations by anchor. Explicit
 declaration bindings name the canonical Account or device preference key or an
 owner-backed nested field and its exact mutation schema;

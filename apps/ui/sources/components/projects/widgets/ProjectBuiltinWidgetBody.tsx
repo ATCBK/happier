@@ -45,8 +45,10 @@ import { WorkspaceLocalChangesBody } from '@/components/projects/scm/WorkspaceLo
 import { activeReviewFileKeyForWorkspace, requestActiveReviewFileForComparison } from '@/components/workspaces/scm/review/activeReviewFile';
 import { captureActiveServerAccountScopeLifetime, selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { useProjectSessionsWidgetBody, type ProjectSessionsWidgetBodyProps } from './useProjectSessionsWidgetBody';
 
-type Props = Readonly<{ id: BuiltinWidgetIdV1; workspace: WorkspaceAddressV1; checkout: WorkspaceRefV1; testID: string }>;
+type Props = Readonly<{ id: BuiltinWidgetIdV1; workspace: WorkspaceAddressV1; checkout: WorkspaceRefV1; testID: string;
+    renderSessions?: (props: ProjectSessionsWidgetBodyProps) => React.ReactElement }>;
 
 /** Native Project bodies consume only the generic binder's admitted exact checkout. */
 export function ProjectBuiltinWidgetBody(props: Props): React.ReactElement {
@@ -56,8 +58,13 @@ export function ProjectBuiltinWidgetBody(props: Props): React.ReactElement {
     if (props.id === 'project_checkouts') return <CheckoutsBody {...props} />;
     if (props.id === 'project_changes') return <ChangesBody {...props} />;
     if (props.id === 'project_scripts') return <ProjectScriptsBody workspace={props.workspace} presentation="widget" testID={props.testID} />;
-    // The stable Project roster needs its live UI producer; legacy machine/path
-    // Session groups cannot supply it.
+    return <SessionsBody {...props} />;
+}
+
+function SessionsBody(props: Props): React.ReactElement {
+    const sessions = useProjectSessionsWidgetBody(props.checkout);
+    if (props.renderSessions) return props.renderSessions({ sessions, testID: props.testID });
+    // The visual body is supplied by the Project host; retain its existing unavailable state otherwise.
     return <UnavailableInstalledWidget unresolved={{ state: 'unavailable', reasonCode: `widget_${props.id}_producer_unavailable` }} testID={props.testID} />;
 }
 

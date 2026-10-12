@@ -364,14 +364,6 @@ class ProjectManager {
     }
 
     /**
-     * Get sessions for a project
-     */
-    getProjectSessions(projectId: string): string[] {
-        const project = this.projects.get(projectId);
-        return project ? [...project.sessionIds] : [];
-    }
-
-    /**
      * Update multiple sessions at once (for bulk operations)
      */
     updateSessions(

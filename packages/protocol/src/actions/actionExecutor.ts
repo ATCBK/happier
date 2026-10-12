@@ -8365,6 +8365,9 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
           }
           const listRequest = listInput.data;
+          if (listRequest.project && ctx.serverId && ctx.serverId !== listRequest.project.serverId) {
+            return { ok: false, errorCode: 'server_scope_mismatch', error: 'server_scope_mismatch' };
+          }
           const requestedRoot = listRequest.underSessionId ?? listRequest.query?.underSessionId;
           if (ctx.sessionListAccess === 'current_session' && requestedRoot !== undefined) {
             return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:session.list' };
@@ -8392,6 +8395,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             : listRequest.query;
           const res = await deps.sessionList({
             context: ctx,
+            ...(listRequest.project ? { project: listRequest.project } : {}),
             ...(query !== undefined ? { query } : {}),
             ...(listRequest.view !== undefined ? { view: listRequest.view } : {}),
             ...(query === undefined && listRequest.limit !== undefined ? { limit: listRequest.limit } : {}),
@@ -8407,6 +8411,11 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           });
           const failure = readActionFailureEnvelope(res);
           if (failure) return failure;
+          if (listRequest.project && (!res || typeof res !== 'object' || !('project' in res)
+            || !res.project || typeof res.project !== 'object' || !('serverId' in res.project) || !('projectKey' in res.project)
+            || res.project.serverId !== listRequest.project.serverId || res.project.projectKey !== listRequest.project.projectKey)) {
+            return { ok: false, errorCode: 'session_list_project_filter_unsupported', error: 'session_list_project_filter_unsupported' };
+          }
           if (
             query !== undefined
             && !parseSessionListQueryActionResultV1(res)

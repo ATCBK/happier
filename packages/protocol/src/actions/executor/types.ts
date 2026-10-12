@@ -1811,6 +1811,7 @@ export type ActionExecutorDeps = Readonly<{
   >;
   sessionList: (args: Readonly<{
     context: ActionExecutorContext;
+    project?: import('../../workspaces/workspaceRefV1.js').QualifiedProjectKeyV1;
     query?: SessionListQueryV1;
     view?: SessionListViewV1;
     limit?: number;

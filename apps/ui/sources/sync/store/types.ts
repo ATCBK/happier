@@ -342,7 +342,6 @@ export interface ProjectDomainSlice {
     getProjects: () => import('../runtime/orchestration/projectManager').Project[];
     getProject: (projectId: string) => import('../runtime/orchestration/projectManager').Project | null;
     getProjectForSession: (sessionId: string, serverId?: string | null) => import('../runtime/orchestration/projectManager').Project | null;
-    getProjectSessions: (projectId: string) => string[];
     getProjectScmStatus: (projectId: string) => ScmStatus | null;
     getSessionProjectScmStatus: (sessionId: string, serverId?: string | null) => ScmStatus | null;
     updateSessionProjectScmStatus: (sessionId: string, status: ScmStatus | null, serverId?: string | null) => void;

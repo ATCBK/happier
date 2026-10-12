@@ -2745,9 +2745,7 @@ export function useSessionRpcAvailabilityState(sessionId: string | null, serverI
   );
 }
 
-export function useProjectSessions(projectId: string | null) {
-  return getStorage()(useShallow((state) => (projectId ? state.getProjectSessions(projectId) : [])));
-}
+export { useProjectSessions } from '../domains/session/listing/useProjectSessions';
 
 export function useProjectScmStatus(projectId: string | null) {
   return getStorage()(useShallow((state) => (projectId ? state.getProjectScmStatus(projectId) : null)));

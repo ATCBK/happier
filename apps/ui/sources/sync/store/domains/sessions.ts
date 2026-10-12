@@ -409,7 +409,6 @@ export type SessionsDomain = {
     getProjects: () => import('../../runtime/orchestration/projectManager').Project[];
     getProject: (projectId: string) => import('../../runtime/orchestration/projectManager').Project | null;
     getProjectForSession: (sessionId: string, serverId?: string | null) => import('../../runtime/orchestration/projectManager').Project | null;
-    getProjectSessions: (projectId: string) => string[];
 
     getProjectScmStatus: (projectId: string) => ScmStatus | null;
     getSessionProjectScmStatus: (sessionId: string, serverId?: string | null) => ScmStatus | null;
@@ -2860,7 +2859,6 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
             ensureProjectManagerSession(sessionId);
             return projectManager.getProjectForSession(sessionId);
         },
-        getProjectSessions: (projectId: string) => projectManager.getProjectSessions(projectId),
         // Project source-control methods
         getProjectScmStatus: (projectId: string) => projectManager.getProjectScmStatus(projectId),
         getSessionProjectScmStatus: (sessionId: string, serverId?: string | null) => {

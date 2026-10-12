@@ -1248,6 +1248,13 @@ export function createCliActionDeps(params: Readonly<{
   };
   const sessionList: ActionExecutorDeps['sessionList'] = params.credentials
     ? createSessionListActionDependency({
+        readWorkspaceRefs: async input => {
+          const denied = await projectAccountAdmission(input.project?.serverId, input.context);
+          if (denied) throw Object.assign(new Error(denied.errorCode), { code: denied.errorCode });
+          const rows = await readProjectRows(input.signal, input.context, 'session.list');
+          await assertProjectRequesterCurrent(input.context);
+          return rows.workspaceRefs;
+        },
         credentials: params.credentials,
         ...(params.actionsSettingsProvider?.getAccountSettings
           ? { resolveAccountSettings: params.actionsSettingsProvider.getAccountSettings }

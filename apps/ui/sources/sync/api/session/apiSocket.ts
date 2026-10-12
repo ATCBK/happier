@@ -322,6 +322,11 @@ class ApiSocket {
         if (!this.config) {
             return;
         }
+        // Intentional disconnect cancels issued HTTP reads. Reconnecting the
+        // same prepared Home admits new reads without reviving those requests.
+        if (this.requestConfigurationAbortController.signal.aborted) {
+            this.requestConfigurationAbortController = new AbortController();
+        }
         if (this.config.request) {
             const config = this.config;
             if (config.isCurrent?.() === false) return;

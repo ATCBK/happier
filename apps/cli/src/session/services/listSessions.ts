@@ -20,8 +20,10 @@ import { projectCliSessionAwarenessV1 } from '@/cli/output/session/sessionAwaren
 import { mapWithConcurrency } from '@/utils/async/mapWithConcurrency';
 import { buildSessionAwarenessListResultV1, markSessionListQueryResultV1 } from '@happier-dev/protocol/sessions/awareness/action';
 import type { SessionAwarenessListResultV1, SessionListQueryV1, SessionListViewV1 } from '@happier-dev/protocol';
-import { matchSessionBotFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
-import { tryDecryptSessionPresentationMetadataView } from '@/session/transport/encryption/sessionEncryptionContext';
+import { matchSessionBotFilterV1, matchSessionProjectFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
+import type { QualifiedProjectKeyV1, WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
+import { readSessionAccessProjectionRoleV1 } from '@happier-dev/protocol/sessions/access/sessionEffectiveAccessV1';
+import { tryDecryptSessionOwnerMetadataView, tryDecryptSessionPresentationMetadataView } from '@/session/transport/encryption/sessionEncryptionContext';
 
 const LIST_SESSION_PREVIEW_TEXT_LIMIT = 200;
 
@@ -48,6 +50,8 @@ export type ListSessionsJsonSession = SessionSummary & Readonly<{
 }>;
 
 type ListSessionsResultBase = Readonly<{
+  project?: QualifiedProjectKeyV1;
+  projectFilterUnavailableCount?: number;
   rows?: readonly CliSessionRowModel[];
   sessions: readonly ListSessionsJsonSession[];
   nextCursor: string | null;
@@ -215,6 +219,8 @@ async function readAdmittedSessionsPage(params: Readonly<{
 }
 
 type ListSessionsParams = Readonly<{
+  project?: QualifiedProjectKeyV1;
+  workspaceRefs?: readonly WorkspaceRefV1[];
   credentials: StoredCredentials;
   /** Already-bound Account snapshot; external Actions must not fetch Account-wide settings. */
   accountSettings?: AccountSettings | null;
@@ -305,9 +311,18 @@ export async function listSessions(params: ListSessionsParams): Promise<ListSess
   const activityAtBySessionId = new Map<string, number>();
   const rowModels: CliSessionRowModel[] = [];
   let botFilterUnavailableCount = 0;
+  let projectFilterUnavailableCount = 0;
   const appendPageRows = (rawRows: typeof initialPage.sessions) => {
     for (const rawRow of rawRows) {
       if (allowedSessionIds && !allowedSessionIds.has(rawRow.id)) continue;
+      if (params.project) {
+        if (readSessionAccessProjectionRoleV1(rawRow) !== 'owner') continue;
+        const match = matchSessionProjectFilterV1(tryDecryptSessionOwnerMetadataView({ credentials: params.credentials,
+          accountEncryptionMode: accountEncryptionCurrentness.mode, rawSession: rawRow }), params.project.serverId,
+          params.project, params.workspaceRefs);
+        if (match === 'unavailable') projectFilterUnavailableCount += 1;
+        if (match !== 'match') continue;
+      }
       if (query?.bot !== undefined) {
         const match = matchSessionBotFilterV1(tryDecryptSessionPresentationMetadataView({
           credentials: params.credentials,
@@ -408,6 +423,7 @@ export async function listSessions(params: ListSessionsParams): Promise<ListSess
       });
     });
     const pageResult = {
+      ...(params.project ? { project: params.project, projectFilterUnavailableCount } : {}),
       sessions,
       nextCursor,
       hasNext,
@@ -456,6 +472,7 @@ export async function listSessions(params: ListSessionsParams): Promise<ListSess
   }
 
   const result = {
+    ...(params.project ? { project: params.project, projectFilterUnavailableCount } : {}),
     sessions,
     nextCursor,
     hasNext,

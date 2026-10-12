@@ -66,6 +66,23 @@ describe('listSessions', () => {
     getSessionTranscript.mockReset();
   });
 
+  it.each(['summary', 'awareness'] as const)('narrows Project %s from real opened owner metadata, not recipient or path guesses', async view => {
+    const project = { serverId: 'home-a', projectKey: 'anchor' };
+    fetchSessionsPage.mockResolvedValue({ sessions: [
+      createSessionRecordFixture({ id: 'own', metadata: encryptedMetadata({ path: '/repo', projectId: 'anchor' }) }),
+      createSessionRecordFixture({ id: 'other', metadata: encryptedMetadata({ path: '/repo', projectId: 'other' }) }),
+      createSessionRecordFixture({ id: 'locked', metadata: 'unreadable-ciphertext' }),
+      createSessionRecordFixture({ id: 'checkout', metadata: encryptedMetadata({ path: '/repo', workspaceId: 'accepted' }) }),
+      createSessionRecordFixture({ id: 'recipient', share: { accessLevel: 'view', canApprovePermissions: false },
+        metadata: encryptedMetadata({ path: '/repo', projectId: 'anchor' }) }),
+    ], nextCursor: 'next', hasNext: true });
+    const { listSessions } = await import('./listSessions');
+    const result = await listSessions({ credentials, project, view, includeSystem: true, resumableOnly: false,
+      workspaceRefs: [{ id: 'accepted', serverId: 'home-a', projectKey: 'anchor', machineId: 'machine', rootPath: '/repo', createdAtMs: 1 }] });
+    expect(result.sessions.map(row => 'sessionId' in row ? row.sessionId : row.id)).toEqual(['own', 'checkout']);
+    expect(result).toMatchObject({ project, projectFilterUnavailableCount: 1, hasNext: true, nextCursor: 'next' });
+  });
+
   it.each(['summary', 'awareness'] as const)('filters %s using authorized Bot metadata and preserves incomplete page coverage', async (view) => {
     const query: SessionListQueryV1 = {
       v: 1, storage: 'active', includeInactive: true, scope: 'my_work', attention: 'any',

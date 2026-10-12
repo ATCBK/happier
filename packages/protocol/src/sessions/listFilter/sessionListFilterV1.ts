@@ -1,6 +1,8 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod';
 import { readSessionBotV1 } from '../identity/sessionBotV1.js';
+import type { QualifiedProjectKeyV1, WorkspaceRefV1 } from '../../workspaces/workspaceRefV1.js';
+import { projectWorkspaceRefV1, resolveWorkspaceRefV1, type WorkspaceRefResolutionContextV1 } from '../../workspaces/workspaceRefResolutionV1.js';
 
 import {
     SessionAttentionFilterV1Schema,
@@ -33,6 +35,36 @@ export type SessionListFilterV1 = Readonly<{
 }>;
 
 export type SessionListFilterDefaultsInputV1 = Partial<SessionListFilterV1>;
+
+/** Owner metadata only. Account/Team admission and corpus membership belong to the list producer. */
+export function matchSessionProjectFilterV1(
+    metadata: unknown,
+    serverId: string,
+    project: QualifiedProjectKeyV1,
+    workspaceRefs?: readonly WorkspaceRefV1[],
+    context: WorkspaceRefResolutionContextV1 = {},
+): 'match' | 'miss' | 'unavailable' {
+    const home = context.normalizeServerId ?? ((id: string) => id.trim());
+    if (home(serverId) !== home(project.serverId)) return 'miss';
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return 'unavailable';
+    const record = metadata as Readonly<Record<string, unknown>>;
+    if (record.projectId !== undefined && record.projectId !== null) {
+        if (typeof record.projectId !== 'string' || !record.projectId.trim()) return 'unavailable';
+        return record.projectId === project.projectKey ? 'match' : 'miss';
+    }
+    const checkoutId = record.workspaceId;
+    if (checkoutId !== undefined && checkoutId !== null && (typeof checkoutId !== 'string' || !checkoutId.trim())) return 'unavailable';
+    const target = typeof checkoutId === 'string'
+        ? { serverId, id: checkoutId }
+        : typeof record.machineId === 'string' && typeof record.path === 'string'
+            ? { serverId, machineId: record.machineId, rootPath: record.path }
+            : null;
+    if (!target) return 'miss';
+    if (workspaceRefs === undefined) return 'unavailable';
+    const resolved = resolveWorkspaceRefV1(workspaceRefs, target, context);
+    if (resolved.kind === 'ambiguous' || resolved.kind === 'invalid') return 'unavailable';
+    return resolved.kind === 'resolved' && projectWorkspaceRefV1(resolved.ref).projectKey === project.projectKey ? 'match' : 'miss';
+}
 
 /** Metadata must already be authorized/opened; a locked candidate is never an ordinary Session. */
 export function matchSessionBotFilterV1(

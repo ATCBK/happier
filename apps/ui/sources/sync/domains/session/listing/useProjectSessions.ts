@@ -1,0 +1,56 @@
+import * as React from 'react';
+import type { QualifiedProjectKeyV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
+import { normalizeSessionListFilterV1, type SessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
+import { buildSessionListFilterQueryHomes, createSessionListViewFilterDefaults } from '@/components/sessions/shell/search/sessionListViewFilters';
+import { useActiveServerAccountScope, useSessionListRowsByServerId, useProjectAccountRows } from '@/sync/domains/state/storage';
+import { readSessionListRowsForServerId } from './sessionListRowStateLookup';
+import { useSessionListQuerySourceState } from './useSessionListQuerySourceState';
+import { resolveSessionListQueryPresentation } from './sessionListIndexPresentation';
+import { projectSessionList } from './projectSessionList';
+import { canSessionListOrdinaryPageAnswerQuery } from './sessionListQueryController';
+import { computeVisibleSessionListIndex } from './computeVisibleSessionListIndex';
+import { filterSessionListIndexByStorageKind } from './filterSessionListIndexByStorageKind';
+import { useServerCredentialAccountScopes } from '@/sync/domains/scope/useServerCredentialAccountScopes';
+import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
+import type { SessionListRenderableSession } from './sessionListRenderable';
+
+const DEFAULT_FILTER = normalizeSessionListFilterV1({ show: 'sessions', startedBy: ['you', 'agents', 'triggers'] });
+const NO_ROWS: Readonly<Record<string, SessionListRenderableSession>> = Object.freeze({});
+
+/** The ordinary Session list's paging, visibility and row contracts, narrowed to an accepted Project. */
+export function useProjectSessions(project: QualifiedProjectKeyV1 | null, filter: SessionListFilterV1 = DEFAULT_FILTER) {
+    const activeViewer = useActiveServerAccountScope(project?.serverId ?? null);
+    const projectRows = useProjectAccountRows();
+    const refs = projectRows?.status === 'ready' && projectRows.coverage === 'complete' ? projectRows.workspaceRefs : undefined;
+    const candidateHomes = React.useMemo(() => project && activeViewer ? [activeViewer.serverId] : [], [project?.serverId, activeViewer]);
+    const bindings = useServerCredentialAccountScopes(candidateHomes);
+    const binding = activeViewer ? bindings.get(activeViewer.serverId) : null;
+    const viewer = binding?.isCurrent() && areServerAccountScopesEqual(binding.scope, activeViewer) ? activeViewer : null;
+    const homeIds = React.useMemo(() => project && viewer ? candidateHomes : [], [candidateHomes, viewer]);
+    const filters = React.useMemo(() => createSessionListViewFilterDefaults({ ...filter, show: 'sessions', homeServerIds: homeIds }), [filter, homeIds]);
+    const homes = React.useMemo(() => buildSessionListFilterQueryHomes(filters, {
+        storage: 'active', includeInactive: true, mountedHomeServerIds: homeIds,
+    }).map(home => ({ ...home, queryMembership: 'rowOnly' as const,
+        // Project is a local owner-metadata projection of the ordinary admitted Account corpus.
+        ordinaryAdapter: canSessionListOrdinaryPageAnswerQuery(home.query)
+            ? { path: '/v2/sessions', allowV1Fallback: true, membership: 'ordinary' as const } : null,
+    })), [filters, homeIds]);
+    const query = useSessionListQuerySourceState({ enabled: homeIds.length > 0, homes });
+    const rowsByHome = useSessionListRowsByServerId(homeIds);
+    const rows = readSessionListRowsForServerId(rowsByHome, project?.serverId) ?? NO_ROWS;
+    const source = React.useMemo(() => {
+        const resolveSessionRow = (_serverId: string | null | undefined, sessionId: string) => rows[sessionId] ?? null;
+        return computeVisibleSessionListIndex({ source: filterSessionListIndexByStorageKind(query.source, filters.source, resolveSessionRow),
+            resolveSessionRow, hideInactiveSessions: false, pinnedSessionKeysV1: [], sessionListGroupOrderV1: {}, workFilter: filters,
+            presentation: { enabled: true, presentation: 'flat-with-badge', selectedServerIds: homeIds } });
+    }, [query.source, filters, rows, homeIds]);
+    const roster = React.useMemo(() => project ? projectSessionList({ project, viewer, source, rows, workspaceRefs: refs })
+        : { items: [], unavailableCount: 0 }, [project?.serverId, project?.projectKey, viewer, source, rows, refs]);
+    const presentation = React.useMemo(() => resolveSessionListQueryPresentation({ selectedServerIds: homeIds,
+        statesByServerId: query.statesByServerId, coverageComplete: query.coverageComplete && roster.unavailableCount === 0,
+        retainedRowCount: roster.items.length }), [homeIds, query.statesByServerId, query.coverageComplete, roster]);
+    return React.useMemo(() => ({ ...roster, filters, presentation, query,
+        access: viewer && project ? 'available' as const : 'unavailable' as const }), [roster, filters, presentation, query, viewer, project?.serverId, project?.projectKey]);
+}
+
+export type ProjectSessionsState = ReturnType<typeof useProjectSessions>;

@@ -1,5 +1,6 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod';
+import { QualifiedProjectKeyV1Schema, type QualifiedProjectKeyV1 } from '../../workspaces/workspaceRefV1.js';
 import { SessionListResultSchema, SessionListMetadataUpgradeRequiredCountSchema, SessionListBotFilterUnavailableCountSchema } from '../control/listResult.js';
 
 import {
@@ -51,6 +52,8 @@ const SessionListAttentionContinuationFieldsV1 = {
 } as const;
 
 const SessionListActionResultMarkerFieldsV1 = {
+  project: QualifiedProjectKeyV1Schema.optional(),
+  projectFilterUnavailableCount: z.number().int().nonnegative().optional(),
   queryVersion: z.literal(SESSION_LIST_QUERY_RESULT_VERSION_V1).optional(),
   metadataUpgradeRequiredCount: SessionListMetadataUpgradeRequiredCountSchema.optional(),
   botFilterUnavailableCount: SessionListBotFilterUnavailableCountSchema.optional(),
@@ -106,6 +109,8 @@ const SessionListRequiredAttentionContinuationFieldsV1Schema = lazyZodSchema(() 
 }).passthrough());
 
 export const SessionAwarenessListResultV1Schema = lazyZodSchema(() => z.object({
+    project: QualifiedProjectKeyV1Schema.optional(),
+    projectFilterUnavailableCount: z.number().int().nonnegative().optional(),
     view: z.literal(SESSION_LIST_AWARENESS_VIEW_V1),
     projectionVersion: z.literal(SESSION_AWARENESS_PROJECTION_VERSION_V1),
     sessions: z.array(SessionAwarenessProjectionV1Schema),
@@ -197,6 +202,8 @@ export function parseSessionListQueryActionResultV1(value: unknown): SessionList
 }
 
 export function buildSessionAwarenessListResultV1(params: Readonly<{
+  project?: QualifiedProjectKeyV1;
+  projectFilterUnavailableCount?: number;
   sessions: readonly SessionAwarenessProjectionV1[];
   nextCursor: string | null;
   hasNext: boolean;
@@ -204,6 +211,8 @@ export function buildSessionAwarenessListResultV1(params: Readonly<{
   botFilterUnavailableCount?: number;
 }> & SessionListAttentionContinuationInputV1): SessionAwarenessListResultV1 {
   return {
+    ...(params.project ? { project: params.project } : {}),
+    ...(params.projectFilterUnavailableCount ? { projectFilterUnavailableCount: params.projectFilterUnavailableCount } : {}),
     view: SESSION_LIST_AWARENESS_VIEW_V1,
     projectionVersion: SESSION_AWARENESS_PROJECTION_VERSION_V1,
     sessions: params.sessions,

@@ -1,9 +1,25 @@
 import { describe, expect, it } from 'vitest';
 
 import { ScopeActionInputSchemas } from '../../actions/scopeActionFamily.js';
-import { matchSessionBotFilterV1, normalizeSessionListFilterV1, SessionListFilterV1Schema } from './sessionListFilterV1.js';
+import { matchSessionBotFilterV1, matchSessionProjectFilterV1, normalizeSessionListFilterV1, SessionListFilterV1Schema } from './sessionListFilterV1.js';
 
 describe('SessionListFilterV1', () => {
+    it('matches only a qualified explicit Project or uniquely accepted checkout, never repository/path groups', () => {
+        const project = { serverId: 'home-a', projectKey: 'anchor' };
+        const refs = [{ id: 'checkout', serverId: 'home-a', projectKey: 'anchor', machineId: 'machine', rootPath: 'C:\\repo', createdAtMs: 1 }];
+        const match = (metadata: unknown, serverId = 'home-a') => matchSessionProjectFilterV1(metadata, serverId, project, refs);
+        expect(match({ projectId: 'anchor' })).toBe('match');
+        expect(match({ projectId: 'anchor' }, 'home-b')).toBe('miss');
+        expect(match({ projectId: 'other', workspaceId: 'checkout' })).toBe('miss');
+        expect(match({ workspaceId: 'checkout' })).toBe('match');
+        expect(match({ machineId: 'machine', path: 'c:/repo/' })).toBe('match');
+        expect(match({ machineId: 'machine', path: 'c:/repo/child' })).toBe('miss');
+        expect(match({ machineId: 'foreign', path: 'c:/repo' })).toBe('miss');
+        expect(match(null)).toBe('unavailable');
+        expect(matchSessionProjectFilterV1({ workspaceId: 'checkout' }, 'home-a', project)).toBe('unavailable');
+        expect(match({ projectId: '', workspaceId: 'checkout' })).toBe('unavailable');
+        expect(matchSessionProjectFilterV1({ workspaceId: 'checkout' }, 'home-a', project, [...refs, { ...refs[0]!, projectKey: 'other' }])).toBe('unavailable');
+    });
     it('matches Bot identity only from authorized canonical metadata and distinguishes unavailable metadata', () => {
         expect(matchSessionBotFilterV1({ bot: { kind: 'bot', future: true } }, 'bot')).toBe('match');
         expect(matchSessionBotFilterV1({ title: 'Bot', tag: 'bot', pinned: true }, 'bot')).toBe('miss');

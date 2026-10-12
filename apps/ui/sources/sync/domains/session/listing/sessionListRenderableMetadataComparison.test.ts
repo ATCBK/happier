@@ -17,6 +17,15 @@ const canonicalExternalSessionLink = {
 };
 
 describe('sessionListRenderableMetadataComparison', () => {
+    it('preserves Project and checkout membership and invalidates only a changed association', () => {
+        const metadata: Metadata = { path: '/repo', projectId: 'anchor', workspaceId: 'checkout-a' };
+        const first = buildSessionListRenderableMetadataComparison(metadata);
+        expect(first).toMatchObject({ projectId: 'anchor', workspaceId: 'checkout-a' });
+        expect(buildSessionListRenderableMetadataComparison(metadata, first)).toBe(first);
+        const moved = buildSessionListRenderableMetadataComparison({ ...metadata, projectId: 'other' }, first);
+        expect(moved).not.toBe(first);
+        expect(moved).toMatchObject({ projectId: 'other', workspaceId: 'checkout-a' });
+    });
     it('does not erase a malformed legacy Bot marker into an ordinary lean Session', () => {
         // Negative stored-metadata boundary vectors can predate today's typed schema.
         for (const bot of [{ kind: 'ordinary' }, null]) {

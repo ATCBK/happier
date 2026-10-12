@@ -18,6 +18,7 @@ import { buildCliSessionRowModel } from '@/cli/output/session/buildCliSessionRow
 import { summarizeSessionRecord } from '@/cli/output/session/sessionSummary';
 import { projectCliSessionAwarenessFromMaterialV1 } from '@/cli/output/session/sessionAwareness';
 import type { SessionTransportEncryptionMaterial } from '@/session/transport/encryption/sessionEncryptionContext';
+import type { WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 
 /** The one typed answer for a query arm an admitted one-Session corpus cannot serve. */
 function unsupportedSessionListQueryArmsResult(arms: readonly string[]) {
@@ -42,6 +43,7 @@ export function createRestrictedCurrentSessionListActionDependency(params: Reado
   material: SessionTransportEncryptionMaterial;
 }>): ActionExecutorDeps['sessionList'] {
   return async (input) => {
+    if (input.project) return { ok: false, errorCode: 'session_list_project_filter_unsupported', error: 'session_list_project_filter_unsupported' };
     if (input.query?.underSessionId !== undefined) {
       return unsupportedSessionListQueryArmsResult(['underSessionId']);
     }
@@ -160,12 +162,14 @@ export function createRestrictedCurrentSessionListActionDependency(params: Reado
 
 /** One CLI/daemon adapter from the shared Action contract to Session listing. */
 export function createSessionListActionDependency(params: Readonly<{
+  readWorkspaceRefs?: (input: Parameters<ActionExecutorDeps['sessionList']>[0]) => Promise<readonly WorkspaceRefV1[]>;
   credentials: StoredCredentials;
   resolveAccountSettings?: () => AccountSettings | null;
   serverHttpBaseUrl?: string;
 }> & ExternalActionHomeBinding): ActionExecutorDeps['sessionList'] {
   const serverId = params.serverId ?? configuration.activeServerId;
   return async ({
+    project,
     context,
     query,
     view,
@@ -184,6 +188,7 @@ export function createSessionListActionDependency(params: Readonly<{
     if (context?.serverId && context.serverId !== serverId) {
       return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
     }
+    if (project && project.serverId !== serverId) return { ok: false, errorCode: 'server_scope_mismatch', error: 'server_scope_mismatch' };
     if (normalizedActiveOnly && normalizedArchivedOnly) {
       return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
     }
@@ -225,6 +230,7 @@ export function createSessionListActionDependency(params: Readonly<{
       ? params.resolveAccountSettings()
       : undefined;
     const run = async () => await listSessions({
+      ...(project ? { project, workspaceRefs: await params.readWorkspaceRefs?.({ context, project, signal }) } : {}),
       credentials: params.credentials,
       resolveAuthorizationHeaders,
       ...(externalActionAccountSettings !== undefined
