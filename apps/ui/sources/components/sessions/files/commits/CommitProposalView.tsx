@@ -5,6 +5,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Icon } from '@/components/ui/icons/Icon';
+import { ExpandableItem } from '@/components/ui/lists/ExpandableItem';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -392,40 +393,49 @@ export const CommitGroupCard = React.memo(function CommitGroupCard(props: Readon
             onLayout={onLayoutY ? (event) => onLayoutY(event.nativeEvent.layout.y) : undefined}
             style={[commitPartsStyles.card, props.highlighted ? styles.cardFocused : null]}
         >
-            <CommitGroupHeader
-                group={group}
-                phone={phone}
-                meta={(
-                    <Pressable
-                        disabled={!phone && group.state !== 'landed' && group.state !== 'failed'}
-                        onPress={() => onToggle(group.id)}
-                        accessibilityRole="button"
-                        accessibilityState={{ expanded: open }}
-                        style={styles.metaPress}
-                    >
-                        {meta}
-                    </Pressable>
+            {/* The commit's rows open and close in place: height and opacity together (the shared disclosure motion). */}
+            <ExpandableItem
+                expanded={open}
+                onExpandedChange={() => onToggle(group.id)}
+                showDivider={false}
+                header={(
+                    <CommitGroupHeader
+                        group={group}
+                        phone={phone}
+                        meta={(
+                            <Pressable
+                                disabled={!phone && group.state !== 'landed' && group.state !== 'failed'}
+                                onPress={() => onToggle(group.id)}
+                                accessibilityRole="button"
+                                accessibilityState={{ expanded: open }}
+                                style={styles.metaPress}
+                            >
+                                {meta}
+                            </Pressable>
+                        )}
+                        canMoveUp={editableIndex > 0}
+                        canMoveDown={editableIndex >= 0 && editableIndex < editableGroups.length - 1}
+                        canMerge={editableIndex >= 0 && editableIndex < editableGroups.length - 1}
+                        onEditMessage={actions.onEditMessage}
+                        onMoveGroup={actions.onMoveGroup}
+                        onMergeWithNext={actions.onMergeWithNext}
+                        onToggle={() => onToggle(group.id)}
+                    />
                 )}
-                canMoveUp={editableIndex > 0}
-                canMoveDown={editableIndex >= 0 && editableIndex < editableGroups.length - 1}
-                canMerge={editableIndex >= 0 && editableIndex < editableGroups.length - 1}
-                onEditMessage={actions.onEditMessage}
-                onMoveGroup={actions.onMoveGroup}
-                onMergeWithNext={actions.onMergeWithNext}
-                onToggle={() => onToggle(group.id)}
-            />
-            {open ? group.changes.map((change) => (
-                <CommitChangeRow
-                    key={change.key}
-                    change={change}
-                    groupNumber={group.number}
-                    choices={group.editable ? props.choices : null}
-                    focused={props.focusedKey === focusKey(group.id, change.path)}
-                    onFocus={() => props.onFocusKey(focusKey(group.id, change.path))}
-                    onMove={actions.onMove}
-                    phone={phone}
-                />
-            )) : null}
+            >
+                {group.changes.map((change) => (
+                    <CommitChangeRow
+                        key={change.key}
+                        change={change}
+                        groupNumber={group.number}
+                        choices={group.editable ? props.choices : null}
+                        focused={props.focusedKey === focusKey(group.id, change.path)}
+                        onFocus={() => props.onFocusKey(focusKey(group.id, change.path))}
+                        onMove={actions.onMove}
+                        phone={phone}
+                    />
+                ))}
+            </ExpandableItem>
             <CommitPlanGroupOutcome group={group} outcome={outcome} actions={actions} phone={phone}
                 hookEvidenceReady={props.hookEvidence?.state === 'ready'}
                 hookChanges={outcome?.kind === 'hookChanged' && outcome.groupId === group.id && props.hookEvidence

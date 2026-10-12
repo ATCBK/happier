@@ -122,6 +122,19 @@ function diffsUnder(screen: Awaited<ReturnType<typeof renderScreen>>, testID: st
 }
 
 describe('WalkthroughView (lab WT1-A)', () => {
+    it('shows the captured rename, untracked and conflict kinds before narration, and opens their exact files', async () => {
+        const reading = buildWalkthroughReading({ ...COMPLETE, walkthrough: { state: 'pending' } });
+        const onOpenFile = vi.fn();
+        const screen = await renderScreen(<WalkthroughView reading={{ ...reading, inventory: reading.inventory.slice(0, 3)
+            .map((row, index) => ({ ...row, changeKind: ['renamed', 'untracked', 'conflicted'][index]! })) }}
+            scopeLabel="This session" layout="wide" onOpenFile={onOpenFile} />);
+        const inventory = screen.findByTestId('walkthrough-inventory')!;
+        const letters = inventory.findAll(node => typeof node.type === 'string')
+            .flatMap(node => node.children.filter((child): child is string => typeof child === 'string'));
+        expect(letters).toEqual(expect.arrayContaining(['R', 'A', '!']));
+        await screen.pressByTestIdAsync(`walkthrough-inventory-${reading.inventory[0]!.path}`);
+        expect(onOpenFile).toHaveBeenCalledWith(reading.inventory[0]!.path);
+    });
     it('begins at the next unread stop without automatically marking it', async () => {
         const initial = buildWalkthroughReading(COMPLETE);
         const stops = initial.stops.map((stop, index) => ({ ...stop, reviewed: index < 2 }));
@@ -205,5 +218,20 @@ describe('WalkthroughView (lab WT1-A)', () => {
         expect(failed.findByTestId('walkthrough-notice-failed')).toBeTruthy();
         expect(failed.findByTestId('walkthrough-rest')).toBeTruthy();
         expect(failed.findByTestId('walkthrough-retry')).toBeTruthy();
+    });
+
+    it('interrupts only for a failed write; a refinement update and stale reading stay polite', async () => {
+        const failed = await renderScreen(view({ ...COMPLETE, walkthrough: { state: 'failed', value: SPECIMEN_WALKTHROUGH, reason: 'overloaded' } }));
+        expect(failed.findHostByTestId('walkthrough-notice-failed')?.props.accessibilityRole).toBe('alert');
+        const quiet = await renderScreen(view(COMPLETE, {
+            update: { message: 'Merged stops 2 and 3', onUndo: vi.fn() },
+            stale: { onRefresh: vi.fn() },
+        }));
+        for (const testID of ['walkthrough-notice-update', 'walkthrough-notice-stale']) {
+            const band = quiet.findHostByTestId(testID);
+            expect(band).toBeTruthy();
+            expect(band?.props.accessibilityRole).not.toBe('alert');
+            expect(band?.props.accessibilityLiveRegion).toBe('polite');
+        }
     });
 });

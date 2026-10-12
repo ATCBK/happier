@@ -88,18 +88,37 @@ export const WalkthroughExplainNotes = React.memo(function WalkthroughExplainNot
     );
 });
 
+/**
+ * Files' Explain in the file list (lab WT8-F2): the stops that explain this file, once each, in reading
+ * order, with the person's marks. Projected from the same notes as the hunks; a file no stop explains
+ * draws nothing.
+ */
+export const WalkthroughFileStops = React.memo(function WalkthroughFileStops(props: Readonly<{ reading: WalkthroughReading; path: string }>) {
+    const stops = React.useMemo(() => {
+        const byId = new Map<string, NonNullable<WalkthroughReading['stops'][number]>>();
+        for (const hunk of props.reading.explainNotesByHunk.get(props.path) ?? []) {
+            for (const note of hunk) if (note.stop && !byId.has(note.stop.id)) byId.set(note.stop.id, note.stop);
+        }
+        return [...byId.values()].sort((a, b) => a.number - b.number);
+    }, [props.path, props.reading.explainNotesByHunk]);
+    if (stops.length === 0) return null;
+    return (
+        <View
+            testID={`walkthrough-file-stops-${props.path}`}
+            accessibilityLabel={stops.map((stop) => t('walkthrough.stopA11y', { number: stop.number, title: stop.title })).join(', ')}
+            style={styles.fileStops}
+        >
+            {stops.map((stop) => <WalkthroughStopNumber key={stop.id} number={stop.number} reviewed={stop.reviewed} size="rail" />)}
+        </View>
+    );
+});
+
 /** Files' Explain column width (lab WT8-F2: a narrow margin of notes beside the code). */
 export const WALKTHROUGH_EXPLAIN_COLUMN_WIDTH_PX = 320;
 
 const styles = StyleSheet.create((theme) => ({
-    column: {
-        width: WALKTHROUGH_EXPLAIN_COLUMN_WIDTH_PX,
-        paddingHorizontal: 16,
-        paddingTop: 12,
-        borderLeftWidth: StyleSheet.hairlineWidth,
-        borderLeftColor: theme.colors.border.default,
-        backgroundColor: theme.colors.surface.base,
-    },
+    // The diff block's notes column owns the frame (its hairline and the hunk alignment); a note is its words.
+    column: { paddingHorizontal: 16 },
     inline: { paddingHorizontal: 16, paddingVertical: 6, gap: 2, backgroundColor: theme.colors.surface.inset },
     note: { paddingBottom: 14 },
     noteDivided: { paddingTop: 14, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.colors.border.default },
@@ -113,4 +132,5 @@ const styles = StyleSheet.create((theme) => ({
     noneInline: { paddingBottom: 0, paddingVertical: 4 },
     inlineRow: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 32 },
     inlineTitle: { flex: 1, fontSize: 13.5, color: theme.colors.text.primary, ...Typography.default('semiBold') },
+    fileStops: { flexDirection: 'row', alignItems: 'center', gap: 3, flexShrink: 0 },
 }));

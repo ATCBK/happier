@@ -6,6 +6,7 @@ import { WorkspaceRepositoryTreeList } from '@/components/projects/files/Workspa
 import { ChangedFilesLayoutSwitch, useGitDisplaySettings } from '@/components/sessions/panes/git/display/GitDisplayMenu';
 import { resolveChangedOnlyTreeInitiallyClosedPaths } from '@/components/workspaces/files/repositoryTree/buildChangedFilesOutlineTree';
 import { ScmChangeRow, resolveScmChangeStatsColumnWidth } from '@/components/workspaces/scm/changes/ScmChangeRow';
+import { DiffStat } from '@/components/workspaces/scm/DiffStat';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { isTouchPrimaryPointer } from '@/components/ui/interactiveTargetSize';
@@ -78,8 +79,12 @@ export const TurnChangesCard = React.memo(function TurnChangesCard(props: TurnCh
                 style={styles.title}
             >
                 <Icon name={state.expanded ? 'caret-down' : 'caret-right'} size={ICON_SIZE.xs} color={theme.colors.text.tertiary} />
-                <ToolFindText text={titleLabel} blockId="tool-turn-changes-title" messageId={props.messageId} style={styles.titleText} numberOfLines={1} />
-                {summary.linesKnown ? <LineTotals added={displayText.added ?? ''} removed={displayText.removed ?? ''} messageId={props.messageId} /> : null}
+                {/* The counts are a smaller step than the title: they share its baseline, not its centre. */}
+                <View style={styles.titleLine}>
+                    <ToolFindText text={titleLabel} blockId="tool-turn-changes-title" messageId={props.messageId} style={styles.titleText} numberOfLines={1} />
+                    {summary.linesKnown ? <DiffStat added={summary.added} removed={summary.removed}
+                        renderCount={(kind, text, style) => <ToolFindText text={text} blockId={`tool-turn-changes-${kind}`} messageId={props.messageId} style={style} />} /> : null}
+                </View>
             </Pressable>
             {hasActions ? (
                 <View testID={`${testID}-actions`} style={styles.actions}>
@@ -124,15 +129,6 @@ export const TurnChangesCard = React.memo(function TurnChangesCard(props: TurnCh
         </View>
     );
 });
-
-function LineTotals(props: Readonly<{ added: string; removed: string; messageId?: string }>) {
-    return (
-        <View style={styles.totals}>
-            <ToolFindText text={props.added} blockId="tool-turn-changes-added" messageId={props.messageId} style={styles.added} />
-            <ToolFindText text={props.removed} blockId="tool-turn-changes-removed" messageId={props.messageId} style={styles.removed} />
-        </View>
-    );
-}
 
 const NO_FILES: readonly ScmFileStatus[] = [];
 
@@ -302,28 +298,18 @@ const styles = StyleSheet.create((theme) => ({
         flexShrink: 1,
         minHeight: 32,
     },
+    titleLine: {
+        flexDirection: 'row',
+        alignItems: 'baseline',
+        gap: theme.margins.sm,
+        flexShrink: 1,
+        minWidth: 0,
+    },
     titleText: {
         fontSize: 14,
         color: theme.colors.text.primary,
         ...Typography.default('semiBold'),
         flexShrink: 1,
-    },
-    totals: {
-        flexDirection: 'row',
-        alignItems: 'baseline',
-        gap: 5,
-    },
-    added: {
-        fontSize: 13,
-        fontVariant: ['tabular-nums'],
-        color: theme.colors.state.success.foreground,
-        ...Typography.default(),
-    },
-    removed: {
-        fontSize: 13,
-        fontVariant: ['tabular-nums'],
-        color: theme.colors.state.danger.foreground,
-        ...Typography.default(),
     },
     actions: {
         flexDirection: 'row',

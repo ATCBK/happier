@@ -54,6 +54,7 @@ export type WalkthroughStop = Readonly<{
 
 export type WalkthroughOtherChange = Readonly<{
     path: string;
+    changeKind: string;
     added: number;
     removed: number;
     lockfile: boolean;
@@ -340,6 +341,7 @@ export function buildWalkthroughReading(input: WalkthroughReadingInput): Walkthr
         const file = filesByPath.get(path)!;
         return {
             path,
+            changeKind: file.changeKind,
             ...fileLines(file),
             lockfile: file.lockfile,
             generated: file.generated,

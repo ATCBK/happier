@@ -4,7 +4,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
 
 import { MarkdownView } from '@/components/markdown/MarkdownView';
-import { ScmComparisonSourceFact } from '@/components/sessions/files/comparison/ScmComparisonHeader';
+import { ScmComparisonEyebrow, ScmComparisonSourceFact } from '@/components/sessions/files/comparison/ScmComparisonHeader';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback';
 import { Text } from '@/components/ui/text/Text';
@@ -79,19 +79,19 @@ export const WalkthroughEditorialHeader = React.memo(function WalkthroughEditori
     );
     return (
         <View testID="walkthrough-editorial-header" style={[styles.header, phone ? styles.headerPhone : null]}>
-            <View style={styles.eyebrow}>
-                <Icon name="path" size={13} color={theme.colors.text.tertiary} />
-                <Text style={styles.eyebrowView}>{t('walkthrough.eyebrow')}</Text>
-                <Text style={styles.eyebrowScope} numberOfLines={1}>
-                    {`· ${props.scopeLabel}${props.scopeDetail && !phone && !props.narrow ? ` · ${props.scopeDetail}` : ''}`}
-                </Text>
-                <View style={styles.grow} />
-                {writing ? (
-                    <View style={styles.writing}>
-                        <View style={styles.writingDot} />
-                        <Text style={styles.writingText}>{props.writingLabel ?? t('walkthrough.readingChanges')}</Text>
-                    </View>
-                ) : hasStops || reading.title ? <WalkthroughGeneratedMark model={props.generatedLabel ?? props.modelLabel} /> : null}
+            <View style={styles.eyebrowFrame}>
+                <ScmComparisonEyebrow
+                    icon="path"
+                    viewLabel={t('walkthrough.eyebrow')}
+                    scope={props.scopeLabel}
+                    detail={!phone && !props.narrow ? props.scopeDetail : null}
+                    trailing={writing ? (
+                        <View style={styles.writing}>
+                            <View style={styles.writingDot} />
+                            <Text style={styles.writingText}>{props.writingLabel ?? t('walkthrough.readingChanges')}</Text>
+                        </View>
+                    ) : hasStops || reading.title ? <WalkthroughGeneratedMark model={props.generatedLabel ?? props.modelLabel} /> : null}
+                />
             </View>
             {reading.title ? (
                 <Text accessibilityRole="header" style={[styles.title, phone ? styles.titlePhone : null]}>{reading.title}</Text>
@@ -102,7 +102,7 @@ export const WalkthroughEditorialHeader = React.memo(function WalkthroughEditori
                     <View style={[styles.skeletonBar, styles.skeletonLineShort]} />
                 </View>
             ) : null}
-            {reading.titleEdited ? <Text testID="walkthrough-title-edited" style={styles.eyebrowScope}>{t('walkthrough.progress.titleEdited')}</Text> : null}
+            {reading.titleEdited ? <Text testID="walkthrough-title-edited" style={styles.titleEdited}>{t('walkthrough.progress.titleEdited')}</Text> : null}
             {reading.intro && reading.phase !== 'arriving' ? (
                 <View style={styles.introFrame}>
                     <MarkdownView
@@ -231,9 +231,8 @@ const styles = StyleSheet.create((theme) => ({
         marginBottom: 8,
     },
     headerPhone: { paddingTop: 18, paddingHorizontal: 16, paddingBottom: 18, marginBottom: 0 },
-    eyebrow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginBottom: 10 },
-    eyebrowView: { fontSize: 13, color: theme.colors.text.secondary, ...Typography.default('semiBold') },
-    eyebrowScope: { fontSize: 13, color: theme.colors.text.tertiary, flexShrink: 1, ...Typography.default() },
+    eyebrowFrame: { marginBottom: 10 },
+    titleEdited: { fontSize: 13, color: theme.colors.text.tertiary, ...Typography.default() },
     grow: { flex: 1 },
     writing: { flexDirection: 'row', alignItems: 'center', gap: 6 },
     extraFact: { marginTop: 8 },

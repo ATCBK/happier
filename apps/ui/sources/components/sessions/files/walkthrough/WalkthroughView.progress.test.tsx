@@ -15,11 +15,14 @@ const reading = buildWalkthroughReading({ comparison: SPECIMEN_COMPARISON,
     walkthrough: { state: 'complete', value: SPECIMEN_WALKTHROUGH }, analysis: SPECIMEN_ANALYSIS_COMPLETE, reviewed: null });
 
 describe('walkthrough personal progress availability', () => {
-    it('names reviewers with unavailable files-read progress instead of inventing counts', async () => {
+    it('names each reviewer once in the status, without inventing files-read counts or a word for the unknown', async () => {
         const { ReviewWalkthroughSteps } = await import('@/components/sessions/reviews/walkthrough/ReviewWalkthroughParts');
         const screen = await renderScreen(<ReviewWalkthroughSteps progress={{ review: { state: 'running', kind: 'engines_reviewing', done: ['Claude'], running: ['Codex'] }, narration: null }} />);
-        expect(screen.findByTestId('walkthrough-engine-progress-unavailable')).not.toBeNull();
-        expect(screen.getTextContent()).toContain('Codex');
+        const text = screen.getTextContent();
+        expect(text).toContain('Claude');
+        expect(text.split('Codex')).toHaveLength(2);
+        expect(text).not.toMatch(/\d+ of \d+/);
+        expect(screen.findByTestId('walkthrough-engine-progress-unavailable')).toBeNull();
     });
     it('renders only host-projected parts and stop provenance, separately from reviewed marks', async () => {
         const projected = buildWalkthroughReading({ comparison: SPECIMEN_COMPARISON,

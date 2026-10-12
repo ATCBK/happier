@@ -5,7 +5,7 @@ import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
 
 import { Icon } from '@/components/ui/icons/Icon';
 import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback';
-import { KeyHint } from '@/components/ui/keyboard/KeyHint';
+import { SCM_COMPARISON_RAIL_INSET_PX, ScmComparisonRailCaption, ScmComparisonRailKeys } from '@/components/sessions/files/comparison/ScmComparisonBar';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
@@ -122,21 +122,17 @@ export const WalkthroughContents = React.memo(function WalkthroughContents(props
     }
     return (
         <View testID="walkthrough-contents-rail" style={styles.rail}>
-            <View style={styles.caption}>
-                <Text style={styles.captionTitle}>{t('walkthrough.contents')}</Text>
-                <View style={styles.grow} />
-                {caption ? <Text testID="walkthrough-contents-count" style={styles.captionCount}>{caption}</Text> : null}
-            </View>
+            <ScmComparisonRailCaption title={t('walkthrough.contents')} count={caption} countTestID="walkthrough-contents-count" />
             <ScrollView style={styles.railScroll} contentContainerStyle={styles.railRows}>
                 {rows}
                 {others}
             </ScrollView>
             {Platform.OS === 'web' ? (
-                <View testID="walkthrough-contents-keys" style={styles.keys}>
-                    <View style={styles.key}><KeyHint label="J" /><KeyHint label="K" /><Text style={styles.keyText}>{t('walkthrough.keys.move')}</Text></View>
-                    <View style={styles.key}><KeyHint label="R" /><Text style={styles.keyText}>{t('walkthrough.keys.reviewed')}</Text></View>
-                    <View style={styles.key}><KeyHint label="/" /><Text style={styles.keyText}>{t('walkthrough.keys.ask')}</Text></View>
-                </View>
+                <ScmComparisonRailKeys testID="walkthrough-contents-keys" keys={[
+                    { keys: ['J', 'K'], label: t('walkthrough.keys.move') },
+                    { keys: ['R'], label: t('walkthrough.keys.reviewed') },
+                    { keys: ['/'], label: t('walkthrough.keys.ask') },
+                ]} />
             ) : null}
         </View>
     );
@@ -150,15 +146,12 @@ const styles = StyleSheet.create((theme) => ({
         width: WALKTHROUGH_RAIL_WIDTH_PX,
         borderRightWidth: StyleSheet.hairlineWidth,
         borderRightColor: theme.colors.border.default,
-        paddingTop: 18,
-        paddingBottom: 12,
+        paddingTop: 12,
+        paddingHorizontal: SCM_COMPARISON_RAIL_INSET_PX,
     },
-    caption: { flexDirection: 'row', alignItems: 'center', paddingLeft: 20, paddingRight: 18, paddingBottom: 8 },
-    captionTitle: { fontSize: 12, color: theme.colors.text.secondary, ...Typography.default('semiBold') },
-    captionCount: { fontSize: 12, color: theme.colors.text.tertiary, fontVariant: ['tabular-nums'], ...Typography.default('medium') },
     grow: { flex: 1 },
     railScroll: { flex: 1 },
-    railRows: { paddingHorizontal: 10, gap: 1 },
+    railRows: { gap: 1 },
     row: { flexDirection: 'row', alignItems: 'flex-start', gap: 9, paddingVertical: 7, paddingHorizontal: 8, borderRadius: 8 },
     rowSheet: { paddingVertical: 11, paddingHorizontal: 20, borderRadius: 0, gap: 14 },
     rowOn: { backgroundColor: theme.colors.surface.selected },
@@ -175,9 +168,6 @@ const styles = StyleSheet.create((theme) => ({
     cue: { marginTop: 1, fontSize: 12, lineHeight: 16, color: theme.colors.text.tertiary, ...Typography.default() },
     cueSheet: { fontSize: 13.5, lineHeight: 19 },
     separator: { height: StyleSheet.hairlineWidth, backgroundColor: theme.colors.border.default, marginVertical: 10, marginHorizontal: 8 },
-    keys: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 10, rowGap: 6, paddingHorizontal: 18, paddingTop: 8 },
-    key: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-    keyText: { fontSize: 12, color: theme.colors.text.tertiary, ...Typography.default() },
     sheet: { maxHeight: '100%' },
     sheetHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingTop: 16, paddingBottom: 10 },
     sheetTitle: { fontSize: 19, color: theme.colors.text.primary, ...Typography.default('semiBold') },

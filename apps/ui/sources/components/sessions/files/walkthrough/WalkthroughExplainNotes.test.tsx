@@ -101,3 +101,18 @@ it('does not add empty hunk annotations on lines without notes or comments', asy
     const lines = buildCodeLinesFromUnifiedDiff({ unifiedDiff: '@@ -1 +1 @@\n-before\n+after\n' });
     for (const line of lines) expect(viewer.props.renderAfterLine(line)).toBeNull();
 });
+
+it('lists in the file list each stop that explains a file, once, in reading order, with the person\u2019s marks', async () => {
+    const { WalkthroughFileStops } = await import('./WalkthroughExplainNotes');
+    const reading = buildWalkthroughReading({ comparison: SPECIMEN_COMPARISON,
+        walkthrough: { state: 'complete', value: SPECIMEN_WALKTHROUGH }, analysis: SPECIMEN_ANALYSIS_COMPLETE, reviewed: null });
+    const path = 'apps/ui/sources/components/settings/SettingsModal.tsx';
+    const expected = reading.stops.filter((stop) => stop.files.some((file) => file.path === path));
+    expect(expected.length).toBeGreaterThan(1);
+    const screen = await renderScreen(<WalkthroughFileStops reading={reading} path={path} />);
+    const numbers = screen.findAll((node) => typeof node.type === 'string' && node.children.length === 1 && typeof node.children[0] === 'string' && /^\d+$/.test(node.children[0] as string))
+        .map((node) => Number(node.children[0]));
+    expect(numbers).toEqual(expected.map((stop) => stop.number));
+    const untold = await renderScreen(<WalkthroughFileStops reading={reading} path="not/in/the/story.ts" />);
+    expect(untold.findByTestId('walkthrough-file-stops-not/in/the/story.ts')).toBeNull();
+});

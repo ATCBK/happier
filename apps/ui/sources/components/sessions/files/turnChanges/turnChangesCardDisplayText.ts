@@ -3,6 +3,7 @@ import { resolveScmChangePathTag } from '@/scm/scmChangePathTag';
 import { resolveScmChangeRowDisplayText } from '@/components/workspaces/scm/changes/scmChangeRowDisplayText';
 import { toolTextBlock, type ToolDisplayTextBlock } from '@/components/tools/renderers/core/toolDisplayTextTypes';
 import { t } from '@/text';
+import { formatHappierDiffStat } from '@happier-dev/plugin-ui/presentation';
 import { summarizeTurnChanges } from './turnChangesCardModel';
 
 export function resolveTurnChangesCardDisplayText(files: readonly ScmFileStatus[]) {
@@ -13,8 +14,8 @@ export function resolveTurnChangesCardDisplayText(files: readonly ScmFileStatus[
         count: summary.folderCount > 1
             ? t('turnChanges.card.fileCountInFolders', { count: summary.fileCount, folders: summary.folderCount })
             : t('turnChanges.card.fileCount', { count: summary.fileCount }),
-        added: summary.linesKnown ? `+${summary.added.toLocaleString()}` : null,
-        removed: summary.linesKnown ? `−${summary.removed.toLocaleString()}` : null,
+        added: summary.linesKnown ? formatHappierDiffStat(summary.added, summary.removed).added : null,
+        removed: summary.linesKnown ? formatHappierDiffStat(summary.added, summary.removed).removed : null,
     };
 }
 

@@ -3,16 +3,15 @@ import { Platform, View } from 'react-native';
 import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
-import { WalkthroughLineCounts, WalkthroughPath, WalkthroughStopNumber } from '@/components/sessions/files/walkthrough/WalkthroughAtoms';
+import { WalkthroughStopNumber } from '@/components/sessions/files/walkthrough/WalkthroughAtoms';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { Icon } from '@/components/ui/icons/Icon';
 import { Text, TextInput } from '@/components/ui/text/Text';
-import { ScmChangeMark } from '@/components/workspaces/scm/changes/ScmChangeMark';
+import { ScmChangeRow } from '@/components/workspaces/scm/changes/ScmChangeRow';
 import { Typography } from '@/constants/Typography';
-import { describeScmChangeKind, resolveScmChangeToneColor } from '@/scm/scmChangeKind';
-import type { ScmEntryKind } from '@/sync/domains/state/storageTypes';
+import { scmFileStatusFromChange } from '@/scm/scmStatusFiles';
 import { t } from '@/text';
 
 import type { CommitProposalChange, CommitProposalGroup, CommitProposalGroupState } from './commitProposal';
@@ -69,7 +68,6 @@ export const CommitChangeRow = React.memo(function CommitChangeRow(props: Readon
 }>) {
     const { theme } = useUnistyles();
     const { change } = props;
-    const descriptor = describeScmChangeKind(change.changeKind as ScmEntryKind);
     // The captured evidence class (the host's shared path classifier), labelled with the shared change-list copy.
     const pathTag = change.lockfile ? t('scmComparison.lockfileTag') : change.generated ? t('scmComparison.generatedTag') : null;
     const [open, setOpen] = React.useState(false);
@@ -118,7 +116,7 @@ export const CommitChangeRow = React.memo(function CommitChangeRow(props: Readon
     }, [change, onMove]);
     const movable = Boolean(props.choices && onMove);
     const row = (
-        <View
+        <ScmChangeRow theme={theme} file={scmFileStatusFromChange(change)} density="compact" phone={props.phone}
             testID={`commit-change:${props.groupNumber ?? 'left-out'}:${change.path}`}
             style={[
                 styles.row,
@@ -126,19 +124,11 @@ export const CommitChangeRow = React.memo(function CommitChangeRow(props: Readon
                 props.focused || open ? styles.rowFocused : null,
                 change.hookChanged ? styles.rowHook : null,
             ]}
-        >
-            <ScmChangeMark code={descriptor.code} color={resolveScmChangeToneColor(descriptor.tone, theme)} size="compact" />
-            <View style={styles.rowPath}>
-                <WalkthroughPath path={change.path} />
-                {change.part && !props.phone ? (
+            pathAccessory={change.part && !props.phone ? (
                     <Text style={styles.part} numberOfLines={1}>{t('commitProposal.part', change.part)}</Text>
                 ) : null}
-            </View>
-            {pathTag ? (
-                <View style={styles.tag}><Text style={styles.tagText}>{pathTag}</Text></View>
-            ) : null}
-            <WalkthroughLineCounts added={change.added} removed={change.removed} />
-            {movable ? (
+            tag={pathTag}
+            trailingElement={movable ? (
                 <DropdownMenu
                     open={open}
                     onOpenChange={onOpenChange}
@@ -165,8 +155,7 @@ export const CommitChangeRow = React.memo(function CommitChangeRow(props: Readon
                         />
                     )}
                 />
-            ) : <View style={styles.moveSlot} />}
-        </View>
+            ) : <View style={styles.moveSlot} />} />
     );
     return props.inspect ? (
         <HappierPressable testID={`commit-hook-change:${change.path}`} accessibilityRole="button" accessibilityLabel={change.path}
@@ -345,9 +334,6 @@ const styles = StyleSheet.create((theme) => ({
     rowPhone: { paddingLeft: 16, gap: 8 },
     rowFocused: { backgroundColor: theme.colors.surface.inset },
     rowHook: { backgroundColor: theme.colors.state.warning.background },
-    rowPath: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 8 },
     part: { flexShrink: 0, fontSize: 12.5, color: theme.colors.text.tertiary, fontVariant: ['tabular-nums'], ...Typography.default() },
-    tag: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6, backgroundColor: theme.colors.surface.inset },
-    tagText: { fontSize: 11.5, color: theme.colors.text.secondary, ...Typography.default('semiBold') },
     moveSlot: { width: 30 },
 }));

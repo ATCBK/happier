@@ -9,6 +9,7 @@ import { buildCapturedComparisonFiles } from './capturedComparisonFiles';
 import { resolveFilesComparisonLabel } from './filesComparison';
 import { scmReviewComparisonOfCaptured } from '@/sync/domains/scm/diffSummary/selection';
 import { WalkthroughNotice } from '@/components/sessions/files/walkthrough/WalkthroughLifecycle';
+import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
@@ -64,8 +65,8 @@ export function CapturedComparisonFilesView(props: Readonly<{
     return <View testID="captured-comparison-files" style={{ flex: 1, minHeight: 0 }}>
         {props.comparison.inventory.state !== 'complete' ? <WalkthroughNotice testID="captured-inventory-incomplete" tone="warning" icon="warning"
             message={t('walkthrough.evidence.unavailable', { reason: props.comparison.inventory.reasons.join(' · ') })} /> : null}
-        {props.comparison.freshness === 'stale' || props.comparison.freshness === 'unknown' ? <WalkthroughNotice testID="captured-comparison-freshness" tone="warning" icon="clock"
-            message={t(props.comparison.freshness === 'stale' ? 'scmComparison.capturedStale' : 'scmComparison.capturedFreshnessUnknown')} /> : null}
+        {props.comparison.freshness === 'stale' || props.comparison.freshness === 'unknown' ? <SurfaceFreshnessLine testID="captured-comparison-freshness" tone="warning"
+            reason={t(props.comparison.freshness === 'stale' ? 'scmComparison.capturedStale' : 'scmComparison.capturedFreshnessUnknown')} /> : null}
         <ChangedFilesReview activeReviewFile={props.activeReviewFile} theme={theme} sessionId={props.sessionId}
             reviewScopeKey={props.reviewScopeKey ?? props.sessionId ?? props.comparison.id}
             snapshot={projected.snapshot} changedFilesViewMode="repository"

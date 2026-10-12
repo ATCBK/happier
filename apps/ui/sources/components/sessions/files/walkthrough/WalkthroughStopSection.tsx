@@ -19,7 +19,9 @@ import { t } from '@/text';
 import { WalkthroughReviewExplanation } from '@/components/sessions/reviews/walkthrough/ReviewWalkthroughParts';
 import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
 
-import { WalkthroughLineCounts, WalkthroughPath, WalkthroughStopNumber } from './WalkthroughAtoms';
+import { WalkthroughStopNumber } from './WalkthroughAtoms';
+import { ScmChangeRow } from '@/components/workspaces/scm/changes/ScmChangeRow';
+import { scmFileStatusFromChange } from '@/scm/scmStatusFiles';
 import type { WalkthroughStop, WalkthroughStopFile } from './walkthroughReading';
 
 function fileName(path: string): string {
@@ -69,15 +71,12 @@ export const WalkthroughHunkCard = React.memo(function WalkthroughHunkCard(props
     );
     return (
         <View testID={`walkthrough-hunk-${file.path}`} style={[styles.card, props.phone ? styles.cardPhone : null]}>
-            <View style={styles.cardHeader}>
-                <FileIcon fileName={fileName(file.path)} size={16} />
-                {props.phone ? <Text style={styles.phoneFileName} numberOfLines={1}>{fileName(file.path)}</Text> : <WalkthroughPath path={file.path} />}
-                <View style={styles.grow} />
-                {file.changeKind === 'added' ? <Text style={styles.newFile}>{t('walkthrough.newFile')}</Text> : null}
-                {file.changeKind === 'deleted' ? <Text style={styles.deletedFile}>{t('walkthrough.deletedFile')}</Text> : null}
-                {file.rangeLabel ? <Text style={styles.range}>{file.rangeLabel}</Text> : null}
-                <WalkthroughLineCounts added={file.added} removed={file.removed} />
-                {props.onOpenFile ? (
+            <ScmChangeRow theme={theme} file={scmFileStatusFromChange(file)} style={styles.cardHeader}
+                showChangeMark={false} phone={props.phone} density="compact"
+                leadingElement={<FileIcon fileName={fileName(file.path)} size={16} />}
+                tag={file.changeKind === 'added' ? t('walkthrough.newFile') : file.changeKind === 'deleted' ? t('walkthrough.deletedFile') : null}
+                pathAccessory={file.rangeLabel ? <Text style={styles.range}>{file.rangeLabel}</Text> : null}
+                trailingElement={props.onOpenFile ? (
                     <IconButton
                         testID={`walkthrough-open-${file.path}`}
                         variant="plain"
@@ -87,8 +86,7 @@ export const WalkthroughHunkCard = React.memo(function WalkthroughHunkCard(props
                         accessibilityLabel={t('walkthrough.openInFiles', { file: fileName(file.path) })}
                         onPress={() => props.onOpenFile?.(file.path)}
                     />
-                ) : null}
-            </View>
+                ) : null} />
             {file.unifiedDiff ? (
                 <View style={bodyStyle}>
                     <HunkEvidenceBoundary key={file.unifiedDiff} fallback={evidence('render_failed')}>
@@ -281,10 +279,6 @@ const styles = StyleSheet.create((theme) => ({
         borderBottomWidth: StyleSheet.hairlineWidth,
         borderBottomColor: theme.colors.border.default,
     },
-    phoneFileName: { fontSize: 13, color: theme.colors.text.primary, ...Typography.default('semiBold') },
-    grow: { flex: 1 },
-    newFile: { fontSize: 12, color: theme.colors.state.success.foreground, ...Typography.default('semiBold') },
-    deletedFile: { fontSize: 12, color: theme.colors.state.danger.foreground, ...Typography.default('semiBold') },
     range: { fontSize: 12, color: theme.colors.text.tertiary, fontVariant: ['tabular-nums'], ...Typography.default() },
     evidenceRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, padding: 12 },
     evidenceText: { flex: 1, fontSize: 13, lineHeight: 19, color: theme.colors.text.secondary, ...Typography.default() },

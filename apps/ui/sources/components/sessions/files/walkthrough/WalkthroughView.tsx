@@ -8,6 +8,7 @@ import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
+import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -91,15 +92,17 @@ export type WalkthroughViewProps = Readonly<{
     onChooseModel?: () => void;
     start?: Readonly<{ modelPicker: React.ReactNode; onStart: () => void | Promise<unknown>; busy?: boolean; disabled?: boolean; reason?: string | null }>;
     endedConversation?: Readonly<{ onStartNew?: () => void; onAskSession: () => void }> | null;
-    /** The existing composer, docked over the stream's foot (WT3-D1). */
-    composer?: React.ReactNode;
     /** Revisioned result controls, supplied by the saved-result consumer. */
     savedActions?: React.ReactNode;
     /** A review's findings beside the stops; absent for a walkthrough no review produced. */
     review?: WalkthroughReviewSlots | null;
 }>;
 
-/** The stream's column (lab WT1-A: one readable measure, centred in a wide tab). */
+/**
+ * The stream's column (lab WT1-A): one readable measure that starts after the contents rail at the
+ * stream's gutter, so the rail and the text it lists read as one unit. A wider tab leaves its extra
+ * room after the text, never between the rail and the text.
+ */
 const STREAM_COLUMN_MAX_WIDTH_PX = 760;
 /** How far below the viewport top a stop must reach to count as the one being read. */
 const CURRENT_STOP_READING_LINE_PX = 96;
@@ -211,11 +214,10 @@ export const WalkthroughView = React.memo(function WalkthroughView(props: Walkth
                 <WalkthroughNoticeLink testID="walkthrough-ask-session" label={t('walkthroughStart.askSession')} onPress={props.endedConversation.onAskSession} />
             </>} />);
     }
+    // Retained reading that is behind (offline, or files changed since) is the shared freshness line: the
+    // same strip the Files view shows for its stale snapshot, so one fact reads the same in both views.
     if (props.offline) {
-        notices.push(
-            <WalkthroughNotice key="offline" testID="walkthrough-notice-offline" tone="offline" icon="cloud-slash"
-                message={t('walkthrough.notice.offline', props.offline)} />,
-        );
+        notices.push(<SurfaceFreshnessLine key="offline" testID="walkthrough-notice-offline" reason={t('walkthrough.notice.offline', props.offline)} />);
     }
     if (props.update) {
         notices.push(
@@ -224,10 +226,8 @@ export const WalkthroughView = React.memo(function WalkthroughView(props: Walkth
         );
     }
     if (props.stale && !props.offline) {
-        notices.push(
-            <WalkthroughNotice key="stale" testID="walkthrough-notice-stale" tone="neutral" icon="arrows-clockwise" message={t('walkthrough.notice.stale')}
-                actions={props.stale.onRefresh ? <WalkthroughNoticeButton testID="walkthrough-refresh" label={t('walkthrough.notice.refresh')} onPress={props.stale.onRefresh} /> : undefined} />,
-        );
+        notices.push(<SurfaceFreshnessLine key="stale" testID="walkthrough-notice-stale" reason={t('walkthrough.notice.stale')}
+            action={props.stale.onRefresh ? { testID: 'walkthrough-refresh', label: t('walkthrough.notice.refresh'), onPress: props.stale.onRefresh } : undefined} />);
     }
     if (reading.phase === 'failed') {
         notices.push(
@@ -235,7 +235,7 @@ export const WalkthroughView = React.memo(function WalkthroughView(props: Walkth
                 message={reading.failureReason ? t('walkthrough.notice.failed', { reason: reading.failureReason }) : t('walkthrough.notice.failedGeneric')}
                 actions={!props.offline && (props.onChooseModel || props.onRetry) ? (
                     <>
-                        {props.onChooseModel ? <WalkthroughNoticeButton testID="walkthrough-choose-model" label={t('walkthrough.notice.chooseModel')} onPress={props.onChooseModel} /> : null}
+                        {props.onChooseModel ? <WalkthroughNoticeLink testID="walkthrough-choose-model" label={t('walkthrough.notice.chooseModel')} onPress={props.onChooseModel} /> : null}
                         {props.onRetry ? <WalkthroughNoticeButton testID="walkthrough-retry" icon="arrows-clockwise" label={t('walkthrough.notice.tryAgain')} onPress={props.onRetry} /> : null}
                     </>
                 ) : undefined} />,
@@ -411,7 +411,6 @@ export const WalkthroughView = React.memo(function WalkthroughView(props: Walkth
                             <View onLayout={(event) => { streamOffset.current = event.nativeEvent.layout.y; }}>{body}</View>
                         </View>
                     </ScrollView>
-                    {props.composer ? <View style={styles.dock} pointerEvents="box-none">{props.composer}</View> : null}
                 </View>
             </View>
             <WalkthroughKeyboardShortcuts
@@ -469,7 +468,7 @@ const styles = StyleSheet.create((theme) => ({
     row: { flex: 1, minHeight: 0, flexDirection: 'row' },
     streamFrame: { flex: 1, minWidth: 0, position: 'relative' },
     stream: { paddingLeft: 36, paddingRight: 40, paddingBottom: 140 },
-    column: { width: '100%', maxWidth: STREAM_COLUMN_MAX_WIDTH_PX, alignSelf: 'center' },
+    column: { width: '100%', maxWidth: STREAM_COLUMN_MAX_WIDTH_PX, alignSelf: 'flex-start' },
     stopDivider: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.colors.border.default },
     arriving: { paddingVertical: 24, fontSize: 13, color: theme.colors.text.tertiary, ...Typography.default() },
     padPhone: { paddingHorizontal: 16 },
@@ -486,7 +485,6 @@ const styles = StyleSheet.create((theme) => ({
     },
     restPhone: { marginHorizontal: 16 },
     restText: { flex: 1, fontSize: 13.5, lineHeight: 19, color: theme.colors.text.secondary, ...Typography.default() },
-    dock: { position: 'absolute', left: 24, right: 24, bottom: 16, alignItems: 'center' },
     phoneContent: { paddingBottom: 120 },
     section: {
         flexDirection: 'row',

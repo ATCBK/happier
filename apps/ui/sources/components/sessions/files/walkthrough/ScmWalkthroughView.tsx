@@ -3,8 +3,12 @@ import { View } from 'react-native';
 import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
 import { isScmCommitPlanApplicationLocked } from '@happier-dev/protocol/scm/diffSummaryCommitPlan';
 import { useRouter } from 'expo-router';
+import { useUnistyles } from 'react-native-unistyles';
 
+import { AgentIcon } from '@/agents/registry/AgentIcon';
 import { IconButton } from '@/components/ui/buttons/IconButton';
+import { ICON_SIZE } from '@/components/ui/icons/Icon';
+import { resolveExecutionRunAgentMarkId } from '@/components/sessions/runs/resolveExecutionRunBackendLabel';
 import { getPreferredLanguage, t } from '@/text';
 
 import type { SessionScmReviewComparison } from '@/components/sessions/panes/details/sessionDetailsTabBuilders';
@@ -158,8 +162,9 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
         ? (stopId: string) => { const stop = reading.stops.find((item) => item.id === stopId); if (stop) onAsk(stop); }
         : null), [onAsk, reading]);
     const review = useWalkthroughReview({
-        sessionId: sessionId ?? '',
-        scope: sessionId ? scope : null,
+        host: bound.host,
+        cwd: cwd ?? '',
+        scope,
         comparison: capturedComparison,
         walkthrough: viewModel?.outputs?.walkthrough ?? null,
         producer: viewModel?.producer,
@@ -178,12 +183,13 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
     });
     const savedForExplain = viewModel?.savedResult ?? null;
     const explainTargets = review?.overlay.stops.size ? [...review.overlay.stops.values()].flatMap((stop) => stop.cards) : [];
-    const onExplain = React.useMemo(() => (sessionId && review && savedForExplain && cwd && canSend && explainTargets.length > 0 && reading?.phase === 'complete'
+    const onExplain = React.useMemo(() => (review && savedForExplain && cwd && canSend && explainTargets.length > 0 && reading?.phase === 'complete'
         ? async () => {
             if (!bound.isCurrent()) return;
             setExplaining(true);
             const done = await requestExplainReviewFindings({
-                sessionId, serverId: props.serverId ?? null, cwd,
+                ...(bound.host.sessionId ? { sessionId: bound.host.sessionId } : { sessionId: null, machineId: bound.host.machineId! }),
+                serverId: scope?.serverId ?? props.serverId ?? null, accountId: scope?.accountId, cwd,
                 runId: viewModel?.producer?.runId ?? review.reviewRunIds[0]!, reviewRunIds: review.reviewRunIds,
                 resultId: savedForExplain.resultId, expectedRevision: savedForExplain.revision,
                 findingIds: explainTargets.map((view) => ({ runId: view.runId, findingId: view.findingId })),
@@ -192,7 +198,7 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
             setExplaining(false);
             if (!done.ok) setError(done.error);
         }
-        : null), [bound.isCurrent, canSend, cwd, explainTargets, props.serverId, props.sessionId, reading?.phase, review, savedForExplain, setError, viewModel?.producer?.runId]);
+        : null), [bound.isCurrent, bound.host.sessionId, bound.host.machineId, canSend, cwd, explainTargets, props.serverId, scope, reading?.phase, review, savedForExplain, setError, viewModel?.producer?.runId]);
     const reviewActions = review ? (
         <>
             {onExplain ? <ReviewExplainFindingsButton running={explaining} onPress={() => { void onExplain(); }} /> : null}
@@ -200,6 +206,8 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
         </>
     ) : null;
 
+    const { theme } = useUnistyles();
+    const markAgentId = resolveExecutionRunAgentMarkId(viewModel?.latestRun?.backendTarget, theme);
     const marksAvailable = marks.record?.comparisonId === capturedComparison?.id && marks.record !== null && marks.unavailableReason === null;
     const setReviewed = marks.setReviewed;
     const onToggleReviewed = React.useMemo(() => (marksAvailable
@@ -215,6 +223,7 @@ export const ScmWalkthroughView = React.memo(function ScmWalkthroughView(props: 
                 scopeLabel={props.scopeLabel}
                 scopeDetail={props.scopeDetail}
                 modelLabel={viewModel?.producer?.modelId ?? null}
+                analysisMark={markAgentId ? <AgentIcon agentId={markAgentId} size={ICON_SIZE.xs} /> : null}
                 generatedLabel={reviewView?.generatedLabel ?? null}
                 review={reviewView?.slots ?? null}
                 layout={props.layout}
