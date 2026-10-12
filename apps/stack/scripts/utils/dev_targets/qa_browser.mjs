@@ -10,6 +10,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { runCaptureResult, spawnProc, killProcessTree } from '../proc/proc.mjs';
 import { runDevTargetCommand } from './executor.mjs';
 import { resolveDevTargetSshConfigFile } from './mutagen_runtime.mjs';
+import { runDevTargetSshProcess } from './ssh_transport.mjs';
 import { buildRemoteQaBrowserStopCommand, buildSshForwardArgs, buildSshWorkerArgs, resolveRemoteStackStatePaths } from './remote_commands.mjs';
 import { loadControlledRuntimeConfig } from './service_placement.mjs';
 import { killPidOwnedByStack, listPsPidsForEnvQueries, observePsEnvLine } from '../proc/ownership.mjs';
@@ -19,6 +20,13 @@ const READY_MARKER = 'HSTACK_QA_BROWSER=';
 // Chromium's PointerType::kPointerFineType=4 and HoverType::kHoverHoverType=2:
 // third_party/blink/public/mojom/webpreferences/web_preferences.mojom.
 const DESKTOP_BLINK_SETTINGS = '--blink-settings=primaryPointerType=4,availablePointerTypes=4,primaryHoverType=2,availableHoverTypes=2';
+
+async function captureQaBrowserSsh(args, { env, capture }) {
+  return await runDevTargetSshProcess({ command: 'ssh', args, env }, async input => {
+    const result = await capture(input.command, input.args, { env: input.env });
+    return { ...result, code: result.exitCode };
+  });
+}
 
 async function readQaBrowserEndpoint(profile) {
   const [portText, debuggerPath] = (await readFile(join(profile, 'DevToolsActivePort'), 'utf8')).trim().split('\n');
@@ -221,10 +229,10 @@ export async function stopStackQaBrowsers({ stackName, baseDir, sourceDir, env }
     const sshConfig = resolveDevTargetSshConfigFile(target, { stackBaseDir: loaded.authority.producerStackBaseDir ?? baseDir, env });
     let result;
     try {
-      result = await capture('ssh', buildSshWorkerArgs(target, { tty: false,
-        sshArgs: [...(sshConfig ? ['-F', sshConfig] : []), '-o', 'ControlMaster=no', '-o', 'ControlPath=none'],
+      result = await captureQaBrowserSsh(buildSshWorkerArgs(target, { tty: false,
+        sshArgs: sshConfig ? ['-F', sshConfig] : [],
         remoteCommand: buildRemoteQaBrowserStopCommand(target, { stackName }),
-      }), { env });
+      }), { env, capture });
     } catch (error) {
       return { warning: { code: `browser_cleanup_unconfirmed:${target.name}`,
         error: error instanceof Error ? error.message : String(error) } };
@@ -271,8 +279,8 @@ export async function runQaBrowserSession({ target, stackName, stackBaseDir, ses
   }
   const sshConfigFile = resolveDevTargetSshConfigFile(target, { stackBaseDir, env });
   const sshArgs = sshConfigFile ? ['-F', sshConfigFile] : [];
-  const probe = await capture('ssh', buildSshWorkerArgs(target, { remoteCommand: 'true', tty: false,
-    sshArgs }), { env });
+  const probe = await captureQaBrowserSsh(buildSshWorkerArgs(target, { remoteCommand: 'true', tty: false,
+    sshArgs }), { env, capture });
   if (!probe.ok) throw new Error(`[dev-targets] QA browser host ${target.name} is unavailable; controller-local browser fallback is disabled`);
   const signalBus = new EventEmitter();
   const abort = new AbortController();
@@ -300,6 +308,7 @@ export async function runQaBrowserSession({ target, stackName, stackBaseDir, ses
   let readiness;
   let readyTask;
   let lifecycleFinished = false;
+  let workerFinished = false;
   const paths = resolveRemoteStackStatePaths(target, { stackName, runtimeMode: 'controlled' });
   const workerEnv = { HAPPIER_STACK_STACK: stackName, HAPPIER_STACK_ENV_FILE: paths.stackEnvPath,
     HAPPIER_STACK_PROCESS_KIND: 'browser' };
@@ -314,33 +323,59 @@ export async function runQaBrowserSession({ target, stackName, stackBaseDir, ses
       // This forward belongs to the lane browser, like its remote worker.
       // Inherited producer Stack markers must not make a Stack infra sweep
       // terminate an independently controlled QA browser session.
-      tunnel = spawnProcess(`browser-forward:${sessionName}`, 'ssh', buildSshForwardArgs(target, {
+      const forwardArgs = buildSshForwardArgs(target, {
         sshArgs,
         forwards: [{ direction: 'reverse-dynamic', listenHost: '127.0.0.1', listenPort: ready.proxyPort },
           { direction: 'local', listenPort: localPort, targetPort: ready.port }],
-      }), { ...env, HAPPIER_STACK_STACK: stackName,
-        HAPPIER_STACK_ENV_FILE: resolveStackEnvPath(stackName, env).envPath,
-        HAPPIER_STACK_PROCESS_KIND: 'browser' }, { silent: true, persistOutput: false });
-      void tunnel.completion.then(() => {
-        if (lifecycleFinished || cancelled) return;
-        failure = new Error('[dev-targets] QA browser SSH forward exited');
-        abort.abort(); closeWorker();
       });
+      const forwardEnv = { ...env, HAPPIER_STACK_STACK: stackName,
+        HAPPIER_STACK_ENV_FILE: resolveStackEnvPath(stackName, env).envPath,
+        HAPPIER_STACK_PROCESS_KIND: 'browser' };
       const signal = abort.signal;
-      while (true) {
-        signal.throwIfAborted();
-        if (tunnel?.exitCode != null || tunnel?.signalCode != null) throw new Error('[dev-targets] QA browser SSH forward exited before readiness');
-        try {
-          const response = await fetchImpl(`http://127.0.0.1:${localPort}/json/version`, { signal });
-          if (response.ok && (await response.json()).webSocketDebuggerUrl) break;
-        } catch { /* Forward establishment is observed before declaring readiness. */ }
-        await delay(100, undefined, { signal });
+      while (!workerFinished && !cancelled) {
+        tunnel = spawnProcess(`browser-forward:${sessionName}`, 'ssh', forwardArgs, forwardEnv,
+          { silent: true, persistOutput: false });
+        // HTTP can remain pending after its SSH stream disappears. Observe
+        // transport completion throughout readiness, as during the live session.
+        await Promise.race([
+          (async () => {
+            while (true) {
+              signal.throwIfAborted();
+              if (tunnel?.exitCode != null || tunnel?.signalCode != null) throw new Error('[dev-targets] QA browser SSH forward exited before readiness');
+              try {
+                const response = await fetchImpl(`http://127.0.0.1:${localPort}/json/version`, { signal });
+                if (response.ok && (await response.json()).webSocketDebuggerUrl) return;
+              } catch { /* Forward establishment is observed before declaring readiness. */ }
+              await delay(100, undefined, { signal });
+            }
+          })(),
+          tunnel.completion.then(result => {
+            throw new Error(`[dev-targets] QA browser SSH forward exited before readiness (${result?.code ?? result?.signal})`);
+          }),
+        ]);
+        if (!readiness) {
+          readiness = { stackName, sessionName, target: target.name, localFallback: false,
+            cdpUrl: `ws://127.0.0.1:${localPort}${ready.debuggerPath}`, cdpHttpUrl: `http://127.0.0.1:${localPort}`,
+            remotePid: ready.pid, profile: ready.profile,
+            url };
+          onReady(readiness);
+        }
+        // The worker/cancellation owns the lifetime. Do not wait for a live
+        // forward to exit before finally can close it.
+        const ended = await new Promise((resolve, reject) => {
+          const onAbort = () => { signal.removeEventListener('abort', onAbort); resolve(null); };
+          signal.addEventListener('abort', onAbort, { once: true });
+          void tunnel.completion.then(result => {
+            signal.removeEventListener('abort', onAbort); resolve(result);
+          }, error => {
+            signal.removeEventListener('abort', onAbort); reject(error);
+          });
+          if (signal.aborted) onAbort();
+        });
+        if (workerFinished || cancelled || lifecycleFinished) break;
+        if (ended?.code !== 255) throw new Error(`[dev-targets] QA browser SSH forward exited (${ended?.code ?? ended?.signal})`);
+        process.stderr.write('[dev-targets] QA browser SSH forward disconnected; restoring its CDP and SOCKS listeners\n');
       }
-      readiness = { stackName, sessionName, target: target.name, localFallback: false,
-        cdpUrl: `ws://127.0.0.1:${localPort}${ready.debuggerPath}`, cdpHttpUrl: `http://127.0.0.1:${localPort}`,
-        remotePid: ready.pid, profile: ready.profile,
-        url };
-      onReady(readiness);
     })().catch(error => { if (!cancelled) failure = error; closeWorker(); });
   };
   try {
@@ -368,6 +403,8 @@ export async function runQaBrowserSession({ target, stackName, stackBaseDir, ses
       },
       stopProcess,
     });
+    workerFinished = true;
+    abort.abort();
     if (failure) throw failure;
     if (result.code !== 0) throw new Error(`[dev-targets] remote QA browser worker failed (${result.code ?? result.signal})`);
     await readyTask;
