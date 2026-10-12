@@ -5,6 +5,9 @@ import {
   admitCallerAuthoredUiSurfaceCapabilitiesV1,
   normalizeUiSurfaceCapabilityRequestV1,
   resolvePluginUiHostedHtmlCapabilityRequestV1,
+  UiSurfaceNetworkRequestV1Schema,
+  UiSurfaceNetworkPolicyV1Schema,
+  intersectUiSurfaceNetworkPoliciesV1,
 } from './hostedHtmlCapabilitiesV1.js';
 import { PLUGIN_UI_CALLER_HOSTED_HTML_HOST_METHODS_V1 } from '../../ui/hostApiDefinition.js';
 
@@ -73,6 +76,33 @@ describe('UiSurfaceCapabilityRequestV1Schema', () => {
 });
 
 describe('normalizeUiSurfaceCapabilityRequestV1', () => {
+  it('keeps network-only instance overrides inside their admitted ceiling', () => {
+    expect(UiSurfaceNetworkRequestV1Schema.safeParse({ network: 'open', hostMethods: [] }).success).toBe(false);
+    const none = { network: 'none' as const, networkOrigins: [] };
+    const open = { network: 'open' as const, networkOrigins: [] };
+    const exact = { network: 'origins' as const, networkOrigins: ['https://api.example.com'] };
+    for (const policy of [none, open, exact]) expect(UiSurfaceNetworkPolicyV1Schema.safeParse(policy).success).toBe(true);
+    expect(UiSurfaceNetworkPolicyV1Schema.safeParse({ network: 'open', networkOrigins: exact.networkOrigins }).success).toBe(false);
+    expect(UiSurfaceNetworkPolicyV1Schema.safeParse({ network: 'origins', networkOrigins: [] }).success).toBe(false);
+    expect(intersectUiSurfaceNetworkPoliciesV1(open, exact)).toEqual(exact);
+    expect(intersectUiSurfaceNetworkPoliciesV1(exact, open)).toEqual(exact);
+    expect(intersectUiSurfaceNetworkPoliciesV1(open, none)).toEqual(none);
+    expect(intersectUiSurfaceNetworkPoliciesV1(none, open)).toEqual(none);
+    expect(intersectUiSurfaceNetworkPoliciesV1(exact, { network: 'origins', networkOrigins: ['https://other.example.com'] })).toEqual(none);
+  });
+  it('distinguishes none, exact origins and explicitly open network without accepting wildcard declarations', () => {
+    for (const request of [undefined, {}, { networkOrigins: [] }, { network: 'none' }]) {
+      expect(normalizeUiSurfaceCapabilityRequestV1(request)).toMatchObject({ network: 'none', networkOrigins: [] });
+    }
+    expect(normalizeUiSurfaceCapabilityRequestV1({ network: 'open' })).toMatchObject({ network: 'open', networkOrigins: [] });
+    expect(normalizeUiSurfaceCapabilityRequestV1({ networkOrigins: ['https://api.example.com'] }))
+      .toMatchObject({ network: 'origins', networkOrigins: ['https://api.example.com'] });
+    for (const request of [{ network: '*' }, { network: 'OPEN' }, { network: null },
+      { network: 'open', networkOrigins: ['https://api.example.com'] },
+      { network: 'none', networkOrigins: ['https://api.example.com'] }, { networkOrigins: ['*'] }]) {
+      expect(normalizeUiSurfaceCapabilityRequestV1(request)).toBeNull();
+    }
+  });
   it('deduplicates and sorts every list so equal requests digest identically', () => {
     const first = normalizeUiSurfaceCapabilityRequestV1({
       hostMethods: ['watchContext', 'context', 'context'],
@@ -128,12 +158,25 @@ describe('admitCallerAuthoredUiSurfaceCapabilitiesV1', () => {
       .toEqual(['context', 'executeAction']);
   });
 
-  it('never widens the advertised set beyond the request even when the host admits more', () => {
+  it.each([undefined, {}])('advertises baseline presentation without a request (%j), but no privileged methods', (request) => {
     const admission = admitCallerAuthoredUiSurfaceCapabilitiesV1({
-      request: {},
+      request,
       admittedHostMethods: [...PLUGIN_UI_CALLER_HOSTED_HTML_HOST_METHODS_V1],
     });
-    expect(admission.kind === 'admitted' ? admission.advertisedHostMethods : null).toEqual([]);
+    expect(admission.kind === 'admitted' ? admission.advertisedHostMethods : null).toEqual(['context', 'watchContext']);
+    expect(admission.kind === 'admitted' ? admission.capabilities : null).toMatchObject({
+      hostMethods: [], resources: [], actions: [], network: 'none', networkOrigins: [],
+    });
+  });
+
+  it('advertises baseline context without a push producer and keeps other methods request-intersect-admitted', () => {
+    const admission = admitCallerAuthoredUiSurfaceCapabilitiesV1({
+      request: { hostMethods: ['readResource', 'watchResource', 'executeAction'] },
+      admittedHostMethods: ['context', 'readResource', 'notify'],
+    });
+    expect(admission.kind === 'admitted' ? admission.advertisedHostMethods : null).toEqual(['context', 'readResource']);
+    expect(admitCallerAuthoredUiSurfaceCapabilitiesV1({ request: undefined, admittedHostMethods: [] }))
+      .toMatchObject({ kind: 'admitted', advertisedHostMethods: [] });
   });
 
   it('reports an invalid request as a typed source failure carrying no domain meaning', () => {
@@ -156,6 +199,7 @@ describe('resolvePluginUiHostedHtmlCapabilityRequestV1', () => {
       hostMethods: ['context', 'watchContext'],
       resources: [{ pluginId: 'com.acme.health', localId: 'status' }],
       actions: [],
+      network: 'origins',
       networkOrigins: ['https://api.example.com'],
     });
   });
@@ -165,6 +209,7 @@ describe('resolvePluginUiHostedHtmlCapabilityRequestV1', () => {
       hostMethods: [],
       resources: [],
       actions: [],
+      network: 'none',
       networkOrigins: [],
     });
   });

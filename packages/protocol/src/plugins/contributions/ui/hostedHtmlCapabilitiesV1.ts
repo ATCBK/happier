@@ -68,15 +68,31 @@ export const UiSurfaceActionRequestV1Schema = lazyZodSchema(() => z.union([
 ]));
 export type UiSurfaceActionRequestV1 = z.infer<typeof UiSurfaceActionRequestV1Schema>;
 
-export const UiSurfaceCapabilityRequestV1Schema = lazyZodSchema(() => z.object({
+const capabilityRequestFieldsV1 = () => z.object({
   hostMethods: z.array(PluginUiHostMethodV1Schema)
     .max(PluginUiHostMethodV1Schema.options.length)
     .optional(),
   resources: z.array(UiSurfaceResourceRequestV1Schema).optional(),
   actions: z.array(UiSurfaceActionRequestV1Schema).optional(),
   networkOrigins: z.array(UiSurfaceNetworkOriginV1Schema).optional(),
-}).strict());
-export type UiSurfaceCapabilityRequestV1 = z.infer<typeof UiSurfaceCapabilityRequestV1Schema>;
+  network: z.enum(['none', 'open']).optional(),
+}).strict();
+
+function validateNetworkAlternativeV1(
+  request: Readonly<{ network?: 'none' | 'open'; networkOrigins?: readonly string[] }>,
+  context: z.RefinementCtx,
+): void {
+  if (request.network !== undefined && (request.networkOrigins?.length ?? 0) > 0) {
+    context.addIssue({ code: 'custom', path: ['networkOrigins'], message: 'Choose exact origins or an explicit network alternative.' });
+  }
+}
+
+export type UiSurfaceCapabilityRequestV1 = z.infer<ReturnType<typeof capabilityRequestFieldsV1>>;
+export const UiSurfaceCapabilityRequestV1Schema: z.ZodType<UiSurfaceCapabilityRequestV1, UiSurfaceCapabilityRequestV1> = lazyZodSchema(() => capabilityRequestFieldsV1().superRefine(validateNetworkAlternativeV1));
+
+export const UiSurfaceNetworkRequestV1Schema = lazyZodSchema(() => capabilityRequestFieldsV1()
+  .pick({ network: true, networkOrigins: true }).superRefine(validateNetworkAlternativeV1));
+export type UiSurfaceNetworkRequestV1 = z.infer<typeof UiSurfaceNetworkRequestV1Schema>;
 
 /**
  * The renderer arm's capability request.
@@ -86,9 +102,9 @@ export type UiSurfaceCapabilityRequestV1 = z.infer<typeof UiSurfaceCapabilityReq
  * does not own. Two host-method declarations on one renderer would be two
  * decision-makers for the same fact.
  */
-export const PluginUiHostedHtmlRequestedCapabilitiesV1Schema = lazyZodSchema(() => UiSurfaceCapabilityRequestV1Schema
+export const PluginUiHostedHtmlRequestedCapabilitiesV1Schema = lazyZodSchema(() => capabilityRequestFieldsV1()
   .omit({ hostMethods: true })
-  .strict());
+  .superRefine(validateNetworkAlternativeV1));
 export type PluginUiHostedHtmlRequestedCapabilitiesV1 =
   z.infer<typeof PluginUiHostedHtmlRequestedCapabilitiesV1Schema>;
 
@@ -102,8 +118,37 @@ export type NormalizedUiSurfaceCapabilityRequestV1 = Readonly<{
   hostMethods: readonly PluginUiHostMethodV1[];
   resources: readonly UiSurfaceResourceRequestV1[];
   actions: readonly UiSurfaceActionRequestV1[];
+  network: 'none' | 'origins' | 'open';
   networkOrigins: readonly UiSurfaceNetworkOriginV1[];
 }>;
+
+/** Effective guest egress; empty exact-origin declarations normalize to none. */
+export const UiSurfaceNetworkPolicyV1Schema = lazyZodSchema(() => z.object({
+  network: z.enum(['none', 'origins', 'open']),
+  networkOrigins: z.array(UiSurfaceNetworkOriginV1Schema),
+}).strict().superRefine((policy, context) => {
+  if ((policy.network === 'origins') !== (policy.networkOrigins.length > 0)) {
+    context.addIssue({ code: 'custom', path: ['networkOrigins'], message: 'Normalized origins exist only for the exact-origin policy.' });
+  }
+}));
+export type UiSurfaceNetworkPolicyV1 = Readonly<{
+  network: z.infer<typeof UiSurfaceNetworkPolicyV1Schema>['network'];
+  networkOrigins: readonly UiSurfaceNetworkOriginV1[];
+}>;
+
+/** Installed renderers and instance overrides can only narrow an admitted ceiling. */
+export function intersectUiSurfaceNetworkPoliciesV1(
+  request: UiSurfaceNetworkPolicyV1,
+  ceiling: UiSurfaceNetworkPolicyV1,
+): UiSurfaceNetworkPolicyV1 {
+  if (request.network === 'none' || ceiling.network === 'none') {
+    return Object.freeze({ network: 'none', networkOrigins: Object.freeze([]) });
+  }
+  if (request.network === 'open') return ceiling;
+  if (ceiling.network === 'open') return request;
+  const networkOrigins = sortedUnique(request.networkOrigins.filter(origin => ceiling.networkOrigins.includes(origin)), origin => origin);
+  return Object.freeze({ network: networkOrigins.length > 0 ? 'origins' : 'none', networkOrigins });
+}
 
 /** The one canonical string form of an Action request, used for order and identity. */
 export function formatUiSurfaceActionRequestV1(request: UiSurfaceActionRequestV1): string {
@@ -142,6 +187,7 @@ export function normalizeUiSurfaceCapabilityRequestV1(
       (resource) => buildQualifiedPluginContributionKey(resource),
     ),
     actions: sortedUnique(parsed.data.actions ?? [], formatUiSurfaceActionRequestV1),
+    network: parsed.data.network ?? ((parsed.data.networkOrigins?.length ?? 0) > 0 ? 'origins' : 'none'),
     networkOrigins: sortedUnique(parsed.data.networkOrigins ?? [], (origin) => origin),
   });
 }
@@ -185,10 +231,13 @@ const CALLER_HOSTED_HTML_HOST_METHODS: ReadonlySet<string> = new Set(
  *
  * A method outside the ceiling is REJECTED rather than dropped, so an author
  * cannot discover the boundary by watching which of their requests silently
- * disappeared. What is then advertised is the intersection of the request with
- * the currently admitted set, so a transport that cannot currently serve a
- * method never advertises it — and a host that admits more never widens the
- * document beyond what it asked for and a human approved.
+ * disappeared. As on installed-plugin surfaces, `context` is baseline
+ * presentation and `watchContext` is its transport-supported push projection;
+ * neither needs an authored request. Both are advertised when currently
+ * admitted by the transport. Every other method stays the intersection of the
+ * request and the currently admitted/approved set, so a broader host never
+ * grants unrequested Actions, Resources or notifications. Network admission is
+ * unchanged.
  *
  * The result is deliberately domain-free. Mapping a rejection to a Board, item
  * or Session outcome belongs to the consuming adapter, not to this parser.
@@ -214,7 +263,10 @@ export function admitCallerAuthoredUiSurfaceCapabilitiesV1(
     kind: 'admitted',
     capabilities,
     advertisedHostMethods: Object.freeze(
-      capabilities.hostMethods.filter((method) => admitted.has(method)),
+      sortedUnique<PluginUiHostMethodV1>(
+        [...capabilities.hostMethods, 'context', 'watchContext'],
+        (method) => method,
+      ).filter((method) => admitted.has(method)),
     ),
   } as const);
 }
