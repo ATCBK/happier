@@ -1,10 +1,9 @@
-import { HappierSkeletonBlock } from '@happier-dev/plugin-ui/presentation';
 import * as React from 'react';
-import { View, type DimensionValue } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Item } from '@/components/ui/lists/Item';
+import { SkeletonRows } from '@/components/ui/lists/SkeletonRows';
 import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
 import { usePageRowMetrics } from '@/components/ui/lists/useResolvedItemDensity';
 import type { PageRowShape } from '@/components/ui/lists/pageRowMetrics';
@@ -42,6 +41,8 @@ const FailedRow = React.memo(function FailedRow(props: Readonly<{ state: FailedL
             testID={props.testID}
             title={reason}
             titleStyle={styles.failedTitle}
+            // A read that failed after the rows were shown is announced, as the state cards' alerts are.
+            accessibilityLiveRegion="assertive"
             subtitleLines={0}
             mode="info"
             showChevron={false}
@@ -96,8 +97,13 @@ const HomeScopedFailedRow = React.memo(function HomeScopedFailedRow(props: Reado
  */
 export const ItemLoadStateRowDividersContext = React.createContext(true);
 
-const TITLE_WIDTHS: readonly DimensionValue[] = ['46%', '58%', '38%', '52%', '42%'];
-const DETAIL_WIDTHS: readonly DimensionValue[] = ['28%', '34%', '24%', '31%', '26%'];
+/** A page row's text edge, with no glyph column: the shared loading rows in the section's row box. */
+const PAGE_ROW_SKELETON_GEOMETRY = Object.freeze({
+    insetStart: PAGE_LIST_METRICS.rowPaddingHorizontalPx,
+    insetEnd: PAGE_LIST_METRICS.rowPaddingHorizontalPx,
+    glyphColumn: 0,
+    gap: 0,
+});
 
 /**
  * The one loading state of a section's rows: while the owner reads, the rows' space is reserved by
@@ -120,7 +126,6 @@ export const ItemLoadStateRows = React.memo(function ItemLoadStateRows(props: Re
     testID?: string;
 }>) {
     const { theme } = useUnistyles();
-    const styles = stylesheet;
     const testID = props.testID;
     // The reserved rows take the real rows' box at the user's density, so nothing moves when they arrive.
     const rowMetrics = usePageRowMetrics(props.shape);
@@ -138,54 +143,20 @@ export const ItemLoadStateRows = React.memo(function ItemLoadStateRows(props: Re
         return <FailedRow testID={testID} state={props.state} />;
     }
 
-    const count = Math.max(1, Math.floor(props.rows ?? 2));
-    const twoLines = (props.lines ?? 2) === 2;
-    const color = theme.colors.border.default;
     return (
-        <View
-            testID={testID}
-            accessibilityRole="progressbar"
-            accessibilityLabel={props.accessibilityLabel}
-            accessibilityState={{ busy: true }}
-            aria-busy
-        >
-            {Array.from({ length: count }, (_, index) => (
-                <View
-                    key={index}
-                    testID={testID ? `${testID}-skeleton:${index}` : undefined}
-                    accessibilityElementsHidden
-                    importantForAccessibility="no-hide-descendants"
-                    style={[styles.row, rowBox, divided && index > 0 ? styles.rowDivided : null]}
-                >
-                    <HappierSkeletonBlock color={color} width={TITLE_WIDTHS[index % TITLE_WIDTHS.length]!} height={10} radius={5} />
-                    {twoLines ? (
-                        <HappierSkeletonBlock
-                            color={color}
-                            width={DETAIL_WIDTHS[index % DETAIL_WIDTHS.length]!}
-                            height={8}
-                            radius={4}
-                            style={styles.detail}
-                        />
-                    ) : null}
-                </View>
-            ))}
-        </View>
+        <SkeletonRows
+            {...(testID === undefined ? {} : { testID, rowTestID: (index: number) => `${testID}-skeleton:${index}` })}
+            {...(props.accessibilityLabel === undefined ? {} : { accessibilityLabel: props.accessibilityLabel })}
+            rows={Math.max(1, Math.floor(props.rows ?? 2))}
+            lines={props.lines ?? 2}
+            rowBox={rowBox}
+            geometry={PAGE_ROW_SKELETON_GEOMETRY}
+            {...(divided ? { dividerColor: theme.colors.border.subtle, dividerPlacement: 'between' as const } : {})}
+        />
     );
 });
 
 const stylesheet = StyleSheet.create((theme) => ({
-    // The page row's own box, so the swap to real rows does not move anything.
-    row: {
-        paddingHorizontal: PAGE_LIST_METRICS.rowPaddingHorizontalPx,
-        justifyContent: 'center',
-    },
-    rowDivided: {
-        borderTopWidth: StyleSheet.hairlineWidth,
-        borderTopColor: theme.colors.border.subtle,
-    },
-    detail: {
-        marginTop: 8,
-    },
     failedTitle: {
         color: theme.colors.text.secondary,
     },

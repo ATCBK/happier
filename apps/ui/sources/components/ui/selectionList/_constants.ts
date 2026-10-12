@@ -33,7 +33,7 @@ export const SELECTION_LIST_VIRTUALIZED_ROW_ESTIMATED_HEIGHT_PX = 56;
 export const SELECTION_LIST_KEYBOARD_SCROLL_MARGIN_PX = 32;
 
 /**
- * R13 (Fix 5): the fixed outer height a single `SelectionListSkeletonRow`
+ * R13 (Fix 5): the fixed outer height a selection list's loading row
  * reserves while a dynamic section is loading. MUST match the comfortable-
  * density Item row geometry the resolver will eventually paint, so the
  * loading→ready transition does not shift the popover layout.
@@ -43,6 +43,16 @@ export const SELECTION_LIST_KEYBOARD_SCROLL_MARGIN_PX = 32;
  * footprint.
  */
 export const SELECTION_LIST_SKELETON_ROW_HEIGHT_PX = 56;
+
+/**
+ * A selection list's loading row for the shared loading rows (`SkeletonRows`): the option row's
+ * height, one title bar, no glyph column, on the option rows' insets.
+ */
+export const SELECTION_LIST_SKELETON_ROW_SHAPE = Object.freeze({
+    rowHeight: SELECTION_LIST_SKELETON_ROW_HEIGHT_PX,
+    lines: 1 as const,
+    geometry: Object.freeze({ insetStart: 16, insetEnd: 16, glyphColumn: 0, gap: 0 }),
+});
 
 /** Default testID prefix used by SelectionList sub-components. */
 export const SELECTION_LIST_DEFAULT_TEST_ID = 'selection-list';

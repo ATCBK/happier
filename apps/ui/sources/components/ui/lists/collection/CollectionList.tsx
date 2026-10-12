@@ -21,6 +21,7 @@ import { ItemList } from '@/components/ui/lists/ItemList';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
+import { SkeletonRows } from '@/components/ui/lists/SkeletonRows';
 
 /**
  * Happier core's binding of the Collection `list` presentation: the app's own text, grouped list
@@ -38,6 +39,8 @@ function listText(role: keyof typeof HAPPIER_COLLECTION_LIST_TEXT) {
 }
 
 const styles = StyleSheet.create((theme) => ({
+    // A line state (a failed read) on the rows' text edge, between the list's rows.
+    stateLine: { paddingHorizontal: HAPPIER_COLLECTION_LIST_METRICS.contentInset, paddingVertical: theme.margins.xs },
     surface: {
         backgroundColor: theme.colors.surface.base,
     },
@@ -229,7 +232,33 @@ export const collectionListStyles = {
     dimmedTitle: styles.dimmedTitle,
     /** Only trouble gets a dot (needs sign-in, not running, failed). */
     troubleDot: styles.troubleDot,
+    /** Wraps a `SurfaceStateCard size="line"` so it sits on the rows' text edge. */
+    stateLine: styles.stateLine,
 } as const;
+
+/** A navigation column's row geometry for the shared loading rows: the rows' text edge and glyph column. */
+const COLLECTION_LIST_SKELETON_GEOMETRY = Object.freeze({
+    insetStart: HAPPIER_COLLECTION_LIST_METRICS.contentInset,
+    insetEnd: HAPPIER_COLLECTION_LIST_METRICS.contentInset,
+    glyphColumn: HAPPIER_COLLECTION_LIST_METRICS.rowGlyphBox,
+    gap: HAPPIER_COLLECTION_LIST_METRICS.rowGlyphGap,
+});
+
+/**
+ * A list's first load: the shared loading rows in the column's one-line navigation rows (the compact
+ * row height, the glyph column), so the real rows replace them without a jump. Shown only while nothing
+ * is known yet; known rows stay while they refresh.
+ */
+export function CollectionSkeletonRows(props: Readonly<{ count: number }>) {
+    return (
+        <SkeletonRows
+            rows={props.count}
+            rowHeight={HAPPIER_COLLECTION_LIST_METRICS.rowMinHeight}
+            lines={1}
+            geometry={COLLECTION_LIST_SKELETON_GEOMETRY}
+        />
+    );
+}
 
 function keepDraftOpen() {}
 

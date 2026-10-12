@@ -1,27 +1,34 @@
 import * as React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act } from 'react-test-renderer';
 
-import { renderScreen } from '@/dev/testkit';
+import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { installUiListsCommonModuleMocks } from './uiListsTestHelpers';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 installUiListsCommonModuleMocks();
 
-// The canonical connection-health owner decides whether the Home this device uses answers; the
-// connection manager (network boundary) names the Home it applied.
-const healthState = vi.hoisted(() => ({ kind: 'connected' as string }));
-vi.mock('@/components/navigation/connectionStatus/useConnectionHealth', () => ({
-    useActiveHomeConnectionHealth: () => ({ kind: healthState.kind }),
-}));
-vi.mock('@/sync/runtime/orchestration/connectionManager', () => ({
-    retryActiveServerConnection: vi.fn(async () => {}),
-    getAppliedActiveServerId: () => 'srv_studio',
-    subscribeAppliedActiveServer: () => () => {},
-}));
-vi.mock('@/hooks/server/useActiveServerSnapshot', () => ({
-    useActiveServerSnapshot: () => ({ serverId: 'srv_studio', serverUrl: 'https://studio.example.test', generation: 1 }),
-}));
+// Exercise the canonical health classifier and store. Only native rendering is substituted.
+const { storage } = await import('@/sync/domains/state/storage');
+const { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+let previous = storage.getState();
+let applied = getAppliedActiveServerSnapshot();
+let available = isAppliedActiveServerRuntimeAvailable();
+beforeEach(() => {
+    previous = storage.getState();
+    applied = getAppliedActiveServerSnapshot();
+    available = isAppliedActiveServerRuntimeAvailable();
+    publishAppliedActiveServerSnapshot({ serverId: 'srv_studio', serverUrl: 'https://studio.example.test', generation: 1 });
+    storage.setState({ endpointStatus: 'online', socketStatus: 'connected' });
+});
+afterEach(async () => {
+    await act(async () => {
+        standardCleanup();
+        storage.setState(previous, true);
+        publishAppliedActiveServerSnapshot(applied, available);
+    });
+});
 
 const { ItemLoadStateRows } = await import('./ItemLoadStateRows');
 
@@ -42,39 +49,35 @@ describe('ItemLoadStateRows: a read from the Home this device uses', () => {
     );
 
     it('defers to the page\'s "can\'t reach" banner while that Home is unreachable: no second failure, no second Retry', async () => {
-        healthState.kind = 'server_unreachable';
+        storage.setState({ endpointStatus: 'offline' });
         const onRetry = vi.fn();
         const screen = await renderScreen(failedOnStudio(onRetry));
 
         expect(hostTexts(screen)).not.toContain("Couldn't read this Home's retention policy");
         expect(hostTexts(screen)).toContain('sidebarFooter.availableWhenHomeAnswers');
         expect(screen.findHostByTestId('retention-retry')).toBeNull();
-        healthState.kind = 'connected';
     });
 
     it('reads again by itself once the Home answers, so the banner\'s Retry re-reads every deferred section', async () => {
-        healthState.kind = 'server_unreachable';
+        storage.setState({ endpointStatus: 'offline' });
         const onRetry = vi.fn();
         const screen = await renderScreen(failedOnStudio(onRetry));
         expect(onRetry).not.toHaveBeenCalled();
 
-        healthState.kind = 'connected';
-        await screen.update(failedOnStudio(onRetry));
+        await act(async () => { storage.setState({ endpointStatus: 'online' }); });
         expect(onRetry).toHaveBeenCalledTimes(1);
     });
 
     it('keeps its own failure and Retry when the Home answers but this read failed, or the read needs another Home', async () => {
-        healthState.kind = 'connected';
         const answered = await renderScreen(failedOnStudio(vi.fn()));
         expect(hostTexts(answered)).toContain("Couldn't read this Home's retention policy");
         expect(answered.findHostByTestId('retention-retry')).not.toBeNull();
         await answered.unmount();
 
-        healthState.kind = 'server_unreachable';
+        storage.setState({ endpointStatus: 'offline' });
         const elsewhere = await renderScreen(failedOnStudio(vi.fn(), ['srv_studio', 'srv_lab']));
         expect(hostTexts(elsewhere)).toContain("Couldn't read this Home's retention policy");
         expect(elsewhere.findHostByTestId('retention-retry')).not.toBeNull();
-        healthState.kind = 'connected';
     });
 });
 
