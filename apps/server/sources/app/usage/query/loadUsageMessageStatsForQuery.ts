@@ -15,8 +15,8 @@ function toObservedAtFilter(request: UsageAnalyticsQueryRequest) {
     }
 
     return {
-        gte: request.dateRange.startMs ? new Date(request.dateRange.startMs) : undefined,
-        lte: request.dateRange.endMs ? new Date(request.dateRange.endMs) : undefined,
+        gte: request.dateRange.startMs !== undefined ? new Date(request.dateRange.startMs) : undefined,
+        lt: request.dateRange.endMs !== undefined ? new Date(request.dateRange.endMs) : undefined,
     };
 }
 

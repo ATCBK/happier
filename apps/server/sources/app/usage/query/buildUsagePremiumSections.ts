@@ -5,6 +5,7 @@ import type {
 
 import type { UsageMessageCounts } from "./loadUsageMessageStatsForQuery";
 import type { ScopedUsageContribution } from "./resolveScopedUsageContributions";
+import { resolveUsageContributionSourceContext } from "./resolveScopedUsageContributions";
 import { buildUsageLeaderList, resolveUsageBucketBounds as resolveBucketBounds, resolveUsageCalendarInstant, resolveUsageContributionDimensionKey, type UsageLeaderDimension } from "@happier-dev/protocol";
 import { resolveUsageCostMode } from "./resolveUsageCostMode";
 
@@ -19,6 +20,7 @@ type UsageEventRow = Pick<
     | "workspaceId"
     | "machineId"
     | "source"
+    | "metadata"
     | "tokens"
     | "cost"
     | "contributingEventIds"
@@ -57,9 +59,11 @@ function buildLeaderList(
     topLimit: number,
     dimension: UsageLeaderDimension,
     requestedMode: UsageAnalyticsQueryRequest["costMode"],
+    includeSources = false,
 ): UsageAnalyticsLeader[] | undefined {
-    return buildUsageLeaderList(rows.map(row => ({ ...row, eventCount: row.contributingEventIds.length })),
-        dimension, topLimit, resolveUsageCostMode(requestedMode));
+    return buildUsageLeaderList(rows.map(row => ({ ...row, eventCount: row.contributingEventIds.length,
+        sourceContext: resolveUsageContributionSourceContext(row) })),
+        dimension, topLimit, resolveUsageCostMode(requestedMode), undefined, includeSources);
 }
 
 export function buildUsageLeaders(
@@ -169,7 +173,7 @@ function countFavoriteModelChanges(rows: UsageEventRow[]): number {
     let changes = 0;
 
     for (const row of rows) {
-        const modelId = row.modelId;
+        const modelId = resolveUsageContributionDimensionKey(row, 'model');
         if (!modelId) {
             continue;
         }
@@ -205,8 +209,9 @@ export function buildUsageInsights(
         if (row.sessionId) {
             sessions.add(row.sessionId);
         }
-        if (row.modelId) {
-            models.set(row.modelId, (models.get(row.modelId) ?? 0) + row.tokens.total);
+        const modelId = resolveUsageContributionDimensionKey(row, 'model');
+        if (modelId) {
+            models.set(modelId, (models.get(modelId) ?? 0) + row.tokens.total);
         }
         const monthKey = getLocalBucketKey(row.observedAt, "month", timeZoneOffsetMinutes);
         months.set(monthKey, (months.get(monthKey) ?? 0) + row.tokens.total);
@@ -265,7 +270,7 @@ function buildTimeline(
         .map((bucket) => ({
             bucketStartMs: bucket.bucketStartMs,
             bucketEndMs: bucket.bucketEndMs,
-            leaders: buildLeaderList(bucket.rows, topLimit, dimension, requestedMode) ?? [],
+            leaders: buildLeaderList(bucket.rows, topLimit, dimension, requestedMode, true) ?? [],
         }));
 }
 

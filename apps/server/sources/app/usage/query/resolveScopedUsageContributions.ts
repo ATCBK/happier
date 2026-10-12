@@ -3,6 +3,7 @@ import type {
     UsageObservationCost,
     UsageObservationTokens,
 } from "@happier-dev/protocol";
+import type { UsageAnalyticsSourceContext } from "@happier-dev/protocol/usage/usageAnalyticsContracts";
 import { createStoredReadSchema, UsageNativeAccountingSubjectSchema, readUsageAccountingMetadata } from "@happier-dev/protocol";
 
 import { addUsageCost, addUsageTokens, createEmptyUsageCost, createEmptyUsageTokens, subtractUsageCost, subtractUsageTokens, usageHasAnyValue } from "../usageMetrics";
@@ -51,12 +52,26 @@ export interface ResolvedScopedUsageContributions {
 
 const nativeSubjectReadSchema = createStoredReadSchema(UsageNativeAccountingSubjectSchema);
 
+function readNativeSubject(metadata: unknown) {
+    return nativeSubjectReadSchema.safeParse(metadata && typeof metadata === "object"
+        ? Reflect.get(metadata, "accountingSubject") : undefined);
+}
+
+/** Capture path is not execution placement: admitted native replay may belong to a real Session. */
+export function resolveUsageContributionSourceContext(row: Pick<ScopedUsageEventRow, "metadata" | "sessionId">): UsageAnalyticsSourceContext {
+    const path = readUsageAccountingMetadata(row.metadata)?.path ?? "unknown";
+    const subject = readNativeSubject(row.metadata);
+    const execution = path === "runtime" && row.sessionId ? "happier"
+        : path === "native" && subject.success && subject.data.linkedSessionId === row.sessionId && row.sessionId ? "happier"
+        : path === "native" && subject.success && !subject.data.linkedSessionId && !row.sessionId ? "outside"
+        : "unknown";
+    return { path, execution };
+}
+
 export function usageAccountingSubjectKey(row: ScopedUsageEventRow): string {
     // A witnessed native subject owns accounting across live and collector
     // rows; the real Session remains attribution on the selected contribution.
-    const metadata = row.metadata;
-    const subject = nativeSubjectReadSchema.safeParse(metadata && typeof metadata === "object"
-        ? Reflect.get(metadata, "accountingSubject") : undefined);
+    const subject = readNativeSubject(row.metadata);
     if (subject.success) {
         const native = subject.data;
         return JSON.stringify(["native", native.machineId, native.agent.pluginId, native.agent.localId,
@@ -189,7 +204,7 @@ export function resolveScopedUsageContributions(
         const resolved = resolveGroup(group);
         const selected = resolved.totalContributions.filter((row) => (
             (range?.startMs === undefined || row.observedAt.getTime() >= range.startMs)
-            && (range?.endMs === undefined || row.observedAt.getTime() <= range.endMs)
+            && (range?.endMs === undefined || row.observedAt.getTime() < range.endMs)
         ));
         totalContributions.push(...selected);
         bucketAttributions.push(...selected);

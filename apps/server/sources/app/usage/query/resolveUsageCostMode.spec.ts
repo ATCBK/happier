@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { addUsageCostForMode, resolveEffectiveUsageCostUsd, withEffectiveUsageCost } from "./resolveUsageCostMode";
+import { resolveUsageCostBasis } from '@happier-dev/protocol';
 
 describe("usage cost basis", () => {
     it("retains current API-equivalent aggregate prices without forgetting an unpriced population", () => {
@@ -11,12 +12,13 @@ describe("usage cost basis", () => {
         const unpriced = addUsageCostForMode(combined, zero, 'api_equivalent');
         expect(withEffectiveUsageCost(unpriced, 'api_equivalent').effectiveUsd).toBeUndefined();
     });
-    it("does not turn different auto bases into a blended effective cost", () => {
+    it("labels best available same-currency facts as mixed instead of dropping them to zero", () => {
         const reported = { reportedUsd: 1, estimatedUsd: 0, currency: "USD", costSource: "provider_reported" as const };
         const estimated = { reportedUsd: 0, estimatedUsd: 2, currency: "USD", costSource: "pricing_estimate" as const };
         const combined = addUsageCostForMode(reported, estimated, "auto");
-        expect(combined.effectiveUsd).toBeUndefined();
-        expect(resolveEffectiveUsageCostUsd(combined, "auto")).toBe(0);
+        expect(combined.effectiveUsd).toBe(3);
+        expect(resolveEffectiveUsageCostUsd(combined, "auto")).toBe(3);
+        expect(resolveUsageCostBasis(combined, 'auto')).toMatchObject({ kind: 'mixed', source: 'best_available', currency: 'USD' });
     });
     it("retains vendor-reported API-equivalent money as a reported fact", () => {
         const reported = { reportedUsd: 1, estimatedUsd: 0, currency: "USD", costSource: "provider_reported" as const };

@@ -504,8 +504,11 @@ function readStoredNativeSubject(metadata: unknown): UsageNativeAccountingSubjec
 }
 
 function accountingMetadataForWrite(request: UsageEventIngestRequest): Record<string, unknown> | null {
+    const metadata = { ...request.metadata };
+    delete metadata.usageAttribution;
+    if (request.attribution) metadata.usageAttribution = request.attribution;
     const subject = request.subject ?? readStoredNativeSubject(request.metadata);
-    if (!subject) return request.metadata ?? null;
+    if (!subject) return Object.keys(metadata).length ? metadata : null;
     const inferenceId = request.subject ? request.accounting?.inferenceKey : readUsageAccountingMetadata(request.metadata)?.inferenceId;
     const evidence = request.subject ? (request.accounting ? {
         status: request.accounting.status,
@@ -516,7 +519,7 @@ function accountingMetadataForWrite(request: UsageEventIngestRequest): Record<st
         ...(request.accounting.outputIncludesReasoning !== undefined ? { outputIncludesReasoning: request.accounting.outputIncludesReasoning } : {}),
     } : undefined) : readUsageAccountingMetadata(request.metadata);
     return {
-        ...(request.subject ? {} : request.metadata),
+        ...(request.subject ? {} : metadata),
         accountingSubject: subject,
         captureOrigin: request.subject ? 'native' : 'runtime',
         usageAccounting: {
@@ -1293,7 +1296,7 @@ export async function recordLegacyUsageReport(
             report,
             usageEventId,
         };
-    });
+    }, { /* Legacy usage deltas depend on the previous cumulative report baseline. */ isolationLevel: "Serializable" });
     const result = sessionId
         ? await write()
         : await inAccountLegacyUsageWriteLock({ accountId, key }, write);

@@ -1,4 +1,4 @@
-import { bundledUsageModelPriceCatalog, UsageAnalyticsQueryRequestSchema } from "@happier-dev/protocol";
+import { bundledUsageModelPriceCatalog, estimateUsageModelCost, repriceUsageAnalyticsResponse, UsageAnalyticsQueryRequestSchema } from "@happier-dev/protocol";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { db } from "@/storage/db";
@@ -85,6 +85,47 @@ describe("usageQueryService scoped aggregation", () => {
         ]);
     });
 
+    it("filters both real QA Haiku 4.5 spellings through their one model identity", async () => {
+        const owner = await createUsageOwner("haiku-aliases");
+        await db.usageEvent.createMany({ data: ["claude-haiku-4-5", "claude-haiku-4-5-20251001", "claude-haiku-5-5"].map((modelId, index) => ({
+            ...buildUsageEvent({ ...owner, observedAt: "2026-10-11T12:00:00Z", scope: "turn_delta", totalTokens: (index + 1) * 10 }),
+            turnId: `turn-${index}`, modelId,
+        })) });
+        for (const modelId of ["claude-haiku-4-5", "claude-haiku-4-5-20251001"]) {
+            const result = await querySession(owner.accountId, owner.sessionId, {
+                filters: { sessionIds: [owner.sessionId], modelIds: [modelId] }, breakdowns: ["model"], includeModelTimeline: true,
+            });
+            expect(result.totals.tokens.total).toBe(30);
+            expect(result.breakdowns?.model?.map(row => row.key)).toEqual(["claude-haiku-4-5"]);
+            expect(result.modelTimeline?.[0]?.leaders.map(row => row.key)).toEqual(["claude-haiku-4-5"]);
+            expect(result.coverage?.ranked.find(row => row.dimension === 'model')).toMatchObject({ totalEntries: 1, returnedEntries: 1, complete: true });
+        }
+    });
+
+    it("projects reconciled execution sources through the real accounting query", async () => {
+        const owner = await createUsageOwner("execution-sources");
+        const subject = { kind: "native", machineId: "machine", agent: { pluginId: "happier.agent.codex", localId: "codex" },
+            sourceRootKey: "root", nativeSessionKey: "native", linkedSessionId: owner.sessionId };
+        const row = buildUsageEvent({ ...owner, observedAt: "2026-07-01T10:00:00Z", scope: "turn_delta", totalTokens: 10 });
+        await db.usageEvent.createMany({ data: [
+            { ...row, source: "runtime", metadata: { accountingSubject: subject, usageAccounting: { path: "runtime", inferenceId: "same" } } },
+            { ...row, source: "native", metadata: { accountingSubject: subject, usageAccounting: { path: "native", inferenceId: "same" } } },
+            { ...row, source: "native", metadata: { accountingSubject: subject, usageAccounting: { path: "native", inferenceId: "linked" } } },
+            { ...row, sessionId: null, source: "native", metadata: { accountingSubject: { kind: "native", machineId: "machine", agent: subject.agent, sourceRootKey: "root", nativeSessionKey: "outside" }, usageAccounting: { path: "native", inferenceId: "outside" } } },
+        ] });
+        const result = await queryUsageAnalytics(owner.accountId, UsageAnalyticsQueryRequestSchema.parse({ granularity: "day", includeModelTimeline: true }));
+        expect(result.totals.tokens.total).toBe(30);
+        expect(result.engineTimeline?.[0]?.leaders[0]?.sources).toEqual([
+            expect.objectContaining({ source: "native", path: "native", execution: "happier", tokens: expect.objectContaining({ total: 10 }) }),
+            expect.objectContaining({ source: "native", path: "native", execution: "outside", tokens: expect.objectContaining({ total: 10 }) }),
+            expect.objectContaining({ source: "runtime", path: "runtime", execution: "happier", tokens: expect.objectContaining({ total: 10 }) }),
+        ]);
+        expect(result.contributions?.map(row => row.sourceContext?.execution).sort()).toEqual(["happier", "happier", "outside"]);
+        const filtered = await queryUsageAnalytics(owner.accountId, UsageAnalyticsQueryRequestSchema.parse({ filters: { sources: ["native"] }, includeModelTimeline: true }));
+        expect(filtered.totals.tokens.total).toBe(20);
+        expect(filtered.engineTimeline?.[0]?.leaders[0]?.sources?.map(part => part.execution)).toEqual(["happier", "outside"]);
+    });
+
     it("retains witnessed Provider binding separately from Agent identity without attributing unknown counters", async () => {
         const owner = await createUsageOwner("provider-binding");
         const binding = { providerId: "happier.provider.openrouter/openrouter", providerConnectionId: "connection-work" };
@@ -132,9 +173,15 @@ describe("usageQueryService scoped aggregation", () => {
             v: 1, models: { 'a-model': { inputUsdPerMillion: 1, outputUsdPerMillion: 1 }, 'z-model': { inputUsdPerMillion: 5, outputUsdPerMillion: 5 } },
             provenance: { source: 'litellm', origin: 'fetched', asOfMs: 1, revision: 'ranking', fetchStatus: 'ready' },
         }) } });
-        const result = await querySession(owner.accountId, owner.sessionId, { costMode: 'api_equivalent', includeLeaders: true, includeModelTimeline: true, topLimit: 1 });
+        const result = await querySession(owner.accountId, owner.sessionId, { costMode: 'api_equivalent', includeLeaders: true, includeModelTimeline: true, breakdowns: ['model'], topLimit: 1 });
         expect(result.leaders?.models?.[0]?.key).toBe('z-model');
         expect(result.modelTimeline?.[0]?.leaders[0]?.key).toBe('z-model');
+        expect(result.breakdowns?.model?.[0]?.key).toBe('z-model');
+        const privatelyRepriced = repriceUsageAnalyticsResponse(result, result.priceCatalog,
+            { 'a-model': { kind: 'rates', inputUsdPerMillion: 10, outputUsdPerMillion: 10 } }, 'api_equivalent');
+        expect(privatelyRepriced.leaders?.models?.[0]?.key).toBe('a-model');
+        expect(privatelyRepriced.modelTimeline?.[0]?.leaders[0]?.key).toBe('a-model');
+        expect(privatelyRepriced.breakdowns?.model?.[0]?.key).toBe('a-model');
     });
 
     it("re-prices historical API-equivalent tokens from the effective catalog without rewriting reported or retained estimates", async () => {
@@ -312,7 +359,7 @@ describe("usageQueryService scoped aggregation", () => {
         });
     });
 
-    it("sums persisted cache savings through scoped usage contributions", async () => {
+    it("does not reuse historical cache savings when current tokens contain no cache reads", async () => {
         const owner = await createUsageOwner("cache-savings");
         await db.usageEvent.createMany({
             data: [
@@ -329,7 +376,9 @@ describe("usageQueryService scoped aggregation", () => {
 
         const result = await querySession(owner.accountId, owner.sessionId, { includeInsights: true });
 
-        expect(result.insights?.cacheSavingsUsd).toBeCloseTo(1);
+        expect(result.insights?.cacheSavingsUsd).toBe(0);
+        const stored = await db.usageEvent.findMany({ where: { sessionId: owner.sessionId }, orderBy: { observedAt: "asc" } });
+        expect(stored.map(row => JSON.parse(row.costBreakdown!))).toEqual([{ cacheSavingsUsd: 0.25 }, { cacheSavingsUsd: 0.75 }]);
     });
 
     it("prefers a session-final snapshot over cumulative snapshots", async () => {
@@ -386,7 +435,10 @@ describe("usageQueryService scoped aggregation", () => {
         const result = await querySession(owner.accountId, owner.sessionId);
 
         expect(result.totals.tokens.total).toBe(100);
-        expect(result.totals.cost.effectiveUsd).toBeUndefined();
+        // Best available selects the API-priced earlier inference and the reported final.
+        expect(result.totals.cost.effectiveUsd).toBeCloseTo(0.120015);
+        expect(result.costPresentation).toMatchObject({ mode: "auto", effectiveUsd: expect.closeTo(0.120015), source: "best_available" });
+        expect(result.totals.cost).toMatchObject({ reportedUsd: 0.12, estimatedUsd: 0.05, costSource: "none" });
         expect(result.costFacts).toEqual(expect.arrayContaining([
             expect.objectContaining({ kind: "estimated", amountUsd: 0.05 }),
             expect.objectContaining({ kind: "reported", amountUsd: 0.12 }),
@@ -413,7 +465,9 @@ describe("usageQueryService scoped aggregation", () => {
 
         const result = await querySession(owner.accountId, owner.sessionId);
 
-        expect(result.totals.cost.effectiveUsd).toBeUndefined();
+        expect(result.totals.cost.effectiveUsd).toBeCloseTo(0.22);
+        expect(result.costPresentation).toMatchObject({ mode: "auto", effectiveUsd: expect.closeTo(0.22), source: "best_available" });
+        expect(result.totals.cost).toMatchObject({ reportedUsd: 0.12, estimatedUsd: 0.1, costSource: "none" });
         expect(result.series?.map((bucket) => bucket.cost.effectiveUsd)).toEqual([
             expect.closeTo(0.1),
             expect.closeTo(0.12),
@@ -628,11 +682,19 @@ describe("usageQueryService scoped aggregation", () => {
             includeModelTimeline: true,
         });
 
-        expect(automatic.totals.cost.effectiveUsd).toBeUndefined();
-        expect(automatic.breakdowns?.agent?.[0]?.cost.effectiveUsd).toBeUndefined();
-        expect(automatic.leaders?.agents?.[0]?.cost?.effectiveUsd).toBeUndefined();
-        expect(automatic.modelTimeline?.[0]?.leaders[0]?.cost?.effectiveUsd).toBeUndefined();
-        expect(automatic.costPresentation).toBeUndefined();
+        const priced = estimateUsageModelCost("gpt-5.4-mini", {
+            input: 20, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 20,
+        }, automatic.priceCatalog);
+        expect(priced).not.toBeNull();
+        const bestAvailable = 0.12 + priced!.total;
+        expect(automatic.totals.cost.effectiveUsd).toBeCloseTo(bestAvailable, 10);
+        expect(automatic.breakdowns?.agent?.[0]?.cost.effectiveUsd).toBeCloseTo(bestAvailable, 10);
+        expect(automatic.leaders?.agents?.[0]?.cost?.effectiveUsd).toBeCloseTo(bestAvailable, 10);
+        expect(automatic.modelTimeline?.[0]?.leaders[0]?.cost?.effectiveUsd).toBeCloseTo(bestAvailable, 10);
+        expect(automatic.costPresentation).toMatchObject({ mode: "auto", effectiveUsd: expect.closeTo(bestAvailable, 10),
+            currency: "USD", source: "best_available" });
+        expect(automatic.totals.cost.reportedUsd).toBe(0.12);
+        expect(automatic.totals.cost.estimatedUsd).toBeCloseTo(0.29);
         expect(automatic.costFacts).toEqual(expect.arrayContaining([
             expect.objectContaining({ kind: "reported", amountUsd: 0.12 }),
             expect.objectContaining({ kind: "estimated", amountUsd: expect.closeTo(0.29) }),

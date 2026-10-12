@@ -17,7 +17,7 @@ import {
     buildUsageModelTimeline,
     deriveEngineKey,
 } from "./query/buildUsagePremiumSections";
-import { resolveUsageBucketBounds as resolveBucketBounds, resolveUsageContributionDimensionKey, readUsageAccountingMetadata, resolveUsageTokenCategories, repriceUsageObservationCost, repriceUsageAnalyticsResponse } from "@happier-dev/protocol";
+import { buildUsageBreakdownList, resolveUsageBucketBounds as resolveBucketBounds, resolveUsageContributionDimensionKey, readUsageAccountingMetadata, resolveUsageTokenCategories, repriceUsageObservationCost, repriceUsageAnalyticsResponse } from "@happier-dev/protocol";
 import { readUsageModelPriceCatalogInTx } from './usageModelPriceCatalog';
 import { loadUsageMessageStatsForQueryInTx } from "./query/loadUsageMessageStatsForQuery";
 import {
@@ -32,6 +32,7 @@ import { addUsageCostForMode, resolveUsageCostMode, withEffectiveUsageCost, type
 import { TEAM_CREDENTIAL_ONLY_USAGE_SOURCES } from "./usageSourceClassifier";
 import { buildUsageResultProjection } from "./query/buildUsageResultProjection";
 import { LegacyUsageReportDataSchema, legacyUsageReportCanonicalOrder, readLegacyUsageReportKey } from "./legacyUsageReportSchema";
+import { canonicalUsageModelPriceId } from "@happier-dev/protocol/usage/usageModelPriceCatalog";
 
 function toPremiumEventRow(row: ScopedUsageContribution) {
     return row;
@@ -111,41 +112,8 @@ function buildBreakdownEntries(
     topLimit: number,
     costMode: UsageCostMode,
 ): UsageAnalyticsBreakdownEntry[] {
-    const entries = new Map<string, UsageAnalyticsBreakdownEntry>();
-
-    for (const row of rows) {
-        const key = resolveUsageContributionDimensionKey(row, dimension) ?? 'unknown';
-        const current = entries.get(key) ?? {
-            key,
-            label: key,
-            eventCount: 0,
-            tokens: createEmptyUsageTokens(),
-            cost: createEmptyUsageCost(),
-        };
-        current.eventCount += row.contributingEventIds.length;
-        current.tokens = addUsageTokens(current.tokens, row.tokens);
-        current.cost = addUsageCostForMode(current.cost, row.cost, costMode);
-        current.context = readContributionContext(row) ?? current.context;
-        if (dimension === 'session') {
-            if (row.contextUsedTokens !== null) {
-                current.latestContextUsedTokens = row.contextUsedTokens;
-            }
-            if (row.contextWindowTokens !== null) {
-                current.latestContextWindowTokens = row.contextWindowTokens;
-            }
-        }
-        entries.set(key, current);
-    }
-
-    return Array.from(entries.values())
-        .sort((left, right) => {
-            if (right.tokens.total !== left.tokens.total) return right.tokens.total - left.tokens.total;
-            if (right.cost.reportedUsd !== left.cost.reportedUsd) return right.cost.reportedUsd - left.cost.reportedUsd;
-            if (right.eventCount !== left.eventCount) return right.eventCount - left.eventCount;
-            return left.key.localeCompare(right.key);
-        })
-        .slice(0, topLimit)
-        .map((entry) => ({ ...entry, cost: withEffectiveUsageCost(entry.cost, costMode) }));
+    return buildUsageBreakdownList(rows.map(row => ({ ...row, eventCount: row.contributingEventIds.length,
+        context: { usedTokens: row.contextUsedTokens, windowTokens: row.contextWindowTokens } })), dimension, topLimit, costMode);
 }
 
 async function loadUsageEventsForQuery(tx: Tx, accountId: string, request: UsageAnalyticsQueryRequest) {
@@ -155,7 +123,7 @@ async function loadUsageEventsForQuery(tx: Tx, accountId: string, request: Usage
             // A range start or Session/dimension/source filter cannot remove
             // baselines or an overlapping producer before reconciliation.
             observedAt: request.dateRange?.endMs !== undefined
-                ? { lte: new Date(request.dateRange.endMs) }
+                ? { lt: new Date(request.dateRange.endMs) }
                 : undefined,
             source: {
                 notIn: [...TEAM_CREDENTIAL_ONLY_USAGE_SOURCES],
@@ -213,7 +181,8 @@ function matchesUsageFilters(row: ScopedUsageContribution, filters: UsageAnalyti
     );
     return matches(filters?.sessionIds, row.sessionId)
         && matches(filters?.agentIds, row.agentId)
-        && matches(filters?.modelIds, row.modelId)
+        && (!filters?.modelIds?.length || filters.modelIds.some(id =>
+            (canonicalUsageModelPriceId(id) ?? 'unknown') === (resolveUsageContributionDimensionKey(row, 'model') ?? 'unknown')))
         && matches(filters?.projectKeys, row.projectKey)
         && matches(filters?.workspaceIds, row.workspaceId)
         && matches(filters?.machineIds, row.machineId)
@@ -230,7 +199,7 @@ async function loadRetainedLegacyUsageRows(
     const reports = await tx.usageReport.findMany({ where: {
         accountId,
         sessionId: request.filters?.sessionIds?.length ? { in: request.filters.sessionIds } : undefined,
-        updatedAt: request.dateRange?.endMs !== undefined ? { lte: new Date(request.dateRange.endMs) } : undefined,
+        updatedAt: request.dateRange?.endMs !== undefined ? { lt: new Date(request.dateRange.endMs) } : undefined,
     }, orderBy: legacyUsageReportCanonicalOrder,
     select: { id: true, sessionId: true, key: true, data: true, createdAt: true, updatedAt: true } });
     const retainedKeys = new Set<string>();
@@ -258,7 +227,7 @@ export async function queryUsageAnalytics(
     accountId: string,
     request: UsageAnalyticsQueryRequest,
 ): Promise<UsageAnalyticsQueryResponse> {
-    return await inTx(tx => queryUsageAnalyticsInTx(tx, accountId, request), { readOnly: true });
+    return await inTx(tx => queryUsageAnalyticsInTx(tx, accountId, request), { /* Usage events, retained reports and transcript attribution share one analytics snapshot. */ isolationLevel: "Serializable", readOnly: true });
 }
 
 /** Ownership admission and every query reader share the caller's captured snapshot. */
@@ -316,7 +285,7 @@ export async function queryUsageAnalyticsInTx(
     if (request.includeModelTimeline) for (const row of totalContributions) {
         const { bucketStartMs } = resolveBucketBounds(request.granularity, row.observedAt.getTime(), request.timeZoneOffsetMinutes);
         const counts = timelineCardinalities.get(bucketStartMs) ?? { models: new Set<string>(), engines: new Set<string>() };
-        counts.models.add(row.modelId ?? 'unknown');
+        counts.models.add(resolveUsageContributionDimensionKey(row, 'model') ?? 'unknown');
         counts.engines.add(deriveEngineKey(row) ?? 'unknown');
         timelineCardinalities.set(bucketStartMs, counts);
     }
@@ -328,7 +297,7 @@ export async function queryUsageAnalyticsInTx(
     });
     if (modelTimeline && !rankedDimensions.has('model')) {
         ranked.push({ dimension: 'model',
-            totalEntries: new Set(totalContributions.map((row) => row.modelId ?? 'unknown')).size,
+            totalEntries: new Set(totalContributions.map((row) => resolveUsageContributionDimensionKey(row, 'model') ?? 'unknown')).size,
             returnedEntries: new Set(modelTimeline.flatMap((bucket) => bucket.leaders.map((leader) => leader.key))).size,
             complete: [...timelineCardinalities.values()].every((counts) => counts.models.size <= request.topLimit),
         });

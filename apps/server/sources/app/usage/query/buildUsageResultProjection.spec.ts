@@ -16,6 +16,51 @@ function row(id: string, total: number): ScopedUsageContribution {
 }
 
 describe("canonical usage result projection", () => {
+    it("retains witnessed machine origins and capture kinds without publishing private source metadata", () => {
+        const measured = row("measured", 10);
+        const otherMachine = { ...measured, id: "measured-other-machine", machineId: "other-machine" };
+        const logs = { ...row("logs", 20), machineId: "second-machine", metadata: {
+            path: "/private/project", root: "/private/logs", host: "private-host",
+            usageAccounting: { path: "native", status: "available", historyComplete: true },
+        } };
+        // A legacy report can be a live runtime transport fallback; its stored path does not witness log capture.
+        const legacy = { ...row("legacy-fallback", 10), source: "legacy_usage_report", machineId: "legacy-machine",
+            metadata: { usageAccounting: { path: "legacy", status: "unknown" } } };
+        const unknown = { ...row("unknown", 0), machineId: null, metadata: null };
+        const unsupported = { ...unknown, id: "unsupported", source: "unsupported-source",
+            metadata: { usageAccounting: { path: "unknown", status: "unsupported" } } };
+        const result = buildUsageResultProjection({ contributions: [measured, otherMachine, logs, legacy], evidenceRows: [measured, otherMachine, logs, legacy, unknown, unsupported],
+            coverageReasons: [], request: { granularity: "day", timeZoneOffsetMinutes: 0, includeSeries: true, topLimit: 20 } });
+        expect(result.coverage.sources).toEqual([
+            expect.objectContaining({ source: "runtime", machineId: "machine", captureKind: "measured", eventCount: 1 }),
+            expect.objectContaining({ source: "runtime", machineId: "other-machine", captureKind: "measured", eventCount: 1 }),
+            expect.objectContaining({ source: "runtime", machineId: "second-machine", captureKind: "from_logs", eventCount: 1 }),
+            { source: "legacy_usage_report", machineId: "legacy-machine", path: "legacy", status: "unknown", eventCount: 1 },
+            { source: "runtime", path: "unknown", status: "unknown", eventCount: 1 },
+            { source: "unsupported-source", path: "unknown", status: "unsupported", captureKind: "not_added", eventCount: 1 },
+        ]);
+        expect(JSON.stringify(result.coverage)).not.toContain("/private/");
+        expect(JSON.stringify(result.coverage)).not.toContain("private-host");
+    });
+    it("projects only request-bound attribution, retaining distinct switched accounts and no cumulative owner", () => {
+        const service = { pluginId: "acme.accounts", localId: "native" };
+        const attributed = (id: string, accountId: string) => ({ ...row(id, 10), metadata: {
+            usageAccounting: { path: "runtime", status: "unknown" },
+            usageAttribution: { v: 1, turnId: id, source: { kind: "native", connectedAccount: { service, accountId } } },
+        } });
+        const first = attributed("first", "account-a");
+        const second = attributed("second", "account-b");
+        const remainder = { ...attributed("remainder", "account-b"), scope: "session_cumulative", isCumulative: true };
+        const mismatched = { ...attributed("mismatch", "account-b"), turnId: "other-turn" };
+        const result = buildUsageResultProjection({ contributions: [first, second, remainder, mismatched], evidenceRows: [],
+            coverageReasons: [], request: { granularity: "day", timeZoneOffsetMinutes: 0, includeSeries: true, topLimit: 20 } });
+        expect(result.contributions).toEqual([
+            expect.objectContaining({ connectedAccount: { service, accountId: "account-a" }, providerSource: "native", providerAttribution: "known", providerConnectionId: null }),
+            expect.objectContaining({ connectedAccount: { service, accountId: "account-b" }, providerSource: "native", providerAttribution: "known" }),
+            expect.objectContaining({ connectedAccount: null, providerSource: "unknown", providerAttribution: "unknown" }),
+            expect.objectContaining({ connectedAccount: null, providerSource: "unknown", providerAttribution: "unknown" }),
+        ]);
+    });
     it("keeps delayed same-model response Provider attribution unknown after a current binding switch", () => {
         // The runtime publisher reads metadata after asynchronous transcript admission;
         // this retained dimension is the then-current binding, not the old response's source.
@@ -45,7 +90,7 @@ describe("canonical usage result projection", () => {
         const unpriced = row("unpriced", 20);
         const result = buildUsageResultProjection({ contributions: [api, unpriced], evidenceRows: [api, unpriced], coverageReasons: [], request: { granularity: "day", timeZoneOffsetMinutes: 0, includeSeries: true, topLimit: 1 }, ranked: [{ dimension: "model", totalEntries: 2, returnedEntries: 1, complete: false }] });
         expect(result.costFacts).toEqual(expect.arrayContaining([
-            expect.objectContaining({ kind: "api_equivalent", amountUsd: 0.2, tokens: expect.objectContaining({ input: 10, cacheRead: 5, total: 10 }) }),
+            expect.objectContaining({ kind: "reported", source: "provider_reported_api_equivalent", amountUsd: 0.2, tokens: expect.objectContaining({ input: 10, cacheRead: 5, total: 10 }) }),
             expect.objectContaining({ kind: "unpriced", amountUsd: null, tokens: expect.objectContaining({ total: 20 }) }),
         ]));
         expect(result.costPresentation).toBeUndefined();
@@ -62,11 +107,11 @@ describe("canonical usage result projection", () => {
         expect(unknown.coverage.status).toBe("unknown");
     });
 
-    it("distinguishes a proven zero price from defaults and separates invoice from API-equivalent", () => {
+    it("distinguishes a proven zero price from defaults and separates invoice from vendor reported money", () => {
         const free = { ...row("free", 10), cost: { ...createEmptyUsageCost(), costSource: "pricing_estimate" as const } };
         const paid = { ...row("paid", 20), cost: { ...createEmptyUsageCost(), reportedUsd: 2, invoiceUsd: 1, costSource: "provider_reported_api_equivalent" as const } };
         const result = buildUsageResultProjection({ contributions: [free, paid], evidenceRows: [free, paid], coverageReasons: [], request: { granularity: "day", timeZoneOffsetMinutes: 0, includeSeries: true, topLimit: 20 } });
-        expect(result.costFacts.map((fact) => [fact.kind, fact.amountUsd])).toEqual(expect.arrayContaining([["estimated", 0], ["api_equivalent", 2], ["invoice", 1]]));
+        expect(result.costFacts.map((fact) => [fact.kind, fact.amountUsd])).toEqual(expect.arrayContaining([["estimated", 0], ["reported", 2], ["invoice", 1]]));
         expect(result.costFacts.some((fact) => fact.kind === "unpriced")).toBe(false);
         expect(result.costPresentation).toBeUndefined();
     });

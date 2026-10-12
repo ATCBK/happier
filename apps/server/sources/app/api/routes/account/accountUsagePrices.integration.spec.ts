@@ -61,7 +61,7 @@ describe('Account Usage public model prices', () => {
                 const result = await refresh();
                 expect(result.statusCode).toBe(200);
                 expect(result.json().provenance).toMatchObject({ origin: 'bundled', fetchStatus: 'error' });
-                expect(result.json().provenance.errorCode).toBe(failure === 'http' ? 'http_503' : failure === 'network' ? 'fetch_failed' : 'invalid_catalog');
+                expect(result.json().provenance.errorCode).toBe(failure === 'http' ? 'http_503' : failure === 'network' ? 'outbound_transport_failed' : 'invalid_catalog');
             }
             vi.mocked(httpFetch).mockResolvedValueOnce(new HttpResponse(JSON.stringify(rawCatalog), { status: 200, headers: { etag: 'catalog-v1' } }));
             const recovered = await refresh();

@@ -17,6 +17,14 @@ function row(id: string, time: number, scope: string, total: number): ScopedUsag
 }
 
 describe("resolveScopedUsageContributions", () => {
+    it("assigns a shared range boundary only to the following half-open period", () => {
+        const events = [row("before", 999, "turn_delta", 5), row("boundary", 1000, "turn_delta", 10), row("end", 2000, "turn_delta", 20)];
+        const previous = resolveScopedUsageContributions(events, { startMs: 0, endMs: 1000 });
+        const current = resolveScopedUsageContributions(events, { startMs: 1000, endMs: 2000 });
+        expect(previous.totalContributions.map(event => event.id)).toEqual(["before"]);
+        expect(current.totalContributions.map(event => event.id)).toEqual(["boundary"]);
+        expect(resolveScopedUsageContributions([row("zero", 0, "turn_delta", 1)], { startMs: 0, endMs: 0 }).totalContributions).toEqual([]);
+    });
     it("uses pre-range snapshots as baselines without making them period events", () => {
         const result = resolveScopedUsageContributions([
             row("baseline", 100, "session_cumulative", 100),

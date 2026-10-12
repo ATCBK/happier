@@ -63,6 +63,29 @@ describe("usageWriteService", () => {
         ]);
     });
 
+    it('retains request-bound switched account identity through ingest and query, ignoring metadata guesses', async () => {
+        const account = await db.account.create({ data: { publicKey: 'request-attribution' } });
+        const session = await db.session.create({ data: { accountId: account.id, tag: 'attribution', encryptionMode: 'e2ee', metadata: 'ciphertext' } });
+        const service = { pluginId: 'acme.accounts', localId: 'native' };
+        for (const [turnId, accountId] of [['a', 'account-a'], ['b', 'account-b'], ['unknown', null]] as const) {
+            expect(await recordUsageEvent(account.id, UsageEventIngestRequestSchema.parse({
+                sessionId: session.id, turnId, externalKey: turnId, observedAt: 100, agentId: 'codex', modelId: 'same-model',
+                source: 'runtime', scope: 'turn_delta', isCumulative: false,
+                tokens: { input: 1, output: 1, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 2 }, cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD' },
+                ...(accountId ? { attribution: { v: 1, turnId, source: { kind: 'native', connectedAccount: { service, accountId } } } } : {}),
+                metadata: { usageAccounting: { path: 'runtime', status: 'unknown' },
+                    usageAttribution: { v: 1, turnId, source: { kind: 'native', connectedAccount: { service, accountId: 'forged' } } } },
+            }))).toMatchObject({ ok: true });
+        }
+        const result = await queryUsageAnalytics(account.id, UsageAnalyticsQueryRequestSchema.parse({ granularity: 'day', filters: { sessionIds: [session.id] } }));
+        expect(result.contributions).toEqual(expect.arrayContaining([
+            expect.objectContaining({ turnId: 'a', connectedAccount: { service, accountId: 'account-a' }, providerSource: 'native', providerAttribution: 'known' }),
+            expect.objectContaining({ turnId: 'b', connectedAccount: { service, accountId: 'account-b' }, providerSource: 'native', providerAttribution: 'known' }),
+            expect.objectContaining({ turnId: 'unknown', connectedAccount: null, providerSource: 'unknown', providerAttribution: 'unknown' }),
+        ]));
+        expect(JSON.stringify(result)).not.toContain('forged');
+    });
+
     it('admits owned native subjects and isolates replay keys across native sessions and roots', async () => {
         const account = await db.account.create({ data: { publicKey: 'native-account' } });
         const other = await db.account.create({ data: { publicKey: 'native-other' } });

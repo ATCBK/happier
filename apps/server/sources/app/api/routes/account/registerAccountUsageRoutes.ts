@@ -87,7 +87,8 @@ export function registerAccountUsageRoutes(app: Fastify): void {
                     filters: sessionId ? { sessionIds: [sessionId] } : undefined,
                     dateRange: startTime || endTime ? {
                         ...(startTime ? { startMs: startTime * 1000 } : {}),
-                        ...(endTime ? { endMs: endTime * 1000 } : {}),
+                        // v1's retained millisecond instant is inclusive; v2 ranges are half-open.
+                        ...(endTime ? { endMs: endTime * 1000 + 1 } : {}),
                     } : undefined,
                 }));
                 return reply.send({

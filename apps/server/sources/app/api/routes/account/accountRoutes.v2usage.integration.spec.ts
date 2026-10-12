@@ -46,6 +46,38 @@ describe("accountRoutes v2 usage", () => {
         ]);
     });
 
+    it("keeps adjacent v2 ranges disjoint while translating the retained inclusive v1 end", async () => {
+        const account = await db.account.create({ data: { publicKey: "pk-query-boundary" }, select: { id: true } });
+        const session = await db.session.create({ data: { accountId: account.id, tag: "query-boundary",
+            encryptionMode: "e2ee", metadata: "ciphertext" }, select: { id: true } });
+        await db.usageEvent.createMany({ data: [
+            { observedAt: new Date(999), totalTokens: 5, inputTokens: 5 },
+            { observedAt: new Date(1000), totalTokens: 10, inputTokens: 10 },
+            { observedAt: new Date(2000), totalTokens: 20, inputTokens: 20 },
+        ].map(event => ({ ...event, accountId: account.id, sessionId: session.id, agentId: "claude", source: "runtime",
+            scope: "turn_delta", isCumulative: false })) });
+        await db.sessionMessage.createMany({ data: [999, 1000, 2000].map((instant, seq) => ({
+            sessionId: session.id, seq: seq + 1, content: { t: "encrypted", c: "ciphertext" }, createdAt: new Date(instant),
+        })) });
+        await withAuthenticatedTestApp(accountRoutes, async app => {
+            const headers = { "content-type": "application/json", "x-test-user-id": account.id };
+            const previous = await app.inject({ method: "POST", url: "/v2/usage/query", headers,
+                payload: { filters: { sessionIds: [session.id] }, dateRange: { startMs: 0, endMs: 1000 }, includeMessageStats: true } });
+            const current = await app.inject({ method: "POST", url: "/v2/usage/query", headers,
+                payload: { filters: { sessionIds: [session.id] }, dateRange: { startMs: 1000, endMs: 2000 }, includeMessageStats: true } });
+            expect(previous.statusCode).toBe(200);
+            expect(current.statusCode).toBe(200);
+            expect(previous.json().totals.tokens.total).toBe(5);
+            expect(current.json().totals.tokens.total).toBe(10);
+            expect(previous.json().messageStats.messageCount).toBe(1);
+            expect(current.json().messageStats.messageCount).toBe(1);
+            const legacy = await app.inject({ method: "POST", url: "/v1/usage/query", headers,
+                payload: { sessionId: session.id, endTime: 1, groupBy: "day" } });
+            expect(legacy.statusCode).toBe(200);
+            expect(legacy.json().usage.map((bucket: { tokens: { total: number } }) => bucket.tokens.total)).toEqual([15]);
+        });
+    });
+
     it("queries authenticated period truth after baseline, model switch and correlated replay", async () => {
         const account = await db.account.create({ data: { publicKey: "pk-u0-authenticated-truth" }, select: { id: true } });
         const session = await db.session.create({ data: {

@@ -7,13 +7,14 @@ import type {
     UsageAnalyticsQueryResponse,
     UsageObservationTokens,
 } from "@happier-dev/protocol";
-import { readUsageAccountingMetadata } from "@happier-dev/protocol/usage/usageAnalyticsContracts";
+import { readUsageAccountingMetadata, readUsageRequestAttribution } from "@happier-dev/protocol/usage/usageAnalyticsContracts";
 import { resolveUsageContributionDimensionKey, resolveUsageCostBasis, resolveUsageCostFacts, resolveUsageCostMode } from "@happier-dev/protocol/usage/usageCost";
 import { resolveUsageTokenCategories } from "@happier-dev/protocol/usage/usageTokenCategories";
 import { ProviderConnectionIdSchema, ProviderContributionKeySchema } from "@happier-dev/protocol/providers/ids";
 
 import { addUsageTokens, createEmptyUsageTokens } from "../usageMetrics";
 import type { ScopedUsageContribution, ScopedUsageEventRow } from "./resolveScopedUsageContributions";
+import { resolveUsageContributionSourceContext } from "./resolveScopedUsageContributions";
 
 type RankedCoverage = UsageAnalyticsCoverage["ranked"][number];
 export interface UsageResultProjectionInput {
@@ -68,11 +69,16 @@ export function buildUsageResultProjection(input: UsageResultProjectionInput): {
         const path = accounting?.path ?? "unknown";
         const status = accounting?.status ?? "unknown";
         // Preserve each observed producer state, rather than replacing pending/error with available.
-        const key = JSON.stringify([source, path, status]);
+        const key = JSON.stringify([source, path, status, row.machineId]);
         const previous = sources.get(key);
         const asOfMs = accounting?.asOfMs;
+        // Legacy is a transport bridge (including live reports), not evidence of log capture.
+        const captureKind = path === "runtime" ? "measured" : path === "native" ? "from_logs"
+            : status === "unsupported" ? "not_added" : undefined;
         sources.set(key, {
             source, path, status,
+            ...(row.machineId ? { machineId: row.machineId } : {}),
+            ...(captureKind ? { captureKind } : {}),
             eventCount: (previous?.eventCount ?? 0) + 1,
             ...(asOfMs !== undefined || previous?.asOfMs !== undefined ? { asOfMs: Math.max(asOfMs ?? 0, previous?.asOfMs ?? 0) } : {}),
             ...(accounting?.historyComplete !== undefined || previous?.historyComplete !== undefined ? { historyComplete: accounting?.historyComplete === true && (!previous || previous.historyComplete === true) } : {}),
@@ -124,15 +130,21 @@ export function buildUsageResultProjection(input: UsageResultProjectionInput): {
                 && row.metadata && typeof row.metadata === "object" ? row.metadata : null;
             const provider = ProviderContributionKeySchema.safeParse(metadata && Reflect.get(metadata, "providerId"));
             const connection = ProviderConnectionIdSchema.safeParse(metadata && Reflect.get(metadata, "providerConnectionId"));
+            const captured = row.scope === "turn_delta" && !row.isCumulative && readUsageAccountingMetadata(row.metadata)?.path === "runtime"
+                ? readUsageRequestAttribution(row.metadata) : null;
+            const source = captured?.turnId === row.turnId ? captured.source : null;
             return {
-                id: row.id, eventCount: row.contributingEventIds.length, observedAtMs: row.observedAt.getTime(), sessionId: row.sessionId, turnId: row.turnId,
+                id: row.id, eventCount: row.contributingEventIds.length, context: { usedTokens: row.contextUsedTokens, windowTokens: row.contextWindowTokens },
+                observedAtMs: row.observedAt.getTime(), sessionId: row.sessionId, turnId: row.turnId,
                 agentId: row.agentId, modelId: row.modelId, backendMode: row.backendMode, machineId: row.machineId ?? null, projectKey: row.projectKey,
-                providerId: provider.success ? provider.data : null,
-                providerConnectionId: connection.success ? connection.data : null,
+                providerId: source?.kind === "provider" ? source.providerId : source ? null : provider.success ? provider.data : null,
+                providerConnectionId: source?.kind === "provider" ? source.providerConnectionId : source ? null : connection.success ? connection.data : null,
                 // Runtime dimensions are read from current Session metadata after
                 // transcript admission; they do not witness this response's source.
-                providerAttribution: "unknown" as const,
-                workspaceId: row.workspaceId, source: row.source, tokens: row.tokens, cost: row.cost,
+                providerAttribution: source ? "known" as const : "unknown" as const,
+                providerSource: source?.kind ?? "unknown" as const,
+                connectedAccount: source?.kind === "native" ? source.connectedAccount : null,
+                workspaceId: row.workspaceId, source: row.source, sourceContext: resolveUsageContributionSourceContext(row), tokens: row.tokens, cost: row.cost,
                 ...(perContributionCategories[index] ? { tokenCategories: perContributionCategories[index] } : {}),
             };
         }),
