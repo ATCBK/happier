@@ -22,6 +22,11 @@ Cross-component composition tests that import another app's source use the exist
 
 In 0.3 development, `yarn workspace @happier-dev/cli test:unit src/api/artifacts/accountArtifactStore.test.ts` forwards the file selection through the routed script chain and runs it once. Explicit runner arguments, including file and test-name filters, bypass automatic sharding and the unit lane's unrelated native checks. An unfiltered unit run retains its shard/CI-part selection, native script tests and import-cycle guard. Known CLI unit aliases use source-test preparation and the validation class; actual compiler and runtime preparation keeps its own class.
 
+CLI Vitest commands declare the existing `cli-dist-build.lock` at joint payload
+admission because source-only global setup stages native process custody. Setup
+inherits that authenticated lease; unit runs still do not build full CLI `dist`.
+Non-CLI validation and generator-only checks do not acquire this CLI lease.
+
 ## Choose checks by the changed contract
 
 ### Primary workload standby preparation (0.3 development)
@@ -76,16 +81,117 @@ Root unit and integration commands collect failures across independent workspace
 
 In 0.3 development, runtime worker bootstrap, validation preparation, local `hstack` bundled-workspace preflight and the Stack unit runner prepare emitted workspace prerequisites in `source-dev` mode by default. Their package compilers use the existing `package-dist` envelope, reusing an authenticated parent admission when present. Explicit strict mode, typecheck preparation and public packing/publication still check semantics; public `typecheck` remains independent. Both UI patch stages request patch-package's `--error-on-fail`, so a mixed previously patched tree reaches the existing dependency owner's pristine re-extraction and retry rather than being admitted as ready.
 
+Expo dev/mobile startup is source-first: its canonical UI preflight compiles only
+plugin UI assets and publishes the app-owned inventory through the existing
+generator. It neither waits for SDK dist publication nor consumes the CLI's
+shared-dependency readiness stamp. A retained inventory permits immediate Metro
+startup while that source preparation refreshes in the background. Cold startup
+waits only for its source asset preparation and dependency admission. Explicit
+`ensure:workspace:built --artifact` still owns package preparation.
+
 Package-artifact publication admits its selected plugin compiler outputs through the existing
 workspace dependency build owner before the generator consumes them. This also prepares missing
 `dist` on a cold AUTO replica; check-only projections and compiler-input generation do not compile
 plugin packages. Existing optional-build isolation and required-plugin failure policy still apply.
 
-Both `source-dev` and `qa-runtime` package builds compile captured inputs, so edits during compilation do not require a quiet checkout. The output record identifies the captured inputs; later edits demand a subsequent build rather than being marked current by the completed build. Strict builds retain their live-input drift fence.
+Both `source-dev` and `qa-runtime` package builds compile captured inputs, so edits during compilation do not require a quiet checkout. The output record identifies the captured inputs; later edits demand a subsequent build rather than being marked current by the completed build. Typecheck preparation also requests captured inputs while retaining strict checking. Ordinary strict publication builds retain their live-input drift fence.
+
+Development startup separately admits intact last-green output through
+`scripts/workspaces/ensureWorkspacePackagesBuilt.mjs`. Source server admission
+checks the recorded dependency closure and its complete emitted import graph
+without demanding current source fingerprints. Daemon runtime probes and Expo's
+source inventory feed that same startup policy. Refresh failures preserve
+availability; cold, damaged, dependency-incoherent, and strict/artifact preparation
+still block. Test startup availability separately from successful refresh and
+the lifecycle owner's adoption of the next build. Recovery watches derive transitive package inputs from the same
+workspace graph as build admission, including compiler dependencies. Compiler
+and missing-source diagnostics can wait for those corrections; wrapped Expo
+errors retain their component target, and OS/configuration exits fail fast.
+Finite publication workers stream package start/done events through the
+existing process transport before their terminal result, so CLI progress and
+active-package failure reporting observe compilation while it is running.
+Finite source QA has no
+workspace-dist gate and retains its explicit restart boundary. In 0.3 development,
+unchanged source web starts share a completed, validated export through the existing
+source-products publisher. Owner tests distinguish a completed hit from repeated
+Plugin UI/SDK preparation, Metro export and precompression, and exercise captured
+membership, effective build options, damaged output, pending retention and independent
+Stack serving paths. Explicit executable app-local configuration outside the captured
+workspace uses private preparation rather than shared reuse.
 
 The Stack unit runner isolates product state and caches without dropping its executor placement or authenticated admission identity. Tests simulating a different worker isolate that worker's OS admission state and package-manager executable paths through the canonical boundary fixtures instead of sharing the real host's reservations.
 
 Remote dependency bootstrap reuses the existing per-install dependency refresh lock and checks freshness again after waiting, so same-input callers share the completed installation. In 0.3 development, both remote command entry points finish dependency and workspace preparation before reserving the payload's heavyweight admission envelope. Preparation's compiler leaves retain their own admission. This order lets a dependency/build lock holder obtain admission while another command waits for that lock. Dependency waiters remain behind a live installer without an acquisition deadline; a delayed JavaScript heartbeat during synchronous package-manager work does not permit replacing that owner. The existing lock owner still reclaims exited installers and stale malformed lock records. Native admission decisions reclaim dead owners and owner directories with an unreadable or incomplete process identity under the existing capacity lock; read-only memory samples do not mutate those records.
+
+In 0.3 development, local validation preparation reads dependency readiness through `dependency_refresh.mjs#assertDependenciesReady`. Stale, missing or damaged dependencies, incomplete UI postinstall outputs, and an active installer return `HAPPIER_DEPENDENCIES_NEED_REFRESH` before installation, repair or lock-queue registration. An active installer diagnostic includes its PID and held/heartbeat ages. Refresh/skip/service settings do not grant validation mutation authority; an explicit refresh remains with the canonical dependency owner and its [Expo dependency barrier](binary-runtime.md). Bootstrap defaults to local admission, and both remote command transports explicitly select worker preparation.
+
+Scriptless bootstrap remains for synchronized replicas. Every worker role completes UI's canonical `postinstall:real` under dependency admission after an install, including forced package repairs. Readiness verifies every applicable UI patch in both hoisted and app-local copies, enriched-markdown's generated JavaScript/WASM outputs, and mandatory postinstall assets before publishing the installed tree. Healthy warm preparation only reads dependency bytes. Warm output repair preserves the installed tree's existing full admission when no extraction occurred. Missing markdown artifacts are repaired through the existing postinstall patch owner before its strict all-package patch pass; they do not require re-extracting healthy dependencies. Dependency-lock consumers, including Expo startup, use the existing workspace wait notifier to report the holder while waiting.
+
+Finite runtime, source-web and workspace-package producers include dependency custody in the existing joint native admission transaction. A busy capacity decision releases dependency and publication scopes before waiting, then retries through that same owner. Stack run/start, remote validation and named workspace preparation must not hold the dependency scope around children queued for native admission. Admitted children inherit dependency custody through their final captured-input read and cleanup; parallel descendants reuse that custody rather than waiting on their parent. Dependency refresh therefore cannot replace the installed bytes consumed by a running finite build.
+
+A dependency scope shares finite exports and read-only verification concurrently.
+Its existing JSON owner records each active reader; the existing short ticket
+registration lock serializes joins, releases and writer admission. A queued
+dependency refresh blocks new independent readers, then runs exclusively after
+all current readers finish; writers retain FIFO order. Healthy Stack startup
+verifies installed admission under shared read custody without joining the mutation
+queue. Component-owned output preparation remains separate from dependency
+freshness, while missing patches/assets and stale installed inputs still use the
+canonical writer. Already-loaded untyped lock owners remain conservatively
+treated as possible writers by read-only verification.
+
+Native Linux liveness rejects unreaped zombie and dead process states even when
+the PID and start token still match. The existing admitted-tree observer keeps
+a terminal wrapper's reservation while an authenticated live payload survives;
+no remaining live workload permits reclamation. Admission logs successful owner
+reclamation and removes terminal waiters from queue ordering. Sleeping, blocked, stopped and
+orphaned live work retains its reservation: age, low CPU and a missing launching
+shell do not prove that its protected workload has ended. Validation concurrency
+is constrained by the existing memory envelopes and FIFO/backfill policy rather
+than a fixed one-job slot.
+
+In current 0.3 development, finite workspace publishers declare their existing
+package/publication leases to `workspace_build_admission.mjs`; native
+`hstack-exec` is the single joint lease/capacity owner. Plain and workspace
+waiters join the same blocking kernel decision-mutex queue before acquiring
+new leases. Under that mutex, a publisher tries its leases without waiting;
+a busy attempt releases every new lease and yields head priority while keeping
+its waiter and original queue age. Capacity-denied attempts likewise release
+new leases before retrying. Only a ready lease transaction is admitted. The
+generic compiler, CLI-common, SDK prepared-script, CLI readiness
+and source-bundle publishers use this path; prerequisites finish outside their
+publication transaction. Completed source-bundle lookup, recovery and selection
+use short publication custody directly. Standalone and in-process publishers
+try all declared resources without waiting, release partial acquisitions before
+an event wait, and never retry an error from an entered publisher.
+Package-manifest and exact-entry facts preserve placement and effective compiler
+class while letting these publishers, rather than an outer package command,
+reserve their envelope. Explicit command environment/cwd overrides participate
+in that same policy. No second class table, admission budget or deadline is added.
+
+In 0.3 development, denied admission attempts keep one custody worker and its
+directory watches across retries. Lease release, queue changes and reservation
+retirement wake that worker; its snapshot precedes the decision and is rechecked
+after arming the wait. The native owner's existing catch-up cadence still
+samples external memory changes, missed notifications and exited owners. A
+plain no-wait probe starts no custody worker. JSON dependency/publication locks
+reuse the workspace lock's notification mechanics while retaining their own
+owner recovery and FIFO rules; heartbeat-only writes do not rescan healthy
+contention. They share the workspace watcher's one-second catch-up default,
+bounded by their existing acquisition and stale-owner budgets; legacy 125/250 ms
+poll settings do not keep healthy owners on periodic scans.
+
+Authenticated descendants may reenter their own leases and envelope. A charged
+payload cannot wait for a foreign publication lease, including a lock-only
+consumer: native admission marks this restriction, and the canonical workspace
+lock refuses contention with `HSTACK_WORKSPACE_ADMISSION_ORDER`. An inherited
+lease cannot queue a compiler or capacity escalation either. Move that producer
+before payload admission rather than retrying beneath the same charged ancestor.
+Local prerequisite preparation likewise precedes admission. Ordinary Linux CI
+keeps its compiler-admission exemption; non-Linux retains its existing execution
+policy and canonical workspace leases. These changes do not replace already
+loaded launchers; a stranded old invocation requires owner-controlled retirement
+and reinvocation, never an unrelated Stack restart.
 
 Routed POSIX commands default scratch beneath `tmp` in the configured worker CLI home, on the worker's disk-backed filesystem. On Linux, custody allocates a unique `hstack-*` directory there and exports it as `TMPDIR` before admission, preparation and payload execution. After the payload group stops, custody reuses its process-binding inventory to remove that command's scratch, including Yarn's per-run directories and killed test fixtures. A surviving group, inherited `TMPDIR`/test-root binding or unavailable newer-process observation retains it. Explicit `TMPDIR` remains caller-owned and unchanged; non-Linux commands retain the shared disk-backed default. This prevents default test/build scratch from consuming RAM-backed `/tmp` quotas.
 
@@ -118,6 +224,10 @@ public-check observations plus headroom exceed 6 GiB. Emit-only builds retain
 `package-dist`. Root and cross-package project builds retain `compilation`.
 
 Development SSH commands, probes and native execution share the OpenSSH control socket selected by the synchronization owner's generated configuration (`sync_project.mjs#prepareDevTargetOpenSsh`). Generated defaults use `ControlMaster auto` and ten idle minutes of persistence; explicit guest socket paths remain in place. The native launcher's existing master-creation lock waits for its live creator instead of opening a new connection on contention. Stack and browser forwards remain dedicated because their owner must remove its listeners on stop without killing another session's master. Enrollment and controller-key verification use independent handshakes rather than treating an already-authenticated master as proof of the configured key. The opt-in Linux host policies and their removal are documented in `apps/docs/content/docs/hstack/dev-targets.mdx`; neither enrollment nor ordinary dispatch applies them.
+
+In 0.3 development, supervisor bootstrap, readiness and worker channels reuse that configured master. Stack service retirement keeps independent control transport so saturated session channels cannot block cleanup. The browser owner restores a disconnected SSH forward while its worker is alive, preserving its CDP port and reverse SOCKS binding; a failed replacement or owner cancellation closes the owned worker and listeners. It does not restart a Stack. `dev-targets host prepare NAME --inspect-ssh [--ssh-log-since=TIME]` is a read-only inspection mode at the same privileged host-preparation owner: it prints effective sshd limits and aggregate journal counts, without printing authentication identities or keys. Run it separately from host-setting changes; it requires existing noninteractive root/sudo access.
+
+Source-replica readiness shares one known-transition-race policy between JSON consumers and native placement. A staged-file relocation collision requests the existing causal flush and requires fresh clean evidence before selection; permission failures, unknown errors and excluded transition evidence remain fail closed. Placement surfaces the recovery diagnostics, while flush progress stays on stderr rather than contaminating its health record. Translation declaration tests keep their fixture and declaration output in private OS temporary storage, outside the synchronized source tree.
 
 In 0.3 development, `provision.mjs` owns first-contact enrollment and explicit Linux host
 preparation. Enrollment accepts missing Node/Corepack and prints the exact
@@ -180,17 +290,19 @@ own lifetime and does not move the daemon. The implicit browser pool includes on
 registered in that consumer's existing target registry, so registries predating either worker still work.
 An empty implicit pool and an unknown explicitly named target fail without local browser fallback.
 
+In current 0.3 development, an unplaced package-script command whose entire payload directly invokes `hstack-exec --script=...`, without local pre/post hooks, reaches that script before the outer launcher selects a host or reserves memory. The package manifest owns this delegation, including `--cwd` and Yarn workspace commands; there is no separate list of routed script names. The script's dispatcher owns placement and admission on the executing host. Binary runners, implementation scripts, already-placed commands and genuine local payloads keep their existing admission envelopes.
+
 On the Linux controller, explicit `--local` heavyweight compilation (including package-dist and runtime-build) refuses by default and points to AUTO. A caller can explicitly authorize `--local --allow-local-compilation`; this changes placement only and retains class admission plus the existing 8 GiB local floor, even under CI. Already-placed workers do not require the controller override. Light local commands remain immediate. Ordinary automatic CI execution retains its existing exemption.
 
 Selection excludes machines whose total RAM is below the selected class's requirement. Linux/WSL admission subtracts only each live admitted job's unused reservation, `max(0, class envelope - authenticated process-tree memory)`, from available memory: resident pages are already absent from `MemAvailable`. Missing memory observation retains the full reservation. There is no additional guessed available-memory percentage, PSI or CPU-load denial. Reservations remain until exit or proven-dead owner reclamation; authenticated descendants reuse their parent's reservation, and escalation replaces that owner's envelope under the admission lock while crediting its existing resident memory. Explicit `--local` bypasses remote placement and uses this same admission against local memory. Light local commands remain immediate. Diagnostics name available, required and unused reserved memory. The envelopes reserve admission headroom but do not cap a command's actual memory use. Runtime publication placement uses the retained-demand broker described below; busy admission keeps the build remote, and only unavailable capable workers permit configured local fallback. Darwin selection applies the total-capacity filter and load ranking; its existing execution path has no admission queue. Native Windows command routing remains local.
 
-In current 0.3 development source, the canonical Linux observer uses `/proc/<pid>/smaps_rollup` PSS for service/browser and admitted trees so shared pages contribute each process's share. During native admission, it can use the summed service RSS upper bound only when that bound cannot constrain available memory or the class's physical capacity; admitted-owner credits always retain exact PSS. Process metadata is observed once for the executing account, and kernel generations are read without per-PID subprocesses. Vanished processes contribute zero rather than stale RSS; unreadable or malformed PSS for a live process falls back to RSS and reports the accounted fallback PIDs. When neither observation is available, admission retains the full reservation. Historical RSS peak measurements above remain measurements of the original runs.
+In current 0.3 development source, the canonical Linux observer uses `/proc/<pid>/smaps_rollup` PSS for admitted trees so shared pages contribute each process's share. Service/browser memory is diagnostic: its resident pages already reduce OS `MemAvailable`, and its census never supplies another capacity deduction. Native admission can report a summed service RSS upper bound without walking those services' page tables; admitted-owner credits retain proportional accounting. Process metadata is observed once for the executing account, and kernel generations are read without per-PID subprocesses. Vanished processes contribute zero rather than stale RSS; unreadable or malformed PSS for a live process falls back to RSS and reports the accounted fallback PIDs. When neither observation is available, admission retains the full reservation. Historical RSS peak measurements above remain measurements of the original runs.
 
-In current 0.3 development source, the Linux worker fixes admission state at `/tmp/happier-heavyweight-admission-v1` and derives machine identity from the OS. Caller roots, homes, temporary mirrors and target aliases cannot create separate queues. The configured worker execution account owns that directory; unavailable or foreign-account state fails closed rather than falling back to a private root. Existing private-root live owners are observed during cutover, and authenticated legacy ancestors migrate their existing envelope on reentry. Already-loaded older launchers must drain before the new single-queue contract covers every writer.
+In current 0.3 development source, the Linux worker fixes admission state at `/tmp/happier-heavyweight-admission-v3` and derives machine identity from the OS. The root's protocol revision must change when waiter/owner semantics change, keeping incompatible launchers in separate queues. Revision 3 adds lease availability to queued publishers so a lease-blocked head yields priority. Caller roots, homes, temporary mirrors and target aliases share the queue for their revision. The configured worker execution account owns that directory; unavailable or foreign-account state fails closed rather than falling back to a private root. Authenticated live owners in other roots retain their unused memory reservations through process-tree observation, and authenticated ancestors reuse their existing envelope on reentry. Queue heads identify themselves by pid and kernel start token rather than waiter path. Already-loaded older launchers remain in their original queue and require owner-controlled reinvocation if stranded; atomic source replacement cannot update their parsed program.
 
 If remote admission cannot register its state before payload execution, the admission owner emits an execution-qualified failure. Automatic placement excludes that worker for the existing unavailable-probe TTL and tries another configured target; an explicitly pinned invocation reports the failure without changing hosts. Preparation failures and a started payload's exit status, including 75, are authoritative and never request replay.
 
-In current 0.3 development, AUTO checks actual worker admission without waiting after preparation and before payload execution. An execution-qualified busy result releases that dispatch reservation and re-evaluates the remaining pool without an unavailable-host TTL. If every usable worker is busy, the selector waits using the admission pressure-retry cadence and re-evaluates the pool; it does not fall back locally merely because workers are busy. Explicit pins retain the worker's observable admission wait. Existing already-loaded launchers are not restarted or moved by this source change.
+In current 0.3 development, AUTO checks actual worker admission without waiting after preparation and before payload execution. An execution-qualified busy result releases that dispatch reservation and re-evaluates the remaining pool without an unavailable-host TTL. If every usable worker is busy, the selector waits using the admission pressure-retry cadence and re-evaluates the pool; it does not fall back locally merely because workers are busy. Heavy Linux candidates also rank using the admission owner's unreserved memory budget, including service memory and unused live-owner reservations; a budget below the command's class floor ranks behind fitting workers. With `includeLocal`, local ranking also adds live waiters from the current admission root divided by CPU capacity to its effective load, alongside active dispatches; stale process incarnations add no penalty. Explicit pins retain the worker's observable admission wait. Existing already-loaded launchers are not restarted or moved by this source change.
 
 POSIX compilation-class dispatch in 0.3 development keeps project locality at this same
 AUTO selector. A repeated project scope prefers its most recently completed worker
@@ -223,8 +335,16 @@ ordered custody reclamation (oldest stale staging across stacks, unneeded Yarn e
 stale lane scratch). Explicit maintenance can run that retention policy independently.
 In 0.3 development, maintenance nominates the former worker `runtime-build/<stack>`
 platform directories, private `store`, and `.incoming-happier-runtime-build-*` roots
-through the historical reaper.
+through the historical reaper. Current runtime builds use temporary roots and normal
+controller/worker teardown; abandoned final staging uses the same historical retention.
 Unknown children, symlinks, recent descendant writes and live references are retained.
+The SDK's private `happier-<uid>` directory is a shared namespace, never a job
+root. Its canonical ownership reader lives in `packages/cli-common/tempDirOwnership.mjs`
+and is also used by the typed temp-directory API. Historical cleanup preserves live
+or unknown SDK creators, including publication callbacks holding only a JavaScript
+reference. Maintenance nominates marked `runtime-build-*` children only after their
+creator generation is gone, then applies the same age and process-reference checks;
+the SDK removes unchanged sidecars only after their directory is absent.
 A still-exhausted worker is excluded before bootstrap/payload; pins report the disk
 diagnostic. The execution-qualified disk marker never authorizes replay of a started
 command. `dev-targets status` exposes free bytes. Admission does not guarantee capacity
@@ -236,9 +356,9 @@ An explicit routed `hstack-exec --heavyweight-admission --class=... -- ...` carr
 
 Stack unit roots, CLI default test homes/bins, external-hook configuration fixtures and docs-check fixtures use `scripts/testing/process/temporaryDirectories.mjs` for normal teardown. On Linux, custody's explicit `reap-test-temp-roots` mode can reclaim marked roots after their creator, process group and explicitly bound descendants are gone. Detached children inherit `HAPPIER_TEST_TEMP_ROOTS`; inaccessible ownership observations retain the root. Ordinary command dispatch does not sweep shared scratch. In current 0.3 development, explicit `reap-temp-roots` maintenance checks historical `happier-*`, `hstack-*`, `docs-check-*` and Yarn v1 `yarn--*` directories beneath the selected temporary parent. It reclaims only account-owned, non-symlink roots whose newest descendant mtime is older than 24 hours and which no live same-UID process uses as cwd, open descriptor, mapped file or inherited temp binding. For a known same-UID process denied by procfs dumpability, the historical reaper retries read-only observation through existing noninteractive `sudo` authorization. It never exempts a process by name, changes OS authorization, or elevates deletion. Unknown UID or still-unavailable same-UID visibility retains candidates; processes whose status identifies only foreign UIDs do not block this user's reclamation. Environment contents and privileged command output are never logged. The 24-hour margin does not limit admission waits. Reclamation logs paths and allocated bytes, counting hard-linked files once. Invoke historical maintenance through target-specific execution of `bash apps/stack/scripts/utils/dev_targets/remote_execution_custody.sh reap-temp-roots - historical-sweep`, with an explicit `TMPDIR` for a shared parent; it never signals processes.
 
-Service placements do not exclude command hosts. Admission measures resident memory of current server/Expo process trees through their existing Stack PID state and process-generation witnesses, including standalone Expo state. It limits capacity to total RAM minus that resident memory without subtracting RSS twice from `MemAvailable`. Active builds retain their `runtime-build` class reservation. Diagnostics expose service and command reservations; no second placement list exists. A class larger than total RAM minus service reservations fails immediately with a remote-routing instruction, rather than waiting for impossible local capacity.
+Service placements do not exclude command hosts. OS available memory already accounts for current server/Expo/daemon/browser processes. Admission subtracts only unused admitted-work envelopes from that available memory; a service RSS estimate with shared-page overcount cannot block otherwise fitting work. Active builds retain their `runtime-build` class reservation. Diagnostics expose service memory and unused command reservations; no second placement list exists. A class larger than total physical RAM fails immediately with a remote-routing instruction. A fitting class waits for available capacity rather than treating a currently resident service as permanently reserved growth.
 
-Fitting work can backfill a blocked queue head. There is no existing admission deadline: cumulative backfill is instead bounded by that head's existing class envelope, and stops when a candidate envelope would bridge its capacity gap. Successful admissions alone consume this allowance; failed attempts and readiness probes do not. This prevents an endless stream of small commands from starving the head, without adding a timeout or fixed job-count ceiling. Admission cannot make unavailable physical capacity appear.
+Fitting work can backfill a capacity-blocked queue head. There is no existing admission deadline: cumulative backfill is instead bounded by that head's existing class envelope, and stops when a candidate envelope would bridge its capacity gap. Successful admissions alone consume this allowance; failed attempts and readiness probes do not. Equal-or-larger queued classes cannot backfill and are rejected before resource observation, so they do not serialize unnecessary process scans ahead of the head. Plain and workspace capacity-lock acquisitions block in the same kernel `flock`; `--no-wait` and inherited lease holders remain nonblocking. Lease-blocked publishers yield head priority until a nonblocking lease attempt succeeds, so a lease holder can obtain admission without a cycle. The existing cadence still applies after a queue or pressure decision. This prevents an endless stream of small commands from starving a ready head, without adding a timeout or fixed job-count ceiling. Admission cannot make unavailable physical capacity appear.
 
 Capacity exclusions are invocation-specific: healthy raw samples remain usable by focused work on smaller workers and retain the default 15-second positive probe TTL. Dependency-refresh waiting belongs to the bootstrap's workspace lock before payload admission, within the same cancellable target execution. A selected sync-flush failure retries another target before any command starts; if reachable targets have synchronization or prerequisite failures, the launcher reports an actionable error. Configured `fallback=local` applies only when no remote target is reachable, with an explicit log. Explicit `includeLocal` participation, local placement and machine-local invocations remain distinct from fallback. Exit 137 remains authoritative and reports possible OOM with the last target memory sample; it is never automatically replayed. Outbound routing requires a cwd inside the synchronized repository; explicitly local publishers and already-placed children may use temporary repositories.
 
@@ -260,7 +380,9 @@ the shared daemon. Before project activation, the sync owner removes orphan
 repository writers by exact session identifier, using Mutagen's project label
 and current lock identity. A failed project termination preserves the project
 file; replacement flushes current old membership before termination.
-Mac mirrors require a current Mac-only flow, not withdrawn
+Sibling command settings live only under the producer's `commands-<checkout>/dev-targets.json`;
+target definitions derive from the producer, and service endpoints derive from
+the sibling's own Stack config. Mac mirrors require a current Mac-only flow, not withdrawn
 exact-target typechecks alone.
 
 `mutagen_runtime.mjs` owns first-cycle readiness, including its generated `native_sync_readiness.sh` projection. A clean connected idle session with both endpoints in `no-watch` and no completed cycle is `needs-flush`: eligible for selection, with the mandatory dispatch barrier establishing a completed clean cycle before any payload. An active initial scan remains `synchronizing`. Status and doctor read the same classification; startup seeding also consumes it rather than deciding independently from watch/cycle fields.
@@ -341,6 +463,15 @@ repeat behavior, and combined sudo scope. Live boot persistence still requires
 the owner's post-restart readback; sysctl.d is a boot input on systemd guests,
 not proof that every WSL init loads it. Removal is documented in both guides.
 
+In 0.3 development, `devReloadCoordinator` owns one source observation service
+per watch-mode stack. Native events invalidate `watchSignature` observations;
+runtime source fingerprints consume those observations with their existing
+encodings. A burst reaching half the actual Linux queue capacity recrawls once
+after it settles. The default five-minute safety check stats known inputs
+sequentially and only re-enumerates changed directories; generation activation
+also checks known metadata. Successful server and daemon source snapshots close
+their preparation watchers and retain no periodic source observation.
+
 ## Voice and audio validation
 
 The current 0.3 development QA seam is [`createVoiceQaController`](../apps/ui/sources/voice/qa/voiceQaController.ts), with default dependencies in [`voiceQaRuntimeDeps.ts`](../apps/ui/sources/voice/qa/voiceQaRuntimeDeps.ts). Text and media start modes are distinct; media delegates to the normal Voice lifecycle owner and binds the exact Home-qualified Session target. [`voiceQaDebugRuntime.ts`](../apps/ui/sources/voice/qa/voiceQaDebugRuntime.ts) defines the development/debug-runtime check. This is a development validation aid, not a second Voice runtime or a release-availability claim.
@@ -352,6 +483,8 @@ Choose the evidence boundary before running a canary:
 - Browser fixture capture can use Chromium's file-backed fake microphone when the browser supports it. Verify the loaded browser's actual track rather than assuming the launch flag worked. Simulator/emulator loopback tools are environment-specific aids, not substitutes for real device acoustics.
 - Exercise permissions, cancellation, interruption, transport loss and terminal cleanup through the normal host owner. Record the actual runtime, platform, account and exact Session binding; a debug route or a text canary alone does not close the normal-UI journey.
 - Physical microphone/speaker quality, AEC, Bluetooth routes, native audio focus and background/lock behavior need their named device/release checks. Missing hardware evidence is reported explicitly and does not manufacture another feature-completion gate.
+
+In current 0.3 development, start a remote fake-audio QA browser with `hstack dev-targets browser start <lane-session> --stack=<qa> --url=<qa-ui-url> --fake-audio=packages/tests/fixtures/voice/phrases/short-command.24k.wav`; the checked-in speech says “Open the project settings,” is copied into the worker-owned profile, and still requires microphone permission (bare `--fake-audio` supplies Chromium's synthetic device instead).
 
 An approved Voice program may require a larger composed journey; use its current execution recipe for that work. Standing evidence rules live here, while program status and past host measurements remain in the program's evidence.
 
@@ -379,9 +512,9 @@ The repository deliberately separates the compiler from the programmatic TypeScr
 - `scripts/workspaces/resolveTypeScriptCliInvocation.mjs` is the only compiler-selection owner. First-party scripts must use `runTypeScriptCli.mjs`, `buildTypeScriptPackageDist.mjs`, or that resolver directly; do not invoke a bare `tsc` shim or resolve `typescript/bin/tsc`.
 - `yarn tsc ...` is defined at the repository root and in every TypeScript-owning workspace; it delegates to the shared native runner and therefore uses TypeScript 7.
 
-CLI and UI typechecks run `tsconfig.source.json` (source) and `tsconfig.test.json`
-(tests and their imported source) sequentially through that runner, including
-the root source-workspace lane. Both retain the original strictness, aliases
+CLI typechecks run `tsconfig.source.json` and `tsconfig.test.json`; UI typechecks
+run foundation, core, source remainder and tests sequentially through that runner,
+including the root source-workspace lane. They retain the original strictness, aliases
 and ambient declarations, with separate incremental caches. The original
 `tsconfig.json` remains the shared full-coverage base so existing configs that
 extend it retain their coverage. Repeated
@@ -389,7 +522,29 @@ extend it retain their coverage. Repeated
 return a nonzero result if any project fails; cancellation or launch failure
 stops the sequence. These large app programs explicitly use `--singleThreaded`
 to avoid retaining duplicate native checker state. Use the public package
-`typecheck` entry point to check both programs, not only the source config.
+`typecheck` entry point to check every partition, not only the source config.
+
+In 0.3 development, `apps/ui/scripts/deriveTypecheckProjects.mjs` derives the UI
+file lists at the serial compiler choke point. The largest source dependency cycle
+belongs to core, its prerequisites belong to foundation, and remaining editor roots
+belong to source or tests. Shared ambient declarations contribute to every partition.
+Imported authored TypeScript and JSON are included in their consuming closure.
+The generator checks exactly-once editor-root coverage before writing finite
+projects into `apps/ui/node_modules/.cache/tsc/tsconfig.*.json`. These ignored
+projects extend the authored configs, preserving option paths and redirecting
+references to the other finite projects. Public checking leaves tracked configs
+unchanged;
+`node apps/ui/scripts/deriveTypecheckProjects.mjs --check` detects stale projections.
+Adding or moving a source file requires no manual partition registration.
+
+Typecheck dependency preparation reuses the workspace owner's captured-input build
+path with strict checking enabled. Unchanged inputs reuse coherent declarations;
+changed packages build from the existing bounded capture. Later source edits demand
+the next build instead of invalidating this check's successful dependency compile.
+Ordinary strict publication retains its live-input fence. Typecheck bootstrap and
+component preparation share this policy through `remote_validation_preparation.mjs`.
+Bootstrap admits source tools and UI postinstall outputs without compiling Stack's
+unrelated workspace closure; the subsequent component preparation owns declarations.
 
 Ordinary CLI builds also use one native checker. Under the existing CLI
 publication lock, `apps/cli/scripts/build.mjs` reuses the source-generation path

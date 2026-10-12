@@ -95,6 +95,11 @@ The Protocol error classifier preserves machine-offline, timeout and transport
 causes with their typed retry recovery. Only malformed successful read responses
 become `provider_rpc_response_invalid`; unknown failures, typed refusals and
 mutation outcomes retain their own recovery semantics.
+An unavailable Account catalog retains `provider_catalog_unavailable` with Retry,
+independently of Agent or model-endpoint availability. Authoring route seeds follow
+the selected machine identity while its execution target resolves; resolution
+alone does not discard the draft, and actual target or Account changes still retire
+machine-derived candidate defaults.
 After a connection mutation, the canonical Action classification also determines
 refresh scope: Account edits refresh active projections on that Home across
 machine targets; machine edits refresh only the exact machine. Hidden projections
@@ -243,11 +248,13 @@ incumbent label stays. A route or model picked while the session runs is armed f
 the next message exactly like an Agent switch (D15): the session's pending model
 selection is the arm, `resolveArmedSubmitPresentation` names it on the send control
 ("Continue via <source>"), and `resolveSessionComposerSendDestination` returns
-`armedRouteContinuation`, so the send restarts the runtime on that route through the
-existing provider-binding restart and then sends through the ordinary path. A
+`armedRouteContinuation`. The transition owner retains live model picks as intent
+without applying them, including their metadata echoes. Send asks that same owner
+to apply the selection; only a restart-required result enters the existing
+provider-binding restart, then sends through the ordinary path. A
 same-Agent change carries nothing over as text (`session.agentTransition` rejects a
 same-Agent target); it resumes the same session. Mid-turn the send is refused like an
-Agent switch, and picking the applied route again un-arms it. A saved custom
+Agent switch, and `session.model.unarm` restores the applied route without sending. A saved custom
 connection reopens in the custom editor it was added with and saves through the
 `update` Action's `template` replacement; the editor is offered only when the form
 can express the stored template exactly. Child Run headers read R2's `resolvedSelection`

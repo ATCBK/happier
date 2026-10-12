@@ -50,6 +50,56 @@ graph TB
 
 Executable Agents and model Providers are different domains. `happier agents ...` manages Agent runtimes; `happier providers ...` manages configured model-source connections. Provider contributions, connections, grants, settings, and structured model selections are protocol-owned. See [Providers](./providers.md) for the complete ownership and safety contract.
 
+### Connected Agent homes (0.3 development)
+
+`daemon/connectedServices/materialize/materializeConnectedServicesForSpawn.ts`
+owns home materialization for launch and credential reapplication. Agents opting
+into a durable native home reuse the existing account/group home resolver and
+update managed files in place under the existing serialization owner. A group
+declaration may instead select its active member's account home. Refresh, failed
+launch and cancellation must not replace or recursively remove that durable
+home. Other materializers and discovery probes retain their temporary/staged
+lifecycle; probes do not import into durable or shared history.
+
+A `linked` entry whose native source is missing remains local. The descriptor
+must explicitly declare `createIfMissing: 'directory'` to create a native
+directory. Shared mode imports declared private history before establishing
+shared links; isolated mode keeps local state in the account/group home. Existing
+resume roots feed the same import owner, and adoption does not authorize deleting
+the previous root. Agent declarations own the state inventory and configuration
+inheritance separately; no refresh-specific copier or migration registry exists.
+
+In isolated mode, adopting a legacy per-session or per-Run root retains its
+declared private state. Between durable account homes, materialization imports
+only the requested conversation verified by the existing Agent catalog; absent
+a resume identifier, it imports no other account's state. Source paths are
+canonicalized before exact-file matching so configured base-directory aliases
+do not prevent adoption. Agent continuity policy still decides whether an
+account transition is permitted; this import does not traverse borrowed state
+links or authorize bulk import from the native home.
+
+Execution-run isolation preserves the user's ordinary cache, data and state
+locations rather than creating per-run XDG stores. Selected-purpose environment
+removals travel through the existing bootstrap/execution-run unset channel and
+are applied case-insensitively after environment overlays. Native launches keep
+their inherited environment.
+
+Authentication reapplication uses the same Account authority as initial launch:
+the daemon's primary Account may retain native sharing, while a requester
+Account is isolated from the custodian's native home. The Session control owner
+passes that decision to the authentication-selection materializer; absent
+authority remains isolated. Reapplying credentials must not force a primary
+Account's shared home into isolation and detach the transcript needed to resume.
+
+Codex app-server authentication is process-local after token application. Its
+runtime records the account actually accepted at startup or hot application,
+and reset-credit requests use that accepted access material rather than the
+launch home's credential file. The daemon's existing runtime-auth refresh owner
+returns access material only for the exact settled credential revision after
+current-target and materialization checks; the plugin does not reread a previous
+account's launch home after a switch. This proof carries no refresh token. These
+development-source contracts do not establish successful provider token rotation.
+
 ### Checkout directory mapping (0.3 development)
 
 `workspaces/activation/resolveDirectoryInCheckout.ts` owns mapping a selected
@@ -115,9 +165,13 @@ ambient saved profiles while retaining the local profile id for credential routi
 Widget Account scope, areas, and input admission consume the qualified Home identity
 from that target; a routing profile id is not substituted for an available Home id.
 The existing Action context carries that identity independently of its routing
-profile id. Protocol's widget surface admission compares the qualified context
-identity and captured Widget scope exactly; contexts without that field retain
-their existing `serverId` comparison.
+profile id. Protocol's shared widget admission compares the target and context
+against the captured Widget Account scope. The UI supplies its existing
+server-profile identity comparison so a local profile id and that profile's
+portable Home id identify the same Home; hosts without aliases retain exact
+comparison. Account identity, captured lifetime and Artifact document identity
+remain independent checks. Approval replay preserves its original input and
+origin rather than rewriting them to the answering device's routing profile.
 
 Retained Project Open intent belongs to Protocol's
 `projects/openProjectDraftV1.ts` and the existing V2 draft repository at
@@ -721,11 +775,280 @@ Semantic output segmentation and character/UTF-8 budgets are owned by the shared
 Protocol speech policy and the selected provider's declaration, described in
 [plugin platform](plugin-platform.md#batch-speech-output-03-development).
 
+Public daemon model-pack metadata retains optional `lastUsedAt` (epoch
+milliseconds), exposed by `DaemonPublicVoiceModelPackRuntime.list()`. The voice
+worker records it through that owner after a fresh successful native model load
+and cancellation checks. Installation, integrity probes, listing and cached
+runtime reuse do not refresh it; older metadata remains readable with the field
+absent. Owner change subscriptions invalidate cached Storage facts after a load,
+installation or removal, separately from plugin-reload runtime invalidation.
+
 Voice may describe a pending permission under the current sharing policy. Spoken
 approval cannot decide it: the canonical permission UI owns the tap, and End leaves
 pending requests reachable. Android's ongoing microphone notification opens the
 app; it does not own conversation state. The existing iOS Focus activity is
 session-attention delivery. A dedicated Voice Live Activity remains deferred.
+
+### Storage sizing, pile and Trash (0.3 development)
+
+The daemon mounts `daemon.storage.summary.get`, `category.list`, `size.refresh`
+and `watch` through its existing Machine RPC attachment owner. Attachment dynamically
+constructs one `storage/storageService.ts` owner and initializes maintenance;
+reconnects reuse it, while Home/installation retirement and daemon shutdown dispose
+it. Category sizing remains demand-driven, with owner edges invalidating its cache. Actions
+use `machines.storage.*` and authenticated exact-Machine transport, not local
+invocation without Home admission. Custodians can read all categories and explicitly
+resize; recipients receive shared capacity/Happier totals and only Session folders
+whose Account custody is proven by the incumbent requester owner. Inventory and
+scan paths remain in Machine RPC payloads, not Machine metadata or broadcast Sync;
+the user's protected-folder policy is the exception described below.
+
+The category catalog borrows current managed-session, Project/SCM, model-pack,
+recording, process-use and temporary-custody facts. Worktree retention goes through
+the canonical SCM registry and repository queue. Main checkouts, live use, changed
+files, unpushed commits, unsaved drafts and open pull requests produce Keep reasons;
+unknown change facts remain unavailable rather than an invented stable fingerprint.
+An unavailable or partially resolved Project snapshot marks affected category
+sizes `atLeast`; it is not reported as a known-empty catalog. Resident model packs
+borrow the actual inference worker's ready/warming state, including paths passed
+over IPC rather than visible in process arguments.
+Unknown ownership remains Check; known retained data is Keep or Forbidden rather
+than inferred disposable from age. `disk-measure` in the existing process-custody
+helper owns allocation and hard-link accounting. Most-specific requested roots
+attribute nested categories; owned-root remainders, including the current-user
+temporary parent and its sibling markers, remain noncollectable own data.
+One measurement returns the catalog sizes and the requested category and Safe-volume
+unions from the same traversal. Ordinary single-link files contribute directly to
+aggregates; only sharing and physical-root overlap evidence needs retained identity state.
+The common temporary-directory owner resolves the trusted OS temp parent to its
+physical path (including macOS `/var` aliases), while still rejecting a symlink
+for the private current-user leaf. The native helper's no-follow rule is unchanged.
+
+Snapshots retain their last successful sizes until owner invalidation or explicit
+Size again. Capacity changes borrow plan 20's sampler without rewalking trees;
+`parkWatch` parks on revision edges without a storage sizing timer. The UI storage
+data store shares demand/subscriptions through `createSharedSubscriptionStore`.
+Storage forwards `availableIncludingPurgeableBytes` only when that sampler reports it.
+The capacity bar distinguishes this reclaimable space from free-now space and from
+Happier's cleanup candidates; an absent fact remains unknown. Review's disk-attention
+copy uses the selected items' volumes and the canonical configured disk threshold,
+not a separate percentage rule, and still initially selects Trash.
+Each measured summary volume also reports optional `canGoBytes`: the native
+reclaimable union of its verified-Safe suggestions, including hard links across
+categories only once. Volume attribution borrows the daemon's current mount facts;
+clients do not infer it from item paths. Caution, Check, Keep and Forbidden items
+do not contribute. Missing means unreported, not zero; capacity-only edges retain
+the last measured value, and recipient summaries omit this inventory figure.
+The same lazy service owns the per-Account Pile, current review and mutation RPCs.
+Collection stamps identity and attribution from current admission, not caller facts.
+Review measures the selected union once, absorbs nested selections and uses identity
+and worktree change facts for `expect`; size growth does not invalidate an otherwise
+unchanged reviewed item. Forbidden is never executable. Keep carries the loss facts
+for the person's confirmation or the agent's proposal. Approval belongs only to the
+ordinary Action policy: no Caution floor, Safe-only waiver, or verdict-dependent
+approval rule. Trash, Empty and Delete now ask first by default for agents; a waived
+Action can act on Safe, Caution and Keep items whose execution facts still match.
+An indexed container composes its owned descendants through the catalog and retires
+them child-first through their existing lifecycle adapters. Their current identities,
+worktree fingerprints and protection tiers participate in the parent's execution check.
+Batch Undo restores the container before its nested owners. Main-checkout removal
+remains unavailable at the current SCM owner: moving its common Git directory would
+invalidate retained registrations. Review exposes that specific lifecycle limitation;
+it does not make a Keep item Forbidden or recursively remove registered worktrees.
+Existing `scm.worktree.remove` and `session.delete` keep their own policy and behavior.
+Storage Actions declare the shared approval-narrowing seam: a signed subset can remove operands,
+refresh `expect`, and reduce `emptyAfter`, but cannot rewrite immutable operands.
+
+Happier Trash records a protected same-volume manifest before the owner retires an
+item. Category adapters preserve managed-session/model-pack/SCM ownership rather
+than bypassing it with generic filesystem mutation. Restore uses the existing native
+helper's atomic no-overwrite operation; an occupied destination is refused. Move,
+empty and Undo receipts consume the shared Activity log, not a storage-local journal.
+Recipient projections and effects require current proven Session-folder ownership;
+accepted effects detach from request cancellation but continue revalidating authority.
+The data-layer Pile hook exposes optimistic pending deltas without introducing a
+second cleanup owner. The separate visual lane owns Storage rendering; these
+development-source contracts do not establish released or loaded-UI availability.
+
+Managed configured ACP installs are indivisible Account/definition/version/source-kind cache items.
+Pin changes install side by side through the existing archive/npm owners. A complete ready
+daemon-Account catalog identifies removed definitions, displayed as
+`<name> · removed agent` from retained install metadata. Exact items use the same
+live-session-protected version remover as install jobs and successful catalog sweeps;
+the automatic sweep considers only the custodian Account's namespace and removes
+only versions no longer referenced by its complete catalog. Storage binds an exact
+namespace/version/source kind so removing one item cannot remove another Account's
+install, another pin, or a retained item from a different distribution kind;
+ancestor and descendant paths cannot bypass it. Cache containers expand to expose
+managed children without withholding unrelated cache cleanup. These installs do
+not acquire generic Trash restoration.
+
+#### Storage policy and protected folders
+
+[`MachineStoragePolicyV1`](../packages/protocol/src/storage/storageV1.ts) is the
+`storage` section of the one resources policy, not a second settings file. It holds
+whole-disk opt-in (off), protected folders, log age (30 days), Trash age (7 days), a
+weekday/local-time scan schedule (off, only on power), and the unused-item suggestion
+age (30 days). Day values are positive whole numbers, not preset enums; `null` means
+Forever for logs, Never for Trash, or no schedule. The admitted custodian edits them
+through `machines.resources.policy.set` and the existing metadata-field CAS owner.
+
+`machines.storage.protected.add` and `.remove` use
+[`storageProtectedFolders`](../apps/cli/src/storage/protection/storageProtectedFolders.ts)
+to normalize physical paths and submit a minimal protected-folder patch with the
+observed revision. Contention returns the current policy; there is no alternate
+list writer. Additions mean Keep, not Forbidden. Removal checks the classifier's
+actual built-in rules and refuses to remove those protections. Suggestions and
+low-disk preparation consume the same classification and never collect Keep or
+Forbidden items; declined fingerprints affect non-person proposals, not the
+person's visible list.
+
+#### Retention and scheduled work
+
+[`storageMaintenance`](../apps/cli/src/storage/maintenance/storageMaintenance.ts)
+owns one due-time timeout for logs/traces/reports, Trash entries, recording expiry
+and scheduled scans. It runs at service initialization, re-arms after passes and
+policy/volume/recording/idle/power edges, and steps delays at the platform timer
+boundary rather than capping a retention setting. Changed Trash age is applied to
+already-retained entries. Git-touching owner work and scheduled scans wait for
+canonical live-work/SCM idleness; scheduled scans also wait for power. Ordinary
+file expiry does not require the machine to be idle. Failed or blocked due work
+waits for a change edge, not a retry interval. Under the approved development
+folding contract, scheduled scans include present volumes that have never been
+scanned or requested by a client; prior client geometry is not an eligibility rule.
+
+[`logRetention`](../apps/cli/src/utils/logs/logRetention.ts) and the shared
+[`pruneLogs`](../apps/cli/src/utils/logs/pruneLogs.ts) replace the separate
+managed-service pruner. The daemon applies age to the known log roots, preserving
+current/live logs and the crashed-session exemption. Session-process startup keeps
+only explicit `HAPPIER_*_LOG_KEEP_COUNT` caps; plugin-declared managed-service count
+caps still use the shared pruner. Recording `expiresAtMs` remains owned by the
+recording service. Its former 60-second scheduler is removed; the existing
+`browser.recording.cleanupExpired` Action remains a manual trigger of that owner.
+A pass that removes anything writes one `housekeeping` Activity record; a no-op
+pass or scheduled scan writes none, and housekeeping does not light the Guard dot.
+
+#### Whole-disk index and reads
+
+Whole-disk scanning is custodian-only and requires `storage.wholeDiskEnabled`.
+The protocol owns `STORAGE_CHART_MAX_DRAWABLE_NODES`, derived from the approved
+largest-desktop Map/Rings geometry: the maximum of the Map's 203 nodes and Rings'
+180 arcs. The runner supplies this shared budget for every interactive, direct-folder
+relist and scheduled native scan; the index uses it for folding thresholds and default
+paging. Clients do not send `drawableNodes`; there is no separate headless cap,
+unpruned mode or first-client prerequisite. The approved chart-culling contract
+consumes the same export; visual chart integration is a separate development lane,
+not established by the scan runner's wiring or a released-runtime certification.
+[`scanRunner`](../apps/cli/src/storage/scan/scanRunner.ts) owns the native invocation;
+[`scanIndex`](../apps/cli/src/storage/scan/scanIndex.ts) persists completed directory
+records through the existing protected SQLite owner. A volume has at most one
+current `storage/scans/<sha256(volumeId)>.sqlite` database and one
+`.previous.sqlite` database. During an incomplete replacement, the latest complete
+baseline stays inside the current database; it does not advance the previous
+complete scan. Prior-size hints are streamed into a transient NDJSON projection
+for the helper and disposed after the invocation, not retained as a third index or
+loaded as a daemon-side tree.
+
+The current development index stores each entry once. Folder/chart and Large/Old
+file queries project that same relation; folding does not create a second full
+file payload. Integer references share exact paths between entries, parents and
+physical observations, and stored JSON omits fields already held in columns.
+Native leaf kinds remain stored so symlink/other chart leaves do not become
+ordinary Large/Old file-query facts merely because their wire kind is `file`.
+Large files has no size floor, including zero-byte files, so a folded file still
+has queryable metadata. Index statistics distinguish the physical `entryRows`
+from the overlapping logical `nodeRows`/`fileRows` and the smaller `chartRows`.
+Completed, interrupted and failed replacements reclaim unused current path
+references and retired SQLite pages without removing the retained baseline;
+an existing development index is normalized in place without dropping its facts
+or previous complete baseline.
+
+The native helper also spills its work frontier, directory headers, prior hints and
+physical-allocation winners to invocation-local files. It streams individual
+entries and allocation facts, then completed directory aggregates, rather than
+retaining completed child lists or encoding a whole wide directory at once.
+Verified developer artifacts are atomic folder summaries. The existing recognizer
+table supplies their names, manifest requirements and SCM-proven ignored paths;
+the native walker checks those descriptors during enumeration and prioritizes them
+on a first scan. Hidden scalar directory edges preserve real ancestry for subtree
+replacement, while ordinary file facts remain queryable in Large and Old files.
+Completed descendant chart and coverage summaries are suppressed within the atomic boundary.
+Raw file metadata remains in SQLite before chart folding; zero-byte rows keep the
+same folding rule. Full physical keys and exact path bytes determine allocation
+ownership; a hash only locates an on-disk slot.
+The adapter creates this scratch through the marked Happier temporary owner and
+removes it only after the child's actual close, including cancellation and parser
+or consumer failure. The helper reports its own scratch as an explicit unscanned
+boundary instead of recursively scanning its growing implementation files.
+Actual stdout chunks share an immediate SQLite transaction without collecting a
+record array or adding a batching timer. Queued-path Skip checks use indexed SQL
+membership rather than loading the complete frontier into daemon memory. Failed
+prior-projection acquisition or close also removes its marked temporary directory.
+
+A folder scan replaces only its subtree in the containing volume index and records
+per-folder coverage with `scannedAt` and `complete`. Unscanned neighboring trees do
+not become measured zero. Initialization marks orphaned running scans interrupted,
+and reconciles databases against the current canonical volume list. An unavailable
+volume report preserves indexes; only a known absent volume is removed. Opt-out or
+known volume disappearance cancels affected native work, waits for settlement and closes
+the database before removing its owned index files. A returning volume needs a new
+scan; no separate index-retention setting or target-per-folder database exists.
+
+`scan.get` serves paged SQL views rather than sending the tree: Folders at the
+requested chart depth, Large files without an implicit size floor, Old files by
+modified time, Find, and comparison insights. Old-file filters accept custom days;
+mtime at 0 or 1 second is unknown age, not old. File and age facts are accumulated
+before visual folding. Find ranks name prefixes before substring matches and
+reports the indexed fold threshold instead of pretending it searches every folded
+entry. Ordinary pages compare only their returned rows; sorting by change compares
+the requested candidate scope, while Insights requests the full comparison including
+disappeared rows. These queries expose coverage-qualified deltas and keep growth and reclamation
+separate. The stored unreadable boundaries and coverage remain part of that read,
+not evidence that missing files occupy zero bytes.
+At a known whole-volume root, canonical reserved bytes are a separate synthetic
+node. APFS container-wide capacity never produces a per-volume hidden-space
+remainder. Synthetic space and folded aggregates are excluded from trusted
+filesystem-node lookup; they are not cleanup operands.
+
+Resume uses the persisted pending frontier for the same root, not a fresh scan of
+every completed folder. Retained allocation observations are supplied to the new
+helper invocation so already-observed hard links and clones remain one union.
+Skip records the selected active/frontier path and retains that skip history for
+same-scan resumes; a fresh start clears it. A blocked worker retires with an
+interrupted frontier before the runner starts the same helper again. Completed
+subtrees remain readable. Packages stay atomic when recovering an interrupted
+package walk. Cancellation waits for the native child's actual close/settlement.
+The frontier itself streams into temporary SQLite replacement state and is swapped
+only with the terminal summary; an interrupted stream preserves the existing
+pending work. Resume streams frontier rows through the same transient prior
+projection, rather than materializing them as a daemon-side array.
+Drilling a folded or unmaterialized folder can request a one-folder relist through this same runner
+and fresh effect admission. Once that level is materialized, ordinary reads remain passive,
+including after sibling navigation; explicit scan requests still refresh it.
+Drilling an atomic summary uses the existing recursive scan to materialize its subtree,
+preserving nested file facts and later explicit subtree replacements.
+There is no second scanner or journal-based incremental
+rescan guarantee.
+
+The native `disk-scan` stream also owns permission observations. On macOS it emits
+`unknown` with `waitingForConsent` before no-content access probes of Desktop,
+Documents and Downloads. A readable TCC database and at least two local data-vault
+directories prove `granted`; a permission denial is `not_granted`; absent evidence
+stays `unknown`, never an inferred grant. The observation names the actual helper
+binary needing access on the scanned Mac, not a binary on the viewing device.
+Other platforms report `not_applicable`. A blocked permission probe has no
+invented timeout; cancellation retires the helper. Signed-build TCC prompts and
+Settings behavior remain a release check, not a claim of these source contracts.
+
+The helper does not follow symlinks or open cloud placeholders; foreign mounts are
+leaves, with sibling APFS devices allowed only by canonical volume facts.
+Allocated and logical bytes remain distinct; hard-link/clone allocation facts
+support union accounting rather than summing overlapping rows. A POSIX name that
+is not UTF-8 retains base64 `nameBytes` beside its display name. Native path operands
+use a canonical `bytes:<standard-base64>` encoding for such absolute paths, not a
+lossy display string; relative paths, NUL and noncanonical encodings are rejected.
+Windows does not admit byte-path operands. This representation is an identity
+carrier, not permission to bypass current Pile admission or physical classification.
 
 ### Local-service Machine summary (0.3 development)
 
@@ -968,6 +1291,11 @@ child stopped or that a missing launch record proves rejection. Terminal Runs
 are no longer reclaimed; the existing indexed recovery reader observes their
 child custody and settles it only when genuine evidence permits. This source
 contract does not certify cancellation in an already-loaded daemon.
+The server's existing Stop control also ends authored work when the incumbent
+claim lease has already expired, retaining `pending` custody and signalling the
+same Machine. A concurrent lease renewal prevents this transition. Historical
+claimed Runs whose cancellation was already requested need another user Stop;
+this is not an automatic orphan sweep or evidence that their children stopped.
 
 In 0.3 development, Automation-origin Workflow claims materialize the accepted
 snapshot only on first admission. Subsequent claims carry the Run-owned snapshot
@@ -1514,7 +1842,6 @@ graph LR
         E3[HAPPIER_WEBAPP_URL]
         E4[HAPPIER_VARIANT]
         E5[HAPPIER_EXPERIMENTAL]
-        E6[HAPPIER_DISABLE_CAFFEINATE]
     end
 
     E1 -.-> settings & access & daemon & logs
@@ -1531,16 +1858,60 @@ Configuration lives in `src/configuration.ts`:
 - `serverUrl` is the canonical public Home URL used for first-contact key-challenge audience checks. `apiServerUrl` is the request transport: `HAPPIER_PUBLIC_SERVER_URL` selects the canonical URL, while `HAPPIER_LOCAL_SERVER_URL` selects a local/forwarded transport without changing that audience.
 - In the 0.3 development stack, stack-scoped CLI invocations pass both URLs and reconcile the stack-stable active profile through `server set`, including on a fresh CLI home. The wrapper verifies the persisted profile before forwarding the requested command and fails closed if reconciliation did not apply.
 - Recovery-key login failures retain the originating error code and operation phase (plus HTTP status when present). The CLI writes a local-only, redacted error diagnostic; attached HTTP bodies and credentials are never serialized into that diagnostic.
-- `HAPPIER_VARIANT`, `HAPPIER_EXPERIMENTAL`, `HAPPIER_DISABLE_CAFFEINATE` control behavior.
+- `HAPPIER_VARIANT` and `HAPPIER_EXPERIMENTAL` control behavior.
+- In 0.3 development source, the machine's `resourcesPolicyV1.guard.keepAwake` controls sleep prevention (`off`, `on`, `on_power`; absent = `on`). One daemon-owned inhibitor preserves idle reachability without keeping the display awake: macOS uses `caffeinate`, Linux uses logind's stdin-bound `systemd-inhibit` where available, and Windows uses the shipped native helper's system execution requirement. On power consumes the canonical vitals AC facts without requiring a viewer; unknown power does not report holding. macOS also enforces AC-only assertion behavior in the OS; closing the lid follows the OS. Inhibitors release on daemon shutdown or pipe closure. The former environment override is replaced by this single policy authority.
+- The same development-source resources document owns the full Guard policy. The daemon's Guard composition shares the existing minute sampler, live-work inventory, native ownership verdicts and parked-watch primitive. Guard Activity is a local 30-day append-only journal; only committed guard-kind effects light the shared automatic-action indicator. Undo invokes the receipt's original Action with fresh admission and that Action's approval policy. Recipient views expose their own work totals and Activity, plus counts for other work; withheld or unavailable left-behind sizes are `null`, not measured zero. The visual Guard tab and composed loaded-daemon certification are separate integration work.
+- Development-source idle Session, left-behind, Session ceiling and idle-terminal rules share that same Guard loop and earliest deadline. Session stop requires current draft, subagent, question and resume eligibility plus an acknowledged runner marker; next-message activation remains the existing activation owner's decision. Left-behind grace consumes the Processes owner's confirmed identities and cleanup Action, including its original Account approval. Linux Session ceilings use `MemoryHigh`, not `MemoryMax`; live enforcement requires a canonical Session-scope containment verdict, never an arbitrary runner cgroup. The root owner joins retained physical launch custody to the exact runner generation and observed native containment, including fresh launches whose unit name does not encode the accepted Session ID; Guard consumes that verdict without reclassifying the unit name. macOS and Windows expose an unavailable reason. Plain terminals have no count eviction or background reaper: the Off-by-default rule closes through the PTY owner, preserves its left-behind retirement, and records Activity without lighting the Guard-acted dot. Missing native foreground or authenticated notification facts prevent a commanded-terminal close.
+- The development-source service rung stops only Project services with captured Stop/Start again, no client connection observed on any listener throughout the sustain window, and no working Session in the same workspace according to that inventory (unknown is busy). Session-plugin services are excluded; stopping their idle Session ends its services and the Session wakes on its next message.
 
 ### Account-managed MCP configuration
 
-In 0.3 development source, Account-managed MCP definitions and bindings share
+In 0.3 development source, Account-managed MCP definitions and reach rules share
 `@happier/account/mcp/v1/catalog` and one row revision. The
 [Protocol catalog owner](../packages/protocol/src/mcp/servers/serverCatalogV1.ts)
 owns admission and semantic mutations; the CLI `mcpServerStore`/`hydrateMcpServerCatalog`
 and UI `apiMcpServerCatalog` consume that same contract. This Account row is
 distinct from the daemon's executable plugin-contribution catalog.
+
+The stored `bindings` array holds rules; configuration overrides live on each
+server's `configOverrides`. Configuration saves preserve reach rules. The shared
+[reach owner](../packages/protocol/src/reach/resolveReachV1.ts) resolves Agent-qualified
+rules before general rules, then workspace, project, machine and Everywhere
+specificity within that Agent scope. Session overrides are applied afterwards
+by [the capability resolver](../packages/protocol/src/reach/resolveSessionCapabilitiesV1.ts).
+Workspace comparisons use the target-platform path owner; Windows paths ignore
+case and comparisons keep separator boundaries without rewriting stored roots.
+
+`mcp.rules.set` is the rules mutation Action. The current user's reversible UI
+changes are direct; Agent and CLI callers require approval by default through
+the shared Action policy. The Action returns previous rules for ordinary Undo.
+Every create path uses the shared create-reach owner, which defaults new MCP
+servers to Everywhere On. Retained 0.2 bindings keep their rules and effective
+configuration: the transfer folds Everywhere overrides into the base and adds
+compensating configuration overrides for narrower bindings.
+
+Current 0.3 launch, execution-run, workflow, Automation, ephemeral-runner and UI
+draft carriers use one `capabilitySelection: { mcp?, skills? }` value. The
+selection owner admits each kind and applies exclusions before inclusions; a
+skill's native name exclusion remains case-sensitive. Released MCP-only carrier
+spellings are folded at their retained ingress boundaries, with an explicitly
+present current carrier taking precedence. Invalid current input does not fall
+back to a valid legacy value. The released MCP preview RPC retains its old
+`selection` input, while current callers supply `capabilitySelection` to the same
+resolver. This does not yet publish the later generic capabilities-preview Action
+or the resolved skill delivery plan.
+
+`reach/sessionCapabilityMetadataV1.ts` owns desired selection and applied-baseline
+metadata. Existing `mcpSelectionV1` and `mcpSelectionRestartRequiredV1` keys remain;
+skills use `skillSelectionV1` and `skillSelectionRestartRequiredV1`. Active edits
+retain the initial applied baseline until the desired selection returns to it or
+a new process positively acknowledges that selection. Attaching to a preserved
+Agent process does not clear either marker. If desired selection advances while
+startup is acknowledging a captured configuration, that captured policy becomes
+the applied baseline and the newer desired policy stays pending. Daemon-committed birth metadata uses
+this same writer; child environment variables do not provide a second selection
+writer. These are development-source contracts, not certification of the later
+selection Actions or composed live capability journey.
 
 Persisted Account encryption mode admits Plain content or domain-bound
 `account_mcp_catalog` ciphertext (43). Unavailable material, a mode mismatch or
@@ -1556,6 +1927,27 @@ the existing typed history owner. Active or deleted rows never reseed from the
 retained root. Runtime readers use the admitted catalog and canonical materializer;
 mode conversion preserves the complete admitted stored payload and envelope metadata.
 These are development-source contracts, not completed package or live-stack certification.
+
+In 0.3 development source, a host-stamped plugin invocation of
+`session.spawn_new` may supply `attestedContext` with `externalPrincipalId` and
+`sourceMessageId`. Other caller surfaces receive the typed
+`session_attested_context_forbidden` refusal. The canonical creator commits
+these birth facts in the private owner metadata before dispatching the runner;
+they are not Machine spawn RPC fields or shared Session presentation. A
+creation-key rejoin keeps the original facts, even when a later message caused
+the retry. The shared metadata mutation owner rejects post-birth addition,
+removal or replacement with `session_attested_context_read_only`.
+
+Remote MCP headers can select `{ t: 'sessionAttested', field: 'externalPrincipalId' }`,
+`sourceMessageId`, or `sessionId` through the same value-reference schema as
+literals and Saved Secrets. The runtime materializer reads the actual Session
+ID and protected metadata snapshot, never launch hints, environment templates,
+or model tool arguments. Missing facts omit that header even in strict mode.
+Portable preparation retains symbolic references until the runtime has its
+Session identity; Session-less environment materialization cannot invent one.
+This is a model-facing authority boundary, not isolation from trusted plugins,
+the Account owner, or the operating-system user. The integrator must separately
+authorize its credential to assert the originating principal.
 
 In 0.3 development, unused-MCP Coach evidence follows the actual runtime
 selection: `resolveRunnerMcpServers` captures the selected, materialized enabled
@@ -1573,9 +1965,11 @@ the Session's existing mode-aware content protection, not plaintext accounting.
 A partial transcript page never establishes complete query coverage. Coach
 reports observed-unused bindings across complete windows of the latest witnessed
 catalog revision; it does not infer token savings or causal overhead. Apply is
-offered only for one matching, currently enabled binding at that same catalog
-row revision, through `mcp.bindings.disable`; exact Undo delegates to the catalog
-owner and refuses intervening edits.
+offered only for one matching, currently enabled rule at that same catalog
+row revision. Apply uses `mcp.rules.set` for that server and place, and Undo
+resends the previous rules returned by the same Action. MCP Undo follows the
+ordinary rules Undo contract rather than retaining the retired binding-specific
+enabled-state reversal receipt.
 
 ### One default channel per Happier home
 
@@ -1852,6 +2246,17 @@ wait selects that exact profile without focusing it until successful enrollment.
 Both lifetimes use the credential owner's same managed registration-before-save
 policy and emit only non-secret bootstrap completion facts.
 
+In current 0.3 development, ordinary `auth wait` success returns authentication
+and Machine facts without the saved bearer. Default API-token creation output
+contains token metadata only; the existing documented `--encryption` option
+explicitly requests the one-time encryption-capable credential output. Native
+email provisioning retains Account material locally and omits recovery keys
+from both human and JSON success output. Authentication error presentation uses
+the shared diagnostic redactor and excludes attached HTTP request/response
+objects even under DEBUG. The short-lived terminal pairing challenge remains
+part of the documented approval ceremony; it is not an issued Account bearer
+or Account encryption material.
+
 Stack's named-profile endpoint reconciliation refreshes an existing descriptor
 through the requested HTTPS or loopback carrier using that profile's credential.
 The authenticated Home publication supplies routing facts; the existing descriptor
@@ -1880,22 +2285,207 @@ even if its SIGTERM handler exits successfully. Caller-owned cancellation and tr
 termination hooks remain in effect. Bash argv stays literal and keeps its existing
 uncapped output behavior.
 
-In development source, `processes/census/processCensus.ts` owns asynchronous process
-observations for identity, Doctor, execution-run statistics, terminal custody,
-session correlation and local-services inventory. Linux reads procfs without spawning;
-macOS and Windows call the existing native helper's `process-census` subcommand.
-Shared reads coalesce only while in flight; identity-sensitive callers request a fresh
-read. Persisted start witnesses retain their existing derivation. Private argv, paths
-and the narrow daemon-ownership environment projection are read only for the daemon's
-principal. `processes/tree/processTree.ts` owns pure lineage and containment queries
-over those rows, without per-hop process reads or a depth limit. Synchronous
-`cli-common/processInstance` lock fingerprints retain their separate contract.
+## Machine processes (0.3 development)
+
+These owners describe the current development build, not stable/preview availability
+or a completed authenticated Processes journey. The daemon owns process evidence;
+clients and Actions consume that evidence rather than classifying commands as ownership.
+
+### Census and ownership
+
+[`processes/census/processCensus.ts`](../apps/cli/src/processes/census/processCensus.ts)
+owns asynchronous process observations for identity, Doctor, execution-run statistics,
+terminal custody, session correlation and local-services inventory. Linux reads procfs
+without spawning; macOS and Windows call the shipped native helper's `process-census`
+subcommand. Shared reads coalesce only while in flight; identity-sensitive callers
+request a fresh read. Persisted start witnesses retain their existing derivation, with
+exact native generation evidence alongside them. Missing helpers, unreadable fields
+and failed reads remain explicitly unavailable; there is no shell-listing fallback.
+Private argv, paths and the narrow daemon-ownership environment projection are read
+only for the daemon's OS principal.
+
+Linux consumers select the optional observation fields they need. Local-service
+inventory keeps the full principal, lineage and ownership table, while command
+and cwd enrichment follows listener PIDs and their ancestors; it does not sample
+unused CPU, memory or executable fields. Run-state, parent and birth probes read
+only identity/state; Doctor requests command/ownership evidence and execution-run
+telemetry requests memory/CPU. Procfs reads use an asynchronous file descriptor
+and a small transfer buffer reused to EOF, including files larger than that buffer.
+Successful process-local page-size observations are reused; command lines,
+ownership environment, credentials and containment are observed anew. PID/start
+equality does not make argv or the current exec environment immutable. Shared
+captures coalesce only identical field and command-root demand. These changes
+neither add a census timer nor alter the inventory/watch owners' cadence.
+
+[`processes/tree/processTree.ts`](../apps/cli/src/processes/tree/processTree.ts) owns
+pure ancestor, descendant and containment queries over those rows, without per-hop
+reads or a lineage-depth limit. Synchronous `cli-common/processInstance` lock
+fingerprints retain their separate package/lock contract; they are not a process view.
+
+[`daemon/processes/ownership/resolveProcessOwnership.ts`](../apps/cli/src/daemon/processes/ownership/resolveProcessOwnership.ts)
+is the one process ownership decision-maker. The root projector reads existing Session,
+terminal, service, Execution Run, sidecar and daemon-helper owners, not a new registry.
+Local-services listener provenance consumes the same result; its socket discovery and
+listener re-probe remain local-services responsibilities. Role classification and
+command redaction are shared under `processes/classification` and `processes/redaction`.
+Ownership evidence records containment, parent chain, host marker and group/port hints,
+each as met, not met or unavailable.
+
+Owner totals sum each attributed member once; they are not cgroup/Job accounting totals.
+CPU is the cumulative-time delta as a percentage of the whole machine and is absent
+until a valid interval exists. Memory retains its OS kind: Linux resident bytes,
+macOS footprint where available (otherwise resident, explicitly named), and Windows
+private bytes. Unreadable values are unknown, not zero; shared pages may count in more
+than one process's memory figure.
+
+| Label | What it means |
+|---|---|
+| Proven | Live-owner attribution supported by native containment, an exact live-root chain or the admitted owner marker. |
+| Likely | A live owner is suggested only by group/port evidence, not proven containment, chain or marker. |
+| Left behind | Evidence points to an ended owner and the same process generation is confirmed in two observations at least 60 seconds apart. |
+| Not Happier's | No Happier ownership evidence applies; this is not the result of a failed or unreadable observation. |
+
+Unknown/unreadable evidence is a separate protected result, never a kill target.
+The host-private [`HAPPIER_PROCESS_OWNER`](../apps/cli/src/processes/ownerTag.ts) marker
+contains a version, Happier-home scope, owner kind and owner id. The host applies it
+after native/Provider/plugin environment composition; plugins cannot replace it.
+Children inherit it, including a Run-specific owner for Run execution. It is not sent
+to clients or logged. A generic short-lived native-IO root without Run/service identity
+belongs to Happier itself. An uncaptured detached descendant carrying only that shared
+daemon marker remains Proven Happier's, not Left behind: its spawner's end is unknown.
+Never sweep a shared daemon/session tag to clean up such work; its spawner's existing
+abort/timeout owns automatic cleanup, and people can use the normal process Actions.
+
+### Native containment
+
+Linux's existing launch-spec builder gives supported roots owner-encoded systemd user
+scope names under `happier-jobs.slice`; the self-migrating cgroup fallback consumes the
+same naming owner. Names include the Happier-home scope and a unique launch suffix.
+Membership comes from the census cgroup path, not a persisted containment registry.
+Unavailable user-manager/cgroup support is an unavailable fence, not fabricated proof.
+macOS has no such fence and uses exact tree, marker and group/port evidence.
+
+Linux launch custody retains the exact physical scope name in the incumbent
+in-memory tracked Session. A fresh launch can encode the launching Happier owner
+before its runner reports a canonical Session ID. The canonical process-root
+projector joins that captured name to the runner's exact PID/start witness, the
+daemon's principal and its current census cgroup membership, then exposes
+`containment: { kind: 'linux_unit', prefix }` for that Session. The prefix ends at
+the captured unit, not an arbitrary parent cgroup; a failed migration or recycled
+PID supplies no such verdict. Consumers use this verdict rather than requiring
+the physical unit's encoded owner ID to equal the later Session ID. This is a
+development-source contract, not a new Session identity or persisted scope map.
+
+Windows session runners hold their own named Job handle; PTY Jobs are held by the
+process owning the PTY host. The one-shot helper's `job-join` transfers custody into
+that existing holder, with no extra keeper per Session or persisted handle registry.
+Session Jobs omit `KILL_ON_JOB_CLOSE`, so restarting the daemon does not kill a Session
+whose runner is still alive. Managed services and finite PTYs retain their existing
+helper-held custody. Once a runner holder dies, the Job name can disappear while its
+members live; owner-tag and captured-tree evidence then feed the same remainder and
+Left-behind paths. Job absence is not evidence that all its former members exited.
+
+### One tree terminator and owner-end recovery
+
+[`processes/terminate/terminateProcessTree.ts`](../apps/cli/src/processes/terminate/terminateProcessTree.ts)
+is the typed entry to the one shipped algorithm in `scripts/process_tree.cjs`.
+Discovery uses the census/tree owner; every signal round revalidates PID and start
+identity. Ownership-sensitive callers also re-derive current ownership and containment
+authority through their authorization callback. Per-PID signals protect
+the reader and its ancestors by generation; only group signals additionally protect
+groups containing them. A non-detached child sharing the reader's group can still be
+ended individually. Listener termination keeps its existing TOCTOU and port-release
+checks around this terminator, rather than another descendant/signal loop.
 
 The shared CLI process-tree owner gives Windows `taskkill` the containing
 teardown phase's budget and spends only the remainder on liveness checks. A
 hung tool is force-stopped at the same subprocess boundary. Cleanup that cannot
 prove containment retains `plugin_exec_termination_incomplete` rather than
 reporting success.
+
+After a runner's confirmed exit, requested or unexpected,
+[`endOwnerRemainder`](../apps/cli/src/daemon/processes/endOwnerRemainder.ts) ends only
+the Session's remaining proven members, with fresh ownership checks; resumed owners
+and replaced generations are not borrowed by an older exit. Likely or unconfirmed
+survivors are not silently killed. Owner-end events and the daemon-start pass feed
+the same two-pass Left-behind tracker. An instant-exit bare Exec with no Run/service
+identity and no observed native subtree settles its existing lease as
+`ended / remainder: unobserved`, not a claimed cleanup or a refusal. Captured trees
+and explicit Run/service custody retain their normal settlement requirements.
+
+### Watch lifecycle and process Actions
+
+[`createMachineProcessesView`](../apps/cli/src/daemon/processes/view/createMachineProcessesView.ts)
+consumes that ownership runtime, the same Left-behind pass, the machine-vitals sampler
+and the local-services inventory. An actively parked Processes watch holds the existing
+`demand('live')` cadence (2 seconds), not Overview extras or a second sampling timer.
+Ports use the existing local-services watch; no census-triggered socket scan is added.
+`daemon.processes.watch` parks through the shared `parkWatch` boundary. Hiding or closing
+the surface releases demand; return reads current evidence. At the last unsubscribe,
+native tables and private port/requester projections drop immediately. Only CPU
+baselines/history survive re-arms until one shared `MACHINE_WATCH_WINDOW_MS` (25 seconds)
+passes without re-arm; then they drop. No samples are taken for that retained history
+without a consumer. The one-hour detail history is daemon-memory-only; visible owner
+aggregates are captured with those same samples, not reconstructed from current members.
+Clients retain last-known rows only for their app lifetime, not across restarts.
+
+The [protocol process Action family](../packages/protocol/src/actions/specs/machineProcesses.ts)
+owns list/get/check, Stop, Start again, Kill and Left-behind cleanup. Destructive
+execution re-reads evidence and checks the daemon-issued generation ref and expected
+owner/level. Refs identify processes; they confer no authority. Stop dispatches through
+the existing lifecycle owner; deliberate Session end stamps stop intent before signalling
+so the respawn owner does not treat it as a crash. Start again keeps the service's original
+reviewed effect digest on the same stopped-root record; definition changes return the
+launcher's existing review-required result and use the existing review flow.
+
+Each Action has its own user approval setting. Stop/Kill and cleanup default to Ask first
+on agent/MCP/CLI; there is no cross-Action approval delegation or extra floor. Set Actions
+declare the shared `approvalNarrowing` contract: a person can reduce, not expand, the
+reviewed set. The Left-behind selector's count and cleanup refs are the same filtered,
+deduplicated set; cleanup never sweeps unseen rows and reports ended/skipped outcomes.
+The machine custodian may stop or kill a guest Account's work after confirmation.
+On guest-owned rows, both Processes controls show the guest-consequence dialog before executing the Action;
+physical custody does not authorize guest Home reads using the custodian's credentials. A port-release
+Action may end its own Session shell after the UI confirms that this closes the terminal.
+
+All processes is the custodian-only `processes.allProcessesVisible` opt-in in the one
+machine resources policy, changed through `machines.resources.policy.set`. Not-Happier
+rows carry name/group and metrics, never command, cwd or owner tag; only a same-OS-principal
+single process may be ended explicitly, never its tree or by automatic policy. Use
+recipients see their own attributed owners and a count of others' work. Unavailable
+requester display identity remains unavailable rather than masquerading as custodian work.
+The same policy's nullable `processes.toolIdleCloseMs` controls documented tool-idle
+environment injection at the next Session start; Off adds nothing, and authored
+environment values win over the default five minutes.
+
+In unreleased 0.3 source, agent browser sidecars are admitted at the existing
+[`productSource`](../apps/cli/src/daemon/browser/sidecar/productSource.ts) Session
+launch owner. Auto allows one engine per 4 GiB of total RAM, at least one and at
+most four: two at 8 GiB, three at 12 GiB, four at 16 GiB. The budget rounds up the
+2026-10-12 Linux observation of a 2340.7 MiB Chromium tree (main process,
+renderers and helpers) to the next binary GiB budget, 4 GiB. Aggregate RSS can
+double-count shared pages; this is a concurrency sizing proxy, not a process
+memory ceiling or a guarantee for arbitrary pages.
+`processes.browserMaxConcurrent` in the same resources policy overrides Auto;
+null restores Auto and a positive safe integer permits a custom count through
+`machines.resources.policy.set`. Changes apply to the next open without stopping
+existing engines. Starting and stopping engines occupy slots; additional views
+of an already admitted Session reuse its engine. A failed open with no usable
+views retires its engine through the profile lifecycle once no sibling command
+is still using it. At capacity, the open returns
+`waiting_for_memory`, retryable with known no-effect completion. The caller
+retries after the last view closes, the Session profile is purged, an exited
+engine is retired, or the override is raised. Nothing launches later from a
+hidden queue. Close and cleanup settle the engine through its original launch
+and profile owners before releasing its slot. Tool-idle close remains separate.
+
+Doctor's process section projects this owner through `machines.processes.list`; its
+cleanup projects the confirmed Left-behind Action with terminal confirmation. Without
+a reachable daemon it reports only narrow lifecycle/root facts. Those retained root
+classifiers support daemon identity and reattachment, not a second process ownership
+or runaway cleanup algorithm.
+
+### Local service command deadlines
 
 Local service install/start/stop/restart commands delegate their execution deadline
 to the CLI's service lifecycle owner, rather than imposing the generic 60-second
@@ -2104,6 +2694,13 @@ The metadata authorities are:
   Session user-input admission, Account settings) fail with
   `session_owner_authority_required` before any effect.
 
+In 0.3 development source, a current-publisher metadata precondition requires
+the existing registration's `publisherGeneration`. Ordinary heartbeats advance
+reachability without replacing that registration; publisher replacement or a
+legacy lease reclaim invalidates its captured proof. A missing generation is
+rejected, not treated as timestamp-only metadata authority. Historical takeover
+additionally retains its exact captured `committedFenceMs` precondition.
+
 A shared editor may only write the fields the canonical
 `SessionSharedMetadataV1` schema admits (`summary`, `agentPresentation`,
 `externalSessionOperationPresentationV1`, `publicAgentState`); owner-only fields
@@ -2177,14 +2774,21 @@ terminal UI integration.
 
 Finite Project commands use the same `TerminalPtySessionManager` with a direct
 executable/argv/cwd and the final native environment. Admission acquires a
-`holdUntilExit` on that terminal; idle reap and capacity replacement skip it.
-Capacity replacement considers only terminals with the admitting requester's
-custody and returns the existing `terminal_busy` refusal when none is eligible.
+`holdUntilExit` on that terminal. There is no terminal-count eviction or
+hard-coded idle reaper. The Off-by-default Guard idle-terminal rule skips
+finite holds and pending or unconfirmed stops. Its anchor is actual PTY I/O,
+not output polling or attachment. Prompt-only shells close after the selected
+idle delay; a running foreground command receives the selected warning lead
+and Keep running reanchors the same terminal. Unknown foreground evidence
+is ineligible. Closure uses the PTY owner and records surviving detached work
+with the existing process owner, without a process-tree kill. The
+`closed_terminal` Activity receipt offers Reopen and does not publish a
+rail automatic-action dot.
 `waitForExit` observes real exit, including nonzero, rather than shell readiness;
 abandoning an observer leaves the process running. `requestStop` delegates to
 the existing cross-platform process-tree owner and keeps retained output and
 the hold while stop is requested or unconfirmed. A root exit after an
-unconfirmed descendant stop cannot settle the operation or free that capacity.
+unconfirmed descendant stop cannot settle the operation or release that hold.
 This manager contract is current development source. Script/setup/ad-hoc
 ingress, shared requester authorization and the composed app journey must
 consume and verify it before their integration is considered complete.
@@ -2885,7 +3489,7 @@ launch is an attach to that exact Session:
 - the daemon-held create-or-rejoin outcome is carried on the tracked Session.
 
 The creator seeds only the launch intents an attaching runner never takes from
-its own process: session mode, configuration overrides and MCP selection. A
+its own process: session mode, configuration overrides and capability selection. A
 launch refused before its runner starts archives a Session this call created.
 Creation refusals keep their exact terminal spawn detail, through the same
 classification the runner uses.
@@ -3043,19 +3647,96 @@ owns that reader's cadence, counter baselines, live ring and minute aggregation.
 single sampler, attaches its read routes through the existing Machine RPC route
 cache, and stops it on shutdown or startup failure. Its history directory is
 `vitals` beside the installation's `daemon.state.json`. This is development
-source wiring, not released availability or a claim that summary publication,
-alerts or the entire machine-resource program are complete.
+source wiring, not released availability or certification of the entire
+machine-resource program.
 
 The sampler uses one unref'ed timer and the fastest held demand: wall-minute
 alignment at 60 seconds without a viewer, 15 seconds for summary demand, and
 2 seconds for live or Overview demand. In-process live demand does not request
-Overview extras. GPU, thermal and battery reads are Overview-only, cached for
-15 seconds. Linux's always-on reader spawns zero processes. Its optional NVIDIA
+Overview extras. GPU, thermal and battery detail are Overview-only, cached for
+15 seconds. The base power fact still serves keep-awake and scheduled scans
+without a viewer. On macOS, the one Darwin reader observes `pmset -g batt` once
+per wall-clock minute, reusing the same result across summary/live reads and
+refreshing it at the existing Overview extras boundary. Thus Processes demand
+adds only the native helper per two-second tick, with one battery-tool read per
+minute; Overview shares that battery read with its extras. A failed power read
+leaves the power fact unknown. Linux's always-on reader spawns zero processes. Its optional NVIDIA
 read first checks for an NVIDIA device and an executable `nvidia-smi` on PATH,
 then runs at most one system-tool call per extras read; a missing or failing tool
 does not hide the base sample. Non-Overview responses omit extras even when a
 concurrent Overview has populated that cache. Missing counters and stale/reset
 intervals remain unreported rather than becoming zero rates.
+
+An explicitly powered-off GPU is a quiet `powerState: 'off'` fact in the existing
+More-from slot, without utilization or memory readings. Linux recognizes the
+kernel's PCI `D3cold` state before querying telemetry and limits the existing
+NVIDIA query to other devices. macOS uses the optional powered-off flag only
+when the existing accelerator output includes it; Windows does not infer it
+from missing utilization. The current battery APIs do not distinguish optimized
+charging from other charging holds, so no optimized-charge reason is guessed.
+
+[`batteryFacts`](../packages/cli-common/src/process/batteryFacts.ts) owns the
+Linux power-supply and macOS battery interpretation shared by Home mobility
+classification and Overview extras. Peripheral batteries do not classify a
+Linux host as portable. Windows keeps native power-status sampling separate
+from the Home chassis/CIM presence check. Worker memory admission consumes the
+daemon sampler through
+[`projectWorkerAdmission`](../apps/cli/src/workspaces/execution/projectWorkerAdmission.ts)'s
+`readMemory` port; it has no independent OS-memory fallback. Memory-bound work
+is refused as `memory_unavailable` when that owner cannot report capacity.
+
+The daemon's
+[`machineResourceSummary`](../apps/cli/src/daemon/resources/machineResourceSummary.ts)
+owns the `daemonState.resources` publication, deriving attention through the
+shared Protocol attention owner. This share-wide projection contains host and
+reporting facts, attention reasons, and typed last-automatic-action facts—not
+samples, chart series or session titles. Current numeric values and history
+remain transient admitted Machine reads. Reporting requires observed host facts;
+an unavailable summary may omit them if no successful observation exists. The
+first failed read publishes its typed unavailable state immediately, without
+inventing host facts. After reporting, ordinary reader failure becomes unavailable
+after one minute; a missing helper is immediate. A policy-dependent nearly-full
+warning waits for the policy read instead of guessing the default during startup.
+Managed provisioner headroom stays unknown unless the provisioner's contract
+establishes execution on this same host with a known storage root; current
+provisioners do not establish that contract. The
+[`machineResourcesPolicy`](../apps/cli/src/daemon/resources/machineResourcesPolicy.ts)
+runtime reads and updates `metadata.resourcesPolicyV1` through the shared
+[`Machine metadata-field CAS owner`](../packages/protocol/src/machines/machineMetadataFieldV1.ts).
+Alerts, Processes, Storage and Guard consume their sections of this one policy.
+`machines.resources.policy.get` reads synced last-known metadata; the single
+`machines.resources.policy.set` writer is the admitted target daemon and returns
+the current policy/revision on contention. There is no separate alert-policy
+setter. The UI's `useMachineResourcesPolicy` sends minimal section patches and
+returns to stored truth after failed saves. Alert durations, CPU thresholds and
+disk thresholds store plain numbers, including custom values; presets are not
+persistence enums. The Account's machine-offline consent is separate from this
+share-wide policy. In development source it is stored in the Account's
+`machineOfflineAlertsV1.machineIds` and changed through keyed `settings.set`
+at `notifications.machineOffline` (`key` is the Machine id, `value` is Boolean),
+not through daemon resource-policy RPC. Account and device alert-policy
+derivation admit this enrollment independently of remote Session-alert consent.
+Consent is default-off per Machine, and is not conditioned on historical Session
+activity. Delivery is custodian-Account-only; a shared recipient's preference
+does not enroll the custodian. The Account hook reports consent, not delivery
+eligibility. The existing server presence timeout submits only Machines whose
+inactive transition passed its exact last-heartbeat fence, including ephemeral
+Session runners, to
+[`submitMachineRemoteAlerts`](../apps/server/sources/app/activity/remoteAlerts/submitMachineRemoteAlerts.ts).
+That sender rechecks current custody, revocation/replacement, settings-version
+bound consent and existing Account/device notification policy. It reads no
+Session activity and sends generic, content-free offline copy. The next admitted
+Machine-alive read submits data-only quiet recovery. Existing batched presence
+writes can repeat that idempotent dismissal before flushing; there is no new
+presence flag, timer, ordering or exactly-once guarantee. These development
+paths do not claim released availability or physical push certification.
+Native optional name enrichment uses the authenticated current
+Account and admitted Machine-mode codec, without including the name in the
+server payload. Android recovery dismisses the stable Machine notification tag;
+the existing JavaScript background owner enumerates presented notices and
+dismisses the actual OS request ids after matching and re-admitting their exact
+Home, Account and Machine. An iOS thread identifier is only grouping, not that
+OS request identity. Background delivery remains subject to platform policy.
 
 [`minuteHistoryStore`](../apps/cli/src/daemon/vitals/history/minuteHistoryStore.ts)
 restores the last seven days from protected, UTC-day-partitioned JSONL files.
@@ -3063,14 +3744,42 @@ Minute timestamps are the end of their measured interval; accepted minutes are
 strictly increasing, including after a backward wall-clock change. Startup and
 day rollover prune whole expired day files. Tolerant stored readers accept
 unknown fields, skip malformed rows and ignore an unfinished final append.
-Alert-episode rows use this same stream, not another store; this is a persistence
-seam, not an alert producer. Missing minutes remain gaps. The 1-hour projection
+Alert-episode rows use this same stream, not another store. Missing minutes remain
+gaps. The 1-hour projection
 combines the live ring with restored minutes, while 24-hour and 7-day projections
 use 5-minute and 30-minute buckets with means and maxima and explicit null
 buckets. Today's received/sent byte totals use observed minute deltas since UTC
 midnight. [`isSustainedV1`](../packages/protocol/src/machines/vitals/isSustainedV1.ts)
 evaluates consecutive minute records; a missing or stale minute breaks both a
 firing streak and a predicate-defined recovery streak.
+
+[`machineVitalsAlerts`](../apps/cli/src/daemon/vitals/alerts/machineVitalsAlerts.ts)
+subscribes to accepted minute records without holding faster sampling demand.
+The pure
+[`alert evaluator`](../packages/protocol/src/machines/vitals/evaluateMachineVitalsAlertsV1.ts)
+uses that shared sustained-condition check for memory and CPU: every minute must
+be observed, CPU uses the minute mean rather than its maximum, and recovery needs
+the same covered duration as firing. Disk conditions use the current volume's
+free-now bytes, with independent episodes per volume. Missing pressure, CPU or
+volume observations never prove recovery. Windows' observed low-memory signal
+and exhausted commit feed the shared effective rule level; a negative binary
+low-memory signal permits rule recovery without inventing a native pressure
+metric for the UI.
+
+The alert runtime journals each transition before delivery and restores episodes
+from the retained history, avoiding a duplicate fire after restart. Its notification
+builder calls the existing activity-notification dispatcher using `resource_limit`.
+That event and Guard's distinct events share the `machines` channel topic.
+Recovery delivery is quiet; machine/rule/volume notification identity is stable,
+but the existing Expo transport does not promise collapse/replace behavior.
+Working-session counts come from the live-work inventory and are omitted when
+unobserved. Notifications describe the condition and say that alerting stopped no
+work. The existing `usage_notice.v1` Account Artifact admits the strict machine
+notice alongside connected-service notices; Inbox parsing and Account isolation
+remain with that existing owner. Notification commands use the canonical Machine
+page route and next-step resolver. Alerts-page visuals and the composed loaded
+daemon/device journey are separate integration evidence, not implied by these
+source contracts.
 
 The [`read RPC owner`](../apps/cli/src/rpc/handlers/daemonMachineVitals.ts) serves
 latest snapshots and history immediately after current Machine admission; reads
@@ -3083,8 +3792,9 @@ watch holds its summary/Overview demand, and admission is checked again before
 disclosure after the wait. Watch deadline and sample cadence are separate
 contracts. The protocol's
 [`machine-vitals Action specs`](../packages/protocol/src/actions/specs/machineVitals.ts)
-declare safe get/history reads and the account-level summaries-list seam;
-declaring that seam does not establish a summary publisher.
+declare safe get/history reads and the account-level summaries-list seam. The
+published resources projection and admitted transient reads have distinct
+privacy and freshness boundaries.
 
 The UI's neutral
 [`machineResourceStore`](../apps/ui/sources/sync/domains/machines/resources/machineResourceStore.ts)
@@ -3093,6 +3803,11 @@ keyed by server, Machine and view (or history range). Multiple viewers share one
 in-flight refresh and one outstanding watch per key, with no client polling
 timer. Last authorized values survive a failed read; unsupported older-daemon
 results remain `not_reported` until daemon-state change permits a retry.
+Fresh base samples update both retained views without replacing their distinct
+detail payloads. A daemon-state change also refreshes failed, stale or unavailable
+views with active demand, allowing a retired watch to resume without a client timer.
+For freshness, a reporting sample supersedes an older published reader failure;
+a failure published since that sample remains visible.
 Summary warming reads once without holding a watch. Overview hooks hold demand
 only while the host is actively viewed and release it on unmount or inactivity;
 summary and in-process live consumers cannot activate Overview extras. Client
@@ -3186,7 +3901,11 @@ Managed server code follows the same boundary. Its generated Prisma/native runti
 
 Explicit built web artifacts and source QA share the source Plugin UI preparation
 owner. The SDK compiler and existing inventory generator produce private inputs;
-Metro consumes that inventory for the ordinary Expo browser/asset export. The web
+the source build owner reuses workspace input capture before preparation, so
+the plugin compiler, QA export, web artifact and entry-size measurement consume
+one copied authored-input view. Later checkout edits affect the next build;
+interactive Expo retains live source and installed external tools retain their
+own lifecycle. Metro consumes that inventory for the ordinary Expo browser/asset export. The web
 artifact owner retains project-local export staging and atomic final publication,
 without workspace dist or declaration preparation. Ordinary Expo and public npm
 preparation retain their separate package-output inputs.
@@ -3229,12 +3948,32 @@ fingerprint and does not request native artifact publication. An explicit restar
 prepares current source; running code remains unchanged between restarts. Source
 development reloads remain with their service owners rather than advancing a
 managed runtime publication flight or selecting another stack's snapshot.
+In current 0.3 development, `withJsonOwnerFileLock` serves registered waiters
+in filesystem ticket order, including the shared source-bundle build lock.
+Queue entries use the same PID/heartbeat reclaim rule as the held lock;
+cancellation and timeout remove the caller's entry. Uncontended callers retain
+the exclusive-create path. Already running scripts keep their loaded lock code
+and can still compete outside the queue: synchronize the checkout and relaunch
+the owning runner to pick up fairness. Bundle reuse still requires both the
+source/tool fingerprint and matching consumed-byte digests; a change to an
+unconsumed input can therefore trigger another build.
 The detached Stack owner in `apps/stack/scripts/stack/run_script_with_stack_env.mjs`
 owns services and logs; the TUI attaches, displays the same state, and sends explicit
 controls. An unexpected TUI exit detaches from a healthy owner, while explicit
 quit/restart/stop retains the command's lifecycle semantics.
 
 For development services placed on a remote target, the target supervisor owns the worker and its independent SSH tunnel. Worker recovery retains a healthy tunnel and rechecks its lifetime at dispatch, replacing a tunnel that exited during backoff or retirement. Remote Expo readiness reports a degraded service at the existing readiness deadline, including with an attended TUI, and continues readiness recovery through the supervisor. Standalone attended Metro waits retain their cancellation-controlled checkpoints. An Expo heap failure is handled separately by the existing Expo process restart policy; it does not select a different host or start a local duplicate.
+
+In current 0.3 development, a target that depends on the local server probes its
+reverse forward once during initial startup. A failed probe returns to the same
+target lifecycle recovery instead of ending the Stack runner. Recovery waits for
+canonical local server readiness before rechecking the forward, using the existing
+readiness policy, target backoff and controller cancellation. This allows the
+server's source preparation and admission queue to finish. A live tunnel survives
+a refused probe; an exited tunnel is replaced before worker dispatch. Server
+authority, preparation refusals and explicit retirement retain their existing
+failure semantics. An already running supervisor must be relaunched through the
+Stack lifecycle owner to load this correction.
 
 Remote dependency bootstrap installs tools without general workspace lifecycle scripts before loading the package-manager owner. Every install that materializes the shared UI dependency tree, including source-test and stage-zero refreshes, completes the canonical UI postinstall under the existing dependency-refresh lock, before publishing the ready marker. Warm prerequisite repair uses the same lock and withdraws admission until repair succeeds. The dependency-free `utils/proc/ui_postinstall.mjs` owner serves both bootstrap and full package-manager preparation; the UI verifier also loads without compiled Stack packages. The mandatory password-worker asset producer compiles the canonical Protocol codec source directly, so cold UI postinstall does not require or consume stale Protocol dist. Scriptless admission still does not certify other runtime lifecycle prerequisites. UI patches and asset-generator sources participate through `apps/ui/package.json`'s `happier.installFreshnessInputs`; changing either reruns postinstall even when Yarn reuses installed packages. Postinstall failure leaves admission stale and fails preparation; an unchanged source-test preparation reuses completed outputs.
 

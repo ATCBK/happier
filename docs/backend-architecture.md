@@ -338,25 +338,29 @@ erDiagram
 ```mermaid
 flowchart TD
     Start([inTx call]) --> Begin[Begin Transaction]
-    Begin --> |ReadCommitted or explicit Serializable| Exec[Execute Operations]
+    Begin --> |Explicit isolation or safe Serializable default| Exec[Execute Operations]
     Exec --> Commit{Commit}
 
     Commit --> |Success| After[afterTx callbacks]
     After --> Emit[Emit Socket Updates]
     Emit --> Done([Complete])
 
-    Commit --> |P2034 Error| Retry{Retry?}
+    Commit --> |Confirmed conflict or stale fenced audience| Retry{Retry?}
     Retry --> |Yes| Begin
-    Retry --> |Max retries| Fail([Throw Error])
+    Retry --> |Recovery exhausted| Fail([Typed conflict error])
 ```
 
 `inTx()` wraps Prisma transactions with:
 
-- ReadCommitted by default on PostgreSQL/MySQL. Callers explicitly retain Serializable for named cross-row admission, read-then-write invariants or coherent snapshots; SQLite retains its provider-owned transaction/read-snapshot behavior.
-- Automatic retry on `P2034` and PostgreSQL serialization/deadlock failures, using the existing provider-owned recovery budget.
+- During the Account-publication validation boundary, Serializable remains the safe PostgreSQL/MySQL default. Explicit ReadCommitted candidates and named Serializable invariants preserve caller-owned isolation; SQLite retains its provider-owned transaction/read-snapshot behavior.
+- Automatic retry on `P2034`, PostgreSQL serialization/deadlock failures and stale fenced audiences, using the existing provider-owned recovery budget.
 - `afterTx()` to emit socket updates after commit.
 
-Account publication holds its row locks through commit. The required lock order is the complete current Account audience in id order before Session write locks or the retained owner-metadata fence; a stale audience capture cannot establish that order. A Session-only presence touch that allocates no Account cursor needs no Account prelock. Serializable alone does not prevent Account/Session deadlocks.
+Account publication holds its row locks through commit. The required lock order is the complete prospective Account audience in id order before Session write locks or the retained owner-metadata fence. Session discovery includes retained grants on unpublished Sessions and inactive Accounts, so later publication or reactivation cannot introduce an unfenced reader. After acquisition, the canonical Session helper rechecks recipients and ReportsTo leads; an expanded audience rolls back and replays the whole transaction instead of extending locks out of order. Grant/membership/Account-status writers fence their affected Session audiences before mutation. Pending admission similarly rechecks its selected Machine/controller after acquisition.
+
+Workflow publication composes Run/watchers, review Sessions, Automation and eligible managed-controller audiences before any owner-mode or domain write fence. Session lifecycle producers include that composed audience before their first lock. These helpers acquire locks only; `markAccountsChanged` remains the single cursor-allocation/publication owner. A Session-only presence touch that allocates no Account cursor needs no Account prelock. Serializable alone does not prevent Account/Session deadlocks.
+
+Exhausted confirmed-rollback conflicts become `database_transaction_conflict_exhausted`, projected once as HTTP 503. Pending admission retains its existing `session_input_storage_unavailable` rejection (nothing sent; draft kept). SQLite transport/execution ambiguity remains an unknown outcome even if a later attempt rolls back or fails acquisition; caller deadlines retain their typed error and original cause. Diagnostics report a named transaction class and driver-provided failed-statement relation/SQLSTATE when available, not invented conflict details or raw private queries.
 
 This development-source pattern is used for multi-write operations like batch KV mutation and session deletion.
 

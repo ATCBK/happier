@@ -63,6 +63,25 @@ target reader maps the 0.2 `{ kind: 'configuredAcpBackend', backendId }` selecti
 to this contribution and the same definition id; new requests and writes use the
 strict current target.
 
+In 0.3 development, configured definitions carry a typed `launch` (`command`,
+`npm`, `archive`, or `uv`); the stored reader folds predecessor `command`/`args`
+into a command launch. `resolveAcpLaunch` is the single CLI launch owner.
+Command Node and package runners use the shared managed runtime normalizer under
+`packagedRuntime/packageRunner`; pinned npm definitions use the existing managed
+Agent CLI installer and its declared package bin, while archive definitions use
+the descriptor-taking runtime installables adapter. Session launch installs a
+missing managed definition on first use, then resolves it again before spawning.
+Probes resolve installed launches without installing a missing definition. The
+managed uv consumer is still unavailable at this development boundary.
+Managed launches use Account + definition id + version roots. Pin changes acquire
+another root and leave an older Session's executable intact. Archive and npm
+acquisition share the existing promotion lock, preserving a version another
+acquisition already installed. Captured requester contexts use their authenticated
+Machine actor's namespace, including when that actor differs from the custodian.
+Absent admission or unstamped private requester-child custody returns
+`ACP_CATALOG_UNAVAILABLE` before managed acquisition. A damaged retained version
+requires the daemon's guarded repair/removal; Session first use cannot replace it.
+
 Executable inventories expand contributions through
 `packages/protocol/src/agents/executionTargetV1.ts#listAgentExecutionTargetsV1`.
 An ordinary Agent contributes one target; Custom ACP contributes one qualified
@@ -70,6 +89,16 @@ target per configured definition, or none without definitions. The declaration
 catalog can retain the container for administration, but selection, allow-list,
 review and Voice inventories use concrete targets. Target schemas and key
 formatting remain strict and require the definition id.
+
+In 0.3 development, `backendTargetRefV2.ts#readBackendTargetKeyV2` is the
+presentation reader for retained or derived targets. It returns the canonical
+key or `null` for an unresolved target, without selecting a replacement Agent;
+unexpected source failures still propagate. Profile compatibility and model
+presentation consume that result, while requests and writes keep strict
+validation. The Protocol Account-settings parser normalizes target-keyed maps
+before validating their values, so an invalid stored target does not discard
+valid neighboring preferences. Explicit canonical entries take precedence over
+predecessor aliases.
 
 The definition id survives picker selection and draft persistence/reopening,
 then the daemon admits the installed contribution and the exact catalog row.
@@ -80,6 +109,21 @@ capability resolution; the contribution uses the public ACP runtime. There is
 no configured-only host runtime or synthetic per-definition identity. A deleted
 definition or unavailable catalog refuses launch and requires selection repair;
 it never silently selects another definition or a bundled Agent.
+
+Configured definitions use one typed `launch`: a user-authored command, a pinned
+npm package, a per-platform pinned archive or executable, or a pinned uv package.
+The stored reader folds 0.2's top-level `command` and `args` into the command
+launch; current writers emit only `launch`. Package-runner commands share the
+managed runner owner with MCP servers. npm acquisition uses the existing managed
+Agent installer, and Account-defined archives use the descriptor-taking
+installables adapter and first-use ensure path without registering another Agent.
+uv execution remains unavailable until the managed uv unit lands.
+
+Registry archives verify a published SHA-256 digest on download. An absent digest
+is reported as `not_published`; manifest-declared pinned archives still require a
+digest. Raw executable assets use the same install, integrity and promotion owner
+as extracted archives. These contracts are development source, not a release or
+composed-runtime certification claim.
 
 The Account row is authority only for those configured definitions. Bundled and
 plugin Agent projections remain available while that row is absent, loading,
@@ -194,6 +238,11 @@ its demanded Agent entry before reading executable hooks; the initial declaratio
 snapshot alone cannot establish whether a lazy hook is available.
 Connected Account launch projections qualify declaration-local state-sharing service IDs
 with their owning plugin ID before host continuity decisions compare account selections.
+In 0.3 development, the account-settings parser also normalizes persisted Agent flavor aliases
+through the generated presentation identity owner. An `agy` state-sharing choice and risk
+acknowledgement become `antigravity`; an existing canonical entry takes precedence when both
+keys are present. Readers preserve the user's isolation choice, and current parsed settings use
+the canonical Agent key.
 
 Connected Account generation application uses the explicit launch continuity contract.
 `continuity.generationApplicationScope` distinguishes per-session process authentication
@@ -280,7 +329,20 @@ then layers selected Connected Account materialization on top. The cold-probe sa
 removes unrelated ambient credentials; only explicitly selected profile/account material is added
 back before the Agent contribution runs. Model, mode, config-option, and passive-setup probes all
 consume that same environment and include the selected profile identity in their cache scope.
+In development source, every discovery method validates supplied Connected Account bindings;
+malformed input returns `connected-service-preflight-failed` before credential resolution.
 
+
+In development source, a declared stdio ACP preflight command also supplies model, mode and
+config-option discovery through the same host process and authentication owner. These reads
+use the initial `session/new` snapshot immediately; command discovery alone waits for the
+matching `available_commands_update`. Model and mode choices fall back to config options when
+legacy arrays are empty or malformed, using the existing ACP control normalizers. Explicit Agent-owned
+control callbacks override this shared ACP behavior.
+Declared control hooks own readiness of their selected executable; mode and config-option discovery
+does not require a separate interactive CLI when those hooks exist. Native probes without a declared
+hook retain their CLI readiness check. The host closes the temporary native session when supported
+and disposes its process after inspection.
 
 In development source, native composer discovery uses `probeCatalogs` through the same host
 preflight boundary and each Agent's `preflightSessionControls` contribution. Agent-native leaves
@@ -402,6 +464,12 @@ variant and adapter callbacks. Agent-owned readers interpret runtime settings; g
 code does not parse Agent-specific descriptor fields. This lets Codex probe the session's actual
 runtime even when the current account default selects another runtime.
 
+In current development, Codex app-server MCP approval requests use the existing normalized
+`mcp__<server>__<tool>` subject from the preceding native tool lifecycle event. A session grant
+therefore applies to that server/tool rather than every `requestUserInput` approval. Requests
+without a correlated MCP item receive a unique per-call subject; completed items and turns
+release the correlation. The host permission handler remains the grant owner.
+
 A successful capability response acknowledges a supplied descriptor with
 `runtimeDescriptorV1Accepted: true` after validating and using that context. The shared app
 discovery operation requires this acknowledgement for descriptor-scoped requests. A predecessor
@@ -439,6 +507,17 @@ or malformed discovery retains the last good list. Pi 0.84.4 can incorrectly rep
 receipt when another internal refresh supersedes it; this upstream limitation prevents a complete
 freshness guarantee in that case. Happier does not inspect private registry state or add retries to
 hide the missing receipt semantics.
+
+In 0.3 development source, Pi receives user MCP servers through its existing
+native tools extension. The host's shared MCP resolver selects and materializes
+the servers; Pi writes that open-request record to its private 0600 config,
+registers `mcp__<server>__<tool>` tools over retained stdio connections, and asks
+through Pi's extension confirmation dialog before calling them. This uses the
+existing RPC dialog route to Happier, rather than a separate daemon MCP proxy.
+Session shutdown closes the connections and removes the private config.
+Every Happier Pi launch includes `--approve`, so the user-selected project also
+loads its native skills, extensions and settings. Live vendor and Windows checks
+remain separate from the source tests.
 
 Installed external Agent plugins and bundled Agent plugins are peers at the public Plugin SDK
 boundary. A manifest declaration is admitted by the same host policy and receives the same public
@@ -598,7 +677,14 @@ Agent set. A package preparation failure aborts full publication before replacin
 these projections and reports the package diagnostic. Correct the failed source
 and rerun the canonical generator. Bounded compiler-input and static-definition
 preparation still unblock dependency builds, and scoped/aggregate publication
-retains its existing recovery contract. Shared identity facts can retain an
+retains its existing recovery contract. Before refreshing host declarations,
+scoped and aggregate publication require every retained Agent registration's
+plugin/local identity to match an admitted manifest Agent. An omitted, invalid,
+or renamed declaration fails publication before replacing host projections;
+repair the declaration or run a coherent full regeneration to change identity.
+Canonical implementation ids may still differ from manifest-local ids.
+Target-owned artifact preparation does not replace those host projections.
+Shared identity facts can retain an
 optional Agent that is absent from the admitted UI maps; identity recognition
 does not establish the presence of its UI core.
 
@@ -789,15 +875,43 @@ Defined/used in the CLI capability system:
 
 ### Machine Agent inventory (0.3 development)
 
-`packages/protocol/src/capabilities/machineAgentInventory.ts` owns projection of
-the complete native Agent probe request. A missing, failed or invalid Agent result
+`packages/protocol/src/capabilities/machineAgentInventory.ts` owns native Agent
+probe requests and their inventory projection. A missing, failed or invalid Agent result
 appears in the optional `unavailable` list with its Agent id and reason; valid
 results remain in `items`. Invalid whole-response envelopes still fail the inventory.
 The app consumes this projection once through `machineAgentCapabilityObservation`.
+Configured registry definitions use the same owner through `tool.acpAgentInventory`.
+Its request carries only the requester's closed definition id, title and typed
+launch projection, without environment, secrets or origin. The daemon returns
+physical installation/version/managed/platform-fit facts for those ids and echoes
+the caller's title; it neither reads its custodian catalog nor grants Account
+custody or launch admission. Definition rows share a tuple `(agentId, definitionId)`
+key across inventory and model persistence. Failed or partial requester catalogs
+are explicit unavailable results: retained named rows become stale, while a
+successful ready-empty catalog withdraws them through the existing cache owner.
+
 Only the affected Agent becomes unknown and stale, retaining any last-known facts
 for display; a successful probe clears that reason. Session admission continues to
 require the canonical fresh ready state. Latest-version lookup failure alone yields
 `latestVersion: null` and does not invalidate installation or readiness facts.
+
+In development source, New Session's selected-Agent read omits
+`includeLatestVersion` but retains native sign-in detection. Full Agent-picker
+reads still request latest versions through that same request builder and
+Account/Machine cache. The observation owner retains a known latest version when
+the response omits that opt-in fact; an explicit `null` still replaces it.
+Fresh authentication facts always replace the old facts. The selected credential's
+readiness rules are unchanged.
+
+The daemon's `cliSnapshot` isolates each Agent observation before this projection:
+an Agent without a native CLI probe, or one whose probe throws, cannot replace
+completed siblings with failures. Failed observations remain unknown rather than
+becoming negative installation facts, and do not acquire the successful snapshot
+cache lifetime. Workflow admission consumes the same exact-Machine inventory.
+Its concrete availability refusals carry typed reasons through
+`WorkflowActionFailureV1Schema`; the shared Workflow presenter reuses localized
+Machine Agent status copy. Workspace preparation and Agent probe failures remain
+distinct. Agent-start policy refusals retain their existing admission contract.
 
 Inventory and daemon-scoped system-tool capability caches use the existing
 machine contribution-registry currentness revision. Unrelated workspace-sync or
@@ -809,6 +923,29 @@ operation deadline on daemon projection work.
 
 Machine and Agent rows describe aggregate authentication availability: a healthy
 accepted Connected Account can satisfy sign-in while the native CLI is signed out.
+`useMachineAgents` evaluates Account health against the exact Machine's cached
+Connected Account declarations through `readConnectedAccountDescriptorProjection`,
+`mergeConnectedAccountDescriptorProjections` and `projectConnectedServiceRegistryEntries`.
+Readiness consumes that registry projection's executable fact; it does not apply
+a second candidate-count rule to the Home-wide settings union.
+In development source, Account-scoped Connected accounts settings and registry
+rows compare declaration facts without machine-local runtime `occurrenceId` stamps.
+Equal declarations collapse across machines and restarts; genuinely divergent
+declarations remain non-executable conflicts. Raw machine publications retain their
+occurrences for exact-runtime admission. For Account-scoped add and configuration
+actions, one valid answering Machine can supply a service while the census is
+incomplete. The registry marks that entry ready only when the answering Machines
+agree on its exact identity; token/OAuth execution also requires its available
+descriptor. The Account snapshot remains loading or stale, with its existing
+freshness and failure facts. Retained services without an answering supplier stay
+visible but non-executable, and an answering identity divergence blocks only that
+service. Partial reads refresh answered identities and their conflict facts while
+retaining unanswered services for display. Strict Machine descriptor validation
+is unchanged; an unsupported or malformed Machine cannot admit its own entries.
+Machine-scoped readiness uses only the selected
+Machine's published descriptors, deduplicated by the same projection owner. An
+unanswered or internally conflicted Machine remains unknown; it cannot borrow
+another Machine's authentication modes.
 The New Session launcher instead projects the credential in its emitted binding
 through `machineAgentModel#projectMachineAgentForCredential`, using the same
 inventory sign-in and readiness owners. Native selection uses the retained native
@@ -855,21 +992,48 @@ for connected-service profile/group enumeration. Custody stops at the home:
 intentional shared-state symlinks inside it remain supported. This does not add a
 second native-home catalog or require a daemon merely to discover local pets.
 
-The process singleton admits one active job per Agent; another start returns that job id.
+The process singleton admits one active built-in job per Agent target; configured
+jobs additionally distinguish the admitted Account and pinned version. Another
+start for the same target/version returns its job id. Configured definitions resolve
+through `resolveAcpLaunch`, install through its managed archive/npm owners, and
+succeed only after that same resolver reports a ready launch. Archive success
+also carries the checksum fact.
 Machine RPCs use `daemon.agents.install.start/read/cancel/list`:
 
-- `start({agentId, intent: 'install' | 'update', consent: {vendorRecipe: boolean}, force?})`
+- `start({agentId, definitionId?, intent: 'install' | 'update' | 'uninstall', consent: {vendorRecipe: boolean}, force?})`
   returns `{ok: true, jobId}`. `force` requests reinstall rather than skip-if-installed.
 - `read({jobId, cursor})` returns `{ok: true, steps, progress, events, nextCursor, done, outcome}`. Events are
   `step`, `progress`, or `log`; the cursor advances through that job's event stream.
   The step/progress snapshots also serve Action status callers without replaying events.
 - `cancel({jobId})` requests cancellation and waits for the running operation to settle.
-- `list({})` returns active jobs and the latest completed attempt for each registered Agent.
+- `list({})` returns active jobs and the latest completed attempt for each target.
+
+Uninstall removes only Happier-managed software in the selected Account namespace.
+Definition uninstall, repair and forced reinstall refuse with `in_use` while a
+tracked Session uses that definition. A pin change installs side by side, including
+when an older Session runs. The hydration sweep compares versions only in the
+custodian's namespace, removes unreferenced versions and retains the live-use guard.
+Unknown relevant Session identity also refuses removal. The daemon binds the
+job owner to its actual tracked runner set, including adopted Sessions.
+`agent/acp/catalog/registry/managedAgentInstalls.ts` supplies the shared definition
+removal used by explicit jobs, hydration cleanup and Storage. Managed archive
+metadata stays in the existing version file, and npm identity stays in the
+Happier-authored workspace manifest; vendor package manifests are untouched.
+
+Configured definition jobs require current Account admission at the machine RPC.
+Foreign requests read the caller's ACP catalog through the existing admitted
+requester Account context and install into that Account's namespace. Job reads,
+lists and cancellation expose only that Account's definition jobs. Built-in jobs
+keep their existing machine access behavior. The canonical cli-common identity
+helper encodes the Account namespace and definition/version tuple as filesystem-safe
+hashes inside the existing archive and npm trees; it adds no catalog or registry.
+This describes development source, not release certification.
 
 The authenticated local daemon control transport exposes the same operations at
 `/agents/install/{start,read,cancel,list}`. Actions `machines.agents.install`,
-`machines.agents.install.status`, and `machines.agents.install.cancel` consume this same
-owner. Terminal outcomes are `succeeded {version}` or `failed {code, stepId, message,
+`machines.agents.uninstall`, `machines.agents.install.status`, and
+`machines.agents.install.cancel` consume this same owner. Terminal outcomes are
+`succeeded {version, checksum?}` or `failed {code, stepId, message,
 guideUrl?}`; unavailable automatic installs can carry the Agent's installation guide.
 
 Jobs and their recent history live in daemon memory. Closing an app surface or disconnecting
@@ -948,6 +1112,22 @@ Checklist ids are treated as stable API between daemon and app:
 
 ### ACP resume (no runtime probes)
 
+In 0.3 development source, Agent manifests may declare `capabilities.skills`:
+`delivery` (`session_dir` or `none`), `nativeDisable`, `liveReload`, optional
+`usageEvidence`, and optional native root segment arrays (`user`, `project`,
+`plugin`). The current catalog projects that declaration; an absent declaration
+resolves to no delivery, native disable or live reload. Bundled Agents initially
+declare `none`; native skill delivery is not yet activated by this seam.
+
+Declarative ACP Session directory delivery requires both `delivery: 'session_dir'`
+and `definition.skills.sessionDelivery`. The closed declaration supports
+`env_path_list`, `defaults_file_env`, or `native_config_skills_dir`; the last
+requires `mcp.nativeSessionConfig`. These are declaration contracts for the later
+delivery implementation, not a claim that all native knobs are already applied.
+Resolved MCP servers and skills have one carrier into Agents: the Session or Run
+open request. ACP reads MCP from that request for both `session/new` and native
+config preparation; its composer dependencies carry no second MCP binding.
+
 We do **not** runtime-probe ACP `loadSession` support in normal UI/CLI flows.
 
 Instead:
@@ -975,6 +1155,28 @@ session composer used by normal Sessions and Session-adapted execution runs. A `
 mapping deliberately performs no mode request, preserving the Agent's own configured default; this
 policy remains plugin-owned data rather than an Agent-id branch in the host.
 
+In current development, an ACP definition's `usageLimitDiagnostic` declares the provider's exact
+assistant diagnostic. The public ACP host turns that diagnostic into a typed failed-turn issue even
+when assistant text was emitted earlier, retaining the selected qualified account, group generation
+and credential revision. Quoted diagnostics and refused prompts remain ordinary provider output.
+After the host accepts the failed-turn mutation and its transcript projection, the session loop sends
+that attributed classification through the existing daemon recovery reporter. Rejected terminal
+persistence and native-account failures do not initiate connected-account recovery. The daemon
+remains the recovery owner; explicit auth-refresh requests share its existing report path.
+The same declaration enables the host's existing backoff recovery control with its shared defaults;
+providers do not declare environment-variable names for that host policy. Antigravity's diagnostic
+is pinned to ACP server 1.3.0. An optional `auth.setupFailure` declaration matches the provider's
+numeric request code and exact error-data reason before the ACP peer strips arbitrary provider data.
+The canonical request failure log retains only the numeric code and `authenticationSetupFailure: true`
+for that match; generic missing authentication remains distinct. Antigravity declares the pinned
+onboarding failure match. This describes development behavior, not released availability.
+
+In development, Antigravity declares `connectedAccountLaunch.environmentUnsetUses` for
+`AGY_ACP_CCPA_BASE_URL` and `AGY_ACP_CCPA_PROJECT`, bound to its `model_upstream` purpose.
+The shared selected-purpose projection supplies the existing launch environment-removal channel,
+so connected authentication excludes inherited endpoint/project overrides. Native launches retain
+those customizations; unrelated Google and tool environment values remain available.
+
 `createPublicAcpSession` is the single configuration owner for create, resume,
 fork and live updates. It resolves the merged native-mode override before the
 permission mapping: explicit mode wins, clearing selects the current mapped
@@ -991,7 +1193,7 @@ code, so behavior expressed as a plugin callback would silently disappear on tha
 
 - `mcp.nativeSessionConfig` covers an Agent whose CLI reads MCP servers only from its own config
   file. Before launch the host materializes a session-private config root, links the user's real
-  provider directory and declared config-root siblings into it, writes the merged server map, and
+  provider directory's children and every config-root sibling into it, writes the merged server map, and
   points the declared config-root variable at that root for one launch; the root is removed when the
   Session ends or the launch fails. The declaration resolves against the effective launch
   environment — host process environment, then launch overrides, then Session unsets — so the host
@@ -1000,11 +1202,23 @@ code, so behavior expressed as a plugin callback would silently disappear on tha
   declaration beside `pass_through`. A project-scoped provider config that would shadow a Session
   server fails the launch instead of silently replacing a Happier tool. Devin is the current
   consumer.
+
 - `models.suffixOption` covers an Agent that advertises one model per option value and encodes that
   value in the model id (`<model>-high`, `<model>-high-fast`). The host presents one model plus the
   declared canonical option and expands a selection back to the exact advertised id. A family
   collapses only when that is reversible: the projected id must not already be an advertised model,
   the variants must share one projected name, and each must carry a distinct value.
+
+In 0.3 development source, native config composition and Gemini home shaping
+share `linkDirectoryChildren` through `@happier-dev/plugin-sdk/fs`. It keeps
+destination directories real, links their source children, skips missing
+sources and excluded child names, and preserves existing destination entries.
+Gemini's private `.gemini/skills`, `.agents/skills` and `.gemini/extensions`
+therefore remain writable for session additions while exposing native entries.
+Only its non-auth configuration files are copied, and copied settings lose
+their native MCP server map. `HOME` and `XDG_CONFIG_HOME` still point at the
+private home pending an installed Gemini CLI path probe; subprocesses inherit
+that isolation. Native Windows link behavior remains a release check.
 
 The public ACP transport declaration includes stdio, WebSocket, and TCP shapes. All three feed the
 same host-owned ACP session lifecycle. WebSocket and TCP connect to the declared endpoint without
@@ -1094,6 +1308,19 @@ with `phase: 'initial_replay'` to establish provider correlation without admitti
 historical work or lifecycle activity. Their delivery continues even when the
 corresponding display row already has durable custody. Omitted phase retains
 live observation semantics.
+
+Terminal follow requires the source declaration
+`terminalFollow.userRowClassification: 'explicitV1'`. Live user display rows
+must explicitly distinguish terminal-origin input from host prompt echoes;
+unclassified `source_fact` rows are historical-only. A producer may instead
+deliver ordered native `source_observation` rows to the current runtime's
+`observeSourceTranscript` owner, retaining native prompt and queue evidence
+without guessing from text equality. Claude's development source declares this
+contract: its terminal projection emits native observations for live prompts,
+while historical display rows retain `source_fact`. The host still refuses
+missing declarations or observers. Failed ordered-history admission keeps
+Claude Runtime Activity unknown; turn completion does not turn lost observation
+into idle.
 
 The closed `source_observation` envelope carries an item identity, timestamp,
 and strict JSON native row. It is not a visual transcript record or user

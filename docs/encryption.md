@@ -86,6 +86,17 @@ events retire from pending custody. An older server that cannot admit a native
 subject is unsupported; a legacy Session report is not an acknowledgement.
 See [actions.md](actions.md#native-usage-sources-development) for source controls.
 
+The development Plans value projection sums only API-equivalent costs repriced
+by the canonical usage price owner and bound to the exact qualified connected
+account. Reported, estimated and paid amounts are not substituted. Unknown
+account attribution or unpriced contributions remain excluded with partial
+coverage, not distributed across accounts. A price multiple compares that
+observed query subset with the existing entered/paid/list subscription fact only
+when the query lies within its witnessed current period and both amounts are
+USD; stale or absent prices, other currencies, zero prices and cross-period
+queries cannot supply a multiple. This is not paid savings, a full-period
+forecast or a cross-plan replay.
+
 ### Provider Account Usage history (0.3 development)
 
 Provider quota and subscription/capacity snapshots are a separate domain from
@@ -93,6 +104,14 @@ the server-queryable accounting above. Their accepted history keeps B's existing
 plain/sealed Account-mode representation; an authorized client opens sealed
 content, and mode/content disagreement fails closed. Retention metadata does
 not make the quota or capacity numbers SQL-queryable for E2EE Accounts.
+
+The development Usage Resource drains this encrypted history on the authorized
+client. Current capacity is published before history, entered-price and Pending work settle;
+each accepted page then updates the same Resource. Client projection keeps the
+first and last actual observations of an unchanged material run, preserving reset,
+denominator and entitlement changes. Its sample counts describe the retained
+observations used for the projection. Ordinary paged reads and exact immutable
+reset-witness reads still return their requested accepted records.
 
 History also follows B's existing lifecycle. The explicit Account-mode
 conversion owner, `migrateConnectedServicesAccountEncryptionInTx`, clears B's
@@ -102,6 +121,18 @@ composite cascading foreign key; it is not rewrapped or recoverable from a
 later provider refresh. New observations start new history. This describes
 unreleased development behavior, not continuity across mode conversion or
 completed loaded-runtime validation.
+
+The development signed reset-start Action carries fixed-size, domain-separated
+canonical digests: Session, qualified source, B record, accepted witness, and the
+full mutation purpose including Session/local input and meter. Read selectors
+and raw mutation input are independently re-derived and compared with these
+signed facts. This preserves accepted long meter identities without expanding
+the global HTTP header limit or imposing new identity caps. For E2EE Accounts,
+initial Session content remains inside the whole-Action ciphertext.
+The Home signs this projection without decrypting B or the Action; the canonical
+client opener rejects any projection that differs from its decrypted input.
+Account-mode currentness and the exact source/record/witness reads remain scoped
+to that root, and a mode change invalidates its existing signed authorization.
 
 ### Private Profile rows (0.3 development)
 
@@ -285,6 +316,28 @@ integrated; this section does not claim released availability or certification.
 
 ### Private Agent, Provider and Connected Account catalogs (0.3 development)
 
+Development MCP OAuth grants use the existing qualified Connected Account
+credential and account-configuration envelopes, under the reserved host service
+`happier/mcp-sign-in`; the service-local account id is the MCP server id.
+The MCP definition records only its OAuth authentication choice, not a token.
+Discovered client registrations are keyed by issuer in the grant configuration;
+client secrets use its secret fields, and access/refresh tokens use its credential
+record. Plain Accounts use explicit plain envelopes without fabricated Account
+key material; E2EE Accounts use the incumbent Account-scoped cipher owners.
+Discovery configuration and temporary exchange metadata stay in the existing
+sealed attempt until settlement. Request-auth capability files are private,
+machine-local bearer capabilities, not a synced credential catalog.
+
+Usage request attribution in 0.3 development carries only the qualified
+Connected Account reference (`service` and opaque `accountId`) or Provider
+connection identity, not personal labels, credentials or provider subjects.
+The host captures the source at request dispatch; the accounting ingest stores
+that proof separately from arbitrary metadata and projects it only onto its
+matching turn delta. Missing proof, cumulative remainders and imported history
+remain explicitly unknown. These structural references are queryable in both
+Account modes, like the existing qualified Connected Account APIs; display
+labels still resolve through the mode-aware private catalog below.
+
 The development contracts define singleton private catalogs through the
 existing reserved Account-row owner, not arbitrary user KV or Resource grants.
 Their envelope domains are allocated by
@@ -306,6 +359,12 @@ unavailable key must not be interpreted as an empty Plain catalog. Connected
 records also bind their inner `key` to `configurations` or `purposes`. Purpose
 records retain the distinct qualified Team resource selection arm; moving these
 records does not move Connected credentials or authentication groups.
+
+Qualified Connected credential-health updates retain Account-mode and revision
+checks. An admitted update whose complete normalized stored metadata is unchanged
+is a no-op: it preserves the existing response and does not advance the row or
+Account profile currentness. Changed health, health timestamps or metadata
+normalization still write and publish through the same Server repository owner.
 
 The Protocol row contracts live in `providers/connections/connectionRowsV1.ts`,
 `connect/connectedAccountConfigurationRowsV1.ts`,
@@ -522,6 +581,14 @@ with a strict JSON value. E2EE content is `{t:'encrypted',c}` in the
 payload is the strict `{key,value}` record; clients verify its key against the
 requested row before returning the value. Opaque engine carriers remain strict
 JSON, without reinterpretation at the server boundary.
+
+Saved Workflow placement uses the same Account memory owner and cipher under
+`workflowProject:<encodeURIComponent(definitionId)>`. Its value is the exact
+Machine, directory and optional WorkspaceRef binding selected for that Account.
+It is separate from the portable shared definition; another recipient's target
+is not written into its Artifact. Explicit Save persists the selection, and a
+failed memory write keeps the target unsaved for retry. Row identity and Account
+mode checks apply before opening or mutating it.
 
 Project navigation recency uses that same owner, with the qualified opaque key
 `projectLastOpened:<encodeURIComponent(serverId)>:<encodeURIComponent(projectKey)>`
@@ -1530,6 +1597,10 @@ those visibility prerequisites hold.
 Lean Run cards receive the server's `attentionRequired` membership without
 opening invocation content. This public boolean adds no result, prompt or
 decision content and is refreshed independently of the parent control revision.
+Membership requires a non-cancelled Run with an indexed approval, review,
+needs-attention or uncertain-outcome invocation. An interrupted state or pending
+physical Stop custody alone does not request human attention; Stop custody
+continues through the existing exact-Machine recovery index.
 
 The development `workflow.run.list` Action host also projects `where` from the
 accepted snapshot it already opens for private display metadata. The server
@@ -1538,15 +1609,37 @@ that exact snapshot could not be opened; omission means the operation did not
 read Where. The shared client Run store preserves an opened Where across
 control-only responses and clears it on an explicit unreadable list projection.
 
-The development worker writes completed top-level authored-block counts into the
-existing sealed root invocation progress. A loop or conditional contributes one
-block; an active loop separately reports completed current items against its
-frozen total. The server returns that exact root envelope beside the lean page,
-without opening it or adding public count fields to the invocation index. The
-authorized Action host opens it with the existing mode, recipient and binding
-checks; missing or unreadable root content produces `stepProgress: null`.
+An attention-filtered list additionally returns the first `waiting_for_review`
+invocation's opaque progress sidecar in sequence order. The authorized Action
+host opens it through the same recipient, Account-mode and exact-record binding
+checks, then resolves its authored step and lane names from the accepted snapshot
+and frozen children. The optional private `heldStep` summary feeds the existing
+Inbox item projection without per-row detail reads or a second store. A missing,
+unreadable or unnamed hold yields `heldStep: null`; lists that did not read holds
+and control-only responses omit it. This is development-only display data, not
+server-readable naming or authority to complete the hold.
+The public `heldCount` summary counts indexed `waiting_for_review` invocations
+through the existing Run selector, including holds beyond that first sidecar.
+Cancelled Runs report zero. It discloses only the number of current review holds;
+private sidecar readability does not determine the count. Omission means that
+the response did not read the count and preserves a prior client observation.
+
+The development worker writes authored-step counts through `countWorkflowStepsV1`
+into the existing sealed root invocation progress. A completed top-level container
+contributes its authored leaf weight; an active loop separately reports completed
+current items against its frozen total. Exact Run reads and lean pages return the
+same opaque root sidecar. Their authorized Action host shares one opener with the
+existing mode, recipient and binding checks; missing or unreadable root content
+produces `stepProgress: null`. No public count fields are added to the invocation index.
 `stepProgressCurrentness` carries the existing root record, attempt and content
 revision because a child fact does not advance the parent control revision.
+For-each item frames may also retain a private `source.displayLabel`, derived from
+the selected item's scalar value, its scalar `title`, or its first scalar field.
+Objects and arrays are never serialized into this label. It shares the existing
+Automation display-label budget of 256 Unicode code points; longer names retain
+a prefix and an ellipsis. This label stays inside the sealed invocation progress.
+The occurrence projection displays it only when that frame's opened attempt and
+content revision match its current index; otherwise the ordinary item number remains.
 These are development projections, not a release-readiness claim. Admission
 freezes `startedBy: user | agent | trigger` in the accepted snapshot, and the
 same authorized list opener projects it. Host callers are users; Session agents
@@ -1825,6 +1918,58 @@ methods retain their existing plain transport and inner-envelope contracts.
   and status, foreign work ids/commands/content, and undeclared peer/transfer native
   bags are not part of that projection. This is producer-side admission, not
   recipient-specific UI redaction, and does not claim an arbitrary path-free blob.
+- The development machine-resources contracts admit `metadata.resourcesPolicyV1`
+  and `daemonState.resources` through that same share-wide content owner and
+  Machine-mode encoding. The resources policy, including its Storage section, and
+  the resources projection are visible to admitted Machine recipients, not private custodian
+  overlays. Resources contain host/reporting facts, attention reasons (including
+  volume labels), and typed automatic-action facts such as counts and bytes;
+  they exclude session titles, raw samples, chart series and retained history.
+  A reporting summary requires observed host facts; typed unavailable summaries
+  include host facts only when previously observed, including on first-read failure.
+  Live sampled metrics and history remain at the daemon and are disclosed through
+  admitted Machine RPC reads, not written into server-published Machine content.
+  Storage scan/index paths, category items, suggestions, per-Account Pile refs and
+  Trash manifests likewise leave the daemon only through admitted Machine RPC:
+  E2EE for encrypted Accounts and the explicit plain envelope for plain Accounts.
+  They are not Machine metadata or daemon-state projections. The user's
+  `storage.protectedFolders` list is the intentional exception: it is synced in
+  the share-wide resources policy using the existing Machine-mode codec and CAS
+  writer, not a private custodian overlay. Whole-disk reads and protected-folder
+  mutations remain custodian-only even though that policy is share-wide.
+  These are development-source contracts, not released feature availability.
+- Development machine-vitals alert delivery uses the existing Account notification
+  and Artifact owners. The strict `resource_limit` notice includes machine/volume
+  identity and witnessed condition evidence, not Session titles or command lines.
+  The existing `usage_notice.v1` Artifact kind retains the Account-mode codec;
+  extending its notice union does not create a second notice store or make it
+  share-wide Machine metadata. Push preview policy remains independent of the
+  private Inbox body, and unavailable live-work counts are omitted rather than
+  fabricated. The Account's keyed machine-offline opt-in is consent, not a
+  per-machine resources-policy field. In development source,
+  `settings.set` at `notifications.machineOffline` changes one Machine id in
+  `machineOfflineAlertsV1.machineIds` through the Account settings mutation owner.
+  Its derived `accountRemoteAlertPolicy.machineOffline` discloses the opted-in
+  ids to the Home, bound to the Account settings version; it does not grant
+  remote Session-alert consent. The separate strict `MachineRemoteAlertV1`
+  payload carries Home, Account and Machine ids, an offline/recovered phase and
+  preview policy, never Machine names, metadata or encryption keys. Device
+  enrichment retains the existing authenticated Account-mode custody checks:
+  exact admitted Machine identity, current custodian, revocation/replacement,
+  current Account encryption state and matching Machine storage mode. Optional
+  names are opened through the incumbent plain-envelope or AES-GCM Machine
+  codec, not the Session payload codec. The server payload stays content-free.
+  Recovery dismisses only strict matching Home/Account/Machine notices; the
+  JavaScript background owner re-admits that scope before each outward OS
+  dismissal. Consent is default-off per Machine, with no historical-working
+  eligibility or additional presence flag. Delivery remains custodian-only;
+  shared recipients cannot enroll the custodian through their own preference.
+  The existing presence-timeout transition supplies the server sender, which
+  rechecks current custody and settings-version-bound Account consent before
+  applying existing Account/device policy. Admitted Machine alive submits quiet,
+  content-free recovery through the same push owner. No Session history or
+  private metadata enters eligibility. These development-source contracts do
+  not claim released offline-alert availability or physical push certification.
 - Machine Sync publication carries only engine/carrier readiness. Its existing
   daemon-state version advance invalidates demanded private status/conflict reads
   for the exact Home and controller. Those reads remain at the admitted relationship
@@ -1898,6 +2043,12 @@ methods retain their existing plain transport and inner-envelope contracts.
   service later recipient changes through the existing Machine invalidation and
   Account-change lifecycles, reusing the Session preparation pass rather than a
   separate queue.
+  Background preparation excludes published revoked or replaced Machines even
+  when their retained access projection still says Manage/ready. The shared
+  preparation owner also rejects an observed retired row before custodian
+  conversion or recipient census. Historical display reads are unchanged;
+  current Machines still retry unavailable recipient preparation through the
+  existing invalidation lifecycle.
 - Encoded Machine metadata/state writers carry `expectedDataEncryptionKey` with
   their expected content revision. `keyBasis` projects that owner-envelope identity
   separately from the caller-openable `dataEncryptionKey` recipient wrapping.
@@ -1913,6 +2064,16 @@ methods retain their existing plain transport and inner-envelope contracts.
   context. It rejects a substituted plain marker before payload emission and never
   follows Machine replacement redirects. Ordinary
   `callMachineRpc` retains its existing replacement behavior.
+- In 0.3 development, the normal Machine census can publish pending display shells
+  before fresh keys open. Activity-ordered hydration uses the existing concurrency
+  owner and releases the JavaScript thread between cohorts; exact reads still await
+  key admission. Retained opened content is re-admitted before reuse. Pending
+  shells grant no decrypted-content or RPC authority. The
+  Account encryption owner shares overlapping uncancellable envelope opens within
+  one captured Home/Account generation, retaining no completed or failed result.
+  Each caller's currentness is rechecked before returning its result; signal-bearing
+  calls retain the native queue's cancellation custody. Machine key, access and
+  creator-trust admission still precede decrypted publication.
 - Successful opening and the expected-mode check do not authenticate the provenance
   of a published scoped key, so scoped Machine-content keys for a Temporary computer
   carry their own signed binding. In current development source the creator seals the
@@ -2885,8 +3046,12 @@ definition, then updates the private profile record with the Artifact reference.
 Private secret bindings remain on that record. Send a copy is an explicit client
 file-export effect, not an access grant or a separately synchronized document.
 
-Development authoring drafts retain their admitted original Scripts or Changes
-destination in the existing device-local draft supplement. Explicit Send carries
+Development Project authoring drafts retain their admitted original page,
+selected dashboard (including its qualified Home when attached), Code location, file or commit, and built-in or qualified plugin companion in the
+existing device-local draft supplement. The closed origin contains qualified
+destination facts, never a raw return href or private plugin launch input. Plugin selection retains
+its contribution and instance identity; the current registry admits the reopened surface. Ordinary New session origins are
+distinguished from setup authoring, including when opened from Scripts. Explicit Send carries
 that destination into `work.authoringOriginV1` through the same Session owner
 metadata tuple writer. Editing the launch Machine or folder preserves the
 original qualified Account, Home and workspace destination. Cold materialized
@@ -2922,7 +3087,7 @@ recipient-envelope format. The 0.3 development stored-content contract has one
 publication owner for Session and ordinary Artifact subjects. A trusted key-holding
 host generates two independent random values: an HTTP-visible lookup capability
 and a fragment-only wrapping secret. The usable link is
-`<isolated origin>/s/<lookupId>#k=<secret>`; the fragment secret never enters the
+`<viewer origin>/s/<lookupId>#k=<secret>`; the fragment secret never enters the
 publication request, server response, access log, or content request. The server
 stores only the lookup hash and, for E2EE content, the opaque DEK envelope wrapped
 using the fragment secret. Plain Sessions and plaintext Accounts require no client
@@ -2935,14 +3100,22 @@ is not a server-side confidentiality guard.
 
 In 0.3 development source, public Session visuals are read through the admitted
 transcript message, not through a general Session-record capability. The existing
-authenticated transcript writer can publish a small, server-validated reference
-alongside its message. The association retains the acknowledgement's original
-source address for presentation correlation; it does not grant a parent Session
+authenticated transcript writer can publish a small, server-validated collection
+alongside its unchanged native message, including multiple tool results in one
+row. The existing `surfaceItemReference` JSON column carries
+`{v:1,references:[...]}`; no additional record store or message writer is involved.
+Each current member retains the acknowledgement's exact original source address,
+item id and revision for correspondence; these fields do not grant a parent Session
 read. Older messages without an association do not acquire one from viewer prose
 or caller-supplied item ids. The lazy public endpoint rechecks the same share,
-Session, message cutoff and consent, then reads the exact current host surface
-item through the canonical record owner. Its record identity must still match
+Session, message cutoff and consent, then selects an admitted member by its
+nonnegative `referenceIndex` and reads that exact current host surface item through
+the canonical record owner. Each member is independently admitted: an unavailable item does not remove
+its valid siblings or the message. Its record identity must still match
 the acknowledged revision; deletion and recreation are not a continuation.
+An explicit unsettled-fork import retry can enrich the same ciphertext row with
+newly admitted members through the existing Message CAS. The retry preserves
+content, local identity and sequence, and omission does not clear older members.
 
 Visual records keep their explicit `{t:'plain',v}` or `{t:'encrypted',c}` envelope.
 The browser opens an encrypted item using the same fragment-unwrapped Session
@@ -2953,7 +3126,11 @@ an original-address hint never authorizes a public parent read. A copied child
 item can appear in the transcript even when its immutable original acknowledgement
 has Board intent; the opened child's own destination must be `transcript` or
 `both`. Ordinary same-Session acknowledgements must match the stored association's
-exact item and acknowledged revision. A share-level
+exact item and acknowledged revision. A validated imported origin plus an exact
+completed visual acknowledgement without a child association produces a
+not-copied placeholder only; it cannot trigger a visual or parent read. Visible
+visual bodies are disposed offscreen, with measured space retained and withdrawn
+reads prevented from mounting a late body. A share-level
 `networkOff` choice is publication policy, not a content/key rewrite. HTML stays
 inside the existing opaque, network-closed bundle sandbox until its shared owner
 admits a saved network policy. This describes development implementation, not a
@@ -2975,13 +3152,14 @@ Protocol owns the V0 SecretBox framing and its current serialized-JSON payload.
 The `fragment_v1` derivation marker distinguishes new links from
 `legacy_token_v1` publications, whose wrapping key came from the released
 server-visible path token. New Session publication and rotation use the same
-fragment-only persistence owner as Artifacts and require the isolated origin and
-its rate-limit dependency. Both Session POST routes accept the current material
-without old-component negotiation; the Session-specific route rejects the former
+fragment-only persistence owner as Artifacts and require an admitted viewer origin
+and the public rate-limit dependency. Both Session POST routes accept the current
+material without old-component negotiation; the Session-specific route rejects the former
 `token` input. Retained legacy links remain readable, listable, revocable and
 settings-editable without replacing their token or resetting usage. Rotating one
-upgrades it to `fragment_v1` and requires isolation; replacing only a legacy E2EE
-wrapped key is refused, while replaying the identical envelope remains valid.
+upgrades it to `fragment_v1` and requires the current viewer-origin admission;
+replacing only a legacy E2EE wrapped key is refused, while replaying the identical
+envelope remains valid.
 Readers retain the released plain-JSON payload and
 legacy Session route; they never substitute a lookup id for a missing or corrupt
 fragment secret. This retains old link keys and routes without claiming their
@@ -2996,22 +3174,49 @@ its owner. Public readers never bypass the privacy projection to restore
 whole-metadata disclosure. This upgrade path is development source, not a claim
 that a retained deployment or composed live journey has been validated.
 
+In **development-only, unreleased 0.3**, `storedContentPublicShareOrigin.ts` owns
+public stored-content delivery admission for Sessions and Artifacts. An isolated
+origin is preferred whenever configured. With no isolated origin, the non-secret
+Home setting `HAPPIER_PUBLIC_SHARES_ALLOW_SUBPATH` permits the configured HTTPS
+public server origin. It defaults to false, applies live, and requires the Home
+owner's `manageHomeSettings` capability to change; admins retain view access.
+An explicit deployment env value takes precedence over the saved Home setting.
+Each operation consumes one effective Home-settings snapshot for origin selection,
+hostname admission, limiter configuration and its response. The request Host is
+not a public-link authority. The strict response field is renamed in place from
+`isolatedOrigin` to `viewerOrigin`, with all current consumers moving together;
+there are no dual fields or compatibility aliases for the unreleased field.
+
+The existing fixed-window public rate limiter remains mandatory for publication
+and public reads. Enabling the hostname option does not bypass it or supply a
+default traffic budget. Turning the option off stops main-origin admission
+without revoking or deleting retained publications or resetting their usage.
+Turning it back on restores eligible fragment links under the unchanged consent,
+expiry, use-limit and revocation checks. Configured isolated links remain usable.
+Legacy token URLs and their reader path remain unchanged; this option neither
+converts those links into same-origin HTML nor bypasses metadata-privacy upgrades.
+Local-service public exposures, private local-service web previews and private
+`/a/:artifactId` previews retain their isolated-origin requirements; their origin
+owner does not consume this permission.
+
 Public Actions describe only the subject and publication settings. After approval,
 the key-holding UI or CLI host returns the complete fragment URL in the create
 Action result, without requiring a mounted share sheet or publication callback.
 The existing E2EE Session transcript encrypts that result; diagnostic observations
 redact the capability URL. Get/list results retain only safe publication settings
 and cannot recover the wrapping secret. The server cannot assemble a usable new
-fragment link. The isolated, unauthenticated viewer sends no Account credentials,
+fragment link. The unauthenticated viewer sends no Account credentials,
 opens E2EE bytes in the browser, and renders ordinary text documents as text.
 Binary Artifact references use the same authorized response, Account-mode
 admission and browser decryption, then verify the opened size and SHA-256 before
 creating a local object URL. Inert raster images use a native image preview and
-PDFs use the browser's native PDF viewer with a download alternative. Other
+PDFs use the browser's native PDF viewer with a download alternative on isolated
+origins. On the main origin, PDFs are download-only with an octet-stream MIME
+type; the HTML sandbox does not establish native inline PDF safety. Other
 formats, including SVG and HTML without an admitted HTML Artifact header, are
 download-only with an octet-stream MIME type. Replacing the content or changing
 the link releases its object URL; no uploaded-file URL or authenticated request
-is introduced. HTML Artifacts use the isolated, opaque sandbox described below;
+is introduced. HTML Artifacts use the opaque sandbox described below;
 neither view has authenticated-app or host-bridge authority. This development contract
 is not a claim of released availability or completed live validation.
 
@@ -3068,16 +3273,27 @@ acknowledged create/update.
 
 Public viewers retain the stored-content publication authority, consent and
 fragment-key custody. They open the current document and optional blob in the
-browser before constructing the same sandbox. The shell never has Account
-credentials. Executable HTML lives only in a nested iframe with `allow-scripts`
+browser before constructing the same sandbox. The trusted Happier shell keeps
+its real viewer origin and decrypts in memory; it is not itself sandboxed.
+Main-origin shell and static-asset navigation may carry automatic browser cookies,
+but those routes ignore them and never authenticate or personalize. Authorization
+is rejected. Isolated shell navigation retains credential rejection, and public
+content, blob and visual APIs refuse credentials on both origins. The viewer
+fetches with `credentials: omit`, `redirect: error`, `cache: no-store` and
+`referrerPolicy: no-referrer`; the shell retains no-store and no-referrer headers.
+Only validated opened HTML reaches the guest: no fragment secret, Account token,
+Session grant, host service or Action bridge is passed to it. Other content stays
+in literal-text, restricted declarative or raster-image rendering paths.
+Executable HTML lives only in a nested iframe with `allow-scripts`
 and no `allow-same-origin`, storage authority, bridge or message receiver.
 Inherited shell CSP blocks network-frame navigation; the guest CSP also denies
 network connections, forms, nested frames and workers. Asset references declared
-in HTML and CSS are rewritten locally; external assets are refused. Classic
-scripts and inline JavaScript are supported; module/import-map declarations and
-cyclic stylesheet imports fail visibly. Runtime-created relative URLs are not
-rewritten, so scripts must embed such data rather than fetch bundle files or load
-dynamic chunks. Grid previews are static and never execute the content.
+in HTML and CSS are rewritten locally; external assets are refused. The shared
+bundle document owner resolves local module imports, dynamic imports, fetch and
+XHR resource reads without a host network or filesystem service. Cyclic CSS
+imports skip the ancestor edge, preserving each entrypoint's remaining cascade,
+as observed in the opaque-browser checks. Missing local assets fail visibly.
+Grid previews are static and never execute the content.
 
 Like every disclosed document, an opened preview cannot be recalled from a
 recipient who already obtained its bytes. This is development-source behavior;
@@ -3094,6 +3310,13 @@ while a plaintext recipient receives an explicit plain stored-content envelope t
 can read. A plaintext Account never receives fabricated Account E2EE material. Source, recipient,
 credential revision, configuration revision, authentication mode, and encryption binding are
 rechecked when material is written and read so a stale preparation cannot replace current material.
+
+The 0.3 development user-facing preparation read is the canonical
+`teams.credentials.preparation.get` Action, used by the UI and exposed to session
+agents and MCP. It aggregates the existing recipient census decisions into a
+ready/not-ready observation, a typed pending reason and the UI's pending-recipient
+count. Its strict result contains no recipient bindings, keys, envelopes or
+ciphertext. The daemon's material preparation and delivery paths are unchanged.
 
 A shared Saved Secret has one mutable resource value and Account, Team, or Group use grants. It is
 not copied into each recipient's personal Settings. Promoting a personal Saved Secret must create

@@ -25,6 +25,14 @@ Apply this policy when a change affects a cross-component wire shape or semantic
 
 ### Non-obligations
 
+Usage request attribution in 0.3 development extends the existing event ingest
+and contribution projection. Older scalar usage reports and historical events
+without this proof remain readable and project unknown attribution; they are
+not relabeled from current Session metadata. The moving 0.2 predecessor uses
+scalar `/v2/usage-reports` and does not advertise the event-ingest capability.
+Its scalar transport remains the existing fallback, without request-source
+proof. This is not a second accounting ledger or an inferred attribution shim.
+
 - `dev`/`*-dev.*` builds, untagged history outside the live predecessor frontier, abandoned experiments, and undeployed internal module paths are not lasting compatibility contracts.
 - Do not keep aliases or adapters solely for an atomic internal rename/move whose old path never shipped.
 - The predecessor rule preserves observable wire/data/state behavior, not `../0.2`'s internal architecture.
@@ -52,6 +60,52 @@ An existing same-concept split-brain in the touched corridor must be consolidate
 - For an incompatible transition, prefer prepare/expand → activate/migrate → contract when mixed-version coexistence or rollback is an approved requirement. Do not assume that old clients must read new writes merely because the server is self-hosted.
 
 Before adding dual writers, parallel persisted formats, rollout modes, operator flags, socket-drain protocols, or a mandatory client floor, compare their lifetime cost with the actual user behavior required. If preserving old-client/new-server behavior for a major change would require substantial machinery, stop and obtain an explicit developer/product decision among: operation-scoped degradation, a documented client update requirement, or the heavier compatibility transition. An agent must not silently choose either forced upgrades or heavy compatibility machinery. This exception is for genuinely incompatible, high-cost transitions; routine server changes must remain compatible and must not manufacture client-update requirements.
+
+### Account trigger deletion receipts (0.3 development)
+
+The current Automation deletion transaction returns the removed definition's
+`templateVersion` as `removedRevision` in its successful V3 response. Whole-set
+`workflow.trigger.remove` forwards that evidence in its existing closed result;
+child-trigger removal still returns the updated set. Both receipt readers
+accept omission from an older Home without inventing a revision. These are
+additive fields in development contracts, not new mutation inputs or a new
+wire epoch. The prospective 0.2 UI deletion client consumes only success from
+V2; this does not restore V2 routes or promise mixed V2/V3 operation.
+
+The existing row-inventory ordering helper retains this evidence for the
+focused Account so delayed acknowledged writes at or below the removed
+revision cannot restore a deleted trigger set. Read revalidation remains
+authoritative: equal revisions may enrich health, and an absent identity may
+reappear as a genuinely recreated row. Receipt history is display ordering,
+not read or mutation authority, and retires with the Account's trigger state.
+Without removed-revision evidence, clients keep revalidation and the existing
+ordering limitation for previously unseen higher revisions.
+
+### Quota recovery details (0.3 development)
+
+The moving 0.2 predecessor keeps optional `recoveryCreditDetails` outside its
+strict Provider Account Usage base body. Plain V3 records carry the facts in
+metadata after negotiating `connectedServices.quotaRecoveryCreditDetails`;
+encrypted records carry an account-sealed supplemental facet. Its inspected
+released readers at `22ac8263cfdbcdb845441b9044ff18199cf7652e` retain the base
+usage while ignoring optional sealed-envelope facts.
+
+Current 0.3 V4 usage snapshots retain the rich optional details in their existing
+snapshot, material identity and history owners. The approved all-component,
+one-way upgrade does not need another V3 negotiation flag or a competing plain
+writer. The existing legacy storage reader reattaches actual predecessor metadata
+facets. Encrypted current/history reads and qualified quota projections use the
+canonical sealing owner for supplemental facts. Their omission remains valid.
+Credit inventory status and count authorize actions; saved quantities and display
+reasons never establish debit permission independently.
+
+The SDK recovery facet retains canonical credit statuses and accepts the existing
+plugin `unavailable` status only at the host adapter, where it becomes `unknown`.
+Known pre-debit failures can explicitly report a certain no-effect outcome;
+older plugins that omit this information retain the existing conservative unknown
+receipt behavior. Legacy reset RPC aliases delegate to the qualified established
+credential owner rather than authorizing scalar V2/V3 transport. This is forward
+data and ingress compatibility, not a restored second credential or debit path.
 
 ### Antigravity account data (0.3 development)
 
@@ -86,6 +140,22 @@ old processes disappear. This integration is unreleased and still under validati
 
 ### Pending reset starts (0.3 development)
 
+Activation failure diagnostics keep the predecessor's closed failure POST body
+and activation authorization envelope unchanged. The optional, strictly decoded
+`failureDetails` query carries only closed diagnostic codes; a predecessor
+without that query reader ignores it and still performs the exact failure CAS.
+Current Session reads expose those facts as the separate additive
+`pendingActivationFailureDetails` projection. The existing failure column accepts
+the predecessor's scalar code and the current flattened diagnostic JSON. These
+diagnostics neither alter activation authority nor claim delivery, and do not
+introduce another writer or retry path.
+
+The diagnostic JSON is forward-only development storage: a 0.2 server reader
+recognizes only the scalar failure code and cannot project these new writes.
+The current reader preserves 0.2-created scalar failure state. This does not
+promise predecessor-server coexistence or downgrade; old-client reads of the
+unchanged authorization envelope are a separate direction.
+
 The existing Pending Input numeric protocol revision 4 advertises the new
 identity-bound `reset_start` arm, installed Machine release, and source-filtered
 waiting read. That read can also return optional `unboundEntries`: content-free
@@ -112,9 +182,17 @@ intent; projection cannot erase it and cause a legacy-model fallback.
 Fresh opened B and its exact accepted witness qualify the current window before
 the effect. The server also checks installed-target capability and accepted
 history identity before creating custody. Unknown or stale windows do not fall
-back to immediate delivery. Signed reset roots currently authorize only exact
-Pending effects, not preparatory B reads; they refuse those reads until an
-input-bound authorization contract is approved.
+back to immediate delivery. The development signed reset root carries a strict
+input-bound projection of Session/local input, qualified source, B record, meter
+and accepted witness. It authorizes only Account-mode currentness and exact
+source/record/witness preparation reads, then the matching Pending effect.
+Plain issuance derives these facts from the input; encrypted issuance signs the
+visible projection, which the canonical opener compares with the decrypted input.
+That projection uses fixed-size canonical domain-separated Session/source/record/
+witness digests and a full mutation-purpose digest, retaining the decoded Action
+input budget without copying large accepted identities into signed HTTP headers.
+Missing or mismatched facts fail closed. This changes only the unreleased 0.3
+signed contract and introduces no reverse 0.2 writer or generic Account authority.
 
 ### Project and checkout identity (0.3 development)
 
@@ -233,6 +311,19 @@ published Artifact contains no private bindings. The unused raw-Settings
 publication writer and its dependency union have been removed rather than kept
 as a second mutation authority.
 
+Artifact-backed Profile Save uses that same private row writer for binding
+changes, including explicit None masks. A binding-only edit does not rewrite
+the Artifact or pin inherited defaults; unchanged editor timestamps are not a
+body edit. A combined edit first acknowledges the captured private row and
+Artifact revision, then updates the authored Artifact body while retaining its
+published default bindings. These are separate acknowledgements: a later body
+failure leaves the acknowledged private row intact and returns failure, not
+complete success. The editor retains its draft; reload the current row before
+reapplying it rather than retrying the old row revision. This development-only
+owner correction introduces no new wire or persisted format.
+
+### Tolerant stored-data readers
+
 Stored widget definitions, instances and placements, Session/WorkBoard and Home
 layouts, Companion preferences, workspace tabs/canvas state, and legacy folder
 settings read their known fields and drop unknown object fields recursively.
@@ -241,6 +332,38 @@ from the canonical schemas, preserving required identities, domain refinements
 and opaque JSON values. UI-local persistence schemas use the same stripping
 policy. Organization display envelopes use a stored projection only when opening
 database content; HTTP snapshots and mutations remain strict.
+
+The same policy applies to Account catalog values, device-local Settings and
+pending deltas recovered after restart, stored Session drafts and delivery facts,
+CLI custody/checkpoint/permission records, and plugin Collection values and
+source-instance checkpoints. Custom preprocessors register their stored
+projection at the schema owner so an internal strict reparse cannot undo the
+read projection. Composable plugin schemas use Protocol's schema-derived
+stored reader, exposed as `createProtocolStoredReadSchema` through the SDK's
+`/protocol` facade, rather than a second validator. This facade is for persisted
+reads only; operation inputs and writes use the original strict schema.
+Opaque JSON remains opaque until
+its semantic owner projects the recognized stored fields. Unknown fields do
+not acquire routing, permission, credential, or mutation authority.
+
+In 0.3 development, Provider Account Usage current records, retained history
+pages and exact reset-witness reads use this persistence projection. History
+and witness payloads then pass the canonical write validator's known-field,
+record-identity and payload-mode invariants. New writes remain strict.
+
+Authentication and typed interpretation are separate boundaries: authenticate
+the original material covered by the format, independently of typed projection.
+Package Asset integrity covers its complete logical body JSON; hosted UI
+integrity covers the exact file set and file bytes, not header annotations.
+Never authenticate a stripped projection instead. Likewise, a retained request
+may expose projected known facts without changing the original replay body or
+the digest/tag computed from the original intent. Newly authored requests and
+proofs still pass their strict input validators.
+Voice provider Settings owners separate retained `parseStoredConfig` from
+strict edit `parseConfig`; readiness and runtime readers consume the former.
+Known credential identities, slots, references, modes and consent still require
+validation. Unrecognized provider/version carriers remain opaque recovery data,
+not silently accepted current configuration.
 
 Action/request inputs, runtime events and wire results keep their strict
 validators. Writers emit the current canonical shape, including when editing
@@ -353,6 +476,65 @@ authorization or mutation admission. The inspected `../0.2` predecessor at
 states remain valid and supply no count. New daemons reconstruct their projection
 from the current inventory and republish through the existing Machine lifecycle,
 without a persisted format migration or a parallel count writer.
+
+### Machine resources and Storage (0.3 development)
+
+Storage is a new Machine RPC V1 epoch, independent of package SemVer. Current
+contracts live in [`storageV1`](../packages/protocol/src/storage/storageV1.ts),
+the [`Storage Action family`](../packages/protocol/src/actions/specs/storage.ts)
+and the exact-Machine route policy. Its requests and mutation/identity envelopes
+are strict; stored Pile and Trash readers discard unknown fields without coercing
+invalid known identities. Presentation sizes and reasons accept and drop additive
+fields. Pile refs, item checks, and staying refs optionally carry the canonical
+catalog title; absent titles remain readable. Review/check presentation objects
+drop unknown fields while nested identity and mutation envelopes remain strict.
+Titles do not participate in cleanup authority or review tokens. Category reads
+can include exact `trashEntries` restoration metadata;
+an entry id is not filesystem authority, and the daemon rechecks every effect.
+Scan views additionally serve an optional `root` with the selected folder's facts,
+independent of the paged children. The Storage service projects its protection
+through the same owner as every child; List, Map and Rings consume these facts for
+their headline and breadcrumb. Its absence remains readable on older answers.
+Disk refs reuse the served `nodeId` as both `itemId` and path, including exact-byte
+ids; invented item labels confer no authority. A rejected collection preserves
+`storage_item_not_collectable` through RPC and Action output normalization.
+Session-bound Storage tools default an omitted Machine target through the existing
+Action contextual-default owner, while explicit targets remain explicit.
+Accepted Storage operations use the transport's unbounded operation wait with
+bounded connection setup. A consumed acknowledgement remains settled after caller
+cancellation; uncertainty does not prove that no item moved.
+Summary volumes can additionally report optional verified-Safe `canGoBytes`.
+Readers accept its absence as unreported rather than zero; older presentation
+readers drop this additive field. It conveys no cleanup authority and is omitted
+from recipient summaries.
+Development scan inputs remove client-supplied `drawableNodes` in place. Every
+interactive, direct-folder relist and scheduled native scan consumes the protocol's
+`STORAGE_CHART_MAX_DRAWABLE_NODES` export, also prescribed by the approved Map/Rings
+culling contract; visual integration is separate from the runner's implementation.
+Never-before-scanned present volumes need no prior client request to be scheduled.
+This unreleased input does not acquire a compatibility alias or a separate headless
+budget.
+
+Settings extend the existing `metadata.resourcesPolicyV1.storage` section. Missing
+sections receive current defaults through the stored reader; writes remain strict
+minimal patches through the single daemon metadata-field CAS owner. Protected-folder
+Actions use that same revisioned writer and return its conflict/current-policy
+result. No second settings file or server copy of the scan index is introduced.
+The index is a machine-local projection, with at most one current and one previous
+complete database per present volume; opting out removes the owned scan databases. Pile refs
+and self-describing Trash manifests remain protected local state, not published
+Machine content. See [Storage ownership](cli-architecture.md#storage-sizing-pile-and-trash-03-development)
+and [Machine encryption boundaries](encryption.md#machine-metadata--daemon-state).
+
+The inspected clean predecessor at
+`e087d15a2f0cce1de6de8ef0895d9c8bcc035056` has neither the Storage RPC/domain nor
+the resources-policy module in these paths. These additions impose no new
+connection-wide update floor or dual writers. On an otherwise compatible admitted
+transport, unavailable Storage methods are an operation-scoped feature boundary;
+unrelated operations keep their existing contracts. The independent encrypted
+socket epoch below still applies. The resources-policy and local-manifest readers do not establish supported
+rollback to a predecessor that never produced them. These are development-source
+contracts, not released availability or mixed-version runtime certification.
 
 ### Encrypted socket RPC binding (v0.3 development)
 
@@ -720,6 +902,18 @@ it for presentation and expiry-first pool ranking; older readers ignore it.
 Pool-selected display projection filters only meters and
 preserves account-, subscription-, freshness-, and recovery-credit fields.
 
+Provider rejection codes (for example Claude's `rate_limit`) are not allowance
+IDs. When the provider does not identify the exhausted allowance, recovery keeps
+that identity unknown and uses the existing account-level recovery policy; only
+an explicit allowance identity can be excluded by the pool selection.
+
+The existing V1 runtime-auth recovery event's `cancelled` carrier also contains
+terminal policy outcomes. Its existing `reason` distinguishes explicit
+cancellation from recovery that stopped without an automatic retry. Current
+readers use the shared protocol interpretation; no new event enum or persisted
+recovery state is introduced. Primary-session failures remain visible even when
+independently owned background runs continue.
+
 Expiry-first is the development default for new or absent pool policies. Explicit
 `least_limited`, `priority`, and `manual` choices remain unchanged. Among eligible
 members with fresh headroom above the existing soft-switch threshold, the daemon
@@ -756,7 +950,8 @@ it. No parallel persistence format or subscription reader is introduced.
 The development Connected Account SDK quota result now admits optional
 `ProviderAccountSubscriptionV1`; its host result owner snapshots the trusted
 in-process SDK result before the coordinator consumes it. External quota wire
-and persistence readers still validate the shared strict schema.
+remains strict. Stored usage readers project recognized fields before applying
+the shared known-field checks.
 Plugins omitting the field retain their quota behavior. This is a development
 author-surface extension, not a predecessor SDK contract or a promise that an
 older host accepts newly authored plugin results.
@@ -789,6 +984,16 @@ or incomparable evidence is explicit. Advisory targets do not enforce a spend
 ceiling. Optional subscription monetary facts distinguish provider-observed
 paid amounts from versioned, dated list prices; absence is not a zero cost or an
 inferred payment.
+
+In development UI source, the Usage Resource can drain the requested history
+through one captured quota Action read. The client starts at the existing page
+size, grows later pages by the accepted volume, and publishes current capacity
+and accepted prefixes independently of entered-price and Pending metadata. It coalesces unchanged
+material runs to their witnessed endpoints without dropping reset or entitlement
+changes. A remaining cursor still marks partial history; failures retain that
+prefix, while authority refusal retires it. This is an in-process read option,
+not a new wire or persisted format: ordinary quota Actions retain one-page
+semantics and exact witness reads remain unchanged.
 
 The development `connectedServices.subscription.price.set` Action sets or clears
 an amount and currency for an exact qualified connected account. It uses normal
@@ -927,6 +1132,35 @@ passthrough schema, so its local marker read is not claimed to strip this
 nonsecret tuple. The private retained lifecycle format has no corresponding
 predecessor reader. Neither format grants runtime authority or changes Run
 placement, and source-level coverage alone does not establish a loaded journey.
+
+### Account display names (development)
+
+Undeployed 0.3 stores one nullable `Account.name`. The additive PostgreSQL,
+SQLite and MySQL migration backfills it from trimmed legacy first/last columns;
+those columns remain read-compatibility data. Current profile writers use only
+the canonical name. An explicit null clears it and must not resurrect stale
+legacy columns. Readers of a released profile with no `name` field may join its
+legacy first/last fields at the Protocol compatibility boundary.
+
+The 0.2 Account-profile reader is passthrough, while released social and direct
+sharing readers require first/last fields. Current producers therefore retain
+both fields, projecting the complete chosen name into `firstName` and null into
+`lastName`. This preserves nicknames and multi-part names without guessing their
+structure. The strict new self-name mutation accepts no Account id and adds no
+new name-length limit. Protocol owns the name → username → null label rule for
+both server and UI; Account ids are not display fallbacks.
+
+Home People ordering belongs to `listHomeAccountsInTx`: owners, then admins,
+then members; named rows precede unnamed rows within each role. The keyset
+captures `(roleRank, unnamedFlag, sortKey, accountId)`. Provider-native SQL folds
+the name (or trimmed username fallback) and retains its first 32 Unicode code
+points for sorting; the Account id breaks ties. This is sort precision required
+by the unchanged 512-character cursor ceiling, not a name-length limit. Ordering
+and continuation use the same provider-specific SQL expression and bytewise
+comparison. A renamed row may cross the captured boundary or recur; unchanged
+rows remain complete even when the boundary Account is renamed or deleted.
+This replaces the unshipped creation-time cursor in place with a new query
+binding, without retaining that intermediate ordering or adding a second codec.
 
 ### Direct sharing and Account erasure (development)
 
@@ -1231,6 +1465,22 @@ unchanged. Trigger-local revisions remain independent. A delayed pre-removal lis
 therefore cannot replace the newer removal result in the shared UI store.
 
 ### Workflow Session input admission (development)
+
+Current development Session-conversation reuse refusals retain their existing
+codes and carry optional `WorkflowConversationUnavailableDetailsV1` facts through
+`WorkflowActionFailureV1Schema` and invocation progress. These closed objects name
+the rejected selection or resolver check and include only expected/observed kinds
+and non-secret identifiers. Configuration values, credentials, prompt text and
+working-folder paths are not diagnostic payloads. Missing retained delegation
+depth and deleted origin Sessions use the same diagnostic owner. The daemon writes one structured
+file-log event at the refusal; `workflowProblemPresentation.ts` renders the same
+facts from Actions and persisted Run detail. Model and permission intents remain
+Session Pending decisions, and inactive Sessions remain eligible for the existing
+resume path. No reuse eligibility or lifecycle decision changes.
+
+Historical progress and refusals without details remain valid. The Workflow
+feature is an undeployed direct cut: these strict V1 diagnostic additions move with
+its current readers and coordinator, without a released-reader or rollback shim.
 
 Current development Workflow definitions accept declared decisions beyond
 `continue | stop`, including strict `{decision, reason?}` results, and input-bound
@@ -1540,8 +1790,11 @@ not silently change a default transfer into existing-state.
 The current V3 capability and read-only existing-state check are negotiated before source
 mutation. Missing, malformed or predecessor V2 capability cannot authorize this mode:
 the operation reports an update requirement, and the caller may explicitly choose transfer.
-The in-progress UI contract keeps transfer on by default and disables the option when either peer cannot prove
-support. The current 0.2 predecessor's V2 `existingState` bit does not prove V3 support.
+The development UI keeps transfer on by default and disables the option when either peer cannot prove
+support. Its Action adapter preserves explicit `existing`, disables workspace copying, and
+keeps `existing_session_state_unavailable` inline in the picker. Turning transfer on and
+submitting again is an explicit choice, never an automatic fallback. Same-machine moves
+hide the toggle and retain ordinary transfer. The current 0.2 predecessor's V2 `existingState` bit does not prove V3 support.
 Its V2 carrier and the current V3 request must never be silently reinterpreted across versions.
 
 Agent plugins provide the optional public-SDK `handoff.resolveExistingState` hook through
@@ -1774,7 +2027,15 @@ The executor must win the Artifact compare-and-set from `approved` to
 `executing` before performing the effect. A duplicate caller reads the winner's
 state instead of running the Action again. Current policy, credential, Home,
 runtime, target, and resource authorization are revalidated against the stored
-origin; the approving caller does not become the execution principal. If the
+origin. In 0.3 development, only unsigned host-CLI requests for Account-placed
+Actions with durable input custody gain app replay through the approving app's
+authenticated Home adapter. Signed/external and Session requests retain their
+exact admitting daemon, including Account-placed Actions. Machine-placed,
+plugin and live-only-input requests likewise retain their exact-daemon or
+admitted live invocation custody. The immutable input, Action id, requester,
+Home and Account remain bound to the Artifact. One-time results reach only the deciding app's
+`liveExecution`; Agent reads, observations and durable history receive the
+Action's material-safe projection. If the
 effect may have happened but terminal persistence cannot be proven, the
 Artifact remains `executing` and later callers receive
 `approval_execution_outcome_unknown`; they do not replay blindly.
@@ -2151,6 +2412,13 @@ Every retained compatibility path records:
 Remove the path when its support window has ended and evidence shows no supported reader, writer, or stored shape still requires it. Do not remove a released-data reader merely because current writers stopped producing that shape.
 
 ### Home profile descriptors (0.3 development)
+
+Shared-database Stack consumers keep descriptor continuity in their private
+runtime directory, selected by the preset's explicit shared-DB consumer fact.
+The source Stack and ordinary PostgreSQL/MySQL servers retain database-backed
+continuity. Each consumer publishes and restarts from its own private history;
+it neither reads nor writes the shared continuity row. Earlier undeployed 0.3
+storage selections do not establish a compatibility transition or revision floor.
 
 The UI's existing `server-state-v1` profile owner retains one exact
 `homeConnectionDescriptor` for descriptor-backed Homes. Endpoint and revision

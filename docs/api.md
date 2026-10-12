@@ -86,6 +86,29 @@ clone bodies remain refused, and a failed save retains the editor draft.
 This describes current development source, not released availability or a
 completed loaded-runtime validation.
 
+## Connected Account OAuth completion (0.3 development source)
+
+`connectedServices.authentication.completeOAuth` uses the existing admitted
+Connected Account Action and daemon attempt owner. Its completion contains
+`code`, the descriptor-owned `callbackUrl`, the complete `state`, and optional
+`iss`. A callback issuer must equal the issuer sealed at begin exactly; it is
+required when the authorization server advertises issuer-response support.
+The daemon rejects a missing required or mismatched issuer before token
+exchange, without displaying untrusted provider error text.
+
+State has the shape `<attemptId>.<random nonce>`. Clients may use the prefix
+to find the owning attempt, but prefix equality does not authorize completion:
+the owner compares the complete state with its sealed transaction. The PKCE
+verifier never enters the completion request. These are development-source
+contracts, not released or loaded-runtime certification.
+
+An authentication `read` may request `waitForProviderStart: true` to await the
+existing background begin operation; ordinary reads remain nonblocking. This
+does not poll or create another deadline. Cancellation and owner disposal
+release waiting callers through the incumbent attempt lifecycle. OAuth replies
+use the transaction's existing expiry when the authorization server supplies
+none, or the earlier transaction/provider expiry when both are present.
+
 ## Connected personal metadata (0.3 development source)
 
 Authenticated Account transport exposes two singleton rows at
@@ -715,6 +738,11 @@ Both the daemon-local adapter and the server-origin relay are implemented and
 have been exercised together on the development stack, including server
 routing to the selected daemon. This remains a development-source contract;
 the HTTP API has not been deployed or released.
+
+Mounted Plugin UI calls use the separate Account admission of this same path,
+not an API token. The narrowing `pluginInvocation` claim does not make
+provenance-only Actions PAT-invocable; see the [plugin carrier
+contract](plugin-platform.md#mounted-plugin-account-root-carrier).
 
 Request:
 
@@ -1361,7 +1389,7 @@ internal dashboard kinds; dedicated widget and access-grant Actions do not
 bypass the dashboard owner's validation. These development-source
 contracts do not claim released or loaded-platform availability.
 
-#### Session Board (development)
+#### Session visuals and Board (development)
 
 The shared Session Board stores its content as host Session System Records
 (`surface/layout.v1/layout` and `surface/item.v1/<itemId>`) and exposes exactly one
@@ -1371,19 +1399,26 @@ mutation endpoint:
 PUT /v2/sessions/:sessionId/board
 ```
 
-`createServerFeatureGatePreHandler("sessions.board")` runs before the handler, so a
-Home with the feature off answers `404 { "error": "not_found" }` instead of revealing
-the route. The route uses the `session.board` hot-endpoint rate-limit family.
+Strict body validation precedes admission. The shared mutation predicate applies
+`sessions.board` admission only when an operation writes layout; disabled Board
+layout operations answer `404 { "error": "not_found" }`. Placement-free Session
+content operations remain available under current Session capabilities. The route
+uses the existing `session.board` hot-endpoint rate-limit family.
 
 The body is a closed operation union:
 
 - `upsert_item` — `itemId`, `itemContent`, `expectedItemRevision` (`null` creates), and
-  an optional `placement` carrying `layoutContent` plus `expectedLayoutRevision`.
-  Creation without a placement is rejected, so a new item and its first Board
-  placement commit together.
-- `remove_item` — `itemId`, `expectedItemRevision`, and the exact replacement
-  `layoutContent` with `expectedLayoutRevision`, so removal cannot leave a dangling
-  placement.
+  optional `destination: transcript | board | both` and `placement` carrying
+  `layoutContent` plus `expectedLayoutRevision`. New content defaults to transcript;
+  Board or both creation requires an atomic first placement. Both stores one item,
+  not two copies. Omitted destination on updates preserves stored intent; legacy
+  items without a stored destination retain Board intent. Plain-envelope intent
+  must correspond to the operation's destination.
+- `remove_item` — `itemId`, `expectedItemRevision`, and, when removing placements,
+  the exact replacement `layoutContent` with `expectedLayoutRevision`. Transcript
+  content can be removed without reading or writing layout. Supplied layout
+  operands unlink placements atomically; an item-only removal leaves any retained
+  Board reference in its existing missing-reference state, not a live body.
 - `update_layout` — `layoutContent`, `expectedLayoutRevision` (`null` creates), and an
   optional `itemPlacementParticipant` whose `expectedItemRevision` is verified in the
   same transaction when the semantic edit adds an existing item to a view.
@@ -1401,6 +1436,24 @@ upsert and layout; `removed` for removal), and the committed revisions. Protocol
 document answers the issued request: a well-formed response is not by itself an
 acknowledgement.
 
+The existing `session.board.item.upsert` Action defaults new visuals to transcript
+and returns a small address/id/revision/outcome/destination acknowledgement, not
+the content body. Transcript references use that acknowledgement and the shared
+exact-Home Session-record observation owner; no mounted Board controller is
+required. After validating the exact issued local transport, a successful Action
+acknowledgement uses the host-proved portable Home identity when available.
+Response and transcript correspondence compare profile labels through the shared
+Home-identity comparator; without identity proof, only exact equality is accepted.
+Foreign Homes remain refused, and recovery packets retain the exact local profile
+used for the issued request. The incumbent transcript list visibility publisher
+drives content
+demand. Offscreen references release observation and bodies while retaining their
+measured slot; opening a Session does not fetch every visual. Board placements,
+including Pin, use `session.board.layout.update` on the same item. Unpin removes
+the placement, not the content. Fork creation seeds independent transcript-only
+child copies through the same mutation owner; an unavailable copy leaves a stable
+not-copied state and never fails the fork or authorizes a parent read.
+
 Failures use a closed error document — `400 session_board_invalid`,
 `403 session_board_forbidden`, `404 session_board_item_not_found`, and `409` for
 `session_board_storage_mode_mismatch`, `session_board_source_conflict` and
@@ -1411,15 +1464,29 @@ Repair is that ordinary retry; there is no second endpoint.
 Reads reuse the existing V1 System Record routes with the exact `surface` addresses:
 `GET /v2/sessions/:sessionId/system-records` and
 `GET /v2/sessions/:sessionId/system-records/record`. No Board-specific GET or cursor
-exists. A `surface` read requires current `readTranscript` and separately resolves
-`sessions.board`, so a Home with the feature off refuses the read rather than
-disclosing the records. The `surface` kinds are typed-only: the record catalog marks
+exists. All content reads require current `readTranscript`. Exact `item.v1` reads
+and typed item inventory do not require Board admission; layout and unqualified
+surface inventory do. Board inventory is demanded by an open Board, an actual
+visual in Companion, or the open Add picker, not a retained hidden/measurement
+surface. Both addressed and inventory readers reuse the same retained records and
+opened content. The `surface` kinds are typed-only: the record catalog marks
 their generic write and delete unavailable, so neither the generic upsert on
 `/v2/sessions/:sessionId/system-records` nor the generic delete on
 `/v2/sessions/:sessionId/system-records/record` can reach them, and the predecessor host
 list, lookup and upsert schemas exclude the namespace entirely. Every Board mutation
 rechecks the actor's current `editSessionRecords` capability in the committing
 transaction.
+
+Current development `item.v1` reads also expose server-owned `creator` metadata,
+separate from the plain/encrypted visual content: `session` (with the original
+Session id), `user`, `plugin`, or `unknown`. Only verified transport provenance
+can establish a Session creator; caller-authored JSON cannot claim it. Updates
+retain the creation fact, including resumed callers of the same Session.
+Historical raw records are `unknown`, never inferred from their next editor.
+Public reads unwrap the same stored envelope, and fork copies acquire truthful
+child creation attribution through the ordinary writer rather than inheriting
+the parent's creator. This uses the existing System Record JSON slot, not a
+second attribution store or schema migration.
 
 The mutating Board Actions — `session.board.item.upsert`, `session.board.item.remove`
 and `session.board.layout.update` — declare this route as their `serverTransport`, so
@@ -1499,6 +1566,11 @@ Machine-scoped updates, but creation does not broadcast the legacy `new-machine`
 inventory event. The same Machine-kind policy excludes temporary Machines from
 replacement, Automation assignments and claims, and Automation Event watcher
 currentness. This does not establish readiness of the complete Runner runtime.
+
+`GET /v1/machines` excludes revoked Machines server-side, including owned
+Machines; unrevoked offline Machines remain discoverable. Exact owner reads
+retain revoked rows. Managed Machine listing explicitly includes revoked owned
+controllers so retained resources, cleanup, and archived history remain visible.
 
 #### Personal Machine Pools (0.3 development)
 
@@ -1766,7 +1838,7 @@ exposure or its audit/lifetime policy.
 - `DELETE /v1/public-shares/:shareId` revokes the publication.
 - `GET /v1/public-shares/:shareId/access-log` returns owner-authorized visit records.
 - `GET /v1/public-shares/:lookupId/content` reads admitted stored content without Account credentials on the publication's isolated origin. Consent and Session pagination use the existing publication-use/access-grant policy.
-- `GET /v1/public-shares/:lookupId/visual/:messageId` lazily reads one Session visual through an admitted message's authenticated publication association. It requires the existing `x-public-share-messages-access-token`, rechecks consent and the current transcript cutoff, and accepts no caller-selected item id. It neither consumes another viewing use nor logs another visit. Expiry, revocation, mode mismatch, a missing association, and a deleted/recreated record refuse the read.
+- `GET /v1/public-shares/:lookupId/visual/:messageId?referenceIndex=0` lazily reads one member of an admitted message's authenticated visual association collection. The nonnegative index defaults to zero; it selects only an already-admitted member, never a caller-supplied item id. The route requires the existing `x-public-share-messages-access-token` and rechecks consent and the current transcript cutoff. It neither consumes another viewing use nor logs another visit. Expiry, revocation, mode mismatch, a missing member, and a deleted/recreated record refuse the read.
 - `GET /s/:lookupId` serves the isolated viewer, including paged Session text and visible acknowledged visuals; its wrapping secret is carried in `#k=...`, not in an HTTP field.
 - `GET /v2/sessions/metadata-upgrades` returns authenticated owner-only Session ids needing the existing privacy-layout upgrade, including archived shared Sessions; it returns no metadata or key material.
 
@@ -1778,13 +1850,55 @@ still enforce publication admission and isolated-origin checks; credential-beari
 viewer requests remain refused.
 
 The Session share's `networkOff` setting defaults to false and does not rewrite
-its visual records. The confirmation explains that network-enabled visuals can
+its visual records. The shared Action transport omits the default false field;
+a requested true policy must be acknowledged as true before either trusted host
+returns successful link issuance. A 2xx response that omits that promise is
+reported through the existing `outcome_unknown` contract. The confirmation
+explains that network-enabled visuals can
 send their contents elsewhere, reveal a viewer's IP address, and load changing
-remote code or assets. Public HTML currently consumes the shared network-closed
-bundle owner; enabling approved saved network policy belongs to that owner's
-separate admission contract. Anonymous live widgets without a usable viewer
+remote code or assets. Public HTML consumes the shared bundle/document owner and
+the visual's stored effective policy: no network, exact HTTPS origins, or open
+HTTPS. The guest policy covers fetch and remote script, style, font, image and
+media assets; the isolated outer shell permits that policy without making the
+guest same-origin with Happier. A missing or malformed policy never implies open
+network, and `networkOff: true` narrows the viewer to none without rewriting the
+saved item.
+
+In 0.3 development source, the Account setting `agentHtmlNetworkPolicy`
+("Network for agent HTML", `allowed | ask | off`) is declared through the existing
+`settings.get/set` owner and defaults to `allowed`. For caller-authored HTML
+created in its caller's own Session,
+allowed admits the declared network, ask requires creation approval, and off
+stores no network and returns the typed `agent_html_network_off` notice when a
+requested network was removed. Existing-item network changes default to approval
+through the canonical Actions policy, honoring explicit per-Action user choices;
+changing the Account preference does not rewrite an existing item's effective
+policy. The existing Action approval owner also checks immutable host-proved
+creator facts: unknown or foreign edits do not receive the own-created exception.
+Installed-plugin widgets retain their manifest/grant admission when no instance
+override is declared; an explicit override can only narrow that ceiling. Switching
+an existing item between inherited and explicit policy also defaults to approval.
+Guest Actions and Resources retain per-request admission; replay has no separate
+device-local executable-consent decision. Anonymous live widgets without a usable viewer
 connection report their unavailability rather than using author credentials.
+Imported visual acknowledgements without a child copy show a not-copied state
+only when validated fork provenance and the canonical completed acknowledgement
+correspond; the placeholder grants no content read. Offscreen visual bodies are
+disposed and withdrawn reads cannot mount after visibility demand ends.
 These are development-source contracts, not completed loaded-runtime validation.
+
+One native message can acknowledge several visuals without splitting or rewriting
+that message. Its existing `surfaceItemReference` JSON field now carries
+`{v:1,references:[...]}`. Each current member names the owned item/revision and
+the exact original acknowledgement's address, item id and revision. The original
+identity is correspondence only: an imported child share still reads only the
+child's admitted records. The Protocol read adapter accepts the earlier singleton
+without inventing original identity; an originless inherited singleton cannot
+prove which parent acknowledgement it represents.
+An explicit historical-import retry for an unsettled fork can add newly admitted
+members to that same native row through the existing Message revision check.
+It preserves the row's content, identity and sequence; an older retry omitting
+the association does not erase previously admitted members.
 
 The lookup and wrapping secret are independent. E2EE content and its wrapped DEK
 remain opaque to the server; plaintext Accounts send no wrapped key. Publication
@@ -1961,6 +2075,12 @@ Keys are `recentMachinePaths`, `lastUsedProfile`,
 `projectLastOpened:<encodeURIComponent(serverId)>:<encodeURIComponent(projectKey)>`.
 The latter uses a finite nonnegative timestamp and the same Account memory cipher,
 CAS and change hints; it never advances structural Project/ref revisions.
+Personal saved-Workflow placement uses
+`workflowProject:<encodeURIComponent(definitionId)>` with the canonical
+`{machineId,directory,workspaceRefId?}` target. Explicit Save writes this Account's
+target through the same row owner; reopening the definition restores it ahead of
+recent Session context. Clearing a retained target writes a tombstone. Shared
+Workflow definitions remain portable, and each recipient keeps their own target.
 The authoring selection owner normalizes scope
 identity before transport. Each mutation publishes a content-free AccountChange
 hint `{authoringMemory:true,key,revision}` for exactly that row. Account identity
