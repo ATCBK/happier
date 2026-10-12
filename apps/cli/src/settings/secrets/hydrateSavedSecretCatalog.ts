@@ -66,6 +66,7 @@ import { deriveSettingsSecretsReadKeysForCredentials } from './settingsSecretsKe
 import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
 import { fetchServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import { readStoredCredentials, type StoredCredentials } from '@/persistence';
+import type { RpcHandlerContext } from '@/api/rpc/types';
 import {
   beginActiveSavedSecretCatalogRefresh,
   commitActiveSavedSecretCatalog,
@@ -113,6 +114,8 @@ export type SavedSecretOperationReferenceV1 = Readonly<{
 
 /** Invocation-owned Account custody; it never publishes to the daemon Account. */
 export type SavedSecretOperationContextV1 = Readonly<{
+  /** Existing authenticated Machine ingress, retained only in host-private invocation custody. */
+  machineAdmission?: Readonly<Pick<NonNullable<RpcHandlerContext['machineAdmission']>, 'actorAccountId' | 'custodianAccountId'>>;
   credentials: StoredCredentials;
   serverHttpBaseUrl: string;
   readSnapshot(): ActiveAccountSettingsSnapshot | null;
@@ -131,6 +134,7 @@ export type SavedSecretOperationContextV1 = Readonly<{
 }>;
 
 export function createInvocationSavedSecretOperationContextV1(input: Readonly<{
+  machineAdmission?: SavedSecretOperationContextV1['machineAdmission'];
   credentials: StoredCredentials;
   snapshot: ActiveAccountSettingsSnapshot;
   serverHttpBaseUrl: string;
@@ -157,6 +161,10 @@ export function createInvocationSavedSecretOperationContextV1(input: Readonly<{
     if (snapshot) snapshot = withdrawSavedSecretCatalogInSnapshot(snapshot);
   };
   return Object.freeze({
+    ...(input.machineAdmission ? { machineAdmission: Object.freeze({
+      actorAccountId: input.machineAdmission.actorAccountId,
+      custodianAccountId: input.machineAdmission.custodianAccountId,
+    }) } : {}),
     credentials: input.credentials,
     serverHttpBaseUrl: input.serverHttpBaseUrl,
     readSnapshot: () => snapshot,
