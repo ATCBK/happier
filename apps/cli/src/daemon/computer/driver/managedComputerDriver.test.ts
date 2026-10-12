@@ -351,12 +351,16 @@ describe.skipIf(process.platform !== 'linux')('managed native computer driver (X
       expect(stored).toMatchObject({ actionArgs: { requestedTarget: 'Requested app' },
         preview: { computerApprovalDisplay: { machineDisplayName: 'Workstation', requiresTargetSelection: true } } });
       expect(await harness.executor.execute('approval.request.decide', {
-        artifactId: 'selection-approval', decision: 'approve', computerTarget: chosen,
+        artifactId: 'selection-approval', decision: 'approve', narrowedInput: {
+          machineId: 'machine', target: chosen, access: 'use', requestedTarget: 'Requested app',
+        },
       }, context)).toMatchObject({ ok: false, errorCode: 'present_user_required' });
       expect(stored?.status).toBe('open');
       expect(registry.list()).toHaveLength(0);
       const decided = await harness.executor.execute('approval.request.decide', {
-        artifactId: 'selection-approval', decision: 'approve', computerTarget: chosen, computerAccess: access,
+        artifactId: 'selection-approval', decision: 'approve', narrowedInput: {
+          machineId: 'machine', target: chosen, access, requestedTarget: 'Requested app',
+        },
       }, { ...context, surface: 'ui', authority: 'present_user' });
       if (windowId === 999) {
         expect(decided).toMatchObject({ ok: false, errorCode: 'computer_target_not_available' });
@@ -370,12 +374,15 @@ describe.skipIf(process.platform !== 'linux')('managed native computer driver (X
       expect(registry.list()[0]?.computer?.access).toBe(access);
       expect(stored).toMatchObject({ executionOriginV1: { authority: 'account_automation' } });
       expect(updates).toEqual(expect.arrayContaining([expect.objectContaining({ status: 'approved',
-        actionArgs: expect.objectContaining({ target: chosen, access, requestedTarget: 'Requested app' }),
-        decision: expect.objectContaining({ authority: 'present_user' }),
+        actionArgs: expect.objectContaining({ target, access: 'use', requestedTarget: 'Requested app' }),
+        decision: expect.objectContaining({ authority: 'present_user',
+          narrowedInput: expect.objectContaining({ target: chosen, access, requestedTarget: 'Requested app' }) }),
       })]));
-      expect(stored).toMatchObject({ status: 'executed', actionArgs: { access } });
+      expect(stored).toMatchObject({ status: 'executed', actionArgs: { access: 'use' },
+        decision: { narrowedInput: { access } } });
       expect(stored?.actionArgs).not.toHaveProperty('target');
       expect(stored?.actionArgs).not.toHaveProperty('sourceId');
+      expect(stored?.decision?.narrowedInput).not.toHaveProperty('target');
     } finally { controller.abort(); await selecting.catch(() => undefined); await routes.dispose(); }
   });
   it.each(['computer.targets.list', 'computer.target.select', 'computer.control.interrupt', 'computer.control.handBack'] as const)(
