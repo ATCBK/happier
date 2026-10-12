@@ -7,7 +7,7 @@ import { StringDecoder } from 'node:string_decoder';
 import { requireJavaScriptRuntimeExecutable } from '@/packagedRuntime/js/requireJavaScriptRuntimeExecutable';
 import { isBun } from '@/utils/runtime';
 import { resolveCliRuntimeAssetPath } from '@/packagedRuntime/assets/resolveCliRuntimeAssetPath';
-import { killProcessTree } from '@/agent/runtime/process/killProcessTree';
+import { terminateProcessTree } from '@/processes/terminate/terminateProcessTree';
 
 export interface RipgrepResult {
     exitCode: number
@@ -72,7 +72,7 @@ export function run(args: string[], options?: RipgrepOptions): Promise<RipgrepRe
                 // The launcher can own a native ripgrep child on some platform
                 // paths. Delegate teardown to the canonical cross-platform tree
                 // owner instead of killing only its immediate runtime process.
-                void killProcessTree(child).catch(() => {});
+                void terminateProcessTree(child).catch(() => {});
             }
             rejectOnce(createRipgrepAbortError());
         };
@@ -106,7 +106,7 @@ export function run(args: string[], options?: RipgrepOptions): Promise<RipgrepRe
             const stopProcess = () => {
                 if (outputLimitTerminationStarted) return;
                 outputLimitTerminationStarted = true;
-                void killProcessTree(spawned).catch(() => {});
+                void terminateProcessTree(spawned).catch(() => {});
             };
             const deliverLine = (line: string) => {
                 if (stoppedEarly || settled) return;

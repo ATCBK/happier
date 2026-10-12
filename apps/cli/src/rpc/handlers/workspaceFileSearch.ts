@@ -138,8 +138,11 @@ export function registerWorkspaceFileSearchHandler(
                 });
                 if (result.exitCode === 127) return { ok: false, code: 'ripgrep_unavailable' };
                 if (result.exitCode !== 0 && result.exitCode !== 1 && !result.stoppedEarly) {
-                    return { ok: false, code: request.regex && /regex parse error|error parsing regex/iu.test(result.stderr)
-                        ? 'invalid_pattern' : 'ripgrep_failed' };
+                    if (request.regex && /regex parse error|error parsing regex/iu.test(result.stderr)) {
+                        return { ok: false, code: 'invalid_pattern' };
+                    }
+                    if (result.exitCode !== 2 || files.length === 0) return { ok: false, code: 'ripgrep_failed' };
+                    coverage = 'partial';
                 }
                 // A launcher or native process that produced no JSON summary is
                 // not proof that the workspace was searched without matches.

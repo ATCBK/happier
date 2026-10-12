@@ -2,10 +2,10 @@ import { EventEmitter } from 'node:events';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const { spawnMock, requireJavaScriptRuntimeExecutableMock, killProcessTreeMock } = vi.hoisted(() => ({
+const { spawnMock, requireJavaScriptRuntimeExecutableMock, terminateProcessTreeMock } = vi.hoisted(() => ({
   spawnMock: vi.fn(),
   requireJavaScriptRuntimeExecutableMock: vi.fn(async (): Promise<string> => process.execPath),
-  killProcessTreeMock: vi.fn(async (_proc: unknown, _opts?: unknown) => {}),
+  terminateProcessTreeMock: vi.fn(async (_proc: unknown, _opts?: unknown) => {}),
 }));
 
 vi.mock('child_process', () => ({
@@ -19,14 +19,14 @@ vi.mock('@/packagedRuntime/js/requireJavaScriptRuntimeExecutable', () => ({
 // The process-tree helper is the OS boundary owner; its cross-platform process
 // semantics have their own focused suite. This wrapper test proves ripgrep
 // delegates cancellation to that owner instead of settling only its RPC promise.
-vi.mock('@/agent/runtime/process/killProcessTree', () => ({
-  killProcessTree: (proc: unknown, opts?: unknown) => killProcessTreeMock(proc, opts),
+vi.mock('@/processes/terminate/terminateProcessTree', () => ({
+  terminateProcessTree: (proc: unknown, opts?: unknown) => terminateProcessTreeMock(proc, opts),
 }));
 
 describe('ripgrep runtime resolution', () => {
   afterEach(() => {
     vi.restoreAllMocks();
-    killProcessTreeMock.mockReset();
+    terminateProcessTreeMock.mockReset();
     requireJavaScriptRuntimeExecutableMock.mockReset();
     requireJavaScriptRuntimeExecutableMock.mockResolvedValue(process.execPath);
   });
@@ -113,7 +113,7 @@ describe('ripgrep runtime resolution', () => {
       status: 'rejected',
       error: { name: 'AbortError', code: 'RIPGREP_ABORTED' },
     });
-    expect(killProcessTreeMock).toHaveBeenCalledWith(child, undefined);
+    expect(terminateProcessTreeMock).toHaveBeenCalledWith(child, undefined);
   });
 
   it('bounds captured output and terminates the process tree when the stdout limit is exceeded', async () => {
@@ -148,7 +148,7 @@ describe('ripgrep runtime resolution', () => {
       stdoutTruncated: true,
       stderrTruncated: true,
     });
-    expect(killProcessTreeMock).toHaveBeenCalledWith(child, undefined);
+    expect(terminateProcessTreeMock).toHaveBeenCalledWith(child, undefined);
   });
 
   it('delivers complete UTF-8 records across chunks and stops at the consumer boundary without buffering stdout', async () => {
@@ -169,6 +169,6 @@ describe('ripgrep runtime resolution', () => {
     child.emit('close', 143);
     await expect(pending).resolves.toMatchObject({ stdout: '', stoppedEarly: true });
     expect(records).toEqual(['é first', 'second']);
-    expect(killProcessTreeMock).toHaveBeenCalledWith(child, undefined);
+    expect(terminateProcessTreeMock).toHaveBeenCalledWith(child, undefined);
   });
 });
