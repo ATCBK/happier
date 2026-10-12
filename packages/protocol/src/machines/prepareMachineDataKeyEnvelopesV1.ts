@@ -1,6 +1,7 @@
 import type { MachineAccessRecipientCensusResponseV1, MachineAccessRefusalCodeV1, MachineKeyPreparationResultV1, MachineRecipientKeyEnvelopeCommitInputV1, MachineRecipientKeyEnvelopeCommitResponseV1, MachineRecipientKeyEnvelopeInputV1 } from './machineAccessV1.js';
 import { isMachinePublishedContentSafeV1 } from './machinePublishedContentV1.js';
 import { computeContentPublicKeyFingerprint } from './identity/contentPublicKeyFingerprint.js';
+import { isMachineReplaced } from './identity/canonicalMachineId.js';
 import { decodeBase64 } from '../crypto/base64.js';
 import { ENCRYPTED_DATA_KEY_V1_BYTES } from '../crypto/encryptedDataKeyEnvelopeFormatV1.js';
 import { prepareResourceDataKeyEnvelopeItemV1 } from '../sessions/encryption/prepareSessionDataKeyEnvelopeItemV1.js';
@@ -25,6 +26,14 @@ export type MachineDataKeyOwnerPreparationV1 = Readonly<{
   prepareContentKey: () => Promise<void>;
 }>;
 
+/** Terminal published rows remain readable, but cannot prepare or deliver new keys. */
+export function isMachineRetiredForKeyPreparationV1(machine: Readonly<{
+  revokedAt?: number | null;
+  replacedByMachineId?: string | null;
+}>): boolean {
+  return machine.revokedAt != null || isMachineReplaced(machine);
+}
+
 /** One trusted-holder flow; the Home alone owns audience, permission and conditional tuple writes. */
 export async function prepareMachineDataKeyEnvelopesV1(params: Readonly<{
   machineId: string;
@@ -42,7 +51,9 @@ export async function prepareMachineDataKeyEnvelopesV1(params: Readonly<{
       const owner = params.ownerPreparation;
       const machine = MachinePublishedRowV1Schema.parse(await owner.observeMachine());
       if (!params.isScopeCurrent()) return { kind: 'unavailable', code: 'machine_key_changed' };
-      if (machine.id !== params.machineId) return { kind: 'unavailable', code: 'machine_unavailable' };
+      if (machine.id !== params.machineId || isMachineRetiredForKeyPreparationV1(machine)) {
+        return { kind: 'unavailable', code: 'machine_unavailable' };
+      }
       // Historical owners can read a genuinely absent envelope, while the recipient census
       // requires a current key holder. C40 must establish that key before asking for recipients.
       // Foreign Manage holders never convert: their delivered tuple remains census-owned.

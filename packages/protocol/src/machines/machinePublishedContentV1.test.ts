@@ -15,6 +15,37 @@ const metadata = {
 const readiness = { engine: { state: 'ready' }, carrier: { state: 'ready' } };
 
 describe('whole Machine publication', () => {
+  it('admits first-read unavailable resources without inventing host facts, but requires host facts while reporting', () => {
+    const unavailable = { v: 1, vitals: { state: 'unavailable', since: 20, reason: 'helper_missing' },
+      attention: { level: 'calm', reasons: [] } };
+    expect(isMachinePublishedContentSafeV1({ metadata, daemonState: { status: 'running', resources: unavailable } })).toBe(true);
+    expect(parseMachinePublishedDaemonStateV1({ status: 'running', resources: unavailable }).resources).not.toHaveProperty('host');
+    const host = { logicalCores: 4, memoryTotalBytes: 1000, bootedAt: 10 };
+    expect(isMachinePublishedContentSafeV1({ metadata, daemonState: { status: 'running', resources: { ...unavailable, host } } })).toBe(true);
+    expect(isMachinePublishedContentSafeV1({ metadata, daemonState: { status: 'running', resources: { ...unavailable, vitals: { state: 'reporting' } } } })).toBe(false);
+    expect(isMachinePublishedContentSafeV1({ metadata, daemonState: { status: 'running', resources: { ...unavailable, vitals: { ...unavailable.vitals, reason: 'unknown' } } } })).toBe(false);
+  });
+  it('admits share-safe resource attention and guard way-back facts without admitting samples or private work', () => {
+    const resources = {
+      v: 1, vitals: { state: 'reporting' },
+      host: { logicalCores: 4, memoryTotalBytes: 1000, bootedAt: 10 },
+      attention: { level: 'needs_you', reasons: [{ key: 'memory', level: 'needs_you', since: 20,
+        metric: 'memory', kind: 'memory_pressure', pressure: 'critical', swapping: true }] },
+      lastAutomaticAction: { at: 30, kind: 'stopped_session', entryId: 'entry-1', undoable: true,
+        facts: { rule: 'memory_guard', freedBytes: 500, count: 1 } },
+    };
+    const daemonState = { status: 'running', resources };
+    expect(isMachinePublishedContentSafeV1({ metadata, daemonState })).toBe(true);
+    expect(parseMachinePublishedDaemonStateV1(daemonState)).toEqual(daemonState);
+    for (const unsafe of [
+      { ...resources, sample: { availableBytes: 200 } },
+      { ...resources, lastAutomaticAction: { ...resources.lastAutomaticAction, sessionId: 'private' } },
+      { ...resources, attention: { level: 'look', reasons: [{ kind: 'extension', data: 'private' }] } },
+      { ...resources, lastAutomaticAction: { ...resources.lastAutomaticAction, kind: 'trash_moved' } },
+    ]) {
+      expect(isMachinePublishedContentSafeV1({ metadata, daemonState: { status: 'running', resources: unsafe } })).toBe(false);
+    }
+  });
   it('publishes the admitted child relation and observed native namespace as one closed projection', () => {
     const devcontainerChild = {
       relation: { managedMachineId: 'managed-child', managedMachineKind: 'devcontainer', parentMachineId: 'physical-controller' },
@@ -68,6 +99,20 @@ describe('whole Machine publication', () => {
     });
     expect(StoredMachinePublishedMetadataV1Schema.parse({ ...metadata, privatePath: '/secret' })).toEqual(metadata);
     expect(() => parseMachinePublishedMetadataV1({ ...metadata, privatePath: '/secret' })).toThrow();
+  });
+
+  it('keeps unrelated retained daemon facts when the optional service summary is unrecognized or malformed', () => {
+    const facts = { status: 'running', runtimeId: 'daemon-occurrence', contributionRegistryProjectionRevision: 7,
+      workspaceSync: { v: 1, readiness } };
+    for (const localServices of [{ v: 1, state: 'future' }, { v: 1, state: 'ready', runningCount: -1 }]) {
+      const retained = { ...facts, localServices };
+      expect(StoredMachinePublishedDaemonStateV1Schema.parse(retained)).toEqual(facts);
+      expect(isMachinePublishedContentSafeV1({ metadata, daemonState: retained })).toBe(false);
+      expect(() => parseMachinePublishedDaemonStateV1(retained)).toThrow();
+    }
+    expect(StoredMachinePublishedDaemonStateV1Schema.parse({ ...facts,
+      localServices: { v: 1, state: 'ready', runningCount: 2, futurePresentation: true } })).toEqual({ ...facts,
+      localServices: { v: 1, state: 'ready', runningCount: 2 } });
   });
 
   it('rejects unknown fields inside the existing additive CLI update facts before disclosure or writes', () => {

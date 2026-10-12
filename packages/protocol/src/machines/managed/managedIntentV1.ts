@@ -32,7 +32,7 @@ export const ManagedIntentResultSchema = lazyDefinition(() => z.discriminatedUni
 /** Content-free projection only; live inventory, attribution and owner references stay host-internal. */
 export const ActivityDecisionV1Schema = lazyDefinition(() => {
   const reasons = z.array(z.enum(['session', 'finite', 'terminal', 'service', 'transfer',
-    'handoff', 'sync', 'setup', 'input', 'execution_run', 'workflow_run', 'coverage_unknown']));
+    'handoff', 'sync', 'setup', 'input', 'execution_run', 'workflow_run', 'agents', 'attention', 'coverage_unknown']));
   return z.discriminatedUnion('kind', [
     z.strictObject({ kind: z.literal('busy'), reasons }),
     z.strictObject({ kind: z.literal('unknown'), reasons }),

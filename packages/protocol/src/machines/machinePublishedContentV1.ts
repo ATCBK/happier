@@ -9,6 +9,8 @@ import { WindowsRemoteSessionLaunchModeSchema } from '../sessions/metadata/windo
 import { WorkspaceSyncRuntimeEventV1Schema } from '../sessions/control/handoff/workspaceSyncSchemas.js';
 import { PeerLoopbackEndpointCandidateV1Schema } from './peer/mediation/loopbackEndpointV1.js';
 import { MachineFinitePolicyV1Schema } from './machineFinitePolicyV1.js';
+import { MachineResourcesPolicyV1Schema } from './resources/machineResourcesPolicyV1.js';
+import { MachinePublishedResourceSummaryV1Schema } from './resources/machineResourceSummaryV1.js';
 import { ActivityDecisionV1Schema } from './managed/managedIntentV1.js';
 import { DevcontainerChildProjectionV1Schema, managedDevcontainerChildProjectionsEqualV1, type DevcontainerChildProjectionV1 } from './managed/devcontainerV1.js';
 
@@ -16,6 +18,7 @@ import { DevcontainerChildProjectionV1Schema, managedDevcontainerChildProjection
 export const MachinePublishedMetadataV1Schema = lazyZodSchema(() => z.object({
   devcontainerChild: z.optional(DevcontainerChildProjectionV1Schema),
   finitePolicyV1: MachineFinitePolicyV1Schema.optional(),
+  resourcesPolicyV1: MachineResourcesPolicyV1Schema.optional(),
   host: z.string(),
   platform: z.string(),
   happyCliVersion: z.string(),
@@ -84,6 +87,7 @@ export const MachinePublishedDaemonStateV1Schema = lazyZodSchema(() => z.object(
   }).strict().optional(),
   workspaceSync: MachinePublishedWorkspaceSyncV1Schema.optional(),
   localServices: LocalServiceMachineSummaryV1Schema.optional(),
+  resources: z.optional(MachinePublishedResourceSummaryV1Schema),
   managedActivity: z.optional(ActivityDecisionV1Schema),
 }).strict());
 
@@ -92,7 +96,10 @@ export const StoredMachinePublishedMetadataV1Schema = lazyZodSchema(() => create
   // The released UI treats a malformed optional update projection as absent.
   cliUpdate: createStoredReadSchema(CliUpdateFactsSchema).optional().catch(undefined),
 }));
-export const StoredMachinePublishedDaemonStateV1Schema = createStoredReadSchema(MachinePublishedDaemonStateV1Schema);
+export const StoredMachinePublishedDaemonStateV1Schema = lazyZodSchema(() => createStoredReadSchema(MachinePublishedDaemonStateV1Schema).extend({
+  // Optional service presentation failures cannot erase unrelated daemon facts.
+  localServices: createStoredReadSchema(LocalServiceMachineSummaryV1Schema).optional().catch(undefined),
+}));
 
 export type MachinePublishedMetadataV1 = z.infer<typeof MachinePublishedMetadataV1Schema>;
 export type MachinePublishedDaemonStateV1 = z.infer<typeof MachinePublishedDaemonStateV1Schema>;
