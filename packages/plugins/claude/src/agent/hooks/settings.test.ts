@@ -1,5 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { listActionSpecs } from '@happier-dev/protocol/actions';
+import { listHappierToolAutoApprovedNamesV1 } from '@happier-dev/protocol/tools/happierToolAutoApprovalV1';
 
 import {
     buildClaudeHookPluginHooks,
@@ -46,6 +48,13 @@ describe('Claude hook settings leaf', () => {
             'mcp__happier__change_title',
             'mcp__happier__session_title_set',
         ]));
+        for (const spec of listActionSpecs()) {
+            if (spec.safety === 'safe' && spec.bindings?.mcpToolName) {
+                expect(settings.permissions?.allow).toContain(`mcp__happier__${spec.bindings.mcpToolName}`);
+            }
+        }
+        expect(settings.permissions?.allow).toContain('mcp__happier__action_execute');
+        expect(settings.permissions?.allow).toEqual(listHappierToolAutoApprovedNamesV1().map((name) => `mcp__happier__${name}`));
     });
 
     it('builds the complete lifecycle hook manifest for a session plugin', () => {

@@ -55,11 +55,20 @@ export function readPermissionHookEventName(data: PermissionHookData): 'Permissi
     return hookEventName === 'PreToolUse' ? 'PreToolUse' : 'PermissionRequest';
 }
 
-export function buildDefaultPermissionHookResponse(data: PermissionHookData = {}): PermissionHookResponse {
+export function buildDefaultPermissionHookResponse(
+    data: PermissionHookData = {},
+    unlistedTools?: 'ask' | 'deny',
+): PermissionHookResponse {
     return {
         continue: true,
         suppressOutput: true,
-        hookSpecificOutput: { hookEventName: readPermissionHookEventName(data) },
+        hookSpecificOutput: {
+            hookEventName: readPermissionHookEventName(data),
+            ...(unlistedTools === 'deny' ? {
+                permissionDecision: 'deny',
+                decision: { behavior: 'deny', message: 'Happier permission authority is unavailable.' },
+            } : {}),
+        },
     };
 }
 

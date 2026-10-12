@@ -1,5 +1,7 @@
 export const CLAUDE_UI_TRANSLATIONS = Object.freeze({
   en: Object.freeze({
+    'settingsAgents.plugins.claude.fields.claudeCodeIncludeInNativeHistory.title': "Show sessions in Claude Code",
+    'settingsAgents.plugins.claude.fields.claudeCodeIncludeInNativeHistory.subtitle': "Use Happier attribution for new Claude sessions, including Agent SDK runs. Off keeps runtime defaults.",
     'agentInput.connectedServiceLabel.claude': 'Claude Code',
     'session.subagents.panel.claudeTeamTitle': 'Claude team',
     'session.subagents.panel.launchClaudeTeamsSubtitle': 'Start a team or add a teammate',
@@ -9,6 +11,8 @@ export const CLAUDE_UI_TRANSLATIONS = Object.freeze({
     'subAgentGuidance.settings.agents.claude.openSubtitle': 'Manage Agent Teams and other Claude-specific subagent behavior.',
   }),
   de: Object.freeze({
+    'settingsAgents.plugins.claude.fields.claudeCodeIncludeInNativeHistory.title': "Sitzungen in Claude Code anzeigen",
+    'settingsAgents.plugins.claude.fields.claudeCodeIncludeInNativeHistory.subtitle': "Happier-Zuordnung für neue Claude-Sitzungen verwenden, auch mit dem Agent SDK. Aus behält die Laufzeitstandards bei.",
     'agentInput.connectedServiceLabel.claude': 'Claude Code',
     'session.subagents.panel.claudeTeamTitle': 'Claude-Team',
     'session.subagents.panel.launchClaudeTeamsSubtitle': 'Ein Team starten oder ein Teammitglied hinzufügen',
@@ -18,6 +22,8 @@ export const CLAUDE_UI_TRANSLATIONS = Object.freeze({
     'subAgentGuidance.settings.agents.claude.openSubtitle': 'Agent Teams und weiteres Claude-spezifisches Subagent-Verhalten verwalten.',
   }),
   ru: Object.freeze({
+    'settingsAgents.plugins.claude.fields.claudeCodeIncludeInNativeHistory.title': "Показывать сессии в Claude Code",
+    'settingsAgents.plugins.claude.fields.claudeCodeIncludeInNativeHistory.subtitle': "Использовать идентификацию Happier для новых сессий Claude, включая Agent SDK. При отключении сохраняются настройки среды по умолчанию.",
     'agentInput.connectedServiceLabel.claude': 'Claude Code',
     'session.subagents.panel.claudeTeamTitle': 'Команда Claude',
     'session.subagents.panel.launchClaudeTeamsSubtitle': 'Создайте команду или добавьте участника',
@@ -27,6 +33,8 @@ export const CLAUDE_UI_TRANSLATIONS = Object.freeze({
     'subAgentGuidance.settings.agents.claude.openSubtitle': 'Управляйте Agent Teams и другими особенностями субагентов Claude.',
   }),
   pl: Object.freeze({
+    'settingsAgents.plugins.claude.fields.claudeCodeIncludeInNativeHistory.title': "Pokaż sesje w Claude Code",
+    'settingsAgents.plugins.claude.fields.claudeCodeIncludeInNativeHistory.subtitle': "Używaj identyfikacji Happier dla nowych sesji Claude, także z Agent SDK. Wyłączenie zachowuje domyślne ustawienia środowiska.",
     'agentInput.connectedServiceLabel.claude': 'Claude Code',
     'session.subagents.panel.claudeTeamTitle': 'Zespół Claude',
     'session.subagents.panel.launchClaudeTeamsSubtitle': 'Utwórz zespół lub dodaj członka zespołu',
@@ -36,6 +44,8 @@ export const CLAUDE_UI_TRANSLATIONS = Object.freeze({
     'subAgentGuidance.settings.agents.claude.openSubtitle': 'Zarządzaj Agent Teams i innymi zachowaniami podagentów Claude.',
   }),
   es: Object.freeze({
+    'settingsAgents.plugins.claude.fields.claudeCodeIncludeInNativeHistory.title': "Mostrar sesiones en Claude Code",
+    'settingsAgents.plugins.claude.fields.claudeCodeIncludeInNativeHistory.subtitle': "Usar la atribución de Happier para nuevas sesiones de Claude, incluidas las del Agent SDK. Desactivado conserva los valores predeterminados.",
     'agentInput.connectedServiceLabel.claude': 'Claude Code',
     'session.subagents.panel.claudeTeamTitle': 'Equipo de Claude',
     'session.subagents.panel.launchClaudeTeamsSubtitle': 'Crea un equipo o añade un compañero',
@@ -45,15 +55,19 @@ export const CLAUDE_UI_TRANSLATIONS = Object.freeze({
     'subAgentGuidance.settings.agents.claude.openSubtitle': 'Gestiona Agent Teams y otros comportamientos específicos de los subagentes de Claude.',
   }),
   fr: Object.freeze({
+    'settingsAgents.plugins.claude.fields.claudeCodeIncludeInNativeHistory.title': "Afficher les sessions dans Claude Code",
+    'settingsAgents.plugins.claude.fields.claudeCodeIncludeInNativeHistory.subtitle': "Utiliser l’attribution Happier pour les nouvelles sessions Claude, y compris avec l’Agent SDK. Désactivé conserve les valeurs par défaut.",
     'agentInput.connectedServiceLabel.claude': 'Claude Code',
     'session.subagents.panel.claudeTeamTitle': 'Équipe Claude',
     'session.subagents.panel.launchClaudeTeamsSubtitle': 'Crée une équipe ou ajoute un équipier',
     'subAgentGuidance.settings.agents.claude.title': 'Agents d’équipe Claude',
     'subAgentGuidance.settings.agents.claude.footer': 'L’écran des réglages de l’agent reste responsable du comportement de ses sous-agents.',
     'subAgentGuidance.settings.agents.claude.openTitle': 'Options des sous-agents Claude',
-    'subAgentGuidance.settings.agents.claude.openSubtitle': 'Gérez Agent Teams et les autres comportements propres aux sous-agents Claude.',
+    'subAgentGuidance.settings.agents.claude.openSubtitle': 'Gère Agent Teams et les autres comportements propres aux sous-agents Claude.',
   }),
   it: Object.freeze({
+    'settingsAgents.plugins.claude.fields.claudeCodeIncludeInNativeHistory.title': "Mostra le sessioni in Claude Code",
+    'settingsAgents.plugins.claude.fields.claudeCodeIncludeInNativeHistory.subtitle': "Usa l’attribuzione Happier per le nuove sessioni Claude, incluse quelle Agent SDK. Disattivato mantiene le impostazioni predefinite.",
     'agentInput.connectedServiceLabel.claude': 'Claude Code',
     'session.subagents.panel.claudeTeamTitle': 'Team Claude',
     'session.subagents.panel.launchClaudeTeamsSubtitle': 'Crea un team o aggiungi un compagno',
@@ -63,6 +77,8 @@ export const CLAUDE_UI_TRANSLATIONS = Object.freeze({
     'subAgentGuidance.settings.agents.claude.openSubtitle': 'Gestisci Agent Teams e gli altri comportamenti specifici dei sottoagenti Claude.',
   }),
   pt: Object.freeze({
+    'settingsAgents.plugins.claude.fields.claudeCodeIncludeInNativeHistory.title': "Mostrar sessões no Claude Code",
+    'settingsAgents.plugins.claude.fields.claudeCodeIncludeInNativeHistory.subtitle': "Usar a atribuição de Happier para novas sessões Claude, incluindo as do Agent SDK. Desativado mantém os padrões de execução.",
     'agentInput.connectedServiceLabel.claude': 'Claude Code',
     'session.subagents.panel.claudeTeamTitle': 'Equipe Claude',
     'session.subagents.panel.launchClaudeTeamsSubtitle': 'Crie uma equipe ou adicione um colega',
@@ -72,6 +88,8 @@ export const CLAUDE_UI_TRANSLATIONS = Object.freeze({
     'subAgentGuidance.settings.agents.claude.openSubtitle': 'Gira Agent Teams e outros comportamentos específicos dos subagentes Claude.',
   }),
   ca: Object.freeze({
+    'settingsAgents.plugins.claude.fields.claudeCodeIncludeInNativeHistory.title': "Mostra les sessions al Claude Code",
+    'settingsAgents.plugins.claude.fields.claudeCodeIncludeInNativeHistory.subtitle': "Utilitza l’atribució de Happier per a les sessions noves de Claude, incloses les de l’Agent SDK. Desactivat conserva els valors predeterminats.",
     'agentInput.connectedServiceLabel.claude': 'Claude Code',
     'session.subagents.panel.claudeTeamTitle': 'Equip de Claude',
     'session.subagents.panel.launchClaudeTeamsSubtitle': 'Crea un equip o afegeix un company',
@@ -81,6 +99,8 @@ export const CLAUDE_UI_TRANSLATIONS = Object.freeze({
     'subAgentGuidance.settings.agents.claude.openSubtitle': 'Gestiona Agent Teams i altres comportaments específics dels subagents de Claude.',
   }),
   'zh-Hans': Object.freeze({
+    'settingsAgents.plugins.claude.fields.claudeCodeIncludeInNativeHistory.title': "在 Claude Code 中显示会话",
+    'settingsAgents.plugins.claude.fields.claudeCodeIncludeInNativeHistory.subtitle': "将新的 Claude 会话标记为 Happier 来源，包括 Agent SDK 会话。关闭时保留运行时默认值。",
     'agentInput.connectedServiceLabel.claude': 'Claude Code',
     'session.subagents.panel.claudeTeamTitle': 'Claude 团队',
     'session.subagents.panel.launchClaudeTeamsSubtitle': '创建团队或添加队友',
@@ -90,6 +110,8 @@ export const CLAUDE_UI_TRANSLATIONS = Object.freeze({
     'subAgentGuidance.settings.agents.claude.openSubtitle': '管理 Agent Teams 和其他 Claude 子代理专属行为。',
   }),
   'zh-Hant': Object.freeze({
+    'settingsAgents.plugins.claude.fields.claudeCodeIncludeInNativeHistory.title': "在 Claude Code 中顯示工作階段",
+    'settingsAgents.plugins.claude.fields.claudeCodeIncludeInNativeHistory.subtitle': "將新的 Claude 工作階段標記為 Happier 來源，包括 Agent SDK 工作階段。關閉時保留執行環境預設值。",
     'agentInput.connectedServiceLabel.claude': 'Claude Code',
     'session.subagents.panel.claudeTeamTitle': 'Claude 團隊',
     'session.subagents.panel.launchClaudeTeamsSubtitle': '建立團隊或新增隊友',
@@ -99,6 +121,8 @@ export const CLAUDE_UI_TRANSLATIONS = Object.freeze({
     'subAgentGuidance.settings.agents.claude.openSubtitle': '管理 Agent Teams 和其他 Claude 子代理專屬行為。',
   }),
   ja: Object.freeze({
+    'settingsAgents.plugins.claude.fields.claudeCodeIncludeInNativeHistory.title': "Claude Code にセッションを表示",
+    'settingsAgents.plugins.claude.fields.claudeCodeIncludeInNativeHistory.subtitle': "Agent SDK を含む新しい Claude セッションを Happier として識別します。オフでは実行環境の既定値を維持します。",
     'agentInput.connectedServiceLabel.claude': 'Claude Code',
     'session.subagents.panel.claudeTeamTitle': 'Claude チーム',
     'session.subagents.panel.launchClaudeTeamsSubtitle': 'チームを作成するか、チームメイトを追加します',

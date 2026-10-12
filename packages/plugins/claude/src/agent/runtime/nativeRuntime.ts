@@ -843,6 +843,11 @@ export function createClaudeNativeSessionRuntimeFromOperations(
       }
     },
     async updateConfiguration(configuration) {
+      if (!isDeepStrictEqual(configuration.allowedTools ?? [], appliedConfiguration?.allowedTools ?? [])
+        || (configuration.unlistedTools ?? 'ask') !== (appliedConfiguration?.unlistedTools ?? 'ask')) {
+        return { status: 'unsupported', diagnostic: diagnostic('claude_tool_policy_restart_required',
+          'Claude native tool availability and permission hooks require a restart when the tool policy changes.') };
+      }
       const nextProviderBinding = configuration.providerBinding;
       if (nextProviderBinding && !currentProviderBinding) {
         return {
@@ -1139,6 +1144,10 @@ function readStringArray(value: unknown): readonly string[] | null {
 function terminalSurface(): NonNullable<AgentRuntime['surfaces']>['terminal'] {
   return {
     resolveLaunch(request) {
+      if (request.configuration?.unlistedTools === 'deny') {
+        throw new PluginError({ code: 'claude_tool_policy_requires_session_hooks', retryable: false,
+          message: 'Confined Claude terminal launches require Session-owned permission hooks.' });
+      }
       const model = request.modelSelection?.modelId.trim() || null;
       const permissionMode = request.configuration?.permissionIntent.value ?? null;
       return {
@@ -1151,6 +1160,8 @@ function terminalSurface(): NonNullable<AgentRuntime['surfaces']>['terminal'] {
           permissionMode: permissionMode ? mapToClaudePermissionMode(permissionMode) : null,
           launchSettings: {},
           workspaceWrites: request.configuration?.workspaceWrites,
+          allowedTools: request.configuration?.allowedTools,
+          unlistedTools: request.configuration?.unlistedTools,
         }),
         process: { stdio: 'inherit', windowsHide: true },
         presentation: {
@@ -1312,6 +1323,8 @@ async function openClaudeNativeAgentSdkSession(input: Readonly<{
     advancedOptions: launchSettings.advancedOptions,
     settingSources: launchSettings.settingSources,
     permissionMode: input.request.configuration?.permissionIntent.value ?? 'default',
+    allowedTools: input.request.configuration?.allowedTools,
+    unlistedTools: input.request.configuration?.unlistedTools,
     workspaceWrites: input.request.configuration?.workspaceWrites,
     supportsEffort: input.supportsEffort === true,
     supportsSystemPromptSnapshotOff: input.supportsSystemPromptSnapshotOff === true,
@@ -1367,12 +1380,15 @@ async function openClaudeNativeAgentSdkExecutionRunConversation(input: Readonly<
     ctx: sdkContext,
     queryContext: sdkContext.agentRuntime.exec,
     permissionEngine: createClaudeNativePermissionEngine(input.context),
+    executionRunId: input.request.runId,
     directory: input.request.cwd,
     launchEnv: launchSettings.launchEnv,
     helperModelEnv: launchSettings.helperModelEnv,
     advancedOptions: launchSettings.advancedOptions,
     settingSources: launchSettings.settingSources,
     permissionMode: input.request.configuration?.permissionIntent.value ?? 'default',
+    allowedTools: input.request.configuration?.allowedTools,
+    unlistedTools: input.request.configuration?.unlistedTools,
     workspaceWrites: input.request.configuration?.workspaceWrites,
     supportsEffort: input.supportsEffort,
     supportsSystemPromptSnapshotOff: input.supportsSystemPromptSnapshotOff,

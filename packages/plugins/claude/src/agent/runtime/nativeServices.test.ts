@@ -5,8 +5,35 @@ import {
   createClaudeNativeAgentSdkContext,
   createClaudeNativeGoalWorkStatePublisher,
 } from './nativeServices.js';
+import { createClaudePermissionHookHandler } from './shared/permissionHookHandler.js';
 
 describe('createClaudeNativeAgentSdkContext', () => {
+  it('honors the host native approval through the SDK PermissionRequest hook', async () => {
+    // Interception and interaction presentation cross the plugin's host SDK boundary.
+    const requestApproval = vi.fn(async () => ({ status: 'approved' as const }));
+    const context = {
+      services: {
+        logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        exec: {},
+        interactions: { requestApproval },
+      },
+      session: { services: { toolExecution: {
+        before: async (request: { input: Record<string, string> }) => ({ status: 'continue' as const, input: request.input }),
+      } } },
+    } as unknown as AgentSessionRuntimeContext;
+    const handler = createClaudePermissionHookHandler(createClaudeNativeAgentSdkContext(context));
+
+    const response = await handler({
+      hook_event_name: 'PermissionRequest', tool_name: 'Bash',
+      tool_input: { command: 'ls -d /usr/bin' },
+    });
+
+    expect(response.hookSpecificOutput?.decision).toEqual({ behavior: 'allow' });
+    expect(requestApproval).toHaveBeenCalledWith(expect.objectContaining({
+      subject: { kind: 'tool', name: 'Bash', input: { command: 'ls -d /usr/bin' } },
+    }), undefined);
+  });
+
   it('preserves committed identities and host refusals through the scoped transcript service', async () => {
     const request = {
       providerSessionId: 'claude-session-1',

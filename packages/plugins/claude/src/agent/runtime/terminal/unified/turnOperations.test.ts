@@ -9,6 +9,7 @@ import type { ClaudeProviderEvent } from '../../providerEvents.js';
 import {
   createEventsFixture,
   createPluginContextFixture,
+  createSessionHooksFixture,
   createTerminalHostFixture,
   expectRuntimeEnvelope,
 } from '../../engine.testkit.js';
@@ -85,6 +86,31 @@ const RESUME_CHOICE_QUESTION = 'How should Claude resume this session?';
 const SAFEGUARD_CHOICE_QUESTION = 'How should Claude continue?';
 
 describe('createClaudeUnifiedTerminalTurnOperations', () => {
+  it('confines unified native tools and installs permission enforcement before every call', async () => {
+    const terminalHost = createTerminalHostFixture();
+    const hooks = createSessionHooksFixture();
+    const params = {
+      ctx: createPluginContextFixture(terminalHost.service, createEventsFixture().service, { sessionHooks: hooks.service }),
+      directory: '/tmp/claude-project', happierSessionId: 'unified-confined',
+      hostPreference: 'zellij' as const, launchEnv: {}, permissionMode: 'yolo',
+      allowedTools: ['WebSearch', 'mcp__wilson__*'], unlistedTools: 'deny' as const,
+    };
+    const operations = createClaudeUnifiedTerminalProviderOperations(params);
+    try {
+      await operations.startProviderSession();
+      const args = vi.mocked(terminalHost.service.createOrAttachHost).mock.calls[0]?.[0].launch?.args ?? [];
+      expect(args[args.indexOf('--tools') + 1]).toBe('WebSearch');
+      expect(args[args.indexOf('--allowedTools') + 1]).toBe('WebSearch,mcp__wilson__*');
+      expect(args[args.indexOf('--permission-mode') + 1]).toBe('dontAsk');
+      expect(args).not.toContain('--allow-dangerously-skip-permissions');
+      const pluginFiles = hooks.service.createPluginDir.mock.calls[0]?.[0].files ?? [];
+      const installedHooks = pluginFiles.find((file: { path: string }) => file.path === 'hooks/hooks.json')?.json;
+      expect(installedHooks.hooks.PreToolUse[0].matcher).toBe('*');
+      const fallback = hooks.service.startServer.mock.calls[0]?.[0].defaultPermissionHookResponse;
+      expect(fallback({ hook_event_name: 'PreToolUse', tool_name: 'Read' }).hookSpecificOutput.permissionDecision).toBe('deny');
+    } finally { await operations.disposeProviderSession(); }
+  });
+
   it.each(['completed', 'failed', 'stopped'] as const)('issue506 publishes cold native task %s only after ordered source delivery', async (status) => {
     const terminalHost = createTerminalHostFixture();
     const transcripts = createManualTranscriptFollowFixture();
@@ -6745,7 +6771,7 @@ describe('createClaudeUnifiedTerminalTurnOperations', () => {
       }
     });
 
-    it('keeps a late stop-failure report with no active turn silent (no allocation without opt-in)', async () => {
+    it('projects a primary usage failure even when it arrives with no active turn', async () => {
       const terminalHost = createTerminalHostFixture();
       const events = createEventsFixture();
       const ctx = createPluginContextFixture(terminalHost.service, events.service);
@@ -6773,13 +6799,15 @@ describe('createClaudeUnifiedTerminalTurnOperations', () => {
           type: 'turn_failed',
           turnId: null,
           reason: 'stop_failure_hook',
-          detail: 'late duplicate stop-failure report',
+          detail: "You've hit your session limit",
+          evidence: { status: 429, type: 'rate_limit_error', message: "You've hit your session limit" },
           source: 'hook',
         });
 
         const { turnStarts, turnFails } = readTurnEvents(runtimeEvents);
-        expect(turnStarts).toHaveLength(0);
-        expect(turnFails).toHaveLength(0);
+        expect(turnStarts).toHaveLength(1);
+        expect(turnFails).toHaveLength(1);
+        expect(turnFails[0]).toMatchObject({ issue: { source: 'usage_limit' } });
       } finally {
         await runtime.resetOrDisposeRuntime().catch(() => undefined);
       }

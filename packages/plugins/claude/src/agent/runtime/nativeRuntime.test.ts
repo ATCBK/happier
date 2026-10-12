@@ -9,6 +9,7 @@ import type {
   AgentSessionRuntimeEvent,
 } from '@happier-dev/plugin-sdk/agents/runtime';
 import { ProviderConnectionIdSchema } from '@happier-dev/protocol';
+import { AgentSessionConfigurationSnapshotV1Schema } from '@happier-dev/protocol/runtime/agentSessionV1';
 
 import {
   createClaudeAgentRuntime,
@@ -229,6 +230,11 @@ describe('createClaudeNativeRuntime', () => {
       kind: 'resume', sessionId: 'selected-session', cwd: '/tmp/claude-project', providerSessionId: 'provider-claude',
       runtimeDescriptorV1: selected.runtimeDescriptorV1,
       launchEnvironment: { values: helperPins, unset: [] },
+      configuration: {
+        mode: { value: null, updatedAtMs: 0 }, model: { value: 'gateway-selected', updatedAtMs: 0 },
+        permissionIntent: { value: 'yolo', updatedAtMs: 0 }, options: {},
+        allowedTools: ['mcp__wilson__*'], unlistedTools: 'deny',
+      },
       providerBinding: {
         connectionId: 'pc_selected_claude', model: { id: 'gateway-selected', name: 'Selected' },
         upstream: { protocol: 'anthropic', normalizedUrl: null, credential: 'apiKey' },
@@ -254,9 +260,23 @@ describe('createClaudeNativeRuntime', () => {
           ? result.plan.argv
           : undefined;
       if (!args) throw new Error('Selected native launch arguments are unavailable');
+      expect(args[args.indexOf('--tools') + 1]).toBe('');
+      expect(args[args.indexOf('--allowedTools') + 1]).toBe('mcp__wilson__*');
+      expect(args[args.indexOf('--permission-mode') + 1]).toBe('dontAsk');
       const nativeSettings = JSON.parse(args[args.indexOf('--settings') + 1] ?? '{}');
       expect(nativeSettings.env).toEqual(helperPins);
       expect(Object.keys(nativeSettings.env)).not.toContain('ANTHROPIC_AUTH_TOKEN');
+      const serializedConfiguration = AgentSessionConfigurationSnapshotV1Schema.parse(JSON.parse(JSON.stringify({
+        mode: { value: null, updatedAtMs: 1 }, model: { value: 'gateway-selected', updatedAtMs: 1 },
+        permissionIntent: { value: 'yolo', updatedAtMs: 1 }, options: {},
+        allowedTools: ['mcp__wilson__*'], unlistedTools: 'deny',
+      })));
+      await expect(session.updateConfiguration(serializedConfiguration)).resolves.toEqual(expect.objectContaining({ status: 'applied' }));
+      await expect(session.updateConfiguration({
+        mode: { value: null, updatedAtMs: 0 }, model: { value: 'gateway-selected', updatedAtMs: 0 },
+        permissionIntent: { value: 'yolo', updatedAtMs: 0 }, options: {},
+        allowedTools: ['Read'], unlistedTools: 'deny',
+      })).resolves.toMatchObject({ status: 'unsupported', diagnostic: { code: 'claude_tool_policy_restart_required' } });
     } finally { await session.dispose('session_closed'); }
   });
 
@@ -1923,6 +1943,16 @@ describe('createClaudeNativeRuntime', () => {
     const args = plan?.argv ?? [];
     const settings = JSON.parse(args[args.indexOf('--settings') + 1] ?? '{}');
     expect(settings.permissions?.deny).toEqual(expect.arrayContaining(['Edit', 'Write', 'Bash']));
+  });
+
+  it('refuses confined direct terminal launch without a Session-owned permission hook', async () => {
+    const runtime = createTestClaudeNativeRuntime({ openSession: ({ request }) => createNativeOperations(request.sessionId).runtime });
+    expect(() => runtime.surfaces?.terminal?.resolveLaunch({
+      sessionId: 'confined-direct', cwd: '/repo', metadata: {}, modelSelection: null,
+      configuration: { mode: { value: null, updatedAtMs: 0 }, model: { value: null, updatedAtMs: 0 },
+        permissionIntent: { value: 'yolo', updatedAtMs: 0 }, options: {},
+        allowedTools: ['mcp__wilson__*'], unlistedTools: 'deny' },
+    })).toThrow(expect.objectContaining({ code: 'claude_tool_policy_requires_session_hooks' }));
   });
 
   it('declares a host-owned terminal launch plan from the current configuration snapshot', async () => {

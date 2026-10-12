@@ -4,11 +4,11 @@ import type { SessionPermissionsService } from '@happier-dev/plugin-sdk/sessions
 import { join } from 'node:path';
 
 import {
-  createNativePermissionDecisionAdapter,
   openClaudeNativeUnifiedTerminalSession,
   resolveClaudeNativeUnifiedResume,
 } from './nativeSession.js';
 import { getClaudeProjectPath } from '../../../surfaces/sessions/handoff/path.js';
+import { createClaudeNativeAgentSdkContext } from '../../nativeServices.js';
 
 function createContext(): AgentSessionRuntimeContext {
   return {
@@ -18,7 +18,7 @@ function createContext(): AgentSessionRuntimeContext {
       logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
       exec: {},
       interactions: {
-        confirm: vi.fn(async () => ({ status: 'approved' as const })),
+        requestApproval: vi.fn(async () => ({ status: 'approved' as const })),
         askQuestions: vi.fn(),
       },
     },
@@ -47,8 +47,8 @@ function createContext(): AgentSessionRuntimeContext {
 
 describe('openClaudeNativeUnifiedTerminalSession', () => {
   it('acknowledges an accepted native permission decision before resolving it', async () => {
-    const requestDecision = createNativePermissionDecisionAdapter(createContext())
-      .requestDecision as SessionPermissionsService['requestDecision'];
+    const requestDecision = createClaudeNativeAgentSdkContext(createContext())
+      .sessions.current.permissions.requestDecision as SessionPermissionsService['requestDecision'];
     const acknowledgeDecisionApplication = vi.fn(async () => undefined);
 
     const result = await requestDecision({
@@ -76,8 +76,8 @@ describe('openClaudeNativeUnifiedTerminalSession', () => {
         },
       },
     });
-    const requestDecision = createNativePermissionDecisionAdapter(context)
-      .requestDecision as SessionPermissionsService['requestDecision'];
+    const requestDecision = createClaudeNativeAgentSdkContext(context)
+      .sessions.current.permissions.requestDecision as SessionPermissionsService['requestDecision'];
 
     const result = await requestDecision({
       provider: 'claude',

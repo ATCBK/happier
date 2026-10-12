@@ -401,6 +401,8 @@ export type ClaudeUnifiedTerminalTurnOperationsParams = Readonly<{
   initialEffort?: string | null;
   initialUltracode?: boolean;
   permissionMode: string | null;
+  allowedTools?: readonly string[];
+  unlistedTools?: 'ask' | 'deny';
   workspaceWrites?: 'allow' | 'deny';
   /** Persisted workflow headline from the session snapshot that created this runtime. */
   initialWorkflowActivityHeadline?: unknown;
@@ -1930,6 +1932,8 @@ export function createClaudeUnifiedTerminalTurnOperations(
             launchSettings: settingsOverlay,
             workspaceWrites: launchWorkspaceWrites,
             helperModelEnv: params.helperModelEnv,
+            allowedTools: params.allowedTools,
+            unlistedTools: params.unlistedTools,
           }), params.launchIntent ?? { kind: 'new_session' }),
           cwd: params.directory,
           env: params.launchEnv,
@@ -2137,7 +2141,7 @@ export function createClaudeUnifiedTerminalTurnOperations(
           }
         },
         onPermissionHook: createClaudePermissionHookHandler(params.ctx),
-        defaultPermissionHookResponse: buildDefaultPermissionHookResponse,
+        defaultPermissionHookResponse: data => buildDefaultPermissionHookResponse(data, params.unlistedTools),
         permissionHookSecret: hookSecret,
         // Host response ceiling aligned with the installed Claude permission-hook `timeout`
         // (effectively-unlimited 7d, env-overridable via the shared resolver). The ceiling is
@@ -2179,6 +2183,7 @@ export function createClaudeUnifiedTerminalTurnOperations(
       sessionForwarderScript: assets.sessionForwarderScript,
       permissionForwarderScript: assets.permissionForwarderScript,
       enableLocalPermissionBridge: true,
+      unlistedTools: params.unlistedTools,
       ...(sessionHookServer.sessionHookSecretFile ? { sessionHookSecretFile: sessionHookServer.sessionHookSecretFile } : {}),
       ...(sessionHookServer.permissionHookSecretFile ? { permissionHookSecretFile: sessionHookServer.permissionHookSecretFile } : {}),
     });
@@ -4285,7 +4290,9 @@ export function createClaudeUnifiedTerminalTurnOperations(
         nativeResumeTurnBarrier?.observeTerminal();
         if (consumeTerminalOriginTurnCompletion()) return;
         promptEchoSuppressor.clearAcceptedPromptEchoes();
-        const allocateFailedTurn = !state.activeTurnId && state.dispatchAttemptInFlight;
+        // A primary StopFailure can arrive after native completion, with no queued
+        // dispatch. It remains a session failure; sidechains were excluded above.
+        const allocateFailedTurn = !state.activeTurnId;
         state.dispatchAttemptInFlight = false;
         const failureEvidence = observation.source === 'hook'
           ? observation.evidence ?? observation.detail ?? observation.reason

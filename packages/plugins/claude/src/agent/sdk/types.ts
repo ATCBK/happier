@@ -100,6 +100,8 @@ export interface GetOAuthTokenCallback {
 export type QueryPrompt = string | AsyncIterable<SDKMessage>;
 
 export interface QueryOptions extends ClaudeRemoteAdvancedOptions {
+    allowedTools?: readonly string[];
+    unlistedTools?: 'ask' | 'deny';
     abort?: AbortSignal;
     allowDangerouslySkipPermissions?: boolean;
     appendSystemPrompt?: string;

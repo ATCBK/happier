@@ -2,6 +2,8 @@
 import {
     AgentRuntimeJsonValueSchema,
     type AgentSessionHostServices,
+    type AgentExecutionRunHooksServiceV1,
+    type AgentSessionHookServerStartRequest,
     type AgentSessionHookServerHandle,
     type AgentSessionProviderBinding,
     type AgentSessionRuntime,
@@ -11,6 +13,7 @@ import type { AgentSessionInputFilesService } from '@happier-dev/plugin-sdk/agen
 import { createClaudeMcpUsageWitness } from './mcpUsage.js';
 import {
     redactBugReportSensitiveText,
+    PluginError,
     type JsonValue,
 } from '@happier-dev/plugin-sdk';
 import type { SessionWorkStateV1 } from '@happier-dev/plugin-sdk/sessions/work-state';
@@ -89,6 +92,7 @@ import {
     extractToolResultBlocksFromSdkMessage,
     extractToolUseBlocksFromSdkMessage,
     hasClaudeAgentSdkDefinitiveSubagentRuntimeAuthFailureEvidence,
+    readClaudeAgentSdkResultFailure,
     shouldSurfaceClaudeAgentSdkRuntimeFailure,
 } from './streamEvents.js';
 import {
@@ -150,6 +154,7 @@ type ClaudeAgentSdkContextBase = Readonly<{
         toolExecution: ClaudeUnifiedTerminalContext['agentRuntime']['toolExecution'];
         nativeHome?: ClaudeUnifiedTerminalContext['agentRuntime']['nativeHome'];
         inputFiles?: AgentSessionInputFilesService;
+        hooks?: AgentExecutionRunHooksServiceV1;
     }>;
 }>;
 
@@ -308,6 +313,33 @@ function normalizeProviderErrorCode(value: string | null): string {
     return `claude_${normalized}`;
 }
 
+function summarizeFailureStderr(stderr: string | undefined): string | null {
+    if (!stderr?.trim()) return null;
+    // Native stderr can echo prompts as well as credentials. Emit only a bounded
+    // classification, never an excerpt or the missing native session identity.
+    if (/\bNo (?:conversation|session) found\b/iu.test(stderr)) {
+        return 'Native resume state not found (details redacted)';
+    }
+    return 'Native stderr present (details redacted)';
+}
+
+function readFailureDiagnosticCode(code: string): string {
+    // The provider's error field is free-form; normalization alone does not make
+    // it safe to log. Retain known machine codes, not arbitrary provider text.
+    switch (code) {
+        case 'claude_authentication_failed':
+        case 'claude_error_during_execution':
+        case 'claude_error_max_turns':
+        case 'claude_sdk_result_error':
+        case 'claude_sdk_no_result':
+        case 'claude_sdk_stream_error':
+        case 'claude_agent_sdk_resume_identity_mismatch':
+            return code;
+        default:
+            return 'Unrecognized failure code (details redacted)';
+    }
+}
+
 function classifyFailureSource(params: Readonly<{
     code: string;
     preview: string | null;
@@ -360,7 +392,7 @@ function buildResultFailureEvidence(
     message: SDKResultMessage,
     providerFailure: ClaudeProviderFailureEvidence | null,
 ): ClaudeProviderFailureEvidence {
-    const resultPreview = sanitizeProviderErrorPreview(message.result);
+    const resultPreview = sanitizeProviderErrorPreview(readClaudeAgentSdkResultFailure(message) ?? message.result);
     const code = providerFailure?.code
         ?? normalizeProviderErrorCode(readString(message.subtype) ?? 'result_error');
     const preview = providerFailure?.preview ?? resultPreview;
@@ -665,8 +697,11 @@ export type ClaudeAgentSdkTurnOperationsParams = Readonly<{
     advancedOptions?: ClaudeRemoteAdvancedOptions;
     settingSources?: readonly ClaudeSettingSourceV2[];
     permissionMode: string;
+    allowedTools?: readonly string[];
+    unlistedTools?: 'ask' | 'deny';
     workspaceWrites?: 'allow' | 'deny';
     happierSessionId?: string | null;
+    executionRunId?: string;
     toolPermissionPolicy?: ClaudeAgentSdkToolPermissionPolicy | null;
     abortSignal?: AbortSignal;
     initialModelId?: string | null;
@@ -716,6 +751,11 @@ export function createClaudeAgentSdkTurnOperations(
     params: ClaudeAgentSdkTurnOperationsParams,
 ): ClaudeAgentSdkNativeOperations {
     const sessionContext = isClaudeAgentSdkSessionContext(params.ctx) ? params.ctx : null;
+    if (params.unlistedTools === 'deny' && !params.happierSessionId && !params.ctx.agentRuntime.hooks
+        && (params.allowedTools ?? []).some(rule => !rule.startsWith('mcp__') && rule.includes('('))) {
+        throw new PluginError({ code: 'claude_scoped_tool_policy_requires_session_hooks', retryable: false,
+            message: 'Scoped Claude tools require the Session-owned permission hook.' });
+    }
     const permissionEngine = params.permissionEngine
         ?? (sessionContext
             ? createClaudePermissionEngine(sessionContext)
@@ -749,6 +789,7 @@ export function createClaudeAgentSdkTurnOperations(
     let currentUltracode = supportsEffort && params.initialUltracode === true;
     let contextUsageRefreshPromise: Promise<boolean> | null = null;
     const toolPermissionPolicy = params.toolPermissionPolicy ?? null;
+    const permissionHooksEnabled = toolPermissionPolicy === null || params.unlistedTools === 'deny';
     const sessionWorkStateEnabled = params.enableSessionWorkState === true;
     const happierSessionId = readString(params.happierSessionId);
     let promotedTranscriptPath: string | null = null;
@@ -963,9 +1004,13 @@ export function createClaudeAgentSdkTurnOperations(
     }
 
     async function ensureSessionHookPluginDir(): Promise<string | null> {
-        if (!happierSessionId) return null;
+        const hookInstanceId = happierSessionId ?? (params.unlistedTools === 'deny' ? params.executionRunId : null);
+        if (!hookInstanceId) return null;
         const sessionHooks = sessionContext?.agentRuntime.sessionHooks;
-        if (!sessionHooks) {
+        const detachedHooks = params.ctx.agentRuntime.hooks;
+        const hooks = sessionHooks ?? detachedHooks;
+        if (!hooks) {
+            if (!happierSessionId) return null;
             throw new Error('Claude Session hooks are unavailable for a Session-bound runtime.');
         }
         if (sessionHookPluginDir) return sessionHookPluginDir;
@@ -973,10 +1018,7 @@ export function createClaudeAgentSdkTurnOperations(
 
         sessionHookSetupPromise = (async () => {
             const sessionHookSecret = randomUUID();
-            const server = await sessionHooks.startServer({
-                providerId: 'claude',
-                sessionId: happierSessionId,
-                lifecycle: { kind: 'session', sessionId: happierSessionId },
+            const hookRequest: AgentSessionHookServerStartRequest = {
                 sessionHookSecret,
                 onSessionHook: async (providerSessionId, payload) => {
                     const observedAt = Date.now();
@@ -999,40 +1041,50 @@ export function createClaudeAgentSdkTurnOperations(
                         activeCompletion?.reject(explicitResumeFailure);
                     }
                 },
-                ...(toolPermissionPolicy === null ? {
-                    onPermissionHook: createClaudePermissionHookHandler(sessionContext!),
-                    defaultPermissionHookResponse: buildDefaultPermissionHookResponse,
+                ...(permissionHooksEnabled ? {
+                    onPermissionHook: createClaudePermissionHookHandler({
+                        agentRuntime: params.ctx.agentRuntime,
+                        permissionEngine: { canCallTool: resolvePermissionAfterInterception },
+                    }),
+                    defaultPermissionHookResponse: data => buildDefaultPermissionHookResponse(data, params.unlistedTools),
                     permissionHookSecret: sessionHookSecret,
                     permissionRequestTimeoutMs: resolveClaudePermissionHookCeilingMs({ env: params.launchEnv }),
                 } : {}),
-            });
+            };
+            const server = sessionHooks && happierSessionId
+                ? await sessionHooks.startServer({ ...hookRequest, providerId: 'claude', sessionId: happierSessionId,
+                    lifecycle: { kind: 'session', sessionId: happierSessionId } })
+                : await detachedHooks!.startServer(hookRequest);
             sessionHookServer = server;
             try {
-                const assets = await sessionHooks.resolveForwarderAssets();
-                const hooks = buildClaudeHookPluginHooks({
+                const assets = await hooks.resolveForwarderAssets();
+                const hooksJson = buildClaudeHookPluginHooks({
                     port: server.port,
                     nodeExecutable: assets.nodeExecutable,
                     sessionForwarderScript: assets.sessionForwarderScript,
-                    ...(toolPermissionPolicy === null ? {
+                    ...(permissionHooksEnabled ? {
                         permissionForwarderScript: assets.permissionForwarderScript,
                         enableLocalPermissionBridge: true,
+                        unlistedTools: params.unlistedTools,
                     } : {}),
                     ...(server.sessionHookSecretFile
                         ? { sessionHookSecretFile: server.sessionHookSecretFile }
                         : {}),
-                    ...(toolPermissionPolicy === null && server.permissionHookSecretFile
+                    ...(permissionHooksEnabled && server.permissionHookSecretFile
                         ? { permissionHookSecretFile: server.permissionHookSecretFile }
                         : {}),
                 });
-                const manifest = buildClaudeHookPluginManifest({ instanceId: happierSessionId });
-                sessionHookPluginDir = await sessionHooks.createPluginDir({
-                    providerId: 'claude',
-                    lifecycle: { kind: 'session', sessionId: happierSessionId },
+                const manifest = buildClaudeHookPluginManifest({ instanceId: hookInstanceId });
+                const pluginRequest = {
                     files: [
                         { path: '.claude-plugin/plugin.json', json: manifest },
-                        { path: 'hooks/hooks.json', json: hooks },
+                        { path: 'hooks/hooks.json', json: hooksJson },
                     ],
-                });
+                };
+                sessionHookPluginDir = sessionHooks && happierSessionId
+                    ? await sessionHooks.createPluginDir({ ...pluginRequest, providerId: 'claude',
+                        lifecycle: { kind: 'session', sessionId: happierSessionId } })
+                    : await detachedHooks!.createPluginDir(pluginRequest);
                 return sessionHookPluginDir;
             } catch (error) {
                 sessionHookServer = null;
@@ -1334,16 +1386,24 @@ export function createClaudeAgentSdkTurnOperations(
         if (!transformedInput) {
             return deniedToolInterception('Tool interception returned invalid input.');
         }
+        return resolvePermissionAfterInterception(toolName, transformedInput, options);
+    }
+
+    async function resolvePermissionAfterInterception(
+        toolName: string,
+        input: unknown,
+        options: Parameters<ClaudePermissionEngine['canCallTool']>[2] = {},
+    ): Promise<PermissionResult> {
         if (toolPermissionPolicy === 'no_tools') {
             return { behavior: 'deny', message: 'Tools are disabled for this execution run.', interrupt: true };
         }
-        if (toolPermissionPolicy === 'workspace_write') {
+        if (toolPermissionPolicy === 'workspace_write' && params.unlistedTools !== 'deny') {
             return {
                 behavior: 'allow',
-                updatedInput: transformedInput,
+                updatedInput: readAgentToolInputRecord(input) ?? {},
             };
         }
-        return permissionEngine.canCallTool(toolName, transformedInput, options);
+        return permissionEngine.canCallTool(toolName, input, options);
     }
 
     const claudeSubscriptionRuntimeAuthSelection = readClaudeSubscriptionRuntimeAuthSelectionFromEnv(params.launchEnv);
@@ -1446,9 +1506,24 @@ export function createClaudeAgentSdkTurnOperations(
         let publishedTranscriptText = false;
         let providerFailure: ClaudeProviderFailureEvidence | null = null;
         let foregroundCompleted = false;
+        let sdkResultSubtype: string | null = null;
         const toolNameByCallId = new Map<string, string>();
         const publishTerminal = (event: ClaudeProviderEvent): void => {
             if (!completion.claimTerminalPublication()) return;
+            if (event.kind === 'turn-failed') {
+                const exit = turnQuery.readExitResult();
+                params.ctx.logger.warn('[ClaudeAgentSdk] Turn failed', {
+                    sessionId: readString(params.happierSessionId) ?? event.sessionId,
+                    turnId: event.turnId,
+                    code: readFailureDiagnosticCode(event.issue.code),
+                    source: event.issue.source,
+                    sdkResultSubtype,
+                    processExitObserved: exit !== null,
+                    exitCode: exit?.exitCode ?? null,
+                    signal: exit?.signal ?? null,
+                    stderrSummary: summarizeFailureStderr(exit?.stderr),
+                });
+            }
             publishRuntimeEvent(event);
         };
         const publishFailedTerminal = (
@@ -1493,6 +1568,12 @@ export function createClaudeAgentSdkTurnOperations(
                 const nextMessage = await turnQuery.next();
                 if (nextMessage.done) break;
                 const message = nextMessage.value;
+                if (isSdkResultMessage(message)) {
+                    sdkResultSubtype = message.subtype === 'success'
+                        || message.subtype === 'error_max_turns'
+                        || message.subtype === 'error_during_execution'
+                        ? message.subtype : 'Unrecognized result subtype (details redacted)';
+                }
                 if (!isReplayClaudeAgentSdkMessage(message)) mcpUsage.observe(message);
                 const commands = readClaudeNativeCommands(message);
                 if (commands !== null) {
@@ -1833,6 +1914,8 @@ export function createClaudeAgentSdkTurnOperations(
                             ? { ultracode: true } : {},
                         workspaceWrites: currentWorkspaceWrites,
                         helperModelEnv: params.helperModelEnv,
+                        allowedTools: params.allowedTools,
+                        unlistedTools: params.unlistedTools,
                     }),
                     environment: { values: params.launchEnv, unset: [] },
                     process: { stdio: 'inherit', windowsHide: true },
@@ -2014,6 +2097,8 @@ export function createClaudeAgentSdkTurnOperations(
                     args: [], interactionKind: 'noninteractive_sdk', permissionMode: currentPermissionMode,
                     launchSettings, workspaceWrites: currentWorkspaceWrites,
                     helperModelEnv: params.helperModelEnv,
+                    allowedTools: params.allowedTools,
+                    unlistedTools: params.unlistedTools,
                 });
                 const settingsJson = denySettingsArgs.includes('--settings')
                     ? denySettingsArgs[denySettingsArgs.indexOf('--settings') + 1]
@@ -2056,7 +2141,10 @@ export function createClaudeAgentSdkTurnOperations(
                                 : {}),
                         ...(getClaudeSdkOAuthToken ? { getOAuthToken: getClaudeSdkOAuthToken } : {}),
                         ...params.advancedOptions,
-                        settingSources: params.settingSources,
+                        allowedTools: params.allowedTools,
+                        unlistedTools: params.unlistedTools,
+                        settingSources: params.unlistedTools === 'deny' && !hookPluginDir ? [] : params.settingSources,
+                        ...(params.unlistedTools === 'deny' ? { strictMcpConfig: true } : {}),
                         ...(params.startupInstructions ? {
                             appendSystemPrompt: params.startupInstructions,
                             appendSystemPromptFile: true,
@@ -2233,7 +2321,8 @@ export function createClaudeAgentSdkTurnOperations(
                         ].filter((query): query is ClaudeSdkQuery => query !== null));
                         try {
                             await Promise.all([...liveQueries].map(query =>
-                                query.setPermissionMode(mapToClaudePermissionMode(permissionMode))));
+                                query.setPermissionMode(params.unlistedTools === 'deny'
+                                    ? 'dontAsk' : mapToClaudePermissionMode(permissionMode))));
                         } catch (error) {
                             params.ctx.logger.warn('[ClaudeAgentSdk] Live permission mode update failed', { error });
                             return { status: 'failed' as const, reason: 'permission_mode_update_failed' };
@@ -2335,7 +2424,8 @@ export function createClaudeAgentSdkTurnOperations(
                 terminalStartupInstructions = undefined;
                 sessionHookPluginDir = null;
                 if (hookPluginDir) {
-                    await sessionContext?.agentRuntime.sessionHooks.disposePluginDir(hookPluginDir).catch(() => undefined);
+                    await (sessionContext?.agentRuntime.sessionHooks ?? params.ctx.agentRuntime.hooks)
+                        ?.disposePluginDir(hookPluginDir).catch(() => undefined);
                 }
                 const hookServer = sessionHookServer;
                 sessionHookServer = null;

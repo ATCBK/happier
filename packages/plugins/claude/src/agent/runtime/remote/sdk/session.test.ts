@@ -8,6 +8,7 @@ import {
 import type { AgentSessionRuntimeEvent } from '@happier-dev/protocol/runtime';
 import type {
   AgentSessionModelsSource,
+  AgentSessionHostServices,
   AgentSessionRuntimeContext,
   AgentTranscriptFileFollowInput as TranscriptFileFollowInputV1,
 } from '@happier-dev/plugin-sdk/agents/runtime';
@@ -42,6 +43,91 @@ type SessionParamsWithCredentials =
   }>;
 
 describe('bindClaudeAgentSdkFallbackSession', () => {
+  it('confines native SDK tools and all-call permission hooks despite ambient bypass options', async () => {
+    const exec = createSdkExecFixture();
+    const hooks = createSessionHooksFixture();
+    const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service,
+      { exec: exec.service, sessionHooks: hooks.service });
+    const params = {
+      ctx, directory: '/tmp/claude-project', launchEnv: {}, happierSessionId: 'sdk-confined',
+      permissionMode: 'yolo', allowedTools: ['Read(//tmp/attachments/**)', 'mcp__wilson__*'],
+      unlistedTools: 'deny' as const,
+      advancedOptions: { tools: ['default'] },
+    };
+    const operations = createClaudeAgentSdkProviderOperations(params);
+    try {
+      await operations.sendProviderTurnPrompt('process the attachment');
+      await vi.waitFor(() => expect(exec.spawnClient).toHaveBeenCalledOnce());
+      const args = exec.spawnClient.mock.calls[0]?.[0].launch.args ?? [];
+      expect(args[args.indexOf('--tools') + 1]).toBe('Read');
+      expect(args[args.indexOf('--allowedTools') + 1]).toBe('Read(//tmp/attachments/**),mcp__wilson__*');
+      expect(args[args.indexOf('--permission-mode') + 1]).toBe('dontAsk');
+      expect(args).not.toContain('--allow-dangerously-skip-permissions');
+      const pluginFiles = hooks.service.createPluginDir.mock.calls[0]?.[0].files ?? [];
+      const installedHooks = pluginFiles.find((file: { path: string }) => file.path === 'hooks/hooks.json')?.json;
+      expect(installedHooks.hooks.PreToolUse[0].matcher).toBe('*');
+      const fallback = hooks.service.startServer.mock.calls[0]?.[0].defaultPermissionHookResponse;
+      expect(fallback({ hook_event_name: 'PreToolUse', tool_name: 'Read' }).hookSpecificOutput.permissionDecision).toBe('deny');
+      const terminal = await operations.prepareTerminalPresentation();
+      if (terminal.kind !== 'terminal_launch') throw new Error('Expected native terminal launch');
+      expect(terminal.plan.argv[terminal.plan.argv.indexOf('--tools') + 1]).toBe('Read');
+      expect(terminal.plan.argv[terminal.plan.argv.indexOf('--permission-mode') + 1]).toBe('dontAsk');
+    } finally { await operations.disposeProviderSession(); }
+  });
+
+  it('rejects detached scoped tools before process creation when no Session permission hook exists', () => {
+    const exec = createSdkExecFixture();
+    const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service, { exec: exec.service });
+    const params = { ctx, directory: '/tmp/claude-project', launchEnv: {}, permissionMode: 'default',
+      allowedTools: ['Read(//tmp/attachments/**)'], unlistedTools: 'deny' as const };
+    expect(() => createClaudeAgentSdkProviderOperations(params)).toThrow(expect.objectContaining({
+      code: 'claude_scoped_tool_policy_requires_session_hooks',
+    }));
+    expect(exec.spawnClient).not.toHaveBeenCalled();
+  });
+
+  it('enforces scoped tools through Run-owned hooks without fabricating a Session', async () => {
+    const exec = createSdkExecFixture();
+    const hooks = createSessionHooksFixture();
+    const requestApproval = vi.fn(async () => ({ status: 'denied' as const }));
+    const fixture = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service, {
+      exec: exec.service,
+      // The host interception service is an external SDK boundary to the Agent plugin.
+      toolExecution: { before: async request => ({ status: 'continue', input: request.input }) } satisfies AgentSessionHostServices['toolExecution'],
+    });
+    const ctx = {
+      logger: fixture.logger,
+      agentRuntime: {
+        exec: exec.service, fileFollow: fixture.agentRuntime.transcripts.fileFollow, hooks: hooks.service,
+        toolExecution: fixture.agentRuntime.toolExecution,
+      },
+    };
+    const { createClaudeNativePermissionEngine } = await import('../../../permissions/nativePermissionEngine.js');
+    const permissionEngine = createClaudeNativePermissionEngine({
+      services: { interactions: { requestApproval } },
+    } as unknown as Parameters<typeof createClaudeNativePermissionEngine>[0]);
+    const params = { ctx, permissionEngine, directory: '/tmp/claude-project', launchEnv: {},
+      permissionMode: 'yolo', executionRunId: 'confined-run', allowedTools: ['Read(//tmp/attachments/**)'],
+      unlistedTools: 'deny' as const };
+    const operations = createClaudeAgentSdkProviderOperations(params);
+    try {
+      await operations.sendProviderTurnPrompt('read attachment');
+      const start = hooks.service.startServer.mock.calls[0]?.[0];
+      expect(start).not.toHaveProperty('sessionId');
+      expect(start).not.toHaveProperty('lifecycle');
+      const response = await start.onPermissionHook({ hook_event_name: 'PreToolUse', tool_name: 'Read',
+        tool_input: { file_path: '/tmp/protected-canary' } });
+      expect(response.hookSpecificOutput.permissionDecision).toBe('deny');
+      expect(requestApproval).toHaveBeenCalledWith(expect.objectContaining({
+        subject: { kind: 'tool', name: 'Read', input: { file_path: '/tmp/protected-canary' } },
+      }), undefined);
+      const args = exec.spawnClient.mock.calls[0]?.[0].launch.args ?? [];
+      expect(args).toContain('--plugin-dir');
+      expect(args[args.indexOf('--tools') + 1]).toBe('Read');
+    } finally { await operations.disposeProviderSession(); }
+    expect(hooks.service.disposePluginDir).toHaveBeenCalledWith('/tmp/happier-claude-hook-plugin');
+  });
+
   it('witnesses native MCP inventory and deduplicated calls through successful SDK completion', async () => {
     const exec = createSdkExecFixture();
     const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service, { exec: exec.service });
@@ -927,7 +1013,7 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
         name: 'Read',
         input: { path: 'README.md' },
       }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
-      expect(exec.written).toContainEqual({
+      await vi.waitFor(() => expect(exec.written).toContainEqual({
         type: 'control_response',
         response: {
           subtype: 'success',
@@ -937,7 +1023,7 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
             updatedInput: { path: 'README.md', intercepted: true },
           },
         },
-      });
+      }));
     } finally {
       await operations.disposeProviderSession();
     }
@@ -4371,6 +4457,8 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
     const terminalKinds = new Set(['turn-complete', 'turn-failed', 'turn-cancelled']);
 
     const runResultError = async () => {
+      const credential = 'sdk result credential with spaces !';
+      const sensitiveValues = registerSensitiveDiagnosticValues([credential]);
       const terminalHost = createTerminalHostFixture();
       const events = createEventsFixture();
       const exec = createSdkExecFixture();
@@ -4396,15 +4484,26 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
           subtype: 'error_during_execution',
           is_error: true,
           session_id: 'claude-provider-session-result-error',
-          errors: ['provider failed'],
+          errors: [`Native resume state unavailable: ${credential}`],
           num_turns: 1,
           total_cost_usd: 0,
           duration_ms: 10,
           duration_api_ms: 8,
         });
-        await expect(completion).rejects.toThrow();
+        await expect(completion).rejects.toThrow(/Native resume state unavailable/u);
+        await expect(completion).rejects.not.toThrow(credential);
+        expect(runtimeEvents).toContainEqual(expect.objectContaining({
+          kind: 'turn-failed',
+          issue: expect.objectContaining({
+            code: 'claude_error_during_execution',
+            source: 'agent_session_error',
+            sanitizedPreview: expect.stringContaining('Native resume state unavailable'),
+          }),
+        }));
+        expect(JSON.stringify(runtimeEvents)).not.toContain(credential);
         return runtimeEvents.filter((event) => terminalKinds.has(event.kind));
       } finally {
+        sensitiveValues.close();
         await runtime.resetOrDisposeRuntime().catch(() => undefined);
       }
     };

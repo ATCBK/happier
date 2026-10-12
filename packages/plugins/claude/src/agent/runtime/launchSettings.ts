@@ -1,5 +1,5 @@
 import { readClaudeSettingSourcesV2, type ClaudeSettingSourceV2 } from '@happier-dev/plugin-sdk/first-party/claude';
-import type { AgentLaunchEnvironment, AgentSessionProviderBinding } from '@happier-dev/plugin-sdk/agents/runtime';
+import type { AgentLaunchEnvironment, AgentSessionConfigurationSnapshot, AgentSessionProviderBinding } from '@happier-dev/plugin-sdk/agents/runtime';
 import { readFileSync } from 'node:fs';
 
 import {
@@ -12,6 +12,7 @@ import { CLAUDE_PROVIDER_HELPER_ENV_KEYS } from '../providerBinding/adapter.js';
 
 export type ClaudeHelperModelEnv = Readonly<Partial<Record<typeof CLAUDE_PROVIDER_HELPER_ENV_KEYS[number], string>>>;
 
+const CLAUDE_NATIVE_HISTORY_SETTING_KEY = 'claudeCodeIncludeInNativeHistory';
 const CLAUDE_AGENT_TEAMS_SETTING_KEY = 'claudeCodeExperimentalAgentTeamsEnabled';
 const CLAUDE_ADVANCED_OPTIONS_SETTING_KEY = 'claudeRemoteAdvancedOptionsJson';
 const CLAUDE_AGENT_TEAMS_ENV_KEY = 'CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS';
@@ -23,6 +24,40 @@ type ClaudeSettingsReader = Readonly<{
   get(key: string): unknown | Promise<unknown>;
   snapshot(): Promise<Readonly<{ values: Readonly<Record<string, unknown>> }>>;
 }>;
+
+export type ClaudeNativeToolPolicy = Pick<AgentSessionConfigurationSnapshot, 'allowedTools' | 'unlistedTools'>;
+
+/** Native availability only; argument/path decisions stay with the host permission owner. */
+export function resolveClaudeNativeToolPolicyArgs(
+  args: readonly string[],
+  policy: ClaudeNativeToolPolicy,
+): readonly string[] {
+  if (policy.unlistedTools !== 'deny') {
+    return policy.allowedTools === undefined ? args : [...args, '--allowedTools', policy.allowedTools.join(',')];
+  }
+  const managedFlags = new Set(['--tools', '--allowedTools', '--allowed-tools', '--permission-mode',
+    '--permission-prompt-tool', '--permission-prompts']);
+  const booleanFlags = new Set(['--dangerously-skip-permissions', '--allow-dangerously-skip-permissions']);
+  const confinedArgs: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    const flag = arg.split('=', 1)[0];
+    if (booleanFlags.has(flag)) continue;
+    if (managedFlags.has(flag)) {
+      if (!arg.includes('=')) {
+        while (typeof args[index + 1] === 'string' && !args[index + 1].startsWith('-')) index += 1;
+      }
+      continue;
+    }
+    confinedArgs.push(arg);
+  }
+  // --tools is a native allow-only list of built-in names, including an empty list.
+  // Keep scoped rules unchanged for --allowedTools; PreToolUse enforces their scope.
+  const builtins = [...new Set((policy.allowedTools ?? []).map(rule => rule.split('(', 1)[0].trim())
+    .filter(name => /^[A-Z][A-Za-z0-9_]*$/u.test(name)))];
+  return [...confinedArgs, '--tools', builtins.join(','), '--allowedTools', (policy.allowedTools ?? []).join(','),
+    '--permission-mode', 'dontAsk'];
+}
 
 export function resolveClaudeExternalSandboxEnv(
   env: Readonly<Record<string, string | undefined>>,
@@ -39,9 +74,10 @@ export function resolveClaudeLaunchSettingsOverlayArgs(input: Readonly<{
   launchSettings: Readonly<Record<string, unknown>>;
   helperModelEnv?: ClaudeHelperModelEnv;
   workspaceWrites?: 'allow' | 'deny';
-}>): readonly string[] {
+}> & ClaudeNativeToolPolicy): readonly string[] {
+  const args = resolveClaudeNativeToolPolicyArgs(input.args, input);
   if (input.interactionKind !== 'interactive_terminal' && input.workspaceWrites !== 'deny'
-    && input.helperModelEnv === undefined) return input.args;
+    && input.helperModelEnv === undefined && input.unlistedTools !== 'deny') return args;
 
   // Claude treats bypass selection and acknowledgement as distinct inputs. Happier's YOLO mode
   // is the user's explicit choice, so acknowledge it only in the trusted command-line settings
@@ -49,18 +85,18 @@ export function resolveClaudeLaunchSettingsOverlayArgs(input: Readonly<{
   // protocols where Claude's ordinary permission/question handling remains authoritative.
   const launchSettings = {
     ...input.launchSettings,
-    ...(input.interactionKind === 'interactive_terminal' && input.permissionMode === 'bypassPermissions'
+    ...(input.unlistedTools !== 'deny' && input.interactionKind === 'interactive_terminal' && input.permissionMode === 'bypassPermissions'
       ? { skipDangerousModePermissionPrompt: true }
       : {}),
   };
   const argsWithoutSettings: string[] = [];
   let firstSettingsIndex: number | null = null;
   let existingSettingsValue: string | null = null;
-  for (let index = 0; index < input.args.length; index += 1) {
-    const arg = input.args[index];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
     if (arg === '--settings') {
       firstSettingsIndex ??= argsWithoutSettings.length;
-      const value = input.args[index + 1];
+      const value = args[index + 1];
       if (existingSettingsValue === null && typeof value === 'string') {
         existingSettingsValue = value;
       }
@@ -104,7 +140,7 @@ export function resolveClaudeLaunchSettingsOverlayArgs(input: Readonly<{
     // pins in the existing session-only command-line overlay, never in a global file.
     mergedSettings.env = { ...existingEnv, ...input.helperModelEnv };
   }
-  if (input.interactionKind === 'interactive_terminal' || input.workspaceWrites === 'deny') {
+  if (input.interactionKind === 'interactive_terminal' || input.workspaceWrites === 'deny' || input.unlistedTools === 'deny') {
     const basePermissions = baseSettings.permissions && typeof baseSettings.permissions === 'object' && !Array.isArray(baseSettings.permissions)
       ? baseSettings.permissions as Record<string, unknown> : {};
     const existingPermissions = mergedSettings.permissions;
@@ -117,7 +153,10 @@ export function resolveClaudeLaunchSettingsOverlayArgs(input: Readonly<{
       ...(input.workspaceWrites === 'deny' ? ['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Bash'] : [])];
     mergedSettings.permissions = {
       ...permissions,
-      allow: [...new Set([...existingAllow, ...(buildClaudeHookSettingsOverlay().permissions?.allow ?? [])])],
+      allow: input.unlistedTools === 'deny'
+        ? [...(input.allowedTools ?? [])]
+        : [...new Set([...existingAllow, ...(buildClaudeHookSettingsOverlay().permissions?.allow ?? [])])],
+      ...(input.unlistedTools === 'deny' ? { defaultMode: 'dontAsk', disableBypassPermissionsMode: 'disable' } : {}),
       ...(deny.length ? { deny: [...new Set(deny)] } : {}),
     };
   }
@@ -185,8 +224,9 @@ export async function resolveClaudeNativeLaunchSettings(input: Readonly<{
   settingSources: readonly ClaudeSettingSourceV2[];
   helperModelEnv?: ClaudeHelperModelEnv;
 }>> {
-  const [agentTeamsEnabled, advancedOptionsJson, settingsSnapshot] = await Promise.all([
+  const [agentTeamsEnabled, includeInNativeHistory, advancedOptionsJson, settingsSnapshot] = await Promise.all([
     readSetting(input.settings, CLAUDE_AGENT_TEAMS_SETTING_KEY),
+    readSetting(input.settings, CLAUDE_NATIVE_HISTORY_SETTING_KEY),
     input.includeAdvancedOptions
       ? readSetting(input.settings, CLAUDE_ADVANCED_OPTIONS_SETTING_KEY)
       : Promise.resolve(null),
@@ -201,12 +241,13 @@ export async function resolveClaudeNativeLaunchSettings(input: Readonly<{
   }
   return {
     ...(Object.keys(helperModelEnv).length ? { helperModelEnv } : {}),
-    launchEnv: agentTeamsEnabled === true
-      ? {
-          ...input.launchEnv,
-          [CLAUDE_AGENT_TEAMS_ENV_KEY]: '1',
-        }
-      : input.launchEnv,
+    launchEnv: {
+      ...input.launchEnv,
+      ...(agentTeamsEnabled === true ? { [CLAUDE_AGENT_TEAMS_ENV_KEY]: '1' } : {}),
+      // Claude Code 2.1.283/2.1.296 rewrite cli to sdk-cli; happier remains distinct.
+      // This opt-in changes attribution on new launches without rewriting transcripts.
+      ...(includeInNativeHistory === true ? { CLAUDE_CODE_ENTRYPOINT: 'happier' } : {}),
+    },
     settingSources: readClaudeSettingSourcesV2(CLAUDE_REMOTE_AGENT_SETTINGS_DEFAULTS, settingsSnapshot.values),
     advancedOptions: input.includeAdvancedOptions
       ? parseClaudeRemoteAdvancedOptionsJson(advancedOptionsJson)

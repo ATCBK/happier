@@ -130,6 +130,18 @@ const CLAUDE_AGENT_SETTINGS_FIELDS = [
     presentation: { control: 'switch' },
   },
   {
+    id: 'claudeCodeIncludeInNativeHistory',
+    title: fieldTitle('claudeCodeIncludeInNativeHistory', 'Show sessions in Claude Code'),
+    description: fieldDescription(
+      'claudeCodeIncludeInNativeHistory',
+      'Use Happier attribution for new Claude sessions, including Agent SDK runs. Off keeps runtime defaults.',
+    ),
+    schema: { type: 'boolean', description: 'Use Happier attribution for Claude session history' },
+    default: false,
+    analytics: BOOLEAN_ANALYTICS,
+    presentation: { control: 'switch' },
+  },
+  {
     id: 'claudeCodeExperimentalAgentTeamsEnabled',
     title: fieldTitle('claudeCodeExperimentalAgentTeamsEnabled', 'Force-enable Agent Teams'),
     description: fieldDescription(
@@ -469,6 +481,7 @@ export const CLAUDE_AGENT_SETTINGS_CONTRIBUTION = {
           fallback: 'These settings apply to both terminal and Agent SDK sessions started by Happier.',
         },
         fields: [
+          'claudeCodeIncludeInNativeHistory',
           'claudeCodeExperimentalAgentTeamsEnabled',
         ],
       },
@@ -524,6 +537,7 @@ type ClaudeSettingsDefaults = {
   claudeDynamicModelProbeEnabled: boolean;
   claudeRemoteAgentSdkEnabled: boolean;
   claudeCodeExperimentalAgentTeamsEnabled: boolean;
+  claudeCodeIncludeInNativeHistory: boolean;
   claudeUnifiedTerminalEnabled: boolean;
   claudeUnifiedTerminalHost: ClaudeUnifiedTerminalHost;
   claudeUnifiedTerminalResumeChoice: ClaudeUnifiedTerminalResumeChoice;

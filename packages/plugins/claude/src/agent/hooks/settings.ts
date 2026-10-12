@@ -1,4 +1,5 @@
 import { buildShellCommand } from '@happier-dev/plugin-sdk/agents/runtime';
+import { listHappierToolAutoApprovedNamesV1 } from '@happier-dev/protocol/tools/happierToolAutoApprovalV1';
 
 import { resolveClaudePermissionHookTimeoutSeconds } from './permissionHookTimeout.js';
 
@@ -59,6 +60,7 @@ export type BuildClaudeHookPluginHooksParams = Readonly<{
     sessionHookSecretFile?: string;
     permissionForwarderScript?: string;
     enableLocalPermissionBridge?: boolean;
+    unlistedTools?: 'ask' | 'deny';
     permissionHookSecretFile?: string;
     /**
      * Effective timeout (seconds) Claude enforces on the permission-hook forwarder. Defaults to
@@ -86,10 +88,7 @@ const CLAUDE_SESSION_HOOK_EVENTS: readonly ClaudeSessionHookEventName[] = [
 export function buildClaudeHookSettingsOverlay(): ClaudeHookSettingsOverlay {
     return {
         permissions: {
-            allow: [
-                'mcp__happier__change_title',
-                'mcp__happier__session_title_set',
-            ],
+            allow: listHappierToolAutoApprovedNamesV1().map((name) => `mcp__happier__${name}`),
         },
     };
 }
@@ -138,6 +137,7 @@ export function buildClaudeHookPluginHooks(params: BuildClaudeHookPluginHooksPar
                 port: params.port,
                 hookEventName: 'PermissionRequest',
                 secretFile: params.permissionHookSecretFile,
+                denyOnUnavailable: params.unlistedTools === 'deny',
             }),
             matcher: '*',
             timeout: permissionHookTimeoutSeconds,
@@ -150,8 +150,11 @@ export function buildClaudeHookPluginHooks(params: BuildClaudeHookPluginHooksPar
                 port: params.port,
                 hookEventName: 'PreToolUse',
                 secretFile: params.permissionHookSecretFile,
+                denyOnUnavailable: params.unlistedTools === 'deny',
             }),
-            matcher: 'AskUserQuestion',
+            // Native safe reads bypass PermissionRequest and SDK canUseTool.
+            // The existing host permission owner must see every confined call first.
+            matcher: params.unlistedTools === 'deny' ? '*' : 'AskUserQuestion',
             timeout: permissionHookTimeoutSeconds,
         })];
     }
@@ -183,6 +186,7 @@ function buildForwarderCommand(params: Readonly<{
     port: number;
     hookEventName: ClaudeSessionHookEventName | ClaudePermissionHookEventName;
     secretFile?: string;
+    denyOnUnavailable?: boolean;
 }>): string {
     const parts = [
         params.nodeExecutable,
@@ -193,6 +197,7 @@ function buildForwarderCommand(params: Readonly<{
     if (typeof params.secretFile === 'string' && params.secretFile.length > 0) {
         parts.push('--secret-file', params.secretFile);
     }
+    if (params.denyOnUnavailable) parts.push('--deny-on-unavailable');
     if ((params.platform ?? process.platform) === 'win32') {
         return buildShellCommand(parts, 'powershell_encoded');
     }

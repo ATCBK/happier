@@ -17,7 +17,7 @@ import {
 } from '@happier-dev/plugin-sdk/agents/runtime';
 import type { JsonValue } from '@happier-dev/plugin-sdk';
 
-type ClaudeToolExecutionContext = ClaudePermissionContext & Readonly<{
+type ClaudeToolExecutionContext = (ClaudePermissionContext | Readonly<{ permissionEngine: ReturnType<typeof createClaudePermissionEngine> }>) & Readonly<{
   agentRuntime: Readonly<{
     toolExecution: AgentSessionHostServices['toolExecution'];
   }>;
@@ -99,7 +99,7 @@ function buildPermissionResponse(
 export function createClaudePermissionHookHandler(
   ctx: ClaudeToolExecutionContext,
 ): (data: PermissionHookData) => Promise<PermissionHookResponse> {
-  const permissionEngine = createClaudePermissionEngine(ctx);
+  const permissionEngine = 'permissionEngine' in ctx ? ctx.permissionEngine : createClaudePermissionEngine(ctx);
   return async (data) => {
     const toolName = readToolName(data);
     if (!toolName) return buildDefaultPermissionHookResponse(data);

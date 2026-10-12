@@ -10,6 +10,11 @@ import {
 } from './definition.js';
 
 describe('CLAUDE_AGENT_SETTINGS_CONTRIBUTION', () => {
+  it('exposes Happier attribution as an account setting that defaults off', () => {
+    expect(CLAUDE_AGENT_SETTINGS_CONTRIBUTION.fields.find((field) => field.id === 'claudeCodeIncludeInNativeHistory'))
+      .toMatchObject({ default: false, schema: { type: 'boolean' }, presentation: { control: 'switch' } });
+  });
+
   it('offers Herdr through the existing unified terminal host setting', () => {
     const field = CLAUDE_AGENT_SETTINGS_CONTRIBUTION.fields.find(
       (entry) => entry.id === 'claudeUnifiedTerminalHost',
@@ -54,7 +59,7 @@ describe('CLAUDE_AGENT_SETTINGS_CONTRIBUTION', () => {
       expect.arrayContaining([
         expect.objectContaining({
           id: 'claude-code-experiments',
-          fields: ['claudeCodeExperimentalAgentTeamsEnabled'],
+          fields: expect.arrayContaining(['claudeCodeExperimentalAgentTeamsEnabled']),
         }),
         expect.objectContaining({
           id: 'claude-remote-sdk',

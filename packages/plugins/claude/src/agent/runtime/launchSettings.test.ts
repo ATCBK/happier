@@ -14,6 +14,23 @@ const titlePermissions = {
 };
 
 describe('resolveClaudeNativeLaunchSettings', () => {
+  it.each([false, true])('uses opt-in Happier attribution for terminal and SDK launch settings (%s)', async (includeAdvancedOptions) => {
+    for (const value of [undefined, false, 'true', true]) {
+      const launchEnv = { EXISTING_ENV: 'kept' };
+      const result = await resolveClaudeNativeLaunchSettings({
+        settings: {
+          get: (key) => key === 'claudeCodeIncludeInNativeHistory' ? value : undefined,
+          snapshot: async () => ({ values: {} }),
+        },
+        launchEnv,
+        includeAdvancedOptions,
+      });
+      expect(result.launchEnv).toEqual(value === true
+        ? { ...launchEnv, CLAUDE_CODE_ENTRYPOINT: 'happier' } : launchEnv);
+      expect(launchEnv).toEqual({ EXISTING_ENV: 'kept' });
+    }
+  });
+
   it.each([null, 'https://external.example.test'])(
     'extracts only helper pins from the existing managed launch environment for %s',
     async (normalizedUrl) => {

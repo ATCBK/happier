@@ -4,6 +4,10 @@ import type {
     AgentSessionRuntimeContext,
 } from '@happier-dev/plugin-sdk/agents/runtime';
 import type { JsonValue } from '@happier-dev/plugin-sdk';
+import type {
+  SessionPermissionDecisionRequest,
+  SessionPermissionsService,
+} from '@happier-dev/plugin-sdk/sessions';
 import type { WorkStateItem } from '@happier-dev/plugin-sdk/sessions/work-state';
 import {
   SessionActivityHeadlineBundleV1Schema,
@@ -11,6 +15,8 @@ import {
 } from '@happier-dev/plugin-sdk/sessions/work-state';
 
 import { createClaudeNativeSdkQueryContext } from '../sdk/nativeExec.js';
+import { createClaudeNativePermissionEngine } from '../permissions/nativePermissionEngine.js';
+import type { ClaudePermissionDecision } from '../permissions/createClaudePermissionEngine.js';
 import {
   createClaudeWorkflowSystemRecordBridge,
 } from '../workflowRecords/workflowRuntime.js';
@@ -112,6 +118,66 @@ export function createClaudeNativeGoalWorkStatePublisher(
   };
 }
 
+function readUpdatedPermissions(
+  value: unknown,
+): readonly Readonly<Record<string, unknown>>[] | undefined {
+  return Array.isArray(value)
+    && value.every((entry) => Boolean(entry) && typeof entry === 'object' && !Array.isArray(entry))
+    ? value as readonly Readonly<Record<string, unknown>>[]
+    : undefined;
+}
+
+function readStructuredQuestionAnswers(
+  value: unknown,
+): Readonly<Record<string, readonly string[]>> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const answers: Record<string, readonly string[]> = {};
+  for (const [question, answer] of Object.entries(value)) {
+    if (typeof answer !== 'string' || answer.length === 0) continue;
+    answers[question] = [answer];
+  }
+  return Object.keys(answers).length > 0 ? answers : undefined;
+}
+
+function createNativePermissionDecisionAdapter(context: AgentSessionRuntimeContext) {
+  const engine = createClaudeNativePermissionEngine(context);
+  return {
+    async requestDecision(
+      request: SessionPermissionDecisionRequest,
+      options?: Parameters<SessionPermissionsService['requestDecision']>[1],
+    ): Promise<ClaudePermissionDecision> {
+      const toolName = typeof request.toolName === 'string' ? request.toolName.trim() : '';
+      if (!toolName) return { decision: 'denied', rationale: 'Claude supplied an invalid tool request.' };
+      const requestId = typeof request.requestId === 'string' ? request.requestId : null;
+      const toolUseId = typeof request.toolCallId === 'string' ? request.toolCallId : null;
+      const result = await engine.canCallTool(toolName, request.input, {
+        requestId,
+        toolUseId,
+        signal: options?.signal,
+      });
+      const updatedPermissions = result.behavior === 'allow'
+        ? readUpdatedPermissions(result.updatedPermissions)
+        : undefined;
+      const answers = result.behavior === 'allow'
+        ? readStructuredQuestionAnswers(result.updatedInput?.answers)
+        : undefined;
+      const decision: ClaudePermissionDecision = result.behavior === 'allow'
+        ? {
+            decision: 'approved',
+            updatedInput: result.updatedInput,
+            ...(answers ? { answers } : {}),
+            ...(updatedPermissions ? { updatedPermissions } : {}),
+          }
+        : {
+            decision: 'denied',
+            rationale: result.message,
+          };
+      await options?.acknowledgeDecisionApplication?.(decision);
+      return decision;
+    },
+  };
+}
+
 export function createClaudeNativeAgentSdkContext(
   context: AgentSessionRuntimeContext,
 ): ClaudeAgentSdkSessionContext {
@@ -173,14 +239,7 @@ export function createClaudeNativeAgentSdkContext(
             },
           },
         },
-        permissions: {
-          async requestDecision() {
-            return {
-              decision: 'denied',
-              rationale: 'Claude native permissions are resolved through context.ui.',
-            };
-          },
-        },
+        permissions: createNativePermissionDecisionAdapter(context),
         async readSystemRecord(request) {
           if (!workflowSystemRecords) return unavailable('session system-record reads');
           return await workflowSystemRecords.read(request);
@@ -216,6 +275,7 @@ export function createClaudeNativeExecutionRunAgentSdkContext(
     agentRuntime: {
       exec: createClaudeNativeSdkQueryContext(context.services.exec, (message) => context.services.logger.warn(message)),
       fileFollow: services.fileFollow,
+      hooks: services.hooks,
       toolExecution: services.toolExecution,
       ...(services.nativeHome ? { nativeHome: services.nativeHome } : {}),
     },
