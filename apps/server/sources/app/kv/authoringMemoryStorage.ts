@@ -1,6 +1,7 @@
 import {
     assertAuthoringMemoryContentForModeV1,
     assertAuthoringMemoryValueForKeyV1,
+    assertStoredAuthoringMemoryValueForKeyV1,
     AuthoringMemoryChangeHintV1Schema,
     AuthoringMemoryContentV1Schema,
     StoredAuthoringMemoryContentV1Schema,
@@ -39,17 +40,20 @@ export const authoringMemoryDomain: ReservedAccountScopedKvRowDomain<AuthoringMe
 });
 
 function domainForKey(key: string): ReservedAccountScopedKvRowDomain<AuthoringMemoryContentV1> {
-    const parse = (value: unknown, schema: typeof AuthoringMemoryContentV1Schema) => {
+    const parse = (value: unknown, schema: typeof AuthoringMemoryContentV1Schema, stored = false) => {
         const envelope = parseEnvelope(value, schema);
         if (envelope?.t === 'plain') {
-            try { assertAuthoringMemoryValueForKeyV1(key, envelope.v); }
+            try {
+                if (stored) return { ...envelope, v: assertStoredAuthoringMemoryValueForKeyV1(key, envelope.v) };
+                assertAuthoringMemoryValueForKeyV1(key, envelope.v);
+            }
             catch { return null; }
         }
         return envelope;
     };
     return {
         ...authoringMemoryDomain,
-        parseStoredEnvelope: value => parse(value, StoredAuthoringMemoryContentV1Schema),
+        parseStoredEnvelope: value => parse(value, StoredAuthoringMemoryContentV1Schema, true),
         parseCandidateEnvelope: value => parse(value, AuthoringMemoryContentV1Schema),
     };
 }
@@ -84,11 +88,12 @@ export async function listAuthoringMemoryInTx(
     for (const row of result.rows) {
         const key = parseAuthoringMemoryPhysicalKey(row.physicalKey);
         if (key === null) return { status: "invalid-stored-content" };
-        if (row.envelope?.t === 'plain') {
-            try { assertAuthoringMemoryValueForKeyV1(key, row.envelope.v); }
+        let content = row.envelope;
+        if (content?.t === 'plain') {
+            try { content = { ...content, v: assertStoredAuthoringMemoryValueForKeyV1(key, content.v) }; }
             catch { return { status: 'invalid-stored-content' }; }
         }
-        rows.push({ key, revision: row.revision, content: row.envelope });
+        rows.push({ key, revision: row.revision, content });
     }
     return { status: "listed", rows };
 }
@@ -108,10 +113,10 @@ export async function mutateAuthoringMemoryInTx(tx: Tx, input: Readonly<{
 }
 
 export async function readAuthoringMemory(input: Readonly<{ accountId: string; key: string }>): Promise<ReservedAccountScopedKvRowReadResult<AuthoringMemoryContentV1>> {
-    return await inTx(tx => readAuthoringMemoryInTx(tx, input), { readOnly: true });
+    return await inTx(tx => readAuthoringMemoryInTx(tx, input), { /* Account mode and catalog content must share one capture. */ isolationLevel: "Serializable", readOnly: true });
 }
 export async function listAuthoringMemory(input: Readonly<{ accountId: string }>): ReturnType<typeof listAuthoringMemoryInTx> {
-    return await inTx(tx => listAuthoringMemoryInTx(tx, input), { readOnly: true });
+    return await inTx(tx => listAuthoringMemoryInTx(tx, input), { /* Account mode and catalog content must share one capture. */ isolationLevel: "Serializable", readOnly: true });
 }
 export async function mutateAuthoringMemory(input: Parameters<typeof mutateAuthoringMemoryInTx>[1]): Promise<ReservedAccountScopedKvRowMutationResult> {
     return await inTx(tx => mutateAuthoringMemoryInTx(tx, input));

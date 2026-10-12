@@ -67,6 +67,35 @@ describe("Account authoring-memory reserved rows", () => {
         } finally { await app.close(); }
     });
 
+    it('projects retained Workflow placement on reads and CAS without accepting unknown target fields in writes', async () => {
+        const account = await db.account.create({ data: { id: randomUUID(), encryptionMode: 'plain' } });
+        const key = 'workflowProject:workflow-one';
+        const physicalKey = `@happier/account/authoring-memory/v1/${key}`;
+        const project = { machineId: 'machine-one', directory: '/workspace' };
+        const retained = { t: 'plain', v: { ...project, retired: true } };
+        const bytes = new TextEncoder().encode(JSON.stringify(retained));
+        await db.userKVStore.create({ data: { accountId: account.id, key: physicalKey, version: 0, value: bytes } });
+        const app = createTestApp();
+        try {
+            const headers = { 'x-test-user-id': account.id };
+            const url = `/v1/account/authoring-memory/${encodeURIComponent(key)}`;
+            const read = await app.inject({ method: 'GET', url, headers });
+            expect(read.statusCode).toBe(200);
+            expect(read.json()).toEqual({ status: 'present', revision: 0, content: { t: 'plain', v: project } });
+            expect((await app.inject({ method: 'GET', url: '/v1/account/authoring-memory', headers })).json())
+                .toEqual({ rows: [{ key, revision: 0, content: { t: 'plain', v: project } }] });
+            expect((await app.inject({ method: 'POST', url, headers, payload: { expectedRevision: 0, content: retained } })).statusCode)
+                .toBe(503);
+            expect((await db.userKVStore.findUniqueOrThrow({ where: { accountId_key: { accountId: account.id, key: physicalKey } } })).value)
+                .toEqual(bytes);
+            const next = { ...project, directory: '/updated' };
+            expect((await app.inject({ method: 'POST', url, headers, payload: { expectedRevision: 0, content: { t: 'plain', v: next } } })).json())
+                .toMatchObject({ status: 'updated', revision: 1 });
+            expect((await app.inject({ method: 'GET', url, headers })).json())
+                .toEqual({ status: 'present', revision: 1, content: { t: 'plain', v: next } });
+        } finally { await app.close(); }
+    });
+
     it("reads, lists and CAS-mutates plain rows without losing opaque values, isolating Accounts and tombstones", async () => {
         const owner = await db.account.create({ data: { id: randomUUID(), encryptionMode: "plain" } });
         const other = await db.account.create({ data: { id: randomUUID(), encryptionMode: "plain" } });
