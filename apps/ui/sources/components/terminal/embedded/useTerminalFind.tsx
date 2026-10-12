@@ -2,7 +2,7 @@ import * as React from 'react';
 import { Platform, TextInput, View } from 'react-native';
 import type { FindController } from '@happier-dev/plugin-ui/presentation';
 import { FindBar } from '@/components/ui/find/FindBar';
-import { FindBarPlacement } from '@/components/ui/find/FindBarPlacement';
+import { FindBarPlacement, useFindBarPresence } from '@/components/ui/find/FindBarPlacement';
 import { useFindSurfaceFocusReturn } from '@/components/ui/find/useFindSurfaceFocusReturn';
 import { usePluginSurfaceFocusEligibility } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { useFindSurfaceRegistration } from '@/keyboard/KeyboardShortcutProvider';
@@ -40,16 +40,17 @@ export function useTerminalFind(props: Readonly<{ title: string; focused?: boole
         open: () => { capture(engine.getSnapshot().open); engine.open(); inputRef.current?.focus(); },
     } : null);
     React.useEffect(() => { if (!eligible) { engine?.close(); setInputFocused(false); clear(); } }, [clear, eligible, engine]);
-    const bar = open && engine && controller ? <TerminalFindBar engine={engine} controller={controller}
-        title={props.title} seatedInFlow={seatedInFlow} inputRef={inputRef}
+    const presence = useFindBarPresence(open);
+    const bar = presence.present && engine && controller ? <TerminalFindBar engine={engine} controller={controller}
+        title={props.title} seatedInFlow={seatedInFlow} inputRef={inputRef} visible={open}
         onInputFocus={() => setInputFocused(true)} onInputBlur={() => setInputFocused(false)} /> : null;
     return { open, bar, rootRef, onFindEngine };
 }
 
-function TerminalFindBar(props: Readonly<{ engine: FindEngine; controller: FindController; title: string; seatedInFlow: boolean;
+function TerminalFindBar(props: Readonly<{ engine: FindEngine; controller: FindController; title: string; seatedInFlow: boolean; visible: boolean;
     inputRef: React.RefObject<TextInput | null>; onInputFocus(): void; onInputBlur(): void }>) {
     const snapshot = React.useSyncExternalStore(props.engine.subscribe, props.engine.getSnapshot, props.engine.getSnapshot);
-    return <FindBarPlacement seatedInFlow={props.seatedInFlow}>{(presentation) =>
+    return <FindBarPlacement seatedInFlow={props.seatedInFlow} visible={props.visible}>{(presentation) =>
         <FindBar testID="terminal-find" surfaceLabel={t('find.surface.terminal', { name: props.title })}
             presentation={presentation} inputRef={props.inputRef}
             query={snapshot.query} options={snapshot.options} status={snapshot.status} capabilities={props.controller.capabilities}
