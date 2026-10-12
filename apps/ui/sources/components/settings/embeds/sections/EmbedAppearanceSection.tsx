@@ -47,7 +47,7 @@ const COLOR_GROUPS: ReadonlyArray<Readonly<{ titleKey: TranslationKeyNoParams; m
 const stylesheet = StyleSheet.create((theme) => ({
     reset: {
         alignItems: 'flex-start',
-        paddingTop: theme.margins.sm,
+        paddingTop: theme.space.s8,
     },
 }));
 
@@ -269,6 +269,8 @@ export const EmbedAppearanceSection = React.memo(function EmbedAppearanceSection
                     />
                 </SettingAnchor>
             </ItemGroup>
+            {/* An operation row in the page column, with the sections' gutter (it was clipped at the column edge). */}
+            <ItemGroup surface="none">
             <View style={stylesheet.reset}>
                 <RoundButton
                     testID="settings-embed-appearance-reset"
@@ -282,6 +284,7 @@ export const EmbedAppearanceSection = React.memo(function EmbedAppearanceSection
                     }}
                 />
             </View>
+            </ItemGroup>
         </>
     );
 });

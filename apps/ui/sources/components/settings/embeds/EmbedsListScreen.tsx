@@ -61,7 +61,7 @@ export const EmbedsListScreen = React.memo(function EmbedsListScreen() {
         >
             <SettingsPageHeader
                 description={t('settingsEmbeds.purpose')}
-                primaryAction={empty ? undefined : { title: t('settingsEmbeds.newEmbed'), testID: 'settings-embeds-new', onPress: openNew }}
+                primaryAction={empty ? undefined : { title: t('settingsEmbeds.newEmbed'), icon: 'plus', testID: 'settings-embeds-new', onPress: openNew }}
             />
             {stale ? (
                 // Under the header, in the page column, without a sheet of its own.

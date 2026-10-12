@@ -21,7 +21,10 @@ export const EmbedsSettingsIndex = React.memo(function EmbedsSettingsIndex() {
 
 const EmbedCollectionLanding = React.memo(function EmbedCollectionLanding() {
     const state = useApiTokenSettingsControllerState(useApiTokenSettingsScopeController());
-    if ((state.phase === 'idle' || state.phase === 'loading') && state.tokens.length === 0) return null;
+    // Until the first list answers there is no embed to land on and no rail beside the page, so the
+    // page itself shows: its header and primary at once, with skeleton rows (lab L3). A Retry from the
+    // error state comes back here too, so it never blanks the page.
+    if ((state.phase === 'idle' || state.phase === 'loading') && state.tokens.length === 0) return <EmbedsListScreen />;
     const landingId = resolveEmbedCollectionLanding(state.tokens, readLastVisitedEmbed());
     if (landingId) return <Redirect href={embedDetailPath(landingId) as never} />;
     return <EmbedsListScreen />;

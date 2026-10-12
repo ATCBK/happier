@@ -41,6 +41,7 @@ import { setClipboardStringSafe } from '@/utils/ui/clipboard';
 import { formatWithCachedDateTimeFormatter } from '@/utils/datetime/cachedIntlFormatters';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { useInPlaceFocusReturn } from '@/utils/navigation/useNavigationFocusReturn';
+import { useSessionCockpitComposerBottomChromeHeight } from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
 import {
@@ -98,9 +99,26 @@ const stylesheet = StyleSheet.create((theme) => ({
         ...Typography.rowMeta(),
         color: theme.colors.text.secondary,
     },
+    // The page's closing review (lab C1): a hairline, then the summary with its notes and the one
+    // primary. Wide, the compact primary sits right of the summary; narrow, it spans beneath it.
     footer: {
-        gap: theme.margins.md,
-        paddingTop: theme.margins.sm,
+        gap: theme.space.s16,
+        marginTop: theme.space.s16,
+        paddingTop: theme.space.s20,
+        borderTopWidth: StyleSheet.hairlineWidth,
+        borderTopColor: theme.colors.border.default,
+        // On the sections' sheet edge (the column itself has no gutter); the operation keeps its own width.
+        marginHorizontal: HAPPIER_PAGE_METRICS.sheetInsetPx,
+        alignItems: 'flex-start',
+    },
+    footerWide: {
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
+    reviewText: {
+        flex: 1,
+        minWidth: 0,
+        gap: theme.space.s4,
     },
     review: {
         ...Typography.default(),
@@ -116,21 +134,19 @@ const stylesheet = StyleSheet.create((theme) => ({
         color: theme.colors.state.danger.foreground,
     },
     danger: {
-        gap: theme.margins.sm,
+        gap: theme.space.s8,
         alignItems: 'flex-start',
-        paddingTop: theme.margins.md,
+        paddingTop: theme.space.s12,
+        marginHorizontal: HAPPIER_PAGE_METRICS.sheetInsetPx,
     },
     encryption: {
-        gap: theme.margins.sm,
+        gap: theme.space.s8,
         alignItems: 'flex-start',
     },
     // The pushed phone preview (lab P3): the chat fills the page below its header, edge to edge.
     previewPage: {
         flex: 1,
         minHeight: 0,
-    },
-    previewPageContainer: {
-        flexGrow: 1,
     },
 }));
 
@@ -224,6 +240,7 @@ const EmbedDetail = React.memo(function EmbedDetail(props: Readonly<{ token: Acc
         if (step === 'settings') focusReturn.restore();
     }, [focusReturn, step]);
     const [width, setWidth] = React.useState(0);
+    const composerBottomChrome = useSessionCockpitComposerBottomChromeHeight();
     const [saving, setSaving] = React.useState(false);
     const [saveError, setSaveError] = React.useState<string | null>(null);
     // Below this width the preview is a pushed page, never stacked above the settings (plan 04 §6.2).
@@ -267,9 +284,13 @@ const EmbedDetail = React.memo(function EmbedDetail(props: Readonly<{ token: Acc
         await controller.createToken();
         const reveal = controller.getState().reveal;
         if (!reveal?.apiToken.embedConfig) return;
-        showApiTokenCreateModal(controller, Modal, () => {
-            navigate(router, embedDetailPath(reveal.apiToken.tokenId), 'EmbedReveal.done');
-        }, {
+        showApiTokenCreateModal(controller, Modal, undefined, {
+            // The embed's own wording: its name is ready, and the secret is a key (lab R1).
+            revealCopy: {
+                title: t('settingsEmbeds.reveal.title', { label: reveal.apiToken.label }),
+                shownOnce: t('settingsEmbeds.reveal.shownOnce'),
+                copy: t('settingsEmbeds.reveal.copy'),
+            },
             revealAccessory: (
                 <RoundButton
                     testID="settings-embed-reveal-env"
@@ -282,6 +303,10 @@ const EmbedDetail = React.memo(function EmbedDetail(props: Readonly<{ token: Acc
                 />
             ),
         });
+        // The embed exists now, so the page behind its one-time reveal is its detail (lab R1), never
+        // the filled create form that would invite a second create. The reveal lives in the shared
+        // controller and the modal host, so it stays open across this replace.
+        navigate(router, embedDetailPath(reveal.apiToken.tokenId), 'EmbedCreate.created');
     }, [controller, createDraft, draftIssue, encryptionReady, labelReady, router]);
 
     const activeScope = useActiveServerAccountScope();
@@ -324,6 +349,10 @@ const EmbedDetail = React.memo(function EmbedDetail(props: Readonly<{ token: Acc
     const previewUi = React.useMemo(
         () => ({ attachments: draft.config.ui.attachments, modelPicker: draft.access.changeModel }),
         [draft.access.changeModel, draft.config.ui.attachments],
+    );
+    const previewAccess = React.useMemo(
+        () => ({ send: draft.access.send, approve: draft.access.approve }),
+        [draft.access.approve, draft.access.send],
     );
 
     const meta = props.token ? [
@@ -406,20 +435,25 @@ const EmbedDetail = React.memo(function EmbedDetail(props: Readonly<{ token: Acc
                 </ItemGroup>
             ) : null}
             <EmbedAppearanceSection draft={draft} onChange={setDraft} />
+            {/* The review and its operation sit in the page column with the sections' gutter. */}
             {create ? (
-                <View style={styles.footer}>
-                    <Text style={styles.review}>{draftIssue
-                        ? t('settingsApiTokens.errors.grantIncomplete')
-                        : formatEmbedSummary(listEmbedSummaryParts({ grant: buildEmbedGrant(draft), embedConfig: draft.config }), summaryNames)}</Text>
-                    <Text testID="settings-embed-key-reach" style={styles.reviewNote}>{t('settingsEmbeds.detail.keyReach')}</Text>
-                    {state.encryptionAvailability === 'ready' ? <Text testID="settings-embed-e2ee-trust" style={styles.reviewNote}>{t('settingsEmbeds.detail.e2eeTrust')}</Text> : null}
-                    <EmbedEncryptionStatus
-                        availability={state.encryptionAvailability}
-                        onRestore={restoreEncryption}
-                        onRetry={() => void controller.refreshEncryptionAvailability()}
-                    />
-                    {state.createError ? <Text style={styles.error} accessibilityLiveRegion="assertive">{t(resolveApiTokenOperationErrorMessageKey(state.createError))}</Text> : null}
+                <ItemGroup surface="none">
+                <View style={[styles.footer, wide ? styles.footerWide : null]}>
+                    <View style={styles.reviewText}>
+                        <Text style={styles.review}>{draftIssue
+                            ? t('settingsApiTokens.errors.grantIncomplete')
+                            : formatEmbedSummary(listEmbedSummaryParts({ grant: buildEmbedGrant(draft), embedConfig: draft.config }), summaryNames)}</Text>
+                        <Text testID="settings-embed-key-reach" style={styles.reviewNote}>{t('settingsEmbeds.detail.keyReach')}</Text>
+                        {state.encryptionAvailability === 'ready' ? <Text testID="settings-embed-e2ee-trust" style={styles.reviewNote}>{t('settingsEmbeds.detail.e2eeTrust')}</Text> : null}
+                        <EmbedEncryptionStatus
+                            availability={state.encryptionAvailability}
+                            onRestore={restoreEncryption}
+                            onRetry={() => void controller.refreshEncryptionAvailability()}
+                        />
+                        {state.createError ? <Text style={styles.error} accessibilityLiveRegion="assertive">{t(resolveApiTokenOperationErrorMessageKey(state.createError))}</Text> : null}
+                    </View>
                     <RoundButton
+                        size="normal"
                         testID="settings-embed-create"
                         title={t('settingsEmbeds.create')}
                         disabled={!labelReady || draftIssue !== null || !encryptionReady || state.createPending}
@@ -427,12 +461,15 @@ const EmbedDetail = React.memo(function EmbedDetail(props: Readonly<{ token: Acc
                         onPress={() => void submitCreate()}
                     />
                 </View>
+                </ItemGroup>
             ) : (
                 <>
                     <EmbedSnippetsSection input={snippetsInput} />
-                    <View style={styles.danger}>
-                        <RoundButton testID="settings-embed-delete" size="normal" display="destructive" title={t('settingsEmbeds.delete.button')} onPress={() => void remove()} />
-                    </View>
+                    <ItemGroup surface="none">
+                        <View style={styles.danger}>
+                            <RoundButton testID="settings-embed-delete" size="normal" display="destructive" title={t('settingsEmbeds.delete.button')} onPress={() => void remove()} />
+                        </View>
+                    </ItemGroup>
                 </>
             )}
         </>
@@ -444,32 +481,36 @@ const EmbedDetail = React.memo(function EmbedDetail(props: Readonly<{ token: Acc
         <EmbedPermissionModesPicker draft={draft} onChange={setDraft} agentType={agentType} />
     ) : step === 'preview' ? (
         <View style={styles.previewPage}>
-            <EmbedLivePreview presentation="page" style={draft.config.style} ui={previewUi} newChat={draft.config.newChat?.enabled === true} reconnecting={enforcedEdit} />
+            <EmbedLivePreview presentation="page" style={draft.config.style} ui={previewUi} newChat={draft.config.newChat?.enabled === true} access={previewAccess} reconnecting={enforcedEdit} />
         </View>
     ) : null;
 
     return (
         <View testID="settings-embed-detail-root" style={styles.root} onLayout={(event) => setWidth(event.nativeEvent.layout.width)}>
             <View style={styles.settings}>
-                <ItemList
-                    testID="settings-embed-detail"
-                    scrollEnabled={step !== 'preview'}
-                    containerStyle={step === 'preview' ? styles.previewPageContainer : undefined}
-                >
-                    {header}
-                    <StepTransitionFrame
-                        transitionKey={step}
-                        direction={step === 'settings' ? 'backward' : 'forward'}
-                        style={step === 'preview' ? styles.previewPage : undefined}
-                        contentStyle={step === 'preview' ? styles.previewPage : undefined}
-                    >
-                        {picker ?? settings}
-                    </StepTransitionFrame>
-                </ItemList>
+                {step === 'preview' ? (
+                    // The pushed phone preview fills the pane under its header with a bounded height
+                    // (no scroll frame), above the floating tab bar, so the chat's composer stays
+                    // reachable in portrait and landscape (lab P3).
+                    <View testID="settings-embed-preview-step" style={[styles.previewPage, { paddingBottom: composerBottomChrome }]}>
+                        {header}
+                        {picker}
+                    </View>
+                ) : (
+                    <ItemList testID="settings-embed-detail">
+                        {header}
+                        <StepTransitionFrame
+                            transitionKey={step}
+                            direction={step === 'settings' ? 'backward' : 'forward'}
+                        >
+                            {picker ?? settings}
+                        </StepTransitionFrame>
+                    </ItemList>
+                )}
             </View>
             {wide && step === 'settings' ? (
                 <View style={styles.previewColumn}>
-                    <EmbedLivePreview style={draft.config.style} ui={previewUi} newChat={draft.config.newChat?.enabled === true} reconnecting={enforcedEdit} />
+                    <EmbedLivePreview style={draft.config.style} ui={previewUi} newChat={draft.config.newChat?.enabled === true} access={previewAccess} reconnecting={enforcedEdit} />
                 </View>
             ) : null}
         </View>

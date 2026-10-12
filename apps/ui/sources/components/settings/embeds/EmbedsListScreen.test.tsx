@@ -102,7 +102,7 @@ async function until(assertion: () => void): Promise<void> {
 }
 
 describe('Settings → Embeds list (real token controller)', () => {
-  it('keeps the last embeds after a failed refresh and says so in one line with Retry (lab L3)', async () => {
+  it.each(['page', 'rail'] as const)('keeps the last embeds after a failed refresh and offers Retry in the %s presentation (lab L3)', async (presentation) => {
     const harness = await createApiTokenSettingsControllerHarness({
       mode: 'plain',
       rows: [embedRow()],
@@ -110,9 +110,13 @@ describe('Settings → Embeds list (real token controller)', () => {
     const { ApiTokenSettingsScope } =
       await import('../apiTokens/collection/ApiTokenSettingsScope');
     const { EmbedsListScreen } = await import('./EmbedsListScreen');
+    const { EmbedsCollectionRail } = await import('./EmbedsCollectionRail');
+    const staleId = presentation === 'page'
+      ? 'settings-embeds-refresh-stale'
+      : 'settings-embeds-rail-refresh-stale';
     const screen = await renderScreen(
       <ApiTokenSettingsScope controller={harness.controller}>
-        <EmbedsListScreen />
+        {presentation === 'page' ? <EmbedsListScreen /> : <EmbedsCollectionRail />}
       </ApiTokenSettingsScope>,
     );
     await until(() =>
@@ -120,7 +124,7 @@ describe('Settings → Embeds list (real token controller)', () => {
         screen.findByTestId(`settings-embeds-row:${EMBED_ID}`),
       ).toBeTruthy(),
     );
-    expect(screen.findByTestId('settings-embeds-refresh-stale')).toBeNull();
+    expect(screen.findByTestId(staleId)).toBeNull();
 
     harness.setListAvailable(false);
     await act(async () => {
@@ -129,15 +133,15 @@ describe('Settings → Embeds list (real token controller)', () => {
 
     // Last-known-good rows stay; the failure is one quiet line with its Retry, not a vanished error.
     expect(screen.findByTestId(`settings-embeds-row:${EMBED_ID}`)).toBeTruthy();
-    expect(screen.findByTestId('settings-embeds-refresh-stale')).toBeTruthy();
+    expect(screen.findByTestId(staleId)).toBeTruthy();
     expect(screen.findByTestId('settings-embeds-list-error')).toBeNull();
 
     harness.setListAvailable(true);
     await act(async () => {
-      screen.pressByTestId('settings-embeds-refresh-stale-action');
+      screen.pressByTestId(`${staleId}-action`);
     });
     await until(() =>
-      expect(screen.findByTestId('settings-embeds-refresh-stale')).toBeNull(),
+      expect(screen.findByTestId(staleId)).toBeNull(),
     );
     expect(screen.findByTestId(`settings-embeds-row:${EMBED_ID}`)).toBeTruthy();
   }, 180_000);

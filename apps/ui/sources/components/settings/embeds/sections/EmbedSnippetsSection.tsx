@@ -15,11 +15,28 @@ type SnippetTab = 'backend' | 'react';
 
 const stylesheet = StyleSheet.create((theme) => ({
     stack: {
-        gap: 12,
+        gap: theme.space.s12,
     },
     steps: {
         ...Typography.rowMeta(),
         color: theme.colors.text.secondary,
+    },
+    stepList: {
+        gap: theme.space.s6,
+    },
+    stepRow: {
+        flexDirection: 'row',
+        gap: theme.space.s8,
+    },
+    stepNumber: {
+        ...Typography.variant('body', 'semiBold'),
+        color: theme.colors.text.tertiary,
+        fontVariant: ['tabular-nums'],
+    },
+    stepText: {
+        ...Typography.variant('body'),
+        color: theme.colors.text.primary,
+        flex: 1,
     },
 }));
 
@@ -34,7 +51,15 @@ export const EmbedSnippetsSection = React.memo(function EmbedSnippetsSection(pro
     return (
         <ItemGroup title={t('settingsEmbeds.snippets.title')} description={t('settingsEmbeds.snippets.description')} surface="none">
             <View style={stylesheet.stack}>
-                <Text style={stylesheet.steps}>{t('settingsEmbeds.snippets.steps')}</Text>
+                {/* A numbered list, one step per line (lab SN), not a dot-joined run. */}
+                <View style={stylesheet.stepList} accessibilityRole="list">
+                    {([t('settingsEmbeds.snippets.step1'), t('settingsEmbeds.snippets.step2'), t('settingsEmbeds.snippets.step3')]).map((step, index) => (
+                        <View key={index} style={stylesheet.stepRow} accessibilityRole="text">
+                            <Text style={stylesheet.stepNumber}>{index + 1}</Text>
+                            <Text style={stylesheet.stepText}>{step}</Text>
+                        </View>
+                    ))}
+                </View>
                 <Text testID="settings-embed-key-reach" style={stylesheet.steps}>{t('settingsEmbeds.detail.keyReach')}</Text>
                 <SegmentedTabBar<SnippetTab>
                     testIDPrefix="settings-embed-snippet-tab"

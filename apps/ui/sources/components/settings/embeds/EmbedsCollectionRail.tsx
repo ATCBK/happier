@@ -3,10 +3,12 @@ import type { AccountApiTokenSummaryV1 } from '@happier-dev/protocol';
 import { usePathname, useRouter } from '@/components/appShell/workspace/destinationRoute';
 
 import { useApiTokenSettingsScopeController } from '@/components/settings/apiTokens/collection/ApiTokenSettingsScope';
+import { resolveApiTokenListPresentation, resolveApiTokenOperationErrorMessageKey } from '@/components/settings/apiTokens/apiTokenSettingsPresentation';
 import { useApiTokenSettingsClock } from '@/components/settings/apiTokens/useApiTokenSettingsClock';
 import { useApiTokenSettingsControllerState } from '@/components/settings/apiTokens/useApiTokenSettingsControllerState';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { CollectionList } from '@/components/ui/lists/collection/CollectionList';
+import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { t } from '@/text';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { useHostActivelyViewed } from '@/utils/runtime/useHostActivelyViewed';
@@ -18,8 +20,11 @@ import { useEmbedSummaryNames } from './useEmbedSummaryNames';
 
 /** The embeds rail beside an embed's detail, with "+" to start a new one. */
 export const EmbedsCollectionRail = React.memo(function EmbedsCollectionRail() {
-    const state = useApiTokenSettingsControllerState(useApiTokenSettingsScopeController());
+    const controller = useApiTokenSettingsScopeController();
+    const state = useApiTokenSettingsControllerState(controller);
     const embeds = React.useMemo(() => state.tokens.filter(isEmbedToken), [state.tokens]);
+    const presentation = resolveApiTokenListPresentation({ ...state, tokens: embeds });
+    const stale = presentation === 'listWithRetry' || presentation === 'emptyWithRetry';
     const router = useRouter();
     const selectedId = resolveSelectedEmbedTokenId(usePathname().replace(/\/+$/, ''));
     const names = useEmbedSummaryNames();
@@ -47,6 +52,14 @@ export const EmbedsCollectionRail = React.memo(function EmbedsCollectionRail() {
                 />
             )}
         >
+            {stale ? (
+                <SurfaceFreshnessLine
+                    testID="settings-embeds-rail-refresh-stale"
+                    reason={t(resolveApiTokenOperationErrorMessageKey(state.listError))}
+                    busy={state.isRefreshing}
+                    action={state.isRefreshing ? undefined : { label: t('common.retry'), onPress: () => void controller.refresh() }}
+                />
+            ) : null}
             {embeds.map((token) => (
                 <EmbedRow
                     key={token.tokenId}

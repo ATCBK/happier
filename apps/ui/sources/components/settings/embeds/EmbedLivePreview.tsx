@@ -25,12 +25,12 @@ const ILLUSTRATION_HEIGHT_PX = 168;
 
 const stylesheet = StyleSheet.create((theme) => ({
     column: {
-        gap: theme.margins.sm,
+        gap: theme.space.s8,
     },
     toolbar: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.sm,
+        gap: theme.space.s8,
     },
     caption: {
         ...Typography.rowMeta(),
@@ -46,6 +46,11 @@ const stylesheet = StyleSheet.create((theme) => ({
         minHeight: 0,
         overflow: 'hidden',
         backgroundColor: theme.colors.background.canvas,
+    },
+    // The page's frame is laid over its measured box instead of sizing it, so the page takes the
+    // height its screen gives it (phone portrait and landscape alike) and the frame follows.
+    pageFrameFill: {
+        ...StyleSheet.absoluteFillObject,
     },
     frame: {
         height: PREVIEW_HEIGHT_PX,
@@ -67,7 +72,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     footer: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: theme.margins.sm,
+        gap: theme.space.s8,
     },
     note: {
         ...Typography.rowMeta(),
@@ -93,6 +98,8 @@ export function EmbedLivePreview(props: Readonly<{
     presentation?: 'interactive' | 'page' | 'illustration';
     /** An unsaved access edit: show what open chats show while they reconnect (lab D2). */
     reconnecting?: boolean;
+    /** What the embed may do: an approve-only embed previews a view-only chat whose requests can be answered. */
+    access?: Readonly<{ send: boolean; approve: boolean }>;
 }>): React.ReactElement {
     const styles = stylesheet;
     const page = props.presentation === 'page';
@@ -109,7 +116,7 @@ export function EmbedLivePreview(props: Readonly<{
 
     const frameWidth = page ? columnWidth : PREVIEW_FRAME_WIDTH[width];
     const scale = page ? 1 : Math.min(1, columnWidth / frameWidth);
-    const path = `${EMBED_PREVIEW_PATH}?${buildEmbedPreviewSearch({ identity, reduceMotion: !interactive || reduceMotion, newChat: props.newChat, reconnecting: props.reconnecting === true })}`;
+    const path = `${EMBED_PREVIEW_PATH}?${buildEmbedPreviewSearch({ identity, reduceMotion: !interactive || reduceMotion, newChat: props.newChat, reconnecting: props.reconnecting === true, send: props.access?.send !== false, approve: props.access?.approve !== false })}`;
     // A failure belongs to the route it happened on; the next route gets its own attempt. It never
     // blocks saving: the preview only says it cannot show (plan 04 §6.2).
     const [unavailablePath, setUnavailablePath] = React.useState<string | null>(null);
@@ -145,6 +152,7 @@ export function EmbedLivePreview(props: Readonly<{
                         <Text style={styles.unavailableText}>{t('settingsEmbeds.preview.unavailable')}</Text>
                     </View>
                 ) : (
+                    <View style={page ? styles.pageFrameFill : null}>
                     <EmbedPreviewFrame
                         key={path}
                         title={t('settingsEmbeds.preview.title')}
@@ -157,6 +165,7 @@ export function EmbedLivePreview(props: Readonly<{
                         passive={!interactive}
                         onUnavailable={markUnavailable}
                     />
+                    </View>
                 )}
             </View>
             {widget ? <View style={styles.footer}>

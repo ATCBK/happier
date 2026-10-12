@@ -4,6 +4,8 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { parseAccountApiTokenCredentialV1 } from '@happier-dev/protocol';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed } from '@/sync/domains/machines/reachability/machineReachability';
 
 import {
     createApiTokenSettingsControllerHarness,
@@ -79,6 +81,7 @@ beforeAll(async () => {
 }, 600_000);
 
 afterEach(async () => {
+    clearMachineRequestReachabilityForTest();
     await disposeApiTokenSettingsControllerHarnesses();
     standardCleanup();
     vi.restoreAllMocks();
@@ -125,6 +128,16 @@ function daysFromNow(expiresAt: unknown): number {
 }
 
 describe('Settings → Embeds detail (create, real token controller)', () => {
+    it('disables new session creation when the only present machine is unreachable', async () => {
+        const harness = await createApiTokenSettingsControllerHarness({ mode: 'plain' });
+        const { storage } = await import('@/sync/domains/state/storageStore');
+        const machine = createMachineFixture({ id: 'embed-target', activeAt: Date.now() });
+        storage.setState({ machines: { [machine.id]: machine }, machineListByServerId: { 'srv_token-ui': [machine] } });
+        recordMachineRequestFailed({ serverId: 'srv_token-ui', machineId: machine.id });
+        const screen = await renderCreate(harness);
+        await until(() => expect(harness.controller.getState().encryptionAvailability).toBe('plain'));
+        expect(screen.findByTestId('settings-embed-sessions-switch')?.props.disabled).toBe(true);
+    }, 180_000);
     it.each([true, false])('gives the new-embed title to one chrome owner (phone=%s)', async (phone) => {
         const harness = await createApiTokenSettingsControllerHarness({ mode: 'plain' });
         const screen = await renderCreate(harness, phone);
@@ -189,6 +202,11 @@ describe('Settings → Embeds detail (create, real token controller)', () => {
         expect(text).toContain(t('settingsEmbeds.capabilities.approveOn'));
         expect(text).not.toContain(t('settingsApiTokens.grant.approve.on'));
         expect(screen.findByTestId('settings-embed-key-reach')).toBeTruthy();
+        // The preview shows what this access really allows: with Send off it is an approve-only chat (AUD-UI N1).
+        expect(runtime.previewProps.at(-1)?.access).toEqual({ send: true, approve: true });
+        await act(async () => { screen.findByTestId('settings-embed-send-switch')!.props.onValueChange(false); });
+        expect(runtime.previewProps.at(-1)?.access).toEqual({ send: false, approve: true });
+        await act(async () => { screen.findByTestId('settings-embed-send-switch')!.props.onValueChange(true); });
 
         await screen.pressByTestIdAsync('settings-embed-create');
         await until(() => {
@@ -201,8 +219,17 @@ describe('Settings → Embeds detail (create, real token controller)', () => {
         const { ApiTokenCreateModal } = await import('../apiTokens/ApiTokenCreateModal');
         expect(Modal.show).toHaveBeenCalledWith(expect.objectContaining({
             component: ApiTokenCreateModal,
-            props: expect.objectContaining({ controller: harness.controller, revealAccessory: expect.anything() }),
+            props: expect.objectContaining({
+                controller: harness.controller,
+                revealAccessory: expect.anything(),
+                // The reveal speaks of this embed and its key, not a generic API token (lab R1).
+                revealCopy: { title: t('settingsEmbeds.reveal.title', { label: 'Leads dashboard' }), shownOnce: t('settingsEmbeds.reveal.shownOnce'), copy: t('settingsEmbeds.reveal.copy') },
+            }),
         }));
+        // The embed exists now: the page behind the one-time reveal is its detail, never the filled
+        // create form that would invite a second create (lab R1).
+        const createdId = harness.controller.getState().reveal!.apiToken.tokenId;
+        expect(runtime.replace).toHaveBeenCalledWith(`/settings/embeds/${encodeURIComponent(createdId)}`);
 
         const [created] = createRequests(harness.requests);
         expect(created?.body).toMatchObject({
