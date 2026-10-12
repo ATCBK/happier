@@ -10,6 +10,7 @@ import type {
 } from '@/sync/domains/machines/administration/useTargetSelection';
 import type { ScopedPluginSettingsTarget } from '@/sync/domains/plugins/settings/scopedPluginSettingsAdapter';
 import { resolveScopedPluginSettingsServerIdentity } from '@/sync/domains/plugins/settings/scopedPluginSettingsRuntime';
+import { t } from '@/text';
 
 /** A missing machine is not a different Account; a foreign target remains unavailable. */
 export function areAgentAccountSettingsAvailable(selection: Pick<
@@ -39,6 +40,10 @@ export const AgentContributedSettingsSection = React.memo(function AgentContribu
             resolveCurrentExecutionTarget: targetSelection.resolveExecutionTarget,
         })
     ), [executionTarget, targetSelection.resolveExecutionTarget]);
+    const presentation = React.useMemo(() => ({
+        kind: 'disclosures' as const,
+        title: t('settingsPlugins.genericSettingsTitle'),
+    }), []);
     if (!pluginSettingsProjection) return null;
     return (
         <PluginDetailGenericSettingsSection
@@ -52,6 +57,9 @@ export const AgentContributedSettingsSection = React.memo(function AgentContribu
             accountOperationsAvailable={areAgentAccountSettingsAvailable(targetSelection)}
             daemonOperationsAvailable={daemonOperationsAvailable}
             isDaemonTargetCurrent={isDaemonSettingsTargetCurrent}
+            // On an Agent's page the plugin's options are expert detail under the Agent's own
+            // sections: one section of summarised disclosures, not a page of flat rows.
+            presentation={presentation}
         />
     );
 });

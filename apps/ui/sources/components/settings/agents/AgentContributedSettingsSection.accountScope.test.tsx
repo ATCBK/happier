@@ -5,17 +5,25 @@ import { PluginAccountSettingsMutationRequestV1Schema, PluginAccountSettingsMuta
 
 import type { PluginProjectionEntry } from '@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters';
 import type { MachineAdministrationTargetSelectionV1 } from '@/sync/domains/machines/administration/useTargetSelection';
-import { resolveMachineAdministrationTargetState } from '@/sync/domains/machines/administration/targetSelection';
 import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
-import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
+import { flushHookEffects, pressTestInstanceAsync, renderScreen, standardCleanup } from '@/dev/testkit';
 import { installSettingsViewCommonModuleMocks } from '../settingsViewTestHelpers';
 
 installSettingsViewCommonModuleMocks({ storage: 'real' });
 const account = createProviderSettingsAccountHarness();
+const { resolveMachineAdministrationTargetState } = await import('@/sync/domains/machines/administration/targetSelection');
 const { AgentContributedSettingsSection } = await import('./AgentContributedSettingsSection');
 const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
 const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
 const { resolveScopedPluginSettingsServerIdentity } = await import('@/sync/domains/plugins/settings/scopedPluginSettingsRuntime');
+
+async function openPreferences(screen: Awaited<ReturnType<typeof renderScreen>>) {
+    const disclosure = screen.findByTestId('settings.plugins.detail.test.agent.settings.preferences.disclosure');
+    const header = disclosure?.findAll(node => node.props.accessibilityRole === 'button'
+        && typeof node.props.onPress === 'function')[0];
+    await pressTestInstanceAsync(header, 'Agent preferences disclosure header');
+    await flushHookEffects();
+}
 
 const projection: PluginProjectionEntry = {
     pluginId: 'test.agent', title: 'Test Agent', description: null, version: '1.0.0', enabled: true,
@@ -64,6 +72,10 @@ describe('Agent contributed Account preferences', () => {
             daemonOperationsAvailable={false}
         />);
         await flushHookEffects();
+        if (!foreign) {
+            expect(screen.findByTestId('settings.plugins.detail.test.agent.settings.preferences.enabled')).toBeNull();
+            await openPreferences(screen);
+        }
         const control = screen.findByTestId('settings.plugins.detail.test.agent.settings.preferences.enabled');
         if (foreign) {
             expect(control).toBeNull();
@@ -130,6 +142,8 @@ describe('Agent contributed Account preferences', () => {
         />);
         await flushHookEffects();
         const prefix = 'settings.plugins.detail.test.agent.settings.preferences.serverUrl';
+        expect(screen.findByTestId(`${prefix}.input`)).toBeNull();
+        await openPreferences(screen);
         expect(screen.findByTestId(`${prefix}.input`)?.props.value).toBe('https://home.example.test');
         await act(async () => { screen.changeTextByTestId(`${prefix}.input`, 'https://updated-home.example.test'); });
         await act(async () => { screen.pressByTestId(`${prefix}.save`); });
