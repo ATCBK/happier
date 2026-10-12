@@ -9547,6 +9547,11 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
             loadingTitle: 'Cercant serveis locals',
             emptyTitle: 'No s\'ha detectat cap servei local',
             errorTitle: 'L\'exploració de serveis locals necessita atenció',
+            scanCause: {
+              workspacesUnavailable: 'No s\'ha pogut llegir quins projectes hi ha oberts en aquesta màquina; poden faltar serveis.',
+              partial: 'L\'exploració ha esgotat el temps en aquesta màquina; poden faltar serveis en execució.',
+              failed: 'Aquesta màquina no ha pogut llistar els seus processos, així que no es poden trobar els serveis en execució.',
+            },
             refreshing: 'Actualitzant',
             state: {
                 listening: 'Escoltant',

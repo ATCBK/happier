@@ -8613,6 +8613,11 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
             loadingTitle: '正在掃描本機服務',
             emptyTitle: '未偵測到本機服務',
             errorTitle: '本機服務掃描需要關注',
+            scanCause: {
+              workspacesUnavailable: '無法讀取此機器上開啟了哪些專案，部分服務可能未顯示。',
+              partial: '此機器上的掃描逾時，部分執行中的服務可能未顯示。',
+              failed: '此機器無法列出執行中的程序，因此找不到執行中的服務。',
+            },
             refreshing: '正在重新整理',
             state: {
                 listening: '正在監聽',

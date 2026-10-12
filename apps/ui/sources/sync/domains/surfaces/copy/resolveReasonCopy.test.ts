@@ -166,10 +166,13 @@ describe('resolveReasonCopy', () => {
         }
     });
 
-    it('names each inventory scan diagnostic family without exposing its raw code', () => {
+    it('names the cause of each inventory scan diagnostic family, never only the title', () => {
+        const title = t('localServices.inventory.errorTitle');
         const workspaces = resolveReasonCopy({ reasonCode: 'local_services_accepted_workspaces_unavailable', kind: 'localServiceInventory' });
         const partial = resolveReasonCopy({ reasonCode: 'linux_procfs_scan_deadline_exceeded', kind: 'localServiceInventory' });
         const failed = resolveReasonCopy({ reasonCode: 'linux_procfs_scan_failed', kind: 'localServiceInventory' });
+        expect(workspaces.title).toBe(title);
+        for (const copy of [workspaces, partial, failed]) expect(copy.body).not.toBe(title);
         expect(new Set([workspaces.body, partial.body, failed.body]).size).toBe(3);
         expect(resolveReasonCopy({ reasonCode: 'darwin_lsof_scan_partial', kind: 'localServiceInventory' }).body).toBe(partial.body);
         expect(resolveReasonCopy({ reasonCode: 'windows_netstat_scan_failed', kind: 'localServiceInventory' }).body).toBe(failed.body);

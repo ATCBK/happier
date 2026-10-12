@@ -10045,6 +10045,11 @@ const zhHansValues = {
       loadingTitle: '正在扫描本地服务',
       emptyTitle: '未检测到本地服务',
       errorTitle: '本地服务扫描需要关注',
+      scanCause: {
+        workspacesUnavailable: '无法读取此机器上打开了哪些项目，部分服务可能未显示。',
+        partial: '此机器上的扫描超时，部分正在运行的服务可能未显示。',
+        failed: '此机器无法列出正在运行的进程，因此找不到正在运行的服务。',
+      },
       refreshing: '正在刷新',
       state: {
         listening: '正在监听',

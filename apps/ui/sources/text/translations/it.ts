@@ -10633,6 +10633,11 @@ encryptedUnavailable: "Dettagli crittografati non disponibili",
       loadingTitle: 'Scansione dei servizi locali',
       emptyTitle: 'Nessun servizio locale rilevato',
       errorTitle: 'La scansione dei servizi locali richiede attenzione',
+      scanCause: {
+        workspacesUnavailable: 'Impossibile leggere quali progetti sono aperti su questa macchina; potrebbero mancare dei servizi.',
+        partial: 'La scansione ha esaurito il tempo su questa macchina; potrebbero mancare servizi in esecuzione.',
+        failed: 'Questa macchina non è riuscita a elencare i suoi processi, quindi i servizi in esecuzione non si trovano.',
+      },
       refreshing: 'Aggiornamento',
       state: {
         listening: 'In ascolto',

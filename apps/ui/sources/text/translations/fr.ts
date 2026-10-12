@@ -10263,6 +10263,11 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
       loadingTitle: 'Analyse des services locaux',
       emptyTitle: 'Aucun service local détecté',
       errorTitle: 'L’analyse des services locaux demande ton attention',
+      scanCause: {
+        workspacesUnavailable: 'Impossible de lire les projets ouverts sur cette machine ; certains services peuvent manquer.',
+        partial: 'L’analyse a manqué de temps sur cette machine ; certains services en cours peuvent manquer.',
+        failed: 'Cette machine n’a pas pu lister ses processus ; les services en cours sont introuvables.',
+      },
       refreshing: 'Actualisation',
       state: {
         listening: 'À l’écoute',

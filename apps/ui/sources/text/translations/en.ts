@@ -12349,9 +12349,9 @@ const enLocalServices = {
     emptyTitle: 'No local services detected',
     errorTitle: 'Local service scan needs attention',
     scanCause: {
-      workspacesUnavailable: 'Happier could not read which projects are open on this machine, so some services may be missing.',
-      partial: 'The scan on this machine timed out, so some running services may be missing.',
-      failed: "This machine couldn't list its running processes, so Happier couldn't find running services.",
+      workspacesUnavailable: 'Couldn\'t read which projects are open on this machine, so some services may be missing.',
+      partial: 'The scan ran out of time on this machine, so some running services may be missing.',
+      failed: 'This machine couldn\'t list its running processes, so running services can\'t be found.',
     },
     refreshing: 'Refreshing',
     state: {

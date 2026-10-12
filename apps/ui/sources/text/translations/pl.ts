@@ -10251,6 +10251,11 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
       loadingTitle: 'Skanowanie usług lokalnych',
       emptyTitle: 'Nie wykryto usług lokalnych',
       errorTitle: 'Skanowanie usług lokalnych wymaga uwagi',
+      scanCause: {
+        workspacesUnavailable: 'Nie udało się odczytać projektów otwartych na tej maszynie, więc części usług może brakować.',
+        partial: 'Skanowanie na tej maszynie przekroczyło czas, więc części działających usług może brakować.',
+        failed: 'Ta maszyna nie mogła wylistować swoich procesów, więc nie da się znaleźć działających usług.',
+      },
       refreshing: 'Odświeżanie',
       state: {
         listening: 'Nasłuchuje',

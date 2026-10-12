@@ -171,6 +171,11 @@ const LOCAL_SERVICE_LAUNCHER_KEYS = {
     managed_service_native_cleanup_unconfirmed: 'localServices.launcher.unavailableReason.nativeCleanupUnconfirmed',
 } as const satisfies Record<string, LocalServiceLauncherMessageKey>;
 
+/**
+ * Inventory scan diagnostic → what the scan could not do, in one sentence. Three causes on purpose:
+ * the opened-projects read failed, the scan was cut short (rows may be missing), or the machine
+ * could not list its processes at all. An unmapped code keeps the neutral title-only fallback.
+ */
 const LOCAL_SERVICE_INVENTORY_KEYS = {
     local_services_accepted_workspaces_unavailable: 'localServices.inventory.scanCause.workspacesUnavailable',
     linux_procfs_scan_deadline_exceeded: 'localServices.inventory.scanCause.partial',

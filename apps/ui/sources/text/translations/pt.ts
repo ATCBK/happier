@@ -10556,6 +10556,11 @@ encryptedUnavailable: "Detalhes encriptados indisponíveis",
       loadingTitle: 'Verificando serviços locais',
       emptyTitle: 'Nenhum serviço local detectado',
       errorTitle: 'A verificação de serviços locais precisa de atenção',
+      scanCause: {
+        workspacesUnavailable: 'Não foi possível ler quais projetos estão abertos nesta máquina; alguns serviços podem estar faltando.',
+        partial: 'A verificação esgotou o tempo nesta máquina; alguns serviços em execução podem estar faltando.',
+        failed: 'Esta máquina não conseguiu listar seus processos, então os serviços em execução não podem ser encontrados.',
+      },
       refreshing: 'Atualizando',
       state: {
         listening: 'Escutando',

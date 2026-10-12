@@ -10255,6 +10255,11 @@ encryptedUnavailable: "Verschlüsselte Details nicht verfügbar",
             loadingTitle: 'Lokale Dienste werden gescannt',
             emptyTitle: 'Keine lokalen Dienste erkannt',
             errorTitle: 'Der Scan lokaler Dienste braucht Aufmerksamkeit',
+            scanCause: {
+              workspacesUnavailable: 'Die auf diesem Rechner geöffneten Projekte konnten nicht gelesen werden; einige Dienste fehlen möglicherweise.',
+              partial: 'Der Scan hat auf diesem Rechner zu lange gedauert; einige laufende Dienste fehlen möglicherweise.',
+              failed: 'Dieser Rechner konnte seine laufenden Prozesse nicht auflisten; laufende Dienste lassen sich nicht finden.',
+            },
             refreshing: 'Wird aktualisiert',
             state: {
                 listening: 'Hört zu',
