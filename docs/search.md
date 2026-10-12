@@ -198,9 +198,12 @@ databases, including native source cursors and progress. It retains saved
 settings and inference models (subject to the existing delete-on-disable
 policy), then resumes the saved indexing configuration. An enabled worker can
 rebuild immediately; clearing is not
-secure physical erasure or a promise that the index remains empty. The current
-Settings button confirms locally and calls the clear RPC; it does not execute
-the Action's configurable approval policy.
+secure physical erasure or a promise that the index remains empty. In 0.3
+development, the Settings button executes this same Action under its captured
+machine, Home and Account. It honours configured approval waivers and explicit
+approval requirements, waits for the approved result, and refreshes that
+machine's status after a successful clear. Rejection or Account retirement does
+not redirect the clear to the page's newly selected target.
 
 ## Memory index and native ingestion (0.3 development)
 
@@ -256,7 +259,10 @@ search row runs `auto`: ready native sources use the index, and unknown/stale
 sources retain the enabled standard fallback. `standard` explicitly scans;
 `indexed` never starts a scan. `useConversationSearch` cancels superseded queries
 and keeps continuations qualified by their producing machine/source. Machine
-statuses are `ok`, `offline`, `outdated`, `partial`, or `disabled-by-settings`;
+and source pages publish after Account authorization as they complete, without
+waiting for slower sources. Loading remains active for unfinished work; a
+response timeout reports incomplete work, not machine unreachability.
+Machine statuses are `ok`, `offline`, `outdated`, `partial`, or `disabled-by-settings`;
 `conversationSearchCoverage.ts` owns the palette/scan coverage wording. Standard
 scans cannot apply message-date bounds and report partial coverage rather than
 substituting conversation update times. History supplies its selected Agent/source
@@ -318,9 +324,10 @@ uses packaged ripgrep JSON output. Searches are literal and case-insensitive
 unless the caller selects case matching or regular expressions.
 
 The Text in files section uses the existing Search scheduler and exact scope
-fence. It groups hits by file, with line
-numbers and matching-line snippets. The UI requests no surrounding context
-lines. UTF-8 offsets become one-based UTF-16 columns at the
+fence. It groups hits by file, with line numbers and matching-line snippets.
+The UI requests two surrounding context lines; the active hit expands its
+context preview while other hits retain their compact snippets. Preview focus
+does not commit or open the hit. UTF-8 offsets become one-based UTF-16 columns at the
 daemon boundary. Unsorted parallel ripgrep returns one page, closing at a file
 boundary under the existing machine transport payload ceiling. An early stop
 returns `hasMore: true` and partial coverage; Search shows “Refine your search”.
@@ -408,6 +415,12 @@ It prefilters source files with host-provided packaged ripgrep where safe, then
 re-matches decoded transcript text through Protocol's `contentSearchMatch`.
 Unicode/escaped/process-unsafe queries retain decoded fallback. OpenCode
 searches decoded client messages through the same helper without ripgrep.
+Codex shares root-family discovery across each requested candidate page and
+projects JSONL records as they are read, retaining identities and possible
+snippets rather than every decoded body. Rollback selection still completes
+before a match becomes authoritative. Searched discovery uses the requested
+page size; its continuation preserves remaining candidates, including empty
+partial pages.
 All six bundled source declarations advertise `contentSearch: true`.
 No transcript body is written into the persistent candidate metadata index;
 optional content indexing belongs only to Memory. Codex
@@ -544,6 +557,11 @@ generation list window used by mounted Triage UI, so Search reuses a live
 refresh instead of creating a second acquisition owner. Query cancellation
 releases its lease promptly, while Account or generation retirement disposes
 the shared value and refuses stale acquisition.
+
+The host requests a positive integer page size and marks any rows omitted at
+that requested size as truncated. Queries, row identities and display labels
+do not inherit Composer-reference limits, and callers may request larger pages
+than the host's default. The result commands retain their own boundary limits.
 
 The command inside each result uses the canonical closed composable union in
 `packages/protocol/src/plugins/ui/semanticCommands.ts`, including its launch-input
