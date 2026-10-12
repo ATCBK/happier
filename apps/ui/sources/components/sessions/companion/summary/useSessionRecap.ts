@@ -1,12 +1,14 @@
 import * as React from 'react';
 import type { SessionSynopsisV1 } from '@happier-dev/protocol';
+import { readSessionMemoryEnabledV1 } from '@happier-dev/protocol/sessions/context/sessionContextV1';
 
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 import { observeSessionSynopses } from '@/sync/ops/sessionSynopsis';
 import { storage } from '@/sync/domains/state/storageStore';
 import { readStoredSessionMessagesForAddress } from '@/sync/domains/messages/readStoredSessionMessagesForAddress';
 import { isSessionContentReadable, readSessionContentAvailability } from '@/sync/domains/session/encryptedContentAvailability';
-import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
+import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
+import { useActiveServerAccountScopeLifetime } from '@/sync/domains/state/storage';
 import { captureActiveServerAccountScopeLifetime, type ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { getAppliedActiveServerId, subscribeAppliedActiveServer } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
@@ -26,19 +28,17 @@ export function useSessionRecap(address: SessionAddress | null): SessionRecap | 
     }> | null>(null);
     const serverId = address?.serverId ?? null;
     const sessionId = address?.sessionId ?? null;
-    const activeScope = useActiveServerAccountScope(serverId);
-    const accountId = activeScope?.accountId ?? null;
+    const activeLifetime = useActiveServerAccountScopeLifetime();
     const appliedServerId = React.useSyncExternalStore(subscribeAppliedActiveServer, getAppliedActiveServerId, getAppliedActiveServerId);
     const focusedHome = areServerProfileIdentifiersEquivalent(appliedServerId, serverId);
-    const lifetime = React.useMemo(() => activeScope ? captureActiveServerAccountScopeLifetime() : null, [activeScope]);
-    const subscribeLifetime = React.useCallback((listener: () => void) => {
-        const subscription = lifetime?.onRetire(listener);
-        return () => subscription?.dispose();
-    }, [lifetime]);
-    const readCurrent = React.useCallback(() => lifetime?.isCurrent() ?? !focusedHome, [lifetime, focusedHome]);
-    const current = React.useSyncExternalStore(subscribeLifetime, readCurrent, readCurrent);
+    const lifetime = activeLifetime && areServerProfileIdentifiersEquivalent(activeLifetime.scope.serverId, serverId)
+        ? activeLifetime : null;
+    const current = lifetime?.isCurrent() ?? !focusedHome;
     const session = storage((state) => sessionId ? state.sessions[sessionId] : undefined);
     const transcript = storage((state) => sessionId ? state.sessionMessages[sessionId] : undefined);
+    const memoryEnabled = session && areServerProfileIdentifiersEquivalent(session.serverId ?? appliedServerId, serverId)
+        && isSessionContentReadable(readSessionContentAvailability(session))
+        ? readSessionMemoryEnabledV1(readSessionOwnerMetadataView(session)) : false;
     // Retained rows keep their captured Account lifetime until the transcript is hydrated again;
     // a scope change alone cannot relabel them as content from the next Account.
     const workerInput = React.useMemo(() => {
@@ -65,7 +65,7 @@ export function useSessionRecap(address: SessionAddress | null): SessionRecap | 
             session: { serverId, sessionId },
             onChange: (next) => setSynopsisInput({ serverId, sessionId, lifetime, synopses: next.length === 0 ? NO_SYNOPSES : next }),
         });
-    }, [serverId, sessionId, accountId, lifetime, focusedHome]);
+    }, [serverId, sessionId, lifetime, focusedHome]);
     return React.useMemo(() => {
         if (!current) return null;
         const synopses = synopsisInput?.serverId === serverId && synopsisInput.sessionId === sessionId
@@ -73,6 +73,6 @@ export function useSessionRecap(address: SessionAddress | null): SessionRecap | 
             ? synopsisInput.synopses : NO_SYNOPSES;
         const latestWorkerUpdate = workerInput && (workerInput.lifetime?.isCurrent() ?? workerInput.backgroundHome)
             ? workerInput.latestWorkerUpdate : null;
-        return resolveSessionRecap({ synopses, latestWorkerUpdate });
-    }, [current, synopsisInput, workerInput, serverId, sessionId, lifetime, focusedHome]);
+        return resolveSessionRecap({ memoryEnabled, synopses, latestWorkerUpdate });
+    }, [current, synopsisInput, workerInput, serverId, sessionId, lifetime, focusedHome, memoryEnabled]);
 }

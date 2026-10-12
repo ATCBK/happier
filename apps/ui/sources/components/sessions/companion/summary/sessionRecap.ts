@@ -2,7 +2,7 @@
  * The Summary card's Recap row (ORC §3.8, D-I): where this Session's work stands, in one line.
  *
  * It reads what already exists and runs nothing: the memory worker's latest `session_synopsis.v1` when
- * memory has produced one, otherwise the headline of the latest update a worker delivered to this
+ * memory is on and has produced one, otherwise the headline of the latest update a worker delivered to this
  * Session. There is no summarizer, cache, character window or setting of its own — when neither
  * exists, there is no Recap.
  */
@@ -21,12 +21,13 @@ function readText(value: string | null | undefined): string | null {
 }
 
 export function resolveSessionRecap(input: Readonly<{
+    memoryEnabled: boolean;
     /** Every synopsis record the memory worker wrote for this Session (any order). */
     synopses: readonly SessionRecapSynopsis[];
     latestWorkerUpdate: SessionRecapWorkerUpdate | null;
 }>): SessionRecap | null {
     let latest: SessionRecapSynopsis | null = null;
-    for (const synopsis of input.synopses) {
+    for (const synopsis of input.memoryEnabled ? input.synopses : []) {
         if (!readText(synopsis.synopsis)) continue;
         if (!latest || synopsis.seqTo > latest.seqTo || (synopsis.seqTo === latest.seqTo && synopsis.updatedAtMs > latest.updatedAtMs)) {
             latest = synopsis;

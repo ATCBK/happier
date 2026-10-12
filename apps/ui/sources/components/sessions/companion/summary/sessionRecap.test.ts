@@ -1,23 +1,31 @@
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Message } from '@happier-dev/session-core/messages';
 
-import { createSessionFixture, renderHook, standardCleanup } from '@/dev/testkit';
+import { createSessionFixture, createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { renderHook } from '@/dev/testkit/hooks/renderHook';
+import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createSessionMessagesFixture } from '@/dev/testkit/fixtures/transcriptFixtures';
-import { storage } from '@/sync/domains/state/storageStore';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
+import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
 
-import { projectSessionSummaryCard } from './sessionSummaryProjection';
 import { resolveSessionRecap } from './sessionRecap';
-import { useSessionRecap } from './useSessionRecap';
 
-// The System Record runtime is a host/network boundary. No memory repository is available here;
-// the real synopsis observer and recap/transcript owners still execute.
-vi.mock('@/sync/runtime/getSyncSingleton', () => ({
-    getSyncSingleton: () => ({ withSessionSystemRecordRuntime: async () => {} }),
-}));
-
-afterEach(() => { standardCleanup(); });
+// Authenticated HTTP/device boundaries only: runtime admission, repository and codecs stay real.
+const homes = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(homes);
+installDisconnectedServerSocketBoundary();
+const { storage } = await import('@/sync/domains/state/storageStore');
+const { useSessionRecap } = await import('./useSessionRecap');
+const { projectSessionSummaryCard } = await import('./sessionSummaryProjection');
+beforeEach(async () => { await homes.reset(); await loadSyncSingletonForTests(); });
+afterEach(async () => { await standardCleanup(); await homes.reset(); });
 
 describe('useSessionRecap delivered transcript fallback', () => {
     const address = { serverId: 'home-a', sessionId: 'lead' };
@@ -32,6 +40,61 @@ describe('useSessionRecap delivered transcript fallback', () => {
             messagesById: Object.fromEntries(messages.map((message) => [message.id, message])),
         });
     }
+
+    it('renews synopsis observation on same-Account restore, respects memory off, and retains transcript custody', async () => {
+        const previous = storage.getState();
+        const applied = getAppliedActiveServerSnapshot();
+        const available = isAppliedActiveServerRuntimeAvailable();
+        let synopsis = 'Retained synopsis';
+        let revision = 'ssr1.AAAACHN5c3JlY18xAAAAAQ';
+        try {
+            const home = await homes.addHome({ name: 'Recap Home', serverUrl: 'https://recap.test', accountId: 'account-a' });
+            const address: SessionAddress = { serverId: home, sessionId: 'lead' };
+            const features = createRootLayoutFeaturesResponse({ capabilities: { session: { systemRecords: { protocolVersions: [1] } } } });
+            homes.answer(home, '/v1/features', { body: features });
+            homes.answer(home, '/v1/features/authenticated', { body: features });
+            const synopsisPath = '/v2/sessions/lead/system-records?owner=host&namespace=memory&kind=synopsis.v1';
+            homes.answer(home, synopsisPath, { select: () => ({ body: { records: [{ id: 'synopsis-one',
+                address: { owner: 'host', namespace: 'memory', kind: 'synopsis.v1', localId: 'latest' },
+                content: { t: 'plain', v: { v: 1, synopsis, seqTo: 5, updatedAtMs: 10 } }, revision,
+                createdAt: '2026-09-05T00:00:00.000Z', updatedAt: '2026-09-05T00:00:00.000Z' }], nextCursor: null, hasNext: false } }) });
+            storage.setState({ profileScope: { serverId: home, accountId: 'account-a' },
+                sessions: { lead: createSessionFixture({ id: 'lead', serverId: home }, { memoryEnabled: true }) },
+                sessionListRowsByServerId: { [home]: { lead: createSessionListRenderableSessionFixture({ id: 'lead', serverId: home }) } },
+                sessionMessages: { lead: transcript([delivered('latest', 1, 20, 'New worker report')]) } });
+            publishAppliedActiveServerSnapshot({ serverId: home, serverUrl: 'https://recap.test', generation: 1 });
+            const hook = await renderHook(() => useSessionRecap(address));
+            await act(async () => { await vi.waitFor(() => expect(hook.getCurrent()?.text).toBe('Retained synopsis')); });
+            synopsis = 'Restored synopsis';
+            revision = 'ssr1.AAAACHN5c3JlY18xAAAAAg';
+            await act(async () => { retireActiveServerAccountScopeLifetime(); });
+            await act(async () => { await vi.waitFor(() => expect(hook.getCurrent()?.text).toBe('Restored synopsis')); });
+            synopsis = 'Observer update';
+            revision = 'ssr1.AAAACHN5c3JlY18xAAAAAw';
+            await act(async () => { await getSyncSingleton().withSessionSystemRecordRuntime(address,
+                runtime => runtime.repository.refresh(address, { type: 'list', namespace: 'memory', kind: 'synopsis.v1' })); });
+            await act(async () => { await vi.waitFor(() => expect(hook.getCurrent()?.text).toBe('Observer update')); });
+            // Layout-1 shared metadata is not the owner's Context policy.
+            await act(async () => storage.setState({ sessions: { lead: createSessionFixture({ ...storage.getState().sessions.lead!,
+                metadataLayoutVersion: 1, metadata: createSessionFixture().metadata,
+                ownerMetadataView: createSessionFixture().metadata }, { memoryEnabled: true }) } }));
+            expect(hook.getCurrent()?.text).toBe('Observer update');
+            await act(async () => storage.setState({ sessions: { lead: createSessionFixture(storage.getState().sessions.lead!,
+                { memoryEnabled: false }) } }));
+            expect(hook.getCurrent()).toEqual({ source: 'worker_update', text: 'New worker report', atMs: 20 });
+            // Switching Accounts must not relabel the retained transcript as the new Account's content.
+            homes.answer(home, synopsisPath, { body: { records: [], nextCursor: null, hasNext: false } });
+            await act(async () => { await homes.switchAccount(home, 'account-b');
+                storage.setState({ profileScope: { serverId: home, accountId: 'account-b' } }); });
+            expect(hook.getCurrent()).toBeNull();
+            await act(async () => storage.setState({ sessionMessages: { lead: transcript([delivered('b', 1, 30, 'Account B report')]) } }));
+            expect(hook.getCurrent()?.text).toBe('Account B report');
+            await hook.unmount();
+        } finally {
+            await standardCleanup();
+            act(() => { storage.setState(previous); publishAppliedActiveServerSnapshot(applied, available); });
+        }
+    });
 
     it('reads the latest delivered headline in transcript order, survives remount, and ignores sibling/ordinary messages', async () => {
         const previous = storage.getState();
@@ -78,6 +141,7 @@ describe('useSessionRecap delivered transcript fallback', () => {
 describe('resolveSessionRecap', () => {
     it('reads the latest synopsis when memory has produced one', () => {
         expect(resolveSessionRecap({
+            memoryEnabled: true,
             synopses: [
                 { synopsis: 'Older view of the work', seqTo: 10, updatedAtMs: 100 },
                 { synopsis: 'Two workers merged; the ledger backfill is still running.', seqTo: 42, updatedAtMs: 400 },
@@ -91,15 +155,16 @@ describe('resolveSessionRecap', () => {
         });
     });
 
-    it('falls back to the latest worker update headline when memory is off (no synopsis exists)', () => {
+    it('falls back to the latest worker update headline when memory is off despite a retained synopsis', () => {
         expect(resolveSessionRecap({
-            synopses: [],
+            memoryEnabled: false,
+            synopses: [{ synopsis: 'Previously generated synopsis', seqTo: 10, updatedAtMs: 100 }],
             latestWorkerUpdate: { headline: 'Runbook drafted and published as #2490', atMs: 500 },
         })).toEqual({ source: 'worker_update', text: 'Runbook drafted and published as #2490', atMs: 500 });
     });
 
     it('offers no recap when there is nothing to read, rather than inventing one', () => {
-        expect(resolveSessionRecap({ synopses: [{ synopsis: '   ', seqTo: 1, updatedAtMs: 1 }], latestWorkerUpdate: null })).toBeNull();
+        expect(resolveSessionRecap({ memoryEnabled: true, synopses: [{ synopsis: '   ', seqTo: 1, updatedAtMs: 1 }], latestWorkerUpdate: null })).toBeNull();
     });
 });
 
