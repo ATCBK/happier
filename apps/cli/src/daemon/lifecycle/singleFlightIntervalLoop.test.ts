@@ -4,6 +4,70 @@ import { createDeferred } from '@/testkit/async/deferred';
 import { startSingleFlightIntervalLoop } from './singleFlightIntervalLoop';
 
 describe('startSingleFlightIntervalLoop', () => {
+  it('parks with no automatic deadline and wakes once on explicit demand', async () => {
+    vi.useFakeTimers();
+    try {
+      const task = vi.fn(async () => ({ nextAutomaticRunAfterMs: null }));
+      const loop = startSingleFlightIntervalLoop({ intervalMs: 10, task });
+      await vi.advanceTimersByTimeAsync(10);
+      expect(task).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(task).toHaveBeenCalledTimes(1);
+      loop.pause();
+      loop.trigger();
+      loop.resume();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(task).toHaveBeenCalledTimes(2);
+      await loop.stop();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('runs at the exact task deadline without waking at the ordinary interval', async () => {
+    vi.useFakeTimers();
+    try {
+      const task = vi.fn(async () => ({ nextAutomaticRunAfterMs: 125 }));
+      const loop = startSingleFlightIntervalLoop({ intervalMs: 50, task });
+      await vi.advanceTimersByTimeAsync(50);
+      expect(task).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(124);
+      expect(task).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(task).toHaveBeenCalledTimes(2);
+      await loop.stop();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each([0, -1, Number.NaN])('retains the ordinary interval for an invalid task delay (%s)', async delay => {
+    vi.useFakeTimers();
+    try {
+      const task = vi.fn(async () => ({ nextAutomaticRunAfterMs: delay }));
+      const loop = startSingleFlightIntervalLoop({ intervalMs: 50, task });
+      await vi.advanceTimersByTimeAsync(50);
+      expect(task).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(49);
+      expect(task).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(task).toHaveBeenCalledTimes(2);
+      await loop.stop();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('rearms a deadline beyond the native timer range without running the task early', async () => {
+    vi.useFakeTimers();
+    try {
+      const task = vi.fn(async () => ({ nextAutomaticRunAfterMs: 2_147_483_747 }));
+      const loop = startSingleFlightIntervalLoop({ intervalMs: 50, task });
+      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(2_147_483_647);
+      expect(task).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(99);
+      expect(task).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(task).toHaveBeenCalledTimes(2);
+      await loop.stop();
+    } finally { vi.useRealTimers(); }
+  });
   it('never overlaps task executions (single-flight)', async () => {
     vi.useFakeTimers();
     try {
@@ -123,7 +187,7 @@ describe('startSingleFlightIntervalLoop', () => {
       expect(task).not.toHaveBeenCalled();
 
       loop.resume();
-      await vi.advanceTimersByTimeAsync(11);
+      await vi.advanceTimersByTimeAsync(0);
       expect(task).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
@@ -132,10 +196,10 @@ describe('startSingleFlightIntervalLoop', () => {
 
   it('unrefs the interval handle when requested', () => {
     const unref = vi.fn();
-    const setIntervalSpy = vi.spyOn(globalThis, 'setInterval').mockReturnValue({
+    const setIntervalSpy = vi.spyOn(globalThis, 'setTimeout').mockReturnValue({
       unref,
     } as unknown as ReturnType<typeof setInterval>);
-    const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval').mockImplementation(() => undefined);
+    const clearIntervalSpy = vi.spyOn(globalThis, 'clearTimeout').mockImplementation(() => undefined);
 
     try {
       const loop = startSingleFlightIntervalLoop({
@@ -296,7 +360,7 @@ describe('startSingleFlightIntervalLoop', () => {
     }
   });
 
-  it('pause() prevents a coalesced forced rerun and resume() does not launch it', async () => {
+  it('pause() retains a coalesced forced rerun until resume()', async () => {
     vi.useFakeTimers();
     try {
       const first = createDeferred();
@@ -318,7 +382,7 @@ describe('startSingleFlightIntervalLoop', () => {
 
       loop.resume();
       await vi.advanceTimersByTimeAsync(1);
-      expect(task).toHaveBeenCalledTimes(1);
+      expect(task).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
     }
