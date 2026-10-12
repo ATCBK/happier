@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { useDestinationParams, useDestinationFocus, useDestinationVisibility, useDestinationInstanceKey } from '@/components/appShell/workspace/DestinationInstanceHost';
-import { SessionView } from './SessionView';
+import { SessionView } from './SessionViewHost';
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import { SessionSplitCanvasScreen } from '@/components/sessions/canvas/SessionSplitCanvasScreen';
 import { SessionInvalidLinkFallback } from '@/components/sessions/shell/SessionInvalidLinkFallback';

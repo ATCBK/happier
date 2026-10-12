@@ -19,7 +19,7 @@ import { t } from '@/text';
 
 import type { AttachmentDraft } from '@/components/sessions/attachments/attachmentDraftModel';
 import type { SessionPaneUrlState } from '@/components/sessions/panes/url/sessionPaneUrlState';
-import { SessionView } from '@/components/sessions/shell/SessionView';
+import { SessionView } from '@/components/sessions/shell/SessionViewHost';
 import { useHydrateSessionForRoute } from '@/hooks/session/useHydrateSessionForRoute';
 import type { SessionRouteHydrationState } from '@/sync/domains/session/sessionRouteHydrationState';
 

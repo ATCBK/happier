@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { View } from 'react-native';
 
-import { SessionView } from '@/components/sessions/shell/SessionView';
+import { SessionView } from '@/components/sessions/shell/SessionViewHost';
 import type { SessionViewEmbeddedPresentation } from '@/components/sessions/shell/embedded/embeddedSessionPresentation';
 import { useHydrateSessionForRoute } from '@/hooks/session/useHydrateSessionForRoute';
 

@@ -3,7 +3,7 @@ import { Platform, View } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
 
 import { requestRegisteredSessionComposerFocus } from '@/components/sessions/presentation/sessionComposerPresentationTargets';
-import { SessionView } from '@/components/sessions/shell/SessionView';
+import { SessionView } from '@/components/sessions/shell/SessionViewHost';
 import { reanimatedMotionTokens } from '@/components/ui/motion/reanimatedMotionTokens';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { useHydrateSessionForRoute } from '@/hooks/session/useHydrateSessionForRoute';

@@ -15,6 +15,11 @@ import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } 
 import '@/sync/syncEngine';
 import { prepareSessionDraftPersistenceStorage } from '@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage';
 
+// Static Session consumers capture the Socket factory during collection; install
+// the canonical external boundary before those imports, then configure it below.
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+
 installDisconnectedServerSocketBoundary();
 
 // Native SDK/navigation boundaries only; Session, hydration, pane and activation owners stay real.
