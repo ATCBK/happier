@@ -106,6 +106,13 @@ function useCredentialScopeEntries(
     const [entries, setEntries] = React.useState<ReadonlyMap<string, ScopeEntry>>(() => new Map());
     /** Homes whose latest settled read failed on this device's secure storage. */
     const unreadableServerIdsRef = React.useRef(new Set<string>());
+    // Projection callbacks observe credential transitions; their identity is
+    // not a credential transition. Read the latest committed callbacks without
+    // retiring and republishing a binding on each consumer render.
+    const projectionLifecycleRef = React.useRef(projectionLifecycle);
+    React.useLayoutEffect(() => {
+        projectionLifecycleRef.current = projectionLifecycle;
+    }, [projectionLifecycle]);
 
     React.useEffect(() => {
         if (embedded) return;
@@ -179,7 +186,7 @@ function useCredentialScopeEntries(
                     });
                 },
             });
-            projectionLifecycle?.beforeBinding?.(binding);
+            projectionLifecycleRef.current?.beforeBinding?.(binding);
             setEntries((current) => {
                 if (!binding.isCurrent()) return current;
                 const next = new Map(current);
@@ -214,7 +221,7 @@ function useCredentialScopeEntries(
         const unsubscribe = subscribeHomeCredentialChange((event) => {
             for (const serverId of trackedServerIds) {
                 if (!areServerProfileIdentifiersEquivalent(event.serverId, serverId)) continue;
-                projectionLifecycle?.onCredentialMutation?.(serverId);
+                projectionLifecycleRef.current?.onCredentialMutation?.(serverId);
                 const revision = invalidate(serverId);
                 void resolveBinding(serverId, revision);
             }
@@ -239,7 +246,7 @@ function useCredentialScopeEntries(
         // The sorted key identifies the Home set. Profile changes retire and
         // re-resolve bindings without making profile data Account authority.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [profilesGeneration, serverIdsKey, projectionLifecycle, embedScopeRevision]);
+    }, [profilesGeneration, serverIdsKey, embedScopeRevision]);
 
     return embedded ? embedEntries : entries;
 }
