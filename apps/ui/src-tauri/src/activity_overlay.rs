@@ -1511,16 +1511,19 @@ fn apply_overlay_state<R: Runtime>(
 
     let action = resolve_overlay_window_visibility_action(&payload);
     if action == OverlayWindowVisibilityAction::Hide {
+        let window_state =
+            DesktopActivityOverlayWindowStatePayload::from_sync_payload(&payload, None);
+        {
+            let mut guard = state
+                .0
+                .lock()
+                .map_err(|_| "Desktop activity overlay state mutex poisoned".to_string())?;
+            guard.last_window_state = Some(window_state.clone());
+        }
         if let Some(window) = app.get_webview_window(OVERLAY_WINDOW_LABEL) {
             let _ = window.hide();
+            let _ = window.emit(OVERLAY_STATE_EVENT, window_state);
         }
-        let mut guard = state
-            .0
-            .lock()
-            .map_err(|_| "Desktop activity overlay state mutex poisoned".to_string())?;
-        guard.last_window_state = Some(
-            DesktopActivityOverlayWindowStatePayload::from_sync_payload(&payload, None),
-        );
         return Ok(());
     }
 

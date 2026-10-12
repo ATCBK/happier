@@ -2,7 +2,7 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { flushHookEffects, invokeTestInstanceHandler, renderScreen } from '@/dev/testkit';
+import { createDeferred, flushHookEffects, invokeTestInstanceHandler, renderScreen } from '@/dev/testkit';
 
 import type { DesktopActivityOverlayWindowStatePayload } from '../runtime/desktopActivityOverlayBridge';
 import { resolveDesktopActivityOverlayCardActionInstanceTestID } from './shared/desktopActivityOverlaySelectors.mjs';
@@ -542,21 +542,20 @@ describe('DesktopActivityOverlayRoute', () => {
         expect(disposeMock).toHaveBeenCalledTimes(1);
     });
 
-    it('reconciles native window state when the overlay window misses an expanded-state event', async () => {
-        vi.useFakeTimers();
+    it('reconciles native window state after a change during listener registration', async () => {
         isDesktopActivityOverlayWindowContextMock.mockReturnValue(true);
+        const subscription = createDeferred<() => void>();
         getDesktopActivityOverlayWindowStateMock
             .mockResolvedValueOnce(createWindowState({ expanded: false }))
             .mockResolvedValue(createWindowState({ expanded: true }));
-        listenDesktopActivityOverlayWindowStateMock.mockResolvedValue(() => {});
+        listenDesktopActivityOverlayWindowStateMock.mockReturnValue(subscription.promise);
 
         const screen = await renderRoute();
 
         expect(screen.findByTestId('desktop-activity-overlay-collapsed')).toBeTruthy();
 
-        await act(async () => {
-            await vi.advanceTimersByTimeAsync(600);
-        });
+        subscription.resolve(() => {});
+        await flushHookEffects();
 
         expect(getDesktopActivityOverlayWindowStateMock.mock.calls.length).toBeGreaterThan(1);
         expect(screen.findByTestId('desktop-activity-overlay-collapsed')).toBeNull();

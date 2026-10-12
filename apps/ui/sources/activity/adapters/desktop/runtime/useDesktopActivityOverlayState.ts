@@ -2,7 +2,6 @@ import * as React from 'react';
 
 import { isDesktopHost } from '@/utils/platform/desktopHost';
 
-import { DESKTOP_ACTIVITY_OVERLAY_STATE_RECONCILE_INTERVAL_MS } from '../desktopActivityOverlayTiming';
 import {
     getDesktopActivityOverlayWindowState,
     listenDesktopActivityOverlayWindowState,
@@ -24,7 +23,7 @@ export function useDesktopActivityOverlayState(): DesktopActivityOverlayWindowSt
 
         let disposed = false;
         let unlisten: (() => void) | null = null;
-        let reconcileInFlight = false;
+        let stateEventVersion = 0;
         const stateSignatureRef = { current: null as string | null };
         const applyState = (payload: DesktopActivityOverlayWindowStatePayload) => {
             if (disposed) return;
@@ -36,42 +35,41 @@ export function useDesktopActivityOverlayState(): DesktopActivityOverlayWindowSt
             setState(payload);
         };
 
-        const reconcileState = () => {
-            if (reconcileInFlight) {
-                return;
-            }
-            reconcileInFlight = true;
-            void getDesktopActivityOverlayWindowState().then((payload) => {
-                if (payload) {
+        const reconcileState = async () => {
+            const readEventVersion = stateEventVersion;
+            try {
+                const payload = await getDesktopActivityOverlayWindowState();
+                // A native publication received during this read is newer than
+                // its snapshot; preserve that event's window state.
+                if (payload && stateEventVersion === readEventVersion) {
                     applyState(payload);
                 }
-            }).catch(() => {}).finally(() => {
-                reconcileInFlight = false;
-            });
+            } catch {}
         };
 
-        reconcileState();
-
-        const reconcileInterval = setInterval(
-            reconcileState,
-            DESKTOP_ACTIVITY_OVERLAY_STATE_RECONCILE_INTERVAL_MS,
-        );
+        const initialStateRead = reconcileState();
 
         void listenDesktopActivityOverlayWindowState((payload) => {
             if (payload) {
+                stateEventVersion += 1;
                 applyState(payload);
             }
-        }).then((dispose) => {
+        }).then(async (dispose) => {
             if (disposed) {
                 dispose();
                 return;
             }
             unlisten = dispose;
+            // Registration is asynchronous. Re-read after it and the initial
+            // read settle to recover any state changed before listening began.
+            await initialStateRead;
+            if (!disposed) {
+                await reconcileState();
+            }
         }).catch(() => {});
 
         return () => {
             disposed = true;
-            clearInterval(reconcileInterval);
             unlisten?.();
         };
     }, []);
