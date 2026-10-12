@@ -27,6 +27,7 @@ import { readMachineStatusNextRefreshAtMs } from '@/utils/sessions/machineUtils'
 import { readSessionStatusNextRefreshAtMs } from '@/utils/sessions/sessionUtils';
 import { resolveMachineDestinationPurposeEligibility } from '@/components/sessions/new/components/machineSelection/buildMachineDestinationModel';
 import { useManagedMachineInventory } from '@/components/settings/machines/managed/useManagedMachineInventory';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 
 import {
     createBoardCardProjection,
@@ -149,7 +150,7 @@ function useMachineRefs(enabled: boolean, machineLists: Readonly<Record<string, 
         for (const [serverId, machines] of Object.entries(machineLists)) {
             const portable = resolveServerProfileScopeIdForIdentifier(serverId) || serverId;
             for (const machine of machines ?? []) {
-                if (!resolveMachineDestinationPurposeEligibility('boards', undefined, machine).eligible) continue;
+                if (!resolveMachineDestinationPurposeEligibility('boards', undefined, machine, null).eligible) continue;
                 next.push({ kind: 'machine', qualifiedId: { serverId: portable, id: machine.id } });
             }
         }
@@ -271,7 +272,8 @@ function useBoardFacts(membership: BoardMembership, homes: BoardHomes, enabled =
     const allRows = useSessionListRowsByServerId(hasMachines ? homes.mountedServerIds : NO_IDS);
     const machineMembers = React.useMemo(() => members.filter(member => member.available && member.ref.kind === 'machine'), [members]);
     const managedHomes = React.useMemo(() => [...new Set(machineMembers.map(member => member.ref.qualifiedId.serverId))], [machineMembers]);
-    const { machinesByEnrolledMachineIdByServerId } = useManagedMachineInventory(managedHomes);
+    const { machinesByEnrolledMachineIdByServerId, bindings: machineScopeBindings } = useManagedMachineInventory(managedHomes);
+    const reachabilityRevision = useMachineReachabilityRevision(hasMachines);
     const machines = getStorage()(useShallow(state => machineMembers.map(member => {
         for (const [serverId, list] of Object.entries(state.machineListByServerId)) {
             if (areServerProfileIdentifiersEquivalent(serverId, member.ref.qualifiedId.serverId)) {
@@ -340,6 +342,10 @@ function useBoardFacts(membership: BoardMembership, homes: BoardHomes, enabled =
             session: (ref) => sessionByKey.get(buildWorkBoardItemKeyV1(ref)) ?? null,
             workflowRun: (ref) => runById.get(ref.qualifiedId.id) ?? null,
             machine: (ref) => machineByKey.get(buildWorkBoardItemKeyV1(ref)) ?? null,
+            machineScope: serverId => {
+                const binding = machineScopeBindings.get(resolveServerProfileScopeIdForIdentifier(serverId));
+                return binding?.isCurrent() ? binding.scope : null;
+            },
             managedMachine: ref => machinesByEnrolledMachineIdByServerId[ref.qualifiedId.serverId]?.[ref.qualifiedId.id] ?? null,
             machineSessionCounts: hasMachines
                 ? countSessionsByMachine(Object.entries(allRows).map(([serverId, rows]) => [
@@ -350,7 +356,7 @@ function useBoardFacts(membership: BoardMembership, homes: BoardHomes, enabled =
             workflow: (ref) => workflowById.get(ref.qualifiedId.id) ?? null,
         };
         return facts;
-    }, [allRows, hasMachines, homes.activeServerId, machineMembers, machines, machinesByEnrolledMachineIdByServerId, runRows, runtimeNowMs, sessionMembers, sessionRows, workflowById]);
+    }, [allRows, hasMachines, homes.activeServerId, machineMembers, machines, machineScopeBindings, machinesByEnrolledMachineIdByServerId, reachabilityRevision, runRows, runtimeNowMs, sessionMembers, sessionRows, workflowById]);
     return facts;
 }
 

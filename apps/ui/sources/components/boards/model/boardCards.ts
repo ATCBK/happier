@@ -17,7 +17,8 @@ import type { Machine } from '@/sync/domains/state/storageTypes';
 import type { ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
 import type { WorkflowRunRow } from '@/sync/store/domains/workflowRuns';
 import { t } from '@/text';
-import { getMachineDisplayName, isMachineOnline } from '@/utils/sessions/machineUtils';
+import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
+import { isMachineReachable, type MachineReachabilityScope } from '@/sync/domains/machines/reachability/machineReachability';
 import { getSessionName, readSessionStatusNextRefreshAtMs } from '@/utils/sessions/sessionUtils';
 
 import type { BoardMember } from './boardMembership';
@@ -37,7 +38,7 @@ export type MachineSessionCounts = Readonly<{ running: number; needsYou: number 
 
 export type BoardCardBody =
     | Readonly<{ kind: 'session'; serverId: string; sessionId: string; statusDetail?: string }>
-    | Readonly<{ kind: 'workflow_run'; runId: string; waitingForYou: boolean; startedAt: string | null;
+    | Readonly<{ kind: 'workflow_run'; runId: string; state: WorkflowRunStateV1; attentionLabel: string | null; startedAt: string | null;
         progress: WorkflowRunSummaryV1['stepProgress'] }>
     | Readonly<{ kind: 'workflow'; needsYouCount: number | null; lastRunWord: string | null; lastRunAt: string | null;
         runSummaryAvailable: boolean; triggerSummary: string | null; nextRun: BoardWorkflowNextRun }>
@@ -77,6 +78,8 @@ export type BoardCardFacts = Readonly<{
     session: (ref: BoardItemRefV1) => SessionListRenderableSession | null;
     workflowRun: (ref: BoardItemRefV1) => WorkflowRunRow | null;
     machine: (ref: BoardItemRefV1) => Machine | null;
+    /** The credential-bound Account for this exact Machine Home; absent authority fails closed. */
+    machineScope?: (serverId: string) => MachineReachabilityScope | null;
     managedMachine?: (ref: BoardItemRefV1) => ManagedMachineV1 | null;
     /** Counts from the already-loaded Session rows, by the machine's qualified item key (no extra read). */
     machineSessionCounts: ReadonlyMap<string, MachineSessionCounts>;
@@ -151,17 +154,21 @@ function readBoardWorkStatus(member: BoardMember, facts: BoardCardFacts): WorkSt
         case 'workflow_run': {
             const row = facts.workflowRun(member.ref);
             return row?.summary ? resolveWorkStatusTone({ kind: 'workflow_run', facts: {
-                state: row.summary.state, word: describeWorkflowRunState(row.summary.state).label,
+                state: row.summary.state,
+                word: describeWorkflowRunState(row.summary.state, { inAttentionWindow: row.summary.attentionRequired === true }).label,
                 inAttentionWindow: row.summary.attentionRequired === true,
             } }) : unavailableStatus('not_loaded');
         }
         case 'machine': {
             const machine = facts.machine(member.ref);
             if (!machine) return unavailableStatus('not_loaded');
-            const online = isMachineOnline(machine, facts.nowMs);
+            const online = isMachineReachable(facts.machineScope?.(member.ref.qualifiedId.serverId), machine, facts.nowMs);
             const counts = facts.machineSessionCounts.get(member.key) ?? NO_SESSIONS;
             return resolveWorkStatusTone({ kind: 'machine', facts: {
-                word: online ? t('boards.card.machine.online') : t('boards.card.machine.offline'),
+                // A Machine that needs the person says why ("1 needs you"); its presence word in the attention
+                // tone would read as if being online were the problem.
+                word: !online ? t('boards.card.machine.offline') : counts.needsYou > 0
+                    ? t('boards.card.machine.needYou', { count: counts.needsYou }) : t('boards.card.machine.online'),
                 online, needsYouCount: counts.needsYou, runningSessionCount: counts.running,
                 machineId: machine.id, revokedAt: machine.revokedAt, managedMachine: facts.managedMachine?.(member.ref),
             } });
@@ -207,19 +214,21 @@ function buildCard(member: BoardMember, facts: BoardCardFacts): BoardCard {
         case 'workflow_run': {
             const row = facts.workflowRun(member.ref);
             if (!row?.summary) return notLoaded(member, 'not_loaded');
-            const waitingForYou = row.summary.attentionRequired === true;
+            const lifecycle = describeWorkflowRunState(row.summary.state, {
+                inAttentionWindow: row.summary.attentionRequired === true,
+            });
             return {
                 ...base,
                 title: formatWorkflowRunDisplayName(resolveWorkflowRunDisplayName(row.metadata)),
                 status: readBoardWorkStatus(member, facts),
-                body: { kind: 'workflow_run', runId: id, waitingForYou, startedAt: row.summary.createdAt,
+                body: { kind: 'workflow_run', runId: id, state: row.summary.state, attentionLabel: lifecycle.attentionLabel, startedAt: row.summary.createdAt,
                     progress: row.summary.stepProgress ?? null },
             };
         }
         case 'machine': {
             const machine = facts.machine(member.ref);
             if (!machine) return notLoaded(member, 'not_loaded');
-            const online = isMachineOnline(machine, facts.nowMs);
+            const online = isMachineReachable(facts.machineScope?.(serverId), machine, facts.nowMs);
             const counts = facts.machineSessionCounts.get(member.key) ?? NO_SESSIONS;
             return {
                 ...base,
@@ -285,7 +294,7 @@ function createBoardProjection<T>(project: (member: BoardMember, facts: BoardCar
                 case 'machine': {
                     const machine = facts.machine(member.ref);
                     source = machine;
-                    machineOnline = machine ? isMachineOnline(machine, facts.nowMs) : null;
+                    machineOnline = machine ? isMachineReachable(facts.machineScope?.(member.ref.qualifiedId.serverId), machine, facts.nowMs) : null;
                     break;
                 }
             }

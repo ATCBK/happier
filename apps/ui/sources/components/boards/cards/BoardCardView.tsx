@@ -4,6 +4,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { Icon, type IconName } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
+import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { formatRelativeTimeShort, readRelativeTimeShortRefreshAtMs } from '@/utils/time/formatShortRelativeTime';
 import { useSessionListRuntimeDeadlineNowMs } from '@/hooks/session/sessionListRuntimeClock';
 import { workStatusSurfaceStyle, workStatusWordStyle } from '@/components/work/status/workStatusTreatment';
@@ -17,6 +18,7 @@ import { formatNextScheduledRun, readNextScheduledRunRefreshAtMs } from '@/compo
 import { describeWorkflowRunProgress } from '@/components/workflows/presentation/workflowRunProgress';
 
 import type { BoardCard, BoardCardBody } from '../model/boardCards';
+import type { BoardCardAction } from '../model/boardCardOpenTarget';
 
 /**
  * One board card (lab `boards-B1`): identity mark, name and the state word; "Kind · context"; then the
@@ -40,7 +42,7 @@ function ageOf(iso: string | null, nowMs: number): string | null {
 
 function readBodyRefreshAtMs(body: BoardCardBody, nowMs: number): number | null {
     const ageRefresh = (iso: string | null) => iso === null ? null : readRelativeTimeShortRefreshAtMs(Date.parse(iso), nowMs);
-    if (body.kind === 'workflow_run') return body.waitingForYou ? null : ageRefresh(body.startedAt);
+    if (body.kind === 'workflow_run') return runAttentionLine(body) ? null : ageRefresh(body.startedAt);
     if (body.kind !== 'workflow') return null;
     const deadlines = [body.lastRunWord ? ageRefresh(body.lastRunAt) : null,
         body.nextRun.kind === 'scheduled' ? readNextScheduledRunRefreshAtMs(body.nextRun.at, nowMs) : null]
@@ -59,16 +61,27 @@ const SessionContext = React.memo(function SessionContext(props: Readonly<{ serv
     </Text>;
 });
 
-function describeBody(body: BoardCardBody, nowMs: number): string | null {
+/**
+ * The Run's attention in the body, unless the card's state word already names it: a held Run's word is
+ * its hold ("Waiting for your review"), so the body keeps its progress and age instead of saying it
+ * again; a stopped Run that still needs the person says so here beside its outcome word.
+ */
+function runAttentionLine(body: Extract<BoardCardBody, { kind: 'workflow_run' }>): string | null {
+    return body.state === 'waiting_for_review' ? null : body.attentionLabel;
+}
+
+/** `shownWord`: the state word on screen, which the body never says again. */
+function describeBody(body: BoardCardBody, nowMs: number, shownWord: string | null): string | null {
     switch (body.kind) {
         case 'workflow_run': {
             const age = ageOf(body.startedAt, nowMs);
-            const state = body.waitingForYou ? t('boards.card.run.waitingForYou') : age ? t('boards.card.run.started', { age }) : null;
+            const state = runAttentionLine(body) ?? (age ? t('boards.card.run.started', { age }) : null);
             return [describeWorkflowRunProgress(body.progress), state].filter(Boolean).join(' · ') || null;
         }
         case 'workflow': {
             const age = ageOf(body.lastRunAt, nowMs);
-            const lastRun = body.lastRunWord && age ? t('boards.card.workflow.lastRun', { word: body.lastRunWord, age }) : null;
+            const lastRun = !body.lastRunWord || !age ? null : body.lastRunWord === shownWord
+                ? t('boards.card.workflow.lastRunAt', { age }) : t('boards.card.workflow.lastRun', { word: body.lastRunWord, age });
             const needs = body.needsYouCount !== null && body.needsYouCount > 0
                 ? t('boards.card.workflow.needYou', { count: body.needsYouCount }) : null;
             const next = body.nextRun.kind === 'scheduled' ? formatNextScheduledRun(body.nextRun.at, true, nowMs)
@@ -78,10 +91,8 @@ function describeBody(body: BoardCardBody, nowMs: number): string | null {
         }
         case 'machine': {
             if (!body.online) return t('boards.card.machine.offlineBody');
-            const parts: string[] = [];
-            if (body.counts.running > 0) parts.push(t('boards.card.machine.running', { count: body.counts.running }));
-            if (body.counts.needsYou > 0) parts.push(t('boards.card.machine.needYou', { count: body.counts.needsYou }));
-            return parts.length > 0 ? parts.join(' · ') : t('boards.card.machine.idle');
+            // Who needs the person is the card's state word; the body says what the Machine is doing.
+            return body.counts.running > 0 ? t('boards.card.machine.running', { count: body.counts.running }) : t('boards.card.machine.idle');
         }
         case 'session':
             return body.statusDetail ?? null;
@@ -90,31 +101,54 @@ function describeBody(body: BoardCardBody, nowMs: number): string | null {
     }
 }
 
-export const BoardCardView = React.memo(function BoardCardView(props: Readonly<{
+/** The card's one secondary action: Run now for a readable workflow, Review for a held Run. */
+export function resolveBoardCardAction(card: BoardCard): BoardCardAction | null {
+    if (card.availability !== 'ready') return null;
+    // A parent hold is enough to open its native detail, not to claim a review/permission type.
+    // Aggregate attention (including stopped/uncertain custody) does not establish a hold.
+    if (card.ref.kind === 'workflow') return 'run';
+    return card.body.kind === 'workflow_run' && card.body.state === 'waiting_for_review' ? 'review' : null;
+}
+
+/**
+ * The card's frame: its edge, the shared state ring and tint, and the lift. It holds the open target and the
+ * action side by side, so the action is never a control inside the card's own button.
+ */
+export function BoardCardFrame(props: Readonly<{ card: BoardCard; lifted?: boolean; children: React.ReactNode }>) {
+    return <View testID={`board-card:${props.card.key}`}
+        style={[styles.card, workStatusSurfaceStyle(props.card.status.tone), props.lifted ? styles.lifted : null]}>
+        {props.children}
+    </View>;
+}
+
+/** The card's own content, drawn inside its open target. */
+export const BoardCardContent = React.memo(function BoardCardContent(props: Readonly<{
     card: BoardCard;
-    /** Lifted while dragged. */
-    lifted?: boolean;
     /** The enclosing status group already states this fact; accessibility keeps the exact word. */
     showStatusWord?: boolean;
 }>) {
     const { theme } = useUnistyles();
     const { card } = props;
     const unavailable = card.availability !== 'ready';
+    // In a status group the column names the bucket, so the title row drops the word. A card that needs
+    // the person or is in trouble still says what it is waiting for ("Permission required") on its own
+    // line; a healthy word ("Idle") would only repeat the column.
+    const grouped = props.showStatusWord === false;
+    const groupedWord = grouped && card.status.tone !== 'neutral' ? card.status.word : null;
+    const shownWord = grouped ? groupedWord : card.status.word;
     const readNextRefresh = React.useCallback((nowMs: number) => readBodyRefreshAtMs(card.body, nowMs), [card.body]);
     const nowMs = useSessionListRuntimeDeadlineNowMs(readNextRefresh, !unavailable
         && (card.body.kind === 'workflow' || card.body.kind === 'workflow_run'));
     const body = unavailable
         ? (card.unavailableReason ?? (card.availability === 'home_unavailable' ? t('boards.card.unavailableBody') : null))
-        : describeBody(card.body, nowMs);
+        : describeBody(card.body, nowMs, shownWord);
     return (
-        <View
-            testID={`board-card:${card.key}`}
-            style={[styles.card, workStatusSurfaceStyle(card.status.tone), props.lifted ? styles.lifted : null]}
-        >
+        <View style={[styles.content, resolveBoardCardAction(card) ? styles.contentAboveAction : null]}>
             <View style={styles.titleRow}>
-                <Icon name={KIND_ICON[card.ref.kind]} size={16} color={theme.colors.text.secondary} />
-                <Text numberOfLines={1} style={[styles.title, unavailable ? styles.quiet : null]}>{card.title}</Text>
-                {props.showStatusWord === false ? null : <Text
+                <View style={styles.mark}><Icon name={KIND_ICON[card.ref.kind]} size={16} color={theme.colors.text.secondary} /></View>
+                {/* A grouped card sits in a narrow column: its name may take a second line rather than truncate. */}
+                <Text numberOfLines={grouped ? 2 : 1} style={[styles.title, unavailable ? styles.quiet : null]}>{card.title}</Text>
+                {grouped ? null : <Text
                     testID={`board-card:${card.key}:word`}
                     numberOfLines={1}
                     style={[styles.word, workStatusWordStyle(card.status.tone)]}
@@ -128,8 +162,49 @@ export const BoardCardView = React.memo(function BoardCardView(props: Readonly<{
                     : <Text numberOfLines={1} style={styles.kind}>{t(`boards.kinds.${card.ref.kind}`)}</Text>}
             </View>
             {body ? <Text style={[styles.body, unavailable ? styles.quiet : null]}>{body}</Text> : null}
+            {groupedWord ? <Text testID={`board-card:${card.key}:needs`} style={[styles.body, workStatusWordStyle(card.status.tone)]}>{groupedWord}</Text> : null}
         </View>
     );
+});
+
+/** The card's secondary action, on its own line under the content; `null` when the card has none. */
+export function BoardCardActionButton(props: Readonly<{
+    card: BoardCard;
+    onAction?: (card: BoardCard, action: BoardCardAction) => void;
+    /** A carry owns interaction without changing the card's measured footprint. */
+    disabled?: boolean;
+}>) {
+    const { card, onAction } = props;
+    const action = resolveBoardCardAction(card);
+    if (!action || !onAction) return null;
+    return <View style={styles.action}>
+        <RoundButton testID={`board-card:${card.key}:${action}`} size="small" display="secondary"
+            disabled={props.disabled}
+            title={action === 'run' ? t('workflows.destination.rowMenu.runNow') : t('workflows.run.review')}
+            onPress={() => onAction(card, action)} />
+    </View>;
+}
+
+/**
+ * The whole card. `renderTarget` wraps the content in the caller's open target (a Pressable); the action
+ * sits beside that target inside the frame.
+ */
+export const BoardCardView = React.memo(function BoardCardView(props: Readonly<{
+    card: BoardCard;
+    /** Lifted while dragged. */
+    lifted?: boolean;
+    /** The enclosing status group already states this fact; accessibility keeps the exact word. */
+    showStatusWord?: boolean;
+    onAction?: (card: BoardCard, action: BoardCardAction) => void;
+    /** A carry owns interaction without changing the card's measured footprint. */
+    actionsDisabled?: boolean;
+    renderTarget?: (content: React.ReactNode) => React.ReactNode;
+}>) {
+    const content = <BoardCardContent card={props.card} showStatusWord={props.showStatusWord} />;
+    return <BoardCardFrame card={props.card} lifted={props.lifted}>
+        {props.renderTarget ? props.renderTarget(content) : content}
+        <BoardCardActionButton card={props.card} onAction={props.onAction} disabled={props.actionsDisabled} />
+    </BoardCardFrame>;
 });
 
 const styles = StyleSheet.create((theme) => ({
@@ -137,19 +212,28 @@ const styles = StyleSheet.create((theme) => ({
     // board follows the person's radius and density choices.
     card: {
         width: '100%',
-        gap: theme.margins.xs,
-        paddingHorizontal: theme.margins.lg,
-        paddingVertical: theme.margins.md,
         borderRadius: theme.borderRadius.xl,
         borderWidth: 1,
         borderColor: theme.colors.border.default,
         backgroundColor: theme.colors.surface.base,
     },
     lifted: shadowLevelStyle(theme.colors.shadowLevels[4]),
+    content: {
+        gap: theme.margins.xs,
+        paddingHorizontal: theme.margins.lg,
+        paddingVertical: theme.margins.md,
+    },
+    // The action's own line carries the card's bottom inset.
+    contentAboveAction: { paddingBottom: theme.margins.sm },
+    // The mark sits on the title's first line, so a two-line name in a status column keeps it level.
     titleRow: {
         flexDirection: 'row',
-        alignItems: 'center',
+        alignItems: 'flex-start',
         gap: 8,
+    },
+    mark: {
+        height: Typography.rowTitle().lineHeight,
+        justifyContent: 'center',
     },
     title: {
         ...Typography.rowTitle(),
@@ -159,6 +243,7 @@ const styles = StyleSheet.create((theme) => ({
     },
     word: {
         ...Typography.rowMeta(),
+        alignSelf: 'center',
         color: theme.colors.text.secondary,
         flexShrink: 1,
         maxWidth: '40%',
@@ -191,4 +276,6 @@ const styles = StyleSheet.create((theme) => ({
     quiet: {
         color: theme.colors.text.tertiary,
     },
+    // Trailing, like the lab's card actions: the body reads first, the action closes the card.
+    action: { alignItems: 'flex-end', paddingHorizontal: theme.margins.lg, paddingBottom: theme.margins.md },
 }));

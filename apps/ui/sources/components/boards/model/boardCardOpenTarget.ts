@@ -6,7 +6,9 @@ import type { BoardCard } from './boardCards';
 
 export type BoardCardOpenTarget =
     | Readonly<{ kind: 'inbox'; item: InboxItemFocus }>
-    | Readonly<{ kind: 'item'; ref: BoardItemRefV1 }>;
+    | Readonly<{ kind: 'item'; ref: BoardItemRefV1; intent?: 'run' }>;
+
+export type BoardCardAction = 'review' | 'run';
 
 /**
  * Where pressing a card goes. A card never answers a permission or a hold: work that needs the person
@@ -15,9 +17,13 @@ export type BoardCardOpenTarget =
  */
 export function resolveBoardCardOpenTarget(
     card: BoardCard,
-    context: Readonly<{ inboxAvailable: boolean }>,
+    context: Readonly<{ inboxAvailable: boolean; action?: BoardCardAction }>,
 ): BoardCardOpenTarget | null {
     if (card.availability === 'home_unavailable') return null;
+    // Secondary actions open native owners; neither dispatches a Run nor answers a hold here.
+    if (context.action === 'run') return card.ref.kind === 'workflow' && card.availability === 'ready'
+        ? { kind: 'item', ref: card.ref, intent: 'run' } : null;
+    if (context.action === 'review') return { kind: 'item', ref: card.ref };
     const inboxWork = card.ref.kind === 'session' || card.ref.kind === 'workflow_run';
     if (inboxWork && card.status.bucket === 'needs_you' && context.inboxAvailable) {
         return { kind: 'inbox', item: { kind: card.ref.kind === 'session' ? 'session' : 'workflow_run',

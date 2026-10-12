@@ -97,6 +97,13 @@ const { lightTheme, darkTheme } = await import('@/theme');
 const { t } = await import('@/text');
 const { upsertServerProfile } = await import('@/sync/domains/server/serverProfiles');
 const { Text: CaptureText } = await vi.importActual<typeof import('react-native-web')>('react-native-web');
+const { buildInboxWorkGroups } = await import('@/activity/presentation/buildInboxWorkGroups');
+const { InboxWorkGroupSection, groupInboxWorkSheets } = await import('@/components/inbox/workGroups/InboxWorkGroupSection');
+const { createInboxAttentionFixture } = await import('@/dev/testkit/fixtures/inboxFixtures');
+const { workflowRunRowFromSummary } = await import('@/sync/store/domains/workflowRuns');
+const { ItemList } = await import('@/components/ui/lists/ItemList');
+const { PageHeader } = await import('@/components/ui/layout/PageHeader');
+const { SegmentedTabBar } = await import('@/components/ui/navigation/SegmentedTabBar');
 
 afterEach(() => { standardCleanup(); storage.setState(storage.getInitialState(), true); vi.restoreAllMocks(); });
 function hostTree(node: ReactTestRendererJSON | ReactTestRendererJSON[] | string | null): React.ReactNode {
@@ -124,11 +131,19 @@ it.each(variants)('renders the STATUS source surfaces ($dark / $width)', async v
         sessionListRowsByServerId: { [home.id]: Object.fromEntries(rows.map(row => [row.id, row])) },
         machineListByServerId: { [home.id]: [machine] }, sessions: { [pending.id]: pending, [locked.id]: locked } });
     const refs = [...rows.map(row => ({ kind: 'session' as const, qualifiedId: { serverId: home.id, id: row.id } })),
-        { kind: 'workflow' as const, qualifiedId: { serverId: home.id, id: 'nightly' } }];
+        { kind: 'workflow' as const, qualifiedId: { serverId: home.id, id: 'nightly' } },
+        { kind: 'workflow_run' as const, qualifiedId: { serverId: home.id, id: 'release' } },
+        { kind: 'machine' as const, qualifiedId: { serverId: home.id, id: machine.id } }];
+    // A held Run (Review) and a Machine running two sessions, one of which needs the person.
+    const heldRun = workflowRunRowFromSummary(createWorkflowRunSummaryFixture({ id: 'release', state: 'waiting_for_review',
+        attentionRequired: true, machineId: machine.id, createdAt: new Date(now - 2 * 3_600_000).toISOString(),
+        updatedAt: new Date(now - 4 * 60_000).toISOString() }), { kind: 'available', value: { title: 'Prepare the 0.3 release' } } as never);
     const membership = projectBoardMembership({ ...createWorkBoardV1({ id: 'capture', name: 'Overview' }),
         source: { picked: refs } }, { isHomeMounted: () => true, sections: {}, filtered: null });
     const cards = buildBoardCards(membership.members, { nowMs: now, session: ref => rows.find(row => row.id === ref.qualifiedId.id) ?? null,
-        workflowRun: () => null, machine: () => null, machineSessionCounts: new Map(), accountScopedHome: () => true,
+        workflowRun: ref => ref.qualifiedId.id === 'release' ? heldRun : null, machine: ref => ref.qualifiedId.id === machine.id ? machine : null,
+        machineScope: () => ({ serverId: home.id, accountId: 'capture-account' }),
+        machineSessionCounts: new Map([[JSON.stringify(['machine', home.id, machine.id]), { running: 2, needsYou: 1 }]]), accountScopedHome: () => true,
         workflow: () => ({ title: 'Nightly release check', summary: { needsYouCount: 0, lastRun: null }, nextRun: { kind: 'unscheduled' },
             triggers: [{ kind: 'schedule', schedule: { kind: 'cron', everyMs: null, scheduleExpr: '0 2 * * *', timezone: 'Europe/Zurich' } }] }) });
     const projection = projectWork({ sessionId: 'lead', serverId: home.id,
@@ -159,15 +174,46 @@ it.each(variants)('renders the STATUS source surfaces ($dark / $width)', async v
     const invocations = [createWorkflowInvocationIndexFixture({ id: 'root' }), createWorkflowInvocationIndexFixture({
         id: 'held', parentRecordId: 'root', sequence: '1', lifecycle: 'waiting_for_review' })];
     const noop = () => {};
+    // Inbox (lab `inbox-I1`): a lead with a stalled worker and a pull request to land, a run that is its
+    // own root, and loose sessions (one to land, one snoozed). Real builder, sections and rows.
+    const inboxSession = (id: string, name: string, extra: Record<string, unknown> = {}) => createSessionFixture({ id, serverId: home.id,
+        active: true, presence: 'online', activeAt: now, updatedAt: now - 4 * 60_000, ...extra,
+        metadata: { ...createSessionFixture().metadata!, name, flavor: 'claude', machineId: machine.id, path: '/Users/alice/projects/payments',
+            homeDir: '/Users/alice', host: 'MacBook Pro' } });
+    const inboxLead = inboxSession('rollout', 'Payments v2 rollout', { reports: { total: 3, working: 1, needsYou: 1, stalled: 1 } });
+    const inboxStalled = inboxSession('ledger', 'Backfill intent ledger', { reportsTo: { sessionId: 'rollout' }, presence: 'offline', active: false });
+    const inboxRunbook = inboxSession('runbook', 'Support runbook for retries', { reportsTo: { sessionId: 'rollout' } });
+    const inboxModal = inboxSession('modal', 'Fix settings modal remount');
+    const inboxPricing = inboxSession('pricing', 'Pricing page copy');
+    const inboxSessions = new Map([inboxLead, inboxStalled, inboxRunbook, inboxModal, inboxPricing].map(session => [session.id, session]));
+    const inboxGroups = groupInboxWorkSheets(buildInboxWorkGroups({ sessionEntries: [],
+        workflowRuns: [workflowRunRowFromSummary(createWorkflowRunSummaryFixture({ id: 'release', state: 'interrupted', machineId: machine.id,
+            updatedAt: new Date(now - 6 * 60_000).toISOString() }), { kind: 'available', value: { title: 'Prepare the 0.3 release' } } as never)],
+        automationRuns: [], automationServerId: home.id, openApprovals: [], stalledSessions: [inboxStalled],
+        landings: [
+            { session: inboxRunbook, link: { sessionId: 'runbook', serverId: home.id, number: 2490, title: 'Support runbook for retries', state: 'open' } },
+            { session: inboxModal, link: { sessionId: 'modal', serverId: home.id, number: 2493, title: 'Keep the settings modal mounted', state: 'open' } },
+        ],
+        snoozed: [{ session: inboxPricing, remindAt: now + 3 * 3_600_000 }],
+        resolveSession: id => inboxSessions.get(id), resolveOriginRunId: () => null }));
+    const inboxModel = { ...createInboxAttentionFixture(home.id), spansHomes: false, settle: async () => {}, setReminder: async () => {} } as never;
     const screen = await renderScreen(<InjectedAuthProvider credentials={null}>
         <UniversalSearchRuntimeProvider value={{ open: noop, buildCommands: () => [] }}>
             <main>
                 <section id="board"><h2>By status</h2><div style={{ height: capture.width === 390 ? 650 : 360 }}>
-                    <div style={{ width: capture.width === 390 ? 390 : 980, height: '100%' }}><BoardByStatus cards={cards} stacked={capture.width === 390} onOpen={noop} /></div></div></section>
-                <section id="canvas"><h2>Filtered Canvas</h2><div style={{ height: 850, width: capture.width === 390 ? 390 : 980 }}>
+                    <div style={{ width: capture.width === 390 ? 390 : 980, height: '100%' }}><BoardByStatus cards={cards} stacked={capture.width === 390} onOpen={noop} onAction={noop} /></div></div></section>
+                <section id="canvas"><h2>Filtered Canvas</h2><div style={{ height: 850, overflow: 'hidden', width: capture.width === 390 ? 390 : 980 }}>
                     <BoardCanvas cards={canvasCards} positionsByItemRef={canvasBoard.positionsByItemRef} snap={false}
-                        binding={binding} onOpen={noop} /></div></section>
-                <section id="work"><h2>Work map</h2><SessionWorkMapView map={map} projection={projection} testIDPrefix="capture-work" onOpenItem={noop} /></section>
+                        binding={binding} onOpen={noop} onAction={noop} /></div></section>
+                <section id="work"><h2>Work map</h2><div style={{ width: capture.width === 390 ? 390 : 420 }}>
+                    <SessionWorkMapView map={map} projection={projection} testIDPrefix="capture-work" onOpenItem={noop} /></div></section>
+                <section id="inbox"><h2>Inbox</h2><div style={{ width: capture.width === 390 ? 390 : 1000 }}><ItemList testID="capture-inbox">
+                    <PageHeader title={t('tabs.inbox')} description={t('inbox.work.pageDescription')} actions={capture.width === 390 ? undefined
+                        : <SegmentedTabBar tabs={[{ id: 'needs_you', label: t('inbox.work.tabs.needsYou'), count: '5' },
+                            { id: 'updates', label: t('inbox.work.tabs.updates') }]} activeTabId="needs_you" onSelectTab={noop} />} />
+                    {inboxGroups.map((group, index) => <InboxWorkGroupSection key={group.key} group={group} model={inboxModel}
+                        identityDisplay="agentLogo" presentation="screen" spacingBefore={index === 0 ? 'following' : 'separated'}
+                        navigate={noop} />)}</ItemList></div></section>
                 <section id="home"><h2>Home</h2><HubStatusLineView working={0} needsYou={1} home={() => <CaptureText
                     style={{ color: (capture.dark ? darkTheme : lightTheme).colors.text.secondary }}>Personal Home</CaptureText>} />
                     <HubAttentionList items={[{ key: 'sessions', mark: null, title: t('homeIndex.sessionsAwaitingResponse', { count: 1 }),
@@ -190,7 +236,8 @@ it.each(variants)('renders the STATUS source surfaces ($dark / $width)', async v
     const layout = screen.tree.root.findAll(node => node.props.testID === 'board-by-status:stage' && typeof node.props.onLayout === 'function');
     expect(layout.length).toBeGreaterThan(0);
     await act(async () => layout[0]!.props.onLayout({ nativeEvent: { layout: { width: capture.width === 390 ? 390 : 980, height: 650 } } }));
-    await act(async () => screen.findHostByTestId('board-canvas')!.props.onLayout({ nativeEvent: { layout: {
+    const canvasLayout = screen.tree.root.find(node => node.props.testID === 'board-canvas' && typeof node.props.onLayout === 'function');
+    await act(async () => canvasLayout.props.onLayout({ nativeEvent: { layout: {
         width: capture.width === 390 ? 390 : 980, height: 850,
     } } }));
     await act(async () => {

@@ -68,6 +68,24 @@ afterEach(async () => {
 });
 
 describe('AddToBoardButton library recovery', () => {
+    it('updates a Machine option from the exact Home request reachability without changing its presence row', async () => {
+        const { createMachineFixture } = await import('@/dev/testkit/fixtures/machineFixtures');
+        const { recordMachineRequestFailed, clearMachineRequestReachabilityForTest } = await import('@/sync/domains/machines/reachability/machineReachability');
+        const { describeMachinePresenceLine } = await import('@/utils/sessions/machinePresenceLine');
+        const machine = createMachineFixture({ id: 'board-option-machine', active: true, activeAt: Date.now() });
+        storage.setState({ machineListByServerId: { [serverId]: [machine] } });
+        harness.home.answer(serverId, ARTIFACT_LIST_PATH, { body: [] });
+        harness.home.answer(serverId, RUN_STORAGE_PATH, { body: await boardRunStoragePage([]) });
+        const screen = await renderScreen(picker(), layout);
+        const id = JSON.stringify(['machine', serverId, machine.id]);
+        await waitForHomeGovernance(() => expect(options(screen).find(option => option.id === id)?.subtitle)
+            .toBe(describeMachinePresenceLine(machine, undefined, undefined, { serverId, accountId: 'account-a' }).label));
+        try {
+            await act(async () => recordMachineRequestFailed({ serverId, accountId: 'account-a', machineId: machine.id }));
+            expect(options(screen).find(option => option.id === id)?.subtitle)
+                .toBe(describeMachinePresenceLine(machine, undefined, undefined, { serverId, accountId: 'account-a' }).label);
+        } finally { clearMachineRequestReachabilityForTest(); }
+    });
     it.each(['refused', 'pending'] as const)('opens a picked widget in the shared Add surface and shows a %s Add there without adding twice', async kind => {
         harness.home.answer(serverId, ARTIFACT_LIST_PATH, { body: [] });
         harness.home.answer(serverId, RUN_STORAGE_PATH, { body: await boardRunStoragePage([]) });

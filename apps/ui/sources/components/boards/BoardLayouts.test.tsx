@@ -93,6 +93,48 @@ function canvasBinding(placed: BoardCard, commits: Record<string, { x: number; y
 }
 
 describe('Board layouts', () => {
+    it('auto-places grid-sized card frames with the same gutter in both drop modes', async () => {
+        const cards = [card('session', 'short', 'idle'), card('workflow', 'tall', 'idle'), card('machine', 'third', 'idle')];
+        const props = { cards, positionsByItemRef: {}, snap: true, binding: canvasBinding(cards[0]!, []), onOpen: () => {} };
+        const screen = await renderScreen(<BoardCanvas {...props} />);
+        const frame = (key: string) => {
+            let node = screen.findHostByTestId(`board-canvas-card:${key}`)!;
+            while (!node.props.onLayout) node = node.parent!;
+            return node;
+        };
+        const flatten = (style: unknown): Record<string, number> => Array.isArray(style)
+            ? Object.assign({}, ...style.map(flatten)) : style && typeof style === 'object' ? style as Record<string, number> : {};
+        await act(async () => {
+            screen.findHostByTestId('board-canvas')!.props.onLayout({ nativeEvent: { layout: { width: 992, height: 900 } } });
+            for (const [index, member] of cards.entries()) frame(member.key).props.onLayout({ nativeEvent: { layout: {
+                x: 0, y: 0, width: 408, height: index === 1 ? 88 : 64,
+            } } });
+        });
+        const check = () => {
+            const first = flatten(frame(cards[0]!.key).props.style), second = flatten(frame(cards[1]!.key).props.style);
+            const third = flatten(frame(cards[2]!.key).props.style);
+            const inset = flatten(screen.findHostByTestId(`board-canvas-card:${cards[0]!.key}`)!.props.style).paddingBottom ?? 0;
+            expect(first.width % 24).toBe(0);
+            expect(second.left - first.left - first.width).toBe(BOARD_CANVAS_METRICS.gapPx);
+            expect(third.top - first.top - (64 + inset)).toBe(BOARD_CANVAS_METRICS.gapPx);
+            for (const member of cards) {
+                const position = flatten(frame(member.key).props.style);
+                expect((position.left - 24) % 24).toBe(0);
+                expect((position.top - 24) % 24).toBe(0);
+            }
+        };
+        check();
+        await screen.update(<BoardCanvas {...props} snap={false} />);
+        check();
+        // The real layout callback includes the newly painted inset; that feedback must settle.
+        await act(async () => frame(cards[0]!.key).props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 408, height: 72 } } }));
+        check();
+        // A shorter refreshed card sheds its previous grid inset instead of keeping a stale height.
+        await act(async () => frame(cards[0]!.key).props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 408, height: 56 } } }));
+        const first = flatten(frame(cards[0]!.key).props.style), third = flatten(frame(cards[2]!.key).props.style);
+        expect(third.top - first.top).toBe(72);
+    });
+
     it('flows filtered cards around saved hand positions and retains geometry and identity on an unrelated update', async () => {
         const picked = [card('workflow', 'own-workflow', 'idle'), card('workflow_run', 'stopped-run', 'finished'),
             card('machine', 'own-machine', 'working'), card('session', 'own-session', 'working')];
@@ -122,13 +164,16 @@ describe('Board layouts', () => {
                 ? Object.assign({}, ...style.map(flatten)) : style && typeof style === 'object' ? style as Record<string, unknown> : {};
             const style = flatten(frame(member.key).props.style);
             const flowIndex = index - picked.length;
-            // Before the fix, native masonry starts at the padded origin, independently of saved XY.
-            return { key: member.key, x: Number(style.left ?? 24 + flowIndex % 2 * 424),
-                y: Number(style.top ?? 24 + Math.floor(flowIndex / 2) * 88), width: 400, height: index < 2 ? 88 : 64 };
+            const inset = flatten(screen.findHostByTestId(`board-canvas-card:${member.key}`)!.props.style).paddingBottom ?? 0;
+            return { key: member.key, x: Number(style.left ?? 24 + flowIndex % 2 * 432),
+                y: Number(style.top ?? 24 + Math.floor(flowIndex / 2) * 96),
+                width: Number(style.width), height: (index < 2 ? 88 : 64) + Number(inset) };
         });
         const before = rectangles();
         const overlaps = before.flatMap((a, index) => before.slice(index + 1).filter(b =>
-            a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height)
+            // Retained manual rectangles can already overlap; automatic cards must avoid them all.
+            (!positionsByItemRef[a.key] || !positionsByItemRef[b.key])
+            && a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height)
             .map(b => [a.key, b.key]));
         expect(overlaps).toEqual([]);
         for (const member of picked) {
@@ -181,6 +226,8 @@ describe('Board layouts', () => {
         expect(keysIn('offline')).toEqual(['build-vps']);
         for (const card of MIXED) {
             expect(screen.findByTestId(`board-card:${card.key}:word`)).toBeNull();
+            // Only work that needs the person or is in trouble keeps what it waits for, on its own line.
+            expect(screen.findByTestId(`board-card:${card.key}:needs`) !== null).toBe(card.status.tone !== 'neutral');
             expect(screen.findHostByTestId(`board-status-card:${card.key}`)?.props.accessibilityLabel).toContain(card.status.word);
         }
     });

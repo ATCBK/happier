@@ -28,11 +28,33 @@ describe('board canvas geometry', () => {
             .toEqual({ x: 0, y: 0 });
     });
 
+    it('finds the closest free rectangle, keeps valid free coordinates, and ignores the card being moved', () => {
+        const footprint = { key: 'moving', width: 408, height: 72 };
+        const occupied = [{ ...footprint, x: 0, y: 0 }, { key: 'a', x: 432, y: 0, width: 408, height: 72 },
+            { key: 'b', x: 432, y: 96, width: 408, height: 72 }];
+        expect(resolveBoardCardDrop({ origin: { x: 440, y: 5 }, translation: { x: 0, y: 0 }, snap: false, footprint, occupied }))
+            .toEqual({ x: 440, y: 192 });
+        expect(resolveBoardCardDrop({ origin: { x: 850, y: 5 }, translation: { x: 0, y: 0 }, snap: false, footprint, occupied }))
+            .toEqual({ x: 864, y: 5 });
+        expect(resolveBoardCardDrop({ origin: { x: 440, y: 5 }, translation: { x: 0, y: 0 }, snap: true, footprint, occupied }))
+            .toEqual({ x: 432, y: 192 });
+        expect(resolveBoardCardDrop({ origin: { x: 9, y: 200 }, translation: { x: 0, y: 0 }, snap: false, footprint, occupied }))
+            .toEqual({ x: 9, y: 200 });
+    });
+
     it('moves a focused card one snap-grid step per arrow key, from a free position onto the grid', () => {
         expect(moveBoardCardByKeyboard({ x: 0, y: 0 }, 'right')).toEqual({ x: step, y: 0 });
         expect(moveBoardCardByKeyboard({ x: step * 2, y: step }, 'up')).toEqual({ x: step * 2, y: 0 });
         expect(moveBoardCardByKeyboard({ x: 5, y: 5 }, 'down')).toEqual({ x: 0, y: step });
         expect(moveBoardCardByKeyboard({ x: 0, y: 0 }, 'left')).toEqual({ x: 0, y: 0 });
+    });
+
+    it('uses a diagonal opening when neither requested axis has the nearest free slot', () => {
+        expect(resolveBoardCardDrop({ origin: { x: 90, y: 90 }, translation: { x: 0, y: 0 }, snap: false,
+            footprint: { key: 'moving', width: 24, height: 24 }, occupied: [
+                { key: 'horizontal', x: 0, y: 80, width: 200, height: 24 },
+                { key: 'vertical', x: 80, y: 0, width: 24, height: 200 },
+            ] })).toEqual({ x: 128, y: 128 });
     });
 
     it('fits as many card columns as the width allows, at least one', () => {
@@ -68,16 +90,16 @@ describe('board canvas geometry', () => {
     });
 
     it('compacts filtered automatic cards into balanced columns while preserving saved rectangles', () => {
-        const members = Array.from({ length: 6 }, (_, index) => ({ key: `card-${index}`, width: 400, height: 64 }));
+        const members = Array.from({ length: 6 }, (_, index) => ({ key: `card-${index}`, width: 408, height: 72 }));
         const previous = new Map(members.map((member, index) => [member.key, { x: 0, y: 200 + index * 88 }]));
-        const input = { members, positionsByItemRef: { 'card-0': { x: 424, y: 176 } }, columnCount: 2, snap: false, previous };
+        const input = { members, positionsByItemRef: { 'card-0': { x: 432, y: 192 } }, columnCount: 2, snap: false, previous };
         const positions = resolveBoardCanvasPositions(input);
         expect(positions.get('card-0')).toEqual(input.positionsByItemRef['card-0']);
         expect(positions.get('card-1')).toEqual({ x: 0, y: 0 });
-        expect(positions.get('card-2')).toEqual({ x: 424, y: 0 });
-        expect(positions.get('card-3')).toEqual({ x: 0, y: 88 });
-        expect(positions.get('card-4')).toEqual({ x: 424, y: 88 });
-        expect(positions.get('card-5')).toEqual({ x: 0, y: 176 });
+        expect(positions.get('card-2')).toEqual({ x: 432, y: 0 });
+        expect(positions.get('card-3')).toEqual({ x: 0, y: 96 });
+        expect(positions.get('card-4')).toEqual({ x: 432, y: 96 });
+        expect(positions.get('card-5')).toEqual({ x: 0, y: 192 });
         expect(resolveBoardCanvasPositions({ ...input, previous: positions })).toBe(positions);
     });
 
@@ -97,10 +119,14 @@ describe('board canvas geometry', () => {
         // The compact projection uses the earlier opening in the other column, not c's old slot.
         expect(grown.get('c')).toEqual({ x: 432, y: 120 });
         expect(grown.get('wide')!.y).toBeGreaterThanOrEqual(208);
+        // Automatic layout keeps the same grid-sized frames and gutter in both drop modes.
         const free = resolveBoardCanvasPositions({ ...input, snap: false });
-        expect(free.get('b')).toEqual({ x: 424, y: 0 });
-        expect(free.get('c')).toEqual({ x: 0, y: 88 });
-        expect(resolveBoardCanvasColumnCount(824, true)).toBe(1);
-        expect(resolveBoardCanvasColumnCount(832, true)).toBe(2);
+        expect(free.get('b')).toEqual({ x: 432, y: 0 });
+        expect(free.get('c')).toEqual({ x: 0, y: 96 });
+        expect(BOARD_CANVAS_METRICS.cardWidthPx).toBe(408);
+        expect(positions.get('b')!.x - BOARD_CANVAS_METRICS.cardWidthPx).toBe(BOARD_CANVAS_METRICS.gapPx);
+        expect(resolveBoardCanvasColumnCount(824)).toBe(1);
+        expect(resolveBoardCanvasColumnCount(839)).toBe(1);
+        expect(resolveBoardCanvasColumnCount(840)).toBe(2);
     });
 });

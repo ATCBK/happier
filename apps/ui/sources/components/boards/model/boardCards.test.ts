@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { BoardItemRefV1 } from '@happier-dev/protocol';
 import type { ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
 
@@ -24,8 +24,10 @@ import {
 } from './boardCards';
 import type { BoardMember } from './boardMembership';
 import { readSessionStatusNextRefreshAtMs } from '@/utils/sessions/sessionUtils';
+import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed, recordMachineRequestSucceeded } from '@/sync/domains/machines/reachability/machineReachability';
 
 const NOW = 1_000_000;
+afterEach(clearMachineRequestReachabilityForTest);
 
 function member(ref: BoardItemRefV1, available = true): BoardMember {
     return { key: JSON.stringify([ref.kind, ref.qualifiedId.serverId, ref.qualifiedId.id]), ref, picked: true, sourced: false, available };
@@ -49,12 +51,28 @@ const workingSession = createSessionListRenderableSessionFixture({
 });
 
 describe('board cards', () => {
+    it('reprojects request failure and recovery for the machine own Home and Account without a machine row update', () => {
+        const ref = { kind: 'machine', qualifiedId: { serverId: 'home-a', id: 'mbp' } } as const;
+        const machine = createMachineFixture({ id: 'mbp', active: true, activeAt: NOW });
+        const scope = { serverId: 'home-a', accountId: 'owner' };
+        const facts: BoardCardFacts = { nowMs: NOW, session: () => null, workflowRun: () => null, workflow: () => null,
+            machine: () => machine, machineScope: () => scope, machineSessionCounts: new Map(), accountScopedHome: () => true };
+        const project = createBoardCardProjection();
+        expect(project([member(ref)], facts)[0]?.body).toMatchObject({ online: true });
+        recordMachineRequestFailed({ ...scope, machineId: machine.id, observedAtMs: NOW });
+        expect(project([member(ref)], facts)[0]?.body).toMatchObject({ online: false });
+        expect(project([member(ref)], facts)[0]?.status.bucket).toBe('offline');
+        recordMachineRequestSucceeded({ ...scope, machineId: machine.id, observedAtMs: NOW + 1 });
+        expect(project([member(ref)], facts)[0]?.body).toMatchObject({ online: true });
+        expect(project([member(ref)], { ...facts, machineScope: () => null })[0]?.body).toMatchObject({ online: false });
+    });
     it('keeps the enrolled Machine asleep and reprojects observed Start through the shared status owner', () => {
         const ref = { kind: 'machine', qualifiedId: { serverId: 'home-a', id: 'guest' } } as const;
         const managed: ManagedMachineV1 = { id: 'managed', homeId: 'home-a', custodianAccountId: 'owner',
             launch: { provider: { pluginId: 'custom.native', localId: 'vm' }, schemaVersion: 1, name: 'Build box', choices: {} },
             controller: { machineId: 'controller', installationId: 'installation' }, enrolledMachineId: 'guest',
             allocation: 'bound', creationState: 'active', desired: 'stop', desiredWhen: 'now', intentRevision: 1,
+            resource: { contributionRef: { pluginId: 'custom.native', localId: 'vm' }, schemaVersion: 1, value: { id: 'retained-native' } },
             retention: { kind: 'unused', afterMs: 3600000, effect: 'stop' }, wakeOnAcceptedMessage: true,
             observation: { observedAt: 10, availability: 'present', power: 'stopped', storage: 'retained', daemon: 'disconnected' } };
         const guest = createMachineFixture({ id: 'guest', active: false, activeAt: 0 });
@@ -66,6 +84,16 @@ describe('board cards', () => {
         expect(project(members, facts)[0]?.status).toMatchObject({ bucket: 'idle', word: 'managedPower.asleep' });
         const starting = { ...managed, submittedNativeEffect: { intent: 'start' as const, intentRevision: 2, requestId: 'start', controller: managed.controller } };
         expect(project(members, { ...facts, managedMachine: () => starting })[0]?.status).toMatchObject({ bucket: 'working', word: 'managedWake.starting' });
+    });
+    it('names why an online Machine needs the person in its state word, not its presence', () => {
+        const ref = { kind: 'machine', qualifiedId: { serverId: 'home-a', id: 'mbp' } } as const;
+        const mbp = createMachineFixture({ id: 'mbp', active: true, activeAt: NOW });
+        const facts: BoardCardFacts = { nowMs: NOW, session: () => null, workflowRun: () => null, workflow: () => null,
+            machine: () => mbp, machineScope: () => ({ serverId: 'home-a', accountId: 'owner' }), machineSessionCounts: new Map([[member(ref).key, { running: 2, needsYou: 1 }]]), accountScopedHome: () => true };
+        expect(buildBoardCards([member(ref)], facts)[0]?.status)
+            .toEqual({ bucket: 'needs_you', tone: 'attention', word: 'boards.card.machine.needYou:1' });
+        const calm = buildBoardCards([member(ref)], { ...facts, machineSessionCounts: new Map([[member(ref).key, { running: 2, needsYou: 0 }]]) });
+        expect(calm[0]?.status).toEqual({ bucket: 'working', tone: 'neutral', word: 'boards.card.machine.online' });
     });
     it('keeps unreadable Session explanations in the body with a short neutral state word', () => {
         const row = createSessionListRenderableSessionFixture({ ...permissionSession, metadata: null,
@@ -144,6 +172,7 @@ describe('board cards', () => {
             machine: (ref) => (ref.qualifiedId.id === 'm1'
                 ? createMachineFixture({ id: 'm1', active: true, activeAt: NOW })
                 : createMachineFixture({ id: 'm2', active: false, activeAt: 1 })),
+            machineScope: serverId => ({ serverId, accountId: 'owner' }),
             machineSessionCounts: new Map([[JSON.stringify(['machine', 'home-a', 'm1']), { running: 1, needsYou: 1 }]]),
             accountScopedHome: () => true,
             workflow: () => ({ title: 'Nightly release check', summary: { needsYouCount: 0, lastRun: null } }),
@@ -215,6 +244,7 @@ describe('board cards', () => {
             session: (ref) => sessionRows.get(ref.qualifiedId.id) ?? null,
             workflowRun: (ref) => workflowRunRowFromSummary(createWorkflowRunSummaryFixture({ id: ref.qualifiedId.id, state: 'running' }), null),
             machine: (ref) => createMachineFixture({ id: ref.qualifiedId.id, active: true, activeAt: NOW }),
+            machineScope: serverId => ({ serverId, accountId: 'owner' }),
             machineSessionCounts: new Map(),
             workflow: () => null,
             accountScopedHome: () => true,

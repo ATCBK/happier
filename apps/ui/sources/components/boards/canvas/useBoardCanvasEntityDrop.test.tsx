@@ -30,12 +30,16 @@ function drag(type: string, x: number, y: number, dataTransfer: ReturnType<typeo
 }
 
 describe('Canvas browser drop at the shared entity owner', () => {
-    it.each(['saved', 'flow'] as const)('drops a %s card on blank viewport space through the Board queue, and does not accept a no-op or an invalid kind', async placement => {
+    it.each(['saved', 'flow'] as const)('drops a %s card through the Board queue, settling an occupied destination and refusing a no-op or invalid kind', async placement => {
         const scope = { serverId: 'home', accountId: 'account' };
         const ref = { kind: 'machine', qualifiedId: { serverId: scope.serverId, id: 'machine' } } as const;
         const key = buildWorkBoardItemKeyV1(ref);
+        const obstacle = { ...ref, qualifiedId: { ...ref.qualifiedId, id: 'obstacle' } };
+        const obstacleKey = buildWorkBoardItemKeyV1(obstacle);
+        const snap = placement === 'saved';
+        const settled = { x: snap ? 432 : 440, y: 96 };
         const board = { ...createWorkBoardV1({ id: 'board', name: 'Board' }), mode: 'canvas' as const,
-            source: { picked: [ref] }, positionsByItemRef: placement === 'saved' ? { [key]: { x: 72, y: 0 } } : {} };
+            source: { picked: [ref, obstacle] }, positionsByItemRef: placement === 'saved' ? { [key]: { x: 72, y: 0 } } : {} };
         const persistence = createWorkBoardArtifactBoundary({ v: 1, boards: [board] });
         const store = createWorkBoardAccountStore(persistence.transport, () => true);
         await store.refresh();
@@ -57,8 +61,9 @@ describe('Canvas browser drop at the shared entity owner', () => {
         runtime.registerSource({ id: 'invalid', scope, isCurrent: () => true,
             getItem: () => ({ kind: 'destination', scope, href: '/inbox' }) });
         // Flow layout and persisted XY use the same padded Canvas coordinate space.
-        const measured = { current: new Map([[key, { x: 72, y: 0 }]]) };
-        const canvas = await renderHook(() => useBoardCanvasEntityDrop(binding, measured, true));
+        const measured = { current: new Map([[key, { x: 72, y: 0, width: 408, height: 72 }],
+            [obstacleKey, { x: 504, y: 0, width: 408, height: 72 }]]) };
+        const canvas = await renderHook(() => useBoardCanvasEntityDrop(binding, measured, snap));
         const sourceHook = await renderHook(() => useEntityDragDomBinding({ runtime, sourceId: 'card', enabled: true,
             canStart: event => { canvas.getCurrent().setGrab(key, { x: event.clientX, y: event.clientY }); return true; } }));
         const viewport = document.createElement('div');
@@ -91,18 +96,22 @@ describe('Canvas browser drop at the shared entity owner', () => {
             act(() => { viewport.dispatchEvent(over); });
             expect(runtime.getSnapshot().admission?.status).toBe('allowed');
             expect(over.defaultPrevented).toBe(true);
-            const drop = drag('drop', 721, 460, data);
+            const overlap = drag('dragover', 578, 140, data);
+            act(() => { viewport.dispatchEvent(overlap); });
+            const admission = runtime.getSnapshot().admission;
+            expect(admission).toMatchObject({ status: 'allowed', effect: { input: { intent: { positionsByItemRef: { [key]: settled } } } } });
+            const drop = drag('drop', 578, 140, data);
             await act(async () => { viewport.dispatchEvent(drop); await vi.waitFor(() => expect(runtime.getSnapshot().outcome?.status).toBe('applied')); });
             expect(drop.defaultPrevented).toBe(true);
-            expect(persistence.acknowledged().boards[0]!.positionsByItemRef[key]).toEqual({ x: 576, y: 336 });
+            expect(persistence.acknowledged().boards[0]!.positionsByItemRef).toEqual({ [key]: settled, [obstacleKey]: { x: 504, y: 0 } });
             expect(runtime.getSnapshot().outcome?.status).toBe('applied');
-            source.dispatchEvent(drag('dragend', 721, 460, data));
+            source.dispatchEvent(drag('dragend', 578, 140, data));
             runtime.begin('invalid');
             const invalid = drag('dragover', 721, 460, data);
             viewport.dispatchEvent(invalid);
             expect(invalid.defaultPrevented).toBe(false);
             await act(async () => { viewport.dispatchEvent(drag('drop', 721, 460, data)); });
-            expect(persistence.acknowledged().boards[0]!.positionsByItemRef[key]).toEqual({ x: 576, y: 336 });
+            expect(persistence.acknowledged().boards[0]!.positionsByItemRef[key]).toEqual(settled);
         } finally {
             stopCancellation(); runtime.cancel();
             await sourceHook.unmount(); await canvas.unmount(); viewport.remove();

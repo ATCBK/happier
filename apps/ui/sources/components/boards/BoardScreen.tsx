@@ -43,13 +43,15 @@ import { useWorkBoardEntityBinding } from './model/workBoardEntityBinding';
 import { widgetMovementRefused } from '@/sync/ops/actions/widgetEntityMovement';
 import { useBoardLiveCards } from './model/useBoardContent';
 import { useBoardWidgetArrivals } from './model/useBoardWidgetArrivals';
-import { resolveBoardCardOpenTarget } from './model/boardCardOpenTarget';
+import { resolveBoardCardOpenTarget, type BoardCardAction } from './model/boardCardOpenTarget';
 import { resolveBoardSaveFailure } from './model/boardSaveFailure';
 import { useDispatchWorkBoardIntent, useWorkBoard, useWorkBoardReadState, useWorkBoardSaveQueue, useWorkBoardSaveState, useWorkBoardSummaries } from './model/useWorkBoards';
 import { BoardReadState } from './BoardReadState';
 import { BoardsInboxBoundary } from './BoardsInboxBoundary';
 import { BOARDS_ROUTE } from './boardsRoutes';
 import { BoardSaveFailureLine, describeBoardSaveFailure } from './BoardSaveFailureLine';
+import { machinePageHref } from '@/components/settings/machines/collection/machineCollectionModel';
+import { PopoverScope } from '@/components/ui/popover';
 
 /**
  * One board (lab `boards-B1`…`B5`): the header — title, the source line, Canvas | By status, Add to
@@ -101,12 +103,12 @@ const MissingBoard = React.memo(function MissingBoard(props: Readonly<{ boardId:
     );
 });
 
-function useOpenBoardCard(): (card: BoardCard) => void {
+function useOpenBoardCard(): (card: BoardCard, action?: BoardCardAction) => void {
     const router = useRouter();
     const destinations = useCompactAppDestinations();
     const inboxAvailable = destinations.some((destination) => destination.id === 'inbox');
-    return React.useCallback((card: BoardCard) => {
-        const target = resolveBoardCardOpenTarget(card, { inboxAvailable });
+    return React.useCallback((card: BoardCard, action?: BoardCardAction) => {
+        const target = resolveBoardCardOpenTarget(card, { inboxAvailable, action });
         if (!target) return;
         if (target.kind === 'inbox') {
             // The Inbox owns needs-you work; the board never answers it. It opens on this card's item.
@@ -119,14 +121,15 @@ function useOpenBoardCard(): (card: BoardCard) => void {
                 router.push(buildScopedSessionRouteHref({ sessionId: id, serverId }) as never);
                 return;
             case 'workflow_run':
-                router.push(createWorkflowRunRoute(id) as never);
+                router.push(createWorkflowRunRoute(id, serverId) as never);
                 return;
             case 'workflow':
-                router.push({ pathname: '/workflows/[id]', params: { id } } as never);
+                router.push({ pathname: '/workflows/[id]', params: { id, ...(target.intent ? { intent: target.intent } : {}) } } as never);
                 return;
             case 'machine':
-                // Qualified: the machine's own Home, never the focused Home's same-id machine.
-                router.push({ pathname: '/machine/[id]', params: { id, serverId } } as never);
+                // Qualified: the machine's own Home, never the focused Home's same-id machine. Outside
+                // Settings, a machine opens through the rail door (plan machine-resources 10 MPG-2).
+                router.push(machinePageHref({ door: 'rail', target: { machineId: id, serverId } }) as never);
                 return;
         }
     }, [inboxAvailable, router]);
@@ -271,6 +274,8 @@ const BoardBody = React.memo(function BoardBody(props: Readonly<{ board: WorkBoa
         <View ref={rootRef} collapsable={false} testID={`board:${board.id}`} style={styles.root} onLayout={() => {
             void measureWindowBounds(toTreeDropMeasurableRef(root.current)).then(bounds => { nativeBounds.current = bounds; binding?.runtime.refresh(); });
         }}>
+            {/* The Board's menus and its Add surface float inside this page column, never over the sidebar. */}
+            <PopoverScope boundaryRef={root}>
             <PageHeader
                 testID="board-header"
                 title={board.name}
@@ -367,12 +372,14 @@ const BoardBody = React.memo(function BoardBody(props: Readonly<{ board: WorkBoa
                     placingKey={placingKey}
                     onPlaced={() => setPlacingKey(null)}
                     onOpen={onOpen}
+                    onAction={onOpen}
                     binding={binding}
                 />
             ) : null}
-                <BoardByStatus cards={cards} widgets={canvasWidgets} renderWidget={renderWidget} onOpen={onOpen} stacked={phone}
+                <BoardByStatus cards={cards} widgets={canvasWidgets} renderWidget={renderWidget} onOpen={onOpen} onAction={onOpen} stacked={phone}
                     visible={mode === 'by_status'} active={routeFocused && mode === 'by_status'} />
             </>}
+            </PopoverScope>
         </View>
     );
 });

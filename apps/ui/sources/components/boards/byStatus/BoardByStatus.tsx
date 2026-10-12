@@ -6,8 +6,9 @@ import { CoreCollectionScope } from '@/components/ui/lists/collection/CoreCollec
 import { describeWorkStatusBucket, WORK_STATUS_BUCKETS } from '@/components/work/status/workStatusBuckets';
 import { t } from '@/text';
 
-import { BoardCardView } from '../cards/BoardCardView';
+import { BoardCardActionButton, BoardCardContent, BoardCardFrame } from '../cards/BoardCardView';
 import type { BoardCard } from '../model/boardCards';
+import type { BoardCardAction } from '../model/boardCardOpenTarget';
 import type { BoardCanvasWidget, BoardCanvasWidgetRender } from '../canvas/BoardCanvas';
 
 /** A work card, or a configured widget (which has a placement and no status). */
@@ -32,6 +33,7 @@ export const BoardByStatus = React.memo(function BoardByStatus(props: Readonly<{
     widgets?: readonly BoardCanvasWidget[];
     renderWidget?: BoardCanvasWidgetRender;
     onOpen: (card: BoardCard) => void;
+    onAction?: (card: BoardCard, action: BoardCardAction) => void;
     stacked: boolean;
     /** Route focus returning from the opened item, supplied by the navigation owner. */
     active?: boolean;
@@ -51,14 +53,18 @@ export const BoardByStatus = React.memo(function BoardByStatus(props: Readonly<{
     }), [hasWidgets, props.stacked]);
     const items = React.useMemo((): readonly StatusItem[] => hasWidgets ? [...widgets, ...props.cards] : props.cards, [hasWidgets, props.cards, widgets]);
     const renderWidget = props.renderWidget;
+    const onAction = props.onAction;
     const anatomy = React.useMemo((): CollectionAnatomy<StatusItem> => ({
-        boardContent: item => isWidget(item) ? renderWidget?.(item, { grip: null, lifted: false, active: true }) ?? null : <BoardCardView card={item} showStatusWord={false} />,
+        boardContent: item => isWidget(item) ? renderWidget?.(item, { grip: null, lifted: false, active: true }) ?? null : <BoardCardContent card={item} showStatusWord={false} />,
+        // The card's frame holds its open target and its action, which Collection keeps as sibling targets.
+        wrapItem: (item, card) => isWidget(item) ? card : <BoardCardFrame card={item}>{card}</BoardCardFrame>,
+        action: item => isWidget(item) ? null : <BoardCardActionButton card={item} onAction={onAction} />,
         glyph: () => null,
         title: item => item.title,
         accessibilityLabel: item => `${item.title}, ${isWidget(item) ? t('boards.widgets.kind') : item.status.word}`,
         testID: item => isWidget(item) ? `board-status-widget:${item.key}` : `board-status-card:${item.key}`,
         columnTitles: { title: '' },
-    }), [renderWidget]);
+    }), [renderWidget, onAction]);
     const onOpenChange = React.useCallback((key: string | null) => {
         const card = props.cards.find(candidate => candidate.key === key);
         if (card) {

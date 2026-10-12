@@ -6,13 +6,15 @@
 export const BOARD_CANVAS_METRICS = Object.freeze({
     /** The snap grid, and the keyboard's move step. */
     gridStepPx: 24,
-    cardWidthPx: 400,
+    /** A whole number of grid steps, so the horizontal gutter is exactly one step. */
+    cardWidthPx: 408,
     gapPx: 24,
     /** The canvas's inner margin, so a card at the origin does not touch the page edge. */
     paddingPx: 24,
 });
 
 export type BoardCanvasPoint = Readonly<{ x: number; y: number }>;
+export type BoardCanvasRect = BoardCanvasPoint & Readonly<{ width: number; height: number }>;
 export type BoardCanvasDirection = 'up' | 'down' | 'left' | 'right';
 
 function snapValue(value: number): number {
@@ -26,17 +28,47 @@ function clampToCanvas(point: BoardCanvasPoint): BoardCanvasPoint {
 
 /**
  * Snapping on: the nearest grid point. Off: exactly where it was released, unless ⇧ was held for this
- * drop (`snapOnce`). Never off the canvas.
+ * drop (`snapOnce`). Overlapping releases settle to the nearest free rectangle with the Canvas gutter.
+ * Never off the canvas; the moving member does not obstruct itself.
  */
 export function resolveBoardCardDrop(input: Readonly<{
     origin: BoardCanvasPoint;
     translation: BoardCanvasPoint;
     snap: boolean;
     snapOnce?: boolean;
+    footprint?: BoardCanvasFootprint;
+    occupied?: readonly (BoardCanvasFootprint & BoardCanvasPoint)[];
 }>): BoardCanvasPoint {
     const x = input.origin.x + input.translation.x;
     const y = input.origin.y + input.translation.y;
-    return clampToCanvas(input.snap || input.snapOnce === true ? { x: snapValue(x), y: snapValue(y) } : { x, y });
+    const snapping = input.snap || input.snapOnce === true;
+    const point = clampToCanvas(snapping ? { x: snapValue(x), y: snapValue(y) } : { x, y });
+    const member = input.footprint;
+    if (!member) return point;
+    const occupied = (input.occupied ?? []).filter(other => other.key !== member.key);
+    const free = (candidate: BoardCanvasPoint) => !occupied.some(other => intersects(member, candidate, other));
+    if (free(point)) return point;
+    // A nearest point outside a union of forbidden rectangles lies on their edges (or the
+    // requested axis). Testing their intersections also finds diagonal openings between cards.
+    const xs = new Set([point.x, 0]), ys = new Set([point.y, 0]);
+    const step = BOARD_CANVAS_METRICS.gridStepPx;
+    for (const other of occupied) {
+        const left = other.x - member.width - BOARD_CANVAS_METRICS.gapPx;
+        const right = other.x + other.width + BOARD_CANVAS_METRICS.gapPx;
+        const top = other.y - member.height - BOARD_CANVAS_METRICS.gapPx;
+        const bottom = other.y + other.height + BOARD_CANVAS_METRICS.gapPx;
+        xs.add(Math.max(0, snapping ? Math.floor(left / step) * step : Math.floor(left)));
+        xs.add(snapping ? ceilToBoardCanvasGrid(right) : Math.ceil(right));
+        ys.add(Math.max(0, snapping ? Math.floor(top / step) * step : Math.floor(top)));
+        ys.add(snapping ? ceilToBoardCanvasGrid(bottom) : Math.ceil(bottom));
+    }
+    let best = point, distance = Infinity;
+    for (const x of xs) for (const y of ys) {
+        const candidateDistance = (x - point.x) ** 2 + (y - point.y) ** 2;
+        if (candidateDistance >= distance || !free({ x, y })) continue;
+        best = { x, y }; distance = candidateDistance;
+    }
+    return best;
 }
 
 /** An arrow key moves a focused card one grid step, first settling a free position onto the grid. */
@@ -53,17 +85,23 @@ export function moveBoardCardByKeyboard(position: BoardCanvasPoint, direction: B
 }
 
 /** How many card columns fit in the canvas width; unplaced cards flow into them. */
-export function resolveBoardCanvasColumnCount(widthPx: number, snap = false): number {
+export function resolveBoardCanvasColumnCount(widthPx: number): number {
     const { cardWidthPx, gapPx } = BOARD_CANVAS_METRICS;
-    const stride = snap ? ceilToGrid(cardWidthPx + gapPx) : cardWidthPx + gapPx;
+    const stride = cardWidthPx + gapPx;
     return Math.max(1, Math.floor((widthPx - cardWidthPx) / stride) + 1);
 }
 
-function ceilToGrid(value: number): number {
+export function ceilToBoardCanvasGrid(value: number): number {
     return Math.ceil(value / BOARD_CANVAS_METRICS.gridStepPx) * BOARD_CANVAS_METRICS.gridStepPx;
 }
 
 export type BoardCanvasFootprint = Readonly<{ key: string; width: number; height: number }>;
+
+function intersects(member: BoardCanvasFootprint, point: BoardCanvasPoint, other: BoardCanvasFootprint & BoardCanvasPoint): boolean {
+    const { gapPx } = BOARD_CANVAS_METRICS;
+    return point.x < other.x + other.width + gapPx && other.x < point.x + member.width + gapPx
+        && point.y < other.y + other.height + gapPx && other.y < point.y + member.height + gapPx;
+}
 
 /** One placement owner for saved XY and measured auto cards. Auto positions are visit-local only. */
 export function resolveBoardCanvasPositions(input: Readonly<{
@@ -74,13 +112,10 @@ export function resolveBoardCanvasPositions(input: Readonly<{
     previous: ReadonlyMap<string, BoardCanvasPoint>;
 }>): ReadonlyMap<string, BoardCanvasPoint> {
     const { cardWidthPx, gapPx } = BOARD_CANVAS_METRICS;
-    const stride = input.snap ? ceilToGrid(cardWidthPx + gapPx) : cardWidthPx + gapPx;
+    const stride = cardWidthPx + gapPx;
     const right = (input.columnCount - 1) * stride + cardWidthPx;
     const occupied: (BoardCanvasFootprint & BoardCanvasPoint)[] = [];
     const next = new Map<string, BoardCanvasPoint>();
-    const intersects = (member: BoardCanvasFootprint, point: BoardCanvasPoint, other: BoardCanvasFootprint & BoardCanvasPoint) =>
-        point.x < other.x + other.width + gapPx && other.x < point.x + member.width + gapPx
-        && point.y < other.y + other.height + gapPx && other.y < point.y + member.height + gapPx;
     const place = (member: BoardCanvasFootprint, point: BoardCanvasPoint) => {
         const previous = input.previous.get(member.key);
         next.set(member.key, previous?.x === point.x && previous.y === point.y ? previous : point);
@@ -104,7 +139,7 @@ export function resolveBoardCanvasPositions(input: Readonly<{
                 const hits = occupied.filter(other => intersects(member, { x, y }, other));
                 if (!hits.length) break;
                 y = Math.max(...hits.map(other => other.y + other.height + gapPx));
-                if (input.snap) y = ceilToGrid(y);
+                y = ceilToBoardCanvasGrid(y);
             }
             if (!best || y < best.y) best = { x, y };
         }

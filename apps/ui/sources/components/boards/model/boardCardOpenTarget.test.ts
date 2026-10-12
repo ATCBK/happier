@@ -17,6 +17,17 @@ function card(kind: BoardItemRefV1['kind'], bucket: BoardCard['status']['bucket'
 }
 
 describe('resolveBoardCardOpenTarget', () => {
+    it('routes secondary actions to native detail and the workflow Run composer, not Inbox or direct execution', () => {
+        const held = card('workflow_run', 'needs_you');
+        expect(resolveBoardCardOpenTarget(held, { inboxAvailable: true, action: 'review' }))
+            .toEqual({ kind: 'item', ref: held.ref });
+        const workflow = card('workflow', 'idle');
+        expect(resolveBoardCardOpenTarget(workflow, { inboxAvailable: true, action: 'run' }))
+            .toEqual({ kind: 'item', ref: workflow.ref, intent: 'run' });
+        expect(resolveBoardCardOpenTarget({ ...workflow, availability: 'home_unavailable' },
+            { inboxAvailable: true, action: 'run' })).toBeNull();
+    });
+
     it('sends needs-you work to its Inbox item, never to the session or run where a card could answer it', () => {
         expect(resolveBoardCardOpenTarget(card('session', 'needs_you'), { inboxAvailable: true }))
             .toEqual({ kind: 'inbox', item: { kind: 'session', serverId: 'home-a', id: 'x' } });

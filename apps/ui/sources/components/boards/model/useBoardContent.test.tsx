@@ -15,6 +15,7 @@ import { waitForHomeGovernance, type HomeDomainAnswer } from '@/dev/testkit/harn
 import { ARTIFACT_LIST_PATH, AUTOMATION_LIST_PATH, RUN_STORAGE_PATH, boardDefinitionArtifact, boardRunStoragePage, installBoardLibraryTestHarness } from '../boardLibraryTestHarness';
 import type { BoardHomes } from './useBoardContent';
 import { formatWorkflowDefinitionContentUnavailableReason } from '@/components/workflows/presentation/workflowProblemPresentation';
+import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed, recordMachineRequestSucceeded } from '@/sync/domains/machines/reachability/machineReachability';
 
 const harness = installBoardLibraryTestHarness();
 const { storage } = await import('@/sync/domains/state/storageStore');
@@ -37,6 +38,7 @@ beforeEach(async () => {
     harness.home.answer(serverId, RUN_STORAGE_PATH, { select: runAnswer });
 });
 afterEach(async () => {
+    clearMachineRequestReachabilityForTest();
     standardCleanup();
     vi.useRealTimers();
     vi.unstubAllEnvs();
@@ -54,6 +56,19 @@ function runsBoard(startedBy: readonly ('you' | 'agents' | 'triggers')[] = []) {
 }
 
 describe('Board shared Run filter membership', () => {
+    it('updates live Machine cards when this Home request fails and recovers with the same presence row', async () => {
+        const machine = createMachineFixture({ id: 'recovering-machine', active: true, activeAt: Date.now() });
+        const serverId = homes.activeServerId!;
+        storage.setState({ machineListByServerId: { [serverId]: [machine] } });
+        const ref = { kind: 'machine' as const, qualifiedId: { serverId, id: machine.id } };
+        const membership = { members: [{ key: buildWorkBoardItemKeyV1(ref), ref, picked: true, sourced: false, available: true }], complete: true };
+        const hook = await renderHook(() => useBoardCards(membership, homes));
+        await waitForHomeGovernance(() => expect(hook.getCurrent()[0]?.body).toMatchObject({ online: true }));
+        await act(async () => recordMachineRequestFailed({ serverId, accountId: 'account-a', machineId: machine.id, observedAtMs: Date.now() }));
+        expect(hook.getCurrent()[0]?.body).toMatchObject({ online: false });
+        await act(async () => recordMachineRequestSucceeded({ serverId, accountId: 'account-a', machineId: machine.id, observedAtMs: Date.now() + 1 }));
+        expect(hook.getCurrent()[0]?.body).toMatchObject({ online: true });
+    });
     it('does not render an idle Board for other surfaces clock wakes', async () => {
         vi.useFakeTimers();
         // These retained idle rows are already past every freshness boundary.

@@ -17,6 +17,26 @@ function context(board: WorkBoardV1): WorkBoardEntityContext {
 }
 
 describe('WorkBoard shared entity owner', () => {
+    it('settles an overlapping free drop in the nearest free slot before saving, including measured auto cards', async () => {
+        const other: BoardItemRefV1 = { kind: 'machine', qualifiedId: { serverId: 'home-a', id: 'obstacle' } };
+        const otherKey = buildWorkBoardItemKeyV1(other);
+        const board = { ...createWorkBoardV1({ id: 'b1', name: 'Board' }), source: { picked: [ref, other] },
+            positionsByItemRef: { [key]: { x: 0, y: 0 } } };
+        const persistence = createWorkBoardArtifactBoundary({ v: 1, boards: [board] });
+        const store = createWorkBoardAccountStore(persistence.transport, () => true);
+        const measuredPositions = new Map([[key, { x: 0, y: 0, width: 408, height: 72 }],
+            [otherKey, { x: 432, y: 0, width: 408, height: 72 }]]);
+        const current = { ...context(board), measuredPositions };
+        const admission = resolveWorkBoardEntityDrop({ item: workBoardDragItem(scope, board.id, ref), context: current,
+            destination: { x: 440, y: 5 }, canvasAvailable: true });
+        if (admission.status !== 'allowed') throw new Error('expected move');
+        expect(admission.effect.input).toMatchObject({ intent: { positionsByItemRef: { [key]: { x: 440, y: 96 } } } });
+        const intent = (await import('@happier-dev/protocol')).WorkBoardActionInputSchemasV1['boards.apply'].parse(admission.effect.input).intent;
+        await createWorkBoardUiActionPort(() => current, store.queue, store.readBoardAccess).apply(intent);
+        expect(persistence.acknowledged().boards[0]!.positionsByItemRef).toEqual({
+            [key]: { x: 440, y: 96 }, [otherKey]: { x: 432, y: 0 },
+        });
+    });
     it('moves a retained widget on its original Canvas key under this caller’s routing scope', () => {
         const instance = { v: 1 as const, id: 'from-cli', definition: { kind: 'builtin' as const, id: 'changes' as const }, bindings: {} };
         const ref = { surface: { ...scope, serverId: 'cli-profile', owner: { kind: 'workBoard' as const, boardId: 'b1' } }, instanceId: instance.id };
@@ -136,7 +156,8 @@ describe('WorkBoard shared entity owner', () => {
         let board = { ...createWorkBoardV1({ id: 'b1', name: 'Board' }), source: { picked: [ref, other] }, positionsByItemRef: { [staleKey]: { x: 3, y: 4 } } };
         const persistence = createWorkBoardArtifactBoundary({ v: 1, boards: [board] });
         const store = createWorkBoardAccountStore(persistence.transport, () => true);
-        const current = { ...context(board), measuredPositions: new Map([[key, { x: 10, y: 20 }], [otherKey, { x: 200, y: 20 }]]) };
+        const current = { ...context(board), measuredPositions: new Map([[key, { x: 10, y: 20, width: 64, height: 24 }],
+            [otherKey, { x: 200, y: 20, width: 64, height: 24 }]]) };
         const position = resolveBoardCardDrop({ origin: { x: 10, y: 20 }, translation: { x: 31, y: 7 }, snap: false, snapOnce: true });
         const admission = resolveWorkBoardEntityDrop({ item: workBoardDragItem(scope, board.id, ref), context: current, destination: position, canvasAvailable: true });
         expect(admission.status).toBe('allowed');

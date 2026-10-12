@@ -7,7 +7,7 @@ import { resolveWorkBoardWidgetPlacementV1 } from '@happier-dev/protocol/widgets
 import { entityDragScopesEqualV1, type EntityDragItemV1, type EntityDragScopeV1, type EntityDropAdmissionV1 } from '@happier-dev/protocol/plugins/ui';
 import { t } from '@/text';
 import { resolveBoardPruneMembership, type BoardMembership } from './boardMembership';
-import { BOARD_CANVAS_METRICS, type BoardCanvasPoint } from './boardCanvasGeometry';
+import { BOARD_CANVAS_METRICS, resolveBoardCardDrop, type BoardCanvasPoint, type BoardCanvasRect } from './boardCanvasGeometry';
 import type { WorkBoardSaveQueue } from './workBoardSaveQueue';
 import { widgetEntitySourceRef } from '@/sync/ops/actions/widgetEntityMovement';
 
@@ -16,8 +16,8 @@ export type WorkBoardEntityContext = Readonly<{
     board: WorkBoardV1;
     membership: BoardMembership;
     isHomeMounted: (serverId: string) => boolean;
-    /** Measured content positions, not another target registry or persisted layout. */
-    measuredPositions?: ReadonlyMap<string, BoardCanvasPoint>;
+    /** Visit-local rectangles; only their XY coordinates may enter persisted layout. */
+    measuredPositions?: ReadonlyMap<string, BoardCanvasRect>;
 }>;
 
 const refused = (code: string, message: string): EntityDropAdmissionV1 => ({ status: 'refused', reason: { code, message } });
@@ -46,6 +46,7 @@ export function resolveWorkBoardEntityDrop(input: Readonly<{
     context: WorkBoardEntityContext;
     destination: unknown;
     canvasAvailable: boolean;
+    snap?: boolean;
 }>): EntityDropAdmissionV1 {
     const { item, context } = input;
     if (!entityDragScopesEqualV1(item.scope, context.scope)) return refused('board-scope-mismatch', t('entityDragDrop.surface.scopeMismatch'));
@@ -67,20 +68,28 @@ export function resolveWorkBoardEntityDrop(input: Readonly<{
     if (!readWorkBoardCanvasKeys(context).includes(key)) return refused('board-item-gone', t('entityDragDrop.reasons.gone'));
     const point = WorkBoardPositionV1Schema.safeParse(input.destination);
     if (!point.success) return refused('board-position-unavailable', t('entityDragDrop.keyboard.choose'));
+    const keys = readWorkBoardCanvasKeys(context);
+    const measuredMember = context.measuredPositions?.get(key);
+    const occupied = keys.flatMap(memberKey => {
+        const measured = context.measuredPositions?.get(memberKey);
+        return measured ? [{ key: memberKey, ...measured, ...(context.board.positionsByItemRef[memberKey] ?? {}) }] : [];
+    });
+    const destination = resolveBoardCardDrop({ origin: point.data, translation: { x: 0, y: 0 }, snap: input.snap === true,
+        footprint: measuredMember ? { key, width: measuredMember.width, height: measuredMember.height } : undefined, occupied });
     const current = context.board.positionsByItemRef[key] ?? context.measuredPositions?.get(key);
-    if (current?.x === point.data.x && current.y === point.data.y) return refused('board-no-change', t('entityDragDrop.reasons.noChange'));
+    if (current?.x === destination.x && current.y === destination.y) return refused('board-no-change', t('entityDragDrop.reasons.noChange'));
     const positions: Record<string, BoardCanvasPoint> = {};
     // Freeze only current unplaced cards, work and widget alike. Saved positions and unrelated concurrent edits stay with the owner.
-    for (const memberKey of readWorkBoardCanvasKeys(context)) {
+    for (const memberKey of keys) {
         if (context.board.positionsByItemRef[memberKey]) continue;
         const measured = context.measuredPositions?.get(memberKey);
-        if (measured) positions[memberKey] = measured;
+        if (measured) positions[memberKey] = { x: measured.x, y: measured.y };
     }
-    positions[key] = point.data;
+    positions[key] = destination;
     return { status: 'allowed', effect: { actionId: 'boards.apply',
         input: { intent: { kind: 'set_positions', boardId: context.board.id, positionsByItemRef: positions } },
         preview: { glyph: 'move', verb: t('entityDragDrop.organize.title'), target: context.board.name,
-            consequence: t('boards.card.moved', { x: Math.round(point.data.x / BOARD_CANVAS_METRICS.gridStepPx), y: Math.round(point.data.y / BOARD_CANVAS_METRICS.gridStepPx) }) } } };
+            consequence: t('boards.card.moved', { x: Math.round(destination.x / BOARD_CANVAS_METRICS.gridStepPx), y: Math.round(destination.y / BOARD_CANVAS_METRICS.gridStepPx) }) } } };
 }
 
 /** Every card the Canvas lays out: live work members, then the Board's configured widgets. */

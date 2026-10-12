@@ -24,7 +24,11 @@ import { Typography } from '@/constants/Typography';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { useMachineListByServerId, useSessionListRowsByServerId } from '@/sync/domains/state/storage';
 import { t } from '@/text';
-import { getMachineDisplayName, isMachineOnline } from '@/utils/sessions/machineUtils';
+import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
+import { describeMachinePresenceLine } from '@/utils/sessions/machinePresenceLine';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
+import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
+import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
 import { getSessionName, getSessionSubtitle } from '@/utils/sessions/sessionUtils';
 
 import type { BoardHomes } from '../model/useBoardContent';
@@ -186,6 +190,10 @@ const AddToBoardList = React.memo(function AddToBoardList(props: Readonly<{
     const { theme } = useUnistyles();
     const rowsByServerId = useSessionListRowsByServerId(props.homes.mountedServerIds);
     const machineLists = useMachineListByServerId();
+    const reachabilityRevision = useMachineReachabilityRevision();
+    const machineScopeBindings = useServerCredentialAccountScopeBindings(Object.keys(machineLists));
+    const presenceMachines = React.useMemo(() => Object.values(machineLists).flatMap(list => list ?? []), [machineLists]);
+    const presenceNowMs = useMachinePresenceNowMs(presenceMachines);
     const library = useWorkflowDefinitionLibrary();
     const runs = useWorkflowRunWindow('all');
     const activeServerId = props.homes.activeServerId;
@@ -271,11 +279,12 @@ const AddToBoardList = React.memo(function AddToBoardList(props: Readonly<{
         const machines: SelectionListOption[] = [];
         for (const [serverId, list] of Object.entries(machineLists)) {
             const portable = resolveServerProfileScopeIdForIdentifier(serverId) || serverId;
+            const binding = machineScopeBindings.get(portable);
             for (const machine of list ?? []) {
                 machines.push(option(
                     { kind: 'machine', qualifiedId: { serverId: portable, id: machine.id } },
                     getMachineDisplayName(machine),
-                    isMachineOnline(machine, nowMs) ? t('boards.card.machine.online') : t('boards.card.machine.offline'),
+                    describeMachinePresenceLine(machine, presenceNowMs, undefined, binding?.isCurrent() ? binding.scope : null).label,
                     glyph('hard-drives'),
                 ));
             }
@@ -297,7 +306,7 @@ const AddToBoardList = React.memo(function AddToBoardList(props: Readonly<{
                 { kind: 'static', id: 'machines', title: t('boards.add.groups.machines'), options: machines },
             ],
         };
-    }, [activeServerId, library.definitions, machineLists, props.onBoardKeys, rowsByServerId, runs.rows, theme.colors.text.secondary, theme.colors.text.tertiary, widgetSections]);
+    }, [activeServerId, library.definitions, machineLists, machineScopeBindings, presenceNowMs, reachabilityRevision, props.onBoardKeys, rowsByServerId, runs.rows, theme.colors.text.secondary, theme.colors.text.tertiary, widgetSections]);
     const { onAdd, onPickWidget, onOpenGallery } = props;
     const select = React.useCallback((id: string, place: boolean) => {
         if (id === GALLERY_OPTION_ID) { onOpenGallery(); return; }

@@ -1,8 +1,9 @@
 import * as React from 'react';
 import { Platform, Pressable, ScrollView, View, type LayoutChangeEvent } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import Animated, { useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
-import { StyleSheet } from 'react-native-unistyles';
+import Animated, { cancelAnimation, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import Svg, { Circle, Defs, Pattern, Rect } from 'react-native-svg';
 import { WorkBoardActionInputSchemasV1 } from '@happier-dev/protocol/boards/actionsV1';
 import type { WorkBoardWidgetPlacementV1 } from '@happier-dev/protocol/boards/workBoardV1';
 import { getWidgetSizeFootprintV1, type WidgetSizeV1 } from '@happier-dev/protocol/widgets';
@@ -10,6 +11,11 @@ import { describeHappierDropAnnouncement, resolveHappierDropChooserSections, res
 
 import { announceAccessibilityMessage } from '@/components/ui/accessibility/announceAccessibilityMessage';
 import { PoliteAccessibilityStatus } from '@/components/ui/accessibility/PoliteAccessibilityStatus';
+import { Text } from '@/components/ui/text/Text';
+import { Typography } from '@/constants/Typography';
+import { motionTokens } from '@/components/ui/motion/motionTokens';
+import { reanimatedMotionTokens } from '@/components/ui/motion/reanimatedMotionTokens';
+import { readReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { EntityDragGripTrigger, EntityStagedMoveDock, useEntityStagedMoveHints } from '@/components/ui/treeDragDrop/ui/EntityReleasePreview';
 import { describeEntityDropOutcome } from '@/components/ui/treeDragDrop/ui/entityDropOutcome';
 import { EntityDropSettledFeedback } from '@/components/ui/treeDragDrop/ui/EntityDropSettledFeedback';
@@ -21,8 +27,9 @@ import { t } from '@/text';
 import { isHoverCapablePrimaryPointer } from '@/utils/platform/webMobileHeuristics';
 import { BoardCardView } from '../cards/BoardCardView';
 import type { BoardCard } from '../model/boardCards';
-import { BOARD_CANVAS_METRICS, moveBoardCardByKeyboard, resolveBoardCanvasColumnCount, resolveBoardCanvasPositions, type BoardCanvasDirection, type BoardCanvasPoint } from '../model/boardCanvasGeometry';
-import { readWorkBoardCanvasKeys, workBoardDragItem, workBoardWidgetDragItem } from '../model/workBoardEntityDrop';
+import type { BoardCardAction } from '../model/boardCardOpenTarget';
+import { BOARD_CANVAS_METRICS, ceilToBoardCanvasGrid, moveBoardCardByKeyboard, resolveBoardCanvasColumnCount, resolveBoardCanvasPositions, type BoardCanvasDirection, type BoardCanvasPoint, type BoardCanvasRect } from '../model/boardCanvasGeometry';
+import { readWorkBoardCanvasKeys, workBoardCanvasKey, workBoardDragItem, workBoardWidgetDragItem } from '../model/workBoardEntityDrop';
 import type { WorkBoardEntityBinding } from '../model/workBoardEntityBinding';
 import { useBoardCanvasEntityDrop } from './useBoardCanvasEntityDrop';
 import { useEntityDragChooser } from '@/components/ui/treeDragDrop/useEntityDragChooser';
@@ -32,7 +39,7 @@ const { cardWidthPx, gapPx, paddingPx, gridStepPx } = BOARD_CANVAS_METRICS;
 const ARROWS: Readonly<Record<string, BoardCanvasDirection>> = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' };
 const MOVE_ACTIONS = [{ name: 'moveUp', direction: 'up' }, { name: 'moveDown', direction: 'down' },
     { name: 'moveLeft', direction: 'left' }, { name: 'moveRight', direction: 'right' }] as const;
-type Rect = Readonly<{ x: number; y: number; height: number }>;
+type CardRect = BoardCanvasRect;
 
 /** A configured widget on the Canvas: its qualified placement key, and its title for the grip and announcements. */
 export type BoardCanvasWidget = Readonly<{ key: string; title: string; placement: WorkBoardWidgetPlacementV1; size?: WidgetSizeV1 }>;
@@ -58,6 +65,7 @@ export type BoardCanvasProps = Readonly<{
     placingKey?: string | null;
     onPlaced?: () => void;
     onOpen: (card: BoardCard) => void;
+    onAction?: (card: BoardCard, action: BoardCardAction) => void;
 }>;
 
 const NO_WIDGETS: readonly BoardCanvasWidget[] = Object.freeze([]);
@@ -69,8 +77,9 @@ function memberWidthPx(span: 1 | 2): number {
 /** Saved XY and flow are layout; the shared entity owner admits and commits every move. */
 export const BoardCanvas = React.memo(function BoardCanvas(props: BoardCanvasProps) {
     const [width, setWidth] = React.useState(0);
+    const [viewportHeight, setViewportHeight] = React.useState(0);
     const [focusedKey, setFocusedKey] = React.useState<string | null>(null);
-    const measured = React.useRef(new Map<string, BoardCanvasPoint>());
+    const measured = React.useRef(new Map<string, BoardCanvasRect>());
     const [heights, setHeights] = React.useState<ReadonlyMap<string, number>>(() => new Map());
     const previousPositions = React.useRef<ReadonlyMap<string, BoardCanvasPoint>>(new Map());
     const previousMembers = React.useRef<readonly CanvasMember[]>([]);
@@ -78,7 +87,7 @@ export const BoardCanvas = React.memo(function BoardCanvas(props: BoardCanvasPro
     // The existing Canvas grid is the quantization boundary; Home's owner supplies demand overscan.
     const [verticalDemand] = React.useState(() => createNearViewportTracker({ quantum: gridStepPx, initialViewportHeight: 0 }));
     const [horizontalDemand] = React.useState(() => createNearViewportTracker({ quantum: gridStepPx, initialViewportHeight: 0, axis: 'x' }));
-    const columnCount = resolveBoardCanvasColumnCount(Math.max(0, width - paddingPx * 2), props.snap);
+    const columnCount = resolveBoardCanvasColumnCount(Math.max(0, width - paddingPx * 2));
     const widgets = props.widgets ?? NO_WIDGETS;
     const members = React.useMemo(() => {
         const prior = new Map(previousMembers.current.map(member => [member.key, member]));
@@ -111,8 +120,8 @@ export const BoardCanvas = React.memo(function BoardCanvas(props: BoardCanvasPro
     React.useLayoutEffect(() => {
         previousPositions.current = positions; previousMembers.current = members;
     }, [positions, members]);
-    const reportRect = React.useCallback((key: string, rect: Rect | null) => {
-        if (rect) measured.current.set(key, { x: rect.x, y: rect.y });
+    const reportRect = React.useCallback((key: string, rect: CardRect | null) => {
+        if (rect) measured.current.set(key, rect);
         else measured.current.delete(key);
         setHeights(previous => {
             if (rect ? previous.get(key) === rect.height : !previous.has(key)) return previous;
@@ -129,16 +138,18 @@ export const BoardCanvas = React.memo(function BoardCanvas(props: BoardCanvasPro
         memberRight = Math.max(memberRight, point.x + memberWidthPx(member.span));
     }
     const contentWidth = Math.max(width, memberRight + paddingPx * 2);
-    const cardProps = { binding: props.binding, canvas, onOpen: props.onOpen, renderWidget: props.renderWidget,
+    const cardProps = { binding: props.binding, canvas, onOpen: props.onOpen, onAction: props.onAction, renderWidget: props.renderWidget,
         verticalDemand, horizontalDemand, onReportRect: reportRect, onPlaced: props.onPlaced, onFocused: setFocusedKey };
     return <View style={styles.scroll}>
         <ScrollView ref={canvas.viewportRef} testID="board-canvas" style={styles.scroll} contentContainerStyle={styles.scrollContent}
-            onLayout={(event: LayoutChangeEvent) => { setWidth(event.nativeEvent.layout.width); verticalDemand.onLayout(event); horizontalDemand.onLayout(event); canvas.refresh(); }}
+            onLayout={(event: LayoutChangeEvent) => { setWidth(event.nativeEvent.layout.width); setViewportHeight(event.nativeEvent.layout.height); verticalDemand.onLayout(event); horizontalDemand.onLayout(event); canvas.refresh(); }}
             onScroll={event => { verticalDemand.onScroll(event); canvas.refresh(); }} scrollEventThrottle={16}>
             <ScrollView testID="board-canvas-horizontal" horizontal contentContainerStyle={{ width: contentWidth }}
                 onScroll={event => { horizontalDemand.onScroll(event); canvas.refresh(); }} scrollEventThrottle={16}>
                 <View ref={canvas.contentRef} collapsable={false} onLayout={canvas.refresh}
-                    style={[styles.content, { width: contentWidth, minHeight: contentHeight + paddingPx * 2 }]}>
+                    style={[styles.content, { width: contentWidth, minHeight: Math.max(contentHeight + paddingPx * 2, viewportHeight) }]}>
+                    {props.snap ? <CanvasDotGrid /> : null}
+                    <CanvasSnapFeedback binding={props.binding} canvas={canvas} members={drawingMembers} heights={heights} />
                     {drawingMembers.map(member => <CanvasCard key={member.key} {...cardProps} member={member}
                         position={positions.get(member.key) ?? props.positionsByItemRef[member.key] ?? null}
                         positioned={positions.has(member.key)} saved={props.positionsByItemRef[member.key] !== undefined}
@@ -154,9 +165,10 @@ const CanvasCard = React.memo(function CanvasCard(props: Readonly<{
     member: CanvasMember; position: BoardCanvasPoint | null; positioned: boolean; saved: boolean; placing: boolean; restoreFocus: boolean;
     binding: WorkBoardEntityBinding; canvas: ReturnType<typeof useBoardCanvasEntityDrop>;
     onOpen: (card: BoardCard) => void; onPlaced?: () => void;
+    onAction?: (card: BoardCard, action: BoardCardAction) => void;
     renderWidget?: BoardCanvasWidgetRender;
     verticalDemand: NearViewportTracker; horizontalDemand: NearViewportTracker;
-    onReportRect: (key: string, rect: Rect | null) => void;
+    onReportRect: (key: string, rect: CardRect | null) => void;
     onFocused: (key: string) => void;
 }>) {
     const { member, binding, canvas } = props;
@@ -167,6 +179,7 @@ const CanvasCard = React.memo(function CanvasCard(props: Readonly<{
     const pressable = React.useRef<Readonly<{ focus: () => void }> | null>(null);
     const latest = React.useRef(props); latest.current = props;
     const origin = React.useRef<BoardCanvasPoint>(props.position ?? { x: 0, y: 0 });
+    const settleTarget = React.useRef<BoardCanvasPoint | null>(null);
     const staged = React.useRef<BoardCanvasPoint | null>(null);
     const carry = React.useRef<EntityDragCarry | null>(null);
     const adapter = React.useRef<ReturnType<typeof createEntityDragGestureAdapter> | null>(null);
@@ -203,7 +216,22 @@ const CanvasCard = React.memo(function CanvasCard(props: Readonly<{
             return true;
         } });
     const ref = React.useCallback((node: Readonly<{ focus: () => void }> | null) => { pressable.current = node; dom(node); }, [dom]);
-    React.useLayoutEffect(() => { if (props.position) origin.current = props.position; }, [props.position]);
+    React.useLayoutEffect(() => {
+        if (!props.position) return;
+        const previous = origin.current;
+        origin.current = props.position;
+        if (previous.x === props.position.x && previous.y === props.position.y) return;
+        // Rebase the carried/settling visual when the acknowledged position reaches the renderer.
+        cancelAnimation(translateX); cancelAnimation(translateY);
+        translateX.value += previous.x - props.position.x;
+        translateY.value += previous.y - props.position.y;
+        const target = settleTarget.current;
+        if (target) {
+            const x = target.x - props.position.x, y = target.y - props.position.y;
+            translateX.value = readReducedMotionPreference() ? x : withSpring(x, reanimatedMotionTokens.spring.travel);
+            translateY.value = readReducedMotionPreference() ? y : withSpring(y, reanimatedMotionTokens.spring.travel);
+        } else if (!state.active) { translateX.value = 0; translateY.value = 0; }
+    }, [props.position, state.active, translateX, translateY]);
     React.useEffect(() => { if (props.placing) pressable.current?.focus?.(); }, [props.placing]);
     // Saving a position retains the card and its focus; return grip focus to the card on that intent.
     const wasSaved = React.useRef(props.saved);
@@ -215,20 +243,46 @@ const CanvasCard = React.memo(function CanvasCard(props: Readonly<{
     // Numeric motion updates only this carried card; the canvas never subscribes to pointer frames.
     React.useEffect(() => {
         let wasSource = false;
-        return runtime.subscribe(() => {
-        const snapshot = runtime.getSnapshot();
-        if (snapshot.sourceId !== sourceId || snapshot.phase === 'idle' || snapshot.phase === 'settled') {
-            if (!wasSource) return;
-            wasSource = false;
-            translateX.value = 0; translateY.value = 0; staged.current = null; return;
-        }
-        wasSource = true;
-        if (snapshot.admission?.status !== 'allowed') { translateX.value = 0; translateY.value = 0; return; }
-        const parsed = WorkBoardActionInputSchemasV1['boards.apply'].safeParse(snapshot.admission.effect.input);
-        const point = parsed.success && parsed.data.intent.kind === 'set_positions' ? parsed.data.intent.positionsByItemRef[member.key] : null;
-        if (point) { translateX.value = point.x - origin.current.x; translateY.value = point.y - origin.current.y; }
-        });
-    }, [runtime, sourceId, member.key, translateX, translateY]);
+        const settle = (point: BoardCanvasPoint) => {
+            if (settleTarget.current?.x === point.x && settleTarget.current.y === point.y) return;
+            settleTarget.current = point;
+            cancelAnimation(translateX); cancelAnimation(translateY);
+            const x = point.x - origin.current.x, y = point.y - origin.current.y;
+            translateX.value = readReducedMotionPreference() ? x : withSpring(x, reanimatedMotionTokens.spring.travel);
+            translateY.value = readReducedMotionPreference() ? y : withSpring(y, reanimatedMotionTokens.spring.travel);
+        };
+        const update = () => {
+            const snapshot = runtime.getSnapshot();
+            if (snapshot.sourceId !== sourceId || snapshot.phase === 'idle') {
+                if (!wasSource) return;
+                wasSource = false;
+                staged.current = null;
+                settle(latest.current.position ?? origin.current);
+                return;
+            }
+            wasSource = true;
+            const parsed = snapshot.admission?.status === 'allowed'
+                ? WorkBoardActionInputSchemasV1['boards.apply'].safeParse(snapshot.admission.effect.input) : null;
+            const admitted = parsed?.success && parsed.data.intent.kind === 'set_positions'
+                ? parsed.data.intent.positionsByItemRef[member.key] : null;
+            if (snapshot.phase === 'settled') {
+                staged.current = null;
+                settle(snapshot.outcome?.status === 'applied'
+                    ? latest.current.binding.getContext().board.positionsByItemRef[member.key] ?? admitted ?? origin.current
+                    : latest.current.position ?? origin.current);
+                return;
+            }
+            if (snapshot.phase === 'pending') { if (admitted) settle(admitted); return; }
+            const pointer = runtime.getPointer();
+            const point = pointer ? canvas.readCarryPoint(member.key, pointer) : admitted;
+            if (!point) return;
+            if (settleTarget.current) { cancelAnimation(translateX); cancelAnimation(translateY); }
+            settleTarget.current = null;
+            translateX.value = point.x - origin.current.x; translateY.value = point.y - origin.current.y;
+        };
+        const unsubscribe = runtime.subscribe(update), unsubscribePointer = runtime.subscribePointer(update);
+        return () => { unsubscribe(); unsubscribePointer(); cancelAnimation(translateX); cancelAnimation(translateY); };
+    }, [runtime, sourceId, member.key, canvas, translateX, translateY]);
     const gesture = React.useMemo(() => Gesture.Pan().enabled(Platform.OS !== 'web').runOnJS(true).minDistance(4)
         .onStart(event => {
             canvas.setGrab(member.key, { x: event.absoluteX, y: event.absoluteY });
@@ -245,7 +299,8 @@ const CanvasCard = React.memo(function CanvasCard(props: Readonly<{
         if (stage) { staged.current = next; carry.current?.choose(canvas.targetId, next); }
         else void runtime.perform(sourceId, canvas.targetId, next, 'action').then(outcome => {
             if (outcome?.status !== 'applied') return;
-            announceAccessibilityMessage(t('boards.card.moved', { x: Math.round(next.x / gridStepPx), y: Math.round(next.y / gridStepPx) }));
+            const admitted = latest.current.binding.getContext().board.positionsByItemRef[member.key] ?? next;
+            announceAccessibilityMessage(t('boards.card.moved', { x: Math.round(admitted.x / gridStepPx), y: Math.round(admitted.y / gridStepPx) }));
             latest.current.onPlaced?.();
         });
     };
@@ -265,20 +320,35 @@ const CanvasCard = React.memo(function CanvasCard(props: Readonly<{
         return true;
     };
     const ownLayout = React.useRef<Readonly<{ y: number; height: number }> | null>(null);
+    const [gridInset, setGridInset] = React.useState(0);
     const [span, setSpan] = React.useState<NearViewportSpan | null>(null);
     const report = () => {
         const layout = ownLayout.current;
         if (!layout) return;
         const point = latest.current.position ?? { x: 0, y: 0 };
         if (member.kind === 'widget') setSpan(previous => previous?.top === paddingPx + point.y && previous.height === layout.height ? previous : { top: paddingPx + point.y, height: layout.height });
-        origin.current = point; latest.current.onReportRect(member.key, { ...point, height: layout.height }); canvas.refresh();
+        latest.current.onReportRect(member.key, { ...point, width: memberWidthPx(member.span),
+            height: member.kind === 'work' ? ceilToBoardCanvasGrid(layout.height) : layout.height }); canvas.refresh();
     };
     const onLayout = (event: LayoutChangeEvent) => {
-        ownLayout.current = { y: event.nativeEvent.layout.y, height: event.nativeEvent.layout.height };
+        // Remove the previous inset before quantizing the current content, so a shorter refresh
+        // can shed padding instead of retaining its former frame height.
+        const height = event.nativeEvent.layout.height - gridInset;
+        ownLayout.current = { y: event.nativeEvent.layout.y, height };
+        if (member.kind === 'work') setGridInset(ceilToBoardCanvasGrid(height) - height);
         report();
     };
     React.useLayoutEffect(report, [props.position]);
-    const dragStyle = useAnimatedStyle(() => ({ transform: [{ translateX: translateX.value }, { translateY: translateY.value }] }));
+    const lifted = state.active || props.placing;
+    // Picking a card up raises it a breath off the Canvas and setting it down sinks it back, on the same
+    // spring as its travel, so lift, carry and settle read as one motion. Reduced motion keeps only the shadow.
+    const liftScale = useSharedValue(1);
+    React.useEffect(() => {
+        const target = lifted && !readReducedMotionPreference() ? motionTokens.drag.liftScale : 1;
+        if (liftScale.value === target) return;
+        liftScale.value = readReducedMotionPreference() ? target : withSpring(target, reanimatedMotionTokens.spring.travel);
+    }, [lifted, liftScale]);
+    const dragStyle = useAnimatedStyle(() => ({ transform: [{ translateX: translateX.value }, { translateY: translateY.value }, { scale: liftScale.value }] }));
     const keyboardProps = Platform.OS === 'web' ? { onKeyDown, 'aria-grabbed': state.active } : {};
     const moveActions = MOVE_ACTIONS.map(action => ({ name: action.name, label: t(`boards.card.moveActions.${action.direction}`) }));
     const onMoveAction = (event: { nativeEvent: { actionName: string } }) => {
@@ -298,7 +368,6 @@ const CanvasCard = React.memo(function CanvasCard(props: Readonly<{
             onPress={toggle} onKeyDown={onKeyDown} expanded={chooserOpen} active={state.active}
                 revealed={member.kind === 'widget' || !isHoverCapablePrimaryPointer() || hovered || focused || chooserOpen}
             /></GestureDetector>} />;
-    const lifted = state.active || props.placing;
     const width = memberWidthPx(member.span);
     return <View onPointerEnter={() => setHovered(true)} onPointerLeave={() => setHovered(false)}
         onFocus={() => setFocused(true)} onBlur={() => setFocused(false)} onLayout={onLayout}
@@ -307,14 +376,17 @@ const CanvasCard = React.memo(function CanvasCard(props: Readonly<{
         style={[styles.placed, { width, left: paddingPx + (props.position?.x ?? 0), top: paddingPx + (props.position?.y ?? 0), opacity: props.positioned ? 1 : 0 }]}>
         <Animated.View style={[dragStyle, state.active ? styles.dragging : null]}>
             {member.kind === 'work' ? <View style={styles.cardFrame}>
-                <Pressable ref={ref} testID={'board-canvas-card:' + member.key} accessibilityRole="button"
-                    style={styles.cardBody} onFocus={() => { setFocused(true); props.onFocused(member.key); }} onBlur={() => setFocused(false)}
-                    accessibilityLabel={member.title + ', ' + spoken} accessibilityHint={t('entityDragDrop.keyboard.hintsA11y')}
-                    accessibilityActions={moveActions} onAccessibilityAction={onMoveAction}
-                    onPress={() => { if (!state.active) props.onOpen(member.card); }} {...keyboardProps}>
-                    <BoardCardView card={member.card} lifted={lifted} />
-                </Pressable>
-                {grip}
+                {/* The card's open target and its action are siblings inside one frame, never a button in a button. */}
+                <BoardCardView card={member.card} lifted={lifted} onAction={props.onAction} actionsDisabled={state.active}
+                    renderTarget={content => <Pressable ref={ref} testID={'board-canvas-card:' + member.key} accessibilityRole="button"
+                        style={[styles.cardBody, { paddingBottom: gridInset }]} onFocus={() => { setFocused(true); props.onFocused(member.key); }} onBlur={() => setFocused(false)}
+                        accessibilityLabel={member.title + ', ' + spoken} accessibilityHint={t('entityDragDrop.keyboard.hintsA11y')}
+                        accessibilityActions={moveActions} onAccessibilityAction={onMoveAction}
+                        onPress={() => { if (!state.active) props.onOpen(member.card); }} {...keyboardProps}>
+                        {content}
+                    </Pressable>} />
+                {/* The handle rides in the gutter beside the card: it never narrows the card, so columns keep one even gap. */}
+                <View style={styles.cardGrip}>{grip}</View>
             </View> : <View testID={'board-canvas-widget:' + member.key}>
                 <CanvasWidgetBody widget={member.widget} span={span} left={paddingPx + (props.position?.x ?? 0)} width={width}
                     verticalDemand={props.verticalDemand} horizontalDemand={props.horizontalDemand}
@@ -352,8 +424,64 @@ function CanvasMoveFeedback(props: Readonly<{ binding: WorkBoardEntityBinding; t
     </EntityDropSettledFeedback>;
 }
 
-const styles = StyleSheet.create(() => ({
+/** Semantic destination feedback is separate from the card's numeric pointer-frame subscription. */
+function CanvasSnapFeedback(props: Readonly<{
+    binding: WorkBoardEntityBinding; canvas: ReturnType<typeof useBoardCanvasEntityDrop>;
+    members: readonly CanvasMember[]; heights: ReadonlyMap<string, number>;
+}>) {
+    const selected = useEntityDropTargetState(props.binding.runtime, props.canvas.targetId);
+    const snapping = React.useSyncExternalStore(props.canvas.subscribeSnapping, props.canvas.readSnapping, props.canvas.readSnapping);
+    if (!snapping || !selected?.item || selected.phase !== 'carrying' || props.binding.runtime.getPointer() === null
+        || selected.admission?.status !== 'allowed') return null;
+    const parsed = WorkBoardActionInputSchemasV1['boards.apply'].safeParse(selected.admission.effect.input);
+    const key = workBoardCanvasKey(selected.item, props.binding.getContext().board);
+    const member = props.members.find(member => member.key === key);
+    const point = key && parsed.success && parsed.data.intent.kind === 'set_positions' ? parsed.data.intent.positionsByItemRef[key] : null;
+    if (!point || !member) return null;
+    const left = paddingPx + point.x, top = paddingPx + point.y;
+    return <View pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={styles.snapFeedback}>
+        <View testID="board-canvas-snap-guide-x" style={[styles.guideX, { left }]} />
+        <View testID="board-canvas-snap-guide-y" style={[styles.guideY, { top }]} />
+        <View testID="board-canvas-snap-target" style={[styles.snapTarget, { left, top, width: memberWidthPx(member.span), height: props.heights.get(member.key) ?? 0 }]}>
+            {/* Hangs from the slot's top-left corner, where the guides cross (lab `boards-B1s`). */}
+            <View style={styles.snapLabel}><Text style={styles.snapLabelText}>{t('boards.canvas.snapsHere')}</Text></View>
+        </View>
+    </View>;
+}
+
+/**
+ * The snap lattice, drawn (lab `dashboards` L1, `sessions-orchestration` canvas): one ink dot on every
+ * grid step, so a free canvas reads as a surface things settle onto. Decorative, under the cards,
+ * hidden from assistive tech; it scrolls with the content because it is the content's own grid.
+ */
+function CanvasDotGrid(): React.ReactElement {
+    const { theme } = useUnistyles();
+    return <View pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={styles.dotGrid}>
+        <Svg width="100%" height="100%">
+            <Defs>
+                <Pattern id="board-canvas-dots" x={-gridStepPx / 2} y={-gridStepPx / 2} width={gridStepPx} height={gridStepPx} patternUnits="userSpaceOnUse">
+                    <Circle cx={gridStepPx / 2} cy={gridStepPx / 2} r={1} fill={theme.colors.border.strong} />
+                </Pattern>
+            </Defs>
+            <Rect x={0} y={0} width="100%" height="100%" fill="url(#board-canvas-dots)" />
+        </Svg>
+    </View>;
+}
+
+const styles = StyleSheet.create(theme => ({
+    dotGrid: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
     scroll: { flex: 1 }, scrollContent: { flexGrow: 1 }, content: { position: 'relative' },
     placed: { position: 'absolute' }, dragging: { zIndex: 10 },
-    cardFrame: { flexDirection: 'row', alignItems: 'center' }, cardBody: { flex: 1 },
+    cardFrame: { position: 'relative' }, cardBody: { alignSelf: 'stretch' },
+    cardGrip: { position: 'absolute', left: '100%', top: 0, bottom: 0, justifyContent: 'center' },
+    snapFeedback: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
+    // Guides are dashed hairlines in the focus ink: alignment help that reads as a hint, not as content.
+    guideX: { position: 'absolute', top: 0, bottom: 0, width: 0, borderLeftWidth: 1, borderStyle: 'dashed', borderColor: theme.colors.border.focus },
+    guideY: { position: 'absolute', left: 0, right: 0, height: 0, borderTopWidth: 1, borderStyle: 'dashed', borderColor: theme.colors.border.focus },
+    snapTarget: { position: 'absolute', borderWidth: 1, borderColor: theme.colors.border.focus, borderStyle: 'dashed', borderRadius: theme.borderRadius.xl },
+    // `left: -1` is the slot's own border width, so the chip's edge meets the outline's.
+    snapLabel: { position: 'absolute', left: -1, bottom: '100%', marginBottom: theme.margins.xs,
+        paddingHorizontal: theme.margins.sm, borderRadius: theme.borderRadius.sm,
+        borderWidth: 1, borderColor: theme.colors.border.focus, backgroundColor: theme.colors.surface.elevated },
+    snapLabelText: { ...Typography.rowMeta(), ...Typography.default('semiBold'), color: theme.colors.border.focus },
 }));
