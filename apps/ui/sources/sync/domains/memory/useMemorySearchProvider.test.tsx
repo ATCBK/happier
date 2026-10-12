@@ -127,20 +127,17 @@ describe('useMemorySearchProvider', () => {
         expect(featureRuntimeOptionsSpy).toHaveBeenCalledWith({ enabled: true });
     });
 
-    it('chooses Home for adopted profiles from the strict active-Home capability, independent of provenance', async () => {
+    it('chooses Home from the strict active-Home capability', async () => {
         setReadyHomeCapability({ enabled: true });
-
-        for (const _source of ['account-directory', 'manual']) {
-            const hook = await renderProviderHook();
-            expect(hook.getCurrent()).toEqual({
-                provider: 'home',
-                homeServerId: 'srv_home',
-                homeReadiness: 'ready',
-                daemonTarget: null,
-                queryAvailable: true,
-                unavailableReason: null,
-            });
-        }
+        const hook = await renderProviderHook();
+        expect(hook.getCurrent()).toEqual({
+            provider: 'home',
+            homeServerId: 'srv_home',
+            homeReadiness: 'ready',
+            daemonTarget: null,
+            queryAvailable: true,
+            unavailableReason: null,
+        });
         expect(featureEnabledState.scopes).toContainEqual(['search', { scopeKind: 'runtime' }]);
     });
 
