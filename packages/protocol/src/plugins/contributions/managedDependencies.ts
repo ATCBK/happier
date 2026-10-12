@@ -52,6 +52,18 @@ export const PluginManagedDependencyContributionV2Schema = lazyZodSchema(() => z
   health: PluginJsonValueV2Schema.optional(),
   metadata: z.record(z.string(), PluginJsonValueV2Schema).optional(),
 }).strict().superRefine((value, ctx) => {
+  value.sources.forEach((source, sourceIndex) => {
+    if (source.kind !== 'pinnedArchive') return;
+    for (const [platform, asset] of Object.entries(source.assetsByPlatform)) {
+      if (asset && !asset.sha256) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['sources', sourceIndex, 'assetsByPlatform', platform, 'sha256'],
+          message: 'Manifest-declared pinned archive assets require a SHA-256 checksum',
+        });
+      }
+    }
+  });
   if (value.sources.some((source) => source.kind === 'managedPypiWheelAsset' || source.kind === 'pinnedArchive' || source.kind === 'githubReleaseBinary') && !value.executable) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,

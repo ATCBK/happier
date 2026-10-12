@@ -85,7 +85,8 @@ export const ManagedPypiWheelAssetInstallableSourceSchema = lazyZodSchema(() => 
 
 export const PinnedArchiveInstallableAssetSchema = lazyZodSchema(() => z.object({
   archiveUrl: z.string().url().refine((value) => value.startsWith('https://'), 'Pinned archive URL must use HTTPS'),
-  sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  sha256: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+  kind: z.enum(['archive', 'executable']).optional(),
   /** Known download bytes for this exact pinned archive; presentation metadata, not an extraction limit. */
   sizeBytes: z.number().int().positive().optional(),
   executableSubpath: z.string().trim().min(1).refine((value) => {
@@ -95,6 +96,7 @@ export const PinnedArchiveInstallableAssetSchema = lazyZodSchema(() => z.object(
   args: z.array(z.string()).optional(),
 }).strict());
 export type PinnedArchiveInstallableAsset = z.infer<typeof PinnedArchiveInstallableAssetSchema>;
+export type InstallChecksumStateV1 = 'verified' | 'not_published';
 
 export const PinnedArchiveAssetsByPlatformSchema = lazyZodSchema(() => z.object({
   'darwin-arm64': PinnedArchiveInstallableAssetSchema.optional(),
@@ -131,8 +133,8 @@ export const PinnedArchiveExtractionLimitsSchema = lazyZodSchema(() => z.object(
 export type PinnedArchiveExtractionLimits = z.infer<typeof PinnedArchiveExtractionLimitsSchema>;
 
 /**
- * One immutable, digest-pinned per-platform archive. The publishing artifact is
- * pinned, so there is no version discovery: the declared `version` is both the
+ * One immutable per-platform artifact, verified against its digest when published.
+ * The artifact is pinned, so there is no version discovery: the declared `version` is both the
  * installed and the available version.
  */
 export const PinnedArchiveInstallableSourceSchema = lazyZodSchema(() => z.object({

@@ -40,6 +40,7 @@ export {
   VendorRecipeInstallableSourceSchema,
   type InstallableSource,
   type InstallableSourceKind,
+  type InstallChecksumStateV1,
 } from './sourceKind.js';
 export {
   type InstallableContributionOwner,
