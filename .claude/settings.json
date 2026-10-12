@@ -5,6 +5,17 @@
     "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "64000"
   },
   "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/formatEditedFiles.mjs\""
+          }
+        ]
+      }
+    ],
     "PreCompact": [
       {
         "hooks": [
