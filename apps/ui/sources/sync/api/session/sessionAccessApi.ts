@@ -4,7 +4,7 @@ import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { SessionGrantMutationV1Schema, type SessionGrantIntentV1, type SessionGrantMutationV1 } from '@happier-dev/protocol/sessions/access/sessionAccessGrantV1';
 import { UserRecipientEnvelopeResponseSchema } from '@happier-dev/protocol/social/friends';
 import { SessionAccessGrantsListResponseV1Schema, SetSessionAccessGrantResponseV1Schema, RemoveSessionAccessGrantResponseV1Schema, SetSessionAccessContextResponseV1Schema, ResolveSessionAccessPrincipalsRequestV1Schema, ResolveSessionAccessPrincipalsResponseV1Schema, type SessionAccessPrincipalSummaryV1, type SessionAccessCreationDecisionV1 } from '@happier-dev/protocol/sessions/access/sessionAccessOperationsV1';
-import { SessionPublicLinkGetActionResultV1Schema, SessionPublicLinkRemoveActionResultV1Schema, SessionPublicLinkCreateActionResultV1Schema, projectSessionPublicLinkActionResultV1, projectSessionPublicLinkCreateActionResultV1 } from '@happier-dev/protocol/sessions/access/sessionAccessActionsV1';
+import { SessionPublicLinkGetActionResultV1Schema, SessionPublicLinkRemoveActionResultV1Schema, SessionPublicLinkCreateActionInputV1Schema, SessionPublicLinkCreateActionResultV1Schema, projectSessionPublicLinkActionResultV1, projectSessionPublicLinkCreateActionResultV1 } from '@happier-dev/protocol/sessions/access/sessionAccessActionsV1';
 import type { ActionId } from '@happier-dev/protocol/actions/actionIds';
 import type { PrincipalRefV1 } from '@happier-dev/protocol/teams/principal';
 import type { SessionAccessAccountSummaryV1 } from '@happier-dev/protocol/sessions/access/sessionAccessPrincipalV1';
@@ -23,6 +23,7 @@ import type { ServerAccountRequestAuthority } from '@/sync/runtime/orchestration
 import { captureEncryptionGenerationCurrentness } from '@/sync/encryption/encryption';
 import { searchUsersPageByUsername } from '@/sync/api/social/apiFriends';
 import { readSessionAccessHttpFailureCode } from './sessionAccessHttpFailure';
+import type { SessionPublicVisualNetworkConsequence } from './sessionPublicVisualNetworkConsequence';
 
 export class SessionAccessApiError extends Error {
     constructor(readonly code: string, readonly status?: number) {
@@ -370,7 +371,8 @@ export async function executeSessionAccessHttpAction(params: SessionAccessReques
                     return spec.outputSchema!.parse({ changed: true });
                 }
                 const value = actionId === 'session.public_link.create' && issuedPublicLink
-                    ? projectSessionPublicLinkCreateActionResultV1(payload, issuedPublicLink)
+                    ? projectSessionPublicLinkCreateActionResultV1(payload, issuedPublicLink,
+                        SessionPublicLinkCreateActionInputV1Schema.parse(publicInput).networkOff === true)
                     : actionId === 'session.public_link.get' ? projectSessionPublicLinkActionResultV1(payload) : payload;
                 if (issuedPublicLink) params.onPublicLinkIssued?.(issuedPublicLink);
                 return spec.outputSchema!.parse(value);
@@ -443,6 +445,11 @@ export function createSessionAccessClient(options: SessionAccessRequestOptions &
         getPublicLink: async () => SessionPublicLinkGetActionResultV1Schema.parse(
             await execute('session.public_link.get', { sessionId: options.sessionId }),
         ),
+        readPublicVisualNetworkConsequence: async (): Promise<SessionPublicVisualNetworkConsequence> => {
+            // Full transcript replay is loaded only for explicit Share preparation.
+            const { readSessionPublicVisualNetworkConsequence } = await import('./sessionPublicVisualNetworkConsequence');
+            return readSessionPublicVisualNetworkConsequence(options);
+        },
         createPublicLink: async (input: Readonly<{ expiresAt?: number; maxUses?: number; isConsentRequired: boolean; networkOff?: boolean }>) =>
             SessionPublicLinkCreateActionResultV1Schema.parse(await execute('session.public_link.create', {
                 sessionId: options.sessionId,
@@ -490,6 +497,7 @@ export async function searchSessionAccessAccountPage(options: SessionAccessReque
             rows: page.users.map((profile): SessionAccessAccountSummaryV1 => ({
                 kind: 'account',
                 accountId: profile.id,
+                name: profile.name,
                 username: profile.username,
                 firstName: profile.firstName,
                 lastName: profile.lastName,

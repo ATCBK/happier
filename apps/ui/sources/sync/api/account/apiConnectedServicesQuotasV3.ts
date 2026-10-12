@@ -6,7 +6,8 @@ import {
 import { HappyError } from '@/utils/errors/errors';
 import { backoff } from '@/utils/timing/time';
 
-import { ConnectedServiceQuotaSnapshotV1Schema, type ConnectedServiceQuotaSnapshotV1 } from '@happier-dev/protocol/connect/connected-service-schemas';
+import type { ConnectedServiceQuotaSnapshotV1 } from '@happier-dev/protocol/connect/connected-service-schemas';
+import { parseBuiltInLegacyConnectedServiceQuotaSnapshotV1 } from '@happier-dev/protocol/connect/legacyConnectedServiceCompatibility';
 import { StoredJsonContentEnvelopeSchema } from '@happier-dev/protocol/storage/storedJsonContentEnvelope';
 import type { ConnectedServiceId } from '@happier-dev/protocol/connect/connected-service-bindings';
 import { z } from 'zod';
@@ -78,11 +79,11 @@ export async function getConnectedServiceQuotaSnapshotPlain(
 
     if (parsed.data.content.t !== 'plain') return null;
 
-    const snapshot = ConnectedServiceQuotaSnapshotV1Schema.safeParse(parsed.data.content.v);
-    if (!snapshot.success) {
+    try {
+      return parseBuiltInLegacyConnectedServiceQuotaSnapshotV1(parsed.data.content.v);
+    } catch {
       throw new Error(`Invalid quota snapshot response for ${params.serviceId}`);
     }
-    return snapshot.data;
   });
 }
 

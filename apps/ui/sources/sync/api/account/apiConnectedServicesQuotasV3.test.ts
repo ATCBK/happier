@@ -11,17 +11,23 @@ afterEach(() => {
 const credentials: AuthCredentials = { token: 't', secret: 's' };
 
 async function activateTestHome() {
-    const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
+    const { upsertAndActivateServer, setAccountServiceEndpoint } = await import('@/sync/domains/server/serverRuntime');
     await upsertAndActivateServer({ serverUrl: 'https://api.example.test', scope: 'tab' });
+    await setAccountServiceEndpoint({ url: 'https://api.example.test', displayName: 'Test service', source: 'user' });
 }
 
 describe('apiConnectedServicesQuotasV3', () => {
-  it('gets the latest plaintext quota snapshot from the v3 endpoint', async () => {
+  it.each(['current', 'predecessor'] as const)('projects retained fields from the stored plaintext quota snapshot (%s)', async shape => {
     await activateTestHome();
+    let servedSnapshot = false;
     const fetchMock = vi.fn(async (input: unknown) => {
       if (isServerFetchConnectivityProbeRequest(input)) {
         return { ok: true, status: 200, json: async () => ({ ok: true }) };
       }
+      // A rejected snapshot must yield a visible failed assertion rather than
+      // leaving the API's retry loop pending for the whole test timeout.
+      if (servedSnapshot) return { ok: false, status: 404, json: async () => ({}) };
+      servedSnapshot = true;
       return {
         ok: true,
         status: 200,
@@ -37,6 +43,12 @@ describe('apiConnectedServicesQuotasV3', () => {
               planLabel: null,
               accountLabel: null,
               meters: [],
+              retired: true,
+              recoveryCredits: { availableCount: 1, retired: true,
+                ...(shape === 'predecessor' ? { kind: 'usage_limit_resets' } : {}), credits: [
+                { kind: 'quota_reset', status: 'available', retired: true,
+                  ...(shape === 'predecessor' ? { providerCreditId: 'credit-a' } : {}) },
+              ] },
             },
           },
           metadata: { fetchedAt: 1, staleAfterMs: 2, status: 'ok' },
@@ -48,6 +60,9 @@ describe('apiConnectedServicesQuotasV3', () => {
     const { getConnectedServiceQuotaSnapshotPlain } = await import('./apiConnectedServicesQuotasV3');
     const res = await getConnectedServiceQuotaSnapshotPlain(credentials, { serviceId: 'openai-codex', profileId: 'work' });
     expect(res?.serviceId).toBe('openai-codex');
+    expect(res?.recoveryCredits).toEqual({ availableCount: 1, credits: [{ kind: 'quota_reset', status: 'available',
+      ...(shape === 'predecessor' ? { id: 'credit-a' } : {}) }] });
+    expect(res).not.toHaveProperty('retired');
     expect(fetchMock).toHaveBeenCalledWith(
       'https://api.example.test/v3/connect/openai-codex/profiles/work/quotas',
       expect.objectContaining({ method: 'GET', headers: expect.any(Headers) }),

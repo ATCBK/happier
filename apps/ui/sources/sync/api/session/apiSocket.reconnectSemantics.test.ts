@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ManagedConnectionState } from '@happier-dev/connection-supervisor';
 import { createSocketIoBoundaryStub } from '@/dev/testkit/mocks/socketIo';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
-import { readRpcRequestDisposition } from '@happier-dev/sync-client';
 
 const ioSpy = vi.hoisted(() => vi.fn());
 let activeSocket: typeof import('./apiSocket')['apiSocket'] | undefined;
@@ -36,6 +35,11 @@ function emitReachability(phase: ManagedConnectionState['phase']) {
     const listener = reachability.listeners.get(endpoint);
     if (!listener) throw new Error('Missing reachability listener');
     listener(state(phase));
+}
+async function readCurrentRpcRequestDisposition(error: unknown) {
+    // resetModules replaces the private disposition Symbol as well as its writer.
+    const { readRpcRequestDisposition } = await import('@happier-dev/sync-client');
+    return readRpcRequestDisposition(error);
 }
 async function boot(options: Readonly<{ autoConnect?: boolean; token?: string }> = {}) {
     const boundary = createSocketIoBoundaryStub(options);
@@ -169,7 +173,7 @@ describe('apiSocket reconnect semantics', () => {
         await expect(request).rejects.toMatchObject({
             kind: 'auth', code: 'not_authenticated', canTryAgain: false,
         });
-        expect(readRpcRequestDisposition(await request.catch((error: unknown) => error))).toBe('notSent');
+        expect(await readCurrentRpcRequestDisposition(await request.catch((error: unknown) => error))).toBe('notSent');
         expect(socket.emitWithAck.mock.calls.filter(([event]) => event === 'rpc-call')).toEqual([]);
     });
 
@@ -181,7 +185,7 @@ describe('apiSocket reconnect semantics', () => {
         const error: unknown = await apiSocket.sessionRPC('session-1', 'send_message', { text: 'hello' })
             .catch((failure: unknown) => failure);
         expect(error).toBeInstanceOf(Error);
-        expect(readRpcRequestDisposition(error)).toBe('notSent');
+        expect(await readCurrentRpcRequestDisposition(error)).toBe('notSent');
         expect(socket.emitWithAck.mock.calls.filter(([event]) => event === 'rpc-call')).toEqual([]);
     });
 
@@ -195,7 +199,7 @@ describe('apiSocket reconnect semantics', () => {
         emitReachability(phase);
         if (phase === 'auth_failed') await expect(request).rejects.toMatchObject({ kind: 'auth', code: 'not_authenticated' });
         else await expect(request).rejects.toThrow('operation has timed out');
-        expect(readRpcRequestDisposition(await request.catch((error: unknown) => error))).toBe('outcomeUnknown');
+        expect(await readCurrentRpcRequestDisposition(await request.catch((error: unknown) => error))).toBe('outcomeUnknown');
     });
 
     it('publishes managed connection phases alongside legacy status', async () => {

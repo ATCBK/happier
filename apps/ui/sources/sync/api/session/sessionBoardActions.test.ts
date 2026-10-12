@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { createSessionBoardActionAdapter as createAdapter } from './sessionBoardActions';
+import { prepareSessionBoardItemForUi } from './sessionBoardActions';
 import { createSessionSystemRecordRepository } from '@/sync/domains/sessionSystemRecords/repository';
 import { SessionEncryption } from '@/sync/encryption/sessionEncryption';
 import { EncryptionCache } from '@/sync/encryption/encryptionCache';
 import { SecretBoxEncryption } from '@/sync/encryption/encryptor';
 import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol/actions';
+import { parseSessionBoardActionExecuteOutcomeV1, SessionBoardOutcomeUnknownDetailsV1Schema, SessionBoardAuthoredItemUpsertInputV1Schema,
+    SessionSurfaceItemV1Schema, type SessionSurfaceItemV1 } from '@happier-dev/protocol/sessions/board';
+import { createWidgetActionInputResolverV1 } from '@happier-dev/protocol/widgets';
 
 const scope = { serverId: 'home-a', accountId: 'alice' };
 const session = { serverId: scope.serverId, sessionId: 'session-one' };
@@ -22,6 +26,26 @@ function createSessionBoardActionAdapter(options: Omit<Parameters<typeof createA
 }
 
 describe('Session Board Action adapter', () => {
+    it('refuses workspace publication at preapproval preparation, before any mutation adapter runs', async () => {
+        await expect(prepareSessionBoardItemForUi({ context: {}, input: {
+            sessionId: session.sessionId, itemId: 'html', expectedItemRevision: null, destination: 'transcript',
+            item: { ...item, source: { kind: 'hostedHtml', publicationSource: { path: 'site', entrypoint: 'index.html' } } },
+        } })).resolves.toMatchObject({ ok: false, errorCode: 'unsupported_action' });
+    });
+    it.each([false, undefined])('refuses layout operations when Board admission is %s without issuing record requests', async (boardEnabled) => {
+        const requests: string[] = [];
+        const execute = createSessionBoardActionAdapter({ scope, session, boardEnabled, contentContext: { mode: 'plain' },
+            capabilities: { readTranscript: true, editSessionRecords: true }, request: async (path) => {
+                requests.push(path);
+                return new Response(JSON.stringify({ record: null }));
+            } });
+        await expect(execute({ actionId: 'session.board.layout.update', context: {}, input: {
+            sessionId: session.sessionId, expectedLayoutRevision: null, operation: { op: 'tab.create', tabId: 'overview', title: 'Overview' },
+        } })).resolves.toMatchObject({ ok: false, errorCode: 'feature_disabled' });
+        await expect(execute({ actionId: 'session.board.get', context: {}, input: { sessionId: session.sessionId } }))
+            .resolves.toMatchObject({ ok: false, errorCode: 'feature_disabled' });
+        expect(requests).toEqual([]);
+    });
     it('refuses workspace publication explicitly without reading or writing a remote record', async () => {
         const requests: string[] = [];
         const execute = createSessionBoardActionAdapter({ scope, session, boardEnabled: false, contentContext: { mode: 'plain' },
@@ -42,12 +66,12 @@ describe('Session Board Action adapter', () => {
                 if (query.get('kind') === 'layout.v1') throw new Error('Disabled Board must not be read');
                 return new Response(JSON.stringify({ record: { id: 'item-row', address: {
                     owner: 'host', namespace: 'surface', kind: 'item.v1', localId: 'note',
-                }, revision, content: { t: 'plain', v: { ...item, destination: 'transcript' } },
+                }, revision, creator: { kind: 'session', sessionId: session.sessionId }, content: { t: 'plain', v: { ...item, destination: 'transcript' } },
                 createdAt: '2026-09-05T00:00:00.000Z', updatedAt: '2026-09-05T00:00:00.000Z' } }));
             } });
         await expect(execute({ actionId: 'session.board.get', context: {}, input: {
             sessionId: session.sessionId, itemIds: ['note'],
-        } })).resolves.toMatchObject({ layout: null, items: [{ itemId: 'note', item: { destination: 'transcript' } }] });
+        } })).resolves.toMatchObject({ layout: null, items: [{ itemId: 'note', creator: { kind: 'session', sessionId: session.sessionId }, item: { destination: 'transcript' } }] });
     });
     it('creates and removes a transcript visual without reading or writing Board layout', async () => {
         const writes: unknown[] = [];
@@ -205,7 +229,7 @@ describe('Session Board Action adapter', () => {
                 address: { owner: 'host', namespace: 'surface', kind: 'layout.v1', localId: 'layout' }, content: { t: 'plain', v: layout }, revision,
                 createdAt: '2026-09-05T00:00:00.000Z', updatedAt: '2026-09-05T00:00:00.000Z' } }));
         const repository = createSessionSystemRecordRepository({ scope, request });
-        const execute = createAdapter({ scope, session, repository, request, contentContext: { mode: 'plain' },
+        const execute = createAdapter({ scope, session, repository, request, boardEnabled: true, contentContext: { mode: 'plain' },
             capabilities: { readTranscript: true, editSessionRecords: true } });
         await execute({ actionId: 'session.board.layout.update', context: {}, input: { sessionId: session.sessionId,
             expectedLayoutRevision: revision, operation: { op: 'tab.rename', tabId: 'overview', title: 'Renamed' } } });
@@ -386,7 +410,7 @@ describe('Session Board Action adapter', () => {
         });
         await repository.refresh(session, query);
         freshnessChanges.length = 0;
-        const execute = createAdapter({ scope, session, repository, request, contentContext: { mode: 'plain' },
+        const execute = createAdapter({ scope, session, repository, request, boardEnabled: true, contentContext: { mode: 'plain' },
             capabilities: { readTranscript: true, editSessionRecords: true } });
         await expect(execute({ actionId: 'session.board.layout.update', context: {}, input: { sessionId: session.sessionId,
             expectedLayoutRevision: revision, operation: { op: 'tab.rename', tabId: 'overview', title: 'Renamed' } } })).resolves.toMatchObject({ errorCode: 'outcome_unknown' });
@@ -396,7 +420,8 @@ describe('Session Board Action adapter', () => {
         expect(repository.getSnapshot(session, query).freshness).toBe('fresh');
         stop();
     });
-    it('keeps exact sealed recovery evidence through the real Action executor without replaying an ambiguous mutation', async () => {
+    it.each(['note', 'html-off', 'widget-default', 'widget-default-fixed'] as const)('keeps exact sealed recovery evidence through the real Action executor without replaying an ambiguous %s mutation', async (kind) => {
+        const defaultWidget = kind === 'widget-default' || kind === 'widget-default-fixed';
         const writes: string[] = [];
         const adapter = createSessionBoardActionAdapter({
             scope,
@@ -413,12 +438,32 @@ describe('Session Board Action adapter', () => {
         const executor = createActionExecutor({
             sessionBoardAction: adapter,
             isActionApprovalRequired: () => false,
+            // The Account settings read is a persistence boundary; admission and policy normalization stay real.
+            readAgentHtmlNetworkPolicy: async () => 'off',
+            widgetAccountScope: () => scope,
+            widgetInputs: createWidgetActionInputResolverV1({
+                // Project the actual authored inline definition, without substituting an installed catalog.
+                readDescriptor: async request => request.instance.definition.kind === 'inline' ? request.instance.definition.definition : null,
+                readContext: async () => ({}), readViewerValues: async () => ({ values: {} }),
+                validateValue: async () => ({ status: 'valid' }), resolveOptions: async () => [],
+            }),
         } as unknown as ActionExecutorDeps);
+        const authoredItem = kind === 'html-off' ? { ...item, source: {
+            kind: 'hostedHtml', source: { v: 1, entrypoint: 'index.html', files: {
+                'index.html': { mime: 'text/html', contentBase64: 'PGgxPkhlbGxvPC9oMT4=' },
+            } }, requestedCapabilities: { network: 'open' },
+        } } as const : defaultWidget ? { ...item, ...(kind === 'widget-default-fixed' ? { height: { mode: 'fixed', size: 'tall' } as const } : {}), source: { kind: 'widget', instance: {
+            v: 1, id: 'note', definition: { kind: 'inline', definition: { v: 1, id: 'note-definition', name: 'Inline result',
+                body: { kind: 'declarative', document: item.source.document }, inputs: { fields: [] },
+                inputSchema: { type: 'object', additionalProperties: false }, sizeDeclaration: { sizes: ['medium'], defaultSize: 'medium' },
+                provenance: { source: { kind: 'authored' } },
+            } }, bindings: {},
+        } } } as const : item;
         const input = {
             sessionId: session.sessionId,
             itemId: 'note',
             expectedItemRevision: null,
-            item,
+            item: authoredItem,
             placement: { tabId: 'overview', tabTitle: 'Overview' },
         } as const;
 
@@ -427,6 +472,7 @@ describe('Session Board Action adapter', () => {
             authority: 'present_user',
             serverId: scope.serverId,
             defaultSessionId: session.sessionId,
+            runtimeAccountId: scope.accountId,
         });
         expect(writes).toHaveLength(1);
         expect(result).toEqual({
@@ -441,10 +487,64 @@ describe('Session Board Action adapter', () => {
                     sessionId: session.sessionId,
                     requestBody: writes[0],
                     mutationRequest: JSON.parse(writes[0]!),
-                    intent: input,
+                    intent: { ...input, destination: 'board', ...(defaultWidget ? { placement: { ...input.placement, width: 'medium' } } : {}),
+                    item: kind === 'html-off' ? { ...authoredItem, source: {
+                        ...authoredItem.source, requestedCapabilities: { network: 'none', networkOrigins: [] },
+                    } } : defaultWidget ? { ...authoredItem, height: { mode: 'fixed', size: 'regular' } } : authoredItem, reviewedVisual: {
+                        recordRevision: null, creator: { kind: 'unknown' }, previousExecutableFingerprint: null,
+                        previousCapabilitiesDigest: null, networkSetting: kind === 'html-off' ? 'off' : null,
+                    } },
                 },
             },
         });
+        expect(parseSessionBoardActionExecuteOutcomeV1('session.board.item.upsert', input, result, {
+            expectedServerId: scope.serverId, expectedSessionId: session.sessionId,
+        })).toEqual({ success: true, kind: 'failure', data: result });
+        if (result.ok) throw new Error('Expected an ambiguous issued mutation');
+        const recovery = SessionBoardOutcomeUnknownDetailsV1Schema.parse(result.details).recovery;
+        if (recovery.actionId !== 'session.board.item.upsert' || recovery.mutationRequest.operation !== 'upsert_item') {
+            throw new Error('Expected an upsert receipt');
+        }
+        const issuedIntent = SessionBoardAuthoredItemUpsertInputV1Schema.parse(recovery.intent);
+        const issuedItem = SessionSurfaceItemV1Schema.parse(issuedIntent.item);
+        const rejectChangedItem = (changedItem: SessionSurfaceItemV1) => {
+            // Keep a valid, internally coherent plain HTTP receipt, so denial
+            // proves request correspondence rather than a malformed envelope.
+            const mutationRequest = { ...recovery.mutationRequest, itemContent: { t: 'plain' as const, v: changedItem } };
+            const changedRecovery = { ...recovery, intent: { ...issuedIntent, item: changedItem }, mutationRequest,
+                requestBody: JSON.stringify(mutationRequest) };
+            const details = SessionBoardOutcomeUnknownDetailsV1Schema.parse({ recovery: changedRecovery });
+            expect(parseSessionBoardActionExecuteOutcomeV1('session.board.item.upsert', input,
+                { ...result, details }, { expectedServerId: scope.serverId, expectedSessionId: session.sessionId })).toEqual({ success: false });
+        };
+        rejectChangedItem({ ...issuedItem, title: 'Changed after dispatch' });
+        if (issuedItem.source.kind === 'hostedHtml') {
+            rejectChangedItem({ ...issuedItem, source: { ...issuedItem.source,
+                requestedCapabilities: { network: 'open', networkOrigins: [] } } });
+            rejectChangedItem({ ...issuedItem, source: { ...issuedItem.source,
+                requestedCapabilities: { ...issuedItem.source.requestedCapabilities, actions: ['session.board.item.remove'] } } });
+            rejectChangedItem({ ...issuedItem, source: { ...issuedItem.source, source: { ...issuedItem.source.source,
+                files: { 'index.html': { mime: 'text/html', contentBase64: 'PGgxPkRpZmZlcmVudDwvaDE+' } } } } });
+        }
+        if (issuedItem.source.kind === 'widget' && issuedItem.source.instance.definition.kind === 'inline') {
+            const definition = issuedItem.source.instance.definition.definition;
+            rejectChangedItem(SessionSurfaceItemV1Schema.parse({ ...issuedItem, source: { ...issuedItem.source,
+                instance: { ...issuedItem.source.instance, definition: { kind: 'inline', definition: { ...definition,
+                    body: { kind: 'declarative', document: { version: 1, root: { kind: 'markdown', text: 'Changed body' } } } } } } } }));
+            rejectChangedItem({ ...issuedItem, height: { mode: 'fixed', size: 'compact' } });
+        }
+        for (const changedInput of [
+            { ...input, placement: { ...input.placement, tabId: 'elsewhere' } },
+            { ...input, placement: { ...input.placement, width: 'wide' } },
+            // Absent width requests the host's entire default footprint; its
+            // ignored height is not a retained operand. Explicit dimensions are.
+            { ...input, placement: { ...input.placement, width: 'medium' },
+                item: { ...input.item, height: { mode: 'fixed', size: 'tall' } } },
+        ]) {
+            expect(parseSessionBoardActionExecuteOutcomeV1('session.board.item.upsert', changedInput, result,
+                { expectedServerId: scope.serverId, expectedSessionId: session.sessionId })).toEqual({ success: false });
+        }
+        expect(writes).toHaveLength(1);
     });
     it('retains exact recovery before dispatch so scope retirement cannot erase an issued mutation', async () => {
         const prepared: unknown[] = [];
@@ -718,7 +818,7 @@ describe('Session Board Action adapter', () => {
         })).resolves.toEqual({
             v: 1, serverId: scope.serverId, sessionId: session.sessionId,
             capabilities: { readTranscript: true, editSessionRecords: false }, layout: null,
-            items: [{ itemId: 'note', revision, title: item.title, sourceKind: 'declarative', item }],
+            items: [{ itemId: 'note', revision, title: item.title, sourceKind: 'declarative', creator: { kind: 'unknown' }, item }],
             incomplete: true, page: { cursor: null, hasNext: false },
         });
     });
@@ -806,7 +906,7 @@ describe('Session Board Action adapter', () => {
         expect(writes).toHaveLength(1);
         expect(writes[0].path).toBe('/v2/sessions/session%2Fone/board');
         expect(JSON.parse(writes[0].body)).toEqual({
-            operation: 'upsert_item', itemId: 'note', expectedItemRevision: null,
+            operation: 'upsert_item', itemId: 'note', expectedItemRevision: null, destination: 'board',
             itemContent: { t: 'plain', v: item }, placement: {
                 expectedLayoutRevision: null, layoutContent: { t: 'plain', v: { v: 1, tabs: [{ id: 'overview', title: 'Overview', items: [{ itemId: 'note', width: 'medium' }] }] } },
             },

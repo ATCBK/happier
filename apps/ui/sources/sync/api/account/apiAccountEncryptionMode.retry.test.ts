@@ -7,7 +7,6 @@ vi.mock('@/utils/system/runtimeFetch', () => ({
 }));
 
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
-import { upsertAndActivateServer } from '@/sync/domains/server/serverRuntime';
 
 import { encodeBase64 } from '@/encryption/base64';
 import { encodeUTF8 } from '@/encryption/text';
@@ -29,7 +28,8 @@ describe('apiAccountEncryptionMode retry modes', () => {
         vi.useFakeTimers();
         vi.spyOn(Math, 'random').mockReturnValue(0);
 
-        upsertAndActivateServer({ serverUrl: 'https://server.example.test', scope: 'tab' });
+        const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
+        await upsertAndActivateServer({ serverUrl: 'https://server.example.test', scope: 'tab' });
 
         runtimeFetchSpy.mockImplementation(async (url: unknown) => {
             const href = String(url ?? '');
@@ -61,5 +61,78 @@ describe('apiAccountEncryptionMode retry modes', () => {
             String(callUrl ?? '').includes('/v1/account/encryption'),
         );
         expect(encryptionCalls).toHaveLength(1);
+    });
+
+    it('recovers a shared Account-mode read after a sustained transient failure without a new invalidation', async () => {
+        vi.useFakeTimers();
+        vi.spyOn(Math, 'random').mockReturnValue(0);
+        const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
+        await upsertAndActivateServer({ serverUrl: 'https://mode-recovery.example.test', scope: 'tab' });
+        let failuresRemaining = 9;
+        runtimeFetchSpy.mockImplementation(async (url: unknown) => {
+            const href = String(url ?? '');
+            if (href.endsWith('/health') || href.includes('/v1/auth/ping')) return new Response('{}', { status: 200 });
+            if (href.includes('/v1/account/encryption')) {
+                if (failuresRemaining-- > 0) throw new TypeError('Failed to fetch');
+                return Response.json({ mode: 'plain', updatedAt: 1 });
+            }
+            throw new Error(`Unexpected runtimeFetch URL: ${href}`);
+        });
+        const { fetchAccountEncryptionMode } = await import('./apiAccountEncryptionMode');
+        const credentials: AuthCredentials = { token: buildTokenWithSub('mode-recovery') };
+        const first = fetchAccountEncryptionMode(credentials);
+        const second = fetchAccountEncryptionMode(credentials);
+        const settled = Promise.all([first, second]).then(value => ({ value }), error => ({ error }));
+        await vi.runAllTimersAsync();
+        expect(await settled).toEqual({ value: [
+            { mode: 'plain', updatedAt: 1 }, { mode: 'plain', updatedAt: 1 },
+        ] });
+    });
+
+    it.each(['invalidation', 'Home replacement'] as const)('retires a pending mode retry on %s without sending credentials again', async (retirement) => {
+        vi.useFakeTimers();
+        vi.spyOn(Math, 'random').mockReturnValue(0);
+        const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
+        await upsertAndActivateServer({ serverUrl: 'https://retired-mode.example.test', scope: 'tab' });
+        const { fetchAccountEncryptionMode, invalidateAccountEncryptionModeCache } = await import('./apiAccountEncryptionMode');
+        const requests: string[] = [];
+        runtimeFetchSpy.mockImplementation(async (url: unknown) => {
+            const href = String(url ?? '');
+            if (href.endsWith('/health') || href.includes('/v1/auth/ping')) return new Response('{}', { status: 200 });
+            if (href.includes('/v1/account/encryption')) {
+                requests.push(href);
+                if (retirement === 'invalidation') invalidateAccountEncryptionModeCache();
+                else await upsertAndActivateServer({ serverUrl: 'https://successor-mode.example.test', scope: 'tab' });
+                throw new TypeError('Failed to fetch');
+            }
+            throw new Error(`Unexpected runtimeFetch URL: ${href}`);
+        });
+        const settled = fetchAccountEncryptionMode({ token: buildTokenWithSub('retired') })
+            .then(value => ({ value }), error => ({ error }));
+        await vi.runAllTimersAsync();
+        expect(await settled).toMatchObject({ error: { code: 'account-encryption-mode-read-retired', canTryAgain: false } });
+        expect(requests).toHaveLength(1);
+    });
+
+    it('does not retry a terminal authorization denial in shared mode', async () => {
+        vi.useFakeTimers();
+        const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
+        await upsertAndActivateServer({ serverUrl: 'https://denied-mode.example.test', scope: 'tab' });
+        let modeRequests = 0;
+        runtimeFetchSpy.mockImplementation(async (url: unknown) => {
+            const href = String(url ?? '');
+            if (href.endsWith('/health') || href.includes('/v1/auth/ping')) return new Response('{}', { status: 200 });
+            if (href.includes('/v1/account/encryption')) {
+                modeRequests++;
+                return Response.json({ error: 'denied' }, { status: 403 });
+            }
+            throw new Error(`Unexpected runtimeFetch URL: ${href}`);
+        });
+        const { fetchAccountEncryptionMode } = await import('./apiAccountEncryptionMode');
+        const assertion = expect(fetchAccountEncryptionMode({ token: buildTokenWithSub('denied') }))
+            .rejects.toMatchObject({ status: 403, code: 'forbidden' });
+        await vi.runAllTimersAsync();
+        await assertion;
+        expect(modeRequests).toBe(1);
     });
 });

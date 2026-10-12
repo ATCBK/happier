@@ -296,8 +296,8 @@ describe('Account session pull-request link reader', () => {
         await expect(readActiveSessionPullRequestLinks({ accountLifetime: harness.accountLifetime,
             readAvailability: fixture.readAvailability })).resolves.toEqual({ status: 'ready', scope: harness.accountLifetime.scope,
             sessions: [
-                { sessionId: 'session-1', pullRequestLinks: [{ provider: 'github', repository: 'acme/widgets', number: 1 }] },
-                { sessionId: 'session-2', pullRequestLinks: [{ provider: 'github', repository: 'acme/widgets', number: 2 }] },
+                { sessionId: 'session-1', pullRequestLinks: [{ provider: 'github', repository: 'acme/widgets', number: 1, url: 'https://github.com/acme/widgets/pull/1' }] },
+                { sessionId: 'session-2', pullRequestLinks: [{ provider: 'github', repository: 'acme/widgets', number: 2, url: 'https://github.com/acme/widgets/pull/2' }] },
             ],
         });
         expect(requests).toHaveLength(2);
@@ -621,6 +621,22 @@ describe('active Account Collection direct client', () => {
                 contractDigest: contract.contractDigest,
             },
         })).resolves.toEqual({ status: 'unavailable', reason: 'response-invalid' });
+    });
+
+    it('opens retained rows with unknown fields while keeping mutation admission strict', async () => {
+        const harness = await loadClient({ responseForDataPath: () => new Response(JSON.stringify({
+            row: { rowId: 'channel-1', revision: 1, projection: { status: 'enabled', title: 'Ops channel' },
+                content: { t: 'plain', v: { privateNote: 'kept', retired: { nested: true } } } },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } }) });
+        const collection = harness.createActivePluginCollectionClient({ contract });
+        await expect(collection.get('channel-1')).resolves.toMatchObject({ status: 'ready', row: {
+            value: { id: 'channel-1', status: 'enabled', title: 'Ops channel', privateNote: 'kept' },
+        } });
+        const opened = await collection.get('channel-1');
+        if (opened.status === 'ready' && opened.row) expect(opened.row.value).not.toHaveProperty('retired');
+        await expect(collection.mutate([{ kind: 'put', expectedRevision: 1,
+            value: { id: 'channel-1', status: 'enabled', title: 'Ops channel', retired: true },
+        }])).resolves.toMatchObject({ status: 'rejected' });
     });
 
     it('queries and CAS-mutates one admitted collection through the scoped Account authority', async () => {

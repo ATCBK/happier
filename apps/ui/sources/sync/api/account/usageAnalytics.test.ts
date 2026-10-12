@@ -820,7 +820,7 @@ describe('buildUsageAnalyticsViewModel', () => {
         }
     });
 
-    it('preserves invoice-aware auto cost presentation from the server response', () => {
+    it('retains a server invoice presentation while best available selects reported money', () => {
         const response: UsageAnalyticsQueryResponse = {
             v: 1,
             totals: {
@@ -851,7 +851,8 @@ describe('buildUsageAnalyticsViewModel', () => {
             currency: 'USD',
             source: 'invoice',
         });
-        expect(viewModel.overview.totalCost).toBe(2);
+        expect(viewModel.overview.totalCost).toBe(4);
+        expect(viewModel.pageCost).toMatchObject({ amountUsd: 4, selection: { kind: 'reported', currency: 'USD' } });
     });
 });
 

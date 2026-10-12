@@ -41,12 +41,16 @@ export type HomeDomainActionExecutor = NonNullable<ActionExecutorDeps['homeDomai
  * failures proven not to have reached the Home retain the Home-unreachable code.
  */
 function toActionFailure(actionId: string, failure: HomeDomainFailure<string>): ActionExecuteFailure {
+    const details = failure.httpStatus === undefined ? failure.details : {
+        ...(typeof failure.details === 'object' && failure.details !== null ? failure.details : {}),
+        httpStatus: failure.httpStatus,
+    };
     if (failure.code) {
         return {
             ok: false,
             errorCode: failure.code,
             error: failure.code,
-            ...(failure.details === undefined ? {} : { details: failure.details }),
+            ...(details === undefined ? {} : { details }),
         };
     }
     if (failure.kind === 'unsupported') {
@@ -54,13 +58,14 @@ function toActionFailure(actionId: string, failure: HomeDomainFailure<string>): 
             ok: false,
             errorCode: 'unsupported_action',
             error: `unsupported_action:${actionId}`,
+            ...(details === undefined ? {} : { details }),
         };
     }
     if (failure.kind === 'outcome_unknown') {
         return { ok: false, errorCode: 'outcome_unknown', error: 'outcome_unknown' };
     }
     const code = `home_${failure.kind}`;
-    return { ok: false, errorCode: code, error: code };
+    return { ok: false, errorCode: code, error: code, ...(details === undefined ? {} : { details }) };
 }
 
 const HOME_DOMAIN_FAILURE_KINDS = [
@@ -94,21 +99,31 @@ export function homeDomainFailureFromActionFailure(
     if (code === 'outcome_unknown') {
         return Object.freeze({ kind: 'outcome_unknown' as const, retryable: false, code: null });
     }
-    const parsedDetails = readHomeDomainActionErrorV1(failure.details);
-    const externalDetails = ExternalActionHttpErrorSchema.safeParse(failure.details);
+    const rawDetails = failure.details;
+    const status = typeof rawDetails === 'object' && rawDetails !== null && 'httpStatus' in rawDetails
+        ? rawDetails.httpStatus : undefined;
+    const httpStatus = typeof status === 'number' && Number.isInteger(status) && status >= 100 && status <= 599 ? status : undefined;
+    const domainDetails = httpStatus === undefined ? rawDetails : (() => {
+        const { httpStatus: _httpStatus, ...domain } = rawDetails as Readonly<Record<string, unknown>>;
+        return domain;
+    })();
+    const parsedDetails = readHomeDomainActionErrorV1(domainDetails);
+    const externalDetails = ExternalActionHttpErrorSchema.safeParse(domainDetails);
     const details = parsedDetails?.code === code ? parsedDetails.details
         : externalDetails.success && 'code' in externalDetails.data && externalDetails.data.code === code
             ? externalDetails.data : undefined;
     const withDetails = (value: HomeDomainFailure<string>): HomeDomainFailure<string> => Object.freeze({
         ...value,
         ...(details === undefined ? {} : { details }),
+        ...(httpStatus === undefined ? {} : { httpStatus }),
+        ...(httpStatus !== undefined && (httpStatus >= 500 || httpStatus === 408 || httpStatus === 429) ? { retryable: true } : {}),
     });
     if (code === 'unsupported_action' || code.startsWith('unsupported_action:')) {
-        return Object.freeze({ kind: 'unsupported' as const, retryable: false, code: null });
+        return withDetails({ kind: 'unsupported' as const, retryable: false, code: null });
     }
     const transportKind = HOME_DOMAIN_FAILURE_KINDS.find((kind) => code === `home_${kind}`);
     if (transportKind) {
-        return Object.freeze({
+        return withDetails({
             kind: transportKind,
             retryable: transportKind === 'unreachable' || transportKind === 'unknown',
             code: null,
@@ -117,7 +132,7 @@ export function homeDomainFailureFromActionFailure(
     const team = TeamErrorCodeV1Schema.safeParse(code);
     if (team.success) {
         return withDetails({
-            kind: homeDomainFailureKindForHttpStatus(teamErrorHttpStatusV1(team.data)),
+            kind: homeDomainFailureKindForHttpStatus(teamErrorHttpStatusV1(team.data), team.data),
             retryable: false,
             code: team.data,
         });
@@ -125,7 +140,7 @@ export function homeDomainFailureFromActionFailure(
     const credential = TeamCredentialErrorCodeV1Schema.safeParse(code);
     if (credential.success) {
         return withDetails({
-            kind: homeDomainFailureKindForHttpStatus(teamCredentialErrorHttpStatusV1(credential.data)),
+            kind: homeDomainFailureKindForHttpStatus(teamCredentialErrorHttpStatusV1(credential.data), credential.data),
             retryable: false,
             code: credential.data,
         });
@@ -134,7 +149,7 @@ export function homeDomainFailureFromActionFailure(
     if (parsed.success) {
         // The Home named this refusal, so it is the Home's answer and stands.
         return withDetails({
-            kind: homeDomainFailureKindForHttpStatus(homeGovernanceErrorHttpStatusV1(parsed.data)),
+            kind: homeDomainFailureKindForHttpStatus(homeGovernanceErrorHttpStatusV1(parsed.data), parsed.data),
             retryable: false,
             code: parsed.data,
         });
@@ -150,7 +165,7 @@ export function homeDomainFailureFromActionFailure(
             && parsedDetails.details !== null
             && 'retryable' in parsedDetails.details
             && parsedDetails.details.retryable === true;
-        return Object.freeze({
+        return withDetails({
             kind: 'unknown' as const,
             retryable,
             code: parsedDetails.code,

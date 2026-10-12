@@ -3,6 +3,8 @@ import {
     MembershipSessionDataKeyEnvelopePageV1Schema,
     PatchMembershipSessionDataKeyEnvelopesResultV1Schema,
 } from '@happier-dev/protocol/sessions/encryption/membershipSessionDataKeyEnvelopes';
+import { TeamMembershipHistoryInputV1Schema, type TeamMembershipHistoryActionIdV1,
+    type TeamMembershipHistoryTargetV1 } from '@happier-dev/protocol/teams/membershipHistoryPreparationV1';
 
 import { SessionAccessApiError, type SessionAccessRequestOptions } from '@/sync/api/session/sessionAccessApi';
 import { serverAccountScopedResourceKey } from '@/sync/domains/scope/serverAccountScope';
@@ -40,9 +42,34 @@ import {
  * target this caller actually discovered rather than whoever the membership resolves to later.
  */
 
-export type MembershipSessionDataKeyEnvelopeTarget =
-    | Readonly<{ kind: 'team'; teamMembershipId: string }>
-    | Readonly<{ kind: 'group'; teamGroupId: string; accountId: string }>;
+export type MembershipSessionDataKeyEnvelopeTarget = TeamMembershipHistoryTargetV1;
+
+/** Admission belongs to Actions; this adapter only joins the incumbent encryption producer. */
+export async function executeMembershipHistoryActionForScope(options: Readonly<{
+    actionId: TeamMembershipHistoryActionIdV1;
+    input: unknown;
+    onProgress?: (progress: SessionDataKeyPreparationProgress) => void;
+}> & SessionAccessRequestOptions): Promise<unknown> {
+    const input = TeamMembershipHistoryInputV1Schema.parse(options.input);
+    const request = { ...options, address: { serverId: options.scope.serverId, teamId: input.teamId },
+        target: input.target, recipientAccountId: input.recipientAccountId };
+    try {
+        if (options.actionId === 'teams.members.history.preparation.get') {
+            const page = await createMembershipSessionDataKeyEnvelopeClient(request).fetchPage(null);
+            if (page.recipientAccountId !== input.recipientAccountId) throw new SessionAccessApiError('recipient_changed');
+            if (page.status === 'recipient_unavailable') return { status: 'recipient_unavailable', reason: page.contentKey.reason };
+            if (!page.exceptions) throw new SessionAccessApiError('invalid_action_output');
+            return { status: 'ready', actionable: page.items.length > 0 || page.nextCursor !== null, exceptions: page.exceptions };
+        }
+        const outcome = await prepareMembershipHistoryEnvelopesDetached(request);
+        return { status: outcome.status, preparedCount: outcome.preparedCount, skippedCount: outcome.skippedCount,
+            repairRequiredCount: outcome.repairRequiredSessions.length, recipientUnavailableReason: outcome.recipientUnavailableReason,
+            exceptions: outcome.exceptions };
+    } catch (error) {
+        if (error instanceof SessionAccessApiError) return { ok: false, errorCode: error.code, error: error.code };
+        throw error;
+    }
+}
 
 export type MembershipSessionDataKeyEnvelopeRequestOptions = SessionAccessRequestOptions & Readonly<{
     /** The exact Home-qualified Team the member-detail host resolved. */

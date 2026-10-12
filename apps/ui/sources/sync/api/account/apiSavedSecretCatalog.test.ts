@@ -9,7 +9,9 @@ import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fi
 import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol';
-import { refreshSavedSecretCatalog, resetSavedSecretCatalogEngineForTests } from '@/sync/engine/settings/savedSecretCatalogEngine';
+import { observeSavedSecretCatalog, refreshSavedSecretCatalog, resetSavedSecretCatalogEngineForTests } from '@/sync/engine/settings/savedSecretCatalogEngine';
+import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
+import { planSyncActionsFromChanges, plannedChangesAffectProfileCatalog } from '@/sync/runtime/orchestration/changesPlanner';
 import { getSavedSecretCatalogSnapshot, resetSavedSecretCatalogSnapshotsForTests, resolveSavedSecretReference } from '@/sync/store/settings/savedSecretCatalogSnapshot';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 import { SharedSavedSecretPromoteInputV1Schema, SHARED_SAVED_SECRET_ACTION_PATHS_V1 } from '@happier-dev/protocol/account/settings/savedSecretResourceActionsV1';
@@ -123,11 +125,32 @@ describe('SavedSecret catalog captured request boundary', () => {
         });
         const scope = { serverId: resolveServerProfileScopeIdForIdentifier(connection.home.id), accountId };
         await refreshSavedSecretCatalog(scope);
-        expect(getSavedSecretCatalogSnapshot(scope)).toMatchObject({ status: 'ready',
-            legacyImport: { status: 'pending', reason: 'source-uncharacterized' } });
+        await vi.waitFor(() => expect(getSavedSecretCatalogSnapshot(scope)).toMatchObject({ status: 'ready',
+            legacyImport: { status: 'pending', reason: 'source-uncharacterized' } }));
         expect(resolveSavedSecretReference(scope, [], ref)).toMatchObject({ status: 'ready',
             secret: { id: ref, encryptedValue: { _isSecretValue: true, value: 'current-private' } } });
         expect(writes).toEqual([]);
+        const release = observeSavedSecretCatalog(scope);
+        try {
+            const before = getSavedSecretCatalogSnapshot(scope);
+            const machineChanges = planSyncActionsFromChanges([{ cursor: 1, kind: 'machine', entityId: 'machine-a', changedAt: 1 }]);
+            for (let index = 0; index < 20; index += 1) publishHomeAccountChange(scope.serverId, ['machine-a'], {
+                profileCatalogAffects: plannedChangesAffectProfileCatalog(machineChanges),
+            });
+            expect(resolveSavedSecretReference(scope, [], ref)).toMatchObject({ status: 'ready' });
+            expect(getSavedSecretCatalogSnapshot(scope)).toBe(before);
+            const resourceChanges = planSyncActionsFromChanges([{ cursor: 2, kind: 'savedSecretResource', entityId: 'current', changedAt: 2 }]);
+            publishHomeAccountChange(scope.serverId, ['current'], {
+                profileCatalogAffects: plannedChangesAffectProfileCatalog(resourceChanges),
+            });
+            expect(resolveSavedSecretReference(scope, [], ref)).toMatchObject({ status: 'temporarily_unavailable' });
+            await refreshSavedSecretCatalog(scope);
+            await vi.waitFor(() => expect(resolveSavedSecretReference(scope, [], ref)).toMatchObject({ status: 'ready' }));
+            publishHomeAccountChange(scope.serverId);
+            expect(resolveSavedSecretReference(scope, [], ref)).toMatchObject({ status: 'temporarily_unavailable' });
+            await refreshSavedSecretCatalog(scope);
+            await vi.waitFor(() => expect(resolveSavedSecretReference(scope, [], ref)).toMatchObject({ status: 'ready' }));
+        } finally { release(); }
     });
 
     it.each(['personal', 'legacy-inference'] as const)('retries retained %s history after fresh material demand without replaying an acknowledged import', async sourceKind => {
@@ -198,6 +221,7 @@ describe('SavedSecret catalog captured request boundary', () => {
             } });
         const scope = { serverId: resolveServerProfileScopeIdForIdentifier(connection.home.id), accountId };
         await refreshSavedSecretCatalog(scope);
+        await vi.waitFor(() => expect(getSavedSecretCatalogSnapshot(scope)?.legacyImport).toBeTruthy());
         expect(promotions).toHaveLength(1);
         const promotion = SharedSavedSecretPromoteInputV1Schema.parse(promotions[0]);
         expect(promotion.referenceCensus).toMatchObject({
@@ -220,8 +244,8 @@ describe('SavedSecret catalog captured request boundary', () => {
         // Drop process-local demand custody; retry must derive only canonical source/resource facts.
         resetSavedSecretCatalogEngineForTests();
         await refreshSavedSecretCatalog(scope);
+        await vi.waitFor(() => expect(historyWrites).toHaveLength(1));
         expect(promotions).toHaveLength(1);
-        expect(historyWrites).toHaveLength(1);
         if (inference) {
             expect(retained).toMatchObject({ t: 'plain', v: { preferredLanguage: 'fr' } });
             if (retained.t !== 'plain') throw new Error('Expected Plain retained source');

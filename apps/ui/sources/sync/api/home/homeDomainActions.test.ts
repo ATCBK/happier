@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NO_HOME_CAPABILITIES_V1 } from '@happier-dev/protocol/home/governance';
+import { ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 const serverFetchMock = vi.hoisted(() => vi.fn());
 const runtimeFetchMock = vi.hoisted(() => vi.fn());
@@ -72,11 +73,36 @@ beforeEach(() => {
     getCredentialsForServerUrlMock.mockResolvedValue({ token: tokenForSub('account') });
 });
 
+it.each(['team_not_found', 'invitation_not_found', 'group_not_found', 'home_account_not_found', 'team_forbidden'])(
+    'retains the access refusal %s after the Action envelope is decoded', (code) => {
+        expect(homeDomainFailureFromActionFailure({ errorCode: code, details: { error: code } })).toEqual({
+            kind: 'forbidden', retryable: false, code, details: { error: code },
+        });
+    },
+);
+
+it('keeps a disabled Team route unsupported after the Action envelope is decoded', () => {
+    expect(homeDomainFailureFromActionFailure({ errorCode: 'teams_unavailable' }).kind).toBe('unsupported');
+});
+
 afterEach(() => {
     vi.clearAllMocks();
 });
 
 describe('createHomeDomainActionExecutorForScope', () => {
+    it.each([
+        { status: 409, body: { error: 'username-taken' }, code: 'username-taken', retryable: false },
+        { status: 429, body: {}, code: 'home_unknown', retryable: true },
+    ])('round-trips actual HTTP $status without losing typed domain details', async ({ status, body, code, retryable }) => {
+        const { scope } = await scopeForNewHome('https://profile-refusal.example');
+        runtimeFetchMock.mockResolvedValue(jsonResponse(body, status));
+        const result = await createHomeDomainActionExecutorForScope(scope)({ actionId: 'account.username.set', input: { username: 'self' },
+            context: { surface: 'ui', authority: 'present_user' } });
+        expect(result).toMatchObject({ ok: false, errorCode: code });
+        const failure = homeDomainFailureFromActionFailure(ActionExecuteFailureSchema.parse(result));
+        expect(failure).toMatchObject({ httpStatus: status, retryable, ...(status === 409 ? { details: body } : {}) });
+    });
+
     it.each([
         { status: 404, error: 'Session not found or not owned by user', code: 'session_absent' },
         { status: 409, error: 'Session delete condition was lost', code: 'session_delete_conflict' },
@@ -85,7 +111,7 @@ describe('createHomeDomainActionExecutorForScope', () => {
         runtimeFetchMock.mockResolvedValue(jsonResponse({ error }, status));
         const result = await createHomeDomainActionExecutorForScope(scope)({ actionId: 'session.delete',
             input: { sessionId: 'session' }, context: { surface: 'ui', authority: 'present_user' } });
-        expect(result).toEqual({ ok: false, errorCode: code, error: code, details: { error } });
+        expect(result).toEqual({ ok: false, errorCode: code, error: code, details: { error, httpStatus: status } });
     });
     it('carries a family intent to the path its Action row declares', async () => {
         const { scope } = await scopeForNewHome('https://home-a.example');
@@ -169,7 +195,7 @@ describe('createHomeDomainActionExecutorForScope', () => {
             ok: false,
             errorCode: 'home_governance_forbidden',
             error: 'home_governance_forbidden',
-            details: { error: 'home_governance_forbidden' },
+            details: { error: 'home_governance_forbidden', httpStatus: 403 },
         });
     });
 
@@ -195,7 +221,7 @@ describe('createHomeDomainActionExecutorForScope', () => {
             ok: false,
             errorCode: 'provider_endpoint_rate_limited',
             error: 'provider_endpoint_rate_limited',
-            details,
+            details: { ...details, httpStatus: 429 },
         });
     });
 
@@ -232,6 +258,7 @@ describe('createHomeDomainActionExecutorForScope', () => {
             ok: false,
             errorCode: 'unsupported_action',
             error: 'unsupported_action:teams.archive',
+            details: { httpStatus: 404 },
         });
     });
 

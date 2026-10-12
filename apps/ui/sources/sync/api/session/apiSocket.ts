@@ -42,6 +42,7 @@ import {
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import {
     getServerProfileById,
+    resolveServerProfileScopeIdForIdentifier,
     subscribeActiveServerRuntimeOrigin,
 } from '@/sync/domains/server/serverProfiles';
 import { resolveSocketIoTransportsForCarrier } from '@/sync/runtime/socketIoTransports';
@@ -74,6 +75,14 @@ import { getActiveServerHomeCarrier } from '@/sync/domains/server/serverRuntime'
 import { ServerScopedTransportUnavailableError } from '@/sync/runtime/homeCarrier';
 import { MachineLiveStreamPayloadErrorV1, type MachineLiveStreamContentV1 } from '@happier-dev/protocol/machines/peer/mediation/stream/payloadV1';
 import { createMachineLiveStreamSocketTransport } from '@/sync/domains/machines/peer/mediation/stream/socketTransport';
+import { createServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { parseToken } from '@/utils/auth/parseToken';
+import { EphemeralUpdateSchema } from '@happier-dev/protocol/updates';
+import {
+    clearMachineRequestReachabilityForMachine,
+    clearMachineRequestReachabilityForScope,
+    type MachineReachabilityScope,
+} from '@/sync/domains/machines/reachability/machineReachability';
 
 const STATIC_EXPO_PUBLIC_HAPPIER_SOCKET_ACK_AUTH_SETTLE_TIMEOUT_MS =
     process.env.EXPO_PUBLIC_HAPPIER_SOCKET_ACK_AUTH_SETTLE_TIMEOUT_MS;
@@ -522,6 +531,20 @@ class ApiSocket {
             ? this.config.socketRole.sessionId : null;
     }
 
+    /** Capture the bearer identity used by this concrete Account socket before an RPC begins. */
+    getMachineRequestScope() {
+        const config = this.config;
+        if (!config || config.isCurrent?.() === false || config.socketRole?.clientType === 'session-scoped') return null;
+        try {
+            return createServerAccountScope(
+                resolveServerProfileScopeIdForIdentifier(config.serverId ?? getActiveServerSnapshot().serverId),
+                parseToken(config.token),
+            );
+        } catch {
+            return null;
+        }
+    }
+
     //
     // Listener Management
     //
@@ -633,6 +656,7 @@ class ApiSocket {
             timeoutMs?: number | null;
             authorization?: SocketRpcAuthorizationContext;
             onIssued?: () => void;
+            onResponse?: () => void;
             signal?: AbortSignal;
             requestId?: string;
         },
@@ -1245,7 +1269,8 @@ class ApiSocket {
         const messageContext: SyncSocketMessageContext = Object.freeze({
             serverId: String(this.config.serverId ?? '').trim() || null,
         });
-        const detachInboundRequests = this.installSocketEventHandlers(socket, statusDemandTransport?.observeEphemeral ?? (() => {}), messageContext, socketRole);
+        const machineRequestScope = accountScoped ? this.getMachineRequestScope() : null;
+        const detachInboundRequests = this.installSocketEventHandlers(socket, statusDemandTransport?.observeEphemeral ?? (() => {}), messageContext, socketRole, machineRequestScope);
         const transportConfig = this.config;
 
         this.detachSocketTransportListeners = [
@@ -1255,9 +1280,10 @@ class ApiSocket {
                 token: this.config.token, socket, transport,
             })] : []),
             transport.onConnected(() => {
-                if (this.config !== transportConfig || transportConfig?.isCurrent?.() === false) return;
+                if (this.socket !== socket || this.config !== transportConfig || transportConfig?.isCurrent?.() === false) return;
                 this.clearError();
                 this.updateStatus('connected');
+                if (machineRequestScope) clearMachineRequestReachabilityForScope(machineRequestScope);
                 if (accountScoped) notifyExecutionRunActivityReconnect(transportConfig.serverId ?? getActiveServerSnapshot().serverId);
                 // Reconnect-safe: re-join every inbound reverse-RPC room on each (re)connect so a
                 // dropped socket does not silently stop answering daemon reverse calls.
@@ -1305,6 +1331,7 @@ class ApiSocket {
         observeStatusDemandEphemeral: (update: unknown) => void,
         messageContext: SyncSocketMessageContext,
         socketRole: HappierSocketRole,
+        machineRequestScope: MachineReachabilityScope | null,
     ) {
         const installedConfig = this.config;
         const liveStreamTransport = createMachineLiveStreamSocketTransport({
@@ -1376,12 +1403,19 @@ class ApiSocket {
             );
         }
         socket.onAny((event, data) => {
-            if (this.config !== installedConfig || installedConfig?.isCurrent?.() === false) return;
+            if (this.socket !== socket || this.config !== installedConfig || installedConfig?.isCurrent?.() === false) return;
             if (event === MACHINE_LIVE_STREAM_SOCKET_EVENT) {
                 liveStreamTransport.receive(data);
                 return;
             }
             if (event === 'ephemeral') {
+                if (machineRequestScope) {
+                    const update = EphemeralUpdateSchema.safeParse(data);
+                    if (update.success && update.data.type === 'machine-activity'
+                        && update.data.active === true && update.data.reconnected === true) {
+                        clearMachineRequestReachabilityForMachine(machineRequestScope, update.data.id);
+                    }
+                }
                 observeStatusDemandEphemeral(data);
             }
             const handlers = this.messageHandlers.get(event);

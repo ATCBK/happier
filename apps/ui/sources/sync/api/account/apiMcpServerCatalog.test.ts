@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { fetchMcpServerCatalogRowV1, mutateMcpServerCatalogInContext, readMcpServerCatalogInContext } from './apiMcpServerCatalog';
 import { createMcpServerActionExecuteV1 } from '@happier-dev/protocol/mcp/servers/serverActionsV1';
+import { reachRulesToDraftsV1 } from '@happier-dev/protocol/reach/reachRulesChangeV1';
+import type { ReachRulesV1 } from '@happier-dev/protocol/reach/reachRuleV1';
 import { MCP_SERVER_CATALOG_ROWS_ROUTE_V1, McpServerCatalogRowMutationV1Schema,
     type McpServerCatalogV1 } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -15,6 +16,7 @@ import { PROFILE_TRANSFER_ROUTE_V1 } from '@happier-dev/protocol/profiles/profil
 import { PromptLibraryRowsListResponseV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 
 installDisconnectedServerSocketBoundary();
+const { fetchMcpServerCatalogRowV1, mutateMcpServerCatalogInContext, readMcpServerCatalogInContext } = await import('./apiMcpServerCatalog');
 
 describe('MCP row HTTP inventory boundary', () => {
     it.each(['empty', 'literal'] as const)('activates %s MCP source without depending on an unrelated locked catalog', async sourceKind => {
@@ -81,7 +83,7 @@ describe('MCP row HTTP inventory boundary', () => {
         } finally { context.dispose(); resetRuntimeFetch(); }
     });
 
-    it('returns exact public Action capture only after row acknowledgement and refuses intervening writes', async () => {
+    it('returns previous reach rules only after row acknowledgement and refuses a lost CAS', async () => {
         let revision = 4;
         let catalog: McpServerCatalogV1 = { v: 1,
             servers: [{ id: 'server', name: 'server', transport: 'stdio', stdio: { command: 'echo', args: [] },
@@ -117,25 +119,20 @@ describe('MCP row HTTP inventory boundary', () => {
                 mutate: (change, expectedRevision) => mutateMcpServerCatalogInContext(owner, { change, expectedRevision }),
                 machine: async () => { throw new Error('Unexpected Machine effect'); } });
             const context = { surface: 'ui_button', authority: 'present_user', actionCaller: { kind: 'host' } } as const;
-            expect(await execute({ actionId: 'mcp.bindings.enable', input: { bindingId: 'binding', expectedRevision: 4,
-                captureBefore: true }, context })).toEqual({ ok: true, result: { status: 'updated', revision: 5, cursor: 5,
-                reversal: { scope: { serverId: owner.serverId, accountId: owner.accountId }, bindingId: 'binding',
-                    before: false, applied: true, revision: 5 } } });
+            const previous: ReachRulesV1 = [{ id: 'binding', target: { t: 'allMachines' }, enabled: false, createdAt: 1, updatedAt: 1 }];
+            expect(await execute({ actionId: 'mcp.rules.set', input: { items: [{ serverId: 'server' }],
+                change: { kind: 'write', write: { place: { t: 'allMachines' }, state: 'on' } } }, context }))
+                .toMatchObject({ ok: true, result: { ok: true, revision: 5, items: [{ serverId: 'server', previous,
+                    rules: [{ id: 'binding', enabled: true }] }] } });
             expect(catalog.bindings[0]?.enabled).toBe(true);
-            await expect(execute({ actionId: 'mcp.bindings.disable', input: { bindingId: 'binding', expectedRevision: 5,
-                expectedEnabled: true, expectedScope: { serverId: owner.serverId, accountId: 'other-account' } },
-                context })).rejects.toMatchObject({ code: 'server_scope_mismatch' });
-            expect(revision).toBe(5);
-            expect(catalog.bindings[0]?.enabled).toBe(true);
-            expect(await execute({ actionId: 'mcp.bindings.disable', input: { bindingId: 'binding', expectedRevision: 5,
-                expectedEnabled: false }, context })).toEqual({ ok: true, result: { status: 'conflict', revision: 5 } });
-            expect(catalog.bindings[0]?.enabled).toBe(true);
-            expect(await execute({ actionId: 'mcp.bindings.disable', input: { bindingId: 'binding', expectedRevision: 5,
-                expectedEnabled: true }, context })).toEqual({ ok: true, result: { status: 'updated', revision: 6, cursor: 6 } });
+            expect(await execute({ actionId: 'mcp.rules.set', input: { items: [{ serverId: 'server' }],
+                change: { kind: 'replace', rules: reachRulesToDraftsV1(previous) } }, context }))
+                .toMatchObject({ ok: true, result: { ok: true, revision: 6, items: [{ rules: [{ enabled: false }] }] } });
             expect(catalog.bindings[0]?.enabled).toBe(false);
             raceAtWrite = true;
-            expect(await execute({ actionId: 'mcp.bindings.enable', input: { bindingId: 'binding', expectedRevision: 6,
-                captureBefore: true }, context })).toEqual({ ok: true, result: { status: 'conflict', revision: 7 } });
+            expect(await execute({ actionId: 'mcp.rules.set', input: { items: [{ serverId: 'server' }],
+                change: { kind: 'write', write: { place: { t: 'allMachines' }, state: 'on' } } }, context }))
+                .toEqual({ ok: true, result: { ok: false, code: 'conflict' } });
             expect(catalog.bindings[0]?.enabled).toBe(false);
         } finally { owner.dispose(); await account.dispose(); }
     });

@@ -1,4 +1,4 @@
-import { resolveUsageBucketBounds, resolveUsageCalendarInstant, resolveUsageCalendarDateStart } from '@happier-dev/protocol';
+import { resolveUsageBucketBounds, resolveUsageCalendarInstant, resolveUsageCalendarDateStart } from '@happier-dev/protocol/usage/usageCalendar';
 import { formatUsageCalendarDate } from '@/sync/domains/usage/usageCalendarPresentation';
 const DAY_MS = 86_400_000;
 const WEEKS = 53;

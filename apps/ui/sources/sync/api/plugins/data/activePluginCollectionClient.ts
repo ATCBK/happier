@@ -2,7 +2,8 @@ import { PLUGIN_COLLECTION_CONTRACT_HTTP_PATH_V1, PLUGIN_COLLECTION_GET_HTTP_PAT
 import { PLUGIN_COLLECTION_LIMITS_V1 } from '@happier-dev/protocol/plugins/data/collectionLimitsV1';
 import { PLUGIN_DATA_ACCOUNT_STORED_CONTENT_COMPATIBILITY_DECLARATION } from '@happier-dev/protocol/clientCompatibility/accountStoredContentCompatibilityV1';
 import { PluginCollectionRowIdV1Schema } from '@happier-dev/protocol/plugins/data/collectionUiQueryWireV1';
-import { compilePluginJsonSchema } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
+import { compilePluginJsonSchema, createPluginJsonSchemaZodValueAdapter } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
 import { createAccountScopedCryptoMaterialSnapshotV1, type AccountScopedCryptoMaterial } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { decodePluginCollectionLogicalRowV1, encodePluginCollectionLogicalValueV1, preparePluginCollectionLogicalMutationRequestV1 } from '@happier-dev/protocol/plugins/data/collectionLogicalCodecV1';
@@ -554,16 +555,18 @@ export function encodePluginCollectionLogicalValue<TValue extends PluginAccountC
 export function mergeLogicalRow<TValue extends PluginAccountCollectionValue<PluginAccountCollectionDefinition>>(input: Readonly<{
     contract: NormalizedPluginAccountCollectionContractV1;
     validate: ReturnType<typeof compilePluginJsonSchema>;
+    storedReadSchema: ReturnType<typeof createPluginJsonSchemaZodValueAdapter>;
     row: PluginCollectionRowV1;
     encryptionMode: 'plain' | 'e2ee';
     material: AccountScopedCryptoMaterial | null;
 }>): ActivePluginCollectionLogicalRowV1<TValue> | null {
     const decoded = decodePluginCollectionLogicalRowV1<TValue>({
         contract: input.contract,
-        isValidLogicalValue: (value): value is TValue => isLogicalCollectionValue<TValue>(
-            input.validate,
-            value,
-        ),
+        parseStoredLogicalValue: (value) => {
+            const parsed = input.storedReadSchema.safeParse(value);
+            if (!parsed.success || parsed.data === null || typeof parsed.data !== 'object' || Array.isArray(parsed.data)) return null;
+            return isLogicalCollectionValue<TValue>(input.validate, parsed.data) ? parsed.data : null;
+        },
         row: input.row,
         encryptionMode: input.encryptionMode,
         material: input.material,
@@ -712,6 +715,7 @@ export function createActivePluginCollectionClient<
     accountLifetime?: ActiveServerAccountScopeLifetime;
 }>): ActivePluginCollectionClientV1<TValue> {
     const validate = compilePluginJsonSchema(params.contract.schema);
+    const storedReadSchema = createStoredReadSchema(createPluginJsonSchemaZodValueAdapter(params.contract.schema));
 
     const get = async (
         rowId: string,
@@ -747,6 +751,7 @@ export function createActivePluginCollectionClient<
                 : mergeLogicalRow<TValue>({
                     contract: params.contract,
                     validate,
+                    storedReadSchema,
                     row: result.data.row,
                     encryptionMode: prepared.operation.encryptionMode,
                     material: prepared.operation.material,
@@ -797,6 +802,7 @@ export function createActivePluginCollectionClient<
                 const materialized = mergeLogicalRow<TValue>({
                     contract: params.contract,
                     validate,
+                    storedReadSchema,
                     row,
                     encryptionMode: prepared.operation.encryptionMode,
                     material: prepared.operation.material,

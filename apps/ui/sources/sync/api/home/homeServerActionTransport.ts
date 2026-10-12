@@ -50,6 +50,8 @@ export type HomeDomainFailure<TCode extends string = HomeDomainErrorCode> = Read
     code: TCode | null;
     /** The strict, secret-free domain error envelope when the Home supplied one. */
     details?: unknown;
+    /** The actual HTTP answer, when one was obtained; never inferred from a code. */
+    httpStatus?: number;
 }>;
 
 export type HomeDomainResult<TValue, TCode extends string = HomeDomainErrorCode> =
@@ -69,6 +71,7 @@ function failure<TCode extends string = HomeDomainErrorCode>(
     retryable: boolean,
     code: TCode | null = null,
     details?: unknown,
+    httpStatus?: number,
 ): HomeDomainResult<never, TCode> {
     return Object.freeze({
         ok: false as const,
@@ -77,6 +80,7 @@ function failure<TCode extends string = HomeDomainErrorCode>(
             retryable,
             code,
             ...(details === undefined ? {} : { details }),
+            ...(httpStatus === undefined ? {} : { httpStatus }),
         }),
     });
 }
@@ -103,11 +107,14 @@ async function readJsonBody(response: Response): Promise<unknown> {
     }
 }
 
-export function homeDomainFailureKindForHttpStatus(status: number): HomeDomainFailureKind {
+export function homeDomainFailureKindForHttpStatus(status: number, domainCode?: string | null): HomeDomainFailureKind {
     if (status === 400) return 'invalid';
     if (status === 401) return 'unauthorized';
     if (status === 403) return 'forbidden';
-    if (status === 404) return 'unsupported';
+    // Typed resource refusals deliberately conceal existence from unauthorized
+    // viewers. They prove the route answered, not that the Home needs an update.
+    // teams_unavailable explicitly means the feature-gated route is absent.
+    if (status === 404) return domainCode && domainCode !== 'teams_unavailable' ? 'forbidden' : 'unsupported';
     if (status === 409) return 'conflict';
     return 'unknown';
 }
@@ -129,14 +136,15 @@ function classifyAnswer<TCode extends string>(
             && domain.details.retryable === true
         );
         return failure(
-            homeDomainFailureKindForHttpStatus(status),
+            homeDomainFailureKindForHttpStatus(status, domain.code),
             retryable,
             domain.code,
             domain.details,
+            status,
         );
     }
     const code = readAdditionalTypedErrorCode(body, schema);
-    return failure(homeDomainFailureKindForHttpStatus(status), status >= 500, code);
+    return failure(homeDomainFailureKindForHttpStatus(status, code), status >= 500 || status === 408 || status === 429, code, undefined, status);
 }
 
 export async function requestHomeDomain<TValue, TCode extends string = HomeDomainErrorCode>(params: Readonly<{
@@ -173,7 +181,7 @@ export async function requestHomeDomain<TValue, TCode extends string = HomeDomai
             params.requestAuthority?.assertCurrent();
             if (!response.ok) return classifyAnswer(response.status, body, params.errorSchema);
             const parsed = params.schema.safeParse(body);
-            if (!parsed.success) return failure('invalid', false);
+            if (!parsed.success) return failure('invalid', false, null, undefined, response.status);
             return Object.freeze({ ok: true as const, value: parsed.data });
         };
         if (params.requestAuthority) return await carry(params.requestAuthority);

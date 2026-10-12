@@ -17,12 +17,13 @@ import { listSavedSecretVoiceCredentialMutationReferencesV1 } from '@happier-dev
 import { parseSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
 import type { ConnectedServiceConfigurationCatalogHostV1 } from '@happier-dev/protocol/connect/execute-configuration-action';
 import { randomUUID } from '@/platform/randomUUID';
+import { applyAcknowledgedConnectedAccountCatalog } from '@/sync/store/settings/connectedAccountCatalogSnapshot';
+import { fireAndForget } from '@/utils/system/fireAndForget';
 
 export type ConnectedAccountCatalogAccountContext = Awaited<ReturnType<typeof import('@/sync/ops/actions/actionAccountContext').captureLazyActionAccountContext>>;
 export type ConnectedAccountCatalogMutationResponseV1 = ReturnType<typeof ConnectedAccountCatalogRowMutationResponseV1Schema.parse>;
-export class ConnectedAccountCatalogOperationError extends Error {
-    constructor(readonly code: string, readonly cause?: unknown) { super(code); this.name = 'ConnectedAccountCatalogOperationError'; }
-}
+import { ConnectedAccountCatalogOperationError } from './connectedAccountCatalogOperationError';
+export { ConnectedAccountCatalogOperationError };
 export function requireUpdatedConnectedAccountCatalogMutation(result: ConnectedAccountCatalogMutationResponseV1): asserts result is Extract<ConnectedAccountCatalogMutationResponseV1, { status: 'updated' }> {
     if (result.status !== 'updated') throw new ConnectedAccountCatalogOperationError(result.status, result);
 }
@@ -216,6 +217,11 @@ export async function writeConnectedAccountCatalogRecordInContext(context: Conne
         }
         const parsed = ConnectedAccountCatalogRowMutationResponseV1Schema.safeParse(await response.json().catch(() => null));
         if (!parsed.success) throw new ConnectedAccountCatalogOperationError(response.ok ? 'outcome_unknown' : `connected_account_catalog_http_${response.status}`);
+        if (parsed.data.status === 'updated') {
+            try { applyAcknowledgedConnectedAccountCatalog(context.accountLifetime.scope, input.record,
+                parsed.data.revision, context.accountLifetime.isCurrent()); }
+            catch { /* Display publication cannot retract the durable row receipt. */ }
+        }
         return parsed.data;
 }
 export async function writeConnectedAccountCatalogRecordAndPublishInContext(context: ConnectedAccountCatalogAccountContext,
@@ -223,8 +229,8 @@ export async function writeConnectedAccountCatalogRecordAndPublishInContext(cont
     const result = await writeConnectedAccountCatalogRecordInContext(context, input, signal);
     if (result.status === 'updated') {
         const { invalidateConnectedAccountCatalogAfterAcknowledgedMutation } = await import('@/sync/engine/settings/connectedAccountCatalogEngine');
-        try { await invalidateConnectedAccountCatalogAfterAcknowledgedMutation({ serverId: context.serverId, accountId: context.accountId },
-            input.record.key, context.assertAccountCurrent); }
+        try { fireAndForget(invalidateConnectedAccountCatalogAfterAcknowledgedMutation(context.accountLifetime.scope,
+            input.record.key, context.assertAccountCurrent), { tag: 'connectedAccountCatalog.afterAcknowledgedMutation' }); }
         catch { /* A projection refusal cannot erase the durable mutation receipt. */ }
     }
     return result;
@@ -271,11 +277,8 @@ export function createUiConnectedServiceConfigurationCatalogHost(context: Connec
                 },
             });
             if (result.ok) {
-                try {
-                    const { invalidateConnectedAccountCatalogAfterAcknowledgedMutation } = await import('@/sync/engine/settings/connectedAccountCatalogEngine');
-                    await invalidateConnectedAccountCatalogAfterAcknowledgedMutation({ serverId: context.serverId, accountId: context.accountId },
-                        'configurations', context.assertAccountCurrent);
-                } catch { /* Keep the acknowledged effect receipt after retirement. */ }
+                // The composite transaction publishes and revalidates its exact
+                // acknowledged catalogs at the resource owner.
                 return { status: 'applied' };
             }
             throw new ConnectedAccountCatalogOperationError(result.reason === 'changed' ? 'connected_account_configuration_changed'

@@ -1,4 +1,8 @@
-import { resolveEffectiveUsageCostUsd, resolveUsageCostPresentationSource, resolveUsageBucketBounds, resolveUsageCalendarInstant, resolveUsageTokenCategories, normalizeLegacyUsageTokens } from '@happier-dev/protocol';
+import { projectUsagePageCost, resolveEffectiveUsageCostUsd, resolveUsageCostPresentationSource, type UsagePageCostProjection } from '@happier-dev/protocol/usage/usageCostFacts';
+import { resolveUsageBucketBounds, resolveUsageCalendarInstant } from '@happier-dev/protocol/usage/usageCalendar';
+import { resolveUsageTokenCategories } from '@happier-dev/protocol/usage/usageTokenCategories';
+import { normalizeLegacyUsageTokens } from '@happier-dev/protocol/usage/legacyUsageTokens';
+import { agentIdFromEngineKey } from '@happier-dev/protocol/usage/usageFilterOptions';
 import type {
     UsageAnalyticsBreakdownDimension,
     UsageAnalyticsBreakdownEntry,
@@ -6,6 +10,7 @@ import type {
     UsageAnalyticsQueryResponse,
     UsageAnalyticsSeriesBucket,
     UsageAnalyticsTotals as ProtocolUsageAnalyticsTotals,
+    UsageCostMode as ProtocolUsageCostMode,
 } from '@happier-dev/protocol';
 
 import type { UsageDataPoint, UsageTotals } from './apiUsage';
@@ -15,7 +20,7 @@ import { formatUsageWeekdayHourLabel } from './formatUsageRhythmLabel';
 import type { UsagePeriod } from './usagePeriods';
 
 export type UsageMetric = 'tokens' | 'cost';
-export type UsageCostMode = 'auto' | 'reported' | 'estimated';
+export type UsageCostMode = ProtocolUsageCostMode;
 
 export type UsageDimension =
     | 'agent'
@@ -281,6 +286,8 @@ export interface UsageEfficiencyViewModel {
 }
 
 export interface UsageAnalyticsViewModel {
+    /** Query-backed views retain the canonical selected money facts, including absence. */
+    pageCost?: UsagePageCostProjection;
     /** Captured shown-query calendar offset; absent only on unqualified display fixtures. */
     timeZoneOffsetMinutes?: number;
     overview: UsageTotals;
@@ -1249,10 +1256,7 @@ export function buildUsageLeaderTrends(
 }
 
 /** Recover the `agentId` from an engine-timeline key (`agentId` | `agentId:backendMode`). */
-function agentIdFromEngineKey(key: string): string {
-    const separator = key.indexOf(':');
-    return separator === -1 ? key : key.slice(0, separator);
-}
+export { agentIdFromEngineKey } from '@happier-dev/protocol/usage/usageFilterOptions';
 
 /**
  * Per-AGENT token sparklines for the Band 5 "Agents" leader rows (D-R2-8). The
@@ -1680,6 +1684,7 @@ export function buildUsageAnalyticsViewModel(
         const modelTimeline = buildTimelineFromResponse(source.modelTimeline, costPresentation);
         const engineTimeline = buildTimelineFromResponse(source.engineTimeline, costPresentation, 'backendMode');
         return {
+            pageCost: projectUsagePageCost(source, filters.costMode),
             timeZoneOffsetMinutes,
             overview,
             hero: buildUsageHeroViewModel(overview, insights, costPresentation),

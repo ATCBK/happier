@@ -2,7 +2,7 @@ import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/
 import { buildSessionDiscussionMutationRequestBodyV1, SessionDiscussionCreateResponseV1Schema, SessionDiscussionDetailsResponseV1Schema, SessionDiscussionErrorResponseV1Schema, SessionDiscussionListResponseV1Schema, SessionDiscussionMessagesResponseV1Schema, SessionDiscussionPostResponseV1Schema, SessionDiscussionReadResponseV1Schema } from '@happier-dev/protocol/sessions/discussions/api';
 import { bindSessionDiscussionActionHttpRequestV1 } from '@happier-dev/protocol/actions/sessionDiscussionActionFamily';
 import { SessionDiscussionCreateInputV1Schema, SessionDiscussionCreateResultV1Schema, SessionDiscussionDetailsResultV1Schema, SessionDiscussionListInputV1Schema, SessionDiscussionListResultV1Schema, SessionDiscussionOpenedMessageV1Schema, SessionDiscussionOpenedSummaryV1Schema, SessionDiscussionPostInputV1Schema, SessionDiscussionPostResultV1Schema, SessionDiscussionReadInputV1Schema, SessionDiscussionReadResultV1Schema, SessionDiscussionReadStateResultV1Schema, SessionDiscussionRenameInputV1Schema, type SessionDiscussionCreateResultV1, type SessionDiscussionDetailsResultV1, type SessionDiscussionListInputV1, type SessionDiscussionListResultV1, type SessionDiscussionOpenedMessageV1, type SessionDiscussionOpenedSummaryV1, type SessionDiscussionPostResultV1, type SessionDiscussionReadResultV1, type SessionDiscussionReadStateResultV1 } from '@happier-dev/protocol/sessions/discussions/actions';
-import { SessionDiscussionMessageContentV1Schema, SessionDiscussionTitleV1Schema, type SessionDiscussionMessageContentV1 } from '@happier-dev/protocol/sessions/discussions/content';
+import { SessionDiscussionMessageContentV1Schema, SessionDiscussionMessageContentV1StoredSchema, SessionDiscussionTitleV1Schema, SessionDiscussionTitleV1StoredSchema, type SessionDiscussionMessageContentV1 } from '@happier-dev/protocol/sessions/discussions/content';
 import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
 import { serializeSessionDiscussionMutationEqualityIntentV1 } from '@happier-dev/protocol/sessions/discussions/equality';
 import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
@@ -51,14 +51,14 @@ function failure(errorCode: string) {
 
 async function openSummary(context: SessionStoredContentContext | null, row: SessionDiscussionSummaryV1): Promise<SessionDiscussionOpenedSummaryV1> {
     const opened = await openSessionStoredContent(context, row.titleContent);
-    const title = opened.status === 'ready' ? SessionDiscussionTitleV1Schema.safeParse(opened.value) : null;
+    const title = opened.status === 'ready' ? SessionDiscussionTitleV1StoredSchema.safeParse(opened.value) : null;
     const { titleContent: _titleContent, ...projection } = row;
     return SessionDiscussionOpenedSummaryV1Schema.parse({ ...projection, title: title?.success === true ? title.data.title : null });
 }
 
 async function openMessage(context: SessionStoredContentContext | null, row: SessionDiscussionMessageV1): Promise<SessionDiscussionOpenedMessageV1> {
     const opened = await openSessionStoredContent(context, row.content);
-    const content = opened.status === 'ready' ? SessionDiscussionMessageContentV1Schema.safeParse(opened.value) : null;
+    const content = opened.status === 'ready' ? SessionDiscussionMessageContentV1StoredSchema.safeParse(opened.value) : null;
     const { content: _content, ...projection } = row;
     return SessionDiscussionOpenedMessageV1Schema.parse({ ...projection, content: content?.success === true ? content.data : null });
 }
@@ -67,9 +67,9 @@ function discussionEqualityEvidence(context: SessionStoredContentContext | null,
     | Readonly<{ status: 'ready'; evidence?: SessionMutationEqualityEvidenceV1 }>
     | Readonly<{ status: 'locked' }> {
     if (context?.mode !== 'e2ee') return { status: 'ready' };
-    const derive = context.encryption?.deriveDiscussionMutationEqualityTagV1;
-    if (!derive) return { status: 'locked' };
-    return { status: 'ready', evidence: { kind: 'e2eeTag', tag: derive(canonicalIntent) } };
+    const encryption = context.encryption;
+    if (!encryption?.deriveDiscussionMutationEqualityTagV1) return { status: 'locked' };
+    return { status: 'ready', evidence: { kind: 'e2eeTag', tag: encryption.deriveDiscussionMutationEqualityTagV1(canonicalIntent) } };
 }
 
 /** One UI host adapter: Action transport + existing Session cipher + Protocol final-body/response owners. */

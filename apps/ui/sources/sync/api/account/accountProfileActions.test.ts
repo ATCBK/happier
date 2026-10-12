@@ -1,0 +1,149 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act } from 'react-test-renderer';
+import { createAccountTokenForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { renderHook } from '@/dev/testkit/hooks/renderHook';
+import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
+import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
+
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
+vi.mock('@react-navigation/native', async () => (await import('@/dev/testkit/mocks/reactNavigation')).createReactNavigationNativeMock());
+
+const homes = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(homes);
+installDisconnectedServerSocketBoundary();
+const { storage } = await import('@/sync/domains/state/storageStore');
+const { profileDefaults } = await import('@/sync/domains/profiles/profile');
+const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+const { publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+const { activateStorageAccountScope } = await import('@/dev/testkit/runtime/storageRuntime');
+const { resetScopedHomeActionExecutorsForTests, scopedHomeActionExecutor } = await import('@/sync/ops/actions/scopedHomeActionExecutor');
+const { setAccountName } = await import('./apiAccountName');
+const { setAccountUsername } = await import('./apiUsername');
+const { useMountedActionExecution } = await import('@/components/approvals/useMountedActionExecution');
+const credentials = { token: createAccountTokenForTests('self', { currentAccount: true }) };
+let serverId: string;
+let disposeScope: (() => void) | undefined;
+
+beforeEach(async () => {
+    resetScopedHomeActionExecutorsForTests();
+    await homes.reset();
+    await loadSyncSingletonForTests();
+    serverId = await homes.addHome({ name: 'Profile Home', serverUrl: 'https://profile-actions.test', accountId: 'self', currentAccount: true });
+    const active = await activateStorageAccountScope({ serverId: getActiveServerSnapshot().serverId, accountId: 'self' });
+    disposeScope = () => active.dispose();
+    publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+    // The HTTP Home answers; the disconnected socket boundary must not model an unreachable endpoint.
+    storage.setState({ endpointStatus: 'online' });
+    storage.getState().applyProfile({ ...profileDefaults, id: 'self', timestamp: 1, name: 'Before', username: 'before' });
+});
+afterEach(async () => { standardCleanup(); disposeScope?.(); disposeScope = undefined; await homes.reset(); });
+
+describe('self-profile UI Action admission and acknowledgements', () => {
+    it.each([
+        { actionId: 'account.name.set' as const, decision: 'approve' as const },
+        { actionId: 'account.name.set' as const, decision: 'reject' as const },
+        { actionId: 'account.username.set' as const, decision: 'approve' as const },
+        { actionId: 'account.username.set' as const, decision: 'reject' as const },
+    ])('keeps the original $actionId save pending until $decision returns the typed result', async ({ actionId, decision }) => {
+        await homes.requireUiApproval(serverId, actionId);
+        const mounted = await renderHook(() => useMountedActionExecution(serverId));
+        await waitForHomeGovernance(() => expect(mounted.getCurrent().ready).toBe(true));
+        const response = actionId === 'account.name.set'
+            ? { name: 'Acknowledged', firstName: 'Acknowledged', lastName: null, timestamp: 2 } : { username: 'acknowledged' };
+        const path = actionId === 'account.name.set' ? '/v1/account/profile' : '/v1/account/username';
+        homes.answer(serverId, `POST ${path}`, { body: response });
+        let settled = false;
+        let save: Promise<unknown>;
+        await act(async () => {
+            const options = { execute: mounted.getCurrent().execute };
+            save = actionId === 'account.name.set' ? setAccountName(credentials, 'Requested', options) : setAccountUsername(credentials, 'requested', options);
+            void save.then(() => { settled = true; }, () => { settled = true; });
+            await waitForHomeGovernance(() => expect(homes.requestsFor('/v1/artifacts')).toHaveLength(1));
+        });
+        expect(settled).toBe(false);
+        expect(mounted.getCurrent().approval.approvalPending).toBe(true);
+        expect(homes.requestsFor(path)).toHaveLength(0);
+        expect(storage.getState().profile).toMatchObject({ name: 'Before', username: 'before' });
+        const artifactId = mounted.getCurrent().approval.approvalId;
+        if (!artifactId) throw new Error('Expected the mounted pending approval');
+        expect(await decideApprovalAsInbox(serverId, artifactId, decision)).toMatchObject({ ok: true });
+        if (decision === 'approve') {
+            await expect(save!).resolves.toEqual(response);
+            expect(storage.getState().profile).toMatchObject(actionId === 'account.name.set' ? { name: 'Acknowledged' } : { username: 'acknowledged' });
+        } else {
+            await expect(save!).rejects.toMatchObject({ code: 'approval_rejected', canTryAgain: false });
+            expect(homes.requestsFor(path)).toHaveLength(0);
+            expect(storage.getState().profile).toMatchObject({ name: 'Before', username: 'before' });
+        }
+    });
+
+    it('retires the original pending save when its Account leaves, without publishing another Account’s acknowledgement', async () => {
+        await homes.requireUiApproval(serverId, 'account.username.set');
+        const mounted = await renderHook(() => useMountedActionExecution(serverId));
+        await waitForHomeGovernance(() => expect(mounted.getCurrent().ready).toBe(true));
+        let save: Promise<unknown>;
+        await act(async () => {
+            save = setAccountUsername(credentials, 'requested', { execute: mounted.getCurrent().execute });
+            void save.catch(() => {});
+            await waitForHomeGovernance(() => expect(homes.requestsFor('/v1/artifacts')).toHaveLength(1));
+        });
+        expect(mounted.getCurrent().approval.approvalPending).toBe(true);
+        await act(async () => {
+            await homes.switchAccount(serverId, 'successor');
+            storage.getState().activateProfileScope({ serverId, accountId: 'successor' });
+            storage.getState().applyProfile({ ...profileDefaults, id: 'successor', username: 'successor' });
+        });
+        await expect(save!).rejects.toMatchObject({ name: 'HappyError', canTryAgain: false });
+        expect(storage.getState().profile).toMatchObject({ id: 'successor', username: 'successor' });
+        expect(homes.requestsFor('/v1/account/username')).toHaveLength(0);
+    });
+
+    it.each(['account.name.set', 'account.username.set'] as const)('honors required UI approval for %s without applying or issuing the mutation', async (actionId) => {
+        const path = actionId === 'account.name.set' ? '/v1/account/profile' : '/v1/account/username';
+        homes.answer(serverId, `POST ${path}`, { body: actionId === 'account.name.set'
+            ? { name: 'After', firstName: 'After', lastName: null, timestamp: 2 } : { username: 'after' } });
+        await homes.requireUiApproval(serverId, actionId);
+        const save = actionId === 'account.name.set' ? setAccountName(credentials, 'After') : setAccountUsername(credentials, 'after');
+        await expect(save).rejects.toMatchObject({ code: 'approval_request_created' });
+        expect(homes.requestsFor(path)).toHaveLength(0);
+        expect(storage.getState().profile).toMatchObject({ name: 'Before', username: 'before' });
+    });
+
+    it('merges the acknowledged username into the current profile without losing a concurrently acknowledged name', async () => {
+        homes.answer(serverId, 'POST /v1/account/username', { select: () => {
+            storage.getState().applyProfile({ ...storage.getState().profile, name: 'Concurrent Name' });
+            return { body: { username: 'normalized' } };
+        } });
+        await expect(setAccountUsername(credentials, 'Requested')).resolves.toEqual({ username: 'normalized' });
+        expect(storage.getState().profile).toMatchObject({ name: 'Concurrent Name', username: 'normalized' });
+    });
+
+    it('rejects a late username acknowledgement after another Account takes over the Home', async () => {
+        homes.answer(serverId, 'POST /v1/account/username', { select: () => {
+            storage.getState().activateProfileScope({ ...storage.getState().profileScope!, accountId: 'successor' });
+            storage.getState().applyProfile({ ...profileDefaults, id: 'successor', username: 'successor' });
+            return { body: { username: 'self-new' } };
+        } });
+        await expect(setAccountUsername(credentials, 'self-new')).rejects.toMatchObject({ name: 'HappyError', canTryAgain: false });
+        expect(storage.getState().profile).toMatchObject({ id: 'successor', username: 'successor' });
+    });
+
+    it('does not automatically repeat a username write whose dispatched outcome is unknown', async () => {
+        homes.answer(serverId, 'POST /v1/account/username', { dispatchThenFail: true });
+        await expect(setAccountUsername(credentials, 'requested')).rejects.toMatchObject({ code: 'outcome_unknown', canTryAgain: false });
+        expect(homes.requestsFor('/v1/account/username')).toHaveLength(1);
+        expect(storage.getState().profile.username).toBe('before');
+    });
+
+    it('reads its own safe identity through the scoped executor without a Home administration capability', async () => {
+        homes.answer(serverId, 'GET /v1/account/profile', { body: { id: 'self', timestamp: 2, firstName: 'Legacy', lastName: 'Name', username: 'before', avatar: null,
+            connectedServices: ['never returned'], futurePrivateField: 'never returned' } });
+        expect(await scopedHomeActionExecutor({ serverId, accountId: 'self' })('account.profile.get', {}, {
+            surface: 'ui', serverId, expectedAccountId: 'self',
+        })).toEqual({ ok: true, result: { id: 'self', timestamp: 2, name: 'Legacy Name', firstName: 'Legacy', lastName: 'Name', username: 'before', avatar: null } });
+    });
+});

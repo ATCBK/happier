@@ -6,6 +6,7 @@ import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/proto
 import { sealExternalActionRequesterAccountContextV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
 import { openExternalActionResponseV2, sealExternalActionRequestV2, type ExternalActionEncryptionBindingV2 } from '@happier-dev/protocol/actions/externalActionEncryption';
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
+import type { ActionExecutorContext } from '@happier-dev/protocol/actions';
 import type { ActionRequiredAuthority } from '@happier-dev/protocol/actions/metadata';
 import { AUTHORITY_CEILING_HEADER_V1 } from '@happier-dev/protocol/actions/invocationAuthority';
 import { readAuthTokenProvenance } from '@happier-dev/protocol/auth/authToken';
@@ -61,6 +62,7 @@ export async function executeOriginalAccountActionTransport(params: Readonly<{
     material?: Material;
     managedAdmission?: ExternalActionRequestEnvelopeV2['managedAdmission'];
     handoffAdmission?: ExternalActionRequestEnvelopeV2['handoffAdmission'];
+    pluginInvocation?: ExternalActionRequestEnvelopeV2['pluginInvocation'];
     signal?: AbortSignal;
     invalidResponseCode?: string;
     requestFailureCode?: string;
@@ -86,8 +88,10 @@ export async function executeOriginalAccountActionTransport(params: Readonly<{
     }
     const sealed = material
         ? sealExternalActionRequestV2({ binding, material, randomBytes: getRandomBytes, input: params.input,
+            ...(params.pluginInvocation ? { pluginInvocation: params.pluginInvocation } : {}),
             ...(params.managedAdmission ? { managedAdmission: params.managedAdmission } : {}) })
-        : ExternalActionRequestEnvelopeV1Schema.parse({ v: 1, requestId: binding.requestId, target: binding.target, input: params.input });
+        : ExternalActionRequestEnvelopeV1Schema.parse({ v: 1, requestId: binding.requestId, target: binding.target, input: params.input,
+            ...(params.pluginInvocation ? { pluginInvocation: params.pluginInvocation } : {}) });
     const envelope = params.handoffAdmission ? { ...sealed, handoffAdmission: params.handoffAdmission } : sealed;
     let request: unknown = envelope;
     if (custody && (foreignGuest || finite)) {
@@ -180,6 +184,7 @@ type OriginalAccountMachineActionParams = Readonly<{
     input: unknown;
     authority?: ActionRequiredAuthority;
     handoffAdmission?: ExternalActionRequestEnvelopeV2['handoffAdmission'];
+    actionCaller?: ActionExecutorContext['actionCaller'];
     signal?: AbortSignal;
 }>;
 
@@ -188,6 +193,18 @@ export function executeOriginalAccountMachineAction(params: OriginalAccountMachi
 /** A stopped Machine is valid; foreign custody uses the incumbent private requester carrier. */
 export async function executeOriginalAccountMachineAction(params: OriginalAccountMachineActionParams & Readonly<{ foreignTargetOnly?: boolean }>): Promise<ActionExecuteResult | null> {
     const { account } = params;
+    const caller = params.actionCaller;
+    let pluginInvocation: ExternalActionRequestEnvelopeV2['pluginInvocation'];
+    if (caller?.kind === 'plugin') {
+        if (!caller.contributionLocalId || !caller.occurrenceId || !caller.sourceCustody) {
+            return failure('plugin_mounted_caller_unavailable');
+        }
+        pluginInvocation = { kind: 'mountedPluginSurface', mountedBinding: {
+            pluginId: caller.pluginId, contributionLocalId: caller.contributionLocalId, occurrenceId: caller.occurrenceId,
+            sourceCustody: caller.sourceCustody,
+            ...(caller.materialization ? { materializationRef: caller.materialization } : {}),
+        } };
+    }
     account.assertCurrent();
     const row = await readOriginalAccountActionMachine(account, params.machineId, params.signal);
     if (!row || row.kind !== 'persistent' || row.revokedAt !== null || row.replacedByMachineId !== null
@@ -205,6 +222,7 @@ export async function executeOriginalAccountMachineAction(params: OriginalAccoun
     if (foreignCustody && !row.installationPublicKey) return failure('content_unavailable');
     if (accountMode === 'e2ee' && !encryption) return failure('content_unavailable');
     return await executeOriginalAccountActionTransport({ account, input: params.input, authority: params.authority,
+        ...(pluginInvocation ? { pluginInvocation } : {}),
         // Open owns checkout effects; an untrusted post-dispatch response cannot
         // authorize a fresh materialization. Read Actions keep their output errors.
         ...(params.actionId === 'projects.open' ? { invalidResponseCode: 'outcome_unknown' } : {}),

@@ -854,10 +854,11 @@ export function createActivePluginAccountHostedArtifactSourceCandidate(input: Re
     const reader = input.reader ?? installedReader;
     return Object.freeze({
         kind: 'accountHosted' as const,
-        fetch: async ({ artifact, accountHostedArtifactId }) => {
-            if (!input.accountLifetime.isCurrent() || !accountHostedArtifactId) return null;
+        fetch: async ({ artifact, accountHostedArtifactId, signal }) => {
+            if (signal?.aborted || !input.accountLifetime.isCurrent() || !accountHostedArtifactId) return null;
             const result = await reader.read({
                 accountLifetime: input.accountLifetime,
+                ...(signal ? { signal } : {}),
                 release: { pluginId: artifact.pluginId, version: artifact.releaseVersion },
                 slot: {
                     contributionId: artifact.contributionId,
@@ -868,7 +869,7 @@ export function createActivePluginAccountHostedArtifactSourceCandidate(input: Re
                 expectedAccountArtifactId: accountHostedArtifactId,
                 expectedArtifactDigest: artifact.digest,
             });
-            return input.accountLifetime.isCurrent() ? archiveFileSet(result) : null;
+            return !signal?.aborted && input.accountLifetime.isCurrent() ? archiveFileSet(result) : null;
         },
     });
 }
@@ -884,10 +885,11 @@ export function createActivePluginAccountHostedArtifactTargetSourceCandidate(inp
     const reader = input.reader ?? installedReader;
     return Object.freeze({
         kind: 'accountHosted' as const,
-        fetch: async ({ artifact }) => {
-            if (!input.accountLifetime.isCurrent()) return null;
+        fetch: async ({ artifact, signal }) => {
+            if (signal?.aborted || !input.accountLifetime.isCurrent()) return null;
             const result = await reader.readTarget({
                 accountLifetime: input.accountLifetime,
+                ...(signal ? { signal } : {}),
                 release: { pluginId: artifact.pluginId, version: artifact.releaseVersion },
                 slot: {
                     contributionId: artifact.contributionId,
@@ -897,7 +899,7 @@ export function createActivePluginAccountHostedArtifactTargetSourceCandidate(inp
                 },
                 expectedArtifactDigest: artifact.digest,
             });
-            return input.accountLifetime.isCurrent() ? archiveFileSet(result) : null;
+            return !signal?.aborted && input.accountLifetime.isCurrent() ? archiveFileSet(result) : null;
         },
     });
 }

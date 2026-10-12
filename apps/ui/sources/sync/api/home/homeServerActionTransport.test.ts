@@ -288,9 +288,24 @@ describe('requestHomeDomain', () => {
                 retryable: false,
                 code: 'home_governance_forbidden',
                 details: { error: 'home_governance_forbidden' },
+                httpStatus: 403,
             },
         });
     });
+
+    it.each(['team_not_found', 'invitation_not_found', 'group_not_found', 'home_account_not_found', 'team_forbidden'])(
+        'preserves the domain refusal %s instead of claiming the route is absent', async (code) => {
+            const homeA = await addHome('Home A', 'https://home-a.example');
+            await focusHome(homeA);
+            plainCredentialsFor('account');
+            runtimeFetchMock.mockResolvedValue(jsonResponse({ error: code }, code.endsWith('forbidden') ? 403 : 404));
+
+            await expect(governanceRequest(homeA)).resolves.toEqual({
+                ok: false,
+                failure: { kind: 'forbidden', retryable: false, code, details: { error: code }, httpStatus: code.endsWith('forbidden') ? 403 : 404 },
+            });
+        },
+    );
 
     it('reports a Home without the operation as unsupported rather than as a denial', async () => {
         const homeA = await addHome('Home A', 'https://home-a.example');
@@ -300,7 +315,7 @@ describe('requestHomeDomain', () => {
 
         await expect(governanceRequest(homeA)).resolves.toEqual({
             ok: false,
-            failure: { kind: 'unsupported', retryable: false, code: null },
+            failure: { kind: 'unsupported', retryable: false, code: null, httpStatus: 404 },
         });
     });
 
@@ -312,7 +327,7 @@ describe('requestHomeDomain', () => {
 
         await expect(governanceRequest(homeA)).resolves.toEqual({
             ok: false,
-            failure: { kind: 'unauthorized', retryable: false, code: null },
+            failure: { kind: 'unauthorized', retryable: false, code: null, httpStatus: 401 },
         });
     });
 
@@ -337,6 +352,7 @@ describe('requestHomeDomain', () => {
                 retryable: false,
                 code: 'home_policy_revision_conflict',
                 details: { error: 'home_policy_revision_conflict' },
+                httpStatus: 409,
             },
         });
     });
@@ -363,6 +379,7 @@ describe('requestHomeDomain', () => {
                 retryable: false,
                 code: 'github_app_revision_conflict',
                 details: { error: 'github_app_revision_conflict' },
+                httpStatus: 409,
             },
         });
     });
@@ -388,6 +405,7 @@ describe('requestHomeDomain', () => {
                 retryable: true,
                 code: 'account_erasure_transition_cleanup_pending',
                 details: { error: 'account_erasure_transition_cleanup_pending' },
+                httpStatus: 409,
             },
         });
     });
@@ -408,6 +426,7 @@ describe('requestHomeDomain', () => {
                 retryable: false,
                 code: 'invitation_not_active',
                 details: { error: 'invitation_not_active' },
+                httpStatus: 409,
             },
         });
     });
@@ -432,6 +451,7 @@ describe('requestHomeDomain', () => {
                 retryable: true,
                 code: 'provider_endpoint_rate_limited',
                 details,
+                httpStatus: 429,
             },
         });
     });
@@ -459,7 +479,7 @@ describe('requestHomeDomain', () => {
 
         await expect(governanceRequest(homeA)).resolves.toEqual({
             ok: false,
-            failure: { kind: 'invalid', retryable: false, code: null },
+            failure: { kind: 'invalid', retryable: false, code: null, httpStatus: 200 },
         });
     });
 });

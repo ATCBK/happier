@@ -4,21 +4,62 @@ import type { ExternalActionEncryptionBindingV2 } from '@happier-dev/protocol/ac
 import { ActionApprovalRequestCreatedResultSchema, type ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { ActionExecutorContext } from '@happier-dev/protocol/actions/executor/types';
 import { resolveInvocationAuthority } from '@happier-dev/protocol/actions/invocationAuthority';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import type { LazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
+import { DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcTypes';
+import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
+import { AsyncTimeoutError, withTimeout } from '@/utils/timing/time';
 import { createManagedMachineActionClient, ManagedMachineActionError } from './managedMachineActions';
 import { executeOriginalAccountActionTransport, executeOriginalAccountMachineAction, readOriginalAccountActionAuthentication,
     readOriginalAccountActionMachine } from '@/sync/api/externalActionAccountTransport';
 
 const failure = (errorCode: string): ActionExecuteResult => ({ ok: false, errorCode, error: errorCode });
 
-/** Ordinary captured Account ingress. The server, not this client, admits and signs the native role. */
-export async function executeManagedMachineNativeAction(params: Readonly<{
+type ManagedMachineNativeActionParams = Readonly<{
     account: LazyActionAccountContext;
     actionId: ManagedMachineActionIdV1;
     input: unknown;
     context: ActionExecutorContext;
     signal?: AbortSignal;
-}>): Promise<ActionExecuteResult> {
+}>;
+
+/** Ordinary captured Account ingress. The server, not this client, admits and signs the native role. */
+export async function executeManagedMachineNativeAction(params: ManagedMachineNativeActionParams): Promise<ActionExecuteResult> {
+    return withManagedMachineNativeReadLifetime(params.actionId, params.signal,
+        signal => executeManagedMachineNativeActionWithinLifetime({ ...params, signal }));
+}
+
+// The front door enters before Account capture/settings; nested native ingress
+// reuses that exact invocation signal instead of starting another timer.
+const managedReadLifetimes = new WeakSet<AbortSignal>();
+
+export async function withManagedMachineNativeReadLifetime(
+    actionId: ManagedMachineActionIdV1,
+    signal: AbortSignal | undefined,
+    execute: (signal: AbortSignal | undefined) => Promise<ActionExecuteResult>,
+): Promise<ActionExecuteResult> {
+    signal?.throwIfAborted();
+    if (getActionSpec(actionId).sideEffectClass !== 'read' || signal && managedReadLifetimes.has(signal)) return execute(signal);
+    const deadline = new AbortController();
+    const lifetime = mergeAbortSignals([signal, deadline.signal]);
+    managedReadLifetimes.add(lifetime.signal);
+    try {
+        // One incumbent read budget covers custody preparation, authorization,
+        // dispatch and response decoding; HTTP phases must not restart it.
+        return await withTimeout(() => execute(lifetime.signal), DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS, actionId);
+    } catch (error) {
+        if (error instanceof AsyncTimeoutError) {
+            deadline.abort(error);
+            return failure('target_unavailable');
+        }
+        throw error;
+    } finally {
+        managedReadLifetimes.delete(lifetime.signal);
+        lifetime.dispose();
+    }
+}
+
+async function executeManagedMachineNativeActionWithinLifetime(params: ManagedMachineNativeActionParams): Promise<ActionExecuteResult> {
     const { account, actionId, context } = params;
     account.assertCurrent();
     // The ordinary ingress has no producer for the outer UI approval Artifact's replay custody.
@@ -70,6 +111,7 @@ export async function executeManagedMachineNativeAction(params: Readonly<{
     }
     if (!controller) return failure('admission_unavailable');
     const { accountMode, encryption } = await account.resolveAccountEncryption();
+    params.signal?.throwIfAborted();
     const target = { kind: 'machine' as const, machineId: controller.machineId };
     const binding: ExternalActionEncryptionBindingV2 = { serverIdentityId: account.serverIdentityId, accountId: account.accountId,
         authentication, actionId, requestId: context.actionRequestId, target };
@@ -102,6 +144,7 @@ export async function executeManagedMachineNativeAction(params: Readonly<{
     })() : undefined;
     // Narrow the authenticated Account carrier before the installed daemon's
     // canonical Action policy creates the Ask. Human replay stays with that owner.
+    params.signal?.throwIfAborted();
     const execution = await executeOriginalAccountActionTransport({ account, binding, input, authority: context.authority,
         ...(material ? { material } : {}), ...(managedAdmission ? { managedAdmission } : {}),
         ...(machineCustody ? { machineCustody } : {}),

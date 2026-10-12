@@ -28,6 +28,8 @@ import { AgentExecutionTargetV1Schema } from '@happier-dev/protocol/agents/execu
 import { resolveConnectedServiceCollapseKey, setConnectedServiceItemCollapsed } from '@/sync/domains/connectedServices/resolveConnectedServiceCollapseKey';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { sameQualifiedConnectedAccountRef } from '@happier-dev/protocol/connect/qualifiedConnectedAccountPersistence';
+import { applyAcknowledgedConnectedMetadata } from '@/sync/store/settings/connectedMetadataCatalogSnapshot';
+import { fireAndForget } from '@/utils/system/fireAndForget';
 
 export type ConnectedMetadataAccountContext = Awaited<ReturnType<typeof import('@/sync/ops/actions/actionAccountContext').captureLazyActionAccountContext>>;
 type CapturedRead = Pick<CapturedAccountSettingsRequest, 'request' | 'isCurrent'>;
@@ -121,13 +123,27 @@ function writePresentation(context: ConnectedMetadataAccountContext, input: Writ
     return admit(context, (mode, material) => writeRow(context, CONNECTED_PRESENTATION_ROWS_ROUTE_V1,
         ConnectedPresentationRowMutationV1Schema.parse({ expectedRevision: input.expectedRevision,
             content: sealConnectedPresentationContentV1({ mode, material, record: input.record, randomBytes: getRandomBytes }),
-            ...(input.sourceSettingsVersion === undefined ? {} : { sourceSettingsVersion: input.sourceSettingsVersion }) }), signal));
+            ...(input.sourceSettingsVersion === undefined ? {} : { sourceSettingsVersion: input.sourceSettingsVersion }) }), signal)).then(result => {
+        if (result.status === 'updated') {
+            try { applyAcknowledgedConnectedMetadata(context.accountLifetime.scope, { kind: 'presentation', record: input.record },
+                result.revision, context.accountLifetime.isCurrent()); }
+            catch { /* Display publication cannot retract the durable row receipt. */ }
+        }
+        return result;
+    });
 }
 function writeAcknowledgements(context: ConnectedMetadataAccountContext, input: Write<ConnectedAcknowledgementsRecordV1>, signal?: AbortSignal) {
     return admit(context, (mode, material) => writeRow(context, CONNECTED_ACKNOWLEDGEMENTS_ROWS_ROUTE_V1,
         ConnectedAcknowledgementsRowMutationV1Schema.parse({ expectedRevision: input.expectedRevision,
             content: sealConnectedAcknowledgementsContentV1({ mode, material, record: input.record, randomBytes: getRandomBytes }),
-            ...(input.sourceSettingsVersion === undefined ? {} : { sourceSettingsVersion: input.sourceSettingsVersion }) }), signal));
+            ...(input.sourceSettingsVersion === undefined ? {} : { sourceSettingsVersion: input.sourceSettingsVersion }) }), signal)).then(result => {
+        if (result.status === 'updated') {
+            try { applyAcknowledgedConnectedMetadata(context.accountLifetime.scope, { kind: 'acknowledgements', record: input.record },
+                result.revision, context.accountLifetime.isCurrent()); }
+            catch { /* Display publication cannot retract the durable row receipt. */ }
+        }
+        return result;
+    });
 }
 type Publication = Readonly<{ onReady?: (projection: ConnectedMetadataCatalogV1, isCurrent: () => boolean) => void; hasPendingCleanup?: () => boolean }>;
 function disclosureKey(context: ConnectedMetadataAccountContext, subject: QualifiedConnectedDisclosureSubject): string {
@@ -148,7 +164,27 @@ async function persistDisclosure(context: ConnectedMetadataAccountContext, entri
     // The incumbent owner synchronously persists through MMKV before returning.
     storage.getState().applyLocalSettings({ collapsedGroupKeysV1: keys }, { source: 'ui' });
 }
+// Read-only consumers of one captured Account share the live admission and
+// catalog GETs. Completed values are never retained, and maintenance/publication
+// operations keep their own effects. Distinct cancellation lifetimes do not join.
+const pendingMetadataReads = new Set<Readonly<{
+    context: ConnectedMetadataAccountContext;
+    signal: AbortSignal | undefined;
+    result: Promise<ConnectedMetadataCatalogV1>;
+}>>();
 export async function readConnectedMetadataCatalogInContext(context: ConnectedMetadataAccountContext, signal?: AbortSignal,
+    publication?: Publication, maintenance = true): Promise<ConnectedMetadataCatalogV1> {
+    if (maintenance || publication) return readConnectedMetadataCatalog(context, signal, publication, maintenance);
+    context.assertCurrent();
+    const pending = [...pendingMetadataReads].find(read => read.context === context && read.signal === signal);
+    if (pending) return await pending.result;
+    const result = readConnectedMetadataCatalog(context, signal, undefined, false);
+    const read = { context, signal, result };
+    pendingMetadataReads.add(read);
+    try { return await result; }
+    finally { pendingMetadataReads.delete(read); }
+}
+async function readConnectedMetadataCatalog(context: ConnectedMetadataAccountContext, signal?: AbortSignal,
     publication?: Publication, maintenance = true): Promise<ConnectedMetadataCatalogV1> {
     return admit(context, async (mode, material) => {
         const result = await loadConnectedMetadataCatalogV1({ mode, material, signal,
@@ -206,7 +242,8 @@ function requireUpdated(result: MutationResult): void {
 async function publishReceipt(context: ConnectedMetadataAccountContext): Promise<void> {
     try {
         const { invalidateConnectedMetadataCatalogAfterAcknowledgedMutation } = await import('@/sync/engine/settings/connectedMetadataCatalogEngine');
-        await invalidateConnectedMetadataCatalogAfterAcknowledgedMutation({ serverId: context.serverId, accountId: context.accountId }, context.assertAccountCurrent);
+        fireAndForget(invalidateConnectedMetadataCatalogAfterAcknowledgedMutation(context.accountLifetime.scope, context.assertAccountCurrent),
+            { tag: 'connectedMetadataCatalog.afterAcknowledgedMutation' });
     } catch { /* Projection failure does not erase a durable receipt. */ }
 }
 export async function setConnectedLabelInContext(context: ConnectedMetadataAccountContext,
@@ -339,9 +376,6 @@ export async function cleanupConnectedMetadataInContext(context: ConnectedMetada
 }
 export function setConnectedLabel(input: Readonly<{ subject: QualifiedConnectedEntityRef; label: string | null }>, scope?: ServerAccountScope): Promise<void> {
     return withAccount(scope, context => setConnectedLabelInContext(context, input));
-}
-export function setConnectedAcknowledgement(input: Readonly<{ subject: QualifiedAcknowledgementSubject; acknowledged: boolean | null }>, scope?: ServerAccountScope): Promise<void> {
-    return withAccount(scope, context => setConnectedAcknowledgementInContext(context, input));
 }
 export async function setConnectedDisclosureInContext(context: ConnectedMetadataAccountContext,
     input: Readonly<{ subject: QualifiedConnectedDisclosureSubject; collapsed: boolean | null }>): Promise<void> {

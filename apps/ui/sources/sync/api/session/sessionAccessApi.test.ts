@@ -1,12 +1,20 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import tweetnacl from 'tweetnacl';
 
+// Transform the real, shared runtime once during collection rather than inside
+// the first transport assertion's deadline. setup() installs each HTTP answer.
+import './sessionAccessApi';
+import './sessionPublicVisualNetworkConsequence';
+import '@/sync/ops/actions/defaultActionExecutor';
+
 const MANAGER_CONTENT_KEYS = tweetnacl.box.keyPair();
 
 afterEach(() => {
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
-    vi.resetModules();
+    // The shared setup clears persisted boundaries; setup() rebinds this case's
+    // Account and HTTP boundary. Reloading the real runtime graph per case
+    // duplicates its large schema/module graph and exhausts the worker heap.
 });
 
 async function setup(options?: Readonly<{ accountEncryption?: 'plain' | 'e2ee' }>) {
@@ -50,6 +58,129 @@ async function setup(options?: Readonly<{ accountEncryption?: 'plain' | 'e2ee' }
 }
 
 describe('Session access exact Account transport', () => {
+    it('reads the full admitted public visual network consequence across pages, not Board inventory', async () => {
+        const env = await setup();
+        const { createSessionAccessClient } = await import('./sessionAccessApi');
+        const revision = 'ssr1.AAAACHN5c3JlY18xAAAAAQ';
+        const item = { v: 1, destination: 'transcript', title: 'HTML', frame: 'card', height: { mode: 'auto', fallback: 'regular' },
+            source: { kind: 'hostedHtml', source: { v: 1, entrypoint: 'index.html', files: {
+                'index.html': { mime: 'text/html', contentBase64: 'PGgxPkhlbGxvPC9oMT4=' },
+            } }, requestedCapabilities: { network: 'open', networkOrigins: [] } } };
+        const rawCall = { role: 'agent', content: { type: 'codex', data: { type: 'tool-call', callId: 'call', name: 'session_board_item_upsert',
+            input: { sessionId: 'same', itemId: 'visual', expectedItemRevision: null, destination: 'transcript', item }, id: 'call' } } };
+        const rawResult = { role: 'agent', content: { type: 'codex', data: { type: 'tool-call-result', callId: 'call', id: 'answer', isError: false,
+            output: JSON.stringify({ v: 1, serverId: env.target.id, sessionId: 'same', destination: null, itemDestination: 'transcript',
+                result: { operation: 'upsert_item', itemId: 'visual', outcome: 'created', itemRevision: revision } }) } } };
+        const reference = { v: 1, references: [{ v: 1, itemId: 'visual', itemRevision: revision,
+            sourceAddress: { serverId: env.target.id, sessionId: 'same' } }] };
+        let complete = true;
+        let referencesAvailable = true;
+        let visualAdmitted = true;
+        let recordRevision = revision;
+        let storedItem: unknown = item;
+        let repeated = false;
+        let repeatedRevision = revision;
+        let recordPresent = true;
+        let mode: 'plain' | 'encrypted' = 'plain';
+        let current = true;
+        env.request.mockImplementation(async (url) => {
+            const address = new URL(url);
+            if (address.pathname.includes('/account/encryption')) return new Response(JSON.stringify({ mode: 'plain', updatedAt: 1 }));
+            if (address.pathname === '/v2/sessions/same') return new Response(JSON.stringify({ session: {
+                id: 'same', createdAt: 1, updatedAt: 2, seq: 2, active: true, activeAt: 2,
+                encryptionMode: 'plain', dataEncryptionKey: null, metadataVersion: 1, metadata: '{}',
+                agentStateVersion: 1, agentState: null, share: null,
+                effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }], capabilities: {
+                    readTranscript: true, submitAgentInput: true, editSessionRecords: true, approveRuntimePermissions: true,
+                    manageAccess: true, managePermissionDelegation: true, managePublicLink: true, archiveSession: true,
+                    renameSession: true, assignResponsibility: true, stopSession: true, deleteSession: true,
+                } },
+            } }));
+            if (address.pathname.endsWith('/turns')) return new Response('{}', { status: 404 });
+            if (address.pathname.endsWith('/messages')) {
+                const older = address.searchParams.has('beforeSeq');
+                return new Response(JSON.stringify({ messages: [{ id: older ? 'call-message' : 'answer-message', seq: older ? 1 : 2,
+                    localId: null, createdAt: 1, content: mode === 'plain' ? { t: 'plain', v: older ? rawCall : rawResult } : { t: 'encrypted', c: 'unopenable' },
+                    ...(referencesAvailable ? { surfaceItemReference: older || !visualAdmitted ? null : reference } : {}) },
+                    ...(!older && repeated ? [
+                        { id: 'repeat-call', seq: 3, createdAt: 1, surfaceItemReference: null, content: { t: 'plain', v: { ...rawCall, content: {
+                            ...rawCall.content, data: { ...rawCall.content.data, callId: 'repeat', id: 'repeat',
+                                input: { ...rawCall.content.data.input, expectedItemRevision: repeatedRevision === revision ? null : revision } } } } } },
+                        { id: 'repeat-answer', seq: 4, createdAt: 1, surfaceItemReference: {
+                            ...reference, references: [{ ...reference.references[0], itemRevision: repeatedRevision }] },
+                            content: { t: 'plain', v: { ...rawResult, content: { ...rawResult.content,
+                                data: { ...rawResult.content.data, callId: 'repeat', id: 'repeat-answer', output: JSON.stringify({
+                                    v: 1, serverId: env.target.id, sessionId: 'same', destination: null, itemDestination: 'transcript',
+                                    result: { operation: 'upsert_item', itemId: 'visual', outcome: repeatedRevision === revision ? 'created' : 'updated',
+                                        itemRevision: repeatedRevision } }) } } } } },
+                    ] : [])],
+                    ...(older ? { hasMore: complete ? false : undefined, nextBeforeSeq: null } : { hasMore: true, nextBeforeSeq: 2 }) }));
+            }
+            if (address.pathname.endsWith('/system-records/record')) return new Response(JSON.stringify({ record: recordPresent ? {
+                id: 'row', revision: recordRevision, address: { owner: 'host', namespace: 'surface', kind: 'item.v1', localId: 'visual' },
+                content: { t: 'plain', v: storedItem }, createdAt: '2026-09-05T00:00:00.000Z', updatedAt: '2026-09-05T00:00:00.000Z',
+            } : null }));
+            throw new Error(`Unexpected public consequence request ${address.pathname}`);
+        });
+        const client = createSessionAccessClient({ scope: { serverId: env.target.id, accountId: 'target-account' },
+            sessionId: 'same', availability: 'unavailable', isCurrent: () => current });
+        await expect(client.readPublicVisualNetworkConsequence()).resolves.toEqual({ status: 'ready', visualCount: 1, networkVisualCount: 1,
+            policies: [{ network: 'open', networkOrigins: [] }] });
+        const messageReads = env.request.mock.calls.filter(([url]) => new URL(url).pathname.endsWith('/messages'));
+        expect(messageReads.map(([url]) => new URL(url).searchParams.get('beforeSeq'))).toEqual([null, '2']);
+        expect(messageReads.every(([url]) => new URL(url).searchParams.get('projection') === 'externalShareableV1'
+            && new URL(url).searchParams.get('scope') === 'main')).toBe(true);
+        expect(env.request.mock.calls.filter(([url]) => url.includes('/system-records')).every(([url]) => new URL(url).searchParams.get('localId') === 'visual')).toBe(true);
+        visualAdmitted = false;
+        await expect(client.readPublicVisualNetworkConsequence()).resolves.toEqual({ status: 'ready', visualCount: 0, networkVisualCount: 0, policies: [] });
+        visualAdmitted = true;
+        repeated = true;
+        await expect(client.readPublicVisualNetworkConsequence()).resolves.toMatchObject({ status: 'ready', visualCount: 2, networkVisualCount: 2 });
+        // Historical acknowledgements point to the current content of this durable record.
+        recordRevision = repeatedRevision = 'ssr1.AAAACHN5c3JlY18xAAAAAg';
+        env.request.mockClear();
+        await expect(client.readPublicVisualNetworkConsequence()).resolves.toEqual({ status: 'ready', visualCount: 2, networkVisualCount: 2,
+            policies: [{ network: 'open', networkOrigins: [] }] });
+        expect(env.request.mock.calls.filter(([url]) => new URL(url).pathname.endsWith('/system-records/record'))).toHaveLength(1);
+        recordRevision = revision;
+        await expect(client.readPublicVisualNetworkConsequence()).resolves.toEqual({ status: 'unavailable' });
+        recordRevision = repeatedRevision = revision;
+        repeated = false;
+        const definition = { v: 1, id: 'definition', name: 'Inline HTML', body: { kind: 'html', source: item.source.source,
+            requestedCapabilities: { networkOrigins: ['https://data.example'] } }, inputs: { fields: [] },
+            inputSchema: { type: 'object', additionalProperties: false }, sizeDeclaration: { sizes: ['medium'], defaultSize: 'medium' },
+            provenance: { source: { kind: 'authored' } } };
+        storedItem = { ...item, source: { kind: 'widget', instance: { v: 1, id: 'visual', bindings: {},
+            definition: { kind: 'inline', definition } } } };
+        await expect(client.readPublicVisualNetworkConsequence()).resolves.toEqual({ status: 'ready', visualCount: 1, networkVisualCount: 1,
+            policies: [{ network: 'origins', networkOrigins: ['https://data.example'] }] });
+        storedItem = { ...item, source: { kind: 'widget', instance: { v: 1, id: 'visual', bindings: {},
+            definition: { kind: 'inline', definition: { ...definition, body: { ...definition.body,
+                requestedCapabilities: { ...definition.body.requestedCapabilities, resources: [{ pluginId: 'acme.data', localId: 'records' }] } } } } } } };
+        await expect(client.readPublicVisualNetworkConsequence()).resolves.toEqual({ status: 'ready', visualCount: 1, networkVisualCount: 0, policies: [] });
+        storedItem = { ...item, source: { kind: 'widget', instance: { v: 1, id: 'visual', bindings: {}, networkOverride: { network: 'open' },
+            definition: { kind: 'installed', surface: { pluginId: 'acme.widgets', localId: 'live' } } } } };
+        await expect(client.readPublicVisualNetworkConsequence()).resolves.toEqual({ status: 'ready', visualCount: 1, networkVisualCount: 0, policies: [] });
+        storedItem = item;
+        referencesAvailable = false;
+        await expect(client.readPublicVisualNetworkConsequence()).resolves.toMatchObject({ status: 'unavailable' });
+        referencesAvailable = true;
+        complete = false;
+        await expect(client.readPublicVisualNetworkConsequence()).resolves.toMatchObject({ status: 'unavailable' });
+        complete = true;
+        recordRevision = 'ssr1.AAAACHN5c3JlY18xAAAAAg';
+        await expect(client.readPublicVisualNetworkConsequence()).resolves.toMatchObject({ status: 'ready', visualCount: 1, networkVisualCount: 1 });
+        recordRevision = 'ssr1.AAAACHN5c3JlY18yAAAAAg';
+        await expect(client.readPublicVisualNetworkConsequence()).resolves.toMatchObject({ status: 'unavailable' });
+        recordPresent = false;
+        await expect(client.readPublicVisualNetworkConsequence()).resolves.toMatchObject({ status: 'unavailable' });
+        recordPresent = true;
+        recordRevision = revision; mode = 'encrypted';
+        await expect(client.readPublicVisualNetworkConsequence()).resolves.toMatchObject({ status: 'unavailable' });
+        current = false;
+        await expect(client.readPublicVisualNetworkConsequence()).resolves.toMatchObject({ status: 'unavailable' });
+        expect(item.source.requestedCapabilities).toEqual({ network: 'open', networkOrigins: [] });
+    });
     it('uses the descriptor transport for explicit Team context changes', async () => {
         const env = await setup();
         const { executeSessionAccessHttpAction } = await import('./sessionAccessApi');
@@ -610,7 +741,7 @@ describe('Session access exact Account transport', () => {
                         id: 'publication', sessionId: 'same', expiresAt: null, maxUses: 4,
                         useCount: 0, isConsentRequired: true, createdAt: 1, updatedAt: 5,
                         keyDerivation: 'fragment_v1',
-                    }, isolatedOrigin: 'https://public.example' }));
+                    }, viewerOrigin: 'https://public.example' }));
                 }
             }
             if (path === '/v1/sessions/same/public-share') {
@@ -628,9 +759,9 @@ describe('Session access exact Account transport', () => {
             availability: 'unavailable',
         });
         await expect(client.getPublicLink()).resolves.toBeNull();
-        await expect(client.createPublicLink({ maxUses: 4, isConsentRequired: true })).resolves.toEqual({
+        await expect(client.createPublicLink({ maxUses: 4, isConsentRequired: true, networkOff: false })).resolves.toEqual({
             id: 'publication', expiresAt: null, maxUses: 4, useCount: 0, isConsentRequired: true, updatedAt: 5,
-            keyDerivation: 'fragment_v1', isolatedOrigin: 'https://public.example',
+            keyDerivation: 'fragment_v1', viewerOrigin: 'https://public.example',
             url: expect.stringMatching(/^https:\/\/public.example\/s\/[^#]+#k=.+$/),
         });
         await expect(client.removePublicLink()).resolves.toEqual({ changed: true });
@@ -649,7 +780,13 @@ describe('Session access exact Account transport', () => {
         expect(bodies[0]).toHaveProperty('keyDerivation', 'fragment_v1');
         expect(bodies[0]).not.toHaveProperty('token');
         expect(bodies[0]).not.toHaveProperty('encryptedDataKey');
+        expect(bodies[0]).not.toHaveProperty('networkOff');
         expect(env.request.mock.calls.every(([url]) => new URL(url).origin === 'https://target.example')).toBe(true);
+        // A loose older writer may accept and discard the new setting. Its 2xx
+        // response must not claim that the requested privacy policy was applied.
+        await expect(client.createPublicLink({ maxUses: 4, isConsentRequired: true, networkOff: true }))
+            .rejects.toMatchObject({ code: 'outcome_unknown' });
+        expect(bodies[1]).toHaveProperty('networkOff', true);
     });
 
     it('replays one lost public-link create with the identical physical body', async () => {
@@ -676,7 +813,7 @@ describe('Session access exact Account transport', () => {
                     id: 'publication', expiresAt: null, maxUses: null, useCount: 0,
                     isConsentRequired: false, createdAt: 1, updatedAt: 2,
                     keyDerivation: 'fragment_v1',
-                }, isolatedOrigin: 'https://public.example' }));
+                }, viewerOrigin: 'https://public.example' }));
             }
             throw new Error(`Unexpected path ${path}`);
         });

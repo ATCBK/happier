@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
+import { MMKV } from 'react-native-mmkv';
 
 import { renderHook } from '@/dev/testkit';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
@@ -32,11 +33,71 @@ vi.mock('@/utils/system/runtimeFetch', async (importOriginal) => ({
 }));
 
 afterEach(async () => {
+    vi.restoreAllMocks();
     vi.useRealTimers();
     resetServerFeaturesClientForTests();
     resetServerProfilesRuntimeForTests();
     await resetServerReachabilitySupervisors();
     boundary.fetch.mockReset();
+});
+
+it('settles feature selection when persisting the observed Home identity fails', async () => {
+    const home = await upsertAndActivateServer({ serverUrl: 'https://feature-storage-failure.example.test' });
+    boundary.fetch.mockImplementation(async (url) => String(url).endsWith('/v1/features')
+        ? Response.json(createRootLayoutFeaturesResponse({ capabilities: {
+            serverIdentity: { serverIdentityId: 'srv_feature_storage_failure' },
+        } }))
+        : Response.json({ ok: true }));
+    // Disk persistence is the failing system boundary; identity adoption, HTTP and hooks stay real.
+    vi.spyOn(MMKV.prototype, 'set').mockImplementationOnce(() => {
+        throw new Error('Device storage unavailable');
+    });
+    vi.useFakeTimers();
+    const hook = await renderHook(() => useServerFeaturesMainSelectionSnapshot([home.id]), {
+        flushOptions: { cycles: 1, turns: 0 },
+    });
+    try {
+        await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+        expect(hook.getCurrent()).toMatchObject({
+            status: 'ready',
+            snapshotsByServerId: { [home.id]: { status: 'error', reason: 'network' } },
+        });
+    } finally {
+        await hook.unmount();
+    }
+});
+
+it.each(['runtime', 'explicit', 'selection'] as const)('retires a pending %s observation only after its final hook unmounts', async (scope) => {
+    const home = await upsertAndActivateServer({ serverUrl: 'https://feature-pending-cleanup.example.test' });
+    const requestSignals: AbortSignal[] = [];
+    boundary.fetch.mockImplementation(async (url, init) => {
+        if (!String(url).endsWith('/v1/features')) return Response.json({ ok: true });
+        if (init?.signal) requestSignals.push(init.signal);
+        return await new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => reject(new DOMException('Cancelled', 'AbortError')), { once: true });
+        });
+    });
+    const useSnapshot = () => {
+        if (scope === 'runtime') return useServerFeaturesRuntimeSnapshot();
+        if (scope === 'explicit') return useServerFeaturesSnapshotForServerId(home.id);
+        return useServerFeaturesMainSelectionSnapshot([home.id]);
+    };
+    const first = await renderHook(useSnapshot);
+    const remaining = await renderHook(useSnapshot);
+    try {
+        expect(requestSignals).toHaveLength(1);
+        await first.unmount();
+        expect(requestSignals[0]?.aborted).toBe(false);
+        await remaining.unmount();
+        expect(requestSignals[0]?.aborted).toBe(true);
+        boundary.fetch.mockResolvedValue(new Response(null, { status: 404 }));
+        await expect(getServerFeaturesSnapshot({ serverId: home.id, force: true })).resolves.toEqual({
+            status: 'unsupported', reason: 'endpoint_missing',
+        });
+    } finally {
+        await first.unmount();
+        await remaining.unmount();
+    }
 });
 
 it.each(['runtime', 'explicit'] as const)('releases the %s observer retry when it unmounts after a failed first observation', async (scope) => {

@@ -3,9 +3,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
     createSessionDraftPrivatePayloadV2,
     SessionDraftMutateResponseV2Schema,
+} from '@happier-dev/protocol/drafts/sessionDraftsV2';
+import {
     SessionDraftMutateResponseV1Schema,
     SessionDraftReadResponseV1Schema,
-} from '@happier-dev/protocol';
+} from '@happier-dev/protocol/drafts/sessionDrafts';
 
 const request = vi.fn<(path: string, init?: RequestInit) => Promise<Response>>();
 const address = { kind: 'session', sessionId: 'session-a' } as const;
@@ -16,6 +18,26 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 describe('apiSessionDrafts', () => {
     beforeEach(() => request.mockReset());
+
+    it('projects stored plaintext draft content without relaxing the HTTP record envelope', async () => {
+        const { createApiSessionDraftsTransport } = await import('./apiSessionDrafts');
+        const field = <T>(value: T) => ({ mutationId: '20000000-0000-4000-8000-000000000001', value });
+        const payload = createSessionDraftPrivatePayloadV2(address, { v: 1,
+            composer: { text: field('Keep me'), mentions: field([]), attachments: field([]) },
+            target: { kind: 'session', routing: { recipient: field(null), agentContinuation: field(null), executionRunDelivery: field(null) } },
+            extensions: {},
+        });
+        const record = { address, revision: 1, createdAt: 1, updatedAt: 1,
+            content: { t: 'plain', v: { ...payload, retired: true, document: { ...payload.document, retired: true } } } };
+        request.mockResolvedValueOnce(jsonResponse({ status: 'present', record }))
+            .mockResolvedValueOnce(jsonResponse({ items: [record] }))
+            .mockResolvedValueOnce(jsonResponse({ status: 'present', record: { ...record, retired: true } }));
+        const transport = createApiSessionDraftsTransport({ request });
+        await expect(transport.read(address)).resolves.toEqual({ status: 'present', record: { ...record,
+            content: { t: 'plain', v: payload } } });
+        await expect(transport.list({})).resolves.toEqual({ items: [{ ...record, content: { t: 'plain', v: payload } }] });
+        await expect(transport.read(address)).rejects.toThrow('Invalid session draft response');
+    });
 
     it('posts typed read and mutate requests and validates responses', async () => {
         const { createApiSessionDraftsTransport } = await import('./apiSessionDrafts');

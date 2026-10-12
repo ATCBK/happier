@@ -1,10 +1,11 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const resolveContext = vi.hoisted(() => vi.fn());
 const emitWithAck = vi.hoisted(() => vi.fn());
 const disconnect = vi.hoisted(() => vi.fn());
 const release = vi.hoisted(() => vi.fn(async () => undefined));
 const createSocket = vi.hoisted(() => vi.fn());
+afterEach(() => { vi.useRealTimers(); });
 
 vi.mock('@/auth/storage/tokenStorage', () => ({
     subscribeHomeCredentialMutations: () => () => undefined,
@@ -29,14 +30,19 @@ describe('emitSessionReadCursorUpdateWithServerScope', () => {
             encryption: null,
             release,
         });
-        emitWithAck.mockResolvedValue({ result: 'success', lastViewedSessionSeq: 4 });
+        vi.useFakeTimers();
+        let acknowledge!: (value: unknown) => void;
+        emitWithAck.mockImplementation(() => new Promise((resolve) => { acknowledge = resolve; }));
         createSocket.mockImplementation(async (params: {
             takeCarrierRelease?: () => (() => Promise<void>) | undefined;
         }) => {
             expect(params.takeCarrierRelease?.()).toBe(release);
             return {
                 emitWithAck,
-                timeout: () => ({ emitWithAck }),
+                timeout: (timeoutMs: number) => ({ emitWithAck: (...args: unknown[]) => Promise.race([
+                    emitWithAck(...args),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('operation has timed out')), timeoutMs)),
+                ]) }),
                 emit: vi.fn(),
                 on: vi.fn(),
                 off: vi.fn(),
@@ -46,10 +52,15 @@ describe('emitSessionReadCursorUpdateWithServerScope', () => {
         });
 
         const { emitSessionReadCursorUpdateWithServerScope } = await import('./emitSessionReadCursorUpdateWithServerScope');
-        await expect(emitSessionReadCursorUpdateWithServerScope(
+        const pending = emitSessionReadCursorUpdateWithServerScope(
             { serverId: 'home-b', sessionId: 'same-session' },
             4,
-        )).resolves.toEqual({ result: 'success', lastViewedSessionSeq: 4 });
+        );
+        const outcome = pending.then((value) => value, (error: unknown) => error);
+        await vi.advanceTimersByTimeAsync(250_000);
+        acknowledge({ result: 'success', lastViewedSessionSeq: 4 });
+        await expect(outcome).resolves.toEqual({ result: 'success', lastViewedSessionSeq: 4 });
+        vi.useRealTimers();
 
         expect(resolveContext).toHaveBeenCalledWith({ serverId: 'home-b', preferScoped: true });
         expect(emitWithAck).toHaveBeenCalledWith('update-read-cursor', {

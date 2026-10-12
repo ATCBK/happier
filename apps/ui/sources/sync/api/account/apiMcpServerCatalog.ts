@@ -22,6 +22,7 @@ import { readAccountSettingsBaseline } from '@/sync/engine/settings/accountSetti
 import { normalizeAccountSettingsHistoryAfterTransfer } from '@/sync/engine/settings/accountSettingsHistoryRestore';
 import { classifyHttpMutationRequestFailure } from '@/sync/http/mutationRequestOutcome';
 import { getRandomBytes } from '@/platform/cryptoRandom';
+import { randomUUID } from '@/platform/randomUUID';
 import { captureSavedSecretReferenceRevisionsInContext } from './apiSavedSecretCatalog';
 import { parseSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
 import { applyAcknowledgedMcpServerCatalog } from '@/sync/store/settings/mcpServerCatalogSnapshot';
@@ -263,6 +264,7 @@ export async function mutateMcpServerCatalogInContext(context: McpServerCatalogA
     }
     if (snapshot.revision !== input.expectedRevision) return { status: 'conflict', revision: snapshot.revision };
     return commitMcpServerCatalogMutationV1({ catalog: snapshot.catalog, revision: snapshot.revision, change: input.change,
+        ctx: { nowMs: Date.now(), newId: randomUUID },
         scope: { serverId: context.serverId, accountId: context.accountId },
         writeCatalog: value => writeMcpServerCatalogAndPublishInContext(context, value, signal) });
 }

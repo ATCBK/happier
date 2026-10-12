@@ -6,11 +6,13 @@ export async function getReadyServerFeatures(params?: {
     timeoutMs?: number;
     force?: boolean;
     serverId?: string;
+    signal?: AbortSignal;
 }): Promise<ServerFeatures | null> {
     const snapshot = await getServerFeaturesSnapshot({
         timeoutMs: params?.timeoutMs,
         force: params?.force,
         serverId: params?.serverId,
+        signal: params?.signal,
     });
     return snapshot.status === 'ready' ? snapshot.features : null;
 }

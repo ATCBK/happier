@@ -118,18 +118,18 @@ export async function fetchPushTokensRemoteAlertProjection(
 
 export async function fetchPushTokens(
     credentials: AuthCredentials,
-    opts: Readonly<{ apiEndpoint?: string }> = {},
+    opts: Readonly<{ apiEndpoint?: string; request?: (path: string, init?: RequestInit) => Promise<Response> }> = {},
 ): Promise<PushToken[]> {
     const API_ENDPOINT = (opts.apiEndpoint ?? '').trim().replace(/\/+$/, '');
     const path = '/v1/push-tokens';
-    const doFetch = API_ENDPOINT
+    const doFetch = opts.request ?? (API_ENDPOINT
         ? (p: string, init: RequestInit) => runtimeFetchWithServerReachability({
             serverUrl: API_ENDPOINT,
             token: credentials.token,
             url: `${API_ENDPOINT}${p}`,
             init,
         })
-        : (p: string, init: RequestInit) => serverFetch(p, init, { includeAuth: false });
+        : (p: string, init: RequestInit) => serverFetch(p, init, { includeAuth: false }));
 
     const response = await doFetch(path, {
         method: 'GET',
@@ -157,7 +157,7 @@ export async function fetchPushTokens(
 export async function deletePushToken(
     credentials: AuthCredentials,
     token: string,
-    opts: Readonly<{ apiEndpoint?: string; runtimeOrigin?: string }> = {},
+    opts: Readonly<{ apiEndpoint?: string; runtimeOrigin?: string; request?: (path: string, init?: RequestInit) => Promise<Response> }> = {},
 ): Promise<void> {
     const API_ENDPOINT = (opts.apiEndpoint ?? '').trim().replace(/\/+$/, '');
     const RUNTIME_ORIGIN = (opts.runtimeOrigin ?? '').trim().replace(/\/+$/, '');
@@ -167,7 +167,7 @@ export async function deletePushToken(
     }
 
     const path = `/v1/push-tokens/${encodedToken}`;
-    const doFetch = API_ENDPOINT
+    const doFetch = opts.request ?? (API_ENDPOINT
         ? (p: string, init: RequestInit) => runtimeFetchWithServerReachability({
             serverUrl: API_ENDPOINT,
             token: credentials.token,
@@ -175,7 +175,7 @@ export async function deletePushToken(
             ...(RUNTIME_ORIGIN ? { runtimeOrigin: RUNTIME_ORIGIN } : {}),
             init,
         })
-        : (p: string, init: RequestInit) => serverFetch(p, init, { includeAuth: false });
+        : (p: string, init: RequestInit) => serverFetch(p, init, { includeAuth: false }));
 
     const response = await doFetch(path, {
         method: 'DELETE',

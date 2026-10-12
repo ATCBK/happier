@@ -1,44 +1,22 @@
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { backoff } from '@/utils/timing/time';
-import { serverFetch } from '@/sync/http/client';
-import { HappyError } from '@/utils/errors/errors';
+import { AccountUsernameUpdateRequestV1Schema, AccountUsernameUpdateResponseV1Schema } from '@happier-dev/protocol/account/profile';
+import { getStorage } from '@/sync/domains/state/storageStore';
+import { captureAccountProfileAction, type AccountProfileActionExecution } from './accountProfileActions';
 
 export async function setAccountUsername(
     credentials: AuthCredentials,
     username: string,
+    mounted?: AccountProfileActionExecution,
 ): Promise<{ username: string }> {
-    return await backoff(async () => {
-        const response = await serverFetch('/v1/account/username', {
-            method: 'POST',
-            headers: {
-                Authorization: `Bearer ${credentials.token}`,
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ username }),
-        }, { includeAuth: false });
-
-        if (!response.ok) {
-            if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
-                let message = 'Failed to set username';
-                try {
-                    const error = await response.json();
-                    if (error?.error) message = error.error;
-                } catch {
-                    // ignore
-                }
-                const kind =
-                    message === 'username-disabled' || message === 'friends-disabled'
-                        ? 'config'
-                        : 'server';
-                throw new HappyError(message, false, { status: response.status, kind });
-            }
-            throw new Error(`Failed to set username: ${response.status}`);
-        }
-
-        const data = await response.json();
-        if (!data || typeof data !== 'object' || typeof (data as any).username !== 'string') {
-            throw new Error('Failed to parse set username response');
-        }
-        return { username: (data as any).username };
-    });
+    const input = AccountUsernameUpdateRequestV1Schema.parse({ username });
+    const action = captureAccountProfileAction(credentials, 'account.username.set', {
+        staleScopeError: 'account_username_stale_scope', failureMessage: 'Failed to set username',
+        invalidResponseMessage: 'Failed to parse set username response',
+    }, mounted);
+    const result = AccountUsernameUpdateResponseV1Schema.parse(await backoff(() => action.execute(input)));
+    action.assertCurrent();
+    const state = getStorage().getState();
+    state.applyProfile({ ...state.profile, username: result.username });
+    return result;
 }

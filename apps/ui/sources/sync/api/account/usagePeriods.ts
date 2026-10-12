@@ -1,6 +1,6 @@
-import { resolveUsageBucketBounds } from '@happier-dev/protocol';
+import { resolveUsageQueryPeriod, type UsageRelativePeriod } from '@happier-dev/protocol/inputs/usageQuery';
 
-export type UsagePeriod = 'today' | '7days' | '30days' | '90days' | 'year' | 'all';
+export type UsagePeriod = UsageRelativePeriod;
 export type UsagePeriodGranularity = 'hour' | 'day' | 'month';
 export type UsageLegacyPeriodGranularity = 'hour' | 'day';
 
@@ -79,10 +79,7 @@ export function getUsagePeriodDefinition(period: UsagePeriod): UsagePeriodDefini
 }
 
 export function resolveUsagePeriodStartTimeSeconds(period: UsagePeriod, nowMs: number, timeZoneOffsetMinutes?: number): number {
-    if (period === 'today') {
-        if (timeZoneOffsetMinutes !== undefined) {
-            return Math.floor(resolveUsageBucketBounds('day', nowMs, timeZoneOffsetMinutes).bucketStartMs / 1000);
-        }
+    if (period === 'today' && timeZoneOffsetMinutes === undefined) {
         // Team's incumbent local-day request has no fixed-offset query contract.
         // Personal usage readers always pass the selected query offset explicitly.
         const today = new Date(nowMs);
@@ -90,8 +87,5 @@ export function resolveUsagePeriodStartTimeSeconds(period: UsagePeriod, nowMs: n
         return Math.floor(today.getTime() / 1000);
     }
 
-    if (period === 'all') return 0;
-    const nowSeconds = Math.floor(nowMs / 1000);
-    const oneDaySeconds = 24 * 60 * 60;
-    return nowSeconds - (getUsagePeriodDefinition(period).rangeDayCount * oneDaySeconds);
+    return resolveUsageQueryPeriod({ period: { relative: period }, timeZoneOffsetMinutes: timeZoneOffsetMinutes ?? 0 }, nowMs).startMs! / 1000;
 }

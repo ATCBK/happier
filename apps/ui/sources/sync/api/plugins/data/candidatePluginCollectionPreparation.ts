@@ -1,6 +1,7 @@
 import { PLUGIN_COLLECTION_CANDIDATE_PREPARATION_RETIRE_HTTP_PATH_V1, PLUGIN_COLLECTION_CANDIDATE_PREPARATION_SOURCE_PAGE_HTTP_PATH_V1, PLUGIN_COLLECTION_CANDIDATE_PREPARATION_STAGE_HTTP_PATH_V1, PluginCollectionCandidatePreparationBindingV1Schema, PluginCollectionCandidatePreparationErrorV1Schema, PluginCollectionCandidatePreparationRetireRequestV1Schema, PluginCollectionCandidatePreparationRetireResultV1Schema, PluginCollectionCandidatePreparationSourcePageRequestV1Schema, PluginCollectionCandidatePreparationSourcePageResultV1Schema, PluginCollectionCandidatePreparationStageRequestV1Schema, PluginCollectionCandidatePreparationStageResultV1Schema, splitPluginCollectionCandidatePreparationStageRequestsForKnownLimitsV1, type NormalizedPluginAccountCollectionContractV1, type PluginCollectionCandidatePreparationBindingV1, type PluginCollectionCandidatePreparationErrorV1, type PluginCollectionCandidatePreparationSourcePageResultV1, type PluginCollectionCandidatePreparationStageRequestV1 } from '@happier-dev/protocol/plugins/data/collectionsV1';
 import { PLUGIN_DATA_ACCOUNT_STORED_CONTENT_COMPATIBILITY_DECLARATION } from '@happier-dev/protocol/clientCompatibility/accountStoredContentCompatibilityV1';
-import { compilePluginJsonSchema } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
+import { compilePluginJsonSchema, createPluginJsonSchemaZodValueAdapter } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { resolvePluginCollectionMigrationChainV1 } from '@happier-dev/protocol/plugins/data/collectionContributionV1';
 import type { PluginDataCollectionsCapabilities } from '@happier-dev/protocol/features/payload/capabilities/pluginDataCollectionsCapabilities';
 import type {
@@ -322,6 +323,7 @@ export function createActivePluginCollectionCandidatePreparation(input: Readonly
             }
             const migrations = runtimeMigrations.slice(runtimeMigrations.length - declarations.length);
             const sourceValidate = compilePluginJsonSchema(input.candidate.sourceContract.schema);
+            const sourceStoredReadSchema = createStoredReadSchema(createPluginJsonSchemaZodValueAdapter(input.candidate.sourceContract.schema));
             const targetValidate = compilePluginJsonSchema(input.candidate.targetContract.schema);
 
             let cursor: string | undefined;
@@ -336,6 +338,7 @@ export function createActivePluginCollectionCandidatePreparation(input: Readonly
                     const source = mergeLogicalRow<Readonly<Record<string, JsonValue>>>({
                         contract: input.candidate.sourceContract,
                         validate: sourceValidate,
+                        storedReadSchema: sourceStoredReadSchema,
                         row,
                         encryptionMode: operation.encryptionMode,
                         material: operation.material,

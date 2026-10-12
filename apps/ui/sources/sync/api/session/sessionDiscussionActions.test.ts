@@ -7,6 +7,10 @@ const platformRandomUUID = vi.hoisted(() => vi.fn());
 vi.mock('@/platform/randomUUID', () => ({ randomUUID: platformRandomUUID }));
 
 import { createSessionDiscussionActionAdapter } from './sessionDiscussionActions';
+import { SessionEncryption } from '@/sync/encryption/sessionEncryption';
+import { EncryptionCache } from '@/sync/encryption/encryptionCache';
+import { AES256Encryption } from '@/sync/encryption/encryptor';
+import { serializeSessionDiscussionMutationEqualityIntentV1 } from '@happier-dev/protocol/sessions/discussions/equality';
 
 const session = { serverId: 'home-a', sessionId: 'session-a' } as const;
 const availability = 'available' as const;
@@ -61,6 +65,67 @@ function createResponse(): SessionDiscussionCreateResponseV1 {
 describe('session Discussion UI Action adapter', () => {
     beforeEach(() => {
         platformRandomUUID.mockReset();
+    });
+
+    it.each(['plain', 'e2ee'] as const)('opens retained Discussion fields through the stored projection (%s)', async mode => {
+        const response = createResponse();
+        const title = { v: 1, title: 'Release readiness', retired: true };
+        const content = { v: 1, retired: true, parts: [{ t: 'text', text: 'Ready?', retired: true }] };
+        const encryption = mode === 'e2ee' ? new SessionEncryption(session.sessionId,
+            new AES256Encryption(new Uint8Array(32).fill(4)), new EncryptionCache(), new Uint8Array(32).fill(5)) : null;
+        const envelope = async (value: unknown) => mode === 'plain'
+            ? { t: 'plain', v: value } : { t: 'encrypted', c: await encryption!.encryptRaw(value) };
+        const titleContent = await envelope(title);
+        const messageContent = await envelope(content);
+        const request = vi.fn<DiscussionRequest>(async () => new Response(JSON.stringify({
+            ...response,
+            discussion: { ...response.discussion, titleContent },
+            firstMessage: { ...response.firstMessage, content: messageContent },
+        }), { status: 200 }));
+        const execute = createSessionDiscussionActionAdapter({
+            session, availability,
+            request,
+            contentContext: mode === 'plain' ? { mode } : { mode, encryption },
+        });
+        const result = await execute({
+            actionId: 'session.discussion.create',
+            input: { sessionId: session.sessionId, creationLocalId: 'create-local-a', title: 'Release readiness',
+                firstMessage: { localId: 'message-local-a', content: { v: 1, parts: [{ t: 'text', text: 'Ready?' }] } } },
+            context: { surface: 'ui', serverId: session.serverId, defaultSessionId: session.sessionId },
+        });
+
+        expect(result).toMatchObject({ discussion: { title: 'Release readiness' },
+            firstMessage: { content: { v: 1, parts: [{ t: 'text', text: 'Ready?' }] } } });
+        expect(result).not.toHaveProperty('firstMessage.content.retired');
+        expect(result).not.toHaveProperty('firstMessage.content.parts.0.retired');
+        if (mode === 'e2ee') {
+            const authoredTitle = { v: 1 as const, title: 'Release readiness' };
+            const authoredContent = { v: 1 as const, parts: [{ t: 'text' as const, text: 'Ready?' }] };
+            expect(JSON.parse(String(request.mock.calls[0]?.[1]?.body))).toMatchObject({
+                creationEqualityEvidenceV1: { kind: 'e2eeTag', tag: encryption!.deriveDiscussionMutationEqualityTagV1(
+                    serializeSessionDiscussionMutationEqualityIntentV1({ kind: 'create', title: authoredTitle,
+                        firstMessage: { localId: 'message-local-a', content: authoredContent, mentionedAccountIds: [] } }),
+                ) },
+                firstMessage: { requestEqualityEvidenceV1: { kind: 'e2eeTag', tag: encryption!.deriveDiscussionMutationEqualityTagV1(
+                    serializeSessionDiscussionMutationEqualityIntentV1({ kind: 'post', content: authoredContent, mentionedAccountIds: [] }),
+                ) } },
+            });
+        }
+    });
+
+    it('keeps malformed known stored Discussion content unavailable', async () => {
+        const response = createResponse();
+        const execute = createSessionDiscussionActionAdapter({ session, availability, contentContext: { mode: 'plain' },
+            request: async () => new Response(JSON.stringify({ ...response,
+                discussion: { ...response.discussion, titleContent: { t: 'plain', v: { v: 1, title: 42, retired: true } } },
+                firstMessage: { ...response.firstMessage, content: { t: 'plain', v: { v: 1, parts: [{ t: 'text', text: 42, retired: true }] } } },
+            }), { status: 200 }),
+        });
+        await expect(execute({ actionId: 'session.discussion.create',
+            input: { sessionId: session.sessionId, creationLocalId: 'create-local-a', title: 'Release readiness',
+                firstMessage: { localId: 'message-local-a', content: { v: 1, parts: [{ t: 'text', text: 'Ready?' }] } } },
+            context: { surface: 'ui', serverId: session.serverId, defaultSessionId: session.sessionId },
+        })).resolves.toMatchObject({ discussion: { title: null }, firstMessage: { content: null } });
     });
 
     it('uses the platform UUID owner for every omitted mutation identity without global crypto', async () => {

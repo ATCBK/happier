@@ -681,6 +681,11 @@ async function getServerFeaturesSnapshotWithRetry(
                     return publishSnapshot(value, canonicalCacheKey);
                 }
                 return published;
+            } catch {
+                throwIfAborted(signal);
+                // Decoding and identity/descriptor persistence are part of discovery too.
+                // Publish their failure so subscribers leave cold Loading and can recover.
+                return publishSnapshot({ status: 'error', reason: 'network' });
             } finally {
                 if (releaseExplicitTransport) await releaseExplicitTransport();
             }

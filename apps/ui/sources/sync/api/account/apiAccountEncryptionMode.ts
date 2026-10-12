@@ -2,7 +2,8 @@ import { TokenStorage, type AuthCredentials } from '@/auth/storage/tokenStorage'
 import { decodeBase64 } from '@/encryption/base64';
 import { parseToken } from '@/utils/auth/parseToken';
 import { resolveAuthCredentialsScopeKey } from '@/auth/storage/resolveAuthCredentialsScopeKey';
-import { backoff } from '@/utils/timing/time';
+import { backoff, backoffForever } from '@/utils/timing/time';
+import type { ApiChangeEntry } from '@/sync/api/types/apiTypes';
 import { serverFetch } from '@/sync/http/client';
 import {
     getActiveServerSnapshot,
@@ -10,6 +11,7 @@ import {
     type ActiveServerSnapshot,
 } from '@/sync/domains/server/serverRuntime';
 import { HappyError } from '@/utils/errors/errors';
+import { throwIfAborted } from '@/utils/runtime/abortSignals';
 import {
     AccountEncryptionModeResponseSchema,
     AccountEncryptionCurrentnessResponseSchema,
@@ -98,6 +100,26 @@ export function invalidateAccountEncryptionModeCache(): void {
     }
 }
 
+/** Account settings and Connected Service notifications do not change persisted Account mode. */
+export function invalidateAccountEncryptionModeCacheForChanges(
+    changes: readonly Pick<ApiChangeEntry, 'kind' | 'entityId' | 'hint'>[],
+): void {
+    const requiresModeRead = changes.some(change => {
+        if (change.kind !== 'account' || change.entityId !== 'self') return false;
+        const hint = change.hint;
+        if (!hint || typeof hint !== 'object' || Array.isArray(hint)) return true;
+        const entries: [string, unknown][] = Object.entries(hint);
+        // Unknown/combined hints (including encryption transitions) still
+        // withdraw disclosure. Only these exact known unrelated writes retain it.
+        return entries.length === 0 || !entries.every(([key, value]) => (
+            key === 'connectedServices' && value === true
+            || key === 'settingsVersion' && typeof value === 'number'
+                && Number.isSafeInteger(value) && value >= 0
+        ));
+    });
+    if (requiresModeRead) invalidateAccountEncryptionModeCache();
+}
+
 /** Owner-local revision for consumers that must withdraw stale disclosures. */
 export function getAccountEncryptionModeCacheRevision(): number {
     return accountEncryptionModeCacheRevision;
@@ -117,12 +139,43 @@ export function subscribeAccountEncryptionModeCacheInvalidation(
     };
 }
 
+type AccountEncryptionCurrentnessReadOptions = Readonly<{
+    request?: (path: string, init: RequestInit) => Promise<Response>;
+    signal?: AbortSignal;
+}>;
+
+// Only live reads share authority. Captured request identity includes its Home
+// and hidden cancellation lifetime; an ambient read uses the selected scope.
+const pendingAccountEncryptionCurrentnessReads = new Set<Readonly<{
+    scopeKey: string;
+    request: AccountEncryptionCurrentnessReadOptions['request'];
+    signal: AbortSignal | undefined;
+    result: Promise<AccountEncryptionCurrentnessResponse>;
+}>>();
+
 export async function fetchAccountEncryptionCurrentness(
     credentials: AuthCredentials,
-    options: Readonly<{
-        request?: (path: string, init: RequestInit) => Promise<Response>;
-        signal?: AbortSignal;
-    }> = {},
+    options: AccountEncryptionCurrentnessReadOptions = {},
+): Promise<AccountEncryptionCurrentnessResponse> {
+    throwIfAborted(options.signal);
+    const scopeKey = options.request ? resolveAuthCredentialsScopeKey(credentials)
+        : `${getAccountEncryptionModeScopeKey(credentials)}\u0000${accountEncryptionModeCacheRevision}`;
+    const incumbent = [...pendingAccountEncryptionCurrentnessReads].find(entry => entry.scopeKey === scopeKey
+        && entry.request === options.request && entry.signal === options.signal);
+    if (incumbent) return await incumbent.result;
+    const result = readAccountEncryptionCurrentness(credentials, options);
+    const entry = { scopeKey, request: options.request, signal: options.signal, result };
+    pendingAccountEncryptionCurrentnessReads.add(entry);
+    try {
+        return await result;
+    } finally {
+        pendingAccountEncryptionCurrentnessReads.delete(entry);
+    }
+}
+
+async function readAccountEncryptionCurrentness(
+    credentials: AuthCredentials,
+    options: AccountEncryptionCurrentnessReadOptions,
 ): Promise<AccountEncryptionCurrentnessResponse> {
     const request = options.request ?? ((path: string, init: RequestInit) =>
         serverFetch(path, init, { includeAuth: false }));
@@ -189,7 +242,7 @@ export async function fetchAccountEncryptionCurrentness(
                                 response = await readCurrentness();
                             }
                         } catch {
-                            if (options.signal?.aborted) options.signal.throwIfAborted();
+                            throwIfAborted(options.signal);
                             // Keep the original typed recovery result when proof fails.
                         } finally {
                             secret.fill(0);
@@ -322,7 +375,7 @@ export async function fetchAccountEncryptionMode(
         return cached.value;
     }
 
-    const promise = backoff(async () => {
+    const promise = backoffForever(async () => {
         assertCurrent();
         return await run();
     });

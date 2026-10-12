@@ -7,7 +7,7 @@ import type {
     UsageAnalyticsQueryRequest,
     UsageAnalyticsQueryResponse,
 } from '@happier-dev/protocol';
-import { resolveUsageCalendarInstant } from '@happier-dev/protocol';
+import { resolveUsageCalendarInstant } from '@happier-dev/protocol/usage/usageCalendar';
 import { buildUsageFocusFilters } from './usageFocusFilters';
 export { buildUsageFocusFilters } from './usageFocusFilters';
 import {

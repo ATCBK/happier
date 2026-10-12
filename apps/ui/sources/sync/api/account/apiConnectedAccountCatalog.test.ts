@@ -7,11 +7,11 @@ import { ConnectedAccountCatalogRowMutationV1Schema, ConnectedAccountCatalogRowR
 import { AccountSettingsV2UpdateRequestSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 import { PluginConnectedAccountAuthenticationModeV2Schema } from '@happier-dev/protocol';
 import { executeConnectedServiceConfigurationActionV1 } from '@happier-dev/protocol/connect/execute-configuration-action';
-import { withConnectedAccountCatalogAccount, createUiConnectedServiceConfigurationCatalogHost } from './apiConnectedAccountCatalog';
 
 installConnectedServicesCommonModuleMocks();
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
+const { withConnectedAccountCatalogAccount, createUiConnectedServiceConfigurationCatalogHost } = await import('./apiConnectedAccountCatalog');
 beforeEach(async () => {
     await home.reset();
     installHomeGovernanceBoundaries(home);

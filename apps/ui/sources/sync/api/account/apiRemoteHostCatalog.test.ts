@@ -134,7 +134,7 @@ describe('Remote host captured catalog mutation', () => {
     );
 
     it.each(['matching', 'rotated'] as const)('cleans signed SSH history through the captured UI catalog only for exact historical material (%s)', async state => {
-        const accountId = 'ssh-history-account';
+        const accountId = `ssh-history-${state}-account`;
         const value = '  historical SSH private fixture\n';
         const source = { kind: 'remote-host-ssh-credential' as const, hostId: 'history-host', slot: 'password' as const };
         const resourceId = deriveSavedSecretImportResourceIdV1({ accountId, source });

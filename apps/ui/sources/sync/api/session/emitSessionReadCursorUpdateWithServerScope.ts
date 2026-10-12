@@ -3,8 +3,7 @@ import { createScopedSocketConnectParams } from '@/sync/runtime/orchestration/se
 import { resolveServerAccountRequestContext } from '@/sync/runtime/orchestration/serverScopedRpc/resolveServerAccountRequestContext';
 import { emitWithAckCancellable } from '@happier-dev/sync-client';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
-import { subscribeHomeCredentialMutations } from '@/auth/storage/tokenStorage';
-import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { runWithHomeCredentialRequestSignal } from '@/sync/runtime/orchestration/serverScopedRpc/serverAccountScopeRequestGuard';
 
 export type SessionReadCursorUpdateAck = Readonly<{
     result: 'success' | 'forbidden' | 'error';
@@ -21,42 +20,39 @@ export async function emitSessionReadCursorUpdateWithServerScope(
     address: SessionAddress,
     lastViewedSessionSeq: number,
 ): Promise<SessionReadCursorUpdateAck> {
-    const controller = new AbortController();
-    const unsubscribeCredentials = subscribeHomeCredentialMutations((event) => {
-        if (areServerProfileIdentifiersEquivalent(event.serverId, address.serverId)) controller.abort();
-    });
-    let context: Awaited<ReturnType<typeof resolveServerAccountRequestContext>> | null = null;
-    let socket: Awaited<ReturnType<typeof createEphemeralServerSocketClient>> | null = null;
-    let carrierCustodyTransferred = false;
-    try {
-        context = await resolveServerAccountRequestContext({
-            serverId: address.serverId,
-            preferScoped: true,
-        });
-        if (context.scope !== 'scoped') {
-            throw new Error('Exact Session read cursor transport is unavailable');
+    return await runWithHomeCredentialRequestSignal(address.serverId, async (signal) => {
+        let context: Awaited<ReturnType<typeof resolveServerAccountRequestContext>> | null = null;
+        let socket: Awaited<ReturnType<typeof createEphemeralServerSocketClient>> | null = null;
+        let carrierCustodyTransferred = false;
+        try {
+            context = await resolveServerAccountRequestContext({
+                serverId: address.serverId,
+                preferScoped: true,
+            });
+            if (context.scope !== 'scoped') {
+                throw new Error('Exact Session read cursor transport is unavailable');
+            }
+            // Captured so the narrowed scoped arm survives into the custody callback.
+            const scopedContext = context;
+            socket = await createEphemeralServerSocketClient(
+                createScopedSocketConnectParams(scopedContext, () => {
+                    carrierCustodyTransferred = true;
+                    return scopedContext.release;
+                }),
+            );
+            return await emitWithAckCancellable<SessionReadCursorUpdateAck>({
+                socket,
+                event: 'update-read-cursor',
+                timeoutMs: null,
+                payload: {
+                    sid: address.sessionId,
+                    lastViewedSessionSeq,
+                },
+                signal,
+            });
+        } finally {
+            socket?.disconnect();
+            if (!carrierCustodyTransferred && context?.scope === 'scoped') await context.release?.();
         }
-        // Captured so the narrowed scoped arm survives into the custody callback.
-        const scopedContext = context;
-        socket = await createEphemeralServerSocketClient(
-            createScopedSocketConnectParams(scopedContext, () => {
-                carrierCustodyTransferred = true;
-                return scopedContext.release;
-            }),
-        );
-        return await emitWithAckCancellable<SessionReadCursorUpdateAck>({
-            socket,
-            event: 'update-read-cursor',
-            timeoutMs: context.timeoutMs,
-            payload: {
-                sid: address.sessionId,
-                lastViewedSessionSeq,
-            },
-            signal: controller.signal,
-        });
-    } finally {
-        socket?.disconnect();
-        if (!carrierCustodyTransferred && context?.scope === 'scoped') await context.release?.();
-        unsubscribeCredentials();
-    }
+    });
 }

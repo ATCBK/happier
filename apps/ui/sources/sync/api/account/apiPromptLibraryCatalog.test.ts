@@ -1,23 +1,23 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
-import { getStorage } from '@/sync/domains/state/storage';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
-import { disconnectActiveServerConnection, restoreConnectionToActiveServer } from '@/sync/runtime/orchestration/connectionManager';
 import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
-import { upsertAndActivateServer } from '@/sync/domains/server/serverRuntime';
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
 import { buildPromptLibraryPhysicalKeyV1, PromptLibraryCatalogKeyV1Schema, PromptLibraryRowMutationV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import { applyPromptLibraryCatalogSnapshot, getPromptLibraryCatalogValue,
   resetPromptLibraryCatalogSnapshotsForTests } from '@/sync/store/settings/promptLibraryCatalogSnapshot';
-import { observePromptLibraryCatalog, refreshPromptLibraryCatalog, resetPromptLibraryCatalogEngineForTests } from '@/sync/engine/settings/promptLibraryCatalogEngine';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
-import { mutatePromptLibraryRoleOverride, readPromptLibraryCatalogProjection } from './apiPromptLibraryCatalog';
 
 installDisconnectedServerSocketBoundary();
+const { getStorage } = await import('@/sync/domains/state/storage');
+const { disconnectActiveServerConnection, restoreConnectionToActiveServer } = await import('@/sync/runtime/orchestration/connectionManager');
+const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
+const { observePromptLibraryCatalog, refreshPromptLibraryCatalog, resetPromptLibraryCatalogEngineForTests } = await import('@/sync/engine/settings/promptLibraryCatalogEngine');
+const { mutatePromptLibraryRoleOverride, readPromptLibraryCatalogProjection } = await import('./apiPromptLibraryCatalog');
 beforeAll(loadSyncSingletonForTests);
 afterEach(async () => {
   resetPromptLibraryCatalogEngineForTests();

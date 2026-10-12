@@ -10,6 +10,8 @@ import {
     SessionBoardItemRemoveInputV1Schema, SessionBoardLayoutUpdateInputV1Schema,
     SessionBoardItemUpsertInputV1Schema, SessionBoardLayoutV1StoredSchema, SessionBoardMutationV1Schema,
     SessionBoardMutationActionResultV1Schema, SessionSurfaceItemV1Schema, SessionSurfaceItemV1StoredSchema,
+    SessionSurfaceItemDestinationV1Schema,
+    SessionBoardActionFailureV1Schema,
     type SessionBoardGetResultV1, type SessionBoardItemPlacementParticipantV1,
     type SessionBoardLayoutV1, type SessionBoardReadProjectionEntryV1,
 } from '@happier-dev/protocol/sessions/board';
@@ -35,6 +37,18 @@ function projectRecordOwnerFailure(
         ? projectSessionBoardFeatureGateFailureV1(actionId)
         : createSessionBoardFailureV1(status);
 }
+
+/** UI owns sealing, not the remote Session workspace filesystem. */
+export const prepareSessionBoardItemForUi: NonNullable<ActionExecutorDeps['sessionBoardPrepareItem']> = async ({ input, signal }) => {
+    if (signal?.aborted) return createSessionBoardFailureV1('cancelled');
+    const parsed = SessionBoardItemUpsertInputV1Schema.safeParse(input);
+    if (!parsed.success) return createSessionBoardFailureV1('session_board_invalid');
+    if (!('item' in parsed.data)) return createSessionBoardFailureV1('session_board_invalid');
+    if (parsed.data.item.source.kind === 'hostedHtml' && 'publicationSource' in parsed.data.item.source) {
+        return createSessionBoardFailureV1('unsupported_action');
+    }
+    return parsed.data;
+};
 
 export function createSessionBoardActionAdapter(options: SessionSystemRecordTransportOptions & Readonly<{
     session: SessionAddress;
@@ -180,7 +194,7 @@ export function createSessionBoardActionAdapter(options: SessionSystemRecordTran
                 const record = entry.value;
                 const opened = await open(record, { owner: 'host', namespace: 'surface', kind: 'item.v1', localId: record.address.localId }, SessionSurfaceItemV1StoredSchema);
                 if (opened.status !== 'ready') { projectedEntries.push({ status: 'unavailable' }); continue; }
-                projectedEntries.push({ status: 'ready', itemId: record.address.localId, revision: record.revision, item: opened.value });
+                projectedEntries.push({ status: 'ready', itemId: record.address.localId, revision: record.revision, item: opened.value, creator: record.creator });
             }
             return projectSessionBoardGetResultV1({ serverId: options.session.serverId, sessionId, capabilities: options.capabilities,
                 layout: layout.layout, entries: projectedEntries,
@@ -243,11 +257,10 @@ export function createSessionBoardActionAdapter(options: SessionSystemRecordTran
         if (!parsed.success) return createSessionBoardFailureV1('session_board_invalid');
         const args = parsed.data;
         if (sessionBoardActionUsesLayoutV1(actionId, args) && options.boardEnabled !== true) return projectSessionBoardFeatureGateFailureV1(actionId);
-        if (args.item.source.kind === 'hostedHtml' && 'publicationSource' in args.item.source) {
-            // This client owns record sealing, not the remote caller's workspace filesystem.
-            return createSessionBoardFailureV1('unsupported_action');
-        }
-        const authoredItem = SessionSurfaceItemV1Schema.parse(args.item);
+        const prepared = await prepareSessionBoardItemForUi({ input: args, context, signal });
+        if ('ok' in prepared) return SessionBoardActionFailureV1Schema.parse(prepared);
+        if (!('item' in prepared)) return createSessionBoardFailureV1('session_board_invalid');
+        const authoredItem = SessionSurfaceItemV1Schema.parse(prepared.item);
         const sessionId = args.sessionId ?? context.defaultSessionId;
         if (!sessionId) return createSessionBoardFailureV1('session_board_invalid');
         if (sessionId !== options.session.sessionId) return createSessionBoardFailureV1('session_board_forbidden');
@@ -281,7 +294,7 @@ export function createSessionBoardActionAdapter(options: SessionSystemRecordTran
             if (!edited.ok) return createSessionBoardFailureV1(edited.error);
             layout = edited.layout;
         }
-        const item = { ...authoredItem, destination: itemDestination };
+        const item = { ...authoredItem, destination: SessionSurfaceItemDestinationV1Schema.parse(itemDestination) };
         const itemContent = await sealSessionStoredContent(options.contentContext, item);
         if (itemContent.status !== 'ready') return createSessionBoardFailureV1(itemContent.status);
         const layoutContent = layout ? await sealSessionStoredContent(options.contentContext, layout) : null;

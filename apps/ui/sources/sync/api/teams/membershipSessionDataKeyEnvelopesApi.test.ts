@@ -1,5 +1,19 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import tweetnacl from 'tweetnacl';
+import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol/actions/actionExecutor';
+import { executeMembershipHistoryActionForScope } from './membershipSessionDataKeyEnvelopesApi';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit';
+import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol';
+import { primeServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { isHomeDomainActionIdV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
+import { TeamMembershipHistoryPreparationResultV1Schema } from '@happier-dev/protocol/teams/membershipHistoryPreparationV1';
+import type { ApprovalRequest } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
+import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
+import type { ActionId } from '@happier-dev/protocol/actions/actionIds';
+import type { ActionExecutorContext } from '@happier-dev/protocol/actions/executor/types';
+import { createUiClientActionReverseHandler } from '@/sync/ops/actions/clientActionReverseDispatch';
 
 import { membershipHistoryPreparationScopeKey } from './membershipSessionDataKeyEnvelopesApi';
 
@@ -24,6 +38,9 @@ async function setup(options?: Readonly<{ accountEncryption?: 'plain' | 'e2ee' }
     const { upsertServerProfile } = await import('@/sync/domains/server/serverProfiles');
     const active = await upsertAndActivateServer({ serverUrl: 'https://active.example', name: 'Active' });
     const target = await upsertServerProfile({ serverUrl: 'https://target.example', name: 'Target' });
+    const features = createRootLayoutFeaturesResponse();
+    tryWriteServerEnabledBitInPlace(features, 'sharing.session', true);
+    primeServerFeaturesSnapshot({ serverId: target.id, snapshot: { status: 'ready', features } });
     const { storage } = await import('@/sync/domains/state/storageStore');
     storage.getState().activateProfileScope({ serverId: active.id, accountId: 'active-account' });
     const token = (sub: string) => `e30.${Buffer.from(JSON.stringify({ sub })).toString('base64url')}.signature`;
@@ -78,6 +95,122 @@ const E2EE_ACCOUNT_ENCRYPTION = JSON.stringify({
 
 const TEAM_TARGET = { kind: 'team' as const, teamMembershipId: 'mem/9' };
 const GROUP_TARGET = { kind: 'group' as const, teamGroupId: 'grp/7', accountId: 'recipient-1' };
+
+function actionExecutor(serverId: string) {
+    // Only the exercised family port is needed; all transport and encryption beneath it are real.
+    return createActionExecutor({
+        teamMembershipHistoryAction: async ({ actionId, input }: Parameters<NonNullable<ActionExecutorDeps['teamMembershipHistoryAction']>>[0]) =>
+            await executeMembershipHistoryActionForScope({ actionId, input,
+                scope: { serverId, accountId: 'target-account' }, availability: 'available', isCurrent: () => true }),
+    } as unknown as ActionExecutorDeps);
+}
+
+describe('membership history public Actions', () => {
+    it('serves the admitted reverse-client read through the default app encryption host', async () => {
+        const env = await setup();
+        env.request.mockImplementation(async url => {
+            const path = new URL(url).pathname;
+            if (path.includes('/account/encryption')) return new Response(JSON.stringify({ mode: 'plain', updatedAt: 1 }));
+            if (path === '/v2/account/settings') return new Response(JSON.stringify({ content: null, version: 0 }));
+            return new Response(JSON.stringify({ status: 'recipient_unavailable', recipientAccountId: 'recipient-1',
+                contentKey: { status: 'unavailable', reason: 'encryption_setup_required' } }));
+        });
+        const receive = createUiClientActionReverseHandler({ serverId: env.target.id, accountId: 'target-account', isCurrent: () => true });
+        const response = await receive({ v: 1, actionId: 'teams.members.history.preparation.get',
+            input: { teamId: TEAM_ID, target: GROUP_TARGET, recipientAccountId: 'recipient-1' },
+            context: { surface: 'agent', authority: 'account_automation', actionCaller: { kind: 'host' } },
+        }, { signal: new AbortController().signal });
+        expect(response).toEqual({ v: 1, execution: { ok: true, result: {
+            status: 'recipient_unavailable', reason: 'encryption_setup_required',
+        } } });
+        expect(env.request.mock.calls.some(([url]) => new URL(url).pathname.includes('/groups/grp%2F7/members/recipient-1/'))).toBe(true);
+    });
+    it('creates mandatory human approval for an Agent request even when ordinary approval is waived', async () => {
+        const env = await setup();
+        let stored: ApprovalRequest | null = null;
+        const settings = ActionsSettingsV1Schema.parse({ v: 1,
+            approvalWaivedSurfaces: { 'teams.members.history.prepare': ['agent'] } });
+        const executor = createActionExecutor({
+            isActionApprovalRequired: (actionId: ActionId, context: ActionExecutorContext) =>
+                isApprovalRequiredByActionsSettings(actionId, settings, context, getActionSpec(actionId).safety),
+            approvalsCreate: async ({ request }: { request: ApprovalRequest }) => {
+                stored = request;
+                return { artifactId: 'membership-history-approval' };
+            },
+            teamMembershipHistoryAction: async ({ actionId, input }: Parameters<NonNullable<ActionExecutorDeps['teamMembershipHistoryAction']>>[0]) =>
+                await executeMembershipHistoryActionForScope({ actionId, input, scope: {
+                    serverId: env.target.id, accountId: 'target-account',
+                }, availability: 'available', isCurrent: () => true }),
+        } as unknown as ActionExecutorDeps);
+        const input = { teamId: TEAM_ID, target: GROUP_TARGET, recipientAccountId: 'recipient-1' };
+        const result = await executor.execute('teams.members.history.prepare', input, {
+            surface: 'agent', authority: 'account_automation', serverId: env.target.id,
+            runtimeAccountId: 'target-account', actionRequestId: 'history-request', actionCaller: { kind: 'host' },
+        });
+        expect(result).toMatchObject({ ok: true, result: { kind: 'approval_request_created',
+            artifactId: 'membership-history-approval', actionId: 'teams.members.history.prepare' } });
+        expect(stored).toMatchObject({ actionArgs: input, approval: { result: 'required' },
+            createdBy: { surface: 'agent' }, executionOriginV1: { authority: 'account_automation' } });
+        expect(env.request).not.toHaveBeenCalled();
+    });
+    it('requires the existing answering client and rejects contradictory Group addressing before dispatch', async () => {
+        const env = await setup();
+        const input = { teamId: TEAM_ID, target: GROUP_TARGET, recipientAccountId: 'recipient-1' };
+        const spec = getActionSpec('teams.members.history.prepare');
+        expect(spec).toMatchObject({ executionPlacement: 'client', requiredAuthority: 'present_user',
+            approval: { result: 'required' }, surfaces: { agent: true, mcp: true, cli: false, rpc: false } });
+        expect(isHomeDomainActionIdV1(spec.id)).toBe(false);
+        // The daemon has only its genuine reverse-client system boundary, no encryption host.
+        const headless = createActionExecutor({ clientActionExecute: async () => ({ ok: false,
+            errorCode: 'unavailable', error: 'noClient' }) } as unknown as ActionExecutorDeps);
+        await expect(headless.execute('teams.members.history.preparation.get', input,
+            { surface: 'agent', authority: 'account_automation', actionCaller: { kind: 'host' } },
+        )).resolves.toMatchObject({ ok: false, errorCode: 'unavailable', error: 'noClient' });
+        await expect(actionExecutor(env.target.id).execute('teams.members.history.preparation.get', {
+            ...input, recipientAccountId: 'another-account',
+        }, { surface: 'agent', authority: 'account_automation', actionCaller: { kind: 'host' } },
+        )).resolves.toMatchObject({ ok: false });
+        expect(env.request).not.toHaveBeenCalled();
+    });
+    it.each([TEAM_TARGET, GROUP_TARGET])('observes only readiness and aggregate counts for $kind membership', async target => {
+        const env = await setup();
+        const recipient = await createRecipient();
+        const { encryptDataKeyForRecipientV0 } = await import('@/sync/encryption/directShareEncryption');
+        const { encodeBase64 } = await import('@/encryption/base64');
+        env.request.mockImplementation(async () => new Response(JSON.stringify({
+            status: 'ready', recipientAccountId: 'recipient-1', contentKey: recipient.contentKey,
+            items: [{ sessionId: 'private-session', callerDataKeyEnvelope: encryptDataKeyForRecipientV0(
+                new Uint8Array(32).fill(3), encodeBase64(MANAGER_CONTENT_KEYS.publicKey, 'base64'),
+            ) }], nextCursor: null,
+            exceptions: { callerEnvelopeRepairRequiredCount: 1, callerVisibleNonTransferableSessionCount: 2 },
+        })));
+        const result = await actionExecutor(env.target.id).execute('teams.members.history.preparation.get', {
+            teamId: TEAM_ID, target, recipientAccountId: 'recipient-1',
+        }, { surface: 'agent', authority: 'account_automation', actionCaller: { kind: 'host' } });
+        expect(result).toEqual({ ok: true, result: {
+            status: 'ready', actionable: true,
+            exceptions: { callerEnvelopeRepairRequiredCount: 1, callerVisibleNonTransferableSessionCount: 2 },
+        } });
+        expect(JSON.stringify(result)).not.toContain('private-session');
+        expect(JSON.stringify(result)).not.toContain('contentKey');
+    });
+
+    it('refuses a preparation without encryption material and does not mistake automation for a present user', async () => {
+        const env = await setup();
+        env.request.mockImplementation(async () => new Response(JSON.stringify({ mode: 'plain', updatedAt: 1 })));
+        const input = { teamId: TEAM_ID, target: TEAM_TARGET, recipientAccountId: 'recipient-1' };
+        await expect(actionExecutor(env.target.id).execute('teams.members.history.prepare', input,
+            { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } },
+        )).resolves.toMatchObject({ ok: false, errorCode: 'session_data_key_unavailable' });
+        expect(env.request.mock.calls.every(([url]) => !new URL(url).pathname.endsWith('/data-key/envelopes'))).toBe(true);
+        env.request.mockClear();
+        const noApprovalHost = actionExecutor(env.target.id);
+        const automated = await noApprovalHost.execute('teams.members.history.prepare', input,
+            { surface: 'agent', authority: 'account_automation', actionCaller: { kind: 'host' } });
+        expect(automated.ok).toBe(false);
+        expect(env.request).not.toHaveBeenCalled();
+    });
+});
 
 describe('membership history envelope exact-Account transport', () => {
     it('uses one canonical identity that distinguishes every Team and Group target', () => {
@@ -207,7 +340,6 @@ describe('membership history preparation host', () => {
         const { encodeBase64, decodeBase64 } = await import('@/encryption/base64');
         const { encryptDataKeyForRecipientV0 } = await import('@/sync/encryption/directShareEncryption');
         const { openEncryptedDataKeyEnvelopeV1 } = await import('@happier-dev/protocol');
-        const { prepareMembershipHistoryEnvelopesForScope } = await import('./membershipSessionDataKeyEnvelopesApi');
         const recipient = await createRecipient();
 
         // Two historical Sessions, each with its own DEK already sealed to the manager.
@@ -252,27 +384,24 @@ describe('membership history preparation host', () => {
             throw new Error(`Unexpected request ${path}`);
         });
 
-        const onProgress = vi.fn(() => { events.push('progress'); });
-        const outcome = await prepareMembershipHistoryEnvelopesForScope({
-            scope: { serverId: env.target.id, accountId: 'target-account' },
-            address: { serverId: env.target.id, teamId: TEAM_ID },
-            target: TEAM_TARGET,
-            recipientAccountId: 'recipient-1',
-            availability: 'available',
-            isCurrent: () => true,
-            onProgress,
-        });
+        const result = await actionExecutor(env.target.id).execute('teams.members.history.prepare', {
+            teamId: TEAM_ID, target: TEAM_TARGET, recipientAccountId: 'recipient-1',
+        }, { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } });
+        expect(result.ok).toBe(true);
+        if (!result.ok) throw new Error(result.errorCode);
+        const outcome = TeamMembershipHistoryPreparationResultV1Schema.parse(result.result);
 
         expect(outcome.status).toBe('complete');
         expect(outcome.preparedCount).toBe(2);
-        expect(outcome.repairRequiredSessions).toEqual([]);
+        expect(outcome.repairRequiredCount).toBe(0);
+        expect(JSON.stringify(result)).not.toContain('repairRequiredSessions');
         // The exceptions the row explains are the server's own last-page counts, not a local tally.
         expect(outcome.exceptions).toEqual({
             callerVisibleNonTransferableSessionCount: 3,
             callerEnvelopeRepairRequiredCount: 1,
         });
-        // Discovery, one bounded commit, progress only after the commit, then the single recheck.
-        expect(events).toEqual(['get:1', 'patch', 'progress', 'get:2']);
+        // Discovery, one bounded commit, then the single recheck through the existing producer.
+        expect(events).toEqual(['get:1', 'patch', 'get:2']);
 
         // Every recipient envelope opens to the exact same 32 bytes the manager opened — no
         // re-keying, and never the manager's own Account material.

@@ -6,7 +6,7 @@ import {
 import { HappyError } from '@/utils/errors/errors';
 import { backoff } from '@/utils/timing/time';
 
-import { ProviderAccountUsageRecordIdSchema, ProviderAccountUsageSnapshotV1Schema, type ProviderAccountUsageRecordId, type ProviderAccountUsageSnapshotV1 } from '@happier-dev/protocol/connect/account-usage-primitives';
+import { ProviderAccountUsageRecordIdSchema, type ProviderAccountUsageRecordId, type ProviderAccountUsageSnapshotV1 } from '@happier-dev/protocol/connect/account-usage-primitives';
 import { QualifiedProviderAccountUsageReadErrorV4Schema, QualifiedProviderAccountUsageRecordResponseV4Schema } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
 import { z } from 'zod';
 import { ConnectedServiceQuotaGetInputV1Schema, QualifiedProviderAccountUsageHistoryRequestV4Schema, QualifiedProviderAccountUsageHistoryResponseV4Schema, openProviderAccountUsageRecordV4, openProviderAccountUsageHistoryPageV4, projectProviderAccountUsageQuotaReadV1, ProviderAccountUsageReadErrorV1, type ConnectedServiceQuotaGetInputV1, type ConnectedServiceQuotaGetResultV1, type ProviderAccountUsageHistoryWitnessV1 } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
@@ -19,12 +19,16 @@ import type { ServerFetch } from '@/sync/http/client';
 import { PendingResetStartsReadInputV1Schema, PendingResetStartsReadResultV1Schema } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
 import { evaluatePendingResetStartReadinessV1 } from '@happier-dev/protocol/sessions/pending/pendingResetStartReadinessV1';
 import type { ProviderAccountUsageWaitingWorkV1 } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
+import { mapCryptoBatchWithYield } from '@/sync/encryption/cryptoBatchYield';
 
 export type ProviderAccountUsageQuotaReadOptions = Readonly<{
     accountMode: 'plain' | 'e2ee'; request?: ServerFetch; assertCurrent?: () => void;
     material?: AccountScopedCryptoMaterial; signal?: AbortSignal; nowMs?: number;
     expectedActiveServer?: ExpectedActiveServerFetchBasis; targets?: UsagePacingTargetsV1;
+    includePendingWork?: boolean;
     readEnteredMonthlyPrice?: () => Promise<import('@happier-dev/protocol/connect/accountSubscription').ProviderAccountSubscriptionMonthlyPriceV1 | undefined>;
+    /** Drain the requested range under one captured read; ordinary Action callers still receive one page. */
+    readAllHistory?: Readonly<{ onProgress(value: ConnectedServiceQuotaGetResultV1): void }>;
 }>;
 export async function getProviderAccountUsageQuota(credentials: AuthCredentials, input: ConnectedServiceQuotaGetInputV1, options: ProviderAccountUsageQuotaReadOptions): Promise<ConnectedServiceQuotaGetResultV1> {
     const request = ConnectedServiceQuotaGetInputV1Schema.parse(input);
@@ -32,14 +36,75 @@ export async function getProviderAccountUsageQuota(credentials: AuthCredentials,
     const resolution = sourceJson === null ? null : QualifiedConnectedServiceUsageSourceResolutionV4Schema.parse(sourceJson);
     const material = options.accountMode === 'e2ee' ? options.material ?? resolveAccountScopedCryptoMaterialFromCredentials(credentials) : undefined;
     const recordJson = resolution ? await requestProviderAccountUsageJson(credentials, `/v4/connect/qualified/provider-account-usage/record?recordId=${encodeURIComponent(resolution.recordId)}`, options) : null;
-    const enteredMonthlyPrice = recordJson !== null ? await options.readEnteredMonthlyPrice?.() : undefined;
+    const progressive = options.readAllHistory && request.history && resolution;
+    const enteredMonthlyPrice = recordJson !== null && !progressive ? await options.readEnteredMonthlyPrice?.() : undefined;
     options.assertCurrent?.();
-    const current = resolution && recordJson !== null ? openProviderAccountUsageRecordV4({ recordId: resolution.recordId, enteredMonthlyPrice, accountMode: options.accountMode, material, record: QualifiedProviderAccountUsageRecordResponseV4Schema.parse(recordJson) }) : null;
+    let current = resolution && recordJson !== null ? openProviderAccountUsageRecordV4({ recordId: resolution.recordId, enteredMonthlyPrice, accountMode: options.accountMode, material, record: QualifiedProviderAccountUsageRecordResponseV4Schema.parse(recordJson) }) : null;
     if (current && resolution && current.recordKey.accountSubjectId !== resolution.providerAccountId) throw new ProviderAccountUsageReadErrorV1('provider_account_usage_identity_mismatch');
+    const historyRequest = request.history;
+    if (options.readAllHistory && historyRequest && resolution) {
+        let history: ConnectedServiceQuotaGetResultV1['history'];
+        let waitingWork: ProviderAccountUsageWaitingWorkV1 | undefined;
+        const project = (appendHistory?: ConnectedServiceQuotaGetResultV1['history']) => projectProviderAccountUsageQuotaReadV1({ input: request, current, history, appendHistory, waitingWork,
+            targets: options.targets, nowMs: options.nowMs ?? Date.now() });
+        const publish = (appendHistory?: ConnectedServiceQuotaGetResultV1['history']) => { options.signal?.throwIfAborted(); options.assertCurrent?.(); const value = project(appendHistory); history = value.history; options.readAllHistory!.onProgress(value); return value; };
+        // Current capacity is useful before either history or unrelated Pending work answers.
+        publish();
+        let active = true;
+        const pending = options.includePendingWork === false ? Promise.resolve() :
+            readProviderAccountUsageWaitingWork(credentials, request, current, options).then(value => {
+                if (!active) return;
+                waitingWork = value.waitingWork; publish();
+            });
+        const price = current && options.readEnteredMonthlyPrice ? options.readEnteredMonthlyPrice().then(enteredMonthlyPrice => {
+            if (!active) return;
+            options.signal?.throwIfAborted(); options.assertCurrent?.();
+            current = openProviderAccountUsageRecordV4({ recordId: resolution.recordId, enteredMonthlyPrice,
+                accountMode: options.accountMode, material, record: QualifiedProviderAccountUsageRecordResponseV4Schema.parse(recordJson) });
+            publish();
+        }) : Promise.resolve();
+        try {
+            await Promise.all([(async () => {
+                let cursor = historyRequest.cursor;
+                let pageSize = historyRequest.pageSize;
+                do {
+                    const page = await requestProviderAccountUsageHistoryPage(credentials, { recordId: resolution.recordId,
+                        history: { range: historyRequest.range, pageSize, ...(cursor ? { cursor } : {}) } }, options);
+                    // A parallel read may have failed while this response was
+                    // pending. Its settled producer cannot open/publish another
+                    // page or acquire the next cursor.
+                    if (!active) return;
+                    if (!page) throw new ProviderAccountUsageReadErrorV1('provider_account_usage_content_unavailable');
+                    const opened = await openHistoryPageWithYield({ recordId: resolution.recordId, accountMode: options.accountMode, material, page }, options);
+                    if (!active) return;
+                    // Grow by the volume actually consumed, without a second result limit or truncation.
+                    pageSize += opened.entries.length;
+                    cursor = opened.nextCursor ?? undefined;
+                    publish(opened);
+                } while (cursor);
+            })(), pending, price]);
+            return project();
+        } finally { active = false; }
+    }
     const page = request.history && resolution ? await requestProviderAccountUsageHistoryPage(credentials, { recordId: resolution.recordId, history: request.history }, options) : null;
     if (request.history && resolution && !page) throw new ProviderAccountUsageReadErrorV1('provider_account_usage_content_unavailable');
-    const { nowMs, waitingWork } = await readProviderAccountUsageWaitingWork(credentials, request, current, options);
-    return projectProviderAccountUsageQuotaReadV1({ input: request, current, ...(request.history ? { history: page && resolution ? openProviderAccountUsageHistoryPageV4({ recordId: resolution.recordId, accountMode: options.accountMode, material, page }) : { entries: [], nextCursor: null } } : {}), nowMs, targets: options.targets, waitingWork });
+    const { nowMs, waitingWork } = options.includePendingWork === false
+        ? { nowMs: options.nowMs ?? Date.now(), waitingWork: undefined }
+        : await readProviderAccountUsageWaitingWork(credentials, request, current, options);
+    return projectProviderAccountUsageQuotaReadV1({ input: request, current, ...(request.history ? { history: page && resolution ? await openHistoryPageWithYield({ recordId: resolution.recordId, accountMode: options.accountMode, material, page }, options) : { entries: [], nextCursor: null } } : {}), nowMs, targets: options.targets, waitingWork });
+}
+
+async function openHistoryPageWithYield(input: Parameters<typeof openProviderAccountUsageHistoryPageV4>[0],
+    options: Pick<ProviderAccountUsageQuotaReadOptions, 'signal' | 'assertCurrent'>) {
+    const assertCurrent = () => { options.signal?.throwIfAborted(); options.assertCurrent?.(); };
+    const entries = await mapCryptoBatchWithYield(input.page.entries, entry => {
+        assertCurrent();
+        // Preserve the Protocol opener's record, mode, timestamp and page-entry
+        // validation. Schedule it through the incumbent crypto batch owner.
+        return openProviderAccountUsageHistoryPageV4({ ...input, page: { entries: [entry], nextCursor: null } }).entries[0]!;
+    });
+    assertCurrent();
+    return { entries, nextCursor: input.page.nextCursor };
 }
 
 async function readProviderAccountUsageWaitingWork(credentials: AuthCredentials, input: ConnectedServiceQuotaGetInputV1, current: ProviderAccountUsageSnapshotV1 | null, options: ProviderAccountUsageQuotaReadOptions): Promise<{ nowMs: number; waitingWork: ProviderAccountUsageWaitingWorkV1 }> {
@@ -80,7 +145,7 @@ async function readProviderAccountUsageWaitingWork(credentials: AuthCredentials,
         recordId: entry.reset.recordId, meterId: entry.reset.meterId,
         readiness: evaluatePendingResetStartReadinessV1({ reset: entry.reset, witness, current, nowMs, authorityCurrent: entry.authorityCurrent }),
     }));
-    return finish({ status: 'available', entries }, nowMs);
+    return finish({ status: 'available', entries, ...(parsed.data.unboundEntries ? { unboundEntries: parsed.data.unboundEntries } : {}) }, nowMs);
 }
 
 async function requestProviderAccountUsageJson(credentials: AuthCredentials, path: string, options: ProviderAccountUsageQuotaReadOptions): Promise<unknown | null> {
@@ -95,7 +160,10 @@ async function requestProviderAccountUsageJson(credentials: AuthCredentials, pat
     const json: unknown = await response.json();
     options.assertCurrent?.();
     if (response.status === 409 && QualifiedProviderAccountUsageReadErrorV4Schema.safeParse(json).success) throw new ProviderAccountUsageReadErrorV1('provider_account_usage_content_mode_mismatch');
-    if (!response.ok) throw new HappyError(extractErrorCode(json) ?? 'Provider account usage read failed', false, { status: response.status, kind: 'server' });
+    if (!response.ok) {
+        const code = extractErrorCode(json) ?? 'provider_account_usage_read_failed';
+        throw new HappyError(code, false, { status: response.status, kind: 'server', code });
+    }
     return json;
 }
 
@@ -107,7 +175,7 @@ async function requestProviderAccountUsageHistoryPage(credentials: AuthCredentia
 export async function getProviderAccountUsageHistoryWitness(credentials: AuthCredentials, input: Readonly<{ recordId: ProviderAccountUsageRecordId; witness: ProviderAccountUsageHistoryWitnessV1 }>, options: ProviderAccountUsageQuotaReadOptions) {
     const page = await requestProviderAccountUsageHistoryPage(credentials, input, options);
     if (!page) return null;
-    const opened = openProviderAccountUsageHistoryPageV4({ recordId: input.recordId, accountMode: options.accountMode, material: options.accountMode === 'e2ee' ? options.material ?? resolveAccountScopedCryptoMaterialFromCredentials(credentials) : undefined, page });
+    const opened = await openHistoryPageWithYield({ recordId: input.recordId, accountMode: options.accountMode, material: options.accountMode === 'e2ee' ? options.material ?? resolveAccountScopedCryptoMaterialFromCredentials(credentials) : undefined, page }, options);
     const entry = opened.entries.find(entry => entry.id === input.witness.id && entry.observedAtMs === input.witness.observedAtMs);
     if (!entry && opened.entries.length) throw new ProviderAccountUsageReadErrorV1('provider_account_usage_identity_mismatch');
     return entry?.snapshot ?? null;
@@ -240,11 +308,7 @@ export async function getProviderAccountUsageSnapshotPlain(
             return rejectContentModeMismatch(recordId);
         }
 
-        const snapshot = ProviderAccountUsageSnapshotV1Schema.safeParse(parsed.content.v);
-        if (!snapshot.success || snapshot.data.recordId !== recordId) {
-            throw new Error(`Invalid provider account usage response for ${recordId}`);
-        }
-        return snapshot.data;
+        return openProviderAccountUsageRecordV4({ recordId, accountMode: 'plain', record: parsed });
     });
 }
 

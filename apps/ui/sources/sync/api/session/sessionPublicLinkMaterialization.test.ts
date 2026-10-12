@@ -36,7 +36,7 @@ afterEach(() => {
 });
 
 describe.each(['plain', 'e2ee'] as const)('Session public-link physical materialization (%s)', mode => {
-    it('returns the complete link and sends only an independent lookup and wrapped key', async () => {
+    it('returns a link on the selected Home origin and sends only an independent lookup and wrapped key', async () => {
         const active = await upsertAndActivateServer({ serverUrl: 'https://active-material.example', name: 'Active' });
         await switchConnectionToActiveServer();
         const target = await upsertServerProfile({ serverUrl: 'https://target-material.example', name: 'Target' });
@@ -102,7 +102,7 @@ describe.each(['plain', 'e2ee'] as const)('Session public-link physical material
                 body = JSON.parse(String(init?.body));
                 if (posts === 1) throw new TypeError('Response lost after dispatch');
                 return new Response(JSON.stringify({publicShare:{id:'share',expiresAt:null,maxUses:null,useCount:0,
-                    isConsentRequired:false,updatedAt:2,keyDerivation:'fragment_v1'},isolatedOrigin:'https://public.example'}));
+                    isConsentRequired:false,updatedAt:2,keyDerivation:'fragment_v1'},viewerOrigin:'https://target-material.example'}));
             }
             throw new Error(`Unexpected boundary request ${path}`);
         });
@@ -120,7 +120,7 @@ describe.each(['plain', 'e2ee'] as const)('Session public-link physical material
         expect(body).not.toHaveProperty('sessionId');
         expect(body).not.toHaveProperty('token');
         expect(JSON.stringify(body)).not.toContain(issued[0]!.secret);
-        expect(result).toMatchObject({ url: `https://public.example/s/${issued[0]!.lookupId}#k=${issued[0]!.secret}` });
+        expect(result).toMatchObject({ url: `https://target-material.example/s/${issued[0]!.lookupId}#k=${issued[0]!.secret}` });
         if (mode === 'e2ee') {
             await expect(decryptDataKeyFromPublicShare(String(body!.encryptedDataKey),issued[0]!.secret)).resolves.toEqual(dataKey);
             await expect(decryptDataKeyFromPublicShare(String(body!.encryptedDataKey),issued[0]!.lookupId)).resolves.toBeNull();
@@ -134,7 +134,7 @@ describe.each(['plain', 'e2ee'] as const)('Session public-link physical material
         expect(posts).toBe(3);
         await expect(executeSessionAccessHttpAction({scope:{serverId:target.id,accountId:'target-account'},
             availability:'available',actionId:'session.public_link.create',input:{sessionId:'same',isConsentRequired:false},
-        })).resolves.toMatchObject({ url: expect.stringMatching(/^https:\/\/public.example\/s\/[^#]+#k=.+$/) });
+        })).resolves.toMatchObject({ url: expect.stringMatching(/^https:\/\/target-material.example\/s\/[^#]+#k=.+$/) });
         expect(posts).toBe(4);
         const actionResult = await createDefaultActionExecutor().execute('session.public_link.create',
             { sessionId: 'same', isConsentRequired: false }, {
@@ -142,7 +142,7 @@ describe.each(['plain', 'e2ee'] as const)('Session public-link physical material
                 actionCaller: { kind: 'host' }, presentUserConfirmation: { actionId: 'session.public_link.create' },
             });
         expect(actionResult, JSON.stringify(actionResult)).toMatchObject({ ok: true, result: {
-            id: 'share', url: expect.stringMatching(/^https:\/\/public.example\/s\/[^#]+#k=.+$/),
+            id: 'share', url: expect.stringMatching(/^https:\/\/target-material.example\/s\/[^#]+#k=.+$/),
         } });
         const callerUrl = new URL((actionResult as { result: { url: string } }).result.url);
         const callerSecret = new URLSearchParams(callerUrl.hash.slice(1)).get('k')!;

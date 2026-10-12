@@ -54,6 +54,23 @@ describe('apiPush', () => {
         ]);
     });
 
+    it('does not negotiate remote alerts from the predecessor tokens-only Home response', async () => {
+        const { fetchPushTokensRemoteAlertProjection } = await import('./apiPush');
+        // Current ../0.2 e087d15a pushRoutes.ts GET projection: no V2 marker,
+        // Account-policy binding or device remoteAlerts projection exists.
+        const predecessor = { tokens: [{ id: 'old-registration', token: 'ExponentPushToken[old]',
+            createdAt: 1, updatedAt: 2, clientServerUrl: null }] };
+        const request = vi.fn(async () => jsonResponse(predecessor));
+        await expect(fetchPushTokensRemoteAlertProjection(credentials, request)).resolves.toBeNull();
+        request.mockImplementation(async () => jsonResponse({ v: 2,
+            accountRemoteAlerts: { settingsVersion: 4, status: 'current' },
+            tokens: predecessor.tokens.map(row => ({ ...row, remoteAlerts: null })),
+        }));
+        await expect(fetchPushTokensRemoteAlertProjection(credentials, request)).resolves.toMatchObject({
+            v: 2, accountRemoteAlerts: { settingsVersion: 4, status: 'current' },
+        });
+    });
+
     it('fetchPushTokens throws a typed error on non-retryable 4xx', async () => {
         const { fetchPushTokens } = await import('./apiPush');
         mocks.serverFetch.mockResolvedValueOnce(jsonResponse({ error: 'invalid' }, 401));
