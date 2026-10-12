@@ -13,12 +13,12 @@ import { readTriageResponseHeaderV1 } from '@happier-dev/triage-protocol/v1';
 
 import {
   GITHUB_API_ORIGIN,
-  GITHUB_API_VERSION,
   GITHUB_CONNECTED_ACCOUNT_ID,
   GITHUB_CONNECTED_ACCOUNT_PURPOSE,
   GITHUB_CONNECTED_ACCOUNT_SERVICE,
   isGithubConnectedAccountRef,
 } from './githubProviderContracts.js';
+import { createGithubRequestHeaders } from './githubRequestHeaders.js';
 
 export type GithubApiResponseV1 = Readonly<{
   status: number;
@@ -173,13 +173,6 @@ export function readGithubContentCreationThrottleRetryAfterMs(
   return readGithubRetryAfterMs(facts.headers, nowMs) ?? GITHUB_RATE_LIMIT_FALLBACK_MS;
 }
 
-function withoutReservedGithubHeaders(headers: Readonly<Record<string, string>>): Readonly<Record<string, string>> {
-  const reserved = new Set(['accept', 'authorization', 'user-agent', 'x-github-api-version']);
-  return Object.freeze(Object.fromEntries(
-    Object.entries(headers).filter(([name]) => !reserved.has(name.toLowerCase())),
-  ));
-}
-
 /**
  * The only GitHub REST client used by the new Channels/Automation provider
  * vertical. It consumes the existing Connected Account owner exactly once and
@@ -245,13 +238,11 @@ function createGithubApiClientWithAuthorization(
     const response = await context.services.http.request({
       url: input.url,
       method: input.method ?? 'GET',
-      headers: {
-        ...withoutReservedGithubHeaders(input.headers ?? {}),
-        Accept: 'application/vnd.github+json',
-        Authorization: authorizationHeader,
-        'User-Agent': context.plugin.id,
-        'X-GitHub-Api-Version': GITHUB_API_VERSION,
-      },
+      headers: createGithubRequestHeaders({
+        authorization: authorizationHeader,
+        userAgent: context.plugin.id,
+        headers: input.headers,
+      }),
       ...(input.body === undefined ? {} : { body: input.body }),
       redirect: input.redirect,
     }, { signal: context.signal });

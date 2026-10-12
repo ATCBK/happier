@@ -329,7 +329,7 @@ describe('GitHub REST pull request adapter', () => {
       resolveToken: async () => ({ kind: 'available', token: 'redacted-test-token' }),
       fetcher: async () => jsonResponse({ message: 'API rate limit exceeded.' }, { status: 429 }),
     });
-    const error = await adapter.listPullRequests({ provider: githubProvider }).catch((error: unknown) => error);
+    const error = await adapter.listPullRequests({ provider: githubProvider, head: 'feature/throttled' }).catch((error: unknown) => error);
     expect(error).toMatchObject({ errorCode: 'REMOTE_RATE_LIMITED' });
     expect(error).not.toMatchObject({ retryNotBeforeMs: expect.any(Number) });
   });

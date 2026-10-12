@@ -6,7 +6,7 @@ import type {
 } from '@happier-dev/plugin-sdk/connected-accounts';
 import { readTriageResponseHeaderV1 } from '@happier-dev/triage-protocol/v1';
 
-import { GITHUB_API_VERSION } from '../observations/githubProviderContracts.js';
+import { createGithubRequestHeaders } from '../observations/githubRequestHeaders.js';
 
 const TOKEN_CREDENTIAL_KEY = 'token';
 const GITHUB_IDENTITY_URL = 'https://api.github.com/user';
@@ -84,11 +84,7 @@ async function confirmGithubIdentity(
     const response = await context.services.http.request({
       url: GITHUB_IDENTITY_URL,
       method: 'GET',
-      headers: {
-        Accept: 'application/vnd.github+json',
-        Authorization: `Bearer ${token}`,
-        'X-GitHub-Api-Version': GITHUB_API_VERSION,
-      },
+      headers: createGithubRequestHeaders({ authorization: `Bearer ${token}` }),
       redirect: 'error',
     }, { signal });
     if (response.status === 401) {

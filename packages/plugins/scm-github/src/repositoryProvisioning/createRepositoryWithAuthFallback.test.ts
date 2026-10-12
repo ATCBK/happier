@@ -70,7 +70,7 @@ describe('GitHub repository provisioning authority', () => {
       },
     }) });
     await expect(adapter.describeCloneTargets({ provider: githubProvider,
-      repository: { nameWithOwner: repository.nameWithOwner }, runtimeServices: ambient.runtimeServices }))
+      repository: { nameWithOwner: repository.nameWithOwner, visibility }, runtimeServices: ambient.runtimeServices }))
       .resolves.toMatchObject({ auth: { profileKind: 'connected_account', profileKey: 'github:work' },
         repository: { visibility } });
     expect(requests).toEqual([true]);
@@ -85,7 +85,7 @@ describe('GitHub repository provisioning authority', () => {
       resolveToken: async () => ({ kind: 'missing', reason: 'credential_unavailable' }), fetcher,
     }) });
     await expect(adapter.describeCloneTargets({ provider: githubProvider,
-      repository: { nameWithOwner: repository.nameWithOwner } }))
+      repository: { nameWithOwner: repository.nameWithOwner, visibility: 'public' } }))
       .rejects.toMatchObject({ errorCode: 'REMOTE_AUTH_REQUIRED' });
     expect(fetcher).not.toHaveBeenCalled();
   });
@@ -96,7 +96,7 @@ describe('GitHub repository provisioning authority', () => {
         clone_url: repository.cloneUrl, visibility: 'public' }), text: async () => '' }));
     const adapter = createGithubRepositoryProvisioningAdapter({ restAdapter: createGithubRepositoryRestAdapter({ fetcher }) });
     await expect(adapter.describeCloneTargets({ provider: githubProvider,
-      repository: { nameWithOwner: repository.nameWithOwner } }))
+      repository: { nameWithOwner: repository.nameWithOwner, visibility: 'public' } }))
       .rejects.toMatchObject({ errorCode: 'REMOTE_AUTH_REQUIRED' });
     expect(fetcher).not.toHaveBeenCalled();
   });
@@ -112,7 +112,7 @@ describe('GitHub repository provisioning authority', () => {
       },
     }) });
     await expect(adapter.describeCloneTargets({ provider: githubProvider,
-      repository: { nameWithOwner: repository.nameWithOwner } }))
+      repository: { nameWithOwner: repository.nameWithOwner, visibility: 'public' } }))
       .rejects.toMatchObject({ errorCode: 'REMOTE_AUTH_REQUIRED' });
     expect(requests).toEqual([true]);
   });

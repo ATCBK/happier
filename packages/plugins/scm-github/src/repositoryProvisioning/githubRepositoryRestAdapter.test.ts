@@ -1,5 +1,6 @@
 import type { ScmHostingProviderRef } from '@happier-dev/plugin-sdk/scm/hosting';
 import { describe, expect, it } from 'vitest';
+import * as mod from './githubRepositoryRestAdapter.js';
 
 const githubProvider: ScmHostingProviderRef = {
   id: 'scm.github',
@@ -32,10 +33,6 @@ function jsonResponse(body: unknown, init?: Readonly<{
 
 describe('GitHub REST repository provisioning adapter', () => {
   it('lists REST publish targets for authenticated principals', async () => {
-    const mod = await import('./githubRepositoryRestAdapter.js').catch(() => null);
-    expect(mod).not.toBeNull();
-    if (!mod) return;
-
     const requests: Array<Readonly<{ url: string; init?: RequestInit }>> = [];
     const adapter = mod.createGithubRepositoryRestAdapter({
       resolveToken: async () => ({ kind: 'available', token: 'redacted-test-token', profileKey: 'github:work' }),
@@ -88,10 +85,6 @@ describe('GitHub REST repository provisioning adapter', () => {
   });
 
   it('uses operation-scoped runtime token materialization when constructor token resolver is absent', async () => {
-    const mod = await import('./githubRepositoryRestAdapter.js').catch(() => null);
-    expect(mod).not.toBeNull();
-    if (!mod) return;
-
     const requests: Array<Readonly<{ url: string; init?: RequestInit }>> = [];
     const adapter = mod.createGithubRepositoryRestAdapter({
       fetcher: async (url: string, init?: RequestInit) => {
@@ -125,8 +118,7 @@ describe('GitHub REST repository provisioning adapter', () => {
   });
 
   it('identifies anonymous public-repository clone reads without fabricating authorization', async () => {
-    const { createGithubRepositoryRestAdapter } = await import('./githubRepositoryRestAdapter.js');
-    const adapter = createGithubRepositoryRestAdapter({
+    const adapter = mod.createGithubRepositoryRestAdapter({
       resolveToken: async () => ({ kind: 'missing', reason: 'account_unbound' }),
       fetcher: async (_url, init) => {
         const headers = new Headers(init?.headers);
@@ -154,10 +146,6 @@ describe('GitHub REST repository provisioning adapter', () => {
   });
 
   it('creates repositories through REST owner endpoints', async () => {
-    const mod = await import('./githubRepositoryRestAdapter.js').catch(() => null);
-    expect(mod).not.toBeNull();
-    if (!mod) return;
-
     const requests: Array<Readonly<{ url: string; init?: RequestInit }>> = [];
     const adapter = mod.createGithubRepositoryRestAdapter({
       resolveToken: async () => ({ kind: 'available', token: 'redacted-test-token' }),
@@ -199,10 +187,6 @@ describe('GitHub REST repository provisioning adapter', () => {
   });
 
   it('returns null for missing REST repositories', async () => {
-    const mod = await import('./githubRepositoryRestAdapter.js').catch(() => null);
-    expect(mod).not.toBeNull();
-    if (!mod) return;
-
     const adapter = mod.createGithubRepositoryRestAdapter({
       resolveToken: async () => ({ kind: 'available', token: 'redacted-test-token' }),
       fetcher: async () => jsonResponse({ message: 'not found' }, { status: 404, statusText: 'Not Found' }),
@@ -216,10 +200,6 @@ describe('GitHub REST repository provisioning adapter', () => {
   });
 
   it('maps REST forbidden responses to remote rejection instead of authentication required', async () => {
-    const mod = await import('./githubRepositoryRestAdapter.js').catch(() => null);
-    expect(mod).not.toBeNull();
-    if (!mod) return;
-
     const adapter = mod.createGithubRepositoryRestAdapter({
       resolveToken: async () => ({ kind: 'available', token: 'redacted-test-token' }),
       fetcher: async () => jsonResponse({ message: 'Resource not accessible by token' }, { status: 403, statusText: 'Forbidden' }),
@@ -237,10 +217,6 @@ describe('GitHub REST repository provisioning adapter', () => {
   });
 
   it('maps REST already-exists validation responses to remote already exists', async () => {
-    const mod = await import('./githubRepositoryRestAdapter.js').catch(() => null);
-    expect(mod).not.toBeNull();
-    if (!mod) return;
-
     const adapter = mod.createGithubRepositoryRestAdapter({
       resolveToken: async () => ({ kind: 'available', token: 'redacted-test-token' }),
       fetcher: async () => jsonResponse({
@@ -268,10 +244,6 @@ describe('GitHub REST repository provisioning adapter', () => {
   });
 
   it('uses Enterprise REST API base with host-eligible tokens', async () => {
-    const mod = await import('./githubRepositoryRestAdapter.js').catch(() => null);
-    expect(mod).not.toBeNull();
-    if (!mod) return;
-
     const requests: string[] = [];
     const adapter = mod.createGithubRepositoryRestAdapter({
       resolveToken: async ({ host }: Readonly<{ host: string }>) => (
@@ -306,10 +278,6 @@ describe('GitHub REST repository provisioning adapter', () => {
   });
 
   it('rejects Enterprise REST base URLs with path components', async () => {
-    const mod = await import('./githubRepositoryRestAdapter.js').catch(() => null);
-    expect(mod).not.toBeNull();
-    if (!mod) return;
-
     const adapter = mod.createGithubRepositoryRestAdapter({
       resolveToken: async () => ({ kind: 'available', token: 'enterprise-redacted-test-token' }),
       fetcher: async () => jsonResponse({}),
@@ -328,10 +296,6 @@ describe('GitHub REST repository provisioning adapter', () => {
   });
 
   it('classifies a throttled GitHub 403 as a retryable backend limit, not a remote rejection', async () => {
-    const mod = await import('./githubRepositoryRestAdapter.js').catch(() => null);
-    expect(mod).not.toBeNull();
-    if (!mod) return;
-
     const adapter = mod.createGithubRepositoryRestAdapter({
       resolveToken: async () => ({ kind: 'available', token: 'redacted-test-token' }),
       fetcher: async () => jsonResponse({ message: 'API rate limit exceeded for user ID 1.' }, {
@@ -357,10 +321,6 @@ describe('GitHub REST repository provisioning adapter', () => {
   });
 
   it('classifies a secondary-limit GitHub 403 with a Retry-After instruction as a backend limit', async () => {
-    const mod = await import('./githubRepositoryRestAdapter.js').catch(() => null);
-    expect(mod).not.toBeNull();
-    if (!mod) return;
-
     const adapter = mod.createGithubRepositoryRestAdapter({
       resolveToken: async () => ({ kind: 'available', token: 'redacted-test-token' }),
       fetcher: async () => jsonResponse({
@@ -383,10 +343,6 @@ describe('GitHub REST repository provisioning adapter', () => {
   });
 
   it('treats a GitHub 410 as an unreachable repository rather than a generic command failure', async () => {
-    const mod = await import('./githubRepositoryRestAdapter.js').catch(() => null);
-    expect(mod).not.toBeNull();
-    if (!mod) return;
-
     const adapter = mod.createGithubRepositoryRestAdapter({
       resolveToken: async () => ({ kind: 'available', token: 'redacted-test-token' }),
       fetcher: async () => jsonResponse({ message: 'gone' }, { status: 410, statusText: 'Gone' }),

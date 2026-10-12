@@ -17,7 +17,7 @@ import type {
 } from '@happier-dev/plugin-sdk/scm';
 import { requestForgeJson as requestScmForgeJson } from '@happier-dev/plugin-sdk/scm/hosting';
 
-import { GITHUB_API_VERSION } from '../observations/githubProviderContracts.js';
+import { createGithubRequestHeaders } from '../observations/githubRequestHeaders.js';
 import { readGithubDecodedResponseFacts, readGithubRetryAfterMs } from '../observations/githubApiClient.js';
 import {
   classifyGithubResponseFacts,
@@ -160,11 +160,7 @@ function mapGithubRestState(state: ScmPullRequestState | undefined): string {
 }
 
 function buildHeaders(token: string): Record<string, string> {
-  return {
-    Accept: 'application/vnd.github+json',
-    Authorization: `Bearer ${token}`,
-    'X-GitHub-Api-Version': GITHUB_API_VERSION,
-  };
+  return createGithubRequestHeaders({ authorization: `Bearer ${token}` });
 }
 
 async function resolveToken(
