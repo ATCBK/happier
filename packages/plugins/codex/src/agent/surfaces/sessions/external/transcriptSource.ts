@@ -118,34 +118,34 @@ async function readCodexExternalTranscriptProjection(params: Readonly<{
     let semanticTracker = createCodexRolloutSemanticTracker();
     while (true) {
       throwIfCodexExternalSessionInvocationStopped(params);
-      // Every JSONL record occupies at least one byte. The existing file-byte
-      // bound also bounds its record count, so decode the read once rather than
-      // reading the remaining file again for each individual record.
-      const page = await readJsonlFileForwardLines({ filePath: stream.filePath, offsetBytes, maxBytes, maxItems: maxBytes, fileSystem });
+      // Project while the canonical scanner reads, retaining identities and
+      // possible snippets instead of every decoded source body. Rollbacks still
+      // select the complete native projection before a hit is published.
+      const page = await readJsonlFileForwardLines({
+        filePath: stream.filePath, offsetBytes, maxBytes, maxItems: maxBytes, fileSystem,
+        onLine(line) {
+          throwIfCodexExternalSessionInvocationStopped(params);
+          const count = readCodexExternalRollbackCount(line.value);
+          if (count !== undefined) {
+            if (count === null) { partial = true; return; }
+            rows.push({ startOffsetBytes: line.startOffsetBytes, records: [], hasUser: false, rollbackCount: count });
+            if (count > 0) semanticTracker = createCodexRolloutSemanticTracker();
+            return;
+          }
+          const projected = projectLine({ stream, lineStartOffsetBytes: line.startOffsetBytes, lineEndOffsetBytes: line.endOffsetBytes, lineValue: line.value, semanticTracker });
+          partial ||= projected.unsupportedRecord;
+          rows.push({ startOffsetBytes: line.startOffsetBytes, hasUser: projected.records.some((record) => record.item.raw.role === 'user'), records: projected.records.map(({ item }) => {
+            const content = item.raw.content;
+            const text = isTranscriptObject(content)
+              ? content.type === 'text' && typeof content.text === 'string' ? content.text
+                : content.type === 'codex' && 'data' in content && isTranscriptObject(content.data) && content.data.type === 'message' && typeof content.data.message === 'string' ? content.data.message : null
+              : null;
+            const snippet = params.matchText && text !== null ? params.matchText(text) : null;
+            return { id: item.id, createdAtMs: item.createdAtMs, ...(snippet !== null ? { snippet } : {}) };
+          }), rollbackCount: undefined });
+        },
+      });
       partial ||= page.truncated || Boolean(page.diagnostics?.length);
-      for (const line of page.items) {
-        throwIfCodexExternalSessionInvocationStopped(params);
-        const count = readCodexExternalRollbackCount(line.value);
-        if (count !== undefined) {
-          // Codex protocol ThreadRolledBackEvent.num_turns names removed user
-          // turns; replay it before external paging, import and content search.
-          if (count === null) { partial = true; continue; }
-          rows.push({ startOffsetBytes: line.startOffsetBytes, records: [], hasUser: false, rollbackCount: count });
-          if (count > 0) semanticTracker = createCodexRolloutSemanticTracker();
-          continue;
-        }
-        const projected = projectLine({ stream, lineStartOffsetBytes: line.startOffsetBytes, lineEndOffsetBytes: line.endOffsetBytes, lineValue: line.value, semanticTracker });
-        partial ||= projected.unsupportedRecord;
-        rows.push({ startOffsetBytes: line.startOffsetBytes, hasUser: projected.records.some((record) => record.item.raw.role === 'user'), records: projected.records.map(({ item }) => {
-          const content = item.raw.content;
-          const text = isTranscriptObject(content)
-            ? content.type === 'text' && typeof content.text === 'string' ? content.text
-              : content.type === 'codex' && 'data' in content && isTranscriptObject(content.data) && content.data.type === 'message' && typeof content.data.message === 'string' ? content.data.message : null
-            : null;
-          const snippet = params.matchText && text !== null ? params.matchText(text) : null;
-          return { id: item.id, createdAtMs: item.createdAtMs, ...(snippet !== null ? { snippet } : {}) };
-        }), rollbackCount: undefined });
-      }
       if (page.reachedEnd) break;
       if (page.nextOffsetBytes <= offsetBytes) { partial = true; break; }
       offsetBytes = page.nextOffsetBytes;
@@ -169,12 +169,14 @@ export async function searchCodexExternalTranscript(params: Readonly<{
   remoteSessionId: string;
   query: string;
   ripgrep: AgentExternalSessionsInvocation['ripgrep'];
+  files?: readonly CodexRolloutFile[];
 }> & CodexExternalSessionInvocationBounds): Promise<Readonly<{
   match?: { snippet: string; sourceItemId: string; messageIndex: number };
   partial: boolean;
   unsearchable: boolean;
 }>> {
-  const { streams } = await resolveTranscriptStreams(params);
+  const files = params.files ?? (await resolveBestHomeWithFiles(params))?.files ?? [];
+  const streams = collectTranscriptStreams({ rootSessionId: params.remoteSessionId, rootFamilyFiles: files });
   if (streams.length === 0) return { partial: true, unsearchable: true };
   // A multi-stream transcript has one semantic order; decode all its streams
   // once any stream matches so source ordinals and normalization stay correct.
@@ -757,13 +759,15 @@ function collectTranscriptStreams(params: Readonly<{
   );
 }
 
-async function resolveBestHomeWithFiles(params: Readonly<{
+async function resolveBestHomesWithFiles(params: Readonly<{
   source: CodexExternalSessionSource;
   activeServerDir?: string;
   env: NodeJS.ProcessEnv;
-  remoteSessionId: string;
-}> & CodexExternalSessionInvocationBounds): Promise<BestCodexHomeWithFiles | null> {
+  remoteSessionIds: readonly string[];
+}> & CodexExternalSessionInvocationBounds): Promise<ReadonlyMap<string, BestCodexHomeWithFiles>> {
   throwIfCodexExternalSessionInvocationStopped(params);
+  const bestById = new Map<string, BestCodexHomeWithFiles>();
+  if (params.remoteSessionIds.length === 0) return bestById;
   const entries = await resolveHomeEntries({
     source: params.source,
     activeServerDir: params.activeServerDir,
@@ -773,27 +777,47 @@ async function resolveBestHomeWithFiles(params: Readonly<{
     onProgress: params.onProgress,
   });
   throwIfCodexExternalSessionInvocationStopped(params);
-  let best: BestCodexHomeWithFiles | null = null;
-  let bestLatestMtimeMs = -1;
+  const bestLatestMtimeById = new Map<string, number>();
   for (const entry of entries) {
     throwIfCodexExternalSessionInvocationStopped(params);
     const inventory = await inventoryCodexRootSessionRolloutFiles({
       codexHome: entry.codexHome,
-      remoteSessionIds: [params.remoteSessionId],
+      remoteSessionIds: params.remoteSessionIds,
       signal: params.signal ?? new AbortController().signal,
       deadlineAtMs: params.deadlineAtMs,
       onProgress: params.onProgress,
     });
     throwIfCodexExternalSessionInvocationStopped(params);
-    const files = inventory.requested[0]?.files ?? [];
-    if (files.length === 0) continue;
-    const latestMtimeMs = Math.max(...files.map((file) => file.mtimeMs));
-    if (latestMtimeMs > bestLatestMtimeMs) {
-      bestLatestMtimeMs = latestMtimeMs;
-      best = { codexHome: entry.codexHome, source: entry.source, files };
+    for (const { remoteSessionId, files } of inventory.requested) {
+      if (files.length === 0) continue;
+      const latestMtimeMs = Math.max(...files.map((file) => file.mtimeMs));
+      if (latestMtimeMs > (bestLatestMtimeById.get(remoteSessionId) ?? -1)) {
+        bestLatestMtimeById.set(remoteSessionId, latestMtimeMs);
+        bestById.set(remoteSessionId, { codexHome: entry.codexHome, source: entry.source, files });
+      }
     }
   }
-  return best;
+  return bestById;
+}
+
+async function resolveBestHomeWithFiles(params: Readonly<{
+  source: CodexExternalSessionSource;
+  activeServerDir?: string;
+  env: NodeJS.ProcessEnv;
+  remoteSessionId: string;
+}> & CodexExternalSessionInvocationBounds): Promise<BestCodexHomeWithFiles | null> {
+  return (await resolveBestHomesWithFiles({ ...params, remoteSessionIds: [params.remoteSessionId] })).get(params.remoteSessionId) ?? null;
+}
+
+/** One canonical root-family inventory shared by the selected content page. */
+export async function resolveCodexExternalTranscriptFiles(params: Readonly<{
+  source: CodexExternalSessionSource;
+  activeServerDir?: string;
+  env: NodeJS.ProcessEnv;
+  remoteSessionIds: readonly string[];
+}> & CodexExternalSessionInvocationBounds): Promise<ReadonlyMap<string, readonly CodexRolloutFile[]>> {
+  const homes = await resolveBestHomesWithFiles(params);
+  return new Map([...homes].map(([remoteSessionId, home]) => [remoteSessionId, home.files]));
 }
 
 async function resolveCodexExternalSessionAppServerMetadata(params: Readonly<{

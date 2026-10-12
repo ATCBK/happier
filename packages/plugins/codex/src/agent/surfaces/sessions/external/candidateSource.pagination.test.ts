@@ -26,7 +26,7 @@ const appServerProbe = vi.hoisted(() => ({
 const rolloutFsProbe = vi.hoisted(() => ({
   statPaths: [] as string[],
   onStat: null as (() => void) | null,
-  onOpen: null as (() => void) | null,
+  onOpen: null as ((filePath: unknown) => void) | null,
 }));
 
 // The Codex native app-server is a spawned provider process reached over JSON-RPC:
@@ -77,7 +77,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     ...actual,
     open: async (...args: Parameters<typeof actual.open>) => {
       const handle = await actual.open(...args);
-      rolloutFsProbe.onOpen?.();
+      rolloutFsProbe.onOpen?.(args[0]);
       return handle;
     },
     stat: async (...args: Parameters<typeof actual.stat>) => {
@@ -96,6 +96,86 @@ import { pageCodexExternalSessionTranscript } from './transcriptSource.js';
 import { createCodexExternalSessionsContribution } from './contribution.js';
 
 describe('Codex candidate conversation search', () => {
+  it('shares canonical root-family discovery across the content page so every hit fits the host deadline', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'codex-content-family-work-'));
+    try {
+      const sessions = join(root, 'sessions', '2026', '07', '23');
+      await mkdir(sessions, { recursive: true });
+      const ids = Array.from({ length: 12 }, (_, index) => `aaaaaaaa-1111-1111-1111-${String(index).padStart(12, '0')}`);
+      const unrelated = new Set<string>();
+      await Promise.all(ids.map(async (id, index) => {
+        const path = join(sessions, `rollout-2026-07-23T10-00-${String(index).padStart(2, '0')}-${id}.jsonl`);
+        if (index < 10) unrelated.add(path);
+        await writeFile(path, [
+          { type: 'session_meta', payload: { id, cwd: '/repo' } },
+          { type: 'event_msg', payload: { type: 'agent_message', message: 'family inventory needle' } },
+        ].map((row) => JSON.stringify(row)).join('\n') + '\n');
+        await utimes(path, new Date(1000 + index), new Date(1000 + index));
+      }));
+      let nowMs = 1000;
+      vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
+      // Opening unrelated metadata is genuine discovery cost. Repeating the
+      // whole home for the second hit exhausts this same invocation budget.
+      rolloutFsProbe.onOpen = (path) => { if (typeof path === 'string' && unrelated.has(path)) nowMs += 1000; };
+      const deadlineAtMs = nowMs + 15000;
+      const contribution = createCodexExternalSessionsContribution({ env: { CODEX_HOME: root } });
+      const result = await contribution.listCandidates({
+        source: { kind: 'codexHome', home: 'user', homePath: root },
+        searchTarget: 'content', searchTerm: 'family inventory needle', maxItems: 2,
+        signal: new AbortController().signal, deadlineAtMs, exec: {} as ExecService,
+        ripgrep: { run: async ({ paths }) => ({ stdout: paths.join('\0') + '\0', stderr: '', exitCode: 0 }) },
+      });
+      expect(result).toMatchObject({ ok: true });
+      if (!result.ok) throw new Error(`${result.code}: ${result.message}`);
+      expect(result.value.candidates.map((candidate) => candidate.remoteSessionId).sort()).toEqual([ids[10], ids[11]]);
+      expect(result.value.candidates.every((candidate) => candidate.match?.snippet === 'family inventory needle')).toBe(true);
+      expect(nowMs).toBeLessThan(deadlineAtMs);
+      expect(result.value.nextCursor).toEqual(expect.any(String));
+    } finally {
+      rolloutFsProbe.onOpen = null;
+      vi.restoreAllMocks();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('returns a title-search window within the requested page work budget', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'codex-search-page-work-'));
+    try {
+      const sessions = join(root, 'sessions', '2026', '07', '23');
+      await mkdir(sessions, { recursive: true });
+      const ids = Array.from({ length: 12 }, (_, index) => `aaaaaaaa-1111-1111-1111-${String(index).padStart(12, '0')}`);
+      await Promise.all(ids.map(async (id, index) => {
+        const path = join(sessions, `rollout-2026-07-23T10-00-${String(index).padStart(2, '0')}-${id}.jsonl`);
+        await writeFile(path, [
+          { type: 'session_meta', payload: { id, cwd: '/repo' } },
+          { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: `searched window needle ${index}` }] } },
+        ].map((row) => JSON.stringify(row)).join('\n') + '\n');
+      }));
+      let nowMs = 1000;
+      vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
+      // The filesystem clock models expensive title heads. Discovery of rows
+      // outside the requested page must not consume the host invocation.
+      rolloutFsProbe.onOpen = () => { nowMs += 50; };
+      const deadlineAtMs = nowMs + 1000;
+      const contribution = createCodexExternalSessionsContribution({ env: { CODEX_HOME: root } });
+      const result = await contribution.listCandidates({
+        source: { kind: 'codexHome', home: 'user', homePath: root },
+        searchTerm: 'searched window needle', searchMode: 'fast', maxItems: 2,
+        signal: new AbortController().signal, deadlineAtMs, exec: {} as ExecService,
+        ripgrep: { run: async () => ({ stdout: '', stderr: '', exitCode: 1 }) },
+      });
+      expect(result).toMatchObject({ ok: true });
+      if (!result.ok) throw new Error(`${result.code}: ${result.message}`);
+      expect(nowMs).toBeLessThan(deadlineAtMs);
+      expect(result.value.nextCursor).toEqual(expect.any(String));
+      expect(result.value.candidates).toHaveLength(2);
+    } finally {
+      rolloutFsProbe.onOpen = null;
+      vi.restoreAllMocks();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('yields during first-page discovery and resumes the unfinished source within the host budget', async () => {
     const root = await mkdtemp(join(tmpdir(), 'codex-content-discovery-deadline-'));
     try {

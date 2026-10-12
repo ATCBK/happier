@@ -3,7 +3,7 @@ import {
 } from '@happier-dev/plugin-sdk/sessions/external';
 import type { ExecService } from '@happier-dev/plugin-sdk/exec';
 import type { AgentExternalSessionsInvocation } from '@happier-dev/plugin-sdk/sessions/external';
-import { searchCodexExternalTranscript } from './transcriptSource.js';
+import { resolveCodexExternalTranscriptFiles, searchCodexExternalTranscript } from './transcriptSource.js';
 import { raceWithTimeout } from '@happier-dev/plugin-sdk/async';
 import { findExternalSessionContentMatchRange } from '@happier-dev/protocol/sessions/external/contentSearchMatch';
 import { createExternalSessionContentSearchControl, ExternalSessionContentSearchYield } from '@happier-dev/plugin-sdk/sessions/file-stores';
@@ -520,6 +520,7 @@ async function listRolloutCandidateOrdering(params: Readonly<{
   searchTerm?: string;
   searchMode?: 'fast' | 'full';
   searchTarget?: 'metadata' | 'content';
+  limit: number;
   scan: CodexExternalSessionRolloutScanState;
 }> & CodexExternalSessionInvocationBounds): Promise<Readonly<{
   rows: CodexMergedOrderingRow[];
@@ -589,10 +590,14 @@ async function listRolloutCandidateOrdering(params: Readonly<{
     source: params.source,
     activeServerDir: params.activeServerDir,
     env: params.env,
-    limit: resolveCodexRolloutSearchCandidateLimit({
+    // The host's requested page is the work window too. Hydrating the entire
+    // configured search window before selecting a small page can consume the
+    // invocation on rows this response cannot serve. The scan cursor continues
+    // remaining rows, including a window whose title filter finds no match.
+    limit: Math.min(params.limit, resolveCodexRolloutSearchCandidateLimit({
       env: params.env,
       searchMode: params.searchMode,
-    }),
+    })),
     after,
     signal: params.signal,
     deadlineAtMs: params.deadlineAtMs,
@@ -936,7 +941,10 @@ function selectBoundedCodexMergedCandidatePage(params: Readonly<{
     emittedIds.add(next.row.remoteSessionId);
     if (next.stream !== 'rollout') {
       const rolloutIndex = rolloutIndexesById.get(next.row.remoteSessionId);
-      if (rolloutIndex !== undefined && rolloutIndex >= rolloutOffset) {
+      if (
+        (rolloutIndex !== undefined && rolloutIndex >= rolloutOffset)
+        || (rolloutIndex === undefined && params.rolloutScan.nextBoundary !== null)
+      ) {
         suppressedRolloutIds.add(next.row.remoteSessionId);
       }
     }
@@ -1053,6 +1061,7 @@ export async function listCodexSessionCandidates(input: Readonly<{
       searchTerm,
       searchMode: params.searchMode,
       searchTarget: params.searchTarget,
+      limit,
       scan: cursor.rolloutScan,
       signal: params.signal,
       deadlineAtMs: params.deadlineAtMs,
@@ -1155,6 +1164,7 @@ export async function listCodexSessionCandidates(input: Readonly<{
     let contentPartial = page.hasMore || appServerListing.incomplete;
     if (search.target === 'content' && params.ripgrep) {
       candidates = [];
+      const filesById = await resolveCodexExternalTranscriptFiles({ ...params, remoteSessionIds: page.rows.map((row) => row.remoteSessionId) });
       let processedRows = 0;
       let longestRowMs = 0;
       for (const row of page.rows) {
@@ -1167,7 +1177,7 @@ export async function listCodexSessionCandidates(input: Readonly<{
           throwIfCodexExternalSessionInvocationStopped(params);
           const built = await buildCodexMergedOrderingPage([row], params);
           for (const candidate of built) {
-            const result = await searchCodexExternalTranscript({ ...params, remoteSessionId: candidate.remoteSessionId, query: searchTerm, ripgrep: params.ripgrep });
+            const result = await searchCodexExternalTranscript({ ...params, remoteSessionId: candidate.remoteSessionId, query: searchTerm, ripgrep: params.ripgrep, files: filesById.get(candidate.remoteSessionId) ?? [] });
             contentPartial ||= result.partial || result.unsearchable;
             if (result.match) candidates.push({ ...candidate, match: result.match });
             else if (result.unsearchable) candidates.push(candidate);
