@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { lstat, mkdir, mkdtemp, rm, symlink, utimes, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -11,8 +11,19 @@ import { createOneBitGrayscalePng } from '@/testkit/media/pngFixtures';
 
 import {
   createComposerMediaStageStore,
+  readStorageComposerMediaStageFacts,
   runComposerMediaStageStartupMaintenance,
 } from './composerMediaStageStore';
+
+const filesystemFault = vi.hoisted(() => ({ removePath: '' }));
+// Model an interrupted OS deletion; stage parsing, claiming and release remain real.
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, rm: async (...args: Parameters<typeof actual.rm>) => {
+    if (args[0] === filesystemFault.removePath) throw new Error('OS deletion interrupted');
+    return actual.rm(...args);
+  } };
+});
 
 const executionTarget = { serverId: 'server-current', machineId: 'machine-current' } as const;
 const owner = { pluginId: 'com.example.media', localId: 'composer' } as const;
@@ -29,9 +40,41 @@ describe('Composer media stage store', () => {
   const tempDirectories: string[] = [];
 
   afterEach(async () => {
+    filesystemFault.removePath = '';
     await Promise.all(tempDirectories.splice(0).map(async (directory) => {
       await rm(directory, { recursive: true, force: true });
     }));
+  });
+
+  it('projects only producer claims and release markers as temporary lifecycle facts', async () => {
+    const activeServerDir = await realpath(await mkdtemp(join(tmpdir(), 'happier-stage-storage-facts-')));
+    tempDirectories.push(activeServerDir);
+    const rootDirectory = join(activeServerDir, 'composer-media-stages');
+    const store = createComposerMediaStageStore({ rootDirectory, executionTarget });
+    const bytes = createOneBitGrayscalePng(16, 16);
+    const tempPath = join(activeServerDir, 'incoming.png');
+    await writeFile(tempPath, bytes);
+    const upload = { tempPath, sizeBytes: bytes.length, sha256: sha256(bytes), executionTarget, owner,
+      mediaKind: 'image', mimeType: 'image/png', name: 'draft.png' } as const;
+    const first = await store.finalizeUpload(upload);
+    const second = await store.finalizeUpload(upload);
+    if (!first.success || !second.success) throw new Error('Fixture stage finalization failed');
+    const firstPath = join(rootDirectory, 'completed', first.handle.id);
+    const secondPath = join(rootDirectory, 'completed', second.handle.id);
+    expect(await readStorageComposerMediaStageFacts({ activeServerDir })).toEqual(expect.arrayContaining([
+      { path: firstPath, state: 'unknown' }, { path: secondPath, state: 'unknown' },
+    ]));
+    const claimant = { composer: { kind: 'session', sessionId: 'session-a' }, attachmentInstanceId: 'attachment-a' } as const;
+    expect(await store.claim({ handle: first.handle, executionTarget, owner, claimant })).toMatchObject({ status: 'claimed' });
+    filesystemFault.removePath = secondPath;
+    expect(await store.release({ handle: second.handle, executionTarget, owner })).toEqual({ status: 'released' });
+    await writeFile(join(secondPath, 'claim.json'), JSON.stringify({ unattachedRelease: true, retiredField: true }));
+    expect(await readStorageComposerMediaStageFacts({ activeServerDir })).toEqual(expect.arrayContaining([
+      { path: firstPath, state: 'in_use' }, { path: secondPath, state: 'closed' },
+    ]));
+    filesystemFault.removePath = '';
+    expect(await store.release({ handle: first.handle, executionTarget, owner, claimant })).toEqual({ status: 'released' });
+    expect(await readStorageComposerMediaStageFacts({ activeServerDir })).not.toContainEqual(expect.objectContaining({ path: firstPath }));
   });
 
   it('atomically finalizes a verified stage that a restarted store can inspect without exposing a source path', async () => {
@@ -69,6 +112,12 @@ describe('Composer media stage store', () => {
       sha256: sha256(bytes),
     });
     expect(JSON.stringify(finalized.handle)).not.toContain(sourcePath);
+
+    const manifestPath = join(tempDirectory, 'stages', 'completed', finalized.handle.id, 'manifest.json');
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, unknown>;
+    await writeFile(manifestPath, JSON.stringify({ ...manifest, retiredField: true,
+      handle: { ...finalized.handle, retiredField: true,
+        owner: { ...owner, retiredField: true }, executionTarget: { ...executionTarget, retiredField: true } } }));
 
     const restartedStore = createComposerMediaStageStore({
       rootDirectory: join(tempDirectory, 'stages'),
@@ -159,6 +208,9 @@ describe('Composer media stage store', () => {
       { status: 'claimed', newlyAcquired: true },
       { status: 'claimed', newlyAcquired: false },
     ]));
+    await writeFile(join(rootDirectory, 'completed', finalized.handle.id, 'claim.json'), JSON.stringify({
+      ...claimant, retiredField: true, composer: { ...composer, retiredField: true },
+    }));
     await expect(restartedStore.claim({
       handle: finalized.handle,
       executionTarget,

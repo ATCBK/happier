@@ -104,22 +104,52 @@ export async function uploadComposerMediaStageViaLocalRpc(input: Readonly<{
   sha256: string;
   signal?: AbortSignal;
 }>): Promise<ComposerMediaStageUploadCarrierResult> {
+  const uploaded = await uploadBytesViaLocalRpc({
+    rpc: input.rpc,
+    bytes: input.bytes,
+    initRequest: {
+      t: 'composer_media_stage_upload_v1',
+      executionTarget: input.executionTarget,
+      owner: input.owner,
+      mediaKind: input.mediaKind,
+      mimeType: input.mimeType,
+      name: input.name,
+      sizeBytes: input.bytes.byteLength,
+      sha256: input.sha256,
+    },
+    ...(input.signal ? { signal: input.signal } : {}),
+  });
+  if (!uploaded.success) return uploaded;
+  const handle = readFinalizedHandle({
+    response: uploaded.response,
+    executionTarget: input.executionTarget,
+    owner: input.owner,
+    mediaKind: input.mediaKind,
+    mimeType: input.mimeType,
+    name: input.name,
+    sizeBytes: input.bytes.byteLength,
+    sha256: input.sha256,
+  });
+  return handle ? { success: true, handle } : { success: false, code: 'invalid_response' };
+}
+
+/** Shared local carrier; target handlers alone own upload state and destinations. */
+export async function uploadBytesViaLocalRpc(input: Readonly<{
+  rpc: RpcHandlerInvoker;
+  bytes: Uint8Array;
+  initRequest: unknown;
+  signal?: AbortSignal;
+}>): Promise<
+  | Readonly<{ success: true; response: unknown }>
+  | Readonly<{ success: false; code: 'aborted' | 'transfer_failed' | 'invalid_response' }>
+> {
   if (input.signal?.aborted) return { success: false, code: 'aborted' };
 
   let uploadId: string | null = null;
   try {
     const init = await input.rpc.invokeLocal(
       RPC_METHODS.DAEMON_TRANSFER_UPLOAD_INIT,
-      {
-        t: 'composer_media_stage_upload_v1',
-        executionTarget: input.executionTarget,
-        owner: input.owner,
-        mediaKind: input.mediaKind,
-        mimeType: input.mimeType,
-        name: input.name,
-        sizeBytes: input.bytes.byteLength,
-        sha256: input.sha256,
-      },
+      input.initRequest,
       input.signal ? { signal: input.signal } : undefined,
     );
     if (input.signal?.aborted) return { success: false, code: 'aborted' };
@@ -159,19 +189,9 @@ export async function uploadComposerMediaStageViaLocalRpc(input: Readonly<{
       input.signal ? { signal: input.signal } : undefined,
     );
     if (input.signal?.aborted) return { success: false, code: 'aborted' };
-    const handle = readFinalizedHandle({
-      response: finalized,
-      executionTarget: input.executionTarget,
-      owner: input.owner,
-      mediaKind: input.mediaKind,
-      mimeType: input.mimeType,
-      name: input.name,
-      sizeBytes: input.bytes.byteLength,
-      sha256: input.sha256,
-    });
-    if (!handle) return { success: false, code: isTransferSuccess(finalized) ? 'invalid_response' : 'transfer_failed' };
+    if (!isTransferSuccess(finalized)) return { success: false, code: 'transfer_failed' };
     uploadId = null;
-    return { success: true, handle };
+    return { success: true, response: finalized };
   } catch {
     return { success: false, code: input.signal?.aborted ? 'aborted' : 'transfer_failed' };
   } finally {

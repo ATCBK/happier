@@ -16,6 +16,8 @@ import {
 import { isAbsolute, join, relative, sep } from 'node:path';
 
 import { ComposerContentHandleV1Schema } from '@happier-dev/protocol/runtime/input/composerContentV1';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
+import { createProtocolStoredReadSchema } from '@happier-dev/protocol/plugins/actions/protocol-composable-schema';
 import { ComposerInstanceIdSchema } from '@happier-dev/protocol/runtime/input/composerAttachmentV1';
 import type { ComposerContentHandleV1, ComposerContentMediaKindV1, ComposerContentMimeTypeV1, ComposerRefV1, PluginContributionIdentityV1, SessionExecutionTargetV1 } from '@happier-dev/protocol';
 import { ComposerRefV1Schema } from '@happier-dev/protocol/plugins/ui/composerRef';
@@ -32,6 +34,7 @@ import {
 import { sanitizeSessionMediaFileName } from '@/session/media/names';
 
 const MANIFEST_VERSION = 1 as const;
+const ComposerRefV1StoredSchema = createProtocolStoredReadSchema(ComposerRefV1Schema);
 const MANIFEST_MAX_BYTES = 16 * 1024;
 const MIME_SNIFF_BYTES = 4 * 1024;
 const CONTENT_FILE_NAME = 'content';
@@ -169,11 +172,11 @@ function hasExactKeys(value: Readonly<Record<string, unknown>>, keys: readonly s
 }
 
 function readManifest(value: unknown): ComposerMediaStageManifest | null {
-  if (!isRecord(value) || !hasExactKeys(value, ['v', 'createdAtMs', 'handle'])) return null;
+  if (!isRecord(value)) return null;
   if (value.v !== MANIFEST_VERSION) return null;
   const createdAtMs = value.createdAtMs;
   if (typeof createdAtMs !== 'number' || !Number.isSafeInteger(createdAtMs) || createdAtMs < 0) return null;
-  const handle = ComposerContentHandleV1Schema.safeParse(value.handle);
+  const handle = createStoredReadSchema(ComposerContentHandleV1Schema).safeParse(value.handle);
   if (!handle.success) return null;
   return {
     v: MANIFEST_VERSION,
@@ -182,9 +185,9 @@ function readManifest(value: unknown): ComposerMediaStageManifest | null {
   };
 }
 
-function readClaimant(value: unknown): ComposerMediaStageClaimant | null {
-  if (!isRecord(value) || !hasExactKeys(value, ['composer', 'attachmentInstanceId'])) return null;
-  const composer = ComposerRefV1Schema.safeParse(value.composer);
+function readClaimant(value: unknown, stored = false): ComposerMediaStageClaimant | null {
+  if (!isRecord(value) || (!stored && !hasExactKeys(value, ['composer', 'attachmentInstanceId']))) return null;
+  const composer = (stored ? ComposerRefV1StoredSchema : ComposerRefV1Schema).safeParse(value.composer);
   const attachmentInstanceId = ComposerInstanceIdSchema.safeParse(value.attachmentInstanceId);
   return composer.success && attachmentInstanceId.success
     ? { composer: composer.data, attachmentInstanceId: attachmentInstanceId.data }
@@ -217,10 +220,10 @@ async function readStageClaim(
   if (raw === null) return 'corrupt';
   try {
     const value = JSON.parse(raw) as unknown;
-    if (isRecord(value) && hasExactKeys(value, ['unattachedRelease']) && value.unattachedRelease === true) {
+    if (isRecord(value) && value.unattachedRelease === true) {
       return 'unattachedRelease';
     }
-    return readClaimant(value) ?? 'corrupt';
+    return readClaimant(value, true) ?? 'corrupt';
   } catch {
     return 'corrupt';
   }
@@ -340,6 +343,35 @@ async function resolveStageNamespace(rootDirectory: string, name: string): Promi
   const canonicalNamespace = await realpath(namespacePath).catch(() => null);
   if (!canonicalNamespace || !isContainedPath(canonicalRoot, canonicalNamespace)) return null;
   return canonicalNamespace;
+}
+
+/** Private storage projection. Finalization is not proof of submission or delivery. */
+export async function readStorageComposerMediaStageFacts(input: Readonly<{ activeServerDir: string }>): Promise<readonly Readonly<{
+  path: string;
+  state: 'closed' | 'in_use' | 'unknown';
+}>[]> {
+  const rootDirectory = join(input.activeServerDir, 'composer-media-stages');
+  const facts: { path: string; state: 'closed' | 'in_use' | 'unknown' }[] = [];
+  for (const name of [COMPLETED_DIRECTORY_NAME, PENDING_DIRECTORY_NAME]) {
+    const namespace = await resolveStageNamespace(rootDirectory, name);
+    if (!namespace) continue;
+    const entries = await readdir(namespace, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.isSymbolicLink() || !isStageId(entry.name)) continue;
+      const path = join(namespace, entry.name);
+      let state: 'closed' | 'in_use' | 'unknown' = 'unknown';
+      if (name === COMPLETED_DIRECTORY_NAME) {
+        const manifest = await readBoundedManifest(join(path, MANIFEST_FILE_NAME));
+        if (manifest?.handle.id === entry.name) {
+          const claim = await readStageClaim(path);
+          if (claim === 'unattachedRelease') state = 'closed';
+          else if (claim !== null && claim !== 'corrupt') state = 'in_use';
+        }
+      }
+      facts.push({ path, state });
+    }
+  }
+  return facts;
 }
 
 async function removeStageEntryFromNamespace(namespaceDirectory: string, id: string): Promise<void> {
