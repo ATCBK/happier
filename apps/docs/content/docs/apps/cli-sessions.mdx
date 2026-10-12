@@ -372,6 +372,18 @@ Human compact output limits each long row to 24 lines or 2,000 characters and
 marks it as truncated; use `--json` when you need the full text.
 Use `raw` when you need provider payloads, metadata, or structured tool/message records.
 
+For semantic transcript items with tool calls and results, use the existing
+`session.transcript.get` Action:
+
+```bash
+hdev session actions execute <session-id-or-prefix-or-tag> session.transcript.get \
+  --input-json '{"includeTools":true,"includeRaw":true,"limit":100}' --json
+```
+
+`includeTools` includes tool items; `includeRaw` adds their stored payloads.
+Use `hdev session actions describe session.transcript.get --json` to inspect
+the available filters and pagination inputs.
+
 ## Session control
 
 Stop a session:
@@ -504,6 +516,20 @@ CLI carries present-user authority and can make the decision. A CLI invocation
 authenticated with `--api-token` or `HAPPIER_TOKEN` carries account-automation
 authority instead and receives `present_user_required`; API Tokens cannot
 approve their own requests. Most users should review in the app.
+
+### Answer an agent tool permission request
+
+An active agent tool approval can be answered through `session.permission.respond`.
+Include the specific request ID:
+
+```bash
+hdev session actions describe session.permission.respond --json
+hdev session actions execute <session-id-or-prefix-or-tag> session.permission.respond \
+  --input-json '{"requestId":"<request-id>","decision":"allow"}' --json
+```
+
+Use `deny` to reject the request. Inbox Action approvals use
+`approval.request.decide` as shown above.
 
 ## Actions (advanced scripting)
 

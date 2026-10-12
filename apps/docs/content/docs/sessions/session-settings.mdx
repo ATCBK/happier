@@ -45,6 +45,18 @@ The root Session screen keeps the controls that affect how you work day to day:
 
 This keeps the root screen focused on common workflow choices instead of mixing them with large advanced settings groups.
 
+## Permission mode timing (development)
+
+In 0.3 development source, choosing a permission mode **from the next prompt**
+keeps that choice with the composer draft. It does not change the running turn.
+Send carries the selected mode; a refused or unconfirmed send keeps the draft
+and its choice for retry. Embedded composers use the same behavior.
+
+The permission-mode Action applies changes immediately. Automation that needs
+a mode for its next prompt should use the Send Action's permission-mode override.
+See the [Action reference](/plugins/api/host-actions). This describes development
+integration, not released availability.
+
 ## Session Instructions (development integration)
 
 Development source lets an ordinary Session or Bot select a Prompt Library
@@ -175,7 +187,7 @@ The root Session screen also contains the defaults that control how app-started 
 
 ### Terminal host for new sessions
 
-Choose whether supported app-started sessions use no terminal host, `tmux`, zellij, or Herdr. A per-machine override can replace the account default. Herdr and automatic presentation of supported server-backed sessions are currently development-build features.
+Choose whether supported app-started sessions use no terminal host, `tmux`, zellij, or Herdr. A per-machine override can replace the account default. Herdr and automatic presentation of supported server-backed sessions shipped in stable Happier CLI 0.2.16. They are also supported in the 0.3 development line. Herdr selection requires an updated app as well as the CLI on the target machine.
 
 In development builds, machine details shows **Override account default**. With it off,
 new sessions inherit the account choice; the effective host remains visible. Turning it

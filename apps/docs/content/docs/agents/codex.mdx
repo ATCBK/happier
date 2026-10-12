@@ -179,7 +179,7 @@ Local control starts from the terminal. Use `happier attach <session-id>` on the
 
 App messages and approvals stay available while the Codex TUI is attached. Both clients use the same running App Server thread.
 
-The shared App Server path uses Codex’s native local socket attach on macOS and Linux. It does not require a terminal host. In development builds, selecting Herdr (or another supported host) for a new session starts the Codex TUI there automatically against that same App Server thread; selecting no host leaves the server-backed session headless until you attach.
+The shared App Server path uses Codex’s native local socket attach on macOS and Linux. It does not require a terminal host. Selecting Herdr (or another supported host) for a new session starts the Codex TUI there automatically against that same App Server thread; selecting no host leaves the server-backed session headless until you attach. This terminal presentation shipped in stable Happier CLI 0.2.16 and remains available in the 0.3 development line.
 
 For the end-to-end workflow, see [Features → Attach to a running session](/sessions/attach-to-session).
 

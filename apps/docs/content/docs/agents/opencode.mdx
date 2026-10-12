@@ -8,7 +8,13 @@ This page documents how Happier integrates with **OpenCode** and what matters fo
 ## Requirements
 
 - OpenCode CLI installed on your machine.
-- Binary available on `PATH` as the released `opencode` or `opencode2` command.
+- Binary available on `PATH` as the released `opencode` or `opencode2` command, or selected through `HAPPIER_OPENCODE_PATH`.
+
+In current 0.3 development source, Happier also checks user install locations
+including `~/.opencode/bin` and `~/.local/bin`. This can find an installation
+when a daemon's inherited `PATH` omits its directory. For another location, set
+`HAPPIER_OPENCODE_PATH` to the executable path in the environment used to start
+Happier.
 
 Happier supports OpenCode V2 through the same integration. See [OpenCode V2](#opencode-v2).
 
@@ -67,6 +73,13 @@ For most users, the important part is:
 - attaching later should use `happier attach <session-id>`, not a raw vendor attach command.
 
 By default, Happier uses a **managed local OpenCode server** on the machine and reuses it across sessions. Advanced users can set an explicit OpenCode server URL in settings; when you do that, Happier will keep using that explicit server for the session.
+
+## Permission modes
+
+In **Auto** (`auto` / `safe-yolo`), Happier allows OpenCode's read and edit tool
+categories. **Bash** remains an approval category, including read-only commands
+run through Bash. Direct read, list, glob, and grep tools use the read policy.
+See [Permission modes](/sessions/permissions) for the shared permission intents.
 
 ## OpenCode V2
 
