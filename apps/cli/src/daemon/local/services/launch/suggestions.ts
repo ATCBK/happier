@@ -92,10 +92,14 @@ function declarationTitleForEntry(
     entry: NormalizedLocalServiceInventoryEntry,
     runTargets: readonly LocalServiceLauncherRunTarget[],
 ): string | undefined {
-    const cwd = entry.provenance?.process?.cwd ?? entry.provenance?.workspace?.path;
-    if (!cwd) return undefined;
+    const workspace = entry.provenance?.workspace;
+    if (!workspace) return undefined;
+    const cwd = entry.provenance?.process?.cwd ?? workspace.path;
     const command = entry.provenance?.process?.command?.trim();
     const matches = runTargets.filter(target => 'declaration' in target && target.workspace.machineId === entry.machineId
+        && (!workspace.id || target.workspace.workspaceId === workspace.id)
+        && isWorkspacePathWithin(target.workspace.rootPath, workspace.path)
+        && isWorkspacePathWithin(workspace.path, target.workspace.rootPath)
         && isWorkspacePathWithin(target.cwd, cwd) && target.displayMatch
         && (target.displayMatch.port === entry.port
             || command && target.displayMatch.command?.trim() === command));
@@ -356,6 +360,7 @@ export function buildLocalServiceLauncherSnapshot(
     input: BuildLocalServiceLauncherSnapshotInput,
 ): LocalServiceLauncherSnapshotV1 {
     const scopePaths = input.workspaceScopePaths;
+    const runTargets = input.runTargets.filter(target => matchesWorkspaceScope(target.cwd, scopePaths));
     const previews = [...input.previewResources].sort((a, b) => a.previewId.localeCompare(b.previewId));
     const inventoryEntries = [...input.inventoryEntries]
         .filter((entry) => localServiceInventoryEntryMatchesWorkspaceScope(entry, scopePaths))
@@ -375,11 +380,10 @@ export function buildLocalServiceLauncherSnapshot(
     for (const entry of availableInventoryEntries) {
         const preview = previews.find((candidate) => previewMatchesEntry(candidate, entry));
         targets.push(targetFromInventoryEntry(entry, preview, input.terminateDetectedEnabled === true,
-            declarationTitleForEntry(entry, input.runTargets)));
+            declarationTitleForEntry(entry, runTargets)));
     }
 
-    for (const target of input.runTargets) {
-        if (!matchesWorkspaceScope(target.cwd, scopePaths)) continue;
+    for (const target of runTargets) {
         targets.push(targetFromRunTarget(target, input.machineId));
     }
 
@@ -398,7 +402,7 @@ export function buildLocalServiceLauncherSnapshot(
     for (const entry of unavailableInventoryEntries) {
         const preview = previews.find((candidate) => previewMatchesEntry(candidate, entry));
         targets.push(targetFromInventoryEntry(entry, preview, input.terminateDetectedEnabled === true,
-            declarationTitleForEntry(entry, input.runTargets)));
+            declarationTitleForEntry(entry, runTargets)));
     }
 
     return {

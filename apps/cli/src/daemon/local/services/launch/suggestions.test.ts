@@ -57,6 +57,35 @@ function inventoryEntry(overrides: Partial<NormalizedLocalServiceInventoryEntry>
 
 
 describe('buildLocalServiceLauncherSnapshot', () => {
+    it.each(['listening', 'stale'] as const)('names a %s listener only from its associated nested accepted checkout and scoped declarations', state => {
+        const parent = { id: 'parent', cwd: '/repo', workspaceId: 'workspace-a',
+            workspace: { serverId: 'home', machineId: 'machine-a', workspaceId: 'workspace-a', rootPath: '/repo' },
+            declaration: { workspaceRefId: 'workspace-a', selection: { kind: 'manifest', name: 'api' } },
+            title: 'Parent api', displayMatch: { port: 5173 } } as const;
+        const child = { ...parent, id: 'child', cwd: '/repo/b', workspaceId: 'workspace-b',
+            workspace: { ...parent.workspace, workspaceId: 'workspace-b', rootPath: '/repo/b' },
+            declaration: { workspaceRefId: 'workspace-b', selection: { kind: 'manifest', name: 'web' } }, title: 'Child web' } as const;
+        const entry = inventoryEntry({ state, provenance: {
+            workspace: { id: 'workspace-b', path: '/repo/b', association: 'cwd_containment' },
+            process: { pid: 400, lineagePids: [400], command: 'node web.js', cwd: '/repo/b/src', redacted: true },
+        } });
+        for (const workspaceScopePaths of [undefined, ['/repo/b']]) {
+            const input = { machineId: 'machine-a', updatedAt: 1, previewResources: [], inventoryEntries: [entry], workspaceScopePaths };
+            const parentOnly = buildLocalServiceLauncherSnapshot({ ...input, runTargets: [parent] });
+            expect(parentOnly.targets.find(target => target.source === 'inventory_entry')?.title).toBe('Local Vite App');
+            const unassociated = { ...entry, provenance: { process: entry.provenance?.process } };
+            expect(buildLocalServiceLauncherSnapshot({ ...input, inventoryEntries: [unassociated], runTargets: [parent] })
+                .targets.find(target => target.source === 'inventory_entry')?.title).toBe('Local Vite App');
+            const withChild = buildLocalServiceLauncherSnapshot({ ...input, runTargets: [parent, child] });
+            expect(withChild.targets.find(target => target.source === 'inventory_entry')?.title).toBe('Child web');
+        }
+        // A path-only association still selects the exact accepted root, not its parent.
+        const pathOnly = { ...entry, provenance: { ...entry.provenance,
+            workspace: { path: '/repo/b', association: 'cwd_containment' as const } } };
+        expect(buildLocalServiceLauncherSnapshot({ machineId: 'machine-a', updatedAt: 1,
+            runTargets: [parent, child], previewResources: [], inventoryEntries: [pathOnly],
+        }).targets.find(target => target.source === 'inventory_entry')?.title).toBe('Child web');
+    });
     it('projects a long observed process command into the existing preview bound without losing the listener', () => {
         const command = `node server.js --description ${'x'.repeat(1_500)}`;
         const snapshot = buildLocalServiceLauncherSnapshot({ machineId: 'machine-a', updatedAt: 1,

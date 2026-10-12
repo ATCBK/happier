@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 
 import { discoverLocalServiceRunTargets, resolveLocalServiceRunTargetCommand } from './runTargets';
 import { buildLocalServiceLauncherSnapshot } from './suggestions';
+import { matchWorkspaceAssociation } from '../inventory/provenance';
 import { LocalServiceLauncherSnapshotV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
 
 async function makeRepo(): Promise<string> {
@@ -36,7 +37,8 @@ describe('discoverLocalServiceRunTargets', () => {
                 source: 'detected' as const, labels: [], confidence: 'high' as const,
                 processOwnershipConfidence: 'medium' as const, workspaceAssociationConfidence: 'high' as const,
                 diagnostics: [], presentation: { addressLabel: `localhost:${port}`, displayName: 'node' },
-                provenance: { process: { pid: port, lineagePids: [port], command, cwd, redacted: true as const } },
+                provenance: { process: { pid: port, lineagePids: [port], command, cwd, redacted: true as const },
+                    workspace: matchWorkspaceAssociation({ cwd, workspaces: [{ id: 'accepted', path: root }] }).workspace },
             });
             const snapshot = LocalServiceLauncherSnapshotV1Schema.parse(buildLocalServiceLauncherSnapshot({
                 machineId: 'machine', updatedAt: 1, runTargets, previewResources: [], inventoryEntries: [
