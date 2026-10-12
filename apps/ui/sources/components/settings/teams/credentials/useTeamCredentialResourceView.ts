@@ -33,10 +33,10 @@ export type TeamCredentialResourceView = Readonly<{
     /** Whether an ordinary resource write may be offered on this screen. */
     canManage: boolean;
     /**
-     * A write this viewer may make is waiting on an approval decision.
+     * The retained resource is stale, or a write is waiting on approval.
      *
      * This is deliberately separate from {@link canManage}: an unresolved
-     * approval suspends writing, it does not withdraw the capability. Folding
+     * read or approval suspends writing, it does not withdraw the capability. Folding
      * the two would make every control vanish the moment someone used one, so
      * the person who is waiting loses both their draft and any explanation.
      */
@@ -99,8 +99,8 @@ export function useTeamCredentialResourceView(params: Readonly<{
         canManage: context.mutationsAvailable
             && !context.archived
             && managesResources,
-        writesSuspended: context.approvalPending,
+        writesSuspended: context.approvalPending || !exact.isCurrent,
         error,
         reload,
-    }), [catalog.resolved, catalogResource, context.approvalPending, context.archived, context.mutationsAvailable, error, exact.resolved, exact.resource, featureEnabled, managesResources, reload, viewer]);
+    }), [catalog.resolved, catalogResource, context.approvalPending, context.archived, context.mutationsAvailable, error, exact.isCurrent, exact.resolved, exact.resource, featureEnabled, managesResources, reload, viewer]);
 }
