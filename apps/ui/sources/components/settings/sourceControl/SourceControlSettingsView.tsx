@@ -2,7 +2,7 @@ import React from 'react';
 import { Platform } from 'react-native';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 
-import { DEFAULT_AGENT_ID } from '@/agents/catalog/catalog';
+import { DEFAULT_AGENT_ID, type AgentId } from '@/agents/catalog/catalog';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemList } from '@/components/ui/lists/ItemList';
@@ -35,7 +35,8 @@ import {
     shouldConfirmRemoteOperation,
 } from '@/scm/settings/remoteConfirmationPolicy';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
-import { FieldValueItem } from '@/components/ui/forms/FieldValueItem';
+import { useEnabledAgentIds } from '@/agents/hooks/useEnabledAgentIds';
+import { getAgentDropdownMenuItems } from '@/components/settings/pickers/agentDropdownItems';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import { SettingsPageHeader } from '@/components/settings/shell/SettingsPageHeader';
@@ -252,6 +253,12 @@ export const SourceControlSettingsView = React.memo(function SourceControlSettin
     const effectiveCommitMessageGeneratorBackendId = typeof scmCommitMessageGeneratorBackendId === 'string' && scmCommitMessageGeneratorBackendId.trim()
         ? scmCommitMessageGeneratorBackendId.trim()
         : DEFAULT_AGENT_ID;
+    const enabledAgentIds = useEnabledAgentIds();
+    // A stored Agent that is not enabled here (say, an externally installed one) stays listed as the current choice.
+    const commitMessageAgentItems = React.useMemo(() => getAgentDropdownMenuItems({
+        agentIds: enabledAgentIds.includes(effectiveCommitMessageGeneratorBackendId as AgentId)
+            ? enabledAgentIds : [...enabledAgentIds, effectiveCommitMessageGeneratorBackendId as AgentId],
+    }), [effectiveCommitMessageGeneratorBackendId, enabledAgentIds]);
     const effectiveCommitMessageGeneratorInstructions = typeof scmCommitMessageGeneratorInstructions === 'string'
         ? scmCommitMessageGeneratorInstructions
         : '';
@@ -289,6 +296,7 @@ export const SourceControlSettingsView = React.memo(function SourceControlSettin
         }));
     const selectedRoutingOption = routingOptions.find((option) => option.id === effectiveScmGitRepoPreferredBackendId);
     const [routingMenuOpen, setRoutingMenuOpen] = React.useState(false);
+    const [commitAgentMenuOpen, setCommitAgentMenuOpen] = React.useState(false);
 
     // One anchor per page for the per-backend default diff: search reveals the first backend that
     // offers a choice, and the first backend's section answers when none does.
@@ -340,18 +348,19 @@ export const SourceControlSettingsView = React.memo(function SourceControlSettin
                 />
                 {effectiveCommitMessageGeneratorEnabled ? (
                     <SettingAnchor setting={SOURCE_CONTROL_SETTINGS.settings.commitMessageAgent}>
-                        <FieldValueItem
-                            subtitleLines={0}
-                            title={t(SOURCE_CONTROL_SETTINGS.settings.commitMessageAgent.titleKey)}
-                            subtitle={t('settingsSourceControl.page.generator.agentDescription')}
-                            fieldTestID="settings.sourceControl.commitMessageAgent"
-                            placeholder={DEFAULT_AGENT_ID}
-                            value={effectiveCommitMessageGeneratorBackendId}
-                            onCommit={(draft) => {
-                                const next = draft.trim();
-                                if (!next) return effectiveCommitMessageGeneratorBackendId;
-                                setScmCommitMessageGeneratorBackendId(next);
-                                return next;
+                        <DropdownMenu
+                            open={commitAgentMenuOpen}
+                            onOpenChange={setCommitAgentMenuOpen}
+                            items={commitMessageAgentItems}
+                            selectedId={effectiveCommitMessageGeneratorBackendId}
+                            variant="selectable"
+                            matchTriggerWidth
+                            connectToTrigger
+                            onSelect={(id) => { setScmCommitMessageGeneratorBackendId(id); setCommitAgentMenuOpen(false); }}
+                            itemTrigger={{
+                                title: t(SOURCE_CONTROL_SETTINGS.settings.commitMessageAgent.titleKey),
+                                subtitle: t('settingsSourceControl.page.generator.agentDescription'),
+                                itemProps: { testID: 'settings.sourceControl.commitMessageAgent', subtitleLines: 0 },
                             }}
                         />
                     </SettingAnchor>
@@ -386,6 +395,119 @@ export const SourceControlSettingsView = React.memo(function SourceControlSettin
                     )}
                     onPress={() => setScmIncludeCoAuthoredBy(!effectiveIncludeCoAuthoredBy)}
                     showChevron={false}
+                />
+            </ItemGroup>
+            </SettingSection>
+
+            <SettingSection section={SOURCE_CONTROL_SETTINGS.sectionRefs.walkthroughs}>
+                <ItemGroup title={t('walkthroughSettings.title')} description={t('walkthroughSettings.description')}>
+                    <SettingRow setting={SOURCE_CONTROL_SETTINGS.settings.explainChanges} subtitleLines={0} showChevron={false}
+                        rightElement={<Switch value={explainChanges !== false} onValueChange={setExplainChanges} />}
+                        onPress={() => setExplainChanges(explainChanges === false)} />
+                    <SettingAnchor setting={SOURCE_CONTROL_SETTINGS.settings.summaryModel}>
+                        <ScmDiffSummaryModelPicker value={typeof summaryModel === 'string' ? summaryModel : ''}
+                            onChange={value => { void setWalkthroughSetting(SOURCE_CONTROL_SETTINGS.settings.summaryModel.anchor, value); }}
+                            onAvailabilityChange={setSummaryModelAvailable}
+                            machineId={executionTarget?.machine.id} serverId={executionTarget?.serverId} testID="settings.sourceControl.summaryModel" />
+                    </SettingAnchor>
+                    <WalkthroughSavedSettings machineId={executionTarget?.machine.id ?? null} serverId={executionTarget?.serverId ?? null}
+                        machineAvailability={administrationTargetSelection.state.kind}
+                        machineName={administrationTargetSelection.candidates.find(candidate => candidate.target.machineId === executionTarget?.machine.id)?.displayName ?? ''}
+                        prepareAfterTurn={prepareAfterTurn === true}
+                        onPrepareAfterTurn={value => { void setWalkthroughSetting(SOURCE_CONTROL_SETTINGS.settings.prepareAfterTurn.anchor, value); }} modelAvailable={summaryModelAvailable} />
+                </ItemGroup>
+            </SettingSection>
+
+            {/* The layout row exists only with the Pierre renderer; the section (with its Renderer row) answers otherwise. */}
+            <SettingSection section={SOURCE_CONTROL_SETTINGS.sectionRefs.files}>
+            <ItemGroup
+                title={t('settingsSourceControl.page.files.title')}
+                description={t('settingsSourceControl.page.files.description')}
+            >
+                {(Platform.OS === 'web' || String(Platform.OS) === 'node') ? (
+                    <SettingAnchor setting={SOURCE_CONTROL_SETTINGS.settings.diffRenderer}>
+                        <SegmentedChoiceItem<'pierre' | 'happier'>
+                            subtitleLines={0}
+                            title={t(SOURCE_CONTROL_SETTINGS.settings.diffRenderer.titleKey)}
+                            testIDPrefix="settings.sourceControl.diffRenderer"
+                            options={translateOptions(FILES_DIFF_RENDERER_OPTIONS)}
+                            value={effectiveFilesDiffRendererMode}
+                            onChange={setFilesDiffRendererMode}
+                        />
+                    </SettingAnchor>
+                ) : null}
+                {(Platform.OS === 'web' || String(Platform.OS) === 'node') && effectiveFilesDiffRendererMode === 'pierre' ? (
+                    <SettingAnchor setting={SOURCE_CONTROL_SETTINGS.settings.diffLayout}>
+                        <SegmentedChoiceItem<'unified' | 'split'>
+                            subtitleLines={0}
+                            title={t(SOURCE_CONTROL_SETTINGS.settings.diffLayout.titleKey)}
+                            testIDPrefix="settings.sourceControl.diffLayout"
+                            options={translateOptions(FILES_DIFF_PRESENTATION_OPTIONS)}
+                            value={effectiveFilesDiffPresentationStyle}
+                            onChange={setFilesDiffPresentationStyle}
+                        />
+                    </SettingAnchor>
+                ) : null}
+                <SettingAnchor setting={SOURCE_CONTROL_SETTINGS.settings.syntaxHighlighting}>
+                    <SegmentedChoiceItem<'off' | 'simple' | 'advanced'>
+                        subtitleLines={0}
+                        title={t(SOURCE_CONTROL_SETTINGS.settings.syntaxHighlighting.titleKey)}
+                        testIDPrefix="settings.sourceControl.syntaxHighlighting"
+                        options={translateOptions(FILES_SYNTAX_HIGHLIGHTING_OPTIONS)}
+                        value={effectiveFilesDiffSyntaxHighlightingMode}
+                        onChange={setFilesDiffSyntaxHighlightingMode}
+                    />
+                </SettingAnchor>
+                <SettingAnchor setting={SOURCE_CONTROL_SETTINGS.settings.gitPaneLayout}>
+                    <SegmentedChoiceItem<'unified' | 'tabs'>
+                        subtitleLines={0}
+                        title={t(SOURCE_CONTROL_SETTINGS.settings.gitPaneLayout.titleKey)}
+                        testIDPrefix="settings.sourceControl.gitPaneLayout"
+                        options={translateOptions(SCM_GIT_PANE_LAYOUT_OPTIONS)}
+                        value={scmGitPaneLayout === 'tabs' ? 'tabs' : 'unified'}
+                        onChange={setScmGitPaneLayout}
+                    />
+                </SettingAnchor>
+                <SettingAnchor setting={SOURCE_CONTROL_SETTINGS.settings.changedFilesLayout}>
+                    <SegmentedChoiceItem<'list' | 'tree'>
+                        subtitleLines={0}
+                        title={t(SOURCE_CONTROL_SETTINGS.settings.changedFilesLayout.titleKey)}
+                        testIDPrefix="settings.sourceControl.changedFilesLayout"
+                        options={translateOptions(SCM_CHANGED_FILES_LAYOUT_OPTIONS)}
+                        value={scmChangedFilesLayout === 'tree' ? 'tree' : 'list'}
+                        onChange={setScmChangedFilesLayout}
+                    />
+                </SettingAnchor>
+                <SettingAnchor setting={SOURCE_CONTROL_SETTINGS.settings.changedFilesDensity}>
+                    <SegmentedChoiceItem<'comfortable' | 'compact'>
+                        subtitleLines={0}
+                        title={t(SOURCE_CONTROL_SETTINGS.settings.changedFilesDensity.titleKey)}
+                        testIDPrefix="settings.sourceControl.changedFilesDensity"
+                        options={translateOptions(FILES_CHANGED_FILES_DENSITY_OPTIONS)}
+                        value={effectiveFilesChangedFilesRowDensity}
+                        onChange={setFilesChangedFilesRowDensity}
+                    />
+                </SettingAnchor>
+                <SettingRow
+                    subtitleLines={0}
+                    setting={SOURCE_CONTROL_SETTINGS.settings.showLineNumbersInDiffs}
+                    rightElement={<Switch value={showLineNumbers === true} onValueChange={setShowLineNumbers} />}
+                    showChevron={false}
+                    onPress={() => setShowLineNumbers(showLineNumbers !== true)}
+                />
+                <SettingRow
+                    subtitleLines={0}
+                    setting={SOURCE_CONTROL_SETTINGS.settings.showLineNumbersInToolViews}
+                    rightElement={<Switch value={showLineNumbersInToolViews === true} onValueChange={setShowLineNumbersInToolViews} />}
+                    showChevron={false}
+                    onPress={() => setShowLineNumbersInToolViews(showLineNumbersInToolViews !== true)}
+                />
+                <SettingRow
+                    subtitleLines={0}
+                    setting={SOURCE_CONTROL_SETTINGS.settings.wrapLinesInDiffs}
+                    rightElement={<Switch value={wrapLinesInDiffs === true} onValueChange={setWrapLinesInDiffs} />}
+                    showChevron={false}
+                    onPress={() => setWrapLinesInDiffs(wrapLinesInDiffs !== true)}
                 />
             </ItemGroup>
             </SettingSection>
@@ -521,117 +643,7 @@ export const SourceControlSettingsView = React.memo(function SourceControlSettin
                 </ItemGroup>
             ) : null}
 
-            {/* The layout row exists only with the Pierre renderer; the section (with its Renderer row) answers otherwise. */}
-            <SettingSection section={SOURCE_CONTROL_SETTINGS.sectionRefs.files}>
-            <ItemGroup
-                title={t('settingsSourceControl.page.files.title')}
-                description={t('settingsSourceControl.page.files.description')}
-            >
-                {(Platform.OS === 'web' || String(Platform.OS) === 'node') ? (
-                    <SettingAnchor setting={SOURCE_CONTROL_SETTINGS.settings.diffRenderer}>
-                        <SegmentedChoiceItem<'pierre' | 'happier'>
-                            subtitleLines={0}
-                            title={t(SOURCE_CONTROL_SETTINGS.settings.diffRenderer.titleKey)}
-                            testIDPrefix="settings.sourceControl.diffRenderer"
-                            options={translateOptions(FILES_DIFF_RENDERER_OPTIONS)}
-                            value={effectiveFilesDiffRendererMode}
-                            onChange={setFilesDiffRendererMode}
-                        />
-                    </SettingAnchor>
-                ) : null}
-                {(Platform.OS === 'web' || String(Platform.OS) === 'node') && effectiveFilesDiffRendererMode === 'pierre' ? (
-                    <SettingAnchor setting={SOURCE_CONTROL_SETTINGS.settings.diffLayout}>
-                        <SegmentedChoiceItem<'unified' | 'split'>
-                            subtitleLines={0}
-                            title={t(SOURCE_CONTROL_SETTINGS.settings.diffLayout.titleKey)}
-                            testIDPrefix="settings.sourceControl.diffLayout"
-                            options={translateOptions(FILES_DIFF_PRESENTATION_OPTIONS)}
-                            value={effectiveFilesDiffPresentationStyle}
-                            onChange={setFilesDiffPresentationStyle}
-                        />
-                    </SettingAnchor>
-                ) : null}
-                <SettingAnchor setting={SOURCE_CONTROL_SETTINGS.settings.syntaxHighlighting}>
-                    <SegmentedChoiceItem<'off' | 'simple' | 'advanced'>
-                        subtitleLines={0}
-                        title={t(SOURCE_CONTROL_SETTINGS.settings.syntaxHighlighting.titleKey)}
-                        testIDPrefix="settings.sourceControl.syntaxHighlighting"
-                        options={translateOptions(FILES_SYNTAX_HIGHLIGHTING_OPTIONS)}
-                        value={effectiveFilesDiffSyntaxHighlightingMode}
-                        onChange={setFilesDiffSyntaxHighlightingMode}
-                    />
-                </SettingAnchor>
-                <SettingAnchor setting={SOURCE_CONTROL_SETTINGS.settings.gitPaneLayout}>
-                    <SegmentedChoiceItem<'unified' | 'tabs'>
-                        subtitleLines={0}
-                        title={t(SOURCE_CONTROL_SETTINGS.settings.gitPaneLayout.titleKey)}
-                        testIDPrefix="settings.sourceControl.gitPaneLayout"
-                        options={translateOptions(SCM_GIT_PANE_LAYOUT_OPTIONS)}
-                        value={scmGitPaneLayout === 'tabs' ? 'tabs' : 'unified'}
-                        onChange={setScmGitPaneLayout}
-                    />
-                </SettingAnchor>
-                <SettingAnchor setting={SOURCE_CONTROL_SETTINGS.settings.changedFilesLayout}>
-                    <SegmentedChoiceItem<'list' | 'tree'>
-                        subtitleLines={0}
-                        title={t(SOURCE_CONTROL_SETTINGS.settings.changedFilesLayout.titleKey)}
-                        testIDPrefix="settings.sourceControl.changedFilesLayout"
-                        options={translateOptions(SCM_CHANGED_FILES_LAYOUT_OPTIONS)}
-                        value={scmChangedFilesLayout === 'tree' ? 'tree' : 'list'}
-                        onChange={setScmChangedFilesLayout}
-                    />
-                </SettingAnchor>
-                <SettingAnchor setting={SOURCE_CONTROL_SETTINGS.settings.changedFilesDensity}>
-                    <SegmentedChoiceItem<'comfortable' | 'compact'>
-                        subtitleLines={0}
-                        title={t(SOURCE_CONTROL_SETTINGS.settings.changedFilesDensity.titleKey)}
-                        testIDPrefix="settings.sourceControl.changedFilesDensity"
-                        options={translateOptions(FILES_CHANGED_FILES_DENSITY_OPTIONS)}
-                        value={effectiveFilesChangedFilesRowDensity}
-                        onChange={setFilesChangedFilesRowDensity}
-                    />
-                </SettingAnchor>
-                <SettingRow
-                    subtitleLines={0}
-                    setting={SOURCE_CONTROL_SETTINGS.settings.showLineNumbersInDiffs}
-                    rightElement={<Switch value={showLineNumbers === true} onValueChange={setShowLineNumbers} />}
-                    showChevron={false}
-                    onPress={() => setShowLineNumbers(showLineNumbers !== true)}
-                />
-                <SettingRow
-                    subtitleLines={0}
-                    setting={SOURCE_CONTROL_SETTINGS.settings.showLineNumbersInToolViews}
-                    rightElement={<Switch value={showLineNumbersInToolViews === true} onValueChange={setShowLineNumbersInToolViews} />}
-                    showChevron={false}
-                    onPress={() => setShowLineNumbersInToolViews(showLineNumbersInToolViews !== true)}
-                />
-                <SettingRow
-                    subtitleLines={0}
-                    setting={SOURCE_CONTROL_SETTINGS.settings.wrapLinesInDiffs}
-                    rightElement={<Switch value={wrapLinesInDiffs === true} onValueChange={setWrapLinesInDiffs} />}
-                    showChevron={false}
-                    onPress={() => setWrapLinesInDiffs(wrapLinesInDiffs !== true)}
-                />
-            </ItemGroup>
-            </SettingSection>
 
-            <SettingSection section={SOURCE_CONTROL_SETTINGS.sectionRefs.walkthroughs}>
-                <ItemGroup title={t('walkthroughSettings.title')} description={t('walkthroughSettings.description')}>
-                    <SettingRow setting={SOURCE_CONTROL_SETTINGS.settings.explainChanges} subtitleLines={0} showChevron={false}
-                        rightElement={<Switch value={explainChanges !== false} onValueChange={setExplainChanges} />}
-                        onPress={() => setExplainChanges(explainChanges === false)} />
-                    <SettingAnchor setting={SOURCE_CONTROL_SETTINGS.settings.summaryModel}>
-                        <ScmDiffSummaryModelPicker value={typeof summaryModel === 'string' ? summaryModel : ''}
-                            onChange={value => { void setWalkthroughSetting(SOURCE_CONTROL_SETTINGS.settings.summaryModel.anchor, value); }}
-                            onAvailabilityChange={setSummaryModelAvailable}
-                            machineId={executionTarget?.machine.id} serverId={executionTarget?.serverId} testID="settings.sourceControl.summaryModel" />
-                    </SettingAnchor>
-                    <WalkthroughSavedSettings machineId={executionTarget?.machine.id ?? null} serverId={executionTarget?.serverId ?? null}
-                        machineName={administrationTargetSelection.candidates.find(candidate => candidate.target.machineId === executionTarget?.machine.id)?.displayName ?? ''}
-                        prepareAfterTurn={prepareAfterTurn === true}
-                        onPrepareAfterTurn={value => { void setWalkthroughSetting(SOURCE_CONTROL_SETTINGS.settings.prepareAfterTurn.anchor, value); }} modelAvailable={summaryModelAvailable} />
-                </ItemGroup>
-            </SettingSection>
 
             {backendPlugins.map((plugin, backendIndex) => {
                 const backendUiPlugin = backendUiRegistry.getPlugin(plugin.backendId);

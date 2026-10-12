@@ -12,6 +12,7 @@ import { useAcpCatalogForServer } from '@/sync/store/useAcpCatalog';
 import { decodeScmDiffSummaryModelOverride } from '@/settings/scmDiffSummary/settings';
 import { buildScmDiffSummaryModelProfiles } from '@/settings/scmDiffSummary/models';
 import { t } from '@/text';
+import { AgentIcon } from '@/agents/registry/AgentIcon';
 
 export type ScmDiffSummaryModelSelection = Readonly<{ backendTarget: BackendTargetRefV2; modelSelector: ScmDiffSummaryModelSelector }>;
 
@@ -72,13 +73,14 @@ export function useScmDiffSummaryModelChoices(params: Readonly<{
         const targetKey = buildBackendTargetKeyV2(target);
         const id = `backend-discovery:${targetKey}`;
         discoveryTargets.set(id, targetKey);
-        items.push({ id, title: entry.title, category: entry.title, disabled: !params.machineId,
+        const icon = React.createElement(AgentIcon, { agentId: entry.agentId, size: 22 });
+        items.push({ id, title: t('walkthroughSettings.loadModels'), category: entry.title, icon, disabled: !params.machineId,
             subtitle: !params.machineId || (probeEntry === entry && probe.probe.failed) ? t('walkthroughSettings.unavailable')
                 : probeEntry === entry && probe.probe.phase !== 'idle' ? t('common.loading') : t('walkthroughSettings.chooseModel') });
         for (const profile of profiles) {
             const support = profile.structuredOutput;
             if (support === 'supported' && profile.modelSelector) selections.set(profile.catalogId, { backendTarget: target, modelSelector: profile.modelSelector });
-            items.push({ id: profile.catalogId, title: profile.title, category: entry.title, disabled: support !== 'supported',
+            items.push({ id: profile.catalogId, title: profile.title, category: entry.title, icon, disabled: support !== 'supported',
                 subtitle: support === 'supported' ? undefined : support === 'unsupported' ? t('walkthroughSettings.unsupported') : t('walkthroughSettings.unavailable') });
         }
     }

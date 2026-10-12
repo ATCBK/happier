@@ -205,9 +205,11 @@ function segmentedControl(row: { props: Record<string, any>; type?: unknown; fin
     return control;
 }
 
+// Load real screen owners after boundary setup, outside behavior deadlines.
+const { SourceControlSettingsView } = await import('./SourceControlSettingsView');
+
 describe('SourceControlSettingsView', () => {
     it('writes explicit explain preferences but does not offer prefetch without an eligible selected model', async () => {
-        const { SourceControlSettingsView } = await import('./SourceControlSettingsView');
         const screen = await renderSettingsView(React.createElement(SourceControlSettingsView));
         screen.pressRowByTitle('walkthroughSettings.enabled');
         setPrepareAfterTurn.mockClear();
@@ -224,7 +226,6 @@ describe('SourceControlSettingsView', () => {
     });
 
     it('reads the SCM contribution catalog from the Administration-selected exact target', async () => {
-        const { SourceControlSettingsView } = await import('./SourceControlSettingsView');
         await renderSettingsView(React.createElement(SourceControlSettingsView));
 
         expect(daemonProjectionRequest).toHaveBeenCalledWith({
@@ -311,7 +312,6 @@ describe('SourceControlSettingsView', () => {
             },
         };
 
-        const { SourceControlSettingsView } = await import('./SourceControlSettingsView');
         const screen = await renderSettingsView(React.createElement(SourceControlSettingsView));
 
         const routing = segmentedControl(screen.findRowByTitle('settingsSourceControl.page.routing.rowTitle'));
@@ -362,7 +362,6 @@ describe('SourceControlSettingsView', () => {
             },
         };
 
-        const { SourceControlSettingsView } = await import('./SourceControlSettingsView');
         const screen = await renderSettingsView(React.createElement(SourceControlSettingsView));
         const routing = segmentedControl(screen.findRowByTitle('settingsSourceControl.page.routing.rowTitle'));
 
@@ -405,7 +404,6 @@ describe('SourceControlSettingsView', () => {
             },
         };
 
-        const { SourceControlSettingsView } = await import('./SourceControlSettingsView');
         const screen = await renderSettingsView(React.createElement(SourceControlSettingsView));
         const routing = segmentedControl(screen.findRowByTitle('settingsSourceControl.page.routing.rowTitle'));
 
@@ -445,7 +443,6 @@ describe('SourceControlSettingsView', () => {
             },
         };
 
-        const { SourceControlSettingsView } = await import('./SourceControlSettingsView');
         const screen = await renderSettingsView(React.createElement(SourceControlSettingsView));
 
         const retainedRow = screen.findRowByTitle('settingsSourceControl.page.routing.rowTitle');
@@ -458,7 +455,6 @@ describe('SourceControlSettingsView', () => {
     it('says what the backend choice waits for instead of rendering an empty section', async () => {
         daemonProjectionState.current = { phase: 'loading', inputs: null };
 
-        const { SourceControlSettingsView } = await import('./SourceControlSettingsView');
         const screen = await renderSettingsView(React.createElement(SourceControlSettingsView));
 
         expect(screen.findRowByTitle('settingsSourceControl.page.routing.rowTitle')).toBeNull();
@@ -469,7 +465,6 @@ describe('SourceControlSettingsView', () => {
 
     it('renders commit strategy options and updates setting when selected', async () => {
         filesDiffPresentationStyleValue = 'split';
-        const { SourceControlSettingsView } = await import('./SourceControlSettingsView');
         const screen = await renderSettingsView(React.createElement(SourceControlSettingsView));
 
         const strategy = segmentedControl(screen.findRowByTitle('settingsSourceControl.page.commitStrategy.title'));
@@ -486,7 +481,6 @@ describe('SourceControlSettingsView', () => {
         scmRemoteConfirmPolicyValue = 'always';
         setScmRemoteConfirmPolicy.mockClear();
 
-        const { SourceControlSettingsView } = await import('./SourceControlSettingsView');
         const screen = await renderSettingsView(React.createElement(SourceControlSettingsView));
 
         screen.pressRowByTitle('settingsSourceControl.remoteConfirmation.confirmBeforePulling.title');
@@ -499,7 +493,6 @@ describe('SourceControlSettingsView', () => {
 
     it('defaults diff presentation style to unified when the setting is missing', async () => {
         filesDiffPresentationStyleValue = undefined;
-        const { SourceControlSettingsView } = await import('./SourceControlSettingsView');
         const screen = await renderSettingsView(React.createElement(SourceControlSettingsView));
         const layout = segmentedControl(screen.findRowByTitle('settingsSourceControl.page.files.layout'));
 
@@ -510,7 +503,6 @@ describe('SourceControlSettingsView', () => {
     it('marks one default-diff row when search opens it, however many backends show one', async () => {
         searchParamsState.value = { setting: 'sourceControl.backendDefaultDiff' };
         try {
-            const { SourceControlSettingsView } = await import('./SourceControlSettingsView');
             const screen = await renderSettingsView(React.createElement(SourceControlSettingsView));
             // Git and Sapling both render the row; only one carries the anchor.
             expect(screen.findRow('settings.sourceControl.backend.git.defaultDiff')).toBeTruthy();
@@ -522,7 +514,6 @@ describe('SourceControlSettingsView', () => {
     });
 
     it('only renders backend-supported default diff modes', async () => {
-        const { SourceControlSettingsView } = await import('./SourceControlSettingsView');
         const screen = await renderSettingsView(React.createElement(SourceControlSettingsView));
         const git = segmentedControl(screen.findRow('settings.sourceControl.backend.git.defaultDiff'));
         expect(git.tabs.map((tab) => tab.id)).toContain('included');
@@ -535,7 +526,6 @@ describe('SourceControlSettingsView', () => {
     it('allows updating diff syntax highlighting mode', async () => {
         setFilesDiffSyntaxHighlightingMode.mockClear();
 
-        const { SourceControlSettingsView } = await import('./SourceControlSettingsView');
         const screen = await renderSettingsView(React.createElement(SourceControlSettingsView));
         const control = segmentedControl(screen.findRowByTitle('settingsSourceControl.page.files.highlighting'));
         expect(control.tabs.map((tab) => tab.id)).toContain('simple');
@@ -547,7 +537,6 @@ describe('SourceControlSettingsView', () => {
     it('allows updating files diff renderer mode', async () => {
         setFilesDiffRendererMode.mockClear();
 
-        const { SourceControlSettingsView } = await import('./SourceControlSettingsView');
         const screen = await renderSettingsView(React.createElement(SourceControlSettingsView));
         const control = segmentedControl(screen.findRowByTitle('settingsSourceControl.page.files.renderer'));
         expect(control.tabs.map((tab) => tab.id)).toContain('happier');
@@ -559,7 +548,6 @@ describe('SourceControlSettingsView', () => {
     it('allows updating diff presentation style', async () => {
         setFilesDiffPresentationStyle.mockClear();
 
-        const { SourceControlSettingsView } = await import('./SourceControlSettingsView');
         const screen = await renderSettingsView(React.createElement(SourceControlSettingsView));
         const control = segmentedControl(screen.findRowByTitle('settingsSourceControl.page.files.layout'));
         expect(control.tabs.map((tab) => tab.id)).toContain('unified');
@@ -571,7 +559,6 @@ describe('SourceControlSettingsView', () => {
     it('allows updating changed files row density', async () => {
         setFilesChangedFilesRowDensity.mockClear();
 
-        const { SourceControlSettingsView } = await import('./SourceControlSettingsView');
         const screen = await renderSettingsView(React.createElement(SourceControlSettingsView));
         const control = segmentedControl(screen.findRowByTitle('settingsSourceControl.page.files.density'));
         expect(control.tabs.map((tab) => tab.id)).toContain('compact');
@@ -585,7 +572,6 @@ describe('SourceControlSettingsView', () => {
         setShowLineNumbersInToolViews.mockClear();
         setWrapLinesInDiffs.mockClear();
 
-        const { SourceControlSettingsView } = await import('./SourceControlSettingsView');
         const screen = await renderSettingsView(React.createElement(SourceControlSettingsView));
 
         expect(screen.findRowByTitle('settingsAppearance.showLineNumbersInDiffs')).toBeTruthy();
@@ -604,7 +590,6 @@ describe('SourceControlSettingsView', () => {
     it('renders commit message generator settings and allows disabling', async () => {
         setScmCommitMessageGeneratorEnabled.mockClear();
 
-        const { SourceControlSettingsView } = await import('./SourceControlSettingsView');
         const screen = await renderSettingsView(React.createElement(SourceControlSettingsView));
         expect(screen.findRowByTitle('settingsSourceControl.commitMessageGenerator.title')).toBeTruthy();
         screen.pressRowByTitle('settingsSourceControl.commitMessageGenerator.title');
@@ -615,7 +600,6 @@ describe('SourceControlSettingsView', () => {
     it('allows editing commit message generator instructions', async () => {
         setScmCommitMessageGeneratorInstructions.mockClear();
 
-        const { SourceControlSettingsView } = await import('./SourceControlSettingsView');
         const screen = await renderSettingsView(React.createElement(SourceControlSettingsView));
         const instructions = screen.findRowByTitle('settingsSourceControl.page.generator.instructionsTitle')?.props.rightElement;
         expect(instructions?.props.placeholder).toBe('settingsSourceControl.commitMessageGenerator.instructionsPlaceholder');
@@ -627,18 +611,19 @@ describe('SourceControlSettingsView', () => {
         expect(setScmCommitMessageGeneratorInstructions).toHaveBeenCalledWith('Use imperative mood');
     });
 
-    it('commits a trimmed inline agent draft on submit and ignores an empty draft', async () => {
+    it('chooses the commit-message Agent by name from the enabled Agents, never as a raw id field', async () => {
         setScmCommitMessageGeneratorBackendId.mockClear();
-        const { SourceControlSettingsView } = await import('./SourceControlSettingsView');
         const screen = await renderSettingsView(<SourceControlSettingsView />);
-        expect(screen.findByTestId('settings.sourceControl.commitMessageAgent')).toBeTruthy();
-        act(() => screen.changeTextByTestId('settings.sourceControl.commitMessageAgent', ' custom-agent '));
-        expect(setScmCommitMessageGeneratorBackendId).not.toHaveBeenCalled();
-        act(() => screen.findByTestId('settings.sourceControl.commitMessageAgent')!.props.onSubmitEditing());
-        expect(setScmCommitMessageGeneratorBackendId).toHaveBeenCalledWith('custom-agent');
-        setScmCommitMessageGeneratorBackendId.mockClear();
-        act(() => screen.changeTextByTestId('settings.sourceControl.commitMessageAgent', ' '));
-        act(() => screen.findByTestId('settings.sourceControl.commitMessageAgent')!.props.onBlur());
-        expect(setScmCommitMessageGeneratorBackendId).not.toHaveBeenCalled();
+        const picker = () => screen.findAll((node: any) => node.props?.itemTrigger?.itemProps?.testID === 'settings.sourceControl.commitMessageAgent')[0];
+        expect(picker()).toBeTruthy();
+        // No free-text field remains for the Agent.
+        expect(screen.findAll((node: any) => node.props?.fieldTestID === 'settings.sourceControl.commitMessageAgent')).toHaveLength(0);
+        const items = picker()!.props.items as ReadonlyArray<{ id: string; title: string; subtitle?: string }>;
+        expect(items.length).toBeGreaterThan(0);
+        for (const item of items) expect(item.subtitle).not.toBe(item.id);
+        expect(picker()!.props.selectedId).toBe('codex');
+        const other = items.find((item) => item.id !== 'codex')!;
+        act(() => picker()!.props.onSelect(other.id));
+        expect(setScmCommitMessageGeneratorBackendId).toHaveBeenCalledWith(other.id);
     });
 });
