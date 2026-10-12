@@ -989,16 +989,20 @@ test('QA runtime builds use coherent last-green package outputs only for compile
           env: { HAPPIER_WORKSPACE_BUILD_MODE: buildMode },
         });
         const qaRequest = await runtimeRequest('qa-runtime');
-        assert.deepEqual(qaRequest.stalePackagesByComponent.web, result.stalePackages);
         const strictRequest = await runtimeRequest('strict');
-        assert.notEqual(qaRequest.artifactFingerprints.web, strictRequest.artifactFingerprints.web);
-        assert.notEqual(qaRequest.snapshotId, strictRequest.snapshotId);
+        // Request identity describes the same consumed source/toolchain inputs;
+        // coherent last-green admission is already proved against the package
+        // record and retained bytes above, not a removed request result field.
+        assert.equal(qaRequest.artifactFingerprints.web, strictRequest.artifactFingerprints.web);
+        assert.equal(qaRequest.snapshotId, strictRequest.snapshotId);
         writeFileSync(source, 'export const value: string = "fixed";\n');
         const fixed = await build();
         assert.deepEqual(fixed.built, ['@happier-dev/example']);
         assert.equal(fixed.stalePackages?.length ?? 0, 0);
         assert.equal(JSON.parse(readFileSync(recordPath, 'utf8')).qaFailure, undefined);
-        assert.deepEqual((await runtimeRequest('qa-runtime')).stalePackagesByComponent.web, []);
+        const repairedRequest = await runtimeRequest('qa-runtime');
+        assert.notEqual(repairedRequest.componentSourceFingerprints.web, qaRequest.componentSourceFingerprints.web);
+        assert.notEqual(repairedRequest.artifactFingerprints.web, qaRequest.artifactFingerprints.web);
       } else if (scenario === 'drift') {
         const result = await build();
         assert.deepEqual(result.built, ['@happier-dev/example']);
