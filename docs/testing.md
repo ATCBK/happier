@@ -87,7 +87,7 @@ The Stack unit runner isolates product state and caches without dropping its exe
 
 Remote dependency bootstrap reuses the existing per-install dependency refresh lock and checks freshness again after waiting, so same-input callers share the completed installation. In 0.3 development, both remote command entry points finish dependency and workspace preparation before reserving the payload's heavyweight admission envelope. Preparation's compiler leaves retain their own admission. This order lets a dependency/build lock holder obtain admission while another command waits for that lock. Dependency waiters remain behind a live installer without an acquisition deadline; a delayed JavaScript heartbeat during synchronous package-manager work does not permit replacing that owner. The existing lock owner still reclaims exited installers and stale malformed lock records. Native admission decisions reclaim dead owners and owner directories with an unreadable or incomplete process identity under the existing capacity lock; read-only memory samples do not mutate those records.
 
-Routed POSIX commands default `TMPDIR` to `tmp` beneath the configured worker CLI home, on the worker's disk-backed filesystem. Explicit `TMPDIR` remains supported; existing live scratch is never relocated. This prevents default test/build scratch from consuming RAM-backed `/tmp` quotas. Custody owns that environment before admission, preparation and payload execution.
+Routed POSIX commands default scratch beneath `tmp` in the configured worker CLI home, on the worker's disk-backed filesystem. On Linux, custody allocates a unique `hstack-*` directory there and exports it as `TMPDIR` before admission, preparation and payload execution. After the payload group stops, custody reuses its process-binding inventory to remove that command's scratch, including Yarn's per-run directories and killed test fixtures. A surviving group, inherited `TMPDIR`/test-root binding or unavailable newer-process observation retains it. Explicit `TMPDIR` remains caller-owned and unchanged; non-Linux commands retain the shared disk-backed default. This prevents default test/build scratch from consuming RAM-backed `/tmp` quotas.
 
 For broad local collection, inspect `node scripts/pipeline/run.mjs checks --profile fast --dry-run` first. For a focused rerun, use a workspace command or `checks --profile custom --custom-checks integration,typecheck --install-deps false`. Custom selection is exact, not an implicit full baseline. The checks owner collects independent failures and returns nonzero; install failure still stops dependent checks.
 
@@ -221,6 +221,10 @@ resident dependencies, caches and retained outputs do not establish additional w
 so there is no disk-envelope reservation or guessed build peak. Exhaustion triggers
 ordered custody reclamation (oldest stale staging across stacks, unneeded Yarn entries,
 stale lane scratch). Explicit maintenance can run that retention policy independently.
+In 0.3 development, maintenance nominates the former worker `runtime-build/<stack>`
+platform directories, private `store`, and `.incoming-happier-runtime-build-*` roots
+through the historical reaper.
+Unknown children, symlinks, recent descendant writes and live references are retained.
 A still-exhausted worker is excluded before bootstrap/payload; pins report the disk
 diagnostic. The execution-qualified disk marker never authorizes replay of a started
 command. `dev-targets status` exposes free bytes. Admission does not guarantee capacity
@@ -230,7 +234,7 @@ Linux/WSL waiting messages and `dev-targets status NAME` expose authenticated ad
 
 An explicit routed `hstack-exec --heavyweight-admission --class=... -- ...` carries its class into this same placement policy before committing to a worker. Payload flags after the delimiter do not change the envelope. Native memory observation uses the existing native process-identity owner without installed workspace dependencies, so fresh mirrors can enter admission before their first dependency bootstrap.
 
-Stack unit roots, CLI default test homes/bins, external-hook configuration fixtures and docs-check fixtures use `scripts/testing/process/temporaryDirectories.mjs` for normal teardown. On Linux, the existing remote execution custody owner can reclaim newly marked roots after their creator, process group and explicitly bound descendants are gone. Detached children inherit `HAPPIER_TEST_TEMP_ROOTS`; inaccessible ownership observations retain the root. In current 0.3 development, its explicit `reap-temp-roots` maintenance mode also checks historical `happier-*`, `hstack-*` and `docs-check-*` directories beneath the worker's temporary directory. Linux runtime-build requests invoke the same historical scanner before compiling; ordinary command dispatch already reaps marked abandoned roots. It reclaims only account-owned, non-symlink roots whose newest descendant mtime is older than 24 hours and which no live same-UID process uses as cwd, open descriptor or mapped file. Unknown UID or same-UID visibility retains candidates; processes whose status identifies only foreign UIDs do not block this user's reclamation. The 24-hour margin is based on builds of at most three hours and watchers of at most two hours, and does not limit admission waits. Reclamation logs paths and allocated bytes, counting hard-linked files once. Invoke the mode through target-specific execution of `bash apps/stack/scripts/utils/dev_targets/remote_execution_custody.sh reap-temp-roots - historical-sweep`; it never signals processes.
+Stack unit roots, CLI default test homes/bins, external-hook configuration fixtures and docs-check fixtures use `scripts/testing/process/temporaryDirectories.mjs` for normal teardown. On Linux, custody's explicit `reap-test-temp-roots` mode can reclaim marked roots after their creator, process group and explicitly bound descendants are gone. Detached children inherit `HAPPIER_TEST_TEMP_ROOTS`; inaccessible ownership observations retain the root. Ordinary command dispatch does not sweep shared scratch. In current 0.3 development, explicit `reap-temp-roots` maintenance checks historical `happier-*`, `hstack-*`, `docs-check-*` and Yarn v1 `yarn--*` directories beneath the selected temporary parent. It reclaims only account-owned, non-symlink roots whose newest descendant mtime is older than 24 hours and which no live same-UID process uses as cwd, open descriptor, mapped file or inherited temp binding. For a known same-UID process denied by procfs dumpability, the historical reaper retries read-only observation through existing noninteractive `sudo` authorization. It never exempts a process by name, changes OS authorization, or elevates deletion. Unknown UID or still-unavailable same-UID visibility retains candidates; processes whose status identifies only foreign UIDs do not block this user's reclamation. Environment contents and privileged command output are never logged. The 24-hour margin does not limit admission waits. Reclamation logs paths and allocated bytes, counting hard-linked files once. Invoke historical maintenance through target-specific execution of `bash apps/stack/scripts/utils/dev_targets/remote_execution_custody.sh reap-temp-roots - historical-sweep`, with an explicit `TMPDIR` for a shared parent; it never signals processes.
 
 Service placements do not exclude command hosts. Admission measures resident memory of current server/Expo process trees through their existing Stack PID state and process-generation witnesses, including standalone Expo state. It limits capacity to total RAM minus that resident memory without subtracting RSS twice from `MemAvailable`. Active builds retain their `runtime-build` class reservation. Diagnostics expose service and command reservations; no second placement list exists. A class larger than total RAM minus service reservations fails immediately with a remote-routing instruction, rather than waiting for impossible local capacity.
 
@@ -252,11 +256,20 @@ root, so two repositories routed to the same worker have independent causal
 barriers. Stack and QA supervisors only borrow existing producer mirrors and
 cannot replace their membership or retire them on shutdown. Provisioning and
 retirement belong to the routing sync service. A failed resume does not restart
-the shared daemon, and project replacement flushes old membership before
-termination. Mac mirrors require a current Mac-only flow, not withdrawn
+the shared daemon. Before project activation, the sync owner removes orphan
+repository writers by exact session identifier, using Mutagen's project label
+and current lock identity. A failed project termination preserves the project
+file; replacement flushes current old membership before termination.
+Mac mirrors require a current Mac-only flow, not withdrawn
 exact-target typechecks alone.
 
 `mutagen_runtime.mjs` owns first-cycle readiness, including its generated `native_sync_readiness.sh` projection. A clean connected idle session with both endpoints in `no-watch` and no completed cycle is `needs-flush`: eligible for selection, with the mandatory dispatch barrier establishing a completed clean cycle before any payload. An active initial scan remains `synchronizing`. Status and doctor read the same classification; startup seeding also consumes it rather than deciding independently from watch/cycle fields.
+
+Known transition races (file modification during validation, a disappearing
+leaf, or a missing staged file during permission application) request one fresh
+flush through the same barrier. Startup uses that barrier too. Recovery never
+admits a payload until a fresh inspection is clean; persistent, unknown,
+excluded or permission-denied transition problems remain unhealthy.
 
 Managed worker enrollment and automatic command placement attempt to disable sleep through `dev-targets power no-sleep NAME|auto`. Ordinary unmanaged SSH enrollment requires explicit `host prepare --no-sleep` or `power no-sleep`. Managed workers apply the same policy to their outer host and Linux guest. Windows disables AC/battery idle and unattended sleep, idle hibernation and lid-triggered sleep; macOS disables idle system sleep; Linux masks systemd sleep targets. Manual targets are excluded from automatic placement setup. An existing Windows machine policy enforcing zero satisfies that setting; conflicting policy remains an error. Administrator privileges are required, and denied settings are reported without blocking worker enrollment or changing placement. The explicit power command returns failure for incomplete configuration. These defaults belong to worker setup, not ordinary Happier installation on a personal computer.
 
@@ -317,10 +330,12 @@ lane's tests. Operator steps and guest Tailscale identity are documented in the
 [worker guide](../apps/docs/content/docs/hstack/dev-targets.mdx).
 
 `apps/stack/scripts/provision/linux-inotify.mjs` owns the owner-approved
-`max_user_instances=1024` policy. Managed guest provisioning invokes it outside
+inotify policy: `max_user_instances=1024`, `max_user_watches=2097152`, and
+`max_queued_events=131072`, retaining any higher live limits. Managed guest provisioning invokes it outside
 toolchain readiness; Linux/WSL `dev-targets host prepare --inotify` embeds it in
-the existing one-sudo preparation session. Neither path changes
-`max_user_watches`. OS-boundary fixtures execute the real shell policy against
+the existing one-sudo preparation session. The values provide headroom for the
+measured 0.3 development fleet's 221,994 watches across 124 instances and a
+16,803-watch CLI/server stack. OS-boundary fixtures execute the real shell policy against
 isolated sysctl/file adapters and assert the persisted file, live value,
 repeat behavior, and combined sudo scope. Live boot persistence still requires
 the owner's post-restart readback; sysctl.d is a boot input on systemd guests,

@@ -110,6 +110,19 @@ or an explicit `HAPPIER_PROVISION_BUN_VERSION` override. Component builders stil
 resolve the selected executable and record its actual version in build identity;
 this pin is not a managed Agent runtime or a change to installed product state.
 
+In 0.3 development, `dev-targets host prepare NAME --toolchain` also prepares
+user-local Rust through `packages/iroh-native/scripts/ensure-rust-toolchain.mjs`.
+The controller streams that installer and the package's `rust-toolchain.toml`
+pin to the selected SSH account, including after `--create-user`; Rust installation
+runs without elevation and adds no mobile or WASM targets. A ready pinned compiler
+is reused. Run native addon builds from `packages/iroh-native` so Cargo selects
+that package's toolchain pin, with its user-local Cargo bin directory on `PATH`.
+Worker source mirrors exclude Iroh's `native/` and `native-test/` outputs so a
+later synchronization barrier preserves the worker's architecture-specific addon.
+Apply changed exclusions to existing mirrors through the routing producer's
+`dev-targets sync-service start --detached`; ordinary flushes use the existing
+project's rules.
+
 Private workspace packages such as `packages/protocol`, `packages/agents`, `packages/cli-common`, and `packages/release-runtime` are not published independently, but they must ship inside published npm packages that import them at runtime.
 
 Published hosts and bundled libraries currently include:

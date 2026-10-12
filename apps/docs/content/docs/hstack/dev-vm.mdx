@@ -106,9 +106,15 @@ remain local. Arbitrary Mac environment variables and credentials are not
 forwarded to the target.
 
 With automatic mounting enabled, SSH-primary delegation mounts that target's
-home at `~/.happier-stack/<target>-home`, with Finder volume name
-`Happier <target>`. It keeps the retained Lima mount and its saved destination
-separate. A healthy existing SSHFS mount from the enrolled SSH alias is adopted;
+home at `~/.happier-stack/<target>-home` by default, with Finder volume name
+`Happier <target>`. Changing the primary selection clears the saved mount
+directory and retains the automatic-mount preference; selecting a different
+enrollment Stack also clears the directory. Existing mounts stay in place.
+After assignment, use `hstack dev-vm mount enable --mount-dir=/absolute/path`
+to save a custom destination for that selection. Assigning the same target and
+Stack again preserves it. Selecting Lima derives `~/.happier-stack/vm-home`
+unless you then configure a custom Lima destination.
+A healthy existing SSHFS mount from the enrolled SSH alias is adopted;
 an inaccessible mount or a different source is left in place with a diagnostic.
 Detach that mount yourself before retrying if it needs replacement.
 
@@ -249,20 +255,22 @@ it also launches a non-blocking skill synchronization in the background. A
 repeated `start` while the guest is already running does not launch another
 synchronization.
 
-## Persist inotify instance capacity
+## Persist inotify capacity
 
 Managed controller and worker guest provisioning in the 0.3 development
-checkout installs `/etc/sysctl.d/60-happier-inotify.conf` containing only
-`fs.inotify.max_user_instances=1024`, and applies that file immediately when
-the runtime value differs. This owner-approved fleet setting addresses observed
-instance exhaustion from many concurrent Agent processes; it leaves
-`fs.inotify.max_user_watches` unchanged. Provisioning repeats the check even
+checkout atomically installs `/etc/sysctl.d/60-happier-inotify.conf` with
+`fs.inotify.max_user_instances=1024`, `fs.inotify.max_user_watches=2097152`, and
+`fs.inotify.max_queued_events=131072`, and applies that file immediately when
+runtime values differ. This fleet policy provides capacity for concurrent Agent
+processes and source-watching event bursts; higher existing limits are retained.
+Provisioning repeats the check even
 when the guest toolchain is already ready, without reinstalling it.
 
 For an existing Linux guest, use the opt-in
 [worker host preparation command](/hstack/dev-targets#prepare-linux-worker-hosts-explicitly)
 before scheduling a VM restart. A runtime-only `sysctl` change does not survive
-that restart. Verify both the drop-in and `sysctl -n fs.inotify.max_user_instances`
+that restart. Verify both the drop-in and
+`sysctl fs.inotify.max_user_instances fs.inotify.max_user_watches fs.inotify.max_queued_events`
 inside the guest afterward. Network apply itself changes no guest sysctl.
 
 To remove the policy inside a guest, remove only its drop-in:
@@ -274,8 +282,8 @@ sudo rm -- /etc/sysctl.d/60-happier-inotify.conf
 Removal takes effect at the next boot that loads the distribution's sysctl
 defaults. It does not restore a live value automatically. To restore a live
 value immediately, first establish the previous value for that machine and
-set only `fs.inotify.max_user_instances` with `sudo sysctl -w`; do not assume
-every distribution uses 128. Managed provisioning installs the policy again
+restore each changed inotify setting with `sudo sysctl -w`; distribution defaults
+vary. Managed provisioning installs the policy again
 when explicitly rerun.
 
 ## Use native NAT for VM traffic

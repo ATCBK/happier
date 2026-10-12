@@ -325,17 +325,19 @@ hstack dev-targets host prepare linux1 windows1-linux --inotify --stack=repo-dev
 ```
 
 Use the enrolled Linux guest's target name, not a native Windows host entry.
-`--inotify` installs `/etc/sysctl.d/60-happier-inotify.conf` containing only
-`fs.inotify.max_user_instances=1024` and applies it immediately if needed.
-It leaves `fs.inotify.max_user_watches` and all other sysctls alone. Repeating
-it keeps the same file and value; combine it with other preparation flags to
+In the 0.3 development checkout, `--inotify` atomically installs
+`/etc/sysctl.d/60-happier-inotify.conf` with `fs.inotify.max_user_instances=1024`,
+`fs.inotify.max_user_watches=2097152`, and `fs.inotify.max_queued_events=131072`,
+then applies it immediately if needed. Higher existing limits are retained. Repeating
+it keeps the same file and values; combine it with other preparation flags to
 share the existing single sudo session. Enrollment does not install the policy
 on unmanaged workers; managed Lima guest provisioning does.
 
 On systemd-based guests, sysctl.d is loaded at boot. A WSL guest whose init
 does not load sysctl.d needs its existing boot policy to do so, or the explicit
 preparation command must be rerun after it boots. Verify
-`sysctl -n fs.inotify.max_user_instances` after any restart.
+`sysctl fs.inotify.max_user_instances fs.inotify.max_user_watches fs.inotify.max_queued_events`
+after any restart.
 Remove only this drop-in interactively:
 
 ```bash
