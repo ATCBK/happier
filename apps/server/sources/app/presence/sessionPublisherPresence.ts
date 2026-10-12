@@ -1,5 +1,6 @@
 import {
   SessionRuntimeActivitySnapshotSchema,
+  SessionPublisherGenerationV1Schema,
   type SessionMetadataPublisherPreconditionV1,
   type PrimaryTurnStatusV1,
     type SessionRuntimeActivitySnapshot,
@@ -14,6 +15,7 @@ import { hasCurrentSessionScopedMachineAccessInTx } from "@/app/api/socket/sessi
 import { readCurrentSessionInputMachineTargetInTx } from "@/app/session/messages/sessionInputAdmission";
 import { getActivePrismaRuntime } from "@/storage/db";
 import { markSessionProjectionRecipientsChanged, type SessionRecipientCursor } from "@/app/session/changeTracking/markSessionProjectionRecipientsChanged";
+import { acquireSessionAccountCursorLocksInTx } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
 import {
     updateSessionRuntimeActivityProjection,
     writeSessionRuntimeActivityObserverLossInTx,
@@ -24,11 +26,11 @@ import {
 } from "@/app/session/sessionWriteService";
 import {
     fenceExactCurrentPublisherAuthorityInTx,
-    hasExactCurrentPublisherAuthorityInTx,
+    readExactCurrentPublisherAuthorityInTx,
 } from "@/app/session/pending/hasExactCurrentPublisherAuthorityInTx";
 import { SESSION_TRANSCRIPT_PUBLICATION_SELECT } from "@/app/session/sessionTranscriptPublicationPolicy";
 import { inTx } from "@/storage/inTx";
-import type { Tx } from "@/storage/inTx";
+import type { InTxOptions, Tx } from "@/storage/inTx";
 import { AsyncLock } from "@/utils/runtime/lock";
 import {
     clearPendingActivationAuthorizationForPublisherActivityData,
@@ -119,6 +121,7 @@ export type SessionPublisherAuthorityProjectionV1 = Readonly<{
     machineId: string;
     sessionId: string;
     committedFenceMs: number;
+    publisherGeneration: string;
 }>;
 
 export type RunAsProjectedCurrentPublisherResult<T> =
@@ -140,6 +143,7 @@ function parseSessionPublisherAuthorityProjection(
     const machineId = normalizeNonEmptyString(candidate.machineId);
     const sessionId = normalizeNonEmptyString(candidate.sessionId);
     const committedFenceMs = candidate.committedFenceMs;
+    const publisherGeneration = SessionPublisherGenerationV1Schema.safeParse(candidate.publisherGeneration);
     if (
         candidate.v !== 1
         || !accountId
@@ -148,6 +152,7 @@ function parseSessionPublisherAuthorityProjection(
         || typeof committedFenceMs !== "number"
         || !Number.isSafeInteger(committedFenceMs)
         || committedFenceMs < 0
+        || !publisherGeneration.success
     ) {
         return null;
     }
@@ -157,6 +162,7 @@ function parseSessionPublisherAuthorityProjection(
         machineId,
         sessionId,
         committedFenceMs,
+        publisherGeneration: publisherGeneration.data,
     };
 }
 
@@ -184,6 +190,7 @@ function writeSessionPublisherAuthorityProjection(
         v: 1,
         ...registration.binding,
         committedFenceMs: registration.committedFence.getTime(),
+        publisherGeneration: registration.publisherGeneration.toString(),
     } satisfies SessionPublisherAuthorityProjectionV1;
 }
 
@@ -238,6 +245,7 @@ export async function expireSessionPublisherCandidates(params: Readonly<{
 }>): Promise<readonly ExpireSessionPublisherResult[]> {
     if (params.candidates.length === 0) return [];
     return await inTx(async (tx): Promise<readonly ExpireSessionPublisherResult[]> => {
+        await acquireSessionAccountCursorLocksInTx(tx, params.candidates.map(candidate => candidate.sessionId));
         const results: ExpireSessionPublisherResult[] = [];
         for (const candidate of params.candidates) {
             const session = await tx.session.findUnique({
@@ -337,6 +345,7 @@ export function createSessionPublisherPresence(options: Readonly<{ now?: () => D
         snapshot: SessionRuntimeActivitySnapshot,
         observedAt?: Date,
     ): Promise<RegisterSessionPublisherResult> => await inTx(async (tx): Promise<RegisterSessionPublisherResult> => {
+        await acquireSessionAccountCursorLocksInTx(tx, [binding.sessionId]);
         const session = await tx.session.findUnique({
             where: { id: binding.sessionId },
             select: {
@@ -479,6 +488,7 @@ export function createSessionPublisherPresence(options: Readonly<{ now?: () => D
                 return { status: "stale_observation" };
             }
             const result = await inTx(async (tx): Promise<TouchSessionPublisherResult> => {
+                await acquireSessionAccountCursorLocksInTx(tx, [registration.binding.sessionId]);
                 const session = await tx.session.findUnique({
                     where: { id: registration.binding.sessionId },
                     select: {
@@ -555,6 +565,9 @@ export function createSessionPublisherPresence(options: Readonly<{ now?: () => D
         mutationId: string;
         settleLatestTurn?: boolean;
     }>): Promise<CloseSessionPublisherResult> => await inTx(async (tx): Promise<CloseSessionPublisherResult> => {
+        await acquireSessionAccountCursorLocksInTx(tx, [params.binding.sessionId], [], {
+            includeLifecyclePublications: params.settleLatestTurn !== false,
+        });
         const session = await tx.session.findUnique({
             where: { id: params.binding.sessionId },
             select: {
@@ -732,7 +745,7 @@ export function createSessionPublisherPresence(options: Readonly<{ now?: () => D
                 authority,
             },
         };
-    });
+    }, { isolationLevel: "Serializable" /* Stop capture combines Session generation, Machine access and Runner currentness in one snapshot. */ });
 
     const captureMachineSessionTerminal = captureExplicitMachineStop;
 
@@ -836,7 +849,8 @@ export function createSessionPublisherPresence(options: Readonly<{ now?: () => D
 
     const runAsCurrentPublisherInTx = async <T>(params: Readonly<{
         socket: object;
-        deadlineAtMs: number;
+        deadlineAtMs?: number;
+        isolationLevel?: InTxOptions["isolationLevel"];
         operation: (authority: CurrentSessionPublisherAuthority, tx: Tx) => Promise<T>;
     }>): Promise<T | null> => await serialize(params.socket, async () => {
         const registration = registrations.get(params.socket);
@@ -844,7 +858,10 @@ export function createSessionPublisherPresence(options: Readonly<{ now?: () => D
         return await inTx(async (tx) => await params.operation({
             ...registration.binding,
             committedFence: new Date(registration.committedFence.getTime()),
-        }, tx), { deadlineAtMs: params.deadlineAtMs });
+        }, tx), {
+            deadlineAtMs: params.deadlineAtMs,
+            ...(params.isolationLevel === undefined ? {} : { isolationLevel: params.isolationLevel }),
+        });
     }, { deadlineAtMs: params.deadlineAtMs });
 
     const readCurrentPublisherPrecondition = async (params: Readonly<{
@@ -869,6 +886,7 @@ export function createSessionPublisherPresence(options: Readonly<{ now?: () => D
           ? {
               machineId: registration.binding.machineId,
               committedFenceMs: registration.committedFence.getTime(),
+              publisherGeneration: registration.publisherGeneration.toString(),
             }
           : null;
     });
@@ -891,19 +909,12 @@ export function createSessionPublisherPresence(options: Readonly<{ now?: () => D
         ) {
             return null;
         }
-        const authority: CurrentSessionPublisherAuthority = {
+        return await inTx(async (tx) => await readExactCurrentPublisherAuthorityInTx(tx, {
             accountId: projection.accountId,
             machineId: projection.machineId,
             sessionId: projection.sessionId,
-            committedFence: new Date(projection.committedFenceMs),
-        };
-        const current = await inTx(async (tx) => await hasExactCurrentPublisherAuthorityInTx(
-            tx,
-            authority,
-            params.expectedAccountId,
-            params.expectedSessionId,
-        ));
-        return current ? authority : null;
+            publisherGeneration: BigInt(projection.publisherGeneration),
+        }, params.expectedAccountId, params.expectedSessionId), { isolationLevel: "Serializable" /* Projected publisher generation and Machine access must be read from one snapshot. */ });
     };
 
     const isCurrentPublisherProjection = async (params: Readonly<{
@@ -949,6 +960,7 @@ export function createSessionPublisherPresence(options: Readonly<{ now?: () => D
                 if (!registration) return { status: "unregistered" } as const;
                 if (closeResults.has(params.socket)) return { status: "closed" } as const;
                 return await inTx(async (tx) => {
+                    await acquireSessionAccountCursorLocksInTx(tx, [registration.binding.sessionId]);
                     const session = await tx.session.findUnique({
                         where: { id: registration.binding.sessionId },
                         select: {
@@ -1003,6 +1015,7 @@ export function createSessionPublisherPresence(options: Readonly<{ now?: () => D
         runAsCurrentPublisherInTx,
         readCurrentPublisherPrecondition,
         checkCurrentPublisher,
+        resolveProjectedCurrentPublisher,
         isCurrentPublisherProjection,
         runAsProjectedCurrentPublisher,
         forgetDisconnectedPublisher,

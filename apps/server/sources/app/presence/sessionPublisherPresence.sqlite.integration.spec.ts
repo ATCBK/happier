@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Socket } from "socket.io";
+import type { Server, Socket } from "socket.io";
 import {
     MACHINE_SESSION_TERMINAL_CAPTURE_EVENT_V1,
     MachineSessionTerminalCaptureResponseV1Schema,
@@ -18,7 +18,8 @@ import {
 } from "@/app/session/sessionWriteService";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 
-import { createSessionPublisherPresence, expireSessionPublisherCandidates } from "./sessionPublisherPresence";
+import { createSessionPublisherPresence, expireSessionPublisherCandidates, readSessionPublisherAuthorityProjection } from "./sessionPublisherPresence";
+import { resolveCurrentSessionPublisherFromServer } from "@/app/api/socket/externalActionDispatcher";
 
 const authentication = createPresentUserSessionAccessAuthentication();
 
@@ -186,7 +187,7 @@ describe("session publisher presence on SQLite", () => {
         });
     });
 
-    it("rejects a predecessor publisher tuple patch after a successor commits its fence", async () => {
+    it.each(["heartbeat", "replacement"] as const)("keeps publisher tuple authority across %s only when the publisher is unchanged", async (change) => {
         const seeded = await seed();
         const previousOwnerMetadataCiphertext =
             "oRoBAgMEBQYHCAkKCwwNDg8QERITFBUWFxh8aC0+8+YDECLScN6uQTItPyWVR7XbQA==";
@@ -213,8 +214,9 @@ describe("session publisher presence on SQLite", () => {
         });
         let now = new Date(seeded.fence.getTime() + 10);
         const presence = createSessionPublisherPresence({ now: () => now });
+        const predecessorSocket = {};
         const predecessor = await presence.registerPublisher({
-            socket: {},
+            socket: predecessorSocket,
             binding: seeded.binding,
             completeActivitySnapshot: { state: "active", activeCount: 1 },
         });
@@ -223,22 +225,26 @@ describe("session publisher presence on SQLite", () => {
             throw new Error("expected predecessor registration");
         }
         now = new Date(predecessor.committedFence.getTime() + 10);
-        const successor = await presence.registerPublisher({
-            socket: {},
-            binding: seeded.binding,
-            completeActivitySnapshot: { state: "idle", activeCount: 0 },
-        });
-        expect(successor.status).toBe("registered");
+        const publisherPrecondition = await presence.readCurrentPublisherPrecondition({ socket: predecessorSocket });
+        if (!publisherPrecondition) throw new Error("expected current publisher authority");
+        const successor = change === "heartbeat"
+            ? await presence.touchPublisher({ socket: predecessorSocket })
+            : await presence.registerPublisher({
+                socket: {},
+                binding: seeded.binding,
+                completeActivitySnapshot: { state: "idle", activeCount: 0 },
+            });
+        expect(successor.status).toBe(change === "heartbeat" ? "touched" : "registered");
+        if (successor.status !== "registered" && successor.status !== "touched") {
+            throw new Error("expected publisher activity commit");
+        }
 
-        const stalePublisherPatch = {
+        const capturedPublisherPatch = {
             mode: "owner" as const,
             actorUserId: seeded.binding.accountId,
             sessionId: seeded.binding.sessionId,
             metadataLayoutVersion: 1 as const,
-            publisherPrecondition: {
-                machineId: seeded.binding.machineId,
-                committedFenceMs: predecessor.committedFence.getTime(),
-            },
+            publisherPrecondition,
             expectedOwnerMetadata: previousOwnerMetadata,
             sharedMetadata: {
                 ciphertext: "shared-after",
@@ -251,11 +257,10 @@ describe("session publisher presence on SQLite", () => {
             },
         };
         await expect(updateSessionMetadataEnvelopeTuple(
-            stalePublisherPatch,
-        )).resolves.toEqual({
-            ok: false,
-            error: "publisher-superseded",
-        });
+            capturedPublisherPatch,
+        )).resolves.toMatchObject(change === "heartbeat"
+            ? { ok: true }
+            : { ok: false, error: "publisher-superseded" });
         await expect(db.session.findUniqueOrThrow({
             where: { id: seeded.binding.sessionId },
             select: {
@@ -267,15 +272,12 @@ describe("session publisher presence on SQLite", () => {
                 lastActiveAt: true,
             },
         })).resolves.toEqual({
-            metadata: "shared-before",
-            metadataVersion: 4,
-            ownerMetadata: JSON.stringify(previousOwnerMetadata),
-            agentState: "agent-before",
-            agentStateVersion: 8,
-            lastActiveAt:
-                successor.status === "registered"
-                    ? successor.committedFence
-                    : expect.any(Date),
+            metadata: change === "heartbeat" ? "shared-after" : "shared-before",
+            metadataVersion: change === "heartbeat" ? 5 : 4,
+            ownerMetadata: JSON.stringify(change === "heartbeat" ? nextOwnerMetadata : previousOwnerMetadata),
+            agentState: change === "heartbeat" ? "agent-after" : "agent-before",
+            agentStateVersion: change === "heartbeat" ? 9 : 8,
+            lastActiveAt: successor.committedFence,
         });
     });
 
@@ -1400,6 +1402,7 @@ describe("session publisher presence on SQLite", () => {
             v: 1,
             ...seeded.binding,
             committedFenceMs: registered.committedFence.getTime(),
+            publisherGeneration: registered.publisherGeneration.toString(),
         });
 
         now = new Date(registered.committedFence.getTime() + 10);
@@ -1409,8 +1412,88 @@ describe("session publisher presence on SQLite", () => {
             v: 1,
             ...seeded.binding,
             committedFenceMs: touched.committedFence.getTime(),
+            publisherGeneration: registered.publisherGeneration.toString(),
         });
     });
+
+    it("keeps the Session Action target current when its publisher heartbeat advances during socket discovery", async () => {
+        const seeded = await seed();
+        let now = new Date(seeded.fence.getTime() + 10);
+        const presence = createSessionPublisherPresence({ now: () => now });
+        const socket = { data: {} as Record<string, unknown> };
+        const registered = await presence.registerPublisher({
+            socket,
+            binding: seeded.binding,
+            completeActivitySnapshot: { state: "idle", activeCount: 0 },
+        });
+        if (registered.status !== "registered") throw new Error("expected registration");
+        let currentFence = registered.committedFence;
+        // Socket.IO discovery crosses an asynchronous transport boundary. Its
+        // captured data can arrive after this same publisher's next heartbeat.
+        const io = {
+            in: () => ({
+                fetchSockets: async () => {
+                    const capturedData = structuredClone(socket.data);
+                    now = new Date(registered.committedFence.getTime() + 10);
+                    const touched = await presence.touchPublisher({ socket });
+                    if (touched.status !== "touched") throw new Error("expected heartbeat");
+                    currentFence = touched.committedFence;
+                    return [{ data: capturedData }];
+                },
+            }),
+        } as unknown as Server;
+
+        const resolved = await resolveCurrentSessionPublisherFromServer({
+            io, presence, accountId: seeded.binding.accountId, sessionId: seeded.binding.sessionId,
+        });
+        expect(resolved).toEqual({ ...seeded.binding, committedFence: currentFence });
+    });
+
+    it.each(["closed", "archived", "access_withdrawn", "legacy_heartbeat", "machine_retired", "machine_replaced", "forged_generation", "malformed_generation"] as const)(
+        "refuses the discovered Session Action publisher after %s",
+        async (change) => {
+            const seeded = await seed();
+            const now = new Date(seeded.fence.getTime() + 10);
+            const presence = createSessionPublisherPresence({ now: () => now });
+            const socket = { data: {} as Record<string, unknown> };
+            const registered = await presence.registerPublisher({
+                socket, binding: seeded.binding, completeActivitySnapshot: { state: "idle", activeCount: 0 },
+            });
+            if (registered.status !== "registered") throw new Error("expected registration");
+            const capturedData = structuredClone(socket.data);
+            if (change === "closed") {
+                expect(await presence.closePublisher({ socket })).toMatchObject({ status: "closed" });
+            } else if (change === "access_withdrawn") {
+                await db.accessKey.deleteMany({ where: seeded.binding });
+            } else if (change === "machine_retired") {
+                await db.machine.update({ where: { id: seeded.binding.machineId }, data: { revokedAt: now } });
+            } else if (change === "machine_replaced") {
+                const replacementId = `${seeded.binding.machineId}-replacement`;
+                await db.machine.create({ data: { id: replacementId, accountId: seeded.binding.accountId, metadata: "{}" } });
+                await db.machine.update({ where: { id: seeded.binding.machineId }, data: { replacedByMachineId: replacementId } });
+            } else if (change === "forged_generation" || change === "malformed_generation") {
+                const projection = readSessionPublisherAuthorityProjection(capturedData);
+                if (!projection) throw new Error("expected server-written projection");
+                capturedData.sessionPublisherAuthority = {
+                    ...projection,
+                    publisherGeneration: change === "forged_generation"
+                        ? (registered.publisherGeneration + 1n).toString()
+                        : "01",
+                };
+            } else {
+                await db.session.update({
+                    where: { id: seeded.binding.sessionId },
+                    data: change === "archived"
+                        ? { archivedAt: now }
+                        : { lastActiveAt: new Date(now.getTime() + 10) },
+                });
+            }
+            const io = { in: () => ({ fetchSockets: async () => [{ data: capturedData }] }) } as unknown as Server;
+            await expect(resolveCurrentSessionPublisherFromServer({
+                io, presence, accountId: seeded.binding.accountId, sessionId: seeded.binding.sessionId,
+            })).resolves.toBeNull();
+        },
+    );
 
     it("rejects a projected publisher that is stale before the guarded effect", async () => {
         const seeded = await seed();
