@@ -43,6 +43,12 @@ describe('Avatar monogram presentation', () => {
         expect(monogram?.props.children).toBe('É');
     });
 
+    it('takes the monogram from the given name while the id keeps seeding the artwork', async () => {
+        const screen = await renderScreen(<Avatar id="cmv3nqbzj001em2z0qa1ivc5p" monogram="Platform Infrastructure" square size={44} />);
+
+        expect(screen.findByTestId('avatar-monogram')?.props.children).toBe('P');
+    });
+
     it('does not cover a published image with the generated monogram', async () => {
         const screen = await renderScreen(
             <Avatar id="team-1" title imageUrl="https://example.test/logo.png" square size={48} />,

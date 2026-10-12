@@ -9,7 +9,7 @@ import { AvatarBrutalist } from "./AvatarBrutalist";
 import { AgentIcon } from '@/agents/registry/AgentIcon';
 import { SafeExpoImage } from '@/components/ui/media/SafeExpoImage';
 import { useSetting } from '@/sync/domains/state/storage';
-import { StyleSheet } from 'react-native-unistyles';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { shadowLevelStyle } from '@/shadowElevation';
 import {
     resolveAgentIdFromFlavor,
@@ -21,6 +21,12 @@ interface AvatarProps {
     testID?: string;
     accessibilityLabel?: string;
     title?: boolean;
+    /**
+     * The name a monogram letter comes from while `id` keeps seeding the artwork (a Team: its name
+     * names it, its immutable id colours it, so two Teams sharing a name still differ).
+     */
+    monogram?: string | null;
+    /** A mark rather than a face: a square with the theme's mark radius (Teams). */
     square?: boolean;
     size?: number;
     monochrome?: boolean;
@@ -54,7 +60,7 @@ const styles = StyleSheet.create((theme) => ({
         right: -2,
         backgroundColor: theme.colors.surface.base,
         borderRadius: 100,
-        padding: 2,
+        padding: theme.space.s2,
         ...shadowLevelStyle(theme.colors.shadowLevels[2]),
     },
     unreadBadge: {
@@ -68,8 +74,15 @@ const styles = StyleSheet.create((theme) => ({
     },
 }));
 
+/** Marks at control height and above take the control radius; smaller ones the small-mark radius. */
+const SQUARE_MARK_CONTROL_SIZE = 28;
+
 export const Avatar = React.memo((props: AvatarProps) => {
-    const { flavor, size = 48, imageUrl, thumbhash, hasUnreadMessages, unreadBadgeTestID, testID, accessibilityLabel, ...avatarProps } = props;
+    const { flavor, size = 48, imageUrl, thumbhash, hasUnreadMessages, unreadBadgeTestID, testID, accessibilityLabel, monogram, ...avatarProps } = props;
+    const { theme } = useUnistyles();
+    // A square mark is clipped to the theme's own radius step, so it nests with rows and sheets
+    // instead of drawing hard corners (DESIGN.md: radii derive from one base).
+    const squareRadius = theme.borderRadius[size >= SQUARE_MARK_CONTROL_SIZE ? 'md' : 'sm'];
     const avatarStyle = useSetting('avatarStyle');
     const showFlavorIcons = useSetting('showFlavorIcons');
 
@@ -93,7 +106,7 @@ export const Avatar = React.memo((props: AvatarProps) => {
                 style={{
                     width: size,
                     height: size,
-                    borderRadius: avatarProps.square ? 0 : size / 2,
+                    borderRadius: avatarProps.square ? squareRadius : size / 2,
                 }}
             />
         );
@@ -129,10 +142,15 @@ export const Avatar = React.memo((props: AvatarProps) => {
 
     // Original generated avatar logic
     // Determine which avatar variant to render
-    const artwork = avatarStyle === 'pixelated' ? <AvatarSkia {...avatarProps} size={size} />
+    const generated = avatarStyle === 'pixelated' ? <AvatarSkia {...avatarProps} size={size} />
         : avatarStyle === 'brutalist' ? <AvatarBrutalist {...avatarProps} size={size} />
             : <AvatarGradient {...avatarProps} size={size} />;
-    const firstGrapheme = props.title ? resolveHappierBrandFallback(props.id) : undefined;
+    const artwork = avatarProps.square
+        ? <View style={{ width: size, height: size, borderRadius: squareRadius, overflow: 'hidden' }}>{generated}</View>
+        : generated;
+    const monogramName = monogram?.trim();
+    const firstGrapheme = monogramName ? resolveHappierBrandFallback(monogramName)
+        : props.title ? resolveHappierBrandFallback(props.id) : undefined;
 
     // An Agent the catalog carries no presentation for — an installed Agent, or a
     // session whose Agent is unreadable — has no mark to show. Wearing the default
@@ -140,7 +158,7 @@ export const Avatar = React.memo((props: AvatarProps) => {
     const overlayAgentId = showFlavorIcons ? agentId : null;
     const { circleSize, iconSize } = getAgentAvatarOverlaySizes(overlayAgentId ?? '', size);
 
-    if (overlayAgentId || hasUnreadMessages || props.title || testID || accessibilityLabel) {
+    if (overlayAgentId || hasUnreadMessages || firstGrapheme || testID || accessibilityLabel) {
         return (
             <View testID={testID} accessible={Boolean(accessibilityLabel || props.title)} accessibilityRole="image" accessibilityLabel={accessibilityLabel ?? (props.title ? props.id : undefined)} style={[styles.container, { width: size, height: size }]}>
                 {artwork}

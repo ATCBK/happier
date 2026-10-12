@@ -1,5 +1,7 @@
 import React from 'react';
-import { UserProfile, getDisplayName } from '@/sync/domains/social/friendTypes';
+import type { UserProfile } from '@/sync/domains/social/friendTypes';
+import { formatAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
+import { t } from '@/text';
 import { Item } from '@/components/ui/lists/Item';
 import { Avatar } from '@/components/ui/avatar/Avatar';
 
@@ -20,7 +22,7 @@ export function UserCard({
     showDivider,
     density,
 }: UserCardProps) {
-    const displayName = getDisplayName(user);
+    const displayName = formatAccountDisplayName(user) ?? t('accountDisplay.unnamed');
     const avatarUrl = user.avatar?.url || user.avatar?.path;
 
     // Create avatar element using the Avatar component
