@@ -1,9 +1,5 @@
 import * as React from 'react';
-import { useProviderSettingsForServer } from '@/providers/hooks/useProviderSettings';
 import type { LaunchProfileV2 } from '@happier-dev/protocol/profiles/v2/schema';
-import type { ProviderBoundModelRef } from '@happier-dev/protocol/providers/model-selection';
-import type { DaemonProviderCurrentSelectionRecoveryV1 } from '@happier-dev/protocol/rpc';
-import { getAgentStaticModels } from '@happier-dev/agents';
 
 import type { ResolvedBackendCatalogEntry } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
 import { AgentIcon } from '@/agents/registry/AgentIcon';
@@ -13,53 +9,13 @@ import { SafeIonicons } from '@/components/ui/icons/SafeIonicons';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ProviderErrorItems } from '@/components/settings/providers/ProviderErrorItems';
-import {
-    SessionModelPicker,
-    type SessionModelPickerExperimentalConfirmationController,
-} from '@/components/sessions/modelPicker/SessionModelPicker';
-import {
-    buildSessionModelSelectedTriggerPresentation,
-    hiddenModelVisibilityKeys,
-} from '@/components/sessions/modelPicker/buildSessionModelPickerSections';
-import { Modal } from '@/modal';
-import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
-import { useConfirmExperimentalProviderModel } from '@/providers/hooks/useConfirmExperimentalProviderModel';
-import { useProviderModelProjection } from '@/providers/hooks/useProviderModelProjection';
+import { useExactModelChoice } from '@/components/sessions/modelPicker/useExactModelChoice';
 import { getPermissionModeLabelForAgentType, getPermissionModeOptionsForAgentType } from '@/sync/domains/permissions/permissionModeOptions';
 import type { PermissionMode } from '@/sync/domains/permissions/permissionTypes';
 import { t } from '@/text';
 import { resolveProfileBackendTargetKeyForEntry } from './profileBackendEntryStorage';
 
 type Entry = ResolvedBackendCatalogEntry;
-
-function PreferredModelModal(props: Readonly<{
-    agentTargetKey: string;
-    nativeModels: readonly { value: string; label: string; description?: string }[];
-    providerGroups: NonNullable<ReturnType<typeof useProviderModelProjection>['data']>['groups'];
-    providerProjectionAuthoritative: boolean;
-    currentSelectionRecovery?: DaemonProviderCurrentSelectionRecoveryV1 | null;
-    hiddenNativeModelKeys: ReadonlySet<string>;
-    selected: ProviderBoundModelRef | null;
-    experimentalConfirmation: SessionModelPickerExperimentalConfirmationController;
-    onSelect: (selection: ProviderBoundModelRef | null) => void;
-    onClose: () => void;
-}>) {
-    return <SessionModelPicker
-        agentTargetKey={props.agentTargetKey}
-        nativeModels={props.nativeModels}
-        providerGroups={props.providerGroups}
-        providerProjectionAuthoritative={props.providerProjectionAuthoritative}
-        currentSelectionRecovery={props.currentSelectionRecovery}
-        hiddenNativeModelKeys={props.hiddenNativeModelKeys}
-        selected={props.selected}
-        effectiveLabel={props.selected?.modelId ?? t('profiles.preferredModel.none')}
-        experimentalConfirmation={props.experimentalConfirmation}
-        onSelect={(selection) => {
-            props.onSelect(selection);
-            props.onClose();
-        }}
-    />;
-}
 
 /** A per-agent default's one line: which agents differ from the account default, if any. */
 function summarizeChanged(agentTitles: readonly string[]): string {
@@ -83,109 +39,27 @@ export function SlimProfileRoutingFields(props: Readonly<{
     /** Rows of the same start decision owned elsewhere (where it runs, working copy), between the model and the per-agent defaults. */
     children?: React.ReactNode;
 }>) {
-    const providersEnabled = useFeatureEnabled('providers', {
-        scopeKind: 'spawn',
-        serverId: props.serverId,
-    });
-    const providerSettings = useProviderSettingsForServer(props.serverId);
     const [openPermissionTarget, setOpenPermissionTarget] = React.useState<string | null>(null);
     const [openPersistenceTarget, setOpenPersistenceTarget] = React.useState<string | null>(null);
     const [agentOpen, setAgentOpen] = React.useState(false);
     const selectedEntry = props.entries.find((entry) => resolveProfileBackendTargetKeyForEntry(entry) === props.preferredAgentTargetKey) ?? null;
-    const projection = useProviderModelProjection({
-        enabled: providersEnabled,
-        machineId: props.machineId,
-        serverId: props.serverId,
-        agentTargetKey: props.preferredAgentTargetKey ?? null,
-        mode: 'picker',
-        ...(props.preferredModelSelection ? { currentSelection: props.preferredModelSelection.ref } : {}),
-    });
-    const confirmExperimentalModel = useConfirmExperimentalProviderModel({
-        enabled: providersEnabled,
-        machineId: props.machineId,
-        serverId: props.serverId,
-        agentTargetKey: props.preferredAgentTargetKey ?? null,
-        refresh: projection.refresh,
-    });
-    const nativeModels = React.useMemo(() => {
-        const agentId = selectedEntry?.builtInAgentId ?? selectedEntry?.catalogAgentId;
-        if (!agentId) return [];
-        try {
-            return getAgentStaticModels(agentId).map((model) => ({
-                value: model.id,
-                label: model.name || model.id,
-                ...(model.description ? { description: model.description } : {}),
-            }));
-        } catch {
-            return [];
-        }
-    }, [selectedEntry]);
-    const hiddenNativeModelKeys = React.useMemo(() => hiddenModelVisibilityKeys(
-        providerSettings,
-        { providersFeatureEnabled: providersEnabled },
-    ), [providersEnabled, providerSettings]);
     const preferredModelFieldLabel = t('profiles.preferredModel.title');
-    const preferredModelPresentation = React.useMemo(() => {
-        const selected = props.preferredModelSelection?.ref ?? null;
-        return buildSessionModelSelectedTriggerPresentation({
-            agentTargetKey: props.preferredAgentTargetKey ?? '',
-            nativeModels,
-            providerGroups: providersEnabled ? (projection.data?.groups ?? []) : [],
-            hiddenNativeModelKeys,
-            providerProjectionAuthoritative: providersEnabled && projection.status === 'success',
-            selected,
-            currentSelectionRecovery: providersEnabled
-                ? projection.data?.currentSelectionRecovery ?? null
-                : null,
-            fallbackLabel: selected?.modelId ?? t('profiles.preferredModel.none'),
-            fieldLabel: preferredModelFieldLabel,
-        });
-    }, [
-        hiddenNativeModelKeys,
-        nativeModels,
-        projection.data,
-        projection.status,
-        props.preferredAgentTargetKey,
-        props.preferredModelSelection,
-        preferredModelFieldLabel,
-        providersEnabled,
-    ]);
-
-    const openModelPicker = React.useCallback(() => {
-        if (!props.preferredAgentTargetKey) return;
-        Modal.show({
-            component: PreferredModelModal,
-            props: {
-                agentTargetKey: props.preferredAgentTargetKey,
-                nativeModels,
-                providerGroups: providersEnabled
-                    ? (projection.data?.groups ?? [])
-                    : [],
-                providerProjectionAuthoritative: projection.status === 'success',
-                currentSelectionRecovery: providersEnabled
-                    ? projection.data?.currentSelectionRecovery ?? null
-                    : null,
-                hiddenNativeModelKeys,
-                selected: props.preferredModelSelection?.ref ?? null,
-                experimentalConfirmation: confirmExperimentalModel,
-                onSelect: (ref: ProviderBoundModelRef | null) => props.onPreferredModelChange(ref ? {
-                    v: 1,
-                    updatedAt: Date.now(),
-                    ref,
-                } : undefined),
-            },
-            chrome: { kind: 'card', title: t('profiles.preferredModel.title'), dimensions: { size: 'lg' } },
-            closeOnBackdrop: true,
-        });
-    }, [
-        confirmExperimentalModel,
-        hiddenNativeModelKeys,
-        nativeModels,
-        projection.data,
-        projection.status,
-        props,
-        providersEnabled,
-    ]);
+    const preferredModel = useExactModelChoice({
+        agentTargetKey: props.preferredAgentTargetKey ?? null,
+        agentId: selectedEntry?.builtInAgentId ?? selectedEntry?.catalogAgentId ?? null,
+        machineId: props.machineId,
+        serverId: props.serverId,
+        selected: props.preferredModelSelection?.ref ?? null,
+        title: preferredModelFieldLabel,
+        fallbackLabel: t('profiles.preferredModel.none'),
+    });
+    const preferredModelPresentation = preferredModel.presentation;
+    const onPreferredModelChange = props.onPreferredModelChange;
+    const openModelPicker = React.useCallback(() => preferredModel.open((ref) => onPreferredModelChange(ref ? {
+        v: 1,
+        updatedAt: Date.now(),
+        ref,
+    } : undefined)), [onPreferredModelChange, preferredModel.open]);
     const permissionEntries = React.useMemo(() => {
         return props.entries.flatMap((entry) => {
             const agentId = entry.builtInAgentId ?? entry.catalogAgentId ?? entry.agentId;
@@ -226,11 +100,11 @@ export function SlimProfileRoutingFields(props: Readonly<{
                 detail={preferredModelPresentation.detail}
                 accessibilityLabel={props.preferredAgentTargetKey ? preferredModelPresentation.accessibilityLabel : `${preferredModelFieldLabel}. ${t('profilesPage.modelRequiresAgent')}`}
                 disabled={!props.preferredAgentTargetKey}
-                loading={projection.loading}
+                loading={preferredModel.loading}
                 onPress={openModelPicker}
             />
-            {providersEnabled && projection.error ? (
-                <ProviderErrorItems error={projection.error} retry={projection.refresh} />
+            {preferredModel.error ? (
+                <ProviderErrorItems error={preferredModel.error} retry={preferredModel.refresh} />
             ) : null}
             {props.children}
         {permissionEntries.length > 0 ? (
