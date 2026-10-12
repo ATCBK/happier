@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { validateHomeSettingsWrite } from './homeSettingsWrite.js';
 import { composeServerConfigRegistry, defineServerConfigRegistry } from './serverConfigEntry.js';
+import { SERVER_CONFIG_REGISTRY_BASE } from './registry.js';
 
 const REGISTRY = composeServerConfigRegistry(
     defineServerConfigRegistry({
@@ -32,6 +33,14 @@ const REGISTRY = composeServerConfigRegistry(
 );
 
 describe('validateHomeSettingsWrite', () => {
+    it.each(['HAPPIER_RPC_FORWARD_CAPABILITIES_TIMEOUT_MS', 'HAPPIER_RPC_FORWARD_MAX_TIMEOUT_MS'])(
+        'refuses the retired relay deadline override %s', key => {
+            expect(validateHomeSettingsWrite(SERVER_CONFIG_REGISTRY_BASE, { values: { [key]: 120_000 } })).toEqual({
+                ok: false, error: 'home_settings_invalid', key, reason: 'unknown_key',
+            });
+        },
+    );
+
     it('accepts Home-editable values and secrets, normalizing values and clears', () => {
         expect(
             validateHomeSettingsWrite(REGISTRY, {

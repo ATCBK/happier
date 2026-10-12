@@ -33,7 +33,9 @@ type BaseValueOf<T extends ServerConfigValueType> = T extends 'boolean'
                 ? ServerConfigJsonValue
                 : string;
 
-export type ServerConfigValueOf<E extends Pick<ServerConfigEntryInput, 'type'>> = BaseValueOf<E['type']>;
+export type ServerConfigValueOf<E extends Pick<ServerConfigEntryInput, 'type'>> = E extends {
+    type: 'enum'; bounds: { values: readonly (infer V extends string)[] };
+} ? V : BaseValueOf<E['type']>;
 
 /** A reader's result: the entry's value type, or `undefined` when the entry declares no default. */
 export type ServerConfigReadValue<E extends ServerConfigEntryInput> = E extends { default: infer D }
@@ -42,14 +44,16 @@ export type ServerConfigReadValue<E extends ServerConfigEntryInput> = E extends 
         : ServerConfigValueOf<E>
     : ServerConfigValueOf<E> | undefined;
 
-/** The first non-blank raw value among the key and its aliases, with the name it came from. */
+/** The first set raw value among the key and its aliases; presence flags retain whitespace truthiness. */
 export function readServerConfigRaw(
     env: ServerConfigEnv,
-    entry: Pick<ServerConfigEntry, 'key' | 'aliases'>,
+    entry: Pick<ServerConfigEntry, 'key' | 'aliases' | 'booleanEnvEncoding'>,
 ): Readonly<{ name: string; raw: string }> | null {
     for (const name of [entry.key, ...(entry.aliases ?? [])]) {
         const raw = env[name];
-        if (typeof raw === 'string' && raw.trim().length > 0) return { name, raw };
+        if (typeof raw === 'string' && (entry.booleanEnvEncoding === 'presence' ? raw.length > 0 : raw.trim().length > 0)) {
+            return { name, raw };
+        }
     }
     return null;
 }
@@ -129,6 +133,7 @@ function parseWithMode<E extends ServerConfigEntryInput>(
     const invalid = (reason: ServerConfigInvalidReason): ServerConfigParseResult<V> => ({ kind: 'invalid', reason });
     switch (entry.type) {
         case 'boolean': {
+            if (mode === 'env' && entry.booleanEnvEncoding === 'presence') return ok(raw.length > 0);
             const parsed = parseOptionalBooleanEnv(trimmed);
             return parsed === null ? invalid('invalid_type') : ok(parsed);
         }
@@ -145,7 +150,8 @@ function parseWithMode<E extends ServerConfigEntryInput>(
             return failure ? invalid(failure) : ok(parsed);
         }
         case 'enum': {
-            const canonical = canonicalEnumValue(entry.bounds?.values ?? [], trimmed);
+            const normalized = entry.normalizeEnumValue ? entry.normalizeEnumValue(trimmed.toLowerCase()) : trimmed;
+            const canonical = normalized === null ? null : canonicalEnumValue(entry.bounds?.values ?? [], normalized);
             return canonical ? ok(canonical) : invalid('out_of_bounds');
         }
         case 'url': {
@@ -193,6 +199,7 @@ export function readServerConfig<E extends ServerConfigEntry>(
 export function serializeServerConfigValue(entry: ServerConfigEntryInput, value: unknown): string {
     switch (entry.type) {
         case 'boolean':
+            if (entry.booleanEnvEncoding === 'presence') return value === true ? 'true' : '';
             return value === true ? 'true' : 'false';
         case 'int':
         case 'float':
@@ -209,6 +216,17 @@ export function serializeServerConfigValue(entry: ServerConfigEntryInput, value:
 export type ServerConfigValidation<V = unknown> =
     | Readonly<{ ok: true; value: V }>
     | Readonly<{ ok: false; reason: ServerConfigInvalidReason }>;
+
+/** Opens retained typed settings; legacy presence flags were stored as strings, never boolean writes. */
+export function readStoredServerConfigValue<E extends ServerConfigEntryInput>(
+    entry: E,
+    value: unknown,
+): ServerConfigValidation<ServerConfigValueOf<E>> {
+    if (entry.type === 'boolean' && entry.booleanEnvEncoding === 'presence' && typeof value === 'string') {
+        return { ok: true, value: (value.length > 0) as ServerConfigValueOf<E> };
+    }
+    return validateServerConfigValue(entry, value);
+}
 
 function isJsonValue(value: unknown, depth = 0): value is ServerConfigJsonValue {
     if (depth > 32) return false;

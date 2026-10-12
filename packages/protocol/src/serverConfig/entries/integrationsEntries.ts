@@ -656,16 +656,6 @@ export const INTEGRATIONS_SERVER_CONFIG = defineServerConfigRegistry({
     },
 
     // Release sources.
-    HAPPIER_PUBLIC_RELEASE_CHANNEL: {
-        type: 'string',
-        default: 'stable',
-        sensitivity: 'plain',
-        apply: 'restart',
-        editable: 'home',
-        section: 'server',
-        group: 'releases',
-        description: 'Release channel this Home follows for published runner artifacts.',
-    },
     HAPPIER_GITHUB_REPO: {
         type: 'string',
         default: 'happier-dev/happier',

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import { readServerConfig, serializeServerConfigValue, validateServerConfigValue } from './serverConfigCodec.js';
+import { parseServerConfigRaw, readServerConfig, serializeServerConfigValue, validateServerConfigValue } from './serverConfigCodec.js';
 import { composeServerConfigRegistry, defineServerConfigRegistry } from './serverConfigEntry.js';
+import { SERVER_CONFIG, SERVER_CONFIG_REGISTRY_BASE } from './registry.js';
 
 const TEST_CONFIG = defineServerConfigRegistry({
     TEST_FLAG: { type: 'boolean', default: true, sensitivity: 'plain', apply: 'live', editable: 'home', section: 'features', description: 'Flag.' },
@@ -97,6 +98,108 @@ describe('validateServerConfigValue', () => {
 });
 
 describe('registry declaration rules', () => {
+    it('groups Sentry tuning separately while keeping reporting destinations in monitoring', () => {
+        expect(Object.values(SERVER_CONFIG_REGISTRY_BASE)
+            .filter((entry) => entry.group === 'errorReporting')
+            .map((entry) => entry.key).sort()).toEqual([
+                'HAPPIER_SENTRY_USE_CENTRAL_DSN', 'SENTRY_ENABLE_LOGS', 'SENTRY_ENVIRONMENT',
+                'SENTRY_LOG_LEVELS', 'SENTRY_MONITORS_ENABLED', 'SENTRY_PROFILE_LIFECYCLE',
+                'SENTRY_PROFILE_SESSION_SAMPLE_RATE', 'SENTRY_RELEASE', 'SENTRY_SEND_DEFAULT_PII',
+                'SENTRY_TRACES_SAMPLE_RATE',
+            ].sort());
+        expect(SERVER_CONFIG.SENTRY_DSN.group).toBe('monitoring');
+        expect(SERVER_CONFIG.HAPPIER_SENTRY_CENTRAL_DSN.group).toBe('monitoring');
+    });
+
+    it('rejects empty or padded group identifiers when loading declarations', () => {
+        for (const group of ['', ' ', ' errorReporting', 'errorReporting ']) {
+            expect(() => defineServerConfigRegistry({ TEST_MODE: { ...TEST_CONFIG.TEST_MODE, group } })).toThrow();
+        }
+        expect(() => defineServerConfigRegistry({ TEST_MODE: { ...TEST_CONFIG.TEST_MODE, group: 'errorReporting' } })).not.toThrow();
+    });
+
+    it('rejects malformed applicability rules when loading declarations', () => {
+        const base = TEST_CONFIG.TEST_MODE;
+        for (const appliesWhen of [
+            { key: 'bad-key', values: ['s3'] },
+            { key: 'TEST_MODE', values: ['s3'] },
+            { key: 'FILES_BACKEND', values: [] },
+            { key: 'FILES_BACKEND', values: [''] },
+        ]) {
+            expect(() => defineServerConfigRegistry({ TEST_MODE: { ...base, appliesWhen } })).toThrow();
+        }
+        const missing = defineServerConfigRegistry({
+            TEST_MODE: { ...base, appliesWhen: { key: 'MISSING_BACKEND', values: ['s3'] } },
+        });
+        expect(() => composeServerConfigRegistry(missing)).toThrow();
+        const invalidChoice = defineServerConfigRegistry({
+            DEPENDENT_MODE: { ...base, appliesWhen: { key: 'TEST_MODE', values: ['s3'] } },
+        });
+        expect(() => composeServerConfigRegistry(TEST_CONFIG, invalidChoice)).toThrow();
+    });
+
+    it('declares closed codec domains as choices and refuses arbitrary text while keeping genuine strings open', () => {
+        // Domains observed at config/backends.ts and features/embeddedFeaturePolicy.ts.
+        const domains = {
+            HAPPIER_FILES_BACKEND: ['local', 's3'],
+            HAPPIER_SOCKET_ADAPTER: ['memory', 'redis-streams'],
+            HAPPIER_FEATURE_POLICY_ENV: ['production', 'preview'],
+        } as const;
+        for (const entry of Object.values(SERVER_CONFIG_REGISTRY_BASE)) {
+            const domain = domains[entry.key as keyof typeof domains];
+            if (domain) {
+                expect(entry.type, entry.key).toBe('enum');
+                expect(entry.bounds?.values, entry.key).toEqual(domain);
+            }
+            if (entry.type === 'enum') {
+                for (const value of entry.bounds?.values ?? []) {
+                    expect(parseServerConfigRaw(entry, value), entry.key).toEqual({ kind: 'value', value });
+                    expect(validateServerConfigValue(entry, value), entry.key).toEqual({ ok: true, value });
+                }
+                expect(validateServerConfigValue(entry, 'not-a-config-choice'), entry.key).toEqual({ ok: false, reason: 'out_of_bounds' });
+            }
+            if (entry.type === 'string') {
+                expect(parseServerConfigRaw(entry, 'not-a-config-choice'), entry.key).toEqual({ kind: 'value', value: 'not-a-config-choice' });
+            }
+        }
+    });
+
+    it('normalizes historical backend and feature-policy values into the declared choice domain', () => {
+        const samples = [
+            [SERVER_CONFIG.HAPPIER_FILES_BACKEND, ' DiSk ', 'local'],
+            [SERVER_CONFIG.HAPPIER_FILES_BACKEND, 'fs', 'local'],
+            [SERVER_CONFIG.HAPPIER_FILES_BACKEND, 'file', 'local'],
+            [SERVER_CONFIG.HAPPIER_FILES_BACKEND, 'MINIO', 's3'],
+            [SERVER_CONFIG.HAPPIER_SOCKET_ADAPTER, 'mem', 'memory'],
+            [SERVER_CONFIG.HAPPIER_SOCKET_ADAPTER, 'redis', 'redis-streams'],
+            [SERVER_CONFIG.HAPPIER_SOCKET_ADAPTER, 'redis_streams', 'redis-streams'],
+            [SERVER_CONFIG.HAPPIER_FEATURE_POLICY_ENV, 'prod', 'production'],
+            [SERVER_CONFIG.HAPPIER_FEATURE_POLICY_ENV, 'stable', 'production'],
+        ] as const;
+        for (const [entry, raw, canonical] of samples) {
+            expect(readServerConfig({ [entry.key]: raw }, entry), entry.key).toBe(canonical);
+            expect(validateServerConfigValue(entry, raw), entry.key).toEqual({ ok: true, value: canonical });
+            expect(serializeServerConfigValue(entry, canonical), entry.key).toBe(canonical);
+        }
+        expect(readServerConfig({ HAPPY_FILES_BACKEND: 'minio' }, SERVER_CONFIG.HAPPIER_FILES_BACKEND)).toBe('s3');
+        expect(readServerConfig({ HAPPY_SOCKET_ADAPTER: 'redis' }, SERVER_CONFIG.HAPPIER_SOCKET_ADAPTER)).toBe('redis-streams');
+    });
+
+    it('declares presence logging as boolean, preserves legacy env truthiness, and round-trips Off', () => {
+        const entry = SERVER_CONFIG.DANGEROUSLY_LOG_TO_SERVER_FOR_AI_AUTO_DEBUGGING;
+        expect(entry.type).toBe('boolean');
+        expect(readServerConfig({}, entry)).toBe(false);
+        for (const raw of ['true', 'false', '0', 'debug', ' ']) {
+            expect(readServerConfig({ [entry.key]: raw }, entry), raw).toBe(true);
+        }
+        expect(readServerConfig({ [entry.key]: '' }, entry)).toBe(false);
+        expect(validateServerConfigValue(entry, 'false')).toEqual({ ok: false, reason: 'invalid_type' });
+        for (const value of [false, true]) {
+            expect(validateServerConfigValue(entry, value)).toEqual({ ok: true, value });
+            expect(readServerConfig({ [entry.key]: serializeServerConfigValue(entry, value) }, entry)).toBe(value);
+        }
+    });
+
     it('refuses a default on a secret and a key or alias declared twice', () => {
         expect(() =>
             defineServerConfigRegistry({

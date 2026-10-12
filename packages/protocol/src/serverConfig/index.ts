@@ -23,6 +23,7 @@ export {
     parseServerConfigRaw,
     readServerConfig,
     readServerConfigRaw,
+    readStoredServerConfigValue,
     serializeServerConfigValue,
     validateServerConfigText,
     validateServerConfigValue,

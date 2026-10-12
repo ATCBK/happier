@@ -284,7 +284,9 @@ export const STORAGE_SERVER_CONFIG = defineServerConfigRegistry({
         reason: STORAGE_TUNING,
     },
     HAPPIER_FILES_BACKEND: {
-        type: 'string',
+        type: 'enum',
+        bounds: { values: ['local', 's3'] },
+        normalizeEnumValue: (raw) => ['disk', 'fs', 'file'].includes(raw) ? 'local' : raw === 'minio' ? 's3' : raw,
         sensitivity: 'plain',
         apply: 'restart',
         editable: 'home',
@@ -295,6 +297,7 @@ export const STORAGE_SERVER_CONFIG = defineServerConfigRegistry({
         docs: 'self-hosting/env#storage-backends',
     },
     S3_HOST: {
+        appliesWhen: { key: 'HAPPIER_FILES_BACKEND', values: ['s3'] },
         type: 'string',
         sensitivity: 'plain',
         apply: 'restart',
@@ -305,6 +308,7 @@ export const STORAGE_SERVER_CONFIG = defineServerConfigRegistry({
         docs: 'self-hosting/env#storage-backends',
     },
     S3_PORT: {
+        appliesWhen: { key: 'HAPPIER_FILES_BACKEND', values: ['s3'] },
         type: 'int',
         bounds: { min: 1, max: 65_535 },
         sensitivity: 'plain',
@@ -316,6 +320,7 @@ export const STORAGE_SERVER_CONFIG = defineServerConfigRegistry({
         docs: 'self-hosting/env#storage-backends',
     },
     S3_USE_SSL: {
+        appliesWhen: { key: 'HAPPIER_FILES_BACKEND', values: ['s3'] },
         type: 'boolean',
         default: true,
         sensitivity: 'plain',
@@ -327,6 +332,7 @@ export const STORAGE_SERVER_CONFIG = defineServerConfigRegistry({
         docs: 'self-hosting/env#storage-backends',
     },
     S3_REGION: {
+        appliesWhen: { key: 'HAPPIER_FILES_BACKEND', values: ['s3'] },
         type: 'string',
         default: 'us-east-1',
         sensitivity: 'plain',
@@ -338,6 +344,7 @@ export const STORAGE_SERVER_CONFIG = defineServerConfigRegistry({
         docs: 'self-hosting/env#storage-backends',
     },
     S3_BUCKET: {
+        appliesWhen: { key: 'HAPPIER_FILES_BACKEND', values: ['s3'] },
         type: 'string',
         sensitivity: 'plain',
         apply: 'restart',
@@ -348,6 +355,7 @@ export const STORAGE_SERVER_CONFIG = defineServerConfigRegistry({
         docs: 'self-hosting/env#storage-backends',
     },
     S3_PRIVATE_BUCKET: {
+        appliesWhen: { key: 'HAPPIER_FILES_BACKEND', values: ['s3'] },
         type: 'string',
         sensitivity: 'plain',
         apply: 'restart',
@@ -358,6 +366,7 @@ export const STORAGE_SERVER_CONFIG = defineServerConfigRegistry({
         docs: 'self-hosting/env#storage-backends',
     },
     S3_PUBLIC_URL: {
+        appliesWhen: { key: 'HAPPIER_FILES_BACKEND', values: ['s3'] },
         type: 'string',
         sensitivity: 'plain',
         apply: 'restart',
@@ -368,6 +377,7 @@ export const STORAGE_SERVER_CONFIG = defineServerConfigRegistry({
         docs: 'self-hosting/env#storage-backends',
     },
     S3_ACCESS_KEY: {
+        appliesWhen: { key: 'HAPPIER_FILES_BACKEND', values: ['s3'] },
         type: 'string',
         sensitivity: 'secret',
         apply: 'restart',
@@ -378,6 +388,7 @@ export const STORAGE_SERVER_CONFIG = defineServerConfigRegistry({
         docs: 'self-hosting/env#storage-backends',
     },
     S3_SECRET_KEY: {
+        appliesWhen: { key: 'HAPPIER_FILES_BACKEND', values: ['s3'] },
         type: 'string',
         sensitivity: 'secret',
         apply: 'restart',

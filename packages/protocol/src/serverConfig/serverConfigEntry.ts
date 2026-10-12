@@ -62,10 +62,16 @@ export type ServerConfigEntryInput = Readonly<{
     section: ServerConfigSection;
     /** Sub-grouping of rows within a section (for example `database` or `monitoring` in `server`). */
     group?: string;
+    /** Presentation applicability; configured values remain visible regardless of this condition. */
+    appliesWhen?: Readonly<{ key: string; values: readonly string[] }>;
     family?: string;
     featureId?: FeatureId;
     /** Older names read (in order) when the key itself is unset; never written. */
     aliases?: readonly string[];
+    /** Legacy enum spellings; the codec still checks the result against bounds.values. Never projected. */
+    normalizeEnumValue?: (raw: string) => string | null;
+    /** Historical env flags enabled by any nonempty value, including `false`; Off serializes as empty. */
+    booleanEnvEncoding?: 'presence';
     description: string;
     docs?: string;
     /** Constraint class of a read-only key; required for (and only for) `bootstrap` entries. */
@@ -95,6 +101,17 @@ function fail(key: string, message: string): never {
 export function assertServerConfigEntry(key: string, entry: ServerConfigEntryInput): void {
     if (!ENV_KEY_PATTERN.test(key)) fail(key, 'key must be an upper-case environment variable name');
     if (!entry.description.trim()) fail(key, 'description is required');
+    if (entry.group !== undefined && (!entry.group.trim() || entry.group !== entry.group.trim())) {
+        fail(key, 'group must be a nonempty, unpadded identifier');
+    }
+    if (entry.appliesWhen) {
+        if (!ENV_KEY_PATTERN.test(entry.appliesWhen.key) || entry.appliesWhen.key === key) {
+            fail(key, 'applicability must reference another environment key');
+        }
+        if (entry.appliesWhen.values.length === 0 || entry.appliesWhen.values.some((value) => !value.trim())) {
+            fail(key, 'applicability must declare nonempty values');
+        }
+    }
     if (entry.editable === 'bootstrap' && !entry.reason?.trim()) fail(key, 'a bootstrap entry must state its reason');
     if (entry.editable === 'bootstrap' && !entry.readOnlyReason) fail(key, 'a bootstrap entry must declare its readOnlyReason');
     if (entry.editable !== 'bootstrap' && (entry.reason !== undefined || entry.readOnlyReason !== undefined)) {
@@ -102,6 +119,10 @@ export function assertServerConfigEntry(key: string, entry: ServerConfigEntryInp
     }
     if (entry.type === 'enum' && !(entry.bounds?.values && entry.bounds.values.length > 0)) {
         fail(key, 'an enum entry must declare bounds.values');
+    }
+    if (entry.normalizeEnumValue && entry.type !== 'enum') fail(key, 'enum normalization applies only to enum entries');
+    if (entry.booleanEnvEncoding && (entry.type !== 'boolean' || entry.default !== false)) {
+        fail(key, 'presence encoding requires a boolean entry with default false');
     }
     if (entry.bounds?.values && entry.type !== 'enum' && entry.type !== 'list') {
         fail(key, 'bounds.values applies only to enum and list entries');
@@ -158,6 +179,17 @@ export function composeServerConfigRegistry(
                 names.set(name, entry.key);
             }
             out[entry.key] = entry;
+        }
+    }
+    for (const entry of Object.values(out)) {
+        const condition = entry.appliesWhen;
+        if (!condition) continue;
+        const controlling = out[condition.key];
+        if (!controlling || controlling.type !== 'enum' || controlling.sensitivity !== 'plain') {
+            fail(entry.key, 'applicability must reference a declared plain enum');
+        }
+        if (condition.values.some((value) => !controlling.bounds?.values?.includes(value))) {
+            fail(entry.key, 'applicability values must belong to the referenced enum');
         }
     }
     return Object.freeze(out);

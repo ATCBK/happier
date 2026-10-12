@@ -27,7 +27,7 @@ export const POLICIES_SERVER_CONFIG = defineServerConfigRegistry({
         editable: 'home',
         section: 'policies',
         group: 'signup',
-        description: 'Sign-in providers that may create new accounts (comma- or space-separated provider ids).',
+        description: 'Deployment-contributed sign-in providers that may create new accounts (comma- or space-separated provider ids). Home-managed providers follow the console admission policy.',
         docs: 'self-hosting/env#global-auth-policy',
     },
     AUTH_REQUIRED_LOGIN_PROVIDERS: {
@@ -101,7 +101,7 @@ export const POLICIES_SERVER_CONFIG = defineServerConfigRegistry({
         editable: 'home',
         section: 'policies',
         group: 'signup',
-        description: 'Requires the version 2 key-challenge sign-in for ordinary Homes.',
+        description: 'Requires devices using key-based sign-in to sign a server-issued, single-use challenge. Older clients that cannot do this must update.',
         docs: 'self-hosting/env#built-in-key-challenge-login-route',
     },
     HAPPIER_AUTH_SIGN_IN_SERVICE_MODE: {
