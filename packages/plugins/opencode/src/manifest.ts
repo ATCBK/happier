@@ -104,6 +104,7 @@ export const OPENCODE_PLUGIN = definePlugin({
           'XDG_CONFIG_HOME',
           OPEN_CODE_REQUEST_AUTH_CAPABILITY_PATH_ENV,
           'OPENCODE_PERMISSION',
+          'OPENCODE_DISABLE_PRUNE',
           'OPENCODE_SERVER_PASSWORD',
         ],
       },
@@ -119,7 +120,7 @@ export const OPENCODE_PLUGIN = definePlugin({
           displayName: 'OpenCode CLI',
           executable: {
             binaryName: 'opencode',
-            knownUserBinDirSuffixes: ['.opencode/bin', 'AppData/Roaming/npm'],
+            knownUserBinDirSuffixes: ['.opencode/bin', '.local/bin', 'AppData/Roaming/npm'],
             sourcePreference: 'system-first',
           },
           install: {
@@ -185,6 +186,7 @@ export const OPENCODE_PLUGIN = definePlugin({
           credentialKinds: ['token'],
         }],
         capabilities: projectAgentCapabilitiesV2FromDefinition(AGENT_DEFINITION.core, {
+          skills: { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported' },
           surfaces: ['externalSessions'],
           sessions: {
             open: ['create', 'resume'],
@@ -343,7 +345,7 @@ export const OPENCODE_PLUGIN = definePlugin({
     servers: {},
     discoverySources: {
       config: {
-        declaration: { title: 'OpenCode MCP configuration', metadata: { agentId: 'opencode' } },
+        declaration: { title: 'OpenCode MCP configuration', loadedInHappierSessions: true, metadata: { agentId: 'opencode' } },
         discover: async (input) => {
           const detected = await readOpenCodeMcpConfigServers({
             directory: input?.directory ?? null,

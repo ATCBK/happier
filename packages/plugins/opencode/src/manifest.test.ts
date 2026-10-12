@@ -2,8 +2,19 @@ import { ingestPluginManifestV2 } from '@happier-dev/protocol';
 import { describe, expect, it } from 'vitest';
 import { OPENCODE_AGENT_SETTINGS_CONTRIBUTION } from './agentSettings/definition.js';
 import { PLUGIN_MANIFEST } from './manifest.js';
+import { OPENCODE_PREFLIGHT_SESSION_CONTROLS } from './agent/preflight/models.js';
 
 describe('OpenCode plugin manifest', () => {
+  it('discloses every environment key requested by its managed preflight commands', () => {
+    const disclosed = new Set(PLUGIN_MANIFEST.hostAccess.required.flatMap((entry) => (
+      entry.capability === 'process' ? entry.scope.envKeys : []
+    )));
+    const undisclosed = OPENCODE_PREFLIGHT_SESSION_CONTROLS.managedServiceCommands.flatMap((command) => (
+      command.environmentKeys.filter((key) => !disclosed.has(key))
+    ));
+    expect([...new Set(undisclosed)]).toEqual([]);
+  });
+
   it('is a canonical data-only custom Agent declaration', () => {
     const result = ingestPluginManifestV2(PLUGIN_MANIFEST);
     expect(result).toMatchObject({ ok: true });
@@ -50,6 +61,7 @@ describe('OpenCode plugin manifest', () => {
           'XDG_CONFIG_HOME',
           'HAPPIER_CONNECTED_ACCOUNT_REQUEST_AUTH_CAPABILITY_PATH',
           'OPENCODE_PERMISSION',
+          'OPENCODE_DISABLE_PRUNE',
           'OPENCODE_SERVER_PASSWORD',
         ],
       }),

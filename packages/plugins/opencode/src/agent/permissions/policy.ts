@@ -1,18 +1,10 @@
 import {
   resolveAcpToolPermissionPolicy,
 } from '@happier-dev/plugin-sdk/agents/runtime';
+import { listHappierToolAutoApprovedNamesV1 } from '@happier-dev/protocol/tools/happierToolAutoApprovalV1';
 
 export type OpenCodePermissionValue =
   ReturnType<typeof resolveAcpToolPermissionPolicy>[string];
-
-const OPEN_CODE_HAPPIER_MCP_ALWAYS_ALLOWED_TOOL_SUFFIXES = [
-  'change_title',
-  'session_title_set',
-  'action_execute',
-  'action_spec_search',
-  'action_spec_get',
-  'action_options_resolve',
-] as const;
 
 export function resolveOpenCodePermissionConfig(
   permissionMode: string | null | undefined,
@@ -47,7 +39,7 @@ export function buildOpenCodeSessionScopedPermissionRuleset(
       permission: `${alias(projectedName)}_*`, pattern: '*', action: ownAction,
     })),
     ...(projection.requiredHappierServerName
-      ? OPEN_CODE_HAPPIER_MCP_ALWAYS_ALLOWED_TOOL_SUFFIXES.map((suffix) => ({
+      ? listHappierToolAutoApprovedNamesV1().map((suffix) => ({
           permission: `${alias(projection.requiredHappierServerName!)}_${suffix}`,
           pattern: '*',
           action: 'allow' as const,

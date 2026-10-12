@@ -74,6 +74,7 @@
             "binaryName": "opencode",
             "knownUserBinDirSuffixes": [
               ".opencode/bin",
+              ".local/bin",
               "AppData/Roaming/npm"
             ],
             "sourcePreference": "system-first"
@@ -230,7 +231,7 @@
             },
             "sources": [
               {
-                "contentSearch": false,
+                "contentSearch": true,
                 "instances": [
                   {
                     "constants": {
@@ -295,6 +296,7 @@
         "title": "OpenCode"
       }
     ],
+    "atmospherePictures": [],
     "backgroundServices": [],
     "browserActions": [],
     "browserTargets": [],
@@ -312,6 +314,7 @@
     "executionRunProfiles": [],
     "hooks": [],
     "inputTypes": [],
+    "machineProvisioners": [],
     "managedDependencies": [],
     "mcp": {
       "discoverySources": [
@@ -329,6 +332,7 @@
     "notifications": [],
     "openableContentViewers": [],
     "pluginContributionPoints": [],
+    "projectNativeAdapters": [],
     "promptAssets": [],
     "providers": [],
     "requestInterceptors": [],
@@ -517,7 +521,7 @@
               "kind": "theme",
               "token": "blue"
             },
-            "ionName": "code-slash-outline"
+            "ionName": "code"
           },
           "sections": [
             {
@@ -658,6 +662,7 @@
             "XDG_CONFIG_HOME",
             "HAPPIER_CONNECTED_ACCOUNT_REQUEST_AUTH_CAPABILITY_PATH",
             "OPENCODE_PERMISSION",
+            "OPENCODE_DISABLE_PRUNE",
             "OPENCODE_SERVER_PASSWORD"
           ],
           "executables": [

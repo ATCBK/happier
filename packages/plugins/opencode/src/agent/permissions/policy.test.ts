@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { listHappierToolAutoApprovedNamesV1 } from '@happier-dev/protocol/tools/happierToolAutoApprovalV1';
 
 import {
   buildOpenCodePermissionEnv,
@@ -48,16 +49,13 @@ describe('OpenCode permission policy', () => {
       requiredHappierServerName: 'happier-session-session-a--happier',
     });
 
-    expect(rules.slice(-9)).toEqual([
+    const names = listHappierToolAutoApprovedNamesV1();
+    expect(rules.slice(-(3 + names.length))).toEqual([
       { permission: 'happier-session-*', pattern: '*', action: 'deny' },
       { permission: 'happier-session-session-a--happier_*', pattern: '*', action: 'ask' },
       { permission: 'happier-session-session-a--custom_*', pattern: '*', action: 'ask' },
-      { permission: 'happier-session-session-a--happier_change_title', pattern: '*', action: 'allow' },
-      { permission: 'happier-session-session-a--happier_session_title_set', pattern: '*', action: 'allow' },
-      { permission: 'happier-session-session-a--happier_action_execute', pattern: '*', action: 'allow' },
-      { permission: 'happier-session-session-a--happier_action_spec_search', pattern: '*', action: 'allow' },
-      { permission: 'happier-session-session-a--happier_action_spec_get', pattern: '*', action: 'allow' },
-      { permission: 'happier-session-session-a--happier_action_options_resolve', pattern: '*', action: 'allow' },
+      ...names.map((name) => ({ permission: `happier-session-session-a--happier_${name}`, pattern: '*', action: 'allow' })),
     ]);
+    expect(rules).not.toContainEqual({ permission: 'happier-session-session-a--happier_daemon_filesystem_delete', pattern: '*', action: 'allow' });
   });
 });
