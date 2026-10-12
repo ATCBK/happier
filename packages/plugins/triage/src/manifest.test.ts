@@ -113,7 +113,9 @@ describe('Triage plugin manifest', () => {
       'composerControls',
       'dragSources',
       'dropTargets',
+      'inputTypes',
       'pluginContributionPoints',
+      'resources',
       'searchProviders',
       'ui',
     ]);
@@ -136,24 +138,18 @@ describe('Triage plugin manifest', () => {
     expect(parsed.ok ? null : parsed.diagnostics).toBe(null);
   });
 
-  it('declares its rail page and a separate views column renderer', () => {
+  it('declares its rail page without an app-rail views column', () => {
     expect(PLUGIN_MANIFEST.contributes.ui.views.map(({ id, icon }) => ({ id, icon }))).toEqual([
       { id: 'triage', icon: 'change-open' },
       { id: 'latest', icon: 'change-open' },
       { id: 'session-entries', icon: 'change-open' },
     ]);
-    expect(PLUGIN_MANIFEST.contributes.ui.views).toContainEqual(expect.objectContaining({
-      id: 'triage',
-      icon: 'change-open',
-      placement: { kind: 'rail' },
-      column: { renderer: 'views-column' },
-    }));
-    expect(PLUGIN_MANIFEST.contributes.ui.renderers).toContainEqual(expect.objectContaining({
-      id: 'views-column',
-      kind: 'reactNative',
-      artifact: 'triage-views-column-native',
-      requiredHostMethods: ['openSurface'],
-    }));
+    // Owner ruling 2026-10-11: the in-page Views menu is the one view selector on every platform, so the
+    // page declares no app-rail column (a second selector beside it on desktop, absent on phones).
+    const page = PLUGIN_MANIFEST.contributes.ui.views.find((view) => view.id === 'triage');
+    expect(page).toEqual(expect.objectContaining({ id: 'triage', icon: 'change-open', placement: { kind: 'rail' } }));
+    expect(page).not.toHaveProperty('column');
+    expect(PLUGIN_MANIFEST.contributes.ui.renderers.map((renderer) => renderer.id)).not.toContain('views-column');
   });
 
   it('declares its Home latest widget as shown by default', () => {

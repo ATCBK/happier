@@ -160,7 +160,7 @@ export function TriageDetailTabbedBody(props: Readonly<{
                   // These Files and Checks belong to the linked fix, not to this entry: said once, above them.
                   <Stack gap="small" style={FILL_STYLE}>
                     <Text
-                      variant="caption"
+                      variant="micro"
                       tone="secondary"
                       value={text('plugins.triage.surface.detail.fixPr.from', 'From the linked fix: {title}', {
                         title: props.fixPullRequest.input.observation.snapshot.title,

@@ -1,4 +1,5 @@
 import { defineAccountCollection } from '@happier-dev/plugin-sdk/collections';
+import { CORPUS_COLLECTION_MIGRATIONS } from './migrations.js';
 import type { PluginJsonSchema } from '@happier-dev/plugin-sdk/protocol';
 import {
     MAX_TRIAGE_IDENTIFIER_UTF8_BYTES_V1,
@@ -130,18 +131,14 @@ export const CORPUS_SOURCE_INSTANCES_COLLECTION = defineAccountCollection({
     relations: [],
     // The native source binding widens the configured union; retained v1
     // configuration already satisfies this schema and must remain unchanged.
-    migrations: [{
-        id: 'source-instances-v1-to-v2',
-        fromSchemaVersion: 1,
-        toSchemaVersion: 2,
-        migrate: (value) => value,
-    }],
+    migrations: CORPUS_COLLECTION_MIGRATIONS[CORPUS_SOURCE_INSTANCES_COLLECTION_ID],
     migrationArtifact: CORPUS_MIGRATION_ARTIFACT,
 });
 
 export const CORPUS_SESSION_LINKS_COLLECTION = defineAccountCollection({
     id: CORPUS_SESSION_LINKS_COLLECTION_ID,
-    schemaVersion: 1,
+    schemaVersion: 2,
+    readableSchemaVersions: [1, 2],
     schema: {
         type: 'object',
         properties: {
@@ -211,10 +208,9 @@ export const CORPUS_SESSION_LINKS_COLLECTION = defineAccountCollection({
         field: CORPUS_SESSION_LINKS_FIELD.sessionId,
         hostKind: 'session',
     }],
-    // No readable schema version below the current one, so there is no
-    // ordered migration edge to declare and none to implement in the
-    // executable half.
-    migrations: [],
+    // The canonical contribution-id grammar widened; retained links keep their addresses.
+    migrations: CORPUS_COLLECTION_MIGRATIONS[CORPUS_SESSION_LINKS_COLLECTION_ID],
+    migrationArtifact: CORPUS_MIGRATION_ARTIFACT,
 });
 
 export const CORPUS_USER_MARKS_COLLECTION = defineAccountCollection({
@@ -283,12 +279,7 @@ export const CORPUS_USER_MARKS_COLLECTION = defineAccountCollection({
     uiQueries: [],
     relations: [],
     // Fix-PR intent is optional; existing pin intent and display bytes survive.
-    migrations: [{
-        id: 'user-marks-v1-to-v2',
-        fromSchemaVersion: 1,
-        toSchemaVersion: 2,
-        migrate: (value) => value,
-    }],
+    migrations: CORPUS_COLLECTION_MIGRATIONS[CORPUS_USER_MARKS_COLLECTION_ID],
     migrationArtifact: CORPUS_MIGRATION_ARTIFACT,
 });
 

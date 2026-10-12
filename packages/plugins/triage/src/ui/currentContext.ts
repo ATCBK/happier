@@ -5,8 +5,6 @@ import type {
 } from '@happier-dev/plugin-sdk/ui';
 import {
   CURRENT_UI_CONTEXT_BOUNDED_INCOMPLETENESS_V1,
-  CURRENT_UI_CONTEXT_MAX_COMMANDS_V1,
-  CURRENT_UI_CONTEXT_MAX_UTF8_BYTES_V1,
 } from '@happier-dev/plugin-sdk/ui';
 
 import { triageEntryRowKey, type TriageListRowV1 } from '../projection/listWindow.js';
@@ -29,9 +27,9 @@ type ContextDetailV1 = Readonly<{
    * The commands this projection publishes are exactly the entries the lens
    * left, so without this a reading agent answers "what is on my plate" from a
    * narrowed list as though it were the whole one — the same failure as a bare
-   * count printed beside a filtered list. It is deliberately NOT the transport
-   * bound's `incomplete`: that one means this surface withheld context to stay
-   * inside the canonical byte limit, and giving one flag two meanings would
+   * count printed beside a filtered list. It is deliberately NOT the
+   * `incomplete` marker: that one means a route or selected display fact is
+   * unavailable, and giving one flag two meanings would
    * leave nobody able to tell which happened.
    */
   filtered?: true;
@@ -39,28 +37,8 @@ type ContextDetailV1 = Readonly<{
   selectedLinkedSessionId?: string | null;
 } & Partial<CurrentUiContextBoundedIncompletenessV1>>;
 
-function utf8Bytes(value: unknown): number {
-  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
-}
-
-function withCommands(
-  base: Omit<PluginUiContextEnrichmentV1, 'commands' | 'detail'>,
-  detail: ContextDetailV1,
-  commands: readonly CurrentUiCommandDeclarationV1[],
-  incomplete: boolean,
-): PluginUiContextEnrichmentV1 {
-  return Object.freeze({
-    ...base,
-    detail: Object.freeze({
-      ...detail,
-      ...(incomplete ? CURRENT_UI_CONTEXT_BOUNDED_INCOMPLETENESS_V1 : {}),
-    }),
-    commands: [...commands],
-  });
-}
-
 /**
- * Project the bounded, data-only context for the mounted aggregate page.
+ * Project complete data-only context for the mounted aggregate page.
  *
  * Selection is read only through the aggregate action-target owner. Display
  * facts come only from the canonical row projection, while command locations
@@ -119,13 +97,13 @@ export function projectTriageCurrentUiContextV1(input: Readonly<{
     filters: input.surface.filters,
     query: input.surface.search.query,
   }).narrowed;
-  const detail: ContextDetailV1 = target.kind === 'refused'
+  const detail = target.kind === 'refused'
     ? Object.freeze({ view: 'list', ...(narrowed ? { filtered: true } as const : {}) })
     : Object.freeze({
         view: 'selected-detail',
         ...(selected === undefined ? {} : { scopeLabel: selected.display.scopeLabel }),
         ...(narrowed ? { filtered: true } as const : {}),
-      });
+      }) satisfies ContextDetailV1;
 
   const lens = readTriageRouteLensV1(input.surface);
   const commands: CurrentUiCommandDeclarationV1[] = [...(input.mountedCommands ?? [])];
@@ -155,24 +133,12 @@ export function projectTriageCurrentUiContextV1(input: Readonly<{
       linkedSessionIds: [...input.linkedSessions.ids], selectedLinkedSessionId: input.linkedSessions.selectedId,
     }),
   };
-  let sessionsOmitted = false;
-  // Session relationships share the incumbent context byte budget, including large paged details.
-  while (mountedDetail.linkedSessionIds?.length && utf8Bytes(withCommands(base, mountedDetail, [], true)) > CURRENT_UI_CONTEXT_MAX_UTF8_BYTES_V1) {
-    mountedDetail.linkedSessionIds.pop();
-    sessionsOmitted = true;
-  }
-  const complete = withCommands(base, mountedDetail, commands, routeOmitted || selectionHasNoDisplay || sessionsOmitted);
-  if (!routeOmitted
-    && commands.length <= CURRENT_UI_CONTEXT_MAX_COMMANDS_V1
-    && utf8Bytes(complete) <= CURRENT_UI_CONTEXT_MAX_UTF8_BYTES_V1) {
-    return complete;
-  }
-
-  const bounded: CurrentUiCommandDeclarationV1[] = [];
-  for (const command of commands) {
-    if (bounded.length >= CURRENT_UI_CONTEXT_MAX_COMMANDS_V1) break;
-    const candidate = withCommands(base, mountedDetail, [...bounded, command], true);
-    if (utf8Bytes(candidate) <= CURRENT_UI_CONTEXT_MAX_UTF8_BYTES_V1) bounded.push(command);
-  }
-  return withCommands(base, mountedDetail, bounded, true);
+  return Object.freeze({
+    ...base,
+    detail: Object.freeze({
+      ...mountedDetail,
+      ...(routeOmitted || selectionHasNoDisplay ? CURRENT_UI_CONTEXT_BOUNDED_INCOMPLETENESS_V1 : {}),
+    }),
+    commands,
+  });
 }

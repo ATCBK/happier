@@ -64,6 +64,31 @@ async function create(
 }
 
 describe('parseTriageSavedViews', () => {
+    it('reads unknown saved-view fields recursively and retains canonical writes', async () => {
+        const fixture = createTestkitAccountKv();
+        const viewId = '00000001-0000-4000-8000-000000000000';
+        const canonical = {
+            viewId, label: 'Work', query: '', order: 'smart' as const, view: 'board' as const,
+            filters: filters({ scopes: [{ source: SOURCE, collisionScope: 'example/repository' }] }),
+            smartPolicy: CORPUS_DEFAULT_SMART_POLICY_V1,
+        };
+        fixture.seed(TRIAGE_SAVED_VIEWS_ACCOUNT_KV_KEY_V1, {
+            v: 1, selectedViewId: viewId, retiredCatalog: true,
+            views: [{ ...canonical, label: '  Work\n  ', retiredView: true,
+                smartPolicy: { ...canonical.smartPolicy, retiredPolicy: true },
+                filters: { ...canonical.filters, retiredFilters: true, scopes: [{
+                    source: { ...SOURCE, retiredSource: true }, collisionScope: 'example/repository', retiredScope: true,
+                }] },
+            }],
+        });
+        const deps = createDeps(fixture);
+        expect((await readTriageSavedViews(deps)).value).toEqual({ v: 1, views: [canonical], selectedViewId: viewId });
+        expect((await mutateTriageSavedViews(deps, {
+            kind: 'select', viewId: null, expectedRevision: fixture.revision(TRIAGE_SAVED_VIEWS_ACCOUNT_KV_KEY_V1),
+        })).status).toBe('applied');
+        expect(fixture.read(TRIAGE_SAVED_VIEWS_ACCOUNT_KV_KEY_V1)).toEqual({ v: 1, views: [canonical], selectedViewId: null });
+    });
+
     it('reads an absent value as the deterministic unsaved default', () => {
         expect(parseTriageSavedViews(undefined)).toEqual({ kind: 'absent', value: CORPUS_EMPTY_SAVED_VIEWS_V1 });
         expect(parseTriageSavedViews(null)).toEqual({ kind: 'absent', value: CORPUS_EMPTY_SAVED_VIEWS_V1 });

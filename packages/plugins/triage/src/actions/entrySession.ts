@@ -670,6 +670,7 @@ export async function startTriageEntrySession(
             display: input.display,
             pending,
             ...(delivery === undefined ? {} : { delivery }),
+            ...(input.orchestrate === undefined ? {} : { orchestrate: input.orchestrate }),
             ...(input.finalOpen === undefined ? {} : { finalOpen: input.finalOpen }),
         }), input);
     }
@@ -683,6 +684,7 @@ export async function startTriageEntrySession(
         display: input.display,
         workspaceMode: input.workspaceMode,
         destination: destinationFrom(input.destination),
+        ...(input.orchestrate === undefined ? {} : { orchestrate: input.orchestrate }),
         ...(delivery === undefined ? {} : { delivery }),
         ...(input.finalOpen === undefined ? {} : { finalOpen: input.finalOpen }),
     });

@@ -70,6 +70,7 @@ export type TriageEntryDisplayV1 = Readonly<{
   key: string;
   title: string;
   scopeLabel: string;
+  scopeDisplayName?: string;
   /** Source-authored readable address; never decoded into routing or identity. */
   identifierLabel: string;
   /** The source's bounded semantic summary, independent of the row status line. */
@@ -179,6 +180,7 @@ export function projectTriageEntryDisplay(
     // entry id is the only true thing we know about this row.
     title: snapshot?.title ?? row.entryRef.entryId,
     scopeLabel: snapshot?.scopeLabel ?? row.entryRef.collisionScope,
+    ...(snapshot?.scopeDisplayName === undefined ? {} : { scopeDisplayName: snapshot.scopeDisplayName }),
     identifierLabel: row.content?.outcome.locator.displayPath ?? row.entryRef.entryId,
     summary: snapshot?.summary ?? null,
     detail,

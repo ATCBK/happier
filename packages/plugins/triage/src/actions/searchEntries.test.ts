@@ -295,7 +295,7 @@ describe('the Triage universal-search query Action', () => {
         expect(result.truncated).toBe(true);
     });
 
-    it('derives a fixed full digest id and code-point-safe bounded display for a maximum-sized entry', async () => {
+    it('derives fixed digest ids while preserving full search display text', async () => {
         const context = createContext([
             {
                 entryId: 'e'.repeat(128),
@@ -320,11 +320,10 @@ describe('the Triage universal-search query Action', () => {
             expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
         ]);
         expect(new Set(result.items.map((item) => item.id))).toHaveProperty('size', 2);
-        const displayItem = result.items.find((item) => item.title.includes('😀'))!;
-        expect(Array.from(displayItem.title)).toHaveLength(128);
-        expect(displayItem.title.endsWith('…')).toBe(true);
-        expect(Array.from(displayItem.subtitle ?? '')).toHaveLength(256);
-        expect(displayItem.subtitle?.endsWith('…')).toBe(true);
+        expect(result.items).toContainEqual(expect.objectContaining({
+            title: `needle ${'😀'.repeat(100)}${'a'.repeat(100)}`,
+            subtitle: `scope ${'z'.repeat(300)}`,
+        }));
         expect(PluginSearchResultV1Schema.safeParse(result).success).toBe(true);
         expect(result.truncated).toBe(false);
     });

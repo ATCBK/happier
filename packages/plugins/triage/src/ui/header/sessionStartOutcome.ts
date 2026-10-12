@@ -78,6 +78,11 @@ const REJECTION_NOTICE_V1: Readonly<Record<
     'plugins.triage.surface.session.rejected.selectedProject',
     'This action needs the project you selected, and no project came back with your choice.',
   ),
+  orchestrationRequiresNewSessionWithEntryInput: notice(
+    'warning',
+    'plugins.triage.surface.session.rejected.orchestration',
+    'Orchestrate this needs a new session, your prompt and the attached issue.',
+  ),
 });
 
 function settledNotice(
@@ -220,7 +225,7 @@ export function describeTriageEntrySessionPhaseV1(
           return notice(
             'warning',
             'plugins.triage.surface.session.preparationUnsupported',
-            'This source cannot prepare a review workspace, so a pull request cannot be fixed here.',
+            'This source cannot prepare a review workspace, so actions that need one cannot start here.',
           );
         // The four reference refusals. Each says which catalog, and each says
         // whether the fix is to repair the configuration or to try again —

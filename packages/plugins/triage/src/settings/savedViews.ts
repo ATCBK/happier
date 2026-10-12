@@ -2,6 +2,7 @@ import { isPluginError } from '@happier-dev/plugin-sdk';
 import type { JsonValue } from '@happier-dev/plugin-sdk';
 import type { PluginContributionIdentity } from '@happier-dev/plugin-sdk/manifest';
 import { PLUGIN_ACCOUNT_STORAGE_LIMITS_V1 } from '@happier-dev/plugin-sdk/storage';
+import { createProtocolStoredReadSchema } from '@happier-dev/plugin-sdk/protocol';
 import {
     normalizeTriageSingleLineV1,
 } from '@happier-dev/triage-protocol/v1';
@@ -20,8 +21,10 @@ import {
     TriageListSettledQueryV1Schema,
 } from '../actions/listEntriesProtocol.js';
 
-import { readExactKeys } from './storedValue.js';
+import { TriageSavedViewsCatalogValueV1Schema } from '../actions/savedViewsProtocol.js';
 import type { TriageCatalogStoreV1 } from './accountKvCatalogStore.js';
+
+const storedTriageSavedViews = createProtocolStoredReadSchema(TriageSavedViewsCatalogValueV1Schema);
 
 /**
  * The sole `triage.savedViews` owner: one typed Account KV value, read,
@@ -291,17 +294,26 @@ export function parseTriageSavedViews(raw: unknown): CorpusSavedViewsReadV1 {
     if (utf8ByteLength(JSON.stringify(raw)) > MAX_TRIAGE_SAVED_VIEWS_SERIALIZED_UTF8_BYTES_V1) {
         return unreadable;
     }
-    const candidate = readExactKeys(raw, ['v', 'views', 'selectedViewId']);
-    if (!candidate || candidate.v !== 1 || !Array.isArray(candidate.views)) return unreadable;
-    if (candidate.selectedViewId !== null && typeof candidate.selectedViewId !== 'string') return unreadable;
+    // Preserve the catalog owner's label normalization before schema admission.
+    const rawCatalog = raw as Readonly<Record<string, unknown>>;
+    const normalized = Array.isArray(rawCatalog.views) ? {
+        ...rawCatalog,
+        views: rawCatalog.views.map((value: unknown) => {
+            if (value === null || typeof value !== 'object' || Array.isArray(value)) return value;
+            const view = value as Readonly<Record<string, unknown>>;
+            return { ...view, label: typeof view.label === 'string' ? normalizeTriageSingleLineV1(view.label) : view.label };
+        }),
+    } : raw;
+    const parsedCatalog = storedTriageSavedViews.safeParse(normalized);
+    if (!parsedCatalog.success) return unreadable;
+    const candidate = parsedCatalog.data;
 
     const views: CorpusSavedViewV1[] = [];
     const ids = new Set<string>();
     for (const member of candidate.views) {
         // A view saved before views existed has no `view` member; it presents as List.
-        const view = readExactKeys(member, ['viewId', 'label', 'query', 'filters', 'order', 'smartPolicy', 'view'])
-            ?? readExactKeys(member, ['viewId', 'label', 'query', 'filters', 'order', 'smartPolicy']);
-        if (!view || typeof view.viewId !== 'string' || !VIEW_ID_PATTERN.test(view.viewId)) return unreadable;
+        const view = member;
+        if (!VIEW_ID_PATTERN.test(view.viewId)) return unreadable;
         if (ids.has(view.viewId)) return unreadable;
         ids.add(view.viewId);
         const parsed = readView(view.viewId, {

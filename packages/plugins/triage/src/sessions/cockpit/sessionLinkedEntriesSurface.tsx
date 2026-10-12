@@ -7,7 +7,6 @@ import {
     ErrorState,
     FreshnessLine,
     Icon,
-    Item,
     List,
     LoadingState,
     Metadata,
@@ -18,26 +17,22 @@ import {
     Stack,
     Status,
     Text,
-    TextField,
     defineUiSurface,
     usePluginHostApi,
+    usePluginTheme,
     usePluginTranslation,
     useSurfaceContext,
     type IconName,
     type ListSectionData,
     type TextTone,
 } from '@happier-dev/plugin-ui';
-import type { TriageEntryRefV1 } from '@happier-dev/triage-protocol/v1';
 
 import { TRIAGE_DISPLAY_NAME } from '../../displayName.js';
 import type { TriageSessionLinkedEntryRowV1, TriageSessionLinkedEntrySummaryV1 } from './linkedEntryRows.js';
-import {
-    linkTriageSessionEntry,
-    projectTriageSessionLinkedEntryCandidates,
-    type TriageSessionLinkedEntryCandidateV1,
-} from './linkedEntrySearch.js';
+import type { TriageSessionLinkedEntryCandidateV1 } from './linkedEntrySearch.js';
+import { linkTriageSessionEntry, useTriageSessionLinkCandidates } from './useSessionLinkCandidates.js';
 import { formatTriageCompactAgeV1, readTriageEntryGlyphV1 } from '../../ui/list/rows.js';
-import { useTriageListWindow } from '../../ui/window/useTriageListWindow.js';
+import { triageEntryRowKey } from '../../projection/listWindow.js';
 import { TRIAGE_ENTRY_DETAIL_DESTINATION_V1 } from '../../composer/openEntryDetails.js';
 import { useTriageDurableAccount } from '../../ui/durable/accountDurableState.js';
 import {
@@ -179,7 +174,7 @@ function LinkedRowFacts(props: Readonly<{ row: LinkedRow }>): React.ReactElement
                 : text('plugins.triage.sessionLinks.kind.entry', 'Entry');
         return (
             <Text
-                variant="caption"
+                variant="micro"
                 tone="secondary"
                 numberOfLines={1}
                 value={linkedAge === null ? noun : text('plugins.triage.sessionLinks.linkedAge', '{kind} · linked {age}', { kind: noun, age: linkedAge })}
@@ -189,31 +184,31 @@ function LinkedRowFacts(props: Readonly<{ row: LinkedRow }>): React.ReactElement
     return (
         <Stack gap="xsmall">
             <Row gap="xsmall" align="center">
-                <Text variant="caption" tone="secondary" numberOfLines={1} value={whereLabel(entry)} />
+                <Text variant="micro" tone="secondary" numberOfLines={1} value={whereLabel(entry)} />
                 {entry.checks === null || entry.checks.total === 0 ? null : <>
-                    <Text variant="caption" tone="muted" value="·" />
+                    <Text variant="micro" tone="muted" value="·" />
                     <Icon name={entry.checks.failed > 0 ? 'warning' : entry.checks.passed === entry.checks.total ? 'check' : 'warning'} size="small"
                         tone={entry.checks.failed > 0 ? 'danger' : entry.checks.passed === entry.checks.total ? 'success' : 'warning'} />
-                    <Text variant="caption" tone="secondary" value={`${entry.checks.passed}/${entry.checks.total}`} />
+                    <Text variant="micro" tone="secondary" value={`${entry.checks.passed}/${entry.checks.total}`} />
                 </>}
                 {entry.stateLabel === '' || entry.lifecycle === 'open' ? null : (
                     <>
-                        <Text variant="caption" tone="muted" value="·" />
-                        <Text variant="caption" tone={lifecycleTone(entry)} value={entry.stateLabel === 'Closed as completed' ? text('plugins.triage.sessionLinks.done', 'Done') : entry.stateLabel} />
+                        <Text variant="micro" tone="muted" value="·" />
+                        <Text variant="micro" tone={lifecycleTone(entry)} value={entry.stateLabel === 'Closed as completed' ? text('plugins.triage.sessionLinks.done', 'Done') : entry.stateLabel} />
                     </>
                 )}
                 {entry.comments === null || entry.comments === 0 ? null : (
                     <>
-                        <Text variant="caption" tone="muted" value="·" />
+                        <Text variant="micro" tone="muted" value="·" />
                         <Icon name="conversations" size="small" tone="secondary" />
-                        <Text variant="caption" tone="secondary" value={String(entry.comments)} />
+                        <Text variant="micro" tone="secondary" value={String(entry.comments)} />
                     </>
                 )}
             </Row>
             {loud === null ? null : (
                 <Row gap="xsmall" align="center">
                     <Icon name={loud.icon} size="small" tone={loud.tone} />
-                    <Text variant="caption" tone={loud.tone} value={loud.label} />
+                    <Text variant="micro" tone={loud.tone} value={loud.label} />
                 </Row>
             )}
         </Stack>
@@ -227,7 +222,7 @@ function LinkedRowTrailing(props: Readonly<{ entry: LinkedEntry | null }>): Reac
     return (
         <Row gap="xsmall" align="center">
             {props.entry.author === null ? null : <Avatar name={props.entry.author.name} size="medium" />}
-            {age === null ? null : <Text variant="caption" tone="secondary" value={age} />}
+            {age === null ? null : <Text variant="micro" tone="secondary" value={age} />}
         </Row>
     );
 }
@@ -338,7 +333,7 @@ function LinkedRowPeek(props: Readonly<{
             {phase === 'confirming' || phase === 'removing' ? (
                 <Stack gap="small">
                     <Text
-                        variant="caption"
+                        variant="micro"
                         tone="secondary"
                         value={text(
                             'plugins.triage.sessionLinks.unlinkConfirm',
@@ -376,7 +371,7 @@ function LinkedRowPeek(props: Readonly<{
                             onPress={() => { void host.openExternalLink(webUrl).catch(() => undefined); }}
                         />
                     )}
-                    <Stack style={{ flex: 1 }} />
+                    <Stack grow />
                     <Button
                         variant="plain"
                         title={text('plugins.triage.sessionLinks.unlink', 'Unlink')}
@@ -443,27 +438,51 @@ function LinkedEntryRow(props: Readonly<{
     );
 }
 
-/** The header "+": search PRs & Issues and link one to this Session (lab PA). */
-function LinkEntryControl(props: Readonly<{ sessionId: string; linked: readonly TriageEntryRefV1[]; onLinked: () => void }>): React.ReactElement {
+/**
+ * Search PRs & Issues and link one to this Session (lab PA). One control, two triggers: the pane header's "+",
+ * and the empty state's one primary action (lab PE), which opens the same picker from where it was pressed.
+ */
+function LinkEntryControl(props: Readonly<{
+    sessionId: string;
+    onLinked: () => void;
+    presentation?: 'header' | 'primary';
+}>): React.ReactElement {
+    const text = usePluginTranslation();
+    const [open, setOpen] = React.useState(false);
+    const label = text('plugins.triage.sessionLinks.link', 'Link a PR or issue');
+    const onLinked = React.useCallback(() => { setOpen(false); props.onLinked(); }, [props]);
+    return (
+        <Popover
+            testID="triage-session-links-link"
+            open={open}
+            onOpenChange={setOpen}
+            trigger={label}
+            // The header's "+" is the glyph alone; the empty state's primary leads its label with it (lab PE).
+            triggerIcon="add"
+            {...(props.presentation === 'primary' ? { triggerAppearance: 'primary' as const } : {})}
+            triggerAccessibilityLabel={label}
+            placement="bottom"
+        >
+            {/* Mounted only while open: the candidate reader runs, and finishes the link pages, for an open picker alone. */}
+            {open ? <LinkEntryPicker sessionId={props.sessionId} label={label} onLinked={onLinked} /> : null}
+        </Popover>
+    );
+}
+
+/**
+ * The open picker: the public List with its own search over the one candidate reader. Every match is listed
+ * (the List's virtualization bounds what mounts; nothing is cut at a count), a linked entry wears a check.
+ */
+function LinkEntryPicker(props: Readonly<{ sessionId: string; label: string; onLinked: () => void }>): React.ReactElement {
     const text = usePluginTranslation();
     const host = usePluginHostApi();
-    const window = useTriageListWindow();
-    const { targetedContributions } = useSurfaceContext();
-    const [open, setOpen] = React.useState(false);
     const [query, setQuery] = React.useState('');
     const [linking, setLinking] = React.useState<string | null>(null);
     const [failed, setFailed] = React.useState(false);
-    const rows = window.snapshot.window?.rows;
-    // A closed picker projects nothing: the search runs only while the popover is open.
-    const candidates = React.useMemo(
-        () => (open ? projectTriageSessionLinkedEntryCandidates(rows ?? [], query, props.linked,
-            (entryRef) => resolveTriageSourceWorkflowSubjectV1(targetedContributions, entryRef)).slice(0, 8) : NO_CANDIDATES),
-        [open, props.linked, query, rows, targetedContributions],
-    );
-    const label = text('plugins.triage.sessionLinks.link', 'Link a PR or issue');
+    const { candidates, status } = useTriageSessionLinkCandidates(props.sessionId, query);
     const link = React.useCallback((candidate: TriageSessionLinkedEntryCandidateV1) => {
         if (candidate.alreadyLinked || linking !== null) return;
-        setLinking(candidate.entry.entryRef.entryId);
+        setLinking(candidateKey(candidate));
         setFailed(false);
         void linkTriageSessionEntry(host, props.sessionId, candidate.entry).then((result) => {
             setLinking(null);
@@ -471,54 +490,70 @@ function LinkEntryControl(props: Readonly<{ sessionId: string; linked: readonly 
                 setFailed(true);
                 return;
             }
-            setOpen(false);
-            setQuery('');
             props.onLinked();
         });
     }, [host, linking, props]);
+    const renderCandidate = React.useCallback((candidate: TriageSessionLinkedEntryCandidateV1): React.ReactElement => {
+        const facts = [whereLabel(candidate.entry), candidate.alreadyLinked ? text('plugins.triage.sessionLinks.alreadyLinked', 'Linked') : null].filter(Boolean);
+        return (
+            <List.Item
+                title={candidate.entry.title}
+                titleNumberOfLines={1}
+                icon={<Icon name={candidate.entry.kind === 'issue' ? 'issue' : 'change-open'} size="small" tone={candidate.entry.lifecycle === 'open' ? 'success' : 'secondary'} />}
+                busy={linking === candidateKey(candidate)}
+                disabled={candidate.alreadyLinked}
+                // A linked entry says so with a mark at the row's end, as in the lab; the words stay beside it.
+                accessory={candidate.alreadyLinked ? <Icon name="check" size="small" tone="secondary" /> : undefined}
+                accessibilityHint={facts.join(', ')}
+                onPress={() => { link(candidate); }}
+            >
+                <Text variant="micro" tone="secondary" numberOfLines={1} value={facts.join(' · ')} />
+            </List.Item>
+        );
+    }, [link, linking, text]);
     return (
-        <Popover
-            testID="triage-session-links-link"
-            open={open}
-            onOpenChange={setOpen}
-            trigger={label}
-            triggerIcon="add"
-            triggerAccessibilityLabel={label}
-            placement="bottom"
-        >
-            <TextField
-                label={text('plugins.triage.sessionLinks.search', 'Search PRs & Issues')}
-                placeholder={text('plugins.triage.sessionLinks.searchPlaceholder', 'Search by title or number')}
-                value={query}
-                onChange={setQuery}
-                autoCapitalize="none"
-                autoCorrect={false}
-            />
-            {candidates.length === 0 ? (
+        <List<TriageSessionLinkedEntryCandidateV1>
+            testID="triage-session-links-candidates"
+            accessibilityLabel={props.label}
+            density="compact"
+            items={candidates}
+            keyForItem={candidateKey}
+            renderItem={renderCandidate}
+            // The List owns the field; the match is the PRs & Issues search owner's (inside the candidate reader).
+            search={{
+                label: text('plugins.triage.sessionLinks.search', 'Search PRs & Issues'),
+                placeholder: text('plugins.triage.sessionLinks.searchPlaceholder', 'Search by title or number'),
+                value: query,
+                onValueChange: setQuery,
+                filter: keepProjectedCandidate,
+            }}
+            empty={status === 'loading' ? (
+                <LoadingState rows={3} title={text('plugins.triage.sessionLinks.loading', `Reading linked ${TRIAGE_DISPLAY_NAME}`)} />
+            ) : (
                 <EmptyState
                     layout="line"
-                    title={text('plugins.triage.sessionLinks.searchEmpty', 'Nothing matches in PRs & Issues yet')}
+                    title={status === 'unavailable'
+                        ? text('plugins.triage.sessionLinks.unavailable', 'Linked entries could not be read')
+                        : text('plugins.triage.sessionLinks.searchEmpty', 'Nothing matches in PRs & Issues yet')}
                 />
-            ) : candidates.map((candidate) => (
-                <Item
-                    key={`${candidate.entry.entryRef.collisionScope}:${candidate.entry.entryRef.entryId}`}
-                    title={candidate.entry.title}
-                    titleNumberOfLines={1}
-                    subtitle={[whereLabel(candidate.entry), candidate.alreadyLinked ? text('plugins.triage.sessionLinks.alreadyLinked', 'Linked') : null].filter(Boolean).join(' · ')}
-                    icon={<Icon name={candidate.entry.kind === 'issue' ? 'issue' : 'change-open'} size="small" tone={candidate.entry.lifecycle === 'open' ? 'success' : 'secondary'} />}
-                    busy={linking === candidate.entry.entryRef.entryId}
-                    disabled={candidate.alreadyLinked}
-                    onPress={() => { link(candidate); }}
-                />
-            ))}
-            {failed ? <Status tone="warning" label={text('plugins.triage.sessionLinks.linkFailed', 'That link didn’t go through. Try again.')} /> : null}
-            <Text variant="caption" tone="secondary" value={text('plugins.triage.sessionLinks.linkReassurance', 'Linking doesn’t change anything at the source.')} />
-        </Popover>
+            )}
+            footer={(
+                <Stack gap="xsmall">
+                    {failed ? <Status tone="warning" label={text('plugins.triage.sessionLinks.linkFailed', 'That link didn’t go through. Try again.')} /> : null}
+                    <Text variant="micro" tone="secondary" value={text('plugins.triage.sessionLinks.linkReassurance', 'Linking doesn’t change anything at the source.')} />
+                </Stack>
+            )}
+        />
     );
 }
 
-function linkedEntryRefs(rows: readonly LinkedRow[]): readonly TriageEntryRefV1[] {
-    return rows.flatMap((row) => (row.presentation.kind === 'linked' ? [row.presentation.entryRef] : []));
+function candidateKey(candidate: TriageSessionLinkedEntryCandidateV1): string {
+    return triageEntryRowKey(candidate.entry.entryRef);
+}
+
+/** The candidate reader already matched the query through the PRs & Issues search owner. */
+function keepProjectedCandidate(): boolean {
+    return true;
 }
 
 function buildSections(rows: readonly LinkedRow[], text: Translate, sources: SurfaceContext['targetedContributions']): readonly ListSectionData<LinkedRow>[] {
@@ -537,6 +572,7 @@ function TriageSessionLinkedEntriesPanel(
 ): React.ReactElement {
     const text = usePluginTranslation();
     const host = usePluginHostApi();
+    const { spacing } = usePluginTheme();
     const { view, refresh, loadMore } = useTriageSessionLinkedEntries(props.sessionId);
     const { targetedContributions } = useSurfaceContext();
     const mounted = React.useRef(true);
@@ -564,12 +600,11 @@ function TriageSessionLinkedEntriesPanel(
             });
     }, [loadMore, loadingMore]);
     const rows = view.kind === 'linked' ? view.rows : NO_ROWS;
-    const linked = React.useMemo(() => linkedEntryRefs(rows), [rows]);
     const sections = React.useMemo(() => buildSections(rows, text, targetedContributions), [rows, text, targetedContributions]);
     const needsYou = rows.filter((row) => entryOf(row)?.review?.decision === 'changesRequested').length;
     const headerActions = React.useMemo(
-        () => <LinkEntryControl sessionId={props.sessionId} linked={linked} onLinked={onRefresh} />,
-        [linked, onRefresh, props.sessionId],
+        () => <LinkEntryControl sessionId={props.sessionId} onLinked={onRefresh} />,
+        [onRefresh, props.sessionId],
     );
     const header = (
         <PaneHeaderContent
@@ -640,6 +675,7 @@ function TriageSessionLinkedEntriesPanel(
                         'plugins.triage.sessionLinks.empty.inviteDescription',
                         'Link a pull request or issue, or start a session from one. It stays here with its state and comments, one tap from the details.',
                     )}
+                    action={<LinkEntryControl sessionId={props.sessionId} onLinked={onRefresh} presentation="primary" />}
                     secondaryAction={(
                         <Button
                             variant="plain"
@@ -676,9 +712,9 @@ function TriageSessionLinkedEntriesPanel(
                     />
                 )}
                 footer={view.more ? (
-                    <Row gap="small" align="center" style={{ paddingHorizontal: 16, paddingVertical: 8 }}>
+                    <Row gap="small" align="center" style={{ paddingHorizontal: spacing.large, paddingVertical: spacing.small }}>
                         <Text
-                            variant="caption"
+                            variant="micro"
                             tone={view.notice === null ? 'secondary' : 'warning'}
                             value={view.notice === null
                                 ? text('plugins.triage.sessionLinks.more.description', 'Recent links from this page are shown; the rest are still linked.')
@@ -704,7 +740,6 @@ function TriageSessionLinkedEntriesPanel(
 }
 
 const NO_ROWS: readonly LinkedRow[] = Object.freeze([]);
-const NO_CANDIDATES: readonly TriageSessionLinkedEntryCandidateV1[] = Object.freeze([]);
 
 export function TriageSessionLinkedEntries(_context: RenderContext): React.ReactElement {
     const text = usePluginTranslation();

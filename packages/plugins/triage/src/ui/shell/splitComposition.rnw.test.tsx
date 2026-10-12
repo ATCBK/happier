@@ -414,13 +414,18 @@ function detailsPaneNode(): HTMLElement | null {
     return document.querySelector<HTMLElement>('[role="group"][aria-label="Details pane"]');
 }
 
-/** The table's column header titles (the header row is presentation: hidden from assistive tech, as each row says it). */
+/**
+ * The table's column header titles. The title column is the order menu's trigger (a real control, named
+ * "Entry: Newest" for assistive tech); the other titles are presentation, hidden from assistive tech, as each row says it.
+ */
 function columnTitles(): string[] {
-    for (const header of listRegionNode().querySelectorAll('[aria-hidden="true"]')) {
-        const titles = [...header.querySelectorAll('[dir="auto"]')].map((node) => node.textContent ?? '');
-        if (titles.includes('Entry')) return titles;
-    }
-    return [];
+    const trigger = listRegionNode().querySelector<HTMLElement>(`[data-testid="${TRIAGE_SHELL_FILL_TEST_ID_V1}:sort:title"]`);
+    if (trigger === null) return [];
+    const title = (trigger.getAttribute('aria-label') ?? '').split(':')[0]!;
+    const row = trigger.closest('[aria-sort]')?.parentElement ?? null;
+    const others = [...(row?.querySelectorAll('[aria-hidden="true"] [dir="auto"], [aria-hidden="true"][dir="auto"]') ?? [])]
+        .map((node) => node.textContent ?? '');
+    return [title, ...others];
 }
 
 /** The entry's list row element — its own node, whichever composition holds it. */
@@ -487,6 +492,21 @@ describe('the Triage entry detail in the host details pane', () => {
         const row = entryRowNode();
         expect(row).not.toBeNull();
         expect(row?.contains(document.activeElement)).toBe(true);
+    });
+
+    it('keeps every lane of the board on screen when only one of them has entries', async () => {
+        // A status board is read by position: an empty "Needs you" is the good news, and a board that drops it
+        // reflows the remaining lane across the page into a list of wide cards.
+        const shell = await mountShell({ detailsPane: { available: true } });
+        await measureFillRegion(DESKTOP_WIDTH);
+
+        await act(async () => {
+            await shell.press(await shell.getByRole('radio', { name: 'Board' }));
+        });
+        const lanes = [...document.querySelectorAll('[data-testid*=":column:"]')]
+            .map((column) => column.getAttribute('data-testid')?.split(':column:')[1]);
+        // Pinned is the reader's own lane: it appears once something is pinned, never as an empty column.
+        expect(lanes).toEqual(['needsYou', 'withAgent', 'inReview', 'everythingElse']);
     });
 
     it('opens a board card into the same pane, the board staying on screen', async () => {

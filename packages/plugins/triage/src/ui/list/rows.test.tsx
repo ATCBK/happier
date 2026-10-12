@@ -254,8 +254,8 @@ describe('a PRs & Issues entry row', () => {
     expect(attention.detailTone).toBe('attention');
     expect(summary).not.toHaveProperty('detailTone');
     expect(suggestion).not.toHaveProperty('detailTone');
-    expect(readTriageRowMarkV1(displayRow({ detailKind: 'attention' }))).toEqual({ name: 'change-open', tone: 'attention' });
-    expect(readTriageRowMarkV1(displayRow({ lifecyclePresentation: 'resolved' }))).toEqual({ name: 'change-complete', tone: 'secondary' });
+    expect(readTriageRowMarkV1(displayRow({ detailKind: 'attention' }))).toEqual({ name: 'info', tone: 'attention' });
+    expect(readTriageRowMarkV1(displayRow({ lifecyclePresentation: 'resolved' }))).toEqual({ name: 'check', tone: 'secondary' });
     expect(readTriageRowMarkV1(displayRow({ lifecyclePresentation: null, detailKind: 'presence', tone: 'warning' })))
       .toEqual({ name: 'info', tone: 'warning' });
     // The detail header's badge: a required reason needs you, a suggestion stays quiet (never blue).
@@ -264,6 +264,8 @@ describe('a PRs & Issues entry row', () => {
   });
 
   it('names the place alone once the designation is said beside the title, and the source address otherwise', () => {
+    expect(readTriageRowPlaceV1({ designation: '#2481', identifierLabel: 'tidewater/payments-api#2481', scopeLabel: 'tidewater/payments-api', scopeDisplayName: 'Payments API' }))
+      .toBe('Payments API');
     expect(readTriageRowPlaceV1({ designation: '#2481', identifierLabel: 'tidewater/payments-api#2481', scopeLabel: 'tidewater/payments-api' }))
       .toBe('tidewater/payments-api');
     expect(readTriageRowPlaceV1({ designation: null, identifierLabel: 'CHECKOUT-WEB', scopeLabel: 'checkout-web' }))
@@ -305,7 +307,7 @@ describe('a PRs & Issues entry row', () => {
       .toBe('change-complete');
     expect(readTriageRowMarkV1(displayRow({ lifecyclePresentation: 'closed' }), 'errorIssue').name).toBe('close');
     // A kind nobody declared keeps the lifecycle glyph rather than a guess.
-    expect(readTriageRowMarkV1(displayRow({}), null).name).toBe('change-open');
+    expect(readTriageRowMarkV1(displayRow({}), null).name).toBe('info');
   });
 
   it('shows and says the provider activity age in the same place', () => {
@@ -394,6 +396,23 @@ describe('the window-honesty line', () => {
     })).toEqual(['3 loaded', failed.title]);
     expect(readTriageWindowStatementV1({
       loadedCount: 0, window: null, configuredSources: sources, entries, text,
+    })).toBeUndefined();
+  });
+
+  it('names only connections that answered, and says nothing about entries over an empty body', () => {
+    // A connection the pass could not read, or whose read failed, has told us nothing: "may have more" about it
+    // would be a guess, and its failure is already said once by the page.
+    const lanes = [
+      { sourceInstanceId: 'gh', source: SOURCE, health: { kind: 'unavailable' as const }, exhausted: false },
+      { sourceInstanceId: 'ado', source: SOURCE, health: { kind: 'walkFinished' as const }, exhausted: false },
+    ];
+    expect(readTriageWindowStatementV1({
+      loadedCount: 3, window: { coverage: 'partial', lanes }, configuredSources: sources, entries, text,
+    })).toEqual(['3 loaded', 'Azure DevOps may have more']);
+    // Nothing loaded: the body's own state (failure, empty) is the whole answer, so the footer adds no
+    // "0 loaded · GitHub may have more" beneath it.
+    expect(readTriageWindowStatementV1({
+      loadedCount: 0, window: { coverage: 'partial', lanes: [lanes[0]!] }, configuredSources: sources, entries, text,
     })).toBeUndefined();
   });
 

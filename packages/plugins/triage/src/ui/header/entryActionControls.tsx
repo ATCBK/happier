@@ -124,7 +124,7 @@ function isTriageActionBlockedV1(action: TriageActionV1, preparesReviewWorkspace
 
 const NO_SELECTION_COPY = 'Select an entry to start a session from it.';
 const NO_PREPARATION_COPY =
-  'This source cannot prepare a review workspace, so a pull request cannot be fixed here.';
+  'This source cannot prepare a review workspace, so actions that need one cannot start here.';
 
 function TriageEntryActionButton(props: Readonly<{
   action: TriageActionV1;
@@ -192,8 +192,6 @@ export function TriageEntryActionControls(
   // Read from the action's own declared mode rather than from the subject: an
   // action needs a prepared workspace because it SAID so, and a subject that
   // happens to be a pull request is not by itself a claim about preparation.
-  const preparationMissing = !preparesReviewWorkspace
-    && offered.some((action) => action.workspaceMode === 'pull_request');
   const primaryActionId = readTriagePrimaryActionIdV1(offered, preparesReviewWorkspace, { workflowSubject, viewerIsAuthor });
   // With nothing pressable, the first offered action still leads, disabled, beside the reason it cannot start.
   const primary = offered.find((action) => action.actionId === primaryActionId) ?? offered[0] ?? null;
@@ -201,6 +199,18 @@ export function TriageEntryActionControls(
   const beside = offered.find((action) => action !== primary && readTriageActionIntentV1(action) === 'ask') ?? null;
   const overflowActions = offered.filter((action) => action !== primary && action !== beside);
   const hasOverflow = overflowActions.length > 0 || (props.overflow !== undefined && props.overflow !== null);
+  // The reason a control cannot start sits with that control: under the row when a blocked action is in sight,
+  // inside More when the blocked ones are all behind it, so the row never says "cannot" beside an action that can.
+  const isBlocked = (action: TriageActionV1 | null) => action !== null && isTriageActionBlockedV1(action, preparesReviewWorkspace);
+  const blockedInRow = isBlocked(primary) || isBlocked(beside);
+  const blockedInOverflow = !blockedInRow && overflowActions.some(isBlocked);
+  const preparationReason = (
+    <Status
+      tone="muted"
+      labelKey="plugins.triage.surface.session.preparationUnsupported"
+      label={NO_PREPARATION_COPY}
+    />
+  );
   // A renamed control shows the person's own words in every locale; a still-shipped one keeps its translation.
   // `titleKey` is therefore resolved from the record, never stored in it.
   const button = (action: TriageActionV1, onPress: (request: TriageEntryActionRequestV1) => void, inOverflow = false) => (
@@ -237,6 +247,7 @@ export function TriageEntryActionControls(
                   {overflowActions.map((action) => button(action, (request) => { setMoreOpen(false); press(request); }, true))}
                 </Stack>
               )}
+              {blockedInOverflow ? preparationReason : null}
               {props.overflow}
             </Stack>
           </Popover>
@@ -258,13 +269,7 @@ export function TriageEntryActionControls(
           label="Happier cannot reach your account right now, so this action cannot start. Try again in a moment."
         />
       )}
-      {preparationMissing ? (
-        <Status
-          tone="muted"
-          labelKey="plugins.triage.surface.session.preparationUnsupported"
-          label={NO_PREPARATION_COPY}
-        />
-      ) : null}
+      {blockedInRow ? preparationReason : null}
     </Stack>
   );
 }

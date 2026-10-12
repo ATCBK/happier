@@ -148,11 +148,13 @@ function readShellFailure(snapshot: TriageListWindowSnapshotV1): TriageListShell
   // A connection the pass could not read at all is the same kind of fact as one
   // that failed with provider evidence — one named connection the reader can go
   // and look at. Only the reason differs, and neither is the aggregate read.
+  // The store's sentence for such a connection is its own diagnostic, worded about its pass; the reader is
+  // told the shell's translated reason for a connection that could not be reached.
   for (const entry of projectTriageUnreadableSourceHealth(snapshot)) {
     sources.push(Object.freeze({
       sourceInstanceId: entry.sourceInstance.sourceInstanceId,
       displayName: entry.displayName,
-      reason: entry.reason,
+      reason: SOURCE_FAILURE_COPY_V1.transient,
     }));
   }
   // A connection whose source is not admitted is never asked, so it has no lane

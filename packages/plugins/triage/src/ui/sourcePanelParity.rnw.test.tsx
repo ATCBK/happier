@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createPluginUiTestkit, createSurfaceContextFixture, type PluginUiTestkit } from '@happier-dev/plugin-sdk/testing';
 import { createPluginUiRnwSemanticSurfaceAdapter } from '@happier-dev/plugin-ui/testing';
 import { defineUiSurface, usePluginHostApi } from '@happier-dev/plugin-ui';
-import { TriageEvidenceDisclosureProvider, type TriageSourcePanelCommandV1, triageSourcePanelActionIdV1, type TriageSourcePanelOperationV1 } from '@happier-dev/triage-sources/ui';
+import { TriageEvidenceDisclosureProvider, type TriageSourcePanelCommandV1, triageSourcePanelActionIdV1, TriageSourcePanelOperationV1Schema, type TriageSourcePanelOperationV1 } from '@happier-dev/triage-sources/ui';
 import { TriageDetailSurfaceInputV1Schema } from '@happier-dev/triage-protocol/v1';
 import { isApprovalRequiredByActionsSettings, normalizeActionsSettingsV1, pluginActionRequiresPresentUserIntent } from '@happier-dev/protocol';
 import type { JsonValue } from '@happier-dev/plugin-sdk';
@@ -54,7 +54,7 @@ const projection = (id: string): JsonValue => ({ kind: 'event', projection: {
   redactions: [], sensitivePaths: [], projectionTruncated: false, omitted: { sections: 0, frames: 0, breadcrumbs: 0, tags: 0, redactions: 0, sensitivePaths: 0 },
 } });
 
-async function mountSource(source: 'sentry' | 'posthog', mode: 'default' | 'ask' | 'waiver' = 'waiver', accept = true, deferComposerRead = false) {
+async function mountSource(source: 'sentry' | 'posthog', mode: 'default' | 'ask' | 'waiver' = 'waiver', accept = true, deferComposerRead = false, paged = false) {
   const scope = createTriageEphemeralSharedScopeFixture();
   const first = source === 'posthog' ? 'aaaaaaaa-0000-4000-8000-000000000001' : FIRST;
   const second = source === 'posthog' ? 'bbbbbbbb-0000-4000-8000-000000000002' : SECOND;
@@ -71,7 +71,7 @@ async function mountSource(source: 'sentry' | 'posthog', mode: 'default' | 'ask'
     const localId = triageSourcePanelActionIdV1(operation);
     const action = PLUGIN_MANIFEST.contributes.actions.find((candidate) => candidate.id === localId);
     if (!action) throw new Error('Action declaration missing');
-    const id = `happier.triage/${localId}` as const;
+    const id = `happier.triage/actions/${localId}` as const;
     const waived = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { [id]: [surface] } });
     const settings = mode === 'default' ? normalizeActionsSettingsV1({ v: 1 }) : mode === 'waiver' || action.confirmation === undefined ? waived
       : normalizeActionsSettingsV1({ ...waived, actions: { [id]: { approvalRequiredSurfaces: [surface] } } });
@@ -109,12 +109,24 @@ async function mountSource(source: 'sentry' | 'posthog', mode: 'default' | 'ask'
             if (requested === 'activity') return { kind: 'activity', activity: { status: 'available', items: [], malformedItemCount: 0, omittedItemCount: 0, projectionTruncated: false } };
             return { kind: 'overview', statePresentation: 'active', nativeStateLabel: 'Active', eventCount: '2' };
           }
-          if (localId === SENTRY_ACTION_IDS.listIssueEvents) return { kind: 'events', rows: [{ eventId: FIRST, headline: 'First occurrence' }, { eventId: SECOND, headline: 'Second occurrence' }], omittedRowCount: 0, projectionTruncated: false };
+          if (localId === SENTRY_ACTION_IDS.listIssueEvents) {
+            const continuation = (request as { continuation?: string }).continuation;
+            return { kind: 'events', rows: paged ? continuation === undefined
+              ? [{ eventId: FIRST, headline: 'First occurrence' }] : [{ eventId: SECOND, headline: 'Second occurrence' }]
+              : [{ eventId: FIRST, headline: 'First occurrence' }, { eventId: SECOND, headline: 'Second occurrence' }],
+              ...(paged && continuation === undefined ? { continuation: 'page-2' } : {}), omittedRowCount: 0, projectionTruncated: false };
+          }
           if (localId === SENTRY_ACTION_IDS.readEvent) return projection((request as { selector: { eventId?: string } }).selector.eventId ?? FIRST);
           if (localId === POSTHOG_ACTION_IDS.nativeOverview) return { kind: 'unreadable-by-design' };
           if (localId === POSTHOG_ACTION_IDS.issueActivity) return { kind: 'activity', records: [], omittedRowCount: 0 };
-          if (localId === POSTHOG_ACTION_IDS.issueEvents) return { kind: 'sampled', events: [first, second].map((uuid, providerOffset) => ({ uuid, providerOffset, exceptions: [{ type: providerOffset === 0 ? 'First occurrence' : 'Second occurrence', frames: [] }] })), omittedRowCount: 0,
-            frozenRequest: { v: 1, issueId: ISSUE, from: '2026-07-01T00:00:00.000Z', to: '2026-08-15T00:00:00.000Z', filterTestAccounts: false, onlyAppFrames: false, include: ['exception', 'stacktrace', 'navigation', 'correlation'], limit: 3, offset: 0 } };
+          if (localId === POSTHOG_ACTION_IDS.issueEvents) {
+            const continuation = (request as { continuation?: string }).continuation;
+            const ids = paged ? continuation === undefined ? [first] : [second] : [first, second];
+            return { kind: 'sampled', events: ids.map((uuid) => ({ uuid, providerOffset: uuid === first ? 0 : 1,
+              exceptions: [{ type: uuid === first ? 'First occurrence' : 'Second occurrence', frames: [] }] })), omittedRowCount: 0,
+              ...(paged && continuation === undefined ? { continuation: 'page-2' } : {}),
+              frozenRequest: { v: 1, issueId: ISSUE, from: '2026-07-01T00:00:00.000Z', to: '2026-08-15T00:00:00.000Z', filterTestAccounts: false, onlyAppFrames: false, include: ['exception', 'stacktrace', 'navigation', 'correlation'], limit: 3, offset: 0 } };
+          }
           throw new Error(`Unexpected source action ${localId}`);
         },
         readComposer: async ({ ref }) => {
@@ -134,6 +146,35 @@ async function mountSource(source: 'sentry' | 'posthog', mode: 'default' | 'ask'
 }
 
 describe('source panel agent/UI parity', () => {
+  it.each(['sentry', 'posthog'] as const)('pages %s occurrences through the same mounted controller as the UI', async (source) => {
+    const agent = await mountSource(source, 'default', true, false, true);
+    const operation = () => TriageSourcePanelOperationV1Schema.parse({ kind: 'loadMoreSourceOccurrences' });
+    expect(agent.commands().some((command) => command.operation.kind === 'loadMoreSourceOccurrences')).toBe(true);
+    await act(async () => { await agent.page.press(await agent.page.getByRole('tab', { name: 'Overview' })); });
+    expect(await agent.invoke(operation())).toEqual({ status: 'unavailable' });
+    await act(async () => { await agent.page.press(await agent.page.getByRole('tab', { name: 'Occurrences' })); });
+    await act(async () => { expect(await agent.invoke({ kind: 'selectSourceOccurrence', occurrenceId: agent.second })).toEqual({ status: 'unavailable' }); });
+    await act(async () => { expect(await agent.invoke(operation())).toEqual({ status: 'applied' }); });
+    await expect(agent.page.getByRole(source === 'sentry' ? 'button' : 'option', { name: 'Second occurrence' })).resolves.toBeDefined();
+    await act(async () => { expect(await agent.invoke({ kind: 'selectSourceOccurrence', occurrenceId: agent.second })).toEqual({ status: 'applied' }); });
+    expect(await agent.invoke(operation())).toEqual({ status: 'unavailable' });
+    expect(agent.commands().some((command) => command.operation.kind === 'loadMoreSourceOccurrences')).toBe(false);
+    expect(agent.dialogs).toEqual([]);
+    if (source === 'posthog') await act(async () => { await agent.page.press(await agent.page.getByRole('tab', { name: 'Stack trace' })); });
+    await act(async () => { expect(await agent.invoke({ kind: 'insertSelectedEvidence', occurrenceId: agent.second })).toEqual({ status: 'applied' }); });
+    const label = `${source === 'sentry' ? 'Sentry' : 'PostHog'} occurrence ${agent.second}`;
+    expect(agent.transactions[0]).toMatchObject({ operations: [{ kind: 'text.insert', text: label }, { kind: 'reference.insert', reference: { label } }] });
+    await act(async () => { await agent.page.dispose(); });
+    expect(await agent.invoke(operation())).toEqual({ status: 'unavailable' });
+
+    const ui = await mountSource(source, 'default', true, false, true);
+    await act(async () => { await ui.page.press(await ui.page.getByRole('button', { name: source === 'sentry' ? 'Load more retained events' : 'Load more sampled occurrences' })); });
+    await act(async () => { await ui.page.press(await ui.page.getByRole(source === 'sentry' ? 'button' : 'option', { name: 'Second occurrence' })); });
+    if (source === 'posthog') await act(async () => { await ui.page.press(await ui.page.getByRole('tab', { name: 'Stack trace' })); });
+    await act(async () => { await ui.page.press(await ui.page.getByRole('button', { name: 'Add selected occurrence to message' })); });
+    expect(ui.transactions).toEqual(agent.transactions);
+  });
+
   it.each(['sentry', 'posthog'] as const)('selects the second %s occurrence and inserts the same reference as UI', async (source) => {
     const mounted = await mountSource(source);
     await act(async () => { expect(await mounted.invoke({ kind: 'selectSourceOccurrence', occurrenceId: mounted.second })).toEqual({ status: 'applied' }); });

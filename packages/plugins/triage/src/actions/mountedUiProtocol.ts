@@ -7,7 +7,7 @@ import {
 } from '@happier-dev/plugin-sdk/protocol';
 import { TriageEntryRefV1Schema } from '@happier-dev/triage-protocol/v1';
 import { TriageSourcePanelSelectionV1Schema, TriageSourcePanelRevealV1Schema, TriageSourcePanelInsertV1Schema } from '@happier-dev/triage-sources/runtime';
-import { TriageListFilterSelectionV1Schema, TriageListSettledQueryV1Schema } from './listEntriesProtocol.js';
+import { TriageListFilterSelectionV1Schema, TriageListSettledQueryV1Schema, TriageSmartPolicyV1Schema } from './listEntriesProtocol.js';
 
 export const TRIAGE_MOUNTED_UI_ACTION_LOCAL_ID_V1 = 'ui/mounted-v1';
 const identifier = defineProtocolString({ minLength: 1 });
@@ -19,17 +19,20 @@ export const TriageMountedUiOperationV1Schema = defineProtocolUnion([
     expanded: defineProtocolUnion([defineProtocolLiteral(true), defineProtocolLiteral(false)]).optional() }, closed),
   defineProtocolObject({ kind: defineProtocolLiteral('openDetail'), entryRef: TriageEntryRefV1Schema, tab: identifier.optional() }, closed),
   defineProtocolObject({ kind: defineProtocolLiteral('closeDetail') }, closed),
+  defineProtocolObject({ kind: defineProtocolLiteral('attachEntry'), entryRef: TriageEntryRefV1Schema }, closed),
+  defineProtocolObject({ kind: defineProtocolLiteral('removeEntry'), entryRef: TriageEntryRefV1Schema }, closed),
   defineProtocolObject({ kind: defineProtocolLiteral('selectDetailTab'), tab: identifier }, closed),
   defineProtocolObject({ kind: defineProtocolLiteral('selectLinkedSession'), sessionId: identifier }, closed),
   defineProtocolObject({ kind: defineProtocolLiteral('switchView'), view: defineProtocolUnion([defineProtocolLiteral('list'), defineProtocolLiteral('board')]) }, closed),
   defineProtocolObject({ kind: defineProtocolLiteral('setLens'), query: TriageListSettledQueryV1Schema, filters: TriageListFilterSelectionV1Schema,
-    order: defineProtocolUnion([defineProtocolLiteral('newest'), defineProtocolLiteral('oldest'), defineProtocolLiteral('smart')]) }, closed),
+    order: defineProtocolUnion([defineProtocolLiteral('newest'), defineProtocolLiteral('oldest'), defineProtocolLiteral('smart')]),
+    smartPolicy: TriageSmartPolicyV1Schema.optional() }, closed),
   defineProtocolObject({ kind: defineProtocolLiteral('selectSavedView'), viewId: identifier.nullable() }, closed),
   defineProtocolObject({ kind: defineProtocolLiteral('setSelection'), entryRefs: defineProtocolArray(TriageEntryRefV1Schema) }, closed),
   defineProtocolObject({ kind: defineProtocolLiteral('retryRun') }, closed),
   defineProtocolObject({ kind: defineProtocolLiteral('cancelRun') }, closed),
   defineProtocolObject({ kind: defineProtocolLiteral('refresh') }, closed),
-  defineProtocolObject({ kind: defineProtocolLiteral('loadMore'), section: defineProtocolUnion([defineProtocolLiteral('entries'), defineProtocolLiteral('pins')]) }, closed),
+  defineProtocolObject({ kind: defineProtocolLiteral('loadMore'), section: defineProtocolUnion([defineProtocolLiteral('entries'), defineProtocolLiteral('pins'), defineProtocolLiteral('linkedSessions')]) }, closed),
 ]);
 export type TriageMountedUiOperationV1 = ReturnType<typeof TriageMountedUiOperationV1Schema.parse>;
 export const TriageMountedUiInputV1Schema = defineProtocolObject({ mountId: identifier, operation: TriageMountedUiOperationV1Schema }, closed);

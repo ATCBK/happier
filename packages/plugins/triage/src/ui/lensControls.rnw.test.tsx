@@ -34,7 +34,7 @@ import {
 } from '../corpus/testkit/observations.test-support.js';
 import { refreshTriageListWindow } from './window/mountedWindow.js';
 import { createTriageEphemeralSharedScopeFixture } from './window/ephemeralSharedScope.test-support.js';
-import { toolbarMenuItem } from './shell/toolbarMenus.test-support.js';
+import { filterFacetOption } from './shell/toolbarMenus.test-support.js';
 import { renderSurface as renderShellSurface } from './surface.js';
 
 /**
@@ -197,7 +197,7 @@ describe('the PRs & Issues lens controls', () => {
             `ft,${SOURCE.pluginId},${SOURCE.localId},pull-request`,
         );
 
-        const active = await toolbarMenuItem(shell, 'Type', 'menuitemcheckbox', {
+        const active = await filterFacetOption(shell, 'Type', {
             name: 'pull-request',
             state: { checked: true },
         });
@@ -217,7 +217,7 @@ describe('the PRs & Issues lens controls', () => {
             `fp,${SOURCE.pluginId},${SOURCE.localId},${encodeURIComponent(SCOPE)}`,
         );
 
-        await expect(toolbarMenuItem(shell, 'Scope', 'menuitemcheckbox', {
+        await expect(filterFacetOption(shell, 'Scope', {
             name: SCOPE,
             state: { checked: true },
         })).resolves.toBeTruthy();

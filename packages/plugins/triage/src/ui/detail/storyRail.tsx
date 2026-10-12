@@ -2,9 +2,12 @@ import * as React from 'react';
 
 import {
   Badge,
-  Banner,
+  ApprovalPrompt,
+  BrandMark,
   Button,
   CodeBlock,
+  HAPPIER_WORK_STATUS_SEMANTIC_TONE,
+  Icon,
   Row,
   Stack,
   Status,
@@ -17,11 +20,10 @@ import {
   type SessionStateReadV1,
   type TextTone,
 } from '@happier-dev/plugin-ui';
-import type { SessionPendingPermissionV1, SessionPermissionAnswerV1 } from '@happier-dev/plugin-sdk/ui';
+import type { SessionPendingPermissionV1, SessionPermissionAnswerV1, SessionStateV1 } from '@happier-dev/plugin-sdk/ui';
 import type { TriageLinkedSessionProjectionV1 } from '@happier-dev/triage-protocol/v1';
-import { HAPPIER_WORK_STATUS_SEMANTIC_TONE } from '@happier-dev/plugin-ui/presentation';
 
-import { describeTriageAgentStatusV1 } from './agentState.js';
+import { describeTriageAgentStatusV1, readTriageSessionWhereV1 } from './agentState.js';
 import { TriageLinkedSessions } from './linkedSessions.js';
 import { useLinkedSessionOpen } from './useLinkedSessionOpen.js';
 
@@ -87,8 +89,7 @@ export function TriageAgentStep(props: Readonly<{
   const opener = useLinkedSessionOpen();
   if (props.sessions.length === 0) return null;
   const status = props.live.state === null ? null : describeTriageAgentStatusV1(props.live.state);
-  const where = props.live.state?.workspace;
-  const whereLabel = where?.worktreeName ?? where?.projectName;
+  const whereLabel = readTriageSessionWhereV1(props.live.state);
   const shown = findings.proposals.slice(0, SHOWN_FINDINGS);
   // Reviews are read in linked-Session scope. Scoped rows may omit that optional
   // field; in that case use the story's current linked Session destination.
@@ -124,7 +125,7 @@ export function TriageAgentStep(props: Readonly<{
                         value={text(`plugins.triage.surface.detail.finding.severity.${severity}`, FINDING_SEVERITY_LABEL[severity])}
                       />
                     )}
-                    {location === null ? null : <Text variant="caption" tone="secondary" value={location} numberOfLines={1} />}
+                    {location === null ? null : <Text variant="micro" tone="secondary" value={location} numberOfLines={1} />}
                   </Row>
                 )}
                 <Text variant="reading" value={finding.body} />
@@ -152,10 +153,10 @@ export function TriageAgentStep(props: Readonly<{
     return (
       <Stack gap="small" testID="triage-activity-agent">
         <Row gap="small" align="center">
-          <Stack style={{ flex: 1, minWidth: 0 }}>
+          <Stack grow>
             <Text variant="label" value={title} />
           </Stack>
-          {whereLabel === undefined ? null : <Text variant="caption" tone="secondary" value={whereLabel} />}
+          {whereLabel === undefined ? null : <Text variant="micro" tone="secondary" value={whereLabel} />}
         </Row>
         {content}
       </Stack>
@@ -165,7 +166,7 @@ export function TriageAgentStep(props: Readonly<{
     <Step
       marker={{ kind: 'number', value: 3 }}
       title={title}
-      trailing={whereLabel === undefined ? undefined : <Text variant="caption" tone="secondary" value={whereLabel} />}
+      trailing={whereLabel === undefined ? undefined : <Text variant="micro" tone="secondary" value={whereLabel} />}
       testID="triage-story-agent"
     >
       {content}
@@ -197,7 +198,8 @@ const ANSWER_COPY: Readonly<Record<SessionPermissionAnswerV1, Readonly<{ key: st
  */
 export function TriagePermissionCard(props: Readonly<{
   sessionId: string;
-  sessionTitle: string | undefined;
+  /** The asking Session's live state: who asks (its Agent) and where it works. */
+  state: SessionStateV1;
   request: SessionPendingPermissionV1;
 }>): React.ReactElement {
   const text = usePluginTranslation();
@@ -223,23 +225,33 @@ export function TriagePermissionCard(props: Readonly<{
     })();
   }, [host, props.request.requestId, props.sessionId]);
 
-  const title = props.sessionTitle === undefined
+  // The Agent asks, never the Session's title ("Fix failing checks on #2476 wants to run…" names no one).
+  const agent = props.state.agent;
+  const title = agent === undefined
     ? text('plugins.triage.surface.detail.permission.title', 'The agent wants to run {tool}', { tool: props.request.toolName })
     : text('plugins.triage.surface.detail.permission.titleNamed', '{session} wants to run {tool}', {
-      session: props.sessionTitle,
+      session: agent.displayName,
       tool: props.request.toolName,
     });
+  const where = readTriageSessionWhereV1(props.state);
   return (
-    <Banner
-      tone="warning"
+    <ApprovalPrompt
+      testID="triage-permission-card"
+      tone="attention"
       title={title}
-      description={props.request.summary}
-      action={(
+      subtitle={props.request.summary}
+      // The asking Agent's own mark when the catalog knows it; it stands alone, no tile.
+      icon={agent?.brand === undefined
+        ? <Icon name="review" size="small" tone="attention" />
+        : <BrandMark pluginId={agent.brand.pluginId} size="small" externallyLabelled />}
+      {...(where === undefined ? {} : {
+        headerAccessory: <Text variant="micro" tone="secondary" value={where} numberOfLines={1} />,
+      })}
+      footer={(
         <Stack gap="small">
-          {props.request.command === undefined ? null : <CodeBlock code={props.request.command} />}
           {props.request.answers.length === 0 ? (
             <Text
-              variant="caption"
+              variant="micro"
               tone="secondary"
               value={text('plugins.triage.surface.detail.permission.notYours', 'Someone who can approve this Session has to answer.')}
             />
@@ -266,6 +278,8 @@ export function TriagePermissionCard(props: Readonly<{
           ) : null}
         </Stack>
       )}
-    />
+    >
+      {props.request.command === undefined ? null : <CodeBlock code={props.request.command} />}
+    </ApprovalPrompt>
   );
 }

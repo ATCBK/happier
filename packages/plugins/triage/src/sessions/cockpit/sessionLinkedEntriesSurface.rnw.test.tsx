@@ -190,7 +190,8 @@ function createCockpitAdapter(
     dataClient: PluginUiDataClient | null,
     sharedScope?: PluginUiEphemeralSharedScope,
 ): PluginUiSemanticSurfaceAdapter<typeof renderSessionLinkedEntriesSurface> {
-    const rnwAdapter = createPluginUiRnwSemanticSurfaceAdapter();
+    // Overlays mounted, so the link picker a press opens is observable like the host's.
+    const rnwAdapter = createPluginUiRnwSemanticSurfaceAdapter({ overlays: true });
     return {
         async mount(mountInput) {
             return await rnwAdapter.mount({
@@ -227,6 +228,7 @@ async function mountCockpit(
     openSurfaceError: unknown = null,
     statusFixture?: Readonly<{ scope: PluginUiEphemeralSharedScope; readStatus: () => Promise<TriagePullRequestStatusV1> }>,
     sourceOccurrencePresent = true,
+    listEntries?: () => Promise<unknown>,
 ): Promise<PluginUiTestkit> {
     let fixture!: PluginUiTestkit;
     const surfaceContext = createSurfaceContextFixture({
@@ -263,6 +265,9 @@ async function mountCockpit(
             handlers: {
                 executeAction: async ({ action, input }) => {
                     actionCalls.push({ action: String(action), input });
+                    if (listEntries !== undefined && String(action) === 'entries/list-v1') {
+                        return await listEntries() as never;
+                    }
                     if (statusFixture !== undefined && String(action) === 'entries/read-pull-request-status-v1') {
                         return await statusFixture.readStatus() as never;
                     }
@@ -349,6 +354,8 @@ describe('expanded PR status from the exact linked source observation', () => {
         await expect(fixture.getByText('Jonas')).resolves.toBeDefined();
         await expect(fixture.getByText(status.merge!.blocker!)).resolves.toBeDefined();
         await expect(fixture.getByText('fix/settings-remount')).resolves.toBeDefined();
+        await expect(fixture.getByText('+48')).resolves.toBeDefined();
+        await expect(fixture.getByText('−12')).resolves.toBeDefined();
         await expect(fixture.getByText('9/10')).resolves.toBeDefined();
         const calls = actionCalls.filter((call) => call.action === 'entries/read-pull-request-status-v1');
         expect(calls).toEqual([{ action: 'entries/read-pull-request-status-v1', input: {
@@ -818,6 +825,63 @@ describe('the mounted Session cockpit', () => {
 
         await expect(fixture.getByText('Keep this session’s PRs and issues at hand')).resolves
             .toEqual({ content: 'Keep this session’s PRs and issues at hand' });
+    });
+
+    it('leads the empty state with its one action, linking a PR or issue, and keeps browsing quiet beside it', async () => {
+        const harness = createDataHarness({
+            snapshot: { rows: [], hasMore: false, status: 'ready' },
+        });
+
+        const fixture = await mountCockpit(harness, { kind: 'session', sessionId: SESSION_ID });
+
+        // The state's primary opens the same picker as the pane header's "+" (which the host draws in its band).
+        const linkControls = await fixture.getAllByRole('button', { name: 'Link a PR or issue' });
+        await expect(fixture.queryByRole('textbox', { name: 'Search PRs & Issues' })).resolves.toBeUndefined();
+        await act(async () => { await fixture.press(linkControls[linkControls.length - 1]!); });
+        await expect(fixture.findByRole('textbox', { name: 'Search PRs & Issues' })).resolves.toBeDefined();
+        // PRs & Issues has read nothing on this mount: the picker says there is nothing to pick yet, never that
+        // this Session's links could not be read.
+        await expect(fixture.getByText('Nothing matches in PRs & Issues yet')).resolves.toBeDefined();
+        await expect(fixture.queryByText('Linked entries could not be read')).resolves.toBeUndefined();
+        await expect(fixture.getByRole('button', { name: 'Browse PRs & Issues' })).resolves.toBeDefined();
+    });
+
+    it('reads PRs & Issues when the picker opens on a mount that has read nothing, and lists what it finds', async () => {
+        // Opening the picker is the reader asking for entries; on a cold app (the Session opened first) an empty
+        // picker would leave them nothing to link. The open picker is a view of the one list window, so it sends
+        // that window's paced view demand rather than reading on its own.
+        const scope = createTriageEphemeralSharedScopeFixture();
+        const link = linkRow();
+        const observation = testkitObservation({ entryRef: link.entryRef, outcome: {
+            kind: 'present',
+            locator: { v: 1, displayPath: link.displayPathAtLink, routingToken: 'exact-route' },
+            snapshot: testkitSnapshot({ title: 'Key settings modals by route' }),
+            viewer: { involvement: [] },
+        } });
+        const listResult = {
+            v: 1, configuredSourcesStatus: 'complete',
+            configuredSources: [{ sourceInstanceId: observation.sourceInstanceId, source: link.entryRef.source, available: true }],
+            window: { v: 1, assembledAtMs: observation.observedAtMs, coverage: 'complete',
+                lanes: [{ sourceInstanceId: observation.sourceInstanceId, source: link.entryRef.source, health: { kind: 'walkFinished' }, exhausted: true }],
+                rows: toTriageListWireRows(foldTriageListWindow({
+                    observations: [observation], lanes: [], activeSourceInstanceIds: [observation.sourceInstanceId],
+                    configuredSourcesStatus: 'complete', lens: TRIAGE_LIST_DEFAULT_LENS_V1, assembledAtMs: observation.observedAtMs,
+                })),
+            },
+        };
+        const harness = createDataHarness({ snapshot: { rows: [], hasMore: false, status: 'ready' } });
+        const fixture = await mountCockpit(harness, { kind: 'session', sessionId: SESSION_ID }, null, true, null,
+            { scope, readStatus: async () => { throw new Error('No status read is expected here.'); } }, true,
+            async () => listResult);
+        expect(actionCalls.filter((call) => call.action === 'entries/list-v1')).toEqual([]);
+
+        const linkControls = await fixture.getAllByRole('button', { name: 'Link a PR or issue' });
+        await act(async () => { await fixture.press(linkControls[linkControls.length - 1]!); });
+        await act(async () => { await Promise.resolve(); });
+        await act(async () => { await Promise.resolve(); });
+        await act(async () => { await new Promise((resolve) => { setTimeout(resolve, 0); }); });
+        await expect(fixture.getByText('Key settings modals by route')).resolves.toBeDefined();
+        expect(actionCalls.some((call) => call.action === 'entries/list-v1')).toBe(true);
     });
 
     it('opens no query at all when the mounted target is not a Session', async () => {

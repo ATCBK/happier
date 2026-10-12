@@ -147,6 +147,7 @@ import {
 } from './ui/list/entryDragDrop.js';
 import { TRIAGE_UI_TRANSLATION_BUNDLES } from './ui/translations.js';
 import { PLUGIN_TARGETED_CONTRIBUTION_POINT_DEFINITIONS } from './targetedContributions.js';
+import { ScmComparisonSourceProtocolSchema } from '@happier-dev/plugin-sdk/scm';
 
 export { TRIAGE_DISPLAY_NAME };
 
@@ -170,6 +171,19 @@ function createTriagePlugin() {
     version: '0.0.0',
     displayName: TRIAGE_DISPLAY_NAME,
     description: 'Aggregates pull requests, issues and error groups from configured sources into one reviewable surface.',
+    brand: { iconResourceId: 'brand-icon', monochrome: true },
+    resources: {
+      'brand-icon': { kind: 'asset', path: 'assets/brand.png', contentType: 'image/png' },
+    },
+    inputTypes: {
+      'pull-request-comparison': {
+        title: { key: 'plugins.triage.comparison.title', fallback: 'Pull request' },
+        semantic: 'scmPullRequestComparison',
+        valueSchema: { allOf: [ScmComparisonSourceProtocolSchema.jsonSchema,
+          { type: 'object', properties: { kind: { const: 'pullRequest' } }, required: ['kind'] }] },
+        picker: 'comparison-picker',
+      },
+    },
     engines: { happier: '^0.0.0' },
     runtime: { apiVersion: 1 },
     entrypoints: { daemon: './.happier-plugin/daemon.js' },
@@ -231,7 +245,8 @@ function createTriagePlugin() {
       },
       [TRIAGE_MOUNTED_UI_ACTION_LOCAL_ID_V1]: {
         title: 'Control the mounted PRs & Issues view',
-        description: 'Control the addressed mounted page, including detail, tabs, linked-session selection, views, lenses, bulk selection, refresh, paging and active source occurrence selection/ordering. Read current UI context for its mountId and available commands. Sensitive reveal and insertion use their separate named Actions.',
+        dangerLevel: 'safe',
+        description: 'Control the addressed mounted page, including detail, tabs, linked-session selection/paging, views, lenses, bulk selection, refresh, entry/pin paging and active source occurrence selection/ordering/paging. On an addressed entry picker, attach or remove an entry from its exact Composer draft without sending. Read current UI context for its mountId and available commands. Sensitive reveal and insertion use their separate named Actions.',
         surfaces: ['ui', 'voice', 'agent', 'mcp', 'cli'],
         placementBindings: [],
         execution: { target: 'client', client: { artifactId: 'triage-mounted-ui-action-native', exportName: 'createTriageMountedUiActionHandler' }, platforms: ['web', 'ios', 'android'] },
@@ -434,7 +449,7 @@ function createTriagePlugin() {
         dangerLevel: 'writesLocal',
         confirmation: {
           title: 'Apply this source change?',
-          body: 'This creates, reconfigures, removes, or restores the selected source in this Happier Account.',
+          body: 'This creates, reconfigures, removes, or restores the selected source in this Happier Account. Removing a source takes its entries out of the list; your pins and Session links stay.',
           confirmLabel: 'Apply change',
         },
         inputSchema: TriageSourceAdministrationActionInputV1Schema,
@@ -587,7 +602,6 @@ function createTriagePlugin() {
         title: TRIAGE_DISPLAY_NAME,
         icon: 'change-open',
         placement: { kind: 'rail' },
-        column: { renderer: 'views-column' },
       }, { sizeDeclaration: { sizes: ['small', 'medium', 'wide', 'full', 'tall', 'large'], defaultSize: 'medium' },
         id: 'latest',
         container: 'widget',
@@ -616,15 +630,15 @@ function createTriagePlugin() {
         // cannot dispatch one would mount an empty shell.
         requiredHostMethods: ['executeAction', 'publishCurrentUiContext'],
       }, {
-        id: 'views-column',
-        kind: 'reactNative',
-        artifact: 'triage-views-column-native',
-        requiredHostMethods: ['openSurface'],
-      }, {
         id: 'latest-widget',
         kind: 'reactNative',
         artifact: 'triage-latest-widget-native',
         requiredHostMethods: ['executeAction', 'openSurface'],
+      }, {
+        id: 'comparison-picker',
+        kind: 'reactNative',
+        artifact: 'triage-comparison-picker-native',
+        requiredHostMethods: ['executeAction', 'settleEphemeralInput'],
       }, {
         id: 'entry-picker',
         kind: 'reactNative',

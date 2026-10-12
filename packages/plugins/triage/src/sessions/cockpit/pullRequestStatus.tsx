@@ -1,7 +1,8 @@
 import * as React from 'react';
 import type { ReactElement } from 'react';
-import { Avatar, Icon, Row, Stack, Text, usePluginTranslation, type TextTone } from '@happier-dev/plugin-ui';
+import { Avatar, DiffStat, Icon, Row, Stack, Text, usePluginTranslation, type TextTone } from '@happier-dev/plugin-ui';
 import type { TriagePullRequestStatusV1 } from '@happier-dev/triage-protocol/v1';
+import { TriageStatusRow } from '@happier-dev/triage-sources/ui';
 
 type CheckState = NonNullable<TriagePullRequestStatusV1['checks']>['rows'][number]['state'];
 const CHECK_TONE = { passed: 'success', failed: 'danger', pending: 'warning', neutral: 'secondary', unknown: 'secondary' } as const satisfies Record<CheckState, TextTone>;
@@ -32,38 +33,35 @@ export function PullRequestStatus(props: Readonly<{ status: TriagePullRequestSta
                 : text('plugins.triage.sessionLinks.fact.unknown', 'Unknown');
     return <Stack gap="medium">
         {checks === null ? null : <Stack gap="xsmall">
-            <Text variant="caption" tone="secondary" value={text('plugins.triage.sessionLinks.status.checks', 'Checks')} />
-            {visibleChecks.map((check) => <Row key={check.id} gap="xsmall" align="center">
-                <Icon name={check.state === 'passed' ? 'check' : check.state === 'neutral' || check.state === 'unknown' ? 'info' : 'warning'} size="small" tone={CHECK_TONE[check.state]} accessibilityLabel={checkLabel(check.state)} />
-                <Stack style={{ flex: 1 }}><Text variant="caption" value={check.name} /></Stack>
-                <Text variant="caption" tone={CHECK_TONE[check.state]} value={checkLabel(check.state)} />
-            </Row>)}
-            {checks.state === 'none' ? <Text variant="caption" tone="secondary" value={text('plugins.triage.sessionLinks.status.none', 'No checks')} /> : null}
-            {otherPassing > 0 ? <Text variant="caption" tone="secondary" value={text('plugins.triage.sessionLinks.status.otherPassing', '{count} other passing', { count: otherPassing })} /> : null}
-            {checks.rows.length === 0 && checks.state !== 'none' ? <Text variant="caption" tone="secondary" value={text('plugins.triage.sessionLinks.fact.unknown', 'Unknown')} /> : null}
+            <Text variant="micro" tone="secondary" value={text('plugins.triage.sessionLinks.status.checks', 'Checks')} />
+            {visibleChecks.map((check) => <TriageStatusRow key={check.id} presentation="compact" grow
+                name={check.name} status={checkLabel(check.state)} tone={CHECK_TONE[check.state]}
+                leading={<Icon name={check.state === 'passed' ? 'check' : check.state === 'neutral' || check.state === 'unknown' ? 'info' : 'warning'} size="small" tone={CHECK_TONE[check.state]} accessibilityLabel={checkLabel(check.state)} />} />)}
+            {checks.state === 'none' ? <Text variant="micro" tone="secondary" value={text('plugins.triage.sessionLinks.status.none', 'No checks')} /> : null}
+            {otherPassing > 0 ? <Text variant="micro" tone="secondary" value={text('plugins.triage.sessionLinks.status.otherPassing', '{count} other passing', { count: otherPassing })} /> : null}
+            {checks.rows.length === 0 && checks.state !== 'none' ? <Text variant="micro" tone="secondary" value={text('plugins.triage.sessionLinks.fact.unknown', 'Unknown')} /> : null}
         </Stack>}
         {review === null ? null : <Stack gap="xsmall">
-            <Text variant="caption" tone="secondary" value={text('plugins.triage.sessionLinks.fact.review', 'Review')} />
-            {review.reviewers.length === 0 ? <Text variant="caption" tone="secondary" value={review.decision === 'approved'
+            <Text variant="micro" tone="secondary" value={text('plugins.triage.sessionLinks.fact.review', 'Review')} />
+            {review.reviewers.length === 0 ? <TriageStatusRow presentation="summary" nameVariant="micro" nameTone="secondary" name={review.decision === 'approved'
                 ? text('plugins.triage.sessionLinks.approved', 'Approved') : review.decision === 'changesRequested'
                     ? text('plugins.triage.sessionLinks.changesRequested', 'Changes requested') : review.decision === 'reviewRequired'
                         ? text('plugins.triage.sessionLinks.reviewRequired', 'Review required') : text('plugins.triage.sessionLinks.fact.unknown', 'Unknown')} /> : null}
-            {review.reviewers.map((reviewer, index) => <Row key={`${reviewer.name}:${index}`} gap="xsmall" align="center">
-                <Avatar name={reviewer.name} size="small" />
-                <Text variant="caption" value={reviewer.name} />
-                <Text variant="caption" tone={reviewer.verb === 'changesRequested' ? 'warning' : reviewer.verb === 'approved' ? 'success' : 'secondary'} value={reviewerVerb(reviewer.verb)} />
-            </Row>)}
+            {review.reviewers.map((reviewer, index) => <TriageStatusRow key={`${reviewer.name}:${index}`} presentation="compact"
+                name={reviewer.name} status={reviewerVerb(reviewer.verb)}
+                tone={reviewer.verb === 'changesRequested' ? 'warning' : reviewer.verb === 'approved' ? 'success' : 'secondary'}
+                leading={<Avatar name={reviewer.name} size="small" />} />)}
         </Stack>}
         {merge === null ? null : <Stack gap="xsmall">
-            <Text variant="caption" tone="secondary" value={text('plugins.triage.sessionLinks.status.merge', 'Merge')} />
-            <Text variant="caption" tone={merge.state === 'mergeable' ? 'success' : merge.state === 'unknown' ? 'secondary' : 'warning'} value={merge.blocker ?? mergeLabel} />
+            <Text variant="micro" tone="secondary" value={text('plugins.triage.sessionLinks.status.merge', 'Merge')} />
+            <TriageStatusRow presentation="summary" nameVariant="micro"
+                nameTone={merge.state === 'mergeable' ? 'success' : merge.state === 'unknown' ? 'secondary' : 'warning'} name={merge.blocker ?? mergeLabel} />
         </Stack>}
         {branch === null ? null : <Stack gap="xsmall">
-            <Text variant="caption" tone="secondary" value={text('plugins.triage.sessionLinks.status.branch', 'Branch')} />
+            <Text variant="micro" tone="secondary" value={text('plugins.triage.sessionLinks.status.branch', 'Branch')} />
             <Row gap="xsmall" align="center" wrap>
-                <Text variant="code" value={branch.head} /><Text variant="caption" tone="secondary" value="→" /><Text variant="code" value={branch.base} />
-                {branch.additions === undefined ? null : <Text variant="caption" tone="success" value={`+${branch.additions}`} />}
-                {branch.deletions === undefined ? null : <Text variant="caption" tone="danger" value={`−${branch.deletions}`} />}
+                <Text variant="code" value={branch.head} /><Text variant="micro" tone="secondary" value="→" /><Text variant="code" value={branch.base} />
+                <DiffStat added={branch.additions ?? 0} removed={branch.deletions ?? 0} />
             </Row>
         </Stack>}
     </Stack>;

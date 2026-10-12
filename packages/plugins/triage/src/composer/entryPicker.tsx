@@ -1,20 +1,25 @@
 import * as React from 'react';
 import type { PluginUiHostApi, RenderContext, RenderSurface } from '@happier-dev/plugin-sdk/ui';
+import { TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1 } from '@happier-dev/triage-protocol/v1';
 import {
     Banner,
+    BrandMark,
     Button,
     EmptyState,
     ErrorState,
+    FreshnessLine,
+    Icon,
     List,
     Row,
     Stack,
-    Status,
     TextField,
     defineUiSurface,
     usePluginTranslation,
     usePluginUiFocusTarget,
     useComposerView,
     useSurfaceContext,
+    usePluginUiEphemeralSharedScope,
+    usePluginSurfaceActivity,
     type ComposerHandle,
     type ComposerRefV1,
 } from '@happier-dev/plugin-ui';
@@ -43,6 +48,10 @@ import {
     reduceTriageRowInteraction,
 } from './rowActionState.js';
 import { useTriageBoundComposer } from './useBoundComposer.js';
+import { deriveTriageComposerEntryAttachmentKey } from './attachmentValue.js';
+import { bindTriageMountedUiActions } from '../ui/mountedActions.js';
+import { useTriageCurrentUiContextPublication } from '../ui/currentContextPublication.js';
+import { TRIAGE_MOUNTED_UI_ACTION_LOCAL_ID_V1, type TriageMountedUiOperationV1, type TriageMountedUiResultV1 } from '../actions/mountedUiProtocol.js';
 
 /**
  * The Composer entry picker.
@@ -223,6 +232,7 @@ function TriagePickerRow(props: Readonly<{
     return (
         <List.Item
             title={row.title}
+            icon={<BrandMark pluginId={row.entryRef.source.pluginId} size="small" externallyLabelled />}
             subtitle={context.label}
             {...(status === null
                 ? {}
@@ -285,6 +295,9 @@ function TriagePickerRow(props: Readonly<{
 export function TriageEntryPicker(context: RenderContext): React.ReactElement {
     const text = usePluginTranslation();
     const window = useTriageListWindow();
+    const sharedScope = usePluginUiEphemeralSharedScope();
+    const surfaceActivity = usePluginSurfaceActivity();
+    const mountId = React.useId();
     // The exact scope this picker was opened from, and the only one it writes.
     const mount = readTriageComposerPickerMount(context.launchInput);
     const handle = useTriageBoundComposer(mount.status === 'bound' ? mount.composer : null);
@@ -306,8 +319,9 @@ export function TriageEntryPicker(context: RenderContext): React.ReactElement {
     // arriving, so a picker left open past it offers the press again instead of
     // waiting for unrelated state activity.
     const nowMs = useTriageRefreshEligibilityNowV1(window.snapshot.refreshBlocked);
+    const facts = projectTriagePickerCorpusFacts({ snapshot: window.snapshot, nowMs });
     const view = buildTriagePickerView({
-        facts: projectTriagePickerCorpusFacts({ snapshot: window.snapshot, nowMs }),
+        facts,
         query,
         attached,
     });
@@ -319,6 +333,37 @@ export function TriageEntryPicker(context: RenderContext): React.ReactElement {
     const settle = React.useCallback(async () => {
         await composerView.refresh();
     }, [composerView]);
+
+    const runMountedOperation = async (operation: TriageMountedUiOperationV1, signal: AbortSignal): Promise<TriageMountedUiResultV1> => {
+        if (signal.aborted || handle === null) return { status: 'unavailable' };
+        if (operation.kind !== 'attachEntry' && operation.kind !== 'removeEntry') return { status: 'unavailable' };
+        const key = deriveTriageComposerEntryAttachmentKey(operation.entryRef);
+        if (!view.rows.some((row) => row.id === key)) return { status: 'unavailable' };
+        // The same picker model supplies attach data even when the current
+        // snapshot already holds the entry. The mutation owner re-reads and
+        // plans against the actual draft, rather than trusting stale row state.
+        const mutation = operation.kind === 'attachEntry'
+            ? buildTriagePickerView({ facts, query, attached: NO_ATTACHMENTS }).rows.find((row) => row.id === key)?.mutation
+            : null;
+        if (operation.kind === 'attachEntry' && mutation?.kind !== 'attach') return { status: 'unavailable' };
+        const outcome = await applyTriageEntryMutation(mutation?.kind === 'attach'
+            ? { handle, intent: 'attach', entryRef: operation.entryRef, sourceInstance: mutation.sourceInstance,
+                presentation: mutation.presentation,
+                ...(mutation.lastKnownLocator === undefined ? {} : { lastKnownLocator: mutation.lastKnownLocator }), options: { signal } }
+            : { handle, intent: 'remove', entryRef: operation.entryRef, options: { signal } });
+        await settle();
+        return { status: outcome.kind === 'refused' ? 'rejected' : 'applied' };
+    };
+    const mountedOperationRef = React.useRef(runMountedOperation);
+    React.useLayoutEffect(() => { mountedOperationRef.current = runMountedOperation; });
+    React.useLayoutEffect(() => sharedScope === null || !surfaceActivity.active ? undefined : bindTriageMountedUiActions(
+        sharedScope, mountId, (operation, signal) => mountedOperationRef.current(operation, signal),
+    ), [mountId, sharedScope, surfaceActivity.active]);
+    const currentUiContext = React.useMemo(() => ({ detail: {
+        view: 'attachment-picker',
+        mountedAction: { action: { pluginId: TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1, localId: TRIAGE_MOUNTED_UI_ACTION_LOCAL_ID_V1 }, mountId },
+    } }), [mountId]);
+    useTriageCurrentUiContextPublication(context.hostApi, currentUiContext);
 
     const originComposer = mount.status === 'bound' ? mount.composer : undefined;
     const renderRow = React.useCallback((row: TriagePickerRowV1): React.ReactElement => (
@@ -344,22 +389,34 @@ export function TriageEntryPicker(context: RenderContext): React.ReactElement {
      * second answer to "may this read now", and this surface only has one.
      */
     const refreshable = requestTriagePickerRefresh(view).status === 'invoke';
+    const refreshLabel = text('plugins.triage.surface.refresh', 'Refresh');
     const refreshControl = (
         <Button
-            title={text('plugins.triage.surface.refresh', 'Refresh')}
+            title={refreshLabel}
             variant="secondary"
+            size="small"
             disabled={!refreshable}
             busy={view.refresh.kind === 'running'}
             onPress={refresh}
         />
     );
-    const pacingNotice = view.refresh.kind !== 'blockedUntil' ? null : (
-        <Banner
-            tone="info"
-            title={text('plugins.triage.surface.waiting', 'Waiting before the next read')}
-            description={resolvePacingReasonDescription(text, view.refresh.reason)}
+    // Beside the search field Refresh is a quiet glyph, as on the app page;
+    // the states that have nothing else to offer keep the labelled control.
+    const refreshGlyph = (
+        <Button
+            accessibilityLabel={refreshLabel}
+            variant="plain"
+            size="small"
+            icon={<Icon name="refresh" size="small" tone="secondary" />}
+            disabled={!refreshable}
+            busy={view.refresh.kind === 'running'}
+            onPress={refresh}
         />
     );
+    const pacingReason = view.refresh.kind !== 'blockedUntil'
+        ? null
+        : resolvePacingReasonDescription(text, view.refresh.reason);
+    const pacingNotice = pacingReason === null ? null : <FreshnessLine reason={pacingReason} />;
 
     if (view.state.kind === 'configureSources') {
         return (
@@ -388,25 +445,32 @@ export function TriageEntryPicker(context: RenderContext): React.ReactElement {
 
     return (
         <Stack gap="small">
-            <TextField
-                label={text('plugins.triage.picker.search', `Search ${TRIAGE_DISPLAY_NAME}`)}
-                value={query}
-                onChange={setQuery}
-                placeholder={text('plugins.triage.picker.filter', 'Filter by title or scope')}
-            />
-
-            <Row justify="space-between" align="center">
-                <Status
-                    tone={view.state.kind === 'refreshing'
-                        ? 'info'
-                        : view.state.kind === 'ready' ? 'success' : 'muted'}
-                    pulsing={view.state.kind === 'refreshing'}
-                    label={resolvePickerStateLabel(text, view.state.kind)}
-                />
-                {refreshControl}
+            <Row gap="small" align="center">
+                <Stack grow>
+                    <TextField
+                        label={text('plugins.triage.picker.search', `Search ${TRIAGE_DISPLAY_NAME}`)}
+                        presentation="field"
+                        value={query}
+                        onChange={setQuery}
+                        placeholder={text('plugins.triage.picker.filter', 'Filter by title or scope')}
+                    />
+                </Stack>
+                {refreshGlyph}
             </Row>
 
-            {pacingNotice}
+            {/*
+              Healthy says nothing. One quiet line speaks only when the list is
+              behind, being read, or waiting to be read; never a green "Up to date".
+            */}
+            {pacingNotice ?? (view.state.kind === 'stale' ? (
+                <FreshnessLine
+                    asOf={view.state.lastMaterializedAtMs}
+                    reason={resolvePickerStateLabel(text, view.state.kind)}
+                    busy={view.refresh.kind === 'running'}
+                />
+            ) : view.state.kind === 'refreshing' && view.rows.length > 0 ? (
+                <FreshnessLine reason={resolvePickerStateLabel(text, view.state.kind)} busy />
+            ) : null)}
 
             {view.health.length === 0 ? null : (
                 <Banner
@@ -499,7 +563,7 @@ const PACING_REASON_COPY: Readonly<Record<TriageRefreshPacingReasonV1, Readonly<
     },
 });
 
-function resolvePacingReasonDescription(
+export function resolvePacingReasonDescription(
     text: (key: string, fallback?: string) => string,
     reason: TriageRefreshPacingReasonV1,
 ): string {
@@ -507,7 +571,7 @@ function resolvePacingReasonDescription(
     return text(copy.key, copy.fallback);
 }
 
-function resolvePickerStateLabel(
+export function resolvePickerStateLabel(
     text: (key: string, fallback?: string) => string,
     state: TriagePickerStateV1['kind'],
 ): string {

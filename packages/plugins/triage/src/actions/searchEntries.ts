@@ -1,7 +1,5 @@
 import {
     computeCanonicalDomainSeparatedDigest,
-    MAX_PLUGIN_SEARCH_SUBTITLE_CODE_POINTS_V1,
-    MAX_PLUGIN_SEARCH_TITLE_CODE_POINTS_V1,
     PluginError,
 } from '@happier-dev/plugin-sdk';
 import type {
@@ -23,7 +21,6 @@ import {
     type TriageListWindowV1,
 } from '../projection/listWindow.js';
 import { projectTriageEntryDisplay } from '../ui/window/entryDisplay.js';
-import { boundTriageDisplayText } from '../ui/window/boundDisplayText.js';
 import {
     acquireTriageListWindow,
     projectTriageListWindow,
@@ -73,8 +70,8 @@ function toSearchItem(
     const display = projectTriageEntryDisplay(row);
     return [{
         id: deriveTriageSearchResultId(row),
-        title: boundTriageDisplayText(display.title, MAX_PLUGIN_SEARCH_TITLE_CODE_POINTS_V1),
-        subtitle: boundTriageDisplayText(display.scopeLabel, MAX_PLUGIN_SEARCH_SUBTITLE_CODE_POINTS_V1),
+        title: display.title,
+        subtitle: display.scopeLabel,
         icon: 'action',
         command: {
             kind: 'openSurface',

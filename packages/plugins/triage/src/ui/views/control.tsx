@@ -184,7 +184,9 @@ export function useTriageViewsControl(props: TriageViewsControlPropsV1): Readonl
         open={open}
         onOpenChange={setOpen}
         trigger={trigger}
-        triggerAppearance="control"
+        // Quiet words that open a menu (lab: the lens is said in the search, not by filled pills).
+        triggerAppearance="text"
+        triggerDisclosure
         triggerAccessibilityLabel={`${viewsLabel}: ${currentLabel}`}
         radioGroups={[{
           id: VIEWS_RADIO_GROUP,

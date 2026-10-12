@@ -3,7 +3,7 @@ import * as React from 'react';
 import { act } from 'react';
 import { createPluginUiTestkit, createSurfaceContextFixture } from '@happier-dev/plugin-sdk/testing';
 import type { PluginUiTestkit } from '@happier-dev/plugin-sdk/testing';
-import type { RenderContext, SessionStateV1 } from '@happier-dev/plugin-sdk/ui';
+import type { RenderContext, SessionPermissionResponseV1, SessionStateV1 } from '@happier-dev/plugin-sdk/ui';
 import type { ReviewCommentV1 } from '@happier-dev/plugin-sdk/reviews';
 import { defineUiSurface, useSessionState } from '@happier-dev/plugin-ui';
 import { createPluginUiRnwSemanticSurfaceAdapter } from '@happier-dev/plugin-ui/testing';
@@ -60,7 +60,7 @@ const renderRail = defineUiSurface(function Rail(_context: RenderContext): React
   return (
     <>
       {live.state?.pendingPermissions.map((request) => (
-        <TriagePermissionCard key={request.requestId} sessionId="session-a" sessionTitle="Codex" request={request} />
+        <TriagePermissionCard key={request.requestId} sessionId="session-a" state={live.state!} request={request} />
       ))}
       <TriageAgentStep
         sessions={[{ sessionId: 'session-a', displayTitle: 'Codex' }]}
@@ -77,7 +77,11 @@ afterEach(async () => {
   for (const fixture of mounted.splice(0)) await fixture.dispose();
 });
 
-async function mountRail(nextProposals: readonly ReviewCommentV1[] = [], session: SessionStateV1 = SESSION): Promise<PluginUiTestkit> {
+async function mountRail(
+  nextProposals: readonly ReviewCommentV1[] = [],
+  session: SessionStateV1 = SESSION,
+  respond: () => SessionPermissionResponseV1 | Promise<SessionPermissionResponseV1> = () => ({ status: 'answered' }),
+): Promise<PluginUiTestkit> {
   answers.length = 0;
   opened.length = 0;
   proposals = nextProposals;
@@ -94,7 +98,7 @@ async function mountRail(nextProposals: readonly ReviewCommentV1[] = [], session
         watchSession: () => undefined,
         respondToSessionPermission: (input) => {
           answers.push(input.request);
-          return { status: 'answered' };
+          return respond();
         },
         executeAction: async ({ action, input }) => {
           if (action === 'session.open') { opened.push(input); return {}; }
@@ -155,8 +159,23 @@ describe('the story rail\'s live agent', () => {
     await act(async () => { await rail.press(seeAll); });
     expect(opened).toEqual([{ sessionId: 'session-a' }]);
   });
+  it('says who is asking and where, from the live Agent, never from the linked Session\'s title', async () => {
+    const rail = await mountRail([], {
+      ...SESSION,
+      title: 'Fix failing checks on #2476',
+      agent: { agentId: 'codex', displayName: 'Codex', brand: { pluginId: 'happier.agent.codex' } },
+    });
+    await rail.findByRole('button', { name: 'Allow once' });
+    await expect(rail.getByText('Codex wants to run Bash')).resolves.toBeDefined();
+    await expect(rail.queryByText('Fix failing checks on #2476 wants to run Bash')).resolves.toBeUndefined();
+    expect(document.querySelector('[data-testid="triage-permission-card"]')?.textContent).toContain('fix/2476-checks');
+  });
+
   it('shows a waiting permission above the rail and answers it through the host owner', async () => {
-    const rail = await mountRail();
+    const rail = await mountRail([], {
+      ...SESSION,
+      agent: { agentId: 'codex', displayName: 'Codex' },
+    });
 
     const allowOnce = await rail.findByRole('button', { name: 'Allow once' });
     await expect(rail.getByText('Codex wants to run Bash')).resolves.toBeDefined();
@@ -175,9 +194,32 @@ describe('the story rail\'s live agent', () => {
 
     await rail.findByRole('button', { name: 'Allow once' });
     await expect(rail.getByText('Needs your permission')).resolves.toBeDefined();
-    await expect(rail.getByText('fix/2476-checks')).resolves.toBeDefined();
+    // Where it works is said in ③ (and again beside the asking Agent on the permission card).
+    expect(document.querySelector('[data-testid="triage-story-agent"]')?.textContent).toContain('fix/2476-checks');
     // ③ is named after the linked Session doing the work, not a generic "Agent work".
     expect(document.querySelector('[data-testid="triage-story-agent"]')?.textContent).toContain('Codex');
     await expect(rail.queryByText('Agent work')).resolves.toBeUndefined();
+  });
+
+  it('keeps a refused answer visible and offers the same host-owned request for retry', async () => {
+    const rail = await mountRail([], SESSION, () => { throw new Error('Session disconnected'); });
+    await act(async () => { await rail.press(await rail.findByRole('button', { name: 'Allow once' })); });
+    await expect(rail.getByText('That answer did not reach the Session. It may already have been answered.')).resolves.toBeDefined();
+    await act(async () => { await rail.press(await rail.findByRole('button', { name: 'Deny' })); });
+    expect(answers).toEqual([
+      expect.objectContaining({ sessionId: 'session-a', requestId: 'request-1', answer: 'allowOnce' }),
+      expect.objectContaining({ sessionId: 'session-a', requestId: 'request-1', answer: 'deny' }),
+    ]);
+  });
+
+  it('explains missing approval authority without inventing answer controls', async () => {
+    const rail = await mountRail([], {
+      ...SESSION,
+      pendingPermissions: SESSION.pendingPermissions.map((request) => ({ ...request, answers: [] })),
+    });
+    await expect(rail.getByText('Someone who can approve this Session has to answer.')).resolves.toBeDefined();
+    await expect(rail.queryByRole('button', { name: 'Allow once' })).resolves.toBeUndefined();
+    await expect(rail.queryByRole('button', { name: 'Deny' })).resolves.toBeUndefined();
+    expect(answers).toEqual([]);
   });
 });

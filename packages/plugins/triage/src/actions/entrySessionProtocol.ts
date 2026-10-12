@@ -418,6 +418,8 @@ export const TriageStartEntrySessionInputV1Schema = defineProtocolObject({
     display: TriageEntrySessionLinkDisplayV1Schema,
     destination: TriageStartEntrySessionDestinationV1Schema,
     delivery: TriageStartEntrySessionDeliveryV1Schema.optional(),
+    /** Explicit birth-planning intent; the canonical start owner owns its role/trigger recipe. */
+    orchestrate: defineProtocolLiteral(true).optional(),
     finalOpen: TriageStartEntrySessionFinalOpenV1Schema.optional(),
     /**
      * The one current authorization a selected-PR preparation runs under.
@@ -616,6 +618,7 @@ export const TriageStartEntrySessionResultV1Schema = defineProtocolUnion([
             defineProtocolLiteral('pullRequestModeRequiresPreparedWorkspace'),
             defineProtocolLiteral('pullRequestWorkspaceEntryMismatch'),
             defineProtocolLiteral('repositoryModeRequiresSelectedProject'),
+            defineProtocolLiteral('orchestrationRequiresNewSessionWithEntryInput'),
         ]),
     }, { policy: 'closed' }),
 ]);

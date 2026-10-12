@@ -11,16 +11,17 @@ import {
   Status,
   Tabs,
   Text,
+  usePluginTheme,
   usePluginTranslation,
   useSessionState,
 } from '@happier-dev/plugin-ui';
 import type { TriageLinkedSessionProjectionV1 } from '@happier-dev/triage-protocol/v1';
+import { HAPPIER_DEFAULT_MINIMUM_INTERACTIVE_TARGET_SIZE } from '@happier-dev/plugin-ui/environment';
 
 import { useLinkedSessionOpen } from './useLinkedSessionOpen.js';
 import type { TriageDetailTabSelectionV1 } from './body.js';
 
 const FILL_STYLE = Object.freeze({ flex: 1, minWidth: 0, minHeight: 0 });
-const TOOLBAR_STYLE = Object.freeze({ paddingHorizontal: 16, paddingVertical: 8, minHeight: 44 });
 
 /**
  * The entry's linked investigation, live (plan 05 §4.6): the real Session — transcript, prompts
@@ -34,6 +35,7 @@ export function TriageSessionPanel(props: Readonly<{
   onSelectSession?: (sessionId: TriageLinkedSessionProjectionV1['sessionId']) => void;
 }>): React.ReactElement | null {
   const text = usePluginTranslation();
+  const { spacing } = usePluginTheme();
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = React.useState(false);
   const opener = useLinkedSessionOpen();
@@ -51,7 +53,7 @@ export function TriageSessionPanel(props: Readonly<{
   const pickerLabel = text('plugins.triage.surface.detail.session.picker', 'Linked session');
   return (
     <Stack style={FILL_STYLE}>
-      <Row gap="small" align="center" style={TOOLBAR_STYLE}>
+      <Row gap="small" align="center" style={{ paddingVertical: spacing.small, minHeight: HAPPIER_DEFAULT_MINIMUM_INTERACTIVE_TARGET_SIZE }}>
         {agentBrandPluginId === undefined ? null : <BrandMark pluginId={agentBrandPluginId} size="small" />}
         <Stack style={FILL_STYLE}>
           {props.sessions.length > 1 ? (

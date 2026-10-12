@@ -23,7 +23,7 @@ import {
 import { renderSurface as renderShellSurface } from '../surface.js';
 import { TRIAGE_SHELL_FILL_TEST_ID_V1 } from '../shell/root.js';
 import { refreshTriageListWindow } from '../window/mountedWindow.js';
-import { toolbarMenuItem } from '../shell/toolbarMenus.test-support.js';
+import { filterFacetOption, toolbarMenuItem } from '../shell/toolbarMenus.test-support.js';
 import { createTriageEphemeralSharedScopeFixture } from '../window/ephemeralSharedScope.test-support.js';
 
 /**
@@ -190,20 +190,32 @@ afterEach(async () => {
 });
 
 describe('the PRs & Issues lens under the shell’s own measurement', () => {
-    it('exposes the facet controls individually once the measured region can carry them', async () => {
+    it('orders through the table title header and retains the toolbar order for list and board', async () => {
+        const shell = await mountShell();
+        await measureFillRegion(WIDE_WIDTH);
+        await expect(shell.queryByRole('button', { name: 'Order: Newest' })).resolves.toBeUndefined();
+        const oldest = await toolbarMenuItem(shell, 'Entry', 'menuitemradio', { name: 'Oldest' });
+        await act(async () => { await shell.press(oldest); });
+        await expect(toolbarMenuItem(shell, 'Entry', 'menuitemradio', { name: 'Oldest', state: { checked: true } })).resolves.toBeDefined();
+        await measureFillRegion(COMPACT_WIDTH);
+        await expect(toolbarMenuItem(shell, 'Order', 'menuitemradio', { name: 'Oldest', state: { checked: true } })).resolves.toBeDefined();
+        await act(async () => { await shell.press(await shell.getByRole('radio', { name: 'Board' })); });
+        await measureFillRegion(WIDE_WIDTH);
+        await expect(toolbarMenuItem(shell, 'Order', 'menuitemradio', { name: 'Oldest', state: { checked: true } })).resolves.toBeDefined();
+    });
+
+    it('keeps the facets behind one Filters trigger at every width, beside one search', async () => {
         const shell = await mountShell();
         await measureFillRegion(WIDE_WIDTH);
 
-        // Each facet is its own compact, labelled toolbar trigger, and a
-        // closed-vocabulary option and a discovered Source option are one press
-        // away inside their own facet.
-        await expect(shell.getByRole('button', { name: 'State' })).resolves.toBeDefined();
-        await expect(shell.getByRole('button', { name: 'Source' })).resolves.toBeDefined();
-        await expect(toolbarMenuItem(shell, 'State', 'menuitemcheckbox', { name: 'Open' })).resolves.toBeDefined();
-        await expect(toolbarMenuItem(shell, 'Source', 'menuitemcheckbox', { name: 'Example account' }))
-            .resolves.toBeDefined();
-        // ...and nothing is folded away behind a trigger at this width.
-        await expect(shell.queryByRole('button', { name: 'Filters' })).resolves.toBeUndefined();
+        // The lab's toolbar is one search with its tokens, not a row of facet pills: the narrowings in force are
+        // already said as tokens in the search field, so a pill per facet beside them says each one twice.
+        await expect(shell.getByRole('button', { name: 'Filters' })).resolves.toBeDefined();
+        await expect(shell.queryByRole('button', { name: 'State' })).resolves.toBeUndefined();
+        await expect(shell.queryByRole('button', { name: 'Source' })).resolves.toBeUndefined();
+        // Every facet value stays one trigger away, inside the one grouped form.
+        await expect(filterFacetOption(shell, 'State', { name: 'Open' })).resolves.toBeDefined();
+        await expect(filterFacetOption(shell, 'Source', { name: 'Example account' })).resolves.toBeDefined();
     });
 
     it('folds the facets into one Filters trigger when the measured region cannot carry them', async () => {
@@ -230,11 +242,11 @@ describe('the PRs & Issues lens under the shell’s own measurement', () => {
     it('keeps every selected constraint visible and removable as a token in the search field, in both arms', async () => {
         const shell = await mountShell();
         await measureFillRegion(WIDE_WIDTH);
-        const openFacet = await toolbarMenuItem(shell, 'State', 'menuitemcheckbox', { name: 'Open' });
+        const openFacet = await filterFacetOption(shell, 'State', { name: 'Open' });
         await act(async () => { await shell.press(openFacet); });
 
         // The narrowing in force is said in the one place a reader looks for what they are looking at: the
-        // search field, as a token. The wide toolbar's State menu stays the way to add one.
+        // search field, as a token. The Filters form stays the way to add one.
         await expect(shell.getByRole('button', { name: 'Remove State Open' })).resolves.toBeDefined();
 
         await measureFillRegion(COMPACT_WIDTH);
@@ -250,7 +262,7 @@ describe('the PRs & Issues lens under the shell’s own measurement', () => {
             .resolves.toBeUndefined();
         // The token removed the constraint itself rather than only its own label.
         await measureFillRegion(WIDE_WIDTH);
-        await expect(toolbarMenuItem(shell, 'State', 'menuitemcheckbox', {
+        await expect(filterFacetOption(shell, 'State', {
             name: 'Open',
             state: { checked: false },
         })).resolves.toBeDefined();
@@ -267,17 +279,5 @@ describe('the PRs & Issues lens under the shell’s own measurement', () => {
         await expect(shell.queryByRole('button', { name: 'Clear filters' })).resolves.toBeUndefined();
         const buttons = await shell.queryAllByRole('button');
         expect(buttons.filter((button) => /^Remove (filter|State|Attention)/u.test(button.name ?? ''))).toEqual([]);
-    });
-
-    it('keeps the facets exposed until a measurement actually says they do not fit', async () => {
-        // No measurement at all. Taking away controls the reader can reach is
-        // the destructive direction, so it waits for positive evidence: the
-        // wide arm wraps in render order and cannot overflow the page, while a
-        // trigger folded away on a guess would hide five controls on a width
-        // nobody reported.
-        const shell = await mountShell();
-
-        await expect(shell.getByRole('button', { name: 'State' })).resolves.toBeDefined();
-        await expect(shell.queryByRole('button', { name: 'Filters' })).resolves.toBeUndefined();
     });
 });

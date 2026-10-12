@@ -81,6 +81,17 @@ function row(input: Partial<TriageListRowV1> = {}): TriageListRowV1 {
 }
 
 describe('projectTriageEntryDisplay', () => {
+  it('carries the source-authored short place name without changing its full scope or address', () => {
+    const observation = present({ sourceInstanceId: INSTANCE_A, title: 'Same title', observedAtMs: 1_000 });
+    if (observation.outcome.kind !== 'present') throw new Error('Expected present fixture');
+    const outcome = {
+      ...observation.outcome,
+      snapshot: { ...observation.outcome.snapshot, scopeLabel: 'group/subgroup/project', scopeDisplayName: 'Project name' },
+    };
+    expect(projectTriageEntryDisplay(row({ content: {
+      sourceInstanceId: INSTANCE_A, observedAtMs: 1_000, outcome,
+    } }))).toMatchObject({ scopeLabel: 'group/subgroup/project', scopeDisplayName: 'Project name' });
+  });
   it('retains the source-owned display path without parsing opaque identity or routing data', () => {
     const observation = present({ sourceInstanceId: INSTANCE_A, title: 'Same title', observedAtMs: 1_000 });
     if (observation.outcome.kind !== 'present') throw new Error('Expected present fixture');

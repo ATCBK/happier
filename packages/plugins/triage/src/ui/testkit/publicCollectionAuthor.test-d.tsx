@@ -7,7 +7,7 @@ import {
     HAPPIER_INSTANT_DISCLOSURE_MOTION,
     useHappierCollection,
     type HappierCollectionPresentation,
-} from '@happier-dev/plugin-ui/presentation';
+} from '@happier-dev/plugin-ui/components';
 import { useHappierUiAccessibility } from '@happier-dev/plugin-ui/environment';
 import type { PluginUiHostApi } from '@happier-dev/plugin-sdk/ui';
 import {
@@ -29,7 +29,7 @@ function ItemDetail({ item, headerHosted, close }: {
     const { reducedMotion } = useHappierUiAccessibility();
     return (
         <Stack>
-            {!headerHosted && <Row><Text value={item.title} variant="title" /><Button title="Close" onPress={close} /></Row>}
+            {!headerHosted && <Row><Text value={item.title} variant="heading" /><Button title="Close" onPress={close} /></Row>}
             <Tabs value={tab} onValueChange={setTab} ariaLabel="Item detail">
                 <Tabs.Item value="overview" title="Overview">
                     <Step marker={{ kind: 'number', value: 1 }} title="The request">

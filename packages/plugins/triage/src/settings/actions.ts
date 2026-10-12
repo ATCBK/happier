@@ -2,6 +2,7 @@ import { isPluginError } from '@happier-dev/plugin-sdk';
 import type { JsonValue } from '@happier-dev/plugin-sdk';
 import { PLUGIN_ACCOUNT_STORAGE_LIMITS_V1 } from '@happier-dev/plugin-sdk/storage';
 import {
+    createProtocolStoredReadSchema,
     defineProtocolArray,
     defineProtocolLiteral,
     defineProtocolObject,
@@ -22,7 +23,6 @@ import {
     TRIAGE_WORKSPACE_MODES_V1,
     type TriageWorkspaceModeV1,
 } from '../sessions/entrySessionWorkspace.js';
-import { readExactKeys } from './storedValue.js';
 import type { TriageCatalogStoreV1 } from './accountKvCatalogStore.js';
 
 /**
@@ -371,6 +371,8 @@ export const TriageActionsCatalogValueV1Schema = defineProtocolObject({
     actions: TriageActionRecordsV1Schema,
 }, { policy: 'closed' });
 
+const storedTriageActions = createProtocolStoredReadSchema(TriageActionsCatalogValueV1Schema);
+
 /**
  * The shipped seed.
  *
@@ -442,8 +444,10 @@ export function isTriageActionTargetOfferableV1(
 /** Whether this action has task intent rather than entry facts alone. */
 export function hasTriageActionInstructionSourceV1(
     target: TriageActionTargetV1,
+    humanPrompt?: string,
 ): boolean {
-    return target.promptInvocationId !== null
+    return (humanPrompt?.trim().length ?? 0) > 0
+        || target.promptInvocationId !== null
         || (target.seededFallbackInstruction?.trim().length ?? 0) > 0;
 }
 
@@ -457,9 +461,10 @@ export function requiresTriageActionInstructionV1(
 /** The one valid target/materialization/subject rule shared by storage and mounts. */
 export function isTriageActionConfigurationCoherentV1(
     action: Pick<TriageActionV1, 'target' | 'workspaceMode' | 'appliesTo'>,
+    humanPrompt?: string,
 ): boolean {
     if (requiresTriageActionInstructionV1(action.target)
-        && !hasTriageActionInstructionSourceV1(action.target)) {
+        && !hasTriageActionInstructionSourceV1(action.target, humanPrompt)) {
         return false;
     }
     return action.target.kind === 'agent'
@@ -872,22 +877,39 @@ export function parseTriageActions(raw: unknown): TriageActionsReadV1 {
     if (utf8ByteLength(JSON.stringify(raw)) > MAX_TRIAGE_ACTIONS_SERIALIZED_UTF8_BYTES_V1) {
         return unreadable;
     }
-    const candidate = readExactKeys(raw, ['v', 'actions']);
-    if (!candidate || candidate.v !== 1 || !Array.isArray(candidate.actions)) return unreadable;
+    // Retain this owner's stored-text normalization before schema admission.
+    // Unknown fields stay present until the canonical stored projection drops them.
+    const rawCatalog = raw as Readonly<Record<string, unknown>>;
+    const normalized = Array.isArray(rawCatalog.actions) ? {
+        ...rawCatalog,
+        actions: rawCatalog.actions.map((value: unknown) => {
+            if (value === null || typeof value !== 'object' || Array.isArray(value)) return value;
+            const action = value as Readonly<Record<string, unknown>>;
+            const target = action.target;
+            const targetRecord = target !== null && typeof target === 'object' && !Array.isArray(target)
+                ? target as Readonly<Record<string, unknown>>
+                : undefined;
+            return {
+                ...action,
+                actionId: typeof action.actionId === 'string' ? normalizeTriageSingleLineV1(action.actionId) : action.actionId,
+                label: typeof action.label === 'string' ? normalizeTriageSingleLineV1(action.label) : action.label,
+                target: targetRecord ? {
+                    ...targetRecord,
+                    promptInvocationId: typeof targetRecord.promptInvocationId === 'string'
+                        ? normalizeTriageSingleLineV1(targetRecord.promptInvocationId)
+                        : targetRecord.promptInvocationId,
+                } : target,
+            };
+        }),
+    } : raw;
+    const parsedCatalog = storedTriageActions.safeParse(normalized);
+    if (!parsedCatalog.success) return unreadable;
+    const candidate = parsedCatalog.data;
 
     const actions: TriageActionV1[] = [];
     const ids = new Set<string>();
     for (const member of candidate.actions) {
-        const stored = readExactKeys(member, [
-            'actionId',
-            'label',
-            'enabled',
-            'appliesTo',
-            'profileId',
-            'workspaceMode',
-            'target',
-        ]);
-        if (!stored) return unreadable;
+        const stored = member;
         const actionId = readBoundedString(stored.actionId, MAX_TRIAGE_IDENTIFIER_UTF8_BYTES_V1);
         // Two rows claiming one id would make every later edit ambiguous.
         if (actionId === null || ids.has(actionId)) return unreadable;

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Button, Popover, Select, Stack } from '@happier-dev/plugin-ui';
+import { Button, Popover, Select, Stack, useHappierCollectionLayout } from '@happier-dev/plugin-ui';
 
 import {
   CORPUS_SMART_PRECEDENCE_TUPLES_V1,
@@ -19,39 +19,24 @@ import type { TriageFilterFacetPlanV1 } from './plan.js';
  * which reducer action one press means — there is no Triage Pressable, chip
  * component, popover or focus handling in this file.
  *
- * **Both §6 compositions live here, chosen by one fact the caller passes in.**
- * Wide exposes the five facet controls individually. Compact folds exactly
- * those five into one labelled **Filters** trigger presented by the public
- * `Popover`, so the portal, the initial focus, dismissal, focus return, Escape
- * and Android Back are the host's — Triage supplies one grouped five-facet form
- * and nothing else. `compact` is not measured here and is not a breakpoint:
- * `ui/shell/root.tsx` reads it off the one fill-region measurement
- * `ui/shell/layout.ts` already resolves the split composition from, so the page
- * has one width authority rather than two.
+ * **One composition at every width (D4-A, 2026-10-11).** The five facets sit
+ * behind one labelled **Filters** trigger presented by the public `Popover`, so
+ * the portal, the initial focus, dismissal, focus return, Escape and Android
+ * Back are the host's — Triage supplies one grouped five-facet form and nothing
+ * else. Every selected value is already said, and removable, as a token in the
+ * list's search field (the shell's `searchTokens`), so a toolbar pill per facet
+ * would state each constraint twice and turn the lab's one calm search row into
+ * a row of grey pills. §6 allows the facets to stay exposed on wide layouts; it
+ * does not require it, and the tokens are what keep the narrowing visible.
  *
- * **Chips exist only in the compact arm, and that is not a preference.** §6
- * asks for removable chips "outside the overlay" because the compact
- * composition hides the selected constraints behind a trigger, leaving a
- * narrowed list with no visible cause. With the facets exposed each control
- * already shows and removes its own selected values, so a chip row beside them
- * would state the same constraint twice and give the reader two places to
- * remove one thing.
- *
- * **Views and Order are never folded in.** They are separate lens questions —
+ * **Views and Order are never folded in.** The table puts Order in its title
+ * column; list and board keep the toolbar control. They are separate lens questions —
  * which saved lens this is, and which ladder ranks it — and a reader who has to
  * open a Filters overlay to reorder the list has lost both.
  */
 
 export type TriageFilterRailPropsV1 = Readonly<{
   facets: readonly TriageFilterFacetPlanV1[];
-  /**
-   * Whether the measured fill region cannot carry the five facet controls
-   * individually (`core/SURFACE.md` §2.1, §6).
-   *
-   * The shell derives it from its own measurement; nothing here measures, asks
-   * the platform how big a device is, or keeps a breakpoint of its own.
-   */
-  compact: boolean;
   order: TriageSurfaceStateV1['order'];
   smartPolicy: CorpusSmartPolicyV1;
   /**
@@ -74,6 +59,14 @@ const ORDER_COPY: readonly (readonly [TriageSurfaceStateV1['order'], string, str
   ['oldest', 'plugins.triage.surface.order.oldest', 'Oldest'],
   ['smart', 'plugins.triage.surface.order.smart', 'Smart'],
 ];
+
+/** The same named ladders for the toolbar and the Collection's table title. */
+export function readTriageOrderOptionsV1(text: TriageTextResolverV1): readonly Readonly<{
+  key: TriageSurfaceStateV1['order'];
+  label: string;
+}>[] {
+  return ORDER_COPY.map(([key, labelKey, fallback]) => ({ key, label: text(labelKey, fallback) }));
+}
 
 /**
  * The two closed Smart ladders, named by what the reader actually gets.
@@ -115,15 +108,9 @@ function toggledKeys(
 
 function TriageFilterFacetControl(props: Readonly<{
   facet: TriageFilterFacetPlanV1;
-  /**
-   * `menu` in the toolbar, where each facet is one compact labelled trigger;
-   * `inline` inside the compact Filters overlay, which is already the one
-   * trigger and lays its five labelled groups out as a form.
-   */
-  presentation: 'menu' | 'inline';
   onToggleFilterValue: (selection: TriageFilterFacetValueV1) => void;
 }>): React.ReactElement | null {
-  const { facet, onToggleFilterValue, presentation } = props;
+  const { facet, onToggleFilterValue } = props;
   const selected = React.useMemo(
     () => facet.options.filter((option) => option.selected).map((option) => option.key),
     [facet.options],
@@ -144,7 +131,7 @@ function TriageFilterFacetControl(props: Readonly<{
   return (
     <Select
       label={facet.label}
-      presentation={presentation}
+      presentation="inline"
       multiple
       value={selected}
       options={facet.options.map((option) => ({ value: option.key, label: option.label }))}
@@ -154,14 +141,12 @@ function TriageFilterFacetControl(props: Readonly<{
 }
 
 /**
- * The compact lens: one **Filters** trigger. Every selected constraint stays
+ * The lens: one **Filters** trigger. Every selected constraint stays
  * named and removable as a token in the list's search field (the shell's
  * `searchTokens`), the one place both arms say it.
  *
- * The open state belongs to this component rather than to the rail, so a
- * region that grows back to the wide composition unmounts it and takes the
- * open state with it. A retained one would reopen the overlay by itself the
- * next time the reader narrowed the window.
+ * The open state belongs to this component, the one place the overlay is
+ * presented from.
  */
 function TriageCompactFilters(props: Readonly<{
   facets: readonly TriageFilterFacetPlanV1[];
@@ -181,7 +166,9 @@ function TriageCompactFilters(props: Readonly<{
         open={open}
         onOpenChange={setOpen}
         trigger={activeCount === 0 ? label : `${label} · ${activeCount}`}
-        triggerAppearance="control"
+        // Quiet words that open a menu (lab: the lens is said in the search, not by filled pills).
+        triggerAppearance="text"
+        triggerDisclosure
         triggerAccessibilityLabel={label}
       >
         {/*
@@ -193,7 +180,6 @@ function TriageCompactFilters(props: Readonly<{
             <TriageFilterFacetControl
               key={facet.facet}
               facet={facet}
-              presentation="inline"
               onToggleFilterValue={onToggleFilterValue}
             />
           ))}
@@ -204,8 +190,8 @@ function TriageCompactFilters(props: Readonly<{
 }
 
 export function TriageFilterRail(props: TriageFilterRailPropsV1): React.ReactElement {
+  const layout = useHappierCollectionLayout();
   const {
-    compact,
     facets,
     filtered,
     onChangeOrder,
@@ -229,36 +215,18 @@ export function TriageFilterRail(props: TriageFilterRailPropsV1): React.ReactEle
 
   return (
     <>
-      {/*
-        Only the facet region has two arms. Order, Smart order and Clear
-        filters are written once and wrap in render order beside whichever one
-        is showing, because a second copy of them would be a second place they
-        could drift.
-      */}
-      {compact ? (
-        <TriageCompactFilters
-          facets={facets}
-          text={text}
-          onToggleFilterValue={onToggleFilterValue}
-        />
-      ) : facets.map((facet) => (
-        <TriageFilterFacetControl
-          key={facet.facet}
-          facet={facet}
-          presentation="menu"
-          onToggleFilterValue={onToggleFilterValue}
-        />
-      ))}
-      <Select
+      <TriageCompactFilters
+        facets={facets}
+        text={text}
+        onToggleFilterValue={onToggleFilterValue}
+      />
+      {layout?.composition !== 'table' ? <Select
         label={text('plugins.triage.surface.order', 'Order')}
         presentation="menu"
         value={order}
-        options={ORDER_COPY.map(([value, key, fallback]) => ({
-          value,
-          label: text(key, fallback),
-        }))}
+        options={readTriageOrderOptionsV1(text).map(({ key, label }) => ({ value: key, label }))}
         onChange={onOrderChange}
-      />
+      /> : null}
       {/*
         Only beside Smart. The precedence is retained across an order change so
         the preference survives, but a control that visibly reorders nothing is

@@ -44,3 +44,23 @@ export async function toolbarMenuItem(
   await openToolbarMenu(shell, field);
   return await shell.getByRole(role, options);
 }
+
+/**
+ * The lens facets (Source, Type, Scope, State, Attention) live in the one **Filters** form, at every width: open
+ * it the way a reader does, then find the option as the checkbox the form draws. `facet` names the group a test
+ * means; option names are unique across the facets these fixtures plan.
+ */
+export async function filterFacetOption(
+  shell: PluginUiTestkit,
+  _facet: string,
+  options: Parameters<PluginUiTestkit['getByRole']>[1],
+): Promise<Awaited<ReturnType<PluginUiTestkit['getByRole']>>> {
+  await openToolbarMenu(shell, 'Filters');
+  return await shell.getByRole('checkbox', options);
+}
+
+/** Open the Filters form and press one facet option. */
+export async function pressFilterFacetOption(shell: PluginUiTestkit, facet: string, name: string): Promise<void> {
+  const option = await filterFacetOption(shell, facet, { name });
+  await act(async () => { await shell.press(option); });
+}

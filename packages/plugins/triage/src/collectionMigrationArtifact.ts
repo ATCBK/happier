@@ -1,9 +1,6 @@
-import { TRIAGE_PLUGIN } from './manifest.js';
+import { CORPUS_COLLECTION_MIGRATIONS } from './corpus/collections/migrations.js';
 
-/** The portable migration entry shares the plugin's declarations and callbacks. */
+/** The build binds the captured canonical manifest around these pure callbacks. */
 export function collectionMigrations() {
-    return Object.freeze({
-        manifest: TRIAGE_PLUGIN.manifest,
-        collectionMigrations: TRIAGE_PLUGIN.collectionMigrations,
-    });
+    return CORPUS_COLLECTION_MIGRATIONS;
 }

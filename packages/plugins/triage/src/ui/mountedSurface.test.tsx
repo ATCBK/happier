@@ -62,7 +62,7 @@ import { createTriageEphemeralSharedScopeFixture } from './window/ephemeralShare
 import { renderSurface as renderShellSurface } from './surface.js';
 import { TriageListShell } from './shell/root.js';
 import { TRIAGE_UI_TRANSLATIONS } from './translations.js';
-import { toolbarMenuItem } from './shell/toolbarMenus.test-support.js';
+import { filterFacetOption } from './shell/toolbarMenus.test-support.js';
 import { TriageMountedUiInputV1Schema } from '../actions/mountedUiProtocol.js';
 import { invokeTriageMountedUiAction } from './mountedActions.js';
 import {
@@ -165,7 +165,7 @@ function createHarness() {
 
     const scans = new Map<object, ScanFn>();
     const scanCalls = { count: 0 };
-    const state = { sourceBFails: false };
+    const state = { sourceAFails: false, sourceBFails: false };
 
     function admittedSource(
         source: Readonly<{ pluginId: string; localId: string }>,
@@ -200,6 +200,9 @@ function createHarness() {
 
     const scanA: ScanFn = async (input) => {
         scanCalls.count += 1;
+        if (state.sourceAFails) {
+            return { kind: 'failed', failure: { class: 'transient', code: 'provider-busy' } };
+        }
         if (input.page.kind === 'initial') {
             return {
                 kind: 'page',
@@ -537,7 +540,6 @@ describe('the mounted PRs & Issues surface', () => {
             'Replace the duplicated normalizer',
             'Middle change',
             'Older change',
-            'Showing the last known list',
             // `REQ-01`. Source A answered and source B did not, so the reader is
             // told *which connection* to go and fix. "Some sources could not be
             // read" is health without attribution: with two connections
@@ -547,10 +549,27 @@ describe('the mounted PRs & Issues surface', () => {
             'Could not be reached just now.',
         ]);
         await expect(shell.queryByText('Up to date')).resolves.toBeUndefined();
+        // One cause, one voice: the notice names the connection and why, so the toolbar does not repeat it as
+        // "Showing the last known list".
+        await expect(shell.queryByText('Showing the last known list')).resolves.toBeUndefined();
         // The healthy connection is never named as a failure, and the published
         // closed classification stays a machine word.
         await expect(shell.queryByText(`${LABEL_A} could not be read`)).resolves.toBeUndefined();
         await expect(shell.queryByText('transient')).resolves.toBeUndefined();
+    });
+
+    it('never claims a last known list when no source has listed anything', async () => {
+        const harness = createHarness();
+        harness.state.sourceAFails = true;
+        harness.state.sourceBFails = true;
+        const shell = await mountSurface(renderShellSurface, harness, 'triage-list');
+        await settleWindow('view', shell);
+
+        // Nothing was ever listed, so the body's own failure state is the whole answer. A toolbar line saying
+        // the reader is looking at "the last known list" over zero rows would be false, and a second voice for
+        // one cause.
+        await visibleTexts(shell, ['Some sources could not be read']);
+        await expect(shell.queryByText('Showing the last known list')).resolves.toBeUndefined();
     });
 
     it('keeps serving the picker after the page that opened the window unmounts', async () => {
@@ -595,7 +614,7 @@ describe('the mounted PRs & Issues surface', () => {
         // One press of one facet, through the shared public option control:
         // rail -> reducer -> window lens -> rows. Every hop is real here.
         await act(async () => {
-            await shell.press(await toolbarMenuItem(shell, 'Source', 'menuitemcheckbox', { name: LABEL_B }));
+            await shell.press(await filterFacetOption(shell, 'Source', { name: LABEL_B }));
         });
         await act(async () => { await Promise.resolve(); });
 
@@ -605,7 +624,7 @@ describe('the mounted PRs & Issues surface', () => {
         // And the honest empty state when a facet matches nothing: the sources
         // all answered, so the healthy claim is available and false.
         await act(async () => {
-            await shell.press(await toolbarMenuItem(shell, 'State', 'menuitemcheckbox', { name: 'Done' }));
+            await shell.press(await filterFacetOption(shell, 'State', { name: 'Done' }));
         });
         await act(async () => { await Promise.resolve(); });
 

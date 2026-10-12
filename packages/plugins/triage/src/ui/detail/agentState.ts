@@ -45,6 +45,11 @@ function status(id: TriageAgentStatusKindV1, state: SessionStateV1): TriageAgent
   };
 }
 
+/** Where a linked Session works, as a reader names it: its worktree, else its project. */
+export function readTriageSessionWhereV1(state: SessionStateV1 | null): string | undefined {
+  return state?.workspace?.worktreeName ?? state?.workspace?.projectName;
+}
+
 export function describeTriageAgentStatusV1(state: SessionStateV1): TriageAgentStatusV1 | null {
   switch (state.workStatus.bucket) {
     case 'working': return status('working', state);

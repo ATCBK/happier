@@ -44,7 +44,7 @@ import { createTestkitAccountKv } from '../settings/testkit/accountKv.test-suppo
 import { refreshTriageListWindow } from './window/mountedWindow.js';
 import { createTriageEphemeralSharedScopeFixture } from './window/ephemeralSharedScope.test-support.js';
 import { renderSurface as renderShellSurface } from './surface.js';
-import { toolbarMenuItem } from './shell/toolbarMenus.test-support.js';
+import { filterFacetOption, toolbarMenuItem } from './shell/toolbarMenus.test-support.js';
 
 /**
  * The saved-view lens a reader can actually reach.
@@ -286,6 +286,21 @@ async function editViewName(value: string): Promise<void> {
     });
 }
 
+/** The Account notice owns this retry; linked-Session activity has an independent one. */
+function accountRetryButton(): HTMLElement {
+    const notice = Array.from(document.querySelectorAll<HTMLElement>('[role="status"]')).find(
+        (candidate) => candidate.textContent ===
+            'Happier cannot reach your account right now, so saved views cannot be changed.',
+    );
+    if (notice?.parentElement === undefined || notice.parentElement === null) {
+        throw new Error('The saved-views Account notice is missing.');
+    }
+    const buttons = Array.from(notice.parentElement.querySelectorAll<HTMLElement>('[role="button"], button'))
+        .filter((button) => (button.getAttribute('aria-label') ?? button.textContent) === 'Retry');
+    if (buttons.length !== 1) throw new Error('The Account notice must have exactly one Retry button.');
+    return buttons[0]!;
+}
+
 afterEach(async () => {
     for (const fixture of mounted.splice(0)) await fixture.dispose();
 });
@@ -319,7 +334,7 @@ describe('the PRs & Issues saved-view lens', () => {
         failNextWrite();
         await act(async () => { await shell.press(await shell.getByRole('button', { name: 'Save view' })); });
         expect((await shell.getByRole('textbox', { name: 'View name' })).value).toBe('Retry this name');
-        await act(async () => { await shell.press(await shell.getByRole('button', { name: 'Retry' })); });
+        await act(async () => { accountRetryButton().click(); });
         await act(async () => { await shell.press(await shell.getByRole('button', { name: 'Save view' })); });
         expect(storedValue(accountKv).views.some((view) => view.label === 'Retry this name')).toBe(true);
     });
@@ -329,11 +344,11 @@ describe('the PRs & Issues saved-view lens', () => {
         await expect(shell.getByText(
             'Happier cannot reach your account right now, so saved views cannot be changed.',
         )).resolves.toBeTruthy();
-        await expect(shell.getByRole('button', { name: 'Retry' })).resolves.toBeTruthy();
+        expect(accountRetryButton()).toBeDefined();
 
         enableViewsRead();
         await act(async () => {
-            await shell.press(await shell.getByRole('button', { name: 'Retry' }));
+            accountRetryButton().click();
         });
         for (let settle = 0; settle < 3; settle += 1) {
             await act(async () => { await Promise.resolve(); });
@@ -362,7 +377,7 @@ describe('the PRs & Issues saved-view lens', () => {
         expect(written).toContain('fst,done');
         expect(written).toContain(`q,${VIEW_QUERY}`);
         expect((await shell.getByRole('textbox')).value).toBe(VIEW_QUERY);
-        await expect(toolbarMenuItem(shell, 'State', 'menuitemcheckbox', {
+        await expect(filterFacetOption(shell, 'State', {
             name: 'Done',
             state: { checked: true },
         })).resolves.toBeTruthy();
@@ -382,7 +397,7 @@ describe('the PRs & Issues saved-view lens', () => {
         expect(accountKv.setCallCount()).toBe(0);
         expect(storedValue(accountKv).selectedViewId).toBeNull();
         expect((await shell.getByRole('textbox')).value).toBe('');
-        await expect(toolbarMenuItem(shell, 'State', 'menuitemcheckbox', {
+        await expect(filterFacetOption(shell, 'State', {
             name: 'Done',
             state: { checked: false },
         })).resolves.toBeTruthy();
@@ -395,7 +410,7 @@ describe('the PRs & Issues saved-view lens', () => {
         await act(async () => { await shell.press(option); });
         const writesAfterSelect = accountKv.setCallCount();
 
-        const openFacet = await toolbarMenuItem(shell, 'State', 'menuitemcheckbox', { name: 'Open' });
+        const openFacet = await filterFacetOption(shell, 'State', { name: 'Open' });
         await act(async () => { await shell.press(openFacet); });
 
         // The reader is looking at something the saved view does not describe,
@@ -412,7 +427,7 @@ describe('the PRs & Issues saved-view lens', () => {
 
         const option = await toolbarMenuItem(shell, 'Views', 'menuitemradio', { name: VIEW_LABEL });
         await act(async () => { await shell.press(option); });
-        const openFacet = await toolbarMenuItem(shell, 'State', 'menuitemcheckbox', { name: 'Open' });
+        const openFacet = await filterFacetOption(shell, 'State', { name: 'Open' });
         await act(async () => { await shell.press(openFacet); });
 
         const update = await toolbarMenuItem(shell, 'Views', 'menuitem', { name: 'Update this view' });
@@ -428,7 +443,7 @@ describe('the PRs & Issues saved-view lens', () => {
 
     it('refuses a stale full-view update, re-reads, and shows the conflict', async () => {
         const { shell, accountKv } = await mountShell({ selectedViewId: VIEW_ID });
-        const openFacet = await toolbarMenuItem(shell, 'State', 'menuitemcheckbox', { name: 'Open' });
+        const openFacet = await filterFacetOption(shell, 'State', { name: 'Open' });
         await act(async () => { await shell.press(openFacet); });
 
         // Another device renames the view after this mount read it. The local
@@ -471,7 +486,7 @@ describe('the PRs & Issues saved-view lens', () => {
         const { shell, accountKv } = await mountShell({ selectedViewId: VIEW_ID });
 
         // Durable account preference, applied on restart without a write.
-        await expect(toolbarMenuItem(shell, 'State', 'menuitemcheckbox', {
+        await expect(filterFacetOption(shell, 'State', {
             name: 'Done',
             state: { checked: true },
         })).resolves.toBeTruthy();
@@ -491,7 +506,7 @@ describe('the PRs & Issues saved-view lens', () => {
             subPath: 'sv,0000000c-0000-4000-8000-00000000000c/fst,open',
         });
 
-        await expect(toolbarMenuItem(shell, 'State', 'menuitemcheckbox', {
+        await expect(filterFacetOption(shell, 'State', {
             name: 'Open',
             state: { checked: true },
         })).resolves.toBeTruthy();
@@ -510,7 +525,7 @@ describe('the PRs & Issues saved-view lens', () => {
             gateViewsRead,
         });
 
-        const openFacet = await toolbarMenuItem(shell, 'State', 'menuitemcheckbox', { name: 'Open' });
+        const openFacet = await filterFacetOption(shell, 'State', { name: 'Open' });
         await act(async () => { await shell.press(openFacet); });
 
         await act(async () => {
@@ -522,11 +537,11 @@ describe('the PRs & Issues saved-view lens', () => {
         // The reader said something more current than the durable preference
         // behind it. Restoring over it would take their narrowing away seconds
         // after they made it, with nothing on screen saying why.
-        await expect(toolbarMenuItem(shell, 'State', 'menuitemcheckbox', {
+        await expect(filterFacetOption(shell, 'State', {
             name: 'Open',
             state: { checked: true },
         })).resolves.toBeTruthy();
-        await expect(toolbarMenuItem(shell, 'State', 'menuitemcheckbox', {
+        await expect(filterFacetOption(shell, 'State', {
             name: 'Done',
             state: { checked: false },
         })).resolves.toBeTruthy();
@@ -542,11 +557,11 @@ describe('the PRs & Issues saved-view lens', () => {
         // The location the reader arrived at is the lens they see; the durable
         // selection is not applied over it and, above all, is not rewritten to
         // match it.
-        await expect(toolbarMenuItem(shell, 'State', 'menuitemcheckbox', {
+        await expect(filterFacetOption(shell, 'State', {
             name: 'Open',
             state: { checked: true },
         })).resolves.toBeTruthy();
-        await expect(toolbarMenuItem(shell, 'State', 'menuitemcheckbox', {
+        await expect(filterFacetOption(shell, 'State', {
             name: 'Done',
             state: { checked: false },
         })).resolves.toBeTruthy();

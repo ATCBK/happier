@@ -1,9 +1,4 @@
 import type { PluginUiContextEnrichmentV1 } from '@happier-dev/plugin-sdk/ui';
-import {
-  CURRENT_UI_CONTEXT_BOUNDED_INCOMPLETENESS_V1,
-  CURRENT_UI_CONTEXT_MAX_COMMANDS_V1,
-  CURRENT_UI_CONTEXT_MAX_UTF8_BYTES_V1,
-} from '@happier-dev/plugin-sdk/ui';
 import { PluginUiContextEnrichmentV1Schema } from '@happier-dev/protocol';
 import type { TriageEntryRefV1, TriageSourceInstanceIdV1 } from '@happier-dev/triage-protocol/v1';
 import { describe, expect, it } from 'vitest';
@@ -119,7 +114,7 @@ function openSurfaceCommands(context: PluginUiContextEnrichmentV1) {
 }
 
 describe('Triage current UI context projection', () => {
-  it('reports linked-session selection and bounds paged relationship ids with the context owner budget', () => {
+  it('retains complete paged linked-session relationships and the selected identity', () => {
     const input = { surface: selected('A'), visibleRows: [row({ entryId: 'A' })] };
     const projected = projectTriageCurrentUiContextV1({ ...input,
       linkedSessions: { ids: ['session-one', 'session-two'], selectedId: 'session-two' },
@@ -129,8 +124,8 @@ describe('Triage current UI context projection', () => {
     const selectedId = pagedIds.at(-1) ?? null;
     const large = projectTriageCurrentUiContextV1({ ...input, linkedSessions: { ids: pagedIds, selectedId } });
     expect(PluginUiContextEnrichmentV1Schema.safeParse(large).success).toBe(true);
-    expect(large.detail).toMatchObject({ incomplete: true, selectedLinkedSessionId: selectedId });
-    expect(new TextEncoder().encode(JSON.stringify(large)).byteLength).toBeLessThanOrEqual(CURRENT_UI_CONTEXT_MAX_UTF8_BYTES_V1);
+    expect(large.detail).toMatchObject({ linkedSessionIds: pagedIds, selectedLinkedSessionId: selectedId });
+    expect(large.detail).not.toHaveProperty('incomplete');
   });
   it('keeps empty and retained-missing selections truthful', () => {
     const empty = projectTriageCurrentUiContextV1({
@@ -324,7 +319,7 @@ describe('Triage current UI context projection', () => {
     expect(parseTriageRouteSubPathV1(command.subPath).selection).toEqual(entryRef('A'));
   });
 
-  it('orders eligible commands canonically and reports bounded omissions explicitly', () => {
+  it('retains every eligible command in canonical order for a large visible inventory', () => {
     const rows = Array.from({ length: 40 }, (_, index) => row({
       entryId: String(40 - index).padStart(2, '0'),
       title: `Issue ${'x'.repeat(300)} ${index}`,
@@ -341,12 +336,10 @@ describe('Triage current UI context projection', () => {
       return parseTriageRouteSubPathV1(command.subPath).selection?.entryId;
     });
 
-    expect(commands.length).toBeLessThanOrEqual(CURRENT_UI_CONTEXT_MAX_COMMANDS_V1);
-    expect(new TextEncoder().encode(JSON.stringify(context)).byteLength)
-      .toBeLessThanOrEqual(CURRENT_UI_CONTEXT_MAX_UTF8_BYTES_V1);
+    expect(commands).toHaveLength(rows.length);
     expect(PluginUiContextEnrichmentV1Schema.safeParse(context).success).toBe(true);
-    expect(context.detail).toMatchObject(CURRENT_UI_CONTEXT_BOUNDED_INCOMPLETENESS_V1);
-    expect(commandEntryIds).toEqual([...commandEntryIds].sort());
+    expect(context.detail).not.toHaveProperty('incomplete');
+    expect(commandEntryIds).toEqual(rows.map(item => item.entryRef.entryId).sort());
   });
 
   it('does not project provider locators, credentials, body, comments, checks, files, or session internals', () => {

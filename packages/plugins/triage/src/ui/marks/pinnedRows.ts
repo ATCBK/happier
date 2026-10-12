@@ -31,6 +31,7 @@ export type TriageListDisplayRowV1 = Readonly<{
   entryRef: TriageEntryRefV1;
   title: string;
   scopeLabel: string;
+  scopeDisplayName?: string;
   /** Source-authored address, or retained scope and opaque identity when unread. */
   identifierLabel?: string;
   /** The quiet trailing line: why it needs the reader, or why it cannot be shown. */
@@ -112,6 +113,7 @@ export function projectTriageWindowRow(
     entryRef: row.entryRef,
     title: display.title,
     scopeLabel: display.scopeLabel,
+    ...(display.scopeDisplayName === undefined ? {} : { scopeDisplayName: display.scopeDisplayName }),
     identifierLabel: display.identifierLabel,
     detail: display.detail,
     tone: display.tone,
@@ -147,6 +149,7 @@ export function projectTriagePinnedRow(
       entryRef: projected.entryRef,
       title: display.title,
       scopeLabel: display.scopeLabel,
+      ...(display.scopeDisplayName === undefined ? {} : { scopeDisplayName: display.scopeDisplayName }),
       identifierLabel: display.identifierLabel,
       detail: display.detail,
       tone: display.tone,

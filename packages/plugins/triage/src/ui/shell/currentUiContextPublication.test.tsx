@@ -8,7 +8,7 @@ import { createPluginUiRnwSemanticSurfaceAdapter } from '@happier-dev/plugin-ui/
 import type { PluginUiContextEnrichmentV1, PluginUiHostApi, RenderSurface } from '@happier-dev/plugin-sdk/ui';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { useTriageCurrentUiContextPublication } from './root.js';
+import { useTriageCurrentUiContextPublication } from '../currentContextPublication.js';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 

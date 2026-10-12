@@ -4,7 +4,6 @@ import {
   Button,
   Item,
   ItemGroup,
-  LoadingState,
   Menu,
   Stack,
   Status,
@@ -75,7 +74,15 @@ export function TriageFixPullRequests(props: Readonly<{
   const [menuOpen, setMenuOpen] = React.useState(false);
   const { state } = props;
   if (state.kind === 'reading') {
-    return <LoadingState titleKey="plugins.triage.surface.detail.fixPr.title" title="Fix pull request" />;
+    // One quiet line where the step will be, like the failed read below: never a page-sized loader in the story.
+    return (
+      <Status
+        tone="muted"
+        pulsing
+        labelKey="plugins.triage.surface.detail.fixPr.reading"
+        label="Looking for a fix pull request…"
+      />
+    );
   }
   if (state.kind === 'unreachable') {
     // A quiet line with its Retry, inside the story: the rest of the entry is still readable.
@@ -127,7 +134,7 @@ export function TriageFixPullRequests(props: Readonly<{
             const line = [statusDetail(lead, text), lead.display.scopeLabel]
               .filter((part): part is string => part !== undefined && part.length > 0)
               .join(' · ');
-            return line.length === 0 ? null : <Text variant="caption" tone="secondary" value={line} />;
+            return line.length === 0 ? null : <Text variant="micro" tone="secondary" value={line} />;
           })()}
           {others.length === 0 ? null : (
             <ItemGroup accessibilityLabel={heading}>

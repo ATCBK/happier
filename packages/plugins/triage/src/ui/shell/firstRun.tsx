@@ -8,6 +8,7 @@ import {
   Stack,
   Step,
   Text,
+  usePluginTheme,
   usePluginTranslation,
   useSurfaceContext,
 } from '@happier-dev/plugin-ui';
@@ -27,6 +28,7 @@ export function TriageFirstRun(props: Readonly<{
   onConnect: (offer: TriageConfigureSourceOfferV1) => void;
 }>): React.ReactElement {
   const text = usePluginTranslation();
+  const { spacing } = usePluginTheme();
   const { locale } = useSurfaceContext();
   // Not every JavaScript engine the host runs ships `Intl.ListFormat`; a comma list says the same thing.
   const formatKinds = React.useMemo(() => {
@@ -35,7 +37,7 @@ export function TriageFirstRun(props: Readonly<{
     return (names: readonly string[]) => listFormat.format(names);
   }, [locale]);
   return (
-    <Stack gap="large" style={FIRST_RUN_COLUMN_STYLE_V1} testID="triage-first-run">
+    <Stack gap="large" style={[FIRST_RUN_COLUMN_STYLE_V1, { paddingVertical: spacing.large + spacing.small }]} testID="triage-first-run">
       <PageHeader
         title={TRIAGE_DISPLAY_NAME}
         description={text(
@@ -65,10 +67,10 @@ export function TriageFirstRun(props: Readonly<{
                 <Stack gap="xsmall">
                   <Text variant="label" value={offer.displayName} numberOfLines={1} />
                   {offer.kindNames.length === 0 ? null : (
-                    <Text variant="caption" tone="secondary" value={formatKinds(offer.kindNames)} numberOfLines={1} />
+                    <Text variant="micro" tone="secondary" value={formatKinds(offer.kindNames)} numberOfLines={1} />
                   )}
                 </Stack>
-                <Text variant="caption" tone="accent" value={text('plugins.triage.surface.firstRun.connect', 'Connect')} />
+                <Text variant="micro" tone="accent" value={text('plugins.triage.surface.firstRun.connect', 'Connect')} />
               </Stack>
             </Card>
           ))}
@@ -79,7 +81,7 @@ export function TriageFirstRun(props: Readonly<{
         <Columns minColumnWidth={180} gap="medium" rowGap="medium">
           {FIRST_RUN_STEPS_V1.map((step, index) => (
             <Step key={step.id} marker={{ kind: 'number', value: index + 1 }} title={text(step.titleKey, step.title)}>
-              <Text variant="caption" tone="secondary" value={text(step.bodyKey, step.body)} />
+              <Text variant="micro" tone="secondary" value={text(step.bodyKey, step.body)} />
             </Step>
           ))}
         </Columns>
@@ -89,7 +91,7 @@ export function TriageFirstRun(props: Readonly<{
 }
 
 /** The lab's reading column for a first run: a centred measure, not a full-bleed table width. */
-const FIRST_RUN_COLUMN_STYLE_V1 = Object.freeze({ width: '100%' as const, maxWidth: 720, alignSelf: 'center' as const, paddingVertical: 24 });
+const FIRST_RUN_COLUMN_STYLE_V1 = Object.freeze({ width: '100%' as const, maxWidth: 720, alignSelf: 'center' as const });
 
 const FIRST_RUN_STEPS_V1 = Object.freeze([
   {

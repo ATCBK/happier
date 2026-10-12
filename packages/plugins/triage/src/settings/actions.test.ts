@@ -136,11 +136,34 @@ describe('the Triage action record', () => {
 
     it('refuses a stored value this build cannot read instead of reporting it absent', () => {
         expect(parseTriageActions({ v: 2, actions: [] }).kind).toBe('unreadable');
-        expect(parseTriageActions({ v: 1, actions: [], extra: true }).kind).toBe('unreadable');
         expect(parseTriageActions({
             v: 1,
             actions: [{ ...storedFrom([ASK]) }],
         }).kind).toBe('unreadable');
+    });
+
+    it('reads retained actions with unknown catalog, record and target fields and writes only canonical fields', async () => {
+        const testkit = createTestkitAccountKv();
+        testkit.seed(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1, {
+            v: 1,
+            retiredCatalog: true,
+            actions: [{
+                actionId: ASK.actionId, label: '  Ask\n  ', enabled: ASK.enabled,
+                appliesTo: [...ASK.appliesTo], profileId: ASK.profileId, workspaceMode: ASK.workspaceMode,
+                retiredRecord: true,
+                target: { kind: 'agent', promptInvocationId: null, delivery: 'compose', retiredTarget: true },
+            }],
+        });
+        const catalog = testkit.catalog(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1);
+        expect((await readTriageActions({ catalog })).value.actions).toEqual([ASK]);
+        const updated = await mutateTriageAction({ catalog, mintActionId: () => 'unused' }, {
+            kind: 'update',
+            expectedRevision: testkit.revision(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1),
+            ...ASK,
+            label: 'Discuss',
+        });
+        expect(updated.status).toBe('applied');
+        expect(testkit.read(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1)).toEqual({ v: 1, actions: [{ ...ASK, label: 'Discuss' }] });
     });
 
     it('refuses incoherent subjects and formal-review materialization at the one writer', async () => {
@@ -436,36 +459,52 @@ describe('the Triage action record', () => {
 
     it('refuses growth only when the complete serialized Account KV value exceeds its byte bound', async () => {
         const testkit = createTestkitAccountKv();
+        const wideAction = (index: number): TriageActionV1 => ({
+            actionId: `wide-action-${index}`,
+            label: `Action ${index}`,
+            enabled: true,
+            appliesTo: ['pullRequest', 'issue', 'errorIssue', 'other'],
+            profileId: `profile-${'p'.repeat(240)}-${index}`,
+            workspaceMode: 'repository',
+            target: { kind: 'agent', promptInvocationId: `prompt-${index}`, delivery: 'compose' },
+        });
+        const encodedBytes = (actions: readonly TriageActionV1[]) =>
+            new TextEncoder().encode(JSON.stringify(storedFrom(actions))).byteLength;
+        const actions: TriageActionV1[] = [];
+        let next = wideAction(0);
+        // Construct the boundary fixture directly; repeated catalog mutations
+        // would test quadratic setup work, not the whole-value admission rule.
+        while (encodedBytes([...actions, next]) <= MAX_TRIAGE_ACTIONS_SERIALIZED_UTF8_BYTES_V1) {
+            actions.push(next);
+            next = wideAction(actions.length);
+        }
+        testkit.seed(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1, storedFrom(actions));
+        const before = testkit.read(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1);
+        const revision = testkit.revision(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1);
+        const { actionId, ...draft } = next;
         const deps = {
             catalog: testkit.catalog(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1),
-            mintActionId: (() => {
-                let index = 0;
-                return () => `wide-action-${index++}`;
-            })(),
+            mintActionId: () => actionId,
         };
-        let overflowed: string | null = null;
 
-        for (let index = 0; index < 1_000; index += 1) {
-            const result = await mutateTriageAction(deps, {
-                kind: 'create',
-                expectedRevision: testkit.revision(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1),
-                label: `Action ${index}`,
-                enabled: true,
-                appliesTo: ['pullRequest', 'issue', 'errorIssue', 'other'],
-                profileId: `profile-${'p'.repeat(240)}-${index}`,
-                workspaceMode: 'repository',
-                target: { kind: 'agent', promptInvocationId: `prompt-${index}`, delivery: 'compose' },
-            });
-            if (result.status === 'rejected') {
-                overflowed = result.reason;
-                break;
-            }
-        }
+        expect(actions.length).toBeGreaterThan(32);
+        expect(encodedBytes(actions)).toBeLessThanOrEqual(MAX_TRIAGE_ACTIONS_SERIALIZED_UTF8_BYTES_V1);
+        expect(encodedBytes([...actions, next])).toBeGreaterThan(MAX_TRIAGE_ACTIONS_SERIALIZED_UTF8_BYTES_V1);
+        expect(await mutateTriageAction(deps, { kind: 'create', expectedRevision: revision, ...draft }))
+            .toEqual({ status: 'rejected', reason: 'valueTooLarge' });
+        expect(testkit.read(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1)).toEqual(before);
+        expect(testkit.revision(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1)).toBe(revision);
 
-        expect(overflowed).toBe('valueTooLarge');
-        const serialized = JSON.stringify(testkit.read(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1));
-        expect(new TextEncoder().encode(serialized).byteLength)
-            .toBeLessThanOrEqual(MAX_TRIAGE_ACTIONS_SERIALIZED_UTF8_BYTES_V1);
+        expect(await mutateTriageAction(deps, {
+            kind: 'delete',
+            expectedRevision: revision,
+            actionId: actions.at(-1)!.actionId,
+        })).toMatchObject({ status: 'applied' });
+        expect(await mutateTriageAction(deps, {
+            kind: 'create',
+            expectedRevision: testkit.revision(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1),
+            ...draft,
+        })).toMatchObject({ status: 'applied', actionId });
     });
 
     it('round-trips every written value through its own reader', async () => {

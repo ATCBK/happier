@@ -329,6 +329,38 @@ const REVIEW_COMPARISON = {
 };
 
 describe('the Session-start Action a mounted header can actually press', () => {
+    it('carries issue orchestration through the registered start Action and its same-key recovery', async () => {
+        const { collections } = createTestkitCorpusCollections();
+        const invoker = createTestkitActionInvoker({ spawn: [
+            { type: 'pending', retryWithSameCreationKey: true, outcome: 'accepted' },
+            spawnSuccess({ disposition: 'rejoined' }),
+        ] });
+        const handler = registeredHandler(TRIAGE_START_ENTRY_SESSION_ACTION_LOCAL_ID_V1);
+        const entryRef = testkitEntryRef({ kindId: 'issue' });
+        const input = TriageStartEntrySessionInputV1Schema.parse({
+            ...START_INPUT_BASE, entryRef, orchestrate: true, workspaceMode: 'repository',
+            destination: { ...NEW_DESTINATION,
+                materialization: { kind: 'selectedProject', directory: '/projects/example' } },
+            delivery: { kind: 'send', text: 'Plan this issue before implementing it.',
+                idempotencyKey: 'orchestrate-delivery', attachments: [{ entryRef,
+                    display: START_INPUT_BASE.display, sourceInstanceId: TESTKIT_SOURCE_INSTANCE_ID, title: 'Issue 17' }] },
+        });
+        expect(await handler(input, createContext(collections, invoker)))
+            .toMatchObject({ type: 'creationPending', outcome: 'accepted' });
+        const result = await handler({ ...input, resume: { phase: 'creationPending' } }, createContext(collections, invoker));
+        expect(result).toMatchObject({ type: 'opened', disposition: 'rejoined', delivery: 'accepted' });
+        const spawns = invoker.callsFor('session.spawn_new');
+        expect(spawns[1]?.input).toEqual(spawns[0]?.input);
+        expect(spawns[0]?.input).toMatchObject({ roleId: 'orchestrator', initialTriggers: [{
+            target: { kind: 'workflow', ref: 'builtin:plan-with-a-panel' },
+            inputs: { request: input.delivery?.text }, onComplete: { kind: 'originating_session' },
+        }] });
+        expect(await readLinkRows(collections, 'session-a')).toEqual([expect.objectContaining({ entryRef })]);
+        expect(invoker.callsFor('session.message.send')[0]?.input).toMatchObject({
+            message: input.delivery?.text, attachments: [expect.objectContaining({ attachmentLocalId: 'entry' })],
+        });
+    });
+
     /**
      * The reachability contract. The mounted header reaches the daemon through
      * the authenticated mounted-UI provenance, which the canonical dispatcher

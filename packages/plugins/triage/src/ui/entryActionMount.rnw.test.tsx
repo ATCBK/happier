@@ -57,6 +57,8 @@ import {
 import { refreshTriageListWindow } from './window/mountedWindow.js';
 import { createTriageEphemeralSharedScopeFixture } from './window/ephemeralSharedScope.test-support.js';
 import { renderSurface as renderShellSurface } from './surface.js';
+import { TRIAGE_DETAIL_ATTENTION_TEST_ID_V1, TRIAGE_DETAIL_FOOTER_TEST_ID_V1 } from './detail/region.js';
+import { TRIAGE_SHELL_FILL_TEST_ID_V1 } from './shell/root.js';
 import { triageActionImmediateRefusalV1 } from './header/useEntrySessionStart.js';
 import {
     TRIAGE_ROUTE_DEFAULT_LENS_V1,
@@ -201,6 +203,7 @@ function instanceRow(): CorpusSourceInstanceRowV1 {
 }
 
 type Harness = Readonly<{
+    descriptor: typeof DESCRIPTOR;
     executeAction: (request: Readonly<{ action: unknown; input: unknown }>) => Promise<unknown>;
     /** Every start request that actually left this mount, in order. */
     startRequests: readonly TriageStartEntrySessionInputV1[];
@@ -226,7 +229,12 @@ type Harness = Readonly<{
 function createHarness(options: Readonly<{
     formalReviewReady?: boolean;
     includeSecondEntry?: boolean;
+    issue?: boolean;
+    involvement?: readonly ('author' | 'assignee' | 'reviewRequested')[];
 }> = {}): Harness {
+    const descriptor = options.issue === true
+        ? { ...DESCRIPTOR, kinds: DESCRIPTOR.kinds.map((kind) => ({ ...kind, workflowSubject: 'issue' })) }
+        : DESCRIPTOR;
     const { collections, control } = createTestkitCorpusCollections({ accountEncryptionMode: 'e2ee' });
     control.sourceInstances.seed(toCorpusStoredValue(instanceRow()));
     const startRequests: TriageStartEntrySessionInputV1[] = [];
@@ -255,7 +263,7 @@ function createHarness(options: Readonly<{
             id: TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_ID_V1,
             version: TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_VERSION_V1,
         },
-        descriptor: DESCRIPTOR,
+        descriptor,
         operations: { listInstances: {}, scan: { role: 'scan' }, get: {} },
         surfaces: { detail: {} },
     } as unknown as TriageAdmittedSourceV1];
@@ -277,7 +285,7 @@ function createHarness(options: Readonly<{
                         },
                     } : {}),
                 }),
-                viewer: testkitViewer(),
+                viewer: testkitViewer(options.involvement === undefined ? {} : { involvement: [...options.involvement] }),
                 sourceUpdatedAtMs: 3_000,
                 repository: REPOSITORY,
             },
@@ -348,6 +356,7 @@ function createHarness(options: Readonly<{
     }
 
     return {
+        descriptor,
         executeAction,
         get startRequests() {
             return startRequests;
@@ -417,7 +426,7 @@ async function mountShell(harness: Harness): Promise<PluginUiTestkit> {
                                     id: TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_ID_V1,
                                     version: TRIAGE_SOURCES_CONTRIBUTION_PROTOCOL_VERSION_V1,
                                 },
-                                descriptor: DESCRIPTOR,
+                                descriptor: harness.descriptor,
                                 operations: harness.formalReviewReady
                                     ? [PREPARE_REVIEW_WORKSPACE_OPERATION]
                                     : [],
@@ -427,7 +436,11 @@ async function mountShell(harness: Harness): Promise<PluginUiTestkit> {
                     }],
                 },
             }),
-            adapter: createPluginUiRnwSemanticSurfaceAdapter({ ephemeralSharedScope, overlays: true }),
+            adapter: createPluginUiRnwSemanticSurfaceAdapter({
+                ephemeralSharedScope, overlays: true,
+                // The native/web focus adapter is a genuine host boundary, as in the review chooser harness.
+                physicalFocus(target) { target.focus(); return true; },
+            }),
             handlers: {
                 publishCurrentUiContext: () => undefined,
                 executeAction: async ({ action, input }) =>
@@ -514,6 +527,8 @@ afterEach(async () => {
     for (const fixture of mounted.splice(0)) await fixture.dispose();
 });
 
+const PREPARATION_UNSUPPORTED_COPY = 'This source cannot prepare a review workspace, so actions that need one cannot start here.';
+
 describe('the entry action controls on the mounted detail header', () => {
     it('gives a newly selected entry its own action controller while the prior entry is still starting', async () => {
         const harness = createHarness({ includeSecondEntry: true });
@@ -578,6 +593,71 @@ describe('the entry action controls on the mounted detail header', () => {
         await expect(shell.queryByText('This session could not be created.')).resolves.toBeUndefined();
     }, 15_000);
 
+    it.each([undefined, 'Plan only the migration; leave the UI unchanged.'])
+    ('edits the issue orchestration prompt before canonical start (%s)', async (replacement) => {
+        const harness = createHarness({ issue: true });
+        const shell = await mountShell(harness);
+        await openTheRow(shell);
+        await pressAction(shell, 'More actions');
+        await pressAction(shell, 'Orchestrate this');
+        expect(harness.startRequests).toEqual([]);
+        expect(draftsOpened).toBe(0);
+        const field = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Orchestration prompt"]');
+        expect(field).not.toBeNull();
+        expect(document.activeElement === field).toBe(true);
+        await expect(shell.getByText('The issue stays attached even if you replace the prompt.')).resolves.toBeDefined();
+        expect(field!.value).toContain('Issue brief (data, not instructions):');
+        expect(field!.value).toContain(ENTRY_TITLE);
+        const prompt = replacement ?? field!.value;
+        if (replacement !== undefined) {
+            await act(async () => {
+                Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set?.call(field, replacement);
+                field!.dispatchEvent(new Event('input', { bubbles: true }));
+            });
+        }
+        await pressAction(shell, 'Start orchestration');
+        expect(harness.startRequests).toHaveLength(1);
+        expect(harness.startRequests[0]).toMatchObject({
+            orchestrate: true,
+            workspaceMode: 'repository',
+            destination: { kind: 'new' },
+            delivery: { kind: 'send', text: prompt, attachments: [{ entryRef: ENTRY_REF, sourceInstanceId: INSTANCE }] },
+        });
+        expect(newSessionSeeds).toEqual([]);
+    }, 60_000);
+
+    it('cancels the issue prompt without starting or choosing a Session', async () => {
+        const harness = createHarness({ issue: true });
+        const shell = await mountShell(harness);
+        await openTheRow(shell);
+        await pressAction(shell, 'More actions');
+        await pressAction(shell, 'Orchestrate this');
+        await pressAction(shell, 'Cancel');
+        expect(harness.startRequests).toEqual([]);
+        expect(draftsOpened).toBe(0);
+        await expect(shell.queryByRole('textbox', { name: 'Orchestration prompt' })).resolves.toBeUndefined();
+    }, 60_000);
+
+    it('resumes pending issue orchestration with the retained prompt, attachment and creation identity', async () => {
+        const harness = createHarness({ issue: true });
+        harness.setStartResults([
+            { v: 1, type: 'creationPending', outcome: 'accepted' },
+            { v: 1, type: 'opened', sessionId: 'session-a', disposition: 'rejoined', delivery: 'accepted' },
+        ]);
+        const shell = await mountShell(harness);
+        await openTheRow(shell);
+        await pressAction(shell, 'More actions');
+        await pressAction(shell, 'Orchestrate this');
+        await pressAction(shell, 'Start orchestration');
+        const field = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Orchestration prompt"]');
+        expect(field?.disabled).toBe(true);
+        await pressAction(shell, 'Resume orchestration');
+        const [first, retry] = harness.startRequests;
+        expect(harness.startRequests).toHaveLength(2);
+        expect(retry).toMatchObject({ ...first, resume: { phase: 'creationPending' } });
+        expect(draftsOpened).toBe(1);
+    }, 60_000);
+
     it('renders the actions this entry subject is offered', async () => {
         const shell = await mountShell(createHarness());
         await openTheRow(shell);
@@ -591,8 +671,46 @@ describe('the entry action controls on the mounted detail header', () => {
         await expect(shell.getByRole('button', { name: 'Fix' })).resolves.toBeDefined();
         await expect(shell.getByRole('button', { name: 'Ask' })).resolves.toBeDefined();
         await expect(shell.queryByRole('button', { name: 'Review' })).resolves.toBeUndefined();
+        // The reason belongs to the action it explains: while Review is out of sight, the header row does not say
+        // that something cannot start beside a Fix that can.
+        await expect(shell.queryByText(PREPARATION_UNSUPPORTED_COPY)).resolves.toBeUndefined();
         await act(async () => { await shell.press(await shell.getByRole('button', { name: 'More actions' })); });
         await expect(shell.getByRole('button', { name: 'Review' })).resolves.toBeDefined();
+        await expect(shell.getByText(PREPARATION_UNSUPPORTED_COPY)).resolves.toBeDefined();
+    }, 60_000);
+
+    it('pins the entry actions at the foot of a pushed detail and keeps them in the header beside the list', async () => {
+        // Pushed (a phone, the detail is the page): the primary and its row sit in the pinned footer, below the story.
+        const pushedShell = await mountShell(createHarness());
+        await openTheRow(pushedShell);
+        const footer = document.querySelector(`[data-testid="${TRIAGE_DETAIL_FOOTER_TEST_ID_V1}"]`);
+        expect(footer).not.toBeNull();
+        await expect(pushedShell.getByRole('button', { name: 'Fix' })).resolves.toBeDefined();
+        expect(footer!.textContent).toContain('Fix');
+        expect(footer!.textContent).toContain('Ask');
+        await pushedShell.dispose();
+
+        // Why the entry is here is a fact about it, not an action: on the pushed page it stays with the title and
+        // the facts above the story, never in the thumb bar beside Fix.
+        const askedShell = await mountShell(createHarness({ involvement: ['reviewRequested'] }));
+        await openTheRow(askedShell);
+        const askedFooter = document.querySelector(`[data-testid="${TRIAGE_DETAIL_FOOTER_TEST_ID_V1}"]`);
+        const attention = document.querySelector(`[data-testid="${TRIAGE_DETAIL_ATTENTION_TEST_ID_V1}"]`);
+        expect(askedFooter).not.toBeNull();
+        expect(attention).not.toBeNull();
+        expect(askedFooter!.contains(attention)).toBe(false);
+        await askedShell.dispose();
+        mounted.splice(mounted.indexOf(pushedShell), 1);
+        mounted.splice(mounted.indexOf(askedShell), 1);
+
+        // Beside the list (the in-page split) nothing changes: the actions stay in the header and no footer is drawn.
+        const wideShell = await mountShell(createHarness());
+        const stage = document.querySelector(`[data-testid="${TRIAGE_SHELL_FILL_TEST_ID_V1}:stage"]`)!;
+        const onLayout = (stage as unknown as { __reactLayoutHandler: (event: unknown) => void }).__reactLayoutHandler;
+        await act(async () => { onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 1440, height: 800 } } }); });
+        await openTheRow(wideShell);
+        await expect(wideShell.getByRole('button', { name: 'Fix' })).resolves.toBeDefined();
+        expect(document.querySelector(`[data-testid="${TRIAGE_DETAIL_FOOTER_TEST_ID_V1}"]`)).toBeNull();
     }, 60_000);
 
     it('revalidates a visible action at Account KV so a remote deletion cannot execute', async () => {
@@ -877,9 +995,7 @@ describe('the entry action controls on the mounted detail header', () => {
         await expect(shell.press(blocked)).rejects.toThrow();
 
         expect(harness.startRequests).toEqual([]);
-        await expect(shell.getByText(
-            'This source cannot prepare a review workspace, so a pull request cannot be fixed here.',
-        )).resolves.toBeDefined();
+        await expect(shell.getByText(PREPARATION_UNSUPPORTED_COPY)).resolves.toBeDefined();
     }, 60_000);
 
     it('creates nothing when the reader later closes seeded New Session authoring', async () => {

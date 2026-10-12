@@ -395,7 +395,6 @@ describe('the mounted Composer entry picker', () => {
         expect(harness.openCalls).toHaveLength(0);
         expect(harness.snapshot(COMPOSER_A).text).toBe('please look at this');
         await picker.dispose();
-        expect(harness.publishedContexts.at(-1)).toBeNull();
         expect(await invoke('attachEntry')).toEqual({ status: 'unavailable' });
     });
 
@@ -406,6 +405,18 @@ describe('the mounted Composer entry picker', () => {
         await expect(picker.getByText('happier.example.source/example-forge · pull-request · example/repository #17 · Open'))
             .resolves.toBeDefined();
     });
+    it('stays quiet when its list is current: no status word, one Refresh', async () => {
+        const picker = await mountPicker(createHarness({
+            observations: [observation('42', 'Replace the duplicated normalizer')],
+        }), COMPOSER_A, 'triage-picker-quiet');
+
+        // Healthy says nothing. A current list that announces "Up to date" in
+        // success green is a second message for a state the reader never acts on.
+        await expect(picker.getByText('Replace the duplicated normalizer')).resolves.toBeDefined();
+        expect(await picker.queryByText('Up to date')).toBeUndefined();
+        await expect(picker.getByRole('button', { name: 'Refresh' })).resolves.toBeDefined();
+    });
+
     it('derives multi-selection and later row state only from the canonical Composer snapshot', async () => {
         const harness = createHarness();
         const picker = await mountPicker(harness, COMPOSER_A, 'triage-picker-canonical-selection');

@@ -134,7 +134,9 @@ export function readTriageWindowStatementV1(input: Readonly<{
 }>): readonly string[] | undefined {
   const { window, text } = input;
   const parts: string[] = [];
-  if (window !== null) {
+  // With nothing loaded the body's own state (a failure, an empty or quiet list) is the whole answer, so the
+  // line adds nothing about entries beneath it.
+  if (window !== null && input.loadedCount > 0) {
     parts.push(text('plugins.triage.surface.window.loaded', '{count} loaded', { count: input.loadedCount }));
     if (input.entries.tone === 'warning') {
       parts.push(input.entries.title);
@@ -143,7 +145,9 @@ export function readTriageWindowStatementV1(input: Readonly<{
     } else {
       const names: string[] = [];
       for (const lane of window.lanes) {
-        if (lane.exhausted) continue;
+        // Only a connection that answered can "have more": one the pass could not read, or whose read failed,
+        // told us nothing, and its failure is said once by the page.
+        if (lane.exhausted || lane.health.kind === 'failed' || lane.health.kind === 'unavailable') continue;
         const name = input.configuredSources.find((source) => source.sourceInstanceId === lane.sourceInstanceId)?.displayLabel;
         if (name !== undefined && !names.includes(name)) names.push(name);
       }

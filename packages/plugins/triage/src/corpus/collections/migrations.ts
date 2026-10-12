@@ -1,0 +1,27 @@
+import type { PluginAccountCollectionMigration } from '@happier-dev/plugin-sdk/collections';
+import {
+    CORPUS_SESSION_LINKS_COLLECTION_ID,
+    CORPUS_SOURCE_INSTANCES_COLLECTION_ID,
+    CORPUS_USER_MARKS_COLLECTION_ID,
+} from './ids.js';
+
+export const CORPUS_COLLECTION_MIGRATIONS = {
+    [CORPUS_SOURCE_INSTANCES_COLLECTION_ID]: [{
+        id: 'source-instances-v1-to-v2',
+        fromSchemaVersion: 1,
+        toSchemaVersion: 2,
+        migrate: (value) => value,
+    }],
+    [CORPUS_SESSION_LINKS_COLLECTION_ID]: [{
+        id: 'session-links-v1-to-v2',
+        fromSchemaVersion: 1,
+        toSchemaVersion: 2,
+        migrate: (value) => value,
+    }],
+    [CORPUS_USER_MARKS_COLLECTION_ID]: [{
+        id: 'user-marks-v1-to-v2',
+        fromSchemaVersion: 1,
+        toSchemaVersion: 2,
+        migrate: (value) => value,
+    }],
+} satisfies Readonly<Record<string, readonly PluginAccountCollectionMigration[]>>;

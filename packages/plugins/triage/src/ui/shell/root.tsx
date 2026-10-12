@@ -1,6 +1,6 @@
 import * as React from 'react';
 import type { PluginContributionIdentity } from '@happier-dev/plugin-sdk/manifest';
-import type { CurrentUiCommandDeclarationV1, PluginUiContextEnrichmentV1, PluginUiHostApi } from '@happier-dev/plugin-sdk/ui';
+import type { CurrentUiCommandDeclarationV1 } from '@happier-dev/plugin-sdk/ui';
 import type { TriageSourceWorkflowSubjectV1, TriageLinkedSessionProjectionV1 } from '@happier-dev/triage-protocol/v1';
 import { TRIAGE_SOURCES_ADMINISTER_ACTION_LOCAL_ID_V1, TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1 } from '@happier-dev/triage-protocol/v1';
 import {
@@ -21,7 +21,6 @@ import {
   Stack,
   Status,
   useHappierCollection,
-  useHappierCollectionLayout,
   useListMultiSelectionController,
   usePluginAccessibility,
   usePluginHostApi,
@@ -35,13 +34,14 @@ import {
 import {
   HAPPIER_COLLECTION_WINDOW_COMPLETE,
   scaleTextStyleMetrics,
+  type CollectionHeaderSlots,
   type HappierCollectionGroup,
   type HappierCollectionWindow,
 } from '@happier-dev/plugin-ui';
 
 import { TRIAGE_DISPLAY_NAME } from '../../displayName.js';
 import type { TriageEntryDetailLaunchInputV1 } from '../../composer/entryDetailLaunchInput.js';
-import type { CorpusSmartPolicyV1 } from '../../corpus/query/smartPolicy.js';
+import { parseCorpusSmartPolicy, type CorpusSmartPolicyV1 } from '../../corpus/query/smartPolicy.js';
 import {
   triageEntryRowKey,
   type TriageListLensV1,
@@ -54,6 +54,7 @@ import type {
   TriageSavedViewPresentationV1,
 } from '../../settings/savedViews.js';
 import { projectTriageCurrentUiContextV1 } from '../currentContext.js';
+import { useTriageCurrentUiContextPublication } from '../currentContextPublication.js';
 import { bindTriageMountedUiActions } from '../mountedActions.js';
 import { useTriageSourcePanelActionsV1 } from '../useSourcePanelActions.js';
 import { triageSourcePanelActionIdV1 } from '@happier-dev/triage-sources/ui';
@@ -62,19 +63,17 @@ import { planTriageDetailTabsV1 } from '../detail/tabs.js';
 import { projectTriageDetailHeaderV1 } from '../detail/header.js';
 import { useTriagePostMutationRow } from '../detail/useTriagePostMutationRow.js';
 import {
-  readTriageDetailContextLineV1,
-  TriageDetailHeaderActions,
+  renderTriageDetailHeaderV1,
   TriageDetailHeaderView,
-  TriageDetailKindMark,
+  TriageDetailInsetColumn,
   TriageDetailRegion,
-  TriageDetailSourceMark,
 } from '../detail/region.js';
 import {
   resolveTriageSourcePrepareReviewWorkspaceOperationV1,
   resolveTriageSourceWorkflowSubjectV1,
   readTriageSourceDescriptorV1,
 } from '../detail/sourceSurface.js';
-import { TriageFilterRail } from '../filters/rail.js';
+import { readTriageOrderOptionsV1, TriageFilterRail } from '../filters/rail.js';
 import { planTriageFilterFacetsV1 } from '../filters/plan.js';
 import {
   TRIAGE_LIST_GROUPS_V1,
@@ -298,15 +297,6 @@ function applyTriageSettledSubPathV1(input: Readonly<{
   };
 }
 
-/**
- * The lens toolbar, told whether the Collection is narrow: it folds its facets behind one Filters trigger only
- * where both panes do not fit, read from the Collection's one measured layout rather than measured again here.
- */
-function TriageToolbarSlot(props: Readonly<{ render: (compact: boolean) => React.ReactElement }>): React.ReactElement {
-  const layout = useHappierCollectionLayout();
-  return props.render(layout !== null && layout.mode === 'stacked');
-}
-
 /** A stable empty set, so an unread saved-view answer changes no memo identity. */
 const NO_SAVED_VIEWS: readonly CorpusSavedViewV1[] = Object.freeze([]);
 
@@ -342,6 +332,7 @@ const TRIAGE_FILL_STYLE_V1 = Object.freeze({
 const TRIAGE_LIST_STYLE_V1 = Object.freeze({ flex: 1, minHeight: 0 });
 /** The lens pickers take the toolbar's free width and wrap inside it. */
 const TRIAGE_TOOLBAR_LEAD_STYLE_V1 = Object.freeze({ flex: 1, minWidth: 0 });
+const TRIAGE_TOOLBAR_TRAIL_STYLE_V1 = Object.freeze({ maxWidth: '100%', minWidth: 0 });
 /**
  * The reader's own type size applied to the host's four measured text roles.
  *
@@ -381,23 +372,6 @@ export type TriageListShellProps = Readonly<{
    */
   launch?: TriageEntryDetailLaunchInputV1;
 }>;
-
-/**
- * The mounted shell owns this one replacement publication lifetime. A new
- * committed context replaces its predecessor directly; retirement clears the
- * same host slot synchronously.
- */
-export function useTriageCurrentUiContextPublication(
-  hostApi: Pick<PluginUiHostApi, 'publishCurrentUiContext'>,
-  currentUiContext: PluginUiContextEnrichmentV1,
-): void {
-  React.useLayoutEffect(() => {
-    hostApi.publishCurrentUiContext(currentUiContext);
-  }, [currentUiContext, hostApi]);
-  React.useLayoutEffect(() => () => {
-    hostApi.publishCurrentUiContext(null);
-  }, [hostApi]);
-}
 
 export function TriageListShell(props: TriageListShellProps = {}): React.ReactElement {
   const hostApi = usePluginHostApi();
@@ -825,6 +799,11 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
   const changeOrder = React.useCallback((order: TriageSurfaceStateV1['order']) => {
     applyLensEdit({ kind: 'orderChanged', order }, 'lens');
   }, [applyLensEdit]);
+  const orderOptions = React.useMemo(() => readTriageOrderOptionsV1(text), [text]);
+  const changeCollectionOrder = React.useCallback((key: string) => {
+    const order = orderOptions.find((option) => option.key === key);
+    if (order !== undefined) changeOrder(order.key);
+  }, [changeOrder, orderOptions]);
   const changeSmartPolicy = React.useCallback((smartPolicy: CorpusSmartPolicyV1) => {
     applyLensEdit({ kind: 'smartPolicyChanged', smartPolicy }, 'lens');
   }, [applyLensEdit]);
@@ -1339,10 +1318,18 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
    */
   const openChangeRef = React.useRef<(key: string | null) => void>(() => undefined);
   const onCollectionOpenChange = React.useCallback((key: string | null) => { openChangeRef.current(key); }, []);
+  // A board is read by position, so it keeps every status lane, an empty one included ("Needs you 0" is the good
+  // news). Pinned is the reader's own lane, not a status: it stands only while something is pinned.
+  const hasPinnedItem = React.useMemo(() => items.some((item) => item.group === 'pinned'), [items]);
+  const collectionGroups = React.useMemo(() => collectionView !== 'board' ? groupAxis : {
+    ...groupAxis,
+    axis: hasPinnedItem ? groupAxis.axis : groupAxis.axis.filter((group) => group.key !== 'pinned'),
+    retainEmpty: true,
+  }, [collectionView, groupAxis, hasPinnedItem]);
   const collection = useHappierCollection({
     items,
     keyOf: readTriageListItemKey,
-    groups: groupAxis,
+    groups: collectionGroups,
     window: collectionWindow,
     // Open is the reducer's selection, whether or not the window still lists it: an entry that left the window
     // keeps its detail (with the last known header) until the reader closes it.
@@ -1367,15 +1354,16 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
   // controlled value is consumed by source Tabs and the mounted Action.
   const [detailTab, setDetailTab] = React.useState<Readonly<{ key: string; tab: string; sessionId?: string }> | null>(null);
   const [detailTabs, setDetailTabs] = React.useState<Readonly<{ key: string; tabs: readonly string[] }> | null>(null);
-  const [detailSessions, setDetailSessions] = React.useState<Readonly<{ key: string; sessions: readonly TriageLinkedSessionProjectionV1[] }> | null>(null);
+  const [detailSessions, setDetailSessions] = React.useState<Readonly<{ key: string; sessions: readonly TriageLinkedSessionProjectionV1[]; loadMore: (() => void) | null }> | null>(null);
   const chooseDetailTab = React.useCallback((tab: string) => {
     if (selectedKey !== null) setDetailTab((previous) => ({ ...(previous?.key === selectedKey ? previous : {}), key: selectedKey, tab }));
   }, [selectedKey]);
-  const reportDetailSessions = React.useCallback((sessions: readonly TriageLinkedSessionProjectionV1[]) => {
+  const reportDetailSessions = React.useCallback((sessions: readonly TriageLinkedSessionProjectionV1[], loadMore: (() => void) | null) => {
     if (selectedKey !== null) setDetailSessions((previous) => previous?.key === selectedKey
+      && previous.loadMore === loadMore
       && previous.sessions.length === sessions.length && previous.sessions.every((session, index) =>
         session.sessionId === sessions[index]?.sessionId && session.displayTitle === sessions[index]?.displayTitle)
-      ? previous : { key: selectedKey, sessions });
+      ? previous : { key: selectedKey, sessions, loadMore });
   }, [selectedKey]);
   const reportDetailTabs = React.useCallback((tabs: readonly string[]) => {
     if (selectedKey !== null) setDetailTabs((previous) => previous?.key === selectedKey
@@ -1393,6 +1381,7 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
     if (signal.aborted) return { status: 'unavailable' };
     switch (operation.kind) {
       case 'selectSourceOccurrence':
+      case 'loadMoreSourceOccurrences':
       case 'setSourceOrdering':
       case 'revealSourceUser': return { status: 'unavailable' }; // Dispatched to the bound source before this callback.
       case 'focusRow':
@@ -1425,6 +1414,10 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
         if (await settleLensEditBeforeDurable({ kind: 'detailDismissed', visibleOrder }) === null) return { status: 'rejected' };
         setDetailTab(null);
         break;
+      case 'attachEntry':
+      case 'removeEntry':
+        // Attachment intents address a mounted picker, never this list page.
+        return { status: 'unavailable' };
       case 'selectDetailTab':
         if (selectedKey === null || detailTabs?.key !== selectedKey || !detailTabs.tabs.includes(operation.tab)) return { status: 'unavailable' };
         chooseDetailTab(operation.tab);
@@ -1434,10 +1427,13 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
           || !detailSessions.sessions.some((session) => session.sessionId === operation.sessionId)) return { status: 'unavailable' };
         setDetailTab({ key: selectedKey, tab: 'session', sessionId: operation.sessionId });
         break;
-      case 'setLens':
+      case 'setLens': {
+        const smartPolicy = operation.smartPolicy === undefined ? surface.smartPolicy : parseCorpusSmartPolicy(operation.smartPolicy);
+        if (smartPolicy === null) return { status: 'rejected' };
         if (await settleLensEditBeforeDurable({ kind: 'savedViewApplied', viewId: surface.selectedViewId,
-          query: operation.query, filters: operation.filters, order: operation.order, smartPolicy: surface.smartPolicy }) === null) return { status: 'rejected' };
+          query: operation.query, filters: operation.filters, order: operation.order, smartPolicy }) === null) return { status: 'rejected' };
         break;
+      }
       case 'selectSavedView': {
         // A routed view is an ephemeral lens, not the Account's saved-view
         // selection write. Use the same resolver as Views and its route owner;
@@ -1467,6 +1463,11 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
         await refresh();
         break;
       case 'loadMore': {
+        if (operation.section === 'linkedSessions') {
+          if (selectedKey === null || detailSessions?.key !== selectedKey || detailSessions.loadMore === null) return { status: 'unavailable' };
+          detailSessions.loadMore();
+          break;
+        }
         const continuation = collectionWindow.kind === 'partial'
           ? collectionWindow.continuations.find((candidate) => candidate.key === operation.section)
           : undefined;
@@ -1488,12 +1489,24 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
       mountId, operation: { kind: 'selectLinkedSession', sessionId },
     }).catch(() => {});
   }, [hostApi, mountId]);
+  const loadMoreLinkedSessions = React.useCallback(() => {
+    void hostApi.executeAction(TRIAGE_MOUNTED_UI_ACTION_LOCAL_ID_V1, {
+      mountId, operation: { kind: 'loadMore', section: 'linkedSessions' },
+    }).catch(() => {});
+  }, [hostApi, mountId]);
   const mountedCommands = React.useMemo(() => {
     const command = (title: string, operation: TriageMountedUiOperationV1): CurrentUiCommandDeclarationV1 => ({
       title, command: { kind: 'executeAction', action: TRIAGE_MOUNTED_UI_ACTION_LOCAL_ID_V1, input: { mountId, operation } },
     });
     return [
-      ...sourcePanel.commands.map(({ title, operation }): CurrentUiCommandDeclarationV1 => ({
+      ...(detailSessions?.key !== selectedKey || detailSessions.loadMore === null ? [] : [command(
+        `${text('plugins.triage.surface.loadMore', 'Load more')} ${text('plugins.triage.surface.detail.sessions', 'Sessions')}`,
+        { kind: 'loadMore', section: 'linkedSessions' },
+      )]),
+      // Keep continuation reachable before per-row commands fill the host's
+      // existing bounded current-context projection.
+      ...[...sourcePanel.commands.filter(({ operation }) => operation.kind === 'loadMoreSourceOccurrences'),
+        ...sourcePanel.commands.filter(({ operation }) => operation.kind !== 'loadMoreSourceOccurrences')].map(({ title, operation }): CurrentUiCommandDeclarationV1 => ({
         title, command: { kind: 'executeAction', action: triageSourcePanelActionIdV1(operation), input: { mountId, operation } },
       })),
       command(text('plugins.triage.currentContext.board', 'Switch to Board'), { kind: 'switchView', view: 'board' }),
@@ -1536,7 +1549,11 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
     [activateRow, pinHandlers],
   );
   /** The signal column exists only while some row has a primary status fact to show in it. */
-  const itemAnatomy = useTriageListAnatomyV1({ withSignal: items.some((item) => item.signal !== null), organizing });
+  const itemAnatomy = useTriageListAnatomyV1({
+    withSignal: items.some((item) => item.signal !== null),
+    withAgent: items.some((item) => item.agent !== null),
+    organizing,
+  });
   const routeLens = React.useMemo(() => readTriageRouteLensV1(surface), [
     surface.order, surface.smartPolicy, surface.filters, surface.search.query, surface.selectedViewId, surface.selection,
   ]);
@@ -1792,8 +1809,7 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
 
   /**
    * The one calm toolbar row above the list (`core/SURFACE.md` §6): the lens
-   * pickers lead — Views, the facets (or one Filters trigger when compact),
-   * Order — and the page's own controls trail: its freshness, Refresh, and an
+   * pickers lead — Views, one Filters trigger for the facets, Order — and the page's own controls trail: its freshness, Refresh, and an
    * overflow holding the rare administration actions. The host navigation bar
    * already titles the page, so the body carries no second title.
    *
@@ -1801,18 +1817,28 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
    * the lens are reachable from the very first frame.
    */
   const freshness = state.kind !== 'window' ? null : state.refreshing
-    ? { tone: 'neutral' as const, pulsing: true, label: text('plugins.triage.surface.refreshing', 'Refreshing') }
+    ? { tone: 'neutral' as const, pulsing: true, indicator: true, label: text('plugins.triage.surface.refreshing', 'Refreshing') }
     : state.stale
-      ? { tone: 'warning' as const, pulsing: false, label: text('plugins.triage.surface.lastKnown', 'Showing the last known list') }
-      : { tone: 'muted' as const, pulsing: false, label: text('plugins.triage.surface.upToDate', 'Up to date') };
+      // "The last known list" is a claim about rows on screen. With none, the body's failure state is the
+      // whole answer, and this line would be false and a second voice for one cause.
+      // Over rows, a failed connection's notice already says whose list stopped and why; the line does not repeat it.
+      ? rowCount === 0 || state.failure != null ? null : { tone: 'warning' as const, pulsing: false, indicator: true, label: text('plugins.triage.surface.lastKnown', 'Showing the last known list') }
+      // Healthy is said in words only, quietly: no dot for "fine" (DESIGN.md, status vocabulary).
+      : { tone: 'muted' as const, pulsing: false, indicator: false, label: text('plugins.triage.surface.upToDate', 'Up to date') };
   const moreLabel = text('plugins.triage.surface.more', 'More');
-  const renderListToolbar = (compact: boolean): React.ReactElement => (
+  /**
+   * The page's one header row (lab `cbar`): the search with its tokens, the view and the filters as quiet words,
+   * then freshness, Refresh, More, List | Board and the machine the page runs on. Inside the Collection it receives
+   * the Collection's own pieces (`CollectionHeaderSlots`); placing `pageActions` here is what retires the host's
+   * separate machine band. Outside a Collection (the page could not be read) it is the same row without them.
+   */
+  const renderListToolbar = (slots?: CollectionHeaderSlots) => (
     <Row gap="small" wrap align="center" justify="space-between">
       <Row gap="small" wrap align="center" style={TRIAGE_TOOLBAR_LEAD_STYLE_V1}>
+        {slots?.search ?? null}
         {views.control}
         <TriageFilterRail
           facets={facets}
-          compact={compact}
           order={surface.order}
           smartPolicy={surface.smartPolicy}
           filtered={narrowing.facets}
@@ -1822,8 +1848,11 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
           onChangeOrder={changeOrder}
           onChangeSmartPolicy={changeSmartPolicy}
         />
+        {slots?.selection ?? null}
       </Row>
-      <Row gap="xsmall" align="center">
+      {/* It wraps too: on a phone the List | Board switch otherwise runs off the right edge. Bounded by the
+          toolbar's width, or a wrapping row sized to its content never has a reason to wrap. */}
+      <Row gap="xsmall" wrap align="center" style={TRIAGE_TOOLBAR_TRAIL_STYLE_V1}>
         {organizing ? (
           <Button
             titleKey="plugins.triage.sessionLinks.done"
@@ -1838,7 +1867,7 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
           not. Stale is the only warning-toned state.
         */}
         {freshness === null ? null : (
-          <Status tone={freshness.tone} pulsing={freshness.pulsing} label={freshness.label} />
+          <Status tone={freshness.tone} pulsing={freshness.pulsing} indicator={freshness.indicator} label={freshness.label} />
         )}
         <IconButton
           icon={<Icon name="refresh" />}
@@ -1877,6 +1906,7 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
             if (value === 'list' || value === 'board') chooseCollectionView(value);
           }}
         />
+        {slots?.pageActions ?? null}
       </Row>
     </Row>
   );
@@ -1889,7 +1919,7 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
     return (
       <Screen safeArea style={TRIAGE_FILL_STYLE_V1}>
         <Stack gap="medium" style={TRIAGE_FILL_STYLE_V1}>
-          {renderListToolbar(false)}
+          {renderListToolbar()}
           <ErrorState
             titleKey="plugins.triage.surface.listFailed"
             title="The list could not be read"
@@ -1956,14 +1986,15 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
    * like", and they would diverge the first time either changed. The Collection
    * tells it when the host already supplies the identity band and Close.
    */
-  const detailContent = (headerHosted: boolean): React.ReactNode => surface.selection === null ? null : (
+  const detailContent = (headerHosted: boolean, pushed: boolean): React.ReactNode => surface.selection === null ? null : (
     selectedRow !== null ? (
       <TriageDetailRegion
         sourcePanelActions={sourcePanel.actions}
         tabSelection={{ value: detailTab?.key === selectedKey ? detailTab.tab : 'overview', onChange: chooseDetailTab, onAvailableTabsChange: reportDetailTabs }}
         sessionSelection={{ value: detailTab?.key === selectedKey ? detailTab.sessionId ?? null : null,
-          onChange: chooseLinkedSession, onAvailableSessionsChange: reportDetailSessions }}
+          onChange: chooseLinkedSession, onAvailableSessionsChange: reportDetailSessions, onLoadMore: loadMoreLinkedSessions }}
         headerHosted={headerHosted}
+        pushed={pushed}
         row={selectedRow}
         completePostMutation={completePostMutation}
         lanes={listWindow?.window.lanes ?? []}
@@ -1991,7 +2022,7 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
        * left them holding a sentence with no subject: they could not say
        * WHICH entry had gone, which is the one thing they were reading.
        */
-      <Stack gap="small">
+      <TriageDetailInsetColumn>
         <TriageDetailHeaderView
           headerHosted={headerHosted}
           header={lastKnownHeader}
@@ -2005,7 +2036,7 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
           descriptionKey="plugins.triage.surface.entryGone.description"
           description="The current window no longer holds this entry, so there is nothing to open it with. It may return on the next refresh."
         />
-      </Stack>
+      </TriageDetailInsetColumn>
     ) : (
       /*
        * `core/SURFACE.md` §3.1 and §3.2: a selection the current window
@@ -2016,7 +2047,7 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
        * surface closed the detail by itself in the first case and like the
        * launch did nothing at all in the second.
        */
-      <Stack gap="small">
+      <TriageDetailInsetColumn>
         {headerHosted ? null : <Row justify="space-between" align="center">
           <Heading
             level={2}
@@ -2041,12 +2072,12 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
             ? 'The filters on this page do not include this entry, so there is nothing here to open. Clear them to see it in the list.'
             : 'The current window no longer holds this entry, so there is nothing to open it with. It may return on the next refresh.'}
         />
-      </Stack>
+      </TriageDetailInsetColumn>
     )
   );
 
   /** The one detail composition, in whichever container the Collection holds it. */
-  const renderDetail = (_key: string, { headerHosted }: CollectionDetailRenderContext): React.ReactNode => detailContent(headerHosted);
+  const renderDetail = (_key: string, { headerHosted, pushed }: CollectionDetailRenderContext): React.ReactNode => detailContent(headerHosted, pushed);
   const selectedHeader = selectedRow === null ? lastKnownHeader : projectTriageDetailHeaderV1({
     row: selectedRow,
     lanes: listWindow?.window.lanes ?? [],
@@ -2060,18 +2091,9 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
     if (selectedHeader === null) return { title: neverListedHere
       ? text('plugins.triage.surface.entryNotInFilter.heading', 'This entry is outside the current filter')
       : text('plugins.triage.surface.entryGone.heading', 'This entry is no longer in the list') };
-    const subtitle = readTriageDetailContextLineV1(selectedHeader, text, { locale: surfaceContext.locale, nowMs: Date.now() });
     const pinRow = selectedRow === null ? lastKnownPinRow : projectTriageWindowRow(selectedRow, pinsByEntry, { text });
-    return {
-      title: selectedHeader.title,
-      // The row's own kind glyph beside the title, and the source's mark leading the line (the lab's crumbs).
-      leading: <TriageDetailKindMark header={selectedHeader} />,
-      ...(subtitle === null ? {} : {
-        subtitle,
-        subtitleLeading: <TriageDetailSourceMark pluginId={selectedHeader.sourcePluginId} />,
-      }),
-      actions: <TriageDetailHeaderActions header={selectedHeader} {...(pinRow === null ? {} : { pin: { row: pinRow, handlers: pinHandlers } })} />,
-    };
+    return renderTriageDetailHeaderV1({ header: selectedHeader, text, locale: surfaceContext.locale, nowMs: Date.now(),
+      ...(pinRow === null ? {} : { pin: { row: pinRow, handlers: pinHandlers } }) });
   };
   /** The window-honesty line (COLLECTION.md §2): how many rows are loaded and which connections have more. */
   const windowStatement = readTriageWindowStatementV1({
@@ -2112,6 +2134,12 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
           anatomy={anatomy}
           accessibilityLabel={TRIAGE_DISPLAY_NAME}
           presentation={collectionView === 'board' ? 'board' : 'table'}
+          sort={{
+            key: surface.order,
+            direction: surface.order === 'oldest' ? 'ascending' : 'descending',
+            orders: orderOptions,
+            onChange: changeCollectionOrder,
+          }}
           detail="auto"
           renderDetail={renderDetail}
           detailHeader={detailHeader}
@@ -2126,7 +2154,7 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
           // The first read has not answered: the list's own region holds its geometry in skeleton rows, and the
           // toolbar above it stays reachable, so the page does not swap a stand-in tree for the list.
           loading={state.kind === 'initial'}
-          header={(
+          header={(slots) => (
             <Stack gap="small">
               {listedEntryRefs.length === 0 || !sessionActivity.incomplete ? null : (
                 <Row gap="small" align="center" wrap>
@@ -2148,13 +2176,7 @@ export function TriageListShell(props: TriageListShellProps = {}): React.ReactEl
                   ) : null}
                 </Row>
               )}
-          {/*
-            An unmeasured region keeps the WIDE arm of the lens: folding five
-            facet controls behind one trigger takes away things the reader can
-            reach, so it waits for a measurement that says they do not fit. The
-            toolbar wraps in render order and cannot overflow the page.
-          */}
-          <TriageToolbarSlot render={renderListToolbar} />
+          {renderListToolbar(slots)}
           {views.details}
           {accountNotice}
 

@@ -64,6 +64,14 @@ const TriageSavedViewV1Schema = defineProtocolObject({
     view: TriageSavedViewPresentationV1Schema.optional(),
 }, { policy: 'closed' });
 
+/** Canonical catalog carrier shared by persisted reads and the Action's view records. */
+export const TriageSavedViewsCatalogValueV1Schema = defineProtocolObject({
+    v: defineProtocolLiteral(1),
+    views: defineProtocolArray(TriageSavedViewV1Schema),
+    // A stale selected id is cleared by the catalog owner after reading.
+    selectedViewId: defineProtocolString().nullable(),
+}, { policy: 'closed' });
+
 export const TriageReadSavedViewsInputV1Schema = defineProtocolObject({
     v: defineProtocolLiteral(1),
 }, { policy: 'closed' });

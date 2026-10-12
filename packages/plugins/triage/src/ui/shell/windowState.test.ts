@@ -315,7 +315,9 @@ describe('resolveTriageListShellState', () => {
         sources: [{
           sourceInstanceId: OTHER_INSTANCE,
           displayName: 'globex/service',
-          reason: 'The source could not be read in this pass.',
+          // The store's sentence is its own diagnostic ("in this pass" is mechanism); the reader is told the
+          // shell's translated reason for a connection that could not be reached.
+          reason: 'Could not be reached just now.',
         }],
       },
     });
@@ -373,7 +375,7 @@ describe('resolveTriageListShellState', () => {
         kind: 'sources',
         sources: [
           { displayName: 'acme/widgets', reason: 'Refused this account access.' },
-          { displayName: 'globex/service', reason: 'The source could not be read in this pass.' },
+          { displayName: 'globex/service', reason: 'Could not be reached just now.' },
         ],
       },
     });
@@ -382,7 +384,7 @@ describe('resolveTriageListShellState', () => {
     );
     expect(notice.title).toBe('Some sources could not be read');
     expect(notice.description).toContain('acme/widgets — Refused this account access.');
-    expect(notice.description).toContain('globex/service — The source could not be read in this pass.');
+    expect(notice.description).toContain('globex/service — Could not be reached just now.');
   });
 
   it('leaves a source no pass ever asked out of the failure notice', () => {

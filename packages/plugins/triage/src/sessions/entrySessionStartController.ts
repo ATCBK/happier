@@ -109,6 +109,8 @@ export type TriageEntrySessionStartRequestV1 = Readonly<{
     settlement?: unknown;
     /** The pressed action, whole. Every member of it decides something below. */
     action: TriageActionV1;
+    /** Final human-edited ORC prompt, not a configured Prompt Library or shipped fallback. */
+    orchestrationPrompt?: string;
     /** Read-only navigation shares placement/creation, with no prompt or checkout preparation. */
     comparisonDestination?: PluginActionInputById['session.open']['destination'];
     linkedSessionIds?: readonly string[];
@@ -257,6 +259,8 @@ export type TriageEntrySessionStartPhaseV1 =
 
 export type TriageEntrySessionStartControllerV1 = Readonly<{
     phase: TriageEntrySessionStartPhaseV1;
+    /** The canonical custody's prompt, immutable while this orchestration can only resume. */
+    pendingOrchestrationPrompt: string | null;
     /** A linked selected-PR Session awaiting the reader's explicit engine choice. */
     review: TriagePendingPullRequestReviewV1 | null;
     /** Ignored while a press is in flight; otherwise starts exactly one. */
@@ -286,15 +290,16 @@ function unavailable(
     return Object.freeze({ kind: 'unavailable', reason });
 }
 
-/** The side-effect-free refusal decided entirely by the action record. */
+/** Refuse incoherent configuration or a missing task before any effect. */
 export function triageActionImmediateRefusalV1(
     action: Pick<TriageActionV1, 'target' | 'workspaceMode' | 'appliesTo'>,
+    humanPrompt?: string,
 ): TriageEntrySessionStartUnavailableReasonV1 | null {
     if (requiresTriageActionInstructionV1(action.target)
-        && !hasTriageActionInstructionSourceV1(action.target)) {
+        && !hasTriageActionInstructionSourceV1(action.target, humanPrompt)) {
         return 'instructionMissing';
     }
-    return isTriageActionConfigurationCoherentV1(action)
+    return isTriageActionConfigurationCoherentV1(action, humanPrompt)
         ? null
         : 'preparedWorkspaceUnsupported';
 }
@@ -708,7 +713,7 @@ export function createTriageEntrySessionStartController(
         //    a pull request in a source-prepared worktree. The mounted producer
         //    can request that workspace, but only for the one coherent formal
         //    arm/mode/subject combination admitted by the action owner.
-        const immediateRefusal = triageActionImmediateRefusalV1(action);
+        const immediateRefusal = triageActionImmediateRefusalV1(action, request.orchestrationPrompt);
         if (immediateRefusal !== null) {
             setPhase(unavailable(immediateRefusal));
             return;
@@ -836,7 +841,7 @@ export function createTriageEntrySessionStartController(
                     return;
                 }
                 const preferences = references.profile?.preferences;
-                const promptText = resolveTriageActionInstructionV1(
+                const promptText = request.orchestrationPrompt ?? resolveTriageActionInstructionV1(
                     action,
                     references.prompt?.text ?? null,
                 );
@@ -1081,6 +1086,7 @@ export function createTriageEntrySessionStartController(
                     entryRef: request.entryRef,
                     display: request.display,
                     destination: destination.destination,
+                    ...(request.orchestrationPrompt === undefined ? {} : { orchestrate: true as const }),
                     ...(prepareReviewWorkspaceSelection === undefined
                         ? {}
                         : { prepareReviewWorkspaceSelection }),
@@ -1136,7 +1142,11 @@ export function createTriageEntrySessionStartController(
         setPhase(IDLE);
     };
 
-    const readSnapshot = (): TriageEntrySessionStartControllerV1 => Object.freeze({ phase, review, start, reset });
+    const readSnapshot = (): TriageEntrySessionStartControllerV1 => Object.freeze({
+        phase, review, start, reset,
+        pendingOrchestrationPrompt: custody.current?.input.orchestrate === true
+            ? custody.current.input.delivery?.text ?? null : null,
+    });
     snapshot = readSnapshot();
     return Object.freeze({
         getSnapshot: () => snapshot,

@@ -25,7 +25,9 @@ describe('fix-PR relationship read states', () => {
   it('reports the initial read and a failed read with explicit retry', async () => {
     const reading = await mount({ kind: 'reading' });
     try {
-      await expect(reading.getByRole('progressbar')).resolves.toBeDefined();
+      // The read is one quiet line inside the story, like its failure below, never a page-sized loader.
+      await expect(reading.getByText('Looking for a fix pull request…')).resolves.toBeDefined();
+      await expect(reading.queryByRole('progressbar')).resolves.toBeUndefined();
     } finally { await reading.dispose(); }
     let retries = 0;
     const unreachable = await mount({ kind: 'unreachable', retry: () => { retries += 1; } });

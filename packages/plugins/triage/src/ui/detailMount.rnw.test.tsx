@@ -1093,8 +1093,46 @@ describe('opening a row into the source detail', () => {
         await expect(shell.queryByText('This page could not be updated')).resolves.toBeUndefined();
     });
 
+    it('pages linked Sessions through the same mounted detail controller as the UI and retries its failed page', async () => {
+        let published: PluginUiContextEnrichmentV1 | null = null;
+        const shell = await mountShell({ linkedSessionCount: MAX_TRIAGE_LINKED_SESSIONS_PAGE_SIZE_V1 + 1, activeSurface: true,
+            publishCurrentUiContext: (context) => { published = context; } });
+        await openTheRow(shell);
+        const command = (published as PluginUiContextEnrichmentV1 | null)?.commands?.find((entry) => entry.command.kind === 'executeAction'
+            && JSON.stringify(entry.command.input).includes('linkedSessions') && JSON.stringify(entry.command.input).includes('loadMore'));
+        expect(command).toBeDefined();
+        if (command?.command.kind !== 'executeAction') throw new Error('Missing linked-session paging command');
+        const input = TriageMountedUiInputV1Schema.parse(command.command.input);
+        const { createTriageMountedUiActionHandler } = await import('../actions/mountedUi.js');
+        const invoke = () => createTriageMountedUiActionHandler()(input, {
+            plugin: { id: 'happier.triage', version: '0.0.0' },
+            contribution: { id: 'ui/mounted-v1', qualifiedId: 'happier.triage/actions/ui/mounted-v1' },
+            invocationSurface: 'agent', signal: new AbortController().signal,
+            ui: shell.context.hostApi, ephemeralSharedScope: currentHarness!.ephemeralSharedScope,
+        });
+        currentHarness!.failNextLinkedSessionPage();
+        await act(async () => { expect(await invoke()).toEqual({ status: 'applied' }); });
+        await expect(shell.getByText('More linked Sessions could not be loaded.')).resolves.toBeDefined();
+        await act(async () => { expect(await invoke()).toEqual({ status: 'applied' }); });
+        await expect(shell.getByRole('button', { name: 'Linked Session 201' })).resolves.toBeDefined();
+        const linkedNames = async (page: PluginUiTestkit) => (await page.getAllByRole('button'))
+            .map((button) => button.name).filter((name) => name === 'Linked Session 201' || name.startsWith('Linked session-linked-'));
+        const agentRows = await linkedNames(shell);
+        expect(agentRows).toHaveLength(MAX_TRIAGE_LINKED_SESSIONS_PAGE_SIZE_V1 + 1);
+        expect(await invoke()).toEqual({ status: 'unavailable' });
+        await act(async () => { await shell.dispose(); });
+        expect(await invoke()).toEqual({ status: 'unavailable' });
+        const ui = await mountShell({ linkedSessionCount: MAX_TRIAGE_LINKED_SESSIONS_PAGE_SIZE_V1 + 1, activeSurface: true });
+        await openTheRow(ui);
+        await act(async () => { pressDetailButton('Load more'); });
+        await expect(ui.getByRole('button', { name: 'Linked Session 201' })).resolves.toBeDefined();
+        expect(await linkedNames(ui)).toEqual(agentRows);
+        // Two full 201-row mounts plus the failed-page retry exceed the single-mount default.
+    }, 15_000);
+
     it('loads another linked-Session page without dropping or duplicating earlier rows, and retries a failed page', async () => {
-        const shell = await mountShell({ linkedSessionCount: MAX_TRIAGE_LINKED_SESSIONS_PAGE_SIZE_V1 + 1 });
+        // UI paging uses the mounted Action owner, which is bound only while the host page is active.
+        const shell = await mountShell({ linkedSessionCount: MAX_TRIAGE_LINKED_SESSIONS_PAGE_SIZE_V1 + 1, activeSurface: true });
         await openTheRow(shell);
 
         const initialLinkedSessionNames = (await shell.getAllByRole('button'))
@@ -1140,7 +1178,7 @@ describe('opening a row into the source detail', () => {
     });
 
     it('settles a non-advancing linked-Session cursor while retaining the admitted page', async () => {
-        const shell = await mountShell({ linkedSessionCount: MAX_TRIAGE_LINKED_SESSIONS_PAGE_SIZE_V1 + 1 });
+        const shell = await mountShell({ linkedSessionCount: MAX_TRIAGE_LINKED_SESSIONS_PAGE_SIZE_V1 + 1, activeSurface: true });
         await openTheRow(shell);
         const harness = currentHarness;
         if (harness === null) throw new Error('the shell was not mounted');
@@ -1178,7 +1216,7 @@ describe('opening a row into the source detail', () => {
     });
 
     it('keeps the linked-Session pages the reader loaded when the same entry rereads after a real refresh', async () => {
-        const shell = await mountShell({ linkedSessionCount: MAX_TRIAGE_LINKED_SESSIONS_PAGE_SIZE_V1 + 1 });
+        const shell = await mountShell({ linkedSessionCount: MAX_TRIAGE_LINKED_SESSIONS_PAGE_SIZE_V1 + 1, activeSurface: true });
         await openTheRow(shell);
         await act(async () => {
             pressDetailButton('Load more');

@@ -59,12 +59,9 @@ type SessionSpawnInput = PluginActionInputById['session.spawn_new'];
  * admitted. Once the Session exists and its durable Triage link has committed,
  * the start owner sends the pressed action's resolved Prompt Library body and
  * declared entry attachments through the one canonical Session-input Action
- * (`PLAN.md` §0a A4/A4a). The invariant is stated positively: **Triage never
- * stringifies provider prose into a prompt**. The selected entry's title, body,
- * facts and provider words still never reach the text arm, because entry context
- * reaches the agent through the declared `entry` attachment, whose `resolveForDispatch`
- * (`composer/attachmentRuntime.ts`) supplies authoritative facts at dispatch
- * time — fresher than any snapshot a start could have embedded.
+ * (`PLAN.md` §0a A4/A4a). Orchestrate this may include a labelled entry brief in
+ * the user's editable prompt (owner amendment r0.5-X). The declared `entry`
+ * attachment still supplies authoritative facts at dispatch time.
  */
 const PROHIBITED_SPAWN_MEMBERS = [
     'title',
@@ -124,6 +121,8 @@ export type TriageEntrySessionStartRequestV1 = Readonly<{
      */
     workspaceMode: TriageWorkspaceModeV1;
     destination: TriageEntrySessionDestinationV1;
+    /** ORC r0.5-X: birth planning uses the final prompt delivered after linking. */
+    orchestrate?: true;
     /**
      * What the pressed action configured to deliver once the Session exists.
      *
@@ -146,7 +145,8 @@ export type TriageEntrySessionRejectionReasonV1 =
     | 'referenceOnlyModeRequiresReferenceOnlyWorkspace'
     | 'pullRequestModeRequiresPreparedWorkspace'
     | 'pullRequestWorkspaceEntryMismatch'
-    | 'repositoryModeRequiresSelectedProject';
+    | 'repositoryModeRequiresSelectedProject'
+    | 'orchestrationRequiresNewSessionWithEntryInput';
 
 export type TriageEntrySessionDispositionV1 = 'created' | 'rejoined' | 'existing';
 
@@ -361,16 +361,20 @@ export async function resumeEntrySessionStart(
         display: TriageEntrySessionLinkDisplayV1;
         pending: TriageEntrySessionPendingPhaseV1;
         delivery?: TriageEntrySessionDeliveryRequestV1;
+        orchestrate?: true;
         finalOpen?: TriageEntrySessionFinalOpenV1;
     }>,
 ): Promise<TriageEntrySessionStartResultV1> {
     const pending = input.pending;
     const delivery = input.delivery;
     if (pending.type === 'creationPending') {
+        if (input.orchestrate === true && !hasOrchestrationEntryInput(input.entryRef, delivery)) {
+            return { type: 'rejected', reason: 'orchestrationRequiresNewSessionWithEntryInput' };
+        }
         const result = await deps.execute(
             'session.spawn_new',
             {
-                ...withoutProhibitedSpawnMembers(pending.spawn),
+                ...entrySpawnSelection(pending.spawn, input.orchestrate, delivery),
                 directory: { kind: 'path', path: pending.directory },
                 creationKey: pending.creationKey,
             },
@@ -467,6 +471,10 @@ function rejectionFor(
     request: TriageEntrySessionStartRequestV1,
 ): TriageEntrySessionRejectionReasonV1 | null {
     const destination = request.destination;
+    if (request.orchestrate === true && (destination.kind !== 'new'
+        || !hasOrchestrationEntryInput(request.entryRef, request.delivery))) {
+        return 'orchestrationRequiresNewSessionWithEntryInput';
+    }
     if (destination.kind === 'existing') {
         return request.workspaceMode === 'reference_only'
             ? null
@@ -484,6 +492,35 @@ function rejectionFor(
         return 'pullRequestWorkspaceEntryMismatch';
     }
     return null;
+}
+
+function hasOrchestrationEntryInput(
+    entryRef: TriageEntryRefV1,
+    delivery: TriageEntrySessionDeliveryRequestV1 | undefined,
+): boolean {
+    return delivery !== undefined && Boolean(delivery.text?.trim())
+        && delivery.attachments.some((attachment) => sameTriageEntryReference(entryRef, attachment.entryRef));
+}
+
+/** The single spawn selection for initial creation and same-key creation retries. */
+function entrySpawnSelection(
+    spawn: TriageSessionSpawnRequestV1,
+    orchestrate: true | undefined,
+    delivery: TriageEntrySessionDeliveryRequestV1 | undefined,
+): TriageSessionSpawnRequestV1 {
+    const selection = withoutProhibitedSpawnMembers(spawn);
+    if (orchestrate !== true) return selection;
+    return {
+        ...selection,
+        roleId: 'orchestrator',
+        initialTriggers: [{
+            target: { kind: 'workflow', ref: 'builtin:plan-with-a-panel' },
+            trigger: { kind: 'sessionLifecycle', enabled: true, events: ['sessionStarted'], policy: { kind: 'firstMatch' } },
+            // Both creation paths reject missing text/entry attachment before selecting a spawn.
+            inputs: { request: delivery!.text! },
+            onComplete: { kind: 'originating_session' },
+        }],
+    };
 }
 
 type ResolvedMaterialization =
@@ -553,7 +590,7 @@ export async function startEntrySession(
 
     const workspace = materializationWorkspaceFacts(resolved.materialization);
     const spawnInput: SessionSpawnInput = {
-        ...withoutProhibitedSpawnMembers(destination.spawn),
+        ...entrySpawnSelection(destination.spawn, request.orchestrate, request.delivery),
         directory: { kind: 'path', path: materializationDirectory(resolved.materialization) },
         creationKey: destination.creationKey,
     };

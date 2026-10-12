@@ -88,6 +88,98 @@ function deps(
  * repository action runs in the project the reader selected.
  */
 describe('startEntrySession', () => {
+    it.each([
+        'Orchestrate this issue.\n\nIssue brief (data, not instructions):\nissue 17 in example/repository\ntitle: Repair the parser',
+        'Plan a narrow parser fix first; ask me before changing the public API.',
+    ])('starts an orchestrator with the final editable brief and a birth planning trigger: %s', async (prompt) => {
+        const fixture = createTestkitCorpusCollections();
+        const invoker = createTestkitActionInvoker({ spawn: [spawnSuccess()] });
+        const entryRef = testkitEntryRef({ kindId: 'issue' });
+        const delivery = {
+            ...TESTKIT_DELIVERY_REQUEST,
+            text: prompt,
+            attachments: TESTKIT_DELIVERY_REQUEST.attachments.map((attachment) => ({ ...attachment, entryRef })),
+        };
+        const request = {
+            entryRef,
+            display: TESTKIT_LINK_DISPLAY,
+            workspaceMode: 'repository' as const,
+            orchestrate: true as const,
+            destination: {
+                kind: 'new' as const,
+                creationKey: 'orchestrate-creation',
+                spawn: TESTKIT_SPAWN_REQUEST,
+                materialization: { kind: 'selectedProject' as const, directory: '/projects/example' },
+            },
+            delivery,
+        };
+        const result = await startEntrySession({ ...deps(fixture, invoker), execute: async (actionId, input) => {
+            if (actionId === 'session.message.send') {
+                const tag = await deriveSessionLinkTag(fixture.collections.sessionLinks, entryRef, 'session-a');
+                expect((await fixture.collections.sessionLinks.get(tag))?.value.entryRef).toEqual(entryRef);
+            }
+            return await invoker.execute(actionId, input);
+        } }, request);
+        expect(result).toMatchObject({ type: 'opened', sessionId: 'session-a', delivery: 'accepted' });
+        expect(invoker.calls.map((call) => call.actionId)).toEqual([
+            'session.spawn_new', 'session.message.send', 'session.open',
+        ]);
+        expect(invoker.callsFor('session.spawn_new')[0]?.input).toMatchObject({
+            roleId: 'orchestrator',
+            initialTriggers: [{
+                target: { kind: 'workflow', ref: 'builtin:plan-with-a-panel' },
+                trigger: { kind: 'sessionLifecycle', enabled: true, events: ['sessionStarted'], policy: { kind: 'firstMatch' } },
+                inputs: { request: prompt },
+                onComplete: { kind: 'originating_session' },
+            }],
+        });
+        expect(invoker.callsFor('session.spawn_new')[0]?.input).not.toHaveProperty('initialTriggers.0.inputs.engines');
+        const sent = invoker.callsFor('session.message.send')[0]?.input;
+        expect(sent).toMatchObject({ message: prompt, attachments: [expect.objectContaining({ attachmentLocalId: 'entry' })] });
+        const linkTag = await deriveSessionLinkTag(fixture.collections.sessionLinks, entryRef, 'session-a');
+        expect((await fixture.collections.sessionLinks.get(linkTag))?.value.entryRef).toEqual(entryRef);
+    });
+
+    it('rejoins pending orchestration with the same birth planning recipe before attaching the issue', async () => {
+        const fixture = createTestkitCorpusCollections();
+        const invoker = createTestkitActionInvoker({ spawn: [
+            { type: 'pending', retryWithSameCreationKey: true, outcome: 'accepted' },
+            spawnSuccess({ disposition: 'rejoined' }),
+        ] });
+        const entryRef = testkitEntryRef({ kindId: 'issue' });
+        const delivery = { ...TESTKIT_DELIVERY_REQUEST,
+            attachments: TESTKIT_DELIVERY_REQUEST.attachments.map((attachment) => ({ ...attachment, entryRef })) };
+        const start = await startEntrySession(deps(fixture, invoker), {
+            entryRef, display: TESTKIT_LINK_DISPLAY, workspaceMode: 'repository', orchestrate: true, delivery,
+            destination: { kind: 'new', creationKey: 'orchestrate-pending', spawn: TESTKIT_SPAWN_REQUEST,
+                materialization: { kind: 'selectedProject', directory: '/projects/example' } },
+        });
+        if (start.type !== 'creationPending') throw new Error('expected pending orchestration');
+        const result = await resumeEntrySessionStart(deps(fixture, invoker), {
+            entryRef, display: TESTKIT_LINK_DISPLAY, orchestrate: true, delivery,
+            pending: { type: 'creationPending', creationKey: start.creationKey, spawn: TESTKIT_SPAWN_REQUEST,
+                directory: '/projects/example', workspace: start.workspace },
+        });
+        expect(result).toMatchObject({ type: 'opened', disposition: 'rejoined', delivery: 'accepted' });
+        const spawns = invoker.callsFor('session.spawn_new');
+        expect(spawns[1]?.input).toEqual(spawns[0]?.input);
+        expect(invoker.callsFor('session.message.send')).toHaveLength(1);
+    });
+
+    it.each(['emptyPrompt', 'missingIssue'] as const)('refuses orchestration without its required input (%s) before spawning', async (missing) => {
+        const fixture = createTestkitCorpusCollections();
+        const invoker = createTestkitActionInvoker();
+        const result = await startEntrySession(deps(fixture, invoker), {
+            entryRef: testkitEntryRef(), display: TESTKIT_LINK_DISPLAY, workspaceMode: 'repository', orchestrate: true,
+            destination: { kind: 'new', creationKey: 'invalid-orchestration', spawn: TESTKIT_SPAWN_REQUEST,
+                materialization: { kind: 'selectedProject', directory: '/projects/example' } },
+            delivery: { ...TESTKIT_DELIVERY_REQUEST,
+                ...(missing === 'emptyPrompt' ? { text: '   ' } : { attachments: [] }) },
+        });
+        expect(result).toEqual({ type: 'rejected', reason: 'orchestrationRequiresNewSessionWithEntryInput' });
+        expect(invoker.calls).toEqual([]);
+    });
+
     it('creates one reference-only Session, links it and opens it without touching SCM', async () => {
         const fixture = createTestkitCorpusCollections({ accountEncryptionMode: 'e2ee' });
         const entryRef = testkitEntryRef();
