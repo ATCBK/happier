@@ -36,14 +36,14 @@ describe('isApprovalRequiredByActionsSettings', () => {
   it('keeps Fork B Project, service, worker, shell and child-machine approval defaults user-changeable', () => {
     const actions = ACTION_IDS.filter(id => id.startsWith('localServices.') || id.startsWith('projects.worker.')
       || id.startsWith('projects.service.') || id.startsWith('projects.execution.output.') || id.startsWith('machines.worker.')
-      || id.startsWith('session.terminals.') || id.startsWith('machines.terminal.')
-      || ['projects.inspect', 'projects.manifest.update', 'projects.trust.list', 'projects.trust.revoke', 'projects.prepare',
+      || id.startsWith('session.terminals.') || id.startsWith('machines.terminal.') || id.startsWith('machines.managed.')
+      || ['projects.open', 'projects.inspect', 'projects.manifest.update', 'projects.trust.list', 'projects.trust.revoke', 'projects.prepare',
         'projects.script.run', 'projects.compute.exec', 'wait', 'action.operations.list', 'action.operations.get',
         'action.operations.cancel', 'machines.managed.acquire', 'machines.managed.rebuild', 'machines.managed.power.set',
         'workspace.sync.relationship.create'].includes(id));
     for (const actionId of actions) {
       const spec = getActionSpec(actionId);
-      for (const surface of ['ui', 'cli', 'agent', 'mcp', 'voice', 'rpc'] as const) {
+      for (const surface of ['ui', 'cli', 'agent', 'mcp', 'voice', 'rpc', 'api', 'plugin'] as const) {
         if (!spec.surfaces[surface]) continue;
         const context = { surface, authority: 'account_automation' } as const;
         const waived = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { [actionId]: [surface] } });
