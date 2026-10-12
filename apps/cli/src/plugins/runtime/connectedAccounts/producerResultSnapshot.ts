@@ -158,6 +158,7 @@ export function redactConnectedAccountAuthenticationResultDiagnostic(
     value: unknown,
     redactDiagnosticText: RedactConnectedAccountDiagnosticText,
 ): unknown {
+    if (value === null || typeof value !== 'object') return value;
     const result = value as Readonly<Record<string, unknown>>;
     if (result.diagnostic === undefined) return value;
     const diagnostic = snapshotConnectedAccountDiagnostic(result.diagnostic, redactDiagnosticText);
