@@ -20,6 +20,32 @@ UPDATE_AUTOMATION_VERB_MATRIX=1 ../../apps/stack/bin/hstack-exec --local -- \
 
 ## Controller and cancellation (development source)
 
+Before a Browser view exists, `browser.workspace.open` admits a target through the same Action
+front door. Its closed input names the answering-client workspace, command and Browser target,
+not an arbitrary OS-open URL. The registered workspace owner captures the exact Home/Account
+lifetime and re-resolves current policy and adapter availability after approval. UI and Agent
+open the same deterministic tab resource; only the renderer materializes live Browser state.
+Disabled/denied Actions, absent workspaces and retired Homes create neither a tab nor an OS open.
+The resolved desktop adapter may hand an allowed target to the system browser, with failure
+reported if the OS refuses. The Action is client-placed, dangerous and Ask-first by default for
+Agents; no mounted Browser view is fabricated to dispatch it. This is unreleased development
+source, not composed-live or native-platform certification.
+
+Mounted Browser navigation, open/retarget/close and presence commands enter through the canonical
+Action front door before the existing runtime adapter dispatches them. The UI and Agent use the
+same exact mounted-view registration and captured Home/Account lifetime. Continuous human input
+remains on the existing sideband custody path, not a per-frame Action loop. A daemon command's
+unconfirmed response cannot be projected as an accepted takeover or overwrite current owner events.
+
+The overflow menu and non-framable/slow-frame escape use `browser.view.openExternal`. Its closed
+input names the Browser Session, view and command; the runtime resolves the current page URL from
+that mounted owner and opens it in the answering client's system browser without navigating or
+replacing the view. It has the existing dangerous Browser Action policy. A missing/retired view,
+disabled Action or refused OS opener fails closed. This explicit operation is distinct from an
+admitted `browser.view.open` whose resolved desktop adapter availability selects the OS fallback;
+an unanswered desktop probe does not authorize that automatic fallback. These are unreleased
+development-source contracts, not loaded-runtime or native-platform certification.
+
 The daemon automation service is the controller authority for sidecar/streamed views; in-app
 engines use the UI automation control service. Human input takes control even when no action is
 running, and that hold lasts until explicit handback through the existing presence/input controls.
