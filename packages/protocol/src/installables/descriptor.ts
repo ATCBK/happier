@@ -1,7 +1,6 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod';
 
-import type { CapabilityId } from '../capabilities/index.js';
 import { PluginDescriptorBaseV1Schema } from '../plugins/contributions/_descriptors.js';
 import { InstallableSourceSchema } from './sourceKind.js';
 
@@ -17,10 +16,9 @@ export type InstallableDefaultPolicy = z.infer<typeof InstallableDefaultPolicySc
 export const InstallableConsentModeSchema = lazyZodSchema(() => z.enum(['not_required', 'required']));
 export type InstallableConsentMode = z.infer<typeof InstallableConsentModeSchema>;
 
-const InstallableCapabilityIdSchema = lazyZodSchema(() => z.custom<Extract<CapabilityId, `dep.${string}`>>(
-  (value) => typeof value === 'string' && /^dep\.[A-Za-z0-9._-]+$/.test(value),
-  'Installable capabilityId must use dep.* syntax',
-));
+export const InstallableCapabilityIdSchema = lazyZodSchema(() => z.templateLiteral([
+  'dep.', z.string().regex(/^[A-Za-z0-9._-]+$/, 'Installable capabilityId must use dep.* syntax'),
+]));
 
 // Inherits `id`, `version`, gates, redaction, ordering, hidden, defaultValue, clearWhenEmpty
 // from PluginDescriptorBaseV1Schema. Only declare fields specific to dependency installables here;
@@ -84,7 +82,7 @@ export type InstallableKind = InstallableDependencyDescriptor['kind'];
 export type InstallableCatalogEntry = Readonly<{
   key: string;
   kind: InstallableKind;
-  capabilityId: Extract<CapabilityId, `dep.${string}`>;
+  capabilityId: z.infer<typeof InstallableCapabilityIdSchema>;
   sourceKind: InstallableDependencyDescriptor['source']['kind'];
   defaultPolicy: InstallableDefaultPolicy;
   experimental: boolean;

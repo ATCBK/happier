@@ -27,14 +27,14 @@ function readInstallablesPolicyByMachineId(
       if (!isRecord(overrideRaw)) continue;
       const autoInstallWhenNeeded = overrideRaw.autoInstallWhenNeeded;
       const autoUpdateMode = overrideRaw.autoUpdateMode;
-      byKey[installableKey] = {
+      Object.defineProperty(byKey, installableKey, { configurable: true, enumerable: true, writable: true, value: {
         ...(typeof autoInstallWhenNeeded === 'boolean' ? { autoInstallWhenNeeded } : {}),
         ...(autoUpdateMode === 'off' || autoUpdateMode === 'notify' || autoUpdateMode === 'auto'
           ? { autoUpdateMode }
           : {}),
-      };
+      } });
     }
-    out[machineId] = byKey;
+    Object.defineProperty(out, machineId, { configurable: true, enumerable: true, writable: true, value: byKey });
   }
 
   return out;
@@ -46,7 +46,9 @@ export function resolveInstallablePolicy(params: Readonly<{
   installableKey: string;
   defaults: InstallableDefaultPolicy;
 }>): InstallableDefaultPolicy {
-  const overrides = readInstallablesPolicyByMachineId(params.settings)[params.machineId]?.[params.installableKey] ?? null;
+  const byMachine = readInstallablesPolicyByMachineId(params.settings);
+  const byKey = Object.hasOwn(byMachine, params.machineId) ? byMachine[params.machineId] : null;
+  const overrides = byKey && Object.hasOwn(byKey, params.installableKey) ? byKey[params.installableKey] : null;
   if (!overrides) return params.defaults;
 
   return {
@@ -114,8 +116,8 @@ export function applyInstallablePolicyOverride(params: Readonly<{
   installableKey: string;
   patch: InstallablePolicyOverride;
 }>): Record<string, Record<string, InstallablePolicyOverride>> {
-  const prevByMachine = params.prev[params.machineId] ?? {};
-  const prevOverride = prevByMachine[params.installableKey] ?? {};
+  const prevByMachine = Object.hasOwn(params.prev, params.machineId) ? params.prev[params.machineId] : {};
+  const prevOverride = Object.hasOwn(prevByMachine, params.installableKey) ? prevByMachine[params.installableKey] : {};
   return {
     ...params.prev,
     [params.machineId]: {
