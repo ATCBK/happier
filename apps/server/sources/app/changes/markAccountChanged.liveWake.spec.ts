@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createDbMocks, installDbModuleMock } from "../api/testkit/dbMocks";
-import { eventRouter } from "../events/eventRouter";
 
 const txDbMocks = createDbMocks({
     account: ["update"],
@@ -17,6 +16,9 @@ installDbModuleMock(() => ({
         $transaction: transaction,
     },
 }));
+
+// Install the database boundary before the event graph can load inTx.
+const { eventRouter } = await import("../events/eventRouter");
 
 describe("markAccountChanged live wake", () => {
     const originalDbProvider = process.env.HAPPIER_DB_PROVIDER;

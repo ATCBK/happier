@@ -147,6 +147,45 @@ describe("AccountChange coalescing database contract", () => {
         })));
     });
 
+    it.skipIf(provider !== "postgres").each(["unpublished", "inactive"] as const)("fences a granted %s reader before publication can expand the audience", async state => {
+        const stem = `audience-prospective-${randomUUID()}`;
+        const owner = await db.account.create({ data: {
+            id: `${stem}-z`, publicKey: `${publicKeyPrefix}${randomUUID()}`, encryptionMode: "plain",
+        } });
+        const reader = await db.account.create({ data: {
+            id: `${stem}-a`, publicKey: `${publicKeyPrefix}${randomUUID()}`, encryptionMode: "plain",
+            status: state === "inactive" ? "suspended" : "active",
+        } });
+        const session = await db.session.create({ data: {
+            accountId: owner.id, tag: stem, encryptionMode: "plain", metadata: "{}",
+            currentStorageState: state === "unpublished" ? "external" : "hosted",
+        } });
+        await db.sessionShare.create({ data: {
+            sessionId: session.id, sharedByUserId: owner.id, sharedWithUserId: reader.id, accessLevel: "view",
+        } });
+        let locked!: () => void;
+        const locksAcquired = new Promise<void>(resolve => { locked = resolve; });
+        let release!: () => void;
+        const mayCommit = new Promise<void>(resolve => { release = resolve; });
+        const holder = inTx(async tx => {
+            await acquireSessionAccountCursorLocksInTx(tx, [session.id]);
+            locked();
+            await mayCommit;
+        }, { isolationLevel: "ReadCommitted" });
+        const holderOutcome = Promise.allSettled([holder]);
+        try {
+            await Promise.race([locksAcquired, holderOutcome.then(() => {
+                throw new Error("Publication ended before Account acquisition");
+            })]);
+            await expect(inTx(tx => tx.$queryRawUnsafe(
+                'SELECT "id" FROM "Account" WHERE "id" = $1 FOR NO KEY UPDATE NOWAIT', reader.id,
+            ), { isolationLevel: "ReadCommitted" })).rejects.toMatchObject({ code: "P2010", meta: { code: "55P03" } });
+        } finally {
+            release();
+            for (const outcome of await holderOutcome) if (outcome.status === "rejected") throw outcome.reason;
+        }
+    });
+
     it.skipIf(provider !== "postgres")("keeps Account lock order when a lower-id reader is granted after audience discovery", async () => {
         const { putSessionAccessGrantInTx } = await import("@/app/session/access/sessionAccessGrantService");
         const { markSessionProjectionRecipientsChanged } = await import("@/app/session/changeTracking/markSessionProjectionRecipientsChanged");
@@ -214,7 +253,7 @@ describe("AccountChange coalescing database contract", () => {
             const observed = observeTransport(tx, true);
             await acquireSessionAccountCursorLocksInTx(observed, [session.id]);
             return markSessionProjectionRecipientsChanged({ tx: observed, sessionId: session.id });
-        });
+        }, { isolationLevel: "ReadCommitted" });
         const firstOutcome = Promise.allSettled([first]);
         let peerOutcome: Promise<PromiseSettledResult<Awaited<typeof first>>[]> | undefined;
         let setupFailure: unknown;
@@ -239,7 +278,7 @@ describe("AccountChange coalescing database contract", () => {
                 const observed = observeTransport(tx, false);
                 await acquireSessionAccountCursorLocksInTx(observed, [session.id]);
                 return markSessionProjectionRecipientsChanged({ tx: observed, sessionId: session.id });
-            });
+            }, { isolationLevel: "ReadCommitted" });
             peerOutcome = Promise.allSettled([peer]).finally(() => { peerFinished = true; });
             while (!peerFinished) {
                 const [blocking] = await db.$queryRawUnsafe<{ waiting: boolean }[]>(
