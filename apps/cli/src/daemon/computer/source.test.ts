@@ -1,35 +1,36 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ComputerControlStatusResponseV1Schema, type MachineLiveStreamFrameV1 } from '@happier-dev/protocol';
-import type { ComputerDriverCapture, ComputerDriverInputResult, ManagedComputerDriver } from './driver/managedComputerDriver';
+import { native, target, captureResult } from './driver/nativeComputerBoundary.testkit';
 import { createComputerCaptureSource } from './source';
 
-// The native OS adapter is the external boundary; source, input arbitration and stream adapter stay real.
-const native = vi.hoisted(() => ({
-  capture: vi.fn<ManagedComputerDriver['capture']>(), captureFrame: vi.fn<ManagedComputerDriver['captureFrame']>(),
-  input: vi.fn<ManagedComputerDriver['input']>(), close: vi.fn<ManagedComputerDriver['close']>(),
-  listTargets: vi.fn<ManagedComputerDriver['listTargets']>(async () => { throw new Error('Unexpected native enumeration'); }),
-  checkPermissions: vi.fn<ManagedComputerDriver['checkPermissions']>(async () => { throw new Error('Unexpected native permission read'); }),
-}));
-vi.mock('./driver/managedComputerDriver', () => ({ createManagedComputerDriver: async (): Promise<ManagedComputerDriver> => native }));
-
-const geometry = { captureWidth: 100, captureHeight: 100, nativeWidth: 100, nativeHeight: 100,
-  originX: 0, originY: 0, scaleX: 1, scaleY: 1, crop: { x: 0, y: 0, width: 100, height: 100 } };
-const observation: ComputerDriverCapture = { png: Buffer.from('pixels'), captureId: 'capture', geometry,
-  accessibility: { complete: true, nodes: [{ id: 'button', role: 'button', name: 'Sign in', bounds: { x: 10, y: 10, width: 20, height: 20 } }] } };
+// Source, driver, native codec and input recovery stay real beneath the shared stdio boundary.
+function observation() {
+  const result = captureResult();
+  return { ...result, structuredContent: { ...result.structuredContent,
+    window_bounds: { x: 0, y: 0, width: 200, height: 100 },
+    elements: [{ element_index: 0, role: 'button', label: 'Sign in', frame: { x: 20, y: 10, w: 40, h: 20 } }],
+  } };
+}
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>(settle => { resolve = settle; });
   return { promise, resolve };
 }
 
-describe('computer source status projection', () => {
+describe.skipIf(process.platform !== 'linux')('computer source status projection', () => {
   it.each(['unknown', 'stale'] as const)('reports the actual %s native viewer input failure without replaying physical input', async kind => {
-    native.capture.mockResolvedValue(observation);
-    native.captureFrame.mockResolvedValue({ png: observation.png, geometry });
-    native.input.mockClear();
-    native.input.mockResolvedValue(kind === 'unknown' ? { status: 'interrupted', completion: 'unknown' } : { status: 'failed', code: 'stale_capture' });
-    native.close.mockResolvedValue(undefined);
-    const source = createComputerCaptureSource({ sessionId: 'native-unknown', target: { kind: 'window', displayId: ':77', pid: 1, windowId: 2 } });
+    let physicalInputs = 0;
+    native.call.mockImplementation(async ({ name, arguments: args }) => {
+      if (name === 'get_window_state') {
+        const result = observation();
+        // Moving after the fresh viewer observation refuses before the physical effect.
+        if (kind === 'stale' && args.include_screenshot === false) result.structuredContent.window_bounds.x = 1;
+        return result;
+      }
+      if (name === 'click') { physicalInputs += 1; throw new Error('Lost native acknowledgement'); }
+      throw new Error(`Unexpected native method ${name}`);
+    });
+    const source = createComputerCaptureSource({ sessionId: 'native-unknown', target, executablePath: '/managed/cua-driver' });
     const failure = deferred<string>();
     const stream = await source.adapter.start({ streamId: 'viewer-input', streamFamily: 'screen',
       sourceMachineId: 'machine', targetMachineId: 'machine', caps: {},
@@ -45,21 +46,28 @@ describe('computer source status projection', () => {
         eventId: 'click-1', kind: 'tap', x: 0.5, y: 0.5 })).toEqual({ ok: true });
       expect(await failure.promise).toBe(kind === 'unknown' ? 'human_input_interruption_uncertain' : 'stale_capture');
       expect(source.status()).toMatchObject({ controller: 'human', uncertain: kind === 'unknown' });
-      expect(native.input).toHaveBeenCalledTimes(1);
+      expect(physicalInputs).toBe(kind === 'unknown' ? 1 : 0);
     } finally {
       await stream.session.stop();
       await source.close();
     }
   });
   it('streams actual agent activity and takeover settlement without using image cadence', async () => {
-    const captured = deferred<ComputerDriverCapture>();
-    const dispatched = deferred<ComputerDriverInputResult>();
+    const captured = deferred<ReturnType<typeof observation>>();
+    const dispatched = deferred<void>();
     const inputEntered = deferred<void>();
-    native.capture.mockReturnValue(captured.promise);
-    native.captureFrame.mockResolvedValue({ png: observation.png, geometry });
-    native.input.mockImplementation(() => { inputEntered.resolve(undefined); return dispatched.promise; });
-    native.close.mockResolvedValue(undefined);
-    const source = createComputerCaptureSource({ sessionId: 'session', target: { kind: 'window', displayId: ':77', pid: 1, windowId: 2 } });
+    let physicalInputs = 0;
+    native.call.mockImplementation(async ({ name, arguments: args }) => {
+      if (name === 'get_window_state') return args.include_accessibility_tree && args.include_screenshot ? captured.promise : observation();
+      if (name === 'click') {
+        physicalInputs += 1;
+        inputEntered.resolve(undefined);
+        await dispatched.promise;
+        throw new Error('Lost native acknowledgement');
+      }
+      throw new Error(`Unexpected native method ${name}`);
+    });
+    const source = createComputerCaptureSource({ sessionId: 'session', target, executablePath: '/managed/cua-driver' });
     const frames: MachineLiveStreamFrameV1[] = [];
     const stream = await source.adapter.start({ streamId: 'stream', streamFamily: 'screen',
       sourceMachineId: 'machine', targetMachineId: 'machine', caps: {},
@@ -75,30 +83,32 @@ describe('computer source status projection', () => {
       const capture = source.observe();
       pending.push(capture);
       expect(statuses().at(-1)).toMatchObject({ sourceId: source.sourceId, activity: { kind: 'capture' } });
-      captured.resolve(observation);
+      captured.resolve(observation());
       await capture;
       expect(statuses().at(-1)?.activity).toBeUndefined();
-      const input = source.input('capture', { kind: 'click', x: 15, y: 15 }, 'agent');
+      const input = source.input('capture-1', { kind: 'click', x: 30, y: 15 }, 'agent');
       pending.push(input);
       expect(statuses().at(-1)).toMatchObject({ controller: 'agent', activity: { kind: 'click', targetLabel: 'Sign in' },
         activeTarget: { x: 0.2, y: 0.2, width: 0.2, height: 0.2, label: 'Sign in' } });
       await inputEntered.promise;
       const interrupt = source.interrupt();
       expect(statuses().at(-1)).toMatchObject({ controller: 'human', stopping: true });
-      dispatched.resolve({ status: 'interrupted', completion: 'unknown' });
+      dispatched.resolve(undefined);
       await input;
       await interrupt;
       expect(statuses().at(-1)).toMatchObject({ controller: 'human', stopping: false, uncertain: true });
       expect(statuses().at(-1)?.activity).toBeUndefined();
-      await source.observe('human');
-      expect(statuses().at(-1)).toMatchObject({ controller: 'human', uncertain: false });
+      // The real driver quarantines unknown physical settlement. An unchanged
+      // source cannot claim repair; the reselect journey lives in nativeInputRecovery.test.ts.
+      await expect(source.observe('human')).rejects.toThrow('driver_unavailable');
       source.handBack();
-      expect(statuses().at(-1)).toMatchObject({ controller: 'idle', uncertain: false });
+      expect(source.status()).toMatchObject({ controller: 'idle', uncertain: true });
+      expect(physicalInputs).toBe(1);
       // The viewer never acknowledged the first image; status still advanced through every transition.
       expect(frames.filter(frame => frame.payloadKind === 'image_keyframe')).toHaveLength(1);
     } finally {
-      captured.resolve(observation);
-      dispatched.resolve({ status: 'dispatched' });
+      captured.resolve(observation());
+      dispatched.resolve(undefined);
       await Promise.allSettled(pending);
       await stream.session.stop();
       await source.close();
