@@ -5,6 +5,25 @@ import {
 } from './nativeSessionStrategy.js';
 
 describe('ElevenLabs native session setup strategy', () => {
+  it('preserves native host rejection without starting provider WebRTC media', async () => {
+    let strategy: ((options: unknown) => Promise<unknown>) | undefined;
+    const setupWebRTCSession = vi.fn();
+    installElevenLabsNativeSessionStrategy({
+      setSetupStrategy(value) { strategy = value; },
+      createConnection: async () => {
+        throw Object.assign(new Error('Voice requires a current iOS WebRTC native module.'), {
+          code: 'voice_native_webrtc_incompatible',
+        });
+      },
+      setupWebRTCSession,
+    });
+    if (!strategy) throw new Error('native_strategy_not_registered');
+    await expect(strategy({ connectionType: 'webrtc' })).rejects.toMatchObject({
+      code: 'voice_native_webrtc_incompatible',
+    });
+    expect(setupWebRTCSession).not.toHaveBeenCalled();
+  });
+
   it('delegates WebRTC setup to the ElevenLabs media engine', async () => {
     const setSetupStrategy = vi.fn();
     const connection = Object.freeze({ kind: 'webrtc-connection' });

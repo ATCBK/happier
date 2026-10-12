@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('react-native', () => ({ Platform: { OS: 'web' } }));
 import type { Callbacks } from '@elevenlabs/client';
 import type { ElevenLabsConversationHandleEvent } from './conversationHandle.js';
 
@@ -114,7 +116,7 @@ describe('createElevenLabsSdkConnection', () => {
     if (prepared.kind !== 'prepared') throw new Error('expected prepared');
     const config = preparation.buildStartConfig({ prepared: prepared.session, settings });
     const connection = createElevenLabsSdkConnection({
-      createSdkHandleConnection: createTestConnection, handle: createElevenLabsConversationHandle({ tools: [] }),
+      createSdkHandleConnection: createTestConnection, handle: createElevenLabsConversationHandle({ tools: [], loadConversationSdk: () => import('@elevenlabs/client') }),
       startConfig: { ...(config as Record<string, unknown>), connectionType: 'websocket', signedUrl: 'wss://provider.test/voice' },
       duckGain: 0.18,
     });

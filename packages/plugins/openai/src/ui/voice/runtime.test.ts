@@ -6,6 +6,8 @@ import type {
 import type { RealtimeVoiceProviderRuntime } from '@happier-dev/plugin-sdk/voice/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('react-native', () => ({ Platform: { OS: 'web' } }));
+
 import { activate } from './runtime.js';
 import * as publicVoiceModule from './index.js';
 import { PLUGIN_MANIFEST } from '../../manifest.js';

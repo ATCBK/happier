@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('react-native', () => ({ Platform: { OS: 'web' } }));
 import type {
   VoiceClientToolDefinition,
   VoiceRealtimeConnection,
@@ -9,7 +11,7 @@ import { VoiceRealtimeJsonValueSchema } from '@happier-dev/plugin-sdk/voice/clie
 import {
   activate,
   createElevenLabsVoiceProviderRuntime,
-} from './runtime.js';
+} from './index.js';
 import { PLUGIN_MANIFEST } from '../../manifest.js';
 import { ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS } from '../../protocol/voice/index.js';
 
@@ -66,7 +68,7 @@ const sdk = vi.hoisted(() => ({
   getId: vi.fn(() => 'conversation-1'),
 }));
 
-vi.mock('@elevenlabs/client', () => ({
+vi.mock('@elevenlabs/client/web', () => ({
   Conversation: { startSession: sdk.startSession },
 }));
 

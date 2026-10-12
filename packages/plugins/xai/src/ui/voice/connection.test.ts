@@ -1,4 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+const platform = vi.hoisted(() => ({ OS: 'web' }));
+vi.mock('react-native', () => ({ Platform: platform }));
 
 import { createXaiWebSocketDriver } from './connection.js';
 
@@ -37,6 +40,37 @@ function jsonEventWithExactUtf8Bytes(totalBytes: number): string {
 }
 
 describe('xAI WebSocket driver', () => {
+  afterEach(() => {
+    platform.OS = 'web';
+    vi.unstubAllGlobals();
+  });
+
+  it.each(['web', 'ios', 'android'])('opens the portable %s transport with the platform auth placement', async (os) => {
+    platform.OS = os;
+    const constructed: unknown[][] = [];
+    class PlatformWebSocket extends FakeWebSocket {
+      constructor(url: string, protocols?: string | string[], options?: unknown) {
+        super(url, protocols);
+        constructed.push([url, protocols, options]);
+        queueMicrotask(() => { this.readyState = FakeWebSocket.OPEN; this.emit('open'); });
+      }
+    }
+    vi.stubGlobal('WebSocket', PlatformWebSocket);
+    const driver = createXaiWebSocketDriver({
+      auth: os === 'web'
+        ? { kind: 'subprotocol_token', placement: 'websocket_subprotocol', value: 'xai-client-secret.short', expiresAtMs: Date.now() + 300_000 }
+        : { kind: 'bearer_token', placement: 'authorization_header', value: 'native-client-secret', expiresAtMs: Date.now() + 300_000 },
+      model: 'grok-voice-think-fast-1.0', conversationId: null,
+      sessionUpdate: { type: 'session.update', session: {} },
+    });
+    await driver.open({ signal: new AbortController().signal, onControl: vi.fn(), onTransport: vi.fn(), onRemoteClose: vi.fn() });
+    expect(constructed).toEqual([[expect.stringContaining('wss://api.x.ai/v1/realtime'),
+      os === 'web' ? ['xai-client-secret.short'] : undefined,
+      os === 'web' ? undefined : { headers: { Authorization: 'Bearer native-client-secret' } },
+    ]]);
+    await driver.close({ code: 'user_stop' });
+  });
+
   it('settles an in-flight open when the connection is closed before WebSocket open', async () => {
     const socket = new FakeWebSocket('');
     const driver = createXaiWebSocketDriver({

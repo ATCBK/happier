@@ -1,3 +1,5 @@
+import { Platform } from 'react-native';
+
 import type {
   VoiceClientAuthArtifact } from '@happier-dev/plugin-sdk/voice/client';
 import type {
@@ -43,10 +45,22 @@ function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
 
-function defaultCreateWebSocket(url: string, protocols?: string | string[]): XaiWebSocketLike {
+type ReactNativeWebSocketConstructor = new (
+  url: string,
+  protocols?: string | string[],
+  options?: Readonly<{ headers?: Readonly<Record<string, string>> }>,
+) => XaiWebSocketLike;
+
+const defaultCreateWebSocket: CreateXaiWebSocket = (url, protocols, headers) => {
   if (typeof WebSocket !== 'function') throw providerError('provider_response_invalid');
+  if (Platform.OS !== 'web') {
+    // React Native owns the third constructor argument for authentication
+    // headers. Browser sessions keep the provider's subprotocol placement.
+    const NativeWebSocket = WebSocket as unknown as ReactNativeWebSocketConstructor;
+    return new NativeWebSocket(url, protocols, headers ? { headers } : undefined);
+  }
   return new WebSocket(url, protocols);
-}
+};
 
 export type XaiWebSocketDriverInput = Readonly<{
   auth: VoiceClientAuthArtifact;

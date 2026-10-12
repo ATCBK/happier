@@ -6,6 +6,8 @@ import type {
 } from '@happier-dev/plugin-sdk/voice/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('react-native', () => ({ Platform: { OS: 'web' } }));
+
 import { createXaiRealtimeProviderRuntime } from './runtime.js';
 
 const SENTINEL_TOOL = Object.freeze({

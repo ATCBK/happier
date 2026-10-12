@@ -1,3 +1,5 @@
+import { Platform } from 'react-native';
+
 import {
   VoiceRealtimeToolCallV1Schema,
   VoiceRealtimeToolResultV1Schema,
@@ -12,6 +14,8 @@ import type {
   PartialOptions,
   Status,
 } from '@elevenlabs/client';
+
+import { installElevenLabsNativeSessionStrategy } from './nativeSessionStrategy.js';
 
 type MessagePayload = Parameters<NonNullable<Callbacks['onMessage']>>[0];
 type AgentResponseCorrectionPayload =
@@ -70,6 +74,7 @@ function normalizeOutputVolume(volume: number): number {
 }
 
 export function createElevenLabsConversationHandle(params: Readonly<{
+    loadConversationSdk: () => Promise<Pick<typeof import('@elevenlabs/client'), 'Conversation'>>;
     tools: readonly Readonly<{
         name: string;
     }>[];
@@ -202,7 +207,14 @@ export function createElevenLabsConversationHandle(params: Readonly<{
                 await endConversationQuietly(previousConversation);
             }
 
-            const { Conversation } = await import('@elevenlabs/client');
+            if (Platform.OS !== 'web') {
+                // The host owns native WebRTC/audio admission. Install only the
+                // provider's media strategy, without evaluating it on the web.
+                const dependencies = await import('@elevenlabs/client/internal');
+                if (!isCurrentStartSequence(startSequence)) return null;
+                installElevenLabsNativeSessionStrategy(dependencies);
+            }
+            const { Conversation } = await params.loadConversationSdk();
             if (!isCurrentStartSequence(startSequence)) return null;
             const conversation = await Conversation.startSession({
                 ...readRecord(config),

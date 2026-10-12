@@ -4,9 +4,9 @@ import {
 } from '@happier-dev/plugin-sdk/voice/client';
 import {
   getActionSpec,
-  listVoiceSdkSafeToolActionSpecs,
   zodSchemaToJsonSchemaObject,
 } from '@happier-dev/protocol';
+import { listVoicePromptHotPathSpecs } from '@happier-dev/protocol/actions/actionSpecs';
 
 import { createXaiRealtimeProtocolAdapter, createXaiSessionUpdate, encodeXaiToolResult } from './protocol.js';
 
@@ -89,8 +89,8 @@ describe('xAI Realtime protocol adapter', () => {
     expect(update).toMatchObject({ type: 'session.update', session: expect.not.objectContaining({ reasoning: expect.anything() }) });
   });
 
-  it('accepts every canonical voice action as an xAI custom function declaration', () => {
-    const actionSpecs = listVoiceSdkSafeToolActionSpecs();
+  it('accepts the canonical Voice hot path and discovery as xAI custom function declarations', () => {
+    const actionSpecs = listVoicePromptHotPathSpecs();
     const update = createXaiSessionUpdate({
       voice: { kind: 'catalog', id: 'eve' }, instructions: null, reasoningEffort: 'none', outputSpeed: 1,
       transcription: { languageHint: null, keyterms: [] },
@@ -109,11 +109,10 @@ describe('xAI Realtime protocol adapter', () => {
     const toolNames = tools.map((tool) => tool.name);
     expect(toolNames).toEqual(actionSpecs.map((spec) => spec.bindings?.voiceClientToolName));
     expect(new Set(toolNames).size).toBe(toolNames.length);
-    expect(tools.every((tool) => (
-      tool.parameters !== null
-      && typeof tool.parameters === 'object'
-      && (tool.parameters as Readonly<{ type?: unknown }>).type === 'object'
-    ))).toBe(true);
+    expect(tools.filter((tool) => (
+      tool.parameters === null
+      || typeof tool.parameters !== 'object'
+    )).map((tool) => tool.name)).toEqual([]);
   });
 
   it('upserts cumulative user transcripts and corrects an already-final item', () => {

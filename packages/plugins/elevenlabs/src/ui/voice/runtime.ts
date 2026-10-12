@@ -1,4 +1,3 @@
-import type { PluginApi } from '@happier-dev/plugin-sdk';
 import { throwIfAborted } from '@happier-dev/plugin-sdk/async';
 import type {
   PluginSettingsActionInput,
@@ -67,10 +66,12 @@ function parseSettingsSnapshot(input: PluginSettingsActionInput) {
 }
 
 /**
- * Public ElevenLabs leaf. All app authority arrives through attempt-scoped
- * Plugin SDK inputs; activation itself has no private host parameter.
+ * ElevenLabs runtime assembled by the portable entry with its SDK loader.
+ * All app authority arrives through attempt-scoped Plugin SDK inputs.
  */
-export function createElevenLabsVoiceProviderRuntime():
+export function createElevenLabsVoiceProviderRuntime(params: Readonly<{
+  loadConversationSdk: Parameters<typeof createElevenLabsConversationHandle>[0]['loadConversationSdk'];
+}>):
 RealtimeVoiceProviderRuntime & Readonly<{
   settingsActions: PluginSettingsActionRuntime<VoiceSettingsActionContext>;
 }> {
@@ -236,7 +237,7 @@ RealtimeVoiceProviderRuntime & Readonly<{
       if (execution.kind !== 'direct_media') {
         throw new Error('elevenlabs_direct_media_authority_required');
       }
-      const handle = createElevenLabsConversationHandle({ tools });
+      const handle = createElevenLabsConversationHandle({ tools, loadConversationSdk: params.loadConversationSdk });
       activeHandle?.dispose();
       activeHandle = handle;
       const controlSessionId = readControlSessionId(session.config);
@@ -286,11 +287,4 @@ RealtimeVoiceProviderRuntime & Readonly<{
       if (closeFailure) throw closeFailure;
     },
   });
-}
-
-export function activate(api: Pick<PluginApi, 'voiceProviders'>): void {
-  api.voiceProviders.register(
-    PROVIDER_ID,
-    createElevenLabsVoiceProviderRuntime(),
-  );
 }

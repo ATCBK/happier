@@ -12,6 +12,10 @@ export const { manifest: PLUGIN_MANIFEST, activate } = definePlugin({
   id: 'happier.voice.openai',
   version: '0.0.0',
   displayName: 'OpenAI Realtime Voice',
+  brand: { iconResourceId: 'brand-icon', monochrome: true },
+  resources: {
+    'brand-icon': { kind: 'asset', path: 'assets/brand.png', contentType: 'image/png' },
+  },
   engines: { happier: '^0.0.0' }, runtime: { apiVersion: 1 },
   entrypoints: { daemon: './.happier-plugin/daemon.js' },
   connectedAccountDescriptors: {

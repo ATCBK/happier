@@ -6,6 +6,7 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "files": [
+    "assets",
     "dist",
     ".happier-plugin",
     "package.json"
@@ -39,18 +40,10 @@
     "./ui/voice": {
       "happier-source": "./src/ui/voice/index.ts",
       "types": "./dist/ui/voice/index.d.ts",
-      "react-native": {
-        "happier-source": "./src/ui/voice/index.native.ts",
-        "default": "./dist/ui/voice/index.native.js"
-      },
       "default": "./dist/ui/voice/index.js"
     },
     "./happier-plugin-ui/voice-runtime": {
       "happier-source": "./src/ui/voice/index.ts",
-      "react-native": {
-        "happier-source": "./src/ui/voice/index.native.ts",
-        "default": "./dist/ui/voice/index.native.js"
-      },
       "default": "./dist/ui/voice/index.js"
     }
   },

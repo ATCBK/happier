@@ -2,12 +2,72 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // Compile the real host contract during collection rather than the timed SDK-loading probe.
 import '@happier-dev/plugin-sdk/voice/client';
 
+const platform = vi.hoisted(() => ({ OS: 'web' }));
+vi.mock('react-native', () => ({ Platform: platform }));
+
 beforeEach(() => {
+    platform.OS = 'web';
     vi.resetModules();
     vi.doUnmock('@elevenlabs/client');
+    vi.doUnmock('@elevenlabs/client/internal');
 });
 
 describe('ElevenLabs browser SDK demand loading', () => {
+    it('retires a native start during strategy loading before opening any media', async () => {
+        platform.OS = 'ios';
+        let release!: () => void;
+        const ready = new Promise<void>((resolve) => { release = resolve; });
+        let notifyLoading!: () => void;
+        const loading = new Promise<void>((resolve) => { notifyLoading = resolve; });
+        const setSetupStrategy = vi.fn();
+        const startSession = vi.fn();
+        vi.doMock('@elevenlabs/client/internal', async () => {
+            notifyLoading();
+            await ready;
+            return { setSetupStrategy, createConnection: vi.fn(), setupWebRTCSession: vi.fn() };
+        });
+        vi.doMock('@elevenlabs/client', () => ({ Conversation: { startSession } }));
+        const { createElevenLabsConversationHandle } = await import('./conversationHandle.js');
+        const handle = createElevenLabsConversationHandle({ tools: [], loadConversationSdk: () => import('@elevenlabs/client') });
+        const started = handle.startSession({});
+        await loading;
+        handle.dispose();
+        release();
+        await expect(started).resolves.toBeNull();
+        expect(setSetupStrategy).not.toHaveBeenCalled();
+        expect(startSession).not.toHaveBeenCalled();
+    });
+
+    it.each(['web', 'ios', 'android'])('loads the %s SDK strategy only at conversation start', async (os) => {
+        platform.OS = os;
+        let nativeLoaded = false;
+        let installedStrategy: ((options: unknown) => Promise<unknown>) | undefined;
+        const media = { kind: 'admitted-webrtc-media' };
+        const connection = { kind: 'provider-connection' };
+        vi.doMock('@elevenlabs/client/internal', () => {
+            nativeLoaded = true;
+            return {
+                setSetupStrategy(strategy: typeof installedStrategy) { installedStrategy = strategy; },
+                createConnection: async () => connection,
+                setupWebRTCSession: () => media,
+            };
+        });
+        const startSession = vi.fn(async () => {
+            if (os !== 'web') {
+                expect(installedStrategy).toBeTypeOf('function');
+                expect(await installedStrategy!({ connectionType: 'webrtc' })).toBe(media);
+            }
+            return { getId: () => 'portable-conversation', endSession: async () => {} };
+        });
+        vi.doMock('@elevenlabs/client', () => ({ Conversation: { startSession } }));
+        const { createElevenLabsConversationHandle } = await import('./conversationHandle.js');
+        const handle = createElevenLabsConversationHandle({ tools: [], loadConversationSdk: () => import('@elevenlabs/client') });
+        expect(nativeLoaded).toBe(false);
+        expect(await handle.startSession({ connectionType: 'webrtc' })).toBe('portable-conversation');
+        expect(nativeLoaded).toBe(os !== 'web');
+        await handle.endSession();
+    });
+
     it('loads the media SDK only when a conversation starts and recovers after a failed start', async () => {
         let loaded = false;
         const conversation = {
@@ -23,7 +83,7 @@ describe('ElevenLabs browser SDK demand loading', () => {
             return { Conversation: { startSession } };
         });
         const { createElevenLabsConversationHandle } = await import('./conversationHandle.js');
-        const handle = createElevenLabsConversationHandle({ tools: [] });
+        const handle = createElevenLabsConversationHandle({ tools: [], loadConversationSdk: () => import('@elevenlabs/client') });
         handle.setMicMuted(true);
         handle.setOutputVolume(0.18);
         expect(loaded).toBe(false);
@@ -55,7 +115,7 @@ describe('ElevenLabs browser SDK demand loading', () => {
         if (firstBoundary === 'sdk') releaseSdk();
         expect(firstBoundary).toBe('handle');
         const { createElevenLabsConversationHandle } = await handleModule;
-        const handle = createElevenLabsConversationHandle({ tools: [] });
+        const handle = createElevenLabsConversationHandle({ tools: [], loadConversationSdk: () => import('@elevenlabs/client') });
         const started = handle.startSession({});
         await loading;
         handle.dispose();

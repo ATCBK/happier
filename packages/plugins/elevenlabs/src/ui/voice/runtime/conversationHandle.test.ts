@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('react-native', () => ({ Platform: { OS: 'web' } }));
+
 const startSession = vi.fn();
 
 vi.mock('@elevenlabs/client', () => ({
@@ -11,6 +13,7 @@ import { createElevenLabsSdkConnection } from './sdkConnection.js';
 import { VoiceRealtimeToolCallV1Schema, type VoiceRealtimeConnection } from '@happier-dev/plugin-sdk/voice/client';
 
 const createHandle = () => createElevenLabsConversationHandle({
+  loadConversationSdk: () => import('@elevenlabs/client'),
   tools: [],
 });
 
@@ -119,7 +122,7 @@ describe('createElevenLabsConversationHandle event surface', () => {
     const tools = [{
       name: 'unavailableRead', execute: async () => { throw new Error('voice_action_unavailable'); },
     }];
-    const handle = createElevenLabsConversationHandle({ tools });
+    const handle = createElevenLabsConversationHandle({ tools, loadConversationSdk: () => import('@elevenlabs/client') });
     let driver!: Parameters<Parameters<typeof createElevenLabsSdkConnection>[0]['createSdkHandleConnection']>[0]['driver'];
     const remoteClose = vi.fn();
     createElevenLabsSdkConnection({
@@ -157,7 +160,7 @@ describe('createElevenLabsConversationHandle event surface', () => {
     startSession.mockResolvedValue({ getId: () => 'custody', endSession: async () => {} });
     const execute = vi.fn(async () => ({ unsafe: true }));
     const tools = [{ name: 'effect', execute }];
-    const handle = createElevenLabsConversationHandle({ tools });
+    const handle = createElevenLabsConversationHandle({ tools, loadConversationSdk: () => import('@elevenlabs/client') });
     const events: unknown[] = [];
     handle.subscribe((event) => events.push(event));
     await handle.startSession({});

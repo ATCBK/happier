@@ -4,6 +4,8 @@ import {
 } from '@happier-dev/protocol';
 import { describe, expect, it, vi } from 'vitest';
 
+vi.mock('react-native', () => ({ Platform: { OS: 'web' } }));
+
 import { PLUGIN_MANIFEST } from '../../manifest.js';
 import { activate } from './runtime.js';
 import { VOICE_PROVIDER_PRESENTATIONS } from './index.js';
