@@ -6,6 +6,11 @@ import { AGENT_IDS } from './types.js';
 import { isLegacyConfiguredBackendSentinelId } from './compat/legacyConfiguredBackend.js';
 import { getAgentResumeConfig } from './manifest.js';
 import { resolveCanonicalAgentIdFromFlavor } from './resolveAgentIdFromFlavor.js';
+import { AgentExecutionTargetV1Schema, type AgentExecutionTargetV1 } from '@happier-dev/protocol/agents/executionTargetV1';
+import { SessionCreationCorrespondenceV1ReadSchema } from '@happier-dev/protocol/sessions/creation/sessionCreationCorrespondenceV1';
+import { resolveLinkedExternalSessionMetadataV1 } from '@happier-dev/protocol/sessions/external/linked-metadata';
+import { agentRoutingIdAddressesContributionIdentityV1 } from '@happier-dev/protocol/plugins/contribution-identity';
+import { BUNDLED_AGENT_CONTRIBUTION_IDENTITIES, isBundledAgentId } from './generated/agentIds.js';
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -156,4 +161,28 @@ export function resolveAgentIdFromSessionMetadata(
   metadata: unknown,
 ): SessionMetadataAgentId | null {
   return resolveSessionMetadataAgentIdentity(metadata).agentId;
+}
+
+/** Shared qualified target projection for already-opened Session metadata. */
+export function resolveAgentExecutionTargetFromSessionMetadata(
+  metadata: unknown,
+  resolvedAgentId?: string | null,
+): AgentExecutionTargetV1 | null {
+  const record = asRecord(metadata);
+  if (!record) return null;
+  const rawAgent = typeof record.agent === 'string' ? record.agent.trim() : null;
+  const agentId = resolvedAgentId === undefined
+    ? resolveAgentIdFromSessionMetadata(record) ?? (isBundledAgentId(rawAgent) ? rawAgent : null)
+    : resolvedAgentId;
+  const correspondence = SessionCreationCorrespondenceV1ReadSchema.safeParse(record.sessionCreationCorrespondenceV1);
+  const linked = resolveLinkedExternalSessionMetadataV1(record, 'stored');
+  const bundledIdentity = agentId && isBundledAgentId(agentId) ? BUNDLED_AGENT_CONTRIBUTION_IDENTITIES[agentId] : null;
+  const candidate = correspondence.success ? correspondence.data.recipe.agentTarget
+    : linked.ok && linked.linkedSession.qualifiedIdentity ? { kind: 'agent' as const, identity: linked.linkedSession.qualifiedIdentity.agent }
+      : bundledIdentity ? { kind: 'agent' as const, identity: bundledIdentity } : null;
+  const parsed = AgentExecutionTargetV1Schema.safeParse(candidate);
+  if (!parsed.success) return null;
+  if (agentId && !agentRoutingIdAddressesContributionIdentityV1(agentId, parsed.data.identity)
+    && !(bundledIdentity?.pluginId === parsed.data.identity.pluginId && bundledIdentity.localId === parsed.data.identity.localId)) return null;
+  return parsed.data;
 }

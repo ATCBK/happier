@@ -278,6 +278,11 @@ export function buildVoiceClientToolAgentPrompt(params?: Readonly<{
             availableToolNames.has('searchActionSpecs')
               ? '- The catalog below is only the hot path. For anything else, use searchActionSpecs first instead of guessing.'
               : '- The catalog below is the complete set of tools available for this conversation.',
+            ...(admittedNames?.has('action_execute') ? [
+              '- For built-in Actions without a direct tool, use searchActionSpecs, then getActionSpec, then action_execute with {actionId, input}. Use the discovered input schema; never guess Action ids.',
+              '- action_execute returns {ok:true,result} or {ok:false,errorCode,error}. An approval_request_created result is pending human approval, not an executed effect.',
+              '- Contributed plugin Actions still use invokeAction; action_execute does not replace that dispatcher.',
+            ] : []),
             ...toolLines,
             '',
             ...(ctx ? ['Conversation context (may be empty):', ctx, ''] : []),

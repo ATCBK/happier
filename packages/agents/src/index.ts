@@ -171,6 +171,7 @@ export type {
 export { resolveAgentIdFromFlavor, resolveCanonicalAgentIdFromFlavor } from './resolveAgentIdFromFlavor.js';
 export {
   resolveAgentIdFromSessionMetadata,
+  resolveAgentExecutionTargetFromSessionMetadata,
   resolveDeclaredAgentIdFromSessionMetadata,
   resolveSessionMetadataAgentIdentity,
   type SessionMetadataAgentIdentityBasis,

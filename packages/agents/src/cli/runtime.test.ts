@@ -185,7 +185,7 @@ describe('AGENT_CLI_RUNTIME_SPECS', () => {
       knownUserBinDirSuffixes: ['.local/bin'],
     });
     expect(getAgentCliRuntimeSpec('opencode')).toMatchObject({
-      knownUserBinDirSuffixes: ['.opencode/bin', 'AppData/Roaming/npm'],
+      knownUserBinDirSuffixes: ['.opencode/bin', '.local/bin', 'AppData/Roaming/npm'],
     });
     expect(getAgentCliRuntimeSpec('ohMyPi')).toMatchObject({
       knownUserBinDirSuffixes: ['.bun/bin'],

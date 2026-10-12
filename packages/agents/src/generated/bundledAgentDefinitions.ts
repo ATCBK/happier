@@ -106,11 +106,7 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
     "backendDefinition": false,
     "cliSubcommand": "antigravity",
     "cloudConnect": null,
-    "connectedServices": {
-      "supportedServiceIds": [
-        "gemini"
-      ]
-    },
+    "connectedServices": null,
     "detectKey": "agy",
     "flavorAliases": [
       "agy"
@@ -422,6 +418,7 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
       "claude-opus-4-7",
       "claude-opus-4-6",
       "claude-sonnet-4-6",
+      "claude-haiku-5-5",
       "claude-haiku-4-5",
       "claude-opus-4-5",
       "claude-sonnet-4-5"
@@ -901,6 +898,11 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
           }
         ],
         "name": "Sonnet 4.6"
+      },
+      {
+        "description": "Claude Haiku model for lighter tasks and lower-latency replies.",
+        "id": "claude-haiku-5-5",
+        "name": "Haiku 5.5"
       },
       {
         "description": "Fastest Claude option for lighter tasks and lower-latency replies.",
@@ -2769,6 +2771,7 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
       "binaryName": "opencode",
       "knownUserBinDirSuffixes": [
         ".opencode/bin",
+        ".local/bin",
         "AppData/Roaming/npm"
       ],
       "sourcePreference": "system-first"

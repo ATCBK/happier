@@ -21,6 +21,15 @@ import {
 } from './voiceAgentPrompt.js';
 
 describe('voiceAgentPrompt', () => {
+  it('documents generic execution only when admitted alongside the realtime discovery catalog', () => {
+    const input = { actionSpecs: listVoiceToolActionSpecs(), availableToolNames: ['searchActionSpecs', 'getActionSpec', 'action_execute'] };
+    const prompt = buildVoiceClientToolAgentPrompt(input);
+    expect(prompt).toContain('action_execute');
+    expect(prompt).toContain('actionId');
+    expect(prompt).not.toContain('Call with sendSessionMessage');
+    expect(buildVoiceClientToolAgentPrompt({ ...input, availableToolNames: ['readCurrentUiContext'] }))
+      .not.toContain('action_execute');
+  });
   it('uses the admitted memory decision for the existing recall guidance in both realtime builders', () => {
     const guidance = buildMemoryRecallGuidanceBlockV1('voice');
     for (const memoryRecallGuidanceEnabled of [true, false]) {
@@ -237,10 +246,10 @@ describe('voiceAgentPrompt', () => {
     expect(prompt).toContain('searchActionSpecs');
     expect(prompt).toContain('getActionSpec');
     expect(prompt).toContain('resolveActionOptions');
-    expect(prompt).toContain('spawnSession');
+    expect(prompt).not.toContain('- spawnSession:');
     expect(prompt).toContain('listRecentPaths');
     expect(prompt).toContain('listAgentBackends');
-    expect(prompt).toContain('listAgentModels');
+    expect(prompt).not.toContain('- listAgentModels:');
     expect(prompt).toContain('Use listExecutionRuns to discover runs by title or status before choosing runId internally');
     expect(prompt).toContain('Use getExecutionRun after choosing runId to inspect available actions before choosing actionId internally');
     expect(prompt).toContain('Use listSessions before choosing the exact serverId and sessionId internally');
@@ -257,7 +266,7 @@ describe('voiceAgentPrompt', () => {
     expect(prompt).not.toContain('listReviewEngines');
     expect(prompt).not.toContain('spawnSession');
     expect(prompt).not.toContain('spawnSessionPicker');
-    expect(prompt).toContain('listAgentModels');
+    expect(prompt).not.toContain('- listAgentModels:');
     expect(prompt).toContain('Use listExecutionRuns to discover runs by title or status before choosing runId internally');
     expect(prompt).toContain('Use listSessions before choosing sessionId internally');
   });

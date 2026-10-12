@@ -4,6 +4,7 @@ import type {
   PluginAgentExecutionRunCapabilitiesV2,
   PluginAgentSessionCapabilitiesV2,
   PluginAgentToolsCapabilityV2,
+  PluginAgentSkillsCapabilityV2,
 } from '@happier-dev/protocol';
 
 /**
@@ -78,7 +79,7 @@ export type AuthoredAgentSessionCapabilitiesV2 =
   & Omit<PluginAgentSessionCapabilitiesV2, 'open' | 'conversationRollback' | 'usageLimitRecovery' | 'usageReporting'>
   & Readonly<{ open: readonly AuthoredAgentSessionOpenRouteV2[] }>;
 
-export type AuthoredAgentCapabilitiesV2 =
+export type AuthoredAgentCapabilitiesV2 = Readonly<{ skills?: PluginAgentSkillsCapabilityV2 }> & (
   | Readonly<{
     surfaces?: readonly AuthoredAgentCapabilitySurfaceV2[];
     sessions: AuthoredAgentSessionCapabilitiesV2;
@@ -93,7 +94,7 @@ export type AuthoredAgentCapabilitiesV2 =
     surfaces?: readonly AuthoredAgentCapabilitySurfaceV2[];
     sessions?: never;
     executionRuns?: never;
-  }>;
+  }>);
 
 function declaresSessionFork(facts: AgentDefinitionCapabilityFacts): boolean {
   const { sessionFork } = facts.sessionCapabilities;
@@ -209,5 +210,6 @@ export function projectAgentCapabilitiesV2FromDefinition(
     ...(!sessions && authored.executionRuns ? { executionRuns: authored.executionRuns } : {}),
     ...(tools ? { tools } : {}),
     ...(structuredOutput ? { structuredOutput } : {}),
+    ...(authored.skills ? { skills: authored.skills } : {}),
   };
 }

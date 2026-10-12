@@ -23,6 +23,14 @@ const MINIMAL_SESSIONS = {
 } as const;
 
 describe('projectAgentCapabilitiesV2FromDefinition', () => {
+  it('keeps manifest-owned skills on Session and execution-primary projections', () => {
+    const skills = { delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported' } as const;
+    expect(projectAgentCapabilitiesV2FromDefinition(NO_CAPABILITIES, { sessions: MINIMAL_SESSIONS, skills }))
+      .toHaveProperty('skills', skills);
+    expect(projectAgentCapabilitiesV2FromDefinition(NO_CAPABILITIES, {
+      executionRuns: { open: ['create'], checkpoint: false, stop: true }, skills,
+    })).toHaveProperty('skills', skills);
+  });
   it('projects JSON output only from the definition-owned capability, independently of Session resume', () => {
     const sessions = { ...MINIMAL_SESSIONS, open: ['create'] as const };
     expect(projectAgentCapabilitiesV2FromDefinition({ ...NO_CAPABILITIES,
@@ -229,6 +237,7 @@ function withoutDefinitionOwnedFacts(capabilities: Readonly<Record<string, unkno
   surfaces?: readonly string[];
   sessions?: Record<string, unknown>;
   executionRuns?: unknown;
+  skills?: unknown;
 }> {
   const surfaces = (capabilities.surfaces as readonly string[] | undefined)
     ?.filter((surface) => surface !== 'terminal');
@@ -245,6 +254,7 @@ function withoutDefinitionOwnedFacts(capabilities: Readonly<Record<string, unkno
     ...(surfaces && surfaces.length > 0 ? { surfaces } : {}),
     ...(sessions ? { sessions } : {}),
     ...(capabilities.executionRuns ? { executionRuns: capabilities.executionRuns } : {}),
+    ...(capabilities.skills ? { skills: capabilities.skills } : {}),
   };
 }
 
