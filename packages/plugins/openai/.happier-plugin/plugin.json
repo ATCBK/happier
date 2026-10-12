@@ -3,6 +3,7 @@
     "accountCollections": [],
     "actions": [],
     "agents": [],
+    "atmospherePictures": [],
     "backgroundServices": [],
     "browserActions": [],
     "browserTargets": [],
@@ -49,6 +50,7 @@
     "executionRunProfiles": [],
     "hooks": [],
     "inputTypes": [],
+    "machineProvisioners": [],
     "managedDependencies": [],
     "mcp": {
       "discoverySources": [],
@@ -58,6 +60,7 @@
     "notifications": [],
     "openableContentViewers": [],
     "pluginContributionPoints": [],
+    "projectNativeAdapters": [],
     "promptAssets": [],
     "providers": [],
     "requestInterceptors": [],
@@ -418,6 +421,48 @@
               {
                 "customIdAllowed": true,
                 "kind": "voice_catalog",
+                "options": [
+                  {
+                    "id": "alloy",
+                    "title": "Alloy"
+                  },
+                  {
+                    "id": "ash",
+                    "title": "Ash"
+                  },
+                  {
+                    "id": "ballad",
+                    "title": "Ballad"
+                  },
+                  {
+                    "id": "coral",
+                    "title": "Coral"
+                  },
+                  {
+                    "id": "echo",
+                    "title": "Echo"
+                  },
+                  {
+                    "id": "sage",
+                    "title": "Sage"
+                  },
+                  {
+                    "id": "shimmer",
+                    "title": "Shimmer"
+                  },
+                  {
+                    "id": "verse",
+                    "title": "Verse"
+                  },
+                  {
+                    "id": "marin",
+                    "title": "Marin"
+                  },
+                  {
+                    "id": "cedar",
+                    "title": "Cedar"
+                  }
+                ],
                 "path": "voice",
                 "subtitleKey": "settingsVoice.realtimeProviders.fields.voice.subtitle",
                 "titleKey": "settingsVoice.realtimeProviders.fields.voice.title",
