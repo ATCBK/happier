@@ -43,12 +43,10 @@ import { createResolvedContributionRegistry } from '@/plugins/projection/registr
 
 const {
   readCredentialsMock,
-  psListMock,
   resolveExecutionSurfacesMock,
   evaluateAgentSessionCapabilitySupportMock,
 } = vi.hoisted(() => ({
   readCredentialsMock: vi.fn<() => Promise<Credentials | null>>(async () => null),
-  psListMock: vi.fn(async () => [] as any[]),
   resolveExecutionSurfacesMock: vi.fn<
     (backendId?: string | null) => Promise<BackendExecutionSurfaces>
   >(),
@@ -89,10 +87,6 @@ const { fetchServerFeaturesSnapshotMock } = vi.hoisted(() => ({
       },
     },
   })),
-}));
-
-vi.mock('ps-list', () => ({
-  default: psListMock,
 }));
 
 vi.mock('@/persistence', async (importOriginal) => {
@@ -334,7 +328,6 @@ describe('registerMachineRpcHandlers', () => {
     // chains cannot leak across cases.
     vi.restoreAllMocks();
     readCredentialsMock.mockReset();
-    psListMock.mockReset();
     resolveExecutionSurfacesMock.mockReset();
     resolveExecutionSurfacesMock.mockResolvedValue(emptyExecutionSurfaces());
     evaluateAgentSessionCapabilitySupportMock.mockReset();
@@ -1610,7 +1603,7 @@ describe('registerMachineRpcHandlers', () => {
     const runId = `run-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     try {
       await writeExecutionRunMarker({
-        pid: 12345,
+        pid: process.pid,
         happySessionId: 'sess-1',
         runId,
         callId: 'call-1',
@@ -1625,10 +1618,6 @@ describe('registerMachineRpcHandlers', () => {
       const handler = registered.get((RPC_METHODS as any).DAEMON_EXECUTION_RUNS_LIST);
       expect(handler).toBeDefined();
 
-      psListMock.mockResolvedValueOnce([
-        { pid: 12345, name: 'node', cmd: '/secret', cpu: 1, memory: 2 },
-      ]);
-
       const res = await handler!({});
       expect(res).toEqual(expect.objectContaining({
         runs: expect.any(Array),
@@ -1637,6 +1626,11 @@ describe('registerMachineRpcHandlers', () => {
 
       const entry = (res.runs as any[]).find((r) => r?.runId === runId);
       expect(entry?.process?.cmd).toBeUndefined();
+      expect(entry?.process?.cpu).toBeUndefined();
+      if (process.platform === 'linux' || process.platform === 'darwin') {
+        expect(entry?.process?.pid).toBe(process.pid);
+        expect(entry?.process?.memory).toBeGreaterThan(0);
+      }
     } finally {
       await removeExecutionRunMarker(runId);
     }
@@ -4317,8 +4311,7 @@ describe('registerMachineRpcHandlers', () => {
               id: 'review-bot',
               name: 'review-bot',
               title: 'Review Bot',
-              command: 'review-cli',
-              args: ['acp'],
+              launch: { kind: 'command' as const, command: 'review-cli', args: ['acp'] },
               env: {},
               transportProfile: 'generic',
               capabilities: {
