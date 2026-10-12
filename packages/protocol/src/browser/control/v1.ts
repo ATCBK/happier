@@ -107,6 +107,7 @@ export const BrowserCommandErrorCodeV1Schema = lazyZodSchema(() => z.enum([
   'feature_disabled',
   'permission_denied',
   'policy_unavailable',
+  'waiting_for_memory',
   'session_not_found',
   'unsupported_command',
   'view_not_found',
