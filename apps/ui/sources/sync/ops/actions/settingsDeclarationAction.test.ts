@@ -1,3 +1,6 @@
+// Enter through the mounted catalog consumer, matching App-shell evaluation:
+// a cold owner-first import can observe the catalog mid-initialization.
+import '@/components/settings/catalog/runtime/useResolvedSettingsPageCatalog';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 // Vite does not apply Metro's .web selection. Use the real IndexedDB device adapter for this web owner.
