@@ -40,7 +40,7 @@ import { prepareAcpCatalogTransferV2 } from '@happier-dev/protocol/acp/catalog/t
 import { KIRO_ACP_STDERR_RULES } from '@happier-dev/plugins-kiro/agent/acp/transport';
 import { mutateRemoteHostCatalogRowInTx } from '@/app/account/remoteHosts/remoteHostRows';
 import { sealMcpServerCatalogContentV1 } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
-import { readMcpServerCatalogRowInTx } from '@/app/account/mcp/serverRows';
+import { readMcpServerCatalogRowInTx, mutateMcpServerCatalogRowInTx } from '@/app/account/mcp/serverRows';
 import { sealAccountScopedBlobCiphertext } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { sealConnectedAccountCatalogContentV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
@@ -145,6 +145,30 @@ describe("Saved Secret resource service (SQLite integration)", () => {
             () => db.userRelationship.deleteMany(),
             () => db.account.deleteMany(),
         ]);
+    });
+
+    it('admits personal MCP references in the private catalog while preserving shared resource checks', async () => {
+        const owner = await db.account.create({ data: { encryptionMode: 'plain' }, select: { id: true } });
+        const content = sealMcpServerCatalogContentV1({ mode: 'plain', material: null, catalog: { v: 1,
+            servers: [{ id: 'personal', name: 'personal', transport: 'stdio', stdio: { command: 'server', args: [] },
+                env: { TOKEN: { t: 'savedSecret', secretId: 'personal-key' } }, createdAt: 1, updatedAt: 1 }], bindings: [],
+        } });
+        expect(await inTx(tx => mutateMcpServerCatalogRowInTx(tx, { accountId: owner.id, expectedRevision: 'absent',
+            sourceSettingsVersion: 0, content, referencedSavedSecretIds: ['personal-key'] })))
+            .toMatchObject({ status: 'updated', revision: 0 });
+        expect(await inTx(tx => readMcpServerCatalogRowInTx(tx, { accountId: owner.id })))
+            .toMatchObject({ status: 'present', revision: 0, content });
+        if (content.t !== 'plain') throw new Error('Fixture must be plain');
+        const sharedRef = formatSharedSavedSecretRefV1('missing-shared');
+        const shared = { ...content, v: { ...content.v, servers: content.v.servers.map(server => ({ ...server,
+            env: { TOKEN: { t: 'savedSecret' as const, secretId: sharedRef } },
+        })) } };
+        expect(await inTx(tx => mutateMcpServerCatalogRowInTx(tx, { accountId: owner.id, expectedRevision: 0,
+            content: shared, referencedSavedSecretIds: [sharedRef],
+            savedSecretRevisions: [{ resourceId: 'missing-shared', expectedRevision: 1 }] })))
+            .toEqual({ status: 'invalid-reference' });
+        expect(await inTx(tx => readMcpServerCatalogRowInTx(tx, { accountId: owner.id })))
+            .toMatchObject({ status: 'present', revision: 0, content });
     });
 
     it('commits two new credentials and their connected catalog despite unrelated Settings drift and refuses a stale catalog', async () => {
