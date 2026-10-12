@@ -23,4 +23,10 @@ describe('teamArchiveConfirmationLines', () => {
     expect(unknown.length).toBeGreaterThanOrEqual(2);
     expect(unknown.join('\n')).not.toMatch(/\d/);
   });
+
+  it('keeps uncounted promises when only the membership count is disclosed', () => {
+    const restricted = teamSummaryFixture({ counts: { ...quiet, groups: null, archivedGroups: null, waitingInvitations: null } });
+    expect(teamArchiveConfirmationLines(restricted))
+      .toEqual(teamArchiveConfirmationLines(teamSummaryFixture({ counts: null })));
+  });
 });

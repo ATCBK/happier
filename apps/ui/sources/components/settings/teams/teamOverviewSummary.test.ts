@@ -8,6 +8,7 @@ import {
 
 import {
   resolveTeamOverviewAttention,
+  teamOverviewAuthenticationSummary,
   teamOverviewGroupsSummary,
   teamOverviewInvitationsSummary,
   teamOverviewSettingsSummary,
@@ -21,6 +22,13 @@ const counts = {
 };
 
 describe('Team Overview summaries', () => {
+  it('says what sign-in and admission the Team has without naming the Home the page already names', () => {
+    const team = teamSummaryFixture({ policy: teamPolicyFixture({ admissionMode: 'invite_only' }) });
+    expect(teamOverviewAuthenticationSummary(team, [])).toBe('Home sign-in · By invitation');
+    expect(teamOverviewAuthenticationSummary(team, ['Acme directory'])).toBe('Home sign-in · By invitation · Acme directory');
+  });
+
+
   it('says the history default beside the session default, and changes with it', () => {
     const fromJoining = teamOverviewSettingsSummary(
       teamSummaryFixture({
@@ -48,6 +56,12 @@ describe('Team Overview summaries', () => {
     expect(managed.startsWith(plain)).toBe(true);
     expect(managed).toContain('Acme directory');
     expect(plain).not.toContain('Acme directory');
+  });
+
+  it('does not invent a Group count from a membership-only Home summary', () => {
+    const restricted = teamSummaryFixture({ counts: { ...counts, groups: null, archivedGroups: null, waitingInvitations: null } });
+    expect(teamOverviewGroupsSummary(restricted, []))
+      .toBe(teamOverviewGroupsSummary(teamSummaryFixture({ counts: null }), []));
   });
 
   it('leads the invitations summary with an undelivered email when there is one', () => {

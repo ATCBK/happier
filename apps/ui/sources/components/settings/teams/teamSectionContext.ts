@@ -3,6 +3,7 @@ import type { TeamSummaryV1 } from '@happier-dev/protocol/teams';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import type { TeamAddress } from '@/sync/domains/teams/teamAddress';
 import type { ActionApprovalRegistration } from '@/components/approvals/actionApprovalContinuation';
+import type { PageHeaderMetaFact } from '@/components/ui/layout/PageHeader';
 
 /**
  * Everything a Team section needs, resolved once by the shared Team shell.
@@ -55,4 +56,22 @@ export type TeamSectionContext = Readonly<{
     refresh: () => void;
     /** Registers a deferred Action approval created by a Team mutation. */
     requestApproval: (registration: ActionApprovalRegistration) => void;
+    /** Settles self-removal at the destination host, even after its roster row unmounts. */
+    settleLeave: (outcome: Readonly<{ kind: 'succeeded' }> | Readonly<{ kind: 'failed'; message: string }>) => void;
 }>;
+
+/**
+ * The meta line under a Team sub-page's title: which Team it is about (unless the title already
+ * names it) and which Home holds it. `TeamSection`'s own header and a page that draws its own
+ * header (Invitations) both take it from here, so sibling pages never differ.
+ */
+export function teamPageHeaderMeta(input: Readonly<{
+    pageTitle: string;
+    teamName: string | null;
+    homeName?: string;
+}>): readonly PageHeaderMetaFact[] {
+    return [
+        ...(input.teamName && input.teamName !== input.pageTitle ? [{ key: 'team', text: input.teamName }] : []),
+        ...(input.homeName !== undefined ? [{ key: 'home', icon: 'house' as const, text: input.homeName }] : []),
+    ];
+}

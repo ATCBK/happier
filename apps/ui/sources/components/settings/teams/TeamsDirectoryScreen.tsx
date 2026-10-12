@@ -4,6 +4,7 @@ import { Platform } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 
 import { EmptyState } from '@/components/ui/empty/EmptyState';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { CompactSearchField } from '@/components/ui/forms/CompactSearchField';
 import { PageHeader } from '@/components/ui/layout/PageHeader';
 import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
@@ -19,7 +20,7 @@ import { t } from '@/text';
 import { TeamRow } from './TeamRow';
 import { teamCredentialCreatePath, teamDetailPath, teamsCreatePath, type TeamCredentialSourceHint } from './teamsRoutes';
 import type { TeamsDirectoryRow, TeamsDirectoryUnavailableHome } from './teamsDirectoryViewState';
-import { teamsUnavailableHomeReason } from './teamsDirectoryViewState';
+import { teamsUnavailableHomeReason, teamsUnavailableHomeStateKind } from './teamsDirectoryViewState';
 import { TeamsCollectionAddButton } from './collection/TeamsCollectionRail';
 import {
     readLastVisitedTeamsCollectionTeam,
@@ -52,28 +53,33 @@ const UnavailableHomes = React.memo(function UnavailableHomes(props: Readonly<{
     if (props.homes.length === 0) return null;
 
     const prefix = props.testIDPrefix ?? 'teams-home-unavailable';
-    const retryable = props.homes.some((home) => home.retryable);
     return (
         <ItemGroup title={t('teams.directory.unreachableHomes')} description={t('teams.directory.partialHomes')}>
-            {props.homes.map((home) => (
+            {props.homes.map((home, index) => home.reason === 'loading' ? (
                 <Item
                     key={home.serverId}
                     testID={`${prefix}:${home.serverId}`}
                     title={home.homeName}
                     subtitle={teamsUnavailableHomeReason(home)}
-                    loading={home.reason === 'loading'}
+                    loading
                     mode="info"
                     showChevron={false}
                 />
-            ))}
-            {retryable ? (
-                <Item
-                    testID={props.retryTestID ?? 'teams-directory-retry'}
-                    title={t('teams.unavailable.retry')}
-                    onPress={props.onRetry}
-                    showChevron={false}
+            ) : (
+                <SurfaceStateCard
+                    key={home.serverId}
+                    testID={`${prefix}:${home.serverId}`}
+                    kind={teamsUnavailableHomeStateKind(home)}
+                    size="line"
+                    title={home.homeName}
+                    reason={teamsUnavailableHomeReason(home)}
+                    action={home.retryable ? {
+                        testID: index === 0 ? props.retryTestID ?? 'teams-directory-retry' : `${prefix}:${home.serverId}:retry`,
+                        label: t('teams.unavailable.retry'),
+                        onPress: props.onRetry,
+                    } : undefined}
                 />
-            ) : null}
+            ))}
         </ItemGroup>
     );
 });
@@ -97,8 +103,12 @@ const TeamsEmptyState = React.memo(function TeamsEmptyState(props: Readonly<{
             // An invitation to add only when this viewer can create a Team.
             variant={collection.showCreateTeam ? 'add' : 'default'}
             iconName="users"
+            // The page's own Daybreak moment (DESIGN.md › Emptiness is designed): a bench under a tree,
+            // the place people gather. The page header already says what a Team is, so the state
+            // says how to start rather than repeating it.
+            scene="invitePeople"
             title={t('teams.directory.emptyTitle')}
-            subtitle={t('teams.directory.emptyBody')}
+            subtitle={t('teams.directory.emptyStart')}
             primaryAction={collection.showCreateTeam ? {
                 label: t('teams.directory.newTeam'),
                 onPress: props.onCreate,

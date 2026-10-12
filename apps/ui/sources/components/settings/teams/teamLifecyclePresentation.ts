@@ -13,7 +13,7 @@ export function teamArchiveConfirmationLines(
 ): readonly string[] {
   const counts = team.counts;
   const lines = [
-    counts
+    counts && counts.groups !== null
       ? t('teams.archive.confirm.keptCounted', {
           members: counts.members,
           groups: counts.groups,

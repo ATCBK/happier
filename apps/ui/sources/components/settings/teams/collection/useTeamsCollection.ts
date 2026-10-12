@@ -104,26 +104,28 @@ export function useTeamsCollection(options: Readonly<{
     // Both are kept — the local one so the section is never empty on arrival —
     // but one Team is one row, in the order it was first known here.
     const archivedRows = React.useMemo(() => {
-        if (archived.archivedRows.length === 0) return active.archivedRows;
         const seen = new Set<string>();
         const merged: TeamsDirectoryRow[] = [];
-        for (const row of [...active.archivedRows, ...archived.archivedRows]) {
+        const selectedArchived = selectedRow?.team.archivedAt != null ? [selectedRow] : [];
+        for (const row of [...active.archivedRows, ...archived.archivedRows, ...selectedArchived]) {
             const key = teamAddressKey(row.address);
             if (seen.has(key)) continue;
             seen.add(key);
             merged.push(row);
         }
         return merged;
-    }, [active.archivedRows, archived.archivedRows]);
+    }, [active.archivedRows, archived.archivedRows, selectedTeam, selectedHomeName, selectedAddress]);
 
     const normalizedQuery = options.query.trim().toLocaleLowerCase();
+    const selectedArchivedKey = selectedTeam?.archivedAt != null && selectedAddress ? teamAddressKey(selectedAddress) : null;
     const visibleActiveRows = React.useMemo(
         () => activeRows.filter((row) => matchesDirectorySearch(row, normalizedQuery)),
         [activeRows, normalizedQuery],
     );
     const visibleArchivedRows = React.useMemo(
-        () => archivedRows.filter((row) => matchesDirectorySearch(row, normalizedQuery)),
-        [archivedRows, normalizedQuery],
+        () => archivedRows.filter((row) => (showArchived || teamAddressKey(row.address) === selectedArchivedKey)
+            && matchesDirectorySearch(row, normalizedQuery)),
+        [archivedRows, normalizedQuery, selectedArchivedKey, showArchived],
     );
 
     // Every Home that has not contributed is simply not finished. A failure

@@ -34,7 +34,7 @@ export function teamOverviewGroupsSummary(
   directoryNames: readonly string[],
 ): string {
   const counts = team.counts;
-  if (!counts) return t('teams.pages.groups');
+  if (!counts || counts.groups === null) return t('teams.pages.groups');
   const groups =
     counts.groups === 0
       ? t('teams.overview.summary.noGroups')
@@ -63,11 +63,10 @@ export function teamOverviewInvitationsSummary(
 
 export function teamOverviewAuthenticationSummary(
   team: TeamSummaryV1,
-  homeName: string,
   directoryNames: readonly string[],
 ): string {
   return [
-    teamAcceptedSignInSummary(team.policy, homeName),
+    teamAcceptedSignInSummary(team.policy),
     teamAdmissionModeLabel(team.policy.admissionMode),
     ...directoryNames,
   ].join(' · ');

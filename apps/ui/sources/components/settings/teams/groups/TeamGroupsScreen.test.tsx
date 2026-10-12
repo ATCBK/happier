@@ -1,16 +1,8 @@
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import {
-    collectRenderedTestIds,
-    createHomeGovernanceHarness,
-    installHomeGovernanceBoundaries,
-    renderScreen,
-    standardCleanup,
-    teamCapabilitiesFixture,
-    teamGroupFixture,
-    teamSummaryFixture,
-} from '@/dev/testkit';
+import { collectRenderedTestIds, renderScreen, standardCleanup, teamCapabilitiesFixture, teamGroupFixture, teamSummaryFixture } from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 
 import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelpers';
 
@@ -55,7 +47,7 @@ async function renderGroups(serverId: string) {
     return renderScreen(<TeamGroupsScreen serverId={serverId} teamId="team-1" />);
 }
 
-async function addManagedHome(): Promise<string> {
+async function addManagedHome(archivedGroups = 1): Promise<string> {
     const serverId = await harness.addHome({
         name: 'Home A',
         serverUrl: 'https://home-a.example',
@@ -66,6 +58,7 @@ async function addManagedHome(): Promise<string> {
     harness.answer(serverId, TEAM_GET_PATH, {
         body: teamSummaryFixture({
             capabilities: teamCapabilitiesFixture({ manageGroups: true }),
+            counts: { members: 1, suspendedMembers: 0, groups: 1, archivedGroups, waitingInvitations: 0 },
         }),
     });
     return serverId;
@@ -97,6 +90,28 @@ afterEach(() => {
 });
 
 describe('TeamGroupsScreen', () => {
+    it('offers the archived sequence only when the Team summary reports archived Groups', async () => {
+        const serverId = await addManagedHome(0);
+        harness.answer(serverId, GROUPS_LIST_PATH, {
+            body: { items: [teamGroupFixture()], nextCursor: null },
+        });
+        const screen = await renderGroups(serverId);
+        await waitForTestId(screen, 'team-groups-row:group-1');
+        expect(collectRenderedTestIds(screen.tree.toJSON())).not.toContain('team-groups-toggle-archived');
+    });
+
+    it('shows the summary count before loading any archived Group rows', async () => {
+        const serverId = await addManagedHome(3);
+        harness.answer(serverId, GROUPS_LIST_PATH, {
+            body: { items: [teamGroupFixture()], nextCursor: null },
+        });
+        const screen = await renderGroups(serverId);
+        await waitForTestId(screen, 'team-groups-toggle-archived');
+        expect(screen.getTextContent()).toContain('teams.directory.showArchived · 3');
+        expect(harness.requestsFor(GROUPS_LIST_PATH)
+            .some((call) => (call.input as { archived?: string }).archived === 'archived')).toBe(false);
+    });
+
     it('renders a large Group directory as stable chunks in the canonical virtualized list', async () => {
         virtualizedBoundary.mountLimit = 2;
         const serverId = await addManagedHome();
@@ -186,7 +201,9 @@ describe('TeamGroupsScreen', () => {
 
         releaseArchived();
         await waitForTestId(screen, 'team-groups-archived-empty');
-        expect(collectRenderedTestIds(screen.tree.toJSON())).not.toContain('team-groups-toggle-archived');
+        expect(collectRenderedTestIds(screen.tree.toJSON())).toContain('team-groups-toggle-archived');
+        await screen.pressByTestIdAsync('team-groups-toggle-archived');
+        expect(collectRenderedTestIds(screen.tree.toJSON())).not.toContain('team-groups-archived-empty');
     });
 
     it('names the source that owns a directory-created Group without hiding its roster', async () => {

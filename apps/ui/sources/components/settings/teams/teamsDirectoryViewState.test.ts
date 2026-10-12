@@ -66,6 +66,15 @@ function snapshot(
 const HOME_NAMES: Readonly<Record<string, string>> = { alpha: 'Alpha', beta: 'Beta' };
 
 describe('resolveTeamsDirectoryViewState', () => {
+    it('settles a server failure without claiming transport loss or keeping initial skeletons', () => {
+        const state = resolveTeamsDirectoryViewState({
+            homes: [{ serverId: 'alpha', state: 'capable' }],
+            homeNamesByServerId: HOME_NAMES,
+            snapshotsByServerId: { alpha: snapshot('alpha', null, { status: 'error', error: { kind: 'unknown', retryable: true } }) },
+        });
+        expect(state.unavailableHomes).toEqual([{ serverId: 'alpha', homeName: 'Alpha', reason: 'error', retryable: true }]);
+        expect(state.kind).toBe('ready');
+    });
     it('flattens capable Homes into addressed rows that carry their exact Home', () => {
         const state = resolveTeamsDirectoryViewState({
             homes: [

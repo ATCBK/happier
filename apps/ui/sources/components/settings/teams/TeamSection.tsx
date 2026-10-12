@@ -9,13 +9,16 @@ import { ListPresentationProvider } from '@/components/ui/lists/listPresentation
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { HomeCredentialUnreadableCard } from '@/components/sessions/access/UnboundSessionHomeScopeCard';
 import { useTeamBinding } from '@/hooks/teams/useTeamBinding';
+import { useMountedRef } from '@/hooks/ui/useMountedRef';
+import { Modal } from '@/modal';
 import { serverAccountScopedTeamKey } from '@/sync/domains/teams/teamAddress';
 import { presentTeamEntryUnavailableReason } from '@/components/teams/entry/teamAuthenticationFailure';
 import { teamSignInReturnPath } from '@/components/teams/entry/teamSignInHome';
 import { t } from '@/text';
 
-import type { TeamSectionContext } from './teamSectionContext';
+import { teamPageHeaderMeta, type TeamSectionContext } from './teamSectionContext';
 import { teamSettingsPath } from './teamsRoutes';
+import { teamReadFailureLabel } from './teamMutationPresentation';
 
 /**
  * The page head of a Team destination: a sub-page names itself (`title`, `description`); an entity
@@ -103,6 +106,14 @@ export const TeamSection = React.memo(function TeamSection(props: Readonly<{
     const scopeKey = binding.kind === 'bound'
         ? serverAccountScopedTeamKey(binding.scope, binding.address)
         : `unbound:${props.serverId}:${props.teamId}`;
+    const mounted = useMountedRef();
+    const currentScopeKey = React.useRef(scopeKey);
+    currentScopeKey.current = scopeKey;
+    const settleLeave = React.useCallback<TeamSectionContext['settleLeave']>((outcome) => {
+        if (!mounted.current || currentScopeKey.current !== scopeKey) return;
+        if (outcome.kind === 'succeeded') router.replace('/settings/teams');
+        else Modal.alert(t('homeGovernance.changeFailedTitle'), outcome.message);
+    }, [mounted, router, scopeKey]);
     const approvalRefresh = React.useCallback(() => {
         if (binding.kind === 'bound') binding.refresh();
     }, [binding]);
@@ -139,10 +150,11 @@ export const TeamSection = React.memo(function TeamSection(props: Readonly<{
             description={props.description}
             actions={actions}
             alwaysShowTitle={headsItself}
-            meta={[
-                ...(readyTeamName && readyTeamName !== resolvedTitle ? [{ key: 'team', text: readyTeamName }] : []),
-                ...('homeName' in binding ? [{ key: 'home', icon: 'house' as const, text: binding.homeName }] : []),
-            ]}
+            meta={teamPageHeaderMeta({
+                pageTitle: resolvedTitle,
+                teamName: readyTeamName,
+                homeName: 'homeName' in binding ? binding.homeName : undefined,
+            })}
         />
     );
     const plainHeader = renderPlainHeader();
@@ -215,16 +227,11 @@ export const TeamSection = React.memo(function TeamSection(props: Readonly<{
         // Account and `unsupported` is its settled answer about itself. None of
         // them is offered a retry that would ask the same question again.
         const denied = state.error.kind === 'forbidden' || state.error.kind === 'unauthorized';
-        const unsupported = state.error.kind === 'unsupported';
         return conditionPage(
             <TeamStateCard
                 kind={denied ? 'unavailable' : 'error'}
                 title={denied ? t('teams.denied.title') : t('teams.unavailable.title')}
-                body={denied
-                    ? t('teams.errors.forbidden')
-                    : unsupported
-                        ? t('teams.unavailable.updateRequired')
-                        : t('teams.unavailable.offline')}
+                body={teamReadFailureLabel(state.error)}
                 action={state.retryable ? { label: t('teams.unavailable.retry'), onPress: refresh } : undefined}
                 testID="team-unavailable"
             />,
@@ -244,6 +251,7 @@ export const TeamSection = React.memo(function TeamSection(props: Readonly<{
         approvalPending,
         refresh,
         requestApproval,
+        settleLeave,
     };
 
     // Restore lives in the Team's Settings; the archived notice leads there, except on Settings itself.
@@ -273,7 +281,7 @@ export const TeamSection = React.memo(function TeamSection(props: Readonly<{
             {state.stale ? (
                 <AttentionBanner
                     testID="team-stale"
-                    title={state.error ? t('teams.unavailable.offline') : t('teams.stale.label')}
+                    title={state.error ? teamReadFailureLabel(state.error) : t('teams.stale.label')}
                     description={state.error ? t('teams.stale.label') : undefined}
                     accessibilityLiveRegion="polite"
                     action={{ label: t('teams.unavailable.retry'), onPress: refresh }}

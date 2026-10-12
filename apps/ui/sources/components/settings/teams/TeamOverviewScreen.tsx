@@ -23,6 +23,7 @@ import { askTeamManagersText } from './collection/teamsCreateGuidanceText';
 import { directorySourcePresentationState } from './identity/directoryAdministrationPresentation';
 import { useDirectoryAdministration } from './identity/useDirectoryAdministration';
 import { TeamSection } from './TeamSection';
+import { TeamSharedSessionsSection } from './TeamSharedSessionsSection';
 import type { TeamSectionContext } from './teamSectionContext';
 import { teamRoleLabel } from './teamLabels';
 import { TeamOwnerRequiredNotice } from './members/TeamOwnerRequiredNotice';
@@ -34,7 +35,6 @@ import {
   teamGroupsPath,
   teamInvitationsPath,
   teamMembersPath,
-  teamSessionsPath,
   teamSettingsPath,
 } from './teamsRoutes';
 import { resolveTeamOverviewDestinationIds } from './teamOverviewDestinations';
@@ -133,7 +133,7 @@ const TeamOverviewHeader = React.memo(function TeamOverviewHeader(
   }>,
 ) {
   const { team, address, homeName } = props.context;
-  const invite = canInvite(props.context);
+  const invite = canInvite(props.context) && resolveTeamSetupSteps(team) === null;
   return (
     <PageHeader
       testID="team-overview-identity"
@@ -143,6 +143,7 @@ const TeamOverviewHeader = React.memo(function TeamOverviewHeader(
       leading={
         <Avatar
           id={address.teamId}
+          monogram={team.name}
           square
           size={TEAM_HEADER_AVATAR_SIZE}
           imageUrl={team.logo?.url ?? null}
@@ -181,8 +182,9 @@ const TeamOverviewHeader = React.memo(function TeamOverviewHeader(
 
 /**
  * "Get {Team} ready" (lab `tsOverview-E`): a just-created Team's setup as the one numbered-step
- * anatomy (`SetupSteps`, the same the WorkOS connection setup uses). Only the current step carries
- * the primary action; the section leaves as soon as the Team is in use.
+ * anatomy (`SetupSteps`, the same the WorkOS connection setup uses). Each step's operation sits at
+ * its end; only the current step's is the filled primary, the rest are bordered. The section leaves
+ * as soon as the Team is in use.
  */
 const TeamSetupSection = React.memo(function TeamSetupSection(
   props: Readonly<{
@@ -205,11 +207,11 @@ const TeamSetupSection = React.memo(function TeamSetupSection(
             home: context.homeName,
             team: context.team.name,
           }),
-          body: (
+          action: (
             <RoundButton
               testID="team-overview-setup-invite-action"
               size="small"
-              display={step.current ? 'default' : 'inverted'}
+              display={step.current ? 'default' : 'secondary'}
               title={t('homeGovernance.invite.action')}
               disabled={!canInvite(context)}
               onPress={() => openInvite(context)}
@@ -223,11 +225,11 @@ const TeamSetupSection = React.memo(function TeamSetupSection(
           testID: 'team-overview-setup-sign-in',
           title: t('teams.overview.setup.signInTitle'),
           detail: t('teams.overview.setup.signInBody'),
-          body: (
+          action: (
             <RoundButton
               testID="team-overview-setup-sign-in-action"
               size="small"
-              display="inverted"
+              display={step.current ? 'default' : 'secondary'}
               title={t('teams.overview.setup.signInAction')}
               onPress={() => router.push(teamAuthenticationPath(context.address))}
             />
@@ -427,19 +429,7 @@ const TeamOverviewBody = React.memo(function TeamOverviewBody(
       {setupSteps ? (
         <TeamSetupSection context={context} steps={setupSteps} />
       ) : (
-        // Sessions is the Team's daily work, so it leads the destinations rather than sitting
-        // among administration. It is offered to anyone who can see the Team: the destination
-        // itself renders this Home's real listing state — loading, unreachable, unsupported or
-        // ready — instead of this row guessing on its behalf.
-        <ItemGroup title={t('teams.overview.sharedSessions')}>
-          <Item
-            testID="team-overview-sessions"
-            icon={<Icon name="chats-circle" />}
-            title={t('teams.overview.allSharedSessions')}
-            subtitle={t('teams.overview.sessionsSubtitle')}
-            onPress={() => router.push(teamSessionsPath(address))}
-          />
-        </ItemGroup>
+        <TeamSharedSessionsSection context={context} />
       )}
 
       <ItemGroup
@@ -447,7 +437,10 @@ const TeamOverviewBody = React.memo(function TeamOverviewBody(
         description={
           manages
             ? undefined
-            : `${t('teams.overview.managedBy', { team: team.name })} ${askTeamManagersText(managerNames)}`
+            // The first sentence already says who to ask; only real names add to it.
+            : managerNames.length > 0
+              ? `${t('teams.overview.managedBy', { team: team.name })} ${askTeamManagersText(managerNames)}`
+              : t('teams.overview.managedBy', { team: team.name })
         }
       >
         {shown('members') ? (
@@ -474,6 +467,8 @@ const TeamOverviewBody = React.memo(function TeamOverviewBody(
                 />
               ) : undefined
             }
+            // The faces sit beside the chevron, as on every other row that opens a page (tsOverview-A).
+            keepChevronWithRightElement
             onPress={() => router.push(teamMembersPath(address))}
           />
         ) : null}
@@ -503,11 +498,7 @@ const TeamOverviewBody = React.memo(function TeamOverviewBody(
             testID="team-overview-authentication"
             icon={<Icon name="fingerprint" />}
             title={t('teams.tabs.authentication')}
-            subtitle={teamOverviewAuthenticationSummary(
-              team,
-              context.homeName,
-              directoryNames,
-            )}
+            subtitle={teamOverviewAuthenticationSummary(team, directoryNames)}
             onPress={() => router.push(teamAuthenticationPath(address))}
           />
         ) : null}

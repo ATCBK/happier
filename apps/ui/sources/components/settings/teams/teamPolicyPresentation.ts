@@ -87,10 +87,34 @@ export function teamAdmissionModeLabel(mode: TeamAdmissionModeV1): string {
     }
 }
 
-/** What sign-in the Team accepts, as one fact: the Home's, its own chosen set, or a rule that needs repair. */
-export function teamAcceptedSignInSummary(policy: TeamPolicyV1, homeName: string): string {
+/**
+ * The mode's name as a segment of the "New members" choice: short enough that the three options sit
+ * on one line on a phone. Elsewhere the mode reads as a fact, through `teamAdmissionModeLabel`.
+ */
+export function teamAdmissionModeSegmentLabel(mode: TeamAdmissionModeV1): string {
+    switch (mode) {
+        case 'invite_only':
+            return t('teams.authentication.policy.admissionSegment.inviteOnly');
+        case 'provisioned':
+            return t('teams.authentication.policy.admissionSegment.provisioned');
+        case 'jit':
+            return t('teams.authentication.policy.admissionSegment.jit');
+    }
+}
+
+/** What the selected new-member mode does, shared wherever the admission choice is presented. */
+export function teamAdmissionModeConsequence(mode: TeamAdmissionModeV1): string {
+    switch (mode) {
+        case 'invite_only': return t('teams.authentication.policy.admissionInviteOnlyDescription');
+        case 'provisioned': return t('teams.authentication.policy.admissionProvisionedDescription');
+        case 'jit': return t('teams.authentication.policy.admissionJitDescription');
+    }
+}
+
+/** What sign-in the Team accepts, as one fact: the Home's, its own chosen set, or a rule that needs repair. The page already names the Home. */
+export function teamAcceptedSignInSummary(policy: TeamPolicyV1): string {
     if (policy.authenticationPolicyStatus === 'repair_required') return t('teams.overview.summary.signInNeedsRepair');
     return policy.authenticationPolicy?.mode === 'restricted'
         ? t('teams.overview.summary.chosenSignIn')
-        : t('teams.overview.summary.homeSignIn', { home: homeName });
+        : t('teams.overview.summary.homeSignIn');
 }

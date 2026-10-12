@@ -2,7 +2,6 @@ import * as React from 'react';
 
 import { Avatar } from '@/components/ui/avatar/Avatar';
 import { Item } from '@/components/ui/lists/Item';
-import { StatusPill } from '@/components/ui/status/StatusPill';
 import { t } from '@/text';
 
 import { teamRoleLabel } from './teamLabels';
@@ -34,9 +33,15 @@ export const TeamRow = React.memo(function TeamRow(props: Readonly<{
     const { row } = props;
     const rail = props.variant === 'rail';
     const roleLabel = row.team.viewerRole ? teamRoleLabel(row.team.viewerRole) : '';
-    const subtitle = props.showHome
-        ? [roleLabel, row.homeName].filter((part) => part.length > 0).join(' · ')
-        : roleLabel;
+    // Active members, when the Home shares the count (a Home administrator gets totals without a
+    // roster). The compact rail stays one fact: the viewer's role.
+    const counts = row.team.counts;
+    const memberCount = !rail && counts
+        ? t('teams.groups.memberCount', { count: counts.members - counts.suspendedMembers })
+        : '';
+    const subtitle = [roleLabel, memberCount, props.showHome ? row.homeName : '']
+        .filter((part) => part.length > 0)
+        .join(' · ');
 
     return (
         <Item
@@ -53,6 +58,7 @@ export const TeamRow = React.memo(function TeamRow(props: Readonly<{
                     <HappierCollectionListMark>
                         <Avatar
                             id={row.address.teamId}
+                            monogram={row.team.name}
                             square
                             size={TEAM_RAIL_AVATAR_SIZE}
                             imageUrl={row.team.logo?.url ?? null}
@@ -68,6 +74,7 @@ export const TeamRow = React.memo(function TeamRow(props: Readonly<{
                 leftElement: (
                     <Avatar
                         id={row.address.teamId}
+                        monogram={row.team.name}
                         square
                         size={TEAM_AVATAR_SIZE}
                         imageUrl={row.team.logo?.url ?? null}
@@ -75,14 +82,8 @@ export const TeamRow = React.memo(function TeamRow(props: Readonly<{
                     />
                 ),
             })}
-            rightElement={row.team.archivedAt !== null ? (
-                <StatusPill
-                    testID={`teams-row-archived:${row.address.teamId}`}
-                    variant="neutral"
-                    label={t('teams.directory.archivedBadge')}
-                    labelVariant="phrase"
-                />
-            ) : undefined}
+            // An archived Team is listed under the collection's "Archived" heading, rail and page alike,
+            // so the row repeats nothing: a pill beside the name only squeezed it.
             onPress={props.onPress}
         />
     );

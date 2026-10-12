@@ -64,10 +64,7 @@ installSettingsViewCommonModuleMocks({
     }),
     // The real client store: the approval writer publishes the settled
     // Artifact into it and the mounted approval reader observes it there.
-    storage: async (importOriginal) => {
-        const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleMock({ importOriginal, overrides: {} });
-    },
+    storage: 'real',
 });
 
 const harness = createHomeGovernanceHarness();

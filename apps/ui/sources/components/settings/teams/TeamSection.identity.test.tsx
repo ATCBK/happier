@@ -19,6 +19,7 @@ vi.mock('@legendapp/list/react-native', async (importOriginal) => {
 });
 
 installSettingsViewCommonModuleMocks({
+    storage: 'real',
     router: async () => {
         const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
         return createExpoRouterMock().module;
@@ -28,14 +29,26 @@ installSettingsViewCommonModuleMocks({
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
 
+// Resolve the real owners during collection, after their transport boundary,
+// so cold source transformation cannot spend a lifecycle test's deadline.
+const { resetTeamsSnapshotsForTests } = await import('@/sync/store/teams/teamsSnapshots');
+const { resetTeamsDirectoryEngineForTests } = await import('@/sync/engine/teams/teamsDirectoryEngine');
+const { resetHomeGovernanceSnapshotsForTests } = await import('@/sync/store/home/governance/homeGovernanceSnapshots');
+const { resetHomeGovernanceEngineForTests } = await import('@/sync/engine/home/governance/homeGovernanceEngine');
+const { TeamSection } = await import('./TeamSection');
+const { SurfaceStateCard } = await import('@/components/ui/surfaces/SurfaceStateCard');
+const { TeamOverviewScreen } = await import('./TeamOverviewScreen');
+const { NavigationTitleChromeProvider } = await import('@/components/ui/layout/PageHeader');
+const { HomeAdministrationSection } = await import('../home/governance/HomeAdministrationSection');
+const { TeamMemberDetailScreen } = await import('./members/TeamMemberDetailScreen');
+const { TeamGroupDetailScreen } = await import('./groups/TeamGroupDetailScreen');
+const { HomeAdministrationAccountScreen } = await import('../home/governance/HomeAdministrationAccountScreen');
+const { HomeConsoleShell, HomeConsoleSidebar } = await import('../home/governance/HomeConsoleNavigation');
+
 const TEAM_GET = '/v1/teams/get';
 const HOME_GET = '/v1/home/governance/get';
 
 beforeEach(async () => {
-    const { resetTeamsSnapshotsForTests } = await import('@/sync/store/teams/teamsSnapshots');
-    const { resetTeamsDirectoryEngineForTests } = await import('@/sync/engine/teams/teamsDirectoryEngine');
-    const { resetHomeGovernanceSnapshotsForTests } = await import('@/sync/store/home/governance/homeGovernanceSnapshots');
-    const { resetHomeGovernanceEngineForTests } = await import('@/sync/engine/home/governance/homeGovernanceEngine');
     resetTeamsSnapshotsForTests();
     resetTeamsDirectoryEngineForTests();
     resetHomeGovernanceSnapshotsForTests();
@@ -56,11 +69,24 @@ async function addHomes() {
 }
 
 describe('exact Home and Team header identity', () => {
+    it.each([
+        { body: { error: 'team_not_found' }, denied: true },
+        { body: undefined, denied: false },
+    ])('distinguishes revoked access from a missing Team route (denied=$denied)', async ({ body, denied }) => {
+        const { target } = await addHomes();
+        harness.answer(target, TEAM_GET, { status: 404, body });
+        const screen = await renderScreen(
+            <TeamSection serverId={target} teamId="team-1" title="Settings">{() => React.createElement('View', { testID: 'scope-ready' })}</TeamSection>,
+        );
+        await waitForHomeGovernance(() => expect(screen.findHostByTestId('team-unavailable')).not.toBeNull());
+        expect(screen.findByType(SurfaceStateCard).props.kind).toBe(denied ? 'unavailable' : 'error');
+        expect(screen.findHostByTestId('scope-ready')).toBeNull();
+    });
+
     it('keeps the saved Home overview addressed when a different Home is focused', async () => {
         const { target, focused } = await addHomes();
         const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
         expect(getActiveServerSnapshot().serverId).toBe(focused);
-        const { TeamOverviewScreen } = await import('./TeamOverviewScreen');
         const screen = await renderScreen(<TeamOverviewScreen serverId={target} teamId="team-1" />);
 
         await waitForHomeGovernance(() => expect(screen.findHostByTestId('team-overview-home')).not.toBeNull());
@@ -73,8 +99,6 @@ describe('exact Home and Team header identity', () => {
 
     it.each([false, true])('keeps a generic Team page qualified when native title chrome is %s', async (showsTitle) => {
         const { target, focused } = await addHomes();
-        const { TeamSection } = await import('./TeamSection');
-        const { NavigationTitleChromeProvider } = await import('@/components/ui/layout/PageHeader');
         const page = (serverId: string) => (
             <NavigationTitleChromeProvider showsTitle={showsTitle}>
                 <TeamSection serverId={serverId} teamId="team-1" title="Settings">{() => React.createElement('View', { testID: 'scope-ready' })}</TeamSection>
@@ -103,9 +127,6 @@ describe('exact Home and Team header identity', () => {
             body: { error: kind === 'team' ? 'team_forbidden' : 'home_governance_forbidden' },
             respondAfter,
         });
-        const { TeamSection } = await import('./TeamSection');
-        const { HomeAdministrationSection } = await import('../home/governance/HomeAdministrationSection');
-        const { NavigationTitleChromeProvider } = await import('@/components/ui/layout/PageHeader');
         const screen = await renderScreen(
             <NavigationTitleChromeProvider showsTitle>
                 {kind === 'team'
@@ -131,18 +152,18 @@ describe('exact Home and Team header identity', () => {
         harness.answer(target, '/v1/teams/groups/get', { body: teamGroupFixture() });
         harness.answer(target, '/v1/teams/groups/members/list', { body: { items: [], nextCursor: null } });
         harness.answer(target, '/v1/home/accounts/get', { body: homeAccountDetailFixture('ada') });
-        const { TeamMemberDetailScreen } = await import('./members/TeamMemberDetailScreen');
-        const { TeamGroupDetailScreen } = await import('./groups/TeamGroupDetailScreen');
-        const { HomeAdministrationAccountScreen } = await import('../home/governance/HomeAdministrationAccountScreen');
-        const { NavigationTitleChromeProvider } = await import('@/components/ui/layout/PageHeader');
         const screen = await renderScreen(
             <NavigationTitleChromeProvider showsTitle>
                 {kind === 'member' ? <TeamMemberDetailScreen serverId={target} teamId="team-1" membershipId="membership-1" />
                     : kind === 'group' ? <TeamGroupDetailScreen serverId={target} teamId="team-1" groupId="group-1" />
-                        : <HomeAdministrationAccountScreen serverId={target} accountId="ada" />}
+                        : <HomeConsoleShell serverId={target} rail="people">
+                            {/* The console navigation owns Home identity; the person header owns the person. */}
+                            <HomeConsoleSidebar serverId={target} />
+                            <HomeAdministrationAccountScreen serverId={target} accountId="ada" />
+                        </HomeConsoleShell>}
             </NavigationTitleChromeProvider>,
         );
-        const readyId = kind === 'member' ? 'team-member-identity' : kind === 'group' ? 'team-group-member-count' : 'home-account-status';
+        const readyId = kind === 'member' ? 'team-member-identity' : kind === 'group' ? 'team-group-member-count' : 'home-account-role';
         await waitForHomeGovernance(() => expect(screen.findHostByTestId(readyId)).not.toBeNull());
         expect(screen.getTextContent()).toContain('Research Home');
         expect(screen.getTextContent()).not.toContain('Personal Home');

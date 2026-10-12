@@ -3,21 +3,8 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TeamIdentityConnectionV1 } from '@happier-dev/protocol/teams';
 
-import {
-    collectRenderedTestIds,
-    createDeferred,
-    createHomeGovernanceHarness,
-    decideApprovalAsInbox,
-    homeAccountPickerRowFixture,
-    installHomeGovernanceBoundaries,
-    renderScreen,
-    standardCleanup,
-    teamCapabilitiesFixture,
-    teamGroupFixture,
-    teamInvitationRowFixture,
-    teamMembershipFixture,
-    teamSummaryFixture,
-} from '@/dev/testkit';
+import { collectRenderedTestIds, createDeferred, decideApprovalAsInbox, homeAccountPickerRowFixture, renderScreen, standardCleanup, teamCapabilitiesFixture, teamGroupFixture, teamInvitationRowFixture, teamMembershipFixture, teamSummaryFixture } from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 
 import { installSettingsViewCommonModuleMocks } from '../settingsViewTestHelpers';
 
@@ -93,11 +80,10 @@ vi.mock('@/sync/ops/teams/teamInvitationOperations', async (importOriginal) => {
 });
 
 installSettingsViewCommonModuleMocks({
-    router: async () => ({
-        useRouter: () => ({ push: routerPush, replace: routerReplace, back: routerBack }),
-        useNavigation: () => ({ setOptions: vi.fn() }),
-        useLocalSearchParams: () => routeParams.current,
-    }),
+    router: async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({
+        params: () => routeParams.current,
+        router: { push: routerPush, replace: routerReplace, back: routerBack },
+    }).module,
     // The real client store: the approval writer publishes the settled
     // Artifact into it and the mounted continuation reads it back, so a stub
     // here would sever exactly the path these journeys prove.
@@ -301,7 +287,7 @@ describe('deferred Team identity reads', () => {
 
         await waitForTestId(screen, decision === 'approve' ? 'team-authentication-empty' : 'team-authentication-unavailable');
         expect(harness.requestsFor(listPath)).toHaveLength(decision === 'approve' ? 1 : 0);
-        if (decision === 'reject') expect(screen.findByTestId('team-authentication-unavailable')?.props.onPress).toEqual(expect.any(Function));
+        if (decision === 'reject') expect(screen.findByTestId('team-authentication-unavailable-action')?.props.onPress).toEqual(expect.any(Function));
         expect(harness.artifacts(serverId).list()).toHaveLength(1);
     });
 });

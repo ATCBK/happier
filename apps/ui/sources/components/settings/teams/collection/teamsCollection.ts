@@ -37,17 +37,20 @@ export function resolveSelectedTeamAddress(pathname: string): TeamAddress | null
 
 /**
  * The member a Teams-collection pathname is about (`…/<teamId>/members/<membershipId>`), so the
- * Members rail can stand beside the open person. `null` on the roster itself, on the add page and
+ * Members rail can stand beside the open person. The roster selects the collection with no person;
+ * `null` on the add page and
  * everywhere else in the Team.
  */
 export function resolveSelectedTeamMember(
     pathname: string,
-): Readonly<{ address: TeamAddress; membershipId: string }> | null {
+): Readonly<{ address: TeamAddress; membershipId: string | null }> | null {
     const address = resolveSelectedTeamAddress(pathname);
     if (!address) return null;
     const segments = pathname.split('/').filter((segment) => segment.length > 0);
     const membershipId = segments[5];
-    if (segments[4] !== 'members' || !membershipId || membershipId === 'add' || segments.length !== 6) return null;
+    if (segments[4] !== 'members') return null;
+    if (segments.length === 5) return { address, membershipId: null };
+    if (!membershipId || membershipId === 'add' || segments.length !== 6) return null;
     try {
         return { address, membershipId: decodeURIComponent(membershipId) };
     } catch {

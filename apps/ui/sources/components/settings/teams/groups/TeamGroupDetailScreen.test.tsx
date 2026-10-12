@@ -2,19 +2,8 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import {
-    accountDisplayProfileFixture,
-    collectRenderedTestIds,
-    createHomeGovernanceHarness,
-    installHomeGovernanceBoundaries,
-    renderScreen,
-    standardCleanup,
-    teamCapabilitiesFixture,
-    teamGroupFixture,
-    teamGroupMemberFixture,
-    teamMembershipFixture,
-    teamSummaryFixture,
-} from '@/dev/testkit';
+import { accountDisplayProfileFixture, collectRenderedTestIds, renderScreen, standardCleanup, teamCapabilitiesFixture, teamGroupFixture, teamGroupMemberFixture, teamMembershipFixture, teamSummaryFixture } from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 
 import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelpers';
 
@@ -55,6 +44,7 @@ vi.mock('@legendapp/list/react-native', async (importOriginal) => {
 });
 
 installSettingsViewCommonModuleMocks({
+    storage: 'real',
     router: async () => ({
         useRouter: () => ({ push: groupRouterPush, back: vi.fn() }),
         useNavigation: () => ({ setOptions: vi.fn() }),
@@ -257,7 +247,7 @@ describe('TeamGroupDetailScreen', () => {
 
         const screen = await renderGroupDetail(serverId);
         await waitForTestId(screen, 'team-group-unavailable-action');
-        expect(screen.getTextContent()).toContain('teams.unavailable.offline');
+        expect(screen.getTextContent()).toContain('teams.errors.loadFailed');
 
         harness.answer(serverId, GROUP_GET_PATH, {
             body: teamGroupFixture({ capabilities: MANAGED_GROUP_CAPABILITIES }),
@@ -491,7 +481,7 @@ describe('TeamGroupDetailScreen', () => {
         expect(historyText).toContain('teams.history.allExistingNamed(name=Developers)');
 
         await waitForTestId(screen, 'team-group-candidates-retry');
-        expect(screen.getTextContent()).toContain('teams.unavailable.offline');
+        expect(screen.getTextContent()).toContain('teams.errors.loadFailed');
     });
 
     it('routes a native removal through the approval owner when a source still contributes', async () => {

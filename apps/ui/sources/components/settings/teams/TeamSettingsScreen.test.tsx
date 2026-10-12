@@ -6,18 +6,9 @@ import {
     buildApprovalRequestArtifactHeaderV1,
 } from '@happier-dev/protocol';
 
-import {
-    collectRenderedTestIds,
-    createHomeGovernanceHarness,
-    installHomeGovernanceBoundaries,
-    renderScreen,
-    standardCleanup,
-    teamCapabilitiesFixture,
-    teamPolicyFixture,
-    teamSummaryFixture,
-} from '@/dev/testkit';
+import { collectRenderedTestIds, renderScreen, standardCleanup, teamCapabilitiesFixture, teamPolicyFixture, teamSummaryFixture } from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
-import { resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 
 import { installSettingsViewCommonModuleMocks } from '../settingsViewTestHelpers';
 
@@ -90,6 +81,7 @@ installSettingsViewCommonModuleMocks({
 
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
+const { resetServerFeaturesClientForTests } = await import("@/sync/api/capabilities/serverFeaturesClient");
 
 const TEAM_GET_PATH = '/v1/teams/get';
 const TEAM_UPDATE_PATH = '/v1/teams/update';
@@ -194,6 +186,26 @@ afterEach(() => {
 });
 
 describe('TeamSettingsScreen', () => {
+    it('classifies an initial Team 503 as a server read failure, not an unreachable Home', async () => {
+        const serverId = await addHomeWithTeam(teamSummaryFixture());
+        harness.answer(serverId, '/v1/teams/get', { status: 503 });
+        const screen = await renderSettings(serverId);
+        await waitForTestId(screen, 'team-unavailable');
+        expect(screen.getTextContent()).toContain('teams.errors.loadFailed');
+        expect(screen.getTextContent()).not.toContain('teams.unavailable.offline');
+        harness.answer(serverId, '/v1/teams/get', { body: teamSummaryFixture() });
+        const { SurfaceStateCard } = await import('@/components/ui/surfaces/SurfaceStateCard');
+        const unavailable = screen.findAllByType(SurfaceStateCard).find((node) => node.props.testID === 'team-unavailable');
+        await act(async () => unavailable?.props.action.onPress());
+        await waitForTestId(screen, 'team-settings-session-creation');
+        harness.answer(serverId, '/v1/teams/get', { status: 503 });
+        const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
+        const { TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1 } = await import('@happier-dev/protocol');
+        await act(async () => publishHomeAccountChange(serverId, [TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1]));
+        await waitForTestId(screen, 'team-stale');
+        expect(screen.getTextContent()).toContain('teams.errors.loadFailed');
+        expect(screen.getTextContent()).not.toContain('teams.unavailable.offline');
+    });
     it('UX keeps an unsaved invalid identity draft when navigation is canceled', async () => {
         const serverId = await addHomeWithTeam(teamSummaryFixture({ capabilities: teamCapabilitiesFixture({ manageSettings: true }) }));
         const screen = await renderSettings(serverId);
@@ -464,7 +476,7 @@ describe('TeamSettingsScreen', () => {
 
         const selectedChoices = [
             ['team-settings-session-creation:team_default', 'teams.settings.sessionDefaultsSection'],
-            ['team-settings-external-sharing:allowed', 'teams.settings.externalSharingSection'],
+            ['team-settings-external-sharing:allowed', 'teams.settings.sharingOutsideTeam(team=Platform)'],
             ['team-settings-history-default:from_membership', 'teams.settings.historyDefaultSection'],
         ] as const;
 
@@ -816,6 +828,8 @@ describe('TeamSettingsScreen', () => {
         expect(ids).not.toContain('team-archived');
         expect(ids).toContain('team-settings-restore');
         expect(ids).not.toContain('team-settings-archive');
+        const { AttentionBanner } = await import('@/components/ui/lists/AttentionBanner');
+        expect(screen.tree.findByType(AttentionBanner).props.action.display).toBe('default');
         // Nothing can change, so nothing is drawn as a control: the values read as text.
         expect(ids).toContain('team-settings-session-creation');
         expect(ids.filter((id) => id.startsWith('team-settings-session-creation:'))).toEqual([]);

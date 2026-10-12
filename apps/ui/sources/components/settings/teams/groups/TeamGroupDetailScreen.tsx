@@ -853,7 +853,7 @@ const GroupDetail = React.memo(function GroupDetail(props: Readonly<{
                             const confirmed = await Modal.confirm(
                                 t('teams.groups.archiveTitle', { name: group.name }),
                                 t('teams.groups.archiveBody'),
-                                { confirmText: t('teams.groups.archiveAction', { name: group.name }), destructive: true },
+                                { confirmText: t('teams.archive.confirmShort'), destructive: true },
                             );
                             if (!confirmed) {
                                 mutationInFlightRef.current = false;

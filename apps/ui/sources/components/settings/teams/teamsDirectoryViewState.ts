@@ -1,3 +1,5 @@
+import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
+import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
 import type { TeamSummaryV1 } from '@happier-dev/protocol/teams';
 
 import type { TeamsHomeAdmissionEntry } from '@/sync/domains/teams/teamsSettingsAdmission';
@@ -5,6 +7,7 @@ import type { TeamAddress } from '@/sync/domains/teams/teamAddress';
 import type { TeamsDirectorySnapshot } from '@/sync/store/teams/teamsSnapshots';
 import type { ScopedSnapshotError } from '@/sync/domains/scope/scopedSnapshotFacts';
 import { t } from '@/text';
+import type { SurfaceStateKind } from '@/components/ui/surfaces/SurfaceStateCard';
 
 /**
  * What the Teams directory should render for the exact Home set right now.
@@ -27,7 +30,7 @@ export type TeamsDirectoryRow = Readonly<{
 export type TeamsDirectoryUnavailableHome = Readonly<{
     serverId: string;
     homeName: string;
-    reason: 'loading' | 'offline' | 'denied' | 'unsupported' | 'credential_unreadable';
+    reason: 'loading' | 'offline' | 'error' | 'denied' | 'unsupported' | 'credential_unreadable';
     retryable: boolean;
 }>;
 
@@ -68,7 +71,7 @@ export function teamsUnavailableReason(
         return { reason: 'denied', retryable: false };
     }
     if (error.kind === 'unsupported') return { reason: 'unsupported', retryable: false };
-    return { reason: 'offline', retryable: error.retryable };
+    return { reason: error.kind === 'unreachable' ? 'offline' : 'error', retryable: error.retryable };
 }
 
 export function teamsUnavailableHomeReason(home: Pick<TeamsDirectoryUnavailableHome, 'reason'>): string {
@@ -77,7 +80,19 @@ export function teamsUnavailableHomeReason(home: Pick<TeamsDirectoryUnavailableH
         case 'denied': return t('teams.errors.forbidden');
         case 'unsupported': return t('teams.unavailable.updateRequired');
         case 'offline': return t('teams.unavailable.offline');
+        case 'error': return t('teams.errors.loadFailed');
         case 'credential_unreadable': return t('homeGovernance.credentialUnreadableTitle');
+    }
+}
+
+/** The directory page and its rail present the same settled Home failure. */
+export function teamsUnavailableHomeStateKind(home: Pick<TeamsDirectoryUnavailableHome, 'reason'>): SurfaceStateKind {
+    switch (home.reason) {
+        case 'loading': return 'loading';
+        case 'denied': return 'denied';
+        case 'offline': return 'offline';
+        case 'unsupported': return 'unavailable';
+        default: return 'error';
     }
 }
 
@@ -93,7 +108,7 @@ export function resolveTeamsDirectoryViewState(
     let stale = false;
 
     for (const home of input.homes) {
-        const homeName = (input.homeNamesByServerId[home.serverId] ?? '').trim() || home.serverId;
+        const homeName = (input.homeNamesByServerId[home.serverId] ?? '').trim() || resolveHomeDisplayLabel(getServerProfileById(home.serverId), home.serverId);
 
         if (home.state === 'disabled') {
             // A settled "no" from the feature decision. The destination itself
@@ -152,7 +167,7 @@ export function resolveTeamsDirectoryViewState(
     }
 
     const partial = unavailableHomes.length > 0 || stale;
-    const kind: TeamsDirectoryViewState['kind'] = answeredHomes === 0
+    const kind: TeamsDirectoryViewState['kind'] = answeredHomes === 0 && unavailableHomes.every((home) => home.reason === 'loading')
         ? 'loading'
         : rows.length === 0 && archivedRows.length === 0 && answeredHomes === admittedHomes
             ? 'empty'

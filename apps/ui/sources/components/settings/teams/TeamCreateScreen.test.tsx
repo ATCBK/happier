@@ -2,19 +2,8 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import {
-    collectRenderedTestIds,
-    createHomeGovernanceHarness,
-    flushHookEffects,
-    homeGovernanceProjectionFixture,
-    homeAccountPickerRowFixture,
-    installHomeGovernanceBoundaries,
-    renderScreen,
-    standardCleanup,
-    teamCapabilitiesFixture,
-    teamSummaryFixture,
-} from '@/dev/testkit';
-import { resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
+import { collectRenderedTestIds, flushHookEffects, homeGovernanceProjectionFixture, homeAccountPickerRowFixture, renderScreen, standardCleanup, teamCapabilitiesFixture, teamSummaryFixture } from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 
 import { installSettingsViewCommonModuleMocks } from '../settingsViewTestHelpers';
 
@@ -54,6 +43,7 @@ vi.mock('expo-file-system', () => ({
 
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
+const { resetServerFeaturesClientForTests } = await import("@/sync/api/capabilities/serverFeaturesClient");
 
 const ELIGIBILITY_PATH = '/v1/home/governance/eligibility/get';
 const GOVERNANCE_PATH = '/v1/home/governance/get';
@@ -98,6 +88,22 @@ afterEach(() => {
 });
 
 describe('TeamCreateScreen', () => {
+    it('UX keeps the draft monogram preview the same while the name and description are typed', async () => {
+        const home = await harness.addHome({ name: 'Home A', serverUrl: 'https://home-a.example', accountId: 'member-a', teamsEnabled: true });
+        await harness.selectHomes([home]);
+        harness.answer(home, ELIGIBILITY_PATH, { body: { teamsEnabled: true, createTeam: true, createTeamForChosenAccount: false } });
+        const screen = await renderCreate();
+        await vi.waitFor(() => expect(screen.findByTestId('teams-create-logo-preview')).not.toBeNull());
+        const previewIdentity = () => screen.tree.root
+            .findAll((node) => node.props.square === true && typeof node.props.id === 'string')
+            .map((node) => node.props.id as string)[0];
+        const before = previewIdentity();
+        expect(before).toEqual(expect.any(String));
+        act(() => screen.changeTextByTestId('teams-create-name', 'Platform'));
+        act(() => screen.changeTextByTestId('teams-create-description', 'Shared dev boxes'));
+        expect(previewIdentity()).toBe(before);
+    });
+
     it('UX preserves a dirty creation draft on navigation until discard is chosen', async () => {
         const home = await harness.addHome({ name: 'Home A', serverUrl: 'https://home-a.example', accountId: 'member-a', teamsEnabled: true });
         await harness.selectHomes([home]);

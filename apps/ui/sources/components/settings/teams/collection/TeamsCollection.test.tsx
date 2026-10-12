@@ -2,8 +2,8 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { collectRenderedTestIds, createHomeGovernanceHarness, installHomeGovernanceBoundaries, renderScreen, standardCleanup, teamSummaryFixture } from '@/dev/testkit';
-import { resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
+import { collectRenderedTestIds, renderScreen, standardCleanup, teamSummaryFixture } from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
 import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelpers';
 
@@ -23,6 +23,7 @@ vi.mock('@legendapp/list/react-native', async (importOriginal) => {
 
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
+const { resetServerFeaturesClientForTests } = await import("@/sync/api/capabilities/serverFeaturesClient");
 const LIST_PATH = '/v1/teams/list';
 
 beforeEach(async () => {
@@ -48,6 +49,45 @@ async function addHome(name: string) {
 }
 
 describe('Team collection loaded-page search', () => {
+    it('retains the selected archived Team in the rail without opening all archived Teams', async () => {
+        const home = await addHome('archived-home');
+        await harness.selectHomes([home]);
+        const team = teamSummaryFixture({ id: 'archived-team', archivedAt: 1 });
+        const other = teamSummaryFixture({ id: 'other-archived', archivedAt: 2 });
+        harness.answer(home, LIST_PATH, { select: (input) => ({ body: {
+            items: input !== null && typeof input === 'object' && 'archived' in input && input.archived === 'archived' ? [other] : [],
+            nextCursor: null,
+        } }) });
+        harness.answer(home, '/v1/teams/get', { body: team });
+        pathname = `/settings/teams/${home}/archived-team/settings`;
+        const { TeamsCollectionRail } = await import('./TeamsCollectionRail');
+        const screen = await renderScreen(<TeamsCollectionRail />);
+        await vi.waitFor(() => expect(harness.requestsFor('/v1/teams/get').length).toBeGreaterThan(0));
+        await vi.waitFor(() => expect(collectRenderedTestIds(screen.tree.toJSON())).toContain(`teams-row:${home}:archived-team`));
+        expect(screen.tree.findAllByTestId(`teams-row:${home}:archived-team`).some((node) => node.props.selected === true)).toBe(true);
+        expect(collectRenderedTestIds(screen.tree.toJSON())).not.toContain(`teams-row:${home}:other-archived`);
+        await screen.pressByTestIdAsync('teams-directory-toggle-archived');
+        await vi.waitFor(() => expect(collectRenderedTestIds(screen.tree.toJSON())).toContain(`teams-row:${home}:other-archived`));
+        await screen.pressByTestIdAsync('teams-directory-toggle-archived');
+        expect(collectRenderedTestIds(screen.tree.toJSON())).not.toContain(`teams-row:${home}:other-archived`);
+        expect(collectRenderedTestIds(screen.tree.toJSON())).toContain(`teams-row:${home}:archived-team`);
+    });
+    it('presents a server failure with the shared error card and retries to a successful directory', async () => {
+        const home = await addHome('failed-home');
+        await harness.selectHomes([home]);
+        harness.answer(home, LIST_PATH, { status: 503 });
+        const { TeamsDirectoryScreen } = await import('../TeamsDirectoryScreen');
+        const { SurfaceStateCard } = await import('@/components/ui/surfaces/SurfaceStateCard');
+        const screen = await renderScreen(<TeamsDirectoryScreen />);
+        await vi.waitFor(() => expect(collectRenderedTestIds(screen.tree.toJSON())).toContain(`teams-home-unavailable:${home}`));
+        const card = screen.tree.findAllByType(SurfaceStateCard).find((node) => node.props.testID === `teams-home-unavailable:${home}`);
+        expect(card?.props).toMatchObject({ kind: 'error', size: 'line', reason: 'teams.errors.loadFailed', action: { testID: 'teams-directory-retry' } });
+        expect(collectRenderedTestIds(screen.tree.toJSON())).not.toContain('teams-directory-loading');
+        harness.answer(home, LIST_PATH, { body: { items: [], nextCursor: null } });
+        await screen.pressByTestIdAsync('teams-directory-retry');
+        await vi.waitFor(() => expect(collectRenderedTestIds(screen.tree.toJSON())).toContain('teams-directory-empty'));
+    });
+
     it('retains a readable addressed Team outside the member directory without an empty or zero-count claim', async () => {
         const home = await addHome('admin-home');
         await harness.selectHomes([home]);

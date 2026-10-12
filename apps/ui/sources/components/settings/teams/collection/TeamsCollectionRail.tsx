@@ -1,5 +1,4 @@
 import * as React from 'react';
-import { View } from 'react-native';
 import { useGlobalSearchParams, usePathname, useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { useUnistyles } from 'react-native-unistyles';
 
@@ -16,7 +15,8 @@ import { fireAndForget } from '@/utils/system/fireAndForget';
 import { TeamRow } from '../TeamRow';
 import { teamCredentialCreatePath, teamDetailPath, teamsCreatePath } from '../teamsRoutes';
 import type { TeamsDirectoryUnavailableHome } from '../teamsDirectoryViewState';
-import { teamsUnavailableHomeReason } from '../teamsDirectoryViewState';
+import { teamsUnavailableHomeReason, teamsUnavailableHomeStateKind } from '../teamsDirectoryViewState';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { teamCreateDraftName } from './teamCreateDraftName';
 import {
     readTeamCredentialSourceHint,
@@ -140,7 +140,7 @@ export const TeamsCollectionRail = React.memo(function TeamsCollectionRail() {
                 titleStyle={collectionListStyles.dimmedTitle} accessibilityExpanded={collection.showArchived}
                 density="compact" showChevron={false} pressableStyle={collectionListStyles.row} onPress={collection.toggleArchived} />
         ));
-        if (collection.showArchived) {
+        if (collection.showArchived || collection.visibleArchivedRows.length > 0) {
             if (collection.visibleArchivedRows.length > 0) {
                 add('archived-heading', () => <CollectionListGroupLabel title={t('teams.directory.archivedSection')} />);
             }
@@ -154,11 +154,11 @@ export const TeamsCollectionRail = React.memo(function TeamsCollectionRail() {
                 add('archived-empty', () => <Item testID="teams-directory-archived-empty" title={t('teams.directory.archivedEmpty')}
                     mode="info" density="compact" />);
             }
-            if (!collection.archivedPending && collection.archived.unavailableHomes.length > 0) {
+            if (collection.showArchived && !collection.archivedPending && collection.archived.unavailableHomes.length > 0) {
                 add('archived-unavailable', () => <UnavailableHomesRail homes={collection.archived.unavailableHomes}
                     onRetry={collection.archived.refresh} testIDPrefix="teams-archived-home-unavailable" />);
             }
-            if (collection.archived.hasMore) {
+            if (collection.showArchived && collection.archived.hasMore) {
                 add('archived-load-more', () => <Item testID="teams-directory-archived-load-more" title={t('homeGovernance.loadMore')}
                     density="compact" showChevron={false} pressableStyle={collectionListStyles.row} onPress={collection.archived.loadMore} />);
             }
@@ -204,40 +204,26 @@ const UnavailableHomesRail = React.memo(function UnavailableHomesRail(props: Rea
     onRetry: () => void;
     testIDPrefix?: string;
 }>) {
-    const { theme } = useUnistyles();
     if (props.homes.length === 0) return null;
     const prefix = props.testIDPrefix ?? 'teams-home-unavailable';
-    const retryable = props.homes.some((home) => home.retryable);
     return (
         <>
             <CollectionListGroupLabel title={t('teams.directory.unreachableHomes')} count={props.homes.length} />
-            {props.homes.map((home) => (
-                <Item
+            {props.homes.map((home, index) => (
+                <SurfaceStateCard
                     key={home.serverId}
                     testID={`${prefix}:${home.serverId}`}
                     title={home.homeName}
-                    subtitle={teamsUnavailableHomeReason(home)}
-                    subtitleLeading={home.reason === 'loading' ? undefined : <View style={collectionListStyles.troubleDot} />}
-                    icon={(
-                        <HappierCollectionListMark>
-                            <Icon name="house" size={18} color={theme.colors.text.secondary} />
-                        </HappierCollectionListMark>
-                    )}
-                    loading={home.reason === 'loading'}
-                    mode="info"
-                    density="compact"
+                    reason={teamsUnavailableHomeReason(home)}
+                    kind={teamsUnavailableHomeStateKind(home)}
+                    size="line"
+                    action={home.retryable ? {
+                        testID: index === 0 ? `${prefix}-retry` : `${prefix}:${home.serverId}:retry`,
+                        label: t('teams.unavailable.retry'),
+                        onPress: props.onRetry,
+                    } : undefined}
                 />
             ))}
-            {retryable ? (
-                <Item
-                    testID={`${prefix}-retry`}
-                    title={t('teams.unavailable.retry')}
-                    density="compact"
-                    showChevron={false}
-                    pressableStyle={collectionListStyles.row}
-                    onPress={props.onRetry}
-                />
-            ) : null}
         </>
     );
 });

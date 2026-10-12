@@ -1,4 +1,5 @@
 import type { HomeDomainFailure } from '@/sync/api/home/homeServerActionTransport';
+import type { ScopedSnapshotError } from '@/sync/domains/scope/scopedSnapshotFacts';
 import { t } from '@/text';
 
 /**
@@ -12,15 +13,13 @@ import { t } from '@/text';
 /**
  * The same vocabulary for a *read* that could not be completed.
  *
- * A read has no committed outcome to describe, so a repeatable failure is a
- * reachability fact and says so, exactly as every other Team read surface does.
- * Only a settled refusal by the Home falls through to the mutation vocabulary,
- * which is where `forbidden`, `conflict` and the typed codes belong.
+ * Only transport loss proves unreachability. A retryable server answer or an
+ * invalid response is a load failure; settled refusals retain their typed meaning.
  */
-export function teamReadFailureLabel(failure: HomeDomainFailure<string>): string {
-    return failure.retryable && failure.code === null
-        ? t('teams.unavailable.offline')
-        : teamMutationFailureLabel(failure);
+export function teamReadFailureLabel(failure: HomeDomainFailure<string> | ScopedSnapshotError): string {
+    if (failure.kind === 'unreachable') return t('teams.unavailable.offline');
+    if (failure.kind === 'unknown' || failure.kind === 'invalid') return t('teams.errors.loadFailed');
+    return teamMutationFailureLabel({ ...failure, code: failure.code ?? null });
 }
 
 export function teamMutationFailureLabel(failure: HomeDomainFailure<string>): string {

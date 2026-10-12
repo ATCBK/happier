@@ -15,7 +15,8 @@ import {
 import { t } from '@/text';
 import { nativePickImages } from '@/utils/files/nativePickImages';
 
-const LOGO_PREVIEW_SIZE = 44;
+/** The logo beside its buttons: the row's value, sized to sit level with a small button. */
+const LOGO_PREVIEW_SIZE = 32;
 
 /**
  * The accepted formats as a person recognises them, read from the media
@@ -129,8 +130,20 @@ export const TeamLogoPicker = React.memo(function TeamLogoPicker(props: Readonly
     const imageUrl = previewSource ? sourceUri(previewSource) : props.currentLogo?.url ?? null;
     const thumbhash = previewSource ? null : props.currentLogo?.thumbhash ?? null;
 
+    // The logo is this row's value, so it stands with its buttons at the row's end (lab `tsSettings-A`)
+    // and the label keeps the section's left edge, level with Name and Description.
+    const preview = (
+        <Avatar
+            id={props.identityId}
+            square
+            size={LOGO_PREVIEW_SIZE}
+            imageUrl={imageUrl}
+            thumbhash={thumbhash}
+        />
+    );
     const actions = candidate ? (
         <SectionButtonRow>
+            {preview}
             <RoundButton
                 testID={`${props.testIDPrefix}-logo-cancel`}
                 size="small"
@@ -151,6 +164,7 @@ export const TeamLogoPicker = React.memo(function TeamLogoPicker(props: Readonly
         </SectionButtonRow>
     ) : (
         <SectionButtonRow>
+            {preview}
             {props.remove && props.currentLogo ? (
                 <RoundButton
                     testID={`${props.testIDPrefix}-logo-remove`}
@@ -178,18 +192,11 @@ export const TeamLogoPicker = React.memo(function TeamLogoPicker(props: Readonly
         <Item
             testID={`${props.testIDPrefix}-logo-preview`}
             title={t('teams.settings.logoSection')}
-            subtitle={shownError ?? (imageUrl ? t('teams.logo.previewLabel') : t('teams.logo.monogramLabel'))}
+            // What the row shows now: a picked image waiting to be used, else the monogram until a
+            // logo exists. A published logo needs no words; it is beside them.
+            subtitle={shownError ?? (previewSource ? t('teams.logo.previewLabel') : imageUrl ? undefined : t('teams.logo.monogramLabel'))}
             subtitleStyle={shownError ? { color: theme.colors.state.danger.foreground } : undefined}
             subtitleLines={0}
-            leftElement={(
-                <Avatar
-                    id={props.identityId}
-                    square
-                    size={LOGO_PREVIEW_SIZE}
-                    imageUrl={imageUrl}
-                    thumbhash={thumbhash}
-                />
-            )}
             accessoryLayout="adaptive"
             rightElement={actions}
             showChevron={false}

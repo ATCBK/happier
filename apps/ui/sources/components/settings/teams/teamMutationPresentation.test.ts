@@ -8,7 +8,17 @@ vi.mock('@/text', async () => {
     return createTextModuleMock({ translate: (key: string) => key });
 });
 
-import { teamMutationFailureLabel } from './teamMutationPresentation';
+import { teamMutationFailureLabel, teamReadFailureLabel } from './teamMutationPresentation';
+
+describe('teamReadFailureLabel', () => {
+    it('distinguishes transport loss from a retryable server answer and access refusal', () => {
+        expect(teamReadFailureLabel({ kind: 'unreachable', retryable: true, code: null })).toBe('teams.unavailable.offline');
+        expect(teamReadFailureLabel({ kind: 'unknown', retryable: true, code: null })).toBe('teams.errors.loadFailed');
+        expect(teamReadFailureLabel({ kind: 'invalid', retryable: false, code: null })).toBe('teams.errors.loadFailed');
+        expect(teamReadFailureLabel({ kind: 'forbidden', retryable: false, code: 'team_not_found' })).toBe('teams.errors.forbidden');
+        expect(teamReadFailureLabel({ kind: 'unsupported', retryable: false, code: null })).toBe('teams.unavailable.updateRequired');
+    });
+});
 
 describe('teamMutationFailureLabel', () => {
     it('does not claim nothing changed when an Action outcome is unknown', () => {

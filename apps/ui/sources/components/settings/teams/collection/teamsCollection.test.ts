@@ -111,8 +111,8 @@ describe('resolveSelectedTeamMember', () => {
             address: { serverId: 'home-a', teamId: 'team-1' },
             membershipId: 'm-7',
         });
-        // The roster itself and the add page are not a person.
-        expect(resolveSelectedTeamMember('/settings/teams/home-a/team-1/members')).toBeNull();
+        // The roster selects the Members collection before a person is opened.
+        expect(resolveSelectedTeamMember('/settings/teams/home-a/team-1/members')).toEqual({ address: { serverId: 'home-a', teamId: 'team-1' }, membershipId: null });
         expect(resolveSelectedTeamMember('/settings/teams/home-a/team-1/members/add')).toBeNull();
         expect(resolveSelectedTeamMember('/settings/teams/home-a/team-1/groups/g-1')).toBeNull();
         expect(resolveSelectedTeamMember('/settings/teams')).toBeNull();

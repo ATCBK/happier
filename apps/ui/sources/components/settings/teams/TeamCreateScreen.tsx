@@ -307,6 +307,9 @@ export const TeamCreateScreen = React.memo(function TeamCreateScreen(props: Read
     React.useEffect(() => {
         requestKey.current = randomUUID();
     }, [name, description, effectiveServerId, initialOwner?.accountId]);
+    // The draft's monogram preview keeps one identity for the page's lifetime. Seeding it from the
+    // retry identity redrew a different monogram on every keystroke.
+    const [draftMarkIdentity] = React.useState(randomUUID);
 
     /**
      * Ordinary creation consumes only the Home's minimum eligibility answer.
@@ -750,8 +753,6 @@ export const TeamCreateScreen = React.memo(function TeamCreateScreen(props: Read
             <ItemGroup title={t('teams.create.detailsSection')}>
                 <Item
                     title={t('teams.create.nameLabel')}
-                    subtitle={t('teams.create.duplicateNameNote')}
-                    subtitleLines={0}
                     accessoryLayout="adaptive"
                     showChevron={false}
                     rightElement={(
@@ -789,7 +790,7 @@ export const TeamCreateScreen = React.memo(function TeamCreateScreen(props: Read
                     )}
                 />
                 <TeamLogoPicker
-                    identityId={committedTeam?.team.id ?? requestKey.current}
+                    identityId={committedTeam?.team.id ?? draftMarkIdentity}
                     testIDPrefix="teams-create"
                     currentLogo={null}
                     selectedSource={committedTeam?.logoSource ?? logoSource}

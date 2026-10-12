@@ -89,15 +89,11 @@ const GroupsList = React.memo(function GroupsList(props: Readonly<{
         address: context.address,
         archived: 'archived',
         // The first affordance is the explicit user's request to read the
-        // archived sequence. Once opened, its answer controls whether the
-        // affordance remains visible; there is no speculative background read.
+        // archived sequence; there is no speculative background read.
         enabled: canRead && showArchived,
     });
-    const offerArchived = !showArchived
-        || archived.status !== 'ready'
-        || !archived.isCurrent
-        || archived.rows.length > 0
-        || archived.error !== null;
+    const archivedCount = context.team.counts?.archivedGroups ?? 0;
+    const offerArchived = archivedCount > 0;
 
     const rows = React.useMemo<readonly GroupVirtualizedRow[]>(() => {
         const result: GroupVirtualizedRow[] = [];
@@ -161,6 +157,7 @@ const GroupsList = React.memo(function GroupsList(props: Readonly<{
                     testID="team-groups-empty"
                     kind="empty"
                     iconName="tree-structure"
+                    scene="treeClean"
                     title={t('teams.groups.emptyTitle')}
                     reason={t('teams.groups.emptyBody')}
                     action={canCreate ? {
@@ -210,7 +207,10 @@ const GroupsList = React.memo(function GroupsList(props: Readonly<{
                             testID="team-groups-toggle-archived"
                             size="small"
                             display="inverted"
-                            title={showArchived ? t('teams.directory.hideArchived') : t('teams.directory.showArchived')}
+                            title={[
+                                showArchived ? t('teams.directory.hideArchived') : t('teams.directory.showArchived'),
+                                archivedCount,
+                            ].filter((part) => part !== null).join(' · ')}
                             expanded={showArchived}
                             onPress={() => setShowArchived((current) => !current)}
                         />
@@ -270,7 +270,7 @@ const GroupsList = React.memo(function GroupsList(props: Readonly<{
         }
 
         return result;
-    }, [active, archived, canCreate, canRead, context, offerArchived, router, showArchived, theme.colors.text.secondary]);
+    }, [active, archived, archivedCount, canCreate, canRead, context, offerArchived, router, showArchived, theme.colors.text.secondary]);
 
     const renderRow = React.useCallback(
         ({ item }: Readonly<{ item: GroupVirtualizedRow }>) => item.render(),
@@ -325,7 +325,10 @@ export const TeamGroupsScreen = React.memo(function TeamGroupsScreen(props: Read
             presentation="virtualized-list"
             // Adding happens at the head of the collection (lab `tsGroups-A`): the list has no
             // section title of its own to carry a "+".
-            renderHeaderActions={(context) => context.team.capabilities.manageGroups && context.canMutate ? (
+            // With no Groups yet the empty state's New Group is the page's one way to start (lab
+            // `tsGroups-E`), so the header does not offer it a second time.
+            renderHeaderActions={(context) => context.team.capabilities.manageGroups && context.canMutate
+                && context.team.counts?.groups !== 0 ? (
                 <NewGroupAction address={context.address} />
             ) : null}
         >

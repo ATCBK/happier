@@ -453,7 +453,7 @@ const TeamPolicySections = React.memo(function TeamPolicySections(props: Readonl
                         />
                         <Item
                             testID="team-settings-external-sharing"
-                            title={t('teams.settings.externalSharingSection')}
+                            title={t('teams.settings.sharingOutsideTeam', { team: teamName })}
                             subtitle={externalSharingConsequence(policy.externalSharingPolicy, teamName)}
                             subtitleLines={0}
                             detail={externalSharingLabel(policy.externalSharingPolicy)}
@@ -488,7 +488,7 @@ const TeamPolicySections = React.memo(function TeamPolicySections(props: Readonl
                         />
                         <SegmentedChoiceItem<TeamExternalSharingPolicyV1>
                             testID="team-settings-external-sharing"
-                            title={t('teams.settings.externalSharingSection')}
+                            title={t('teams.settings.sharingOutsideTeam', { team: teamName })}
                             subtitleLines={0}
                             options={EXTERNAL_SHARING_OPTIONS.map((option) => ({
                                 id: option,
@@ -538,13 +538,19 @@ const TeamLifecycleSection = React.memo(function TeamLifecycleSection(props: Rea
     const archive = React.useCallback(async () => {
         if (lifecycleInFlightRef.current) return;
         lifecycleInFlightRef.current = true;
-        // The consequence in three plain lines (lab `tsSettings-X`): what is kept, the one thing
+        // The consequence in separate paragraphs (lab `tsSettings-X`): what is kept, the one thing
         // that does not come back, and the way back.
+        const lines = teamArchiveConfirmationLines(context.team);
         const confirmed = await Modal.confirm(
             t('teams.archive.confirmTitle', { name }),
-            teamArchiveConfirmationLines(context.team).join('\n'),
+            lines.join('\n'),
             // Destructive styling appears only at the final confirmation.
-            { confirmText: t('teams.archive.action', { name }), destructive: true },
+            {
+                // The title names the Team; the button stays one short word in the alert's narrow width.
+                confirmText: t('teams.archive.confirmShort'),
+                destructive: true,
+                messageParagraphs: lines.map((text, index) => ({ text, irreversible: lines.length === 3 && index === 1 })),
+            },
         );
         if (!confirmed) {
             lifecycleInFlightRef.current = false;
@@ -577,7 +583,7 @@ const TeamLifecycleSection = React.memo(function TeamLifecycleSection(props: Rea
         const confirmed = await Modal.confirm(
             t('teams.archive.restoreTitle', { name }),
             t('teams.archive.restoreBody'),
-            { confirmText: t('teams.archive.restoreAction', { name }) },
+            { confirmText: t('common.restore') },
         );
         if (!confirmed) {
             lifecycleInFlightRef.current = false;
@@ -618,9 +624,10 @@ const TeamLifecycleSection = React.memo(function TeamLifecycleSection(props: Rea
                 description={error ?? t('teams.archive.archivedBody')}
                 accessibilityLiveRegion={error ? 'assertive' : undefined}
                 action={showRestore ? {
-                    label: t('teams.archive.restoreAction', { name }),
+                    label: t('common.restore'),
                     onPress: () => void restore(),
                     testID: 'team-settings-restore',
+                    display: 'default',
                     loading: busy,
                     disabled: busy || !context.mutationsAvailable || context.approvalPending,
                 } : null}
