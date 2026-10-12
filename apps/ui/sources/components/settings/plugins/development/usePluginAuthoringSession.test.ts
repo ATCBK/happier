@@ -26,6 +26,9 @@ const { restoreConnectionToActiveServer, disconnectActiveServerConnection } = aw
 const { TokenStorage } = await import('@/auth/storage/tokenStorage');
 const { usePluginAuthoringSession } = await import('./usePluginAuthoringSession');
 const { useOpenAgentAuthoringSession } = await import('@/components/settings/agents/authoring/agentAuthoringSession');
+const { setActiveUnsavedChangesGuard, clearActiveUnsavedChangesGuard } = await import('@/utils/navigation/runGuardedNavigation');
+const { createDeferred } = await import('@/dev/testkit/hooks/createDeferred');
+type UnsavedChangesDecision = import('@/utils/ui/promptUnsavedChangesAlert').UnsavedChangesDecision;
 const { handleSourceControlBranchMenuSelect } = await import('@/components/sessions/sourceControl/branches/handleSourceControlBranchMenuSelect');
 const { useSessionListNavigationActions } = await import('@/components/sessions/shell/useSessionListNavigationActions');
 const { UniversalSearchRuntimeProvider } = await import('@/components/appShell/search/UniversalSearchRuntimeContext');
@@ -44,7 +47,7 @@ beforeEach(async () => {
         settings: { ...state.settings, rememberLastProjectSessionSelections: true } }));
     push.mockClear();
 });
-afterEach(async () => { standardCleanup(); await disconnectActiveServerConnection(); vi.unstubAllGlobals(); });
+afterEach(async () => { clearActiveUnsavedChangesGuard(); standardCleanup(); await disconnectActiveServerConnection(); vi.unstubAllGlobals(); });
 
 describe('ordinary authoring adapters', () => {
     it('opens one editable Plugin draft with the exact administration target and daemon directory, without spawning', async () => {
@@ -97,6 +100,51 @@ describe('ordinary authoring adapters', () => {
             .toMatchObject({ input: 'settingsAgents.authoring.configureAcpBackendPrompt',
                 executionTarget: { kind: 'machine', target: { serverId, machineId: 'agent-machine' } } });
         expect(Object.keys(getStorage().getState().sessions)).toHaveLength(0);
+    });
+
+    it.each(['keepEditing', 'discard'] as const)('settles the real Agent dirty decision before any draft write (%s)', async (decision) => {
+        const pending = createDeferred<UnsavedChangesDecision>();
+        setActiveUnsavedChangesGuard({ isDirtyRef: { current: true }, requestDecision: () => pending.promise, tag: 'agent-authoring-test' });
+        const hook = await renderHook(() => useOpenAgentAuthoringSession({ serverId, machineId: 'agent-machine' }));
+        const scope = { serverId, accountId: 'account-a' };
+        const before = structuredClone(listNewSessionDraftProjections(scope));
+        const opening = hook.getCurrent()('addAgent');
+        expect(listNewSessionDraftProjections(scope)).toEqual(before);
+        expect(push).not.toHaveBeenCalled();
+        pending.resolve(decision);
+        await opening;
+        await Promise.resolve();
+        if (decision === 'keepEditing') {
+            expect(listNewSessionDraftProjections(scope)).toEqual(before);
+            expect(push).not.toHaveBeenCalled();
+        } else {
+            expect(listNewSessionDraftProjections(scope)).toHaveLength(before.length + 1);
+            expect(push).toHaveBeenCalledOnce();
+            const route = push.mock.calls[0][0] as { params: { draftId: string } };
+            expect(readNewSessionDraftFromRepository({ scope, draftId: route.params.draftId })).toMatchObject({
+                input: 'settingsAgents.authoring.addAgentPrompt',
+                executionTarget: { kind: 'machine', target: { serverId, machineId: 'agent-machine' } },
+            });
+        }
+    });
+
+    it.each(['target', 'account', 'unmount'] as const)('refuses accepted Agent navigation when its %s retires during the dirty decision', async (retirement) => {
+        const pending = createDeferred<UnsavedChangesDecision>();
+        setActiveUnsavedChangesGuard({ isDirtyRef: { current: true }, requestDecision: () => pending.promise, tag: 'agent-authoring-test' });
+        const hook = await renderHook((target: { serverId: string; machineId: string }) => useOpenAgentAuthoringSession(target), {
+            initialProps: { serverId, machineId: 'agent-machine' },
+        });
+        const scopes = ['account-a', 'account-b'].map(accountId => ({ serverId, accountId }));
+        const before = scopes.map(scope => structuredClone(listNewSessionDraftProjections(scope)));
+        const opening = hook.getCurrent()('configureAcpBackend');
+        if (retirement === 'target') await hook.rerender({ serverId, machineId: 'other-machine' });
+        else if (retirement === 'unmount') await hook.unmount();
+        else getStorage().setState({ profileScope: { serverId, accountId: 'account-b' } });
+        pending.resolve('discard');
+        await opening;
+        await Promise.resolve();
+        expect(scopes.map(scope => listNewSessionDraftProjections(scope))).toEqual(before);
+        expect(push).not.toHaveBeenCalled();
     });
 
     it('opens a branch-selection draft on the exact source Machine without creating a worktree or Session', async () => {

@@ -2,11 +2,13 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { AccountSettingsV2UpdateRequestSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
+import { ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 import type { CapabilitiesInvokeRequest } from '@/sync/api/capabilities/capabilitiesProtocol';
 import type { IModal } from '@/modal';
 
 import { renderHook, standardCleanup } from '@/dev/testkit';
-import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createManagedResourceDependencyFixture } from '@/dev/testkit/fixtures/managedResourceDependencyFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
@@ -39,7 +41,8 @@ afterEach(async () => { standardCleanup(); await connection?.dispose(); connecti
 async function renderRemovalOwner(
     method: 'disable' | 'uninstall',
     changes: readonly unknown[],
-    options: Readonly<{ initiallyEnabled?: boolean; readbackEnabled?: boolean }> = {},
+    options: Readonly<{ initiallyEnabled?: boolean; readbackEnabled?: boolean; development?: boolean;
+        developmentRoot?: string; actionFailure?: boolean }> = {},
 ) {
     boundary.rpc.mockReset();
     boundary.confirm.mockReset().mockResolvedValue(true);
@@ -48,23 +51,37 @@ async function renderRemovalOwner(
     vi.mocked(Modal.confirm).mockImplementation(boundary.confirm);
     vi.mocked(Modal.alert).mockImplementation(boundary.alert);
     const selectedTarget = { serverIdentityId: 'srv_plugin_removal', machineId: 'controller-1' };
+    const developmentActionsSettings = normalizeActionsSettingsV1({ v: 1, actions: {}, approvalWaivedSurfaces: {
+        'plugins.dev.submit': ['ui'], 'plugins.dev.unregister': ['ui'], 'plugins.dev.test': ['ui'], 'plugins.pack': ['ui'],
+    } });
     let serverContent: unknown = { t: 'plain', v: {
         machineAdministrationTargetsLocalV1: { 'plugins.home': selectedTarget },
+        ...(options.development ? { actionsSettingsV1: developmentActionsSettings } : {}),
     } };
     let serverVersion = 1;
     const pluginId = 'example.compute';
+    const sourceRootPath = options.developmentRoot ?? '/plugins/example.compute';
     const installed = {
         pluginId, title: 'Example compute', description: null, version: '1.0.0', enabled: options.initiallyEnabled ?? true,
-        source: { kind: 'localPath', locator: '/plugins/example.compute', trustPolicy: 'trusted' },
+        source: { kind: 'localPath', locator: sourceRootPath, trustPolicy: 'trusted' },
         install: { mode: 'managed', manifestVersion: '2' },
         compatibility: { status: 'compatible', diagnostics: [] }, diagnostics: [],
     };
     const requests: Array<Readonly<{ machineId: string; serverId?: string | null; payload: CapabilitiesInvokeRequest }>> = [];
+    const actionRequests: Array<Readonly<{ actionId: string; envelope: ReturnType<typeof ExternalActionRequestEnvelopeV1Schema.parse> }>> = [];
+    const developmentStatus = {
+        roots: [{ kind: 'explicit', rootPath: sourceRootPath, trusted: true, persisted: true }],
+        plugins: [{ pluginId, sourceRootPath, phase: 'active' }],
+    };
+    let machineCensus = {
+        ...createPlainMachineRowFixture({ id: 'controller-1', accountId: 'account-owner' }),
+        installationId: 'installation-1', runnerContentKeyBinding: null,
+    };
     boundary.rpc.mockImplementation(async request => {
         if (request.method === RPC_METHODS.CAPABILITIES_DETECT) return {
             protocolVersion: 1, results: { 'tool.plugins': { ok: true, checkedAt: 1, data: { installedPlugins: [{
                 ...installed, enabled: requests.length > 0 ? options.readbackEnabled ?? installed.enabled : installed.enabled,
-            }] } } },
+            }], ...(options.development ? { developmentActions: { create: true }, developmentStatus } : {}) } } },
         };
         if (request.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) return {
             protocolVersion: 1,
@@ -104,6 +121,17 @@ async function renderRemovalOwner(
                 return Response.json({ content: serverContent, version: serverVersion });
             }
             if (path === '/v1/artifacts') return Response.json([]);
+            if (path === '/v1/machines') return Response.json([machineCensus]);
+            if (options.development && path.startsWith('/v1/actions/')) {
+                const actionId = path.slice('/v1/actions/'.length);
+                const envelope = ExternalActionRequestEnvelopeV1Schema.parse(JSON.parse(String(init?.body)));
+                actionRequests.push({ actionId, envelope });
+                return Response.json(ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId, requestId: envelope.requestId,
+                    execution: { ok: true, result: { ok: options.actionFailure !== true, kind: actionId.replaceAll('.', '_'),
+                        ...(options.actionFailure ? { diagnostics: [{ code: 'plugin_author_test_failed', message: 'Plugin tests failed' }] } : {}),
+                        ...(actionId === 'plugins.dev.submit' || actionId === 'plugins.dev.unregister' ? { status: developmentStatus } : {}) } },
+                }));
+            }
             return Response.json({ error: 'not_found' }, { status: 404 });
         },
     });
@@ -113,16 +141,62 @@ async function renderRemovalOwner(
     await storage.getState().activateSettingsScope(scope);
     storage.getState().applySettings({ ...storage.getState().settings,
         machineAdministrationTargetsLocalV1: { 'plugins.home': selectedTarget },
+        ...(options.development ? { actionsSettingsV1: developmentActionsSettings } : {}),
     }, serverVersion);
     const machine = createMachineFixture({ id: 'controller-1', installationId: 'installation-1', activeAt: Date.now() });
-    storage.setState({ machines: { [machine.id]: machine }, isDataReady: true });
+    storage.getState().applyMachines([machine], true, { sourceServerId: scope.serverId });
+    storage.setState({ isDataReady: true,
+        machineListStatusByServerId: { [connection.home.id]: 'idle' },
+    });
     const { clearDaemonMergedProjectionCacheForTests } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
     clearDaemonMergedProjectionCacheForTests();
     const { usePluginSettingsScreenState } = await import('./usePluginSettingsScreenState');
     const hook = await renderHook(() => usePluginSettingsScreenState());
     await vi.waitFor(() => expect(hook.getCurrent().daemonOperationsAvailable).toBe(true));
-    return { hook, requests, storage, scope, machine };
+    const publishMachine = (changes: Partial<typeof machine>) => {
+        const next = { ...machine, seq: machine.seq + 1, updatedAt: Date.now(), ...changes };
+        machineCensus = { ...machineCensus, seq: next.seq, updatedAt: next.updatedAt,
+            installationId: next.installationId ?? machineCensus.installationId,
+            daemonStateVersion: next.daemonStateVersion,
+        };
+        storage.getState().applyMachines([next], true, { sourceServerId: scope.serverId });
+    };
+    return { hook, requests, actionRequests, storage, scope, machine, publishMachine };
 }
+
+describe('development Settings through the real UI Action wiring', () => {
+    it.each(['/plugins/example.compute', '/plugins/example.compute.mjs'])('submits, tests, packs, and unregisters %s only on the selected machine through Actions', async (sourceRootPath) => {
+        const { hook, requests, actionRequests } = await renderRemovalOwner('disable', [], {
+            development: true, developmentRoot: sourceRootPath,
+        });
+        await act(async () => { hook.getCurrent().runDevelopmentSourceInstall(sourceRootPath); });
+        await vi.waitFor(() => expect(hook.getCurrent().isPluginActionInFlight(sourceRootPath)).toBe(false));
+        for (const action of ['test', 'pack', 'unregister'] as const) {
+            await act(async () => { hook.getCurrent().runDevelopmentAction(action, 'example.compute'); });
+            await vi.waitFor(() => expect(hook.getCurrent().isPluginActionInFlight('example.compute')).toBe(false));
+        }
+        expect(actionRequests.map(({ actionId, envelope }) => ({ actionId, target: envelope.target, input: envelope.input }))).toEqual([
+            { actionId: 'plugins.dev.submit', target: { kind: 'machine', machineId: 'controller-1' }, input: { projectRoot: sourceRootPath } },
+            { actionId: 'plugins.dev.test', target: { kind: 'machine', machineId: 'controller-1' }, input: { projectRoot: sourceRootPath } },
+            { actionId: 'plugins.pack', target: { kind: 'machine', machineId: 'controller-1' }, input: { locator: sourceRootPath } },
+            { actionId: 'plugins.dev.unregister', target: { kind: 'machine', machineId: 'controller-1' }, input: { projectRoot: sourceRootPath } },
+        ]);
+        expect(requests).toEqual([]);
+        expect(hook.getCurrent().routineOperationSettlement?.message).toBe('common.done');
+    });
+
+    it('settles a failed development Action without publishing success', async () => {
+        const { hook, actionRequests, requests } = await renderRemovalOwner('disable', [], {
+            development: true, actionFailure: true,
+        });
+        await act(async () => { hook.getCurrent().runDevelopmentAction('test', 'example.compute'); });
+        await vi.waitFor(() => expect(hook.getCurrent().isPluginActionInFlight('example.compute')).toBe(false));
+        expect(actionRequests.map(request => request.actionId)).toEqual(['plugins.dev.test']);
+        expect(requests).toEqual([]);
+        expect(hook.getCurrent().routineOperationSettlement).toBeNull();
+        expect(boundary.alert).toHaveBeenCalledWith('common.error', 'Plugin tests failed');
+    });
+});
 
 const committed = { kind: 'committed', pluginId: 'example.compute', desiredGeneration: null, appliedGeneration: null, pendingSurfaces: [] };
 
@@ -155,12 +229,12 @@ describe('local plugin removal at the actual settings hook and machine RPC bound
     });
 
     it.each(['cancel', 'daemon generation', 'installation', 'account'] as const)('does not retry or report success after consent retires (%s)', async retirement => {
-        const { hook, requests, storage, scope, machine } = await renderRemovalOwner('disable', [
+        const { hook, requests, storage, scope, publishMachine } = await renderRemovalOwner('disable', [
             { kind: 'managedResourcesReviewRequired', pluginId: 'example.compute', resources: [createManagedResourceDependencyFixture()] }, committed,
         ]);
         boundary.confirm.mockImplementation(async () => {
-            if (retirement === 'daemon generation') storage.setState({ machines: { [machine.id]: { ...machine, daemonStateVersion: 2 } } });
-            if (retirement === 'installation') storage.setState({ machines: { [machine.id]: { ...machine, installationId: 'installation-2' } } });
+            if (retirement === 'daemon generation') publishMachine({ daemonStateVersion: 2 });
+            if (retirement === 'installation') publishMachine({ installationId: 'installation-2' });
             if (retirement === 'account') storage.getState().activateProfileScope({ ...scope, accountId: 'account-next' });
             return retirement !== 'cancel';
         });

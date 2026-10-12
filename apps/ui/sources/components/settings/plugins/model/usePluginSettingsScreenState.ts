@@ -27,6 +27,8 @@ import {
 import { resolveScopedPluginSettingsServerIdentity } from '@/sync/domains/plugins/settings/scopedPluginSettingsRuntime';
 import type { ScopedPluginSettingsTarget } from '@/sync/domains/plugins/settings/scopedPluginSettingsAdapter';
 import { captureActiveServerAccountScopeCurrentness } from '@/sync/domains/scope/activeServerAccountScope';
+import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import type { PluginDevLoopActionIdV1 } from '@happier-dev/protocol';
 import { reviewManagedResourceRemoval } from '@/components/settings/machines/managed/reviewManagedResourceRemoval';
 import type { ManagedResourceDispositionV1 } from '@happier-dev/protocol/machines/managed/managedDependencyV1';
 import {
@@ -78,7 +80,6 @@ import {
     resolvePluginDaemonOperationsAvailability,
     readPendingPluginChangeReview,
     readPendingPluginChangeStatus,
-    readPluginDevelopChange,
     readPluginInstallationReviewChange,
     readPluginRegistryProfileRequirement,
     resolvePluginReadOnlySnapshotNotice,
@@ -1311,6 +1312,48 @@ export function usePluginSettingsScreenState(params: Readonly<{ focused?: boolea
         runCatalogAction({ method: 'setUpdatePolicy', pluginId, policy });
     }, [runCatalogAction]);
 
+    const executeDevelopmentAction = React.useMemo(() => createFrontDoorActionExecute(), []);
+    const invokeDevelopmentAction = React.useCallback(async (
+        actionId: PluginDevLoopActionIdV1,
+        input: unknown,
+        target: FreshMachineAdministrationExecutionTargetV1,
+        isAuthorityCurrent: () => boolean,
+    ): Promise<boolean> => {
+        if (!isAuthorityCurrent()) return false;
+        try {
+            const response = await executeDevelopmentAction(actionId, input, {
+                surface: 'ui',
+                serverId: target.serverId,
+                executionRunTargetMachineId: target.machine.id,
+            });
+            if (!isAuthorityCurrent()) return false;
+            if (!response.ok) {
+                Modal.alert(t('common.error'), response.error);
+                return false;
+            }
+            const result = response.result;
+            if (result && typeof result === 'object' && 'ok' in result && result.ok === true
+                && 'kind' in result && result.kind === actionId.replaceAll('.', '_')) return true;
+            if (result && typeof result === 'object' && 'ok' in result && result.ok === false) {
+                const messages = 'diagnostics' in result && Array.isArray(result.diagnostics)
+                    ? result.diagnostics.flatMap((diagnostic: unknown) => (
+                        diagnostic && typeof diagnostic === 'object' && 'message' in diagnostic
+                            && typeof diagnostic.message === 'string' ? [diagnostic.message] : []
+                    ))
+                    : [];
+                Modal.alert(t('common.error'), messages.join('\n') || t('common.requestFailed'));
+            }
+            // A queued approval belongs to the canonical Actions approval UI.
+            // It is pending, not a completed development operation.
+            return false;
+        } catch (error) {
+            if (isAuthorityCurrent()) {
+                Modal.alert(t('common.error'), error instanceof Error ? error.message : t('common.requestFailed'));
+            }
+            return false;
+        }
+    }, [executeDevelopmentAction]);
+
     const runDevelopmentAction = React.useCallback((action: 'test' | 'pack' | 'unregister', pluginId: string) => {
         const development = developmentPlugins.find((entry) => entry.installed.pluginId === pluginId) ?? null;
         const initialTarget = resolveCurrentExecutionTarget(executionTarget);
@@ -1328,35 +1371,14 @@ export function usePluginSettingsScreenState(params: Readonly<{ focused?: boolea
         void (async () => {
             markPluginActionStarted(mutationAuthorityKey, pluginId);
             try {
-                const response = await invokeWithAlerts({
-                    machineId: initialTarget.machine.id,
-                    serverId: initialTarget.serverId,
-                    request: {
-                        id: MARKETPLACE_CAPABILITY_ID,
-                        method: action === 'unregister' ? 'unregisterDevelopment' : action,
-                        params: action === 'unregister'
-                            ? { sourceRootPath: development.sourceRootPath }
-                            : { pluginId },
-                    },
-                    timeoutMs: null,
-                    isAuthorityCurrent: () => (
-                        mutationAuthorityKeyRef.current === mutationAuthorityKey
-                        && resolveCurrentExecutionTarget(initialTarget) !== null
-                    ),
-                    alerts: {
-                        errorTitle: t('common.error'),
-                        successTitle: t('common.success'),
-                        unsupportedMessage: (reason) => reason === 'not-supported' ? t('common.unavailable') : t('common.requestFailed'),
-                        successMessage: null,
-                    },
-                });
-                if (
-                    response.supported
-                    && 'response' in response
-                    && response.response.ok
-                    && mutationAuthorityKeyRef.current === mutationAuthorityKey
-                    && resolveCurrentExecutionTarget(initialTarget) !== null
-                ) {
+                const succeeded = await invokeDevelopmentAction(
+                    action === 'pack' ? 'plugins.pack' : action === 'test' ? 'plugins.dev.test' : 'plugins.dev.unregister',
+                    action === 'pack' ? { locator: development.sourceRootPath } : { projectRoot: development.sourceRootPath },
+                    initialTarget,
+                    () => mutationAuthorityKeyRef.current === mutationAuthorityKey
+                        && resolveCurrentExecutionTarget(initialTarget) !== null,
+                );
+                if (succeeded) {
                     setRoutineOperationSettlement({
                         scope: 'development',
                         message: action === 'test'
@@ -1368,9 +1390,7 @@ export function usePluginSettingsScreenState(params: Readonly<{ focused?: boolea
                 }
                 if (
                     action === 'unregister'
-                    && response.supported
-                    && 'response' in response
-                    && response.response.ok
+                    && succeeded
                 ) {
                     machineCapabilities.refresh({ bypassCache: true });
                     refreshPluginTruth();
@@ -1379,7 +1399,7 @@ export function usePluginSettingsScreenState(params: Readonly<{ focused?: boolea
                 markPluginActionFinished(mutationAuthorityKey, pluginId);
             }
         })();
-    }, [developmentPlugins, executionTarget, invokeWithAlerts, isPluginActionInFlight, machineCapabilities, markPluginActionFinished, markPluginActionStarted, mutationAuthorityKey, refreshPluginTruth, resolveCurrentExecutionTarget]);
+    }, [developmentPlugins, executionTarget, invokeDevelopmentAction, isPluginActionInFlight, machineCapabilities, markPluginActionFinished, markPluginActionStarted, mutationAuthorityKey, refreshPluginTruth, resolveCurrentExecutionTarget]);
 
     const resolveDevelopmentEditTarget = React.useCallback((
         pluginId: string,
@@ -1499,17 +1519,7 @@ export function usePluginSettingsScreenState(params: Readonly<{ focused?: boolea
         })();
     }, [developmentCreateAvailable, executionTarget, invokeWithAlerts, isPluginActionInFlight, markPluginActionFinished, markPluginActionStarted, mutationAuthorityKey, resolveCurrentExecutionTarget]);
 
-    /**
-     * Adopts a local folder as a development source.
-     *
-     * Two authorizations happen, in this order, and neither is ever answered on
-     * the user's behalf: first the **source root** — the daemon is not allowed
-     * to read, install dependencies in, or evaluate code from that folder until
-     * the user has seen the exact path — and only then the ordinary
-     * install-and-trust review for the plugin the daemon derived from it. The
-     * daemon may answer the first decision with the second, so the two steps
-     * share one pending change and one authority fence.
-     */
+    /** Adopts an explicit source through the same development Action used by the CLI and Agents. */
     const runDevelopmentSourceInstall = React.useCallback((sourceRootPath: string) => {
         const trimmedSourceRootPath = sourceRootPath.trim();
         const initialTarget = resolveCurrentExecutionTarget(executionTarget);
@@ -1518,66 +1528,33 @@ export function usePluginSettingsScreenState(params: Readonly<{ focused?: boolea
             || mutationAuthorityKeyRef.current !== mutationAuthorityKey
             || !initialTarget
             || !trimmedSourceRootPath
+            || !developmentSourceInstallAvailable
             || isPluginActionInFlight(trimmedSourceRootPath)
-        ) {
-            return;
-        }
+        ) return;
 
         void (async () => {
             markPluginActionStarted(mutationAuthorityKey, trimmedSourceRootPath);
             try {
-                const isAuthorityCurrent = () => (
-                    mutationAuthorityKeyRef.current === mutationAuthorityKey
-                    && resolveCurrentExecutionTarget(initialTarget) !== null
+                const succeeded = await invokeDevelopmentAction(
+                    'plugins.dev.submit',
+                    { projectRoot: trimmedSourceRootPath },
+                    initialTarget,
+                    () => mutationAuthorityKeyRef.current === mutationAuthorityKey
+                        && resolveCurrentExecutionTarget(initialTarget) !== null,
                 );
-
-                const response = await invokeWithAlerts({
-                    machineId: initialTarget.machine.id,
-                    serverId: initialTarget.serverId,
-                    request: {
-                        id: MARKETPLACE_CAPABILITY_ID,
-                        method: 'develop',
-                        params: { sourceRootPath: trimmedSourceRootPath },
-                    },
-                    timeoutMs: null,
-                    isAuthorityCurrent,
-                    alerts: {
-                        errorTitle: t('common.error'),
-                        successTitle: t('common.success'),
-                        unsupportedMessage: (reason) => reason === 'not-supported' ? t('common.unavailable') : t('common.requestFailed'),
-                        successMessage: null,
-                    },
+                if (!succeeded) return;
+                setRoutineOperationSettlement({
+                    scope: 'development',
+                    message: t('settingsPlugins.developmentSourceInstallSucceeded'),
+                    detail: trimmedSourceRootPath,
                 });
-                if (!isAuthorityCurrent() || !('response' in response) || !response.response.ok) return;
-
-                const developChange = readPluginDevelopChange(response.response.result);
-                if (!developChange) return;
-                if (developChange.kind === 'committed') {
-                    // The daemon commits without a review only when both the root
-                    // and the derived plugin were already trusted.
-                    setRoutineOperationSettlement({
-                        scope: 'development',
-                        message: t('settingsPlugins.developmentSourceInstallSucceeded'),
-                        detail: trimmedSourceRootPath,
-                    });
-                    machineCapabilities.refresh({ bypassCache: true });
-                    refreshPluginTruth();
-                    return;
-                }
-                await decidePendingPluginChangeAsPresentUser({
-                    target: initialTarget,
-                    isAuthorityCurrent,
-                    decision: developChange,
-                    settlementScope: 'development',
-                    successMessage: t('settingsPlugins.developmentSourceInstallSucceeded'),
-                    formatFailure: (outcome) => t('settingsPlugins.developmentSourceInstallFailed', { outcome }),
-                });
+                machineCapabilities.refresh({ bypassCache: true });
+                refreshPluginTruth();
             } finally {
                 markPluginActionFinished(mutationAuthorityKey, trimmedSourceRootPath);
             }
         })();
-    }, [decidePendingPluginChangeAsPresentUser, executionTarget, invokeWithAlerts, isPluginActionInFlight, machineCapabilities, markPluginActionFinished, markPluginActionStarted, mutationAuthorityKey, refreshPluginTruth, resolveCurrentExecutionTarget]);
-
+    }, [developmentSourceInstallAvailable, executionTarget, invokeDevelopmentAction, isPluginActionInFlight, machineCapabilities, markPluginActionFinished, markPluginActionStarted, mutationAuthorityKey, refreshPluginTruth, resolveCurrentExecutionTarget]);
     /**
      * Answers a change the daemon is holding that this screen did not start.
      *
