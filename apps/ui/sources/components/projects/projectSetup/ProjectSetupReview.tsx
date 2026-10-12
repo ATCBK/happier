@@ -214,7 +214,7 @@ export const ProjectSetupReviewFacts = React.memo(function ProjectSetupReviewFac
         </Text>
         {props.onViewFile ? <RoundButton
           size="small"
-          display="secondary"
+          display="inverted"
           title={t('projects.scripts.setup.viewFile')}
           testID={`${props.testID}.viewFile`}
           onPress={props.onViewFile}
@@ -301,7 +301,7 @@ export const ProjectSetupReview = React.memo(function ProjectSetupReview(
       <View style={styles.actions}>
         <RoundButton
           size="small"
-          display="secondary"
+          display="inverted"
           title={t('projects.scripts.setup.notNow')}
           testID={`${props.testID}.notNow`}
           onPress={props.onNotNow}
