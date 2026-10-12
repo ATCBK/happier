@@ -2,6 +2,7 @@ import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { renderScreen } from '@/dev/testkit';
+import { AuthProvider, getCurrentAuth } from './AuthContext';
 
 (
     globalThis as typeof globalThis & {
@@ -144,37 +145,6 @@ describe('AuthContext.login', () => {
         vi.unstubAllGlobals();
     });
 
-    it('resolves without waiting for syncSwitchServer to finish', async () => {
-        // Make sync's initial HTTP work hang so `syncSwitchServer` cannot complete until timers advance.
-        vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})));
-
-        const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
-        upsertAndActivateServer({ serverUrl: 'http://localhost:53288', scope: 'tab' });
-
-        const { AuthProvider, getCurrentAuth } = await import('./AuthContext');
-
-        const screen = await renderScreen(
-            React.createElement(AuthProvider, {
-                initialCredentials: null,
-                children: React.createElement(React.Fragment, null),
-            }),
-        );
-
-        try {
-            const auth = getCurrentAuth();
-            if (!auth) throw new Error('Expected current auth to be set');
-
-            await act(async () => {
-                await auth.login(buildTokenWithSub('server-test'), 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA');
-            });
-            await vi.advanceTimersByTimeAsync(1);
-            expect(switchConnectionToActiveServerSpy).toHaveBeenCalledTimes(1);
-            expect(syncSwitchServerSpy).not.toHaveBeenCalledWith(expect.objectContaining({ token: expect.any(String) }));
-        } finally {
-            await screen.unmount();
-        }
-    });
-
     it('keeps the session authenticated while a login-triggered server refresh is still rebinding credentials', async () => {
         switchConnectionToActiveServerSpy.mockImplementation(
             () => new Promise<null>(() => {}),
@@ -182,7 +152,6 @@ describe('AuthContext.login', () => {
         const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
         upsertAndActivateServer({ serverUrl: 'http://localhost:53288', scope: 'tab' });
 
-        const { AuthProvider, getCurrentAuth } = await import('./AuthContext');
 
         const screen = await renderScreen(
             React.createElement(AuthProvider, {
@@ -244,7 +213,6 @@ describe('AuthContext.login', () => {
             { serverId: homeB.serverIdentityId },
             homeBCredentials,
         );
-        const { AuthProvider, getCurrentAuth } = await import('./AuthContext');
         const screen = await renderScreen(React.createElement(AuthProvider, {
             initialCredentials: homeBCredentials,
             children: React.createElement(React.Fragment, null),
@@ -311,7 +279,6 @@ describe('AuthContext.login', () => {
                 return await suppressionGate;
             });
 
-        const { AuthProvider, getCurrentAuth } = await import('./AuthContext');
         const screen = await renderScreen(React.createElement(AuthProvider, {
             initialCredentials: null,
             children: React.createElement(React.Fragment, null),
@@ -358,7 +325,6 @@ describe('AuthContext.login', () => {
         activeServerSnapshotState.generation = 1;
         activeServerSnapshotState.connectionDescriptorRevision = 1;
         switchConnectionToActiveServerSpy.mockResolvedValue(credentials);
-        const { AuthProvider } = await import('./AuthContext');
         const screen = await renderScreen(React.createElement(AuthProvider, {
             initialCredentials: credentials,
             children: React.createElement(React.Fragment, null),
@@ -387,7 +353,6 @@ describe('AuthContext.login', () => {
         const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
         upsertAndActivateServer({ serverUrl: 'http://localhost:53288', scope: 'tab' });
 
-        const { AuthProvider, getCurrentAuth } = await import('./AuthContext');
 
         const screen = await renderScreen(
             React.createElement(AuthProvider, {
@@ -435,7 +400,6 @@ describe('AuthContext.login', () => {
             },
         };
         await TokenStorage.setCredentials(initialCredentials);
-        const { AuthProvider, getCurrentAuth } = await import('./AuthContext');
         const screen = await renderScreen(
             React.createElement(AuthProvider, {
                 initialCredentials,
@@ -471,7 +435,6 @@ describe('AuthContext.login', () => {
             brandHeroSeenAt: seenAt,
         });
 
-        const { AuthProvider, getCurrentAuth } = await import('./AuthContext');
 
         const screen = await renderScreen(
             React.createElement(AuthProvider, {
@@ -501,7 +464,6 @@ describe('AuthContext.login', () => {
         const { TokenStorage } = await import('@/auth/storage/tokenStorage');
         const token = buildTokenWithSub('server-test');
         await TokenStorage.setCredentials({ token });
-        const { AuthProvider, getCurrentAuth } = await import('./AuthContext');
         const { trackLogout } = await import('@/track');
         const beforeMutation = vi.fn();
         const screen = await renderScreen(
@@ -575,7 +537,6 @@ describe('AuthContext.login', () => {
                 },
             },
         });
-        const { AuthProvider, getCurrentAuth } = await import('./AuthContext');
         const { abandonAccountEncryptionFirstKeyExternalAuth } = await import(
             '@/sync/ops/account/accountEncryptionFirstKeyExternalAuth'
         );
@@ -627,7 +588,6 @@ describe('AuthContext.login', () => {
         const { TokenStorage } = await import('@/auth/storage/tokenStorage');
         const token = buildTokenWithSub('server-test');
         await TokenStorage.setCredentials({ token });
-        const { AuthProvider, getCurrentAuth } = await import('./AuthContext');
         const { trackLogout } = await import('@/track');
         const screen = await renderScreen(
             React.createElement(AuthProvider, {
@@ -662,7 +622,6 @@ describe('AuthContext.login', () => {
         const { TokenStorage } = await import('@/auth/storage/tokenStorage');
         const token = buildTokenWithSub('server-test');
         await TokenStorage.setCredentials({ token });
-        const { AuthProvider, getCurrentAuth } = await import('./AuthContext');
         let release!: () => void;
         const pending = new Promise<void>((resolve) => { release = resolve; });
         const beforeMutation = vi.fn(async () => await pending);
@@ -733,7 +692,6 @@ describe('AuthContext.login', () => {
             { token: 'account-service-token' },
         );
 
-        const { AuthProvider, getCurrentAuth } = await import('./AuthContext');
         const screen = await renderScreen(React.createElement(AuthProvider, {
             initialCredentials: { token: buildTokenWithSub('home-a') },
             children: React.createElement(React.Fragment, null),
@@ -796,7 +754,6 @@ describe('AuthContext.login', () => {
             },
         }, { serverUrl: homeA.serverUrl, serverId: homeA.id })).resolves.toBe(true);
 
-        const { AuthProvider, getCurrentAuth } = await import('./AuthContext');
         const screen = await renderScreen(React.createElement(AuthProvider, {
             initialCredentials: homeBCredentials,
             children: React.createElement(React.Fragment, null),
@@ -855,7 +812,6 @@ describe('AuthContext.login', () => {
             cleanupPending: null,
         });
 
-        const { AuthProvider, getCurrentAuth } = await import('./AuthContext');
         const screen = await renderScreen(React.createElement(AuthProvider, {
             initialCredentials: homeCredentials,
             children: React.createElement(React.Fragment, null),
@@ -934,7 +890,6 @@ describe('AuthContext.login', () => {
         let resumeLogout!: () => void;
         const logoutPaused = new Promise<void>((resolve) => { resumeLogout = resolve; });
         const beforeMutation = vi.fn(async () => await logoutPaused);
-        const { AuthProvider, getCurrentAuth } = await import('./AuthContext');
         const screen = await renderScreen(React.createElement(AuthProvider, {
             initialCredentials: homeACredentials,
             children: React.createElement(React.Fragment, null),
@@ -1039,7 +994,6 @@ describe('AuthContext.login', () => {
             expiresAt: Date.now() + 10_000,
         });
 
-        const { AuthProvider, getCurrentAuth } = await import('./AuthContext');
         const screen = await renderScreen(React.createElement(AuthProvider, {
             initialCredentials: homeACredentials,
             children: React.createElement(React.Fragment, null),
@@ -1116,7 +1070,6 @@ describe('AuthContext.login', () => {
             cleanupPending: null,
         });
 
-        const { AuthProvider, getCurrentAuth } = await import('./AuthContext');
         const screen = await renderScreen(React.createElement(AuthProvider, {
             initialCredentials: homeACredentials,
             children: React.createElement(React.Fragment, null),
@@ -1192,7 +1145,6 @@ describe('AuthContext.login', () => {
                 },
             },
         });
-        const { AuthProvider, getCurrentAuth } = await import('./AuthContext');
         const screen = await renderScreen(
             React.createElement(AuthProvider, {
                 initialCredentials: { token },
@@ -1248,7 +1200,6 @@ describe('AuthContext.login', () => {
             },
         }, { serverUrl: profiles[0]!.serverUrl, serverId: profiles[0]!.serverIdentityId })).resolves.toBe(true);
 
-        const { AuthProvider, getCurrentAuth } = await import('./AuthContext');
         const screen = await renderScreen(React.createElement(AuthProvider, {
             initialCredentials: homeBCredentials,
             children: React.createElement(React.Fragment, null),

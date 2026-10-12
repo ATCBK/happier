@@ -27,8 +27,11 @@ export async function openEnrolledHomeOrReturnToShell(params: Readonly<{
             scope: resolveRoutineServerSelectionScope(Platform.OS, isDesktopHost()),
             refreshAuth: params.refreshAuth,
         });
-        if (!params.isCurrent()) return 'cancelled';
+        // Focusing the Home may retire the old Account/command authority itself.
+        // Keep the focus owner's known ACK; callers still fence their mounted
+        // interest before navigating. A failed or unknown open never becomes success.
         if (opened) return 'opened';
+        if (!params.isCurrent()) return 'cancelled';
 
         let retry = false;
         await Modal.alertAsync(

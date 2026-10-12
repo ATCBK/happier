@@ -672,7 +672,10 @@ async function readHomeCredentials(
     return await withHomeMutationAuthority(undefined, async (authority) => {
         const currentKeys = await getAuthKeys(serverUrl, lookup);
         return currentKeys ? await readCredentialsForScopedKeys(currentKeys, authority, storageReadFailure) : null;
-    });
+    }, JSON.stringify([
+        AUTH_KEY, readStorageScopeFromEnv(), serverUrl ?? getActiveServerUrl(),
+        lookup.serverId ?? getActiveServerId(), storageReadFailure ?? 'absent',
+    ]));
 }
 
 /**
@@ -1866,7 +1869,7 @@ function parseCredentialsRaw(raw: string | null): AuthCredentials | null {
     }
 }
 
-function areCredentialsEqual(left: AuthCredentials | null, right: AuthCredentials): boolean {
+export function areCredentialsEqual(left: AuthCredentials | null, right: AuthCredentials): boolean {
     if (!left || left.token !== right.token) return false;
     if (isLegacyAuthCredentials(left) || isLegacyAuthCredentials(right)) {
         return isLegacyAuthCredentials(left)
@@ -1952,6 +1955,7 @@ async function serializeCredentialScopeOperations<T>(
     keys: readonly string[],
     run: () => Promise<T>,
     authority?: HomeMutationAuthority,
+    preserveSharedRead = false,
 ): Promise<T> {
     return await withHomeMutationAuthority(authority, async () => {
         const orderedKeys = uniqueStrings(keys).sort();
@@ -1964,7 +1968,7 @@ async function serializeCredentialScopeOperations<T>(
             );
         };
         return await acquire(0);
-    });
+    }, preserveSharedRead ? 'credential-layout-read' : undefined);
 }
 
 /**
@@ -2023,7 +2027,7 @@ async function readCredentialsForScopedKeys(
     }
         if (legacyReadFailure) throw legacyReadFailure.reason;
         return null;
-    }, authority);
+    }, authority, true);
 }
 
 async function removeCredentialKeysAtomically(targetKeys: readonly string[]): Promise<boolean> {
@@ -2804,18 +2808,20 @@ export async function setHomeCredentialsWithRollbackUnderMutationAuthority(
     options: ServerCredentialLookupOptions,
     credentials: AuthCredentials,
 ): Promise<HomeCredentialWriteRollback | null> {
-    const outcome = await writeHomeCredentialsForServerScope(
-        serverUrl,
-        options,
-        credentials,
-        authority,
-    );
-    if (!outcome.stored || !outcome.rollback) return null;
-    return {
-        serverUrl: normalizeUrl(serverUrl),
-        serverId: outcome.serverId,
-        rollback: outcome.rollback,
-    };
+    return await withHomeMutationAuthority(authority, async (owned) => {
+        const outcome = await writeHomeCredentialsForServerScope(
+            serverUrl,
+            options,
+            credentials,
+            owned,
+        );
+        if (!outcome.stored || !outcome.rollback) return null;
+        return {
+            serverUrl: normalizeUrl(serverUrl),
+            serverId: outcome.serverId,
+            rollback: outcome.rollback,
+        };
+    });
 }
 
 /** Internal composition seam for profile adoption while it owns the Home lock. */
@@ -2824,31 +2830,33 @@ export async function removeHomeCredentialsUnderMutationAuthority(
     serverUrl: string,
     options: ServerCredentialLookupOptions = {},
 ): Promise<boolean> {
-    const keys = await getAuthKeys(serverUrl, options);
-    if (!keys) return false;
-    const targetKeys = uniqueStrings([keys.primary, ...keys.legacy]);
-    const removed = await serializeCredentialScopeOperations(
-        targetKeys,
-        async () => {
-            if (options.expectedCredentials) {
-                let raws: (string | null)[];
-                try { raws = await Promise.all(targetKeys.map(key => readCredentialRawByKey(key, 'surface'))); }
-                catch { return false; }
-                const currentCredentials = raws.map(parseCredentialsRaw).find((value): value is AuthCredentials => value !== null) ?? null;
-                // An absent credential is already removed. Changed or unreadable bytes
-                // are not custody the original caller is authorized to discard.
-                if (currentCredentials
-                    ? !areCredentialsEqual(currentCredentials, options.expectedCredentials)
-                    : raws.some(raw => raw !== null)) return false;
-            }
-            return await removeCredentialKeysAtomically(targetKeys);
-        },
-        authority,
-    );
-    if (!removed) return false;
-    emitHomeCredentialMutation('credentials_removed', serverUrl, options);
-    retireIrohHomeTransportDiagnostics(resolveHomeCredentialMutationTarget(serverUrl, options)?.serverId ?? '');
-    return true;
+    return await withHomeMutationAuthority(authority, async (owned) => {
+        const keys = await getAuthKeys(serverUrl, options);
+        if (!keys) return false;
+        const targetKeys = uniqueStrings([keys.primary, ...keys.legacy]);
+        const removed = await serializeCredentialScopeOperations(
+            targetKeys,
+            async () => {
+                if (options.expectedCredentials) {
+                    let raws: (string | null)[];
+                    try { raws = await Promise.all(targetKeys.map(key => readCredentialRawByKey(key, 'surface'))); }
+                    catch { return false; }
+                    const currentCredentials = raws.map(parseCredentialsRaw).find((value): value is AuthCredentials => value !== null) ?? null;
+                    // An absent credential is already removed. Changed or unreadable bytes
+                    // are not custody the original caller is authorized to discard.
+                    if (currentCredentials
+                        ? !areCredentialsEqual(currentCredentials, options.expectedCredentials)
+                        : raws.some(raw => raw !== null)) return false;
+                }
+                return await removeCredentialKeysAtomically(targetKeys);
+            },
+            owned,
+        );
+        if (!removed) return false;
+        emitHomeCredentialMutation('credentials_removed', serverUrl, options);
+        retireIrohHomeTransportDiagnostics(resolveHomeCredentialMutationTarget(serverUrl, options)?.serverId ?? '');
+        return true;
+    });
 }
 
 export const TokenStorage = {

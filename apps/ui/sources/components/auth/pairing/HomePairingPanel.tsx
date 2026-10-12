@@ -39,6 +39,8 @@ import { useSetupBlockPanelWidth } from '@/components/ui/setupBlocks/SetupBlockG
 import { SetupSteps, type SetupStep } from '@/components/ui/setupBlocks/SetupSteps';
 
 import { PairingQrCode } from './PairingQrCode';
+import { PairingQrMomentCanvas } from './PairingQrMoment';
+import { usePairingQrMoment, type PairingQrMomentSource } from './usePairingQrMoment';
 import { PAIRING_QR_PALETTE } from './pairingQrPalette';
 
 /** Who the code is for: a phone scans it; another computer opens (or pastes) its link. */
@@ -46,9 +48,11 @@ export type HomePairingPurpose = 'phone' | 'computer';
 /**
  * `inline`: inside Home's Get set up row, drawn on the morph frame's surface (QR beside the text when
  * there is room). `modal`: centred, for entry points with no tile to grow. `page`: the Add your phone
- * page, which also lets the person see the link and cancel the code.
+ * page, which also lets the person see the link and cancel the code. `section`: one step of a page that
+ * names it itself (Add a machine's Another computer): no heading or lead of its own and no inset, so the
+ * code starts at the page's content edge.
  */
-export type HomePairingPanelLayout = 'inline' | 'modal' | 'page';
+export type HomePairingPanelLayout = 'inline' | 'modal' | 'page' | 'section';
 
 /** The paper: a 216 px code (as dense as the Add your phone page's) inside its margin. */
 const QR_PAPER_PX = 240;
@@ -197,7 +201,7 @@ export const HomePairingPanel = React.memo(function HomePairingPanel(props: Read
         <View
             testID={`${prefix}-panel`}
             onLayout={onLayout}
-            style={[styles.root, props.layout === 'page' ? styles.rootPage : null, props.layout === 'modal' ? styles.rootModal : null]}
+            style={[styles.root, props.layout === 'page' || props.layout === 'section' ? styles.rootPage : null, props.layout === 'modal' ? styles.rootModal : null]}
         >
             {props.onClose ? (
                 <View style={styles.close}>
@@ -214,12 +218,16 @@ export const HomePairingPanel = React.memo(function HomePairingPanel(props: Read
             <View style={sideBySide ? styles.sideBySide : styles.stacked}>
                 <PairingCodeBlock testIDPrefix={prefix} state={state} homeName={homeName} />
                 <View style={sideBySide ? styles.bodySide : styles.bodyStacked}>
-                    <Text style={[styles.title, centred ? styles.centredText : null]}>
-                        {t(phone ? 'homeSetup.pairingPhoneTitle' : 'homeSetup.pairingComputerTitle')}
-                    </Text>
-                    <Text style={[styles.body, centred ? styles.centredText : null]}>
-                        {phone ? t('homeSetup.pairingPhoneBody', { home: homeName }) : t('homeSetup.pairingComputerBody', { home: homeName })}
-                    </Text>
+                    {props.layout !== 'section' ? (
+                        <>
+                            <Text style={[styles.title, centred ? styles.centredText : null]}>
+                                {t(phone ? 'homeSetup.pairingPhoneTitle' : 'homeSetup.pairingComputerTitle')}
+                            </Text>
+                            <Text style={[styles.body, centred ? styles.centredText : null]}>
+                                {phone ? t('homeSetup.pairingPhoneBody', { home: homeName }) : t('homeSetup.pairingComputerBody', { home: homeName })}
+                            </Text>
+                        </>
+                    ) : null}
                     {props.layout !== 'modal' ? <PairingSteps purpose={props.purpose} /> : null}
                     <View style={[styles.actions, centred ? styles.actionsCentred : null]}>
                         {phone ? (
@@ -320,10 +328,27 @@ function StoreQr(props: Readonly<{ testID: string; store: string; qrLink: string
     );
 }
 
+/** The facts of the panel's state that the QR and pairing moments answer. */
+function pairingQrMomentSource(state: PanelState): PairingQrMomentSource {
+    switch (state.kind) {
+        case 'making':
+            return state;
+        case 'ready':
+            return { kind: 'ready', link: state.link, qrAvailable: state.qrAvailable };
+        case 'adding':
+            return { kind: 'adding', device: state.device };
+        case 'joined':
+            return { kind: 'joined', device: state.device };
+        default:
+            return { kind: 'other' };
+    }
+}
+
 /** The code on its paper, or what stands in its place while there is none. */
 function PairingCodeBlock(props: Readonly<{ testIDPrefix: string; state: PanelState; homeName: string }>) {
     const { theme } = useUnistyles();
     const { state } = props;
+    const moment = usePairingQrMoment(pairingQrMomentSource(state));
     const showsCode = state.kind === 'making' || state.kind === 'ready';
     const label = state.kind === 'ready'
         ? state.qrAvailable
@@ -338,7 +363,16 @@ function PairingCodeBlock(props: Readonly<{ testIDPrefix: string; state: PanelSt
             accessibilityLabel={label}
             style={styles.codeSlot}
         >
-            {state.kind === 'ready' && state.qrAvailable ? (
+            {moment.drawing ? (
+                <PairingQrMomentCanvas
+                    size={QR_PAPER_PX}
+                    scene={moment.scene}
+                    theme={moment.theme}
+                    reducedMotion={moment.reducedMotion}
+                    pairing={moment.pairing}
+                    machines={moment.machines}
+                />
+            ) : state.kind === 'ready' && state.qrAvailable ? (
                 <PairingQrCode link={state.link} size={QR_PAPER_PX} />
             ) : (
                 <View style={styles.codeStandIn}>

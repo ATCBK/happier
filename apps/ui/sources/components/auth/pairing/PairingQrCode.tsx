@@ -4,9 +4,9 @@ import { Image } from 'expo-image';
 import { StyleSheet } from 'react-native-unistyles';
 
 import { QRCode } from '@/components/qr/QRCode';
-import { tryCreateQRMatrix } from '@/components/qr/qrMatrix';
 
 import { PAIRING_QR_PALETTE } from './pairingQrPalette';
+import { isPairingQrMarked } from './pairingQrMark';
 
 const PAPER_PADDING_PX = 12;
 const MARK_BOX_PX = 44;
@@ -25,11 +25,7 @@ export const PairingQrCode = React.memo(function PairingQrCode(props: Readonly<{
     size: number;
     testID?: string;
 }>) {
-    const marked = React.useMemo(() => {
-        const admitted = tryCreateQRMatrix(props.link, 'medium');
-        const sturdier = tryCreateQRMatrix(props.link, 'quartile');
-        return admitted.ok && sturdier.ok && sturdier.matrix.size === admitted.matrix.size;
-    }, [props.link]);
+    const marked = React.useMemo(() => isPairingQrMarked(props.link), [props.link]);
     const codeSize = props.size - (2 * PAPER_PADDING_PX);
     return (
         <View testID={props.testID} style={[styles.paper, { width: props.size, height: props.size }]}>

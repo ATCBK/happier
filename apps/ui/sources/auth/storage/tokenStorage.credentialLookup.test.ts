@@ -123,6 +123,7 @@ describe('TokenStorage credential lookup (native keychain)', () => {
 
     afterEach(() => {
         vi.restoreAllMocks();
+        vi.unstubAllGlobals();
         vi.doUnmock('@/sync/domains/server/serverProfiles');
     });
 
@@ -155,6 +156,97 @@ describe('TokenStorage credential lookup (native keychain)', () => {
 
         await expect(FreshTokenStorage.getCredentials()).resolves.toEqual({ token: 'token-1', secret: 'secret-1' });
         expect(secureStoreState.readOrder).toEqual([primaryKey]);
+    });
+
+    it('shares concurrent identical cold scoped reads at the Home authority', async () => {
+        installServerProfilesMockWithLegacyScopes();
+        const { TokenStorage } = await import('./tokenStorage');
+        await TokenStorage.setCredentials({ token: 'before' });
+        vi.resetModules();
+        installServerProfilesMockWithLegacyScopes();
+        const { TokenStorage: Fresh } = await import('./tokenStorage');
+        secureStoreState.readOrder.length = 0;
+        // Web Locks are the cross-tab Home mutation authority. Its queue is
+        // also used when this native-host fixture has a browser coordinator.
+        let tail: Promise<unknown> = Promise.resolve();
+        const request = vi.fn((_name: string, run: () => Promise<unknown>) => {
+            const result = tail.then(run);
+            tail = result.catch(() => undefined);
+            return result;
+        });
+        vi.stubGlobal('navigator', { locks: { request } });
+        const reads = Array.from({ length: 12 }, () => Fresh.getCredentialsForServerUrl(SERVER_URL, {
+            serverId: 'srv-identity', storageReadFailure: 'surface',
+        }));
+        expect(await Promise.all(reads)).toEqual(Array(12).fill({ token: 'before' }));
+        expect(secureStoreState.readOrder).toHaveLength(1);
+        expect(request).toHaveBeenCalledTimes(1);
+        // Settlement releases the share; the native owner's existing raw cache
+        // is independent of this one-operation queue sharing.
+        expect(await Fresh.getCredentialsForServerUrl(SERVER_URL, {
+            serverId: 'srv-identity', storageReadFailure: 'surface',
+        })).toEqual({ token: 'before' });
+        expect(request).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not let a post-mutation read join an older scoped read still in flight', async () => {
+        installServerProfilesMockWithLegacyScopes();
+        const { TokenStorage } = await import('./tokenStorage');
+        await TokenStorage.setCredentials({ token: 'before' });
+        vi.resetModules();
+        installServerProfilesMockWithLegacyScopes();
+        const { TokenStorage: Fresh } = await import('./tokenStorage');
+        let release!: () => void;
+        const gate = new Promise<void>(resolve => { release = resolve; });
+        let started = false;
+        secureStoreState.getItemAsync.mockImplementationOnce(async (key: string) => {
+            const captured = secureStoreState.values.get(key) ?? null;
+            started = true;
+            await gate;
+            return captured;
+        });
+        const options = { serverId: 'srv-identity', storageReadFailure: 'surface' as const };
+        const before = Fresh.getCredentialsForServerUrl(SERVER_URL, options);
+        await vi.waitFor(() => expect(started).toBe(true));
+        const mutation = Fresh.setCredentialsForServerUrl(SERVER_URL, options, { token: 'after' });
+        const after = Fresh.getCredentialsForServerUrl(SERVER_URL, options);
+        release();
+        expect(await before).toEqual({ token: 'before' });
+        expect(await mutation).toBe(true);
+        expect(await after).toEqual({ token: 'after' });
+    });
+
+    it('interrupts sharing when a profile-adoption writer already holds its Home authority', async () => {
+        installServerProfilesMockWithLegacyScopes();
+        const { TokenStorage } = await import('./tokenStorage');
+        await TokenStorage.setCredentials({ token: 'before' });
+        vi.resetModules();
+        installServerProfilesMockWithLegacyScopes();
+        const { TokenStorage: Fresh, setHomeCredentialsWithRollbackUnderMutationAuthority } = await import('./tokenStorage');
+        const { withHomeMutationAuthority } = await import('@/sync/domains/server/homeMutationLock');
+        // Native adoption has a composed authority but no browser Web Lock.
+        // Node's optional Web Locks must not turn this case into a lock deadlock.
+        vi.stubGlobal('navigator', {});
+        await withHomeMutationAuthority(undefined, async (authority) => {
+            let release!: () => void;
+            const gate = new Promise<void>(resolve => { release = resolve; });
+            let started = false;
+            secureStoreState.getItemAsync.mockImplementationOnce(async (key: string) => {
+                const captured = secureStoreState.values.get(key) ?? null;
+                started = true;
+                await gate;
+                return captured;
+            });
+            const options = { serverId: 'srv-identity', storageReadFailure: 'surface' as const };
+            const before = Fresh.getCredentialsForServerUrl(SERVER_URL, options);
+            await vi.waitFor(() => expect(started).toBe(true));
+            const mutation = setHomeCredentialsWithRollbackUnderMutationAuthority(authority, SERVER_URL, options, { token: 'after' });
+            const after = Fresh.getCredentialsForServerUrl(SERVER_URL, options);
+            release();
+            expect(await before).toEqual({ token: 'before' });
+            expect(await mutation).not.toBeNull();
+            expect(await after).toEqual({ token: 'after' });
+        });
     });
 
     it('keeps legacy scope precedence and still migrates the winner onto the primary scope', async () => {
