@@ -49,15 +49,17 @@ export function classifyWidgetDefinitionCommandResult<Id extends CommandId>(
 
 export async function runWidgetDefinitionCommand<Id extends CommandId>(
     actionId: Id,
-    input: PublicActionInputById[Id],
+    input: PublicActionInputById[Id] | (() => PublicActionInputById[Id]),
     target: WidgetCommandTarget,
     signal?: AbortSignal,
 ): Promise<WidgetDefinitionCommandOutcome<PublicActionResultById[Id]>> {
     try {
+        // Preparing widget inputs can fail at the platform or validation boundary too.
+        const preparedInput = typeof input === 'function' ? input() : input;
         const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
         // The person pressed it: present-user authority, one request id, so a consequential
         // operation enters the existing approval policy exactly as any other UI Action does.
-        const result = await createDefaultActionExecutor().execute(actionId, input, {
+        const result = await createDefaultActionExecutor().execute(actionId, preparedInput, {
             surface: 'ui', authority: 'present_user', serverId: target.serverId, expectedAccountId: target.accountId,
             actionRequestId: randomUUID(), ...(signal ? { signal } : {}),
         });

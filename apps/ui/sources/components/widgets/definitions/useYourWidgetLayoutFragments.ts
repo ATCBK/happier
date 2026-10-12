@@ -4,8 +4,10 @@ import type { ItemAction } from '@/components/ui/lists/itemActions';
 import { Modal } from '@/modal';
 import { randomUUID } from '@/platform/randomUUID';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
-import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
+import { areServerAccountScopesEqual, serverAccountScopeKeySuffix } from '@/sync/domains/scope/serverAccountScope';
+import { publishPresentationNotice } from '@/components/sessions/presentation/presentationNotices';
 import { t } from '@/text';
+import { resolveActionExecutionFailureMessage } from '@/sync/ops/actions/resolveActionExecutionFailureMessage';
 import { runWidgetDefinitionCommand, type WidgetCommandTarget } from './widgetDefinitionCommands';
 
 const EMPTY_FRAGMENTS: readonly WidgetLayoutFragmentSummaryV1[] = Object.freeze([]);
@@ -33,7 +35,8 @@ export function useYourWidgetLayoutFragments(account: WidgetCommandTarget | null
         })();
         return () => { controller.abort(); if (mountedAccount.current === scope) mountedAccount.current = null; };
     }, [reload, scope]);
-    const manage = React.useCallback(async (artifactId: string, intent: 'rename' | 'duplicate' | 'delete') => {
+    const manage = React.useCallback(async (fragment: WidgetLayoutFragmentSummaryV1, intent: 'rename' | 'duplicate' | 'delete') => {
+        const artifactId = fragment.artifactId;
         const lifetime = captureActiveServerAccountScopeLifetime();
         if (!scope || mountedAccount.current !== scope || !lifetime?.isCurrent()
             || !areServerAccountScopesEqual(lifetime.scope, scope)) return;
@@ -42,10 +45,17 @@ export function useYourWidgetLayoutFragments(account: WidgetCommandTarget | null
         const { signal } = controller;
         const cancellation = lifetime.onRetire(() => controller.abort());
         const current = () => !signal.aborted && lifetime.isCurrent() && mountedAccount.current === scope;
-        const notify = (kind: 'approvalPending' | 'refused') => {
+        const notify = (outcome: Readonly<{ kind: 'approvalPending' }> | Readonly<{ kind: 'refused'; errorCode: string }>) => {
             if (!current()) return;
-            Modal.alert(t(kind === 'approvalPending' ? 'common.info' : 'common.error'),
-                t(kind === 'approvalPending' ? 'widgetAdd.areaApprovalPending' : 'errors.operationFailed'));
+            if (outcome.kind === 'approvalPending') {
+                publishPresentationNotice({
+                    key: `widget-fragment:${serverAccountScopeKeySuffix(scope)}:${artifactId}:${intent}`,
+                    severity: 'info',
+                    message: `${t(`common.${intent}`)} · ${fragment.name} · ${t('approvals.waitingForYou')}`,
+                });
+            } else Modal.alert(t('common.error'),
+                resolveActionExecutionFailureMessage({ ok: false, errorCode: outcome.errorCode }, t('errors.operationFailed'))
+                    ?? t('errors.operationFailed'));
         };
         try {
             if (!current()) return;
@@ -54,39 +64,45 @@ export function useYourWidgetLayoutFragments(account: WidgetCommandTarget | null
                 const deleted = await runWidgetDefinitionCommand('widgets.fragment.delete', { account: scope, artifactId }, scope, signal);
                 if (!current()) return;
                 if (deleted.kind === 'applied') refresh();
-                else notify(deleted.kind);
+                else notify(deleted);
                 return;
             }
             if (intent === 'duplicate') {
                 // The Action owns the copy's name/default and its independent Artifact identity.
                 const copied = await runWidgetDefinitionCommand('widgets.fragment.duplicate',
-                    { account: scope, artifactId, newArtifactId: randomUUID() }, scope, signal);
+                    () => ({ account: scope, artifactId, newArtifactId: randomUUID() }), scope, signal);
                 if (!current()) return;
                 if (copied.kind === 'applied') refresh();
-                else notify(copied.kind);
+                else notify(copied);
                 return;
             }
-            const opened = await runWidgetDefinitionCommand('widgets.fragment.get', { account: scope, artifactId }, scope, signal);
-            if (!current()) return;
-            if (opened.kind !== 'applied') { notify(opened.kind); return; }
-            const name = opened.result.fragment.name;
-            const answer = await Modal.prompt(t('common.rename'), name, {
+            const name = fragment.name;
+            const answer = await Modal.prompt(t('common.rename'), undefined, {
                 defaultValue: name, placeholder: t('widgetDefinition.name'), confirmText: t('common.save'), cancelText: t('common.cancel'),
             });
             const nextName = answer?.trim();
             if (!current() || !nextName || nextName === name) return;
+            setInventory(previous => previous && areServerAccountScopesEqual(previous, scope)
+                ? { ...previous, fragments: previous.fragments.map(entry => entry.artifactId === artifactId ? { ...entry, name: nextName } : entry) }
+                : previous);
             // This patch stays on the Fragment port; its Artifact CAS/retry owns revisions.
             const renamed = await runWidgetDefinitionCommand('widgets.fragment.update',
                 { account: scope, artifactId, patch: { name: nextName } }, scope, signal);
             if (!current()) return;
             if (renamed.kind === 'applied') refresh();
-            else notify(renamed.kind);
+            else if (renamed.kind === 'refused') {
+                // Roll back only this proposal; a newer rename or another Account must remain intact.
+                setInventory(previous => previous && areServerAccountScopesEqual(previous, scope)
+                    ? { ...previous, fragments: previous.fragments.map(entry => entry.artifactId === artifactId && entry.name === nextName
+                        ? { ...entry, name } : entry) } : previous);
+                notify(renamed);
+            } else notify(renamed);
         } finally { cancellation.dispose(); }
     }, [scope]);
     const actionsFor = React.useCallback((fragment: WidgetLayoutFragmentSummaryV1): ItemAction[] => [
-        { id: 'rename', title: t('common.rename'), icon: 'pencil-simple', onPress: () => { void manage(fragment.artifactId, 'rename'); } },
-        { id: 'duplicate', title: t('common.duplicate'), icon: 'copy', onPress: () => { void manage(fragment.artifactId, 'duplicate'); } },
-        { id: 'delete', title: t('common.delete'), icon: 'trash', destructive: true, onPress: () => { void manage(fragment.artifactId, 'delete'); } },
+        { id: 'rename', title: t('common.rename'), icon: 'pencil-simple', onPress: () => { void manage(fragment, 'rename'); } },
+        { id: 'duplicate', title: t('common.duplicate'), icon: 'copy', onPress: () => { void manage(fragment, 'duplicate'); } },
+        { id: 'delete', title: t('common.delete'), icon: 'trash', destructive: true, onPress: () => { void manage(fragment, 'delete'); } },
     ], [manage]);
     return { fragments: inventory && inventory.serverId === serverId && inventory.accountId === accountId ? inventory.fragments : EMPTY_FRAGMENTS, actionsFor };
 }

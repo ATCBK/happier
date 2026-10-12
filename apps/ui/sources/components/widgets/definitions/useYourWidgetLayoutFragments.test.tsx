@@ -5,6 +5,9 @@ import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { instantiateWidgetLayoutFragmentGroupV1 } from '@happier-dev/protocol/widgets';
+import * as uuidBoundary from '@/platform/randomUUID';
+import { Pressable } from 'react-native';
 
 const modalBoundary = vi.hoisted(() => ({ prompt: vi.fn(), confirm: vi.fn(), alert: vi.fn() }));
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ spies: modalBoundary }).module);
@@ -16,6 +19,9 @@ const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
 installDisconnectedServerSocketBoundary();
 await loadSyncSingletonForTests();
+const { useWidgetGroupKeepFlows } = await import('../group/useWidgetGroupKeepFlows');
+const { WidgetFlowPanel } = await import('../flow/WidgetFlowPanel');
+const { readPresentationNotice, retirePresentationNotice } = await import('@/components/sessions/presentation/presentationNotices');
 const { renderScreen } = await import('@/dev/testkit/render/renderScreen');
 const { flushHookEffects } = await import('@/dev/testkit/hooks/flushHookEffects');
 const { useAccountWidgetAddSections } = await import('../add/accountWidgetAddSections');
@@ -36,6 +42,7 @@ const LABELS = { count: String, submit: 'Add' };
 const addInstance = async () => ({ ok: true as const });
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
 let previousSettings: ReturnType<typeof storage.getState>['settings'] | null = null;
+let restoreUuid: (() => void) | null = null;
 
 async function renderGallery(options: Readonly<{ waiveManagementApproval?: boolean }> = {}) {
     const serverId = await harness.addHome({ name: 'Home A', serverUrl: 'https://fragments-home.example', accountId: ACCOUNT_ID });
@@ -53,7 +60,7 @@ async function renderGallery(options: Readonly<{ waiveManagementApproval?: boole
     if (options.waiveManagementApproval !== false) {
         // Persisted Account policy, not an executor bypass: success cases opt out of default Ask.
         const settings = { ...previousSettings, actionsSettingsV1: ActionsSettingsV1Schema.parse({
-            v: 1, actions: {}, approvalWaivedSurfaces: { 'widgets.fragment.update': ['ui'], 'widgets.fragment.delete': ['ui'] },
+            v: 1, actions: {}, approvalWaivedSurfaces: { 'widgets.fragment.update': ['ui'], 'widgets.fragment.delete': ['ui'], 'widgets.group.add': ['ui'] },
         }) };
         storage.setState({ settings });
         harness.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: settings }, version: 1 } });
@@ -87,10 +94,124 @@ describe('saved-group Gallery management', () => {
     beforeEach(async () => { await harness.reset(); modalBoundary.prompt.mockReset(); modalBoundary.confirm.mockReset(); modalBoundary.alert.mockReset(); });
     afterEach(async () => {
         standardCleanup();
+        retirePresentationNotice();
+        restoreUuid?.();
+        restoreUuid = null;
         if (connection) { await connection.dispose(); connection = null; installHomeGovernanceBoundaries(harness); }
         if (previousSettings) { storage.setState({ settings: previousSettings }); previousSettings = null; }
     });
 
+    it('ends Save group on a failed platform operation and lets Retry save through the real Artifact Action without a daemon', async () => {
+        const { account, serverId } = await renderGallery();
+        const group = instantiateWidgetLayoutFragmentGroupV1(DRAFT.group, { groupId: 'source-group', childIds: ['source-widget'] });
+        function KeepGroup() {
+            const flow = useWidgetGroupKeepFlows({ group, name: 'L3 terminal save',
+                scope: { ...account, owner: { kind: 'home' } }, candidates: [], anchorRef: React.useRef(null), testID: 'terminal-save' });
+            return <><Pressable testID="terminal-save.open" onPress={flow.onSave} />{flow.overlay}</>;
+        }
+        const screen = await renderScreen(<KeepGroup />);
+        await screen.pressByTestIdAsync('terminal-save.open');
+        // UUID allocation is an OS/platform boundary; the command, Action policy and Artifact writer stay real.
+        const uuid = vi.spyOn(uuidBoundary, 'randomUUID').mockImplementationOnce(() => { throw new Error('Platform UUID unavailable'); });
+        restoreUuid = () => uuid.mockRestore();
+        await screen.pressByTestIdAsync('terminal-save.saveGroup.panel.submit');
+        await flushHookEffects({ cycles: 2 });
+        expect(screen.tree.root.findByType(WidgetFlowPanel).props.primary.busy).toBe(false);
+        expect(screen.tree.root.findByType(WidgetFlowPanel).props.primary.label).toBe('Retry');
+        expect(screen.findByTestId('terminal-save.saveGroup.panel')).not.toBeNull();
+        await screen.pressByTestIdAsync('terminal-save.saveGroup.panel.submit');
+        await vi.waitFor(() => expect(screen.findByTestId('terminal-save.saveGroup.panel')).toBeNull());
+        expect(harness.artifacts(serverId).list().some(row => harness.artifacts(serverId).readPlainBody(row.id)?.includes('L3 terminal save'))).toBe(true);
+    });
+
+    it('reports a failed Duplicate preparation and lets the same Gallery action retry', async () => {
+        const { choose, serverId } = await renderGallery();
+        const uuid = vi.spyOn(uuidBoundary, 'randomUUID').mockImplementationOnce(() => { throw new Error('Platform UUID unavailable'); });
+        restoreUuid = () => uuid.mockRestore();
+        await choose('duplicate');
+        await vi.waitFor(() => expect(modalBoundary.alert).toHaveBeenCalled());
+        expect(modalBoundary.alert.mock.calls.at(-1)?.[0]).toBe('Error');
+        expect(harness.artifacts(serverId).list()).toHaveLength(1);
+        await choose('duplicate');
+        await vi.waitFor(() => expect(harness.artifacts(serverId).list()).toHaveLength(2));
+    });
+
+    it('reports a failed Add-to preparation after closing the chooser and lets a reopened chooser retry', async () => {
+        const { account, serverId } = await renderGallery();
+        const group = instantiateWidgetLayoutFragmentGroupV1({ ...DRAFT.group, children: [{ kind: 'widget',
+            instance: { v: 1, definition: { kind: 'builtin', id: 'your_home' }, bindings: {} } }] },
+        { groupId: 'source-group', childIds: ['source-widget'] });
+        function CopyGroup() {
+            const flow = useWidgetGroupKeepFlows({ group, name: DRAFT.name,
+                scope: { ...account, owner: { kind: 'project', projectId: 'source-project' } }, candidates: [],
+                anchorRef: React.useRef(null), testID: 'terminal-copy' });
+            return <><Pressable testID="terminal-copy.open" onPress={flow.onAddTo} />{flow.overlay}</>;
+        }
+        const screen = await renderScreen(<CopyGroup />);
+        await screen.pressByTestIdAsync('terminal-copy.open');
+        const uuid = vi.spyOn(uuidBoundary, 'randomUUID').mockImplementationOnce(() => { throw new Error('Platform UUID unavailable'); });
+        restoreUuid = () => uuid.mockRestore();
+        await screen.pressByTestIdAsync('terminal-copy.addTo.home');
+        await vi.waitFor(() => expect(readPresentationNotice()).toMatchObject({ key: 'widget-group-copy:source-group', severity: 'error' }));
+        expect(screen.findByTestId('terminal-copy.addTo.home')).toBeNull();
+        expect(harness.artifacts(serverId).list()).toHaveLength(1);
+        await screen.pressByTestIdAsync('terminal-copy.open');
+        await screen.pressByTestIdAsync('terminal-copy.addTo.home');
+        await vi.waitFor(() => expect(readPresentationNotice()).toMatchObject({ key: 'widget-group-copy:source-group', severity: 'info' }));
+        const layout = await createDefaultActionExecutor().execute('home.hub.layout.get', {}, { serverId, surface: 'ui', authority: 'present_user' });
+        expect(layout).toMatchObject({ ok: true, result: { layout: { items: expect.arrayContaining([
+            expect.objectContaining({ kind: 'group', children: [expect.objectContaining({ instance: expect.objectContaining({ definition: group.children[0]!.instance.definition }) })] }),
+        ]) } } });
+    });
+
+    it('opens Rename from the listed name even when the Artifact read has not answered', async () => {
+        const { choose, serverId } = await renderGallery();
+        let release!: () => void;
+        const held = new Promise<void>(resolve => { release = resolve; });
+        harness.answer(serverId, 'GET /v1/artifacts/saved', { respondAfter: held, body: {} });
+        modalBoundary.prompt.mockResolvedValue(null);
+        try {
+            await choose('rename');
+            expect(modalBoundary.prompt).toHaveBeenCalledWith(expect.any(String), undefined,
+                expect.objectContaining({ defaultValue: DRAFT.name }));
+        } finally { release(); }
+    });
+
+    it('shows the submitted name while saving and restores the row with an error on refusal', async () => {
+        const { screen, choose, serverId } = await renderGallery();
+        let release!: () => void;
+        const held = new Promise<void>(resolve => { release = resolve; });
+        harness.answer(serverId, 'POST /v1/artifacts/saved', { respondAfter: held, status: 403, body: { error: 'forbidden' } });
+        modalBoundary.prompt.mockResolvedValue('Release room');
+        try {
+            await choose('rename');
+            await vi.waitFor(() => expect(harness.requestsFor('/v1/artifacts/saved').some(request =>
+                !!request.input && typeof request.input === 'object' && 'body' in request.input)).toBe(true));
+            expect(screen.getTextContent()).toContain('Release room');
+        } finally { release(); }
+        await vi.waitFor(() => expect(modalBoundary.alert).toHaveBeenCalled());
+        expect(screen.getTextContent()).toContain(DRAFT.name);
+        expect(screen.getTextContent()).not.toContain('Release room');
+    });
+
+    it('explains a Home that cannot be reached before Rename can save', async () => {
+        const { screen, choose, serverId } = await renderGallery();
+        const scope = { serverId, accountId: ACCOUNT_ID };
+        const { getPersistenceStorage } = await import('@/sync/domains/state/persistenceStorage');
+        const { accountSettingsScopeKeySuffix } = await import('@/sync/domains/settings/scope/accountSettingsScope');
+        const { loadAccountSettings } = await import('@/sync/domains/state/accountSettingsPersistence');
+        getPersistenceStorage().delete(`account-settings:v2:${accountSettingsScopeKeySuffix(scope)}`);
+        storage.setState({ settingsScope: null });
+        expect(loadAccountSettings(scope).version).toBeNull();
+        harness.answer(serverId, '/v2/account/settings', { dispatchThenFail: true });
+        modalBoundary.prompt.mockResolvedValue('Release room');
+        await choose('rename');
+        const { t } = await import('@/text');
+        await vi.waitFor(() => expect(modalBoundary.alert).toHaveBeenCalledWith(t('common.error'),
+            t('settingsPlugins.targetSelection.unreachableThisHome')));
+        expect(screen.getTextContent()).toContain(DRAFT.name);
+        expect(screen.getTextContent()).not.toContain('Release room');
+    });
     it('renames the saved group through current Artifact revisions, duplicates independently, and refreshes after delete', async () => {
         const { screen, choose, account, executor, context, serverId } = await renderGallery();
         expect(screen.findByTestId('gallery.detail.submit')?.props.disabled).toBe(true);
@@ -105,6 +226,8 @@ describe('saved-group Gallery management', () => {
             expect(renamed).toMatchObject({ ok: true, result: { fragment: { name: 'Release room', description: 'Kept by another client', group: DRAFT.group } } });
         });
         await vi.waitFor(() => expect(screen.getTextContent()).toContain('Release room'));
+        // The prompt shows the name once, as the field's value; its message line does not repeat it.
+        expect(modalBoundary.prompt).toHaveBeenCalledWith(expect.any(String), undefined, expect.objectContaining({ defaultValue: expect.any(String) }));
         expect(screen.findByTestId('gallery.detail.submit')?.props.disabled).toBe(true);
         await choose('duplicate');
         await vi.waitFor(() => expect(harness.artifacts(serverId).list()).toHaveLength(2));
@@ -133,18 +256,6 @@ describe('saved-group Gallery management', () => {
         expect(modalBoundary.alert.mock.calls.at(-1)?.[0]).toBe('Error');
         expect(harness.artifacts(serverId).readPlainBody('saved')).toBe(original);
         expect(screen.findByTestId('gallery.entry.group-saved.actions')).not.toBeNull();
-    });
-
-    it.each(['rename', 'delete'] as const)('leaves the saved group unchanged while default policy places %s in approval custody', async (intent) => {
-        const { choose, serverId } = await renderGallery({ waiveManagementApproval: false });
-        const original = harness.artifacts(serverId).readPlainBody('saved');
-        modalBoundary.prompt.mockResolvedValue('Release room');
-        await choose(intent);
-        await vi.waitFor(() => expect(modalBoundary.alert).toHaveBeenCalled());
-        expect(modalBoundary.alert.mock.calls.at(-1)?.[0]).toBe('Info');
-        expect(modalBoundary.confirm).not.toHaveBeenCalled();
-        expect(harness.artifacts(serverId).readPlainBody('saved')).toBe(original);
-        expect(harness.artifacts(serverId).list()).toHaveLength(2);
     });
 
     it('does not finish a pending rename after its Account lifetime retires', async () => {

@@ -19,6 +19,7 @@ import {
 } from './SaveWidgetGroupPanel';
 import { describeWidgetGroupOrigin, WidgetGroupCopyChooser } from './widgetGroupCopy';
 import { buildWidgetGroupInputsCandidate } from './widgetGroupInputs';
+import { readWidgetGroupTitle } from './widgetGroupTitle';
 
 /**
  * A group's keep-it entries (lab wgmenu M): Save group… asks for the name inline (starting from the
@@ -100,7 +101,7 @@ export function useWidgetGroupKeepFlows(
       testID={`${testID}.saveGroup`}
     >
       <SaveWidgetGroupPanel
-        defaultName={group.title ?? name}
+        defaultName={readWidgetGroupTitle(group) ?? name}
         childCount={group.children.length}
         onSave={save}
         onCancel={close}
