@@ -1,0 +1,74 @@
+X-Fixture-Kind: constructed-client-markup; gmail; en
+From: Camille <camille@example.test>
+Sender: camille@example.test
+To: wilson@example.test
+Message-ID: <gmail-en@example.test>
+References: <root@example.test>
+In-Reply-To: <root@example.test>
+Authentication-Results: mx.example.test; dmarc=pass header.from=example.test
+Date: Mon, 12 Oct 2026 09:30:00 +0200
+Subject: Re: Quote request
+MIME-Version: 1.0
+Content-Type: multipart/related; boundary="gmail-en-related"
+
+--gmail-en-related
+Content-Type: multipart/alternative; boundary="gmail-en-alternative"
+
+--gmail-en-alternative
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: quoted-printable
+
+Hello=2C=20the=20quote=20is=20approved.
+Quote=20details=3A=20https=3A=2F=2Fexample.test=2Fquote
+--=20
+Camille=20Example=20=C2=B7=20Sales=20team
+On=20Monday=2C=2012=20October=202026=2C=20Alex=20Example=20wrote=3A
+=3E=20Could=20you=20confirm=20the=20previous=20quote=3F
+--gmail-en-alternative
+Content-Type: text/html; charset=utf-8
+Content-Transfer-Encoding: quoted-printable
+
+=3Chtml=3E=3Cbody=3E=3Cp=3EHello=2C=20the=20quote=20is=20approved.=3C=2Fp=
+=3E=3Cp=3E=3Ca=20href=3D=22https=3A=2F=2Fexample.test=2Fquote=22=3EQuote=
+=20details=3C=2Fa=3E=3C=2Fp=3E=3Cp=3E=3Cimg=20src=3D=22cid=3Aproject-plan=
+=22=20alt=3D=22Project=20plan=22=3E=3C=2Fp=3E=3Cspan=20style=3D=22display=
+=3Anone=22=3EHIDDEN=20FIXTURE=20CONTENT=3C=2Fspan=3E=3Cimg=20src=3D=22http=
+s=3A=2F=2Fexample.test=2Ftracker=22=20width=3D=221=22=20height=3D=221=22=
+=3E=3Cdiv=20class=3D=22gmail_signature=22=20data-smartmail=3D=22gmail_sign=
+ature=22=3ECamille=20Example=20=C2=B7=20Sales=20team=3Cimg=20src=3D=22cid=
+=3Asignature-logo=22=20alt=3D=22Logo=22=3E=3C=2Fdiv=3E=3Cdiv=20class=3D=22=
+gmail_quote=22=3E=3Cdiv=20class=3D=22gmail_attr=22=3EOn=20Monday=2C=2012=
+=20October=202026=2C=20Alex=20Example=20wrote=3A=3C=2Fdiv=3E=3Cblockquote=
+=3ECould=20you=20confirm=20the=20previous=20quote=3F=3C=2Fblockquote=3E=3C=
+=2Fdiv=3E=3C=2Fbody=3E=3C=2Fhtml=3E
+--gmail-en-alternative--
+--gmail-en-related
+Content-Type: image/png
+Content-Disposition: inline; filename="signature-logo.png"
+Content-ID: <signature-logo>
+Content-Transfer-Encoding: base64
+
+iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j5XQAAAAASUVORK5CYII=
+--gmail-en-related
+Content-Type: image/png
+Content-Disposition: inline; filename="project-plan.png"
+Content-ID: <project-plan>
+Content-Transfer-Encoding: base64
+
+iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j5XQAAAAASUVORK5CYII=
+--gmail-en-related
+Content-Type: text/calendar; method=REQUEST
+Content-Disposition: attachment; filename="appointment.ics"
+
+BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:gmail-en-appointment@example.test
+DTSTAMP:20261012T073000Z
+DTSTART:20261013T080000Z
+DTEND:20261013T090000Z
+SUMMARY:Quote review
+END:VEVENT
+END:VCALENDAR
+--gmail-en-related--
+

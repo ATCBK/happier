@@ -1,0 +1,293 @@
+import { describe, expect, it } from 'vitest';
+import { readFile, stat } from 'node:fs/promises';
+import { simpleParser } from 'mailparser';
+import { assertEmailTransportContributionV1 } from '@happier-dev/email-transports-protocol/testing/v1';
+import { definePlugin, type JsonValue, type PluginInvocationContext, type TargetedContributionSnapshot } from '@happier-dev/plugin-sdk';
+import type { ActionHandler } from '@happier-dev/plugin-sdk/actions';
+import { createPluginTestkit, type PluginTestkit } from '@happier-dev/plugin-sdk/testing';
+import { emailPlugin } from './plugin.js';
+import { EMAIL_CHANNEL_ACTION_IDS as ids } from './constants.js';
+import { EmailTransportsContributionProtocolV1 as protocol, EmailTransportFetchRawInputV1Schema,
+  EmailTransportSubmitRawInputV1Schema, EmailTransportFindSentInputV1Schema,
+  type EmailTransportSubmitRawInputV1 } from './transports.js';
+import { ConversationAttachmentFetchResultV1Schema, ConversationPollResultV1Schema,
+  ConversationPrincipalResolveResultV1Schema, ConversationProviderConnectionReadInputV1Schema,
+  ConversationTransportFactReportInputV1Schema, type ConversationTransportFactReportInputV1 } from '@happier-dev/channels-protocol/v1';
+
+const mailbox = 'wilson@example.com';
+const incoming = Buffer.from(['From: Alice <alice@example.com>', 'Message-ID: <incoming@example.com>',
+  'References: <root@example.com>', 'Authentication-Results: mx.example.com; dmarc=pass header.from=example.com',
+  'Reply-To: attacker@outside.com', 'Cc: other@example.com',
+  'Subject: Re: Question', 'Content-Type: text/plain; charset=utf-8', '', 'ANSWER',
+  'On Monday, Alice wrote:', '> HISTORY'].join('\r\n'));
+
+async function fixture(options: { findSent?: boolean } = {}) {
+  const sent = new Map<string, Uint8Array>();
+  const submissions: EmailTransportSubmitRawInputV1[] = [];
+  const messages = new Map<string, Uint8Array>([['opaque-incoming', incoming], ['<incoming@example.com>', incoming]]);
+  const facts: ConversationTransportFactReportInputV1[] = [];
+  let refs = ['opaque-incoming'];
+  let forceNotFound = false;
+  let retainedCatalog: ReturnType<PluginTestkit['readTargetedContributionFixture']> | undefined;
+  let ambiguous = false;
+  let lookupOverride: Uint8Array | undefined;
+  function transportAction(role: keyof typeof protocol.operations, run: ActionHandler) {
+    const d = protocol.operations[role].declaration;
+    return { title: role, inputSchema: d.input.schema.jsonSchema, resultSchema: d.resultSchema.jsonSchema,
+      surfaces: d.surfaces, dangerLevel: d.dangerLevel, run };
+  }
+  const transportPlugin = definePlugin({ id: 'acme.email.fixture', version: '0.0.0', actions: {
+    list: transportAction('listSince', async () => ({ kind: 'batch', refs, checkpointAfterBatch: { position: 1 } })),
+    fetch: transportAction('fetchRaw', async (input): Promise<JsonValue> => {
+      const { ref } = EmailTransportFetchRawInputV1Schema.parse(input);
+      const raw = lookupOverride ?? messages.get(ref) ?? sent.get(ref);
+      return raw ? { kind: 'raw', mimeBase64: Buffer.from(raw).toString('base64') } : { kind: 'notReady', reason: 'unsupported' };
+    }),
+    submit: transportAction('submitRaw', async (input): Promise<JsonValue> => {
+      const request = EmailTransportSubmitRawInputV1Schema.parse(input);
+      submissions.push(request);
+      sent.set(request.messageId, Buffer.from(request.mimeBase64, 'base64'));
+      return ambiguous ? { kind: 'outcomeUnknown' } : { kind: 'delivered', providerMessageIds: [request.messageId] };
+    }),
+    test: transportAction('connectionTest', async () => ({ kind: 'ready', mailbox })),
+    ...(options.findSent === false ? {} : { find: transportAction('findSent', async (input): Promise<JsonValue> => {
+      const { messageId } = EmailTransportFindSentInputV1Schema.parse(input);
+      return !forceNotFound && sent.has(messageId) ? { kind: 'found', messageId } : { kind: 'notFound' };
+    }) }),
+  }, contributesTo: { 'happier.channel.email': { transports: { fixture: protocol.contribute({ operations: {
+    listSince: protocol.operations.listSince.bind('list'), fetchRaw: protocol.operations.fetchRaw.bind('fetch'),
+    submitRaw: protocol.operations.submitRaw.bind('submit'), connectionTest: protocol.operations.connectionTest.bind('test'),
+    ...(options.findSent === false ? {} : { findSent: protocol.operations.findSent.bind('find') }),
+  } }) } } } });
+  assertEmailTransportContributionV1(transportPlugin.manifest);
+  const transport = await createPluginTestkit({ manifest: transportPlugin.manifest, module: transportPlugin });
+  const factsDefinition = definePlugin({ id: 'happier.channels', version: '0.0.0', actions: {
+    'provider/connection-read-v1': { title: 'Read fixture authority', surfaces: ['plugin'], dangerLevel: 'safe',
+      run: async input => ConversationProviderConnectionReadInputV1Schema.parse(input).connectionId === connection.connectionId
+        ? { [connection.connectionId]: { ...connection, authorityEpoch: 1, enabled: true,
+          deletionState: 'none', requiresFullSharedMessageContent: false } } : {} },
+    'provider/transport-fact-report-v1': { title: 'Record fixture readiness', surfaces: ['plugin'], dangerLevel: 'writesLocal',
+      confirmation: { title: 'Record fixture readiness?' },
+      run: async input => { facts.push(ConversationTransportFactReportInputV1Schema.parse(input)); return { kind: 'recorded' }; } },
+  } });
+  const coreFacts = await createPluginTestkit({ manifest: factsDefinition.manifest, module: factsDefinition });
+  let email: PluginTestkit;
+  // The testkit provides structural admission and real opaque Action handles,
+  // but deliberately has no production catalog observer. Adapt that host boundary only.
+  function withCatalog(context: PluginInvocationContext): PluginInvocationContext {
+    return { ...context, services: { ...context.services, targetedContributions: {
+      observeForSelf: <T>(point: Parameters<PluginInvocationContext['services']['targetedContributions']['observeForSelf']>[0]) => ({
+        dispose() {}, readCurrent: async () => (retainedCatalog ?? email.readTargetedContributionFixture(point)) as unknown as TargetedContributionSnapshot<T>,
+      }),
+    } } };
+  }
+  email = await createPluginTestkit({ manifest: emailPlugin.manifest, targetedContributionContributors: [transport],
+    actionTargets: [coreFacts],
+    module: { activate(api) {
+      return emailPlugin.activate({ ...api, actions: { ...api.actions,
+        register: (id, run) => api.actions.register(id, (input: Parameters<typeof run>[0], context) => run(input, withCatalog(context))),
+      } });
+    } } });
+  const channelsPlugin = definePlugin({ id: 'happier.channels', version: '0.0.0', actions: {
+    invoke: { title: 'Invoke email provider', surfaces: ['cli'], dangerLevel: 'writesRemote',
+      confirmation: { title: 'Invoke fixture provider?' },
+      run: (input, context) => {
+        if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Invalid fixture invocation');
+        // Array.isArray does not narrow readonly JSON arrays; the fixture's Action boundary has rejected them above.
+        const request = input as Readonly<Record<string, JsonValue>>;
+        if (typeof request.action !== 'string') throw new Error('Invalid fixture invocation');
+        return context.services.actions.execute({ pluginId: emailPlugin.manifest.id, localId: request.action }, request.input ?? null);
+      } },
+  } });
+  const channels = await createPluginTestkit({ manifest: channelsPlugin.manifest, module: channelsPlugin, actionTargets: [email] });
+  return { sent, submissions, facts, setAmbiguous(value: boolean) { ambiguous = value; }, replaceFetched(raw: Uint8Array) { lookupOverride = raw; },
+    setMessages(values: readonly (readonly [string, Uint8Array])[]) { for (const [ref, raw] of values) messages.set(ref, raw); refs = values.map(([ref]) => ref); },
+    addMessage(ref: string, raw: Uint8Array) { messages.set(ref, raw); },
+    setNotFound() { forceNotFound = true; },
+    retainCatalog() { retainedCatalog = email.readTargetedContributionFixture(emailPlugin.contributionPoints.transports); return retainedCatalog; },
+    releaseCatalog() { retainedCatalog = undefined; },
+    retireTransport: () => transport.dispose(),
+    invoke: (action: string, input: JsonValue) => channels.invokeAction('invoke', { action, input }),
+    dispose: async () => { await channels.dispose(); await email.dispose(); await transport.dispose(); await coreFacts.dispose(); } };
+}
+
+const config = { mailbox, transport: { pluginId: 'acme.email.fixture', contributionId: 'fixture' }, transportConfig: {},
+  trustStrategy: { kind: 'authenticationResults', authservId: 'mx.example.com' }, allowedDomains: ['example.com'] };
+const connection = { v: 1, connectionId: 'email-fixture', providerConnectionKey: `email:${mailbox}`,
+  providerConfigVersion: 1, providerConfig: config, credentialRef: null };
+const thread = { kind: 'thread', audience: 'direct', id: '<root@example.com>', parentId: mailbox };
+const delivery = { ...connection, endpoint: thread, content: { text: 'Reply' }, deliveryKey: 'fixture-reply',
+  replyContext: { replyToMessageId: '<incoming@example.com>' }, mentionPolicy: 'suppress', linkPreviewPolicy: 'providerDefault' };
+
+describe('email core with an external contributed raw transport', () => {
+  it('authenticates the selected contributed mailbox during setup without inventing an outbound cap', async () => {
+    const f = await fixture();
+    try {
+      await expect(f.invoke(ids.setup, { ...config, credentialRef: { service: { pluginId: 'acme.email.fixture', localId: 'mail' }, accountId: mailbox } }))
+        .resolves.toMatchObject({ providerConnectionKey: `email:${mailbox}` });
+    } finally { await f.dispose(); }
+  });
+
+  it('receives a trusted thread and strips only history already held by a binding', async () => {
+    const f = await fixture();
+    try {
+      const poll = { ...connection, checkpoint: null, limit: 10, waitMs: 0 };
+      await expect(f.invoke(ids.observationsPoll, poll)).resolves.toMatchObject({ kind: 'batch', observations: [{ observation: {
+        kind: 'fullText', observation: { endpoint: thread, actor: { principalId: 'alice@example.com', kind: 'human' },
+          message: { id: '<incoming@example.com>', text: expect.stringContaining('HISTORY') } },
+      } }] });
+      await expect(f.invoke(ids.observationsPoll, { ...poll, bindings: [{ endpoint: thread }] })).resolves.toMatchObject({
+        observations: [{ observation: { observation: { message: { text: 'ANSWER' } } } }], checkpointAfterBatch: { position: 1 },
+      });
+    } finally { await f.dispose(); }
+  });
+
+  it('replies only to the authenticated author and refuses a mismatched Message-ID lookup', async () => {
+    const f = await fixture();
+    try {
+      await expect(f.invoke(ids.messageDeliver, delivery)).resolves.toMatchObject({ kind: 'delivered' });
+      const raw = [...f.sent.values()][0]!;
+      const parsed = await simpleParser(Buffer.from(raw));
+      expect(parsed.inReplyTo).toBe('<incoming@example.com>');
+      expect(parsed.references).toEqual(['<root@example.com>', '<incoming@example.com>']);
+      expect(parsed.to).toMatchObject({ value: [{ address: 'alice@example.com' }] });
+      expect(parsed.cc).toBeUndefined();
+      f.replaceFetched(Buffer.from(incoming.toString().replace('<incoming@example.com>', '<different@example.com>')));
+      await expect(f.invoke(ids.messageDeliver, delivery)).resolves.toMatchObject({ kind: 'notDelivered', retry: 'never' });
+      expect(f.sent.size).toBe(1);
+    } finally { await f.dispose(); }
+  });
+
+  it('starts with HTML and reconciles an ambiguous submit through the same deterministic identity', async () => {
+    const f = await fixture();
+    try {
+      f.setAmbiguous(true);
+      const resolved = ConversationPrincipalResolveResultV1Schema.parse(await f.invoke(ids.principalResolve, {
+        ...connection, endpoint: { kind: 'direct', audience: 'direct', id: mailbox }, query: 'Owner@Example.com',
+      }));
+      expect(resolved.kind).toBe('resolved');
+      if (resolved.kind !== 'resolved') return;
+      const html = `<h1>${'a'.repeat(120_000)}</h1>`;
+      const start = { ...connection, endpoint: { kind: 'direct', audience: 'direct', id: mailbox },
+        content: { text: 'Brief', html }, deliveryKey: 'fixture-start',
+        newThread: { recipients: resolved.candidates.map(principal => principal.id), subject: 'Brief' }, mentionPolicy: 'suppress', linkPreviewPolicy: 'providerDefault' };
+      await expect(f.invoke(ids.messageDeliver, start)).resolves.toMatchObject({ kind: 'outcomeUnknown' });
+      const [messageId, raw] = [...f.sent.entries()][0]!;
+      expect((await simpleParser(Buffer.from(raw))).html).toBe(html);
+      expect(f.submissions[0]!.envelope.to).toEqual(['owner@example.com']);
+      await expect(f.invoke(ids.deliveryReconcile, { ...connection, endpoint: start.endpoint, deliveryKey: start.deliveryKey }))
+        .resolves.toMatchObject({ kind: 'delivered', providerMessageIds: [messageId], endpoint: { kind: 'thread', id: messageId, parentId: mailbox } });
+      expect(f.sent.size).toBe(1);
+      expect(f.submissions).toHaveLength(1);
+      f.setAmbiguous(false);
+      await expect(f.invoke(ids.messageDeliver, { ...start, deliveryKey: 'confirmed-start' }))
+        .resolves.toMatchObject({ kind: 'delivered', endpoint: { kind: 'thread', audience: 'direct', parentId: mailbox } });
+      f.setNotFound();
+      await expect(f.invoke(ids.deliveryReconcile, { ...connection, endpoint: start.endpoint, deliveryKey: start.deliveryKey }))
+        .resolves.toEqual({ kind: 'outcomeUnknown' });
+      expect(f.submissions).toHaveLength(2);
+    } finally { await f.dispose(); }
+  });
+
+  it('projects unknown senders, noise and self while recording content-free trust attention and malformed mail', async () => {
+    const f = await fixture();
+    const makeMail = (id: string | null, from: string, headers: readonly string[]) => Buffer.from([
+      `From: ${from}`, ...(id === null ? [] : [`Message-ID: ${id}`]), ...headers, 'Content-Type: text/plain', '', 'Question',
+    ].join('\r\n'));
+    const trustedHeader = 'Authentication-Results: mx.example.com; dmarc=pass header.from=example.com';
+    try {
+      f.setMessages([
+        ['spoof', makeMail('<spoof@example.com>', 'alice@example.com', [
+          'Authentication-Results: attacker.invalid; dmarc=pass header.from=example.com', trustedHeader])],
+        ['missing', makeMail('<missing@example.com>', 'alice@example.com', [])],
+        ['noise', makeMail('<noise@example.com>', 'alice@example.com', [trustedHeader, 'Auto-Submitted: auto-replied'])],
+        ['self', makeMail('<self@example.com>', mailbox, [trustedHeader])],
+        ['malformed', makeMail(null, 'alice@example.com', [trustedHeader])],
+      ]);
+      const polled = ConversationPollResultV1Schema.parse(await f.invoke(ids.observationsPoll, { ...connection, checkpoint: null, limit: 10, waitMs: 0 }));
+      expect(polled.kind).toBe('batch');
+      if (polled.kind !== 'batch') return;
+      const entries = polled.observations.map(entry => entry.observation);
+      for (const index of [0, 1]) expect(entries[index]).toMatchObject({ observation: { actor: { kind: 'unknown', principalId: null } } });
+      expect(entries[2]).toMatchObject({ observation: { actor: { kind: 'bot' } } });
+      expect(entries[3]).toMatchObject({ observation: { actor: { isIntegrationSelf: true } } });
+      expect(entries[4]).toMatchObject({ kind: 'routableNonAdmission', reason: 'unsupportedContent' });
+      expect(entries[4]).not.toHaveProperty('shell.message.text');
+      expect(polled.checkpointAfterBatch).toEqual({ position: 1 });
+      expect(f.facts).toContainEqual(expect.objectContaining({ authorityEpoch: 1,
+        fact: expect.objectContaining({ kind: 'providerReadiness', status: 'attention', code: 'providerPermissionMissing' }) }));
+      expect(JSON.stringify(f.facts)).not.toContain('alice@example.com');
+    } finally { await f.dispose(); }
+  });
+
+  it('fetches stable nested attachment ids after signature image filtering without trusting embedded authentication headers', async () => {
+    const f = await fixture();
+    let stagedPath: string | undefined;
+    const auth = 'Authentication-Results: mx.example.com; dmarc=pass header.from=example.com';
+    const inner = ['From: client@outside.com', 'Message-ID: <inner@outside.com>', auth, 'Subject: Lead',
+      'MIME-Version: 1.0', 'Content-Type: multipart/mixed; boundary=inner', '', '--inner', 'Content-Type: text/html', '',
+      '<p>Lead details</p><div class="gmail_signature"><img src="cid:logo"></div>', '--inner',
+      'Content-Type: image/png', 'Content-ID: <logo>', 'Content-Disposition: inline; filename=logo.png',
+      'Content-Transfer-Encoding: base64', '', 'eA==', '--inner', 'Content-Type: text/plain',
+      'Content-Disposition: attachment; filename=lead.txt', 'Content-Transfer-Encoding: base64', '',
+      Buffer.from('nested lead file').toString('base64'), '--inner--', ''].join('\r\n');
+    const outer = Buffer.from(['From: alice@example.com', 'Message-ID: <forward@example.com>', auth, 'Subject: Fwd: Lead',
+      'MIME-Version: 1.0', 'Content-Type: multipart/mixed; boundary=outer', '', '--outer', 'Content-Type: text/html', '',
+      '<p>Process the lead.</p><div class="gmail_signature"><img src="cid:forwarder-logo"></div>', '--outer',
+      'Content-Type: image/png', 'Content-ID: <forwarder-logo>', 'Content-Disposition: inline; filename=forwarder-logo.png',
+      'Content-Transfer-Encoding: base64', '', 'eA==', '--outer', 'Content-Type: text/plain',
+      'Content-Disposition: attachment; filename=outer.txt', '', 'Outer file', '--outer',
+      'Content-Type: message/rfc822', 'Content-Disposition: attachment; filename=lead.eml',
+      'Content-Transfer-Encoding: base64', '', Buffer.from(inner).toString('base64'), '--outer--', ''].join('\r\n'));
+    try {
+      f.setMessages([['forward-ref', outer]]);
+      f.addMessage('<forward@example.com>', outer);
+      const pollInput = { ...connection, checkpoint: null, limit: 10, waitMs: 0 };
+      const polled = ConversationPollResultV1Schema.parse(await f.invoke(ids.observationsPoll, pollInput));
+      expect(polled.kind).toBe('batch');
+      if (polled.kind !== 'batch') return;
+      const entry = polled.observations[0]!.observation;
+      expect(entry.kind).toBe('fullText');
+      if (entry.kind !== 'fullText') return;
+      expect(entry.observation.actor.principalId).toBe('alice@example.com');
+      expect(entry.observation.message.contentProvenance).toBe('forwarded');
+      expect(entry.observation.message.text).toContain('Lead details');
+      const attachments = entry.observation.message.attachments!;
+      expect(attachments.map(file => file.name)).not.toContain('forwarder-logo.png');
+      expect(attachments.map(file => file.name)).toContain('logo.png');
+      const attachment = attachments.find(file => file.name === 'lead.txt')!;
+      expect(attachment.attachmentId).toContain('/');
+      const fetched = ConversationAttachmentFetchResultV1Schema.parse(await f.invoke(ids.attachmentFetch, {
+        ...connection, messageId: '<forward@example.com>', attachmentId: attachment.attachmentId,
+      }));
+      expect(fetched.kind).toBe('fetched');
+      if (fetched.kind === 'fetched') { stagedPath = fetched.path; expect(await readFile(fetched.path, 'utf8')).toBe('nested lead file'); }
+      const untrusted = Buffer.from(outer.toString().replace(`${auth}\r\n`, '').replace('<forward@example.com>', '<untrusted-forward@example.com>'));
+      f.setMessages([['untrusted-ref', untrusted]]);
+      f.addMessage('<untrusted-forward@example.com>', untrusted);
+      await expect(f.invoke(ids.observationsPoll, pollInput)).resolves.toMatchObject({ observations: [{ observation: {
+        observation: { actor: { kind: 'unknown', principalId: null } },
+      } }] });
+      await expect(f.invoke(ids.attachmentFetch, { ...connection, messageId: '<untrusted-forward@example.com>', attachmentId: attachment.attachmentId }))
+        .resolves.toMatchObject({ kind: 'notReady', reason: 'permissionMissing' });
+    } finally { await f.dispose(); }
+    if (stagedPath) await expect(stat(stagedPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('keeps reconciliation unknown without findSent and rejects original handles from a retired contributor', async () => {
+    const f = await fixture({ findSent: false });
+    try {
+      await expect(f.invoke(ids.deliveryReconcile, { ...connection, endpoint: thread, deliveryKey: 'unknown' }))
+        .resolves.toEqual({ kind: 'outcomeUnknown' });
+      const snapshot = f.retainCatalog();
+      expect(snapshot.contributions[0]!.operations.connectionTest!.identity.contributor.pluginId).toBe('acme.email.fixture');
+      await expect(f.invoke(ids.connectionTest, { ...connection, selectedTransport: 'checkpointedPull' })).resolves.toMatchObject({ kind: 'ready' });
+      await f.retireTransport();
+      await expect(f.invoke(ids.connectionTest, { ...connection, selectedTransport: 'checkpointedPull' }))
+        .rejects.toMatchObject({ code: 'plugin_action_generation_retired' });
+      f.releaseCatalog();
+      await expect(f.invoke(ids.observationsPoll, { ...connection, checkpoint: null, limit: 10, waitMs: 0 }))
+        .rejects.toMatchObject({ code: 'email_transport_unavailable' });
+    } finally { await f.dispose(); }
+  });
+});

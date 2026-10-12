@@ -1,0 +1,73 @@
+X-Fixture-Kind: constructed-client-markup; thunderbird; de
+From: Camille <camille@example.test>
+Sender: camille@example.test
+To: wilson@example.test
+Message-ID: <thunderbird-de@example.test>
+References: <root@example.test>
+In-Reply-To: <root@example.test>
+Authentication-Results: mx.example.test; dmarc=pass header.from=example.test
+Date: Mon, 12 Oct 2026 09:30:00 +0200
+Subject: Re: Angebotsanfrage
+MIME-Version: 1.0
+Content-Type: multipart/related; boundary="thunderbird-de-related"
+
+--thunderbird-de-related
+Content-Type: multipart/alternative; boundary="thunderbird-de-alternative"
+
+--thunderbird-de-alternative
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: quoted-printable
+
+Guten=20Tag=2C=20das=20Angebot=20ist=20best=C3=A4tigt.
+Angebotsdetails=3A=20https=3A=2F=2Fexample.test=2Fquote
+--=20
+Camille=20Beispiel=20=C2=B7=20Vertrieb
+Am=20Montag=2C=2012.=20Oktober=202026=20schrieb=20Alex=20Beispiel=3A
+=3E=20K=C3=B6nnen=20Sie=20das=20vorherige=20Angebot=20best=C3=A4tigen=3F
+--thunderbird-de-alternative
+Content-Type: text/html; charset=utf-8
+Content-Transfer-Encoding: quoted-printable
+
+=3Chtml=3E=3Cbody=3E=3Cp=3EGuten=20Tag=2C=20das=20Angebot=20ist=20best=C3=
+=A4tigt.=3C=2Fp=3E=3Cp=3E=3Ca=20href=3D=22https=3A=2F=2Fexample.test=2Fquo=
+te=22=3EAngebotsdetails=3C=2Fa=3E=3C=2Fp=3E=3Cp=3E=3Cimg=20src=3D=22cid=3A=
+project-plan=22=20alt=3D=22Projektplan=22=3E=3C=2Fp=3E=3Cspan=20style=3D=
+=22display=3Anone=22=3EHIDDEN=20FIXTURE=20CONTENT=3C=2Fspan=3E=3Cimg=20src=
+=3D=22https=3A=2F=2Fexample.test=2Ftracker=22=20width=3D=221=22=20height=
+=3D=221=22=3E=3Cdiv=20class=3D=22moz-signature=22=3ECamille=20Beispiel=20=
+=C2=B7=20Vertrieb=3Cimg=20src=3D=22cid=3Asignature-logo=22=20alt=3D=22Logo=
+=22=3E=3C=2Fdiv=3E=3Cdiv=20class=3D=22moz-cite-prefix=22=3EAm=20Montag=2C=
+=2012.=20Oktober=202026=20schrieb=20Alex=20Beispiel=3A=3C=2Fdiv=3E=3Cblock=
+quote=20type=3D=22cite=22=3EK=C3=B6nnen=20Sie=20das=20vorherige=20Angebot=
+=20best=C3=A4tigen=3F=3C=2Fblockquote=3E=3C=2Fbody=3E=3C=2Fhtml=3E
+--thunderbird-de-alternative--
+--thunderbird-de-related
+Content-Type: image/png
+Content-Disposition: inline; filename="signature-logo.png"
+Content-ID: <signature-logo>
+Content-Transfer-Encoding: base64
+
+iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j5XQAAAAASUVORK5CYII=
+--thunderbird-de-related
+Content-Type: image/png
+Content-Disposition: inline; filename="project-plan.png"
+Content-ID: <project-plan>
+Content-Transfer-Encoding: base64
+
+iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j5XQAAAAASUVORK5CYII=
+--thunderbird-de-related
+Content-Type: text/calendar; method=REQUEST
+Content-Disposition: attachment; filename="appointment.ics"
+
+BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:thunderbird-de-appointment@example.test
+DTSTAMP:20261012T073000Z
+DTSTART:20261013T080000Z
+DTEND:20261013T090000Z
+SUMMARY:Quote review
+END:VEVENT
+END:VCALENDAR
+--thunderbird-de-related--
+

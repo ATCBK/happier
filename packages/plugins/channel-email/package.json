@@ -1,0 +1,49 @@
+{
+  "name": "@happier-dev/plugins-channel-email",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": { "happier-source": "./src/index.ts", "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+    "./manifest": { "happier-source": "./src/manifest.ts", "types": "./dist/manifest.d.ts", "default": "./dist/manifest.js" },
+    "./transports": { "happier-source": "./src/transports.ts", "types": "./dist/transports.d.ts", "default": "./dist/transports.js" },
+    "./targeted-contributions": { "happier-source": "./src/targetedContributions.ts", "types": "./dist/targetedContributions.d.ts", "default": "./dist/targetedContributions.js" }
+  },
+  "files": ["dist", "assets", ".happier-plugin", "package.json"],
+  "scripts": {
+    "build": "node ../../../scripts/workspaces/buildTypeScriptPackageDist.mjs -p tsconfig.json",
+    "build:finite": "yarn -s build",
+    "project:finite": "node --experimental-strip-types ../../../apps/cli/scripts/build-owned/checkBundledPluginWorkspace.mjs",
+    "test": "../../../apps/stack/bin/hstack-exec --script=test:local",
+    "test:local": "vitest run --config vitest.config.ts",
+    "typecheck": "../../../apps/stack/bin/hstack-exec --script=typecheck:local",
+    "typecheck:local": "yarn -s typecheck:source && yarn -s typecheck:tests",
+    "typecheck:source": "node ../../../scripts/workspaces/runTypeScriptCli.mjs --noEmit -p tsconfig.json",
+    "typecheck:tests": "node ../../../scripts/workspaces/runTypeScriptCli.mjs --noEmit -p tsconfig.tests.json"
+  },
+  "dependencies": {
+    "@happier-dev/channels-protocol": "0.0.0",
+    "@happier-dev/email-transports-protocol": "0.0.0",
+    "@happier-dev/plugin-sdk": "0.0.0",
+    "cheerio": "^1.1.2",
+    "css-tree": "^3.2.1",
+    "imapflow": "^2.4.0",
+    "mailparser": "^3.7.4",
+    "marked": "^16.3.0",
+    "nodemailer": "^7.0.10",
+    "turndown": "^7.2.0"
+  },
+  "devDependencies": {
+    "@types/css-tree": "^3.2.0",
+    "@types/mailparser": "^3.4.6",
+    "@types/nodemailer": "^7.0.2",
+    "@types/smtp-server": "^3.5.12",
+    "@types/turndown": "^5.0.5",
+    "imapkit": "^5.0.1",
+    "smtp-server": "^3.15.0",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  }
+}

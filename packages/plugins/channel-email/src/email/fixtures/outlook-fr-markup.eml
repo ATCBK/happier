@@ -1,0 +1,75 @@
+X-Fixture-Kind: constructed-client-markup; outlook; fr
+From: Camille <camille@example.test>
+Sender: camille@example.test
+To: wilson@example.test
+Message-ID: <outlook-fr@example.test>
+References: <root@example.test>
+In-Reply-To: <root@example.test>
+Authentication-Results: mx.example.test; dmarc=pass header.from=example.test
+Date: Mon, 12 Oct 2026 09:30:00 +0200
+Subject: Re: Demande de devis
+MIME-Version: 1.0
+Content-Type: multipart/related; boundary="outlook-fr-related"
+
+--outlook-fr-related
+Content-Type: multipart/alternative; boundary="outlook-fr-alternative"
+
+--outlook-fr-alternative
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: quoted-printable
+
+Bonjour=2C=20le=20devis=20est=20valid=C3=A9.
+D=C3=A9tails=20du=20devis=3A=20https=3A=2F=2Fexample.test=2Fquote
+--=20
+Camille=20Exemple=20=C2=B7=20=C3=89quipe=20commerciale
+Le=20lundi=2012=20octobre=202026=2C=20Alex=20Exemple=20a=20=C3=A9crit=20=
+=3A
+=3E=20Pouvez-vous=20confirmer=20le=20devis=20pr=C3=A9c=C3=A9dent=20=3F
+--outlook-fr-alternative
+Content-Type: text/html; charset=utf-8
+Content-Transfer-Encoding: quoted-printable
+
+=3Chtml=3E=3Cbody=3E=3Cp=3EBonjour=2C=20le=20devis=20est=20valid=C3=A9.=3C=
+=2Fp=3E=3Cp=3E=3Ca=20href=3D=22https=3A=2F=2Fexample.test=2Fquote=22=3ED=
+=C3=A9tails=20du=20devis=3C=2Fa=3E=3C=2Fp=3E=3Cp=3E=3Cimg=20src=3D=22cid=
+=3Aproject-plan=22=20alt=3D=22Plan=20du=20projet=22=3E=3C=2Fp=3E=3Cspan=20=
+style=3D=22display=3Anone=22=3EHIDDEN=20FIXTURE=20CONTENT=3C=2Fspan=3E=3Ci=
+mg=20src=3D=22https=3A=2F=2Fexample.test=2Ftracker=22=20width=3D=221=22=20=
+height=3D=221=22=3E=3Cdiv=20id=3D=22Signature=22=3ECamille=20Exemple=20=C2=
+=B7=20=C3=89quipe=20commerciale=3Cimg=20src=3D=22cid=3Asignature-logo=22=
+=20alt=3D=22Logo=22=3E=3C=2Fdiv=3E=3Cdiv=20id=3D=22divRplyFwdMsg=22=3E=3Cb=
+=3EDe=20=3A=3C=2Fb=3E=20Alex=20=26lt=3Balex=40example.test=26gt=3B=3Cbr=3E=
+=3Cb=3EEnvoy=C3=A9=20=3A=3C=2Fb=3E=2012=20October=202026=3C=2Fdiv=3E=3Cdiv=
+=3EPouvez-vous=20confirmer=20le=20devis=20pr=C3=A9c=C3=A9dent=20=3F=3C=2Fd=
+iv=3E=3C=2Fbody=3E=3C=2Fhtml=3E
+--outlook-fr-alternative--
+--outlook-fr-related
+Content-Type: image/png
+Content-Disposition: inline; filename="signature-logo.png"
+Content-ID: <signature-logo>
+Content-Transfer-Encoding: base64
+
+iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j5XQAAAAASUVORK5CYII=
+--outlook-fr-related
+Content-Type: image/png
+Content-Disposition: inline; filename="project-plan.png"
+Content-ID: <project-plan>
+Content-Transfer-Encoding: base64
+
+iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j5XQAAAAASUVORK5CYII=
+--outlook-fr-related
+Content-Type: text/calendar; method=REQUEST
+Content-Disposition: attachment; filename="appointment.ics"
+
+BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:outlook-fr-appointment@example.test
+DTSTAMP:20261012T073000Z
+DTSTART:20261013T080000Z
+DTEND:20261013T090000Z
+SUMMARY:Quote review
+END:VEVENT
+END:VCALENDAR
+--outlook-fr-related--
+

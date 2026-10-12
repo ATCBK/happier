@@ -1,0 +1,69 @@
+import { definePlugin } from '@happier-dev/plugin-sdk';
+import type { ActionHandler } from '@happier-dev/plugin-sdk/actions';
+import type { PluginJsonSchema } from '@happier-dev/plugin-sdk/protocol';
+import { ConversationProvidersContributionProtocolV1 as providers, CONVERSATION_CORE_PLUGIN_ID_V1 } from '@happier-dev/channels-protocol/v1';
+import { EmailTransportsContributionPointV1 } from './transports.js';
+import { EMAIL_CHANNEL_PLUGIN_ID, EMAIL_CHANNEL_ACTION_IDS as ids } from './constants.js';
+import { setupEmailChannels, testEmailConnection, resolveEmailEndpoint, resolveEmailPrincipal, pollEmailObservations, deliverEmailMessage, reconcileEmailDelivery, fetchEmailAttachment, cleanupEmailAttachments, EMAIL_SETUP_INPUT_SCHEMA } from './channelActions.js';
+import { EMAIL_UI_TRANSLATION_BUNDLES } from './ui/translations.js';
+import { EMAIL_SETUP_INPUT_HINTS } from './ui/setupHints.js';
+import { IMAP_SMTP_CONNECTED_ACCOUNT_ID, IMAP_SMTP_CREDENTIAL_PURPOSE,
+  imapSmtpActions, imapSmtpConnectedAccountDescriptor, imapSmtpTransportContribution } from './transports/imapSmtp/index.js';
+
+function providerAction(
+  title: string,
+  declaration: { surfaces: readonly ('plugin' | 'ui' | 'cli' | 'agent' | 'mcp' | 'voice')[]; dangerLevel: 'safe' | 'writesLocal' | 'writesRemote' | 'externalSideEffect' | 'destructive'; resultSchema: { jsonSchema: PluginJsonSchema } },
+  inputSchema: PluginJsonSchema,
+  run: ActionHandler,
+) {
+  return { title, inputSchema, resultSchema: declaration.resultSchema.jsonSchema,
+    surfaces: declaration.surfaces, dangerLevel: declaration.dangerLevel, run };
+}
+
+export const emailPlugin = definePlugin({
+  id: EMAIL_CHANNEL_PLUGIN_ID, version: '0.0.0', displayName: 'Email Channels',
+  description: 'Connects authenticated mailbox conversations to Happier Channels.',
+  runtime: { apiVersion: 1 }, entrypoints: { daemon: './.happier-plugin/daemon.js' },
+  hostAccess: { required: [
+    { id: IMAP_SMTP_CREDENTIAL_PURPOSE, capability: 'connectedAccounts',
+      reason: 'Authenticate the selected mailbox for IMAP and SMTP operations.',
+      scope: { serviceRefs: [IMAP_SMTP_CONNECTED_ACCOUNT_ID], operations: ['select', 'use'], materializationKinds: ['environment'] } },
+    { id: 'microsoft-token', capability: 'network', reason: 'Authenticate Microsoft app-only mailbox access.',
+      scope: { targets: [{ kind: 'fixedOrigin', origin: 'https://login.microsoftonline.com' }], methods: ['POST'] } },
+  ], optional: [] },
+  brand: { iconResourceId: 'email-brand' },
+  resources: { 'email-brand': { kind: 'asset', path: 'assets/brand.png', contentType: 'image/png' } },
+  ui: { translations: EMAIL_UI_TRANSLATION_BUNDLES },
+  contributionPoints: { transports: EmailTransportsContributionPointV1 },
+  setup: () => cleanupEmailAttachments,
+  connectedAccountDescriptors: { [IMAP_SMTP_CONNECTED_ACCOUNT_ID]: imapSmtpConnectedAccountDescriptor },
+  actions: {
+    ...imapSmtpActions,
+    [ids.setup]: { ...providerAction('Set up Email Channels', providers.operations.setup.declaration, EMAIL_SETUP_INPUT_SCHEMA.jsonSchema, setupEmailChannels), inputHints: EMAIL_SETUP_INPUT_HINTS },
+    [ids.connectionTest]: providerAction('Test email connection', providers.operations.connectionTest.declaration, providers.operations.connectionTest.declaration.input.schema.jsonSchema, testEmailConnection),
+    [ids.endpointResolve]: providerAction('Resolve mailbox destination', providers.operations.endpointResolve.declaration, providers.operations.endpointResolve.declaration.input.schema.jsonSchema, resolveEmailEndpoint),
+    [ids.principalResolve]: providerAction('Resolve email principal', providers.operations.principalResolve.declaration, providers.operations.principalResolve.declaration.input.schema.jsonSchema, resolveEmailPrincipal),
+    [ids.observationsPoll]: providerAction('Poll mailbox observations', providers.operations.observationsPoll.declaration, providers.operations.observationsPoll.declaration.input.schema.jsonSchema, pollEmailObservations),
+    [ids.messageDeliver]: providerAction('Deliver email message', providers.operations.messageDeliver.declaration, providers.operations.messageDeliver.declaration.input.schema.jsonSchema, deliverEmailMessage),
+    [ids.deliveryReconcile]: providerAction('Reconcile email delivery', providers.operations.deliveryReconcile.declaration, providers.operations.deliveryReconcile.declaration.input.schema.jsonSchema, reconcileEmailDelivery),
+    [ids.attachmentFetch]: providerAction('Fetch email attachment', providers.operations.attachmentFetch.declaration, providers.operations.attachmentFetch.declaration.input.schema.jsonSchema, fetchEmailAttachment),
+  },
+  contributesTo: {
+    [EMAIL_CHANNEL_PLUGIN_ID]: { transports: { 'imap-smtp': imapSmtpTransportContribution } },
+    [CONVERSATION_CORE_PLUGIN_ID_V1]: {
+      providers: { 'email-provider': providers.contribute({ operations: {
+        setup: providers.operations.setup.bind(ids.setup),
+        connectionTest: providers.operations.connectionTest.bind(ids.connectionTest),
+        endpointResolve: providers.operations.endpointResolve.bind(ids.endpointResolve),
+        principalResolve: providers.operations.principalResolve.bind(ids.principalResolve),
+        observationsPoll: providers.operations.observationsPoll.bind(ids.observationsPoll),
+        messageDeliver: providers.operations.messageDeliver.bind(ids.messageDeliver),
+        deliveryReconcile: providers.operations.deliveryReconcile.bind(ids.deliveryReconcile),
+        attachmentFetch: providers.operations.attachmentFetch.bind(ids.attachmentFetch),
+      } }) },
+    },
+  },
+});
+export const EMAIL_TRANSPORT_POINT_REF = emailPlugin.contributionPoints.transports;
+export const PLUGIN_MANIFEST = emailPlugin.manifest;
+export const activate = emailPlugin.activate;
