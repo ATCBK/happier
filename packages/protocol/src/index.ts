@@ -3351,7 +3351,6 @@ export {
   McpServerCatalogEntryTransportV1Schema,
   McpServerCatalogEntryV1Schema,
   McpServersSettingsV1Schema,
-  McpValueRefV1Schema,
   type McpServerConfigOverrideFieldsV1,
   type McpServerConfigOverrideV1,
   mcpPluginItemIdV1, isMcpPluginItemIdV1, type McpPluginItemV1,
@@ -3360,8 +3359,11 @@ export {
   type McpServerCatalogEntryTransportV1,
   type McpServerCatalogEntryV1,
   type McpServersSettingsV1,
-  type McpValueRefV1,
 } from './mcp/servers/settingsV1.js';
+
+export {
+  ValueRefV1Schema, type ValueRefV1, resolveValueRefPlaintextV1, listValueRefSecretIdsV1,
+} from './valueRefs/valueRefV1.js';
 
 export {
   MCP_SERVER_CATALOG_ACCOUNT_KEY_V1, MCP_SERVER_CATALOG_ROWS_ROUTE_V1, MCP_SERVER_CATALOG_ACCOUNT_CIPHER_KIND_V1,

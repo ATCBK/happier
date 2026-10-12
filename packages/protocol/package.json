@@ -7,6 +7,11 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./valueRefs/valueRefV1": {
+      "happier-source": "./src/valueRefs/valueRefV1.ts",
+      "types": "./dist/valueRefs/valueRefV1.d.ts",
+      "default": "./dist/valueRefs/valueRefV1.js"
+    },
     "./actions/specs/capabilityRules": {
       "happier-source": "./src/actions/specs/capabilityRules.ts",
       "types": "./dist/actions/specs/capabilityRules.d.ts",
